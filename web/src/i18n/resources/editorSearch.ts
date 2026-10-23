@@ -34,8 +34,8 @@ const ko = {
   "editorSearch.currentMatch": "현재 일치 항목",
   "editorSearch.onLine": "줄 번호",
   "editorSearch.controlCharacter": "제어 문자",
-  "editorSearch.replacedMatch": "{{line}}번째 줄의 일치 항목을 바꿨습니다",
-  "editorSearch.replacedMatches": "일치 항목 {{matches}}개를 바꿨습니다",
+  "editorSearch.replacedMatch": "{{line}}번째 줄의 일치 항목을 바꿨어요",
+  "editorSearch.replacedMatches": "일치 항목 {{matches}}개를 바꿨어요",
   "editorSearch.replaceButton": "바꾸기",
   "editorSearch.close": "닫기",
 } satisfies Catalog<typeof editorSearchEnglish>;

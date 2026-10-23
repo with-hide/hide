@@ -381,7 +381,7 @@ pub(crate) fn start_agent(
                 detail,
             },
         },
-        Err(StartError::NotStarted(detail)) => WakeOutcome::Failed {
+        Err(StartError::NotStarted { detail, .. }) => WakeOutcome::Failed {
             reason: refused_reason(request.mode).to_owned(),
             detail,
         },

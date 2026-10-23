@@ -118,6 +118,9 @@ pub struct ChangesKey {
 pub struct ChangesAnswer {
     /// `None` for the closed view's empty projection.
     pub key: Option<ChangesKey>,
+    /// Why the read failed in the host's own words, for the log; the
+    /// snapshot carries only its code.
+    pub detail: Option<String>,
     /// The row its request asked for (`ChangesRequest::selection`). An
     /// answer lands one wake after its request, so the operator may have
     /// chosen another row since.
@@ -137,16 +140,21 @@ impl ChangesReader {
                 Duration::ZERO,
                 |request: &Option<ChangesRequest>| {
                     match request {
-                        Some(request) => ChangesAnswer {
-                            key: Some(request.key()),
-                            selection: request.selection(),
-                            changes: read(request),
-                        },
+                        Some(request) => {
+                            let (changes, detail) = read(request);
+                            ChangesAnswer {
+                                key: Some(request.key()),
+                                detail,
+                                selection: request.selection(),
+                                changes,
+                            }
+                        }
                         // The view is closed, so there is nothing to describe. An
                         // empty projection also drops the retained diff text off
                         // the wire.
                         None => ChangesAnswer {
                             key: None,
+                            detail: None,
                             selection: (None, false),
                             changes: ChangesSnapshot::default(),
                         },
@@ -278,17 +286,26 @@ impl Drop for ChangesPump {
 
 /// Reads `request` on its checkout's host and projects the answer. Blocks on
 /// the channel; a refusal or a lost answer is a stated reason, never an empty
-/// list, so a failure is not shown as a clean tree.
-pub fn read(request: &ChangesRequest) -> ChangesSnapshot {
+/// list, so a failure is not shown as a clean tree. The reason is a code the
+/// screen words (`changes.*`, `host.*`, `link.*`); the host's sentence comes
+/// back beside the snapshot for the log.
+pub fn read(request: &ChangesRequest) -> (ChangesSnapshot, Option<String>) {
     let root_path = request.root_path.clone();
-    let unavailable = |reason: String| ChangesSnapshot {
-        root_path: Some(root_path.clone()),
-        unavailable_reason: Some(reason),
-        ..ChangesSnapshot::default()
+    let unavailable = |code: String, detail: String| {
+        let changes = ChangesSnapshot {
+            root_path: Some(root_path.clone()),
+            unavailable_reason: Some(code),
+            ..ChangesSnapshot::default()
+        };
+        (changes, Some(detail))
     };
     let channel = match &request.channel {
         Ok(channel) => Arc::clone(&channel.0),
-        Err(reason) => return unavailable(reason.clone()),
+        Err(reason) => return unavailable("link.not_connected".to_owned(), reason.clone()),
+    };
+    let failed = |error: LinkError| {
+        let (code, detail) = failed_code(error);
+        unavailable(code, detail)
     };
     // Every path here is the checkout device's, in the wire spelling, and is
     // related by names alone, whatever system the device runs.
@@ -296,7 +313,8 @@ pub fn read(request: &ChangesRequest) -> ChangesSnapshot {
         path::wire_relative(&request.root.path, &request.root_path).map(path::RelPath::into_string)
     else {
         return unavailable(
-            "This History folder no longer matches its registered checkout".to_owned(),
+            "changes.folder_moved".to_owned(),
+            "this History folder no longer matches its registered checkout".to_owned(),
         );
     };
     let relative = |path: &str| {
@@ -323,7 +341,7 @@ pub fn read(request: &ChangesRequest) -> ChangesSnapshot {
     }
     let root = match crate::files::root_ref(channel.as_ref(), &request.root) {
         Ok(root) => root,
-        Err(error) => return unavailable(reason(error)),
+        Err(error) => return failed(error),
     };
     let answer: Result<Changes, _> = call_as(
         channel.as_ref(),
@@ -342,12 +360,17 @@ pub fn read(request: &ChangesRequest) -> ChangesSnapshot {
         // The host answers `Unsupported` only for a folder Git finds no
         // repository for (`hide_host::git::changes`).
         Err(LinkError::Refused(error)) if error.code == ErrorCode::Unsupported => {
-            return ChangesSnapshot {
-                not_a_repository: true,
-                ..unavailable(error.message)
-            };
+            let (changes, detail) =
+                unavailable("changes.not_a_repository".to_owned(), error.message);
+            return (
+                ChangesSnapshot {
+                    not_a_repository: true,
+                    ..changes
+                },
+                detail,
+            );
         }
-        Err(error) => return unavailable(reason(error)),
+        Err(error) => return failed(error),
     };
     let project = |files: Vec<ChangedFile>| {
         files
@@ -383,7 +406,7 @@ pub fn read(request: &ChangesRequest) -> ChangesSnapshot {
             )),
         }))
         .collect();
-    ChangesSnapshot {
+    let changes = ChangesSnapshot {
         root_path: Some(root_path),
         selected_path: diff.as_ref().map(|diff| diff.path.clone()),
         selected_committed: request.selected_committed && diff.is_some(),
@@ -395,13 +418,25 @@ pub fn read(request: &ChangesRequest) -> ChangesSnapshot {
         unavailable_reason: None,
         not_a_repository: false,
         stale_reason: None,
-    }
+    };
+    (changes, None)
 }
 
-fn reason(error: LinkError) -> String {
+/// The code a failed host call shows as, with its sentence for the log. Git
+/// failing on the repository is the host's `Io`, which History names as Git's.
+fn failed_code(error: LinkError) -> (String, String) {
     match error {
-        LinkError::Refused(error) => error.message,
-        other => other.to_string(),
+        LinkError::Refused(error) if error.code == ErrorCode::Io => {
+            ("changes.git_failed".to_owned(), error.message)
+        }
+        LinkError::Refused(error) => {
+            let code = crate::node_access::link_failure_code(&LinkError::Refused(error.clone()));
+            (code, error.message)
+        }
+        other => (
+            crate::node_access::link_failure_code(&other),
+            other.to_string(),
+        ),
     }
 }
 
@@ -473,7 +508,7 @@ mod tests {
         std::fs::write(folder.join("inside.txt"), "INSIDE\n").unwrap();
         std::fs::write(checkout.join("outside.txt"), "OUTSIDE\n").unwrap();
 
-        let listed = read(&request(
+        let (listed, _) = read(&request(
             &checkout,
             &folder,
             Some(&folder.join("inside.txt")),
@@ -519,7 +554,7 @@ mod tests {
             })
             .collect();
 
-        let listed = read(&asked);
+        let (listed, _) = read(&asked);
         let [taken, left] = listed.diffs.as_slice() else {
             panic!("two View diffs: {:?}", listed.diffs);
         };
@@ -543,17 +578,18 @@ mod tests {
         let folder = temporary.path().canonicalize().unwrap();
         let mut unready = request(&folder, &folder, None);
         unready.channel = Err("The device helper is not ready".to_owned());
-        let projected = read(&unready);
+        let (projected, detail) = read(&unready);
         assert_eq!(
             projected.unavailable_reason.as_deref(),
-            Some("The device helper is not ready")
+            Some("link.not_connected")
         );
+        assert_eq!(detail.as_deref(), Some("The device helper is not ready"));
         assert!(projected.entries.is_empty());
 
         // A folder with its own `.git` pointing nowhere is never a
         // repository, whatever contains the temporary directory.
         std::fs::write(folder.join(".git"), "gitdir: /nonexistent\n").unwrap();
-        let projected = read(&request(&folder, &folder, None));
+        let (projected, _) = read(&request(&folder, &folder, None));
         assert!(projected.unavailable_reason.is_some());
         assert_eq!(projected.root_path.as_deref(), folder.to_str());
     }
@@ -564,24 +600,26 @@ mod tests {
         let folder = temporary.path().canonicalize().unwrap();
         let mut unready = request(&folder, &folder, None);
         unready.channel = Err("The device helper is not ready".to_owned());
-        assert!(!read(&unready).not_a_repository);
+        assert!(!read(&unready).0.not_a_repository);
 
         // A `.git` pointing nowhere, whatever contains the temporary directory.
         std::fs::write(folder.join(".git"), "gitdir: /nonexistent\n").unwrap();
-        assert!(read(&request(&folder, &folder, None)).not_a_repository);
+        assert!(read(&request(&folder, &folder, None)).0.not_a_repository);
 
         // Git finds this repository and then fails on its index: the
         // operator's to repair.
         std::fs::remove_file(folder.join(".git")).unwrap();
         git(&folder, &["init", "-q"]);
         std::fs::write(folder.join(".git/index"), "not an index").unwrap();
-        let broken = read(&request(&folder, &folder, None));
-        assert!(
-            broken
-                .unavailable_reason
-                .as_deref()
-                .is_some_and(|reason| reason.starts_with("git status failed")),
+        let (broken, detail) = read(&request(&folder, &folder, None));
+        assert_eq!(
+            broken.unavailable_reason.as_deref(),
+            Some("changes.git_failed"),
             "{broken:?}"
+        );
+        assert!(
+            detail.is_some_and(|reason| reason.starts_with("git status failed")),
+            "the log keeps Git's own words"
         );
         assert!(!broken.not_a_repository);
     }

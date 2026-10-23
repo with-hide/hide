@@ -549,7 +549,7 @@ fn switch_on(runtime: &mut Runtime, ids: &[&str]) {
         .map(|adapter| {
             let piece = crate::model::KitPieceSnapshot {
                 state: hide_kit::ComponentState::Installed,
-                reason: None,
+                why: None,
                 location: None,
             };
             crate::model::KitAgentSnapshot {

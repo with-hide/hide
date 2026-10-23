@@ -6,8 +6,8 @@
 
 use super::*;
 use crate::model::{
-    CheckoutSnapshot, PR_CARD_LIMIT, PrCardSnapshot, PrFeedbackSnapshot, PrLinkSnapshot,
-    PrWriteSnapshot, PullRequestBadge, PullRequestSnapshot,
+    CheckoutSnapshot, CodedFailure, PR_CARD_LIMIT, PrCardSnapshot, PrFeedbackSnapshot,
+    PrLinkSnapshot, PrWriteSnapshot, PullRequestBadge, PullRequestSnapshot,
 };
 
 /// How long a merged pull request with no worktree here stays on the tab (D-52).
@@ -120,7 +120,7 @@ impl Runtime {
         else {
             self.set_error(
                 "pr_open.unknown_project",
-                "이 core가 아는 Git 프로젝트가 아닙니다",
+                "the project is not a Git project this core knows",
                 false,
             );
             return true;
@@ -132,7 +132,10 @@ impl Runtime {
         else {
             self.set_error(
                 "pr_open.unknown_pull_request",
-                format!("PR #{}은 이 프로젝트의 목록에 없습니다", payload.pr_number),
+                format!(
+                    "pull request #{} is not in this project's list",
+                    payload.pr_number
+                ),
                 false,
             );
             return true;
@@ -156,7 +159,7 @@ impl Runtime {
             ) else {
                 self.set_error(
                     "pr_open.no_checkout",
-                    "이 프로젝트에는 카드를 열 Workspace가 없습니다",
+                    "the project has no checkout to open the card in",
                     false,
                 );
                 return true;
@@ -212,7 +215,7 @@ impl Runtime {
         let (node, workspace) = self
             .issue_project(workspace_id)
             .filter(|(_, workspace)| workspace.is_git)
-            .ok_or_else(|| "이 core가 아는 Git 프로젝트가 아닙니다".to_owned())?;
+            .ok_or_else(|| "the project is not a Git project this core knows".to_owned())?;
         let pull_request = workspace
             .pull_requests
             .iter()
@@ -220,18 +223,27 @@ impl Runtime {
                 pull_request.number == number && !(open_only && pull_request.badge.is_settled())
             })
             .cloned()
-            .ok_or_else(|| format!("PR #{number}은 열려 있지 않습니다"))?;
+            .ok_or_else(|| format!("pull request #{number} is not open"))?;
         Ok((node, workspace, pull_request))
     }
 
-    fn fail_pr_link(&mut self, mut link: PrLinkSnapshot, step: &str, message: String) -> bool {
+    /// `detail` is the failure in the core's own words, for the log; the
+    /// card words `failure`.
+    fn fail_pr_link(
+        &mut self,
+        mut link: PrLinkSnapshot,
+        step: &str,
+        failure: CodedFailure,
+        detail: impl std::fmt::Display,
+    ) -> bool {
         crate::diagnostic!(serde_json::json!({
             "component": "pull_requests", "kind": "pr_link.failed",
-            "request": link.request_id, "pr": link.pr_number, "step": step, "reason": message,
+            "request": link.request_id, "pr": link.pr_number, "step": step,
+            "code": failure.code, "reason": detail.to_string(),
         }));
         link.step = step.into();
         link.phase = "failed".into();
-        link.message = Some(message);
+        link.failure = Some(failure);
         self.snapshot.pr_work.link = Some(link);
         true
     }
@@ -265,12 +277,19 @@ impl Runtime {
             issue_key: None,
             issue_id: None,
             created: false,
-            message: None,
+            failure: None,
         };
         let (machine, workspace, pull_request) =
             match self.open_pull_request(&link.workspace_id, link.pr_number) {
                 Ok(target) => target,
-                Err(message) => return self.fail_pr_link(link, "link", message),
+                Err(message) => {
+                    return self.fail_pr_link(
+                        link,
+                        "link",
+                        CodedFailure::new("pr_link.pr_unknown"),
+                        message,
+                    );
+                }
             };
         crate::diagnostic!(serde_json::json!({
             "component": "pull_requests", "kind": "pr_link.requested",
@@ -289,7 +308,7 @@ impl Runtime {
                 });
                 let (title, body) = match checked {
                     Ok(checked) => checked,
-                    Err(message) => return self.fail_pr_link(link, "create", message),
+                    Err(error) => return self.fail_pr_link(link, "create", error.into(), error),
                 };
                 if local {
                     return match self.create_local_issue(
@@ -298,7 +317,9 @@ impl Runtime {
                         &title,
                         &body,
                     ) {
-                        Err(message) => self.fail_pr_link(link, "create", message),
+                        Err((failure, detail)) => {
+                            self.fail_pr_link(link, "create", failure, detail)
+                        }
                         Ok(number) => {
                             let link = PrLinkSnapshot {
                                 created: true,
@@ -311,7 +332,14 @@ impl Runtime {
                 }
                 let place = match self.github_place(machine.as_deref(), &workspace.path) {
                     Ok(place) => place,
-                    Err(message) => return self.fail_pr_link(link, "create", message),
+                    Err(message) => {
+                        return self.fail_pr_link(
+                            link,
+                            "create",
+                            CodedFailure::new("pr_link.repository_unknown"),
+                            message,
+                        );
+                    }
                 };
                 let request_id = link.request_id.clone();
                 self.snapshot.pr_work.link = Some(PrLinkSnapshot {
@@ -343,14 +371,20 @@ impl Runtime {
                     Ok(()) => true,
                     Err(message) => {
                         let link = self.snapshot.pr_work.link.take().expect("slot set above");
-                        self.fail_pr_link(link, "create", message)
+                        self.fail_pr_link(
+                            link,
+                            "create",
+                            CodedFailure::new("pr_link.worker_unavailable"),
+                            message,
+                        )
                     }
                 }
             }
             _ => self.fail_pr_link(
                 link,
                 "link",
-                "잇는 이슈 하나 또는 새 이슈 하나를 보내야 합니다".to_owned(),
+                CodedFailure::new("pr_link.request_invalid"),
+                "the request names neither one issue to link nor one new issue",
             ),
         }
     }
@@ -372,7 +406,8 @@ impl Runtime {
             return self.fail_pr_link(
                 link,
                 "link",
-                format!("{key}는 이 프로젝트의 이슈가 아닙니다"),
+                CodedFailure::new("pr_link.issue_not_in_project"),
+                format!("{key} is not an issue of this project"),
             );
         };
         let id = crate::local_issues::display_id(number);
@@ -382,7 +417,8 @@ impl Runtime {
             return self.fail_pr_link(
                 link,
                 "link",
-                "이 PR의 브랜치를 가진 워크트리가 없어 Local 이슈를 이을 곳이 없습니다".to_owned(),
+                CodedFailure::new("pr_link.no_worktree"),
+                "no worktree holds the pull request's branch",
             );
         };
         let checkout_id = checkout.id.clone();
@@ -394,7 +430,12 @@ impl Runtime {
         if let Err((_, message)) = self.link_checkout_issue(&checkout_id, &id) {
             self.pr_link_checkout = None;
             let link = self.snapshot.pr_work.link.take().expect("slot set above");
-            return self.fail_pr_link(link, "link", message);
+            return self.fail_pr_link(
+                link,
+                "link",
+                CodedFailure::new("pr_link.link_not_saved"),
+                message,
+            );
         }
         true
     }
@@ -412,7 +453,12 @@ impl Runtime {
         };
         match error {
             Some(message) => {
-                self.fail_pr_link(link, "link", message);
+                self.fail_pr_link(
+                    link,
+                    "link",
+                    CodedFailure::new("pr_link.link_not_saved"),
+                    message,
+                );
             }
             None => {
                 self.snapshot.pr_work.link = Some(PrLinkSnapshot {
@@ -438,11 +484,23 @@ impl Runtime {
             workspace.home_issues.repository.as_deref() == Some(reference.repository.as_str())
         });
         let Some(reference) = reference else {
-            return self.fail_pr_link(link, "link", format!("{key}는 이 저장소의 이슈가 아닙니다"));
+            return self.fail_pr_link(
+                link,
+                "link",
+                CodedFailure::new("pr_link.issue_not_in_project"),
+                format!("{key} is not an issue of this repository"),
+            );
         };
         let place = match self.github_place(machine, &workspace.path) {
             Ok(place) => place,
-            Err(message) => return self.fail_pr_link(link, "body", message),
+            Err(message) => {
+                return self.fail_pr_link(
+                    link,
+                    "body",
+                    CodedFailure::new("pr_link.repository_unknown"),
+                    message,
+                );
+            }
         };
         link.issue_key = Some(key.to_owned());
         link.issue_id = Some(format!("#{}", reference.number));
@@ -460,7 +518,12 @@ impl Runtime {
         );
         if let Err(message) = spawned {
             let link = self.snapshot.pr_work.link.take().expect("slot set above");
-            return self.fail_pr_link(link, "body", message);
+            return self.fail_pr_link(
+                link,
+                "body",
+                CodedFailure::new("pr_link.worker_unavailable"),
+                message,
+            );
         }
         true
     }
@@ -499,7 +562,14 @@ impl Runtime {
         };
         let issue = match created {
             Ok(issue) => issue,
-            Err(message) => return self.fail_pr_link(link, "create", message),
+            Err(message) => {
+                return self.fail_pr_link(
+                    link,
+                    "create",
+                    CodedFailure::new("pr_link.create_failed"),
+                    message,
+                );
+            }
         };
         let reference = issue.reference.clone();
         let target = self.open_pull_request(&link.workspace_id, link.pr_number);
@@ -519,7 +589,8 @@ impl Runtime {
         {
             self.link_pr_branch(workspace, pull_request, &reference);
         }
-        let written = written.unwrap_or_else(|| Err("PR 본문을 쓰지 않았습니다".to_owned()));
+        let written =
+            written.unwrap_or_else(|| Err("the pull request's body was not written".to_owned()));
         self.finish_pr_body(request_id, &reference, written);
         true
     }
@@ -543,7 +614,14 @@ impl Runtime {
         };
         let wrote = match written {
             Ok(wrote) => wrote,
-            Err(message) => return self.fail_pr_link(link, "body", message),
+            Err(message) => {
+                return self.fail_pr_link(
+                    link,
+                    "body",
+                    CodedFailure::new("pr_link.body_not_written"),
+                    message,
+                );
+            }
         };
         crate::diagnostic!(serde_json::json!({
             "component": "pull_requests", "kind": "pr_link.body_written",

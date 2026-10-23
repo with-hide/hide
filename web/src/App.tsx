@@ -19,6 +19,8 @@ import { Palette } from "./Palette";
 import { installProbe, probeEnabled } from "./probe";
 import { configurePaneVisits, expectPane, expectSurface, focusSignature } from "./recent";
 import { FirstRunWizard } from "./FirstRunWizard";
+import { HerdrGate } from "./HerdrTakeover";
+import { herdrGate } from "./herdrTakeoverRules";
 import { useAgentNotifications } from "./agentNotices";
 import { useFetchLook, useGithubLook } from "./githubLook";
 import { SettingsGate } from "./SettingsSheet";
@@ -279,6 +281,27 @@ export function App() {
     ["add_project", <AddProjectDialog actions={actions} />],
     ["browser", <BrowserHost actions={actions} />],
   ];
+  // A Herdr on another protocol holds all of Hide: the screen that says so is drawn in place of the shell, so no
+  // window, menu item or key opens a workspace on a server Hide cannot use (PRD herdr-takeover).
+  const gate = useShellStore((s) => herdrGate(s.rest));
+  // A failure of something tried on that server, before the screen came or while it stood, is not one to act on
+  // once it goes.
+  useEffect(() => {
+    useUiStore.getState().setNotice(null);
+  }, [gate]);
+  if (gate) {
+    return (
+      <TooltipProvider>
+        <InterfaceLanguageBoundary />
+        <RenderBoundary region="herdr_gate" fallback={<ShellFailed />}>
+          <div className="flex h-full flex-col bg-background text-foreground" data-herdr-gate-screen={gate}>
+            <header className="window-drag h-(--size-tab-strip) shrink-0" />
+            <HerdrGate actions={actions} gate={gate} />
+          </div>
+        </RenderBoundary>
+      </TooltipProvider>
+    );
+  }
   const leftOut = ([region, node]: [string, ReactNode]) => (
     <RenderBoundary key={region} region={region} fallback={null}>
       {node}

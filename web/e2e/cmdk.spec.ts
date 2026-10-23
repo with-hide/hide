@@ -498,7 +498,7 @@ test("⌘K lists a typed URL as unavailable in a browser tab, and opens it as a 
     await input(page).fill("localhost:5173");
     const row = page.locator('[data-palette-row="command:open-url"]');
     await expect(row).toHaveAttribute("data-palette-dim", "true");
-    await expect(row).toContainText("Pages open in the hide desktop app.");
+    await expect(row).toContainText("Pages open in the Hide desktop app.");
     await expect(page.locator("[data-palette-action]")).toHaveCount(0);
     await screenshot(page, "cmdk-open-url-unavailable");
     await page.keyboard.press("Enter");

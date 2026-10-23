@@ -4,7 +4,7 @@ use herdr_core::delivery::{BODY_LIMIT, Command, HOOK_LETTERS};
 
 use crate::env::{self, Env};
 
-pub const USAGE: &str = "hide request send <target> --intent <key> --body <text> [--kind request|block|report|progress] [--now]\nhide request reply <id> --intent <key> --body <text>\nhide request ack|cancel|show <id>\nhide inbox [--hook [--prompt-digest <sha256>] [--session <id>] [--tool|--turn-end]]\nhide watch start <target> [--observer <id>] [--actor <id>]\nhide watch assign <watch-or-target-id> --observer <id> [--actor <id>] [--expected-generation <n>] [--approval <text>]\nhide watch stop <id>\nhide watch list\nDelivery commands require a running daemon and a current agent pane; they do not require an open renderer.";
+pub const USAGE: &str = "hide request send <target> --intent <key> --body <text> [--kind request|block|report|progress] [--now]\nhide request reply <id> --intent <key> --body <text>\nhide request ack|cancel|show <id>\nhide inbox [--hook [--prompt-digest <sha256>] [--session <id>] [--tool|--turn-end]]\nhide watch start <target> [--observer <id>] [--actor <id>]\nhide watch assign <watch-or-target-id> --observer <id> [--actor <id>] [--expected-generation <n>] [--approval <text>]\nhide watch stop <id>\nhide watch list\nThese commands need a running Hide and a current agent pane; Hide's window does not have to be open.";
 
 pub fn parse<'a>(
     topic: &str,
@@ -145,12 +145,12 @@ pub fn parse<'a>(
                     _ => return Err(USAGE.into()),
                 }
             }
-            let intent = intent.ok_or(USAGE)?;
+            let intent = intent.ok_or("--intent is required")?;
             let body = body
                 .filter(|body: &String| !body.trim().is_empty())
-                .ok_or(USAGE)?;
+                .ok_or("--body is required and cannot be blank")?;
             if body.len() > BODY_LIMIT {
-                return Err("capacity".into());
+                return Err(format!("the letter body is over {} KiB", BODY_LIMIT / 1024));
             }
             if verb == Some("send") {
                 Ok(Command::Send {
@@ -220,7 +220,7 @@ pub fn run(env: &Env, command: Command) -> Result<(), String> {
         Err(code) => {
             println!(
                 "{}",
-                serde_json::json!({"ok":false,"reason":code,"next_action":"Check the running daemon and current agent pane, then retry the same intent"})
+                serde_json::json!({"ok":false,"reason":code,"next_action":crate::cli::request_next_action(&code)})
             );
             Err(code)
         }

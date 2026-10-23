@@ -20,7 +20,7 @@ This is the only part of the tree Hide cannot read from the session snapshot, an
 | Grok | `~/.grok/hooks/hide.json`, Hide's own file ([Grok's own hooks](#groks-own-hooks)) |
 
 On Windows `~` is the account's profile folder (`%USERPROFILE%`), where Claude Code, Codex, Grok keeps these files and OpenCode, Pi and omp load their plugins and extensions from.
-Beside the hooks, Hide records Claude Code's, Codex's and agy's own folder trust for a worktree it made, in each agent's own file ([Folder trust for the worktrees Hide makes](#folder-trust-for-the-worktrees-hide-makes)).
+Beside the hooks, Hide records Claude Code's, Codex's, agy's and Grok's own folder trust for a worktree it made, in each agent's own file ([Folder trust for the worktrees Hide makes](#folder-trust-for-the-worktrees-hide-makes)).
 
 One entry is appended per registered event, and nothing else in the file is touched.
 The common writer retains JSON source spans through `serde_json::value::RawValue`, splicing only owned changes so unrelated members, groups and handlers retain their literal whitespace, ordering and escapes.
@@ -357,7 +357,7 @@ The per-call cost is what an ordinary shell call pays: the payload is read withi
 
 ## Folder trust for the worktrees Hide makes
 
-Claude Code, Codex and agy each ask, the first time they start interactively in a folder they have not been told to trust, whether to trust it, and a delegated child stopped at that question waits for an answer nobody is there to give.
+Claude Code, Codex, agy and Grok each ask, the first time they start interactively in a folder they have not been told to trust, whether to trust it, and a delegated child stopped at that question waits for an answer nobody is there to give.
 So before Hide starts one of them in a worktree it made for that start (`hide agent spawn` into a new worktree, a task's agent), it records that agent's own trust of the worktree on the machine that will run it: the core sends `agent_trust` to the node of the machine that runs the worktree's pane, this Mac's or a connected device's, and the node writes it there (`hide_agent_hooks::folder_trust`).
 That node is the pane's, not the one the agent's PATH is checked on (none for a device, whose own Herdr answers for its PATH), so a worktree made on a device from the screen or the phone gets its trust like one made here; a pane whose machine cannot be reached refuses the start with `agent_trust_unavailable`.
 A start in a checkout that already existed, the operator's own or an earlier worktree, records nothing, and the agent asks there as it would outside Hide.
@@ -367,18 +367,24 @@ A start in a checkout that already existed, the operator's own or an earlier wor
 | Claude Code | `~/.claude.json`, or `~/.claude/.config.json` while Claude Code still keeps that older file and it is not empty | `projects["<worktree>"].hasTrustDialogAccepted: true` |
 | Codex | `~/.codex/config.toml`, written by Codex's own app-server | `[projects."<worktree>"] trust_level = "trusted"` |
 | agy | `~/.gemini/antigravity-cli/settings.json` | the worktree in `trustedWorkspaces` |
+| Grok | `~/.grok/trusted_folders.toml` | `[folders."<main checkout>"] trusted = true` and `decided_at`, for the repository the worktree was made from |
 
 Claude Code's and Codex's files are found from the same folder as their hook files (`AgentRuntime::trust_path` beside `config_path`), so the trust and the hooks always land in one place.
-Like the hooks, they are the account's default folders: an agent run with `CLAUDE_CONFIG_DIR` or `CODEX_HOME` pointing elsewhere reads neither Hide's hooks nor its trust, and asks.
+Like the hooks, they are the account's default folders: an agent run with `CLAUDE_CONFIG_DIR`, `CODEX_HOME` or `GROK_HOME` pointing elsewhere reads neither Hide's hooks nor its trust, and asks.
 
 The worktree is named by its resolved path, spelled as the agent compares it: with `/` between names for Claude Code on Windows, and in lower case for Codex on Windows, which compares folders there without case.
-The entry names the worktree itself and never the repository it was made from.
+For Claude Code, Codex and agy the entry names the worktree itself and never the repository it was made from.
 Answering an agent's own question in a linked worktree trusts the repository's main checkout, which is the operator's and would trust every worktree of that repository with it; Claude Code 2.1.302 and Codex 0.163.0 read an entry for the exact folder before the repository's, and trust given to a folder above a repository does not reach into it (measured on 2026-10-17).
 
-Hide keeps which entries it added in its own record, `~/.hide/agent-hooks/<agent>-trust.json` (`claude-trust.json`, `codex-trust.json`, `antigravity-trust.json`), at most 4096 folders that exist per agent; a trust past that is refused with the cap in its reason.
+Grok is the exception: Grok 1.0.67 keeps the trust of every worktree of a repository under the repository's main checkout and reads no other entry for it, so an entry for the worktree itself, or for a folder above the repository, leaves Grok asking (measured on 2026-10-23 in an isolated `GROK_HOME`; `workspace_key` in Grok's published folder trust source says the same).
+Hide's Grok entry therefore names the main checkout, by its resolved path as Grok spells it (`dunce::canonicalize`: no `\\?\` prefix on Windows), and while it is there Grok also starts in the main checkout and the repository's other worktrees without asking.
+Hide keeps it only while a worktree it made for Grok in that repository is there: the record holds each worktree with the entry it needed, and the entry leaves with the last of them.
+A worktree whose repository has no main checkout (a bare repository's) is refused, since Grok keeps its trust under no folder Hide can name.
+
+Hide keeps which entries it added in its own record, `~/.hide/agent-hooks/<agent>-trust.json` (`claude-trust.json`, `codex-trust.json`, `antigravity-trust.json`, `grok-trust.json`), by the worktree each was added for, at most 4096 folders that exist per agent; a trust past that is refused with the cap in its reason.
 The record is written before the entry and taken back when the entry could not be written, so Hide never leaves an entry its record does not name.
 An entry that is already there is the operator's: Hide writes nothing and records nothing, so removing the worktree leaves it.
-Removing a worktree Hide made takes out the entries Hide added for it, for each agent, and switching an agent off, or removing the machine from Hide, takes out every entry Hide added for that agent; an entry the operator added, before Hide or after it, stays, and so does what else the agent keeps under the same folder (Claude Code's project settings, a Codex project's other keys).
+Removing a worktree Hide made takes out the entries Hide added for it, for each agent, unless another worktree Hide trusted still needs the same entry (Grok's main checkout), and switching an agent off, or removing the machine from Hide, takes out every entry Hide added for that agent; an entry the operator added, before Hide or after it, stays, and so does what else the agent keeps under the same folder (Claude Code's project settings, a Codex project's other keys).
 The removal runs once the folder is gone, so it finds the entry by the key Hide recorded, compared as the system compares folders: the folder's parent resolved, and on Windows without case and with either separator, so Git's `C:/x` finds Codex's `c:\x`.
 A worktree removed outside Hide (by hand) leaves its entries until the next trust Hide records for that agent, which takes out every entry of Hide's whose folder is gone in the same write.
 Codex's entries are taken out through its app-server too; with no Codex left to ask, they and Hide's record of them stay until a pass that finds one, and nothing reads them meanwhile.
@@ -389,15 +395,17 @@ The JSON files are rewritten through the same lossless read and compare-before-r
 Claude Code rewrites `~/.claude.json` while it holds its own lock on it, the `.lock` folder beside the file's real path (proper-lockfile resolves a link, so a linked `~/.claude.json` is locked beside its target), and reads the file again under that lock, so Hide changes the file only while it holds the same lock and neither overwrites the other.
 Hide waits up to two seconds for it and takes over a lock older than ten seconds, which Claude Code treats as left by a process that ended, removing only the folder it saw stale; it removes its own lock only while the folder there is still the one it made, and does not write once Claude Code has taken the lock over.
 Hide's own changes never meet at Claude Code's lock, since each holds Hide's lock first; between Hide and Claude Code, a takeover of a stale lock has the moment between the look and the removal that Claude Code's own takeover has.
+Grok replaces `trusted_folders.toml` whole while it holds an exclusive lock on `trusted_folders.toml.lock` beside it (`fs2`: `flock` on Unix, `LockFileEx` on Windows) and reads the file again under it, so Hide reads and replaces the file only while it holds the same lock, waiting up to two seconds for it; Grok rewrites the file from its `folders` alone, and Hide changes only the entries it adds or takes out.
 Codex's file is never written by Hide: `hide_agent_hooks::codex_trust` starts `codex app-server`, reads the user layer's `projects` with `config/read`, writes the one key with `config/batchWrite` against the version it read, and reads it back, as it does for [Hide's own hooks](#codex-trusts-hides-own-hooks).
 
 A trust that cannot be recorded refuses the start before the agent runs, with `agent_trust_failed: <agent>'s trust of <worktree> could not be recorded (<reason>)`, so no agent waits unseen on its question (PRD antigravity-first-class B20).
 The node refuses to trust a folder that is not a Git worktree, a path written with `.` or `..`, the filesystem root, the home folder or a folder above it, whoever asks.
-When the operator marked the worktree, or the repository's main checkout it was made from, `untrusted` in Codex, Hide does not override that answer: the reason names that folder and says to trust it in Codex or to start the agent there by hand.
-A Codex configuration the operator's organization manages that decides the folder's trust instead, a machine with no Codex Hide can find, a Claude Code lock held past two seconds and a settings file that does not parse refuse the start too, each with its reason; a machine that is not connected refuses it with `agent_trust_unavailable`.
+When the operator marked the worktree, or the repository's main checkout it was made from, `untrusted` in Codex, or answered Grok's question for that main checkout with No (`trusted = false`), Hide does not override that answer: the reason names that folder and says to trust it in that agent or to start the agent there by hand.
+A Codex configuration the operator's organization manages that decides the folder's trust instead, a machine with no Codex Hide can find, a Claude Code or Grok lock held past two seconds and a settings file that does not parse refuse the start too, each with its reason; a machine that is not connected refuses it with `agent_trust_unavailable`.
 
 `hide-agent-hooks/src/folder_trust/tests.rs` checks each agent's format, spelling, ownership and removal in a fixture home on every pull request, on Linux in `rust` and on Windows in `windows check`, and `tests/it/codex_folder_trust.rs` runs Codex's through a stand-in app-server on Linux.
 The nightly `agent trust contract` (`.github/workflows/agent-trust-contract.yml`) installs the pinned Claude Code and Codex on all three systems and checks that the real ones read what Hide wrote: Codex's app-server loads a worktree's own settings once Hide trusted it and stops once Hide took the trust out (`tests/it/codex_binary.rs`), and Claude Code in a pane of the pinned Herdr starts at its prompt in the worktree Hide trusted and asks its question in the repository's other worktree (`herdr-core/src/agent_start/real_agent_trust_tests.rs`).
+Grok's real reading is measured by the agent journey's `start_untrusted` cell ([VERIFICATION.md](VERIFICATION.md)), on macOS only so far; no nightly lane installs Grok.
 The pull request runs no registry install, so a failure that is not Hide's never holds one; a change to the trust writer is proven on all three systems with `gh workflow run nightly.yml --ref <branch> -f lane=agy`.
 
 ## Project guardrails
@@ -466,9 +474,9 @@ A pane with no record, and a record of another session than the call's, gives ne
 
 The prompt hook adds the record's lines to the session context, at most three:
 
-- the plan's, `계획: 지금 <step> (n/m) · 다음 <step> · <N분 전 갱신>`, with the review's rule after it while the plan waits for review, or, when it was not updated for 30 minutes, the `hide plan node <key> --status done` command; a finished plan has none;
-- a mission worker's, `미션 <id> · 노드 <key> · 범위 <criteria or title> · 머지 금지 · 에이전트 띄우기 금지`, without `머지 금지` for a mission that goes through the merge;
-- a Conductor's, `미션 <done>/<nodes> · 일하는 중 <n> · 편지 <n>통 · 결정 기다림 <있음/없음>`.
+- the plan's, `Plan: now <step> (n/m) · next <step> · updated <N> min ago`, with the review's rule after it while the plan waits for review, or, when it was not updated for 30 minutes, the `hide plan node <key> --status done` command; a finished plan has none;
+- a mission worker's, `Mission <id> · node <key> · range <criteria or title> · no merging · no starting agents`, without `no merging` for a mission that goes through the merge;
+- a Conductor's, `Mission <done>/<nodes> · working <n> · letters <n> · decision waiting: <yes/no>`.
 
 The pre-tool hook reads only the record, after the project guardrails and before the spawn guard, and never asks the daemon; a tool call refused here is logged in the spawn guard's log as `plan.refused` with the rule, the runtime and the pane, never the command.
 It refuses three things and lets everything else run, reading and searching included:
@@ -855,7 +863,7 @@ OpenCode's sessions live in its database rather than in session files, so it has
 An agent is a row only when its documentation confirms where it reads skills and the name of the program it installs.
 The other fifteen agents earlier builds supported are no longer rows (see Retired agents below).
 Hide does not write an agent's `AGENTS.md` or `CLAUDE.md`, its MCP configuration or its model settings, and it runs no installer for an agent.
-The things it records in an agent's own state are Codex's trust for Hide's own hooks, below, and Claude Code's, Codex's and agy's folder trust for the worktrees Hide makes ([Folder trust for the worktrees Hide makes](#folder-trust-for-the-worktrees-hide-makes)).
+The things it records in an agent's own state are Codex's trust for Hide's own hooks, below, and Claude Code's, Codex's, agy's and Grok's folder trust for the worktrees Hide makes ([Folder trust for the worktrees Hide makes](#folder-trust-for-the-worktrees-hide-makes)).
 
 ### Herdr's integration for an agent
 
@@ -934,7 +942,7 @@ Removing Hide's hooks leaves its trust records in `config.toml`; each one matche
 Codex's `--dangerously-bypass-hook-trust` and `bypass_hook_trust` skip the review for every hook and are not used.
 
 The app-server is one child per check, started through the one spawn helper, bounded by a 15 second overall and 5 second per-request deadline, by caps on what it may print, and by the kit's stop flag, and ended with its whole process tree on success, failure and timeout alike (a process that left that tree and holds its output open is not waited for: the reader thread ends when it lets go); it runs on the kit worker or the device helper, never under the runtime lock.
-When Codex is there and the trust cannot be recorded, the Codex hook part reads Failed with one line, "Codex has not trusted Hide's hook: …; it will ask you to review it", the cause class goes to the diagnostic log with the pass's record (`kit apply.completed` names each part's reason), Codex's own words go to the kit's standard error as `codex_trust_failed` (seen where the kit runs in a terminal, and in a device helper's log, but not from the packaged app's detached daemon), the other parts are installed as usual, and the next pass tries again.
+When Codex is there and the trust cannot be recorded, the Codex hook part reads Failed with one line, "Codex has not trusted Hide's hook yet. Review it in Codex." (the `codex_untrusted` cause; the kit's own sentence with the cause class stays in its report for the `hide` CLI), the cause class goes to the diagnostic log with the pass's record (`kit apply.completed` names each part's reason), Codex's own words go to the kit's standard error as `codex_trust_failed` (seen where the kit runs in a terminal, and in a device helper's log, but not from the packaged app's detached daemon), the other parts are installed as usual, and the next pass tries again.
 `status` runs every few seconds while Settings is open and starts no process, so it repeats what the last pass in this process found; a failure the operator fixed by approving the hook in Codex clears at the next pass or Reinstall, which Failed offers.
 `hide-agent-hooks/tests/it/codex_trust.rs` runs the module against a stand-in app-server (`tests/fixtures/fake-codex.py`), and `hide-kit`'s `codex_trust_cases` runs the passes.
 Codex's app-server interface is marked experimental; a method or field that changes ends as the Failed line above, and Codex shows its screen, never a wrong trust.

@@ -1,5 +1,6 @@
 import { ChevronDownIcon, GitForkIcon, ListTreeIcon } from "lucide-react";
 import { useMemo, type ReactNode } from "react";
+import type { TFunction } from "i18next";
 import type { Actions } from "./actions";
 import { agentProductName } from "./agentAdapters";
 import { askWhat, VerbText } from "./components/agent-tree";
@@ -10,7 +11,9 @@ import { Elapsed } from "./components/elapsed";
 import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
-import { localDeviceId, type PaneBand, type PaneHeader, type PaneRow, type SnapshotRest, type AgentRow } from "./snapshot";
+import { localDeviceId, type PaneBand, type PaneHeader, type PaneRow, type SnapshotRest, type AgentRow, type Device, type RemoteStatus } from "./snapshot";
+import { remoteStateText } from "./coreError";
+import { machineName } from "./screenMachine";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { relationState } from "./lineage";
@@ -75,10 +78,11 @@ function ForkSourceButton({ paneId, source, actions }: { paneId: string; source:
  * The pane's second row over its terminal (docs/UI_BEHAVIOR.md, Agent panes and
  * the Agents explorer): the child-tree entry, then the turn the core selects,
  * `<request> → <answer>`, where the answer is an ask, the pane agent's own
- * progress or a finished turn's result. When the turn does not fit one line
- * the answer wraps under the request, two rows, each cut only when it
- * overflows its own (PRD pane-last-request D-04). Neither the terminal
- * viewport nor its PTY grid moves for it.
+ * progress or a finished turn's result. A working turn with nothing beyond
+ * its request shows the request alone: the status mark and the working line
+ * already say it works. Only an ask wraps its answer under the request; a
+ * quiet turn stays one line in the head's own surface, each part cut. Neither
+ * the terminal viewport nor its PTY grid moves for it.
  */
 export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; header: PaneHeader | undefined; actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -86,7 +90,7 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
   const outcome = useShellStore((state) => state.rest?.status?.pane_focus_request);
   const agents = usePaneAgents();
   const { children, devices } = usePaneChildren(paneId, agents);
-  const childConnection = children?.unavailableDevice ? devices?.status?.remote?.find((row) => row.target_id === children.unavailableDevice)?.message ?? t("devices.rail.notConnected") : null;
+  const childConnection = children?.unavailableDevice ? notConnectedText(devices?.status?.remote, devices?.navigator?.devices, children.unavailableDevice, t) : null;
   const band = header?.band ?? null;
   // A running plan's current step and its line take the progress place (PRD hide-plan B7).
   const planLine = useShellStore((state) => {
@@ -107,8 +111,7 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
   const tree = children ? <PaneTreeButton paneId={paneId} children={children} agents={agents} actions={actions} connection={childConnection} /> : null;
   const answer = <>
     {band ? <AskBand paneId={paneId} band={band} navigation={navigation} unreachable={unreachable} failed={progress?.phase === "failed"} actions={actions} hasTree={children !== null} /> : <>
-      {finished ? <span className="shrink-0 font-semibold text-foreground" data-pane-finished={paneId}>{t("paneTurn.finished")}</span> : null}
-      {!finished && !ownProgress && request && header?.working ? <span className="shrink-0" data-pane-working-word={paneId}>{statusText(t, "working")}</span> : null}
+      {finished ? <span className="shrink-0 font-medium text-success" data-pane-finished={paneId}>{t("paneTurn.finished")}</span> : null}
       {waitingOnChildren ? <span className="min-w-0 flex-1 truncate" data-pane-children-wait={paneId}>{[statusText(t, "waiting"), t("agents.line.children", { count: waitingOnChildren })].join(" · ")}</span> : null}
       {ownProgress ? <Hint label={ownProgress}><span className="min-w-0 flex-1 truncate" data-pane-own-progress={paneId}>{ownProgress}</span></Hint> : null}
       {childConnection ? <span className={cn("min-w-0 truncate", ownProgress ? "max-w-1/4 shrink" : "flex-1")} title={childConnection} data-pane-child-connection={paneId}>{childConnection}</span> : null}
@@ -116,23 +119,30 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
     {band?.action ? <button type="button" data-pane-band-open={paneId} disabled={unreachable !== null || progress?.phase === "pending" || (progress?.phase === "failed" && !progress.retryable)} aria-busy={progress?.phase === "pending"} className="shrink-0 rounded-xs border border-border bg-background px-xs py-xxs text-micro text-foreground outline-none hover:brightness-95 focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50" onClick={() => actions.followRelation(paneId, band.action!.pane_id, band.action!.label)}>{progress?.phase === "failed" && progress.retryable ? t("common.retry") : t("common.open")}</button> : null}
   </>;
   const kind = band?.kind ?? (finished ? "finished" : ownProgress ? "progress" : waitingOnChildren ? "waiting" : request ? "request" : "children");
-  const tone = band ? "border-l-2 border-warning text-foreground" : "text-muted-foreground";
+  // A working turn with no word beyond its request draws no answer at all.
+  const answered = kind !== "request" || childConnection !== null;
+  // An ask is the one row the operator acts on, so it keeps the raised
+  // surface and wraps; a quiet turn sits in the head's surface on one line.
+  const tone = band ? cn("bg-secondary border-l-2 border-warning text-foreground", request ? "flex-wrap" : "flex-nowrap") : "flex-nowrap bg-card border-t border-border text-muted-foreground";
   return <div className="absolute inset-x-0 top-0 z-10 bg-background">
     {/* One row whether or not it leads with a request, so the tree's
         popover stays open when the request comes or goes. Each part is one
-        flex item: with a request, the answer wraps under it as a whole when
-        the turn does not fit, and each then fills its own row. */}
-    <div className={cn("flex min-w-0 items-center gap-x-xs bg-secondary px-sm text-caption", request ? "flex-wrap" : "flex-nowrap", tone)} data-pane-header-band={kind} data-pane-turn={request ? paneId : undefined}>
+        flex item: an ask's answer wraps under its request as a whole when
+        the turn does not fit; a quiet turn caps its request at half the row
+        and cuts each part instead. */}
+    <div className={cn("flex min-w-0 items-center gap-x-xs px-sm text-caption", tone)} data-pane-header-band={kind} data-pane-turn={request ? paneId : undefined}>
       {tree || request ? (
-        <div key="request" className="flex h-(--size-pane-header) min-w-0 max-w-full shrink items-center gap-xs" data-pane-turn-part="request">
+        <div key="request" className={cn("flex h-(--size-pane-header) min-w-0 shrink items-center gap-xs", !band && answered ? "max-w-1/2" : "max-w-full")} data-pane-turn-part="request">
           {tree}
           {request ? <PaneTurnCard paneId={paneId} actions={actions} trigger={(state) => <TurnRequestButton paneId={paneId} request={request} state={state} />} /> : null}
         </div>
       ) : null}
-      <div key="answer" className={cn("flex h-(--size-pane-header) min-w-0 max-w-full grow items-center gap-xs", !request && "basis-0")} data-pane-turn-part="answer">
-        {request ? <span aria-hidden="true" className="shrink-0 text-subtle-foreground">→</span> : null}
-        {answer}
-      </div>
+      {answered ? (
+        <div key="answer" className={cn("flex h-(--size-pane-header) min-w-0 max-w-full grow items-center gap-xs", !request && "basis-0")} data-pane-turn-part="answer">
+          {request ? <span aria-hidden="true" className="shrink-0 text-subtle-foreground">→</span> : null}
+          {answer}
+        </div>
+      ) : null}
     </div>
     {workingLine}
   </div>;
@@ -155,7 +165,7 @@ function TurnRequestButton({ paneId, request, state }: { paneId: string; request
       data-pane-turn-request={paneId}
       data-pinned={state.pinned || undefined}
       data-state={state.open ? "open" : "closed"}
-      className="flex min-w-0 items-center gap-xxs rounded-xs px-xxs -mx-xxs text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:text-foreground"
+      className="flex min-w-0 items-center gap-xxs rounded-xs px-xxs -mx-xxs text-subtle-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:text-foreground"
       onMouseDown={(event) => event.preventDefault()}
       onClick={state.onToggle}
       onPointerEnter={state.onPointerEnter}
@@ -217,6 +227,12 @@ function AskBand({ paneId, band, navigation, unreachable, failed, actions, hasTr
   </>;
 }
 
+/** Why `device` is not connected, worded from its state; a device still connecting or holding its last report is plainly not connected. */
+function notConnectedText(remote: readonly RemoteStatus[] | undefined, devices: readonly Device[] | undefined, device: string, t: TFunction<"translation">): string {
+  const state = remote?.find((row) => row.target_id === device)?.state;
+  return !state || state === "not_connected" || state === "stale" ? t("devices.rail.notConnected") : remoteStateText(state, machineName(devices, device, t), t);
+}
+
 /** Why a pane on a device that is not connected cannot be opened now, or null when it can (B8). */
 function useUnreachable(paneId: string | null): string | null {
   const { t } = useInterfaceTranslation();
@@ -224,7 +240,7 @@ function useUnreachable(paneId: string | null): string | null {
     if (paneId === null) return null;
     const device = remoteTargetOfPane(state.rest, paneId);
     if (device === null || deviceConnected(state.rest, device)) return null;
-    return state.rest?.status?.remote?.find((row) => row.target_id === device)?.message ?? t("devices.rail.notConnected");
+    return notConnectedText(state.rest?.status?.remote, state.rest?.navigator?.devices, device, t);
   });
 }
 

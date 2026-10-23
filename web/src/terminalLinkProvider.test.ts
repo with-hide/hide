@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProbedPath } from "./host";
 import type { CellRow } from "./selection";
 import { useShellStore } from "./store";
-import { linkCandidates } from "./terminalLinks";
+import { linkCandidates, TOKEN_CANDIDATES } from "./terminalLinks";
 import type { SnapshotRest } from "./snapshot";
 import { PROBE_CACHE_CAP, PROBE_NEW_LIMIT, PROBE_TTL_MS, clearProbeCache, osc8Handler, owningCheckout, paneContext, pathLookups, probePaths, resolveGroups } from "./terminalLinkProvider";
 
@@ -205,7 +205,8 @@ describe("original spelling and bounded hover work", () => {
   });
 
   it("chooses each composite literal before shorter spellings or a location, with exact cells", async () => {
-    const spellings = ["(src/a.ts:12:5)에", "src/a.ts:12:5)에", "(src/a.ts:12:5)", "src/a.ts:12:5)", "src/a.ts:12:5", "src/a.ts"];
+    // Longest first; of two the same length, the one that keeps the token's start.
+    const spellings = ["(src/a.ts:12:5)에", "(src/a.ts:12:5)", "src/a.ts:12:5)에", "src/a.ts:12:5)", "src/a.ts:12:5", "src/a.ts"];
     for (let index = 0; index < spellings.length; index += 1) {
       clearProbeCache();
       const chosen = await resolveGroups(linkCandidates([row(spellings[0]!, 40)], 0), { cwd: "/w", root: "/r" }, host(spellings.slice(index).map((file) => "/w/" + file)));
@@ -224,7 +225,7 @@ describe("original spelling and bounded hover work", () => {
       clearProbeCache();
       const token = "(src/a.ts:12:5)에" + punctuation;
       const groups = linkCandidates([row(token, 40)], 0);
-      expect(groups[0]).toHaveLength(6);
+      expect(groups[0]!.length).toBeLessThanOrEqual(TOKEN_CANDIDATES);
       const chosen = await resolveGroups(groups, { cwd: "/w", root: "/r" }, host(["/w/(src/a.ts:12:5)", "/w/src/a.ts:12:5)", "/w/src/a.ts:12:5", "/w/src/a.ts"]));
       expect(chosen[0]!.resolved.found!.real).toBe("/w/(src/a.ts:12:5)");
       expect(chosen[0]!.candidate.spans).toEqual([{ row: 0, start: 0, end: 15 }]);

@@ -637,8 +637,12 @@ pub(crate) fn skill_location(dir: SkillDir, home: &Path) -> String {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PieceReport {
     pub state: ComponentState,
+    /// Why, in one sentence for the log and the `hide` CLI; `why` is what
+    /// the app words.
     #[serde(default)]
     pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<crate::PartWhy>,
     #[serde(default)]
     pub location: Option<String>,
 }

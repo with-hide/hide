@@ -17,6 +17,18 @@ pub use hide_node_link::{LinkAnswer, LinkError, NodeLink, call_as, call_as_with_
 
 const LIST_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Why a call to a checkout's host failed, as the code a screen words:
+/// `host.<code>` for the host's refusal, `link.not_connected`, `link.busy`
+/// or `link.unknown` for the link. The host's own sentence is the log's.
+pub fn link_failure_code(error: &LinkError) -> String {
+    match error {
+        LinkError::Refused(error) => format!("host.{}", error.code.as_str()),
+        LinkError::NotConnected(_) => "link.not_connected".to_owned(),
+        LinkError::Busy => "link.busy".to_owned(),
+        LinkError::Unknown(_) => "link.unknown".to_owned(),
+    }
+}
+
 /// Whether `path` is a directory on `node`. A node that cannot answer says
 /// no, so the caller falls back the way it does for a folder that is gone.
 pub fn is_directory(node: &dyn NodeLink, path: &str) -> bool {

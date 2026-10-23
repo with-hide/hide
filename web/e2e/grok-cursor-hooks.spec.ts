@@ -59,7 +59,7 @@ async function start(label: string, options: { on?: boolean; claude?: boolean } 
   }
 }
 
-type Piece = { state: string; reason: string | null };
+type Piece = { state: string; why?: { cause: string; value?: string } | null };
 type Subagents = { working: number | null; done: number | null };
 
 /**
@@ -209,7 +209,7 @@ test("a Grok file the operator removed or edited shows on its row until Reinstal
     const edited = read(grokFile(home)).replace("--event Stop", "--event Stop --verbose");
     fs.writeFileSync(grokFile(home), edited);
     await list.locator("[data-agents-check]").click();
-    await expect(problem).toContainText("edited after Hide wrote them", { timeout: 60_000 });
+    await expect(problem).toContainText("Edited after Hide wrote it", { timeout: 60_000 });
     await expect(list.locator("[data-agent-problem]")).toHaveCount(1);
     expect(read(grokFile(home))).toBe(edited);
     await problem.locator("[data-hook-reinstall]").click();
@@ -221,13 +221,13 @@ test("a Grok file the operator removed or edited shows on its row until Reinstal
     expect(read(path.join(home, ".grok", "hooks", "orca.json"))).toBe(ORCA_FILE);
 
     // B8: an agent that is on but has not made its folder gets nothing made, and its row says why in a quiet
-    // line without Reinstall (the kit piece's reason).
+    // line without Reinstall (the kit piece's cause, worded with its folder).
     fs.rmSync(path.join(home, ".grok"), { recursive: true });
     await list.locator("[data-agents-check]").click();
     const waiting = list.locator(`[data-agent-hook-wait="${daemon.node}:grok"]`);
-    await expect(waiting).toContainText("has not created", { timeout: 60_000 });
+    await expect(waiting).toContainText("once the agent makes this folder", { timeout: 60_000 });
     await expect(waiting).toContainText(".grok");
-    expect(wire.hook("grok")).toMatchObject({ state: "absent" });
+    expect(wire.hook("grok")).toMatchObject({ state: "absent", why: { cause: "not_created_yet" } });
     expect(fs.existsSync(path.join(home, ".grok"))).toBe(false);
     await expect(list.locator('[data-agent-row*="cursor"]')).toHaveCount(0);
     expect(read(cursorFile(home))).toBe(CURSOR_BYTES);

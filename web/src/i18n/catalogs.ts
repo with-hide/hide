@@ -18,6 +18,10 @@ import { cleanupCatalogs, cleanupEnglish } from "./resources/cleanup";
 import { commonCatalogs, commonEnglish } from "./resources/common";
 import { agentPresentationCatalogs, agentPresentationEnglish } from "./resources/agentPresentation";
 import { devicesCatalogs, devicesEnglish } from "./resources/devices";
+import { kitReasonsCatalogs, kitReasonsEnglish } from "./resources/kitReasons";
+import { issueReasonsCatalogs, issueReasonsEnglish } from "./resources/issueReasons";
+import { agentActionReasonsCatalogs, agentActionReasonsEnglish } from "./resources/agentActionReasons";
+import { fileReasonsCatalogs, fileReasonsEnglish } from "./resources/fileReasons";
 import { agentsCatalogs, agentsEnglish } from "./resources/agents";
 import { hideAiCatalogs, hideAiEnglish } from "./resources/hideAi";
 import { issueSettingsCatalogs, issueSettingsEnglish } from "./resources/issueSettings";
@@ -48,6 +52,7 @@ import { settingsCatalogs, settingsEnglish } from "./resources/settings";
 import { workspaceCatalogs, workspaceEnglish } from "./resources/workspace";
 import { checkoutGitCatalogs, checkoutGitEnglish } from "./resources/checkoutGit";
 import type { Catalogs } from "./schema";
+import { coreErrorsCatalogs, coreErrorsEnglish } from "./resources/coreErrors";
 import { sessionWorkCatalogs, sessionWorkEnglish } from "./resources/sessionWork";
 import { deviceOverviewCatalogs, deviceOverviewEnglish } from "./resources/deviceOverview";
 import { overviewRedesignCatalogs, overviewRedesignEnglish } from "./resources/overviewRedesign";
@@ -84,6 +89,10 @@ export const english = {
   ...usageEnglish,
   ...cleanupEnglish,
   ...devicesEnglish,
+  ...kitReasonsEnglish,
+  ...issueReasonsEnglish,
+  ...agentActionReasonsEnglish,
+  ...fileReasonsEnglish,
   ...mobileSetupEnglish,
   ...coreMoveEnglish,
   ...workspaceEnglish,
@@ -105,6 +114,7 @@ export const english = {
   ...memoryEnglish,
   ...projectSettingsEnglish,
   ...projectToolEnglish,
+  ...coreErrorsEnglish,
 } as const;
 
 export type MessageKey = keyof typeof english;
@@ -143,6 +153,10 @@ export const catalogs = {
     ...usageCatalogs.ko,
     ...cleanupCatalogs.ko,
     ...devicesCatalogs.ko,
+    ...kitReasonsCatalogs.ko,
+    ...issueReasonsCatalogs.ko,
+    ...agentActionReasonsCatalogs.ko,
+    ...fileReasonsCatalogs.ko,
     ...mobileSetupCatalogs.ko,
     ...coreMoveCatalogs.ko,
     ...workspaceCatalogs.ko,
@@ -164,6 +178,7 @@ export const catalogs = {
     ...memoryCatalogs.ko,
     ...projectSettingsCatalogs.ko,
     ...projectToolCatalogs.ko,
+    ...coreErrorsCatalogs.ko,
   },
   "zh-CN": {
     ...groupTabsCatalogs["zh-CN"],
@@ -197,6 +212,10 @@ export const catalogs = {
     ...usageCatalogs["zh-CN"],
     ...cleanupCatalogs["zh-CN"],
     ...devicesCatalogs["zh-CN"],
+    ...kitReasonsCatalogs["zh-CN"],
+    ...issueReasonsCatalogs["zh-CN"],
+    ...agentActionReasonsCatalogs["zh-CN"],
+    ...fileReasonsCatalogs["zh-CN"],
     ...mobileSetupCatalogs["zh-CN"],
     ...coreMoveCatalogs["zh-CN"],
     ...workspaceCatalogs["zh-CN"],
@@ -218,6 +237,7 @@ export const catalogs = {
     ...memoryCatalogs["zh-CN"],
     ...projectSettingsCatalogs["zh-CN"],
     ...projectToolCatalogs["zh-CN"],
+    ...coreErrorsCatalogs["zh-CN"],
   },
   ja: {
     ...groupTabsCatalogs.ja,
@@ -251,6 +271,10 @@ export const catalogs = {
     ...usageCatalogs.ja,
     ...cleanupCatalogs.ja,
     ...devicesCatalogs.ja,
+    ...kitReasonsCatalogs.ja,
+    ...issueReasonsCatalogs.ja,
+    ...agentActionReasonsCatalogs.ja,
+    ...fileReasonsCatalogs.ja,
     ...mobileSetupCatalogs.ja,
     ...coreMoveCatalogs.ja,
     ...workspaceCatalogs.ja,
@@ -272,5 +296,6 @@ export const catalogs = {
     ...memoryCatalogs.ja,
     ...projectSettingsCatalogs.ja,
     ...projectToolCatalogs.ja,
+    ...coreErrorsCatalogs.ja,
   },
 } satisfies Catalogs<typeof english>;

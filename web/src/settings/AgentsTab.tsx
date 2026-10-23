@@ -5,6 +5,7 @@ import { Disclosure, Group, Note, Row } from "../components/settings-rows";
 import { Button } from "../components/ui/button";
 import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group";
 import { useInterfaceTranslation } from "../i18n/client";
+import { kitUnavailableText } from "../kitWhy";
 import { machineName, windowDeviceId, windowFirst } from "../screenMachine";
 import { useShellStore } from "../store";
 import { agentMachines, checkFailedReason, type AgentMachine } from "./agentRows";
@@ -13,7 +14,8 @@ import { IdleAgentsGroup } from "./IdleAgentsGroup";
 import { HideSkillsGroup } from "./HideSkillsGroup";
 import { StartingWorkGroup } from "./StartingWorkGroup";
 import { useAgentsDemand } from "./useAgentsDemand";
-import { useErrorSince } from "./useErrorSince";
+import { coreErrorText } from "../coreError";
+import { useErrorSince } from "../errorSince";
 
 /**
  * Agents (PRD settings-cleanup D-06 to D-13): the seven supported agents of one
@@ -93,7 +95,7 @@ function MachineAgents({ machine, actions }: { machine: AgentMachine; actions: A
   const checkFailed = device.kit?.check_failed ?? null;
   return (
     <div data-agents-machine-list={device.id}>
-      {machine.blocked === "unavailable" && device.kit?.unavailable ? <Note data-agents-unavailable={device.id}>{device.kit.unavailable}</Note> : null}
+      {machine.blocked === "unavailable" && device.kit?.unavailable ? <Note data-agents-unavailable={device.id} data-kit-unavailable={device.kit.unavailable}>{kitUnavailableText(device.kit.unavailable, t)}</Note> : null}
       {machine.unread && machine.blocked === null ? <Note data-agents-unread={device.id}>{t("agents.reading")}</Note> : null}
       {machine.unlisted && machine.blocked === null ? (
         <Group>
@@ -134,8 +136,8 @@ function MachineAgents({ machine, actions }: { machine: AgentMachine; actions: A
             </Note>
           ) : null}
           {failure ? (
-            <Note tone="error" data-agents-error="true">
-              {failure}
+            <Note tone="error" data-agents-error="true" data-core-error={failure.kind}>
+              {coreErrorText(failure, t, "coreError.kit.unavailable")}
             </Note>
           ) : null}
           {machine.notInstalled.length > 0 ? (

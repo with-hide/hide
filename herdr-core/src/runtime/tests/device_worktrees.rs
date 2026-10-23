@@ -392,7 +392,7 @@ fn a_dirty_device_worktree_is_deleted_only_once_the_operator_accepts_the_loss() 
     );
     assert_eq!(
         last_error(&shared).as_deref(),
-        Some("worktree.remove_unaccepted")
+        Some("worktree.remove_discard_unconfirmed")
     );
     assert!(shared.lock().unwrap().snapshot.worktree_removal.is_none());
     assert!(Path::new(&repo.linked).exists());

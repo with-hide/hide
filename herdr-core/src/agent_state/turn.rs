@@ -439,13 +439,16 @@ pub(crate) fn is_seen(agent: &SidebarAgentSnapshot) -> bool {
     agent.group == "seen"
 }
 
-pub(crate) fn rest_refusal(agent: &SidebarAgentSnapshot) -> Option<&'static str> {
+pub(crate) fn rest_refusal(
+    agent: &SidebarAgentSnapshot,
+) -> Option<crate::model::AgentActionRefusal> {
+    use crate::model::AgentActionRefusal;
     if has_work_in_progress(agent) {
-        Some("This agent is working")
+        Some(AgentActionRefusal::Working)
     } else if is_waiting_for_operator(agent) {
-        Some("This agent is waiting for you")
+        Some(AgentActionRefusal::WaitingForYou)
     } else if agent.activity != "stopped" {
-        Some("Hide cannot tell what this agent is doing")
+        Some(AgentActionRefusal::UnknownActivity)
     } else {
         None
     }

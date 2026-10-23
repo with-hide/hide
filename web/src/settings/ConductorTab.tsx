@@ -16,7 +16,8 @@ import { cn } from "../lib/utils";
 import { CANDIDATE_LIMIT, CAP_CHOICES, DEFAULT_CONDUCTOR, addCandidate, candidateAgent, effortsOf, replaceCandidate } from "../conductorSettings";
 import type { ConductorCandidate, ConductorSettings, MissionScope } from "../snapshot";
 import { useShellStore } from "../store";
-import { useErrorSince } from "./useErrorSince";
+import { coreErrorText } from "../coreError";
+import { useErrorSince } from "../errorSince";
 
 // Settings › Conductor (PRD software-factory-conductor D-31, B48, B49): how
 // many agents a mission runs at once, how far a mission goes when it does not
@@ -63,7 +64,7 @@ export function ConductorTab({ actions }: { actions: Actions }) {
           </RadioGroup>
         </Row>
       </Group>
-      {error ? <Note tone="error" data-conductor-error="true">{error}</Note> : null}
+      {error ? <Note tone="error" data-conductor-error="true" data-core-error={error.kind}>{coreErrorText(error, t, "coreError.settings.notSaved")}</Note> : null}
       <Group
         title={t("conductor.candidates")}
         action={

@@ -437,7 +437,7 @@ impl ExplorerChange {
         }
     }
 
-    fn plan(&self, root: &str) -> Result<files::ExplorerOperation, String> {
+    fn plan(&self, root: &str) -> Result<files::ExplorerOperation, files::ExplorerFailure> {
         match self {
             Self::Create { kind, parent, name } => {
                 files::ExplorerOperation::create(*kind, root, parent, name)
@@ -2029,7 +2029,7 @@ impl Runtime {
                     ),
                     persistence::UnrecognizedField::ConductorSettings => (
                         "ui_state.conductor_settings_unknown",
-                        "The stored Settings › Conductor was not recognized; the defaults were used",
+                        "The stored Settings > Conductor was not recognized; the defaults were used",
                     ),
                 })
                 .collect(),
@@ -2941,7 +2941,7 @@ pub fn pane_fork_snapshot(agent: Option<&SidebarAgentSnapshot>) -> PaneForkSnaps
     PaneForkSnapshot {
         available,
         reason: (!available && ForkableAgent::parse(&agent.agent_kind).is_some())
-            .then(|| "This agent has not reported its conversation yet".to_owned()),
+            .then_some(crate::model::AgentActionRefusal::NoConversation),
         forked_from: agent.forked_from.clone(),
     }
 }

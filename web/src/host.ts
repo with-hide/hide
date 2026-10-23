@@ -168,6 +168,8 @@ export type HostBridge = {
    * `failed` has already put the start failure on the window's status page.
    */
   restartHerdr(): Promise<HerdrRestart>;
+  /** Quits the app, as the app menu's Quit does; hided keeps running. */
+  quit(): void;
   browser: BrowserBridge;
   /** This app's own updates (PRD auto-update), which only the desktop host has. */
   updates: UpdatesBridge;

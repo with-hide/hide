@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { readFailureText } from "./fileFailure";
 import { useEffect, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import { FileMark } from "./components/file-mark";
@@ -151,7 +152,7 @@ function FilePalette({ actions }: { actions: Actions }) {
     >
       {fileIndex?.unavailable ? (
         <div className="px-md py-sm text-caption text-muted-foreground" role="alert" data-palette-state="unavailable">
-          {t("documents.filesUnavailable", { reason: fileIndex.unavailable })}
+          {t("documents.filesUnavailable", { reason: readFailureText(fileIndex.unavailable, t) })}
         </div>
       ) : fileIndex?.indexing && entries.length === 0 ? (
         <div className="px-md py-sm text-caption text-muted-foreground" data-palette-state="indexing">

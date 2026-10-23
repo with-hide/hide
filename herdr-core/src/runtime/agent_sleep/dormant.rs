@@ -108,7 +108,11 @@ impl Runtime {
             return Ok(false);
         }
         if let Some(reason) = crate::agent_state::rest_refusal(&agent) {
-            return Err(SleepRefusal::new("agent_sleep.refused", reason, false));
+            return Err(SleepRefusal::new(
+                "agent_sleep.refused",
+                reason.detail(),
+                false,
+            ));
         }
         let Some((tab, owner)) = self.sleep_place(pane_id) else {
             return Err(SleepRefusal::new(

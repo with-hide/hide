@@ -183,7 +183,7 @@ describe("git decorations", () => {
     );
     const folder = decorationFor(decorations, `${ROOT}/src`, ROOT, true);
     expect(folder).toMatchObject({ badge: "●", status: "conflict" });
-    expect(t(folder!.title)).toBe("Contains changed files; highest priority is conflict");
+    expect(t(folder!.title)).toBe("Contains changed files; top status: conflict");
     expect(decorationFor(decorations, `${ROOT}/src/nested`, ROOT, true)?.status).toBe("conflict");
   });
 
@@ -196,7 +196,7 @@ describe("git decorations", () => {
 
   it("words a folder's tooltip in the chosen language", () => {
     const rows = explorerRows({ rootPath: ROOT, listings: { [ROOT]: TOP }, expandedPaths: [], changes: changes([["src/a.ts", "deleted"]]) });
-    expect(rowTitle(rows[0]!, ROOT, ko)).toBe("src · 변경된 파일이 있으며, 삭제된 파일의 우선순위가 가장 높습니다.");
+    expect(rowTitle(rows[0]!, ROOT, ko)).toBe("src · 변경된 파일이 있어요. 대표 상태: 삭제");
   });
 
   it("puts the relative path and the status title in the row's tooltip", () => {
@@ -207,7 +207,7 @@ describe("git decorations", () => {
       changes: changes([["src/a.ts", "deleted"]]),
     });
     expect(rows.map((row) => rowTitle(row, ROOT, t))).toEqual([
-      "src · Contains changed files; highest priority is deleted",
+      "src · Contains changed files; top status: deleted",
       "README.md",
       ".gitignore",
     ]);
@@ -286,17 +286,17 @@ describe("the Explorer's Git status mark (S5.5 B20, B22)", () => {
   const base = { root_path: "/repo", entries: [], committed: [], selected_path: null, diff: null } as unknown as ChangesSnapshot;
   it("says a failed read is unavailable or out of date and never draws it as current", () => {
     expect(explorerGitMark(null, t)).toEqual({ state: "loading", text: "Loading Git status" });
-    expect(explorerGitMark({ ...base, unavailable_reason: "git is not installed" }, t)?.text).toBe("Git status unavailable: git is not installed");
-    expect(explorerGitMark({ ...base, stale_reason: "git status timed out" }, t)?.state).toBe("stale");
+    expect(explorerGitMark({ ...base, unavailable_reason: "changes.git_failed" }, t)?.text).toBe("Git status unavailable: Git could not read this repository");
+    expect(explorerGitMark({ ...base, stale_reason: "link.unknown" }, t)?.state).toBe("stale");
     expect(explorerGitMark(base, t)).toBeNull();
   });
 
   it("draws nothing for a folder that is not a repository", () => {
-    expect(explorerGitMark({ ...base, unavailable_reason: "/plain is not inside a Git repository", not_a_repository: true }, t)).toBeNull();
+    expect(explorerGitMark({ ...base, unavailable_reason: "changes.not_a_repository", not_a_repository: true }, t)).toBeNull();
   });
 
   it("words the mark's sentence in the chosen language", () => {
-    expect(explorerGitMark({ ...base, unavailable_reason: "git is not installed" }, ko)?.text).toBe("Git 상태를 읽을 수 없습니다: git is not installed");
+    expect(explorerGitMark({ ...base, unavailable_reason: "link.not_connected" }, ko)?.text).toBe("Git 상태를 읽지 못했어요: 기기가 연결돼 있지 않아요");
   });
 });
 

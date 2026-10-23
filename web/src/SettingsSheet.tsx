@@ -129,7 +129,7 @@ function SettingsSheet({ actions }: { actions: Actions }) {
               {tab === "conductor" ? <ConductorTab actions={actions} /> : null}
               {tab === "mobile" ? <MobileTab actions={actions} /> : null}
               {tab === "github" ? <GithubTab actions={actions} /> : null}
-              {tab === "about" ? <AboutTab /> : null}
+              {tab === "about" ? <AboutTab actions={actions} /> : null}
               {tab === "privacy" ? <PrivacyTab actions={actions} /> : null}
             </TabsContent>
           </div>

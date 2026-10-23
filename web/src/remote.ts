@@ -11,6 +11,7 @@ import type { AgentRow, Checkout, Device, RemotePaneLayout, RemoteSession, Remot
 import { findArea } from "./areaLayout";
 import type { WorkspaceView } from "./workspace";
 import { machineName } from "./screenMachine";
+import { remoteStateText } from "./coreError";
 
 export type RemoteContext = {
   device: Device;
@@ -245,8 +246,7 @@ export function deviceCatalogLine(context: RemoteContext, devices: readonly Devi
     if (!status || status.state === "not_connected" || status.state === "connecting") {
       return { state: "loading", text: t("devices.catalog.loading", { device }) };
     }
-    const state = status.state.replace(/_/g, " ");
-    return { state: "error", text: status.message ? t("devices.catalog.errorMessage", { device, state, message: status.message }) : t("devices.catalog.error", { device, state }) };
+    return { state: "error", text: remoteStateText(status.state, device, t) };
   }
   if (!connected) {
     return { state: "stale", text: t("devices.catalog.stale", { device }) };
@@ -261,7 +261,7 @@ export function deviceCatalogLine(context: RemoteContext, devices: readonly Devi
   if (catalog?.state === "unavailable") {
     return {
       state: "unavailable",
-      text: catalog.message ? t("devices.catalog.unavailableMessage", { device, message: catalog.message }) : t("devices.catalog.unavailable", { device }),
+      text: t("devices.catalog.unavailable", { device }),
     };
   }
   if (catalog && catalog.refused.length > 0) {

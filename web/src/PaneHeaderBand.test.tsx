@@ -240,15 +240,15 @@ it.each(["parent", "child", "descendant"] as const)("preserves topology but repl
   agents[0]!.descendant_mark = { kind: "raised", count: 2 };
   if (scope === "descendant") agents.push({ ...agents[1]!, id: "deep", pane_id: "deep", device_id: "mini", lineage_parent_pane_id: "working", lineage_path_pane_ids: ["parent", "working", "deep"], lineage_child_pane_ids: [] });
   else agents[scope === "parent" ? 0 : 1]!.device_id = "mini";
-  const rest = { status: { pane_focus_request: null, remote: [{ target_id: "mini", state: "disconnected", message: "Mac mini is not connected" }] } } as unknown as SnapshotRest;
+  const rest = { status: { pane_focus_request: null, remote: [{ target_id: "mini", state: "unreachable", message: "ssh: connect to host mini port 22: Connection refused" }] } } as unknown as SnapshotRest;
   const { container, unmount } = await mount({ working: false, notice: null, band: null }, agents, { rest });
   try {
     const trigger = container.querySelector<HTMLButtonElement>("[data-pane-tree]")!;
-    expect(trigger.getAttribute("aria-label")).toBe("Child agents 5 · Mac mini is not connected");
+    expect(trigger.getAttribute("aria-label")).toBe("Child agents 5 · Hide cannot reach mini");
     // A disconnected device's children draw no mark (status-marks B16).
     expect(trigger.querySelector("[data-mark]")).toBeNull();
     expect(container.querySelector("[data-pane-child-count]")).toBeNull();
-    expect(container.querySelector('[data-pane-child-connection]')?.textContent).toBe("Mac mini is not connected");
+    expect(container.querySelector('[data-pane-child-connection]')?.textContent).toBe("Hide cannot reach mini");
     await act(async () => trigger.click());
     expect(document.querySelector('[data-agent-tree="parent"]')).not.toBeNull();
     if (scope === "child") {
@@ -263,11 +263,11 @@ it.each(["parent", "child", "descendant"] as const)("preserves topology but repl
 it("keeps the child connection reason visible beside the parent's own progress", async () => {
   const agents = childrenFixture();
   agents[1]!.device_id = "mini";
-  const rest = { status: { pane_focus_request: null, remote: [{ target_id: "mini", state: "disconnected", message: "Mac mini is not connected" }] } } as unknown as SnapshotRest;
+  const rest = { status: { pane_focus_request: null, remote: [{ target_id: "mini", state: "unreachable", message: "ssh: connect to host mini port 22: Connection refused" }] } } as unknown as SnapshotRest;
   const { container, unmount } = await mount({ working: true, notice: null, band: null, progress: "Checking my changes" }, agents, { rest });
   try {
     expect(container.querySelector('[data-pane-own-progress]')?.textContent).toBe("Checking my changes");
-    expect(container.querySelector('[data-pane-child-connection]')?.textContent).toBe("Mac mini is not connected");
+    expect(container.querySelector('[data-pane-child-connection]')?.textContent).toBe("Hide cannot reach mini");
   } finally { await unmount(); }
 });
 
@@ -279,7 +279,7 @@ it("keeps online raised requests accessible when another descendant's device is 
   agents[1]!.lineage_child_pane_ids = ["online-ask"];
   agents.find((row) => row.pane_id === "question")!.device_id = "mini";
   agents.push({ ...agents[1]!, id: "online-ask", pane_id: "online-ask", lineage_parent_pane_id: "working", lineage_path_pane_ids: ["parent", "working", "online-ask"], lineage_child_pane_ids: [] });
-  const rest = { status: { pane_focus_request: null, remote: [{ target_id: "mini", state: "disconnected", message: "Mac mini is not connected" }] } } as unknown as SnapshotRest;
+  const rest = { status: { pane_focus_request: null, remote: [{ target_id: "mini", state: "unreachable", message: "ssh: connect to host mini port 22: Connection refused" }] } } as unknown as SnapshotRest;
   const { container, unmount } = await mount({ working: false, notice: null, band: { ...header.band!, kind: "approval", raised: undefined, action: null, more: 1 } }, agents, { rest });
   try {
     const trigger = container.querySelector<HTMLButtonElement>("[data-pane-tree]")!;
@@ -380,9 +380,9 @@ it("blocks Open on a raised descendant whose device is not connected and says wh
   const band = header.band!;
   const {container, unmount} = await mount({ ...header, band: { ...band, action: {pane_id: pane, label: "자식 검증"}, raised: { ...band.raised!, raised_pane_id: pane, pane_id: pane, open_pane_id: pane } } });
   try {
-    await act(async () => useShellStore.setState({rest: {status: {pane_focus_request: null, remote: [{target_id: "mini", state: "disconnected", message: "Mac mini is not connected"}]}} as unknown as SnapshotRest}));
+    await act(async () => useShellStore.setState({rest: {status: {pane_focus_request: null, remote: [{target_id: "mini", state: "unreachable", message: "ssh: connect to host mini port 22: Connection refused"}]}} as unknown as SnapshotRest}));
     expect(container.querySelector<HTMLButtonElement>("[data-pane-band-open]")!.disabled).toBe(true);
-    expect(container.querySelector("[data-pane-band-unreachable]")?.textContent).toBe("Mac mini is not connected");
+    expect(container.querySelector("[data-pane-band-unreachable]")?.textContent).toBe("Hide cannot reach mini");
   } finally { await unmount(); }
 });
 
@@ -475,7 +475,7 @@ it("leaves a header alone when a snapshot section it does not draw moves, and re
     await act(async () => useShellStore.setState({ rest: { ...useShellStore.getState().rest!, navigator: { ...useShellStore.getState().rest!.navigator, workspaces: [] } } as unknown as SnapshotRest }));
     expect(draws).toEqual(settled);
     // The device a parent's totals depend on moves: the parent redraws, a plain pane does not.
-    await act(async () => useShellStore.setState({ rest: { ...useShellStore.getState().rest!, status: { pane_focus_request: null, remote: [{ target_id: "mini", state: "disconnected", message: "Mac mini is not connected" }] } } as unknown as SnapshotRest }));
+    await act(async () => useShellStore.setState({ rest: { ...useShellStore.getState().rest!, status: { pane_focus_request: null, remote: [{ target_id: "mini", state: "unreachable", message: "ssh: connect to host mini port 22: Connection refused" }] } } as unknown as SnapshotRest }));
     expect(draws.parent).toBeGreaterThan(settled.parent!);
     expect(draws.shell).toBe(settled.shell);
     // An agent row moves: every header that selects the agents is asked again.
@@ -592,7 +592,7 @@ it("leads the row with the turn's request before its ask, progress or result", a
   const cases: [PaneHeader, string, string][] = [
     [{ working: false, notice: null, band: ask, request }, "answer", "Proceed as proposed + check unclear states→QuestionBundle questions 1-3 into one PR?"],
     [{ working: true, notice: null, band: null, progress: "Reading the status model", request }, "progress", "Proceed as proposed + check unclear states→Reading the status model"],
-    [{ working: true, notice: null, band: null, request }, "request", "Proceed as proposed + check unclear states→Working"],
+    [{ working: true, notice: null, band: null, request }, "request", "Proceed as proposed + check unclear states"],
     [{ working: false, notice: null, band: null, progress: "Remote reads every 3 s, PR merged", finished: true, request }, "finished", "Proceed as proposed + check unclear states→DoneRemote reads every 3 s, PR merged"],
     [{ working: false, notice: null, band: null, finished: true, request: { text: null, images: 2 } }, "finished", "2 images→Done"],
   ];
@@ -601,10 +601,12 @@ it("leads the row with the turn's request before its ask, progress or result", a
     try {
       const row = container.querySelector(`[data-pane-header-band="${kind}"]`)!;
       expect(row.textContent).toBe(text);
-      // The request and the answer are the row's two parts, so a turn that
-      // does not fit one line wraps its answer under the request (B4).
-      expect([...row.querySelectorAll("[data-pane-turn-part]")].map((part) => part.getAttribute("data-pane-turn-part"))).toEqual(["request", "answer"]);
+      // A working turn with nothing beyond its request draws the request
+      // alone; every other turn has the request and the answer as its parts.
+      expect([...row.querySelectorAll("[data-pane-turn-part]")].map((part) => part.getAttribute("data-pane-turn-part"))).toEqual(kind === "request" ? ["request"] : ["request", "answer"]);
       expect(row.querySelector("[data-pane-turn-request]")?.getAttribute("aria-label")).toBe(`Request: ${text.split("→")[0]}`);
+      // Only an ask wraps its answer under the request; a quiet turn stays one line.
+      expect(row.classList.contains("flex-wrap")).toBe(kind === "answer");
     } finally { await unmount(); }
   }
 });

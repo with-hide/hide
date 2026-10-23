@@ -171,7 +171,7 @@ it("lists projects, hides one, and shows a chosen session's team and counterpart
     expect(button("Fold 알파 into one circle")).toBeUndefined();
     expect([...alpha.querySelectorAll("button")].map((one) => one.textContent?.trim())).not.toContain("Hide");
     const eye = () => column().querySelector<HTMLButtonElement>('[data-graph-project-row="alpha"] .og-eye')!;
-    expect(eye().getAttribute("aria-label")).toBe("Hide 알파 on the map");
+    expect(eye().getAttribute("aria-label")).toBe("Hide 알파 from the graph");
     expect(eye().getAttribute("aria-pressed")).toBe("false");
     await act(async () => eye().click());
     expect(events.at(-1)).toEqual({ schema_version: 2, kind: "overview_graph_change", payload: { change: { kind: "project_hidden", project: { device_id: "local", workspace_id: "alpha" }, hidden: true } } });
@@ -184,11 +184,11 @@ it("lists projects, hides one, and shows a chosen session's team and counterpart
     expect(hidden.getAttribute("data-hidden")).toBe("true");
     expect(hidden.querySelector('[data-state="turn"]')?.textContent).toContain("1");
     // B9: the hidden row's eye says how to bring it back, and its name does not move the camera.
-    expect(eye().getAttribute("aria-label")).toBe("Show 알파 on the map again");
+    expect(eye().getAttribute("aria-label")).toBe("Show 알파 on the graph again");
     expect(eye().getAttribute("aria-pressed")).toBe("true");
     expect(button("Locate 알파")!.disabled).toBe(true);
     // D-21/B27: a hidden project's question still waits for the operator, marked hidden.
-    expect(column().querySelector('[data-graph-ask="r"] .og-hidden-mark')?.textContent).toBe("Hidden on the map");
+    expect(column().querySelector('[data-graph-ask="r"] .og-hidden-mark')?.textContent).toBe("Hidden on the graph");
     // B1: closing and opening Overview again keeps it hidden, because the core holds it.
     await act(async () => reactRoot.render(<TooltipProvider><div /></TooltipProvider>));
     await act(async () => reactRoot.render(<TooltipProvider><OverviewGraph projects={projects} deviceId="local" actions={actions} /></TooltipProvider>));

@@ -537,15 +537,22 @@ fn project_preflight(project: &Path) -> Result<(), KitRefusal> {
 /// just passed, so it is not inspected a second time.
 pub(crate) fn observe(target: &KitTarget) -> Observed {
     match load(target) {
-        Err(refusal) => Observed::Blocked(refusal.into()),
+        Err(refusal) => Observed::Blocked(crate::Reason::new(
+            crate::PartCause::Unreadable,
+            String::from(refusal),
+        )),
         Ok(Some(progress)) if progress.complete => Observed::Current,
         Ok(Some(progress)) if progress.failure.is_some() => {
-            Observed::Blocked(progress.failure.unwrap())
+            Observed::Blocked(crate::Reason::not_changed(progress.failure.unwrap()))
         }
-        Ok(Some(progress)) => Observed::Stale(format!("retirement resumes at {}", progress.step)),
-        Ok(None) => {
-            Observed::Stale("legacy coordination retirement has not run on this machine".into())
-        }
+        Ok(Some(progress)) => Observed::Stale(crate::Reason::new(
+            crate::PartCause::RetirementPending,
+            format!("retirement resumes at {}", progress.step),
+        )),
+        Ok(None) => Observed::Stale(crate::Reason::new(
+            crate::PartCause::RetirementPending,
+            "legacy coordination retirement has not run on this machine",
+        )),
     }
 }
 

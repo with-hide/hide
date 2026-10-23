@@ -447,9 +447,10 @@ impl Core {
         ) {
             Ok(pump) => Some(pump),
             Err(error) => {
-                lock_recover(&runtime).set_local_kit_unavailable(&format!(
-                    "Hide could not start its installer: {error}"
-                ));
+                lock_recover(&runtime).set_local_kit_unavailable(
+                    crate::model::KitUnavailable::InstallerUnavailable,
+                    &format!("Hide could not start its installer: {error}"),
+                );
                 None
             }
         };

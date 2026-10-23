@@ -94,3 +94,10 @@ export const UPDATE_PRERELEASE_CHANNEL = "hide:update-prerelease";
  * operator confirmed what ends (invoke), and the host answers how it went.
  */
 export const HERDR_RESTART_CHANNEL = "hide:herdr-restart";
+
+/**
+ * Quitting the app from the screen that holds Hide while this machine's Herdr
+ * speaks another protocol (PRD herdr-takeover): the window's own Quit, as
+ * the app menu's would; hided keeps running, as it does after any quit.
+ */
+export const QUIT_CHANNEL = "hide:quit";

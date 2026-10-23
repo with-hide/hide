@@ -30,6 +30,6 @@ describe("connection machine", () => {
 
   it("keeps the shipped Korean wording for a refused connection", async () => {
     const { t } = await createInterfaceI18n("ko");
-    expect(badgeText("gone", true, t)).toBe("연결 거부 - hide를 다시 실행하세요");
+    expect(badgeText("gone", true, t)).toBe("연결 거부됨 - hide 명령을 다시 실행하세요");
   });
 });

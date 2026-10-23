@@ -104,6 +104,7 @@ pub(super) fn report(states: &[(ComponentId, ComponentState)]) -> KitReport {
                 id: *id,
                 state: *state,
                 reason: None,
+                why: None,
                 location: Some(format!("/home/me/{}", id.code())),
             })
             .collect(),
@@ -228,6 +229,10 @@ fn a_connected_device_shows_its_kit_and_retirement_failure_with_recovery() {
     ]);
     let recovery = "remove owned links failed: inspect the link, then retry retirement";
     answer.components.last_mut().unwrap().reason = Some(recovery.to_owned());
+    answer.components.last_mut().unwrap().why = Some(hide_kit::PartWhy {
+        cause: hide_kit::PartCause::NotChanged,
+        value: None,
+    });
     let helper = KitDevice::answering(Ok(answer));
     let shared = with_consent(Some(Arc::clone(&helper)));
 
@@ -261,10 +266,18 @@ fn a_connected_device_shows_its_kit_and_retirement_failure_with_recovery() {
             (ComponentId::CoordinationRetirement, ComponentState::Failed),
         ]
     );
+    // The screen gets the cause; the kit's sentence is the log's.
     assert_eq!(
-        kit.components.last().unwrap().reason.as_deref(),
-        Some(recovery)
+        kit.components
+            .last()
+            .unwrap()
+            .why
+            .as_ref()
+            .map(|why| why.cause),
+        Some(hide_kit::PartCause::NotChanged)
     );
+    let wire = serde_json::to_string(&kit).unwrap();
+    assert!(!wire.contains(recovery), "{wire}");
     assert!(kit.offers_reinstall);
 }
 
@@ -315,6 +328,7 @@ fn agent_report(
     let piece = |state| hide_kit::PieceReport {
         state,
         reason: None,
+        why: None,
         location: None,
     };
     hide_kit::AgentReport {
@@ -411,6 +425,10 @@ fn a_failed_herdr_integration_shows_on_its_agent_and_offers_reinstall() {
     pi.herdr = Some(hide_kit::PieceReport {
         state: ComponentState::Failed,
         reason: Some("`herdr integration install pi` failed: disk full".to_owned()),
+        why: Some(hide_kit::PartWhy {
+            cause: hide_kit::PartCause::NotChanged,
+            value: None,
+        }),
         location: Some("/home/me/.pi/agent".to_owned()),
     });
     let grok = agent_report("grok", Available, true, ComponentState::Installed);
@@ -427,7 +445,10 @@ fn a_failed_herdr_integration_shows_on_its_agent_and_offers_reinstall() {
 
     let piece = kit.agents[0].herdr.as_ref().expect("pi has an integration");
     assert_eq!(piece.state, ComponentState::Failed);
-    assert!(piece.reason.as_deref().unwrap().contains("disk full"));
+    assert_eq!(
+        piece.why.as_ref().map(|why| why.cause),
+        Some(hide_kit::PartCause::NotChanged)
+    );
     assert!(kit.agents[0].needs_attention());
     assert!(kit.agents[1].herdr.is_none());
     assert!(!kit.agents[1].needs_attention());
@@ -745,10 +766,9 @@ fn applying_an_agent_hide_does_not_know_is_refused() {
 fn a_device_without_consent_installs_nothing_and_says_why() {
     let shared = device_runtime(None, None);
     let kit = kit(&shared);
-    assert!(
-        kit.unavailable
-            .as_deref()
-            .is_some_and(|reason| reason.contains("allow its helper")),
+    assert_eq!(
+        kit.unavailable,
+        Some(crate::model::KitUnavailable::NoConsent),
         "{kit:?}"
     );
     dispatch(
@@ -789,8 +809,8 @@ fn a_device_on_an_unsupported_platform_shows_why() {
         runtime.refresh_device_snapshots();
     }
     assert_eq!(
-        kit(&shared).unavailable.as_deref(),
-        Some("This Hide build does not include the device helper for Linux x86_64")
+        kit(&shared).unavailable,
+        Some(crate::model::KitUnavailable::UnsupportedPlatform)
     );
 }
 
@@ -928,10 +948,9 @@ fn a_failed_kit_call_on_an_unread_device_says_why() {
     settle(&shared);
     let kit = kit(&shared);
     assert!(!kit.busy);
-    assert!(
-        kit.unavailable
-            .as_deref()
-            .is_some_and(|reason| reason.contains("did not answer in time")),
+    assert_eq!(
+        kit.unavailable,
+        Some(crate::model::KitUnavailable::Unreadable),
         "{kit:?}"
     );
 }
@@ -1918,8 +1937,8 @@ fn a_standalone_own_node_installs_nothing_and_says_why() {
     let kit = settle_own(&shared);
     drop(pump);
     assert_eq!(
-        kit.unavailable.as_deref(),
-        Some(hide_kit::STANDALONE_REASON)
+        kit.unavailable,
+        Some(crate::model::KitUnavailable::Standalone)
     );
     assert_eq!(
         std::fs::read_dir(home.path()).unwrap().count(),

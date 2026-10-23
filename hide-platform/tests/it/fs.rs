@@ -996,6 +996,36 @@ fn a_file_made_private_is_readable_by_its_owner_and_runs_when_asked_to() {
     assert_eq!(read(&script), "echo");
 }
 
+#[test]
+fn a_folder_of_ones_own_takes_new_files_and_a_file_is_not_a_folder() {
+    let outer = folder();
+    assert!(permissions::account_can_add_to(outer.path()).unwrap());
+    let file = outer.path().join("plain");
+    std::fs::write(&file, b"x").unwrap();
+    assert!(permissions::account_can_add_to(&file).is_err());
+    assert_eq!(
+        permissions::account_can_add_to(&outer.path().join("missing"))
+            .unwrap_err()
+            .kind(),
+        ErrorKind::NotFound
+    );
+    assert_eq!(std::fs::read_dir(outer.path()).unwrap().count(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_folder_without_write_permission_takes_no_new_file() {
+    use std::os::unix::fs::PermissionsExt;
+    let outer = folder();
+    let locked = outer.path().join("locked");
+    std::fs::create_dir(&locked).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let answer = permissions::account_can_add_to(&locked).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // root writes anywhere, which is the kernel's answer too.
+    assert_eq!(answer, unsafe { libc::geteuid() } == 0);
+}
+
 // ---- lock ---------------------------------------------------------------
 
 fn never() -> bool {

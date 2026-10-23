@@ -1,7 +1,8 @@
 // The right lane (PRD right-lane B25; PRD lane-two-columns D-12) in the
 // production Workspace over invented local data: each `state` the design
 // boards drew, from the closed rail to a narrow window whose pinned lane
-// stacks its two columns. No daemon is used.
+// stacks its two columns; the rail's pin is drawn off and on, with the lane
+// up and closed. No daemon is used.
 import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
 import { TooltipProvider } from "../components/ui/tooltip";
@@ -16,13 +17,14 @@ import { memorySceneProject } from "./MemoryScene";
 import { REFERENCE_FOLDS, sidebarScene } from "./sceneData";
 import { sceneParams, type SceneParams } from "./SidebarScene";
 
-const STATES = ["closed", "overlay", "pinned", "explorer-overlay", "explorer-only", "expanded", "project", "memory", "changes", "narrow"] as const;
+const STATES = ["closed", "closed-pinned", "overlay", "pinned", "explorer-overlay", "explorer-only", "expanded", "project", "memory", "changes", "narrow"] as const;
 type LaneState = (typeof STATES)[number];
 /** `documents`: the checkout has views and the viewing column shows them; `tool`: the tool column. */
 type Lane = { tool: Tool | null; pinned: boolean; documents: boolean; expanded: boolean };
 
 const LANES: Record<LaneState, Lane> = {
   closed: { tool: null, pinned: false, documents: true, expanded: false },
+  "closed-pinned": { tool: null, pinned: true, documents: true, expanded: false },
   overlay: { tool: null, pinned: false, documents: true, expanded: false },
   pinned: { tool: null, pinned: true, documents: true, expanded: false },
   "explorer-overlay": { tool: "explorer", pinned: false, documents: true, expanded: false },
@@ -57,6 +59,7 @@ export function rightLaneSceneParams(params: URLSearchParams): SceneParams & { s
 
 export function RightLaneScene({ theme, scale, content, state }: SceneParams & { state: LaneState }) {
   const lane = LANES[state];
+  const open = state !== "closed" && state !== "closed-pinned";
   const fixture = useMemo(() => {
     const scene = sidebarScene(content, REFERENCE_FOLDS, Date.now());
     const workspace = scene.rest.navigator!.workspaces!.find((project) => project.id === "hide")!;
@@ -83,7 +86,7 @@ export function RightLaneScene({ theme, scale, content, state }: SceneParams & {
     scene.rest.navigator!.focused_checkout_id = checkout.id;
     scene.rest.ui_state = { ...scene.rest.ui_state!, expanded_paths: Object.keys(listings), selected_path: lane.documents ? tabs[0]!.path : null };
     scene.rest.workspace_view = {
-      device_id: "local", path: root, open: state !== "closed", documents: lane.documents, tool: lane.tool, pinned: lane.pinned, document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view",
+      device_id: "local", path: root, open, documents: lane.documents, tool: lane.tool, pinned: lane.pinned, document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view",
       layout: { root: { area: { id: "a1", active: displays[0]?.id ?? null, displays } }, active_area: "a1", limits: { areas: 4, depth: 3, displays: 32 }, display_count: displays.length },
     };
     // The project's 현황 as the core derives it: one pull request to do, so 할 일 draws its head, a group and a row.
@@ -95,14 +98,14 @@ export function RightLaneScene({ theme, scale, content, state }: SceneParams & {
     // The project's Memory, so the Project tool draws its recent cards and the rail adds what Memory asks to its number.
     const memory = { ...memorySceneProject("workspace"), workspace_id: workspace.id };
     return { scene, editor: { tabs: lane.documents ? tabs : [], active_tab_id: lane.documents ? "t1" : null }, documents, listings, memory };
-  }, [content, lane, state]);
+  }, [content, lane, open]);
   const actions = useMemo(() => createActions(() => true), []);
   useLayoutEffect(() => {
     useShellStore.setState({ rest: fixture.scene.rest, agents: fixture.scene.agents, connection: "live", editor: fixture.editor, documents: fixture.documents, listings: fixture.listings, memory: { project: fixture.memory } });
-    useUiStore.setState({ screen: { kind: "workspace" }, laneShown: state !== "closed", laneExpanded: lane.expanded, stackFront: "view", projectTab: state === "memory" ? "memory" : "status" });
+    useUiStore.setState({ screen: { kind: "workspace" }, laneShown: open, laneExpanded: lane.expanded, stackFront: "view", projectTab: state === "memory" ? "memory" : "status" });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
     document.documentElement.style.setProperty("--interface-scale", String(scale));
-  }, [fixture, lane, state, theme, scale]);
+  }, [fixture, lane, open, state, theme, scale]);
   return <TooltipProvider><div className="flex h-full flex-col bg-background text-foreground" data-gallery-scene="right-lane" data-lane-state={state}><TitleRow actions={actions}/><div className="flex min-h-0 flex-1"><Sidebar actions={actions}/><WorkspaceScreen actions={actions}/></div></div></TooltipProvider>;
 }

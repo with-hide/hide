@@ -31,6 +31,8 @@ pub enum CommandKind {
     Device(crate::device_cli::DeviceCli),
     Help,
     AgentSpawnHelp,
+    /// `hide <command> … --help`: that command's usage, printed to stdout.
+    Usage(String),
     /// `hide version [--json]`: this build's version, commit and contract.
     Version {
         json: bool,
@@ -103,6 +105,93 @@ const MEMORY_USAGE: &str = "usage: hide memory show <card> | search <words> | ad
 
 const BROWSER_USAGE: &str = "usage: hide browser open <url-or-path> [--wait] [--request-id <id>] | connect [--display <id>] | help | <command> <display> ... (see hide browser help)";
 
+const FILE_USAGE: &str = "usage: hide file open <path> [--beside] [--request-id <id>]";
+
+const DIFF_USAGE: &str = "usage: hide diff open <path> [--beside] [--request-id <id>]";
+
+const VIEW_USAGE: &str = "usage: hide view list | status <view-id> | select <view-id> [--request-id <id>] | close <view-id> [--request-id <id>] | split <view-id> --area <area-id> --edge left|right|up|down [--request-id <id>] | move <view-id> --area <area-id> --index <n> [--request-id <id>]";
+
+/// A topic's command lines as a wrong command or `--help` prints them: one
+/// `usage:` line, then each form indented under it.
+pub(crate) fn usage(lines: &str) -> String {
+    let mut text = String::from("usage:");
+    for line in lines.lines() {
+        text.push_str("\n  ");
+        text.push_str(line);
+    }
+    text
+}
+
+/// A parse refusal as it is printed: the reason when the parser named one,
+/// then the topic's usage.
+fn wrong(reason: String, lines: &str) -> String {
+    if reason == lines {
+        usage(lines)
+    } else {
+        format!("{reason}\n{}", usage(lines))
+    }
+}
+
+/// The usage `hide <topic> … --help` prints, for every command a person or
+/// an agent types.
+fn topic_usage(topic: &str) -> Option<String> {
+    Some(match topic {
+        "request" | "inbox" | "watch" => usage(crate::delivery_cli::USAGE),
+        "agent" => usage(crate::agent_cli::USAGE),
+        "ps" => usage(crate::ps_cli::USAGE),
+        "device" => usage(crate::device_cli::USAGE),
+        "mission" => usage(crate::mission_cli::USAGE),
+        "plan" => usage(crate::plan_cli::USAGE),
+        "links" => LINKS_USAGE.to_owned(),
+        "memory" => MEMORY_USAGE.to_owned(),
+        "browser" => BROWSER_USAGE.to_owned(),
+        "file" => FILE_USAGE.to_owned(),
+        "diff" => DIFF_USAGE.to_owned(),
+        "view" => VIEW_USAGE.to_owned(),
+        "workspace" => "usage: hide workspace info".to_owned(),
+        "status" => "usage: hide status [--json]".to_owned(),
+        "stop" => "usage: hide stop".to_owned(),
+        "open" => "usage: hide [open]".to_owned(),
+        "version" => "usage: hide version [--json]".to_owned(),
+        "guide" => "usage: hide guide".to_owned(),
+        "contract" => "usage: hide contract --json".to_owned(),
+        _ => return None,
+    })
+}
+
+/// `hide --help`: the commands a person types, then the ones an agent in a
+/// Hide pane uses. The host's and the hooks' own commands (`connect`,
+/// `serve`, `dev`, `runtime prepare`, `observation`, `workspace bootstrap`,
+/// `workspace memory`) are not listed.
+fn help_text() -> String {
+    let indent =
+        |lines: &str| -> String { lines.lines().map(|line| format!("  {line}\n")).collect() };
+    let mut text = String::from(
+        "usage: hide [command]\n\nFor you\n  hide                      open Hide\n  hide status [--json]      show whether Hide is running\n  hide stop                 stop Hide's background service\n  hide version [--json]     show this build's version\n\nFor agents in a Hide pane\n  hide guide                the agent guide to everything below\n  hide contract --json      the commands tools call, as JSON\n",
+    );
+    for lines in [
+        crate::delivery_cli::USAGE,
+        crate::agent_cli::USAGE,
+        crate::ps_cli::USAGE,
+        crate::device_cli::USAGE,
+        crate::mission_cli::USAGE,
+        crate::plan_cli::USAGE,
+        "hide workspace info",
+        FILE_USAGE.trim_start_matches("usage: "),
+        DIFF_USAGE.trim_start_matches("usage: "),
+        "hide browser open <url-or-path> [--wait] [--request-id <id>]\nhide browser connect [--display <id>]\nhide browser snapshot|click|fill|type|press|hover|drag|scroll|wait|screenshot|eval|console|network <display> ...\nhide browser help",
+        "hide view list\nhide view status <view-id>\nhide view select <view-id> [--request-id <id>]\nhide view close <view-id> [--request-id <id>]\nhide view split <view-id> --area <area-id> --edge left|right|up|down [--request-id <id>]\nhide view move <view-id> --area <area-id> --index <n> [--request-id <id>]",
+        LINKS_USAGE.trim_start_matches("usage: "),
+        MEMORY_USAGE.trim_start_matches("usage: "),
+    ] {
+        text.push_str(&indent(lines));
+    }
+    text.push_str(
+        "\nCommands that act on the operator's screen (workspace, file, diff, view, browser) need Hide's window open and a pane or shell inside a registered checkout.\nThey never start Hide.\nhide links needs only that pane or shell and a running Hide, and reads the project it is in unless --all-projects is given.\nhide memory reads, adds to and forgets from that project's Project Memory, which Hide keeps for the projects of its own device and of every linked device with a Memory reader.\nhide memory release ends a hold that an agent's stale report put on a card.\nRun in a Hide shell pane with no agent, it also lets that card's text be reported stale once more.\n",
+    );
+    text
+}
+
 /// The version this build reports: `HIDE_VERSION` when it was built (a
 /// package passes the version it ships), else the crate's own.
 pub const VERSION: &str = crate::VERSION;
@@ -130,9 +219,21 @@ pub const COMMIT: Option<&str> = match env!("HIDE_BUILD_COMMIT").as_bytes() {
 };
 
 pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
+    // `--help` or `-h` ending any command asks for that command's usage; the
+    // guides of `agent spawn`, `mission` and `plan` answer it themselves.
+    if let (Some(topic), Some("--help" | "-h")) = (
+        args.get(1).map(String::as_str),
+        args.last().filter(|_| args.len() > 2).map(String::as_str),
+    ) && !(args[2..] == ["spawn", "--help"]
+        || (matches!(topic, "mission" | "plan") && args.len() == 3))
+        && let Some(text) = topic_usage(topic)
+    {
+        return Ok(CommandKind::Usage(text));
+    }
     let mut iter = args.iter().skip(1);
     match iter.next().map(String::as_str) {
         Some("help" | "--help" | "-h") if iter.next().is_none() => Ok(CommandKind::Help),
+        Some("help") => Err("usage: hide --help".to_owned()),
         Some("--version") if iter.next().is_none() => Ok(CommandKind::Version { json: false }),
         Some("version") => match (iter.next().map(String::as_str), iter.next()) {
             (None, _) => Ok(CommandKind::Version { json: false }),
@@ -166,7 +267,7 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
         Some("agent") if args[2..] == ["spawn", "--help"] => Ok(CommandKind::AgentSpawnHelp),
         Some("agent") if args.get(2).map(String::as_str) == Some("catalog") => {
             crate::cli_contract::admit(&args[1..])
-                .map_err(|refusal| format!("{refusal}\n{}", crate::agent_cli::USAGE))?;
+                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::agent_cli::USAGE)))?;
             parse_catalog(&args[3..])
         }
         Some("mission") if matches!(args.get(2).map(String::as_str), Some("help" | "--help")) => {
@@ -174,46 +275,54 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
         }
         Some("mission") => {
             crate::cli_contract::admit(&args[1..])
-                .map_err(|refusal| format!("{refusal}\n{}", crate::mission_cli::USAGE))?;
+                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::mission_cli::USAGE)))?;
             crate::mission_cli::parse(iter)
                 .map(CommandKind::Mission)
-                .map_err(|reason| format!("{reason}\n{}", crate::mission_cli::USAGE))
+                .map_err(|reason| wrong(reason, crate::mission_cli::USAGE))
         }
         Some("plan") if matches!(args.get(2).map(String::as_str), Some("help" | "--help")) => {
             crate::plan_cli::parse(args[2..].iter()).map(CommandKind::Plan)
         }
         Some("plan") => {
             crate::cli_contract::admit(&args[1..])
-                .map_err(|refusal| format!("{refusal}\n{}", crate::plan_cli::USAGE))?;
+                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::plan_cli::USAGE)))?;
             crate::plan_cli::parse(iter)
                 .map(CommandKind::Plan)
-                .map_err(|reason| format!("{reason}\n{}", crate::plan_cli::USAGE))
+                .map_err(|reason| wrong(reason, crate::plan_cli::USAGE))
         }
         Some("agent") => {
             crate::cli_contract::admit(&args[1..])
-                .map_err(|refusal| format!("{refusal}\n{}", crate::agent_cli::USAGE))?;
-            crate::agent_cli::parse(iter).map(|parsed| match parsed.brief_file {
-                Some(path) => CommandKind::AgentSpawnBriefFile {
-                    command: parsed.command,
-                    path,
-                },
-                None => CommandKind::Delivery(parsed.command),
-            })
+                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::agent_cli::USAGE)))?;
+            crate::agent_cli::parse(iter)
+                .map_err(|reason| wrong(reason, crate::agent_cli::USAGE))
+                .map(|parsed| match parsed.brief_file {
+                    Some(path) => CommandKind::AgentSpawnBriefFile {
+                        command: parsed.command,
+                        path,
+                    },
+                    None => CommandKind::Delivery(parsed.command),
+                })
         }
         Some("ps") => {
             crate::cli_contract::admit(&args[1..])
-                .map_err(|refusal| format!("{refusal}\n{}", crate::ps_cli::USAGE))?;
-            crate::ps_cli::parse(iter).map(CommandKind::Ps)
+                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::ps_cli::USAGE)))?;
+            crate::ps_cli::parse(iter)
+                .map(CommandKind::Ps)
+                .map_err(|reason| wrong(reason, crate::ps_cli::USAGE))
         }
         Some("device") => {
             crate::cli_contract::admit(&args[1..])
-                .map_err(|refusal| format!("{refusal}\n{}", crate::device_cli::USAGE))?;
-            crate::device_cli::parse(iter).map(CommandKind::Device)
+                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::device_cli::USAGE)))?;
+            crate::device_cli::parse(iter)
+                .map(CommandKind::Device)
+                .map_err(|reason| wrong(reason, crate::device_cli::USAGE))
         }
         Some(topic @ ("request" | "inbox" | "watch")) => {
             crate::cli_contract::admit(&args[1..])
-                .map_err(|refusal| format!("{refusal}\n{}", crate::delivery_cli::USAGE))?;
-            crate::delivery_cli::parse(topic, iter).map(CommandKind::Delivery)
+                .map_err(|refusal| format!("{refusal}\n{}", usage(crate::delivery_cli::USAGE)))?;
+            crate::delivery_cli::parse(topic, iter)
+                .map(CommandKind::Delivery)
+                .map_err(|reason| wrong(reason, crate::delivery_cli::USAGE))
         }
         Some("browser") => parse_browser(iter),
         Some("observation") => match (iter.next().map(String::as_str), iter.next()) {
@@ -241,7 +350,9 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
         Some("view") => parse_view(iter),
         Some("links") => parse_links(iter),
         Some("memory") => parse_memory(iter),
-        Some(other) => Err(format!("unknown command: {other}")),
+        Some(other) => Err(format!(
+            "unknown command: hide {other} (run hide --help for the commands)"
+        )),
     }
 }
 
@@ -363,11 +474,7 @@ fn parse_open<'a>(
     mut iter: impl Iterator<Item = &'a String>,
     file: bool,
 ) -> Result<CommandKind, String> {
-    let usage = if file {
-        "usage: hide file open <path> [--beside] [--request-id <id>]"
-    } else {
-        "usage: hide diff open <path> [--beside] [--request-id <id>]"
-    };
+    let usage = if file { FILE_USAGE } else { DIFF_USAGE };
     if iter.next().map(String::as_str) != Some("open") {
         return Err(usage.to_owned());
     }
@@ -405,7 +512,7 @@ fn parse_open<'a>(
 }
 
 fn parse_view<'a>(mut iter: impl Iterator<Item = &'a String>) -> Result<CommandKind, String> {
-    let usage = "usage: hide view list | status <view-id> | select <view-id> [--request-id <id>] | close <view-id> [--request-id <id>] | split <view-id> --area <area-id> --edge left|right|up|down [--request-id <id>] | move <view-id> --area <area-id> --index <n> [--request-id <id>]";
+    let usage = VIEW_USAGE;
     let verb = iter.next().map(String::as_str).ok_or(usage)?;
     if verb == "list" {
         return if iter.next().is_none() {
@@ -550,21 +657,16 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         return Ok(());
     }
 
+    if let CommandKind::Usage(text) = &kind {
+        println!("{text}");
+        return Ok(());
+    }
     if kind == CommandKind::AgentSpawnHelp {
         println!("{}", crate::agent_cli::SPAWN_HELP);
         return Ok(());
     }
     if kind == CommandKind::Help {
-        println!("hide guide\nhide version [--json]\nhide contract --json");
-        println!("{}", crate::delivery_cli::USAGE);
-        println!("{}", crate::agent_cli::USAGE);
-        println!("{}", crate::ps_cli::USAGE);
-        println!("{}", crate::device_cli::USAGE);
-        println!("{}", crate::mission_cli::USAGE);
-        println!("{}", crate::plan_cli::USAGE);
-        println!(
-            "hide workspace info\nhide file open <path> [--beside] [--request-id <id>]\nhide diff open <path> [--beside] [--request-id <id>]\nhide browser open <url-or-path> [--wait] [--request-id <id>]\nhide browser connect [--display <id>]\nhide browser snapshot|click|fill|type|press|hover|drag|scroll|wait|screenshot|eval|console|network <display> ...\nhide browser help\nhide view list\nhide view status <view-id>\nhide view select <view-id> [--request-id <id>]\nhide view close <view-id> [--request-id <id>]\nhide view split <view-id> --area <area-id> --edge left|right|up|down [--request-id <id>]\nhide view move <view-id> --area <area-id> --index <n> [--request-id <id>]\nhide links pr <number> | issue <number> | branch <name> | session <id> [--all-projects]\nhide memory show <card> | search <words> | add <text> | forget <card> | undo <card> | placed <card> <path> | building <card> <branch> <path> | unbuilt <card> <reason> | outdated <card> <reason> | skipped <card> <reason> | stale <card> <reason> | release <card>\nEach Workspace command requires a live Hide renderer and a caller Hide can bind to a checkout, an attested Herdr pane or a shell inside a registered checkout; it never starts Hide. hide links needs only the caller and a running Hide, and reads the caller's Project unless --all-projects is given. hide memory reads, adds to and forgets from the caller's Project Memory, which the core keeps in one store for the Projects of its own machine and every registered linked device with a Memory reader. hide memory release ends a hold an agent's stale report put on a card; run in a Hide shell pane with no agent, it also lets that card's text be reported stale once more."
-        );
+        print!("{}", help_text());
         return Ok(());
     }
     // The guides need no daemon and no environment.
@@ -643,6 +745,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         }
         CommandKind::Help
         | CommandKind::AgentSpawnHelp
+        | CommandKind::Usage(_)
         | CommandKind::BrowserHelp
         | CommandKind::Guide
         | CommandKind::Version { .. }
@@ -852,12 +955,12 @@ fn memory_text(
                 })
                 .unwrap_or_default();
             if !evidence.is_empty() {
-                lines.push(format!("Rests on: {}", evidence.join(", ")));
+                lines.push(format!("Based on: {}", evidence.join(", ")));
             }
             let hold = &result["hold"];
             if hold.is_object() {
                 lines.push(format!(
-                    "Held: an agent reported it stale at {}, so Hide does not give it until that conversation is analyzed or {}. Release: hide memory release {}",
+                    "Held: an agent reported it stale at {}, so Hide does not hand it to agents until that conversation is analyzed or {}. Release: hide memory release {}",
                     text(&hold["reported_at"]),
                     text(&hold["expires_at"]),
                     text(&result["card"]),
@@ -869,7 +972,7 @@ fn memory_text(
             }
             if result["verifying"] == true {
                 lines.push(
-                    "Not verified: a file or name this card rests on changed, so check it against the repository before relying on it."
+                    "Not verified: a file or name this card is based on changed, so check it against the repository before relying on it."
                         .to_owned(),
                 );
             }
@@ -924,15 +1027,15 @@ fn memory_text(
             let card = text(&result["card"]);
             match (result["report"].as_str(), result["caller"].as_str()) {
                 (Some("given_back"), _) => format!(
-                    "Released {card}; Hide gives it again, and it may be reported stale once more.\n"
+                    "Released {card}; Hide hands it to agents again, and it may be reported stale once more.\n"
                 ),
                 (Some("spent"), Some("checkout")) => format!(
-                    "Released {card}; Hide gives it again. Hide cannot tell a terminal outside its panes from an agent, so this text is not reported stale again; a release run in a Hide shell pane with no agent gives the report back.\n"
+                    "Released {card}; Hide hands it to agents again. Hide cannot tell a terminal outside its panes from an agent, so this text is not reported stale again; a release run in a Hide shell pane with no agent gives the report back.\n"
                 ),
                 (Some("spent"), _) => format!(
-                    "Released {card}; Hide gives it again. An agent released it, so this text is not reported stale again.\n"
+                    "Released {card}; Hide hands it to agents again. An agent released it, so this text is not reported stale again.\n"
                 ),
-                _ => format!("Released {card}; Hide gives it again.\n"),
+                _ => format!("Released {card}; Hide hands it to agents again.\n"),
             }
         }
         MemoryCommand::Placed { .. } => format!(
@@ -947,7 +1050,7 @@ fn memory_text(
             text(&result["branch"])
         ),
         MemoryCommand::Unbuilt { .. } => format!(
-            "{} returns to To ask as not built yet, with its reason; this attempt ends without a pull request.\n",
+            "{} goes back to Memory's questions as not built yet, with its reason; this attempt ends without a pull request.\n",
             text(&result["card"])
         ),
         MemoryCommand::Outdated { .. } => format!(
@@ -955,7 +1058,7 @@ fn memory_text(
             text(&result["card"])
         ),
         MemoryCommand::Skipped { .. } => format!(
-            "{} returns to To ask with its reason. Other cards stay in the shared pull request; retry continues the same branch.\n",
+            "{} goes back to Memory's questions with its reason. Other cards stay in the shared pull request; retry continues the same branch.\n",
             text(&result["card"])
         ),
         MemoryCommand::Search { .. } => {
@@ -983,7 +1086,7 @@ fn memory_text(
                         Some("same_as") => format!("{card} already says this; added it as a source.\n"),
                         Some("replaced") => format!("Replaced {card}.\n"),
                         Some("outranked") => format!(
-                            "Not given: {card} rests on the operator's own words and stays in use; this text is kept in its history.\n"
+                            "Not used: {card} is based on the operator's own words and stays in use; this text is kept in its history.\n"
                         ),
                         Some("secret") => "Not kept: it looked like a secret.\n".to_owned(),
                         Some("full") => "Not kept: this Project's Memory is full.\n".to_owned(),
@@ -1134,15 +1237,17 @@ pub(crate) fn bootstrap_next_action(reason: &str) -> &'static str {
 /// A bootstrap refusal reaches a request when the reference `HIDE_CAP_REF`
 /// named was gone and the bare bootstrap that replaces it was refused;
 /// nothing was sent, and the bootstrap's next step still applies.
-fn bootstrap_refused(reason: &str) -> bool {
+pub(crate) fn bootstrap_refused(reason: &str) -> bool {
     matches!(reason, "checkout_not_registered" | "caller_unavailable")
 }
 
-fn request_next_action(reason: &str) -> &'static str {
+/// What a command that could not reach the core can do, one sentence for a
+/// code whichever topic ran it.
+pub(crate) fn request_next_action(reason: &str) -> &'static str {
     if bootstrap_refused(reason) {
         bootstrap_next_action(reason)
     } else {
-        "Check Hide status, reconnect the pane, and retry"
+        "Check that Hide is running (hide status), reconnect the pane, and run the same command again"
     }
 }
 
@@ -2030,13 +2135,13 @@ fn status(state_dir: &Path, idle_secs: u64) -> Result<(), String> {
                 .and_then(|value| value.as_u64())
                 .unwrap_or(idle_secs);
             println!(
-                "pid {}  port {}  clients {}  idle {}s remaining",
+                "Hide is running  pid {}  port {}  clients {}  idle {}s remaining",
                 state.pid, state.port, clients, idle
             );
             Ok(())
         }
         None => {
-            println!("hided is not running");
+            println!("Hide is not running");
             Ok(())
         }
     }
@@ -2101,8 +2206,16 @@ fn runtime_prepare(home: &Path) -> Result<(), String> {
 }
 
 fn stop(state_dir: &Path) -> Result<(), String> {
-    if let Some(state) = state_file::read_state(state_dir).map_err(|e| e.to_string())? {
-        stop_daemon(state_dir, &state)?;
+    match state_file::read_state(state_dir).map_err(|e| e.to_string())? {
+        Some(state) if still_the_daemon(&state) => {
+            stop_daemon(state_dir, &state)?;
+            println!("Stopped Hide (pid {}).", state.pid);
+        }
+        Some(state) => {
+            stop_daemon(state_dir, &state)?;
+            println!("Hide is not running.");
+        }
+        None => println!("Hide is not running."),
     }
     Ok(())
 }
@@ -2762,15 +2875,89 @@ mod tests {
             CommandKind::AgentSpawnHelp
         );
         for verb in ["register", "list", "show", "end"] {
-            assert!(
-                parse(&["hide", "agent", verb, "--help"])
-                    .unwrap_err()
-                    .contains("Unknown flag")
+            assert_eq!(
+                parse(&["hide", "agent", verb, "--help"]).unwrap(),
+                CommandKind::Usage(usage(crate::agent_cli::USAGE))
             );
         }
         let error = parse(&["hide", "agent", "spawn", "--no-watch"]).unwrap_err();
-        assert!(error.starts_with("Unknown flag for hide agent spawn: --no-watch\n"));
-        assert!(error.contains(crate::agent_cli::USAGE));
+        assert!(error.starts_with(
+            "unknown flag for hide agent spawn: --no-watch\nusage:\n  hide agent register"
+        ));
+    }
+
+    /// Every command a person types answers `--help` with its own usage, a
+    /// topic without its subcommand says so, and a wrong one says how to see
+    /// the commands (the CLI copy audit).
+    #[test]
+    fn every_command_answers_help_and_says_what_is_wrong() {
+        let parse = |args: &[&str]| {
+            parse_args(&args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>())
+        };
+        for (args, lines) in [
+            (&["hide", "ps", "--help"][..], usage(crate::ps_cli::USAGE)),
+            (
+                &["hide", "device", "-h"][..],
+                usage(crate::device_cli::USAGE),
+            ),
+            (
+                &["hide", "device", "add", "--help"][..],
+                usage(crate::device_cli::USAGE),
+            ),
+            (
+                &["hide", "request", "send", "--help"][..],
+                usage(crate::delivery_cli::USAGE),
+            ),
+            (
+                &["hide", "mission", "create", "--help"][..],
+                usage(crate::mission_cli::USAGE),
+            ),
+            (&["hide", "links", "--help"][..], LINKS_USAGE.to_owned()),
+            (
+                &["hide", "status", "--help"][..],
+                "usage: hide status [--json]".to_owned(),
+            ),
+        ] {
+            assert_eq!(parse(args).unwrap(), CommandKind::Usage(lines), "{args:?}");
+        }
+        assert_eq!(
+            parse(&["hide", "mission", "--help"]).unwrap(),
+            CommandKind::Mission(crate::mission_cli::MissionCli::Help)
+        );
+        assert_eq!(
+            parse(&["hide", "device"]).unwrap_err(),
+            format!(
+                "hide device needs a subcommand\n{}",
+                usage(crate::device_cli::USAGE)
+            )
+        );
+        assert!(
+            parse(&["hide", "device", "rename"])
+                .unwrap_err()
+                .starts_with("unknown command: hide device rename\nusage:\n  hide device list")
+        );
+        assert_eq!(
+            parse(&["hide", "foo"]).unwrap_err(),
+            "unknown command: hide foo (run hide --help for the commands)"
+        );
+        assert_eq!(
+            parse(&["hide", "help", "extra"]).unwrap_err(),
+            "usage: hide --help"
+        );
+        assert!(
+            parse(&["hide", "ps", "--every"])
+                .unwrap_err()
+                .starts_with("unknown flag for hide ps: --every\nusage:\n  hide ps")
+        );
+        let help = help_text();
+        assert!(help.starts_with("usage: hide [command]\n\nFor you\n"));
+        assert_eq!(help.matches("hide agent catalog").count(), 1);
+        assert!(
+            !help.contains("hide serve")
+                && !help.contains("hide connect")
+                && !help.contains("renderer")
+        );
+        assert!(help.lines().all(|line| line.len() <= 400), "{help}");
     }
 
     #[test]
@@ -3139,7 +3326,7 @@ mod tests {
                 },
                 &serde_json::json!({"card":"m6","outcome":"skipped"})
             ),
-            "m6 returns to To ask with its reason. Other cards stay in the shared pull request; retry continues the same branch.\n"
+            "m6 goes back to Memory's questions with its reason. Other cards stay in the shared pull request; retry continues the same branch.\n"
         );
         assert_eq!(
             memory_text(
@@ -3165,7 +3352,7 @@ mod tests {
                     {"outcome": "already_added", "card": "m2"},
                 ]})
             ),
-            "Not given: m1 rests on the operator's own words and stays in use; this text is kept in its history.\nAlready added as m2.\n"
+            "Not used: m1 is based on the operator's own words and stays in use; this text is kept in its history.\nAlready added as m2.\n"
         );
         assert_eq!(
             memory_text(
@@ -3199,11 +3386,11 @@ mod tests {
         };
         assert_eq!(
             released("person", "given_back"),
-            "Released m5; Hide gives it again, and it may be reported stale once more.\n"
+            "Released m5; Hide hands it to agents again, and it may be reported stale once more.\n"
         );
         assert_eq!(
             released("agent", "spent"),
-            "Released m5; Hide gives it again. An agent released it, so this text is not reported stale again.\n"
+            "Released m5; Hide hands it to agents again. An agent released it, so this text is not reported stale again.\n"
         );
         assert!(
             released("checkout", "spent")

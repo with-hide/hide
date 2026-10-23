@@ -48,7 +48,7 @@ describe("a row's 지금 (B48)", () => {
   });
 });
 
-describe("챙길 것 and the quiet fold (B49, B50)", () => {
+describe("처리할 일 and the quiet fold (B49, B50)", () => {
   it("counts the merged checkouts left on disk, and folds a resting project only when nothing is left to clean", () => {
     const [quiet, dirty, busy] = projectRows([project("quiet", { states: ["resting"] }), project("dirty", { states: ["resting"], merged: [{ cache: GB, deps: GB }] }), project("busy", { states: ["working"] })]);
     expect(quiet).toMatchObject({ merged: 0, quiet: true });

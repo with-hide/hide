@@ -8,7 +8,9 @@ use std::sync::{Arc, Mutex, Weak, mpsc};
 
 use super::first_run::{event, first_run_pass, report_here, step};
 use super::*;
-use crate::herdr_takeover::{FailureCause, HerdrTakeover, Look, Moved, Offer, OfferKind};
+use crate::herdr_takeover::{
+    FailureCause, HerdrTakeover, Look, Moved, Offer, OfferKind, PathHerdr, Versions,
+};
 use crate::model::FirstRunStep;
 
 /// Answers what it is told; the runtime under test never hears it on its
@@ -33,6 +35,10 @@ impl HerdrTakeover for StandIn {
             stage: "stand_in".into(),
             detail: "the test answers for it".into(),
         }
+    }
+
+    fn versions(&self) -> Versions {
+        Versions::default()
     }
 }
 
@@ -103,10 +109,12 @@ fn the_wizard_opens_on_herdr_only_while_there_may_be_a_server_to_move() {
     assert_eq!(step(&plain), Some(FirstRunStep::Agents));
 }
 
-/// Engineering rule 10: a look that does not answer in time counts as one
-/// that found nothing, so the wizard is never held on its Herdr step.
+/// B8, B9, engineering rule 10: a look that does not answer in time counts
+/// as one that could not read the server; while Hide cannot use the server
+/// the step says so, Not now closes the wizard, and a later look that finds
+/// nothing takes the failure away. A server Hide reads keeps it in the log.
 #[test]
-fn a_look_that_does_not_answer_in_time_finds_nothing() {
+fn a_look_that_could_not_read_an_unusable_server_shows_its_failure() {
     let (release, held) = mpsc::channel();
     let slow: Arc<dyn HerdrTakeover> = Arc::new(StandIn {
         look: offer(OfferKind::Move, "0.8.2", OLD_PROTOCOL),
@@ -118,15 +126,68 @@ fn a_look_that_does_not_answer_in_time_finds_nothing() {
         matches!(&look, Look::Unreadable { stage, .. } if stage == "timeout"),
         "{look:?}"
     );
+
     let mut runtime = installed();
+    runtime.snapshot.status.herdr.state = "malformed".into();
     report_here(&mut runtime, &first_run_pass());
-    runtime.ingest_herdr_look(look);
-    assert_eq!(step(&runtime), Some(FirstRunStep::Agents));
+    runtime.ingest_herdr_look(look.clone());
+    assert_eq!(step(&runtime), Some(FirstRunStep::Herdr));
+    assert_eq!(
+        takeover(&runtime),
+        serde_json::json!({
+            "kind": "look", "stage": "failed", "server_version": "", "version": "",
+            "same_protocol": false, "failure": "unreadable", "path_herdr_behind": null,
+        })
+    );
+    assert!(act(&mut runtime, "later"));
+    assert_eq!(step(&runtime), None);
+    runtime.ingest_herdr_look(Look::Nothing);
     assert_eq!(takeover(&runtime), serde_json::Value::Null);
+
+    let mut connected = installed();
+    connected.snapshot.status.herdr.state = "connected".into();
+    report_here(&mut connected, &first_run_pass());
+    connected.ingest_herdr_look(look);
+    assert_eq!(step(&connected), Some(FirstRunStep::Agents));
+    assert_eq!(takeover(&connected), serde_json::Value::Null);
+}
+
+/// Settings > About reads the Herdr this app ships and the operator's own
+/// `herdr`, with the command that brings an older one up to it.
+#[test]
+fn the_versions_a_look_read_reach_the_snapshot() {
+    let mut runtime = installed();
+    assert!(runtime.ingest_herdr_versions(Versions {
+        hide: Some("0.9.5".into()),
+        path_herdr: Some(PathHerdr {
+            version: "0.7.5".into(),
+            protocol: Some(17),
+            update: "brew upgrade herdr".into(),
+        }),
+    }));
+    let status = serde_json::to_value(runtime.snapshot()).unwrap()["status"].clone();
+    assert_eq!(
+        status["herdr_versions"],
+        serde_json::json!({
+            "hide": "0.9.5",
+            "path_herdr": {"version": "0.7.5", "behind": true, "update_command": "brew upgrade herdr"},
+        })
+    );
+    assert!(!runtime.ingest_herdr_versions(Versions {
+        hide: Some("0.9.5".into()),
+        path_herdr: Some(PathHerdr {
+            version: "0.7.5".into(),
+            protocol: Some(17),
+            update: "brew upgrade herdr".into(),
+        }),
+    }));
+    assert!(runtime.ingest_herdr_versions(Versions::default()));
+    let status = serde_json::to_value(runtime.snapshot()).unwrap()["status"].clone();
+    assert_eq!(status["herdr_versions"], serde_json::Value::Null);
 }
 
 fn bounded_look_for_test(takeover: &Arc<dyn HerdrTakeover>, within: std::time::Duration) -> Look {
-    super::super::herdr_takeover::bounded_look(takeover, within)
+    super::super::herdr_takeover::bounded_look(takeover, within).0
 }
 
 /// B3, B7, B8, B9: a server Hide cannot read offers the move alone; a second

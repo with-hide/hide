@@ -889,11 +889,18 @@ pub(crate) fn command_words<'a>(
     (&words[at..], foreign)
 }
 
-fn is_herdr(word: &str) -> bool {
-    matches!(word, "$HERDR_BIN_PATH" | "${HERDR_BIN_PATH}")
-        || Path::new(word)
-            .file_name()
-            .is_some_and(|name| name == "herdr")
+/// Whether a command word runs Herdr: by name, or through the pane's
+/// `HERDR_BIN_PATH` as Hide's guidance writes it, with the PATH `herdr` as
+/// the fallback where a server older than 0.9 sets no such variable, and in
+/// PowerShell's spelling.
+pub(crate) fn is_herdr(word: &str) -> bool {
+    matches!(
+        word,
+        "$HERDR_BIN_PATH"
+            | "${HERDR_BIN_PATH}"
+            | "${HERDR_BIN_PATH:-herdr}"
+            | "$env:HERDR_BIN_PATH"
+    ) || matches!(word.rsplit(['/', '\\']).next(), Some("herdr" | "herdr.exe"))
 }
 
 /// The kind of the agent a command word runs, matched on its file name.
@@ -1354,6 +1361,7 @@ mod tests {
             "HERDR_X=1 FOO=bar herdr agent start a --kind claude --pane p",
             "\"$HERDR_BIN_PATH\" agent start a --kind claude --pane p",
             "${HERDR_BIN_PATH} agent start a --kind claude --pane p",
+            "\"${HERDR_BIN_PATH:-herdr}\" agent start a --kind claude --pane p",
             "herdr agent start a --kind claude --pane p > /tmp/out 2>&1",
             "herdr agent start a --kind claude --pane p &> /tmp/out",
             "for n in a b; do herdr agent start \"$n\" --kind claude --pane p; done",

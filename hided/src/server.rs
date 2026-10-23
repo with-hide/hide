@@ -2414,7 +2414,9 @@ fn device_listing(
         Ok(relative) => relative.into_string(),
         Err(_) => return refused("file_list", &folder, Refusal::OutsideCheckout),
     };
-    let unavailable = |code: &str, message: String| {
+    // `reason` is the host's refusal code, which the Explorer words; the
+    // sentence beside it is the log's.
+    let unavailable = |code: &str, reason: Option<&str>, message: String| {
         eprintln!(
             "{}",
             json!({
@@ -2422,16 +2424,17 @@ fn device_listing(
                 "kind": "device.listing_unavailable",
                 "device": device,
                 "code": code,
+                "reason": reason,
                 "message": message,
             })
         );
         json!({"type": "directory_unavailable", "payload": {
-            "kind": "file_list", "device_id": device, "root_path": folder, "code": code, "message": message,
+            "kind": "file_list", "device_id": device, "root_path": folder, "code": code, "reason": reason,
         }})
     };
     let channel = match core.node_link(&device) {
         Ok(channel) => channel,
-        Err(message) => return unavailable("not_ready", message),
+        Err(message) => return unavailable("not_ready", None, message),
     };
     use herdr_core::node_access::LinkError;
     match herdr_core::node_access::list_folder(channel.as_ref(), &root, &relative) {
@@ -2454,10 +2457,12 @@ fn device_listing(
                 "entries": entries, "truncated": listing.truncated,
             }})
         }
-        Err(LinkError::NotConnected(message)) => unavailable("not_ready", message),
-        Err(error @ LinkError::Busy) => unavailable("busy", error.to_string()),
-        Err(LinkError::Unknown(message)) => unavailable("unknown", message),
-        Err(LinkError::Refused(error)) => unavailable("refused", error.message),
+        Err(LinkError::NotConnected(message)) => unavailable("not_ready", None, message),
+        Err(error @ LinkError::Busy) => unavailable("busy", None, error.to_string()),
+        Err(LinkError::Unknown(message)) => unavailable("unknown", None, message),
+        Err(LinkError::Refused(error)) => {
+            unavailable("refused", Some(error.code.as_str()), error.message)
+        }
     }
 }
 
@@ -3169,19 +3174,30 @@ fn device_file_index(state: &AppState, device: &str, root: &str, query: &str) ->
     }
     let core = Arc::clone(&state.core);
     let (walk_device, walk_root) = (device.to_owned(), root.to_owned());
+    // A walk that failed answers the code the palette words; the helper's
+    // sentence goes to the log.
     let answer = state.index.query(device, root, query, move || {
-        let channel = core.node_link(&walk_device)?;
-        herdr_core::node_access::index_root(channel.as_ref(), &walk_root).map_err(|error| {
+        let log = |code: &str, message: String| {
             eprintln!(
                 "{}",
                 json!({
                     "component": "hided",
                     "kind": "device.index_unavailable",
                     "device": walk_device,
-                    "message": error.to_string(),
+                    "code": code,
+                    "message": message,
                 })
             );
-            error.to_string()
+            code.to_owned()
+        };
+        let channel = core
+            .node_link(&walk_device)
+            .map_err(|message| log("link.not_connected", message))?;
+        herdr_core::node_access::index_root(channel.as_ref(), &walk_root).map_err(|error| {
+            log(
+                &herdr_core::node_access::link_failure_code(&error),
+                error.to_string(),
+            )
         })
     });
     index_result(device, root, query, answer, |relative| {

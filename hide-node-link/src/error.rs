@@ -44,6 +44,30 @@ pub enum ErrorCode {
     Io,
 }
 
+impl ErrorCode {
+    /// The code as the wire spells it, for a screen to word.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::InvalidRequest => "invalid_request",
+            Self::InvalidPath => "invalid_path",
+            Self::OutsideRoot => "outside_root",
+            Self::RootReplaced => "root_replaced",
+            Self::NotFound => "not_found",
+            Self::NotADirectory => "not_a_directory",
+            Self::NotAFile => "not_a_file",
+            Self::PermissionDenied => "permission_denied",
+            Self::AlreadyExists => "already_exists",
+            Self::Conflict => "conflict",
+            Self::TooLarge => "too_large",
+            Self::Unsupported => "unsupported",
+            Self::Busy => "busy",
+            Self::HomeConflict => "home_conflict",
+            Self::Cancelled => "cancelled",
+            Self::Io => "io",
+        }
+    }
+}
+
 pub type HostResult<T> = Result<T, HostError>;
 
 impl HostError {
@@ -88,3 +112,32 @@ impl fmt::Display for HostError {
 }
 
 impl std::error::Error for HostError {}
+
+#[cfg(test)]
+mod tests {
+    use super::ErrorCode;
+
+    #[test]
+    fn each_code_reads_as_the_wire_spells_it() {
+        for code in [
+            ErrorCode::InvalidRequest,
+            ErrorCode::InvalidPath,
+            ErrorCode::OutsideRoot,
+            ErrorCode::RootReplaced,
+            ErrorCode::NotFound,
+            ErrorCode::NotADirectory,
+            ErrorCode::NotAFile,
+            ErrorCode::PermissionDenied,
+            ErrorCode::AlreadyExists,
+            ErrorCode::Conflict,
+            ErrorCode::TooLarge,
+            ErrorCode::Unsupported,
+            ErrorCode::Busy,
+            ErrorCode::HomeConflict,
+            ErrorCode::Cancelled,
+            ErrorCode::Io,
+        ] {
+            assert_eq!(serde_json::to_value(code).unwrap(), code.as_str());
+        }
+    }
+}

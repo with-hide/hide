@@ -1,7 +1,7 @@
 //! The folder trust Hide records in an agent's own state for the worktrees it
-//! makes. Claude Code, Codex and agy each ask, the first time they start
-//! interactively in a folder they have not been told to trust, whether to
-//! trust it, and a delegated child stopped at that question waits for an
+//! makes. Claude Code, Codex, agy and Grok each ask, the first time they
+//! start interactively in a folder they have not been told to trust, whether
+//! to trust it, and a delegated child stopped at that question waits for an
 //! answer nobody is there to give. So Hide records that trust before it
 //! starts the agent in a worktree it made, and only there (docs/agent-hooks.md,
 //! Folder trust for the worktrees Hide makes; PRD antigravity-first-class D-08
@@ -16,17 +16,25 @@
 //!   (`crate::codex_trust`), so Hide never writes that file.
 //! - agy: one entry of `trustedWorkspaces` in
 //!   `~/.gemini/antigravity-cli/settings.json`.
+//! - Grok: `[folders."<folder>"] trusted = true` in
+//!   `~/.grok/trusted_folders.toml`, changed while Hide holds Grok's own lock
+//!   on that file.
 //!
 //! The entry names the worktree itself, never the repository it was made
-//! from. Answering an agent's own question in a worktree trusts the
-//! repository's main checkout, which is the operator's; Claude Code 2.1.302
-//! and Codex 0.163.0 both read an entry for the exact folder before the
-//! repository's, and an entry for a folder above a repository does not reach
-//! into it (measured 2026-10-17).
+//! from, for every agent that reads one: answering an agent's own question in
+//! a worktree trusts the repository's main checkout, which is the operator's;
+//! Claude Code 2.1.302 and Codex 0.163.0 both read an entry for the exact
+//! folder before the repository's, and an entry for a folder above a
+//! repository does not reach into it (measured 2026-10-17). Grok 1.0.67 reads
+//! only the main checkout's entry for every worktree of a repository
+//! (`workspace_key` in its folder trust), so Grok's entry names the main
+//! checkout, and Hide keeps it while any worktree it trusted it for is there
+//! (measured 2026-10-23).
 //!
-//! Hide remembers in its own record which entries it added: removing the
-//! worktree, or switching the agent off, takes out only those, and an entry
-//! the operator added, before Hide or after it, stays. An entry for a folder
+//! Hide remembers in its own record which entries it added, by the worktree
+//! each was added for: removing the worktree, or switching the agent off,
+//! takes out only those, and an entry the operator added, before Hide or after
+//! it, stays. An entry for a folder
 //! that is gone goes with the next entry Hide adds, so the record's cap is
 //! only reached by folders that exist. Every change holds one account lock
 //! per agent, waited for as long as the longest change holds it, and the JSON
@@ -41,6 +49,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use hide_agent_adapter::LaunchDialect;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::install::{HookDocument, InstallFailure, read_document, write_document};
@@ -49,6 +58,9 @@ use crate::runtime::AgentRuntime;
 /// How long Hide waits for Claude Code's own lock on its config, which Claude
 /// holds only while it saves the file.
 const CLAUDE_LOCK_WAIT: Duration = Duration::from_secs(2);
+/// How long Hide waits for Grok's own lock on its trust file, which Grok holds
+/// only while it reads and replaces the file.
+const GROK_LOCK_WAIT: Duration = Duration::from_secs(2);
 /// The most folders that exist one agent's record keeps; a worktree is
 /// removed long before.
 const RECORD_LIMIT: usize = 4096;
@@ -59,10 +71,11 @@ pub enum Agent {
     ClaudeCode,
     Codex,
     Antigravity,
+    Grok,
 }
 
 impl Agent {
-    pub const ALL: [Self; 3] = [Self::ClaudeCode, Self::Codex, Self::Antigravity];
+    pub const ALL: [Self; 4] = [Self::ClaudeCode, Self::Codex, Self::Antigravity, Self::Grok];
 
     /// The agent a start of `dialect` records trust for, when it asks one
     /// (`LaunchDialect::trusts_worktrees`).
@@ -74,6 +87,7 @@ impl Agent {
             LaunchDialect::Claude => Some(Self::ClaudeCode),
             LaunchDialect::Codex => Some(Self::Codex),
             LaunchDialect::Antigravity => Some(Self::Antigravity),
+            LaunchDialect::Grok => Some(Self::Grok),
             _ => None,
         }
     }
@@ -84,6 +98,7 @@ impl Agent {
             Self::ClaudeCode => "Claude Code",
             Self::Codex => "Codex",
             Self::Antigravity => "agy",
+            Self::Grok => "Grok",
         }
     }
 
@@ -94,6 +109,7 @@ impl Agent {
             Self::ClaudeCode => AgentRuntime::ClaudeCode.trust_path(home),
             Self::Codex => AgentRuntime::Codex.trust_path(home),
             Self::Antigravity => antigravity::settings_path(home),
+            Self::Grok => grok::settings_path(home),
         }
     }
 
@@ -104,6 +120,7 @@ impl Agent {
         let own = match self {
             Self::Codex => crate::codex_trust::SESSION_BOUND,
             Self::ClaudeCode => CLAUDE_LOCK_WAIT,
+            Self::Grok => GROK_LOCK_WAIT,
             Self::Antigravity => Duration::ZERO,
         };
         own + Duration::from_secs(1)
@@ -120,6 +137,7 @@ impl Agent {
             Self::ClaudeCode => "claude-trust",
             Self::Codex => "codex-trust",
             Self::Antigravity => "antigravity-trust",
+            Self::Grok => "grok-trust",
         }
     }
 
@@ -133,7 +151,10 @@ impl Agent {
 
     /// The spelling the agent compares a folder by. Claude Code writes its
     /// keys with `/` on Windows too; Codex compares them without case there
-    /// and writes them in lower case (`project_trust_key`, codex-rs 0.163.0).
+    /// and writes them in lower case (`project_trust_key`, codex-rs 0.163.0);
+    /// Grok writes the resolved path as the system spells it, without the
+    /// `\\?\` prefix on Windows (`dunce::canonicalize`), which is how a
+    /// worktree reaches here.
     fn spelling(self, path: &Path) -> Result<String, InstallFailure> {
         let spelled = path
             .to_str()
@@ -154,8 +175,9 @@ impl Agent {
 }
 
 /// What a change may start: the `codex` program whose app-server records
-/// Codex's trust, and the flag that ends it when Hide quits. Claude Code's
-/// and agy's changes start nothing.
+/// Codex's trust, and the flag that ends it, or a wait for an agent's own
+/// lock, when Hide quits. Claude Code's, agy's and Grok's changes start
+/// nothing.
 #[derive(Clone, Copy)]
 pub struct Tools<'a> {
     pub codex: Option<&'a Path>,
@@ -163,7 +185,7 @@ pub struct Tools<'a> {
 }
 
 impl Tools<'static> {
-    /// For a change that starts nothing: Claude Code's and agy's.
+    /// For a change that starts nothing: Claude Code's, agy's and Grok's.
     pub fn none() -> Self {
         static NEVER: AtomicBool = AtomicBool::new(false);
         Self {
@@ -214,7 +236,63 @@ fn hold(
     }
 }
 
-fn read_record(agent: Agent, home: &Path) -> Result<Vec<String>, InstallFailure> {
+/// One folder Hide trusted for an agent, as its record keeps it: the folder,
+/// and the entry it put in the agent's file when that names another folder.
+/// Grok's entry names the repository's main checkout, shared by every
+/// worktree of it, so the entry leaves only with the last of them.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+enum Recorded {
+    /// The entry is the folder itself, the form every record held before
+    /// Grok's.
+    Folder(String),
+    Through {
+        folder: String,
+        entry: String,
+    },
+}
+
+impl Recorded {
+    fn new(folder: String, entry: String) -> Self {
+        if folder == entry {
+            Self::Folder(folder)
+        } else {
+            Self::Through { folder, entry }
+        }
+    }
+
+    fn folder(&self) -> &str {
+        match self {
+            Self::Folder(folder) | Self::Through { folder, .. } => folder,
+        }
+    }
+
+    fn entry(&self) -> &str {
+        match self {
+            Self::Folder(entry) | Self::Through { entry, .. } => entry,
+        }
+    }
+}
+
+/// The entries of `leaving` that no record in `staying` still needs, each
+/// once.
+fn entries_to_take_out<'a>(
+    leaving: impl IntoIterator<Item = &'a Recorded>,
+    staying: &[&Recorded],
+) -> Vec<String> {
+    let mut entries: Vec<String> = Vec::new();
+    for recorded in leaving {
+        let entry = recorded.entry();
+        if !staying.iter().any(|kept| kept.entry() == entry)
+            && !entries.iter().any(|taken| taken == entry)
+        {
+            entries.push(entry.to_owned());
+        }
+    }
+    entries
+}
+
+fn read_record(agent: Agent, home: &Path) -> Result<Vec<Recorded>, InstallFailure> {
     let path = agent.record_path(home);
     let unreadable = |detail: String| InstallFailure::Unreadable {
         path: path.display().to_string(),
@@ -227,7 +305,7 @@ fn read_record(agent: Agent, home: &Path) -> Result<Vec<String>, InstallFailure>
     }
 }
 
-fn write_record(agent: Agent, home: &Path, record: &[String]) -> Result<(), InstallFailure> {
+fn write_record(agent: Agent, home: &Path, record: &[Recorded]) -> Result<(), InstallFailure> {
     let path = agent.record_path(home);
     let failure = |detail: String| InstallFailure::NotWritable {
         path: path.display().to_string(),
@@ -253,23 +331,42 @@ pub(crate) enum Added {
 /// A folder the agent already trusts is left as it is and stays the
 /// operator's.
 pub fn trust(agent: Agent, home: &Path, folder: &Path, tools: Tools) -> Result<(), InstallFailure> {
-    let key = agent.spelling(folder)?;
+    let folder_key = agent.spelling(folder)?;
     let repository = match agent {
-        Agent::Codex => main_checkout(folder)
+        Agent::Codex | Agent::Grok => main_checkout(folder)
             .map(|root| agent.spelling(&root))
             .transpose()?,
         _ => None,
     };
+    let key = match agent {
+        Agent::Grok => repository.clone().ok_or_else(|| InstallFailure::UnexpectedShape {
+            path: folder.display().to_string(),
+            detail: "a worktree Grok trusts belongs to a repository with a main checkout, the folder Grok keeps a worktree's trust under".to_owned(),
+        })?,
+        _ => folder_key.clone(),
+    };
+    let new = Recorded::new(folder_key, key.clone());
     let _lock = hold(agent, home, tools.stop)?;
     let mut record = read_record(agent, home)?;
     // Hide's entries for folders that are gone (removed outside Hide, or by a
     // removal that could not reach the agent) go in the same write as the new
     // one, so the cap is only reached by folders that exist.
-    let gone: Vec<String> = record
+    let gone: Vec<Recorded> = record
         .iter()
-        .filter(|entry| **entry != key && folder_is_gone(entry))
+        .filter(|recorded| recorded.folder() != new.folder() && folder_is_gone(recorded.folder()))
         .cloned()
         .collect();
+    let staying: Vec<&Recorded> = record
+        .iter()
+        .filter(|recorded| !gone.contains(recorded))
+        .chain([&new])
+        .collect();
+    let gone_entries = entries_to_take_out(&gone, &staying);
+    // An entry another worktree of Hide's already needs is Hide's too, so
+    // this folder is recorded with it whatever the agent's file says.
+    let shared = record.iter().any(|recorded| {
+        recorded.entry() == key && recorded.folder() != new.folder() && !gone.contains(recorded)
+    });
     let mut added = false;
     // The record is written first, so a crash between the two writes leaves a
     // recorded folder the agent does not trust, which a removal skips. A
@@ -277,7 +374,10 @@ pub fn trust(agent: Agent, home: &Path, folder: &Path, tools: Tools) -> Result<(
     // it would make a trust the operator gives later look like Hide's.
     let written = {
         let mut remember = || {
-            if !record.contains(&key) {
+            if !record
+                .iter()
+                .any(|recorded| recorded.folder() == new.folder())
+            {
                 if record.len() - gone.len() >= RECORD_LIMIT {
                     return Err(InstallFailure::NotWritable {
                         path: agent.record_path(home).display().to_string(),
@@ -287,29 +387,31 @@ pub fn trust(agent: Agent, home: &Path, folder: &Path, tools: Tools) -> Result<(
                         ),
                     });
                 }
-                record.push(key.clone());
+                record.push(new.clone());
                 write_record(agent, home, &record)?;
                 added = true;
             }
             Ok(())
         };
-        match agent {
-            Agent::ClaudeCode => claude::add(home, &key, &gone, &mut remember),
+        let shared_remembered = if shared { remember() } else { Ok(()) };
+        shared_remembered.and_then(|()| match agent {
+            Agent::ClaudeCode => claude::add(home, &key, &gone_entries, &mut remember),
             Agent::Codex => crate::codex_trust::add_project_trust(
                 codex_program(home, tools)?,
                 home,
                 tools.stop,
                 &key,
                 repository.as_deref(),
-                &gone,
+                &gone_entries,
                 &mut remember,
             ),
-            Agent::Antigravity => antigravity::add(home, &key, &gone, &mut remember),
-        }
+            Agent::Antigravity => antigravity::add(home, &key, &gone_entries, &mut remember),
+            Agent::Grok => grok::add(home, &key, &gone_entries, tools.stop, &mut remember),
+        })
     };
     match written {
         Ok(Added::New) if !gone.is_empty() => {
-            record.retain(|entry| !gone.contains(entry));
+            record.retain(|recorded| !gone.contains(recorded));
             // The agent no longer trusts them; an entry still recorded is
             // taken out of the record with the next one Hide adds.
             let _ = write_record(agent, home, &record);
@@ -318,7 +420,7 @@ pub fn trust(agent: Agent, home: &Path, folder: &Path, tools: Tools) -> Result<(
         Ok(_) => Ok(()),
         Err(failure) => {
             if added {
-                record.retain(|entry| entry != &key);
+                record.retain(|recorded| recorded.folder() != new.folder());
                 // The agent's failure is the one reported; a record left
                 // behind is the crash case above.
                 let _ = write_record(agent, home, &record);
@@ -378,8 +480,9 @@ pub fn trust_worktree(
 }
 
 /// The main checkout of the repository `worktree` belongs to, which Codex
-/// reads a worktree's trust from when it has none of its own: the folder
-/// holding the common `.git` (`resolve_root_git_project_for_trust`).
+/// reads a worktree's trust from when it has none of its own
+/// (`resolve_root_git_project_for_trust`) and Grok reads it from always
+/// (`workspace_key`): the folder holding the common `.git`.
 fn main_checkout(worktree: &Path) -> Option<PathBuf> {
     let repository = hide_project::git::discover(worktree)?;
     let common = repository.common_dir;
@@ -397,10 +500,11 @@ fn codex_program<'a>(home: &Path, tools: Tools<'a>) -> Result<&'a Path, InstallF
 }
 
 /// Takes out the trust Hide added for `folder`, as when Hide removes the
-/// worktree; a folder Hide did not add is left alone. The folder may already
-/// be gone and named as Git lists it: Hide's record holds the key it wrote,
-/// and each entry there is compared with the folder as the system compares
-/// folders. Answers how many entries left the agent's settings.
+/// worktree; a folder Hide did not add is left alone, and so is an entry
+/// another folder Hide trusted still needs (Grok's main checkout). The folder
+/// may already be gone and named as Git lists it: Hide's record holds the key
+/// it wrote, and each entry there is compared with the folder as the system
+/// compares folders. Answers how many entries left the agent's settings.
 pub fn forget(
     agent: Agent,
     home: &Path,
@@ -472,11 +576,15 @@ fn forget_where(
     }
     let _lock = hold(agent, home, tools.stop)?;
     let record = read_record(agent, home)?;
-    let (gone, kept): (Vec<_>, Vec<_>) = record.into_iter().partition(|entry| chosen(entry));
+    let (gone, kept): (Vec<_>, Vec<_>) = record
+        .into_iter()
+        .partition(|recorded| chosen(recorded.folder()));
     if gone.is_empty() {
         return Ok(0);
     }
+    let gone = entries_to_take_out(&gone, &kept.iter().collect::<Vec<_>>());
     let removed = match agent {
+        _ if gone.is_empty() => 0,
         Agent::ClaudeCode => claude::remove(home, &gone)?,
         Agent::Codex => crate::codex_trust::remove_project_trust(
             codex_program(home, tools)?,
@@ -485,6 +593,7 @@ fn forget_where(
             &gone,
         )?,
         Agent::Antigravity => antigravity::remove(home, &gone)?,
+        Agent::Grok => grok::remove(home, &gone, tools.stop)?,
     };
     write_record(agent, home, &kept)?;
     Ok(removed)
@@ -587,6 +696,203 @@ mod antigravity {
                 .is_none_or(|entry| !gone.iter().any(|g| g == entry))
         });
         before - list.len()
+    }
+}
+
+/// Grok's trust: `[folders."<folder>"] trusted = true` in
+/// `trusted_folders.toml` of Grok's default home, the file Grok 1.0.67 reads
+/// and writes as a serde document of `folders` alone (`TrustStore`). Grok
+/// takes an exclusive lock on `trusted_folders.toml.lock` beside it (`fs2`,
+/// `flock` on Unix and `LockFileEx` on Windows) and reads the file again
+/// before each write of its own, so Hide holds the same lock across its read
+/// and its write and neither drops the other's change.
+mod grok {
+    use toml_edit::{DocumentMut, Item, Table, TableLike, value};
+
+    use super::*;
+
+    const FOLDERS: &str = "folders";
+    const TRUSTED: &str = "trusted";
+    const DECIDED_AT: &str = "decided_at";
+
+    pub(super) fn settings_path(home: &Path) -> PathBuf {
+        home.join(".grok").join("trusted_folders.toml")
+    }
+
+    /// Grok's lock on its trust file, held until dropped.
+    fn take_lock(
+        settings: &Path,
+        stop: &AtomicBool,
+    ) -> Result<hide_platform::fs::lock::Lock, InstallFailure> {
+        let path = settings.with_extension("toml.lock");
+        let failure = |detail: String| InstallFailure::NotWritable {
+            path: settings.display().to_string(),
+            detail,
+        };
+        if let Some(parent) = path.parent() {
+            hide_platform::fs::private::create_dir_all(parent)
+                .map_err(|error| failure(error.to_string()))?;
+        }
+        let file = hide_platform::fs::private::open_or_create_file(&path)
+            .map_err(|error| failure(error.to_string()))?;
+        match hide_platform::fs::lock::lock_file(
+            file,
+            hide_platform::fs::lock::Mode::Exclusive,
+            GROK_LOCK_WAIT,
+            &|| stop.load(Ordering::Relaxed),
+        )
+        .map_err(|error| failure(error.to_string()))?
+        {
+            hide_platform::fs::lock::Waited::Locked(held) => Ok(held),
+            hide_platform::fs::lock::Waited::TimedOut => Err(failure(format!(
+                "Grok held its trust lock ({}) for more than {} s",
+                path.display(),
+                GROK_LOCK_WAIT.as_secs()
+            ))),
+            hide_platform::fs::lock::Waited::Cancelled => {
+                Err(failure("Hide is stopping".to_owned()))
+            }
+        }
+    }
+
+    /// The file Grok reads, through a link the operator made, and what it
+    /// holds; `None` when there is none.
+    fn read(settings: &Path) -> Result<(PathBuf, Option<DocumentMut>), InstallFailure> {
+        let real = hide_platform::fs::identity::canonical(settings)
+            .unwrap_or_else(|_| settings.to_path_buf());
+        let text = match std::fs::read_to_string(&real) {
+            Ok(text) => text,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok((real, None)),
+            Err(error) => {
+                return Err(InstallFailure::Unreadable {
+                    path: settings.display().to_string(),
+                    detail: error.to_string(),
+                });
+            }
+        };
+        let document =
+            text.parse::<DocumentMut>()
+                .map_err(|error| InstallFailure::UnexpectedShape {
+                    path: settings.display().to_string(),
+                    detail: format!("it is not valid TOML ({error}); Hide left it untouched"),
+                })?;
+        Ok((real, Some(document)))
+    }
+
+    fn write(settings: &Path, real: &Path, document: &DocumentMut) -> Result<(), InstallFailure> {
+        hide_platform::fs::atomic::write_file(
+            real,
+            document.to_string().as_bytes(),
+            hide_platform::fs::Access::Private,
+        )
+        .map(drop)
+        .map_err(|error| InstallFailure::NotWritable {
+            path: settings.display().to_string(),
+            detail: error.to_string(),
+        })
+    }
+
+    fn folders<'a>(
+        document: &'a mut DocumentMut,
+        settings: &Path,
+    ) -> Result<&'a mut dyn TableLike, InstallFailure> {
+        document
+            .entry(FOLDERS)
+            .or_insert_with(|| {
+                let mut folders = Table::new();
+                folders.set_implicit(true);
+                Item::Table(folders)
+            })
+            .as_table_like_mut()
+            .ok_or_else(|| InstallFailure::UnexpectedShape {
+                path: settings.display().to_string(),
+                detail: "folders is not a table".to_owned(),
+            })
+    }
+
+    /// What Grok decided for `key`: trusted, untrusted, or nothing.
+    fn decision(folders: &dyn TableLike, key: &str) -> Option<bool> {
+        folders
+            .get(key)
+            .and_then(Item::as_table_like)
+            .map(|entry| entry.get(TRUSTED).and_then(Item::as_bool) == Some(true))
+    }
+
+    /// Records `key` as trusted unless Grok already decided it, and takes out
+    /// the entries in `gone` in the same write. A folder the operator answered
+    /// "No" for in Grok is refused, never overridden.
+    pub(super) fn add(
+        home: &Path,
+        key: &str,
+        gone: &[String],
+        stop: &AtomicBool,
+        remember: &mut dyn FnMut() -> Result<(), InstallFailure>,
+    ) -> Result<Added, InstallFailure> {
+        let settings = settings_path(home);
+        let _lock = take_lock(&settings, stop)?;
+        let (real, document) = read(&settings)?;
+        let mut document = document.unwrap_or_default();
+        let folders = folders(&mut document, &settings)?;
+        match decision(folders, key) {
+            Some(true) => return Ok(Added::Present),
+            Some(false) => {
+                return Err(InstallFailure::Refused {
+                    path: settings.display().to_string(),
+                    detail: format!(
+                        "Grok marks {key} untrusted, the repository this worktree was made from; trust it in Grok, or start the agent there yourself"
+                    ),
+                });
+            }
+            None => {}
+        }
+        remember()?;
+        take_out(folders, gone);
+        let mut entry = Table::new();
+        entry.insert(TRUSTED, value(true));
+        // Optional in Grok's file, and left out as Grok leaves it out when the
+        // clock cannot say.
+        if let Some(now) = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .and_then(|elapsed| i64::try_from(elapsed.as_secs()).ok())
+        {
+            entry.insert(DECIDED_AT, value(now));
+        }
+        folders.insert(key, Item::Table(entry));
+        write(&settings, &real, &document).map(|()| Added::New)
+    }
+
+    pub(super) fn remove(
+        home: &Path,
+        gone: &[String],
+        stop: &AtomicBool,
+    ) -> Result<usize, InstallFailure> {
+        let settings = settings_path(home);
+        if !settings.exists() {
+            return Ok(0);
+        }
+        let _lock = take_lock(&settings, stop)?;
+        let (real, Some(mut document)) = read(&settings)? else {
+            return Ok(0);
+        };
+        let removed = take_out(folders(&mut document, &settings)?, gone);
+        if removed > 0 {
+            write(&settings, &real, &document)?;
+        }
+        Ok(removed)
+    }
+
+    /// Takes out each entry in `gone` that Grok still trusts; one the
+    /// operator has since answered "No" for stays theirs.
+    fn take_out(folders: &mut dyn TableLike, gone: &[String]) -> usize {
+        let mut removed = 0;
+        for key in gone {
+            if decision(folders, key) == Some(true) {
+                folders.remove(key);
+                removed += 1;
+            }
+        }
+        removed
     }
 }
 

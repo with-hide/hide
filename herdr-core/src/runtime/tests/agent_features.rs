@@ -140,6 +140,7 @@ fn the_snapshot_row_carries_the_chip_and_the_table_in_order() {
     let piece = hide_kit::PieceReport {
         state: hide_kit::ComponentState::Installed,
         reason: None,
+        why: None,
         location: None,
     };
     let row = |id: &str| hide_kit::AgentReport {

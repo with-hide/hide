@@ -48,7 +48,7 @@ test("a worktree with only a delegated child draws no checkout line, and the roo
     await expect(project.locator(`[data-pane="${root}"]`).first()).toBeVisible();
     await expect(checkout("kid")).toHaveCount(0);
     // Not moved into the agentless fold either: its agent is working.
-    await expect(project.getByRole("button", { name: /^No agents/ })).toHaveCount(0);
+    await expect(project.getByRole("button", { name: /^Worktrees with no agents/ })).toHaveCount(0);
     await screenshot(page, "sidebar-root-only");
 
     // The way to the child is the root's tree.

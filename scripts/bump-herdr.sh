@@ -224,7 +224,7 @@ if repo == "herdrdev/herdr":
     if notice:
         prose = f"This application distributes the upstream Herdr release {tag} from {repo}.\nThe bundled binary's code is not modified by hide; on macOS a release replaces only its ad-hoc signature with hide's Developer ID one, which notarization requires.\nhide monitors upstream stable through herdr-update.yml; updates must pass contract and runtime checks."
     else:
-        prose = f"hide distributes the [upstream Herdr release {tag}](https://github.com/{repo}/releases/tag/{tag}).\nThe bundled binary's code is not modified by hide; a macOS release replaces only its ad-hoc signature with hide's Developer ID one, which notarization requires.\nThe weekly `herdr-update.yml` workflow proposes upstream stable releases with `--repo herdrdev/herdr`; updates must pass contract and runtime checks."
+        prose = f"hide distributes the [upstream Herdr release {tag}](https://github.com/{repo}/releases/tag/{tag}).\nThe bundled binary's code is not modified by hide; a macOS release replaces only its ad-hoc signature with hide's Developer ID one, which notarization requires.\nThe daily `herdr-update.yml` workflow proposes upstream stable releases with `--repo herdrdev/herdr`; updates must pass contract and runtime checks."
 else:
     commit = tag.rsplit("-", 1)[-1] if tag.startswith("preview-") else None
     if notice:
@@ -232,7 +232,7 @@ else:
         prose = f"This is a modified Herdr preview from {repo},\n{source}\nIt supplies host scope, event sequences, and agent lineage not available in upstream stable.\nhide monitors upstream stable through herdr-update.yml and returns when contract and runtime checks pass."
     else:
         source = f", built from commit `{commit}`" if commit else ""
-        prose = f"hide distributes a modified Herdr preview from the [{repo} fork](https://github.com/{repo}/releases/tag/{tag}){source}.\nThis fork supplies host-scoped snapshots, ordered event sequences, and agent lineage that the upstream stable release does not yet expose.\nThe weekly `herdr-update.yml` workflow continues to propose upstream stable releases with `--repo herdrdev/herdr`; return to upstream when the contract field tests and runtime checks pass."
+        prose = f"hide distributes a modified Herdr preview from the [{repo} fork](https://github.com/{repo}/releases/tag/{tag}){source}.\nThis fork supplies host-scoped snapshots, ordered event sequences, and agent lineage that the upstream stable release does not yet expose.\nThe daily `herdr-update.yml` workflow continues to propose upstream stable releases with `--repo herdrdev/herdr`; return to upstream when the contract field tests and runtime checks pass."
 start = text.index(begin) + len(begin)
 finish = text.index(end, start)
 text = text[:start] + "\n" + prose + "\n" + text[finish:]

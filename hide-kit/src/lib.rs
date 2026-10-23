@@ -38,6 +38,7 @@ mod retired_agents;
 pub mod retirement_inspection;
 pub mod runtime;
 mod state_route;
+mod why;
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -57,6 +58,8 @@ pub use legacy::{BuildPlace, build_of, is_build_name};
 pub use local::{STANDALONE_REASON, bundled_kit_dir, holds_package_runtime, local_target};
 pub use record::kit_state_dir;
 pub use refusal::{KitRefusal, RefusalCause};
+pub(crate) use why::Reason;
+pub use why::{PartCause, PartWhy};
 
 /// One part of the kit.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -146,9 +149,15 @@ impl ComponentState {
 pub struct ComponentReport {
     pub id: ComponentId,
     pub state: ComponentState,
-    /// Why the part is not installed, in one sentence; absent when it is.
+    /// Why the part is not installed, in one sentence for the log and the
+    /// `hide` CLI; absent when it is. No screen draws it: `why` is what the
+    /// app words.
     #[serde(default)]
     pub reason: Option<String>,
+    /// The same why as a cause the app words in the operator's language;
+    /// absent from a helper whose build predates it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<PartWhy>,
     /// The file, link or folder the part lives at on that machine.
     #[serde(default)]
     pub location: Option<String>,
@@ -408,18 +417,18 @@ impl Scope {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Observed {
     Current,
-    /// There, but not this build's; the sentence says what is there.
-    Stale(String),
+    /// There, but not this build's; the reason says what is there.
+    Stale(Reason),
     /// Hide's, edited by the operator after Hide wrote it: theirs until
-    /// Reinstall, read as out of date with the sentence saying so.
-    Edited(String),
+    /// Reinstall, read as out of date with the reason saying so.
+    Edited(Reason),
     Missing,
     /// Neither installed nor installable as things stand.
-    Blocked(String),
+    Blocked(Reason),
     /// Nothing on the machine for the part to attach to.
-    Absent(String),
+    Absent(Reason),
     /// A hook that cannot be written on this system or for this version.
-    Unsupported(String),
+    Unsupported(Reason),
 }
 
 fn observe(id: ComponentId, target: &KitTarget) -> Observed {
@@ -484,7 +493,7 @@ fn report(
     failure: Option<String>,
 ) -> ComponentReport {
     let (state, reason) = match (failure, observed) {
-        (Some(failure), _) => (ComponentState::Failed, Some(failure)),
+        (Some(failure), _) => (ComponentState::Failed, Some(Reason::not_changed(failure))),
         (None, Observed::Current) => (ComponentState::Installed, None),
         // An agent that is switched off gets nothing from a pass, so a hook
         // that is out of date or cannot be judged is not a repair to offer.
@@ -497,20 +506,21 @@ fn report(
         // Gone after Hide applied it: the operator turned it off or undid it
         // by hand, and either way it is theirs now (B36).
         (None, Observed::Missing) if switched_off => (ComponentState::Off, None),
-        (None, Observed::Missing) if recorded => (
-            ComponentState::Removed,
-            Some("taken out after Hide installed it; Reinstall puts it back".to_owned()),
-        ),
+        (None, Observed::Missing) if recorded => {
+            (ComponentState::Removed, Some(Reason::taken_out()))
+        }
         (None, Observed::Missing) => (ComponentState::NotInstalled, None),
         (None, Observed::Blocked(reason)) => (ComponentState::Failed, Some(reason)),
         (None, Observed::Absent(reason) | Observed::Unsupported(reason)) => {
             (ComponentState::Absent, Some(reason))
         }
     };
+    let (reason, why) = Reason::split(reason);
     ComponentReport {
         id,
         state,
         reason,
+        why,
         location: Some(location(id, target)),
     }
 }
@@ -894,6 +904,10 @@ fn apply_scope(target: &KitTarget, scope: &Scope) -> KitReport {
             .find(|part| part.id == ComponentId::CodexHook)
     {
         part.state = ComponentState::Failed;
+        part.why = Some(PartWhy {
+            cause: PartCause::CodexUntrusted,
+            value: None,
+        });
         part.reason = Some(failure);
     }
     let agents = agent_kit::reports(
@@ -922,6 +936,10 @@ fn apply_scope(target: &KitTarget, scope: &Scope) -> KitReport {
         for component in &mut components {
             if component.state == ComponentState::Installed {
                 component.reason = Some(format!("Installed, but {reason}"));
+                component.why = Some(PartWhy {
+                    cause: PartCause::RecordUnsaved,
+                    value: None,
+                });
             }
         }
     }

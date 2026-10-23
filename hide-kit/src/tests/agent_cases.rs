@@ -465,6 +465,13 @@ fn an_operators_own_hide_skill_is_left_alone() {
         skill.reason.as_deref(),
         Some("a skill named hide that Hide did not write is already there; Hide left it alone")
     );
+    assert_eq!(
+        skill.why,
+        Some(crate::PartWhy {
+            cause: crate::PartCause::Foreign,
+            value: Some("hide".to_owned()),
+        })
+    );
     assert_eq!(std::fs::read_to_string(&own).unwrap(), mine);
 
     // Switching Claude Code off leaves the operator's file.
@@ -1334,6 +1341,10 @@ fn opencode_without_its_config_folder_gets_no_folder_made_and_says_why() {
     let hook = agent(&report, "opencode").hook.clone().unwrap();
     assert_eq!(hook.state, ComponentState::Absent);
     assert!(hook.reason.unwrap().contains("has not created"));
+    // The screen words the cause with the folder; the sentence above is the log's.
+    let why = hook.why.unwrap();
+    assert_eq!(why.cause, crate::PartCause::NotCreatedYet);
+    assert!(why.value.unwrap().ends_with(".config/opencode"));
     assert!(!fixture.home().join(".config/opencode").exists());
 }
 

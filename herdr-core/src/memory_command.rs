@@ -874,7 +874,7 @@ pub fn next_action(code: &str) -> &'static str {
         "memory_ai_off" => "Turn Hide AI on and choose an agent in Hide's Settings",
         "memory_ai_sign_in" => "Sign in to the agent Hide AI uses, then retry",
         "memory_ai_usage_limited" => "Retry after the agent's usage limit resets",
-        "memory_daily_cap" => "Retry tomorrow; this machine reached its daily Memory calls",
+        "memory_daily_cap" => "Retry tomorrow; this device reached its daily Memory calls",
         "memory_add_timeout" => "Nothing was saved; retry with shorter text",
         "memory_card_not_found" => "Find the card with hide memory search <words>",
         "memory_full" => {
