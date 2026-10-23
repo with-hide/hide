@@ -191,7 +191,9 @@ export function createActions(send: DispatchFn) {
    * own them and the core keeps them when they are absent, so an echo of an
    * older snapshot can never undo a registration that landed after it.
    * Sidebar width is also patch-only: echoing it could undo a completed drag
-   * while its snapshot is still in flight. The folds (`collapsed_workspace_ids`,
+   * while its snapshot is still in flight, and so are the two text sizes:
+   * moving one slider right after the other would send the first one's older
+   * value back. The folds (`collapsed_workspace_ids`,
    * `expanded_checkout_ids`, `expanded_agent_pane_ids`,
    * `sessions_expanded_agent_pane_ids`) are left out for the same reason: the
    * core owns them through `project_checkouts_fold`, `checkout_agents_toggle`,
@@ -208,6 +210,8 @@ export function createActions(send: DispatchFn) {
       workspace_registrations: _workspaces,
       device_registrations: _devices,
       sidebar_width: _width,
+      font_size: _fontSize,
+      terminal_font_size: _terminalFontSize,
       interface_language: _language,
       collapsed_workspace_ids: _projectFolds,
       expanded_checkout_ids: _checkoutFolds,
@@ -221,6 +225,8 @@ export function createActions(send: DispatchFn) {
     void _workspaces;
     void _devices;
     void _width;
+    void _fontSize;
+    void _terminalFontSize;
     void _language;
     void _projectFolds;
     void _checkoutFolds;
@@ -1213,6 +1219,10 @@ export function createActions(send: DispatchFn) {
 
     setFontSize(size: number) {
       updateUiState({ font_size: size });
+    },
+
+    setTerminalFontSize(size: number) {
+      updateUiState({ terminal_font_size: size });
     },
 
     /** The width a sidebar drag or its reset lands on, sent once per gesture (PRD sidebar-typography D-09). */

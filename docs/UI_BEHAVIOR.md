@@ -1695,7 +1695,7 @@ A project's block is set off from the one above it by a hairline at its top and 
 A project row and a one-line plain folder are 32 high, a checkout row 32 or 48 with its second line, an agent row 28 or 44.
 A checkout name mutes its prefix up to and including the first slash (`prd/`), so the part that tells checkouts apart reads first; a name with no slash, or one that starts or ends with it, has no prefix.
 The checkout whose Workspace is in front turns its name 500 and nothing else about the row.
-The sidebar keeps these sizes at every Appearance font size, because its rows are scanned, not read; the font size scales the rest of the interface.
+These are the sizes at the default Interface text; the sidebar follows Appearance's Interface text with the rest of the interface, its rows growing with their text so every row still holds it.
 The sidebar's right edge sets the width of its content column, the lists right of the device rail while one shows (see Device rail): under the pointer it shows a line and a column cursor, a drag moves the sidebar over the center between 220 and 440 and stops at either bound, and the release stores the width in the core's ui state, where it survives a reload and a relaunch; the center and its terminals take the new width once, on the release, never on each pointer move.
 A double-click on the edge returns the width to 292, and a press that does not move changes nothing.
 A width outside the bounds is refused into the diagnostic log: a sent one leaves the width as it was, and a stored one opens the sidebar at 292.
@@ -2478,7 +2478,11 @@ Settings opens on General unless the way in names a page: Explorer's and a devic
 ### General
 
 General has the Appearance group.
-Appearance contains Language, Color theme, Mode, Accent and Interface text; Accent shows its swatches and no hex value, and Interface text carries one note that the sidebar keeps its own sizes (PRD settings-left-nav B5; hide-color-theme B1).
+Appearance contains Language, Color theme, Mode, Accent, Interface text and Terminal text; Accent shows its swatches and no hex value (PRD settings-left-nav B5; hide-color-theme B1).
+Interface text, 11 to 17 pt with 13 the default, sizes every text outside the terminals and the editor's code, the sidebar included.
+Terminal text, 10 to 24 pt with 14 the default, is every terminal's size; it carries one note that a single pane is sized with Larger text and Smaller text in that pane (⌘= and ⌘- on macOS) and the editor's text with the same keys in a document.
+A pane's own size multiplies Terminal text, so moving the slider resizes every terminal and keeps a zoomed pane that much larger than the rest; each terminal takes its new rows and columns at once.
+The core keeps both sizes in its ui state, where they survive a reload and a relaunch, and refuses a size outside its range into the diagnostic log, keeping the last one.
 Color theme chooses the palette every window draws in, Hide or Neutral, as a segmented toggle like Mode's, each name led by a small swatch of its brand color, the same in Light and Dark (Hide the owl mark's blue-grey, Neutral a grey), and no color code; it waits for a live connection, as Language does.
 Hide is the landing page's Owl Field palette and the default, including for an install that never chose; Neutral is the grey chrome.
 Both have their own sixteen terminal colors, each readable at 4.5:1 on its background, and the choice changes the sidebar, tabs, pane headers, terminals, editors, sheets and popovers at once, keeping a terminal's content, scroll position, half-typed line and selection.

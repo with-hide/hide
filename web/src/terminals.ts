@@ -229,6 +229,29 @@ function tokenPx(name: string): number {
   return value;
 }
 
+/** Appearance's Terminal text size, or null for the token's until the core reports one. */
+let baseFontSize: number | null = null;
+
+function fontSizeAt(scale: number): number {
+  return Math.round((baseFontSize ?? tokenPx("--text-terminal-base")) * scale);
+}
+
+/**
+ * Applies Appearance's Terminal text size to every terminal, each still
+ * multiplied by its own pane's scale; a pane whose size moved sends its new
+ * fit as `terminal_resize`, as a pane's own zoom does.
+ */
+export function applyTerminalFontSize(size: number | null) {
+  if (baseFontSize === size) return;
+  baseFontSize = size;
+  for (const [paneId, instance] of instances) {
+    const next = fontSizeAt(instance.scale);
+    if (instance.term.options.fontSize === next) continue;
+    instance.term.options.fontSize = next;
+    sendGrid(paneId, instance, false);
+  }
+}
+
 function decodeChunk(chunk: TerminalChunk): Uint8Array | null {
   if (!chunk.bytes_base64) return null;
   const binary = atob(chunk.bytes_base64);
@@ -384,7 +407,7 @@ export function setTextScale(paneId: string, scale: number) {
   const instance = instances.get(paneId);
   if (!instance || instance.scale === scale) return;
   instance.scale = scale;
-  instance.term.options.fontSize = Math.round(tokenPx("--text-terminal-base") * scale);
+  instance.term.options.fontSize = fontSizeAt(scale);
   sendGrid(paneId, instance, false);
 }
 
@@ -772,7 +795,7 @@ function createInstance(paneId: string, dispatch: DispatchFn, links: TerminalLin
   const link: LinkState = { hovered: false };
   const term = new Terminal({
     fontFamily: token("--font-mono"),
-    fontSize: Math.round(tokenPx("--text-terminal-base") * scale),
+    fontSize: fontSizeAt(scale),
     theme: terminalTheme(),
     // Herdr owns the history; the pane shows the viewport the core sends.
     scrollback: 0,
