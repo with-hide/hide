@@ -3,12 +3,27 @@
 // leaves the page: no daemon, no Herdr, no agent.
 
 import type { NodeUsage } from "../generated/hided-ws";
-import type { AgentRow, LinkPanel, SessionRecordSection, SessionWorkSearch, SnapshotRest } from "../snapshot";
+import type { AgentRow, EditorSnapshot, LinkPanel, SessionRecordSection, SessionWorkSearch, SnapshotRest } from "../snapshot";
+import type { Documents, FileIndexResult } from "../store";
 
 export type CoreEvent = { kind: string; payload: Record<string, unknown> };
 
-/** What the core sends beside the snapshot: ⌘K's session search, the record and the link record the lane's 보기 slot shows. */
-export type WorldFrames = { sessionWorkSearch?: SessionWorkSearch | null; sessionRecord?: SessionRecordSection | null; linkPanel?: LinkPanel | null };
+/**
+ * What the practice window sends a world besides the core's events: text the
+ * shell would have put on the clipboard (`{ text, what }`). The operator's
+ * clipboard is never written from a practice screen.
+ */
+export const PRACTICE_COPY = "practice_copy";
+
+/**
+ * What the core sends beside the snapshot: the ⌘P index's answer, the open
+ * editor tabs and their documents, ⌘K's session search, and the record and
+ * link record the lane's 보기 slot shows.
+ */
+export type WorldFrames = {
+  fileIndex?: FileIndexResult | null; editor?: EditorSnapshot | null; documents?: Documents;
+  sessionWorkSearch?: SessionWorkSearch | null; sessionRecord?: SessionRecordSection | null; linkPanel?: LinkPanel | null;
+};
 
 export type WorldSnapshot = { rest: SnapshotRest; agents: AgentRow[]; focused: string | null; usage: NodeUsage | null; frames?: WorldFrames };
 

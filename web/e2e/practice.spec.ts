@@ -11,8 +11,8 @@ import { startHided, type Daemon } from "./hided-fixture";
 
 test.describe.configure({ timeout: 180_000 });
 
-/** More presses than every chapter's steps together; a practice that needs more has stopped moving. */
-const MAX_PRESSES = 80;
+/** More presses than any chapter's steps and the press that starts it; a practice that needs more has stopped moving. */
+const PRESSES_PER_CHAPTER = 25;
 
 /** Where the practice window stands: the chapter list, or a chapter's step and how many events its world has answered. */
 function practiceState(page: Page): Promise<string> {
@@ -25,11 +25,11 @@ function practiceState(page: Page): Promise<string> {
 }
 
 /** Presses Enter from the chapter list until it comes back to it, each press waiting for the practice to move. */
-async function playEveryChapter(practice: Page): Promise<void> {
+async function playEveryChapter(practice: Page, chapters: number): Promise<void> {
   let now = await practiceState(practice);
   let presses = 0;
   do {
-    expect(presses, `the practice stopped moving at ${now}`).toBeLessThan(MAX_PRESSES);
+    expect(presses, `the practice stopped moving at ${now}`).toBeLessThan(chapters * PRESSES_PER_CHAPTER);
     const before = now;
     await practice.keyboard.press("Enter");
     presses += 1;
@@ -62,7 +62,7 @@ test("the practice window plays every chapter with Enter alone and the core keep
     expect(count).toBeGreaterThan(1);
     await expect(chapters.and(practice.locator('[data-status="new"]'))).toHaveCount(count);
 
-    await playEveryChapter(practice);
+    await playEveryChapter(practice, count);
 
     await expect(chapters.and(practice.locator('[data-status="done"]'))).toHaveCount(count);
     // The shell answered, so the line that says progress is not being kept never showed.
