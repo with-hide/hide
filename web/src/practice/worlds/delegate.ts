@@ -7,10 +7,9 @@
 // and writes to it, and a pane ID copied from a pane's menu names the agent
 // that gets the last piece of work.
 
-import type { AgentScope, AgentTreeScope } from "../../agentScope";
-import type { AgentRow, AgentState, SnapshotRest } from "../../snapshot";
+import type { AgentRow, AgentState } from "../../snapshot";
 import { PRACTICE_COPY, type PracticeWorld, type WorldSnapshot } from "../world";
-import { agent, applyDesk, deskSnapshot, shellScreen, type DeskModel, type PracticePlace } from "./kit";
+import { agent, applyDesk, deskSnapshot, keyText, shellScreen, typed, withLineage, type DeskModel, type PracticePlace } from "./kit";
 
 const PLACE: PracticePlace = { project: "hide-practice", label: "hide-practice", branch: "main" };
 
@@ -134,23 +133,6 @@ function submit(model: DelegateModel): DelegateModel {
   }
 }
 
-const decode = (base64: string) => new TextDecoder().decode(Uint8Array.from(atob(base64), (char) => char.charCodeAt(0)));
-
-/** The lead's prompt after the keys `text`: ⌃U clears it, ⌫ takes a character back, ⏎ sends it; an arrow or other escape sequence moves nothing. */
-function typed(model: DelegateModel, text: string): DelegateModel {
-  let next = model;
-  let escape = false;
-  for (const char of text) {
-    if (escape) escape = !/[A-Za-z~]/.test(char);
-    else if (char === "\x1b") escape = true;
-    else if (char === "\r") next = submit(next);
-    else if (char === "\x15") next = { ...next, draft: "" };
-    else if (char === "\x7f") next = { ...next, draft: [...next.draft].slice(0, -1).join("") };
-    else if (char >= " ") next = { ...next, draft: next.draft + char };
-  }
-  return next;
-}
-
 // --- What each terminal shows ------------------------------------------------
 
 const CLAUDE = "\x1b[38;2;215;119;87m";
@@ -224,40 +206,9 @@ function childScreen(model: DelegateModel): string {
 
 // --- The snapshot ---------------------------------------------------------------
 
-/** Every agent scope in `rest`, with the child drawn one level under the lead and the lead no longer its only root. */
-function withLineage(rest: SnapshotRest): SnapshotRest {
-  const nest = (tree: AgentTreeScope): AgentTreeScope => {
-    const rows = tree.rows.filter((row) => row.pane_id !== CHILD).flatMap((row) => (row.pane_id === LEAD ? [row, { pane_id: CHILD, occurrence: 0, depth: 1 }] : [row]));
-    return { ...tree, rows, visible_rows: rows };
-  };
-  const scope = (one: AgentScope): AgentScope => ({
-    ...one,
-    roots: one.roots.filter((row) => row.pane_id !== CHILD),
-    children: { [LEAD]: [CHILD] },
-    descendants: { [LEAD]: 1 },
-    tree: nest(one.tree),
-    sidebar_tree: nest(one.sidebar_tree),
-    global_tree: nest(one.global_tree),
-  });
-  const navigator = rest.navigator!;
-  return {
-    ...rest,
-    navigator: {
-      ...navigator,
-      agent_scope: navigator.agent_scope && scope(navigator.agent_scope),
-      devices: navigator.devices?.map((device) => ({ ...device, agent_scope: scope(device.agent_scope) })),
-      workspaces: navigator.workspaces?.map((workspace) => ({
-        ...workspace,
-        agent_scope: scope(workspace.agent_scope),
-        checkouts: workspace.checkouts.map((checkout) => ({ ...checkout, agent_scope: scope(checkout.agent_scope) })),
-      })),
-    },
-  };
-}
-
 function snapshot(model: DelegateModel, nowMs: number): WorldSnapshot {
   const drawn = deskSnapshot([{ place: PLACE, model: model.desk }], PLACE.project, nowMs);
-  return model.stage >= 1 ? { ...drawn, rest: withLineage(drawn.rest) } : drawn;
+  return model.stage >= 1 ? { ...drawn, rest: withLineage(drawn.rest, LEAD, [CHILD]) } : drawn;
 }
 
 const SCREENS: Record<string, (model: DelegateModel, cols: number) => string> = {
@@ -273,7 +224,7 @@ export const DELEGATE_WORLD: PracticeWorld<DelegateModel> = {
     const p = event.payload;
     if (event.kind === PRACTICE_COPY) return { ...model, copied: String(p.text) };
     // Only the lead is talked to here; keys typed into another pane reach no one.
-    if (event.kind === "key") return p.pane_id === LEAD && typeof p.bytes_base64 === "string" ? typed(model, decode(p.bytes_base64)) : null;
+    if (event.kind === "key") return p.pane_id === LEAD && typeof p.bytes_base64 === "string" ? typed(model, keyText(p.bytes_base64), submit) : null;
     const desk = applyDesk(model.desk, event);
     return desk ? { ...model, desk } : null;
   },
