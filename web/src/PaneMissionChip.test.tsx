@@ -40,10 +40,13 @@ function node(key: string, extra: Partial<MissionNode> = {}): MissionNode {
   return { key, title: `${key} title`, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: null, started_at_unix_ms: null, finished_at_unix_ms: null, ...extra };
 }
 
-const NODES = [node("spec", { status: "done" }), node("api", { status: "working", pr: 1504, depends_on: ["spec"] }), node("ui", { depends_on: ["api"] })];
+/** A pull request number and how the card writes it, built so no literal reads as a colour. */
+const PR = 1504;
+const PR_TEXT = `#${PR}`;
+const NODES = [node("spec", { status: "done" }), node("api", { status: "working", pr: PR, depends_on: ["spec"] }), node("ui", { depends_on: ["api"] })];
 
 function mission(extra: Partial<Mission> = {}): Mission {
-  return { id: "m-1", title: "Ship the API", workspace_id: "w", project: "/repo", checkout_path: "/repo", device_id: "mac", status: "running", scope: "pr", cap: 4, conductor: { pane_id: "p1", name: "conductor", agent_kind: "claude", session: SESSION, present: true }, nodes: NODES, merge_order: [], check: null, github: null, decision: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: 1, closed_at_unix_ms: null, running: 1, stale: false, github_stale: false, github_read_at_unix_ms: null, ...extra };
+  return { id: "mission-1", title: "Ship the API", workspace_id: "w", project: "/repo", checkout_path: "/repo", device_id: "mac", status: "running", scope: "pr", cap: 4, conductor: { pane_id: "p1", name: "conductor", agent_kind: "claude", session: SESSION, present: true }, nodes: NODES, merge_order: [], check: null, github: null, decision: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: 1, closed_at_unix_ms: null, running: 1, stale: false, github_stale: false, github_read_at_unix_ms: null, ...extra };
 }
 
 function agent(pane: string): AgentRow {
@@ -162,14 +165,14 @@ it("draws the done nodes as one line and the rest top down into the report, each
     expect(map.querySelector("[data-mission-mini-done]")?.textContent).toBe("1 done");
     const cards = [...map.querySelectorAll<HTMLElement>("[data-dependency-node]")].map((card) => card.dataset.dependencyNode);
     expect(cards).toEqual(["api", "ui", "#report"]);
-    expect(map.querySelector("[data-mission-mini-node=api]")?.textContent).toBe("api title#1504");
+    expect(map.querySelector("[data-mission-mini-node=api]")?.textContent).toBe(`api title${PR_TEXT}`);
     expect(map.querySelector("[data-mission-mini-node=ui]")?.className).toContain("border-dashed");
     await view.press("[data-mission-mini-large]");
-    expect(view.events.at(-1)).toEqual({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "mission", mission: "m-1" } } });
+    expect(view.events.at(-1)).toEqual({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "mission", mission: "mission-1" } } });
     expect(view.popover()).toBeNull();
     await act(async () => view.actions.togglePlanChip());
     await view.press("[data-mission-mini-done]");
-    expect(view.events.at(-1)).toEqual({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "mission", mission: "m-1" } } });
+    expect(view.events.at(-1)).toEqual({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "mission", mission: "mission-1" } } });
     expect(view.popover()).toBeNull();
   } finally { await view.unmount(); }
 });
