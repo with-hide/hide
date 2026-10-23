@@ -14,16 +14,18 @@ test.describe.configure({ timeout: 180_000 });
 /** More presses than any chapter's steps and the press that starts it; a practice that needs more has stopped moving. */
 const PRESSES_PER_CHAPTER = 25;
 
-/** Records each call a page makes to the system clipboard in `window.clipboardCalls`; the practice window makes none. */
+/**
+ * Records each call a page makes to the system clipboard in `window.clipboardCalls`; the practice window makes none.
+ * A call never reaches the real clipboard, so one the check catches has not already changed the operator's.
+ */
 function watchClipboard() {
   const calls: string[] = [];
   Object.assign(window, { clipboardCalls: calls });
   const board = navigator.clipboard;
   if (!board) return;
   for (const name of ["read", "readText", "write", "writeText"] as const) {
-    const real = board[name] as ((...args: unknown[]) => unknown) | undefined;
-    if (!real) continue;
-    Object.defineProperty(board, name, { configurable: true, value: (...args: unknown[]) => (calls.push(name), real.apply(board, args)) });
+    if (!board[name]) continue;
+    Object.defineProperty(board, name, { configurable: true, value: () => (calls.push(name), Promise.reject(new DOMException("The practice journey holds the clipboard", "NotAllowedError"))) });
   }
 }
 
