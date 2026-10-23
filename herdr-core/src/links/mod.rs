@@ -66,6 +66,9 @@ pub(crate) fn link_code(error: &LinkError, who: &str) -> String {
 pub const PANEL_SESSION_LIMIT: usize = 200;
 /// The most pull request addresses kept per session (D-40).
 pub const SESSION_PR_LIMIT: usize = 20;
+/// The most pull requests kept per session that its tool calls named; a
+/// session that reviews or merges many keeps its first ones.
+pub const SESSION_NAMED_LIMIT: usize = 200;
 /// The store's page cap: 64 MiB of 4 KiB pages (D-40).
 pub const STORE_PAGE_LIMIT: u32 = 16_384;
 /// How far back the first fill reaches (D-17).

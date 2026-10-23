@@ -40,6 +40,9 @@ const SPACING = '(?:p|px|py|pt|pb|pl|pr|ps|pe|m|mx|my|mt|mb|ml|mr|ms|me|gap|gap-
 // A leading `-` or a variant prefix still names the same utility; `0` and `px` are not scale values.
 const DEFAULT_SCALE = new RegExp(`(?<![\\w-])-?${SPACING}-(?:[1-9][0-9]*(?:\\.5)?|0\\.5)(?![\\w./-])`);
 const DEFAULT_TEXT = /(?<![\w-])text-(?:xs|sm|base|lg|xl|[2-9]xl)(?![\w-])/;
+// A container or media query condition takes a compiled length, never var():
+// Tailwind drops the whole rule, so the class silently never applies.
+const VAR_BREAKPOINT = /(?<![\w-])@?(?:min|max)-(?:\[(?:var|calc)\(|\(--)[^\s"'`]*/;
 
 const files = walk(path.join(root, 'web/src'));
 for (const file of files) {
@@ -58,6 +61,8 @@ for (const file of files) {
   if (scale) failures.push(`${rel}: Tailwind default scale \`${scale[0]}\`; use a --spacing-* or --size-* token`);
   const text = DEFAULT_TEXT.exec(source);
   if (text) failures.push(`${rel}: Tailwind default text size \`${text[0]}\`; use a --text-* token`);
+  const breakpoint = VAR_BREAKPOINT.exec(source);
+  if (breakpoint) failures.push(`${rel}: query variant on a custom property \`${breakpoint[0]}\` never applies; add a variant to scripts/gen-tokens.mjs, as pane-wide is`);
 }
 
 if (failures.length) {

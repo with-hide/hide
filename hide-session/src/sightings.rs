@@ -73,7 +73,7 @@ fn parse_address(after_host: &str, kind: &str) -> Option<(String, u64)> {
     Some((format!("{owner}/{name}"), number))
 }
 
-fn is_name(part: &str) -> bool {
+pub(crate) fn is_name(part: &str) -> bool {
     !part.is_empty()
         && part.len() <= 100
         && part

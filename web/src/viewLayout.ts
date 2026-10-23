@@ -6,6 +6,7 @@
 // menu offers, and what a narrow window shows. They take values and return
 // values, so every rule is testable without a page; nothing here dispatches.
 
+import { useExternalStore } from "./externalFiles";
 import type { TFunction } from "i18next";
 import type { ViewDisplaySnapshot, ViewLayoutSnapshot, ViewNode } from "./snapshot";
 import { revealExternalEntry, type RevealHost } from "./revealExternal";
@@ -164,8 +165,9 @@ function displayCommands(
   return MENU_ITEMS.map(({ id, label: labelOf }) => {
     const label = labelOf();
     if (id === "reveal_external") {
-      // A page is not a file of the checkout.
-      const [entry] = display.kind === "browser" ? [] : revealExternalEntry(external.host, external.device, external.node, translate, revealBlocked(display));
+      // A page is not a file of the checkout, and an outside file is in no
+      // checkout's tree (PRD outside-path-in-hide B12).
+      const [entry] = display.kind === "browser" || display.kind === "external" ? [] : revealExternalEntry(external.host, external.device, external.node, translate, revealBlocked(display));
       return entry ? { ...entry, hidden: false } : { id, label, unavailable: null, hidden: true };
     }
     const edge = menuEdge(id);
@@ -183,7 +185,10 @@ function displayCommands(
     } else if (id === "select_in_tree") {
       unavailable = revealBlocked(display);
       // A page is not a file of the checkout.
-      hidden = display.kind === "browser";
+      hidden = display.kind === "browser" || display.kind === "external";
+    } else if (id === "copy_path" && display.kind === "external") {
+      // Only the window holding the grant knows the path.
+      hidden = !display.external || !useExternalStore.getState().described[display.external.grant];
     }
     const named = id === "copy_path" && display.kind === "browser" ? translate("documents.view.copyAddress") : label;
     return { id, label: named, unavailable, hidden, separated: id === "copy_path" || id === "close_view" };
@@ -235,6 +240,10 @@ export function menuEdge(id: ViewMenuId): Edge | null {
 
 /** What a display is, for its tooltip and accessible name (B21): kind, full path and state. */
 export function displayIdentity(display: ViewDisplaySnapshot, t: TFunction<"translation">): string {
+  if (display.kind === "external") {
+    const held = display.external ? useExternalStore.getState().described[display.external.grant] : null;
+    return held ? t("documents.external.identity", { path: held.path }) : `${display.label} · ${t("documents.external.elsewhereTab")}`;
+  }
   if (display.kind === "browser" && !display.url) return t("panes.area.newTab");
   if (display.kind === "browser") return t("documents.view.identityPage", { target: `${display.title ? `${display.title} · ` : ""}${display.url ?? ""}` });
   const kind = display.kind === "diff" ? (display.committed ? t("documents.view.kindBranchDiff") : t("documents.view.kindWorkingDiff")) : t("documents.view.kindFile");

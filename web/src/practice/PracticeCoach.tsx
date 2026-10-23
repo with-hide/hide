@@ -303,7 +303,8 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
   const [zones, setZones] = useState<(Rect | null)[]>([]);
   const [hand, setHand] = useState<Point | null>(null);
   const [examples, setExamples] = useState<Point[]>([]);
-  // A palette (⌘P, ⌘K) or a held chord's switcher (⌃⇥) the shell opened is drawn in full: no ring or dim over it, and the bubble beside it.
+  // A palette (⌘P, ⌘K) or a held chord's switcher (⌃⇥) the shell opened is drawn in full: nothing the
+  // coach points with (dim, zones, ring, chord, marks, hand) is drawn over it, and the bubble moves beside it.
   const palette = useUiStore(shellLayerOpen);
   const [layerBox, setLayerBox] = useState<Rect | null>(null);
   const step = chapter.steps[index]!;
@@ -379,18 +380,6 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
     });
   }, [step]);
 
-  // Whether the learner typed into the step's field themselves: a field may still hold an earlier step's words.
-  const wrote = useRef<PracticeStep | null>(null);
-  useEffect(() => {
-    const typing = step.gesture && "type" in step.gesture ? step.gesture.type : null;
-    if (!typing || !("input" in typing)) return undefined;
-    const onInput = (event: Event) => {
-      if (event.isTrusted && event.target instanceof Element && event.target.matches(typing.input)) wrote.current = step;
-    };
-    document.addEventListener("input", onInput, true);
-    return () => document.removeEventListener("input", onInput, true);
-  }, [step]);
-
   const perform = useCallback(() => {
     if (playing.current === step) return;
     if (!acts(step)) return advance();
@@ -398,10 +387,9 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
     if (step.gesture && "type" in step.gesture && "input" in step.gesture.type && !document.querySelector(step.gesture.type.input) && step.command) return pressCommand(step.command);
     if (step.gesture && "type" in step.gesture) {
       const typing = step.gesture.type;
-      // The learner's own words go as they are, for the world to judge: a prompt's are sent,
-      // and a field answers as it is typed, so its words stay. The example goes only where there are none.
+      // The learner's own words in a prompt are sent as they are, for the world to judge; the example goes only into an
+      // empty one. A field that holds words never reaches here: ⏎ there is the palette's, and the palette hides the button.
       if ("pane" in typing && promptWords(chapter.world, current.current, typing.pane)) return pasteText(typing.pane, "\r");
-      if ("input" in typing && wrote.current === step && document.querySelector<HTMLInputElement>(typing.input)?.value.trim()) return;
       return play(typeInto(typing));
     }
     if (step.gesture && "menu" in step.gesture) return play(chooseFromMenu(step.gesture.menu, setHand));
@@ -419,8 +407,8 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
 
   const back = index > 0 && !acts(step) && !acts(chapter.steps[index - 1]!);
 
-  // ⏎ and → perform the step, ← goes back over a look; every other key reaches the shell untouched,
-  // and while a palette the shell opened is up, every key is the palette's.
+  // ⏎ performs the step, → moves on from a look and ← goes back over one; every other key reaches the shell
+  // untouched, and while a palette the shell opened is up every key is the palette's but the ⏎ held below.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (!event.isTrusted || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.isComposing) return;
@@ -464,15 +452,23 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
   const title = say(`practice.${chapter.id}.title`);
 
   return (
-    <div className="pc-layer" data-practice-layer data-practice-step={step.id}>
+    <div className="pc-layer" data-practice-layer data-practice-step={step.id} data-practice-index={index} data-practice-steps={chapter.steps.length}>
       <style>{COACH_CSS}</style>
-      {zones.length ? <div className="pc-zdim" /> : null}
-      {zones.map((rect, at) => rect ? (
-        <div key={ZONES[at]!.key} className={`pc-zone ${ZONES[at]!.key}`} style={{ left: rect.x + 6, top: rect.y + 6, width: rect.w - 12, height: rect.h - 12, animationDelay: `${150 + at * 260}ms` }}>
-          <div className="pc-tag">{say(`practice.zone.${ZONES[at]!.key}`)}<small>{say(`practice.zone.${ZONES[at]!.key}Sub`)}</small></div>
-        </div>
-      ) : null)}
-      <div className={`pc-spot${ring && !step.zones && !palette ? "" : " off"}`} style={ring ? { left: ring.x - 3, top: ring.y - 3, width: ring.w + 6, height: ring.h + 6 } : undefined} />
+      {/* What the coach points with, all of it stepping aside while the shell's palette or switcher is up; the chord, marks and hand still sit above the bubble (`z-index` in the style). */}
+      {palette ? null : (
+        <>
+          {zones.length ? <div className="pc-zdim" /> : null}
+          {zones.map((rect, at) => rect ? (
+            <div key={ZONES[at]!.key} className={`pc-zone ${ZONES[at]!.key}`} style={{ left: rect.x + 6, top: rect.y + 6, width: rect.w - 12, height: rect.h - 12, animationDelay: `${150 + at * 260}ms` }}>
+              <div className="pc-tag">{say(`practice.zone.${ZONES[at]!.key}`)}<small>{say(`practice.zone.${ZONES[at]!.key}Sub`)}</small></div>
+            </div>
+          ) : null)}
+          <div className={`pc-spot${ring && !step.zones ? "" : " off"}`} style={ring ? { left: ring.x - 3, top: ring.y - 3, width: ring.w + 6, height: ring.h + 6 } : undefined} />
+          {flash ? <div className="pc-flash">{keyParts(flash).map((part, at) => <span key={at} className="pc-kc">{part}</span>)}</div> : null}
+          {examples.map((at, i) => <span key={i} className="pc-example" style={{ left: at.x, top: at.y }} data-practice-example>{say("practice.example")}</span>)}
+          {hand ? <svg className="pc-hand" style={{ left: hand.x - 3, top: hand.y - 2 }} width="24" height="24" viewBox="0 0 18 18" aria-hidden="true"><path d="M1 1l6 15 2.2-6.3L15.5 7.5z" /></svg> : null}
+        </>
+      )}
       <div className="pc-mode">
         <button type="button" onClick={onHub} data-practice-hub-open>{say("practice.hub")}</button>
         <span>{say("practice.mode", { number: chapter.number, title })}</span>
@@ -490,9 +486,6 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
           {palette ? null : <button type="button" className="pc-go" onClick={perform}>{go} <span className="pc-kc">⏎</span></button>}
         </div>
       </div>
-      {flash ? <div className="pc-flash">{keyParts(flash).map((part, at) => <span key={at} className="pc-kc">{part}</span>)}</div> : null}
-      {examples.map((at, i) => <span key={i} className="pc-example" style={{ left: at.x, top: at.y }} data-practice-example>{say("practice.example")}</span>)}
-      {hand ? <svg className="pc-hand" style={{ left: hand.x - 3, top: hand.y - 2 }} width="24" height="24" viewBox="0 0 18 18" aria-hidden="true"><path d="M1 1l6 15 2.2-6.3L15.5 7.5z" /></svg> : null}
       {chapter.quest ? <QuestCard chapter={chapter} index={index} title={title} say={say} onRestart={onRestart} /> : null}
     </div>
   );

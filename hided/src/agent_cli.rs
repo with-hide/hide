@@ -3,8 +3,8 @@
 use crate::env::{self, Env};
 use herdr_core::{coordination::Command, delivery::Command as Delivery};
 use std::collections::BTreeMap;
-pub const USAGE: &str = "hide agent register [--check] [--machine <device id>] --host-scope <scope> --session <session> --instance <terminal> --name <name> --pane <pane> [--parent <id>] [--project <path>]\nhide agent list\nhide agent show <id|here>\nhide agent end <id> [--actor <id>]\nhide agent catalog [--machine <device id>]\nhide agent spawn [--parent <here|id>] [--machine <device id>] --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]";
-pub const SPAWN_HELP: &str = "hide agent spawn [--parent <here|id>] [--machine <device id>] --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]
+pub const USAGE: &str = "hide agent register [--check] [--machine <device id>] --host-scope <scope> --session <session> --instance <terminal> --name <name> --pane <pane> [--parent <id>] [--project <path>]\nhide agent list\nhide agent show <id|here>\nhide agent end <id> [--actor <id>]\nhide agent catalog [--machine <device id>]\nhide agent spawn [--parent <here|id>] [--machine <device id>] [--beside] --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]";
+pub const SPAWN_HELP: &str = "hide agent spawn [--parent <here|id>] [--machine <device id>] [--beside] --name <name> --intent <key> --kind <kind> --repo <path> --branch <branch> [--path <path>] [--model <model>] [--effort <effort>] [--brief <text> | --brief-file <path>] [-- <native args>]
 
 Choose the model and effort with --model and --effort, not after --:
   Hide starts the agent with them and starts it with them again whenever it wakes, forks or reopens the agent.
@@ -23,7 +23,13 @@ Choose responsibility when spawning:
   Without --parent: hand work off to the operator as an independent root.
     The operator handles its questions and completion; no automatic watch starts.
 
-Both modes open their own tab without changing the current screen or keyboard focus.
+Choose where the agent opens:
+  Without --beside it opens in a tab of its own.
+  With --beside it opens in your tab, in the right half of your pane, and stays there.
+    Only for your own checkout: --repo and --branch (and --path) must name the checkout you work in.
+    A spawn that would work in another worktree or branch, or on another device, is refused before
+    anything is created; run it again without --beside to open it in a new tab.
+Neither changes the current screen or keyboard focus.
 The origin field records who spawned the agent in both modes; it grants no authority.
 Use delegation for work you will collect and report, and handoff for independent work the operator will handle.
 Responsibility cannot be changed after spawn; reusing an intent with another mode is refused.
@@ -48,12 +54,19 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Parsed, S
     let verb = args.next().ok_or(USAGE)?.as_str();
     let mut flags = BTreeMap::new();
     let mut check = false;
+    let mut beside = false;
     let mut id = None;
     let mut native = Vec::new();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--json" => {}
             "--check" if verb == "register" && !check => check = true,
+            "--beside" if verb == "spawn" => {
+                if beside {
+                    return Err("--beside is given twice".into());
+                }
+                beside = true;
+            }
             "--" if verb == "spawn" => {
                 native.extend(args.cloned());
                 break;
@@ -175,6 +188,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Parsed, S
                         },
                         // Only Hide's own identity gives a task; no flag names one.
                         task: None,
+                        beside,
                     },
                 },
             });
@@ -321,6 +335,34 @@ mod tests {
             assert!(line(&["spawn", flag, "value"]).is_err());
         }
     }
+    #[test]
+    fn beside_is_a_switch_for_either_mode_and_its_help_names_the_folder_rule() {
+        let beside_of = |extra: &[&str]| {
+            let mut args = vec![
+                "spawn", "--name", "worker", "--intent", "one", "--kind", "codex", "--repo",
+                "/fixture", "--branch", "topic",
+            ];
+            args.extend_from_slice(extra);
+            match line(&args)? {
+                Delivery::Agents {
+                    command: Command::Spawn { beside, .. },
+                } => Ok::<bool, String>(beside),
+                _ => panic!("spawn"),
+            }
+        };
+        assert_eq!(beside_of(&[]), Ok(false));
+        assert_eq!(beside_of(&["--beside"]), Ok(true));
+        assert_eq!(beside_of(&["--parent", "here", "--beside"]), Ok(true));
+        assert_eq!(
+            beside_of(&["--beside", "--beside"]),
+            Err("--beside is given twice".into())
+        );
+        assert!(USAGE.contains("[--beside]"));
+        assert!(SPAWN_HELP.contains("Without --beside it opens in a tab of its own."));
+        assert!(SPAWN_HELP.contains("Only for your own checkout"));
+        assert!(SPAWN_HELP.contains("run it again without --beside to open it in a new tab"));
+    }
+
     #[test]
     fn machine_names_the_device_for_either_mode_and_is_in_every_help() {
         let spawn = |extra: &[&str]| {

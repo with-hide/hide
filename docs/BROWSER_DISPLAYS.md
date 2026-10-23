@@ -23,7 +23,7 @@ Only checkouts in the current connected catalog contribute to that inventory; a 
 
 ## Opening a page
 
-- `hide browser open <url-or-path> [--wait] [--request-id <id>]` from a shell the daemon can bind to a checkout: a connected Herdr pane, or a local process whose working directory is inside a registered checkout (`docs/ARCHITECTURE.md`, hided and the WebSocket boundary).
+- `hide browser open <url-or-path> [--beside] [--wait] [--request-id <id>]` from a shell the daemon can bind to a checkout: a connected Herdr pane, or a local process whose working directory is inside a registered checkout (`docs/ARCHITECTURE.md`, hided and the WebSocket boundary).
   The CLI resolves a relative file on the calling machine, gives loopback hosts `http` and other hosts `https`, and submits one action scoped to the caller's checkout with no Workspace override.
   The core checks an HTML file against that checkout on its own device and reads it outside the core lock before placing its Browser View.
   The action result confirms View placement, while `hide view status <view-id>` returns `pending`, `loading`, `loaded`, `failed`, `disconnected`, or `unsupported` for its native page.
@@ -32,6 +32,7 @@ Only checkouts in the current connected catalog contribute to that inventory; a 
   Another pane there, of the same tab or another, adds its page to the checkout's one list, in the area it lands in and behind the one in front, and moves no tab, checkout or keyboard; the same address opened from two tabs is one page, so the operator's page and load stay unchanged.
   On a checkout not on screen, a pane of its active tab brings its page to the front of that checkout, where it loads and can be driven, and a pane of another tab adds it behind; neither calls the lane or moves the screen.
   A shell bound only to the checkout counts as another pane on the checkout on screen and as its active tab on one that is not.
+  `--beside` places the page as a file's Open to the side does ([UI_BEHAVIOR.md](UI_BEHAVIOR.md#opening-preview-and-open-to-the-side)): in the area next to the active one, trying right, left, below and above, or a new area to its right; a page of the same address already in that area is brought forward and loaded again rather than opened twice, and with no room for another area the open is refused with the next action to close a View or open without `--beside`.
   The desktop window's gateway, acting for a CDP client that creates a page, brings that page forward, since a page loads only in front; it acts as `gateway:<key>:<path>`, one key per window, so the core tells it from a checkout shell (`gateway_caller_id`).
   A new page that is not in front can stay pending until it first appears.
   An agent reads the checkout's Views (`hide view list`, `hide view status`, select, close, `--wait`) from any of its tabs, even when its tab is not the Workspace's active tab and the Workspace was never in front: every caller sees the same list, so such a page is listed as `pending` rather than missing.
@@ -48,7 +49,7 @@ Only checkouts in the current connected catalog contribute to that inventory; a 
   The shell sends one `browser_open` event with the owning registered checkout and `reveal: true`, so the page and its checkout come forward together; the existing local `file:` boundary checks the address.
   An HTML file of another checkout than the one in front opens in the front Workspace instead, with no reveal, so no checkout moves; the same boundary admits a file of any registered checkout.
   Open source in the same menu opens the file in the editor at the link's line instead.
-  A path outside registered checkouts follows the desktop host's default-application boundary.
+  An HTML path outside every registered checkout, clicked in the desktop app's window on the core's machine, opens as an outside page instead (The file boundary, Outside pages); anywhere else it follows the desktop host's default-application boundary.
 - A page that opens a tab, a `target=_blank` link (an image a page wraps in one), a shift-click or `window.open` without window features, gets another browser display in the same Workspace, beside that page so the page that asked stays in view.
   The shell names the page (`beside_display`), and the core places the new display in the View area next to the page's area in Open to the side's order (right, left, down, up), else, the page's area being the only one, in a new area to its right; with the page gone it opens where any page would.
   An address the Workspace already shows is focused and loaded again there instead.
@@ -313,6 +314,19 @@ A name is resolved once per page generation and the answer kept, so a name that 
 `localPageRequest` and `isLocalNetworkHost` in `desktop/src/main/browserSync.ts` decide, and `BrowserViews.localPageRequest` applies the decision to a request of every local file page, whoever opened it.
 Each kind of refusal (a file, the network) is logged once per page generation as `browser.request_refused` with `reason: local_page_boundary` and the kind, and shows nothing on screen.
 A page of a connected device's checkout is served through its own route, which refuses every request that is not that route's.
+
+### Outside pages
+
+An HTML file outside every registered checkout that the operator clicked in a terminal of the desktop app (PRD outside-path-in-hide) is an outside page, and its address never reaches hided or the core.
+The desktop host grants the clicked file and its folder to the window that clicked it (`desktop/src/main/externalFiles.ts`), and the core holds a display of kind `external` with the grant's 32-hex id, the file's name and `html`, never a path or an address; the browser sync names it by `grant` with an empty `url`, and the host loads the granted file itself, with no `/browser-route`.
+Its page follows every rule of a local page above with the grant's folder, links resolved, as its checkout: its own files load from that folder and below, and nothing outside it.
+A navigation to a `file:` address outside the folder, by a link or by `window.open`, is refused and logged as `browser.navigation_refused` (or `browser.window_open_refused`) with `reason: external_folder_boundary` and the grant, and a `window.open` of a file inside the folder loads in the same tab rather than opening another display.
+Each HTML grant holds one of 32 in-memory partitions, `hide-browser-external-<slot>`, so an outside page shares storage with no other live outside page and no checkout page; its storage is cleared when the grant ends, and the slot is handed out again only after that clear succeeds.
+The page reports its state to the shell marked `external`, and the shell sends no `browser_state` for it, so its `file:` address is never written anywhere hided reads.
+It is never a gateway target: `/connect` and `hide browser` on its display answer as on a `file:` page of a checkout (`display_unsupported`), and Comment does not offer it.
+The grant ends when no tab stands on it: every browser sync names the grants of the core's outside displays and of opens still on their way (`external_grants`), the host lets go of the rest and destroys their pages, and a sync before the reloaded window has the core's tabs names nothing so a reload lets go of nothing.
+A grant no sync has named since it was handed out is kept for 10 s (`UNNAMED_GRANT_GRACE_MS`), because the shell learns of it only from the click's answer, and an open the core never answers stops being named after 10 s (`PENDING_GRANT_MS`), so a lost open frees its grant.
+When a window attaches it tells the core which grants its host still holds (`external_grants`), so a tab whose grant went with a quit app closes.
 What the fuse changes beyond these pages: any `file:` page the app itself loads (the status page) is an origin of its own and loads only its own script and style, which it does; the shell, the preload and the main process load over loopback or from the asar and are unchanged. The `file:` loader no longer reads inside the asar, so the status page ships unpacked beside it (`ARCHITECTURE.md`, The desktop host).
 `desktop/e2e` runs on a copy of Electron flipped the same way (`fused-electron.ts`), so what its tests prove is what ships; an unpackaged run of the app (`pnpm --dir desktop dev`) is stock Electron, where the request rules hold and the fuse does not.
 What Comment's world can read on a local page is what the page itself can read, and no more.
@@ -402,6 +416,8 @@ An evicted page reports its disappearance as disconnected until shown again.
 ## Keyboard ownership and cycling
 
 Only a visible native page can report keyboard focus to the shell; the shell resolves its complete Workspace identity and current View area.
+When the lane closes or its documents fold, the shell retires their keyboard owner with that drawing and returns it to the focused pane, even if a native focus report arrived after the preceding menu command and the terminal was already its active DOM element.
+Input moved to another live column or a popup is left in place.
 The host also reports desktop window activation separately from page focus, so an embedded page taking input does not make the app appear inactive.
 An inactive window retains its selection and logical keyboard destination while hiding canvas input emphasis.
 The page's `before-input-event` matches the shell's effective Electron shortcut registry for focused-area, global panel and project cycle commands before the page or menu sees them.
@@ -515,6 +531,8 @@ It opens a page with `hide browser open`, checks the native view sits on its slo
 The test window never activates the app or takes the keyboard, because the e2e fixture launches every app with `--hide-show-inactive` and `--disable-backgrounding-occluded-windows` (see [BUILD.md](BUILD.md#the-desktop-app)); it is shown behind the operator's windows, keeps painting there, and captures of it are taken by window id.
 The zoom test needs the key window: it is tagged `@needs-focus` and brings its window to the front itself.
 Keep screenshots and logs under local-only `agents/runs/`.
+`desktop/e2e/new-tab.spec.ts` preserves the native menu's target and its resulting core and drawn state in the `menu-target-transitions` attachment, through the existing opt-in probe and WebSocket observation.
+It records command and region identifiers, pane presence and close confirmation, with no page address or content; its behavior assertions, waits and retry policy are unchanged.
 `desktop/e2e/local-page-rules.spec.ts` opens a local page from an isolated pane on the fused Electron and checks that its folder's image and script load, that reads of files and requests to a loopback server and this machine's own network address fail, that an image drawn from its own folder cannot be read back, and that each refusal is logged once.
 `desktop/src/main/browserSync.test.ts` tests the request decision and the address ranges, the device size field and zoom commands a sync may carry, and the emulation a device size asks for at a zoom.
 `desktop/e2e/browser.spec.ts`'s `page width` tests open a page into a 520px lane and see it widen to 900px, a width the operator narrows stay through a file tab and back, the widening stop where Agent Views keeps 480px over the agents and docked, and an expanded lane stay; its `page zoom` test zooms a focused page with ⌘=, steps it in the popover with the keyboard left in the shell, sees another page of the host show the zoom and the badge go at 100%, and sees ⌘= take nothing at a device size; its `device size` test reads the page's `window.innerWidth` at 390, 768 and 1280 with the host at 110%, the scaled label in a narrow lane, the size kept through a navigation, the user agent unchanged and Fit back at the zoom.

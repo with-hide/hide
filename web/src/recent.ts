@@ -315,7 +315,7 @@ export function recentProjectOrder(existing: readonly string[]): string[] {
   return [...seen, ...existing.filter((id) => !seen.includes(id))];
 }
 
-/** Test seam. */
+/** Back to an empty order: a test, and a practice chapter that starts over on the same page. */
 export function resetRecent() {
   entries = [];
   projects = [];

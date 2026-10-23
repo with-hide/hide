@@ -39,6 +39,7 @@ const SURFACE_LABEL: Record<SurfaceKind, MessageKey> = {
   file: "shell.surface.file",
   diff: "shell.diff",
   browser: "shell.surface.browser",
+  external: "shell.surface.file",
 };
 
 function cycleDetail(detail: CycleDetail, t: TFunction<"translation">): string {
@@ -394,7 +395,7 @@ export function FindBar({ actions }: { actions: Actions }) {
     close("find");
     if (paneId) focusTerminal(paneId);
   };
-  useEffect(() => (open ? pushEscape(() => dismiss.current()) : undefined), [open, pushEscape]);
+  useEffect(() => (open ? pushEscape(() => dismiss.current(), false, true) : undefined), [open, pushEscape]);
   if (!open) return null;
   const submit = (step: -1 | 0 | 1) => {
     if (paneId) actions.find(paneId, term, step);

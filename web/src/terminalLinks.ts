@@ -423,7 +423,10 @@ function parseTarget(text: string): LinkTarget | null {
   const uri = uriTarget(text);
   if (uri !== undefined) return uri;
   const location = LOCATION.exec(text);
-  const path = location ? location[1]! : text;
+  // A Windows shell prints a drive path with backslashes (`C:\Users\example\...`);
+  // the wire spells it with `/` (docs/ARCHITECTURE.md, The platform layer).
+  const printed = location ? location[1]! : text;
+  const path = /^[A-Za-z]:\\/u.test(printed) ? printed.replaceAll("\\", "/") : printed;
   const line = location ? Number(location[2] ?? location[4] ?? location[5]) : null;
   const column = location && (location[3] ?? location[6]) ? Number(location[3] ?? location[6]) : null;
   if (!pathShaped(path)) return null;

@@ -172,6 +172,7 @@ pub(crate) mod tests {
             launch: Default::default(),
             brief: None,
             task,
+            beside: false,
         };
         let reserved = apply(
             ledger,
@@ -422,6 +423,7 @@ pub(crate) mod tests {
                 launch: Default::default(),
                 brief: None,
                 task,
+                beside: false,
             },
         };
         apply(&mut ledger, &hide, &again(memory_task("m72")), 1).unwrap();
