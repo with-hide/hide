@@ -67,8 +67,7 @@ test("a record shown in the lane's 보기 slot stays through pin, unpin and a wi
     // Each change redraws the lane in another frame; the record it shows is not left by that.
     const mode = page.locator("[data-workspace-screen]");
     for (const state of ["docked", "overlay"]) {
-      await page.locator("[data-lane-more]").click();
-      await page.locator('[data-lane-menu-item="pin"]').click();
+      await page.locator("[data-lane-pin]").click();
       await expect(mode).toHaveAttribute("data-lane-mode", state);
       await expect(record).toBeVisible();
     }
