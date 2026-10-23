@@ -574,7 +574,8 @@ A letter another agent sent after it does not replace it; a delegated child with
 The answer is the operator's ask, the agent's own Working progress, for a finished turn the operator has not looked at, `끝남` in the success colour and its result sentence, or, while the agent waits on working children, `대기 · 자식 에이전트 N개 작업 중`, the words its sidebar row says; once the operator has looked at a finished turn the row goes.
 The progress says only what the request does not: the label's line never restates the request, and a turn whose events show nothing beyond it yet has no line, so a working turn with no progress shows its request alone, with no arrow and no `작업 중`, since the status mark and the working line already say it works.
 The request shows only with an ask, while the agent works or waits on working children, or for a finished turn not yet looked at: a pane that waits on anything else, rests or finished and was read has no row (only the children button when it has live children).
-A quiet turn (progress, a result, a children wait or a request alone) sits on the head's own surface under a hairline, one line, its request cut at half the row when an answer follows and each part cut where it overflows; an ask keeps the raised surface with its warning edge, and when its request and answer do not fit one line the answer moves to a second row under the request, each cut only when it overflows its own row, and the two return to one line when the pane widens.
+A quiet turn (progress, a result, a children wait or a request alone) sits on the head's own surface under a hairline, and an ask keeps the raised surface with its warning edge.
+How many lines the row takes is the View menu's choice ([Pane turn row mode](#pane-turn-row-mode)): one line by default, the request cut at two fifths of the row when an answer follows and each part cut where it overflows, an ask included, so no turn grows over the terminal on a narrow pane.
 The children button stays at the first row's left, the request is never folded into an icon, and the rows overlay the terminal without changing its grid.
 The request is a button the keyboard reaches: the pointer or focus on it opens the turn card under it, a press pins the card and a second press or Esc closes it, and Esc on a card neither pinned nor focused stays the terminal's.
 With the card open, Tab from the request or the title moves the keyboard into the card to `기록 열기`, the card stays open while focus is in it, Shift+Tab before its start goes back to the trigger, Tab past its end and Esc in the card close it and return focus to the trigger, which keeps it closed until the pointer or focus comes anew; only Tab moves focus in, so the pointer never takes the terminal's keyboard, and a card the pointer only shows is no Escape layer, so Esc reaches the terminal.
@@ -733,6 +734,20 @@ While hidden, holding the Agents key (⌥, or Alt) draws the same logos for as l
 Shown, the same hold shows only the keycaps.
 Changing the mode or peeking never changes a row's height, the scroll position or the selection.
 Web owners: `web/src/components/view-menu.tsx`, `web/src/agentLogoMode.ts` (the one rule), `web/src/AgentRowMark.tsx`, `web/src/TabBar.tsx`, `web/src/TaskLens.tsx`, `web/src/components/sidebar-agent-row.tsx` and `web/src/components/sleeping-session-row.tsx`; core owner: `herdr-core/src/runtime/events.rs`.
+
+### Pane turn row mode
+
+The View menu's second section, after the agent logo choices and their key line and a separator, is labeled `요청·진행 줄` (`Request and progress line`) and offers `한 줄` (`One line`, marked `기본`, `Default`), `두 줄` (`Two lines`) and `끔` (`Off`), with a check on the current one; the keyboard, Escape, a repeated choice and a disconnected daemon behave as for the logo choices.
+It shapes the second row of every agent pane ([Agent panes and the Agents explorer](#agent-panes-and-the-agents-explorer)) in every window of one daemon at once:
+
+- One line keeps every turn on one line: the request at most two fifths of the row when an answer follows, the answer in the rest, each cut where it overflows, an ask as much as a quiet turn; the whole request stays on the turn card the request opens.
+- Two lines put the request (after the children button) on its own line and the arrow and answer on the line under it, each cut, so a turn takes at most two lines; a turn with only a request or only an answer takes one.
+- Off draws no request, progress, result or ask on the row; a pane with live children keeps the children button alone on it, whose warning border and tree carry a raised descendant's ask, and Working keeps its thin line.
+  The pane's own approval, question, block or stop rides the head after the title as a small warning-edged mark with its verb and wait (`web/src/PaneHeaderBand.tsx`, `PaneAskMark`), named by its verb and what is asked, which opens the same turn card as the request does and dims once read as the row's ask does; an ask is never hidden by the mode.
+
+The choice is a core preference, `ui_state.pane_turn_row_mode` (`one_line`, `two_lines` or `off`, `one_line` when never chosen), changed only by `pane_turn_row_mode_set`; `ui_state_update` never changes it, an unknown stored value opens one line with the `ui_state.pane_turn_row_mode_unknown` diagnostic, and it survives a restart.
+The mode never changes the terminal's viewport or its PTY grid, because the row overlays the terminal.
+Web owners: `web/src/components/view-menu.tsx` and `web/src/PaneHeaderBand.tsx`; core owner: `herdr-core/src/runtime/events.rs`.
 
 ### Subagent count
 
