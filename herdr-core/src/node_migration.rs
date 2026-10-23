@@ -2034,6 +2034,7 @@ mod tests {
         "right_panel_section",
         "sidebar_lens",
         "task_view",
+        "practice",
         "focus_from_herdr",
         "shortcut_bindings",
         "shortcut_bindings_imported",

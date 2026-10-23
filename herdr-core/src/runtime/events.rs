@@ -1540,6 +1540,7 @@ pub(super) enum Event {
     SidebarLensSet(super::detail::SidebarLensPayload),
     TaskViewSet(super::detail::TaskViewPayload),
     SidebarProjectSet(super::detail::SidebarProjectPayload),
+    PracticeProgressSet(super::detail::PracticeProgressPayload),
     OverviewGraphChange(super::overview_graph::OverviewGraphChangePayload),
     TaskReveal(super::detail::TaskRevealPayload),
     DetailOpen(super::detail::DetailOpenPayload),
@@ -1808,6 +1809,9 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "sidebar_lens_set" => decode!(super::detail::SidebarLensPayload, SidebarLensSet),
         "task_view_set" => decode!(super::detail::TaskViewPayload, TaskViewSet),
         "sidebar_project_set" => decode!(super::detail::SidebarProjectPayload, SidebarProjectSet),
+        "practice_progress_set" => {
+            decode!(super::detail::PracticeProgressPayload, PracticeProgressSet)
+        }
         "overview_graph_change" => decode!(
             super::overview_graph::OverviewGraphChangePayload,
             OverviewGraphChange
@@ -4088,6 +4092,7 @@ impl Runtime {
             Event::SidebarLensSet(payload) => self.set_sidebar_lens(payload),
             Event::TaskViewSet(payload) => self.set_task_view(payload),
             Event::SidebarProjectSet(payload) => self.set_sidebar_project(payload),
+            Event::PracticeProgressSet(payload) => self.set_practice_progress(payload),
             Event::OverviewGraphChange(payload) => self.change_overview_graph(payload),
             Event::TaskReveal(payload) => self.reveal_task(payload),
             Event::DetailOpen(payload) => self.open_detail(payload.item),
@@ -4160,11 +4165,13 @@ impl Runtime {
                     expanded_agent_pane_ids: current.expanded_agent_pane_ids,
                     sessions_expanded_agent_pane_ids: current.sessions_expanded_agent_pane_ids,
                     // Each has its own event (`sidebar_lens_set`,
-                    // `task_view_set`, `sidebar_project_set`, `detail_*`,
+                    // `task_view_set`, `sidebar_project_set`,
+                    // `practice_progress_set`, `detail_*`,
                     // `overview_graph_change`).
                     sidebar_lens: current.sidebar_lens,
                     task_view: current.task_view,
                     sidebar_project: current.sidebar_project,
+                    practice: current.practice,
                     detail: current.detail,
                     overview_graph: current.overview_graph,
                     selected_path: payload.selected_path,

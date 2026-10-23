@@ -3693,6 +3693,33 @@ pub struct SidebarProject {
     pub workspace_id: String,
 }
 
+/// The most chapters of Hide's practice mode whose progress is kept.
+pub const PRACTICE_CHAPTER_LIMIT: usize = 64;
+
+/// The highest step index a chapter's progress can hold.
+pub const PRACTICE_STEP_LIMIT: u32 = 255;
+
+/// How far a learner got in one practice-mode chapter: the chapter version
+/// they played, the step they reached, and whether they reached the end.
+/// The chapters run in their own window on scripted data, so the core keeps
+/// only this, per chapter id (`ui_state.practice`).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PracticeProgress {
+    pub version: u32,
+    pub step: u32,
+    pub finished: bool,
+}
+
+/// Whether `id` names a practice chapter: 1 to 32 characters of `a-z`, `0-9`
+/// and `-`.
+pub fn practice_chapter_id_valid(id: &str) -> bool {
+    (1..=32).contains(&id.len())
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+}
+
 /// The most items the 보기 slot's ← steps back through; past it the oldest
 /// goes first (PRD sidebar-task-lens B47).
 pub const DETAIL_HISTORY_LIMIT: usize = 20;
@@ -3852,6 +3879,11 @@ pub struct UiStateSnapshot {
     /// every project; kept like the lens.
     #[serde(default)]
     pub sidebar_project: Option<SidebarProject>,
+    /// Practice mode's progress, by chapter id (`practice_progress_set`):
+    /// the learner's place in each onboarding chapter, kept like the lens so
+    /// a relaunch resumes it. At most [`PRACTICE_CHAPTER_LIMIT`] chapters.
+    #[serde(default)]
+    pub practice: BTreeMap<String, PracticeProgress>,
     /// The lane's 보기 slot (D-50): a pull request's card or a session's
     /// record, one per window and no checkout's or Agent tab's, so it stays
     /// when either changes.
@@ -4754,6 +4786,7 @@ impl Default for UiStateSnapshot {
             sidebar_lens: SidebarLens::default(),
             task_view: TaskView::default(),
             sidebar_project: None,
+            practice: BTreeMap::new(),
             detail: DetailSlot::default(),
             overview_graph: OverviewGraphChoices::default(),
             selected_path: None,

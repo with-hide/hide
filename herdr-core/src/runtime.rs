@@ -2019,6 +2019,10 @@ impl Runtime {
                         "ui_state.sidebar_project_unknown",
                         "The stored sidebar project was not recognized; every project was used",
                     ),
+                    persistence::UnrecognizedField::Practice => (
+                        "ui_state.practice_unknown",
+                        "Some of the stored practice progress was not recognized; the rest loaded",
+                    ),
                     persistence::UnrecognizedField::Detail => (
                         "ui_state.detail_unknown",
                         "The stored 보기 slot was not recognized; it loaded empty",
