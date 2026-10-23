@@ -66,7 +66,7 @@ function stage(chapter: PracticeChapter) {
     useShellStore.setState({ rest, agents, connection: "live", focusedPaneId: focused, usage: usage ? { nodes: [usage] } : null });
   };
   show(model);
-  useUiStore.setState({ screen: { kind: "workspace" }, overviewOpen: false, laneShown: world.lane, laneExpanded: false, stackFront: "view" });
+  useUiStore.setState({ screen: { kind: "workspace" }, overviewOpen: false, laneExpanded: false, stackFront: "view" });
   const calm = useUiStore.getState();
   const uninstall = installKeyboard(actions);
   // Every command the keyboard runs, each pane clicked, and a close confirmed on its sheet.
