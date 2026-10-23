@@ -126,7 +126,7 @@ const ko = {
   "mobile.input.tooLong": "답장은 한 번에 {{limit}}자까지 보낼 수 있어요.",
   "mobile.input.controlCharacters": "답장에는 한 줄 텍스트만 보낼 수 있어요.",
   "mobile.input.gone": "이 터미널은 더 이상 열려 있지 않아요.",
-  "mobile.input.asleep": "이 에이전트는 휴면 중이거나 깨우는 중이라 보내지 않았어요. 먼저 깨우세요.",
+  "mobile.input.asleep": "이 에이전트는 재움 상태이거나 깨우는 중이라 보내지 않았어요. 먼저 깨우세요.",
   "mobile.input.deviceUnreachable": "기기가 연결돼 있지 않아 보내지 못했어요.",
   "mobile.input.offline": "Mac의 Hide에 연결하지 못해 답장을 보내지 못했어요. 다시 보내세요.",
   "mobile.input.failed": "보내지 못했어요. 다시 보내세요.",
