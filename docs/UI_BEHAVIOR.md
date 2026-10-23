@@ -2338,6 +2338,7 @@ A chapter with tasks lists them on a card in the lower left with a check as each
 The last step of a chapter offers the next chapter, and the last chapter's offers the list.
 
 Chapter 4 (`delegate`) hands work on by saying it to a lead agent, in three ways: a child it starts in a tab of its own, under the lead in the list, then tells something and hears back from by letter; an open agent it finds by what it does and writes to; and an agent named by the Terminal ID copied from its pane's menu (Copy details › Terminal ID) and pasted into the request.
+The lead takes the learner's own words for the first three; the last goes only when the request holds the copied ID, and the lead asks for it otherwise.
 The agents' answers and letters are the world's script, drawn in the panes and the list; the learner only types the requests and chooses the menu item.
 
 The window holds no daemon connection and carries no token.

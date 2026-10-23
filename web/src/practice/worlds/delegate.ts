@@ -10,7 +10,7 @@
 import type { AgentScope, AgentTreeScope } from "../../agentScope";
 import type { AgentRow, AgentState, SnapshotRest } from "../../snapshot";
 import { PRACTICE_COPY, type PracticeWorld, type WorldSnapshot } from "../world";
-import { agent, applyDesk, deskSnapshot, type DeskModel, type PracticePlace } from "./kit";
+import { agent, applyDesk, deskSnapshot, shellScreen, type DeskModel, type PracticePlace } from "./kit";
 
 const PLACE: PracticePlace = { project: "hide-practice", label: "hide-practice", branch: "main" };
 
@@ -249,11 +249,7 @@ function withLineage(rest: SnapshotRest): SnapshotRest {
       workspaces: navigator.workspaces?.map((workspace) => ({
         ...workspace,
         agent_scope: scope(workspace.agent_scope),
-        checkouts: workspace.checkouts.map((checkout) => ({
-          ...checkout,
-          agent_scope: scope(checkout.agent_scope),
-          tabs: checkout.tabs.map((tab) => (tab.id === CHILD_TAB ? { ...tab, delegated: true } : tab)),
-        })),
+        checkouts: workspace.checkouts.map((checkout) => ({ ...checkout, agent_scope: scope(checkout.agent_scope) })),
       })),
     },
   };
@@ -284,6 +280,7 @@ export const DELEGATE_WORLD: PracticeWorld<DelegateModel> = {
   snapshot,
   prompt: (model, paneId) => (paneId === LEAD ? model.draft : ""),
   panes: (model) => model.desk.panes.map((pane) => pane.id),
-  screen: (model, paneId, cols) => SCREENS[paneId]!(model, cols),
+  // A pane the learner opened, a new tab or a split, is a shell with no agent in it.
+  screen: (model, paneId, cols) => SCREENS[paneId]?.(model, cols) ?? shellScreen(PLACE),
   lane: false,
 };
