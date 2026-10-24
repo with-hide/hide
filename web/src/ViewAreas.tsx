@@ -152,6 +152,7 @@ function ViewTree({ layout, deviceId, path, actions }: { layout: ViewLayoutSnaps
     newTabShortcut: commandLabel("new_tab"),
     tabListLabel: t("documents.view.tabList"),
     actionsLabel: t("documents.view.actions"),
+    close: { label: t("panes.lane.closeDocuments"), onClose: actions.closeDocuments, attributes: { "data-lane-documents-close": "true" } },
     onDraw: (frame) => noteDrawnViews(frame ? { ...frame, workspace } : null),
     onBody: setBody,
   };
