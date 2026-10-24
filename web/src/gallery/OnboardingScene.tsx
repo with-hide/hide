@@ -57,6 +57,7 @@ export const ONBOARDING_STATES = [
   "notifications-unreadable",
   "notifications-no-service",
   "project",
+  "project-add",
   "start-panel",
   "start-panel-signed-out",
   "home-no-project",
@@ -245,11 +246,11 @@ function sceneHerdr(state: OnboardingState): { herdr: Record<string, unknown>; h
 
 function sceneRest(state: OnboardingState, system: OnboardingSystem): SnapshotRest {
   const now = Math.floor(Date.now() / 1000);
-  const projects = state === "project" || state.startsWith("agents") || state.startsWith("devices") || state.startsWith("notifications") || state.startsWith("herdr") || state === "home-no-project" ? [] : [
+  const projects = state.startsWith("project") || state.startsWith("agents") || state.startsWith("devices") || state.startsWith("notifications") || state.startsWith("herdr") || state === "home-no-project" ? [] : [
     workspace("my-app", { path: "/work/my-app", checkouts: [checkout({ id: "my-app:main", workspace: "my-app", branch: "main", primary: true, age: 3600 }, now)] }, REFERENCE_FOLDS),
   ];
   // Help's walk is the page's own, over a first run that ended (B45).
-  const step = state === "agents-setup" ? "done" : state.startsWith("herdr") ? "herdr" : state.startsWith("agents") ? "agents" : state.startsWith("devices") ? "devices" : state.startsWith("notifications") ? "notifications" : state === "project" ? "project" : "done";
+  const step = state === "agents-setup" ? "done" : state.startsWith("herdr") ? "herdr" : state.startsWith("agents") ? "agents" : state.startsWith("devices") ? "devices" : state.startsWith("notifications") ? "notifications" : state.startsWith("project") ? "project" : "done";
   // The switch is on once Turn on was pressed; macOS's answer is the host's (`permissionOf`).
   const enabled = (state.startsWith("notifications-") && state !== "notifications-no-service") || state === "settings-on" || state === "settings-blocked" || state === "settings-both";
   // A first pass that stopped before changing anything: a state folder HIDE_STATE_DIR chose that other
@@ -279,7 +280,7 @@ function sceneRest(state: OnboardingState, system: OnboardingSystem): SnapshotRe
     ui_state: {
       left_sidebar_visible: true,
       first_run: { version: 1, step },
-      first_run_choices: { devices: state === "devices-partial" ? ["build", "research"] : [] },
+      first_run_choices: { devices: state === "devices-partial" ? ["build", "research"] : [], project_form: { view: state === "project-add" ? "add" : "" } },
       agent_onboarding: state === "agents-refused" ? null : step === "agents" || step === "herdr" ? "pending" : "done",
       desktop_notifications: enabled,
       desktop_notifications_done: state === "settings-done-only" || state === "settings-both",

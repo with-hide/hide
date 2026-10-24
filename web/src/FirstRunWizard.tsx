@@ -11,7 +11,7 @@
 // a dialog over the dimmed shell, the three-part progress above the title,
 // the step's main button at the footer's right with its ⌘↵ keycap.
 
-import { CheckIcon, ChevronRightIcon } from "lucide-react";
+import { CheckIcon, ChevronRightIcon, FolderPlusIcon, GraduationCapIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ComponentProps, type KeyboardEvent, type ReactNode } from "react";
 import { create } from "zustand";
 import type { TFunction } from "i18next";
@@ -36,6 +36,7 @@ import { cn } from "./lib/utils";
 import { NotificationLine, useNotificationControl, usePermission } from "./NotificationControls";
 import { kitUnavailableText, kitWhyText } from "./kitWhy";
 import { kitRefusalLine } from "./settings";
+import { FIRST_CHAPTER, openPractice } from "./practice/channel";
 import { NotOnSystem } from "./settings/AgentRow";
 import { installDocUrl, machineSystem, supportedAgents, type AgentPart } from "./settings/agentRows";
 import { useAgentsDemand } from "./settings/useAgentsDemand";
@@ -171,7 +172,7 @@ function Wizard({ actions, step, reopened, desktop }: { actions: Actions; step: 
         ) : step === "notifications" ? (
           <NotificationsStep actions={actions} reopened={reopened} primary={primary} onBack={back!} answered={answered || saved?.notifications_answered === true} onAnswered={() => setAnswered(true)} />
         ) : (
-          <ProjectStep actions={actions} reopened={reopened} onBack={back!} />
+          <StartStep actions={actions} reopened={reopened} onBack={back!} />
         )}
       </DialogContent>
     </Dialog>
@@ -488,7 +489,15 @@ function NotificationsStep({ actions, reopened, primary, onBack, answered, onAns
   );
 }
 
-function ProjectStep({ actions, reopened, onBack }: { actions: Actions; reopened: boolean; onBack: () => void }) {
+/**
+ * The last step: how to start. Each way is its own button, with no choice to
+ * confirm: practice first (recommended), which ends the wizard and opens the
+ * practice window on chapter 0 over the empty Home; Add a project, the views
+ * of Add project as they were, whose Back returns here; or Skip for now. Which
+ * of the two is on screen is the project draft's view (`""` here), so a reload
+ * reopens it.
+ */
+function StartStep({ actions, reopened, onBack }: { actions: Actions; reopened: boolean; onBack: () => void }) {
   const { t } = useInterfaceTranslation();
   const registrations = useShellStore((s) => s.rest?.ui_state?.workspace_registrations ?? NO_REGISTRATIONS);
   // The projects that were there when the step opened; the first one after them is the operator's (B23).
@@ -496,9 +505,19 @@ function ProjectStep({ actions, reopened, onBack }: { actions: Actions; reopened
   // Only on the host the step adds to: a device's own registrations arriving meanwhile are not the operator's pick.
   const [host, setHost] = useState<string | null>(null);
   const added = registrations.find((row) => !row.home && !known.has(row.id) && row.device_id === host) ?? null;
+  const [adding, setAdding] = useState(() => !!useShellStore.getState().rest?.ui_state?.first_run_choices?.project_form?.view);
   const finish = () => {
     if (reopened) useSetupWalk.getState().close();
     else actions.advanceFirstRun("project");
+  };
+  const showAdding = (next: boolean) => {
+    setAdding(next);
+    const form = useShellStore.getState().rest?.ui_state?.first_run_choices?.project_form;
+    actions.saveFirstRunDraft({ project_form: { ...form, view: next ? "add" : "" } });
+  };
+  const practice = () => {
+    finish();
+    openPractice(FIRST_CHAPTER);
   };
   useEffect(() => {
     if (!added) return;
@@ -511,16 +530,81 @@ function ProjectStep({ actions, reopened, onBack }: { actions: Actions; reopened
     if (kind) useStartPanel.getState().open(false, { projectId: added.id, kind });
     // `finish` reads only the store; the project appearing is the one trigger.
   }, [added?.id]);
+  const skip = (
+    <Button variant="ghost" onClick={finish} data-first-run-skip="true">
+      {t("firstRun.project.skip")}
+    </Button>
+  );
+  if (adding) {
+    return (
+      <>
+        <AddProjectViews actions={actions} title={(translate) => translate("firstRun.project.title")} onHost={setHost} draft={{ device: useShellStore.getState().rest?.ui_state?.first_run_choices?.project_device, path: useShellStore.getState().rest?.ui_state?.first_run_choices?.project_path, form: useShellStore.getState().rest?.ui_state?.first_run_choices?.project_form }} onDraft={actions.saveFirstRunDraft} />
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => showAdding(false)} data-first-run-back="true">{t("firstRun.back")}</Button>
+          {skip}
+        </DialogFooter>
+      </>
+    );
+  }
   return (
     <>
-      <AddProjectViews actions={actions} title={(translate) => translate("firstRun.project.title")} onHost={setHost} draft={{ device: useShellStore.getState().rest?.ui_state?.first_run_choices?.project_device, path: useShellStore.getState().rest?.ui_state?.first_run_choices?.project_path, form: useShellStore.getState().rest?.ui_state?.first_run_choices?.project_form }} onDraft={actions.saveFirstRunDraft} />
+      <DialogHeader>
+        <DialogTitle>{t("firstRun.start.title")}</DialogTitle>
+        <DialogDescription>{t("firstRun.start.description")}</DialogDescription>
+      </DialogHeader>
+      <DialogBody className="flex flex-col gap-sm" data-first-run-start="true">
+        {/* The practice coach's own card, so it reads as practice and stays legible in Light and Dark. */}
+        <StartWay
+          icon={<GraduationCapIcon />}
+          title={t("firstRun.start.practice")}
+          line={t("firstRun.start.practiceNote")}
+          badge={t("firstRun.start.recommended")}
+          className="border-(--practice-accent) bg-(--practice-card) text-(--practice-text) hover:border-(--practice-accent-strong)"
+          lineClassName="text-(--practice-mute)"
+          iconClassName="border-(--practice-line) bg-(--practice-keycap) text-(--practice-ink)"
+          onClick={practice}
+          data-first-run-way="practice"
+        />
+        <StartWay
+          icon={<FolderPlusIcon />}
+          title={t("firstRun.start.project")}
+          line={t("firstRun.start.projectNote")}
+          className="border-border bg-background text-foreground hover:bg-accent"
+          lineClassName="text-muted-foreground"
+          iconClassName="border-border bg-card text-muted-foreground"
+          onClick={() => showAdding(true)}
+          data-first-run-way="project"
+        />
+      </DialogBody>
       <DialogFooter>
         <Button variant="ghost" onClick={onBack} data-first-run-back="true">{t("firstRun.back")}</Button>
-        <Button variant="ghost" onClick={finish} data-first-run-skip="true">
-          {t("firstRun.project.skip")}
-        </Button>
+        <span className="flex-1" />
+        {skip}
       </DialogFooter>
     </>
+  );
+}
+
+/** One way to start: a whole-width button with its mark, its name and one line under it. */
+function StartWay({ icon, title, line, badge, className, lineClassName, iconClassName, ...props }: ComponentProps<"button"> & { icon: ReactNode; title: string; line: string; badge?: string; lineClassName: string; iconClassName: string }) {
+  return (
+    <button
+      type="button"
+      className={cn("flex w-full cursor-pointer items-center gap-md rounded-lg border px-md py-sm text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring", className)}
+      {...props}
+    >
+      <span className={cn("flex size-(--size-icon-button-standard) shrink-0 items-center justify-center rounded-md border [&_svg]:size-(--size-icon)", iconClassName)} aria-hidden="true">
+        {icon}
+      </span>
+      <span className="flex min-w-0 flex-1 flex-col gap-xxs">
+        <span className="flex flex-wrap items-center gap-sm text-body font-semibold">
+          {title}
+          {badge ? <span className="rounded-full bg-(--practice-accent) px-sm text-caption font-semibold text-(--practice-ink)">{badge}</span> : null}
+        </span>
+        <span className={cn("text-caption", lineClassName)}>{line}</span>
+      </span>
+      <ChevronRightIcon aria-hidden="true" className={cn("size-(--size-icon) shrink-0", lineClassName)} />
+    </button>
   );
 }
 
