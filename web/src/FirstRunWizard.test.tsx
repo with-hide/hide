@@ -84,9 +84,73 @@ it("opens a remote project's first agent from that device's kit, regardless of l
   Object.assign(next.rest.navigator, { focused_device_id: "build" });
   next.rest.navigator.devices.push({ id: "build", kind: "remote", label: "Build server", kit: { agents: [agent("opencode", "OpenCode", "available"), agent("claude-code", "Claude Code", "not_installed")].map((row) => ({ ...row, enabled: true })), components: [], busy: false } } as never);
   const { events, unmount } = await mount(next);
+  await act(async () => way("project").click());
   await act(async () => useShellStore.setState((current) => ({ revision: current.revision + 1, rest: { ...current.rest, ui_state: { ...current.rest?.ui_state, workspace_registrations: [{ id: "remote-project", label: "project", path: "~/project", device_id: "build" }] } } }) as never));
   expect(useStartPanel.getState().preset).toEqual({ projectId: "remote-project", kind: "opencode" });
   expect(events.find((event) => event.kind === "first_run_advance")?.payload).toEqual({ from: "project" });
+  await unmount();
+});
+
+/** The last step on screen: a first run that reached it, with nothing added yet. */
+const startStep = () => {
+  const next = state(false, AGENTS);
+  Object.assign(next.rest.navigator.devices[0]!, { kind: "local" });
+  Object.assign(next.rest.ui_state, { first_run: { version: 1, step: "project" }, workspace_registrations: [] });
+  return next;
+};
+
+const way = (id: "practice" | "project") => document.querySelector<HTMLButtonElement>(`[data-first-run-way="${id}"]`)!;
+const navigation = (events: Parameters<DispatchFn>[0][]) => events.filter((event) => event.kind === "first_run_advance").map((event) => event.payload);
+
+it("asks how to start with two ways and Skip for now, and no choice to confirm", async () => {
+  window.hideHost = { kind: "electron", platform: "darwin", openPractice: vi.fn() } as never;
+  const { unmount } = await mount(startStep());
+  expect(way("practice")).not.toBeNull();
+  expect(way("project")).not.toBeNull();
+  expect(document.querySelector("[data-first-run-skip]")).not.toBeNull();
+  // Each way is the button: no selected tile waits for a Continue.
+  expect(document.querySelector("[data-first-run-next], [data-onboarding-apply], [role=radio]")).toBeNull();
+  expect(document.querySelector("[data-add-project-browse]")).toBeNull();
+  await unmount();
+});
+
+it("practice first ends the wizard and opens the practice window on chapter 0", async () => {
+  const openPractice = vi.fn();
+  window.hideHost = { kind: "electron", platform: "darwin", openPractice } as never;
+  const { events, unmount } = await mount(startStep());
+  await act(async () => way("practice").click());
+  expect(navigation(events)).toEqual([{ from: "project" }]);
+  expect(openPractice).toHaveBeenCalledWith(expect.any(String), "overview");
+  await unmount();
+});
+
+it("Add a project shows Add project's views, keeps them through a cancelled pick, and Back returns to the two ways", async () => {
+  const pickFolder = vi.fn(async () => null);
+  const openPractice = vi.fn();
+  window.hideHost = { kind: "electron", platform: "darwin", pickFolder, openPractice } as never;
+  const { events, unmount } = await mount(startStep());
+  await act(async () => way("project").click());
+  expect(events.filter((event) => event.kind === "first_run_draft").at(-1)?.payload).toMatchObject({ project_form: { view: "add" } });
+  await act(async () => document.querySelector<HTMLButtonElement>("[data-add-project-browse]")!.click());
+  expect(pickFolder).toHaveBeenCalledOnce();
+  expect(document.querySelector("[data-add-project-browse]")).not.toBeNull();
+  expect(navigation(events)).toEqual([]);
+  await act(async () => document.querySelector<HTMLButtonElement>("[data-first-run-back]")!.click());
+  expect(way("project")).not.toBeNull();
+  expect(events.filter((event) => event.kind === "first_run_draft").at(-1)?.payload).toMatchObject({ project_form: { view: "" } });
+  // Back inside the step is not the wizard's Back to notifications.
+  expect(events.some((event) => event.kind === "first_run_back")).toBe(false);
+  expect(openPractice).not.toHaveBeenCalled();
+  await unmount();
+});
+
+it("Skip for now ends the wizard on the empty Home without opening the practice window", async () => {
+  const openPractice = vi.fn();
+  window.hideHost = { kind: "electron", platform: "darwin", openPractice } as never;
+  const { events, unmount } = await mount(startStep());
+  await act(async () => document.querySelector<HTMLButtonElement>("[data-first-run-skip]")!.click());
+  expect(navigation(events)).toEqual([{ from: "project" }]);
+  expect(openPractice).not.toHaveBeenCalled();
   await unmount();
 });
 

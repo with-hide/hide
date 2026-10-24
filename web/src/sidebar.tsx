@@ -60,6 +60,7 @@ import { machineName, windowDeviceId, windowFirst } from "./screenMachine";
 import { focusedRemoteDevice, localDeviceId, type AgentRow, type Checkout, type HideAiCheckout, type SleepingSession, type SnapshotRest, type Workspace } from "./snapshot";
 import { useStartPanel } from "./startDraft";
 import { HelpMenu } from "./components/help-menu";
+import { PracticeInvite } from "./components/practice-invite";
 import { ViewMenu } from "./components/view-menu";
 import { useShellStore } from "./store";
 import { draggedSidebarWidth, sidebarWidthToSend } from "./sidebarWidth";
@@ -155,6 +156,7 @@ export function Sidebar({ actions }: { actions: Actions }) {
           <SidebarLensSwitch actions={actions} />
           <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-sidebar-content="true">
             {list}
+            <PracticeInvite actions={actions} />
             <div data-sidebar-footer="true" className="flex shrink-0 flex-wrap items-center gap-xs border-t border-border px-sm py-xs">
               <Usage actions={actions} />
               {/* Usage holds the left edge; the menus keep the right one, also on a wrapped line. */}

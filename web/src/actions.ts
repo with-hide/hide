@@ -1853,6 +1853,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "practice_progress_set", payload: { chapter, ...progress } });
     },
 
+    /** The sidebar's invitation to practice was closed; it never shows again. */
+    closePracticeInvite() {
+      dispatch({ schema_version: 2, kind: "practice_invite_close", payload: {} });
+    },
+
     /** One action on the Overview map: a filter, a hide, a fold, a drop or Reset layout (PRD overview-graph-remembered D-10). */
     changeOverviewGraph(change: import("./snapshot").OverviewGraphChange) {
       dispatch({ schema_version: 2, kind: "overview_graph_change", payload: { change } });

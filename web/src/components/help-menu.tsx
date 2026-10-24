@@ -57,7 +57,7 @@ export function HelpMenu({ actions }: { actions: Actions }) {
           {t("sidebar.help.shortcuts")}
           {chord ? <DropdownMenuShortcut>{chord}</DropdownMenuShortcut> : null}
         </DropdownMenuItem>
-        <DropdownMenuItem data-help-item="practice" onSelect={openPractice}>
+        <DropdownMenuItem data-help-item="practice" onSelect={() => openPractice()}>
           {t("sidebar.help.practice")}
         </DropdownMenuItem>
         <DropdownMenuItem data-help-item="copy_diagnostics" onSelect={copyDiagnostics}>

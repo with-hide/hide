@@ -2035,6 +2035,7 @@ mod tests {
         "sidebar_lens",
         "task_view",
         "practice",
+        "practice_invite_closed",
         "focus_from_herdr",
         "shortcut_bindings",
         "shortcut_bindings_imported",
