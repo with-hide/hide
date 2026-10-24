@@ -569,9 +569,9 @@ function StartStep({ actions, reopened, onBack }: { actions: Actions; reopened: 
           icon={<FolderPlusIcon />}
           title={t("firstRun.start.project")}
           line={t("firstRun.start.projectNote")}
-          className="border-border bg-background text-foreground hover:bg-accent"
+          className="border-border bg-secondary text-foreground hover:bg-accent"
           lineClassName="text-muted-foreground"
-          iconClassName="border-border bg-card text-muted-foreground"
+          iconClassName="border-border bg-background text-muted-foreground"
           onClick={() => showAdding(true)}
           data-first-run-way="project"
         />
