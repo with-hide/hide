@@ -60,7 +60,11 @@ fn the_practice_invite_closes_once_and_a_stale_save_keeps_it_closed() {
     let mut runtime = runtime();
     assert!(!runtime.snapshot.ui_state.practice_invite_closed);
     let stale = super::appearance::ui_state_update(&runtime, serde_json::json!({}));
-    assert!(event(&mut runtime, "practice_invite_close", serde_json::json!({})));
+    assert!(event(
+        &mut runtime,
+        "practice_invite_close",
+        serde_json::json!({})
+    ));
     assert!(runtime.snapshot.ui_state.practice_invite_closed);
     assert!(
         !event(&mut runtime, "practice_invite_close", serde_json::json!({})),
