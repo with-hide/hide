@@ -46,20 +46,40 @@ function freshShell() {
   resetRecent();
 }
 
-export function PracticeApp() {
+/** The chapter whose id is `id`, or null for an id no chapter has (the window then opens on the list). */
+function chapterById(id: string | null | undefined): PracticeChapter | null {
+  return CHAPTERS.find((chapter) => chapter.id === id) ?? null;
+}
+
+/** `opening` is the chapter the address asks for (`practiceAddress`): the window plays it at once instead of listing the chapters. */
+export function PracticeApp({ opening = null }: { opening?: string | null }) {
   const [answer, setAnswer] = useState<ShellAnswer | null>(null);
   const [unanswered, setUnanswered] = useState(false);
-  const [playing, setPlaying] = useState<Playing | null>(null);
+  const [playing, setPlaying] = useState<Playing | null>(() => {
+    const chapter = chapterById(opening);
+    return chapter ? { chapter, resume: 0, run: 1 } : null;
+  });
   const channel = useRef<BroadcastChannel | null>(null);
   // A chapter keeps the page's copy and paste on its own clipboard; the chapter list holds them with none.
   const listing = playing === null;
   useEffect(() => (listing ? holdPageClipboard(null) : undefined), [listing]);
+
+  // Every start goes through here: a chapter from the list, from its start again, the next one, or one the shell asks for.
+  const start = useCallback((chapter: PracticeChapter, resume: number) => {
+    freshShell();
+    setPlaying((before) => ({ chapter, resume, run: (before?.run ?? 0) + 1 }));
+  }, []);
 
   useEffect(() => {
     const opened = new BroadcastChannel(PRACTICE_CHANNEL);
     channel.current = opened;
     opened.onmessage = (event: MessageEvent<ShellAnswer | PracticeMessage>) => {
       if (event.data.kind === "state") setAnswer(event.data);
+      else if (event.data.kind === "play") {
+        // The shell brings this window forward and asks for a chapter from the start (the sidebar's invitation).
+        const chapter = chapterById(event.data.chapter);
+        if (chapter) start(chapter, 0);
+      }
     };
     opened.postMessage({ kind: "hello" } satisfies PracticeMessage);
     const timer = window.setTimeout(() => setUnanswered(true), ANSWER_WAIT_MS);
@@ -68,7 +88,7 @@ export function PracticeApp() {
       opened.close();
       channel.current = null;
     };
-  }, []);
+  }, [start]);
 
   useLayoutEffect(() => {
     const language = answer?.language;
@@ -88,11 +108,6 @@ export function PracticeApp() {
   const progress: PracticeProgress = useMemo(() => answer?.progress ?? {}, [answer?.progress]);
   const operator: OperatorChoices = useMemo(() => ({ shortcut_bindings: answer?.shortcut_bindings, browser_shortcut_bindings: answer?.browser_shortcut_bindings }), [answer?.shortcut_bindings, answer?.browser_shortcut_bindings]);
 
-  // Every start goes through here: a chapter from the list, from its start again, or the next one.
-  const start = useCallback((chapter: PracticeChapter, resume: number) => {
-    freshShell();
-    setPlaying((before) => ({ chapter, resume, run: (before?.run ?? 0) + 1 }));
-  }, []);
   const chapter = playing?.chapter;
   const onStep = useCallback((step: number, finished: boolean) => {
     if (!chapter) return;

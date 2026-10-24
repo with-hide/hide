@@ -222,7 +222,7 @@ function NoProjectView({ actions }: { actions: Actions }) {
         </Button>
         {chord ? <Kbd aria-hidden="true">{chord}</Kbd> : null}
       </span>
-      <Button variant="ghost" size="sm" onClick={openPractice} data-main-empty-home-action="practice">
+      <Button variant="ghost" size="sm" onClick={() => openPractice()} data-main-empty-home-action="practice">
         {t("firstRun.home.practice")}
       </Button>
     </div>

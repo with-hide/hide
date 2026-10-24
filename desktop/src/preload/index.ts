@@ -110,8 +110,8 @@ contextBridge.exposeInMainWorld("hideHost", {
   quit(): void {
     ipcRenderer.send(QUIT_CHANNEL);
   },
-  openPractice(language: string): void {
-    ipcRenderer.send(PRACTICE_OPEN_CHANNEL, language);
+  openPractice(language: string, chapter?: string): void {
+    ipcRenderer.send(PRACTICE_OPEN_CHANNEL, language, chapter);
   },
   updates: {
     onStatus(listener: (status: UpdateStatus) => void): () => void {

@@ -10,6 +10,13 @@ describe("practiceUrl", () => {
     expect(url.hash).toBe("");
   });
 
+  it("opens on the chapter asked for, and refuses a chapter id the core would not keep", () => {
+    const url = new URL(practiceUrl("http://127.0.0.1:53111", "en", "win32", "overview") as string);
+    expect(url.searchParams.get("chapter")).toBe("overview");
+    expect(practiceUrl("http://127.0.0.1:53111", "en", "win32", "../x")).toEqual({ refused: "chapter" });
+    expect(practiceUrl("http://127.0.0.1:53111", "en", "win32", 0)).toEqual({ refused: "chapter" });
+  });
+
   it("refuses a language the shell does not offer", () => {
     expect(practiceUrl("http://127.0.0.1:53111", "ko&host=browser", "darwin")).toEqual({ refused: "language" });
     expect(practiceUrl("http://127.0.0.1:53111", 7, "darwin")).toEqual({ refused: "language" });
