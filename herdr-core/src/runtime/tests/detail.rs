@@ -52,6 +52,26 @@ fn practice_event(runtime: &mut Runtime, chapter: &str, step: u32, finished: boo
     )
 }
 
+/// The sidebar's practice invitation closes once and stays closed: a second
+/// close is no change, and a whole-state save from a shell that still read it
+/// open does not bring it back.
+#[test]
+fn the_practice_invite_closes_once_and_a_stale_save_keeps_it_closed() {
+    let mut runtime = runtime();
+    assert!(!runtime.snapshot.ui_state.practice_invite_closed);
+    let stale = super::appearance::ui_state_update(&runtime, serde_json::json!({}));
+    assert!(event(&mut runtime, "practice_invite_close", serde_json::json!({})));
+    assert!(runtime.snapshot.ui_state.practice_invite_closed);
+    assert!(
+        !event(&mut runtime, "practice_invite_close", serde_json::json!({})),
+        "closing it again is no change"
+    );
+    runtime.dispatch_json(&stale);
+    assert!(runtime.snapshot.ui_state.practice_invite_closed);
+    let snapshot = serde_json::to_value(&runtime.snapshot.ui_state).unwrap();
+    assert_eq!(snapshot["practice_invite_closed"], serde_json::json!(true));
+}
+
 fn last_error_kind(runtime: &Runtime) -> Option<String> {
     runtime
         .snapshot

@@ -194,6 +194,17 @@ impl Runtime {
         true
     }
 
+    /// The sidebar's invitation to practice was closed; it stays closed.
+    pub(super) fn close_practice_invite(&mut self) -> bool {
+        let state = &mut self.snapshot.ui_state;
+        if state.practice_invite_closed {
+            return false;
+        }
+        state.practice_invite_closed = true;
+        self.persist_ui_state();
+        true
+    }
+
     /// Opens `item` in the slot, in front, and the front Workspace's lane
     /// opens to draw it in its viewing column (B14, B15, B47; lane-two-
     /// columns B9); the Workspace, its Agent tab and the keyboard stay

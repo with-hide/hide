@@ -2419,6 +2419,8 @@ export type SnapshotRest = {
     sidebar_project?: SidebarProject | null;
     /** Practice mode's progress by chapter id (`practice_progress_set`): the chapter version played, the step reached, and whether the end was reached; absent reads as none. */
     practice?: Record<string, { version: number; step: number; finished: boolean }>;
+    /** The sidebar's invitation to practice was closed with its × (`practice_invite_close`); absent reads as open. */
+    practice_invite_closed?: boolean;
     /** The lane's 보기 slot (D-50), one per window. */
     detail?: DetailSlot;
     /** The Overview Work map's remembered choices; absent reads as the defaults. */
