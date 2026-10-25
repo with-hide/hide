@@ -4,7 +4,7 @@
 // would, since a practice understands no words: the lead
 // starts a child in a tab of its own and later passes it an instruction, the
 // child reports back by letter, the lead finds an open agent by what it does
-// and writes to it, and a pane ID copied from a pane's menu names the agent
+// and writes to it, and a name and ID copied from a pane's menu names the agent
 // that gets the last piece of work.
 
 import type { AgentRow, AgentState } from "../../snapshot";
@@ -166,7 +166,7 @@ function leadScreen(model: DelegateModel, cols: number): string {
     rows.push("", `${OWL}🦉  Letter from ${LABELS[CHILD]}${RESET}`, `  ${GREEN}✓${RESET} The timeout test passes on sqlite. 12 passed.`);
   }
   if (model.stage >= 3) rows.push(...said(asked(3)), ...ran("hide agent list", `${LABELS[DOCS]} · ${LABELS[SIGNUP]} · ${LABELS[CHILD]}`), ...ran(`hide request send ${DOCS} …`, `Letter sent to ${LABELS[DOCS]} (Codex)`));
-  if (model.unnamed !== null) rows.push(...said(model.unnamed), "● Which agent should get it? Paste its terminal ID into the request.");
+  if (model.unnamed !== null) rows.push(...said(model.unnamed), "● Which agent should get it? Paste its name and ID into the request.");
   if (model.stage >= 4) rows.push(...said(asked(4)), ...ran(`hide request send ${SIGNUP} …`, `Letter sent to ${SIGNUP} (${LABELS[SIGNUP]})`));
   if (model.stage === 1) rows.push("", `${CLAUDE}✻ Waiting on 1 child… ${DIM}(esc to interrupt)${RESET}`);
   rows.push("", rule(cols), `${DIM}>${RESET} ${model.draft}`, rule(cols));

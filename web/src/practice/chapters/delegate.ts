@@ -1,6 +1,6 @@
 // Chapter 4: three ways to hand work to another agent, all by saying it to the
 // lead: a child it starts and keeps talking to, an open agent it finds by what
-// it does, and an agent named by the pane ID copied from its pane's menu.
+// it does, and an agent named by the name and ID copied from its pane's menu.
 
 import { chapter } from "../chapter";
 import { CHILD, DELEGATE_WORLD, DOCS, LEAD, SIGNUP, type DelegateModel } from "../worlds/delegate";

@@ -52,10 +52,13 @@ test("an agent row dropped on another terminal types its reference there and not
 
     const read = (log: string) => (fs.existsSync(log) ? fs.readFileSync(log, "utf8") : "");
     const [targetLog, agentLog] = herdr.inputLogs.map((log) => ({ log, before: read(log).length }));
-    await dragRowOnto(page, agent, target);
+    // A drag with the real pointer: the mouse events around it must not end it early.
+    await page.locator(`nav[data-sidebar] [data-agent-open="${agent}"]`).dragTo(page.locator(`[data-pane-view="${target}"] [data-terminal-host]`));
     await expect.poll(() => read(targetLog!.log).slice(targetLog!.before)).toContain(`${reference} `);
     expect(read(targetLog!.log).slice(targetLog!.before)).not.toMatch(/[\r\n]/);
     await expect(page.locator(`[data-pane-view="${target}"]`)).toHaveAttribute("data-focused", "true");
+    // The drag let go of the page: hover cards and hints open again.
+    await expect(page.locator("html")).not.toHaveAttribute("data-view-drag");
 
     // Its own pane refuses the drop: the id would name the agent to itself.
     await dragRowOnto(page, agent, agent);

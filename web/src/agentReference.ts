@@ -13,8 +13,9 @@ const TASK_LIMIT = 80;
 
 /** One line of text: control characters (a newline would submit the prompt) become spaces. */
 function oneLine(text: string, limit: number): string {
-  const flat = text.replace(/\p{Cc}/gu, " ").replace(/\s+/g, " ").trim();
-  return flat.length > limit ? `${flat.slice(0, limit - 1)}…` : flat;
+  const flat = Array.from(text.replace(/\p{Cc}/gu, " ").replace(/\s+/g, " ").trim());
+  // Cut by code point, so an emoji is never split into a lone surrogate.
+  return flat.length > limit ? `${flat.slice(0, limit - 1).join("")}…` : flat.join("");
 }
 
 /** The reference text for a pane: its name, its Herdr pane id, and the task it does when one is known. */
@@ -48,8 +49,13 @@ export function referenceLands(rest: SnapshotRest | null, reference: string, tar
 export type AgentDrag = { paneId: string; text: string };
 export const agentDrag: { current: AgentDrag | null } = { current: null };
 
-/** A row can disappear during the drag, so its native dragend owns cleanup. */
-export function beginAgentDrag(agent: Parameters<typeof agentReference>[0], event: { dataTransfer: DataTransfer; currentTarget: HTMLElement }): void {
+/**
+ * The drag ends on the native dragend, which the window hears while the row
+ * is still in the page. A row can re-sort away mid-drag, and a removed row
+ * fires no dragend, so the first mouse event after the drag (none fire during
+ * one) ends it too; a held drag would otherwise keep every hover card shut.
+ */
+export function beginAgentDrag(agent: Parameters<typeof agentReference>[0], event: { dataTransfer: DataTransfer }): void {
   const item = { paneId: agent.pane_id, text: agentReference(agent) };
   event.dataTransfer.effectAllowed = "copy";
   event.dataTransfer.setData("text/plain", item.text);
@@ -63,8 +69,14 @@ export function beginAgentDrag(agent: Parameters<typeof agentReference>[0], even
   agentDrag.current = item;
   // The same mark an Explorer file drag holds, so a browser display gives the drop its place.
   const release = holdShellDrag("file");
-  event.currentTarget.addEventListener("dragend", () => {
+  const end = () => {
+    window.removeEventListener("dragend", end, true);
+    window.removeEventListener("mousemove", end, true);
+    window.removeEventListener("pointerdown", end, true);
     if (agentDrag.current === item) agentDrag.current = null;
     release();
-  }, { once: true });
+  };
+  window.addEventListener("dragend", end, true);
+  window.addEventListener("mousemove", end, true);
+  window.addEventListener("pointerdown", end, true);
 }

@@ -3,7 +3,7 @@ import type { Catalog, Catalogs } from "../../schema";
 // Chapter 4's words (`practice/chapters/delegate.ts`).
 const en = {
   "practice.delegate.title": "Hand work to other agents",
-  "practice.delegate.summary": "To a child, to an open agent, by terminal ID",
+  "practice.delegate.summary": "To a child, to an open agent, by name and ID",
   "practice.delegate.intro.kick": "Three agents are open in the practice project",
   "practice.delegate.intro.title": "Just tell the agent on the left",
   "practice.delegate.intro.text": "It hands the work on itself. Type to it in your own words, or press ⏎ and an example is typed for you.",
@@ -28,8 +28,8 @@ const en = {
   "practice.delegate.received.kick": "The letter arrived",
   "practice.delegate.received.title": "The docs agent got it and started",
   "practice.delegate.received.text": "A letter wakes the agent it is for, and the record stays.",
-  "practice.delegate.copy.quest": "Copy a terminal ID",
-  "practice.delegate.copy.kick": "C · By terminal ID",
+  "practice.delegate.copy.quest": "Copy a name and ID",
+  "practice.delegate.copy.kick": "C · By name and ID",
   "practice.delegate.copy.title": "Copy the signup agent's ID",
   "practice.delegate.copy.text": "Right-click its header, then Copy name and ID. This is practice, so your clipboard stays as it was.",
   "practice.delegate.paste.quest": "Paste it and say it",
@@ -38,12 +38,12 @@ const en = {
   "practice.delegate.paste.text": "Right-click the left pane and choose Paste, then say the work. A request with the ID goes to that agent alone, even when names look alike.",
   "practice.delegate.end.kick": "End of chapter 4",
   "practice.delegate.end.title": "Three ways, all by saying it",
-  "practice.delegate.end.text": "A child for work you follow, a letter to an open agent, a terminal ID when you need to be sure.",
+  "practice.delegate.end.text": "A child for work you follow, a letter to an open agent, a name and ID when you need to be sure.",
 };
 
 const ko = {
   "practice.delegate.title": "에이전트끼리 일 시키기",
-  "practice.delegate.summary": "자식에게, 열린 에이전트에게, 터미널 ID로 맡기기",
+  "practice.delegate.summary": "자식에게, 열린 에이전트에게, 이름·ID로 맡기기",
   "practice.delegate.intro.kick": "연습 프로젝트에 에이전트 셋이 열려 있어요",
   "practice.delegate.intro.title": "왼쪽 에이전트에게 말로 시키면 돼요",
   "practice.delegate.intro.text": "일을 넘기는 건 에이전트가 알아서 해요. 직접 쳐서 말해도 되고, ⏎를 누르면 예시를 대신 입력해요.",
@@ -68,8 +68,8 @@ const ko = {
   "practice.delegate.received.kick": "편지가 도착했어요",
   "practice.delegate.received.title": "문서 에이전트가 받고 일을 시작해요",
   "practice.delegate.received.text": "편지는 받는 에이전트를 깨우고, 기록이 남아요.",
-  "practice.delegate.copy.quest": "터미널 ID 복사",
-  "practice.delegate.copy.kick": "C · 터미널 ID로 콕 집어",
+  "practice.delegate.copy.quest": "이름·ID 복사",
+  "practice.delegate.copy.kick": "C · 이름·ID로 콕 집어",
   "practice.delegate.copy.title": "회원가입 에이전트의 ID 복사",
   "practice.delegate.copy.text": "머리줄을 우클릭하고 이름·ID 복사를 골라요. 연습이라 클립보드는 그대로예요.",
   "practice.delegate.paste.quest": "붙여 넣고 말하기",
@@ -78,12 +78,12 @@ const ko = {
   "practice.delegate.paste.text": "왼쪽 터미널을 우클릭해 붙여넣기를 고르고, 할 일을 말해요. ID가 든 요청은 이름이 비슷해도 그 에이전트에게만 가요.",
   "practice.delegate.end.kick": "4편 끝",
   "practice.delegate.end.title": "세 가지 모두 말로 시켜요",
-  "practice.delegate.end.text": "지켜볼 일은 자식에게, 열린 에이전트에게는 편지로, 확실해야 할 땐 터미널 ID로.",
+  "practice.delegate.end.text": "지켜볼 일은 자식에게, 열린 에이전트에게는 편지로, 확실해야 할 땐 이름·ID로.",
 } satisfies Catalog<typeof en>;
 
 const zhCN = {
   "practice.delegate.title": "让智能体互相分派工作",
-  "practice.delegate.summary": "交给子智能体、已打开的智能体，或按终端 ID 指定",
+  "practice.delegate.summary": "交给子智能体、已打开的智能体，或按名称和 ID 指定",
   "practice.delegate.intro.kick": "练习项目里开着三个智能体",
   "practice.delegate.intro.title": "直接告诉左边的智能体",
   "practice.delegate.intro.text": "转交工作由智能体自己完成。可以自己输入要说的话，也可以按 ⏎ 让示例替你输入。",
@@ -108,8 +108,8 @@ const zhCN = {
   "practice.delegate.received.kick": "信件到了",
   "practice.delegate.received.title": "文档智能体收到后开始工作",
   "practice.delegate.received.text": "信件会唤醒收件的智能体，并留下记录。",
-  "practice.delegate.copy.quest": "复制终端 ID",
-  "practice.delegate.copy.kick": "C · 按终端 ID 指定",
+  "practice.delegate.copy.quest": "复制名称和 ID",
+  "practice.delegate.copy.kick": "C · 按名称和 ID 指定",
   "practice.delegate.copy.title": "复制注册文案智能体的 ID",
   "practice.delegate.copy.text": "右键点击它的标题栏，选择“复制名称和 ID”。这是练习，你的剪贴板不会改变。",
   "practice.delegate.paste.quest": "粘贴后说出来",
@@ -118,12 +118,12 @@ const zhCN = {
   "practice.delegate.paste.text": "右键点击左边的窗格，选择“粘贴”，再说要做的事。带 ID 的请求只会交给那个智能体，名字相近也不会弄错。",
   "practice.delegate.end.kick": "第 4 章完",
   "practice.delegate.end.title": "三种方法，都是说出来",
-  "practice.delegate.end.text": "要跟进的工作交给子智能体，已打开的智能体用信件，需要确定时用终端 ID。",
+  "practice.delegate.end.text": "要跟进的工作交给子智能体，已打开的智能体用信件，需要确定时用名称和 ID。",
 } satisfies Catalog<typeof en>;
 
 const ja = {
   "practice.delegate.title": "エージェント同士で仕事を任せる",
-  "practice.delegate.summary": "子エージェント、開いているエージェント、ターミナル ID で任せる",
+  "practice.delegate.summary": "子エージェント、開いているエージェント、名前と ID で任せる",
   "practice.delegate.intro.kick": "エージェントが3つ開いています",
   "practice.delegate.intro.title": "左のエージェントに言うだけです",
   "practice.delegate.intro.text": "仕事の受け渡しはエージェントがします。自分で入力しても、⏎ で例を入れてもかまいません。",
@@ -148,8 +148,8 @@ const ja = {
   "practice.delegate.received.kick": "レターが届きました",
   "practice.delegate.received.title": "ドキュメントのエージェントが受け取って動き出します",
   "practice.delegate.received.text": "レターは受け取ったエージェントを起こし、記録が残ります。",
-  "practice.delegate.copy.quest": "ターミナル ID をコピー",
-  "practice.delegate.copy.kick": "C · ターミナル ID で指定",
+  "practice.delegate.copy.quest": "名前と ID をコピー",
+  "practice.delegate.copy.kick": "C · 名前と ID で指定",
   "practice.delegate.copy.title": "サインアップ文言のエージェントの ID をコピー",
   "practice.delegate.copy.text": "ヘッダーを右クリックして「名前と ID をコピー」を選びます。練習なのでクリップボードは変わりません。",
   "practice.delegate.paste.quest": "貼り付けて伝える",
@@ -158,7 +158,7 @@ const ja = {
   "practice.delegate.paste.text": "左のペインを右クリックして「貼り付け」を選び、仕事を伝えます。ID入りの依頼は、名前が似ていてもそのエージェントだけに届きます。",
   "practice.delegate.end.kick": "第 4 章 おわり",
   "practice.delegate.end.title": "3つとも、言うだけです",
-  "practice.delegate.end.text": "見守る仕事は子エージェントに、開いているエージェントにはレターで、確実にしたいときはターミナル ID で。",
+  "practice.delegate.end.text": "見守る仕事は子エージェントに、開いているエージェントにはレターで、確実にしたいときは名前と ID で。",
 } satisfies Catalog<typeof en>;
 
 export default { en, ko, "zh-CN": zhCN, ja } satisfies Catalogs<typeof en>;
