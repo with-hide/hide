@@ -1581,6 +1581,7 @@ fn a_banner_answer_waits_for_its_question_and_is_kept_once() {
             .state,
         crate::runtime::missions::AnswerState::Waiting
     );
+    runtime.mission_answer_typing("mission-1", 1);
     runtime.mission_answer_sent("mission-1", 1, Ok(()));
     assert!(
         runtime.mission_answers_due().is_empty(),
@@ -1742,6 +1743,27 @@ fn an_answer_herdr_may_have_typed_is_typed_again_only_when_the_operator_sends_it
     // Sending again is refused while the answer is still to be typed.
     assert!(!runtime.mission_answer_event("mission-1", 1, None, None, true));
     assert_eq!(runtime.mission_answers_due().len(), 1);
+    // The prompt is asked: the answer reads as sending, and the book already
+    // holds it as unconfirmed, so a stop before Herdr's reply never types it
+    // again after a restart.
+    runtime.mission_answer_typing("mission-1", 1);
+    runtime.refresh_missions();
+    assert_eq!(
+        runtime.snapshot.missions.items[0]
+            .answer
+            .as_ref()
+            .unwrap()
+            .state,
+        AnswerState::Sending
+    );
+    assert!(
+        runtime.missions.book.missions[0]
+            .answer
+            .as_ref()
+            .unwrap()
+            .unconfirmed
+    );
+    assert!(runtime.mission_answers_due().is_empty());
     // Herdr's reply to the prompt timed out: the answer may be in the conversation.
     runtime.mission_answer_sent(
         "mission-1",
@@ -1766,7 +1788,21 @@ fn an_answer_herdr_may_have_typed_is_typed_again_only_when_the_operator_sends_it
     let due = runtime.mission_answers_due();
     assert_eq!(due.len(), 1);
     assert!(due[0].line.ends_with("main"));
+    runtime.mission_answer_typing("mission-1", 1);
     runtime.mission_answer_sent("mission-1", 1, Ok(()));
+    // A late second report for the same prompt changes nothing.
+    runtime.mission_answer_sent(
+        "mission-1",
+        1,
+        Err(AnswerSendFailure::MaybeTyped("herdr_format")),
+    );
+    assert!(
+        runtime.missions.book.missions[0]
+            .answer
+            .as_ref()
+            .unwrap()
+            .delivered
+    );
     assert!(runtime.mission_answers_due().is_empty());
     // A question cleared after it adds no answer of its own.
     command(

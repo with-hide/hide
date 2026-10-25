@@ -546,6 +546,25 @@ impl Runtime {
         judge(current, work.patience(), super::memory::now_ms())
     }
 
+    /// The doorbell is about to ask Herdr to type the answer: from here it
+    /// may reach the conversation, so the book holds it as unconfirmed
+    /// before the prompt, and a stop before the reply leaves it for the
+    /// operator to send again rather than typing it twice (B26).
+    pub(crate) fn mission_answer_typing(&mut self, mission: &str, key: u64) {
+        let Some(answer) = self
+            .missions
+            .book
+            .get_mut(mission)
+            .and_then(|mission| mission.answer.as_mut())
+            .filter(|answer| answer.key == key && !answer.delivered)
+        else {
+            return;
+        };
+        answer.unconfirmed = true;
+        self.missions.answers_typing.insert(mission.to_owned());
+        self.save_missions();
+    }
+
     /// The doorbell held an answer: the banner shows it waits for the
     /// Conductor's turn (B28).
     pub(crate) fn mission_answer_held(&mut self, mission: &str) -> bool {
@@ -584,14 +603,18 @@ impl Runtime {
         result: Result<(), AnswerSendFailure>,
     ) {
         let now = super::memory::now_ms();
+        // A typed or uncertain answer reports for the prompt the doorbell
+        // asked, once; a failure before it, for an answer still to type.
+        let typing = self.missions.answers_typing.remove(id);
+        if typing == matches!(result, Err(AnswerSendFailure::NotTyped(_))) {
+            return;
+        }
         let Some(mission) = self.missions.book.get_mut(id) else {
             return;
         };
-        let Some(answer) = mission
-            .answer
-            .as_mut()
-            .filter(|answer| answer.key == key && !answer.delivered && !answer.unconfirmed)
-        else {
+        let Some(answer) = mission.answer.as_mut().filter(|answer| {
+            answer.key == key && !answer.delivered && (typing || !answer.unconfirmed)
+        }) else {
             return;
         };
         self.missions.answers_held.remove(id);
@@ -602,6 +625,7 @@ impl Runtime {
         let mut event = match result {
             Ok(()) => {
                 answer.delivered = true;
+                answer.unconfirmed = false;
                 let mut event =
                     MissionEvent::new(now, EventKind::Answered).line(Some(&answer.text));
                 event.source = Some(AnswerSource::Banner);
@@ -618,7 +642,7 @@ impl Runtime {
                 MissionEvent::new(now, EventKind::AnswerUndelivered).line(Some(&text))
             }
             Err(AnswerSendFailure::MaybeTyped(code)) => {
-                answer.unconfirmed = true;
+                // Already held as unconfirmed since the prompt was asked.
                 crate::diagnostic!(json!({
                     "component": "missions", "kind": "mission.answer_unconfirmed",
                     "mission": id, "key": key, "code": code,

@@ -1172,7 +1172,7 @@ The core holds each history as a shared list of shared events (`History`), so pu
 A mission keeps at most 500, the oldest dropped and counted; the files are read back with the book at launch, a file that cannot be read is logged and replaced on its mission's next event, and the folder moves with the core (`MOVES_WITH_CORE`).
 The events are published as their own rest section, `mission_events`, for the mission open in the 보기 slot only, made again only when that mission or its events changed, so a mission's history never rides every frame; the section shares the core's list and is encoded with the rest of the frame off the lock.
 The operator's answer to a decision is kept on the mission (`Answer`, keyed by the question it answers) and typed into the Conductor's conversation by the doorbell's thread (`delivery::doorbell`), which judges the Conductor's pane as it judges a letter's recipient and types off the lock; whether it waits for the Conductor's turn is memory only, so a restart shows it as sending until the next pass.
-Once `agent.prompt` is asked, a failed, timed-out or unreadable reply may follow a typed answer, so the answer is kept as `unconfirmed` and no pass types it again; only the operator's `resend` from the banner makes it due once more (engineering principle 11).
+Once `agent.prompt` is asked, a failed, timed-out or unreadable reply may follow a typed answer, so the book holds the answer as `unconfirmed` before the prompt is asked (shown as sending until Herdr replies, memory only) and no pass, and no restart after a stop in between, types it again; only the operator's `resend` from the banner makes it due once more (engineering principle 11).
 
 ## Session plans
 

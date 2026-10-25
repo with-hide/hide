@@ -204,6 +204,11 @@ pub(crate) struct MissionRuntime {
     /// waiting for the Conductor's turn (B28). Memory only; a restart shows
     /// an answer as sending until the next pass holds it again.
     pub(crate) answers_held: std::collections::HashSet<String>,
+    /// The answers whose `agent.prompt` the doorbell has asked and not yet
+    /// heard back from, by mission: shown as sending. Memory only; the book
+    /// already holds them as unconfirmed, so a stop in between never types
+    /// one again.
+    pub(crate) answers_typing: std::collections::HashSet<String>,
     /// When each mission's Conductor was first seen missing while its
     /// answer waited; only those missions are kept.
     pub(crate) answer_absent_since: HashMap<String, u64>,
@@ -1443,6 +1448,8 @@ impl Runtime {
                 option: answer.option,
                 state: if answer.delivered {
                     AnswerState::Delivered
+                } else if self.missions.answers_typing.contains(&mission.id) {
+                    AnswerState::Sending
                 } else if answer.unconfirmed {
                     AnswerState::Unconfirmed
                 } else if self.missions.answers_held.contains(&mission.id) {

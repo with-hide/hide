@@ -856,15 +856,18 @@ fn type_answer(
     if let Err(reason) = native_current(connector, observed).map_err(AnswerSendFailure::NotTyped)? {
         return Ok(Outcome::Held(reason));
     }
-    if let Err(reason) = owner
-        .lock()
-        .map_err(|_| AnswerSendFailure::NotTyped("runtime_unavailable"))?
-        .mission_answer_current(work, observed)
-    {
-        return Ok(Outcome::Held(reason));
-    }
     let parameters = wire::delivery_prompt_params(&observed.raw_pane_id, &work.line)
         .map_err(|_| AnswerSendFailure::NotTyped("herdr_parameters"))?;
+    {
+        let mut guard = owner
+            .lock()
+            .map_err(|_| AnswerSendFailure::NotTyped("runtime_unavailable"))?;
+        if let Err(reason) = guard.mission_answer_current(work, observed) {
+            return Ok(Outcome::Held(reason));
+        }
+        // From here the answer may reach the conversation.
+        guard.mission_answer_typing(&work.mission, work.key);
+    }
     let submitted = request_small_response(connector, "agent.prompt", parameters, PROMPT_TIMEOUT)
         .map_err(|_| AnswerSendFailure::MaybeTyped("herdr_call_failed"))?;
     wire::delivery_prompted(submitted)
