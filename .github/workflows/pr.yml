@@ -521,7 +521,8 @@ jobs:
       # a shard is sized for; six plan 686 s. Six was cut to four on 2026-10-05
       # because 23 of 99 runs waited over 10 minutes for a Linux shard at the
       # organization's 20 jobs at once, with a full run then asking for 23.
-      # The daemon and web build are now shared; retain six until a later
+      # The daemon and web builds are shared in parallel jobs, adding one
+      # job against that limit; retain six until a later
       # measured duration-table/count update (docs/TESTING.md).
       shards: 6
 

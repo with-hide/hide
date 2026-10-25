@@ -153,10 +153,16 @@ if name == 'playwright' and '--list' in args:
 
     def test_web_shards_share_current_run_output_and_single_shard_keeps_its_build(self):
         lane = yaml.safe_load((ROOT / ".github/workflows/web-e2e.yml").read_text())
-        build, e2e = (lane["jobs"][key] for key in ("build", "e2e"))
+        daemon, build, e2e = (lane["jobs"][key] for key in ("build", "build-web", "e2e"))
         self.assertEqual(build["if"], "${{ inputs.shards > 1 }}")
-        self.assertEqual(e2e["needs"], "build")
-        self.assertIn('contains(fromJSON(\'["success","skipped"]\'), needs.build.result)', e2e["if"])
+        self.assertEqual(daemon["if"], build["if"])
+        for job in (daemon, build):
+            self.assertNotIn("needs", job)
+            self.assertNotIn("continue-on-error", job)
+        self.assertEqual(e2e["needs"], ["build", "build-web"])
+        self.assertEqual(e2e["if"], "${{ !cancelled() && "
+                         "contains(fromJSON('[\"success\",\"skipped\"]'), needs.build.result) && "
+                         "contains(fromJSON('[\"success\",\"skipped\"]'), needs.build-web.result) }}")
         self.assertNotIn("continue-on-error", build)
         self.assertEqual(build["runs-on"], e2e["runs-on"])
         self.assertEqual(build.get("env", {}), e2e.get("env", {}))
@@ -185,13 +191,15 @@ if name == 'playwright' and '--list' in args:
         # No token/run-id lookup: download-artifact defaults to this run.
         self.assertEqual(download["with"], {"name": upload["with"]["name"], "path": "web/dist"})
         self.assertEqual(download["if"], "${{ inputs.shards > 1 }}")
+        self.assertLess(e2e["steps"].index(download),
+                        e2e["steps"].index(one(e2e, name="End-to-end")))
         for step in (upload, download):
             self.assertNotIn("continue-on-error", step)
         self.assertEqual(lane["permissions"], {"contents": "read", "issues": "write"})
 
         # Exercise the actual build command's prerequisite failure boundary.
         self.enable_package_scripts()
-        for job in ("build", "e2e"):
+        for job in ("build-web", "e2e"):
             with self.subTest(job=job):
                 self.record.unlink(missing_ok=True)
                 result = self.workflow_step("web-e2e.yml", job, "Build the web shell")

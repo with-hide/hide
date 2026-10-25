@@ -112,7 +112,7 @@ bash scripts/verify-cargo.sh test-scoped -p hide-platform -p hide-herdr-client #
 The web build typechecks before bundling, so CI's web checks and the no-argument web gate run that build once before lint and unit tests, rather than repeating the same typecheck.
 Desktop's build does not typecheck, so its separate typecheck stays.
 Linux `checks` owns both packages' OS-independent typecheck and lint; `windows check` runs both Vitest suites and its native Rust contracts without repeating typecheck or lint.
-The multi-shard web e2e lane builds `web/dist` once beside the daemon and downloads both into each shard; a single shard still builds both in place.
+The multi-shard web e2e lane builds `web/dist` once in parallel with the daemon and downloads both into each shard; a single shard still builds both in place.
 For build-free discovery use `bash scripts/verify-web.sh desktop e2e-list --reporter=list` (add the same test filters as the execution).
 Desktop CI discovers and checks each shard with `e2e-list`, then executes with `desktop e2e`, which always builds the current host once before Playwright.
 Direct local `desktop e2e` and both packages' standalone build/e2e scripts keep their preparation; no command opts execution into stale desktop output.

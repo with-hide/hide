@@ -620,8 +620,8 @@ def runner_jobs(block):
     """How many runner jobs one `pr.yml` job starts: a reusable workflow starts its own."""
     if "uses: ./.github/workflows/web-e2e.yml" in block:
         shards = int(re.search(r"\n      shards: (\d+)", block).group(1))
-        # With more than one shard a `build` job precedes them.
-        return shards + (1 if shards > 1 else 0)
+        # With more than one shard parallel daemon and web builds precede them.
+        return shards + (2 if shards > 1 else 0)
     if "uses: ./.github/workflows/desktop-e2e.yml" in block:
         # Each shard builds in place.
         return int(re.search(r"\n      shards: (\d+)", block).group(1))
@@ -725,8 +725,9 @@ class Workflows(unittest.TestCase):
         # the agent journey's Linux stand-in job and Windows forms job were
         # added, then the agent CLIs' Linux and Windows installs, which only a
         # pin change plans; a job beyond these is a new decision, made with
-        # this number.
-        self.assertLessEqual(most, 32, "a run starts more jobs than the suites and native SDK contracts need")
+        # this number. The independent shared web build adds one job so it
+        # does not serialize the daemon and shell builds.
+        self.assertLessEqual(most, 33, "a run starts more jobs than the suites and native SDK contracts need")
         testing = (ROOT / "docs/TESTING.md").read_text()
         self.assertIn(f"starts at most {most} jobs", testing)
 

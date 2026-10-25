@@ -461,7 +461,7 @@ A passing fixture does not prove paid-service authentication or standalone suppo
 
 ### How many jobs a run starts
 
-A run that plans every lane a pull request can plan starts at most 32 jobs, nine more than the 2026-10-05 shape of run `37324202934` before the macOS and mailbox work: that work saved one, the e2e suites outgrew their shards' step caps, which took a second macOS desktop shard and two more web shards ([Balancing the e2e shards](#balancing-the-e2e-shards)), the agent journey's Linux stand-in job and Windows forms job added two, and the `agent CLIs` installs on Linux and Windows, which only a change to `contracts/agent-clis.json` or an installer plans, added two.
+A run that plans every lane a pull request can plan starts at most 33 jobs, ten more than the 2026-10-05 shape of run `37324202934` before the macOS and mailbox work: that work saved one, the e2e suites outgrew their shards' step caps, which took a second macOS desktop shard and two more web shards ([Balancing the e2e shards](#balancing-the-e2e-shards)), the agent journey's Linux stand-in job and Windows forms job added two, and the `agent CLIs` installs on Linux and Windows, which only a change to `contracts/agent-clis.json` or an installer plans, added two, and building the shared web shell in parallel with the daemon adds one.
 `scripts/tests/test_ci_plan.py` counts them from the workflows:
 
 | Jobs | Count | Why |
@@ -469,7 +469,7 @@ A run that plans every lane a pull request can plan starts at most 32 jobs, nine
 | `plan`, `policy`, `rust`, `checks`, `windows check`, `verify` | 6 | `checks` merges `web checks` and `desktop checks`: both install the same dependencies, run for a minute or two and start a runner each |
 | `windows e2e` | 1 | the reusable workflow no longer starts a `plan` job that only fanned the shard numbers out; a matrix picks its list by index |
 | `windows desktop` | 1 | the desktop `@platform` tests on Windows, the one job that starts the Electron app there in a pull request; it keeps the window it drew as the run's artifact |
-| `web e2e` (Linux) | 7 | one daemon and web shell build, which also downloads the zsh packages the `fetch zsh` job used to, and six shards dealt by recorded durations: six were cut to four on 2026-10-05 so fewer jobs queued at the 20-job limit, and went back to six on 2026-10-18 when the suite had grown to 68 minutes of tests and four shards ran 984 to 1111 s of their 1200 s step |
+| `web e2e` (Linux) | 8 | parallel daemon and web shell builds, with the daemon job also downloading the zsh packages the `fetch zsh` job used to, and six shards dealt by recorded durations: six were cut to four on 2026-10-05 so fewer jobs queued at the 20-job limit, and went back to six on 2026-10-18 when the suite had grown to 68 minutes of tests and four shards ran 984 to 1111 s of their 1200 s step |
 | `os contract` (Linux, Windows), `os contract (macOS)` | 3 | one job per system, the macOS leg planned only for its two crates |
 | `agy contract` (Windows) | 1 | agy's hook block, trust, conversations and Hide AI backend, and the real agy reading Hide's block, where the hook commands and install folder differ; `rust` runs the same tests on Linux and the nightly runs all three systems |
 | `omp SDK contract` (Linux, macOS, Windows) | 3 | both supported exact npm SDK versions on Bun 1.3.14, with synthetic stored login and localhost inference; the native SQLite, Bun runtime and package resolution need each system |
@@ -479,16 +479,17 @@ A run that plans every lane a pull request can plan starts at most 32 jobs, nine
 | `desktop e2e` | 2 | the only macOS lane of the desktop app's own changes, in two shards that build in place, because the whole suite outgrew one job's step cap ([Balancing the e2e shards](#balancing-the-e2e-shards)) |
 | `package` (Windows, Linux, macOS) | 3 | `package.yml`'s jobs, planned only for what goes into a package; before the lane its Windows and Linux jobs ran on the same paths outside `verify` |
 
-The common runs are smaller: a `herdr-core` or `hided` change starts 19 jobs with two on macOS (the `desktop e2e` shards), a web shell change 14 with two on macOS, a desktop-only change 7 with two on macOS (8 for `desktop/src/main`, which adds `windows check`), a `hide-platform` change 20 with three on macOS, a `hide-kit` or `hide-agent-hooks` change 23 with three on macOS (the `desktop e2e` shards and `package`), and a documentation change 3, as does a push that reuses the pull request's last green run.
+The common runs are smaller: a `herdr-core` or `hided` change starts 20 jobs with two on macOS (the `desktop e2e` shards), a web shell change 15 with two on macOS, a desktop-only change 7 with two on macOS (8 for `desktop/src/main`, which adds `windows check`), a `hide-platform` change 21 with three on macOS, a `hide-kit` or `hide-agent-hooks` change 24 with three on macOS (the `desktop e2e` shards and `package`), and a documentation change 3, as does a push that reuses the pull request's last green run.
 The median wall time and the share of runs whose Linux shards waited more than 10 minutes come from a measurement of the pull request runs after a change merges, taken the way issue #561 took its baseline; they are not in this guide because a pull request cannot prove them.
 The `plan` job's summary lists each lane with the paths that chose it.
 
 ### Balancing the e2e shards
 
-The multi-shard web lane builds the daemon and web shell once in its existing build job, then each shard downloads the same run's binaries and `web-dist-<lane>` into the paths its fixtures read.
+The multi-shard web lane builds the daemon and web shell once in independent parallel build jobs, then each shard waits for both and downloads the same run's binaries and `web-dist-<lane>` into the paths its fixtures read.
 The shell build uses the same checkout, Node, pnpm, frozen lockfile, command and environment as the single-shard build; [BUILD.md](BUILD.md#two-entrypoints) owns the artifact and failure contract.
 Each shard still installs its test dependencies and runs its unchanged discovery, selection, execution and reporting steps.
 A single shard builds in place, with no additional job or artifact transfer.
+The separate shell build adds one job against the organization's 20-job limit; lane measurements include both build queues and setup before the final shard completes.
 
 Playwright's `--shard` cuts the tests in file order into runs of equal count, and a test takes from 1 second to a minute, so with four shards one web shard job took 11 minutes and another 6 (run `37402687007`, 2026-10-06).
 It also runs a project's dependencies whole in every shard that holds a dependent test, which in the desktop suite is every background test (below).
