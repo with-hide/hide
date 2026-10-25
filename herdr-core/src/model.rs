@@ -8393,7 +8393,10 @@ mod wire_enum_tests {
             }
             assert_wire(&contract, "mission_blocked", &blocked);
             checked.insert("mission_blocked");
-            let verdicts = [crate::missions::Verdict::Pass, crate::missions::Verdict::Fail];
+            let verdicts = [
+                crate::missions::Verdict::Pass,
+                crate::missions::Verdict::Fail,
+            ];
             for variant in verdicts {
                 match variant {
                     crate::missions::Verdict::Pass | crate::missions::Verdict::Fail => {}
@@ -8402,7 +8405,11 @@ mod wire_enum_tests {
             assert_wire(&contract, "mission_verdict", &verdicts);
             checked.insert("mission_verdict");
             use crate::runtime::missions::AnswerState;
-            let states = [AnswerState::Sending, AnswerState::Waiting, AnswerState::Delivered];
+            let states = [
+                AnswerState::Sending,
+                AnswerState::Waiting,
+                AnswerState::Delivered,
+            ];
             for variant in states {
                 match variant {
                     AnswerState::Sending | AnswerState::Waiting | AnswerState::Delivered => {}

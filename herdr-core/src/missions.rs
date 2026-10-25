@@ -1091,11 +1091,11 @@ pub(crate) fn apply_patch(
     {
         return Err("mission_field_kind_invalid".into());
     }
-    if patch
-        .commit
-        .as_ref()
-        .is_some_and(|commit| commit.as_deref().is_some_and(|commit| !valid_commit(commit)))
-    {
+    if patch.commit.as_ref().is_some_and(|commit| {
+        commit
+            .as_deref()
+            .is_some_and(|commit| !valid_commit(commit))
+    }) {
         return Err("mission_commit_invalid".into());
     }
     if patch.checks.as_ref().is_some_and(|checks| {
@@ -1167,7 +1167,9 @@ pub(crate) fn check_question(
     recommend: Option<u8>,
     node: Option<&str>,
 ) -> Result<(), String> {
-    if line.is_none() && (why.is_some() || !options.is_empty() || recommend.is_some() || node.is_some()) {
+    if line.is_none()
+        && (why.is_some() || !options.is_empty() || recommend.is_some() || node.is_some())
+    {
         return Err("mission_question_without_line".into());
     }
     if options.len() > OPTION_LIMIT {
@@ -1308,7 +1310,9 @@ pub fn next_action(code: &str) -> &'static str {
             "Record --commit on a direct change node and --verdict or --checks on a verify node"
         }
         "mission_commit_invalid" => "Give the commit as 7 to 64 hexadecimal digits",
-        "mission_checks_invalid" => "Give --checks as <passed>/<total> with total above 0 and passed at most total",
+        "mission_checks_invalid" => {
+            "Give --checks as <passed>/<total> with total above 0 and passed at most total"
+        }
         "mission_text_invalid" | "mission_plan_invalid" => {
             "Check the command's text and JSON and retry"
         }

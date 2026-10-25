@@ -16,7 +16,9 @@ use serde_json::json;
 use super::Runtime;
 use crate::delivery::Actor;
 use crate::mission_events::{AnswerSource, EventKind, EventLog, MissionEvent};
-use crate::missions::{ANSWER_LIMIT, Answer, AnswerFailure, Mission, MissionNode, MissionStatus, Question};
+use crate::missions::{
+    ANSWER_LIMIT, Answer, AnswerFailure, Mission, MissionNode, MissionStatus, Question,
+};
 use crate::model::DetailItem;
 
 /// The events of the mission open in the 보기 slot (B18-B21, B31): sent
@@ -71,9 +73,9 @@ pub(crate) fn plan_events(before: &Mission, after: &Mission, now: u64) -> Vec<Mi
         return Vec::new();
     }
     let reason = after.nodes.iter().find_map(|node| {
-        node.change
-            .as_deref()
-            .filter(|change| before.node(&node.key).and_then(|old| old.change.as_deref()) != Some(change))
+        node.change.as_deref().filter(|change| {
+            before.node(&node.key).and_then(|old| old.change.as_deref()) != Some(change)
+        })
     });
     let mut event = MissionEvent::new(now, EventKind::Replanned).line(reason);
     event.count = u32::try_from(changed).ok();
@@ -83,7 +85,11 @@ pub(crate) fn plan_events(before: &Mission, after: &Mission, now: u64) -> Vec<Mi
 /// The events one node change makes (B31): its new status, a further
 /// attempt, a pull request it names for the first time, and its commit on
 /// main. The same change again makes none.
-pub(crate) fn node_events(before: &MissionNode, after: &MissionNode, now: u64) -> Vec<MissionEvent> {
+pub(crate) fn node_events(
+    before: &MissionNode,
+    after: &MissionNode,
+    now: u64,
+) -> Vec<MissionEvent> {
     let mut out = Vec::new();
     if after.attempts > before.attempts && after.attempts >= 2 {
         let mut event = MissionEvent::new(now, EventKind::Retried).node(&after.key);
@@ -131,9 +137,15 @@ fn answer_line(question: &str, answer: &str, language: crate::model::InterfaceLa
     let question = crate::display_text::one_line(question, 200).unwrap_or_default();
     match language {
         crate::model::InterfaceLanguage::Korean => format!("[판단 답] {question} → {answer}"),
-        crate::model::InterfaceLanguage::Japanese => format!("[判断への回答] {question} → {answer}"),
-        crate::model::InterfaceLanguage::SimplifiedChinese => format!("[决定的回答] {question} → {answer}"),
-        crate::model::InterfaceLanguage::English => format!("[Decision answer] {question} → {answer}"),
+        crate::model::InterfaceLanguage::Japanese => {
+            format!("[判断への回答] {question} → {answer}")
+        }
+        crate::model::InterfaceLanguage::SimplifiedChinese => {
+            format!("[决定的回答] {question} → {answer}")
+        }
+        crate::model::InterfaceLanguage::English => {
+            format!("[Decision answer] {question} → {answer}")
+        }
     }
 }
 
@@ -231,8 +243,15 @@ impl Runtime {
         }
         let mut events = Vec::new();
         let key_before = mission.question.as_ref().map_or(0, |question| question.key);
-        let asked = mission.question.as_ref().and_then(|question| question.node.clone());
-        if let Some(answer) = mission.answer.as_ref().filter(|answer| answer.key == key_before) {
+        let asked = mission
+            .question
+            .as_ref()
+            .and_then(|question| question.node.clone());
+        if let Some(answer) = mission
+            .answer
+            .as_ref()
+            .filter(|answer| answer.key == key_before)
+        {
             if !answer.delivered {
                 // The Conductor changed its question before reading this.
                 let mut event =
@@ -296,7 +315,11 @@ impl Runtime {
         if current != key {
             return Err("mission_decision_changed".into());
         }
-        if mission.answer.as_ref().is_some_and(|answer| answer.key == key) {
+        if mission
+            .answer
+            .as_ref()
+            .is_some_and(|answer| answer.key == key)
+        {
             return Ok(false);
         }
         // The doorbell types only into an agent it rings; nothing would ever
@@ -395,13 +418,21 @@ impl Runtime {
             let Some(answer) = mission.answer.as_ref().filter(|answer| !answer.delivered) else {
                 continue;
             };
-            let asked = mission.question.as_ref().and_then(|question| question.node.clone());
+            let asked = mission
+                .question
+                .as_ref()
+                .and_then(|question| question.node.clone());
             if !mission.status.open() {
                 gone.push((mission.id.clone(), answer.text.clone(), asked));
                 continue;
             }
             if !self.conductor_present(&mission.conductor.actor) {
-                let since = self.missions.answer_absent_since.get(&mission.id).copied().unwrap_or(now);
+                let since = self
+                    .missions
+                    .answer_absent_since
+                    .get(&mission.id)
+                    .copied()
+                    .unwrap_or(now);
                 if now.saturating_sub(since) >= ABSENT_GRACE_MS {
                     gone.push((mission.id.clone(), answer.text.clone(), asked));
                 } else {
@@ -414,7 +445,11 @@ impl Runtime {
                 key: answer.key,
                 conductor: mission.conductor.actor.clone(),
                 at_unix_ms: answer.at_unix_ms,
-                line: answer_line(mission.decision.as_deref().unwrap_or_default(), &answer.text, language),
+                line: answer_line(
+                    mission.decision.as_deref().unwrap_or_default(),
+                    &answer.text,
+                    language,
+                ),
             });
         }
         // Only the missions still waiting on an absent Conductor keep the
@@ -448,13 +483,17 @@ impl Runtime {
     ) -> Result<(), crate::delivery::doorbell::Hold> {
         use crate::delivery::doorbell::{Hold, judge};
         let current = self.delivery_pane_unmoved(observed)?;
-        let waiting = self.missions.book.get(&work.mission).is_some_and(|mission| {
-            mission.status.open()
-                && mission
-                    .answer
-                    .as_ref()
-                    .is_some_and(|answer| answer.key == work.key && !answer.delivered)
-        });
+        let waiting = self
+            .missions
+            .book
+            .get(&work.mission)
+            .is_some_and(|mission| {
+                mission.status.open()
+                    && mission
+                        .answer
+                        .as_ref()
+                        .is_some_and(|answer| answer.key == work.key && !answer.delivered)
+            });
         if !waiting {
             return Err(Hold::Letter);
         }
@@ -465,7 +504,11 @@ impl Runtime {
     /// Conductor's turn (B28).
     pub(crate) fn mission_answer_held(&mut self, mission: &str) -> bool {
         let waiting = self.missions.book.get(mission).is_some_and(|mission| {
-            mission.status.open() && mission.answer.as_ref().is_some_and(|answer| !answer.delivered)
+            mission.status.open()
+                && mission
+                    .answer
+                    .as_ref()
+                    .is_some_and(|answer| !answer.delivered)
         });
         if !waiting || !self.missions.answers_held.insert(mission.to_owned()) {
             return false;
@@ -504,11 +547,15 @@ impl Runtime {
             return;
         };
         self.missions.answers_held.remove(id);
-        let asked = mission.question.as_ref().and_then(|question| question.node.clone());
+        let asked = mission
+            .question
+            .as_ref()
+            .and_then(|question| question.node.clone());
         let mut event = match result {
             Ok(()) => {
                 answer.delivered = true;
-                let mut event = MissionEvent::new(now, EventKind::Answered).line(Some(&answer.text));
+                let mut event =
+                    MissionEvent::new(now, EventKind::Answered).line(Some(&answer.text));
                 event.source = Some(AnswerSource::Banner);
                 event
             }
@@ -587,12 +634,20 @@ const ABSENT_GRACE_MS: u64 = 30_000;
 /// question, the answer and why one failed, and records an answer not yet
 /// typed as not delivered.
 pub(crate) fn end_decision(mission: &mut Mission, now: u64) -> Vec<MissionEvent> {
-    let asked = mission.question.as_ref().and_then(|question| question.node.clone());
-    let undelivered = mission.answer.take().filter(|answer| !answer.delivered).map(|answer| {
-        let mut event = MissionEvent::new(now, EventKind::AnswerUndelivered).line(Some(&answer.text));
-        event.node = asked;
-        event
-    });
+    let asked = mission
+        .question
+        .as_ref()
+        .and_then(|question| question.node.clone());
+    let undelivered = mission
+        .answer
+        .take()
+        .filter(|answer| !answer.delivered)
+        .map(|answer| {
+            let mut event =
+                MissionEvent::new(now, EventKind::AnswerUndelivered).line(Some(&answer.text));
+            event.node = asked;
+            event
+        });
     mission.decision = None;
     mission.question = None;
     mission.answer_failed = None;

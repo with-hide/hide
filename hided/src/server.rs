@@ -1412,7 +1412,7 @@ enum ScopedRequest {
     /// shell.
     MemoryHook(herdr_core::memory_hook::Ask),
     /// `hide mission`: a Conductor's mission record, the core's own.
-    Mission(herdr_core::missions::MissionCommand),
+    Mission(Box<herdr_core::missions::MissionCommand>),
     /// `hide plan`: the caller's session's own plan, the core's record.
     Plan(herdr_core::plans::PlanCommand),
     /// `hide agent catalog`: what a machine's agents take, read from the
@@ -1540,7 +1540,7 @@ async fn scoped_client_loop(
                         >(value["command"].clone())
                         .ok()
                         .filter(herdr_core::missions::MissionCommand::valid)
-                        .map(ScopedRequest::Mission),
+                        .map(|command| ScopedRequest::Mission(Box::new(command))),
                         Some("plan") => serde_json::from_value::<herdr_core::plans::PlanCommand>(
                             value["command"].clone(),
                         )
@@ -1677,7 +1677,7 @@ async fn scoped_client_loop(
                                         })?
                                 }
                                 ScopedRequest::Mission(command) => {
-                                    core.mission(&cap.context.device_id, &cap.pane_id, &cap.context, command)
+                                    core.mission(&cap.context.device_id, &cap.pane_id, &cap.context, *command)
                                         .map_err(|code| {
                                             let next = herdr_core::missions::next_action(
                                                 herdr_core::coordination::split_refusal(&code).0,

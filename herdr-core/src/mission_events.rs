@@ -213,7 +213,9 @@ impl MissionEventStore {
         let mut out = HashMap::new();
         for id in missions {
             let path = file(&self.dir, id);
-            match read_capped(&path, READ_CAP).and_then(|bytes| bytes.map(|b| decode(&b)).transpose()) {
+            match read_capped(&path, READ_CAP)
+                .and_then(|bytes| bytes.map(|b| decode(&b)).transpose())
+            {
                 Ok(Some(log)) => {
                     out.insert(id.to_owned(), log);
                 }
@@ -384,7 +386,11 @@ mod tests {
     fn a_start_deletes_the_files_of_missions_the_book_no_longer_holds() {
         let dir = tempfile::tempdir().unwrap();
         for id in ["mission-1", "mission-2"] {
-            std::fs::write(dir.path().join(format!("{id}.json")), r#"{"schema_version":1,"events":[]}"#).unwrap();
+            std::fs::write(
+                dir.path().join(format!("{id}.json")),
+                r#"{"schema_version":1,"events":[]}"#,
+            )
+            .unwrap();
         }
         {
             let store = MissionEventStore::new(dir.path().to_path_buf());

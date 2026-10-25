@@ -15,9 +15,10 @@ use super::Runtime;
 use crate::delivery::Actor;
 use crate::mission_events::EventLog;
 use crate::missions::{
-    AnswerFailure, Blocked, Checks, Conductor, ConductorSettings, Delivery, MISSION_LIMIT, Mission, MissionBook,
-    MissionCommand, MissionEnd, MissionNode, MissionScope, MissionStatus, NodeKind, NodeStatus,
-    PENDING_WAKE_LIMIT, PendingWake, PrSeen, Question, Restored, Verdict, WakeEvent, Worker,
+    AnswerFailure, Blocked, Checks, Conductor, ConductorSettings, Delivery, MISSION_LIMIT, Mission,
+    MissionBook, MissionCommand, MissionEnd, MissionNode, MissionScope, MissionStatus, NodeKind,
+    NodeStatus, PENDING_WAKE_LIMIT, PendingWake, PrSeen, Question, Restored, Verdict, WakeEvent,
+    Worker,
 };
 use crate::model::{DetailItem, PrState, PullRequestBadge, ReviewDecision};
 use crate::workspace_control::{Caller, Context, Query};
@@ -1080,7 +1081,10 @@ impl Runtime {
                 mission.status = MissionStatus::Done;
                 mission.closed_at_unix_ms = Some(now);
                 mission.updated_at_unix_ms = now;
-                ended.push((mission.id.clone(), super::mission_events::end_decision(mission, now)));
+                ended.push((
+                    mission.id.clone(),
+                    super::mission_events::end_decision(mission, now),
+                ));
                 crate::diagnostic!(json!({
                     "component": "missions", "kind": "mission.closed_by_merge", "mission": mission.id,
                 }));
@@ -1418,7 +1422,9 @@ impl Runtime {
                 agent_kind: mission.conductor.actor.kind.clone(),
                 session: mission.conductor.session.clone(),
                 present: self.conductor_present(&mission.conductor.actor),
-                takes_answers: crate::delivery::doorbell::bell_target(&mission.conductor.actor.kind),
+                takes_answers: crate::delivery::doorbell::bell_target(
+                    &mission.conductor.actor.kind,
+                ),
             },
             nodes,
             merge_order: mission.merge_order.clone(),

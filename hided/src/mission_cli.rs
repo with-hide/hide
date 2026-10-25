@@ -120,10 +120,12 @@ fn one<'a>(
 fn checks(value: &str) -> Result<Checks, String> {
     value
         .split_once('/')
-        .and_then(|(passed, total)| Some(Checks {
-            passed: passed.trim().parse().ok()?,
-            total: total.trim().parse().ok()?,
-        }))
+        .and_then(|(passed, total)| {
+            Some(Checks {
+                passed: passed.trim().parse().ok()?,
+                total: total.trim().parse().ok()?,
+            })
+        })
         .ok_or_else(|| "--checks takes <passed>/<total>, such as 6/6".to_owned())
 }
 
@@ -619,8 +621,19 @@ mod tests {
         assert_eq!(
             parse(
                 words(&[
-                    "decide", "--line", "Which base?", "--why", "Two PRs touch it", "--option",
-                    "main", "--option", "#1503", "--recommend", "2", "--node", "ui",
+                    "decide",
+                    "--line",
+                    "Which base?",
+                    "--why",
+                    "Two PRs touch it",
+                    "--option",
+                    "main",
+                    "--option",
+                    "#1503",
+                    "--recommend",
+                    "2",
+                    "--node",
+                    "ui",
                 ])
                 .iter()
             )
@@ -650,14 +663,26 @@ mod tests {
     fn node_records_a_commit_a_verdict_and_checks() {
         let Ok(MissionCli::Command(MissionCommand::Node { patch, .. })) = parse(
             words(&[
-                "node", "check", "--verdict", "fail", "--checks", "4/6", "--no-commit",
+                "node",
+                "check",
+                "--verdict",
+                "fail",
+                "--checks",
+                "4/6",
+                "--no-commit",
             ])
             .iter(),
         ) else {
             panic!("node did not parse");
         };
         assert_eq!(patch.verdict, Some(Some(Verdict::Fail)));
-        assert_eq!(patch.checks, Some(Some(Checks { passed: 4, total: 6 })));
+        assert_eq!(
+            patch.checks,
+            Some(Some(Checks {
+                passed: 4,
+                total: 6
+            }))
+        );
         assert_eq!(patch.commit, Some(None));
         assert!(parse(words(&["node", "check", "--checks", "six"]).iter()).is_err());
         assert!(parse(words(&["node", "check", "--verdict", "maybe"]).iter()).is_err());
