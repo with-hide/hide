@@ -127,6 +127,96 @@ function herdr(env: NodeJS.ProcessEnv, bin: string, args: string[], timeout = 30
   return JSON.parse(out) as unknown;
 }
 
+type PendingStart = { stop: () => void };
+
+/** Stop the private Unix process group, including a CLI wrapper's children. */
+export function endStartGroup(pid: number): void {
+  try { process.kill(-pid, "SIGKILL"); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+  }
+  const deadline = Date.now() + 5_000;
+  for (;;) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw new Error(`fixture CLI process group ${pid} did not exit`);
+    const listed = spawnSync("/bin/ps", ["-A", "-o", "pgid=,stat="], { encoding: "utf8", timeout: remaining });
+    if (listed.error || listed.status !== 0) throw new Error(`cannot confirm fixture CLI group ${pid} exit: ${listed.error ?? listed.stderr}`);
+    // A zombie has exited and cannot use the root; Node reaps it after this
+    // synchronous teardown, or the OS does when the worker itself exits.
+    const live = listed.stdout.trim().split(/\r?\n/).some((line) => {
+      const [group, state] = line.trim().split(/\s+/);
+      return Number(group) === pid && !state?.startsWith("Z");
+    });
+    if (!live) return;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.min(25, remaining));
+  }
+}
+
+/** The fixture owns at most two starts until close, or confirmed tree teardown. */
+function herdrAsync(env: NodeJS.ProcessEnv, bin: string, args: string[], pending: Set<PendingStart>): Promise<unknown> {
+  if (pending.size >= 2) return Promise.reject(new Error("fixture already owns two pending CLI starts"));
+  return new Promise((resolve, reject) => {
+    let stdout = "", stderr = "";
+    let failure: Error | undefined;
+    let confirmed = false;
+    let windowsOwned: WindowsProcess[] | undefined;
+    // execFile does not pass detached through to spawn. A private group is
+    // essential: killing only a wrapper leaves its real CLI child alive.
+    const child = spawn(bin, args, { env, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
+    const command: PendingStart = { stop: () => {
+      if (confirmed) return;
+      if (child.pid !== undefined) {
+        if (process.platform === "win32") {
+          if (windowsOwned === undefined) throw new Error(`fixture CLI ${child.pid} has no confirmed process identity`);
+          endWindowsProcesses(windowsOwned);
+        } else endStartGroup(child.pid);
+      }
+      confirmed = true;
+      pending.delete(command);
+    } };
+    pending.add(command);
+    const terminate = (error: Error) => {
+      failure ??= error;
+      try { command.stop(); } catch (cleanup) {
+        failure = afterCleanup(failure, () => { throw cleanup; }) as Error;
+        // A failed tree confirmation must still settle setup within its bound.
+        // Keep ownership for teardown, which retains the root if it fails again.
+        child.kill("SIGKILL");
+        reject(Object.assign(failure, { stdout, stderr }));
+      }
+    };
+    const timeout = setTimeout(() => terminate(new Error("fixture CLI timed out after 30000 ms")), 30_000);
+    child.on("error", terminate);
+    for (const [name, stream] of [["stdout", child.stdout], ["stderr", child.stderr]] as const) {
+      stream.setEncoding("utf8");
+      stream.on("data", (chunk: string) => {
+        const previous = name === "stdout" ? stdout : stderr;
+        if (Buffer.byteLength(previous) + Buffer.byteLength(chunk) > 1024 * 1024) {
+          terminate(new Error(`fixture CLI ${name} exceeded 1048576 bytes`));
+          return;
+        }
+        if (name === "stdout") stdout += chunk;
+        else stderr += chunk;
+      });
+    }
+    child.once("close", (code, signal) => {
+      clearTimeout(timeout);
+      if (!failure && (code !== 0 || signal)) terminate(new Error(`fixture CLI exited with status ${code}, signal ${signal}`));
+      if (!failure || confirmed) pending.delete(command);
+      if (failure) { reject(Object.assign(failure, { stdout, stderr, status: code, signal })); return; }
+      try { resolve(JSON.parse(stdout) as unknown); } catch (error) { reject(error); }
+    });
+    // Capture identity while the CLI handle is owned, before it can be reaped
+    // and its PID reused. The helper also follows descendants born later.
+    if (process.platform === "win32" && child.pid !== undefined) {
+      try {
+        const identities = windowsProcessTree(child.pid);
+        if (!identities.some((item) => item.id === child.pid)) throw new Error(`fixture CLI ${child.pid} identity was not observed`);
+        windowsOwned = identities;
+      } catch (error) { terminate(error instanceof Error ? error : new Error(String(error))); }
+    }
+  });
+}
+
 function isolatedEnv(root: string, socket: string): NodeJS.ProcessEnv {
   const env = inheritedFixtureEnv();
   const config = path.join(root, "herdr-config.toml");
@@ -546,39 +636,52 @@ function shellAvailability(env: NodeJS.ProcessEnv, bin: string, root: string, pa
  * pinned Herdr counts the pane's shell as available. Herdr does not wait, so
  * the fixture does, as the product does (`agent_start::start_at_shell`): a
  * refusal as `agent_pane_busy` typed nothing, so it goes back to waiting,
- * within the same bound. Any other answer is the start's. Synchronous so `run`
- * can hold a start until the pane is ready.
+ * within the same bound. Any other answer is the start's. `run` stays synchronous; the initial
+ * pair uses the asynchronous form so both interactive waits can overlap.
  */
-function startAgentAtShell(env: NodeJS.ProcessEnv, bin: string, root: string, args: string[], ms = 10_000): unknown {
+function startAgentAtShell(env: NodeJS.ProcessEnv, bin: string, root: string, args: string[], ms = 10_000, pending?: Set<PendingStart>): unknown {
   const pane = args[args.indexOf("--pane") + 1]!;
   const deadline = Date.now() + ms;
   let seen = "";
-  for (;;) {
-    const promptRead = paneRead(env, bin, pane, Math.max(1, deadline - Date.now()));
-    const { available, info } = shellAvailability(env, bin, root, pane, Math.max(1, deadline - Date.now()));
-    const shell = info.shell_pid;
-    const prompt = promptRead.text.includes("fixture %");
-    seen = JSON.stringify({ prompt, promptFailure: promptRead.failure, processInfo: info });
-    // Foreground ownership can precede shell startup. Later split and resumed
-    // panes need the same prompt barrier as the initial fixture panes.
-    if (available && prompt) {
-      try {
-        return herdr(env, bin, args);
-      } catch (error) {
-        // Herdr prints a refusal on stderr; stdout is empty.
-        const refusal = String((error as { stderr?: unknown }).stderr ?? error);
-        if (!refusal.includes("agent_pane_busy")) {
-          const failed = error as { status?: number; signal?: string; stdout?: string; stderr?: string };
-          throw new Error(`fixture agent start failed: ${JSON.stringify({ pane, readiness: seen, status: failed.status ?? null, signal: failed.signal ?? null, stdout: failed.stdout ?? null, stderr: failed.stderr ?? null })}; ${String(error)}`, { cause: error });
+  const failed = (error: unknown) => {
+    // Herdr prints a refusal on stderr; stdout is empty. A busy refusal typed nothing.
+    const refusal = String((error as { stderr?: unknown }).stderr ?? error);
+    if (!refusal.includes("agent_pane_busy")) {
+      const result = error as { status?: number; signal?: string; stdout?: string; stderr?: string };
+      throw new Error(`fixture agent start failed: ${JSON.stringify({ pane, readiness: seen, status: result.status ?? null, signal: result.signal ?? null, stdout: result.stdout ?? null, stderr: result.stderr ?? null })}; ${String(error)}`, { cause: error });
+    }
+    seen = `${seen}; busy answer: ${refusal.trim()}`;
+  };
+  const attempt = (): unknown => {
+    for (;;) {
+      const promptRead = paneRead(env, bin, pane, Math.max(1, deadline - Date.now()));
+      const { available, info } = shellAvailability(env, bin, root, pane, Math.max(1, deadline - Date.now()));
+      const shell = info.shell_pid;
+      const prompt = promptRead.text.includes("fixture %");
+      seen = JSON.stringify({ prompt, promptFailure: promptRead.failure, processInfo: info });
+      // Foreground ownership can precede shell startup. Later split and resumed
+      // panes need the same prompt barrier as the initial fixture panes.
+      if (available && prompt) {
+        if (pending) return herdrAsync(env, bin, args, pending).catch(async (error: unknown) => {
+          failed(error);
+          if (Date.now() >= deadline) throw new Error(`the shell of pane ${pane} never held the terminal alone before agent start; last process info ${seen}${shellChildren(root, shell)}`);
+          // Poll the same shell-availability condition after a busy refusal.
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          return attempt();
+        });
+        try {
+          return herdr(env, bin, args);
+        } catch (error) {
+          failed(error);
         }
-        seen = `${seen}; busy answer: ${refusal.trim()}`;
       }
+      if (Date.now() >= deadline) {
+        throw new Error(`the shell of pane ${pane} never held the terminal alone before agent start; last process info ${seen}${shellChildren(root, shell)}`);
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
     }
-    if (Date.now() >= deadline) {
-      throw new Error(`the shell of pane ${pane} never held the terminal alone before agent start; last process info ${seen}${shellChildren(root, shell)}`);
-    }
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
-  }
+  };
+  return attempt();
 }
 
 /** The processes that name `shell` as their parent on Windows, `<pid> <started> <older|newer|unknown> <name>` each (`shims/hide-children.c`). */
@@ -705,15 +808,21 @@ export async function startHerdr({ agents = true, shortRoot = false }: { agents?
   let server = launchServer();
   let stopped = false;
   const afterStop: (() => void)[] = [];
+  const pendingStarts = new Set<PendingStart>();
   const stopServer = () => {
     // On Windows a pane's processes can outlive the server and keep the
     // root locked. Listed while the server still runs (so its pid is its
     // own), ended after it stops; a failure here keeps the root and is
     // thrown after the logs are copied.
     let failure: unknown;
+    const startFailures: unknown[] = [];
+    for (const command of [...pendingStarts]) {
+      try { command.stop(); } catch (error) { startFailures.push(error); }
+    }
+    if (startFailures.length > 0) failure = new AggregateError(startFailures, `fixture CLI exit unconfirmed; preserve ${root}: ${startFailures.map(String).join("; ")}`);
     let owned: WindowsProcess[] = [];
     if (process.platform === "win32" && server.pid && server.exitCode === null && server.signalCode === null) {
-      try { owned = windowsProcessTree(server.pid); } catch (error) { failure = error; }
+      try { owned = windowsProcessTree(server.pid); } catch (error) { failure = failure === undefined ? error : afterCleanup(failure, () => { throw error; }); }
     }
     spawnSync(bin, ["server", "stop"], { env, timeout: 10_000 });
     if (server.exitCode === null) server.kill("SIGKILL");
@@ -824,8 +933,14 @@ export async function startHerdr({ agents = true, shortRoot = false }: { agents?
     }
     const [first, second] = opened.panes;
     if (agents) {
-      startAgentAtShell(env, bin, root, ["agent", "start", "one", "--kind", "claude", "--pane", first]);
-      startAgentAtShell(env, bin, root, ["agent", "start", "two", "--kind", "claude", "--pane", second]);
+      // Exactly two starts may run together. Observe both exits before setup
+      // cleanup, so a sibling cannot keep using the server or root afterwards.
+      const starts = await Promise.allSettled([
+        Promise.resolve().then(() => startAgentAtShell(env, bin, root, ["agent", "start", "one", "--kind", "claude", "--pane", first], 10_000, pendingStarts)),
+        Promise.resolve().then(() => startAgentAtShell(env, bin, root, ["agent", "start", "two", "--kind", "claude", "--pane", second], 10_000, pendingStarts)),
+      ]);
+      const failures = starts.flatMap((start) => start.status === "rejected" ? [start.reason as unknown] : []);
+      if (failures.length > 0) throw failures.length === 1 ? failures[0] : new AggregateError(failures, "both fixture agents failed to start");
       // Distinct row labels, made by the core from each pane's transcript.
       for (const [pane, task] of [
         [first, "Agent one"],
