@@ -1764,6 +1764,15 @@ fn an_answer_herdr_may_have_typed_is_typed_again_only_when_the_operator_sends_it
             .unconfirmed
     );
     assert!(runtime.mission_answers_due().is_empty());
+    // A press of 다시 보내기 from a stale screen while the prompt is in flight adds nothing.
+    assert!(!runtime.mission_answer_event("mission-1", 1, None, None, true));
+    assert!(
+        runtime.missions.book.missions[0]
+            .answer
+            .as_ref()
+            .unwrap()
+            .unconfirmed
+    );
     // Herdr's reply to the prompt timed out: the answer may be in the conversation.
     runtime.mission_answer_sent(
         "mission-1",

@@ -342,7 +342,11 @@ impl Runtime {
         if resend && (option.is_some() || text.is_some()) {
             return Err("mission_answer_invalid".into());
         }
-        if resend && !answered.is_some_and(|answer| answer.unconfirmed) {
+        // An answer whose prompt is in flight is already sending again.
+        if resend
+            && (!answered.is_some_and(|answer| answer.unconfirmed)
+                || self.missions.answers_typing.contains(id))
+        {
             return Ok(false);
         }
         if answered.is_some() && !resend {
@@ -642,7 +646,9 @@ impl Runtime {
                 MissionEvent::new(now, EventKind::AnswerUndelivered).line(Some(&text))
             }
             Err(AnswerSendFailure::MaybeTyped(code)) => {
-                // Already held as unconfirmed since the prompt was asked.
+                // Held as unconfirmed since the prompt was asked; set again so
+                // nothing in between makes it due.
+                answer.unconfirmed = true;
                 crate::diagnostic!(json!({
                     "component": "missions", "kind": "mission.answer_unconfirmed",
                     "mission": id, "key": key, "code": code,
