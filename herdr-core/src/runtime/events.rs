@@ -954,6 +954,20 @@ pub(super) struct ConductorSettingsSetPayload {
     pub(super) candidates: Option<Vec<crate::missions::Candidate>>,
 }
 
+/// `mission_answer`: the operator's answer from a mission's decision banner
+/// (PRD mission-plan-visibility B26, B27): the option it pressed, counted
+/// from 1, or what it wrote, for the question with `key`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct MissionAnswerPayload {
+    pub(super) mission: String,
+    pub(super) key: u64,
+    #[serde(default)]
+    pub(super) option: Option<u8>,
+    #[serde(default)]
+    pub(super) text: Option<String>,
+}
+
 /// `issue_settings_set`: how starting work from an issue behaves; an absent
 /// field keeps its value.
 #[derive(Debug, Deserialize)]
@@ -1645,6 +1659,7 @@ pub(super) enum Event {
     ProjectSettingsSet(super::project_settings::SetPayload),
     IssueSettingsSet(IssueSettingsSetPayload),
     ConductorSettingsSet(ConductorSettingsSetPayload),
+    MissionAnswer(MissionAnswerPayload),
     IssueDetailRequest(IssueDetailRequestPayload),
     GithubSearch(GithubSearchPayload),
     WorktreeNameSuggest(WorktreeNameSuggestPayload),
@@ -1940,6 +1955,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "project_settings_set" => decode!(super::project_settings::SetPayload, ProjectSettingsSet),
         "issue_settings_set" => decode!(IssueSettingsSetPayload, IssueSettingsSet),
         "conductor_settings_set" => decode!(ConductorSettingsSetPayload, ConductorSettingsSet),
+        "mission_answer" => decode!(MissionAnswerPayload, MissionAnswer),
         "issue_detail_request" => decode!(IssueDetailRequestPayload, IssueDetailRequest),
         "github_search" => decode!(GithubSearchPayload, GithubSearch),
         "worktree_name_suggest" => decode!(WorktreeNameSuggestPayload, WorktreeNameSuggest),
@@ -3882,6 +3898,12 @@ impl Runtime {
                 }
                 self.set_conductor_settings(settings)
             }
+            Event::MissionAnswer(payload) => self.mission_answer_event(
+                &payload.mission,
+                payload.key,
+                payload.option,
+                payload.text,
+            ),
             Event::IssueDetailRequest(payload) => self.request_issue_detail(payload),
             Event::GithubSearch(payload) => self.request_github_search(payload),
             Event::WorktreeNameSuggest(payload) => self.suggest_worktree_name(payload),

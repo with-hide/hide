@@ -1487,15 +1487,12 @@ impl Runtime {
         Ok(current.clone())
     }
 
-    /// The final memory guard immediately before the off-lock pane write.
-    /// The refusal names what moved since the verdict, for the diagnostic
-    /// log.
-    pub(crate) fn delivery_bell_current(
+    /// The pane as it is now, if nothing moved since `observed`: the same
+    /// agent and session, status, state sequence and last input.
+    pub(crate) fn delivery_pane_unmoved(
         &self,
-        id: &str,
         observed: &Observation,
-        reserved: Option<u8>,
-    ) -> Result<(), crate::delivery::doorbell::Hold> {
+    ) -> Result<&Observation, crate::delivery::doorbell::Hold> {
         use crate::delivery::doorbell::Hold;
         let current = self
             .delivery_observations
@@ -1512,6 +1509,20 @@ impl Runtime {
         if current.last_input_at_unix_ms != observed.last_input_at_unix_ms {
             return Err(Hold::Input);
         }
+        Ok(current)
+    }
+
+    /// The final memory guard immediately before the off-lock pane write.
+    /// The refusal names what moved since the verdict, for the diagnostic
+    /// log.
+    pub(crate) fn delivery_bell_current(
+        &self,
+        id: &str,
+        observed: &Observation,
+        reserved: Option<u8>,
+    ) -> Result<(), crate::delivery::doorbell::Hold> {
+        use crate::delivery::doorbell::Hold;
+        let current = self.delivery_pane_unmoved(observed)?;
         let now = unix_milliseconds();
         let letter = self
             .delivery_ledger

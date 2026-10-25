@@ -13,10 +13,11 @@ use serde_json::{Value, json};
 
 use super::Runtime;
 use crate::delivery::Actor;
+use crate::mission_events::EventLog;
 use crate::missions::{
-    Blocked, Conductor, ConductorSettings, Delivery, MISSION_LIMIT, Mission, MissionBook,
+    Blocked, Checks, Conductor, ConductorSettings, Delivery, MISSION_LIMIT, Mission, MissionBook,
     MissionCommand, MissionEnd, MissionNode, MissionScope, MissionStatus, NodeKind, NodeStatus,
-    PENDING_WAKE_LIMIT, PendingWake, PrSeen, Restored, WakeEvent, Worker,
+    PENDING_WAKE_LIMIT, PendingWake, PrSeen, Question, Restored, Verdict, WakeEvent, Worker,
 };
 use crate::model::{DetailItem, PrState, PullRequestBadge, ReviewDecision};
 use crate::workspace_control::{Caller, Context, Query};
@@ -56,6 +57,14 @@ pub struct MissionView {
     pub check: Option<String>,
     pub github: Option<String>,
     pub decision: Option<String>,
+    /// What the Conductor said beside its decision (PRD
+    /// mission-plan-visibility B25); a decision from before it has key 0
+    /// and nothing beside its line.
+    pub question: Option<Question>,
+    /// The operator's answer from the banner to that decision (B26, B28).
+    pub answer: Option<AnswerView>,
+    /// Why the last answer did not reach the Conductor (B28).
+    pub answer_failed: Option<String>,
     pub delay: Option<String>,
     pub report: Option<String>,
     pub created_at_unix_ms: u64,
@@ -71,6 +80,24 @@ pub struct MissionView {
     /// the time of the read before (B16).
     pub github_stale: bool,
     pub github_read_at_unix_ms: Option<u64>,
+}
+
+/// Where the operator's answer is (B26, B28): accepted and not yet tried,
+/// waiting for the Conductor's turn, or typed into its conversation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnswerState {
+    Sending,
+    Waiting,
+    Delivered,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AnswerView {
+    pub key: u64,
+    pub text: String,
+    pub option: Option<u8>,
+    pub state: AnswerState,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -114,6 +141,9 @@ pub struct NodeView {
     pub criteria: Option<String>,
     pub started_at_unix_ms: Option<u64>,
     pub finished_at_unix_ms: Option<u64>,
+    pub commit: Option<String>,
+    pub verdict: Option<Verdict>,
+    pub checks: Option<Checks>,
     /// The worker's own plan (PRD hide-plan D-17, D-18): the value its pane's
     /// chip and map draw, for the card's fourth line and the node's detail.
     pub plan: Option<crate::plans::PlanView>,
@@ -150,12 +180,24 @@ pub(crate) struct MissionRuntime {
     rewake: bool,
     /// Counts the book's changes; every change is saved, so the save counts
     /// it.
-    book_edit: u64,
+    pub(crate) book_edit: u64,
     /// Counts the GitHub answers and the pull request lists replaced since.
     github_edit: u64,
     /// What the published missions were made from, so a snapshot read whose
     /// inputs did not move makes nothing (docs/PERFORMANCE_TESTING.md).
     views: ViewsMadeFrom,
+    /// Each mission's events (PRD mission-plan-visibility D-22), saved by
+    /// their own store; only the mission open in the 보기 slot sends them.
+    pub(crate) events: HashMap<String, EventLog>,
+    pub(crate) event_store: Option<crate::mission_events::MissionEventStore>,
+    /// Counts the events' changes, for the published section.
+    pub(crate) events_edit: u64,
+    /// The answers the doorbell tried and held, by mission: shown as
+    /// waiting for the Conductor's turn (B28). Memory only; a restart shows
+    /// an answer as sending until the next pass holds it again.
+    pub(crate) answers_held: std::collections::HashSet<String>,
+    /// The mission and events edit the published events were made from.
+    pub(crate) events_made: (Option<String>, u64),
 }
 
 #[derive(Default)]
@@ -400,6 +442,10 @@ impl Runtime {
                     check: None,
                     github,
                     decision: None,
+                    question: None,
+                    question_seq: 0,
+                    answer: None,
+                    answer_failed: None,
                     delay: None,
                     report: None,
                     created_at_unix_ms: now,
@@ -433,8 +479,10 @@ impl Runtime {
                 // the Conductor pane's own chip (PRD mission-pane-chip D-02).
                 let next = crate::missions::apply_plan(&current, &plan, now)?;
                 let overlaps = crate::missions::overlaps(&self.missions.book, &next);
+                let events = super::mission_events::plan_events(&current, &next, now);
                 *self.missions.book.get_mut(&id).ok_or("mission_unknown")? = next;
                 self.save_missions();
+                self.record_mission_events(&id, events);
                 Ok((
                     json!({"mission": self.mission_view_of(&id), "overlaps": overlaps}),
                     true,
@@ -462,10 +510,12 @@ impl Runtime {
                 }
                 let target = self.missions.book.get_mut(&id).ok_or("mission_unknown")?;
                 let changed = target.nodes[index] != next;
+                let events = super::mission_events::node_events(&target.nodes[index], &next, now);
                 target.nodes[index] = next;
                 if changed {
                     target.updated_at_unix_ms = now;
                     self.save_missions();
+                    self.record_mission_events(&id, events);
                 }
                 Ok((json!({"mission": self.mission_view_of(&id)}), changed))
             }
@@ -484,11 +534,21 @@ impl Runtime {
                 }
                 Ok((json!({"mission": self.mission_view_of(&id)}), changed))
             }
-            MissionCommand::Decide { mission, line } => {
-                self.set_mission_line(&actor, mission.as_deref(), line, now, true)
+            MissionCommand::Decide {
+                mission,
+                line,
+                why,
+                options,
+                recommend,
+                node,
+            } => {
+                let id = self.conducted_mission(&actor, mission.as_deref(), true)?;
+                let changed =
+                    self.decide_mission(&id, line, (why, options, recommend, node), now)?;
+                Ok((json!({"mission": self.mission_view_of(&id)}), changed))
             }
             MissionCommand::Delay { mission, line } => {
-                self.set_mission_line(&actor, mission.as_deref(), line, now, false)
+                self.set_mission_delay(&actor, mission.as_deref(), line, now)
             }
             MissionCommand::Close {
                 mission,
@@ -515,6 +575,9 @@ impl Runtime {
                 }
                 if status != MissionStatus::MergeWait {
                     target.decision = None;
+                    target.question = None;
+                    target.answer = None;
+                    target.answer_failed = None;
                     target.delay = None;
                 }
                 target.closed_at_unix_ms = Some(now);
@@ -524,11 +587,13 @@ impl Runtime {
                     target.wakes.clear();
                 }
                 let changed = *target != before;
+                let events = super::mission_events::close_events(&before, target, now);
                 crate::diagnostic!(json!({
                     "component": "missions", "kind": "mission.closed",
                     "mission": id, "end": status,
                 }));
                 self.save_missions();
+                self.record_mission_events(&id, events);
                 Ok((json!({"mission": self.mission_view_of(&id)}), changed))
             }
             MissionCommand::Reopen { mission } => {
@@ -622,23 +687,17 @@ impl Runtime {
         }
     }
 
-    fn set_mission_line(
+    fn set_mission_delay(
         &mut self,
         actor: &Actor,
         mission: Option<&str>,
         line: Option<String>,
         now: u64,
-        decision: bool,
     ) -> Result<(Value, bool), String> {
         let id = self.conducted_mission(actor, mission, true)?;
         let target = self.missions.book.get_mut(&id).ok_or("mission_unknown")?;
-        let slot = if decision {
-            &mut target.decision
-        } else {
-            &mut target.delay
-        };
-        let changed = *slot != line;
-        *slot = line;
+        let changed = target.delay != line;
+        target.delay = line;
         if changed {
             target.updated_at_unix_ms = now;
             self.save_missions();
@@ -859,17 +918,24 @@ impl Runtime {
     /// (`(machine, native session id)`) go with it (D-22, B47).
     pub(crate) fn drop_missions_of(&mut self, sessions: &[(String, String)]) -> bool {
         let before = self.missions.book.missions.len();
+        let mut gone = Vec::new();
         self.missions.book.missions.retain(|mission| {
-            !mission.conductor.session.as_ref().is_some_and(|session| {
+            let keep = !mission.conductor.session.as_ref().is_some_and(|session| {
                 sessions
                     .iter()
                     .any(|(machine, id)| session.device_id == *machine && session.session_id == *id)
-            })
+            });
+            if !keep {
+                gone.push(mission.id.clone());
+            }
+            keep
         });
         let dropped = before - self.missions.book.missions.len();
         if dropped == 0 {
             return false;
         }
+        // The history goes with its mission (D-22).
+        self.forget_mission_events(&gone);
         crate::diagnostic!(json!({
             "component": "missions", "kind": "missions.deleted_with_session", "count": dropped,
         }));
@@ -920,6 +986,7 @@ impl Runtime {
                 continue;
             }
             let mut events = Vec::new();
+            let mut merged = Vec::new();
             let mut seen_updates = Vec::new();
             for (node_index, node) in mission.nodes.iter().enumerate() {
                 let Some(number) = node.pr else { continue };
@@ -937,6 +1004,7 @@ impl Runtime {
                     None => {}
                     Some(before) => {
                         if now_seen.merged && !before.merged {
+                            merged.push(super::mission_events::merged_event(node, number, now));
                             events.push((node.key.clone(), number, WakeEvent::Merged, None));
                         } else if !now_seen.merged {
                             if now_seen.changes_requested && !before.changes_requested {
@@ -971,6 +1039,9 @@ impl Runtime {
                 continue;
             }
             changed = true;
+            let id = mission.id.clone();
+            self.record_mission_events(&id, merged);
+            let mission = &self.missions.book.missions[index];
             let done = mission.status == MissionStatus::Done;
             // A done mission's merge is the end it was waiting for, not work
             // for its Conductor (B41).
@@ -1240,7 +1311,7 @@ impl Runtime {
 
     /// The mission's device does not answer, so its map shows the last
     /// value (B20).
-    fn mission_stale(&self, mission: &Mission) -> bool {
+    pub(super) fn mission_stale(&self, mission: &Mission) -> bool {
         mission.device_id != self.node.as_str()
             && !self
                 .snapshot
@@ -1303,6 +1374,9 @@ impl Runtime {
                     criteria: node.criteria.clone(),
                     started_at_unix_ms: node.started_at_unix_ms,
                     finished_at_unix_ms: node.finished_at_unix_ms,
+                    commit: node.commit.clone(),
+                    verdict: node.verdict,
+                    checks: node.checks,
                     plan: record.and_then(|record| self.worker_plan(&record.machine, &record.pane)),
                 }
             })
@@ -1336,6 +1410,29 @@ impl Runtime {
             check: mission.check.clone(),
             github: mission.github.clone(),
             decision: mission.decision.clone(),
+            question: mission.decision.as_ref().map(|_| {
+                mission.question.clone().unwrap_or(Question {
+                    key: 0,
+                    why: None,
+                    options: Vec::new(),
+                    recommend: None,
+                    node: None,
+                    asked_at_unix_ms: mission.updated_at_unix_ms,
+                })
+            }),
+            answer: mission.answer.as_ref().map(|answer| AnswerView {
+                key: answer.key,
+                text: answer.text.clone(),
+                option: answer.option,
+                state: if answer.delivered {
+                    AnswerState::Delivered
+                } else if self.missions.answers_held.contains(&mission.id) {
+                    AnswerState::Waiting
+                } else {
+                    AnswerState::Sending
+                },
+            }),
+            answer_failed: mission.answer_failed.clone(),
             delay: mission.delay.clone(),
             report: mission.report.clone(),
             created_at_unix_ms: mission.created_at_unix_ms,

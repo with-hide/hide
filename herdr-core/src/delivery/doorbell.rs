@@ -311,6 +311,11 @@ pub(crate) struct Doorbell {
     held: HashMap<String, Hold>,
     /// The composer reads made for panes held on a possible draft.
     composer: super::composer::Reader,
+    /// The operator's answers to a mission's decision, by mission: the last
+    /// attempt that did not type, and why each waits, logged once per
+    /// change. Bounded by the open missions.
+    answer_tried: HashMap<String, Tried>,
+    answer_held: HashMap<String, Hold>,
 }
 
 /// How one attempt ended without failing.
@@ -499,6 +504,7 @@ impl Doorbell {
                 }
             }
         }
+        self.answers(owner, stop, now, &mut count);
         if count < WORK_PER_PASS && !stop.load(Ordering::Acquire) {
             self.composer.check(owner, now);
         }
@@ -510,6 +516,100 @@ impl Doorbell {
                 .collect(),
             now,
         );
+    }
+
+    /// Types the operator's answers to a mission's decision into its
+    /// Conductor's conversation as the operator's own input (PRD
+    /// mission-plan-visibility B26, B28), under the verdict a letter's bell
+    /// waits for: at rest, or mid-turn once it has worked as long as a
+    /// letter waits, never over a draft, a menu or a question of its own.
+    fn answers(&mut self, owner: &Mutex<Runtime>, stop: &AtomicBool, now: u64, count: &mut usize) {
+        let due = owner
+            .lock()
+            .map(|mut guard| guard.mission_answers_due())
+            .unwrap_or_default();
+        self.answer_tried
+            .retain(|mission, _| due.iter().any(|work| &work.mission == mission));
+        self.answer_held
+            .retain(|mission, _| due.iter().any(|work| &work.mission == mission));
+        for work in due {
+            if stop.load(Ordering::Acquire) || *count >= WORK_PER_PASS {
+                break;
+            }
+            let verdict = owner
+                .lock()
+                .map(|guard| guard.delivery_bell_verdict(&work.conductor, work.patience(), now))
+                .unwrap_or(Err(Hold::Absent));
+            let observed = match verdict {
+                Ok(observed) => observed,
+                Err(reason) => {
+                    self.answer_hold(owner, &work, reason);
+                    continue;
+                }
+            };
+            let Some(connector) = owner
+                .lock()
+                .ok()
+                .and_then(|guard| guard.delivery_connector(&work.conductor.device_id))
+            else {
+                self.answer_hold(owner, &work, Hold::Absent);
+                continue;
+            };
+            let episode = Episode::from(&observed);
+            if self
+                .answer_tried
+                .get(&work.mission)
+                .is_some_and(|last| last.episode == episode && now < last.retry_at)
+            {
+                continue;
+            }
+            *count += 1;
+            match type_answer(owner, connector.as_ref(), &work, &observed, stop) {
+                Ok(Outcome::Rung) => {
+                    self.answer_tried.remove(&work.mission);
+                    self.answer_held.remove(&work.mission);
+                    if let Ok(mut guard) = owner.lock() {
+                        guard.mission_answer_sent(&work.mission, work.key, Ok(()));
+                    }
+                }
+                Ok(Outcome::Held(reason)) => {
+                    self.answer_hold(owner, &work, reason);
+                    self.answer_tried.insert(
+                        work.mission.clone(),
+                        Tried {
+                            episode,
+                            retry_at: now.saturating_add(RETRY_FIRST_MS),
+                            delay: RETRY_FIRST_MS,
+                        },
+                    );
+                }
+                Ok(Outcome::Stopped) => break,
+                Err(code) => {
+                    // The prompt may have been typed; the operator sees it
+                    // failed and decides whether to answer again (B28).
+                    if let Ok(mut guard) = owner.lock() {
+                        guard.mission_answer_sent(&work.mission, work.key, Err(code));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Logs why an answer waits once per change and shows it waiting for
+    /// the Conductor's turn.
+    fn answer_hold(
+        &mut self,
+        owner: &Mutex<Runtime>,
+        work: &crate::runtime::mission_events::AnswerWork,
+        reason: Hold,
+    ) {
+        if self.answer_held.insert(work.mission.clone(), reason) != Some(reason) {
+            crate::diagnostic!(json!({"component":"missions","kind":"mission.answer_held",
+                "mission":work.mission,"pane_id":work.conductor.pane_id,"reason":reason.code()}));
+        }
+        if let Ok(mut guard) = owner.lock() {
+            guard.mission_answer_held(&work.mission);
+        }
     }
 
     /// Drops what the doorbell kept for letters that left the pass. A letter
@@ -732,6 +832,38 @@ fn deliver(
         .map_err(|_| "herdr_call_failed")?;
     wire::delivery_prompted(submitted).map_err(|_| "herdr_format")?;
     // Arrival is not intake. Only a flushed prompt-hook confirmation clears it.
+    Ok(Outcome::Rung)
+}
+
+/// Types one answer, after the same last checks a bell makes: Herdr still
+/// reports the agent the verdict was read for, the pane has not moved, and
+/// the answer still waits. Nothing is recorded as a letter's bell: the
+/// conversation reads it as the operator's own message (D-13).
+fn type_answer(
+    owner: &Mutex<Runtime>,
+    connector: &dyn ApiConnector,
+    work: &crate::runtime::mission_events::AnswerWork,
+    observed: &Observation,
+    stop: &AtomicBool,
+) -> Result<Outcome, &'static str> {
+    if stop.load(Ordering::Acquire) {
+        return Ok(Outcome::Stopped);
+    }
+    if let Err(reason) = native_current(connector, observed)? {
+        return Ok(Outcome::Held(reason));
+    }
+    if let Err(reason) = owner
+        .lock()
+        .map_err(|_| "runtime_unavailable")?
+        .mission_answer_current(work, observed)
+    {
+        return Ok(Outcome::Held(reason));
+    }
+    let parameters = wire::delivery_prompt_params(&observed.raw_pane_id, &work.line)
+        .map_err(|_| "herdr_parameters")?;
+    let submitted = request_small_response(connector, "agent.prompt", parameters, PROMPT_TIMEOUT)
+        .map_err(|_| "herdr_call_failed")?;
+    wire::delivery_prompted(submitted).map_err(|_| "herdr_format")?;
     Ok(Outcome::Rung)
 }
 

@@ -81,6 +81,9 @@ pub struct Snapshot {
     /// Each Conductor's mission as its map draws it (PRD
     /// software-factory-conductor D-14).
     pub missions: crate::runtime::missions::MissionsSnapshot,
+    /// The events of the mission open in the 보기 slot only (PRD
+    /// mission-plan-visibility D-22).
+    pub mission_events: crate::runtime::mission_events::MissionEventsSnapshot,
     /// Each pane's session's own plan (PRD hide-plan D-10).
     pub plans: crate::runtime::plans::PlansSnapshot,
     pub navigator: NavigatorSnapshot,
@@ -6765,6 +6768,7 @@ impl Snapshot {
             delivery_watches: Vec::new(),
             overview_graph: OverviewGraphSnapshot::default(),
             missions: Default::default(),
+            mission_events: Default::default(),
             plans: Default::default(),
             navigator: NavigatorSnapshot {
                 agent_scope: Default::default(),
@@ -8389,6 +8393,64 @@ mod wire_enum_tests {
             }
             assert_wire(&contract, "mission_blocked", &blocked);
             checked.insert("mission_blocked");
+            let verdicts = [crate::missions::Verdict::Pass, crate::missions::Verdict::Fail];
+            for variant in verdicts {
+                match variant {
+                    crate::missions::Verdict::Pass | crate::missions::Verdict::Fail => {}
+                }
+            }
+            assert_wire(&contract, "mission_verdict", &verdicts);
+            checked.insert("mission_verdict");
+            use crate::runtime::missions::AnswerState;
+            let states = [AnswerState::Sending, AnswerState::Waiting, AnswerState::Delivered];
+            for variant in states {
+                match variant {
+                    AnswerState::Sending | AnswerState::Waiting | AnswerState::Delivered => {}
+                }
+            }
+            assert_wire(&contract, "mission_answer_state", &states);
+            checked.insert("mission_answer_state");
+            use crate::mission_events::{AnswerSource, EventKind};
+            let kinds = [
+                EventKind::Planned,
+                EventKind::Replanned,
+                EventKind::Node,
+                EventKind::Retried,
+                EventKind::PrOpened,
+                EventKind::PrMerged,
+                EventKind::Landed,
+                EventKind::Asked,
+                EventKind::Answered,
+                EventKind::AnswerUndelivered,
+                EventKind::Reported,
+                EventKind::Cancelled,
+            ];
+            for variant in kinds {
+                match variant {
+                    EventKind::Planned
+                    | EventKind::Replanned
+                    | EventKind::Node
+                    | EventKind::Retried
+                    | EventKind::PrOpened
+                    | EventKind::PrMerged
+                    | EventKind::Landed
+                    | EventKind::Asked
+                    | EventKind::Answered
+                    | EventKind::AnswerUndelivered
+                    | EventKind::Reported
+                    | EventKind::Cancelled => {}
+                }
+            }
+            assert_wire(&contract, "mission_event_kind", &kinds);
+            checked.insert("mission_event_kind");
+            let sources = [AnswerSource::Banner, AnswerSource::Conversation];
+            for variant in sources {
+                match variant {
+                    AnswerSource::Banner | AnswerSource::Conversation => {}
+                }
+            }
+            assert_wire(&contract, "mission_answer_source", &sources);
+            checked.insert("mission_answer_source");
         }
 
         {
