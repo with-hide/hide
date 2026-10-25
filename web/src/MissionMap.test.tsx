@@ -209,6 +209,7 @@ it("marks a held card with !, says every badge in the card's name, and draws a r
   const cancelled = await mount({ items: [mission({ nodes: [node("base", { status: "held" }), node("run", { status: "working", line: "Writing tests" })], status: "cancelled", closed_at_unix_ms: Date.now(), decision: "Which base?" })] });
   try {
     expect(cancelled.q('[data-mission-node="base"] [data-node-held]')).toBeNull();
+    expect(cancelled.q('[data-mission-node="base"]')?.getAttribute("aria-label")).toBe("Node base · Held");
     expect(cancelled.q('[data-mission-node="run"] [data-node-now]')).toBeNull();
     await act(async () => cancelled.q('[data-mission-node="run"]')!.click());
     expect(cancelled.q('[data-mission-detail="run"]')?.textContent).not.toContain("Writing tests");

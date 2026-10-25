@@ -464,10 +464,15 @@ function shownMark(node: MissionNode, tone: ReturnType<typeof nodeTone>, worker:
 function badgeWords(mission: Mission, node: MissionNode, t: TFunction): string[] {
   return [
     // The status word already says held; the badge adds the question.
-    ...(node.status === "held" && mission.decision ? [mission.decision] : []),
+    ...(showsHeld(mission, node) && mission.decision ? [mission.decision] : []),
     ...(node.attempts >= 2 ? [t("mission.badge.attempts", { count: node.attempts })] : []),
     ...(node.change ? [`${t("mission.changed")} · ${node.change}`] : []),
   ];
+}
+
+/** A decision stopped the node; a cancelled mission's decision is over with it. */
+function showsHeld(mission: Mission, node: MissionNode): boolean {
+  return node.status === "held" && nodeTone(mission, node) !== "cancelled";
 }
 
 function heldWords(mission: Mission, t: TFunction): string {
@@ -483,7 +488,7 @@ function Badges({ mission, node }: { mission: Mission; node: MissionNode }) {
   const { t } = useInterfaceTranslation();
   return (
     <>
-      {node.status === "held" && nodeTone(mission, node) !== "cancelled" ? (
+      {showsHeld(mission, node) ? (
         <Hint label={heldWords(mission, t)}>
           <span className="shrink-0 rounded-xs bg-muted px-xxs font-mono text-micro font-semibold text-mission-hold" data-node-held="true">!</span>
         </Hint>
@@ -656,8 +661,9 @@ function FlowDetail({ mission, node, actions }: { mission: Mission; node: Missio
   // a done or cancelled node has no current line.
   const result = nodeResult(node);
   const resultLine = result?.kind === "conclusion" || result?.kind === "verify" ? result : null;
-  const current = nodeMoving(mission, node) || (nodeTone(mission, node) !== "cancelled" && node.status !== "done" && node.status !== "dropped");
-  const nowLine = current && !resultLine ? ((node.plan ? planNowLine(node.plan, t) : null) ?? node.line) : null;
+  const current = nodeTone(mission, node) !== "cancelled" && node.status !== "done" && node.status !== "dropped";
+  // A stopped node's own line says why; the worker's plan says where it is only while it moves.
+  const nowLine = !current || resultLine ? null : nodeMoving(mission, node) ? ((node.plan ? planNowLine(node.plan, t) : null) ?? node.line) : node.line;
   const time = (at: number) => formatDateTime(language, at, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
   const fields: [string, ReactNode][] = [
     [t("mission.field.kind"), t(kindWord(node.kind))],
