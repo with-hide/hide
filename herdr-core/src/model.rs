@@ -1306,6 +1306,11 @@ pub struct SidebarAgentSnapshot {
     /// A delayed telemetry read leaves the last confirmed read fingerprint intact.
     #[serde(skip)]
     pub(crate) telemetry_stale: bool,
+    /// Herdr is still starting this agent and it has reported no state yet
+    /// (`agent_state::agent_starting`): its activity is unknown, but it has
+    /// done nothing a close could lose.
+    #[serde(skip)]
+    pub(crate) starting: bool,
     /// Raw Herdr session bound to destructive close approval, never a label fallback.
     #[serde(skip_serializing)]
     pub close_session: Option<crate::sidebar::SessionAgentSessionPayload>,

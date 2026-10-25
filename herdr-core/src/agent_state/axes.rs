@@ -1118,6 +1118,18 @@ pub(crate) fn agent_activity(agent: &SessionAgentPayload) -> AgentActivity {
     }
 }
 
+/// Whether Herdr is still starting this agent and it has reported no state
+/// since: the start Herdr made of it is pending (`launch_pending`) and its
+/// state has never changed on this server (`state_change_seq` 0). Herdr
+/// reports such an agent `unknown` until it detects it (measured on the
+/// pinned 0.9.5: about 2.5 s after `agent.start`), so its activity is
+/// unknown, yet it has not been given anything to do. A pane on a restored
+/// server is also at sequence 0 and unknown, but carries no pending start,
+/// and an unconfirmed list says nothing about the agent now.
+pub(crate) fn agent_starting(agent: &SessionAgentPayload) -> bool {
+    !agent.telemetry_stale && agent.launch_pending && agent.state_change_seq == Some(0)
+}
+
 /// Whether this stopped pane has actually completed work: Herdr's `done`, or
 /// its `idle` with the completion it keeps (`completion_seq`) after its
 /// tab-scoped seen turned `done` into `idle`. A ready pane has no completion.

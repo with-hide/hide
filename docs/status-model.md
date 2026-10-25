@@ -347,8 +347,12 @@ Regression owners: `precedence_is_the_turn_then_progress_then_a_stop_to_read`, `
 
 `requires_close_confirmation` and `requires_close_status_check` are core-derived values carried by both the sidebar agent row and its pane projection.
 The confirmation value is true for Working activity, an unresolved demand, or a blocked pane; a stopped unread completion does not create a work-interruption prompt.
-The status-check value is true only for Unknown activity with no demand and no block.
+The status-check value is true only for Unknown activity with no demand and no block, on an agent that is not starting.
 It prevents a destructive local or remote close from guessing that an unobserved agent is idle, and the caller-visible remedy is to refresh status before closing.
+An agent is starting while Herdr still holds open the start it made of it (`launch_pending`) and has reported no state for it on this server (`state_change_seq` 0), from a confirmed agent list (`agent_state::agent_starting`).
+The pinned Herdr reports such an agent `unknown` for about 2.5 s after `agent.start`, until it detects it; it has been given nothing to do, so a pane closed right after it was made closes like a stopped one, with no status check and no confirmation.
+A pane on a restored server is also at sequence 0 and `unknown` while Herdr detects its agent again, but it carries no pending start and may hold running work, so it still needs the status check, as does a starting agent whose list was not confirmed.
+Regression owners: `an_agent_still_starting_closes_without_a_status_check` and `an_unknown_agent_that_is_not_starting_still_needs_a_status_check` in `herdr-core/src/session_sync/tests.rs`.
 The shell presents that remedy as the existing read-only `Check status` action and keeps the destructive close confirmation separate from it.
 An unknown row still belongs to Seen for sidebar grouping, so close safety never changes the read or ownership axes.
 

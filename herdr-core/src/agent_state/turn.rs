@@ -598,12 +598,15 @@ pub(crate) fn agent_requires_close_confirmation(
 
 /// An activity-less pane cannot safely be described as idle in a destructive
 /// confirmation. The caller must obtain a fresh status before it can close.
+/// An agent still starting (`starting`) has reported nothing yet and been
+/// given nothing to do, so it closes like a stopped one.
 pub(crate) fn agent_requires_close_status_check(
     activity: AgentActivity,
     demand: AgentDemand,
     blocked: bool,
+    starting: bool,
 ) -> bool {
-    activity == AgentActivity::Unknown && demand == AgentDemand::None && !blocked
+    activity == AgentActivity::Unknown && demand == AgentDemand::None && !blocked && !starting
 }
 
 /// What a row's second line says, decided by the row's group (PRD D-06).
@@ -796,7 +799,7 @@ pub(crate) fn derive_from_axes(agent: &mut SidebarAgentSnapshot) {
     agent.requires_close_confirmation =
         agent_requires_close_confirmation(activity, demand, agent.blocked);
     agent.requires_close_status_check =
-        agent_requires_close_status_check(activity, demand, agent.blocked);
+        agent_requires_close_status_check(activity, demand, agent.blocked, agent.starting);
     // A sleeping agent keeps its group, order and read axis; only its mark
     // and word say that its process is gone until it is opened (PRD B10).
     if let Some(sleep) = &agent.sleep {

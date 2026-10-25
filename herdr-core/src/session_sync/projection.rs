@@ -68,9 +68,10 @@ pub(crate) struct ProjectedAgent {
     /// tab seen leaves it in place.
     pub(crate) completion_seq: Option<u64>,
     /// Herdr still holds open the start it made of this agent
-    /// (`agent.start`). The core reads it while it is also at rest
-    /// (`launch_settle.rs`); it never reaches the shell. A workaround for
-    /// herdrdev/herdr#3853, deleted with it.
+    /// (`agent.start`). It says, with no state reported yet, that the agent
+    /// is starting (`agent_state::agent_starting`), and the start settle
+    /// reads it while the agent is also at rest (`launch_settle.rs`, a
+    /// workaround for herdrdev/herdr#3853); it never reaches the shell.
     pub(crate) launch_pending: bool,
     pub(crate) tokens: BTreeMap<String, Value>,
 }
@@ -132,6 +133,7 @@ impl ProjectionState {
                     lineage_session: agent.lineage_session.clone(),
                     state_change_seq: Some(agent.state_change_seq),
                     completion_seq: agent.completion_seq,
+                    launch_pending: agent.launch_pending,
                     tokens: agent.tokens.clone(),
                     // The coordinator's label worker lays these on.
                     label: None,

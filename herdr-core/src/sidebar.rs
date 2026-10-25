@@ -242,6 +242,11 @@ pub struct SessionAgentPayload {
     /// tab-scoped seen does not clear (`agent_state::agent_completed`).
     #[serde(default)]
     pub completion_seq: Option<u64>,
+    /// Herdr still holds open the start it made of this agent
+    /// (`agent.start`). With no state reported yet it is the starting state
+    /// (`agent_state::agent_starting`).
+    #[serde(default)]
+    pub launch_pending: bool,
     #[serde(default)]
     pub tokens: BTreeMap<String, Value>,
     /// The core's label for this agent's current session, if proven.
@@ -656,6 +661,7 @@ fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSnapshot, Str
     let identity_label = title.unwrap_or_else(|| provider_name(agent.agent.as_deref()));
     let projected = SidebarAgentSnapshot {
         telemetry_stale: agent.telemetry_stale,
+        starting: agent_starting(&agent),
         record_connection: agent.record.as_ref().map(|r| r.connection),
         record_summary: agent
             .record
@@ -1520,7 +1526,7 @@ mod tests {
                 "{demand:?} {activity:?} unread={unread} blocked={blocked}"
             );
             assert_eq!(
-                agent_requires_close_status_check(activity, demand, blocked),
+                agent_requires_close_status_check(activity, demand, blocked, false),
                 status_check,
                 "status check: {demand:?} {activity:?} unread={unread} blocked={blocked}"
             );
