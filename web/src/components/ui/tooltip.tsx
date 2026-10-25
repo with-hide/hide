@@ -2,6 +2,7 @@ import { Tooltip as TooltipPrimitive } from "radix-ui";
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ComponentProps, type FocusEvent, type ReactNode, type RefObject } from "react";
 import { visiblePageRects } from "../../browserViews";
 import { cn } from "../../lib/utils";
+import { shellDragging } from "../../shellDrag";
 import { hintSide, type HintSide } from "../../tooltipSide";
 import { useUiStore } from "../../ui";
 
@@ -126,7 +127,8 @@ function useHintOpen() {
   };
   return {
     open,
-    onOpenChange: (next: boolean) => setOpen(next && !pressed.current),
+    // A pane or agent dragged across the trigger is not pointing at it.
+    onOpenChange: (next: boolean) => setOpen(next && !pressed.current && !shellDragging()),
     triggerProps: {
       onPointerDown: press,
       onContextMenu: press,

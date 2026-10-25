@@ -258,6 +258,16 @@ describe("the line's words (status-marks D-04, B7, B10, B13, B16)", () => {
     expect(sidebarLine(asked)).toMatchObject({ text: "어느 쪽으로 나눌까요?", mode: "request" });
   });
 
+  it("says 시작 중 on a row Herdr is still starting, on its line and its mark, where an unknown row says 상태 모름", async () => {
+    const { t } = await createInterfaceI18n("ko");
+    for (const [status_code, words] of [["starting", "시작 중"], ["unknown", "상태 모름"]] as const) {
+      const agent = row("s", { activity: "unknown", mark: "unknown", status_code });
+      expect(lineText(t, agent, sidebarLine(agent)!)).toBe(words);
+      expect(treeLine(agent)).not.toBeNull();
+      expect(markWords(t, agent)).toBe(words);
+    }
+  });
+
   it("names the pull request whose checks ended, in warning only when they failed", async () => {
     const { t } = await createInterfaceI18n("ko");
     const ended = (mode: "checks_passed" | "checks_failed") => {

@@ -1,6 +1,6 @@
 // Chapter 4: three ways to hand work to another agent, all by saying it to the
 // lead: a child it starts and keeps talking to, an open agent it finds by what
-// it does, and an agent named by the pane ID copied from its pane's menu.
+// it does, and an agent named by the name and ID copied from its pane's menu.
 
 import { chapter } from "../chapter";
 import { CHILD, DELEGATE_WORLD, DOCS, LEAD, SIGNUP, type DelegateModel } from "../worlds/delegate";
@@ -24,8 +24,8 @@ export default chapter<DelegateModel>({
     { id: "received", target: pane(DOCS), side: "left" },
     {
       id: "copy", quest: true, target: `${pane(SIGNUP)} header, [role="menu"]`, side: "left",
-      gesture: { menu: { at: `${pane(SIGNUP)} header`, path: ['[data-menu-group="copy"]', '[data-menu-item="copy_pane_id"]'] } },
-      done: (model) => model.copied === SIGNUP,
+      gesture: { menu: { at: `${pane(SIGNUP)} header`, path: ['[data-menu-item="copy_reference"]'] } },
+      done: (model) => model.copied?.includes(`pane ${SIGNUP}`) === true,
     },
     { id: "paste", quest: true, target: pane(LEAD), side: "inside", gesture: say(`${SIGNUP} update the signup copy for the new timeout`), done: (model) => model.stage >= 4 },
     { id: "end", target: "[data-sidebar-box] [data-sidebar]", side: "right" },

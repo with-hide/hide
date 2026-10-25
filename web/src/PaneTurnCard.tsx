@@ -9,6 +9,7 @@ import { cn } from "./lib/utils";
 import { agentsByPane, allAgents } from "./paneAgents";
 import { sessionOfAgentOn } from "./sessionWork";
 import { localDeviceId, type AgentRow, type LabelEnd, type PaneHeader, type PaneTurnRequest, type RequestSender } from "./snapshot";
+import { shellDragging } from "./shellDrag";
 import { useShellStore } from "./store";
 
 /** How long the pointer may cross the gap between a trigger and its card before the card closes. */
@@ -54,6 +55,8 @@ export function PaneTurnCard({ paneId, actions, trigger }: { paneId: string; act
   const localId = useShellStore((state) => localDeviceId(state.rest));
   const open = !dismissed && (pinned || hovered || focused);
   const enter = () => {
+    // A pane or agent dragged across the trigger is not pointing at it.
+    if (shellDragging()) return;
     if (leave.current !== null) window.clearTimeout(leave.current);
     leave.current = null;
     setDismissed(false);

@@ -20,7 +20,6 @@ export const menusEnglish = {
   "menus.group.move": "Move",
   "menus.group.relations": "Related sessions",
   "menus.group.fork": "Fork session",
-  "menus.group.copy": "Copy details",
   "menus.right": "Right",
   "menus.left": "Left",
   "menus.up": "Up",
@@ -31,12 +30,8 @@ export const menusEnglish = {
   "menus.sleep": "Sleep agent",
   "menus.zoom": "Zoom terminal",
   "menus.unzoom": "Exit zoom",
-  "menus.terminalName": "Terminal name",
-  "menus.terminalId": "Terminal ID",
   "menus.parent": "Parent: {{name}}",
   "menus.sibling": "Sibling: {{name}}",
-  "menus.sessionTitle": "Session title",
-  "menus.sessionId": "Session ID",
 } as const;
 
 const ko = {
@@ -59,7 +54,6 @@ const ko = {
   "menus.group.move": "이동",
   "menus.group.relations": "관련 세션",
   "menus.group.fork": "세션 포크",
-  "menus.group.copy": "정보 복사",
   "menus.right": "오른쪽",
   "menus.left": "왼쪽",
   "menus.up": "위쪽",
@@ -70,12 +64,8 @@ const ko = {
   "menus.sleep": "에이전트 재우기",
   "menus.zoom": "터미널 확대",
   "menus.unzoom": "확대 해제",
-  "menus.terminalName": "터미널 이름",
-  "menus.terminalId": "터미널 ID",
   "menus.parent": "부모 · {{name}}",
   "menus.sibling": "같은 부모의 세션 · {{name}}",
-  "menus.sessionTitle": "세션 이름",
-  "menus.sessionId": "세션 ID",
 } satisfies Catalog<typeof menusEnglish>;
 
 const zhCN = {
@@ -98,7 +88,6 @@ const zhCN = {
   "menus.group.move": "移动",
   "menus.group.relations": "相关会话",
   "menus.group.fork": "派生会话",
-  "menus.group.copy": "复制信息",
   "menus.right": "右侧",
   "menus.left": "左侧",
   "menus.up": "上方",
@@ -109,12 +98,8 @@ const zhCN = {
   "menus.sleep": "休眠",
   "menus.zoom": "放大终端",
   "menus.unzoom": "退出放大",
-  "menus.terminalName": "终端名称",
-  "menus.terminalId": "终端 ID",
   "menus.parent": "父会话：{{name}}",
   "menus.sibling": "同级会话：{{name}}",
-  "menus.sessionTitle": "会话名称",
-  "menus.sessionId": "会话 ID",
 } satisfies Catalog<typeof menusEnglish>;
 
 const ja = {
@@ -137,7 +122,6 @@ const ja = {
   "menus.group.move": "移動",
   "menus.group.relations": "関連セッション",
   "menus.group.fork": "セッションを分岐",
-  "menus.group.copy": "情報をコピー",
   "menus.right": "右",
   "menus.left": "左",
   "menus.up": "上",
@@ -148,12 +132,8 @@ const ja = {
   "menus.sleep": "スリープ",
   "menus.zoom": "ターミナルを拡大",
   "menus.unzoom": "拡大を解除",
-  "menus.terminalName": "ターミナル名",
-  "menus.terminalId": "ターミナル ID",
   "menus.parent": "親: {{name}}",
   "menus.sibling": "兄弟: {{name}}",
-  "menus.sessionTitle": "セッション名",
-  "menus.sessionId": "セッション ID",
 } satisfies Catalog<typeof menusEnglish>;
 
 export const menusCatalogs = { en: menusEnglish, ko, "zh-CN": zhCN, ja } satisfies Catalogs<typeof menusEnglish>;

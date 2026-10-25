@@ -123,6 +123,14 @@ const KEYS = new Map<string, MessageKey>([
   ["remote.control.not_connected", "coreError.deviceNotConnected"],
   ["remote.control.unavailable", "coreError.deviceNotConnected"],
   ["pane_reopen.not_restarted", "coreError.notice.reopenNotRestarted"],
+  // Why a close of an agent with its children closed nothing, or not all of it.
+  ["tree_close.capacity", "coreError.close.capacity"],
+  ["tree_close.busy", "coreError.close.busy"],
+  ["tree_close.too_many", "coreError.close.tooMany"],
+  ["tree_close.unresolved_close", "coreError.close.unresolved"],
+  ["tree_close.incomplete", "coreError.close.incomplete"],
+  ["tree_close.status_unknown", "coreError.notice.closeStatusUnknown"],
+  ["tree_close.confirmation_required", "coreError.notice.closeNeedsConfirm"],
 
   ["view_layout.limit", "coreError.view.limit"],
   ["view_layout.unsaved", "coreError.view.unsaved"],

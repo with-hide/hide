@@ -1699,6 +1699,9 @@ pub struct Runtime {
     /// id. Kept off the snapshot: an issue body or a request has no business
     /// on the wire after the surface that sent it.
     task_agent_launch: Option<TaskAgentLaunch>,
+    /// The panes whose agent a task started with the operator's first
+    /// prompt, kept until Herdr reports that agent (`lay_start_prompts`).
+    start_prompts: BTreeSet<String>,
     group_start: Option<group_starts::ActiveStart>,
     task_start_focus: Option<group_starts::TaskStartFocus>,
     group_start_saves: Vec<group_starts::SaveWaiter>,
@@ -2392,6 +2395,7 @@ impl Runtime {
             github_search: issues::GithubSearchWork::default(),
             pr_link_checkout: None,
             task_agent_launch: None,
+            start_prompts: BTreeSet::new(),
             group_start: None,
             task_start_focus: None,
             group_start_saves: Vec::new(),

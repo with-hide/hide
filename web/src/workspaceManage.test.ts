@@ -270,7 +270,7 @@ describe("row menus", () => {
 
   it("draws an agent's menu with its ⌥n and without Mark as seen or Stop agent (B7, B8)", () => {
     const agent = legacyAgentRow({ id: "a", pane_id: "p1", identity_label: "배포 전 확인", agent_kind: "claude", mark: "going", group: "working", status_code: "working" as const, changed_at_unix_ms: null, emphasized: false, unread: false, session_id: "0b5e-session" });
-    expect(drawn(agentMenu(agent, "⌥3"))).toEqual(["Show ⌥3", "─", "Copy title", "Copy session id", "Copy pane ID", "─", "Close tab…"]);
+    expect(drawn(agentMenu(agent, "⌥3"))).toEqual(["Show ⌥3", "─", "Copy name and ID", "Copy session id", "─", "Close tab…"]);
     expect(drawn(agentMenu(agent, ""))[0]).toBe("Show");
     expect(agentMenu({ ...agent, session_id: null }, "").find((item) => item.id === "copy_session_id")?.unavailable).toMatch(/no session id/);
   });

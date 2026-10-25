@@ -6,7 +6,7 @@ import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
 import { EntryPointMenu, type MenuEntry } from "./components/entry-menu";
 import { relationEntries, relationState } from "./lineage";
-import { herdrPaneId } from "./remote";
+import { agentReference, referenceText } from "./agentReference";
 import { type AgentActionRefusal, type PaneRow } from "./snapshot";
 import { agentActionReasonsEnglish } from "./i18n/resources/agentActionReasons";
 import { useShellStore } from "./store";
@@ -124,8 +124,7 @@ type PaneMenuId =
   | "open_plan"
   | "fork_agent"
   | "fork_agent_side"
-  | "copy_name"
-  | "copy_pane_id"
+  | "copy_reference"
   | "close_pane"
   | "copy"
   | "paste"
@@ -142,7 +141,7 @@ type PaneMenuId =
 
 /**
  * What the pane header offers about this pane (B16, B18): its relatives,
- * each opened only by choosing it, its name and Herdr id to copy, and closing it. Opening
+ * each opened only by choosing it, its reference (name and Herdr id) to copy, and closing it. Opening
  * the menu moves no focus and marks nothing read.
  */
 /** 다시 볼 것 on a root agent's pane (PRD revisit-group D-08, B10): `star` offers the ★, `done` offers 다시 볼 것에서 빼기. */
@@ -201,8 +200,7 @@ export function paneMenuItems(pane: PaneRow, title: string, archive: ArchiveOffe
   if (plan) agentActions.unshift({ id: "open_plan", icon: "plan", label: translate("panes.menu.plan"), unavailable: null });
   if (overview) agentActions.unshift({ id: "open_in_overview", icon: "overview", label: translate("panes.menu.openInOverview"), unavailable: null });
   if (agentActions.length > 0) items.push(...agentActions.map((item, index) => (index === 0 ? { ...item, separated: items.length > 0 } : item)));
-  items.push({ id: "copy_name", group: "copy", menuLabel: translate("menus.terminalName"), icon: "copy", label: translate("panes.menu.copyName"), unavailable: null, separated: items.length > 0 });
-  items.push({ id: "copy_pane_id", group: "copy", menuLabel: translate("menus.terminalId"), icon: "id", label: translate("panes.menu.copyPaneId"), unavailable: null });
+  items.push({ id: "copy_reference", icon: "copy", label: translate("panes.menu.copyReference"), unavailable: null, separated: items.length > 0 });
   items.push({ id: "close_pane", menuLabel: translate("menus.closeTerminal"), icon: "close", label: translate("panes.close", { name: title }), unavailable: null, separated: true });
   return items;
 }
@@ -289,10 +287,11 @@ export function usePaneMenu(pane: PaneRow, title: string, actions: Actions) {
       return actions.openTerminalPath(found, target.line, target.column, id === "link_external", id === "link_source" ? "source" : "auto", pane.id);
     }
     switch (id) {
-      case "copy_name":
-        return actions.copyText(title, "pane name");
-      case "copy_pane_id":
-        return actions.copyText(herdrPaneId(pane.id), "pane id");
+      case "copy_reference": {
+        const state = useShellStore.getState();
+        const agent = agentsByPane(allAgents(state.agents, state.rest?.status?.remote)).get(pane.id);
+        return actions.copyText(agent ? agentReference(agent) : referenceText(title, pane.id), "pane reference");
+      }
       case "close_pane":
         return actions.closePane(pane.id);
       case "sleep_agent":

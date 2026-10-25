@@ -1,5 +1,7 @@
+import { useState } from "react";
 import type { TFunction } from "i18next";
-import type { Subtree, SubtreeRow, SubtreeState } from "../close";
+import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
+import { foldQuietRows, type Subtree, type SubtreeRow, type SubtreeState } from "../close";
 import { useInterfaceTranslation } from "../i18n/client";
 import { statusText } from "../agentStatus";
 import type { MessageKey } from "../i18n/catalogs";
@@ -18,7 +20,9 @@ import { Hint } from "./ui/tooltip";
 // status marks' alone. A row that is working, waiting for an answer, holding
 // an unread result or unreadable is bright and says its state in a neutral
 // word; a quiet one is dimmed, and its mark's tooltip and the row's
-// accessible name carry its state.
+// accessible name carry its state. Quiet descendants with nothing below them
+// that needs the operator fold under one line the operator can open, so a
+// tree of dozens of finished children still shows what needs them first.
 
 // The four marks mean here what they mean on every row (B21): a request
 // waiting for an answer is `!`, work in progress the ring, an unread result
@@ -45,6 +49,8 @@ export function subtreeSummaryWords(counts: Subtree["counts"], t: TFunction<"tra
 export function SubtreeList({ subtree, targetDevice, scope = "close" }: { subtree: Subtree; targetDevice: string | undefined; scope?: SubtreeScope }) {
   const { t } = useInterfaceTranslation();
   const parts = SUMMARY.filter(({ state }) => subtree.counts[state] > 0);
+  const { shown, folded } = foldQuietRows(subtree.rows);
+  const [open, setOpen] = useState(false);
   return (
     <div className="flex min-w-0 flex-col gap-xs" data-subtree-list="true">
       {parts.length > 0 ? (
@@ -60,9 +66,25 @@ export function SubtreeList({ subtree, targetDevice, scope = "close" }: { subtre
         </p>
       ) : null}
       <ul className="flex max-h-(--size-relationship-list-max) min-w-0 flex-col gap-xxs overflow-y-auto rounded-md border border-border p-xs" aria-label={t(LIST_LABEL[scope])}>
-        {subtree.rows.map((row) => (
+        {shown.map((row) => (
           <SubtreeItem key={row.agent.pane_id} row={row} targetDevice={targetDevice} />
         ))}
+        {folded.length > 0 ? (
+          <li>
+            <button
+              type="button"
+              aria-expanded={open}
+              data-subtree-fold={folded.length}
+              onClick={() => setOpen((value) => !value)}
+              className="flex w-full min-w-0 items-center gap-xs rounded-xs px-xs py-xxs text-start text-caption text-subtle-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring"
+              style={{ paddingInlineStart: "calc(var(--spacing-xs) + var(--spacing-lg))" }}
+            >
+              {open ? <ChevronDownIcon aria-hidden="true" className="size-(--size-icon) shrink-0" /> : <ChevronRightIcon aria-hidden="true" className="size-(--size-icon) shrink-0" />}
+              <span>{t("agents.subtree.quietFolded", { count: folded.length })}</span>
+            </button>
+          </li>
+        ) : null}
+        {open ? folded.map((row) => <SubtreeItem key={row.agent.pane_id} row={row} targetDevice={targetDevice} />) : null}
       </ul>
     </div>
   );

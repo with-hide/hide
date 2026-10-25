@@ -12,7 +12,7 @@
   "agent_onboarding": ["pending", "done"],
   "agent_wait": ["children", "background", "reply", "checks"],
   "row_mark": ["turn", "going", "waiting", "done", "unread", "quiet", "unknown", "asleep"],
-  "agent_status_code": ["error", "question", "approval", "working", "done", "idle", "unknown", "waiting", "unfinished", "stopped", "attached", "sleeping", "waking", "sleep_failed"],
+  "agent_status_code": ["error", "question", "approval", "working", "done", "idle", "unknown", "starting", "waiting", "unfinished", "stopped", "attached", "sleeping", "waking", "sleep_failed"],
   "changed_file_status": ["modified", "added", "deleted", "untracked", "renamed", "conflict"],
   "color_theme": ["hide", "neutral"],
   "checkout_purpose_origin": ["token", "branch_description", "agent_title", "pull_request_title"],

@@ -580,7 +580,7 @@ test("a right-click focuses its pane and opens the terminal menu, whose Zoom pan
     await shellPane.locator("[data-terminal-host]").click({ button: "right", position: { x: 40, y: 40 } });
     const menu = page.getByRole("menu");
     await expect(menu).toBeVisible();
-    for (const item of ["Paste", "Select all", "Find", "Split right", "Split down", "Zoom terminal", "Copy details"]) {
+    for (const item of ["Paste", "Select all", "Find", "Split right", "Split down", "Zoom terminal", "Copy name and ID"]) {
       await expect(menu.getByRole("menuitem", { name: item, exact: false }).first()).toBeVisible();
     }
     await expect(page.locator("[data-pane-focus-outline]")).toHaveCount(0);
