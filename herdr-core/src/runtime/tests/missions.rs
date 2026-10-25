@@ -1509,6 +1509,25 @@ fn an_answer_whose_conductor_left_or_whose_question_changed_is_not_delivered() {
 }
 
 #[test]
+fn closing_a_mission_ends_its_decision_and_records_an_answer_never_typed() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running(&mut runtime);
+    command(&mut runtime, "sender", json!({"op": "decide", "line": "Which base?"})).unwrap();
+    assert!(runtime.mission_answer_event("mission-1", 1, None, Some("main".into())));
+    runtime.mission_answer_held("mission-1");
+    command(&mut runtime, "sender", json!({"op": "close", "end": "cancelled"})).unwrap();
+    let mission = &runtime.missions.book.missions[0];
+    assert_eq!(
+        (mission.decision.is_none(), mission.question.is_none(), mission.answer.is_none(), mission.answer_failed),
+        (true, true, true, None)
+    );
+    assert!(runtime.missions.answers_held.is_empty());
+    assert!(runtime.mission_answers_due().is_empty());
+    assert_eq!(kinds(&runtime).iter().filter(|kind| *kind == "answer_undelivered").count(), 1);
+}
+
+#[test]
 fn a_conductor_whose_agent_the_doorbell_does_not_ring_takes_no_banner_answer() {
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
