@@ -777,6 +777,7 @@ Settings > Agents lists no subagent count either: the kit's feature table has no
 Closing a pane or a tab asks about the agents spawned from it only when one of them runs outside what closes (PRD close-agent-subtree).
 Those are the live descendants of every agent pane that closes, on this machine or a connected device, asleep or not, less the panes that close anyway; a device that is not connected contributes none.
 With none, the close is the ordinary one: a quiet pane closes at once, a working or attention pane asks the Stop-work confirmation, and an unknown status shows the status notice.
+A pane whose agent Herdr is still starting (`시작 중`) never shows the status notice: it closes at once, or asks the Stop-work confirmation when its start carried the operator's first prompt, which the close would otherwise drop ([status-model.md](status-model.md#close-protection-is-separate-from-read-state)).
 A target whose own status is unknown still shows only the status notice.
 The Stop-work confirmation has one line under its title and lists every pane that closes, named as the sidebar names it, with its status mark; a working, asking or unknown pane adds its status word, and a quiet one is dimmed with its state in the mark's tooltip and its accessible name.
 While it is open the list is live: a pane that settles stays listed and dims, one that starts working or asking brightens, and its title, line, buttons and focus stay as they opened.
@@ -1304,7 +1305,7 @@ In both 프로젝트 and 태스크, a session's elapsed time measures its latest
 State changes and a daemon restart preserve that reference; a new session never inherits it, and an unknown prompt time leaves the slot empty until the native read succeeds.
 The existing localized units and shared clock also apply to child rows; open-task ordering, unread state, waiting and escalation still use their own existing state times.
 Its second line is the sidebar's line in its parts: on 내 차례 the verb and the question (`질문 · …`) or the block's cause (`막힘 · …`) in the warning colour, a waiting ring's `대기 · ` and its cause, a stop's word (`끝남 · `, `일 남음 · `) and the background tail, work in progress its sentence alone, a waking, failed or unknown row its state, a sleeping row none (status-marks B10, B27, B29, B31, B33); on 쉬는 중 only unfinished work has a line, and a read one draws the quiet ring; with nothing to say there is no second line, and no stage bar is drawn.
-An unknown row is dimmed with no mark (status-marks B16).
+An unknown row is dimmed with no mark (status-marks B16); a row Herdr is still starting is drawn the same way and says `시작 중` instead of `상태 모름` wherever the status word stands (its line, the pane header, the Stop-work confirmation).
 A row with children opens them in place under its chevron, five per parent and the rest behind `N개 더`, indented to the third level; a child in another checkout carries a branch line, a child on another device a device chip, a finished child a quiet title, and pressing a child goes to its pane, bringing its device to the front (B10, B11).
 Folds are kept apart from the 프로젝트 tree's (`sessions_expanded_agent_pane_ids`).
 

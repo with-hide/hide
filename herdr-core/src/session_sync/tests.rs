@@ -138,6 +138,75 @@ fn a_refused_subscription_reads_the_protocol_the_server_pings_with() {
     }
 }
 
+/// Herdr's answer for an agent it is still starting, as the pinned 0.9.5
+/// sends it for about 2.5 s after `agent.start`.
+fn starting_agent(fields: Value) -> Value {
+    let mut agent = json!({
+        "pane_id": "w1:p1", "workspace_id": "w1", "tab_id": "w1:t1",
+        "terminal_id": "fixture-terminal", "focused": true, "revision": 0,
+        "name": "fixture-agent", "agent": "claude", "agent_status": "unknown",
+        "state_change_seq": 0, "launch_pending": true, "tokens": {}
+    });
+    for (key, value) in fields.as_object().unwrap() {
+        if value.is_null() {
+            agent.as_object_mut().unwrap().remove(key);
+        } else {
+            agent[key] = value.clone();
+        }
+    }
+    agent
+}
+
+#[test]
+fn an_agent_still_starting_closes_without_a_status_check() {
+    let mut value = snapshot();
+    value["agents"] = json!([starting_agent(json!({}))]);
+    let replica = SessionReplica::from_snapshot(&value).unwrap();
+    let payload = replica.project();
+    let local = crate::sidebar::project_agents(payload.clone());
+    let (remote, _) = replica.project_remote("mini", payload).unwrap();
+    for row in [&local.agents[0], &remote.agents[0]] {
+        assert_eq!(row.activity, "unknown");
+        assert_eq!(row.status_code, crate::model::AgentStatusCode::Starting);
+        assert!(!row.requires_close_status_check);
+        assert!(
+            !row.requires_close_confirmation,
+            "a start that carried no first prompt has nothing to stop"
+        );
+    }
+}
+
+#[test]
+fn an_unknown_agent_that_is_not_starting_still_needs_a_status_check() {
+    let cases = [
+        // A restored server lists a running agent at sequence 0 and unknown
+        // while it detects it again, with no start of its own pending.
+        ("restored", json!({"launch_pending": null})),
+        // Herdr reported a state for it once, so it has run.
+        ("reported before", json!({"state_change_seq": 3})),
+    ];
+    for (case, fields) in cases {
+        let mut value = snapshot();
+        value["agents"] = json!([starting_agent(fields)]);
+        let replica = SessionReplica::from_snapshot(&value).unwrap();
+        let row = &crate::sidebar::project_agents(replica.project()).agents[0];
+        assert_eq!(row.activity, "unknown", "{case}");
+        assert_eq!(
+            row.status_code,
+            crate::model::AgentStatusCode::Unknown,
+            "{case}"
+        );
+        assert!(row.requires_close_status_check, "{case}");
+    }
+    // A list that failed after the start says nothing about the agent now.
+    let mut value = snapshot();
+    value["agents"] = json!([starting_agent(json!({}))]);
+    let mut replica = SessionReplica::from_snapshot(&value).unwrap();
+    assert!(replica.invalidate_agents());
+    let row = &crate::sidebar::project_agents(replica.project()).agents[0];
+    assert!(row.requires_close_status_check, "unconfirmed");
+}
+
 #[test]
 fn unconfirmed_telemetry_preserves_identity_but_never_claims_activity_or_demand() {
     let mut value = snapshot();

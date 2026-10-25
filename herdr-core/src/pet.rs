@@ -151,6 +151,7 @@ mod tests {
             record_summary: None,
             record_metadata: None,
             telemetry_stale: false,
+            start: Default::default(),
             close_session: None,
             state: Default::default(),
             resolved: None,

@@ -641,6 +641,7 @@ export interface AgentNotice {
       | "done"
       | "idle"
       | "unknown"
+      | "starting"
       | "waiting"
       | "unfinished"
       | "stopped"

@@ -1486,6 +1486,11 @@ impl Runtime {
             ReadRecordScope::Remote(&prefix),
             Some(&live_pane_ids),
         );
+        self.lay_start_prompts(
+            &mut session.agents,
+            ReadRecordScope::Remote(&prefix),
+            Some(&live_pane_ids),
+        );
         crate::agent_state::apply_lineage(
             &mut session.agents,
             &session.workspaces,

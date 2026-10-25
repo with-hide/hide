@@ -66,6 +66,7 @@ export function stateLine(agent: Pick<AgentRow, "status_code" | "mark">): RowLin
     case "waking":
     case "sleep_failed":
     case "unknown":
+    case "starting":
       return { text: "", mode: "kept" };
     default:
       return undefined;
@@ -192,7 +193,7 @@ export function markName(t: TFunction<"translation">, mark: Exclude<RowMark, "un
  */
 export function markWords(t: TFunction<"translation">, agent: Pick<AgentRow, "mark" | "status_code"> & { background_left?: number }): string {
   if (agent.mark === "asleep") return statusText(t, agent.status_code);
-  if (agent.mark === "unknown") return statusText(t, "unknown");
+  if (agent.mark === "unknown") return statusText(t, agent.status_code === "starting" ? "starting" : "unknown");
   const name = markName(t, agent.mark);
   const word = agent.mark === "going" ? null : agent.mark === "waiting" ? statusText(t, "waiting") : agent.mark === "quiet" ? (QUIET_WORDS.has(agent.status_code) ? statusText(t, agent.status_code) : null) : agent.mark === "unread" && agent.status_code === "stopped" ? statusText(t, agent.status_code) : leadWord(t, agent);
   const left = agent.background_left ? t("agents.backgroundLeftWords", { count: agent.background_left }) : null;

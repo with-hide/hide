@@ -567,6 +567,7 @@ pub(crate) fn dormant_group() -> AgentGroup {
 pub(crate) fn agent_status_code(
     demand: AgentDemand,
     activity: AgentActivity,
+    start: AgentStart,
     completed: bool,
     unread: bool,
     finished: bool,
@@ -580,6 +581,7 @@ pub(crate) fn agent_status_code(
             AgentActivity::Stopped if completed && unread && finished => AgentStatusCode::Done,
             AgentActivity::Stopped if completed && unread => AgentStatusCode::Stopped,
             AgentActivity::Stopped => AgentStatusCode::Idle,
+            AgentActivity::Unknown if start != AgentStart::Settled => AgentStatusCode::Starting,
             AgentActivity::Unknown => AgentStatusCode::Unknown,
         },
     }
@@ -587,23 +589,34 @@ pub(crate) fn agent_status_code(
 
 /// Closing this pane would interrupt running work or discard an unresolved
 /// demand. Read state remains a presentation axis, so an unread completion or
-/// an ordinary stopped pane cannot create a close prompt by itself.
+/// an ordinary stopped pane cannot create a close prompt by itself. An agent
+/// still starting with the operator's first prompt would drop that prompt.
 pub(crate) fn agent_requires_close_confirmation(
     activity: AgentActivity,
     demand: AgentDemand,
     blocked: bool,
+    start: AgentStart,
 ) -> bool {
-    activity == AgentActivity::Working || demand != AgentDemand::None || blocked
+    activity == AgentActivity::Working
+        || demand != AgentDemand::None
+        || blocked
+        || start == AgentStart::Starting { first_prompt: true }
 }
 
 /// An activity-less pane cannot safely be described as idle in a destructive
 /// confirmation. The caller must obtain a fresh status before it can close.
+/// An agent still starting has reported nothing yet; what it may lose is
+/// decided by its start alone (`agent_requires_close_confirmation`).
 pub(crate) fn agent_requires_close_status_check(
     activity: AgentActivity,
     demand: AgentDemand,
     blocked: bool,
+    start: AgentStart,
 ) -> bool {
-    activity == AgentActivity::Unknown && demand == AgentDemand::None && !blocked
+    activity == AgentActivity::Unknown
+        && demand == AgentDemand::None
+        && !blocked
+        && start == AgentStart::Settled
 }
 
 /// What a row's second line says, decided by the row's group (PRD D-06).
@@ -764,6 +777,7 @@ pub(crate) fn derive_from_axes(agent: &mut SidebarAgentSnapshot) {
             verdict => agent_status_code(
                 demand,
                 activity,
+                agent.start,
                 agent.completed,
                 unread,
                 verdict == Some(StopVerdict::Finished),
@@ -794,9 +808,9 @@ pub(crate) fn derive_from_axes(agent: &mut SidebarAgentSnapshot) {
         0
     };
     agent.requires_close_confirmation =
-        agent_requires_close_confirmation(activity, demand, agent.blocked);
+        agent_requires_close_confirmation(activity, demand, agent.blocked, agent.start);
     agent.requires_close_status_check =
-        agent_requires_close_status_check(activity, demand, agent.blocked);
+        agent_requires_close_status_check(activity, demand, agent.blocked, agent.start);
     // A sleeping agent keeps its group, order and read axis; only its mark
     // and word say that its process is gone until it is opened (PRD B10).
     if let Some(sleep) = &agent.sleep {
