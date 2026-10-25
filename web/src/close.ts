@@ -147,3 +147,40 @@ const CLOSING_PHASES = new Set(["queued", "waiting", "closing", "transmitting", 
 export function agentClosing(operations: readonly AsyncOperation[] | undefined, paneId: string): boolean {
   return (operations ?? []).some((op) => (op.kind === "tree.close" || op.kind === "pane.close") && op.target_id === paneId && CLOSING_PHASES.has(op.phase));
 }
+
+/**
+ * How far the tree close whose target is `paneId` has come, as `closed/total`
+ * over every pane it closes, the target included; null when no tree close of
+ * it runs. The target's own `tree.close` record (stage `target`) names the
+ * tree, and every record of that tree shares its scope.
+ */
+export function treeCloseProgress(operations: readonly AsyncOperation[] | undefined, paneId: string): string | null {
+  const list = operations ?? [];
+  const target = list.find((op) => op.kind === "tree.close" && op.stage === "target" && op.target_id === paneId && CLOSING_PHASES.has(op.phase));
+  if (!target) return null;
+  const tree = list.filter((op) => op.kind === "tree.close" && op.scope_id === target.scope_id);
+  return `${tree.filter((op) => op.phase === "completed").length}/${tree.length}`;
+}
+
+/** A close list split for drawing: the rows shown as they are, and the quiet ones folded under one line. */
+export type FoldedRows = { shown: SubtreeRow[]; folded: SubtreeRow[] };
+
+/**
+ * Which rows of a close list fold (quiet screens, design principle 13): a
+ * quiet descendant whose own descendants are all quiet has nothing for the
+ * operator to answer, so it folds; a target, a row that needs the operator and
+ * every quiet ancestor of one stay, so the tree path to what needs attention
+ * is never cut. Folding one row saves nothing, so fewer than two fold none.
+ */
+export function foldQuietRows(rows: readonly SubtreeRow[]): FoldedRows {
+  const keep = rows.map((row, index) => {
+    if (row.target || row.state !== "quiet") return true;
+    for (let below = index + 1; below < rows.length && rows[below]!.depth > row.depth; below += 1) {
+      if (rows[below]!.state !== "quiet") return true;
+    }
+    return false;
+  });
+  const folded = rows.filter((_, index) => !keep[index]);
+  if (folded.length < 2) return { shown: [...rows], folded: [] };
+  return { shown: rows.filter((_, index) => keep[index]), folded };
+}

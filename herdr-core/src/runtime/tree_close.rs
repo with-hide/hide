@@ -22,6 +22,13 @@ use serde::Deserialize;
 pub(super) const TREE_CLOSE_PANE_LIMIT: usize = 64;
 /// Tree closes running at once.
 pub(super) const TREE_CLOSE_ACTIVE_LIMIT: usize = 4;
+// The close slots are the ordinary close's own records, at most
+// `RECENT_CLOSED_LIMIT` at once. An admitted tree holds a fixed number of
+// them for its whole life (`TreeClose::slots`, at most half of what was free
+// when it was admitted, so ordinary closes and the next tree keep the rest).
+// A node starts only on a slot its tree holds and leaves it when its close
+// record does, so a tree of any listed size up to `TREE_CLOSE_PANE_LIMIT`
+// runs through its slots without ever being refused one halfway.
 /// How long one pane's close may take from its start to confirmed absence.
 /// The ordinary close has three stages of `CLOSE_STAGE_TIMEOUT_MS` (capture,
 /// request, topology), a protected replacement three more; past that its own
@@ -84,6 +91,17 @@ enum NodeState {
     Failed(&'static str),
 }
 
+/// Which of its tree's close slots a local node occupies.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum NodeSlot {
+    None,
+    /// Its ordinary close is being started under this same lock.
+    Starting,
+    /// Its ordinary close record, which keeps the slot until the record
+    /// leaves the close queue, after the node itself has settled.
+    Held(String),
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum NodeHandle {
     /// The key of the ordinary close record.
@@ -113,6 +131,9 @@ struct TreeNode {
     /// When this node first found its tab busy; a tab that stays busy past
     /// the pane timeout fails the node rather than holding the tree.
     blocked_since: Option<u64>,
+    slot: NodeSlot,
+    /// The pane or tab the operator closed, which goes last.
+    target: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -122,6 +143,22 @@ pub(super) struct TreeClose {
     then: TreeFinal,
     confirmed: bool,
     started_at_unix_ms: u64,
+    /// The close slots this tree holds from admission to its end.
+    slots: usize,
+}
+
+impl TreeClose {
+    /// The slots a node of this tree occupies now.
+    fn slots_in_use(&self, close_operations: &HashMap<String, PendingClose>) -> usize {
+        self.nodes
+            .iter()
+            .filter(|node| match &node.slot {
+                NodeSlot::None => false,
+                NodeSlot::Starting => true,
+                NodeSlot::Held(key) => close_operations.contains_key(key),
+            })
+            .count()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -131,14 +168,16 @@ enum Place<'a> {
 }
 
 impl Runtime {
-    /// The local closes admitted trees have not started yet. An ordinary
-    /// close leaves this many of the shared reservations free.
+    /// The close slots admitted trees hold and no node of theirs occupies
+    /// now. An ordinary close leaves this many of them free.
     pub(super) fn tree_close_reserved_slots(&self) -> usize {
         self.tree_closes
             .iter()
-            .flat_map(|tree| &tree.nodes)
-            .filter(|node| node.device.is_none() && node.state == NodeState::Waiting)
-            .count()
+            .map(|tree| {
+                tree.slots
+                    .saturating_sub(tree.slots_in_use(&self.close_operations))
+            })
+            .sum()
     }
 
     /// `close_tree`: the target and the listed descendants, deepest first.
@@ -174,6 +213,8 @@ impl Runtime {
             waits_on: Vec::new(),
             state: NodeState::Waiting,
             blocked_since: None,
+            slot: NodeSlot::None,
+            target: true,
         };
         self.admit_tree_close(
             Some(target),
@@ -215,6 +256,8 @@ impl Runtime {
             waits_on: Vec::new(),
             state: NodeState::Waiting,
             blocked_since: None,
+            slot: NodeSlot::None,
+            target: true,
         };
         self.admit_tree_close(
             Some(target),
@@ -251,7 +294,8 @@ impl Runtime {
                 &then,
                 "tree_close.too_many",
                 format!(
-                    "A close can take at most {TREE_CLOSE_PANE_LIMIT} agents at once; nothing was closed"
+                    "{} agents were listed and a close takes at most {TREE_CLOSE_PANE_LIMIT}; nothing was closed",
+                    listed.len()
                 ),
                 false,
             );
@@ -260,7 +304,9 @@ impl Runtime {
             return self.refuse_tree_close(
                 &then,
                 "tree_close.busy",
-                "Wait for the closes already running to finish, then close again".to_owned(),
+                format!(
+                    "{TREE_CLOSE_ACTIVE_LIMIT} closes of agents with their children are already running; close again once one finishes"
+                ),
                 true,
             );
         }
@@ -295,6 +341,8 @@ impl Runtime {
                 waits_on: Vec::new(),
                 state: NodeState::Waiting,
                 blocked_since: None,
+                slot: NodeSlot::None,
+                target: false,
             });
         }
         let checked = nodes
@@ -371,19 +419,17 @@ impl Runtime {
             .chain(target.iter())
             .filter(|node| node.device.is_none())
             .count();
-        if self.close_operations.len() - retrying.len() + self.tree_close_reserved_slots() + local
-            > crate::recent_closed::RECENT_CLOSED_LIMIT
-        {
-            self.set_reopen_notices(vec![live::ReopenNotice {
-                pane_id: None,
-                message: "Resolve or dismiss an earlier close before closing another item".into(),
-            }]);
+        let held = self.close_operations.len() - retrying.len() + self.tree_close_reserved_slots();
+        let free = crate::recent_closed::RECENT_CLOSED_LIMIT.saturating_sub(held);
+        if local > 0 && free == 0 {
             return self.refuse_tree_close(
                 &then,
                 "tree_close.capacity",
-                "Too many closes are waiting; resolve or dismiss an earlier close, then close again"
-                    .to_owned(),
-                false,
+                format!(
+                    "{} closes are already in progress or waiting to be resolved, the most Hide runs at once; close again once one finishes",
+                    crate::recent_closed::RECENT_CLOSED_LIMIT
+                ),
+                true,
             );
         }
         for key in retrying {
@@ -424,12 +470,14 @@ impl Runtime {
             then,
             confirmed,
             started_at_unix_ms: unix_milliseconds(),
+            slots: local.min(free.div_ceil(2)),
         };
         crate::diagnostic!(serde_json::json!({
             "component": "tree_close",
             "kind": "tree_close.started",
             "tree_id": tree.id,
             "target": tree_target(&tree),
+            "slots": tree.slots,
             "pane_ids": tree.nodes.iter().map(|node| node.id.as_str()).collect::<Vec<_>>(),
         }));
         self.tree_closes.push(tree);
@@ -520,14 +568,23 @@ impl Runtime {
         changed
     }
 
-    /// Starts one node through the ordinary close. It leaves the tree's
-    /// reservation before the ordinary close counts its own.
+    /// Starts one node through the ordinary close. A local node occupies
+    /// its tree's slot before the ordinary close counts its own record, so
+    /// the slot the tree holds is the one the close takes.
     fn start_node(&mut self, index: usize, position: usize) {
         let node = self.tree_closes[index].nodes[position].clone();
         let confirmed = self.tree_closes[index].confirmed;
         let tree_id = self.tree_closes[index].id.clone();
         self.tree_closes[index].nodes[position].state = NodeState::Failed("starting");
-        let state = match self.start_tree_node(&tree_id, &node, confirmed) {
+        if node.device.is_none() {
+            self.tree_closes[index].nodes[position].slot = NodeSlot::Starting;
+        }
+        let started = self.start_tree_node(&tree_id, &node, confirmed);
+        self.tree_closes[index].nodes[position].slot = match &started {
+            Ok(NodeHandle::Local(key)) => NodeSlot::Held(key.clone()),
+            _ => NodeSlot::None,
+        };
+        let state = match started {
             Ok(handle) => NodeState::Closing {
                 started_at_unix_ms: unix_milliseconds(),
                 handle,
@@ -583,7 +640,7 @@ impl Runtime {
                 // the close in front of it has settled, and a close there
                 // that ended unresolved would refuse this one for good.
                 match self.tab_close_state(node, &[]) {
-                    TabClose::Free => Step::Start,
+                    TabClose::Free => self.slot_step(tree, node),
                     TabClose::Busy => match node.blocked_since {
                         Some(since) if now.saturating_sub(since) > TREE_CLOSE_PANE_TIMEOUT_MS => {
                             Step::Become(NodeState::Failed("tab_busy"))
@@ -643,6 +700,21 @@ impl Runtime {
                     }
                 }
             }
+        }
+    }
+
+    /// A node that is free to start, given its tree's slots: a device node
+    /// takes none, a local one starts on a slot no node of its tree occupies,
+    /// and otherwise waits for one of its tree's records to leave the close
+    /// queue. Those leave by themselves unless the queue is held by a close
+    /// that needs the operator, which would keep the slots taken for good.
+    fn slot_step(&self, tree: &TreeClose, node: &TreeNode) -> Step {
+        if node.device.is_some() || tree.slots_in_use(&self.close_operations) < tree.slots {
+            return Step::Start;
+        }
+        match self.close_queue_state(&[]) {
+            TabClose::Unresolved => Step::Become(NodeState::Failed("close_queue_unresolved")),
+            _ => Step::Stay,
         }
     }
 
@@ -807,6 +879,9 @@ impl Runtime {
                         NodeState::Closed => ("completed", None),
                         NodeState::Failed(reason) => ("failed", Some((*reason).to_owned())),
                     };
+                    // The target's record is the one a surface counts the
+                    // tree's progress on: its siblings share its scope.
+                    let stage = if node.target { "target" } else { "tree" };
                     crate::model::AsyncOperationSnapshot {
                         related_scope_ids: Vec::new(),
                         id: format!("{}:{}", tree.id, node.id),
@@ -814,7 +889,7 @@ impl Runtime {
                         target_id: node.id.clone(),
                         scope_id: tree.id.clone(),
                         phase: phase.to_owned(),
-                        stage: "tree".to_owned(),
+                        stage: stage.to_owned(),
                         started_at_unix_ms: tree.started_at_unix_ms,
                         deadline_at_unix_ms: None,
                         message,
@@ -983,23 +1058,13 @@ impl Runtime {
         if self.pane_move_holds_tab(tab_id) {
             return TabClose::Unresolved;
         }
-        let running = |phase: &str, deadline: Option<u64>| match phase {
-            "preparing" | "capturing" | "transmitting" | "awaiting_topology" => true,
-            "unknown" => deadline.is_some(),
-            _ => false,
-        };
-        let settled = |operation: &PendingClose| match operation.phase.as_str() {
-            "completed" => true,
-            "failed" | "refused" => !operation.request.context.replacement_shell,
-            _ => false,
-        };
         let mut state = TabClose::Free;
         for operation in self
             .pane_operations
             .values()
             .filter(|operation| operation.scope_id == tab_id)
         {
-            if !running(&operation.phase, operation.deadline_at_unix_ms) {
+            if !close_running(&operation.phase, operation.deadline_at_unix_ms) {
                 return TabClose::Unresolved;
             }
             state = TabClose::Busy;
@@ -1010,32 +1075,41 @@ impl Runtime {
             .iter()
             .filter(|(key, operation)| operation.scope_id == tab_id && !retrying.contains(*key))
         {
-            if running(&operation.phase, operation.deadline_at_unix_ms) {
+            if close_running(&operation.phase, operation.deadline_at_unix_ms) {
                 state = TabClose::Busy;
-            } else if settled(operation) {
+            } else if close_settled(operation) {
                 queued = true;
             } else {
                 return TabClose::Unresolved;
             }
         }
         if queued {
-            // The first record the queue cannot pass decides.
-            let front = self
-                .close_capture_order
-                .iter()
-                .filter(|key| !retrying.contains(*key))
-                .filter_map(|key| self.close_operations.get(key))
-                .find(|operation| !settled(operation));
-            match front {
-                Some(operation) if running(&operation.phase, operation.deadline_at_unix_ms) => {
-                    state = TabClose::Busy;
-                }
-                Some(_) => return TabClose::Unresolved,
-                // Nothing holds the queue: it drains on the next promotion.
-                None => state = TabClose::Busy,
+            match self.close_queue_state(retrying) {
+                TabClose::Unresolved => return TabClose::Unresolved,
+                _ => state = TabClose::Busy,
             }
         }
         state
+    }
+
+    /// Whether the settled records in the close queue leave by themselves:
+    /// the first record the queue cannot pass decides. A running one has a
+    /// deadline (`Busy`); one that waits for the operator holds every record
+    /// behind it (`Unresolved`); with none, the queue drains on the next
+    /// promotion (`Busy`).
+    fn close_queue_state(&self, retrying: &[String]) -> TabClose {
+        let front = self
+            .close_capture_order
+            .iter()
+            .filter(|key| !retrying.contains(*key))
+            .filter_map(|key| self.close_operations.get(key))
+            .find(|operation| !close_settled(operation));
+        match front {
+            Some(operation) if !close_running(&operation.phase, operation.deadline_at_unix_ms) => {
+                TabClose::Unresolved
+            }
+            _ => TabClose::Busy,
+        }
     }
 
     /// Asking again to close a pane whose earlier close was refused or
@@ -1066,6 +1140,24 @@ enum TabClose {
     Free,
     Busy,
     Unresolved,
+}
+
+/// A close record that goes away by itself within its deadline.
+fn close_running(phase: &str, deadline: Option<u64>) -> bool {
+    match phase {
+        "preparing" | "capturing" | "transmitting" | "awaiting_topology" => true,
+        "unknown" => deadline.is_some(),
+        _ => false,
+    }
+}
+
+/// A close record that leaves as soon as the close queue reaches it.
+fn close_settled(operation: &PendingClose) -> bool {
+    match operation.phase.as_str() {
+        "completed" => true,
+        "failed" | "refused" => !operation.request.context.replacement_shell,
+        _ => false,
+    }
 }
 
 fn tabs_of(workspaces: &[WorkspaceSnapshot]) -> impl Iterator<Item = &TabSnapshot> {
