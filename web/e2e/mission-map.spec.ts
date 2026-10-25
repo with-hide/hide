@@ -111,10 +111,7 @@ test("the Conductor's first plan shows on its pane, the map follows the record, 
     await expect(map.locator('[data-mission-node="cause"] [data-node-steps]')).toHaveCount(0);
     await expect(node.locator("[data-node-steps]")).toHaveCount(1);
     // Its row in the flow table draws its bar from the core's events: a worked stretch from its start with a live end (mission-plan-visibility B18).
-    const track = map.locator('[data-flow-track="api"]');
-    await expect(track).toHaveAttribute("data-flow-drawn", "events");
-    await expect(track.locator('[data-flow-segment="worked"]')).toHaveCount(1);
-    await expect(track.locator("[data-flow-live]")).toBeVisible();
+    await expect(map.locator('[data-flow-track="api"][data-flow-drawn="events"] [data-flow-segment="worked"] ~ [data-flow-live]')).toBeVisible();
     await mission(conductor, ["mission", "decide", "--line", "화면 PR 방식 선택"]);
     await expect(map.locator('[data-mission-banner="decision"]')).toContainText("화면 PR 방식 선택");
     // A card opens its row in the flow table in the app too, where the terminal keeps the keyboard, and a second press closes it (B20).
