@@ -397,8 +397,7 @@ function NodeCard({ mission, node, selected, onSelect }: { mission: Mission; nod
   const tone = nodeTone(mission, node);
   const mark = shownMark(node, tone, row?.mark ?? null);
   const worker = workerWords(node, launchModel, t("mission.auto"));
-  // A cancelled mission's work stopped, whatever its last status said (B24).
-  const moving = tone !== "cancelled" && (node.status === "working" || node.status === "review");
+  const moving = nodeMoving(mission, node);
   // The worker's own plan says where it is, else the Conductor's `--line` (PRD hide-plan B16, D-18).
   const nowText = moving ? ((node.plan ? planNowLine(node.plan, t) : null) ?? node.line) : null;
   const result = nodeResult(node);
@@ -448,6 +447,11 @@ function NodeCard({ mission, node, selected, onSelect }: { mission: Mission; nod
   );
 }
 
+/** A worker is at the node; a cancelled mission's work stopped, whatever its last status said (B24). */
+function nodeMoving(mission: Mission, node: MissionNode): boolean {
+  return nodeTone(mission, node) !== "cancelled" && (node.status === "working" || node.status === "review");
+}
+
 /** A node's status mark: a cancelled mission's unfinished node is at rest, whatever its last status said (B24). */
 function shownMark(node: MissionNode, tone: ReturnType<typeof nodeTone>, worker: RowMark | null): RowMark {
   return tone === "cancelled" ? "quiet" : nodeMark(node, worker);
@@ -459,7 +463,8 @@ function shownMark(node: MissionNode, tone: ReturnType<typeof nodeTone>, worker:
  */
 function badgeWords(mission: Mission, node: MissionNode, t: TFunction): string[] {
   return [
-    ...(node.status === "held" ? [heldWords(mission, t)] : []),
+    // The status word already says held; the badge adds the question.
+    ...(node.status === "held" && mission.decision ? [mission.decision] : []),
     ...(node.attempts >= 2 ? [t("mission.badge.attempts", { count: node.attempts })] : []),
     ...(node.change ? [`${t("mission.changed")} · ${node.change}`] : []),
   ];
@@ -478,7 +483,7 @@ function Badges({ mission, node }: { mission: Mission; node: MissionNode }) {
   const { t } = useInterfaceTranslation();
   return (
     <>
-      {node.status === "held" ? (
+      {node.status === "held" && nodeTone(mission, node) !== "cancelled" ? (
         <Hint label={heldWords(mission, t)}>
           <span className="shrink-0 rounded-xs bg-muted px-xxs font-mono text-micro font-semibold text-mission-hold" data-node-held="true">!</span>
         </Hint>
@@ -646,11 +651,13 @@ function FlowDetail({ mission, node, actions }: { mission: Mission; node: Missio
   const session = useMemo(() => (row ? sessionOfAgent(row, rest) : null), [row, rest]);
   const depends = node.depends_on.map((key) => mission.nodes.find((other) => other.key === key)?.title ?? key);
   const worker = node.worker;
-  // A moving node's line says where it is; once it ended the line is what it left (B22).
-  const moving = node.status === "working" || node.status === "review";
-  const nowLine = moving ? ((node.plan ? planNowLine(node.plan, t) : null) ?? node.line) : null;
+  // A moving node's line says where it is, a waiting, held or failed one's why;
+  // once a research or verify node ended the line is what it left (B22), and
+  // a done or cancelled node has no current line.
   const result = nodeResult(node);
   const resultLine = result?.kind === "conclusion" || result?.kind === "verify" ? result : null;
+  const current = nodeMoving(mission, node) || (nodeTone(mission, node) !== "cancelled" && node.status !== "done" && node.status !== "dropped");
+  const nowLine = current && !resultLine ? ((node.plan ? planNowLine(node.plan, t) : null) ?? node.line) : null;
   const time = (at: number) => formatDateTime(language, at, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
   const fields: [string, ReactNode][] = [
     [t("mission.field.kind"), t(kindWord(node.kind))],

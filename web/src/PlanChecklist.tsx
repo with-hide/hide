@@ -21,7 +21,9 @@ export function PlanChecklist({ plan, popover = false }: { plan: PlanView; popov
   const current = useRef<HTMLLIElement>(null);
   // Opening the popover shows where the plan is, however long the list (B5).
   // Its height is bounded only once it is placed, so the step is revealed
-  // again whenever the scrolling box settles to a new size.
+  // again whenever the scrolling box settles to a new size, and follows the
+  // current step as it moves.
+  const currentKey = plan.progress.current;
   useLayoutEffect(() => {
     const row = current.current;
     if (!popover || !row) return;
@@ -32,7 +34,7 @@ export function PlanChecklist({ plan, popover = false }: { plan: PlanView; popov
     const observer = new ResizeObserver(reveal);
     observer.observe(box);
     return () => observer.disconnect();
-  }, [popover]);
+  }, [popover, currentKey]);
   if (popover && plan.progress.finished) {
     const done = plan.steps.filter((step) => step.status === "done").length;
     const outputs = rows.filter(({ step }) => step.status === "done" && step.output && step.output !== "none");

@@ -174,12 +174,14 @@ it("marks a held card with !, says every badge in the card's name, and draws a r
     node("reading", { kind: "research", delivery: null, status: "working", line: "Reading 3 of 5 logs" }),
     node("checking", { kind: "verify", delivery: null, status: "working", line: "4 of 6 so far" }),
     node("cause", { kind: "research", delivery: null, status: "done", line: "The cache was stale" }),
+    node("broken", { status: "failed", pr: 1600, pr_state: "failed", line: "CI failed · attempt 2/2" }),
+    node("queued", { status: "waiting", line: "Waits on the API merge" }),
   ];
   const map = await mount({ items: [mission({ nodes, decision: "Which base?" })] });
   try {
     const card = (key: string) => map.q(`[data-mission-node="${key}"]`)!;
     expect(card("base").querySelector("[data-node-held]")?.textContent).toBe("!");
-    expect(card("base").getAttribute("aria-label")).toBe("Node base · Held · Held · Which base?");
+    expect(card("base").getAttribute("aria-label")).toBe("Node base · Held · Which base?");
     expect(card("retry").querySelector("[data-node-held]")).toBeNull();
     expect(card("retry").getAttribute("aria-label")).toBe("Node retry · Working · Attempt 3 · Changed by a replan · Split from api");
     // A running research or verify node's line is where it is, said once, never a result.
@@ -197,7 +199,20 @@ it("marks a held card with !, says every badge in the card's name, and draws a r
     await act(async () => card("reading").click());
     expect(map.q('[data-mission-detail="reading"]')?.textContent).toContain("NowReading 3 of 5 logs");
     expect(map.q('[data-mission-detail="reading"] [data-flow-result]')).toBeNull();
+    // A failed or waiting node's row still says why, though its card shows its PR instead.
+    await act(async () => card("broken").click());
+    expect(map.q('[data-mission-detail="broken"]')?.textContent).toContain("NowCI failed · attempt 2/2");
+    await act(async () => card("queued").click());
+    expect(map.q('[data-mission-detail="queued"]')?.textContent).toContain("NowWaits on the API merge");
   } finally { await map.unmount(); }
+  // A cancelled mission's work stopped: no held mark, no line of where it is.
+  const cancelled = await mount({ items: [mission({ nodes: [node("base", { status: "held" }), node("run", { status: "working", line: "Writing tests" })], status: "cancelled", closed_at_unix_ms: Date.now(), decision: "Which base?" })] });
+  try {
+    expect(cancelled.q('[data-mission-node="base"] [data-node-held]')).toBeNull();
+    expect(cancelled.q('[data-mission-node="run"] [data-node-now]')).toBeNull();
+    await act(async () => cancelled.q('[data-mission-node="run"]')!.click());
+    expect(cancelled.q('[data-mission-detail="run"]')?.textContent).not.toContain("Writing tests");
+  } finally { await cancelled.unmount(); }
 });
 
 it("puts the worker's own plan on the card's last line and folded in the node's detail, else the Conductor's line (PRD hide-plan B15, B16)", async () => {
