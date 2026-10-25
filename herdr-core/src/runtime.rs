@@ -74,6 +74,7 @@ mod tab_focus;
 mod terminal;
 mod terminal_input;
 mod tree_close;
+mod tree_reopen;
 pub(crate) mod usage_ledger;
 mod usage_limit;
 mod view_areas;
@@ -1439,6 +1440,15 @@ pub struct Runtime {
     /// (`tree_close.rs`). At most `TREE_CLOSE_ACTIVE_LIMIT` at once.
     tree_closes: Vec<tree_close::TreeClose>,
     next_tree_close_id: u64,
+    /// What each `close_tree` records for Reopen closed while its panes
+    /// close, until its one reopen unit is on `recent_closed`
+    /// (`tree_reopen.rs`).
+    tree_reopen_captures: Vec<tree_reopen::TreeCapture>,
+    /// The tree unit being reopened, one member at a time.
+    tree_reopen: Option<tree_reopen::TreeReopen>,
+    /// Registrations of reopened tree members waiting for their new pane to
+    /// take them over.
+    tree_reopen_continuations: Vec<tree_reopen::Continuation>,
     /// User-initiated local closes, newest last. Memory only by contract.
     recent_closed: VecDeque<ClosedItem>,
     /// User closes in request order. A close is promoted onto
@@ -2272,6 +2282,9 @@ impl Runtime {
             panes_closing: HashSet::new(),
             tree_closes: Vec::new(),
             next_tree_close_id: 0,
+            tree_reopen_captures: Vec::new(),
+            tree_reopen: None,
+            tree_reopen_continuations: Vec::new(),
             recent_closed: VecDeque::new(),
             close_capture_order: VecDeque::new(),
             close_operations: HashMap::new(),

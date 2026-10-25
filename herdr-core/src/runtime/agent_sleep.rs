@@ -15,7 +15,7 @@ use crate::agent_sleep::{
 use crate::agent_sleep_herdr::{self, SleepTarget, WakeOutcome, WakeRequest};
 
 mod dormant;
-pub(in crate::runtime) use dormant::WOKEN_BINDING_LIMIT_MS;
+pub(in crate::runtime) use dormant::Takeover;
 
 /// Ends in flight at once. A first enable over a long day's panes would
 /// otherwise start one worker per idle agent; the rest wait for the next

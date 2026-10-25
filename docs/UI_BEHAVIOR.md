@@ -798,7 +798,11 @@ A sheet that turns into the other leaves the keyboard on the sheet itself, never
 The core closes the deepest descendants first, each pane only after every descendant below it is gone, and the target last, so no descendant ever surfaces as a root on the way; each row reads `closing…` until it goes.
 A descendant whose close is refused, times out, or loses its device keeps itself and its ancestors, the target included, open while the other branches finish; the close failure notice shows and the detail goes to the diagnostic log.
 Closing the same target again lists only what is left.
-Each local pane or tab closed this way gets its own Reopen closed tab entry; a device's close leaves none, as before.
+The local panes and tabs closed this way are one Reopen closed tab entry, named after the target: one ⇧⌘T brings the target back first and then every descendant closed with it, each under the parent it was closed under, grandchildren included, and the keyboard stays on the target.
+Each agent comes back as itself: its conversation resumes, and its letters, the watch on it and its parent relationship continue in the new pane; a descendant left open is drawn under its reopened parent again.
+A member that fails to come back stays in the entry together with every member under it, which is not started, so no child reopens without its parent; the other branches still come back, the notice says how many did not, and the next ⇧⌘T retries what is left.
+While the tree is still closing, ⇧⌘T waits with `The latest close is still being confirmed.` rather than reopening an older item.
+A device's close leaves no entry, as before.
 Every entry to a pane or tab close uses this: ⌘W or ⌥W, ⌘⇧W or ⌥⇧W, the desktop menu's commands, a tab's ×, the tab menu's `Close tab…`, the pane header's ×, the pane menu's `Close pane`, and the agent row menu's `Close tab…`; closing a View, the phone app and the Overview are unchanged.
 Web owner: `web/src/close.ts` (which sheet, which panes and descendants, and their states), `web/src/Overlays.tsx` (both sheets), `web/src/components/subtree-list.tsx` (the list both the sheet and the removal dialogs draw); core owner: `herdr-core/src/runtime/tree_close.rs`.
 

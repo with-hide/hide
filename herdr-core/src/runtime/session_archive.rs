@@ -1166,26 +1166,21 @@ impl Runtime {
                 .or_insert(now);
             let gone =
                 !self.pane_listed(&pane) && !self.archive_rows().any(|agent| agent.pane_id == pane);
-            let expired = now.saturating_sub(since) >= super::agent_sleep::WOKEN_BINDING_LIMIT_MS;
-            let released = gone || expired;
-            if released {
+            let step = self.take_over_registration(&registration, &pane, gone, since, now);
+            if let super::agent_sleep::Takeover::Released(reason) = step {
                 crate::diagnostic!(serde_json::json!({
                     "component": "session_archive", "kind": "session_archive.registration_released",
                     "archive_id": id.as_str(), "agent_id": registration.id, "pane_id": pane,
-                    "reason": if gone { "pane_gone" } else { "unbound" },
+                    "reason": reason,
                 }));
             }
-            if (released || self.continue_dormant_registration(&registration, &pane))
+            if step != super::agent_sleep::Takeover::Waiting
                 && let Some(record) = self.snapshot.ui_state.session_archive.records.get_mut(&id)
             {
                 record.members[index].registration = None;
                 record.revision += 1;
                 changed = true;
                 self.archive_registration_waits.remove(&registration.id);
-                if released {
-                    self.registration_rebinds.remove(&registration.id);
-                    self.release_dormant_hold(&registration.id);
-                }
             }
         }
         changed

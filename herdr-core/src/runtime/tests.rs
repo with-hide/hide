@@ -125,6 +125,8 @@ mod start_geometry;
 mod terminal;
 #[path = "tests/tree_close.rs"]
 mod tree_close;
+#[path = "tests/tree_reopen.rs"]
+mod tree_reopen;
 mod ui_state_focus;
 #[path = "tests/usage_limit.rs"]
 mod usage_limit;

@@ -4,12 +4,17 @@ use serde::{Deserialize, Serialize};
 
 pub const RECENT_CLOSED_LIMIT: usize = 20;
 
-pub fn push_bounded(stack: &mut VecDeque<ClosedItem>, mut item: ClosedItem) {
+/// Pushes `item` and returns the oldest item it pushed out, whose holds the
+/// caller lets go.
+pub fn push_bounded(stack: &mut VecDeque<ClosedItem>, mut item: ClosedItem) -> Option<ClosedItem> {
     item.clear_start_claims();
-    if stack.len() == RECENT_CLOSED_LIMIT {
-        stack.pop_front();
-    }
+    let evicted = if stack.len() == RECENT_CLOSED_LIMIT {
+        stack.pop_front()
+    } else {
+        None
+    };
     stack.push_back(item);
+    evicted
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -183,6 +188,13 @@ pub enum ClosedItem {
         layout: ClosedLayout,
         panes: Vec<ClosedPane>,
     },
+    /// A close of an agent together with its descendants (`close_tree`):
+    /// one reopen brings the whole tree back (docs/UI_BEHAVIOR.md, Reopen
+    /// closed).
+    Tree {
+        key: String,
+        members: Vec<TreeMember>,
+    },
     File {
         key: String,
         /// The device the file is on; it reopens only while that device is
@@ -196,7 +208,31 @@ pub enum ClosedItem {
     },
 }
 
+/// One closed node of a tree close: its own pane or tab item, the
+/// registrations of the agents it held, which the unit holds until the
+/// member reopens or the unit leaves the list, and the member its agent's
+/// parent closed with.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TreeMember {
+    pub item: ClosedItem,
+    pub registrations: Vec<crate::agent_sleep::DormantRegistration>,
+    /// The key of the member whose agent is this one's parent; none for the
+    /// target, and for a child whose parent stayed open.
+    pub parent: Option<String>,
+}
+
 impl ClosedItem {
+    /// The registrations a tree unit holds for its members.
+    pub fn held_registrations(
+        &self,
+    ) -> impl Iterator<Item = &crate::agent_sleep::DormantRegistration> {
+        let members: &[TreeMember] = match self {
+            Self::Tree { members, .. } => members,
+            _ => &[],
+        };
+        members.iter().flat_map(|member| &member.registrations)
+    }
+
     fn clear_start_claims(&mut self) {
         match self {
             Self::Pane { pane, .. } => {
@@ -208,6 +244,11 @@ impl ClosedItem {
                     pane.label = crate::start_claim::public_label(pane.label.as_deref());
                 }
             }
+            Self::Tree { members, .. } => {
+                for member in members {
+                    member.item.clear_start_claims();
+                }
+            }
             Self::Draft { .. } | Self::File { .. } => {}
         }
     }
@@ -216,6 +257,7 @@ impl ClosedItem {
         match self {
             Self::Pane { key, .. }
             | Self::Tab { key, .. }
+            | Self::Tree { key, .. }
             | Self::File { key, .. }
             | Self::Draft { key, .. } => key,
         }
@@ -225,7 +267,7 @@ impl ClosedItem {
     /// tab close only on this machine's Herdr, the core's `node`.
     pub fn device_id<'a>(&'a self, node: &'a str) -> &'a str {
         match self {
-            Self::Pane { .. } | Self::Tab { .. } => node,
+            Self::Pane { .. } | Self::Tab { .. } | Self::Tree { .. } => node,
             Self::File { device_id, .. } | Self::Draft { device_id, .. } => device_id,
         }
     }
@@ -238,6 +280,12 @@ impl ClosedItem {
                 .filter(|label| !crate::start_claim::is_reserved(label))
                 .unwrap_or("Pane"),
             Self::Tab { context, .. } => &context.tab_label,
+            // Named by its target, the member no other member is under.
+            Self::Tree { members, .. } => members
+                .iter()
+                .find(|member| member.parent.is_none())
+                .or(members.first())
+                .map_or("Pane", |member| member.item.label()),
             Self::File { label, .. } => label,
             Self::Draft { .. } => "New tab",
         }
