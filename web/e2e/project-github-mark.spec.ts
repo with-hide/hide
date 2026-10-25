@@ -66,7 +66,7 @@ async function workspaceAt(herdr: HerdrFixture, cwd: string, task: string): Prom
 test("a GitHub project's row ends in the repository's mark, a folder's in none, and no row counts agents", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
   await page.context().route("https://github.com/**", (route) => route.fulfill({ contentType: "text/html", body: "<title>acme/repo</title>" }));
-  const herdr = await startHerdr();
+  const herdr = await startHerdr({ readiness: "registered" });
   let daemon: Daemon | null = null;
   try {
     const repo = path.join(herdr.root, "repo");

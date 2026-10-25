@@ -25,7 +25,7 @@ const read = (file: string) => (fs.existsSync(file) ? fs.readFileSync(file, "utf
  * likely to have there.
  */
 async function start(label: string) {
-  const herdr = await startHerdr();
+  const herdr = await startHerdr({ readiness: "registered" });
   const home = path.join(fs.mkdtempSync(path.join(herdr.root, "ag-")), "home");
   for (const folder of [".claude", ".codex", ".grok/hooks", ".cursor"]) fs.mkdirSync(path.join(home, folder), { recursive: true });
   fs.mkdirSync(path.join(home, ".local", "bin"), { recursive: true });

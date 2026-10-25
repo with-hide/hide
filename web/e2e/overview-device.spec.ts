@@ -50,7 +50,7 @@ test("@platform a folder's memo is added from the toolbar, opens in the detail, 
 });
 
 test("a record shown in the lane's 보기 slot stays through pin, unpin and a window too narrow to dock the lane", async ({ page }) => {
-  const herdr = await startHerdr();
+  const herdr = await startHerdr({ readiness: "registered" });
   let daemon: Daemon | undefined;
   try {
     daemon = await startHided(herdr, "record-remount");
@@ -81,7 +81,7 @@ test("a record shown in the lane's 보기 slot stays through pin, unpin and a wi
 });
 
 test("@platform an agent pane's head opens its session record in the lane and leaves the keyboard in the terminal", async ({ page }) => {
-  const herdr = await startHerdr();
+  const herdr = await startHerdr({ readiness: "registered" });
   let daemon: Daemon | undefined;
   try {
     daemon = await startHided(herdr, "pane-record");

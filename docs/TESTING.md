@@ -135,11 +135,22 @@ When the behavior depends on the order of two events, the test fixes that order;
   A missing native shell fails fixture setup before starting the server.
   Before each initial agent start, the fixture waits for the prompt and for the shell to be available to `agent start`, decided by the one check below (`shellAvailability`), within the existing ten-second setup bound.
   Every `agent start` the fixture sends (setup's and every `fixture.run`'s) goes through `startAgentAtShell`, which sends it only while `shellAvailability` says the pinned Herdr counts the shell as available (`docs/ARCHITECTURE.md`, Starting an agent), as the product's `agent_start` does.
-  Setup starts its two agents concurrently through bounded, worker-owned CLI children; it observes both results before returning or cleaning up, so one failed start cannot leave its sibling using a removed server or folder.
-  Both starts still wait for Herdr's interactive-ready success, and `fixture.run` keeps its synchronous start contract.
+  Setup starts its two agents concurrently through bounded, worker-owned CLI children or socket requests; it observes both results before returning or cleaning up, so one failed start cannot leave its sibling using a removed server or folder.
+  The default `startHerdr()` returns only after both CLI starts report interactive-ready success, and `fixture.run` keeps its synchronous start contract.
+  A consumer that needs registered names, pane topology, transcripts, settings or files, but sends no input to the initial panes, uses `startHerdr({ readiness: "registered" })`.
+  That form uses the pinned socket's `agent.start` registration acknowledgement, not the CLI's later interactive wait; it makes no promise that the agent accepts input yet.
+  Before any initial-pane input, including a lifecycle screen or browser keyboard/mouse input, such a consumer must `await fixture.ready()` or keep the default interactive setup.
+  `ready()` reads each registered identity with `agent.get` until `interactive_ready`, no pending launch and idle/done state agree, within a thirty-second startup wait; blocked, exited or replaced agents fail the wait.
+  Concurrent `ready()` callers share one wait, success is remembered, and stopping the fixture cancels pending socket readers and polling before server/root cleanup.
+  Each request owns one connection, a maximum 64 KiB response and a deadline; at most two requests run together.
+  `setFixtureLifecycle` waits before writing an initial pane's screen; its later working/blocked states do not repeat startup readiness.
+  `fixture.run` refuses initial-pane input before `ready()`, while direct CLI and browser input consumers retain responsibility for that barrier.
+  Direct initial-terminal-input, Herdr restart and desktop consumers keep interactive setup; eligible web settings, topology, transcript and file-view consumers opt into registration explicitly.
+  `web/e2e/herdr-fixture.spec.ts` holds each CLI start until both arrived, forwards to the real pinned Herdr, and checks first input and cleanup after a partial failure on every platform.
+  Its registered-mode journey holds the actual native shim launch, confirms Herdr reports a pending, non-interactive agent, and observes another `agent.get` round before release and first input.
+  Other journeys hold a readiness read during teardown and an outgoing sibling start after the real server refuses an invalid kind, proving cancellation and ordered partial-failure cleanup without a fixed sleep or substituted answer.
   Before server/root teardown on Node-managed worker exit, the fixture synchronously ends and confirms pending CLI trees: private process groups on Unix, captured identities and descendants on Windows.
   Unconfirmed CLI exit preserves the root and reports the failure; SIGKILL/OOM skips the exit hook and is outside this guarantee.
-  `web/e2e/herdr-fixture.spec.ts` holds each start at the CLI boundary until both arrived, forwards to the real pinned Herdr, and checks first input and cleanup after a partial failure on every platform.
   `web/e2e/fixture-worker-exit.spec.ts` exits a separate owner during actual pending starts and observes process exit before server/root teardown, including root preservation when termination is refused.
   On macOS and Linux that is while `pane process-info` says the shell alone holds the terminal; on Windows it is while no process names the shell as its parent, which `pane process-info` does not show, so the fixture lists those processes with the compiled `hide-children.exe`.
   A refusal as `agent_pane_busy` typed nothing, so the fixture goes back to waiting within the same ten-second bound; any other answer is the start's.

@@ -18,7 +18,7 @@ const read = (file: string) => (fs.existsSync(file) ? fs.readFileSync(file, "utf
 
 /** A private HOME with `programs` in `~/.local/bin` (which the kit searches), `folders` made, and `files` written. */
 async function start(label: string, programs: string[], folders: string[], files: Record<string, string>) {
-  const herdr = await startHerdr();
+  const herdr = await startHerdr({ readiness: "registered" });
   const home = path.join(fs.mkdtempSync(path.join(herdr.root, "fh-")), "home");
   for (const folder of [".local/bin", ...folders]) fs.mkdirSync(path.join(home, folder), { recursive: true });
   for (const program of programs) fs.writeFileSync(path.join(home, ".local", "bin", program), "#!/bin/sh\n", { mode: 0o755 });

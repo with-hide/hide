@@ -19,7 +19,7 @@ async function drag(page: Page, handle: Locator, dx: number, dy: number) {
 }
 
 test("@platform Overview restores its exact current session and keeps map movement local", async ({ page }) => {
-  const herdr = await startHerdr();
+  const herdr = await startHerdr({ readiness: "registered" });
   let daemon: Daemon | undefined;
   try {
     daemon = await startHided(herdr, "overview-map");
@@ -118,7 +118,7 @@ test("@platform Overview restores its exact current session and keeps map moveme
 // PRD overview-graph-remembered B1, B3, B5, B9: the core keeps the map's arrangement, so a
 // reloaded shell opens it as it was left, and Reset layout's fresh map is what reopens.
 test("Overview's work map keeps a hidden project and a dropped session across a reload until Reset layout", async ({ page }) => {
-  const herdr = await startHerdr();
+  const herdr = await startHerdr({ readiness: "registered" });
   let daemon: Daemon | undefined;
   try {
     daemon = await startHided(herdr, "overview-map-remembered");
@@ -156,7 +156,7 @@ test("Overview's work map keeps a hidden project and a dropped session across a 
 // PRD pane-open-in-overview B1, B2, B4-B7, B12: an agent pane's header opens the Overview's Work map with
 // that pane's session chosen, its hidden project shown again, framed, and Escape steps back to the pane.
 test("a pane's Show in Overview opens Work with its session chosen and gives the keyboard back", async ({ page }) => {
-  const herdr = await startHerdr();
+  const herdr = await startHerdr({ readiness: "registered" });
   let daemon: Daemon | undefined;
   try {
     daemon = await startHided(herdr, "overview-map-pane");

@@ -13,7 +13,7 @@ import { countSent, showProjectMemory, showProjectRow } from "./wire";
 test.describe.configure({ timeout: 90_000 });
 
 test("Memory opens the front checkout's Project and shows it off until the operator turns it on", async ({ page }) => {
-  const herdr = await startHerdr();
+  const herdr = await startHerdr({ readiness: "registered" });
   let daemon: Awaited<ReturnType<typeof startHided>> | null = null;
   try {
     const repoDir = path.join(herdr.root, "memory-repo");

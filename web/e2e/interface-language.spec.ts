@@ -31,7 +31,7 @@ async function choose(page: Page, language: string) {
 }
 
 test("one confirmed choice follows every window, persists, and resets to each system language", async ({ browser }) => {
-  const herdr = await startHerdr();
+  const herdr = await startHerdr({ readiness: "registered" });
   let daemon: Daemon | null = null;
   const korean = await browser.newContext({ locale: "ko-KR" });
   const japanese = await browser.newContext({ locale: "ja-JP" });
@@ -117,7 +117,7 @@ test("one confirmed choice follows every window, persists, and resets to each sy
 });
 
 test("unsupported systems use English, and an invalid stored preference is diagnosed and retained", async ({ browser }) => {
-  const herdr = await startHerdr();
+  const herdr = await startHerdr({ readiness: "registered" });
   let daemon: Daemon | null = null;
   const context = await browser.newContext({ locale: "fr-FR" });
   try {

@@ -26,9 +26,11 @@ import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_pr
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
+import net from "node:net";
+import { setTimeout as pause } from "node:timers/promises";
 import path from "node:path";
 import { afterCleanup, ownUntilWorkerExit } from "./worker-owned";
-import { endWindowsProcesses, fixtureExecutable, fixtureHomeEnv, fixtureToolPath, inheritedFixtureEnv, windowsProcessTree, type WindowsProcess } from "./platform-fixture";
+import { endWindowsProcesses, fixtureExecutable, fixtureHomeEnv, fixtureToolPath, inheritedFixtureEnv, localEndpoint, windowsProcessTree, type WindowsProcess } from "./platform-fixture";
 import { copyFixtureShim } from "./shims/build";
 
 /** What `pane process-info` answers about a pane's shell, as far as the fixture reads it. */
@@ -40,6 +42,60 @@ type ShellProcessInfo = {
 
 /** What `workspace create` answers, as far as the fixture reads it. */
 type CreatedWorkspace = { result: { workspace: { workspace_id: string }; root_pane: { pane_id: string } } };
+
+/** Only the pinned schema fields needed for the initial agents' startup identity. */
+type InitialAgent = {
+  name: string;
+  terminal_id: string;
+  pane_id: string;
+  agent?: string | null;
+  agent_status: string;
+  launch_pending?: boolean;
+  interactive_ready?: boolean;
+};
+
+/**
+ * A custom socket client separates registration from the CLI's interactive wait.
+ * The fixture owns at most two requests, each with a deadline and response cap.
+ * Destroying a connection cancels its read before server/root cleanup begins.
+ */
+function agentRequest(env: NodeJS.ProcessEnv, method: "agent.start" | "agent.get", params: Record<string, string>, pending: Set<PendingStart>, timeout = 30_000): Promise<{ result: { agent: InitialAgent } }> {
+  if (pending.size >= 2) return Promise.reject(new Error("fixture agent request limit exceeded"));
+  return new Promise((resolve, reject) => {
+    const peer = net.createConnection(localEndpoint(env.HERDR_SOCKET_PATH!));
+    const id = crypto.randomUUID();
+    let buffer = Buffer.alloc(0);
+    let settled = false;
+    const finish = (error?: Error, answer?: { result: { agent: InitialAgent } }) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      peer.destroy();
+      pending.delete(request);
+      if (error) reject(error);
+      else resolve(answer!);
+    };
+    const request = { stop: () => finish(new Error(`fixture stopped during ${method}`)) };
+    pending.add(request);
+    const timer = setTimeout(() => finish(new Error(`${method} timed out`)), timeout);
+    peer.once("connect", () => peer.write(`${JSON.stringify({ id, method, params })}\n`));
+    peer.once("error", (error) => finish(error));
+    peer.once("close", () => finish(new Error(`Herdr closed ${method} before answering`)));
+    peer.on("data", (chunk: Buffer) => {
+      if (buffer.length + chunk.length > 64 * 1024) { finish(new Error(`${method} response exceeded 64 KiB`)); return; }
+      buffer = Buffer.concat([buffer, chunk]);
+      const end = buffer.indexOf(10);
+      if (end < 0) return;
+      try {
+        const answer = JSON.parse(buffer.subarray(0, end).toString("utf8"));
+        if (answer.id !== id) throw new Error(`${method} response id did not match`);
+        if (answer.error) throw Object.assign(new Error(`${method} refused: ${JSON.stringify(answer.error)}`), { stderr: JSON.stringify(answer.error) });
+        if (answer.result?.type !== (method === "agent.start" ? "agent_started" : "agent_info") || !answer.result.agent) throw new Error(`${method} returned an invalid agent answer`);
+        finish(undefined, answer);
+      } catch (error) { finish(error instanceof Error ? error : new Error(String(error))); }
+    });
+  });
+}
 
 export type HerdrFixture = {
   bin: string;
@@ -59,6 +115,8 @@ export type HerdrFixture = {
   /** Runs a pinned-herdr CLI command against the private server and parses its JSON. */
   run: (args: string[]) => unknown;
   stop: () => void;
+  /** Waits for both initial agents to own their terminals and accept input. */
+  ready: () => Promise<void>;
   /** Cold restart this private server, changing its files only while it is stopped. */
   restart: (beforeStart?: () => void) => Promise<void>;
   /**
@@ -544,6 +602,7 @@ export function labelAgent(fixture: HerdrFixture, pane: string, label: FixtureLa
  * `idle` ends the turn: Herdr reports `done` when the pane's tab is not the
  * one its clients show, and `idle` when it is, so either answers it. */
 export async function setFixtureLifecycle(fixture: HerdrFixture, pane: string, state: "working" | "blocked" | "idle"): Promise<string> {
+  if (fixture.panes.includes(pane)) await fixture.ready();
   type Agent = { pane_id: string; agent_status: string; agent_session?: { source: string; agent: string; kind: string; value: string } };
   const current = () => (fixture.run(["agent", "list"]) as { result: { agents: Agent[] } }).result.agents.find((agent) => agent.pane_id === pane);
   const reference = current()?.agent_session;
@@ -639,7 +698,7 @@ function shellAvailability(env: NodeJS.ProcessEnv, bin: string, root: string, pa
  * within the same bound. Any other answer is the start's. `run` stays synchronous; the initial
  * pair uses the asynchronous form so both interactive waits can overlap.
  */
-function startAgentAtShell(env: NodeJS.ProcessEnv, bin: string, root: string, args: string[], ms = 10_000, pending?: Set<PendingStart>): unknown {
+function startAgentAtShell(env: NodeJS.ProcessEnv, bin: string, root: string, args: string[], ms = 10_000, asynchronous?: (args: string[]) => Promise<unknown>): unknown {
   const pane = args[args.indexOf("--pane") + 1]!;
   const deadline = Date.now() + ms;
   let seen = "";
@@ -662,7 +721,7 @@ function startAgentAtShell(env: NodeJS.ProcessEnv, bin: string, root: string, ar
       // Foreground ownership can precede shell startup. Later split and resumed
       // panes need the same prompt barrier as the initial fixture panes.
       if (available && prompt) {
-        if (pending) return herdrAsync(env, bin, args, pending).catch(async (error: unknown) => {
+        if (asynchronous) return asynchronous(args).catch(async (error: unknown) => {
           failed(error);
           if (Date.now() >= deadline) throw new Error(`the shell of pane ${pane} never held the terminal alone before agent start; last process info ${seen}${shellChildren(root, shell)}`);
           // Poll the same shell-availability condition after a busy refusal.
@@ -763,7 +822,7 @@ export function liveHandoff(fixture: Pick<HerdrFixture, "bin" | "env">): void {
  * binds sockets named from the config folder, and the macOS temp folder is
  * too long for a Unix socket path. Windows has no such limit and no handoff.
  */
-export async function startHerdr({ agents = true, shortRoot = false }: { agents?: boolean; shortRoot?: boolean } = {}): Promise<HerdrFixture> {
+export async function startHerdr({ agents = true, shortRoot = false, readiness = "interactive" }: { agents?: boolean; shortRoot?: boolean; readiness?: "registered" | "interactive" } = {}): Promise<HerdrFixture> {
   const bin = herdrBinary();
   const version = execFileSync(bin, ["--version"], { encoding: "utf8" }).trim().split(/\s+/)[1];
   const pinned = pinnedHerdrVersion();
@@ -809,7 +868,11 @@ export async function startHerdr({ agents = true, shortRoot = false }: { agents?
   let stopped = false;
   const afterStop: (() => void)[] = [];
   const pendingStarts = new Set<PendingStart>();
+  const pendingRequests = new Set<PendingStart>();
+  const reads = new AbortController();
   const stopServer = () => {
+    reads.abort();
+    for (const request of [...pendingRequests]) request.stop();
     // On Windows a pane's processes can outlive the server and keep the
     // root locked. Listed while the server still runs (so its pid is its
     // own), ended after it stops; a failure here keeps the root and is
@@ -932,15 +995,52 @@ export async function startHerdr({ agents = true, shortRoot = false }: { agents?
       );
     }
     const [first, second] = opened.panes;
+    let initialAgents: InitialAgent[] = [];
+    let interactive = !agents || readiness === "interactive";
+    let readyWait: Promise<void> | undefined;
+    const waitUntilInteractive = async () => {
+      const deadline = Date.now() + 30_000;
+      let seen: InitialAgent[] = [];
+      while (Date.now() < deadline) {
+        if (reads.signal.aborted) throw new Error("fixture stopped while waiting for interactive agents");
+        seen = [];
+        for (const expected of initialAgents) {
+          const { result: { agent } } = await agentRequest(env, "agent.get", { target: expected.name }, pendingRequests, Math.max(1, deadline - Date.now()));
+          if (agent.terminal_id !== expected.terminal_id || agent.pane_id !== expected.pane_id || agent.name !== expected.name || (agent.agent && agent.agent !== "claude")) {
+            throw new Error(`fixture agent identity changed during startup: ${JSON.stringify({ expected, agent })}`);
+          }
+          if (agent.agent_status === "blocked" || (["idle", "done"].includes(agent.agent_status) && !agent.launch_pending && !agent.interactive_ready)) {
+            throw new Error(`fixture agent did not become interactive: ${JSON.stringify(agent)}`);
+          }
+          seen.push(agent);
+        }
+        if (seen.every((agent) => agent.agent === "claude" && agent.interactive_ready === true && !agent.launch_pending && ["idle", "done"].includes(agent.agent_status))) return;
+        await pause(100, undefined, { signal: reads.signal });
+      }
+      throw new Error(`timed out waiting for both fixture agents to become interactive; last seen: ${JSON.stringify(seen)}`);
+    };
+    const ready = (): Promise<void> => {
+      if (stopped || reads.signal.aborted) return Promise.reject(new Error("cannot wait for agents in a stopped fixture"));
+      if (interactive) return Promise.resolve();
+      return readyWait ??= waitUntilInteractive().then(() => { interactive = true; });
+    };
     if (agents) {
+      const start = readiness === "interactive"
+        ? (args: string[]) => herdrAsync(env, bin, args, pendingStarts)
+        : (args: string[]) => agentRequest(env, "agent.start", { name: args[2]!, kind: "claude", pane_id: args[args.indexOf("--pane") + 1]! }, pendingRequests);
       // Exactly two starts may run together. Observe both exits before setup
       // cleanup, so a sibling cannot keep using the server or root afterwards.
       const starts = await Promise.allSettled([
-        Promise.resolve().then(() => startAgentAtShell(env, bin, root, ["agent", "start", "one", "--kind", "claude", "--pane", first], 10_000, pendingStarts)),
-        Promise.resolve().then(() => startAgentAtShell(env, bin, root, ["agent", "start", "two", "--kind", "claude", "--pane", second], 10_000, pendingStarts)),
+        Promise.resolve().then(() => startAgentAtShell(env, bin, root, ["agent", "start", "one", "--kind", "claude", "--pane", first], 10_000, start)),
+        Promise.resolve().then(() => startAgentAtShell(env, bin, root, ["agent", "start", "two", "--kind", "claude", "--pane", second], 10_000, start)),
       ]);
       const failures = starts.flatMap((start) => start.status === "rejected" ? [start.reason as unknown] : []);
       if (failures.length > 0) throw failures.length === 1 ? failures[0] : new AggregateError(failures, "both fixture agents failed to start");
+      initialAgents = starts.map((start, index) => {
+        const agent = (start as PromiseFulfilledResult<{ result: { agent: InitialAgent } }>).value.result.agent;
+        if (!agent.terminal_id || agent.name !== ["one", "two"][index] || agent.pane_id !== opened.panes[index]) throw new Error(`fixture start did not register its agent: ${JSON.stringify(agent)}`);
+        return agent;
+      });
       // Distinct row labels, made by the core from each pane's transcript.
       for (const [pane, task] of [
         [first, "Agent one"],
@@ -962,6 +1062,11 @@ export async function startHerdr({ agents = true, shortRoot = false }: { agents?
       fixturePath,
       shell: paneShellOf(env),
       run: (args) => {
+        const input = (args[0] === "pane" && ["send-text", "send-keys", "run"].includes(args[1]!)) || (args[0] === "agent" && ["prompt", "send-keys"].includes(args[1]!));
+        const target = args.includes("--pane") ? args[args.indexOf("--pane") + 1] : args[2];
+        if (!interactive && input && [first, second, "one", "two"].includes(target!)) {
+          throw new Error("initial fixture agent input requires await fixture.ready() or interactive setup");
+        }
         if (args[0] === "workspace" && args[1] === "create") {
           return unclaimedWorkspace(env, bin, root, () => herdr(env, bin, args) as CreatedWorkspace, (created) => ({
             workspace: created.result.workspace.workspace_id,
@@ -978,6 +1083,7 @@ export async function startHerdr({ agents = true, shortRoot = false }: { agents?
         return result;
       },
       stop,
+      ready,
       restart: async (beforeStart) => {
         const owned = process.platform === "win32" && server.pid ? windowsProcessTree(server.pid) : [];
         const result = spawnSync(bin, ["server", "stop"], { env, timeout: 10_000 });

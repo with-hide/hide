@@ -17,7 +17,7 @@ test.use({ actionTimeout: 15_000 });
 
 test("a checkout whose only tab is delegated opens on the child's pane", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const herdr = await startHerdr();
+  const herdr = await startHerdr({ readiness: "registered" });
   let daemon: Daemon | null = null;
   try {
     const [parent] = herdr.panes;
