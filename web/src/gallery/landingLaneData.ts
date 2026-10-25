@@ -133,7 +133,7 @@ export function landingRecord(nowMs: number, agents: AgentRow[]): SessionRecord 
 }
 
 function node(key: string, title: string, extra: Partial<MissionNode>): MissionNode {
-  return { key, title, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: null, started_at_unix_ms: null, finished_at_unix_ms: null, ...extra };
+  return { key, title, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: null, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, verdict: null, checks: null, ...extra };
 }
 
 /** The mission the lead conducts: one research node, four changes and a check together, each on the hero's panes. */
@@ -154,9 +154,9 @@ export function landingMission(nowMs: number, agents: AgentRow[]): Mission {
   return {
     id: "mission-export", title: "Invoice export", workspace_id: PROJECT, project: "/work/billing-app", checkout_path: "/work/billing-app", device_id: "local",
     status: "running", scope: "pr", cap: 4,
-    conductor: { pane_id: LEAD_PANE, name: "Invoice export · Conductor", agent_kind: "claude", session: leadSession(agents), present: true },
+    conductor: { pane_id: LEAD_PANE, name: "Invoice export · Conductor", agent_kind: "claude", session: leadSession(agents), present: true, takes_answers: true },
     nodes, merge_order: ["csv", "button", "sort", "empty"], check: "pnpm test", github: "example",
-    decision: null, delay: null, report: null,
+    decision: null, question: null, answer: null, answer_failed: null, delay: null, report: null,
     created_at_unix_ms: ago(70), started_at_unix_ms: ago(66), closed_at_unix_ms: null, running: 2,
     stale: false, github_stale: false, github_read_at_unix_ms: nowMs,
   };

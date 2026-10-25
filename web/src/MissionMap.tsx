@@ -17,13 +17,18 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { formatDateTime } from "./i18n/format";
 import { requireInterfaceLanguage, type InterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
+import { DecisionBanner } from "./MissionDecision";
 import {
+  axisMarks,
+  eventWords,
   flowShows,
   flowSpan,
   kindWord,
   launchModelOf,
+  heldQuestion,
   missionCells,
   missionCounts,
+  missionEventsOf,
   missionLegend,
   missionOf,
   missionOpen,
@@ -31,22 +36,27 @@ import {
   nodeBar,
   nodeLine,
   nodeMark,
+  nodeMarks,
   nodeResult,
+  nodeSegments,
   nodeTone,
   orderedNodes,
+  shortCommit,
   stackWaiting,
   stepsOf,
   workerWords,
   type FlowFilter,
+  type FlowMarkKind,
   type LegendTone,
   type NodeResult,
+  type SegmentTone,
 } from "./missions";
 import { allAgents, agentsByPane } from "./paneAgents";
 import { staleLabel } from "./prMark";
 import { layerDependencies } from "./projectBoard";
 import { machineName } from "./screenMachine";
 import { sessionOfAgent } from "./sessionWork";
-import type { Mission, MissionNode, MissionStatus, PlanView, RowMark } from "./snapshot";
+import type { Mission, MissionEvent, MissionEventsSnapshot, MissionNode, MissionStatus, PlanView, RowMark } from "./snapshot";
 import { useShellStore } from "./store";
 import type { MessageKey } from "./i18n/catalogs";
 import type { TFunction } from "i18next";
@@ -54,11 +64,12 @@ import type { TFunction } from "i18next";
 // A mission's detail in the lane's 보기 slot (PRD software-factory-conductor
 // D-06, B14-B21, B43; PRD mission-plan-visibility D-10-D-14, D-19, D-25,
 // B12-B17, B19, B20, B22-B24): one page that scrolls down, its head with the
-// state, the time and a cell per node, a line only when the operator has
-// something to decide or no Conductor holds it, the map at the slot's full
-// width and one 흐름 table, a row per node on the mission's time axis. A
-// finished or cancelled mission puts its report and results first. Every
-// value is the core's (`MissionView`); the page words and draws it.
+// state, the time and a cell per node, the decision banner when the operator
+// has something to decide (B25-B30) or a line when no Conductor holds it,
+// the map at the slot's full width and one 흐름 table, a row per node on the
+// mission's time axis drawn from its events (B18-B21). A finished or
+// cancelled mission puts its report and results first. Every value is the
+// core's (`MissionView`, `MissionEventsSnapshot`); the page words and draws it.
 
 /** The card that stands for the report every node ends in; a node key is letters, digits, `-`, `_` and `.`, so none is this. */
 const REPORT = "#report";
@@ -88,6 +99,7 @@ function MissionBody({ mission, actions }: { mission: Mission; actions: Actions 
   const [filter, setFilter] = useState<FlowFilter>("all");
   const [zoom, setZoom] = useState<Zoom>("fit");
   const device = useShellStore((s) => (mission.stale ? machineName(s.rest?.navigator?.devices, mission.device_id, t) : null));
+  const log = useShellStore((s) => missionEventsOf(s.rest, mission.id));
   const open = missionOpen(mission);
   const ended = mission.status === "done" || mission.status === "cancelled";
   const takeover = !mission.conductor.present && open;
@@ -101,26 +113,20 @@ function MissionBody({ mission, actions }: { mission: Mission; actions: Actions 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto" data-mission={mission.id} data-mission-status={mission.status} data-mission-stale={mission.stale || undefined} data-mission-scroll="true">
       <Head mission={mission} zoom={mission.nodes.length > 0 ? zoom : null} onZoom={setZoom} />
-      {takeover ? (
+      {mission.decision && open ? (
+        <DecisionBanner mission={mission} device={device} actions={actions} />
+      ) : takeover ? (
         <Banner
           mark={<span aria-hidden="true" className="size-(--size-agent-mark) shrink-0 rounded-full border border-dashed border-muted-foreground" />}
-          text={[t("mission.noConductor"), mission.decision].filter(Boolean).join(" · ")}
+          text={t("mission.noConductor")}
           action={<Button size="sm" onClick={() => actions.takeOverMission(mission.id)} data-mission-takeover="true">{t("mission.takeOver")}</Button>}
           data-mission-banner="no-conductor"
-        />
-      ) : mission.decision && open ? (
-        <Banner
-          mark={<StatusMark mark="turn" />}
-          text={t("mission.decide", { line: mission.decision })}
-          tone="text-mission-hold"
-          action={<Button size="sm" variant="secondary" onClick={() => actions.openAgent(mission.conductor.pane_id)} data-mission-conversation="true">{t("mission.toConversation")}</Button>}
-          data-mission-banner="decision"
         />
       ) : null}
       {mission.delay && open ? <p className="px-md pb-xs text-caption text-muted-foreground" data-mission-delay="true">{t("mission.delay", { line: mission.delay })}</p> : null}
       {device ? <p className="px-md pb-xs text-caption text-muted-foreground" data-mission-stale-note="true">{t("mission.stale", { device })}</p> : null}
       <div className={cn("flex min-w-0 flex-col", mission.stale && "opacity-(--opacity-dimmed)")} data-mission-values={mission.stale ? "stale" : "live"}>
-        {ended ? <Ending mission={mission} /> : null}
+        {ended ? <Ending mission={mission} log={log} /> : null}
         {mission.nodes.length === 0 ? (
           <p className="px-md py-sm text-body text-muted-foreground" data-mission-planning="true">{t("mission.planning")}</p>
         ) : (
@@ -130,7 +136,7 @@ function MissionBody({ mission, actions }: { mission: Mission; actions: Actions 
                 <Graph mission={mission} selected={expanded} onSelect={openRow} />
               </FitWidth>
             </div>
-            <FlowTable mission={mission} filter={filter} onFilter={setFilter} expanded={expanded} onExpand={setExpanded} actions={actions} />
+            <FlowTable mission={mission} log={log} filter={filter} onFilter={setFilter} expanded={expanded} onExpand={setExpanded} actions={actions} />
           </>
         )}
       </div>
@@ -253,9 +259,11 @@ function Head({ mission, zoom, onZoom }: { mission: Mission; zoom: Zoom | null; 
   );
 }
 
-/** A finished or cancelled mission's first part (B23, B24): the Conductor's report and the results table. */
-function Ending({ mission }: { mission: Mission }) {
-  const { t } = useInterfaceTranslation();
+/** A finished or cancelled mission's first part (B23, B24): when it was cancelled, the Conductor's report and the results table. */
+function Ending({ mission, log }: { mission: Mission; log: MissionEventsSnapshot | null }) {
+  const { t, i18n } = useInterfaceTranslation();
+  const language = requireInterfaceLanguage(i18n.language);
+  const cancelledAt = mission.status === "cancelled" ? (log?.events.find((event) => event.kind === "cancelled")?.at_unix_ms ?? mission.closed_at_unix_ms) : null;
   const [unfolded, setUnfolded] = useState(false);
   const lines = mission.report?.split("\n") ?? [];
   const long = lines.length > REPORT_FOLD_LINES;
@@ -263,6 +271,11 @@ function Ending({ mission }: { mission: Mission }) {
   const results = missionResults(mission);
   return (
     <div className="flex min-w-0 flex-col gap-sm px-md pb-sm">
+      {cancelledAt != null ? (
+        <p className="text-caption text-mission-cancelled tabular-nums" data-mission-cancelled-at="true">
+          {t("mission.cancelledAt", { time: formatDateTime(language, cancelledAt, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) })}
+        </p>
+      ) : null}
       {mission.report ? (
         <div className={cn("flex min-w-0 flex-col gap-xxs rounded-md border-l-2 bg-muted px-sm py-xs text-body", mission.status === "done" ? "border-mission-done" : "border-mission-cancelled")} data-mission-report-text={unfolded ? "open" : "folded"}>
           <p className="min-w-0 whitespace-pre-wrap break-words">{shown.join("\n")}</p>
@@ -314,6 +327,15 @@ export function ResultTail({ result, stale, full = false }: { result: NodeResult
   switch (result.kind) {
     case "pr":
       return result.state ? <PrMark state={result.state} number={result.number} stale={stale} data-node-pr={result.number} /> : <span className="shrink-0 font-mono text-caption text-subtle-foreground" data-node-pr={result.number}>#{result.number}</span>;
+    case "commit":
+      return <span className="shrink-0 font-mono text-caption text-mission-done" title={result.commit} data-node-commit={result.commit}>{t("mission.result.main", { commit: shortCommit(result.commit) })}</span>;
+    case "verdict":
+      return (
+        <span className={cn("shrink-0 font-mono text-caption font-semibold", result.verdict === "pass" ? "text-mission-done" : "text-mission-failed")} data-node-verdict={result.verdict}>
+          {t(result.verdict === "pass" ? "mission.result.pass" : "mission.result.fail")}
+          {result.checks ? ` ${result.checks.passed}/${result.checks.total}` : ""}
+        </span>
+      );
     case "branch":
       return (
         <span className="flex min-w-0 items-center gap-xxs text-caption text-subtle-foreground" data-node-branch={result.branch}>
@@ -463,8 +485,8 @@ function shownMark(node: MissionNode, tone: ReturnType<typeof nodeTone>, worker:
  */
 function badgeWords(mission: Mission, node: MissionNode, t: TFunction): string[] {
   return [
-    // The status word already says held; the badge adds the question.
-    ...(showsHeld(mission, node) && mission.decision ? [mission.decision] : []),
+    // The status word already says held; the badge adds the question of the node it stopped.
+    ...(heldQuestion(mission, node) ? [heldQuestion(mission, node)!] : []),
     ...(node.attempts >= 2 ? [t("mission.badge.attempts", { count: node.attempts })] : []),
     ...(node.change ? [`${t("mission.changed")} · ${node.change}`] : []),
   ];
@@ -475,8 +497,9 @@ function showsHeld(mission: Mission, node: MissionNode): boolean {
   return node.status === "held" && nodeTone(mission, node) !== "cancelled";
 }
 
-function heldWords(mission: Mission, t: TFunction): string {
-  return mission.decision ? `${t("mission.status.held")} · ${mission.decision}` : t("mission.status.held");
+function heldWords(mission: Mission, node: MissionNode, t: TFunction): string {
+  const question = heldQuestion(mission, node);
+  return question ? `${t("mission.status.held")} · ${question}` : t("mission.status.held");
 }
 
 /**
@@ -489,7 +512,7 @@ function Badges({ mission, node }: { mission: Mission; node: MissionNode }) {
   return (
     <>
       {showsHeld(mission, node) ? (
-        <Hint label={heldWords(mission, t)}>
+        <Hint label={heldWords(mission, node, t)}>
           <span className="shrink-0 rounded-xs bg-muted px-xxs font-mono text-micro font-semibold text-mission-hold" data-node-held="true">!</span>
         </Hint>
       ) : null}
@@ -550,13 +573,45 @@ function axisTime(language: InterfaceLanguage, at: number, long: boolean): strin
   return formatDateTime(language, at, long ? { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" } : { hour: "2-digit", minute: "2-digit" });
 }
 
+/** A bar's stretch in its colour (B18): worked green, review purple, a failed attempt red, stopped grey. */
+const SEGMENT_FILL: Record<SegmentTone, string> = {
+  worked: "bg-mission-done",
+  review: "bg-mission-review",
+  failed: "bg-mission-failed",
+  paused: "bg-mission-waiting",
+};
+
+/** A mark's glyph on a bar or the axis (B18). */
+const MARK_GLYPH: Record<FlowMarkKind, string> = { merged: "⑂", landed: "↓", asked: "!", replanned: "✎", cancelled: "×" };
+const MARK_TONE: Record<FlowMarkKind, string> = {
+  merged: "text-pr-merged",
+  landed: "text-mission-done",
+  asked: "text-mission-hold",
+  replanned: "text-mission-review",
+  cancelled: "text-mission-cancelled",
+};
+
+/** One mark on a bar or on the axis, its event's words on hover (B18). */
+function FlowMark({ at, kind, event }: { at: number; kind: FlowMarkKind; event: MissionEvent }) {
+  const { t } = useInterfaceTranslation();
+  const words = eventWords(event, t);
+  return (
+    <Hint label={[words.what, words.line].filter(Boolean).join(" · ")}>
+      <span className={cn("absolute top-1/2 -translate-x-1/2 -translate-y-1/2 font-mono text-micro font-semibold leading-none", MARK_TONE[kind])} style={{ left: `${at}%` }} data-flow-mark={kind}>
+        {MARK_GLYPH[kind]}
+      </span>
+    </Hint>
+  );
+}
+
 /**
- * The 흐름 table (B17, B19, B20): a row per node in the order they wait on
- * each other, its state, title and kind, result and one bar on the mission's
- * time axis, from its start to its finish or to now. `전체 · 지금 · 끝남`
- * filters the rows; pressing a row, or Enter on it, opens it.
+ * The 흐름 table (B17-B21): a row per node in the order they wait on each
+ * other, its state, title and kind, result and its bar on the mission's time
+ * axis, drawn from its events when the mission has them and from its start
+ * and finish otherwise. `전체 · 지금 · 끝남` filters the rows; pressing a
+ * row, or Enter on it, opens it.
  */
-function FlowTable({ mission, filter, onFilter, expanded, onExpand, actions }: { mission: Mission; filter: FlowFilter; onFilter: (filter: FlowFilter) => void; expanded: string | null; onExpand: (key: string | null) => void; actions: Actions }) {
+function FlowTable({ mission, log, filter, onFilter, expanded, onExpand, actions }: { mission: Mission; log: MissionEventsSnapshot | null; filter: FlowFilter; onFilter: (filter: FlowFilter) => void; expanded: string | null; onExpand: (key: string | null) => void; actions: Actions }) {
   const { t, i18n } = useInterfaceTranslation();
   const language = requireInterfaceLanguage(i18n.language);
   // The clock ticks by the minute, so an open mission's axis runs to the end
@@ -570,6 +625,7 @@ function FlowTable({ mission, filter, onFilter, expanded, onExpand, actions }: {
     const at = span.from + ((span.to - span.from) * index) / (AXIS_TICKS - 1);
     return index === AXIS_TICKS - 1 && open ? t("mission.flow.nowTick") : axisTime(language, at, long);
   });
+  const marks = log ? axisMarks(log.events, span) : [];
   return (
     <section className="flex min-w-0 flex-col border-t border-border px-md pb-md pt-sm" data-mission-flow={filter}>
       <div className="flex min-w-0 items-center gap-sm pb-xs">
@@ -589,22 +645,37 @@ function FlowTable({ mission, filter, onFilter, expanded, onExpand, actions }: {
           {ticks.map((tick, index) => <span key={index}>{tick}</span>)}
         </span>
       </div>
+      {marks.length > 0 ? (
+        <div className={cn(ROW_GRID, "px-xs")}>
+          <span />
+          <span />
+          <span />
+          <span className="relative h-(--size-flow-track) min-w-0" data-flow-axis-marks={marks.map((mark) => mark.kind).join(" ")}>
+            {marks.map((mark, index) => <FlowMark key={index} {...mark} />)}
+          </span>
+        </div>
+      ) : null}
+      {log && log.dropped > 0 ? <p className="px-xs py-xxs text-caption text-muted-foreground" data-mission-flow-dropped={log.dropped}>{t("mission.flow.dropped", { count: log.dropped })}</p> : null}
       {rows.length === 0 ? <p className="px-xs py-xs text-caption text-muted-foreground" data-mission-flow-empty="true">{t("mission.flow.empty")}</p> : null}
       <ul className="flex min-w-0 flex-col">
         {rows.map((node) => (
-          <FlowRow key={node.key} mission={mission} node={node} span={span} open={expanded === node.key} onOpen={(next) => onExpand(next ? node.key : null)} actions={actions} />
+          <FlowRow key={node.key} mission={mission} node={node} events={log?.events ?? null} span={span} open={expanded === node.key} onOpen={(next) => onExpand(next ? node.key : null)} actions={actions} />
         ))}
       </ul>
     </section>
   );
 }
 
-function FlowRow({ mission, node, span, open, onOpen, actions }: { mission: Mission; node: MissionNode; span: { from: number; to: number }; open: boolean; onOpen: (open: boolean) => void; actions: Actions }) {
+function FlowRow({ mission, node, events, span, open, onOpen, actions }: { mission: Mission; node: MissionNode; events: MissionEvent[] | null; span: { from: number; to: number }; open: boolean; onOpen: (open: boolean) => void; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const row = useWorkerRow(node);
   const ref = useRef<HTMLButtonElement>(null);
   const tone = nodeTone(mission, node);
-  const bar = nodeBar(node, span);
+  // With its events the bar is its stretches and marks (B18); without, one bar from its times (B19).
+  const drawn = events ? nodeSegments(mission, node, events, span) : null;
+  const marks = drawn && events ? nodeMarks(node, events, span) : [];
+  const bar = drawn ? null : nodeBar(node, span);
+  const liveEnd = drawn?.live ? drawn.segments[drawn.segments.length - 1] : null;
   const result = nodeResult(node);
   const kind = shortKind(node);
   // An opened row comes into view, as a card pressed on the map asks (B20).
@@ -626,7 +697,24 @@ function FlowRow({ mission, node, span, open, onOpen, actions }: { mission: Miss
           {kind !== "mission.kind.short.pr" ? <span className="shrink-0 text-micro text-muted-foreground">{t(kind)}</span> : null}
         </span>
         <span className="flex min-w-0 items-center">{result ? <ResultTail result={result} stale={mission.github_stale} /> : null}</span>
-        <span className="relative h-(--size-flow-track) min-w-0 rounded-xs bg-muted/30" data-flow-track={node.key}>
+        <span className="relative h-(--size-flow-track) min-w-0 rounded-xs bg-muted/30" data-flow-track={node.key} data-flow-drawn={drawn ? "events" : "times"}>
+          {drawn?.segments.map((segment, index) => (
+            <span
+              key={index}
+              className={cn("absolute top-1/2 h-(--size-flow-bar) -translate-y-1/2 rounded-xs", SEGMENT_FILL[segment.tone])}
+              style={{ left: `${segment.left}%`, width: `max(${segment.width}%, var(--size-hairline))` }}
+              data-flow-segment={segment.tone}
+            />
+          ))}
+          {liveEnd ? (
+            <span
+              aria-hidden="true"
+              className="absolute top-1/2 size-(--size-flow-bar) -translate-x-1/2 -translate-y-1/2 rounded-full bg-mission-working motion-safe:animate-pulse"
+              style={{ left: `${liveEnd.left + liveEnd.width}%` }}
+              data-flow-live="true"
+            />
+          ) : null}
+          {marks.map((mark, index) => <FlowMark key={index} {...mark} />)}
           {bar ? (
             <span
               className={cn("absolute top-1/2 h-(--size-flow-bar) -translate-y-1/2 rounded-xs", TONE_FILL[tone === "dropped" ? "cancelled" : tone], tone === "waiting" && "bg-mission-waiting")}
@@ -636,18 +724,18 @@ function FlowRow({ mission, node, span, open, onOpen, actions }: { mission: Miss
           ) : null}
         </span>
       </button>
-      {open ? <FlowDetail mission={mission} node={node} actions={actions} /> : null}
+      {open ? <FlowDetail mission={mission} node={node} events={events} actions={actions} /> : null}
     </li>
   );
 }
 
 /**
- * An opened row (B19, B20): when the node started and finished, what the map
- * card has no room for, the way to its terminal, its record and its PR card,
- * and the worker's own plan, folded. A mission recorded before its events
- * shows its times and no list of events.
+ * An opened row (B19, B20): the node's events in order, what the map card
+ * has no room for, the way to its terminal, its record and its PR card, and
+ * the worker's own plan, folded. A node with no events, as in a mission
+ * recorded before them, shows when it started and finished instead.
  */
-function FlowDetail({ mission, node, actions }: { mission: Mission; node: MissionNode; actions: Actions }) {
+function FlowDetail({ mission, node, events, actions }: { mission: Mission; node: MissionNode; events: MissionEvent[] | null; actions: Actions }) {
   const { t, i18n } = useInterfaceTranslation();
   const language = requireInterfaceLanguage(i18n.language);
   const row = useWorkerRow(node);
@@ -665,6 +753,7 @@ function FlowDetail({ mission, node, actions }: { mission: Mission; node: Missio
   // A stopped node's own line says why; the worker's plan says where it is only while it moves.
   const nowLine = !current || resultLine ? null : nodeMoving(mission, node) ? ((node.plan ? planNowLine(node.plan, t) : null) ?? node.line) : node.line;
   const time = (at: number) => formatDateTime(language, at, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  const own = events?.filter((event) => event.node === node.key) ?? [];
   const fields: [string, ReactNode][] = [
     [t("mission.field.kind"), t(kindWord(node.kind))],
     ...(worker ? [[t("mission.field.agent"), (
@@ -681,7 +770,20 @@ function FlowDetail({ mission, node, actions }: { mission: Mission; node: Missio
   ];
   return (
     <div className="ml-lg flex min-w-0 flex-col gap-sm border-l border-border py-xs pl-md" data-mission-detail={node.key}>
-      {node.started_at_unix_ms != null ? (
+      {own.length > 0 ? (
+        <ol aria-label={t("mission.flow.events")} className="grid grid-cols-[auto_auto_1fr] gap-x-md gap-y-xxs text-caption" data-flow-events={own.length}>
+          {own.map((event, index) => {
+            const words = eventWords(event, t);
+            return (
+              <li key={index} className="contents" data-flow-event={event.kind}>
+                <span className="text-muted-foreground tabular-nums">{time(event.at_unix_ms)}</span>
+                <span className="font-semibold">{words.what}</span>
+                <span className="min-w-0 break-words text-muted-foreground">{words.line}</span>
+              </li>
+            );
+          })}
+        </ol>
+      ) : node.started_at_unix_ms != null ? (
         <p className="flex flex-wrap gap-x-md text-caption text-muted-foreground tabular-nums" data-flow-times="true">
           <span>{t("mission.flow.started", { time: time(node.started_at_unix_ms) })}</span>
           {node.finished_at_unix_ms != null ? <span>{t("mission.flow.ended", { time: time(node.finished_at_unix_ms) })}</span> : null}

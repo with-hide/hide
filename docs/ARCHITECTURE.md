@@ -1166,6 +1166,10 @@ A take hands the mission's workers to the new Conductor in the ledger (`Mutation
 Pull request wakes are decided on the GitHub ingest, compared with each node's last seen head, review and merge, recorded on the mission (at most 32 unsent) until their letter is in the Conductor's inbox, and sent by `hide:conductor` from one thread of their own, at most 256 at a time.
 A command whose change would take the saved book past a 7 MiB write budget, under the 8 MiB read cap, is undone and answered `mission_full`.
 Deleting a Conductor's archived session deletes its missions in the same transition.
+A mission's events (PRD mission-plan-visibility D-15, D-22) are kept apart from the book, so its 7 MiB budget never counts them: `herdr-core/src/mission_events.rs` holds the model and `MissionEventStore`, one save thread that writes each mission's file under `mission-events/` (`hide_kit::layout::mission_events`) off the lock, collapsing a burst to one write per mission, deletes a gone mission's file, and is joined when the store drops; `runtime/mission_events.rs` decides which command makes which event under the lock.
+A mission keeps at most 500, the oldest dropped and counted; the files are read back with the book at launch, a file that cannot be read is logged and replaced on its mission's next event, and the folder moves with the core (`MOVES_WITH_CORE`).
+The events are published as their own rest section, `mission_events`, for the mission open in the 보기 slot only, made again only when that mission or its events changed, so a mission's history never rides every frame.
+The operator's answer to a decision is kept on the mission (`Answer`, keyed by the question it answers) and typed into the Conductor's conversation by the doorbell's thread (`delivery::doorbell`), which judges the Conductor's pane as it judges a letter's recipient and types off the lock; whether it waits for the Conductor's turn is memory only, so a restart shows it as sending until the next pass.
 
 ## Session plans
 

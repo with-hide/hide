@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // A mission's detail in the 보기 slot (PRD software-factory-conductor B15-B21,
-// B43; PRD mission-plan-visibility B12-B17, B19, B20, B22-B24): what it shows
-// in each state of the record, and the one event each press sends.
+// B43; PRD mission-plan-visibility B12-B30, B39): what it shows in each state
+// of the record and its events, and the one event each press sends.
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
@@ -9,7 +9,7 @@ import { createActions } from "./actions";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { initializeInterfaceI18n } from "./i18n/instance";
 import { MissionMap } from "./MissionMap";
-import type { Mission, MissionNode, SnapshotRest } from "./snapshot";
+import type { Mission, MissionEvent, MissionNode, SnapshotRest } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import type { DispatchFn } from "./ws";
@@ -26,21 +26,21 @@ afterEach(() => {
 });
 
 function node(key: string, extra: Partial<MissionNode> = {}): MissionNode {
-  return { key, title: `Node ${key}`, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: null, started_at_unix_ms: null, finished_at_unix_ms: null, ...extra };
+  return { key, title: `Node ${key}`, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: null, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, verdict: null, checks: null, ...extra };
 }
 
 function mission(extra: Partial<Mission> = {}): Mission {
-  return { id: "mission-1", title: "Fix the bug", workspace_id: "w", project: "/repo", checkout_path: "/repo", device_id: "mac", status: "running", scope: "pr", cap: 4, conductor: { pane_id: "p1", name: "conductor", agent_kind: "claude", session: null, present: true }, nodes: [], merge_order: [], check: null, github: null, decision: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: Date.now() - 180_000, closed_at_unix_ms: null, running: 2, stale: false, github_stale: false, github_read_at_unix_ms: null, ...extra };
+  return { id: "mission-1", title: "Fix the bug", workspace_id: "w", project: "/repo", checkout_path: "/repo", device_id: "mac", status: "running", scope: "pr", cap: 4, conductor: { pane_id: "p1", name: "conductor", agent_kind: "claude", session: null, present: true, takes_answers: true }, nodes: [], merge_order: [], check: null, github: null, decision: null, question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: Date.now() - 180_000, closed_at_unix_ms: null, running: 2, stale: false, github_stale: false, github_read_at_unix_ms: null, ...extra };
 }
 
-async function mount(missions: { items: Mission[]; failed?: string }, remote: unknown[] = [], sessions: unknown[] = []) {
+async function mount(missions: { items: Mission[]; failed?: string }, remote: unknown[] = [], sessions: unknown[] = [], more: Partial<SnapshotRest> = {}) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   vi.stubGlobal("CSS", { escape: (value: string) => value });
   initializeInterfaceI18n("en");
   useShellStore.setState({
     agents: [],
-    rest: { missions, navigator: { devices: [{ id: "mac", kind: "local", label: "This Mac" }, { id: "mini", kind: "remote", label: "mini" }], workspaces: [] }, status: { remote }, overview_graph: { sessions } } as unknown as SnapshotRest,
+    rest: { ...more, missions, navigator: { devices: [{ id: "mac", kind: "local", label: "This Mac" }, { id: "mini", kind: "remote", label: "mini" }], workspaces: [] }, status: { remote }, overview_graph: { sessions } } as unknown as SnapshotRest,
   });
   const events: Parameters<DispatchFn>[0][] = [];
   const actions = createActions((event) => { events.push(event); return true; });
@@ -49,7 +49,20 @@ async function mount(missions: { items: Mission[]; failed?: string }, remote: un
   const root = createRoot(container);
   await act(async () => root.render(<TooltipProvider><MissionMap missionId="mission-1" actions={actions} /></TooltipProvider>));
   const q = (selector: string) => container.querySelector<HTMLElement>(selector);
-  return { container, events, q, unmount: async () => { await act(async () => root.unmount()); } };
+  const rerender = async (next: Mission) => { await act(async () => useShellStore.setState((state) => ({ rest: { ...state.rest!, missions: { items: [next] } } }))); };
+  return { container, events, q, rerender, unmount: async () => { await act(async () => root.unmount()); } };
+}
+
+/** Types into a field as a person does, through React's own value tracking. */
+async function type(field: HTMLInputElement, value: string) {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field, value);
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+async function press(target: Element, key: string) {
+  await act(async () => { target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })); });
 }
 
 it("shows one planning line before a plan, and a head of state, time, a cell per node, n / m done and a legend of the states with nodes in it (B12, B13)", async () => {
@@ -79,12 +92,118 @@ it("shows one planning line before a plan, and a head of state, time, a cell per
   } finally { await running.unmount(); }
 });
 
-it("shows the decision line only while there is one, and it goes to the Conductor's conversation", async () => {
-  const map = await mount({ items: [mission({ decision: "Pick the screen PR's approach", nodes: [node("a")] })] });
+const asked = (extra: Partial<Mission> = {}): Mission => mission({
+  decision: "Which base for the screen PR?",
+  question: { key: 3, why: "Two PRs touch the same file", options: ["Stack on the API PR", "Wait for the API PR to merge"], recommend: 1, node: "screen", asked_at_unix_ms: Date.now() - 120_000 },
+  nodes: [node("api", { status: "working" }), node("screen", { title: "API screen", status: "held" }), node("other", { status: "held" })],
+  ...extra,
+});
+
+it("shows the decision with why, the node it stopped, its wait and the choices, and sends a pressed choice once (B25, B26, B30)", async () => {
+  const map = await mount({ items: [asked()] });
   try {
-    expect(map.q('[data-mission-banner="decision"]')?.textContent).toContain("To decide · Pick the screen PR's approach");
+    const banner = map.q('[data-mission-banner="decision"]')!;
+    expect(banner.querySelector("[data-mission-question]")?.textContent).toBe("Which base for the screen PR?");
+    expect(banner.querySelector("[data-mission-banner-why]")?.textContent).toBe("Two PRs touch the same file");
+    expect(banner.querySelector("[data-mission-banner-node]")?.textContent).toBe("API screen held");
+    expect(banner.querySelector("[data-mission-banner-waited]")?.textContent).toBe("waiting 2m");
+    expect([...banner.querySelectorAll("[data-mission-option]")].map((button) => button.textContent)).toEqual(["Stack on the API PRRecommended", "Wait for the API PR to merge"]);
+    expect(banner.querySelector("[data-mission-recommended]")?.getAttribute("data-mission-option")).toBe("1");
+    // The decision's question rides only the node it stopped (B16).
+    expect(map.q('[data-mission-node="screen"]')?.getAttribute("aria-label")).toContain("Which base for the screen PR?");
+    expect(map.q('[data-mission-node="other"]')?.getAttribute("aria-label")).not.toContain("Which base");
+    await act(async () => (banner.querySelector('[data-mission-option="2"]') as HTMLElement).click());
+    expect(map.events.filter((event) => event.kind === "mission_answer")).toEqual([{ schema_version: 2, kind: "mission_answer", payload: { mission: "mission-1", key: 3, option: 2 } }]);
+    // Sent at once: the choice with a check, nothing left to press twice.
+    expect(map.q("[data-mission-banner-sent]")?.textContent).toBe("Wait for the API PR to merge· Conductor is reading");
+    expect(map.q("[data-mission-option]")).toBeNull();
+    // A working Conductor reads it on its next turn.
+    await map.rerender(asked({ answer: { key: 3, text: "Wait for the API PR to merge", option: 2, state: "waiting" } }));
+    expect(map.q("[data-mission-banner-sent]")?.getAttribute("data-mission-banner-sent")).toBe("waiting");
+    expect(map.q("[data-mission-banner-sent]")?.textContent).toContain("Sent · waiting for its turn");
     await act(async () => map.q("[data-mission-conversation]")!.click());
     expect(map.events.at(-1)).toMatchObject({ kind: "focus_pane", payload: { pane_id: "p1" } });
+    // A new question asks again; the answer to the old one is not shown on it (B29).
+    await map.rerender(asked({ decision: "Merge order?", question: { key: 4, why: null, recommend: null, node: null, asked_at_unix_ms: Date.now() } }));
+    expect(map.q("[data-mission-banner-sent]")).toBeNull();
+    expect(map.q("[data-mission-question]")?.textContent).toBe("Merge order?");
+    expect(map.q("[data-mission-option]")).toBeNull();
+    expect(map.q("[data-mission-write]")).not.toBeNull();
+    // A cleared decision takes the banner away.
+    await map.rerender(asked({ decision: null, question: null }));
+    expect(map.q("[data-mission-banner]")).toBeNull();
+  } finally { await map.unmount(); }
+});
+
+it("writes an answer in the banner: Enter sends it, Escape closes it and gives focus back, and the field stops at its cap (B27)", async () => {
+  const map = await mount({ items: [asked()] });
+  try {
+    const write = map.q("[data-mission-write]")!;
+    write.focus();
+    await act(async () => write.click());
+    const field = map.q("[data-mission-answer-input]") as HTMLInputElement;
+    expect(document.activeElement).toBe(field);
+    expect(field.maxLength).toBe(500);
+    await type(field, "Stack it");
+    expect(map.q("[data-mission-answer-left]")?.textContent).toBe("492 left");
+    await press(field, "Escape");
+    expect(map.q("[data-mission-answer-input]")).toBeNull();
+    expect(document.activeElement).toBe(map.q("[data-mission-write]"));
+    await act(async () => map.q("[data-mission-write]")!.click());
+    const again = map.q("[data-mission-answer-input]") as HTMLInputElement;
+    // What was written stays across a close; an empty answer sends nothing.
+    expect(again.value).toBe("Stack it");
+    await type(again, "   ");
+    await press(again, "Enter");
+    expect(map.events.some((event) => event.kind === "mission_answer")).toBe(false);
+    await type(again, "  Stack it on the API PR  ");
+    await press(again, "Enter");
+    expect(map.events.filter((event) => event.kind === "mission_answer").map((event) => event.payload)).toEqual([{ mission: "mission-1", key: 3, text: "Stack it on the API PR" }]);
+    expect(map.q("[data-mission-banner-sent]")?.textContent).toContain("Stack it on the API PR");
+  } finally { await map.unmount(); }
+});
+
+it("turns the choices off with a reason when no Conductor or no device can read the answer, and says why an answer did not arrive (B28, B39)", async () => {
+  const gone = await mount({ items: [asked({ conductor: { ...mission().conductor, present: false }, answer_failed: "conductor_gone" })] });
+  try {
+    const banner = gone.q('[data-mission-banner="decision"]')!;
+    expect([...banner.querySelectorAll<HTMLButtonElement>("[data-mission-option], [data-mission-write]")].every((button) => button.disabled)).toBe(true);
+    expect(banner.querySelector("[data-mission-conversation]")).toBeNull();
+    expect(banner.querySelector("[data-mission-banner-reason]")?.textContent).toBe("Not sent · no Conductor");
+    await act(async () => (banner.querySelector("[data-mission-takeover]") as HTMLElement).click());
+    expect(String((gone.events.find((event) => event.kind === "agent_start_in_checkout")?.payload as { prompt: string }).prompt)).toContain("hide mission take mission-1");
+  } finally { await gone.unmount(); }
+  const offline = await mount({ items: [asked({ device_id: "mini", stale: true })] });
+  try {
+    expect([...offline.container.querySelectorAll<HTMLButtonElement>("[data-mission-option]")].every((button) => button.disabled)).toBe(true);
+    expect(offline.q("[data-mission-banner-reason]")?.textContent).toBe("mini is not responding · answer once it is back");
+  } finally { await offline.unmount(); }
+  // An agent the doorbell does not ring takes its answer in the conversation only.
+  const unsupported = await mount({ items: [asked({ conductor: { ...mission().conductor, agent_kind: "opencode", takes_answers: false } })] });
+  try {
+    expect([...unsupported.container.querySelectorAll<HTMLButtonElement>("[data-mission-option], [data-mission-write]")].every((button) => button.disabled)).toBe(true);
+    expect(unsupported.q("[data-mission-conversation]")).not.toBeNull();
+    expect(unsupported.q("[data-mission-banner-reason]")?.getAttribute("data-mission-banner-reason")).toBe("unsupported");
+  } finally { await unsupported.unmount(); }
+  const failed = await mount({ items: [asked({ answer_failed: "send_failed" })] });
+  try {
+    // A failed send goes back to before it was sent, with what to do.
+    expect([...failed.container.querySelectorAll<HTMLButtonElement>("[data-mission-option]")].some((button) => button.disabled)).toBe(false);
+    expect(failed.q("[data-mission-banner-reason]")?.textContent).toBe("Could not send · answer again");
+  } finally { await failed.unmount(); }
+});
+
+it("answers a decision without choices by writing, as one from before choices is (B25)", async () => {
+  const map = await mount({ items: [mission({ decision: "Pick the screen PR's approach", nodes: [node("a", { status: "held" })] })] });
+  try {
+    expect(map.q("[data-mission-option]")).toBeNull();
+    expect(map.q("[data-mission-banner-node]")).toBeNull();
+    expect(map.q('[data-mission-node="a"]')?.getAttribute("aria-label")).toContain("Pick the screen PR's approach");
+    await act(async () => map.q("[data-mission-write]")!.click());
+    const field = map.q("[data-mission-answer-input]") as HTMLInputElement;
+    await type(field, "Stack it");
+    await press(field, "Enter");
+    expect(map.events.find((event) => event.kind === "mission_answer")?.payload).toEqual({ mission: "mission-1", key: 0, text: "Stack it" });
   } finally { await map.unmount(); }
 });
 
@@ -357,5 +476,79 @@ it("draws a cancelled mission in grey, its unfinished nodes dashed grey, with no
     expect(map.q("[data-mission-legend]")?.getAttribute("data-mission-legend")).toBe("done:1 cancelled:2");
     expect(map.q("[data-mission-banner]")).toBeNull();
     expect(map.q('[data-mission-result-row="a"] [data-pr-mark=merged]')).not.toBeNull();
+  } finally { await map.unmount(); }
+});
+
+it("draws each node's bar from its events: worked, review, a failed attempt and a stop in their colours, its merges and decisions marked, the working end live, and the events in its row (B18, B20, B21)", async () => {
+  const start = Date.now() - 60 * 60_000;
+  const at = (minutes: number) => start + minutes * 60_000;
+  const nodes = [
+    node("a", { status: "done", started_at_unix_ms: at(10), finished_at_unix_ms: at(40), pr: 1, pr_state: "merged" }),
+    node("b", { status: "working", started_at_unix_ms: at(20), attempts: 2 }),
+    node("c", { status: "working", started_at_unix_ms: at(5) }),
+  ];
+  const events: MissionEvent[] = [
+    { at_unix_ms: at(0), kind: "planned", count: 3 },
+    { at_unix_ms: at(10), kind: "node", node: "a", status: "working" },
+    { at_unix_ms: at(15), kind: "replanned", count: 2, line: "Split the API" },
+    { at_unix_ms: at(20), kind: "node", node: "b", status: "working" },
+    { at_unix_ms: at(25), kind: "node", node: "a", status: "review" },
+    { at_unix_ms: at(30), kind: "node", node: "b", status: "failed", line: "CI failed" },
+    { at_unix_ms: at(32), kind: "retried", node: "b", count: 2 },
+    { at_unix_ms: at(33), kind: "node", node: "b", status: "working" },
+    { at_unix_ms: at(35), kind: "asked", node: "b", line: "Keep the old flag?", options: ["Keep", "Drop"] },
+    { at_unix_ms: at(40), kind: "node", node: "a", status: "done" },
+    { at_unix_ms: at(40), kind: "pr_merged", node: "a", pr: 1 },
+  ];
+  const map = await mount({ items: [mission({ nodes, started_at_unix_ms: start })] }, [], [], { mission_events: { mission: "mission-1", events, dropped: 3 } });
+  try {
+    const track = (key: string) => map.q(`[data-flow-track="${key}"]`)!;
+    const tones = (key: string) => [...track(key).querySelectorAll("[data-flow-segment]")].map((segment) => segment.getAttribute("data-flow-segment"));
+    expect(tones("a")).toEqual(["worked", "review"]);
+    expect(tones("b")).toEqual(["failed", "paused", "worked"]);
+    expect(track("a").querySelector("[data-flow-live]")).toBeNull();
+    expect(track("b").querySelector("[data-flow-live]")).not.toBeNull();
+    expect([...track("a").querySelectorAll("[data-flow-mark]")].map((mark) => mark.textContent)).toEqual(["⑂"]);
+    expect([...track("b").querySelectorAll("[data-flow-mark]")].map((mark) => mark.textContent)).toEqual(["!"]);
+    expect(map.q("[data-flow-axis-marks]")?.getAttribute("data-flow-axis-marks")).toBe("replanned");
+    // A node with no event of its own keeps the bar its times draw (B19).
+    expect(track("c").getAttribute("data-flow-drawn")).toBe("times");
+    expect(track("c").querySelector("[data-flow-bar]")).not.toBeNull();
+    expect(map.q("[data-mission-flow-dropped]")?.textContent).toBe("3 earlier events omitted");
+    await act(async () => (map.q('[data-flow-row="a"] button') as HTMLElement).click());
+    const detail = map.q('[data-mission-detail="a"]')!;
+    expect([...detail.querySelectorAll("[data-flow-event]")].map((row) => row.getAttribute("data-flow-event"))).toEqual(["node", "node", "node", "pr_merged"]);
+    expect(detail.textContent).toContain("PR #1 merged");
+    expect(detail.querySelector("[data-flow-times]")).toBeNull();
+    await act(async () => (map.q('[data-flow-row="b"] button') as HTMLElement).click());
+    const b = map.q('[data-mission-detail="b"]')!;
+    expect(b.textContent).toContain("FailedCI failed");
+    expect(b.textContent).toContain("Attempt 2");
+    expect(b.textContent).toContain("Decision askedKeep the old flag? / Keep / Drop");
+  } finally { await map.unmount(); }
+  // Another mission's events draw nothing here.
+  const other = await mount({ items: [mission({ nodes, started_at_unix_ms: start })] }, [], [], { mission_events: { mission: "mission-2", events, dropped: 0 } });
+  try {
+    expect(other.q('[data-flow-track="a"]')?.getAttribute("data-flow-drawn")).toBe("times");
+    expect(other.q("[data-mission-flow-dropped]")).toBeNull();
+  } finally { await other.unmount(); }
+});
+
+it("shows a direct change's commit on main and a verify node's verdict as their results, and a cancel's time (B22, B24)", async () => {
+  const nodes = [
+    node("fix", { delivery: "direct", status: "done", branch: "fix/cache", commit: "abc1234def5678" }),
+    node("check", { kind: "verify", delivery: null, status: "failed", verdict: "fail", checks: { passed: 3, total: 5 }, line: "2 failed" }),
+    node("pass", { kind: "verify", delivery: null, status: "done", verdict: "pass", checks: null }),
+  ];
+  const closed = Date.now() - 5 * 60_000;
+  const map = await mount({ items: [mission({ status: "cancelled", nodes, closed_at_unix_ms: closed })] }, [], [], { mission_events: { mission: "mission-1", events: [{ at_unix_ms: closed, kind: "cancelled" }], dropped: 0 } });
+  try {
+    const result = (key: string) => map.q(`[data-mission-result-row="${key}"]`)?.textContent;
+    expect(result("fix")).toContain("→ main abc1234");
+    expect(result("check")).toContain("FAIL 3/5");
+    expect(result("pass")).toContain("PASS");
+    expect(map.q("[data-node-commit]")?.getAttribute("title")).toBe("abc1234def5678");
+    expect(map.q("[data-mission-cancelled-at]")?.textContent).toMatch(/^Cancelled /);
+    expect(map.q("[data-flow-axis-marks]")?.getAttribute("data-flow-axis-marks")).toBe("cancelled");
   } finally { await map.unmount(); }
 });
