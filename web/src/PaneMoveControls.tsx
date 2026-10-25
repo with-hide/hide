@@ -20,7 +20,8 @@ type Gesture = { source: PaneMoveSource; label: string; stamp: string; pointerId
 type Preview = { areaId: string; tabId: string; requestId: string };
 type MoveContext = {
   active: boolean;
-  press: (paneId: string, event: React.PointerEvent<HTMLElement>) => void;
+  /** `title` is the name the pane's header shows, which the chip under the pointer repeats. */
+  press: (paneId: string, title: string, event: React.PointerEvent<HTMLElement>) => void;
   mutationBlocked: (paneId: string) => boolean;
   menu: (paneId: string) => MenuEntry[];
   select: (id: string) => boolean;
@@ -242,7 +243,7 @@ export function PaneMoveProvider({ checkout, layout, deviceId, actions, children
       return !!tabId && (movingTab(operations, tabId) || !!(held && request && [request.source.tab_id, "tab_id" in request.destination ? request.destination.tab_id : ""].includes(tabId)));
     },
     select: (id) => { const choice = menuTargets.get(id); if (!choice) return false; run(choice.source, choice.destination); return true; },
-    press: (paneId, event) => {
+    press: (paneId, title, event) => {
       if (event.button !== 0 || !event.isPrimary || gesture.current) return;
       const source = paneLocation(checkout, layout, paneId);
       if (!source) return;
@@ -250,8 +251,7 @@ export function PaneMoveProvider({ checkout, layout, deviceId, actions, children
       // Keep terminal keys and selection while a header press becomes a drag.
       // Click still reaches the existing record button below the threshold.
       event.preventDefault();
-      const pane = checkout.tabs.find(tab => tab.id === source.tab_id)?.panes.find(row => row.id === paneId);
-      gesture.current = { source, label: pane?.identity_label ?? pane?.terminal_title ?? pane?.herdr_label ?? paneId, stamp: stamp(source.tab_id), pointerId: event.pointerId, origin: { x: event.clientX, y: event.clientY }, dragging: false, target: null };
+      gesture.current = { source, label: title, stamp: stamp(source.tab_id), pointerId: event.pointerId, origin: { x: event.clientX, y: event.clientY }, dragging: false, target: null };
     },
   };
   const overlayStyle = target ? (() => {

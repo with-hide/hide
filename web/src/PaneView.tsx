@@ -367,7 +367,7 @@ export const PaneView = memo(function PaneView({
           input ? "bg-primary/[var(--opacity-selected-fill)] text-foreground" : "bg-card text-muted-foreground"
         }`}
         onPointerDown={(event) => {
-          if (paneMoveStartTarget(event.currentTarget, event.target)) move?.press(paneId, event);
+          if (paneMoveStartTarget(event.currentTarget, event.target)) move?.press(paneId, title, event);
         }}
         onContextMenu={(event) => {
           event.preventDefault();

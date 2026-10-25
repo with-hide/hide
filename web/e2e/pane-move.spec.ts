@@ -42,11 +42,14 @@ test("hover and Escape preserve tab selection, keyboard, selection and terminal 
     const focus = flow.sent.get("focus_pane") ?? 0, selection = flow.sent.get("agent_layout.focus") ?? 0;
     await beginDrag(page, source, tabTitle(page, flow.target.tab.tab_id));
     await expect(page.locator('[data-pane-move-preview-tab]')).toBeVisible();
+    // The dragged pane's name rides under the pointer while the drag runs.
+    await expect(page.locator("[data-pane-move-chip]")).not.toBeEmpty();
     await expect(tabTitle(page, flow.herdr.tab)).toHaveAttribute("aria-selected", "true");
     expect(await keyboard.evaluate(node => node === document.activeElement)).toBe(true);
     expect(await page.evaluate(id => ({ grid: window.__hideProbe!.paneGrid(id), selected: window.__hideProbe!.paneSelection(id) }), source)).toEqual({ grid, selected: "MOVE_SELECTION" });
     await screenshot(page, "pane-move-hover-preview"); await page.keyboard.press("Escape"); await page.mouse.up();
     await expect(page.locator('[data-pane-move-preview-tab]')).toHaveCount(0);
+    await expect(page.locator("[data-pane-move-chip]")).toHaveCount(0);
     expect(flow.sent.get("pane_move") ?? 0).toBe(0); expect(flow.sent.get("focus_pane") ?? 0).toBe(focus); expect(flow.sent.get("agent_layout.focus") ?? 0).toBe(selection);
     await expect(paneView(page, source)).toBeVisible();
   } finally { flow.stop(); }
