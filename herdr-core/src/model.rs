@@ -8451,6 +8451,21 @@ mod wire_enum_tests {
             }
             assert_wire(&contract, "mission_answer_source", &sources);
             checked.insert("mission_answer_source");
+            use crate::missions::AnswerFailure;
+            let failures = [
+                AnswerFailure::ConductorGone,
+                AnswerFailure::DeviceDisconnected,
+                AnswerFailure::SendFailed,
+            ];
+            for variant in failures {
+                match variant {
+                    AnswerFailure::ConductorGone
+                    | AnswerFailure::DeviceDisconnected
+                    | AnswerFailure::SendFailed => {}
+                }
+            }
+            assert_wire(&contract, "mission_answer_failure", &failures);
+            checked.insert("mission_answer_failure");
         }
 
         {

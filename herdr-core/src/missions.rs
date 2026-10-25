@@ -248,6 +248,19 @@ pub struct Answer {
     pub delivered: bool,
 }
 
+/// Why the operator's last answer from the banner did not reach the
+/// Conductor (B28, B39).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnswerFailure {
+    /// No Conductor runs the mission to read it.
+    ConductorGone,
+    /// The device the mission's project is on does not answer.
+    DeviceDisconnected,
+    /// Typing it into the conversation failed.
+    SendFailed,
+}
+
 /// Wakes a mission keeps unsent; past this the oldest is dropped and
 /// logged, and the Conductor's own `hide mission show` still reads the
 /// pull request as it is.
@@ -371,7 +384,7 @@ pub struct Mission {
     /// Why the last answer from the banner did not reach the Conductor,
     /// shown once beside the question until the next answer (B28).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub answer_failed: Option<String>,
+    pub answer_failed: Option<AnswerFailure>,
     /// Why new nodes wait on usage (B13).
     #[serde(default)]
     pub delay: Option<String>,

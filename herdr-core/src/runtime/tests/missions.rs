@@ -6,7 +6,7 @@
 use super::*;
 use crate::delivery::{Actor, worker::Worker};
 use crate::handle::ChangeNotifier;
-use crate::missions::{MissionCommand, MissionStatus, NodeStatus};
+use crate::missions::{AnswerFailure, MissionCommand, MissionStatus, NodeStatus};
 use crate::model::{
     DetailItem, GithubProjectSnapshot, GithubSnapshot, PullRequestBadge, PullRequestChecks,
     PullRequestSnapshot, ReviewDecision,
@@ -1480,11 +1480,11 @@ fn an_answer_whose_conductor_left_or_whose_question_changed_is_not_delivered() {
     runtime.delivery_observations.remove("sender");
     assert!(runtime.mission_answers_due().is_empty());
     let mission = &runtime.missions.book.missions[0];
-    assert_eq!((mission.answer.is_none(), mission.answer_failed.as_deref()), (true, Some("conductor_gone")));
+    assert_eq!((mission.answer.is_none(), mission.answer_failed), (true, Some(AnswerFailure::ConductorGone)));
     assert_eq!(kinds(&runtime)[1..], ["asked", "answer_undelivered", "asked", "answer_undelivered"]);
     // With no Conductor there, the banner's answer is refused with its reason.
     assert!(runtime.mission_answer_event("mission-1", 2, None, Some("yes".into())));
-    assert_eq!(runtime.missions.book.missions[0].answer_failed.as_deref(), Some("mission_conductor_gone"));
+    assert_eq!(runtime.missions.book.missions[0].answer_failed, Some(AnswerFailure::ConductorGone));
     // A question cleared with no banner answer was answered in the conversation.
     command(&mut runtime, "recipient", json!({"op": "take", "mission": "mission-1"})).unwrap();
     command(&mut runtime, "recipient", json!({"op": "decide", "line": null})).unwrap();

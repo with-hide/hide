@@ -64,7 +64,7 @@ pub struct MissionView {
     /// The operator's answer from the banner to that decision (B26, B28).
     pub answer: Option<AnswerView>,
     /// Why the last answer did not reach the Conductor (B28).
-    pub answer_failed: Option<String>,
+    pub answer_failed: Option<crate::missions::AnswerFailure>,
     pub delay: Option<String>,
     pub report: Option<String>,
     pub created_at_unix_ms: u64,
@@ -1432,7 +1432,7 @@ impl Runtime {
                     AnswerState::Sending
                 },
             }),
-            answer_failed: mission.answer_failed.clone(),
+            answer_failed: mission.answer_failed,
             delay: mission.delay.clone(),
             report: mission.report.clone(),
             created_at_unix_ms: mission.created_at_unix_ms,

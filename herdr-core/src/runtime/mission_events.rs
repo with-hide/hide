@@ -16,7 +16,7 @@ use serde_json::json;
 use super::Runtime;
 use crate::delivery::Actor;
 use crate::mission_events::{AnswerSource, EventKind, EventLog, MissionEvent};
-use crate::missions::{ANSWER_LIMIT, Answer, Mission, MissionNode, MissionStatus, Question};
+use crate::missions::{ANSWER_LIMIT, Answer, AnswerFailure, Mission, MissionNode, MissionStatus, Question};
 use crate::model::DetailItem;
 
 /// The events of the mission open in the 보기 slot (B18-B21, B31): sent
@@ -353,13 +353,14 @@ impl Runtime {
                     "component": "missions", "kind": "mission.answer_refused",
                     "mission": mission, "key": key, "code": code,
                 }));
-                let shown = matches!(
-                    code.as_str(),
-                    "mission_conductor_gone" | "mission_device_disconnected"
-                );
-                match self.missions.book.get_mut(mission) {
-                    Some(target) if shown => {
-                        target.answer_failed = Some(code);
+                let shown = match code.as_str() {
+                    "mission_conductor_gone" => Some(AnswerFailure::ConductorGone),
+                    "mission_device_disconnected" => Some(AnswerFailure::DeviceDisconnected),
+                    _ => None,
+                };
+                match (self.missions.book.get_mut(mission), shown) {
+                    (Some(target), Some(failure)) => {
+                        target.answer_failed = Some(failure);
                         self.save_missions();
                         true
                     }
@@ -396,7 +397,7 @@ impl Runtime {
         for (id, text) in gone {
             if let Some(mission) = self.missions.book.get_mut(&id) {
                 mission.answer = None;
-                mission.answer_failed = Some("conductor_gone".to_owned());
+                mission.answer_failed = Some(AnswerFailure::ConductorGone);
             }
             self.missions.answers_held.remove(&id);
             crate::diagnostic!(json!({
@@ -485,7 +486,7 @@ impl Runtime {
             Err(code) => {
                 let text = answer.text.clone();
                 mission.answer = None;
-                mission.answer_failed = Some("send_failed".to_owned());
+                mission.answer_failed = Some(AnswerFailure::SendFailed);
                 crate::diagnostic!(json!({
                     "component": "missions", "kind": "mission.answer_failed",
                     "mission": id, "key": key, "code": code,
