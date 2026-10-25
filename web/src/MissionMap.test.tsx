@@ -163,6 +163,28 @@ it("writes an answer in the banner: Enter sends it, Escape closes it and gives f
   } finally { await map.unmount(); }
 });
 
+it("keeps an answer Herdr may have typed as unconfirmed and types it again only when the operator sends it again, once (B26)", async () => {
+  const unconfirmed = asked({ answer: { key: 3, text: "Stack on the API PR", option: 1, state: "unconfirmed" } });
+  const map = await mount({ items: [unconfirmed] });
+  try {
+    const row = map.q('[data-mission-banner-sent="unconfirmed"]')!;
+    expect(row.textContent).toContain("Stack on the API PR");
+    expect(row.textContent).toContain("Delivery not confirmed");
+    // Nothing else answers the question while it may already be in the conversation.
+    expect(map.q("[data-mission-option]")).toBeNull();
+    await act(async () => map.q("[data-mission-resend]")!.click());
+    expect(map.events.filter((event) => event.kind === "mission_answer").map((event) => event.payload)).toEqual([{ mission: "mission-1", key: 3, resend: true }]);
+    // Pressed, it reads as sending and offers no second press.
+    expect(map.q("[data-mission-banner-sent]")?.getAttribute("data-mission-banner-sent")).toBe("sending");
+    expect(map.q("[data-mission-resend]")).toBeNull();
+    await map.rerender(asked({ answer: { key: 3, text: "Stack on the API PR", option: 1, state: "delivered" } }));
+    expect(map.q("[data-mission-banner-sent]")?.getAttribute("data-mission-banner-sent")).toBe("delivered");
+    // With no Conductor there, sending again waits.
+    await map.rerender({ ...unconfirmed, conductor: { ...unconfirmed.conductor, present: false } });
+    expect((map.q("[data-mission-resend]") as HTMLButtonElement).disabled).toBe(true);
+  } finally { await map.unmount(); }
+});
+
 it("turns the choices off with a reason when no Conductor or no device can read the answer, and says why an answer did not arrive (B28, B39)", async () => {
   const gone = await mount({ items: [asked({ conductor: { ...mission().conductor, present: false }, answer_failed: "conductor_gone" })] });
   try {

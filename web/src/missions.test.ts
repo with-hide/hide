@@ -3,8 +3,8 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { chipWords, conductedBy, firstPlans, flowShows, flowSpan, kindWord, missionCells, missionLegend, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, nodeBar, nodeResult, nodeTone, paneChipWords, launchModelOf, missionCounts, nodeLine, nodeMark, stackWaiting, stageWord, stepsOf, takeOverPrompt, takeOverProvider, workerWords } from "./missions";
-import type { Mission, MissionNode, SnapshotRest } from "./snapshot";
+import { chipWords, conductedBy, firstPlans, flowShows, flowSpan, kindWord, missionCells, missionLegend, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, nodeBar, nodeMarks, nodeResult, nodeTone, paneChipWords, launchModelOf, missionCounts, nodeLine, nodeMark, stackWaiting, stageWord, stepsOf, takeOverPrompt, takeOverProvider, workerWords } from "./missions";
+import type { Mission, MissionEvent, MissionNode, SnapshotRest } from "./snapshot";
 
 // What the map and the Conductor row read from a mission (PRD
 // software-factory-conductor B14-B21, B44, B46): the core decides every value,
@@ -234,4 +234,11 @@ describe("a first plan landing (PRD mission-pane-chip D-06, B12-B14)", () => {
     expect(firstPlans({} as SnapshotRest, rest([planned]))).toEqual([]);
     expect(firstPlans({ missions: { items: [], failed: "unreadable" } } as unknown as SnapshotRest, rest([planned]))).toEqual([]);
   });
+});
+
+it("marks a node's decision and each answer to it on its bar: delivered, not delivered, or not confirmed (B18, B26)", () => {
+  const event = (at: number, kind: MissionEvent["kind"], nodeKey = "screen"): MissionEvent => ({ at_unix_ms: at, kind, node: nodeKey });
+  const events = [event(0, "asked"), event(25, "answer_unconfirmed"), event(50, "answered"), event(75, "answer_undelivered"), event(80, "answered", "other")];
+  const marks = nodeMarks({ key: "screen" } as MissionNode, events, { from: 0, to: 100 });
+  expect(marks.map((mark) => [mark.at, mark.kind])).toEqual([[0, "asked"], [25, "unconfirmed"], [50, "answered"], [75, "undelivered"]]);
 });

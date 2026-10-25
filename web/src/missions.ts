@@ -338,11 +338,22 @@ export function missionEventsOf(rest: SnapshotRest | null | undefined, missionId
 /** One stretch of a node's bar (B18): worked, in review, an attempt that failed, or stopped on a decision or a free place. */
 export type SegmentTone = "worked" | "review" | "failed" | "paused";
 /** A mark on a bar or on the axis (B18, B31): ⑂ a merge, ↓ main, ! a decision, ✓ its answer, ⊘ an answer not delivered, ✎ a replan, × the cancel. */
-export type FlowMarkKind = "merged" | "landed" | "asked" | "answered" | "undelivered" | "replanned" | "cancelled";
+export type FlowMarkKind = "merged" | "landed" | "asked" | "answered" | "undelivered" | "unconfirmed" | "replanned" | "cancelled";
 
 /** The marks a decision leaves, wherever it sits. */
 function decisionMark(event: MissionEvent): FlowMarkKind | null {
-  return event.kind === "asked" ? "asked" : event.kind === "answered" ? "answered" : event.kind === "answer_undelivered" ? "undelivered" : null;
+  switch (event.kind) {
+    case "asked":
+      return "asked";
+    case "answered":
+      return "answered";
+    case "answer_undelivered":
+      return "undelivered";
+    case "answer_unconfirmed":
+      return "unconfirmed";
+    default:
+      return null;
+  }
 }
 
 /** Where on the axis a moment falls, as a percentage. */
@@ -417,6 +428,8 @@ export function eventWords(event: MissionEvent, t: TFunction<"translation">): { 
       return { what: t(event.source === "banner" ? "mission.event.answered.banner" : "mission.event.answered.conversation"), line };
     case "answer_undelivered":
       return { what: t("mission.event.undelivered"), line };
+    case "answer_unconfirmed":
+      return { what: t("mission.event.unconfirmed"), line };
     case "reported":
       return { what: t("mission.event.reported"), line: null };
     case "cancelled":

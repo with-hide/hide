@@ -1,4 +1,4 @@
-import { CheckIcon, ChevronRightIcon } from "lucide-react";
+import { CheckIcon, ChevronRightIcon, CircleAlertIcon } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { Actions } from "./actions";
 import { useElapsed } from "./components/elapsed";
@@ -15,7 +15,8 @@ import type { Mission, MissionAnswerState } from "./snapshot";
 // choices with its recommendation, a short written answer, and the way to
 // the conversation. The core keeps the answer and types it into the
 // Conductor's conversation as the operator's own input; this draws where
-// that answer is.
+// that answer is. One typed without Herdr confirming it is typed again only
+// when the operator sends it again, so a question is answered once (B26).
 
 /** The longest written answer the core takes (`missions::ANSWER_LIMIT`), counted in UTF-16 units so the field's own cap never lets past what the core refuses. */
 export const ANSWER_LIMIT = 500;
@@ -29,7 +30,7 @@ export function DecisionBanner({ mission, device, actions }: { mission: Mission;
   // A decision from before questions is answered under key 0, as the core keeps it.
   const key = question?.key ?? 0;
   // `failed` is the failure shown when it was pressed, so only a new one ends it.
-  const [pressed, setPressed] = useState<{ key: number; text: string; failed: Mission["answer_failed"] } | null>(null);
+  const [pressed, setPressed] = useState<{ key: number; text: string; failed: Mission["answer_failed"]; resend: boolean } | null>(null);
   const [writing, setWriting] = useState(false);
   const [draft, setDraft] = useState("");
   const writeButton = useRef<HTMLButtonElement>(null);
@@ -38,14 +39,16 @@ export function DecisionBanner({ mission, device, actions }: { mission: Mission;
   const waited = useElapsed(question?.asked_at_unix_ms ?? null);
   const stopped = question?.node ? (mission.nodes.find((node) => node.key === question.node) ?? null) : null;
   const answer = mission.answer?.key === key ? mission.answer : null;
+  // Sending an unconfirmed answer again shows it sending until the core moves it on.
+  const resending = pressed?.resend === true && answer?.state === "unconfirmed";
 
   // What was pressed shows until the core answers for it, refuses it, or asks something else (B26).
   useEffect(() => {
     if (!pressed) return;
-    if (answer || pressed.key !== key || pressed.failed !== mission.answer_failed) return setPressed(null);
+    if ((answer && !resending) || pressed.key !== key || pressed.failed !== mission.answer_failed) return setPressed(null);
     const timer = window.setTimeout(() => setPressed(null), PRESSED_MS);
     return () => window.clearTimeout(timer);
-  }, [pressed, answer, key, mission.answer_failed]);
+  }, [pressed, answer, resending, key, mission.answer_failed]);
   useEffect(() => {
     if (writing) field.current?.focus();
     else if (returnFocus.current) {
@@ -54,16 +57,22 @@ export function DecisionBanner({ mission, device, actions }: { mission: Mission;
     }
   }, [writing]);
 
-  const sent: { text: string; state: MissionAnswerState } | null = answer ? { text: answer.text, state: answer.state } : pressed ? { text: pressed.text, state: "sending" } : null;
+  const sent: { text: string; state: MissionAnswerState } | null = answer && !resending ? { text: answer.text, state: answer.state } : pressed ? { text: pressed.text, state: "sending" } : null;
   const gone = !mission.conductor.present;
   const offline = mission.stale;
   const unsupported = !mission.conductor.takes_answers;
-  const closed = gone || offline || unsupported || sent !== null;
+  const unreachable = gone || offline || unsupported;
+  const closed = unreachable || sent !== null;
   const options = question?.options ?? [];
 
   const choose = (index: number) => {
     actions.answerMission(mission.id, key, { option: index + 1 });
-    setPressed({ key, text: options[index]!, failed: mission.answer_failed });
+    setPressed({ key, text: options[index]!, failed: mission.answer_failed, resend: false });
+  };
+  const resend = () => {
+    if (!sent) return;
+    actions.answerMission(mission.id, key, { resend: true });
+    setPressed({ key, text: sent.text, failed: mission.answer_failed, resend: true });
   };
   const onKey = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.nativeEvent.isComposing) return;
@@ -78,7 +87,7 @@ export function DecisionBanner({ mission, device, actions }: { mission: Mission;
       const text = draft.replace(/\p{Cc}/gu, " ").trim();
       if (!text) return;
       actions.answerMission(mission.id, key, { text });
-      setPressed({ key, text, failed: mission.answer_failed });
+      setPressed({ key, text, failed: mission.answer_failed, resend: false });
       setWriting(false);
       setDraft("");
     }
@@ -122,7 +131,14 @@ export function DecisionBanner({ mission, device, actions }: { mission: Mission;
         )}
       </div>
       {question?.why ? <p className="min-w-0 break-words text-caption text-muted-foreground" data-mission-banner-why="true">{question.why}</p> : null}
-      {sent ? (
+      {sent?.state === "unconfirmed" ? (
+        <p className="flex min-w-0 items-center gap-xs text-body" data-mission-banner-sent="unconfirmed">
+          <CircleAlertIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-mission-hold" />
+          <span className="min-w-0 truncate font-semibold" title={sent.text}>{sent.text}</span>
+          <span className="shrink-0 text-caption text-mission-hold">· {t("mission.banner.unconfirmed")}</span>
+          <Button size="sm" variant="ghost" disabled={unreachable} onClick={resend} data-mission-resend="true">{t("mission.banner.resend")}</Button>
+        </p>
+      ) : sent ? (
         <p className="flex min-w-0 items-center gap-xs text-body" data-mission-banner-sent={sent.state}>
           <CheckIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-mission-done" />
           <span className="min-w-0 truncate font-semibold text-mission-done" title={sent.text}>{sent.text}</span>

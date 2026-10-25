@@ -966,6 +966,9 @@ pub(super) struct MissionAnswerPayload {
     pub(super) option: Option<u8>,
     #[serde(default)]
     pub(super) text: Option<String>,
+    /// Types an answer again that was typed without Herdr confirming it.
+    #[serde(default)]
+    pub(super) resend: bool,
 }
 
 /// `issue_settings_set`: how starting work from an issue behaves; an absent
@@ -3903,6 +3906,7 @@ impl Runtime {
                 payload.key,
                 payload.option,
                 payload.text,
+                payload.resend,
             ),
             Event::IssueDetailRequest(payload) => self.request_issue_detail(payload),
             Event::GithubSearch(payload) => self.request_github_search(payload),

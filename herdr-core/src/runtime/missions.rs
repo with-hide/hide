@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 
 use super::Runtime;
 use crate::delivery::Actor;
-use crate::mission_events::EventLog;
+use crate::mission_events::History;
 use crate::missions::{
     AnswerFailure, Blocked, Checks, Conductor, ConductorSettings, Delivery, MISSION_LIMIT, Mission,
     MissionBook, MissionCommand, MissionEnd, MissionNode, MissionScope, MissionStatus, NodeKind,
@@ -84,13 +84,16 @@ pub struct MissionView {
 }
 
 /// Where the operator's answer is (B26, B28): accepted and not yet tried,
-/// waiting for the Conductor's turn, or typed into its conversation.
+/// waiting for the Conductor's turn, typed into its conversation, or typed
+/// without Herdr confirming it arrived, kept until the operator sends it
+/// again.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AnswerState {
     Sending,
     Waiting,
     Delivered,
+    Unconfirmed,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -193,7 +196,7 @@ pub(crate) struct MissionRuntime {
     views: ViewsMadeFrom,
     /// Each mission's events (PRD mission-plan-visibility D-22), saved by
     /// their own store; only the mission open in the 보기 slot sends them.
-    pub(crate) events: HashMap<String, EventLog>,
+    pub(crate) events: HashMap<String, History>,
     pub(crate) event_store: Option<crate::mission_events::MissionEventStore>,
     /// Counts the events' changes, for the published section.
     pub(crate) events_edit: u64,
@@ -1440,6 +1443,8 @@ impl Runtime {
                 option: answer.option,
                 state: if answer.delivered {
                     AnswerState::Delivered
+                } else if answer.unconfirmed {
+                    AnswerState::Unconfirmed
                 } else if self.missions.answers_held.contains(&mission.id) {
                     AnswerState::Waiting
                 } else {

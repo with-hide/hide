@@ -15,20 +15,30 @@ use serde_json::json;
 
 use super::Runtime;
 use crate::delivery::Actor;
-use crate::mission_events::{AnswerSource, EventKind, EventLog, MissionEvent};
+use crate::mission_events::{AnswerSource, EventKind, History, MissionEvent};
 use crate::missions::{
     ANSWER_LIMIT, Answer, AnswerFailure, Mission, MissionNode, MissionStatus, Question,
 };
 use crate::model::DetailItem;
 
 /// The events of the mission open in the 보기 slot (B18-B21, B31): sent
-/// only for that one, so a mission's history never rides every frame.
+/// only for that one, so a mission's history never rides every frame. The
+/// list is the core's own, shared: publishing it copies a pointer, and it
+/// is encoded off the lock with the rest of the frame.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub struct MissionEventsSnapshot {
     pub mission: Option<String>,
-    pub events: Vec<MissionEvent>,
+    #[serde(serialize_with = "shared_events")]
+    pub events: Arc<Vec<Arc<MissionEvent>>>,
     /// Events dropped past the limit before the first of these (B21).
     pub dropped: u64,
+}
+
+fn shared_events<S: serde::Serializer>(
+    events: &Arc<Vec<Arc<MissionEvent>>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.collect_seq(events.iter().map(|event| event.as_ref()))
 }
 
 /// One answer for the doorbell to type: made under the lock, typed off it.
@@ -38,6 +48,15 @@ pub(crate) struct AnswerWork {
     pub conductor: Actor,
     pub at_unix_ms: u64,
     pub line: String,
+}
+
+/// Why the doorbell could not confirm an answer: it failed before the
+/// answer was typed, or after Herdr was asked to type it, when the answer
+/// may already be in the conversation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AnswerSendFailure {
+    NotTyped(&'static str),
+    MaybeTyped(&'static str),
 }
 
 /// The events one plan makes of the plan before it: the first plan, or a
@@ -153,7 +172,7 @@ impl Runtime {
     pub(crate) fn install_mission_events(
         &mut self,
         store: crate::mission_events::MissionEventStore,
-        logs: std::collections::HashMap<String, EventLog>,
+        logs: std::collections::HashMap<String, History>,
     ) {
         self.missions.events = logs;
         self.missions.event_store = Some(store);
@@ -167,10 +186,11 @@ impl Runtime {
         if events.is_empty() {
             return;
         }
+        let events: Vec<Arc<MissionEvent>> = events.into_iter().map(Arc::new).collect();
         let log = self.missions.events.entry(mission.to_owned()).or_default();
         let before = log.dropped;
-        for event in events {
-            log.push(event);
+        for event in &events {
+            log.push(Arc::clone(event));
         }
         // The first drop and each hundredth after it, so a full log does not
         // write a line per event.
@@ -180,12 +200,11 @@ impl Runtime {
                 "mission": mission, "dropped": log.dropped,
             }));
         }
-        let saved = Arc::new(log.clone());
         self.missions.events_edit = self.missions.events_edit.wrapping_add(1);
         if self.missions.unreadable.is_none()
             && let Some(store) = &self.missions.event_store
         {
-            store.save(mission, saved);
+            store.append(mission, &events);
         }
     }
 
@@ -252,7 +271,7 @@ impl Runtime {
             .as_ref()
             .filter(|answer| answer.key == key_before)
         {
-            if !answer.delivered {
+            if !answer.delivered && !answer.unconfirmed {
                 // The Conductor changed its question before reading this.
                 let mut event =
                     MissionEvent::new(now, EventKind::AnswerUndelivered).line(Some(&answer.text));
@@ -305,6 +324,7 @@ impl Runtime {
         key: u64,
         option: Option<u8>,
         text: Option<String>,
+        resend: bool,
     ) -> Result<bool, String> {
         let now = super::memory::now_ms();
         let mission = self.missions.book.get(id).ok_or("mission_unknown")?;
@@ -315,11 +335,17 @@ impl Runtime {
         if current != key {
             return Err("mission_decision_changed".into());
         }
-        if mission
-            .answer
-            .as_ref()
-            .is_some_and(|answer| answer.key == key)
-        {
+        let answered = mission.answer.as_ref().filter(|answer| answer.key == key);
+        // Sending again is the operator's own choice for an answer typed
+        // without confirmation, and once: a second press finds it sending
+        // (engineering principle 11).
+        if resend && (option.is_some() || text.is_some()) {
+            return Err("mission_answer_invalid".into());
+        }
+        if resend && !answered.is_some_and(|answer| answer.unconfirmed) {
+            return Ok(false);
+        }
+        if answered.is_some() && !resend {
             return Ok(false);
         }
         // The doorbell types only into an agent it rings; nothing would ever
@@ -332,6 +358,19 @@ impl Runtime {
         }
         if self.mission_stale(mission) {
             return Err("mission_device_disconnected".into());
+        }
+        if resend {
+            let target = self.missions.book.get_mut(id).ok_or("mission_unknown")?;
+            if let Some(answer) = target.answer.as_mut() {
+                answer.unconfirmed = false;
+            }
+            target.answer_failed = None;
+            crate::diagnostic!(json!({
+                "component": "missions", "kind": "mission.answer_resent",
+                "mission": id, "key": key,
+            }));
+            self.save_missions();
+            return Ok(true);
         }
         let text = match (option, text) {
             (Some(choice), None) => mission
@@ -359,6 +398,7 @@ impl Runtime {
             option,
             at_unix_ms: now,
             delivered: false,
+            unconfirmed: false,
         });
         target.answer_failed = None;
         crate::diagnostic!(json!({
@@ -378,8 +418,9 @@ impl Runtime {
         key: u64,
         option: Option<u8>,
         text: Option<String>,
+        resend: bool,
     ) -> bool {
-        match self.answer_mission(mission, key, option, text) {
+        match self.answer_mission(mission, key, option, text, resend) {
             Ok(changed) => changed,
             Err(code) => {
                 crate::diagnostic!(json!({
@@ -415,7 +456,13 @@ impl Runtime {
         let mut gone = Vec::new();
         let mut absent = Vec::new();
         for mission in &self.missions.book.missions {
-            let Some(answer) = mission.answer.as_ref().filter(|answer| !answer.delivered) else {
+            // An answer that may already be in the conversation waits for
+            // the operator to send it again; nothing types it on its own.
+            let Some(answer) = mission
+                .answer
+                .as_ref()
+                .filter(|answer| !answer.delivered && !answer.unconfirmed)
+            else {
                 continue;
             };
             let asked = mission
@@ -489,10 +536,9 @@ impl Runtime {
             .get(&work.mission)
             .is_some_and(|mission| {
                 mission.status.open()
-                    && mission
-                        .answer
-                        .as_ref()
-                        .is_some_and(|answer| answer.key == work.key && !answer.delivered)
+                    && mission.answer.as_ref().is_some_and(|answer| {
+                        answer.key == work.key && !answer.delivered && !answer.unconfirmed
+                    })
             });
         if !waiting {
             return Err(Hold::Letter);
@@ -508,7 +554,7 @@ impl Runtime {
                 && mission
                     .answer
                     .as_ref()
-                    .is_some_and(|answer| !answer.delivered)
+                    .is_some_and(|answer| !answer.delivered && !answer.unconfirmed)
         });
         if !waiting || !self.missions.answers_held.insert(mission.to_owned()) {
             return false;
@@ -527,13 +573,15 @@ impl Runtime {
     }
 
     /// The doorbell typed the answer, or failed to: a typed answer is in the
-    /// history as the operator's, from the banner; a failed one goes back
-    /// with its reason so the operator can answer again (B28).
+    /// history as the operator's, from the banner; one that failed before
+    /// it was typed goes back with its reason so the operator can answer
+    /// again (B28); one Herdr took without confirming it is kept as
+    /// unconfirmed, and only the operator sends it again (B26).
     pub(crate) fn mission_answer_sent(
         &mut self,
         id: &str,
         key: u64,
-        result: Result<(), &'static str>,
+        result: Result<(), AnswerSendFailure>,
     ) {
         let now = super::memory::now_ms();
         let Some(mission) = self.missions.book.get_mut(id) else {
@@ -542,7 +590,7 @@ impl Runtime {
         let Some(answer) = mission
             .answer
             .as_mut()
-            .filter(|answer| answer.key == key && !answer.delivered)
+            .filter(|answer| answer.key == key && !answer.delivered && !answer.unconfirmed)
         else {
             return;
         };
@@ -559,7 +607,7 @@ impl Runtime {
                 event.source = Some(AnswerSource::Banner);
                 event
             }
-            Err(code) => {
+            Err(AnswerSendFailure::NotTyped(code)) => {
                 let text = answer.text.clone();
                 mission.answer = None;
                 mission.answer_failed = Some(AnswerFailure::SendFailed);
@@ -568,6 +616,14 @@ impl Runtime {
                     "mission": id, "key": key, "code": code,
                 }));
                 MissionEvent::new(now, EventKind::AnswerUndelivered).line(Some(&text))
+            }
+            Err(AnswerSendFailure::MaybeTyped(code)) => {
+                answer.unconfirmed = true;
+                crate::diagnostic!(json!({
+                    "component": "missions", "kind": "mission.answer_unconfirmed",
+                    "mission": id, "key": key, "code": code,
+                }));
+                MissionEvent::new(now, EventKind::AnswerUnconfirmed).line(Some(&answer.text))
             }
         };
         event.node = asked;
@@ -591,6 +647,7 @@ impl Runtime {
         if self.missions.events_made == (open.clone(), self.missions.events_edit) {
             return;
         }
+        // A pointer to the core's own list: nothing of the events is copied here.
         let log = open
             .as_ref()
             .and_then(|id| self.missions.events.get(id))
@@ -638,10 +695,11 @@ pub(crate) fn end_decision(mission: &mut Mission, now: u64) -> Vec<MissionEvent>
         .question
         .as_ref()
         .and_then(|question| question.node.clone());
+    // An unconfirmed answer is already in the history as such.
     let undelivered = mission
         .answer
         .take()
-        .filter(|answer| !answer.delivered)
+        .filter(|answer| !answer.delivered && !answer.unconfirmed)
         .map(|answer| {
             let mut event =
                 MissionEvent::new(now, EventKind::AnswerUndelivered).line(Some(&answer.text));

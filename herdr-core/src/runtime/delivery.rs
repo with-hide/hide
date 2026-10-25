@@ -2017,6 +2017,40 @@ pub(crate) mod tests {
         observation
     }
 
+    /// `pane` conducts a running mission in `/checkouts/fixture` whose
+    /// decision `Which base?` the operator answered `main` from the banner.
+    pub(crate) fn answered_mission(runtime: &mut Runtime, pane: &str) {
+        runtime
+            .worktree_catalog
+            .projects
+            .push(crate::model::ProjectWorktreesSnapshot {
+                root_path: "/checkouts/fixture".into(),
+                ..Default::default()
+            });
+        let context = authority(&observed(runtime, pane).actor).context;
+        for command in [
+            json!({"op": "create", "title": "Fix the bug"}),
+            json!({"op": "plan", "plan": {"nodes": [{"key": "fix", "title": "Fix it", "kind": "change", "delivery": "pr"}]}}),
+            json!({"op": "start"}),
+            json!({"op": "decide", "line": "Which base?"}),
+        ] {
+            runtime
+                .mission_command(
+                    crate::node::TEST_NODE,
+                    pane,
+                    &context,
+                    serde_json::from_value(command).unwrap(),
+                )
+                .unwrap();
+        }
+        assert!(runtime.mission_answer_event("mission-1", 1, None, Some("main".into()), false));
+    }
+
+    /// The banner's answer to that mission's decision.
+    pub(crate) fn mission_answer(runtime: &Runtime) -> Option<crate::missions::Answer> {
+        runtime.missions.book.missions[0].answer.clone()
+    }
+
     /// The pane as the core observes it now.
     pub(crate) fn observed(runtime: &Runtime, pane: &str) -> Observation {
         runtime.delivery_observations[pane].clone()

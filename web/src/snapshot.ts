@@ -1274,14 +1274,14 @@ export type MissionQuestion = {
 };
 
 /** Where the operator's answer is (`mission_answer_state`, B26, B28). */
-export type MissionAnswerState = "sending" | "waiting" | "delivered";
+export type MissionAnswerState = "sending" | "waiting" | "delivered" | "unconfirmed";
 /** The operator's answer from the banner (`AnswerView`); `option` counts from 1, none for a written answer. */
 export type MissionAnswer = { key: number; text: string; option: number | null; state: MissionAnswerState };
 /** Why the last answer did not reach the Conductor (`mission_answer_failure`, B28, B39). */
 export type MissionAnswerFailure = "conductor_gone" | "device_disconnected" | "send_failed";
 
 /** What a mission event records (`mission_event_kind`, B31). */
-export type MissionEventKind = "planned" | "replanned" | "node" | "retried" | "pr_opened" | "pr_merged" | "landed" | "asked" | "answered" | "answer_undelivered" | "reported" | "cancelled";
+export type MissionEventKind = "planned" | "replanned" | "node" | "retried" | "pr_opened" | "pr_merged" | "landed" | "asked" | "answered" | "answer_undelivered" | "answer_unconfirmed" | "reported" | "cancelled";
 
 /** One event of a mission (`MissionEvent`, D-15): only the fields its kind carries are present. */
 export type MissionEvent = {

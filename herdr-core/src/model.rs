@@ -8409,10 +8409,14 @@ mod wire_enum_tests {
                 AnswerState::Sending,
                 AnswerState::Waiting,
                 AnswerState::Delivered,
+                AnswerState::Unconfirmed,
             ];
             for variant in states {
                 match variant {
-                    AnswerState::Sending | AnswerState::Waiting | AnswerState::Delivered => {}
+                    AnswerState::Sending
+                    | AnswerState::Waiting
+                    | AnswerState::Delivered
+                    | AnswerState::Unconfirmed => {}
                 }
             }
             assert_wire(&contract, "mission_answer_state", &states);
@@ -8429,6 +8433,7 @@ mod wire_enum_tests {
                 EventKind::Asked,
                 EventKind::Answered,
                 EventKind::AnswerUndelivered,
+                EventKind::AnswerUnconfirmed,
                 EventKind::Reported,
                 EventKind::Cancelled,
             ];
@@ -8444,6 +8449,7 @@ mod wire_enum_tests {
                     | EventKind::Asked
                     | EventKind::Answered
                     | EventKind::AnswerUndelivered
+                    | EventKind::AnswerUnconfirmed
                     | EventKind::Reported
                     | EventKind::Cancelled => {}
                 }

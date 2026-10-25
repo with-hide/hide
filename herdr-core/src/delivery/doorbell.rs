@@ -19,6 +19,7 @@ use serde_json::{Value, json};
 
 use crate::runtime::Runtime;
 use crate::runtime::delivery::Observation;
+use crate::runtime::mission_events::AnswerSendFailure;
 use crate::wire::{self, Readiness};
 
 use super::ledger::{Ledger, Letter, State};
@@ -584,11 +585,12 @@ impl Doorbell {
                     );
                 }
                 Ok(Outcome::Stopped) => break,
-                Err(code) => {
-                    // The prompt may have been typed; the operator sees it
-                    // failed and decides whether to answer again (B28).
+                Err(failure) => {
+                    // Nothing types it again on its own: a failure before the
+                    // prompt goes back to the operator, one after it may
+                    // already be in the conversation (B26, B28).
                     if let Ok(mut guard) = owner.lock() {
-                        guard.mission_answer_sent(&work.mission, work.key, Err(code));
+                        guard.mission_answer_sent(&work.mission, work.key, Err(failure));
                     }
                 }
             }
@@ -838,32 +840,35 @@ fn deliver(
 /// Types one answer, after the same last checks a bell makes: Herdr still
 /// reports the agent the verdict was read for, the pane has not moved, and
 /// the answer still waits. Nothing is recorded as a letter's bell: the
-/// conversation reads it as the operator's own message (D-13).
+/// conversation reads it as the operator's own message (D-13). Once
+/// `agent.prompt` is asked, a failed or timed-out reply or one Hide cannot
+/// read may follow a typed answer, so it is never typed again on its own.
 fn type_answer(
     owner: &Mutex<Runtime>,
     connector: &dyn ApiConnector,
     work: &crate::runtime::mission_events::AnswerWork,
     observed: &Observation,
     stop: &AtomicBool,
-) -> Result<Outcome, &'static str> {
+) -> Result<Outcome, AnswerSendFailure> {
     if stop.load(Ordering::Acquire) {
         return Ok(Outcome::Stopped);
     }
-    if let Err(reason) = native_current(connector, observed)? {
+    if let Err(reason) = native_current(connector, observed).map_err(AnswerSendFailure::NotTyped)? {
         return Ok(Outcome::Held(reason));
     }
     if let Err(reason) = owner
         .lock()
-        .map_err(|_| "runtime_unavailable")?
+        .map_err(|_| AnswerSendFailure::NotTyped("runtime_unavailable"))?
         .mission_answer_current(work, observed)
     {
         return Ok(Outcome::Held(reason));
     }
     let parameters = wire::delivery_prompt_params(&observed.raw_pane_id, &work.line)
-        .map_err(|_| "herdr_parameters")?;
+        .map_err(|_| AnswerSendFailure::NotTyped("herdr_parameters"))?;
     let submitted = request_small_response(connector, "agent.prompt", parameters, PROMPT_TIMEOUT)
-        .map_err(|_| "herdr_call_failed")?;
-    wire::delivery_prompted(submitted).map_err(|_| "herdr_format")?;
+        .map_err(|_| AnswerSendFailure::MaybeTyped("herdr_call_failed"))?;
+    wire::delivery_prompted(submitted)
+        .map_err(|_| AnswerSendFailure::MaybeTyped("herdr_format"))?;
     Ok(Outcome::Rung)
 }
 
@@ -1628,6 +1633,35 @@ mod tests {
                 Some("🦉 Codex report: private · hide inbox")
             );
         }
+    }
+
+    /// The operator's answer to a mission's decision whose prompt Herdr
+    /// refused or timed out may already be in the conversation: a later
+    /// pass never types it again, and it waits for the operator to send it
+    /// again (mission-plan-visibility B26).
+    #[test]
+    fn an_answer_whose_prompt_failed_is_not_typed_again_by_a_later_pass() {
+        use crate::runtime::delivery::tests::{answered_mission, mission_answer};
+        let bell = Bell::with_submission_error(json!({}), Some("timeout"));
+        answered_mission(&mut bell.runtime.lock().unwrap(), "recipient");
+        let answers = || {
+            bell.typed()
+                .into_iter()
+                .filter(|params| params.to_string().contains("Which base?"))
+                .count()
+        };
+        let mut doorbell = Doorbell::default();
+        let at = now();
+        for pass in 0..4 {
+            bell.pass(&mut doorbell, at + pass * RETRY_LIMIT_MS);
+        }
+        assert_eq!(
+            answers(),
+            1,
+            "a timer must not type an uncertain answer again"
+        );
+        let answer = mission_answer(&bell.runtime.lock().unwrap()).unwrap();
+        assert!(answer.unconfirmed && !answer.delivered);
     }
 
     /// A failed submission may have written input before its answer was

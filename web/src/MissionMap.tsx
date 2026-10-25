@@ -583,13 +583,14 @@ const SEGMENT_FILL: Record<SegmentTone, string> = {
 };
 
 /** A mark's glyph on a bar or the axis (B18). */
-const MARK_GLYPH: Record<FlowMarkKind, string> = { merged: "⑂", landed: "↓", asked: "!", answered: "✓", undelivered: "⊘", replanned: "✎", cancelled: "×" };
+const MARK_GLYPH: Record<FlowMarkKind, string> = { merged: "⑂", landed: "↓", asked: "!", answered: "✓", undelivered: "⊘", unconfirmed: "?", replanned: "✎", cancelled: "×" };
 const MARK_TONE: Record<FlowMarkKind, string> = {
   merged: "text-pr-merged",
   landed: "text-mission-done",
   asked: "text-mission-hold",
   answered: "text-mission-done",
   undelivered: "text-mission-failed",
+  unconfirmed: "text-mission-hold",
   replanned: "text-mission-review",
   cancelled: "text-mission-cancelled",
 };

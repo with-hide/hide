@@ -1,7 +1,7 @@
 // The real mission map and Settings › Conductor over invented values (PRD
 // software-factory-conductor), one state per `state` parameter: plan,
 // running, decision, decision-sent (its answer waiting for the Conductor's
-// turn), stack, no-conductor, stale, failed, wide (a row wider
+// turn), decision-unconfirmed (its answer typed without Herdr confirming it), stack, no-conductor, stale, failed, wide (a row wider
 // than the slot, shrunk to fit), done, cancelled, no-pr (a finished mission
 // with no pull request), settings. The Conductor pane's head with its mission
 // chip and pinned popover (PRD mission-pane-chip, mission-plan-visibility) is
@@ -149,7 +149,7 @@ function history(mission: Mission, now: number): MissionEvent[] {
 
 function scene(shown: string, now: number): { mission: Mission; rest: SnapshotRest } {
   // An answer sent from the banner draws the decision with that answer on it.
-  const state = shown === "decision-sent" ? "decision" : shown;
+  const state = shown === "decision-sent" || shown === "decision-unconfirmed" ? "decision" : shown;
   const nodes = plan(state, now);
   const mission: Mission = {
     id: "mission-1", title: "이슈 정리", workspace_id: "hide", project: "/projects/herdr-ide", checkout_path: "/projects/herdr-ide", device_id: "local",
@@ -161,7 +161,7 @@ function scene(shown: string, now: number): { mission: Mission; rest: SnapshotRe
     question: state === "decision"
       ? { key: 2, why: `API PR ${no(1503)}이 아직 리뷰 중이라 그 위에 쌓으면 리베이스가 생길 수 있어요`, options: [`${no(1503)} 위에 쌓기`, `${no(1503)} 머지 뒤 main에서`, "화면 PR을 둘로 나누기"], recommend: 1, node: "screen", asked_at_unix_ms: now - 8 * MINUTE }
       : null,
-    answer: shown === "decision-sent" ? { key: 2, text: `${no(1503)} 위에 쌓기`, option: 1, state: "waiting" } : null,
+    answer: shown === "decision-sent" || shown === "decision-unconfirmed" ? { key: 2, text: `${no(1503)} 위에 쌓기`, option: 1, state: shown === "decision-sent" ? "waiting" : "unconfirmed" } : null,
     answer_failed: null,
     delay: null, report: state === "done" ? REPORT : state === "no-pr" ? "1.0.0 릴리스 끝. private 배포, 사이트 반영, floor 올림." : null,
     created_at_unix_ms: now - 320 * MINUTE,

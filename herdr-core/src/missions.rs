@@ -246,6 +246,10 @@ pub struct Answer {
     pub at_unix_ms: u64,
     #[serde(default)]
     pub delivered: bool,
+    /// Typing it may have reached the conversation without Herdr saying so:
+    /// it is not typed again until the operator sends it again (B26).
+    #[serde(default)]
+    pub unconfirmed: bool,
 }
 
 /// Why the operator's last answer from the banner did not reach the

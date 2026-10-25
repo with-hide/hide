@@ -6,8 +6,11 @@
 //! Each mission keeps its own file beside the book, at most `EVENT_LIMIT`
 //! events, the oldest dropped and counted past that, so a long mission never
 //! makes the book's own save budget refuse a change (B21). The runtime holds
-//! the events and decides them under the lock; one save thread writes and
-//! deletes the files off it, and is joined when the store drops.
+//! the events and decides them under the lock, each event and the list
+//! shared, so publishing a history copies a pointer; it hands the save
+//! thread only the new events, and the thread keeps its own copy of each
+//! log, which it extends, encodes and writes off the lock
+//! (docs/PERFORMANCE_TESTING.md). The thread is joined when the store drops.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -49,6 +52,8 @@ pub enum EventKind {
     Answered,
     /// An answer from the banner that did not reach the Conductor (D-30).
     AnswerUndelivered,
+    /// An answer from the banner typed without Herdr confirming it arrived.
+    AnswerUnconfirmed,
     Reported,
     Cancelled,
 }
@@ -109,8 +114,40 @@ impl MissionEvent {
     }
 }
 
+/// One mission's events as the core holds and publishes them: the list and
+/// each event shared, so the 보기 slot's copy is a pointer and a change
+/// that finds the list shared copies pointers, never the events.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct History {
+    pub events: Arc<Vec<Arc<MissionEvent>>>,
+    pub dropped: u64,
+}
+
+impl History {
+    /// Adds `event`, dropping the oldest past `EVENT_LIMIT` as `EventLog`
+    /// does, so the save thread's copy stays the same.
+    pub(crate) fn push(&mut self, event: Arc<MissionEvent>) {
+        let events = Arc::make_mut(&mut self.events);
+        events.push(event);
+        if events.len() > EVENT_LIMIT {
+            let over = events.len() - EVENT_LIMIT;
+            events.drain(..over);
+            self.dropped = self.dropped.saturating_add(over as u64);
+        }
+    }
+}
+
+impl From<EventLog> for History {
+    fn from(log: EventLog) -> Self {
+        Self {
+            events: Arc::new(log.events.into_iter().map(Arc::new).collect()),
+            dropped: log.dropped,
+        }
+    }
+}
+
 /// One mission's events, oldest first, and how many were dropped before
-/// the first of them.
+/// the first of them: the file's shape, and the save thread's copy.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct EventLog {
     #[serde(default)]
@@ -134,17 +171,24 @@ impl EventLog {
     }
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize)]
 struct Stored {
     schema_version: u32,
     #[serde(flatten)]
     log: EventLog,
 }
 
+#[derive(Serialize)]
+struct StoredRef<'a> {
+    schema_version: u32,
+    #[serde(flatten)]
+    log: &'a EventLog,
+}
+
 fn encode(log: &EventLog) -> Result<Vec<u8>, String> {
-    serde_json::to_vec(&Stored {
+    serde_json::to_vec(&StoredRef {
         schema_version: SCHEMA_VERSION,
-        log: log.clone(),
+        log,
     })
     .map_err(|error| format!("could not be encoded: {error}"))
 }
@@ -164,12 +208,21 @@ fn decode(bytes: &[u8]) -> Result<EventLog, String> {
     Ok(stored.log)
 }
 
-/// What the save thread still has to do, by mission: write that log, or
-/// delete the file (`None`). A newer request for a mission replaces the
-/// older one, so a burst writes once.
+/// What the save thread still has to do for one mission: delete its file,
+/// then add these events to its log and write it. A burst of events for a
+/// mission is written once.
+#[derive(Default)]
+struct Work {
+    removed: bool,
+    added: Vec<Arc<MissionEvent>>,
+}
+
+/// The logs read at start, which the thread's own copies begin from, and
+/// the work by mission.
 #[derive(Default)]
 struct Pending {
-    work: BTreeMap<String, Option<Arc<EventLog>>>,
+    restored: HashMap<String, EventLog>,
+    work: BTreeMap<String, Work>,
     stop: bool,
 }
 
@@ -204,12 +257,13 @@ impl MissionEventStore {
     }
 
     /// Reads the events of `missions` from their files, before the lock is
-    /// taken. A file that cannot be read is logged and its mission starts
-    /// with none; it is replaced on that mission's next event.
+    /// taken, and gives the save thread the same logs to extend. A file
+    /// that cannot be read is logged and its mission starts with none; it
+    /// is replaced on that mission's next event.
     pub(crate) fn restore<'a>(
         &self,
         missions: impl Iterator<Item = &'a str>,
-    ) -> HashMap<String, EventLog> {
+    ) -> HashMap<String, History> {
         let mut out = HashMap::new();
         for id in missions {
             let path = file(&self.dir, id);
@@ -226,7 +280,16 @@ impl MissionEventStore {
                 })),
             }
         }
-        out
+        let held = out
+            .iter()
+            .map(|(id, log)| (id.clone(), History::from(log.clone())))
+            .collect();
+        self.shared
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .restored = out;
+        held
     }
 
     /// Deletes the files of missions the book no longer holds (D-22): a
@@ -257,21 +320,29 @@ impl MissionEventStore {
         }
     }
 
-    pub(crate) fn save(&self, mission: &str, log: Arc<EventLog>) {
-        self.post(mission, Some(log));
+    /// Hands the save thread a mission's new events; only they cross the
+    /// lock, as shared pointers.
+    pub(crate) fn append(&self, mission: &str, events: &[Arc<MissionEvent>]) {
+        self.post(mission, |work| work.added.extend(events.iter().cloned()));
     }
 
     /// Deletes the mission's file with the mission (D-22).
     pub(crate) fn remove(&self, mission: &str) {
-        self.post(mission, None);
+        self.post(mission, |work| {
+            work.removed = true;
+            work.added.clear();
+        });
     }
 
-    fn post(&self, mission: &str, work: Option<Arc<EventLog>>) {
+    fn post(&self, mission: &str, change: impl FnOnce(&mut Work)) {
         let (lock, wake) = &*self.shared;
-        lock.lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .work
-            .insert(mission.to_owned(), work);
+        change(
+            lock.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .work
+                .entry(mission.to_owned())
+                .or_default(),
+        );
         wake.notify_one();
     }
 }
@@ -297,31 +368,44 @@ fn file(dir: &Path, mission: &str) -> PathBuf {
     dir.join(format!("{mission}.json"))
 }
 
-/// Writes and deletes what is pending until the store stops, finishing the
-/// work already handed over first.
+/// Deletes and writes what is pending until the store stops, finishing the
+/// work already handed over first. The thread keeps each log it writes, so
+/// an event costs the lock only its pointer.
 fn run(shared: &(Mutex<Pending>, Condvar), dir: &Path) {
     let (lock, wake) = shared;
+    let mut logs: HashMap<String, EventLog> = HashMap::new();
     loop {
         let work = {
             let mut pending = lock.lock().unwrap_or_else(PoisonError::into_inner);
             while pending.work.is_empty() && !pending.stop {
                 pending = wake.wait(pending).unwrap_or_else(PoisonError::into_inner);
             }
+            for (id, log) in std::mem::take(&mut pending.restored) {
+                logs.entry(id).or_insert(log);
+            }
             if pending.work.is_empty() {
                 return;
             }
             std::mem::take(&mut pending.work)
         };
-        for (mission, log) in work {
+        for (mission, work) in work {
             let path = file(dir, &mission);
-            let result = match log {
-                Some(log) => write(dir, &path, &log),
-                None => match std::fs::remove_file(&path) {
+            let mut result = Ok(());
+            if work.removed {
+                logs.remove(&mission);
+                result = match std::fs::remove_file(&path) {
                     Ok(()) => Ok(()),
                     Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
                     Err(error) => Err(format!("could not be deleted: {error}")),
-                },
-            };
+                };
+            }
+            if result.is_ok() && !work.added.is_empty() {
+                let log = logs.entry(mission.clone()).or_default();
+                for event in work.added {
+                    log.push(Arc::unwrap_or_clone(event));
+                }
+                result = write(dir, &path, log);
+            }
             if let Err(reason) = result {
                 crate::diagnostic!(json!({
                     "component": "missions", "kind": "mission_events.save_failed",
@@ -366,20 +450,29 @@ mod tests {
     fn a_saved_log_reads_back_and_a_removed_one_is_gone() {
         let dir = tempfile::tempdir().unwrap();
         let folder = dir.path().join("mission-events");
-        let mut log = EventLog::default();
-        log.push(event(1));
-        log.dropped = 3;
+        let added = [Arc::new(event(1))];
         {
             let store = MissionEventStore::new(folder.clone());
-            store.save("mission-1", Arc::new(log.clone()));
-            store.save("mission-2", Arc::new(log.clone()));
+            store.append("mission-1", &added);
+            store.append("mission-2", &added);
             store.remove("mission-2");
         }
         let store = MissionEventStore::new(folder.clone());
         let restored = store.restore(["mission-1", "mission-2"].into_iter());
-        assert_eq!(restored.get("mission-1"), Some(&log));
+        assert_eq!(restored["mission-1"].events.as_slice(), &added);
         assert!(!restored.contains_key("mission-2"));
         assert!(!folder.join("mission-2.json").exists());
+        // Events added after a start extend the log read back, past the limit
+        // as the core's own copy drops them.
+        let more: Vec<_> = (2..=EVENT_LIMIT as u64 + 1)
+            .map(|at| Arc::new(event(at)))
+            .collect();
+        store.append("mission-1", &more);
+        drop(store);
+        let restored = MissionEventStore::new(folder).restore(["mission-1"].into_iter());
+        let log = &restored["mission-1"];
+        assert_eq!((log.events.len(), log.dropped), (EVENT_LIMIT, 1));
+        assert_eq!(log.events[0].at_unix_ms, 2);
     }
 
     #[test]

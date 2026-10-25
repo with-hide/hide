@@ -1762,7 +1762,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * as the operator's own input, refuses it once the question with `key`
      * changed, and keeps the first answer to the same question.
      */
-    answerMission(missionId: string, key: number, answer: { option: number } | { text: string }) {
+    answerMission(missionId: string, key: number, answer: { option: number } | { text: string } | { resend: true }) {
       dispatch({ schema_version: 2, kind: "mission_answer", payload: { mission: missionId, key, ...answer } });
     },
 
