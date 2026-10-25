@@ -72,7 +72,7 @@ describe("a mission map's top-down flow", () => {
 });
 
 describe("a top-down graph before the layout places it (PRD mission-pane-chip B7)", () => {
-  // The small map's first plan as the columns draw it: two cards, one below the first, the report under both.
+  // A mission's first plan as the columns draw it: two cards, one below the first, the report under both.
   const box = (left: number, top: number): Box => ({ left, right: left + 144, top, bottom: top + 30 });
   const first = box(0, 0);
   const second = box(152, 0);

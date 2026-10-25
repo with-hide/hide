@@ -71,7 +71,7 @@ export function PlanScene({ params }: { params: URLSearchParams }) {
       <div style={{ width }} className="flex h-full min-w-0 gap-lg bg-background p-lg text-foreground" data-gallery-scene="plan" data-plan-scene={state}>
         <div className="flex w-(--size-pr-popover) shrink-0 flex-col self-start rounded-md border border-border bg-popover text-caption" data-plan-scene-popover="true">
           <div className="px-sm pt-sm"><PlanSummaryLine plan={shown} /></div>
-          <div className="px-xs py-sm"><PlanChecklist plan={shown} /></div>
+          <div className="px-xs py-sm"><PlanChecklist plan={shown} popover /></div>
         </div>
         <div className="flex min-h-0 min-w-0 flex-1 flex-col rounded-md border border-border">
           <PlanMap session={SESSION} actions={actions} />

@@ -167,6 +167,39 @@ it("draws a card's state as its whole border, with its PR mark, the base of its 
   } finally { await map.unmount(); }
 });
 
+it("marks a held card with !, says every badge in the card's name, and draws a research or verify line as a result only once the node ended (B16, B22, B36)", async () => {
+  const nodes = [
+    node("base", { status: "held" }),
+    node("retry", { status: "working", attempts: 3, change: "Split from api" }),
+    node("reading", { kind: "research", delivery: null, status: "working", line: "Reading 3 of 5 logs" }),
+    node("checking", { kind: "verify", delivery: null, status: "working", line: "4 of 6 so far" }),
+    node("cause", { kind: "research", delivery: null, status: "done", line: "The cache was stale" }),
+  ];
+  const map = await mount({ items: [mission({ nodes, decision: "Which base?" })] });
+  try {
+    const card = (key: string) => map.q(`[data-mission-node="${key}"]`)!;
+    expect(card("base").querySelector("[data-node-held]")?.textContent).toBe("!");
+    expect(card("base").getAttribute("aria-label")).toBe("Node base · Held · Held · Which base?");
+    expect(card("retry").querySelector("[data-node-held]")).toBeNull();
+    expect(card("retry").getAttribute("aria-label")).toBe("Node retry · Working · Attempt 3 · Changed by a replan · Split from api");
+    // A running research or verify node's line is where it is, said once, never a result.
+    for (const key of ["reading", "checking"]) {
+      expect(card(key).querySelector("[data-node-conclusion], [data-node-verify]")).toBeNull();
+      expect(card(key).querySelectorAll("[data-node-now]")).toHaveLength(1);
+    }
+    expect(card("cause").querySelector("[data-node-conclusion=folded]")).not.toBeNull();
+    // A done research node's row writes its conclusion out under its own label, not under Now.
+    await act(async () => card("cause").click());
+    const detail = map.q('[data-mission-detail="cause"]')!;
+    expect(detail.querySelector("[data-flow-result=conclusion]")?.textContent).toBe("The cache was stale");
+    expect(detail.textContent).toContain("ConclusionThe cache was stale");
+    expect(detail.textContent).not.toContain("Now");
+    await act(async () => card("reading").click());
+    expect(map.q('[data-mission-detail="reading"]')?.textContent).toContain("NowReading 3 of 5 logs");
+    expect(map.q('[data-mission-detail="reading"] [data-flow-result]')).toBeNull();
+  } finally { await map.unmount(); }
+});
+
 it("puts the worker's own plan on the card's last line and folded in the node's detail, else the Conductor's line (PRD hide-plan B15, B16)", async () => {
   const own = {
     pane_id: "p2", session: { device_id: "mac", agent: "codex", session_id: "worker-session" },
@@ -231,9 +264,9 @@ it("shrinks a map wider than its slot to the slot's width, and 100% draws it at 
 });
 
 it("lists a row per node in order on the mission's time axis, filters it, and a card pressed on the map opens its row whatever the filter hid (B17, B19, B20)", async () => {
-  // The axis reads now to the minute; the clock is held on a minute so the bars measure exactly.
+  // An open mission's axis runs to the end of the current minute; the clock is held on a minute so the bars measure exactly.
   vi.useFakeTimers({ toFake: ["Date"], now: 1_800_000_000_000 });
-  const start = Date.now() - 100 * 60_000;
+  const start = Date.now() + 60_000 - 100 * 60_000;
   const at = (minutes: number) => start + minutes * 60_000;
   const nodes = [
     node("ui", { status: "working", depends_on: ["api"], started_at_unix_ms: at(50) }),

@@ -294,7 +294,9 @@ export function stageWord(node: MissionNode): MessageKey {
 /**
  * What a node left behind, by its kind (B22, D-14): its pull request, a
  * direct change's branch, a research node's conclusion or a verify node's
- * line. Null when the record holds none, so nothing is drawn for it.
+ * line. A research or verify node's line is a result only once the node
+ * ended (done, or a failed check); while it runs the line is its progress.
+ * Null when the record holds none, so nothing is drawn for it.
  */
 export type NodeResult =
   | { kind: "pr"; number: number; state: MissionNode["pr_state"] }
@@ -306,7 +308,8 @@ export function nodeResult(node: MissionNode): NodeResult | null {
   if (node.pr != null) return { kind: "pr", number: node.pr, state: node.pr_state };
   if (node.kind === "change") return node.branch ? { kind: "branch", branch: node.branch } : null;
   if (!node.line) return null;
-  return node.kind === "research" ? { kind: "conclusion", line: node.line } : { kind: "verify", line: node.line };
+  if (node.kind === "research") return node.status === "done" ? { kind: "conclusion", line: node.line } : null;
+  return node.status === "done" || node.status === "failed" ? { kind: "verify", line: node.line } : null;
 }
 
 /** A finished or cancelled mission's results (B11, B23, B24): each done node that left something, in order. */

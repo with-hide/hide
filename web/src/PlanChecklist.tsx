@@ -10,18 +10,30 @@ import type { PlanStep, PlanView } from "./snapshot";
 // A plan read as a list (PRD mission-plan-visibility D-07, B3-B6): the pane
 // chip's popover and a mission node's folded plan. The steps run in the order
 // they wait on each other, every title whole, the current one marked, a
-// parallel step indented once; a finished plan folds its steps into one line
-// and keeps what they left behind. The map is drawn only in the 보기 slot.
+// parallel step indented once. In the popover a finished plan folds its steps
+// into one line and keeps what they left behind; a session record or a node's
+// row, where a finished plan is read afterwards, lists every step. The map is
+// drawn only in the 보기 slot.
 
-export function PlanChecklist({ plan, revealCurrent = false }: { plan: PlanView; revealCurrent?: boolean }) {
+export function PlanChecklist({ plan, popover = false }: { plan: PlanView; popover?: boolean }) {
   const { t } = useInterfaceTranslation();
   const rows = useMemo(() => planChecklist(plan), [plan]);
   const current = useRef<HTMLLIElement>(null);
-  // Opening shows where the plan is, however long the list (B5).
+  // Opening the popover shows where the plan is, however long the list (B5).
+  // Its height is bounded only once it is placed, so the step is revealed
+  // again whenever the scrolling box settles to a new size.
   useLayoutEffect(() => {
-    if (revealCurrent) current.current?.scrollIntoView?.({ block: "nearest" });
-  }, [revealCurrent]);
-  if (plan.progress.finished) {
+    const row = current.current;
+    if (!popover || !row) return;
+    const reveal = () => row.scrollIntoView?.({ block: "nearest" });
+    reveal();
+    const box = scrollingBox(row);
+    if (!box || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(reveal);
+    observer.observe(box);
+    return () => observer.disconnect();
+  }, [popover]);
+  if (popover && plan.progress.finished) {
     const done = plan.steps.filter((step) => step.status === "done").length;
     const outputs = rows.filter(({ step }) => step.status === "done" && step.output && step.output !== "none");
     return (
@@ -80,6 +92,13 @@ export function PlanChecklist({ plan, revealCurrent = false }: { plan: PlanView;
       })}
     </ol>
   );
+}
+
+function scrollingBox(element: HTMLElement): HTMLElement | null {
+  for (let at = element.parentElement; at; at = at.parentElement) {
+    if (/(auto|scroll)/.test(getComputedStyle(at).overflowY)) return at;
+  }
+  return null;
 }
 
 function StepMark({ step, current }: { step: PlanStep; current: boolean }) {

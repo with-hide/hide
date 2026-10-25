@@ -2,7 +2,7 @@
 // Herdr and hided (PRD software-factory-conductor B14, B15, B19, B21, B48):
 // the real `hide mission` commands from the pane's own shell change the
 // core's record, the first plan opens nothing in the lane and, with the
-// operator looking at the Conductor pane, pins that pane's small map once
+// operator looking at the Conductor pane, pins that pane's popover once
 // (PRD mission-pane-chip B11, B12), the map follows each change of the
 // record, and Settings › Conductor keeps the cap the next
 // `hide mission settings` reads.

@@ -49,6 +49,7 @@ import { sessionOfAgent } from "./sessionWork";
 import type { Mission, MissionNode, MissionStatus, PlanView, RowMark } from "./snapshot";
 import { useShellStore } from "./store";
 import type { MessageKey } from "./i18n/catalogs";
+import type { TFunction } from "i18next";
 
 // A mission's detail in the lane's 보기 slot (PRD software-factory-conductor
 // D-06, B14-B21, B43; PRD mission-plan-visibility D-10-D-14, D-19, D-25,
@@ -396,7 +397,8 @@ function NodeCard({ mission, node, selected, onSelect }: { mission: Mission; nod
   const tone = nodeTone(mission, node);
   const mark = shownMark(node, tone, row?.mark ?? null);
   const worker = workerWords(node, launchModel, t("mission.auto"));
-  const moving = node.status === "working" || node.status === "review";
+  // A cancelled mission's work stopped, whatever its last status said (B24).
+  const moving = tone !== "cancelled" && (node.status === "working" || node.status === "review");
   // The worker's own plan says where it is, else the Conductor's `--line` (PRD hide-plan B16, D-18).
   const nowText = moving ? ((node.plan ? planNowLine(node.plan, t) : null) ?? node.line) : null;
   const result = nodeResult(node);
@@ -408,7 +410,7 @@ function NodeCard({ mission, node, selected, onSelect }: { mission: Mission; nod
     <button
       type="button"
       onClick={onSelect}
-      aria-label={`${node.title} · ${t(`mission.status.${node.status}`)}`}
+      aria-label={[node.title, t(`mission.status.${node.status}`), ...badgeWords(mission, node, t)].join(" · ")}
       aria-pressed={selected}
       data-dependency-node={node.key}
       data-mission-node={node.key}
@@ -425,7 +427,7 @@ function NodeCard({ mission, node, selected, onSelect }: { mission: Mission; nod
       <span className="flex min-w-0 items-center gap-xs">
         <StatusMark mark={mark} />
         <span className={cn("min-w-0 flex-1 truncate text-body font-semibold", tone === "done" && "text-muted-foreground", node.status === "dropped" && "line-through")} title={node.title}>{node.title}</span>
-        <Badges node={node} />
+        <Badges mission={mission} node={node} />
       </span>
       {worker || result || node.base_pr != null ? (
         <span className="flex min-w-0 items-center gap-xs text-caption text-subtle-foreground">
@@ -451,19 +453,44 @@ function shownMark(node: MissionNode, tone: ReturnType<typeof nodeTone>, worker:
   return tone === "cancelled" ? "quiet" : nodeMark(node, worker);
 }
 
-/** `↻n` for a node tried twice or more, `✎` for one the last replan changed, its reason on hover or focus (B16). */
-function Badges({ node }: { node: MissionNode }) {
+/**
+ * What a card's badges say, in its accessible name (B36): a badge inside the
+ * card's button cannot take focus of its own, so the button speaks for it.
+ */
+function badgeWords(mission: Mission, node: MissionNode, t: TFunction): string[] {
+  return [
+    ...(node.status === "held" ? [heldWords(mission, t)] : []),
+    ...(node.attempts >= 2 ? [t("mission.badge.attempts", { count: node.attempts })] : []),
+    ...(node.change ? [`${t("mission.changed")} · ${node.change}`] : []),
+  ];
+}
+
+function heldWords(mission: Mission, t: TFunction): string {
+  return mission.decision ? `${t("mission.status.held")} · ${mission.decision}` : t("mission.status.held");
+}
+
+/**
+ * `!` for a node a decision stopped, `↻n` for a node tried twice or more, `✎`
+ * for one the last replan changed, each explained on hover (B16); the card's
+ * accessible name carries the same words for a keyboard or a screen reader.
+ */
+function Badges({ mission, node }: { mission: Mission; node: MissionNode }) {
   const { t } = useInterfaceTranslation();
   return (
     <>
+      {node.status === "held" ? (
+        <Hint label={heldWords(mission, t)}>
+          <span className="shrink-0 rounded-xs bg-muted px-xxs font-mono text-micro font-semibold text-mission-hold" data-node-held="true">!</span>
+        </Hint>
+      ) : null}
       {node.attempts >= 2 ? (
         <Hint label={t("mission.badge.attempts", { count: node.attempts })}>
-          <span aria-label={t("mission.badge.attempts", { count: node.attempts })} className="shrink-0 rounded-xs bg-muted px-xxs font-mono text-micro text-mission-failed" data-node-attempts={node.attempts}>↻{node.attempts}</span>
+          <span className="shrink-0 rounded-xs bg-muted px-xxs font-mono text-micro text-mission-failed" data-node-attempts={node.attempts}>↻{node.attempts}</span>
         </Hint>
       ) : null}
       {node.change ? (
         <Hint label={`${t("mission.changed")} · ${node.change}`}>
-          <span aria-label={`${t("mission.changed")} · ${node.change}`} className="flex shrink-0 items-center rounded-xs bg-muted px-xxs text-mission-review" data-node-changed="true">
+          <span className="flex shrink-0 items-center rounded-xs bg-muted px-xxs text-mission-review" data-node-changed="true">
             <PencilIcon aria-hidden="true" className="size-(--size-icon-sm)" />
           </span>
         </Hint>
@@ -522,7 +549,9 @@ function axisTime(language: InterfaceLanguage, at: number, long: boolean): strin
 function FlowTable({ mission, filter, onFilter, expanded, onExpand, actions }: { mission: Mission; filter: FlowFilter; onFilter: (filter: FlowFilter) => void; expanded: string | null; onExpand: (key: string | null) => void; actions: Actions }) {
   const { t, i18n } = useInterfaceTranslation();
   const language = requireInterfaceLanguage(i18n.language);
-  const now = useMinuteClock();
+  // The clock ticks by the minute, so an open mission's axis runs to the end
+  // of the current minute: work that started or ended within it stays on it.
+  const now = useMinuteClock() + 60_000;
   const span = flowSpan(mission, now);
   const rows = orderedNodes(mission).filter((node) => flowShows(node, filter));
   const long = span.to - span.from > 86_400_000;
@@ -617,7 +646,11 @@ function FlowDetail({ mission, node, actions }: { mission: Mission; node: Missio
   const session = useMemo(() => (row ? sessionOfAgent(row, rest) : null), [row, rest]);
   const depends = node.depends_on.map((key) => mission.nodes.find((other) => other.key === key)?.title ?? key);
   const worker = node.worker;
-  const nowLine = (node.plan ? planNowLine(node.plan, t) : null) ?? node.line;
+  // A moving node's line says where it is; once it ended the line is what it left (B22).
+  const moving = node.status === "working" || node.status === "review";
+  const nowLine = moving ? ((node.plan ? planNowLine(node.plan, t) : null) ?? node.line) : null;
+  const result = nodeResult(node);
+  const resultLine = result?.kind === "conclusion" || result?.kind === "verify" ? result : null;
   const time = (at: number) => formatDateTime(language, at, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
   const fields: [string, ReactNode][] = [
     [t("mission.field.kind"), t(kindWord(node.kind))],
@@ -629,6 +662,7 @@ function FlowDetail({ mission, node, actions }: { mission: Mission; node: Missio
     ...(stepsOf(node) > 0 ? [[t("mission.field.pr"), <span key="s" className="text-muted-foreground" data-node-step-names="true">{t(node.delivery === "direct" ? "mission.steps.direct" : "mission.steps.pr")}</span>] as [string, ReactNode]] : []),
     ...(node.review ? [[t("mission.field.review"), node.review] as [string, ReactNode]] : []),
     ...(nowLine ? [[t("mission.field.now"), nowLine] as [string, ReactNode]] : []),
+    ...(resultLine ? [[t(resultLine.kind === "conclusion" ? "mission.result.conclusion" : "mission.result.verify"), <span key="r" data-flow-result={resultLine.kind}>{resultLine.line}</span>] as [string, ReactNode]] : []),
     ...(node.change ? [[t("mission.field.change"), node.change] as [string, ReactNode]] : []),
     ...(node.criteria ? [[t("mission.field.criteria"), node.criteria] as [string, ReactNode]] : []),
   ];

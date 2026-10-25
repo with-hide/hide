@@ -6,6 +6,7 @@ import { createActions } from "./actions";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { initializeInterfaceI18n } from "./i18n/instance";
 import { PanePlanChip } from "./PanePlanChip";
+import { PlanChecklist } from "./PlanChecklist";
 import { PlanMap } from "./PlanMap";
 import { planNowLine, planWorkLine } from "./plans";
 import type { AgentRow, PlanStep, PlanView, SnapshotRest } from "./snapshot";
@@ -151,6 +152,20 @@ it("folds a finished plan's steps into one line with the time it took and what i
     // A dropped step's output was never made.
     expect([...popover.querySelectorAll<HTMLElement>("[data-plan-output-row]")].map((row) => row.textContent)).toEqual(["spec titlefile", "web titlePR"]);
   } finally { await view.unmount(); }
+});
+
+it("lists every step of a finished plan outside the popover, where the plan is read afterwards (B6)", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  initializeInterfaceI18n("en");
+  const steps = [step("spec", "done", [], { output: "file" }), step("core", "done", ["spec"]), step("docs", "dropped", ["spec"])];
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => root.render(<TooltipProvider><PlanChecklist plan={plan({ steps, progress: { current: null, next: null, done: 2, total: 2, finished: true } })} /></TooltipProvider>));
+  try {
+    expect(container.querySelector("[data-plan-done-steps]")).toBeNull();
+    expect([...container.querySelectorAll<HTMLElement>("[data-plan-row]")].map((row) => [row.dataset.planRow, row.dataset.stepStatus])).toEqual([["spec", "done"], ["core", "done"], ["docs", "dropped"]]);
+  } finally { await act(async () => root.unmount()); }
 });
 
 it("pins on ⇧⌘U's action and closes on the second, and a pane with no plan pins nothing", async () => {

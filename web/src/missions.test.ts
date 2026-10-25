@@ -180,8 +180,11 @@ describe("what a node left (PRD mission-plan-visibility B11, B22)", () => {
   it("is its pull request, a direct change's branch, a research conclusion or a verify line, and nothing the record does not hold", () => {
     expect(nodeResult(node("a", { pr: 7, pr_state: "merged" }))).toEqual({ kind: "pr", number: 7, state: "merged" });
     expect(nodeResult(node("b", { delivery: "direct", branch: "fix/x" }))).toEqual({ kind: "branch", branch: "fix/x" });
-    expect(nodeResult(node("c", { kind: "research", line: "cache first" }))).toEqual({ kind: "conclusion", line: "cache first" });
-    expect(nodeResult(node("d", { kind: "verify", line: "6 of 6" }))).toEqual({ kind: "verify", line: "6 of 6" });
+    expect(nodeResult(node("c", { kind: "research", status: "done", line: "cache first" }))).toEqual({ kind: "conclusion", line: "cache first" });
+    expect(nodeResult(node("d", { kind: "verify", status: "done", line: "6 of 6" }))).toEqual({ kind: "verify", line: "6 of 6" });
+    expect(nodeResult(node("d2", { kind: "verify", status: "failed", line: "4 of 6" }))).toEqual({ kind: "verify", line: "4 of 6" });
+    // A running node's line is its progress, not what it left.
+    expect([nodeResult(node("r", { kind: "research", status: "working", line: "reading logs" })), nodeResult(node("v", { kind: "verify", status: "review", line: "3 of 6 so far" }))]).toEqual([null, null]);
     expect([nodeResult(node("e")), nodeResult(node("f", { kind: "research" })), nodeResult(node("g", { line: "a change's own line is no result" }))]).toEqual([null, null, null]);
   });
 

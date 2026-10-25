@@ -109,10 +109,13 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
     const plan = planOfPane(state.rest, paneId);
     return plan ? planWorkLine(plan) : null;
   });
-  // A Conductor's pane says its waiting decision, else the nodes a worker is at (PRD mission-plan-visibility B9, D-21).
+  // A Conductor's pane says its waiting decision, else the nodes a worker is
+  // at, and nothing when no node runs: the mission line owns the place, so
+  // the Conductor's own plan or progress does not stand in (PRD
+  // mission-plan-visibility B9, D-21).
   const mission = useShellStore((state) => missionOfPane(state.rest, allAgents(state.agents, state.rest?.status?.remote), paneId));
   const missionLine = mission ? missionWorkLine(mission, t) : null;
-  const ownProgress = band || off ? null : (mission ? missionLine?.text ?? null : planLine) ?? header?.progress ?? null;
+  const ownProgress = band || off ? null : mission ? missionLine?.text ?? null : planLine ?? header?.progress ?? null;
   const request = off ? null : header?.request ?? null;
   const finished = !band && !off && (header?.finished ?? false);
   const waitingOnChildren = band || off ? null : header?.waiting_on_children ?? null;

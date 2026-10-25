@@ -87,7 +87,7 @@ export function PanePlanChip({ paneId, actions }: { paneId: string; actions: Act
             </button>
           </div>
           <div className="px-xs py-sm">
-            <PlanChecklist plan={plan} revealCurrent />
+            <PlanChecklist plan={plan} popover />
           </div>
           <Delegated paneId={paneId} />
         </div>

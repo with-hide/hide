@@ -789,11 +789,11 @@ it("puts the pane's own ask on its head only while the turn row is off", async (
   expect(await draw(header, "off")).toBeNull();
 });
 
-it("says a Conductor's waiting decision on its second line, else the nodes at work, in place of its own progress (PRD mission-plan-visibility B9)", async () => {
+it("says a Conductor's waiting decision on its second line, else the nodes at work, and nothing when no node runs (PRD mission-plan-visibility B9)", async () => {
   const conductor = legacyAgentRow({ pane_id: "parent", agent_kind: "claude", session_id: "s-c", device_id: "mac", identity_label: "root", group: "working", activity: "working", status_code: "working" } as Partial<AgentRow>);
   const node = (key: string, status: string) => ({ key, title: `${key} title`, kind: "change", depends_on: [], status, blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: null, started_at_unix_ms: null, finished_at_unix_ms: null });
-  const mission = (decision: string | null) => ({ id: "m", title: "Ship", workspace_id: "w", project: "/repo", checkout_path: "/repo", device_id: "mac", status: "running", scope: "pr", cap: 4, conductor: { pane_id: "parent", name: "c", agent_kind: "claude", session: null, present: true }, nodes: [node("api", "working"), node("ui", "review"), node("docs", "planned")], merge_order: [], check: null, github: null, decision, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: 1, closed_at_unix_ms: null, running: 2, stale: false, github_stale: false, github_read_at_unix_ms: null });
-  const rest = (decision: string | null) => ({ status: { pane_focus_request: null }, missions: { items: [mission(decision)] } }) as unknown as SnapshotRest;
+  const mission = (decision: string | null, nodes = [node("api", "working"), node("ui", "review"), node("docs", "planned")]) => ({ id: "m", title: "Ship", workspace_id: "w", project: "/repo", checkout_path: "/repo", device_id: "mac", status: "running", scope: "pr", cap: 4, conductor: { pane_id: "parent", name: "c", agent_kind: "claude", session: null, present: true }, nodes, merge_order: [], check: null, github: null, decision, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: 1, closed_at_unix_ms: null, running: 2, stale: false, github_stale: false, github_read_at_unix_ms: null });
+  const rest = (decision: string | null, nodes?: ReturnType<typeof node>[]) => ({ status: { pane_focus_request: null }, missions: { items: [mission(decision, nodes)] } }) as unknown as SnapshotRest;
   const running = await mount({ working: true, notice: null, band: null, progress: "Reading the inbox" }, [conductor], { rest: rest(null) });
   try {
     const line = running.container.querySelector<HTMLElement>("[data-pane-own-progress]")!;
@@ -805,4 +805,10 @@ it("says a Conductor's waiting decision on its second line, else the nodes at wo
     expect([line.dataset.paneMissionLine, line.textContent]).toEqual(["decision", "! Which base?"]);
     expect(line.className).toContain("text-mission-hold");
   } finally { await deciding.unmount(); }
+  // No node at work: the mission line owns the place, so the agent's own progress does not stand in.
+  const resting = await mount({ working: true, notice: null, band: null, progress: "Reading the inbox" }, [conductor], { rest: rest(null, [node("api", "done"), node("docs", "planned")]) });
+  try {
+    expect(resting.container.querySelector("[data-pane-own-progress]")).toBeNull();
+    expect(resting.container.textContent).not.toContain("Reading the inbox");
+  } finally { await resting.unmount(); }
 });
