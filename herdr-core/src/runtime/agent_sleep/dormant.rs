@@ -32,6 +32,16 @@ impl SleepRefusal {
 
 /// Why a wake was not started. `kept`: the record is still there, so the
 /// refusal is written on it.
+/// Where a registration waiting for its pane stands after one step
+/// (`take_over_registration`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::runtime) enum Takeover {
+    Waiting,
+    Continued,
+    /// Let go, and why: `pane_gone` or `unbound`.
+    Released(&'static str),
+}
+
 pub(in crate::runtime) struct WakeRefusal {
     pub(in crate::runtime) code: &'static str,
     pub(in crate::runtime) message: &'static str,
@@ -1319,6 +1329,39 @@ impl Runtime {
         self.registration_rebinds
             .insert(registration.id.clone(), rebind);
         false
+    }
+
+    /// One step of a registration waiting for the pane its conversation came
+    /// back in, a resumed archive member's or a reopened tree member's: it
+    /// moves there once the delivery store sees the pane, and is let go,
+    /// to end with the pane that held it, when that pane closed first
+    /// (`pane_gone`) or the store has not seen it within the hour a woken
+    /// sleeper gets.
+    pub(in crate::runtime) fn take_over_registration(
+        &mut self,
+        registration: &crate::agent_sleep::DormantRegistration,
+        pane: &str,
+        pane_gone: bool,
+        waiting_since_unix_ms: u64,
+        now: u64,
+    ) -> Takeover {
+        let reason = if pane_gone {
+            Some("pane_gone")
+        } else if now.saturating_sub(waiting_since_unix_ms) >= WOKEN_BINDING_LIMIT_MS {
+            Some("unbound")
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            self.registration_rebinds.remove(&registration.id);
+            self.release_dormant_hold(&registration.id);
+            return Takeover::Released(reason);
+        }
+        if self.continue_dormant_registration(registration, pane) {
+            Takeover::Continued
+        } else {
+            Takeover::Waiting
+        }
     }
 
     /// A sleeping session that is no longer woken lets its registration

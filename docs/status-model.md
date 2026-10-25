@@ -356,6 +356,7 @@ A row with live descendants also carries `close_descendant_pane_ids`: every live
 `apply_lineage` derives it on the same pass as the tree, and `refresh_agent_lineage` drops the panes of a device that is not connected, so a close never lists what it cannot reach; a row with none omits the field.
 A pane or tab close asks about the subtree only when some agent that closes lists a pane outside what closes (PRD close-agent-subtree D-16), and the status check above applies to each listed descendant: an unknown one keeps `모두 닫기` disabled, while `이것만 닫기` stays available.
 Closing a parent alone does not close its children: they lose their parent on the next projection and become the operator's roots with their own state.
+A subtree close is undone by one Reopen closed: the parent and its descendants come back as the same registrations in their new panes, so the lineage tokens name the new parent pane and each child is delegated again under it, its descendants and the children left open included ([ARCHITECTURE.md: Reopening locally closed work](ARCHITECTURE.md#reopening-locally-closed-work)).
 Regression owners: `each_row_lists_its_live_descendants_deepest_first_and_a_leaf_lists_none`, `a_descendant_on_a_disconnected_device_is_never_listed_for_a_close`, and the tree-close tests in `herdr-core/src/runtime/tests/tree_close.rs`.
 
 Needs You and Done ordinarily belong to operator-owned roots.
