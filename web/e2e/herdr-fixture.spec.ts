@@ -1,6 +1,7 @@
 // @platform: The real pinned CLI starts two native pane processes together;
 // a partial start failure must release the private server and Windows locks.
 import { expect, test } from "@playwright/test";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -56,7 +57,7 @@ test("fixture starts overlap and both panes accept their first input", { tag: "@
       for (const [index, pane] of fixture.panes.entries()) {
         expect(fs.existsSync(path.join(root, ["one", "two"][index]! + ".completed"))).toBe(true);
         const marker = `first-input-${index}`;
-        fixture.run(["pane", "send-text", pane, marker]);
+        execFileSync(fixture.bin, ["pane", "send-text", pane, marker], { env: fixture.env, timeout: 30_000 });
         await expect.poll(() => fs.existsSync(fixture.inputLogs[index]!) ? fs.readFileSync(fixture.inputLogs[index]!, "utf8") : "").toBe(marker);
       }
     } finally {
