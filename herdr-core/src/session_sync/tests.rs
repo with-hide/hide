@@ -167,10 +167,11 @@ fn an_agent_still_starting_closes_without_a_status_check() {
     let (remote, _) = replica.project_remote("mini", payload).unwrap();
     for row in [&local.agents[0], &remote.agents[0]] {
         assert_eq!(row.activity, "unknown");
+        assert_eq!(row.status_code, crate::model::AgentStatusCode::Starting);
         assert!(!row.requires_close_status_check);
         assert!(
             !row.requires_close_confirmation,
-            "an agent given nothing to do has no work to stop"
+            "a start that carried no first prompt has nothing to stop"
         );
     }
 }
@@ -190,6 +191,11 @@ fn an_unknown_agent_that_is_not_starting_still_needs_a_status_check() {
         let replica = SessionReplica::from_snapshot(&value).unwrap();
         let row = &crate::sidebar::project_agents(replica.project()).agents[0];
         assert_eq!(row.activity, "unknown", "{case}");
+        assert_eq!(
+            row.status_code,
+            crate::model::AgentStatusCode::Unknown,
+            "{case}"
+        );
         assert!(row.requires_close_status_check, "{case}");
     }
     // A list that failed after the start says nothing about the agent now.

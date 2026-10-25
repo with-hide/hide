@@ -346,13 +346,17 @@ Regression owners: `precedence_is_the_turn_then_progress_then_a_stop_to_read`, `
 ## Close protection is separate from read state
 
 `requires_close_confirmation` and `requires_close_status_check` are core-derived values carried by both the sidebar agent row and its pane projection.
-The confirmation value is true for Working activity, an unresolved demand, or a blocked pane; a stopped unread completion does not create a work-interruption prompt.
+The confirmation value is true for Working activity, an unresolved demand, a blocked pane, or an agent starting with the operator's first prompt; a stopped unread completion does not create a work-interruption prompt.
 The status-check value is true only for Unknown activity with no demand and no block, on an agent that is not starting.
 It prevents a destructive local or remote close from guessing that an unobserved agent is idle, and the caller-visible remedy is to refresh status before closing.
 An agent is starting while Herdr still holds open the start it made of it (`launch_pending`) and has reported no state for it on this server (`state_change_seq` 0), from a confirmed agent list (`agent_state::agent_starting`).
-The pinned Herdr reports such an agent `unknown` for about 2.5 s after `agent.start`, until it detects it; it has been given nothing to do, so a pane closed right after it was made closes like a stopped one, with no status check and no confirmation.
+The pinned Herdr reports such an agent `unknown` for about 2.5 s after `agent.start`, until it detects it, and its status code is `starting` (`시작 중`) rather than `unknown`; it never needs a status check.
+Whether the start carried the operator's first prompt is the core's own fact from the start request (`AgentStart::Starting { first_prompt }`): the runtime keeps the pane of a task start whose kept launch has a prompt (`lay_start_prompts`) until Herdr reports that agent, the pane is gone or the start definitely failed, so the start's answer and Herdr's report may arrive in either order.
+A starting agent with a first prompt asks the ordinary Stop-work confirmation before its pane closes, because the agent took that prompt as its argument and a close would drop it without a word; one with no first prompt has been given nothing to do and closes at once.
+The record lives in the daemon's memory only, so a daemon restart inside the few seconds of a start closes that pane as one started with no prompt.
+A `hide agent spawn` brief is not a first prompt: it is submitted after the agent is ready, and a close before then refuses it back to its sender as `brief_not_submitted`.
 A pane on a restored server is also at sequence 0 and `unknown` while Herdr detects its agent again, but it carries no pending start and may hold running work, so it still needs the status check, as does a starting agent whose list was not confirmed.
-Regression owners: `an_agent_still_starting_closes_without_a_status_check` and `an_unknown_agent_that_is_not_starting_still_needs_a_status_check` in `herdr-core/src/session_sync/tests.rs`.
+Regression owners: `an_agent_still_starting_closes_without_a_status_check` and `an_unknown_agent_that_is_not_starting_still_needs_a_status_check` in `herdr-core/src/session_sync/tests.rs`, `a_starting_agent_asks_before_closing_only_when_its_start_carried_a_first_prompt` in `herdr-core/src/runtime/tests/projects.rs`, and the starting case of `web/src/agentRow.test.ts`.
 The shell presents that remedy as the existing read-only `Check status` action and keeps the destructive close confirmation separate from it.
 An unknown row still belongs to Seen for sidebar grouping, so close safety never changes the read or ownership axes.
 

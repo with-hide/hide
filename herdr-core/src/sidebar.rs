@@ -661,7 +661,13 @@ fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSnapshot, Str
     let identity_label = title.unwrap_or_else(|| provider_name(agent.agent.as_deref()));
     let projected = SidebarAgentSnapshot {
         telemetry_stale: agent.telemetry_stale,
-        starting: agent_starting(&agent),
+        start: if agent_starting(&agent) {
+            AgentStart::Starting {
+                first_prompt: false,
+            }
+        } else {
+            AgentStart::Settled
+        },
         record_connection: agent.record.as_ref().map(|r| r.connection),
         record_summary: agent
             .record
@@ -1521,12 +1527,12 @@ mod tests {
                 false,
             );
             assert_eq!(
-                agent_requires_close_confirmation(activity, demand, blocked),
+                agent_requires_close_confirmation(activity, demand, blocked, AgentStart::Settled),
                 expected,
                 "{demand:?} {activity:?} unread={unread} blocked={blocked}"
             );
             assert_eq!(
-                agent_requires_close_status_check(activity, demand, blocked, false),
+                agent_requires_close_status_check(activity, demand, blocked, AgentStart::Settled),
                 status_check,
                 "status check: {demand:?} {activity:?} unread={unread} blocked={blocked}"
             );
@@ -1653,13 +1659,27 @@ mod tests {
         ];
         for (demand, activity, completed, unread, expected) in labels {
             assert_eq!(
-                agent_status_code(demand, activity, completed, unread, false),
+                agent_status_code(
+                    demand,
+                    activity,
+                    AgentStart::Settled,
+                    completed,
+                    unread,
+                    false
+                ),
                 expected
             );
         }
         // Done is only a finish the label read (D-03).
         assert_eq!(
-            agent_status_code(AgentDemand::None, AgentActivity::Stopped, true, true, true),
+            agent_status_code(
+                AgentDemand::None,
+                AgentActivity::Stopped,
+                AgentStart::Settled,
+                true,
+                true,
+                true,
+            ),
             AgentStatusCode::Done
         );
     }

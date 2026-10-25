@@ -1306,11 +1306,11 @@ pub struct SidebarAgentSnapshot {
     /// A delayed telemetry read leaves the last confirmed read fingerprint intact.
     #[serde(skip)]
     pub(crate) telemetry_stale: bool,
-    /// Herdr is still starting this agent and it has reported no state yet
-    /// (`agent_state::agent_starting`): its activity is unknown, but it has
-    /// done nothing a close could lose.
+    /// Where the agent stands in the start Herdr made of it: while it is
+    /// starting its activity is unknown, yet it has run nothing but the first
+    /// prompt its start may carry (`agent_state::AgentStart`).
     #[serde(skip)]
-    pub(crate) starting: bool,
+    pub(crate) start: crate::agent_state::AgentStart,
     /// Raw Herdr session bound to destructive close approval, never a label fallback.
     #[serde(skip_serializing)]
     pub close_session: Option<crate::sidebar::SessionAgentSessionPayload>,
@@ -2219,6 +2219,9 @@ pub enum AgentStatusCode {
     Done,
     Idle,
     Unknown,
+    /// Herdr is still starting the agent and it has reported nothing yet
+    /// (`agent_state::AgentStart::Starting`).
+    Starting,
     /// Waiting: on delegated children, a background job, a reply or a pull
     /// request's checks (the row is in progress), or, by the label's word, on
     /// something nothing proves (the row is to read).
@@ -2245,6 +2248,7 @@ impl AgentStatusCode {
             Self::Done => "Done",
             Self::Idle => "Idle",
             Self::Unknown => "Unknown",
+            Self::Starting => "Starting",
             Self::Waiting => "Waiting",
             Self::Unfinished => "Unfinished",
             Self::Stopped => "Stopped",
@@ -7401,6 +7405,7 @@ mod wire_enum_tests {
             AgentStatusCode::Done,
             AgentStatusCode::Idle,
             AgentStatusCode::Unknown,
+            AgentStatusCode::Starting,
             AgentStatusCode::Waiting,
             AgentStatusCode::Unfinished,
             AgentStatusCode::Stopped,
@@ -7418,6 +7423,7 @@ mod wire_enum_tests {
                 | AgentStatusCode::Done
                 | AgentStatusCode::Idle
                 | AgentStatusCode::Unknown
+                | AgentStatusCode::Starting
                 | AgentStatusCode::Waiting
                 | AgentStatusCode::Unfinished
                 | AgentStatusCode::Stopped

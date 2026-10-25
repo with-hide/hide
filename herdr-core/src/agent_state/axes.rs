@@ -1118,6 +1118,22 @@ pub(crate) fn agent_activity(agent: &SessionAgentPayload) -> AgentActivity {
     }
 }
 
+/// Where an agent stands in the start Herdr made of it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum AgentStart {
+    /// Herdr has reported a state for the agent, or holds no start of it.
+    #[default]
+    Settled,
+    /// Herdr is still starting the agent and it has reported nothing yet
+    /// (`agent_starting`).
+    Starting {
+        /// The start Hide made carried the operator's first prompt, which the
+        /// agent took as its argument; the core's own fact from the start
+        /// request, laid on by the runtime (`lay_start_prompts`).
+        first_prompt: bool,
+    },
+}
+
 /// Whether Herdr is still starting this agent and it has reported no state
 /// since: the start Herdr made of it is pending (`launch_pending`) and its
 /// state has never changed on this server (`state_change_seq` 0). Herdr
