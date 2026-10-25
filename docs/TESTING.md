@@ -147,7 +147,8 @@ When the behavior depends on the order of two events, the test fixes that order;
   `fixture.run` refuses initial-pane input before `ready()`, while direct CLI and browser input consumers retain responsibility for that barrier.
   Direct initial-terminal-input, Herdr restart and desktop consumers keep interactive setup; eligible web settings, topology, transcript and file-view consumers opt into registration explicitly.
   `web/e2e/herdr-fixture.spec.ts` holds each CLI start until both arrived, forwards to the real pinned Herdr, and checks first input and cleanup after a partial failure on every platform.
-  Its registered-mode journeys hold the actual `agent.get` socket request before first input and during teardown, proving the observed-state barrier and cancellation without a fixed sleep or substituted answer.
+  Its registered-mode journey holds the actual native shim launch, confirms Herdr reports a pending, non-interactive agent, and observes another `agent.get` round before release and first input.
+  Other journeys hold a readiness read during teardown and an outgoing sibling start after the real server refuses an invalid kind, proving cancellation and ordered partial-failure cleanup without a fixed sleep or substituted answer.
   Before server/root teardown on Node-managed worker exit, the fixture synchronously ends and confirms pending CLI trees: private process groups on Unix, captured identities and descendants on Windows.
   Unconfirmed CLI exit preserves the root and reports the failure; SIGKILL/OOM skips the exit hook and is outside this guarantee.
   `web/e2e/fixture-worker-exit.spec.ts` exits a separate owner during actual pending starts and observes process exit before server/root teardown, including root preservation when termination is refused.
