@@ -166,13 +166,22 @@ export function treeCloseProgress(operations: readonly AsyncOperation[] | undefi
 export type FoldedRows = { shown: SubtreeRow[]; folded: SubtreeRow[] };
 
 /**
- * Which rows of a close list fold (quiet screens, design principle 13): a
- * quiet descendant whose own descendants are all quiet has nothing for the
- * operator to answer, so it folds; a target, a row that needs the operator and
- * every quiet ancestor of one stay, so the tree path to what needs attention
- * is never cut. Folding one row saves nothing, so fewer than two fold none.
+ * The rows a close list shows whole: they fit its height
+ * (`--size-relationship-list-max`) without scrolling, so a small tree lists
+ * every agent by name, as the sheet always has.
+ */
+export const SUBTREE_ROWS_WHOLE = 10;
+
+/**
+ * Which rows of a longer close list fold (quiet screens, design principle
+ * 13): a quiet descendant whose own descendants are all quiet has nothing for
+ * the operator to answer, so it folds; a target, a row that needs the operator
+ * and every quiet ancestor of one stay, so the tree path to what needs
+ * attention is never cut. Folding one row saves nothing, so fewer than two
+ * fold none.
  */
 export function foldQuietRows(rows: readonly SubtreeRow[]): FoldedRows {
+  if (rows.length <= SUBTREE_ROWS_WHOLE) return { shown: [...rows], folded: [] };
   const keep = rows.map((row, index) => {
     if (row.target || row.state !== "quiet") return true;
     for (let below = index + 1; below < rows.length && rows[below]!.depth > row.depth; below += 1) {

@@ -163,16 +163,20 @@ describe("foldQuietRows", () => {
   const row = (pane: string, depth: number, state: SubtreeState, target = false) => ({ agent: legacyAgentRow({ pane_id: pane }) as AgentRow, depth, target, state }) as SubtreeRow;
   const ids = (rows: SubtreeRow[]) => rows.map((r) => r.agent.pane_id);
 
-  it("folds the quiet children and keeps the target, what needs the operator and the path to it", () => {
-    const rows = [row("p1", 0, "working", true), row("c1", 1, "quiet"), row("c2", 1, "quiet"), row("g1", 2, "waiting"), row("c3", 1, "quiet"), row("g2", 2, "quiet"), row("c4", 1, "unread")];
+  const filler = Array.from({ length: 6 }, (_, index) => row(`f${index}`, 1, "quiet"));
+
+  it("folds the quiet children of a long list and keeps the target, what needs the operator and the path to it", () => {
+    const rows = [row("p1", 0, "working", true), row("c1", 1, "quiet"), row("c2", 1, "quiet"), row("g1", 2, "waiting"), row("c3", 1, "quiet"), row("g2", 2, "quiet"), row("c4", 1, "unread"), ...filler];
     const { shown, folded } = foldQuietRows(rows);
     expect(ids(shown)).toEqual(["p1", "c2", "g1", "c4"]);
-    expect(ids(folded)).toEqual(["c1", "c3", "g2"]);
+    expect(ids(folded)).toEqual(["c1", "c3", "g2", ...ids(filler)]);
   });
 
-  it("folds nothing when only one row would fold", () => {
-    const rows = [row("p1", 0, "quiet", true), row("c1", 1, "quiet"), row("c2", 1, "working")];
-    expect(foldQuietRows(rows)).toEqual({ shown: rows, folded: [] });
+  it("lists every row of a list that fits whole, and folds nothing when only one row would", () => {
+    const small = [row("p1", 0, "quiet", true), row("c1", 1, "quiet"), row("g1", 2, "quiet")];
+    expect(foldQuietRows(small)).toEqual({ shown: small, folded: [] });
+    const busy = [row("p1", 0, "quiet", true), row("c1", 1, "quiet"), ...Array.from({ length: 10 }, (_, index) => row(`w${index}`, 1, "working"))];
+    expect(foldQuietRows(busy)).toEqual({ shown: busy, folded: [] });
   });
 });
 
