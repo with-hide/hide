@@ -260,7 +260,7 @@ fn an_earlier_builds_two_stubs_give_way_to_the_current_ones() {
             .contains("description: \"Conduct a mission of agents in Hide")
     );
     assert!(CONDUCTOR_SKILL.text().contains("run `hide mission help`"));
-    assert!(CONDUCTOR_SKILL.text().contains("<!-- hide-skill@2:"));
+    assert!(CONDUCTOR_SKILL.text().contains("<!-- hide-skill@3:"));
     // The plan's stub is written beside them and sends the agent to the
     // help that owns the plan's commands.
     assert_eq!(

@@ -224,12 +224,13 @@ pub const GUIDE_SKILL: Skill = Skill {
 /// The Conductor's stub: a mission of agents, which `hide mission help`
 /// owns. Version 1 had a plain description that Pi's strict front matter
 /// dropped (`Skill::text`); it is an older version of this stub, replaced by
-/// the marker rule like any other.
+/// the marker rule like any other. Version 3 names the decision's choices
+/// and the node results (PRD mission-plan-visibility B34).
 pub const CONDUCTOR_SKILL: Skill = Skill {
     name: "hide-conductor",
     description: "Conduct a mission of agents in Hide: plan it with the operator, start the workers, replan, report. Use when the operator asks for a mission or for several PRs carried as a group.",
-    body: "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide mission help` and follow what it prints: it is the Conductor's contract, with the commands, how to cut the mission into nodes and brief each worker, the cap and the candidates, replanning on the operator's words, merging, the report and taking a mission over.",
-    version: 2,
+    body: "First check that this session runs in a pane Hide manages: Hide's session guidance names this checkout, or `hide workspace info` answers `\"ok\":true`. If neither, stop here; this skill does not apply. Inside Hide, run `hide mission help` and follow what it prints: it is the Conductor's contract, with the commands, how to cut the mission into nodes and brief each worker, the cap and the candidates, replanning on the operator's words, asking the operator a decision with choices they can answer from the map, whose answer arrives in your conversation as their own message, recording a direct change's commit and a verify node's verdict, merging, the report and taking a mission over.",
+    version: 3,
 };
 
 /// An agent's own plan (PRD hide-plan D-16), which `hide plan help` owns.
