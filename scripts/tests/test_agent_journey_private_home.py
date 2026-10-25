@@ -164,6 +164,24 @@ class PrivateHome(unittest.TestCase):
         with self.assertRaisesRegex(ProtectionError, 'cache_over_budget'):
             cli_cache.size(payload, 99)
 
+    def test_a_file_replaced_while_the_cache_is_sized_counts_nothing(self):
+        from unittest.mock import patch
+        folder = self.root / 'pin'
+        folder.mkdir()
+        (folder / 'kept').write_bytes(b'x' * 10)
+        (folder / 'replaced').write_bytes(b'x' * 50)
+        lstat = Path.lstat
+
+        def gone(path):
+            if path.name == 'replaced':
+                raise FileNotFoundError(path)
+            return lstat(path)
+        with patch.object(Path, 'lstat', gone):
+            total = cli_cache.size(folder, 1000)
+        self.assertEqual(total, folder.lstat().st_size + 10)
+        with self.assertRaises(FileNotFoundError):
+            cli_cache.size(self.root / 'missing', 1000)
+
     @unittest.skipIf(os.name == 'nt', 'local cache lease uses the macOS lock boundary')
     def test_existing_oversized_cache_is_refused_before_a_pin_is_installed(self):
         (self.root / 'payload').write_bytes(b'x' * 16385)
