@@ -130,7 +130,7 @@ function herdr(env: NodeJS.ProcessEnv, bin: string, args: string[], timeout = 30
 type PendingStart = { stop: () => void };
 
 /** Stop the private Unix process group, including a CLI wrapper's children. */
-function endStartGroup(pid: number): void {
+export function endStartGroup(pid: number): void {
   try { process.kill(-pid, "SIGKILL"); } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
   }

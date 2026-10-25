@@ -7,7 +7,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { herdrBinary } from "./herdr-fixture";
+import { endStartGroup, herdrBinary } from "./herdr-fixture";
 import { endWindowsProcesses, fixtureProgram, type WindowsProcess } from "./platform-fixture";
 import { fixtureShimPath } from "./shims/build";
 import { afterCleanup } from "./worker-owned";
@@ -60,7 +60,10 @@ if (args[0] === "agent" && args[1] === "start") {
   // Even after the real CLI answers, this real client wrapper stays pending
   // until its owning fixture ends it. No Herdr response is substituted.
   setInterval(() => {}, 1000);
-} else cli.on("exit", code => process.exit(code === null ? 1 : code));
+} else cli.on("exit", (code, signal) => {
+  if (args[0] === "server" && args[1] === "stop") fs.writeFileSync(path.join(root, "server-stop-result.json"), JSON.stringify({ code, signal }));
+  process.exit(code === null ? 1 : code);
+});
 `);
   const owner = path.join(root, "owner.cjs");
   buildSync({
@@ -121,16 +124,26 @@ async function withPendingWorker(refuse: boolean, check: (root: string, fixture:
     }
     // Failure injection deliberately leaves owned clients alive. End only the
     // recorded identities/groups, then the same private server, before removal.
-    for (const start of starts) {
-      if (process.platform === "win32") endWindowsProcesses(start.owned);
-      else {
-        const leader = spawnSync("/bin/ps", ["-p", String(start.leader), "-o", "args="], { encoding: "utf8", timeout: 5_000 });
-        if (leader.stdout.includes(path.join(root, "pending-herdr"))) process.kill(-start.leader, "SIGKILL");
-      }
-    }
     if (!fixture && fs.existsSync(path.join(root, "private.json"))) fixture = JSON.parse(fs.readFileSync(path.join(root, "private.json"), "utf8")) as Private;
+    const failures: unknown[] = [];
+    for (const start of starts) {
+      try {
+        if (process.platform === "win32") endWindowsProcesses(start.owned);
+        else endStartGroup(start.leader);
+      } catch (error) { failures.push(error); }
+    }
+    if (failures.length > 0) throw new AggregateError(failures, `pending CLI exit unconfirmed; preserve ${fixture?.root ?? root} and ${root}`);
     if (fixture) {
-      spawnSync(herdrBinary(), ["server", "stop"], { env: { ...process.env, ...fixture.env }, timeout: 10_000 });
+      // The owner normally already stopped this server. Reuse only its actual
+      // pinned CLI success; a missing-server error is not generic success.
+      const record = path.join(root, "server-stop-result.json");
+      const prior = fs.existsSync(record) ? JSON.parse(fs.readFileSync(record, "utf8")) as { code: number | null; signal: string | null } : undefined;
+      if (prior?.code !== 0 || prior.signal !== null) {
+        const stopped = spawnSync(herdrBinary(), ["server", "stop"], { env: { ...process.env, ...fixture.env }, encoding: "utf8", timeout: 10_000 });
+        if (stopped.error || stopped.signal || stopped.status !== 0) {
+          throw new Error(`private server stop unconfirmed; preserve ${fixture.root} and ${root}: ${stopped.error ?? stopped.signal ?? stopped.stderr ?? stopped.status}`);
+        }
+      }
       if (process.platform === "win32") endWindowsProcesses([], fixture.root);
       fs.rmSync(fixture.root, { recursive: true, force: true });
     }
