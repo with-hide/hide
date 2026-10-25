@@ -22,7 +22,7 @@
 // core's own transcript read and analysis, never from a token (PRD
 // labels-in-hided).
 
-import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { execFile, execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -125,6 +125,20 @@ export function herdrHasFocus(fixture: HerdrFixture, pane: string): boolean {
 function herdr(env: NodeJS.ProcessEnv, bin: string, args: string[], timeout = 30_000): unknown {
   const out = execFileSync(bin, args, { env, encoding: "utf8", timeout });
   return JSON.parse(out) as unknown;
+}
+
+/** A bounded CLI child, owned until its outputs close, including worker exit. */
+function herdrAsync(env: NodeJS.ProcessEnv, bin: string, args: string[]): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const child = execFile(bin, args, { env, encoding: "utf8", timeout: 30_000, maxBuffer: 1024 * 1024, killSignal: "SIGKILL" }, (error, stdout, stderr) => {
+      owned.disown();
+      if (error) { reject(Object.assign(error, { stdout, stderr })); return; }
+      try { resolve(JSON.parse(stdout) as unknown); } catch (error) { reject(error); }
+    });
+    const owned = ownUntilWorkerExit(() => {
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    });
+  });
 }
 
 function isolatedEnv(root: string, socket: string): NodeJS.ProcessEnv {
@@ -546,39 +560,52 @@ function shellAvailability(env: NodeJS.ProcessEnv, bin: string, root: string, pa
  * pinned Herdr counts the pane's shell as available. Herdr does not wait, so
  * the fixture does, as the product does (`agent_start::start_at_shell`): a
  * refusal as `agent_pane_busy` typed nothing, so it goes back to waiting,
- * within the same bound. Any other answer is the start's. Synchronous so `run`
- * can hold a start until the pane is ready.
+ * within the same bound. Any other answer is the start's. `run` stays synchronous; the initial
+ * pair uses the asynchronous form so both interactive waits can overlap.
  */
-function startAgentAtShell(env: NodeJS.ProcessEnv, bin: string, root: string, args: string[], ms = 10_000): unknown {
+function startAgentAtShell(env: NodeJS.ProcessEnv, bin: string, root: string, args: string[], ms = 10_000, asynchronous = false): unknown {
   const pane = args[args.indexOf("--pane") + 1]!;
   const deadline = Date.now() + ms;
   let seen = "";
-  for (;;) {
-    const promptRead = paneRead(env, bin, pane, Math.max(1, deadline - Date.now()));
-    const { available, info } = shellAvailability(env, bin, root, pane, Math.max(1, deadline - Date.now()));
-    const shell = info.shell_pid;
-    const prompt = promptRead.text.includes("fixture %");
-    seen = JSON.stringify({ prompt, promptFailure: promptRead.failure, processInfo: info });
-    // Foreground ownership can precede shell startup. Later split and resumed
-    // panes need the same prompt barrier as the initial fixture panes.
-    if (available && prompt) {
-      try {
-        return herdr(env, bin, args);
-      } catch (error) {
-        // Herdr prints a refusal on stderr; stdout is empty.
-        const refusal = String((error as { stderr?: unknown }).stderr ?? error);
-        if (!refusal.includes("agent_pane_busy")) {
-          const failed = error as { status?: number; signal?: string; stdout?: string; stderr?: string };
-          throw new Error(`fixture agent start failed: ${JSON.stringify({ pane, readiness: seen, status: failed.status ?? null, signal: failed.signal ?? null, stdout: failed.stdout ?? null, stderr: failed.stderr ?? null })}; ${String(error)}`, { cause: error });
+  const failed = (error: unknown) => {
+    // Herdr prints a refusal on stderr; stdout is empty. A busy refusal typed nothing.
+    const refusal = String((error as { stderr?: unknown }).stderr ?? error);
+    if (!refusal.includes("agent_pane_busy")) {
+      const result = error as { status?: number; signal?: string; stdout?: string; stderr?: string };
+      throw new Error(`fixture agent start failed: ${JSON.stringify({ pane, readiness: seen, status: result.status ?? null, signal: result.signal ?? null, stdout: result.stdout ?? null, stderr: result.stderr ?? null })}; ${String(error)}`, { cause: error });
+    }
+    seen = `${seen}; busy answer: ${refusal.trim()}`;
+  };
+  const attempt = (): unknown => {
+    for (;;) {
+      const promptRead = paneRead(env, bin, pane, Math.max(1, deadline - Date.now()));
+      const { available, info } = shellAvailability(env, bin, root, pane, Math.max(1, deadline - Date.now()));
+      const shell = info.shell_pid;
+      const prompt = promptRead.text.includes("fixture %");
+      seen = JSON.stringify({ prompt, promptFailure: promptRead.failure, processInfo: info });
+      // Foreground ownership can precede shell startup. Later split and resumed
+      // panes need the same prompt barrier as the initial fixture panes.
+      if (available && prompt) {
+        if (asynchronous) return herdrAsync(env, bin, args).catch(async (error: unknown) => {
+          failed(error);
+          if (Date.now() >= deadline) throw new Error(`the shell of pane ${pane} never held the terminal alone before agent start; last process info ${seen}${shellChildren(root, shell)}`);
+          // Poll the same shell-availability condition after a busy refusal.
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          return attempt();
+        });
+        try {
+          return herdr(env, bin, args);
+        } catch (error) {
+          failed(error);
         }
-        seen = `${seen}; busy answer: ${refusal.trim()}`;
       }
+      if (Date.now() >= deadline) {
+        throw new Error(`the shell of pane ${pane} never held the terminal alone before agent start; last process info ${seen}${shellChildren(root, shell)}`);
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
     }
-    if (Date.now() >= deadline) {
-      throw new Error(`the shell of pane ${pane} never held the terminal alone before agent start; last process info ${seen}${shellChildren(root, shell)}`);
-    }
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100);
-  }
+  };
+  return attempt();
 }
 
 /** The processes that name `shell` as their parent on Windows, `<pid> <started> <older|newer|unknown> <name>` each (`shims/hide-children.c`). */
@@ -824,8 +851,14 @@ export async function startHerdr({ agents = true, shortRoot = false }: { agents?
     }
     const [first, second] = opened.panes;
     if (agents) {
-      startAgentAtShell(env, bin, root, ["agent", "start", "one", "--kind", "claude", "--pane", first]);
-      startAgentAtShell(env, bin, root, ["agent", "start", "two", "--kind", "claude", "--pane", second]);
+      // Exactly two starts may run together. Observe both exits before setup
+      // cleanup, so a sibling cannot keep using the server or root afterwards.
+      const starts = await Promise.allSettled([
+        Promise.resolve().then(() => startAgentAtShell(env, bin, root, ["agent", "start", "one", "--kind", "claude", "--pane", first], 10_000, true)),
+        Promise.resolve().then(() => startAgentAtShell(env, bin, root, ["agent", "start", "two", "--kind", "claude", "--pane", second], 10_000, true)),
+      ]);
+      const failures = starts.flatMap((start) => start.status === "rejected" ? [start.reason as unknown] : []);
+      if (failures.length > 0) throw failures.length === 1 ? failures[0] : new AggregateError(failures, "both fixture agents failed to start");
       // Distinct row labels, made by the core from each pane's transcript.
       for (const [pane, task] of [
         [first, "Agent one"],

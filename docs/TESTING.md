@@ -135,6 +135,9 @@ When the behavior depends on the order of two events, the test fixes that order;
   A missing native shell fails fixture setup before starting the server.
   Before each initial agent start, the fixture waits for the prompt and for the shell to be available to `agent start`, decided by the one check below (`shellAvailability`), within the existing ten-second setup bound.
   Every `agent start` the fixture sends (setup's and every `fixture.run`'s) goes through `startAgentAtShell`, which sends it only while `shellAvailability` says the pinned Herdr counts the shell as available (`docs/ARCHITECTURE.md`, Starting an agent), as the product's `agent_start` does.
+  Setup starts its two agents concurrently through bounded, worker-owned CLI children; it observes both results before returning or cleaning up, so one failed start cannot leave its sibling using a removed server or folder.
+  Both starts still wait for Herdr's interactive-ready success, and `fixture.run` keeps its synchronous start contract.
+  `web/e2e/herdr-fixture.spec.ts` holds each start at the CLI boundary until both arrived, forwards to the real pinned Herdr, and checks first input and cleanup after a partial failure on every platform.
   On macOS and Linux that is while `pane process-info` says the shell alone holds the terminal; on Windows it is while no process names the shell as its parent, which `pane process-info` does not show, so the fixture lists those processes with the compiled `hide-children.exe`.
   A refusal as `agent_pane_busy` typed nothing, so the fixture goes back to waiting within the same ten-second bound; any other answer is the start's.
   A pane's shell that never gets there fails with the last process info and, on Windows, the children the shell still has.
