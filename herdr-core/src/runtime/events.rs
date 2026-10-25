@@ -1551,6 +1551,7 @@ pub(super) enum Event {
     TaskViewSet(super::detail::TaskViewPayload),
     SidebarProjectSet(super::detail::SidebarProjectPayload),
     PracticeProgressSet(super::detail::PracticeProgressPayload),
+    PracticeInviteClose,
     OverviewGraphChange(super::overview_graph::OverviewGraphChangePayload),
     TaskReveal(super::detail::TaskRevealPayload),
     DetailOpen(super::detail::DetailOpenPayload),
@@ -1823,6 +1824,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "practice_progress_set" => {
             decode!(super::detail::PracticeProgressPayload, PracticeProgressSet)
         }
+        "practice_invite_close" => Ok(Event::PracticeInviteClose),
         "overview_graph_change" => decode!(
             super::overview_graph::OverviewGraphChangePayload,
             OverviewGraphChange
@@ -4117,6 +4119,7 @@ impl Runtime {
             Event::TaskViewSet(payload) => self.set_task_view(payload),
             Event::SidebarProjectSet(payload) => self.set_sidebar_project(payload),
             Event::PracticeProgressSet(payload) => self.set_practice_progress(payload),
+            Event::PracticeInviteClose => self.close_practice_invite(),
             Event::OverviewGraphChange(payload) => self.change_overview_graph(payload),
             Event::TaskReveal(payload) => self.reveal_task(payload),
             Event::DetailOpen(payload) => self.open_detail(payload.item),
@@ -4190,12 +4193,13 @@ impl Runtime {
                     sessions_expanded_agent_pane_ids: current.sessions_expanded_agent_pane_ids,
                     // Each has its own event (`sidebar_lens_set`,
                     // `task_view_set`, `sidebar_project_set`,
-                    // `practice_progress_set`, `detail_*`,
+                    // `practice_progress_set`, `practice_invite_close`, `detail_*`,
                     // `overview_graph_change`).
                     sidebar_lens: current.sidebar_lens,
                     task_view: current.task_view,
                     sidebar_project: current.sidebar_project,
                     practice: current.practice,
+                    practice_invite_closed: current.practice_invite_closed,
                     detail: current.detail,
                     overview_graph: current.overview_graph,
                     selected_path: payload.selected_path,

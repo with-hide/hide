@@ -26,7 +26,7 @@ export function mountPractice(root: Root, params: URLSearchParams) {
   }
   root.render(
     <StrictMode>
-      <PracticeApp />
+      <PracticeApp opening={params.get("chapter")} />
     </StrictMode>,
   );
 }

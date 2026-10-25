@@ -209,8 +209,8 @@ export type HostBridge = {
   restartHerdr(): Promise<HerdrRestart>;
   /** Quits the app, as the app menu's Quit does; hided keeps running. */
   quit(): void;
-  /** Opens the practice window in `language`, or brings the open one forward (`practice/channel.ts`). */
-  openPractice(language: string): void;
+  /** Opens the practice window in `language`, on `chapter` when one is named, or brings the open one forward (`practice/channel.ts`). */
+  openPractice(language: string, chapter?: string): void;
   browser: BrowserBridge;
   /** This app's own updates (PRD auto-update), which only the desktop host has. */
   updates: UpdatesBridge;

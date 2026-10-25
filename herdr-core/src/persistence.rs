@@ -85,6 +85,8 @@ struct StoredUiState {
     /// chapter this build cannot read is dropped and the rest still load.
     #[serde(default)]
     practice: Option<serde_json::Value>,
+    #[serde(default)]
+    practice_invite_closed: bool,
     /// Kept as JSON so a slot this build cannot read loads empty instead of
     /// making the whole store unreadable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -576,6 +578,7 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
             task_view,
             sidebar_project,
             practice,
+            practice_invite_closed: stored.practice_invite_closed,
             detail,
             overview_graph,
             selected_path: stored.selected_path,
@@ -757,6 +760,7 @@ pub fn save(
         practice: Some(
             serde_json::to_value(&state.practice).expect("practice progress serializes"),
         ),
+        practice_invite_closed: state.practice_invite_closed,
         detail: (state.detail != DetailSlot::default())
             .then(|| serde_json::to_value(&state.detail).expect("the 보기 slot serializes")),
         overview_graph: Some(
@@ -1635,15 +1639,18 @@ mod tests {
                 finished: true,
             },
         );
+        state.practice_invite_closed = true;
         save(&path, &state, &PaneTerminalSizes::new()).expect("persist the progress");
         let (restored, _sizes, disposition) = load(&path);
         assert_eq!(disposition, LoadDisposition::Loaded);
         assert_eq!(restored.practice, state.practice);
+        assert!(restored.practice_invite_closed);
 
         let older = br#"{"schema_version":1,"expanded_paths":[],"selected_path":null,"selected_pane_id":null}"#;
         let (older_state, _sizes, older_disposition) = decode(older);
         assert_eq!(older_disposition, LoadDisposition::Loaded);
         assert!(older_state.practice.is_empty());
+        assert!(!older_state.practice_invite_closed);
 
         let mut stored: serde_json::Value =
             serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();

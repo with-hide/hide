@@ -3933,6 +3933,11 @@ pub struct UiStateSnapshot {
     /// a relaunch resumes it. At most [`PRACTICE_CHAPTER_LIMIT`] chapters.
     #[serde(default)]
     pub practice: BTreeMap<String, PracticeProgress>,
+    /// The sidebar's invitation to practice was closed with its ×
+    /// (`practice_invite_close`); it never shows again. A learner who
+    /// opened a chapter loses it through `practice` instead.
+    #[serde(default)]
+    pub practice_invite_closed: bool,
     /// The lane's 보기 slot (D-50): a pull request's card or a session's
     /// record, one per window and no checkout's or Agent tab's, so it stays
     /// when either changes.
@@ -4850,6 +4855,7 @@ impl Default for UiStateSnapshot {
             task_view: TaskView::default(),
             sidebar_project: None,
             practice: BTreeMap::new(),
+            practice_invite_closed: false,
             detail: DetailSlot::default(),
             overview_graph: OverviewGraphChoices::default(),
             selected_path: None,

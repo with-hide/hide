@@ -157,3 +157,57 @@ test("every chapter started over from each of its steps plays to its end with En
     }
   });
 });
+
+/** An isolated stack's shell, signed in, for `journey`; the stack stops after it. */
+async function withShell(page: Page, journey: (origin: string) => Promise<void>): Promise<void> {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  const herdr = await startHerdr();
+  let daemon: Daemon | null = null;
+  try {
+    daemon = await startHided(herdr, "practice-invite");
+    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
+    await expect(page.locator("nav[data-sidebar]")).toHaveAttribute("data-sidebar", "projects", { timeout: 20_000 });
+    await journey(daemon.origin);
+  } finally {
+    daemon?.stop();
+    herdr.stop();
+  }
+}
+
+test("the sidebar's invitation brings the open practice window forward on chapter 0 and goes once a chapter is opened", async ({ page }) => {
+  await withShell(page, async () => {
+    const invite = page.locator("[data-practice-invite]");
+    await expect(invite).toBeVisible();
+    // A practice window already open on its chapter list: the invitation plays chapter 0 there, in the same window.
+    await page.locator("[data-help-menu-trigger]").click();
+    const opened = page.context().waitForEvent("page");
+    await page.locator('[data-help-item="practice"]').click();
+    const practice = await opened;
+    await expect(practice.locator("[data-practice-hub]")).toBeVisible({ timeout: 20_000 });
+    // Only opening the window is not practicing: the invitation stays until a chapter opens.
+    await expect(invite).toBeVisible();
+    await page.bringToFront();
+    await page.locator("[data-practice-invite-open]").click();
+    await expect(practice.locator('[data-practice-chapter="overview"]')).toBeVisible({ timeout: 20_000 });
+    expect(page.context().pages()).toHaveLength(2);
+    await expect(invite).toHaveCount(0);
+    await page.reload();
+    await expect(page.locator("nav[data-sidebar]")).toBeVisible({ timeout: 20_000 });
+    await expect(invite).toHaveCount(0);
+  });
+});
+
+test("the sidebar's invitation closed with its × stays closed after a reload", async ({ page }) => {
+  await withShell(page, async () => {
+    const invite = page.locator("[data-practice-invite]");
+    await expect(invite).toBeVisible();
+    await page.locator("[data-practice-invite-close]").click();
+    await expect(invite).toHaveCount(0);
+    await page.reload();
+    await expect(page.locator("nav[data-sidebar]")).toBeVisible({ timeout: 20_000 });
+    await expect(invite).toHaveCount(0);
+    // The ways in that were there stay: the Help menu still opens the practice window.
+    await page.locator("[data-help-menu-trigger]").click();
+    await expect(page.locator('[data-help-item="practice"]')).toBeVisible();
+  });
+});

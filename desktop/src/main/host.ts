@@ -1516,9 +1516,13 @@ export class DesktopHost {
     this.render();
   }
 
-  /** Help > Practice Hide and the empty Home: one practice window, opened or brought forward; only this window's shell is heard. */
+  /**
+   * Help > Practice Hide, the empty Home, the first run's last step and the sidebar's invitation: one practice
+   * window, opened or brought forward; only this window's shell is heard. A new window opens on `chapter` when
+   * one is asked for; an open one is told to play it by the shell itself (web `practice/channel.ts`).
+   */
   private listenPractice(): void {
-    ipcMain.on(PRACTICE_OPEN_CHANNEL, (event: IpcMainEvent, language: unknown) => {
+    ipcMain.on(PRACTICE_OPEN_CHANNEL, (event: IpcMainEvent, language: unknown, chapter: unknown) => {
       const origin = this.daemonOrigin();
       if (!this.fromShell(event) || !origin) {
         this.log.event("practice.refused", { reason: "sender" });
@@ -1528,7 +1532,7 @@ export class DesktopHost {
         this.present(this.practice, true);
         return;
       }
-      const url = practiceUrl(origin, language, process.platform);
+      const url = practiceUrl(origin, language, process.platform, chapter ?? undefined);
       if (typeof url !== "string") {
         this.log.event("practice.refused", { reason: url.refused });
         return;

@@ -75,7 +75,8 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
 
   useLayoutEffect(() => {
     const { rest, agents, focused, usage, frames } = chapter.world.snapshot(model, Date.now());
-    const ui_state = { ...rest.ui_state, ...operator };
+    // The practice screen is the practice: its sidebar never invites to practice.
+    const ui_state = { ...rest.ui_state, ...operator, practice_invite_closed: true };
     // A frame the world does not send is empty, so one chapter's files or records never show in the next.
     useShellStore.setState({
       rest: { ...rest, ui_state }, agents, connection: "live", focusedPaneId: focused, usage: usage ? { nodes: [usage] } : null,

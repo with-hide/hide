@@ -68,8 +68,23 @@ test("the wizard walks agents, notifications and the first project, never return
   await page.locator('[data-first-run-next="notifications"]').click();
 
   await expect(wizard).toHaveAttribute("data-first-run", "project");
+  // The last step asks how to start: each way is its own button, with no choice to confirm.
+  await expect(page.locator("[data-first-run-way]")).toHaveCount(2);
+  await screenshot(page, "first-run-start");
+  await page.locator('[data-first-run-way="project"]').click();
   await expect(page.locator("[data-add-project-browse]")).toBeVisible();
+  // A cancelled pick keeps Add project's views; their Back returns to the two ways, and the choice survives a reload.
+  await app.evaluate(({ dialog }) => {
+    dialog.showOpenDialog = (async () => ({ canceled: true, filePaths: [] })) as typeof dialog.showOpenDialog;
+  });
+  await page.locator("[data-add-project-browse]").click();
+  await expect(page.locator("[data-add-project-browse]")).toBeVisible();
+  await page.reload();
+  await expect(page.locator("[data-add-project-browse]")).toBeVisible({ timeout: 30_000 });
   await screenshot(page, "first-run-project");
+  await page.locator("[data-first-run-back]").click();
+  await expect(page.locator('[data-first-run-way="practice"]')).toBeVisible();
+  await expect(wizard).toHaveAttribute("data-first-run", "project");
   // B25: Skip for now ends it, and it does not return (B6).
   await page.locator("[data-first-run-skip]").click();
   await expect(wizard).toHaveCount(0);
@@ -132,6 +147,7 @@ test("the first project closes the wizard into the start panel on it, Start runs
   await expect(wizard).toHaveAttribute("data-first-run", "notifications", { timeout: 60_000 });
   await page.locator('[data-first-run-next="notifications"]').click();
   await expect(wizard).toHaveAttribute("data-first-run", "project");
+  await page.locator('[data-first-run-way="project"]').click();
   // The wizard keeps its own steps: its Host list has no Add device.
   await page.locator("[data-add-project-host]").click();
   await expect(page.locator("[data-host-option-add-device]")).toHaveCount(0);
@@ -184,6 +200,7 @@ test("with every agent off, the first project closes the wizard and opens no sta
   await expect(wizard).toHaveAttribute("data-first-run", "notifications", { timeout: 60_000 });
   await page.locator('[data-first-run-next="notifications"]').click();
   await expect(wizard).toHaveAttribute("data-first-run", "project");
+  await page.locator('[data-first-run-way="project"]').click();
 
   // B50: no agent on, so no panel opens on the project. (The fixture's shared Herdr runs agents, so the
   // Home here lists its tasks; the empty Home with no agent is B28's own check.)
@@ -192,4 +209,26 @@ test("with every agent off, the first project closes the wizard and opens no sta
   await expect(wizard).toHaveCount(0, { timeout: 20_000 });
   await expect(page.locator("[data-project-list]")).toContainText("alpha", { timeout: 20_000 });
   await expect(page.locator("[data-start-panel]")).toHaveCount(0);
+});
+
+test("practice first ends the wizard over the empty Home and opens the practice window on chapter 0", async () => {
+  let page;
+  ({ app, page } = await launch(run.env));
+  const wizard = page.locator("[data-first-run]");
+  await expect(wizard).toHaveAttribute("data-first-run", "agents", { timeout: 60_000 });
+  await page.locator("[data-onboarding-apply]").click();
+  await expect(wizard).toHaveAttribute("data-first-run", "notifications", { timeout: 60_000 });
+  await page.locator('[data-first-run-next="notifications"]').click();
+  await expect(wizard).toHaveAttribute("data-first-run", "project");
+  const opened = app.waitForEvent("window");
+  await page.locator('[data-first-run-way="practice"]').click();
+  const practice = await opened;
+  await expect(practice.locator('[data-practice-chapter="overview"]')).toBeVisible({ timeout: 30_000 });
+  expect(new URL(practice.url()).searchParams.get("chapter")).toBe("overview");
+  await expect(wizard).toHaveCount(0);
+  // Opening the chapter is practicing: the sidebar's invitation is gone with it.
+  await expect(page.locator("[data-practice-invite]")).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator("[data-main-screen], [data-workspace-screen]").first()).toBeVisible({ timeout: 30_000 });
+  await expect(wizard).toHaveCount(0);
 });

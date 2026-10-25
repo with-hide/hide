@@ -31,7 +31,20 @@ export type ShellAnswer = {
   color_theme: UiState["color_theme"];
 };
 
-export type PracticeMessage = { kind: "hello" } | ({ kind: "progress"; chapter: string } & ChapterProgress);
+/** The window's hello and the steps it reaches; the shell's ask to play a chapter in a window that is already open. */
+export type PracticeMessage = { kind: "hello" } | ({ kind: "progress"; chapter: string } & ChapterProgress) | { kind: "play"; chapter: string };
+
+/** The chapter a newcomer starts on: 0, the tour of the screen (`chapters/overview.ts`). */
+export const FIRST_CHAPTER = "overview";
+
+/**
+ * Whether the sidebar invites the operator to practice: never practiced (the
+ * core keeps no chapter's progress) and never closed with its ×. Opening any
+ * chapter writes progress, so the invitation goes with the first step.
+ */
+export function practiceInvited(ui: UiState | undefined): boolean {
+  return Object.keys(ui?.practice ?? {}).length === 0 && ui?.practice_invite_closed !== true;
+}
 
 /** The core fields an answer carries; a snapshot that moves none of them tells the practice window nothing. */
 const ANSWERED = ["practice", "interface_language", "shortcut_bindings", "browser_shortcut_bindings", "theme", "color_theme"] as const;
@@ -71,14 +84,25 @@ export function usePracticeChannel(actions: Actions): void {
   }, [actions]);
 }
 
-/** The practice address on this shell's origin, in the operator's language. */
-export function practiceAddress(language: string): string {
-  return `/?practice=1&lang=${encodeURIComponent(language)}`;
+/** The practice address on this shell's origin, in the operator's language, opening on `chapter` when one is named. */
+export function practiceAddress(language: string, chapter?: string): string {
+  const opening = chapter === undefined ? "" : `&chapter=${encodeURIComponent(chapter)}`;
+  return `/?practice=1&lang=${encodeURIComponent(language)}${opening}`;
 }
 
-/** Opens the practice window: the desktop app's own window, or a tab of its own in a browser (one per shell, reused). */
-export function openPractice(): void {
+/**
+ * Opens the practice window, or brings the open one forward: the desktop
+ * app's own window, or a tab of its own in a browser (one per shell, reused).
+ * With `chapter` the window plays that chapter: a new one from its address,
+ * one already open because it is told to here.
+ */
+export function openPractice(chapter?: string): void {
   const bridge = hostBridge();
-  if (bridge) bridge.openPractice(clientI18n.language);
-  else window.open(practiceAddress(clientI18n.language), PRACTICE_CHANNEL);
+  if (chapter !== undefined) {
+    const channel = new BroadcastChannel(PRACTICE_CHANNEL);
+    channel.postMessage({ kind: "play", chapter } satisfies PracticeMessage);
+    channel.close();
+  }
+  if (bridge) bridge.openPractice(clientI18n.language, chapter);
+  else window.open(practiceAddress(clientI18n.language, chapter), PRACTICE_CHANNEL);
 }
