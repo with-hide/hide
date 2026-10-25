@@ -486,6 +486,8 @@ it("draws each node's bar from its events: worked, review, a failed attempt and 
     node("a", { status: "done", started_at_unix_ms: at(10), finished_at_unix_ms: at(40), pr: 1, pr_state: "merged" }),
     node("b", { status: "working", started_at_unix_ms: at(20), attempts: 2 }),
     node("c", { status: "working", started_at_unix_ms: at(5) }),
+    // Worked before its events were kept; only its end was recorded.
+    node("d", { status: "done", started_at_unix_ms: at(2), finished_at_unix_ms: at(41) }),
   ];
   const events: MissionEvent[] = [
     { at_unix_ms: at(0), kind: "planned", count: 3 },
@@ -499,6 +501,7 @@ it("draws each node's bar from its events: worked, review, a failed attempt and 
     { at_unix_ms: at(35), kind: "asked", node: "b", line: "Keep the old flag?", options: ["Keep", "Drop"] },
     { at_unix_ms: at(40), kind: "node", node: "a", status: "done" },
     { at_unix_ms: at(40), kind: "pr_merged", node: "a", pr: 1 },
+    { at_unix_ms: at(41), kind: "node", node: "d", status: "done" },
   ];
   const map = await mount({ items: [mission({ nodes, started_at_unix_ms: start })] }, [], [], { mission_events: { mission: "mission-1", events, dropped: 3 } });
   try {
@@ -511,9 +514,10 @@ it("draws each node's bar from its events: worked, review, a failed attempt and 
     expect([...track("a").querySelectorAll("[data-flow-mark]")].map((mark) => mark.textContent)).toEqual(["⑂"]);
     expect([...track("b").querySelectorAll("[data-flow-mark]")].map((mark) => mark.textContent)).toEqual(["!"]);
     expect(map.q("[data-flow-axis-marks]")?.getAttribute("data-flow-axis-marks")).toBe("replanned");
-    // A node with no event of its own keeps the bar its times draw (B19).
+    // A node with no event that draws a stretch keeps the bar its times draw (B19).
     expect(track("c").getAttribute("data-flow-drawn")).toBe("times");
     expect(track("c").querySelector("[data-flow-bar]")).not.toBeNull();
+    expect(track("d").getAttribute("data-flow-drawn")).toBe("times");
     expect(map.q("[data-mission-flow-dropped]")?.textContent).toBe("3 earlier events omitted");
     await act(async () => (map.q('[data-flow-row="a"] button') as HTMLElement).click());
     const detail = map.q('[data-mission-detail="a"]')!;
@@ -539,9 +543,11 @@ it("shows a direct change's commit on main and a verify node's verdict as their 
     node("fix", { delivery: "direct", status: "done", branch: "fix/cache", commit: "abc1234def5678" }),
     node("check", { kind: "verify", delivery: null, status: "failed", verdict: "fail", checks: { passed: 3, total: 5 }, line: "2 failed" }),
     node("pass", { kind: "verify", delivery: null, status: "done", verdict: "pass", checks: null }),
+    node("late", { status: "working", started_at_unix_ms: Date.now() - 20 * 60_000 }),
   ];
   const closed = Date.now() - 5 * 60_000;
-  const map = await mount({ items: [mission({ status: "cancelled", nodes, closed_at_unix_ms: closed })] }, [], [], { mission_events: { mission: "mission-1", events: [{ at_unix_ms: closed, kind: "cancelled" }], dropped: 0 } });
+  const events: MissionEvent[] = [{ at_unix_ms: Date.now() - 20 * 60_000, kind: "node", node: "late", status: "working" }, { at_unix_ms: closed, kind: "cancelled" }];
+  const map = await mount({ items: [mission({ status: "cancelled", nodes, closed_at_unix_ms: closed })] }, [], [], { mission_events: { mission: "mission-1", events, dropped: 0 } });
   try {
     const result = (key: string) => map.q(`[data-mission-result-row="${key}"]`)?.textContent;
     expect(result("fix")).toContain("→ main abc1234");
@@ -550,5 +556,8 @@ it("shows a direct change's commit on main and a verify node's verdict as their 
     expect(map.q("[data-node-commit]")?.getAttribute("title")).toBe("abc1234def5678");
     expect(map.q("[data-mission-cancelled-at]")?.textContent).toMatch(/^Cancelled /);
     expect(map.q("[data-flow-axis-marks]")?.getAttribute("data-flow-axis-marks")).toBe("cancelled");
+    // A node the cancel stopped is grey, not the green of work, and nothing on it blinks (B24).
+    expect(map.q('[data-flow-track="late"] [data-flow-segment]')?.className).toContain("bg-mission-cancelled");
+    expect(map.q('[data-flow-track="late"] [data-flow-live]')).toBeNull();
   } finally { await map.unmount(); }
 });

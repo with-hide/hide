@@ -524,7 +524,7 @@ const zh: Catalog<typeof missionsEnglish> = {
   "mission.result.main": "→ main {{commit}}",
   "mission.result.pass": "PASS",
   "mission.result.fail": "FAIL",
-  "mission.banner.unsupported": "这个 Conductor 的代理只在对话中接收回答",
+  "mission.banner.unsupported": "这个 Conductor 的智能体只在对话中接收回答",
 };
 
 const ja: Catalog<typeof missionsEnglish> = {

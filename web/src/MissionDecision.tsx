@@ -74,7 +74,8 @@ export function DecisionBanner({ mission, device, actions }: { mission: Mission;
       setWriting(false);
     } else if (event.key === "Enter") {
       event.preventDefault();
-      const text = draft.trim();
+      // The core takes one line: a tab or another control character becomes a space.
+      const text = draft.replace(/\p{Cc}/gu, " ").trim();
       if (!text) return;
       actions.answerMission(mission.id, key, { text });
       setPressed({ key, text, failed: mission.answer_failed });

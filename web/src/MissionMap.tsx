@@ -114,7 +114,8 @@ function MissionBody({ mission, actions }: { mission: Mission; actions: Actions 
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto" data-mission={mission.id} data-mission-status={mission.status} data-mission-stale={mission.stale || undefined} data-mission-scroll="true">
       <Head mission={mission} zoom={mission.nodes.length > 0 ? zoom : null} onZoom={setZoom} />
       {mission.decision && open ? (
-        <DecisionBanner mission={mission} device={device} actions={actions} />
+        // A new question is a new banner: nothing written for the one before carries over to it (B26).
+        <DecisionBanner key={mission.question?.key ?? 0} mission={mission} device={device} actions={actions} />
       ) : takeover ? (
         <Banner
           mark={<span aria-hidden="true" className="size-(--size-agent-mark) shrink-0 rounded-full border border-dashed border-muted-foreground" />}
@@ -582,11 +583,13 @@ const SEGMENT_FILL: Record<SegmentTone, string> = {
 };
 
 /** A mark's glyph on a bar or the axis (B18). */
-const MARK_GLYPH: Record<FlowMarkKind, string> = { merged: "⑂", landed: "↓", asked: "!", replanned: "✎", cancelled: "×" };
+const MARK_GLYPH: Record<FlowMarkKind, string> = { merged: "⑂", landed: "↓", asked: "!", answered: "✓", undelivered: "⊘", replanned: "✎", cancelled: "×" };
 const MARK_TONE: Record<FlowMarkKind, string> = {
   merged: "text-pr-merged",
   landed: "text-mission-done",
   asked: "text-mission-hold",
+  answered: "text-mission-done",
+  undelivered: "text-mission-failed",
   replanned: "text-mission-review",
   cancelled: "text-mission-cancelled",
 };
@@ -671,8 +674,10 @@ function FlowRow({ mission, node, events, span, open, onOpen, actions }: { missi
   const row = useWorkerRow(node);
   const ref = useRef<HTMLButtonElement>(null);
   const tone = nodeTone(mission, node);
-  // With its events the bar is its stretches and marks (B18); without, one bar from its times (B19).
-  const drawn = events ? nodeSegments(mission, node, events, span) : null;
+  // With its events the bar is its stretches and marks (B18); without, or with none that
+  // draws a stretch (its early events dropped or recorded before them), one bar from its times (B19).
+  const segmented = events ? nodeSegments(mission, node, events, span) : null;
+  const drawn = segmented && segmented.segments.length > 0 ? segmented : null;
   const marks = drawn && events ? nodeMarks(node, events, span) : [];
   const bar = drawn ? null : nodeBar(node, span);
   const liveEnd = drawn?.live ? drawn.segments[drawn.segments.length - 1] : null;
@@ -701,7 +706,8 @@ function FlowRow({ mission, node, events, span, open, onOpen, actions }: { missi
           {drawn?.segments.map((segment, index) => (
             <span
               key={index}
-              className={cn("absolute top-1/2 h-(--size-flow-bar) -translate-y-1/2 rounded-xs", SEGMENT_FILL[segment.tone])}
+              // A cancelled mission's unfinished node is grey whatever it did before (B24).
+              className={cn("absolute top-1/2 h-(--size-flow-bar) -translate-y-1/2 rounded-xs", tone === "cancelled" ? TONE_FILL.cancelled : SEGMENT_FILL[segment.tone])}
               style={{ left: `${segment.left}%`, width: `max(${segment.width}%, var(--size-hairline))` }}
               data-flow-segment={segment.tone}
             />

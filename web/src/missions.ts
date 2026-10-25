@@ -337,8 +337,13 @@ export function missionEventsOf(rest: SnapshotRest | null | undefined, missionId
 
 /** One stretch of a node's bar (B18): worked, in review, an attempt that failed, or stopped on a decision or a free place. */
 export type SegmentTone = "worked" | "review" | "failed" | "paused";
-/** A mark on a bar or on the axis (B18): ⑂ a merge, ↓ main, ! a decision, ✎ a replan, × the cancel. */
-export type FlowMarkKind = "merged" | "landed" | "asked" | "replanned" | "cancelled";
+/** A mark on a bar or on the axis (B18, B31): ⑂ a merge, ↓ main, ! a decision, ✓ its answer, ⊘ an answer not delivered, ✎ a replan, × the cancel. */
+export type FlowMarkKind = "merged" | "landed" | "asked" | "answered" | "undelivered" | "replanned" | "cancelled";
+
+/** The marks a decision leaves, wherever it sits. */
+function decisionMark(event: MissionEvent): FlowMarkKind | null {
+  return event.kind === "asked" ? "asked" : event.kind === "answered" ? "answered" : event.kind === "answer_undelivered" ? "undelivered" : null;
+}
 
 /** Where on the axis a moment falls, as a percentage. */
 function axisAt(at: number, span: { from: number; to: number }): number {
@@ -375,15 +380,15 @@ export function nodeSegments(mission: Mission, node: MissionNode, events: Missio
 export function nodeMarks(node: MissionNode, events: MissionEvent[], span: { from: number; to: number }): { at: number; kind: FlowMarkKind; event: MissionEvent }[] {
   return events.flatMap((event) => {
     if (event.node !== node.key) return [];
-    const kind: FlowMarkKind | null = event.kind === "pr_merged" ? "merged" : event.kind === "landed" ? "landed" : event.kind === "asked" ? "asked" : null;
+    const kind: FlowMarkKind | null = event.kind === "pr_merged" ? "merged" : event.kind === "landed" ? "landed" : decisionMark(event);
     return kind ? [{ at: axisAt(event.at_unix_ms, span), kind, event }] : [];
   });
 }
 
-/** The marks on the axis itself (B18, B24): each replan, a decision that named no node, and the cancel. */
+/** The marks on the axis itself (B18, B24, B31): each replan, a decision that named no node with its answer, and the cancel. */
 export function axisMarks(events: MissionEvent[], span: { from: number; to: number }): { at: number; kind: FlowMarkKind; event: MissionEvent }[] {
   return events.flatMap((event) => {
-    const kind: FlowMarkKind | null = event.kind === "replanned" ? "replanned" : event.kind === "asked" && !event.node ? "asked" : event.kind === "cancelled" ? "cancelled" : null;
+    const kind: FlowMarkKind | null = event.kind === "replanned" ? "replanned" : event.kind === "cancelled" ? "cancelled" : event.node ? null : decisionMark(event);
     return kind ? [{ at: axisAt(event.at_unix_ms, span), kind, event }] : [];
   });
 }
