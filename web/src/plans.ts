@@ -1,5 +1,6 @@
 import type { TFunction } from "i18next";
-import { layerDependencies, type LayeredGraph } from "./projectBoard";
+import type { LegendTone } from "./missions";
+import { layerDependencies, orderByDependencies, type LayeredGraph } from "./projectBoard";
 import type { PlanStep, PlanView, RowMark, SnapshotRest, WorkSession } from "./snapshot";
 
 // A session's own plan (PRD hide-plan): what the chip, the map and a
@@ -59,4 +60,24 @@ export function stepMark(step: PlanStep): RowMark {
 export function planGraph(plan: PlanView): LayeredGraph<PlanStep> {
   const byKey = new Map(plan.steps.map((step) => [step.key, step]));
   return layerDependencies(plan.steps, (step) => step.key, (step) => step.depends_on.flatMap((key) => byKey.get(key) ?? []));
+}
+
+/** The steps as the checklist reads them (PRD mission-plan-visibility B3): by what they wait on, a step beside an earlier one at its depth indented. */
+export function planChecklist(plan: PlanView): { step: PlanStep; parallel: boolean }[] {
+  return orderByDependencies(plan.steps, (step) => step.key, (step) => step.depends_on).map(({ item, parallel }) => ({ step: item, parallel }));
+}
+
+/**
+ * The chip's cells (B1): one per step still in the plan, in the checklist's
+ * order, done green, the current step blue or, while the plan waits for its
+ * review, in the warning colour; a dropped step has no cell.
+ */
+export function planCells(plan: PlanView): LegendTone[] {
+  const review = planProposed(plan);
+  return planChecklist(plan).flatMap(({ step }): LegendTone[] => {
+    if (step.status === "dropped") return [];
+    if (step.status === "done") return ["done"];
+    if (step.key === plan.progress.current && !plan.progress.finished) return [review ? "hold" : "working"];
+    return [step.status === "working" ? "working" : "waiting"];
+  });
 }

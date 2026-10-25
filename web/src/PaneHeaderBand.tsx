@@ -28,6 +28,7 @@ import { statusText } from "./agentStatus";
 import { StatusMark } from "./components/status-mark";
 import { PaneTurnCard, requestWords, type TurnCardTrigger } from "./PaneTurnCard";
 import { planOfPane, planWorkLine } from "./plans";
+import { missionOfPane, missionWorkLine } from "./missions";
 import type { PaneTurnRowMode } from "./generated/hided-ws";
 
 /** The View menu's turn row mode; absent reads as one line. */
@@ -108,7 +109,13 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
     const plan = planOfPane(state.rest, paneId);
     return plan ? planWorkLine(plan) : null;
   });
-  const ownProgress = band || off ? null : planLine ?? header?.progress ?? null;
+  // A Conductor's pane says its waiting decision, else the nodes a worker is
+  // at, and nothing when no node runs: the mission line owns the place, so
+  // the Conductor's own plan or progress does not stand in (PRD
+  // mission-plan-visibility B9, D-21).
+  const mission = useShellStore((state) => missionOfPane(state.rest, allAgents(state.agents, state.rest?.status?.remote), paneId));
+  const missionLine = mission ? missionWorkLine(mission, t) : null;
+  const ownProgress = band || off ? null : mission ? missionLine?.text ?? null : planLine ?? header?.progress ?? null;
   const request = off ? null : header?.request ?? null;
   const finished = !band && !off && (header?.finished ?? false);
   const waitingOnChildren = band || off ? null : header?.waiting_on_children ?? null;
@@ -124,7 +131,7 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
     {band ? <AskBand paneId={paneId} band={band} navigation={navigation} unreachable={unreachable} failed={progress?.phase === "failed"} actions={actions} hasTree={children !== null} /> : <>
       {finished ? <span className="shrink-0 font-medium text-success" data-pane-finished={paneId}>{t("paneTurn.finished")}</span> : null}
       {waitingOnChildren ? <span className="min-w-0 flex-1 truncate" data-pane-children-wait={paneId}>{[statusText(t, "waiting"), t("agents.line.children", { count: waitingOnChildren })].join(" · ")}</span> : null}
-      {ownProgress ? <Hint label={ownProgress}><span className="min-w-0 flex-1 truncate" data-pane-own-progress={paneId}>{ownProgress}</span></Hint> : null}
+      {ownProgress ? <Hint label={ownProgress}><span className={cn("min-w-0 flex-1 truncate", missionLine?.decision && "text-mission-hold")} data-pane-own-progress={paneId} data-pane-mission-line={missionLine ? (missionLine.decision ? "decision" : "running") : undefined}>{ownProgress}</span></Hint> : null}
       {childConnection ? <span className={cn("min-w-0 truncate", ownProgress ? "max-w-1/4 shrink" : "flex-1")} title={childConnection} data-pane-child-connection={paneId}>{childConnection}</span> : null}
     </>}
     {band?.action ? <button type="button" data-pane-band-open={paneId} disabled={unreachable !== null || progress?.phase === "pending" || (progress?.phase === "failed" && !progress.retryable)} aria-busy={progress?.phase === "pending"} className="shrink-0 rounded-xs border border-border bg-background px-xs py-xxs text-micro text-foreground outline-none hover:brightness-95 focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50" onClick={() => actions.followRelation(paneId, band.action!.pane_id, band.action!.label)}>{progress?.phase === "failed" && progress.retryable ? t("common.retry") : t("common.open")}</button> : null}

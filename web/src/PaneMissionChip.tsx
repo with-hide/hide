@@ -1,29 +1,31 @@
-import { ChevronRightIcon, WaypointsIcon } from "lucide-react";
-import { useMemo } from "react";
+import { CheckIcon, ChevronRightIcon, WaypointsIcon } from "lucide-react";
 import type { Actions } from "./actions";
-import { DependencyGraphView, type EdgeLook } from "./DependencyGraph";
-import type { GraphEdge } from "./dependencyLayout";
+import { formatElapsed } from "./components/elapsed";
+import { ProgressCells, TONE_TEXT } from "./components/mission-tone";
 import { StatusMark } from "./components/status-mark";
-import { Kbd } from "./components/ui/kbd";
 import { Popover, PopoverAnchor, PopoverContent } from "./components/ui/popover";
 import { useInterfaceTranslation } from "./i18n/client";
+import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
-import { useWorkerRow } from "./MissionMap";
+import { useWorkerRow, ResultTail } from "./MissionMap";
 import { allAgents } from "./paneAgents";
-import { MINI_REPORT, missionMiniGraph, missionOfPane, missionOpen, nodeMark, paneChipWords, type MiniCard } from "./missions";
+import { liveNodes, missionCells, missionOfPane, missionOpen, missionResults, missionTally, nodeMark, paneChipWords, stageWord, type PaneChipState } from "./missions";
 import { PanePlanChip, usePaneChipPopover } from "./PanePlanChip";
 import { machineName } from "./screenMachine";
 import type { Mission, MissionNode } from "./snapshot";
-import { commandLabel } from "./shortcutLabels";
 import { useShellStore } from "./store";
 
-// A Conductor pane's mission chip and its small map (PRD mission-pane-chip
-// D-01, D-04, D-05, D-07-D-10, D-16): in the plan chip's place, the same
-// pointer, pin and Esc rules, the nodes still to do top down into the
-// report, and `크게 ›` for the big map in the lane's 보기 slot.
+// A Conductor pane's mission chip and its popover (PRD mission-pane-chip
+// D-01, D-07; PRD mission-plan-visibility B8, B10, B11): in the plan chip's
+// place, the same pointer, pin and Esc rules, the nodes a worker is at now
+// while the mission runs, what it left once it ends, and `크게 ›` for the
+// big map in the lane's 보기 slot. The map itself is drawn only there.
 
-/** A done node draws one dot up to this many; the count says the rest. */
-const DONE_DOTS = 10;
+/** A finished mission's popover lists this many results; `+N` says the rest (B11). */
+export const POPOVER_RESULTS = 3;
+
+/** A finished mission's popover quotes this many lines of the Conductor's report (B11). */
+const REPORT_LINES = 2;
 
 /** The mission the pane's session conducts, as its sidebar row finds it; none while the record cannot be read. */
 export function usePaneMission(paneId: string): Mission | null {
@@ -36,22 +38,24 @@ export function PaneWorkChip({ paneId, actions }: { paneId: string; actions: Act
   return mission ? <PaneMissionChip paneId={paneId} mission={mission} actions={actions} /> : <PanePlanChip paneId={paneId} actions={actions} />;
 }
 
-const CHIP_TONE: Record<ReturnType<typeof paneChipWords>["state"], string> = {
+const CHIP_TONE: Record<PaneChipState, string> = {
   planning: "",
   running: "text-foreground",
-  // The state keeps its colour while the map is open, over the open chip's ring (approved board 3).
-  decision: "border-warning text-warning data-[state=open]:border-warning data-[state=open]:text-warning",
+  // The state keeps its colour while the popover is open, over the open chip's ring (approved board 3).
+  decision: "border-mission-hold text-mission-hold data-[state=open]:border-mission-hold data-[state=open]:text-mission-hold",
   merge_wait: "text-foreground",
-  done: "border-success text-success data-[state=open]:border-success data-[state=open]:text-success",
-  cancelled: "",
+  done: "text-mission-done data-[state=open]:text-mission-done",
+  cancelled: "text-mission-cancelled",
 };
 
 function PaneMissionChip({ paneId, mission, actions }: { paneId: string; mission: Mission; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const chip = usePaneChipPopover(paneId, true);
   const words = paneChipWords(mission);
-  const state = [t(words.key), words.counts].filter(Boolean).join(" ");
+  const [first] = liveNodes(mission);
+  const state = [t(words.key), words.counts, first ? t("mission.pane.now", { title: first.title }) : null].filter(Boolean).join(" ");
   const label = t("mission.pane.label", { title: mission.title, state });
+  const Mark = words.state === "done" ? CheckIcon : WaypointsIcon;
   return (
     <Popover {...chip.popover}>
       <PopoverAnchor asChild>
@@ -65,8 +69,9 @@ function PaneMissionChip({ paneId, mission, actions }: { paneId: string; mission
             CHIP_TONE[words.state],
           )}
         >
-          <WaypointsIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
+          <Mark aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
           <span className="whitespace-nowrap">{t(words.key)}</span>
+          {mission.nodes.length > 0 ? <ProgressCells tones={missionCells(mission)} size="chip" /> : null}
           {words.counts ? <span className="font-mono tabular-nums">{words.counts}</span> : null}
         </button>
       </PopoverAnchor>
@@ -78,7 +83,7 @@ function PaneMissionChip({ paneId, mission, actions }: { paneId: string; mission
         data-pane-mission={mission.id}
         {...chip.content}
       >
-        <MiniMap
+        <MissionPopover
           paneId={paneId}
           mission={mission}
           onLarge={() => {
@@ -89,36 +94,26 @@ function PaneMissionChip({ paneId, mission, actions }: { paneId: string; mission
             chip.close();
             actions.openAgent(paneId);
           }}
-          onRecord={
-            mission.conductor.session
-              ? () => {
-                  chip.close();
-                  if (mission.conductor.session) actions.openSessionRecord(mission.conductor.session);
-                }
-              : null
-          }
         />
       </PopoverContent>
     </Popover>
   );
 }
 
-/** The popover's body: its head, the decision, the done line, the small map and the record (B5-B10). */
-export function MiniMap({ paneId, mission, onLarge, onConversation, onRecord }: { paneId: string; mission: Mission; onLarge: () => void; onConversation: () => void; onRecord: (() => void) | null }) {
+/**
+ * The popover's body: an open mission's head, its decision, the nodes a
+ * worker is at and one tally line (B10); a finished or cancelled mission's
+ * head, its report's first lines and what it left (B11). No record footer:
+ * the pane ⋯ menu and the sidebar row open the record (B7).
+ */
+export function MissionPopover({ paneId, mission, onLarge, onConversation }: { paneId: string; mission: Mission; onLarge: () => void; onConversation: () => void }) {
   const { t } = useInterfaceTranslation();
   const device = useShellStore((s) => (mission.stale ? machineName(s.rest?.navigator?.devices, mission.device_id, t) : null));
-  const { done, graph, stacked } = useMemo(() => missionMiniGraph(mission), [mission]);
-  // The head reads the mission's own state; the decision has its own words beside it.
-  const head = paneChipWords({ ...mission, decision: null });
-  const deciding = mission.decision !== null && missionOpen(mission);
+  const ended = mission.status === "done" || mission.status === "cancelled";
   return (
-    <div className="flex min-w-0 flex-col [word-break:keep-all]" data-mission-mini={paneId}>
+    <div className="flex min-w-0 flex-col gap-xs pb-sm [word-break:keep-all]" data-mission-popover={paneId} data-mission-popover-state={ended ? mission.status : "open"}>
       <div className="flex min-w-0 items-center gap-xs px-sm pt-sm">
-        <span className="min-w-0 flex-1 truncate text-muted-foreground" data-mission-mini-head={head.state}>
-          {t(head.key)}
-          {head.counts ? <span className="ml-xxs font-semibold tabular-nums text-foreground">{head.counts}</span> : null}
-          {deciding ? <span className="text-warning"> · {t("mission.pane.decision")}</span> : null}
-        </span>
+        <span className="min-w-0 flex-1 truncate">{ended ? <EndedHead mission={mission} /> : <OpenHead mission={mission} />}</span>
         <button
           type="button"
           className="flex shrink-0 items-center gap-xxs rounded-xs px-xs py-xxs text-primary outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring"
@@ -129,9 +124,53 @@ export function MiniMap({ paneId, mission, onLarge, onConversation, onRecord }: 
           <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />
         </button>
       </div>
+      {device ? <p className="px-sm text-muted-foreground" data-mission-stale-note="true">{t("mission.stale", { device })}</p> : null}
+      <div className={cn("flex min-w-0 flex-col gap-xs", mission.stale && "opacity-(--opacity-dimmed)")}>
+        {ended ? <EndedBody mission={mission} /> : <OpenBody mission={mission} onConversation={onConversation} />}
+      </div>
+    </div>
+  );
+}
+
+/** `미션 n/m` while it runs, else the chip's own state word (B10). */
+function OpenHead({ mission }: { mission: Mission }) {
+  const { t } = useInterfaceTranslation();
+  // The head reads the mission's own state; the decision has its own line below it.
+  const head = paneChipWords({ ...mission, decision: null });
+  return (
+    <span className="text-muted-foreground" data-mission-mini-head={head.state}>
+      {t(head.key)}
+      {head.counts ? <span className="ml-xxs font-semibold tabular-nums text-foreground">{head.counts}</span> : null}
+    </span>
+  );
+}
+
+/** `✓ 끝남 · <걸린 시간>`, or the cancelled mission's grey `취소` (B11). */
+function EndedHead({ mission }: { mission: Mission }) {
+  const { t, i18n } = useInterfaceTranslation();
+  const done = mission.status === "done";
+  const took = mission.started_at_unix_ms != null && mission.closed_at_unix_ms != null ? formatElapsed(requireInterfaceLanguage(i18n.language), mission.closed_at_unix_ms - mission.started_at_unix_ms) : null;
+  return (
+    <span className="flex min-w-0 items-center gap-xs" data-mission-mini-head={mission.status}>
+      <span className={cn("flex shrink-0 items-center gap-xxs font-semibold", done ? TONE_TEXT.done : TONE_TEXT.cancelled)}>
+        {done ? <CheckIcon aria-hidden="true" className="size-(--size-icon-sm)" /> : null}
+        {t(done ? "mission.pill.done" : "mission.pill.cancelled")}
+      </span>
+      {took ? <span className="truncate text-muted-foreground" data-mission-mini-took="true">· {took}</span> : null}
+    </span>
+  );
+}
+
+function OpenBody({ mission, onConversation }: { mission: Mission; onConversation: () => void }) {
+  const { t } = useInterfaceTranslation();
+  const live = liveNodes(mission);
+  const { done, next } = missionTally(mission);
+  const deciding = mission.decision !== null && missionOpen(mission);
+  return (
+    <>
       {deciding ? (
-        <div className="mx-sm mt-xs flex min-w-0 items-center gap-xs rounded-md border border-warning px-sm py-xs" data-mission-mini-decision="true">
-          <span className="min-w-0 flex-1 truncate text-warning" title={mission.decision ?? undefined}>
+        <div className="mx-sm flex min-w-0 items-center gap-xs rounded-md border border-mission-hold px-sm py-xs" data-mission-mini-decision="true">
+          <span className="min-w-0 flex-1 truncate text-mission-hold" title={mission.decision ?? undefined}>
             <span aria-hidden="true" className="font-semibold">! </span>
             {mission.decision}
           </span>
@@ -140,106 +179,59 @@ export function MiniMap({ paneId, mission, onLarge, onConversation, onRecord }: 
           </button>
         </div>
       ) : null}
-      {device ? <p className="px-sm pt-xs text-muted-foreground" data-mission-stale-note="true">{t("mission.stale", { device })}</p> : null}
-      {done > 0 ? (
-        <button type="button" className="mx-sm mt-xs flex w-fit items-center gap-xs rounded-xs px-xxs py-xxs text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring" onClick={onLarge} data-mission-mini-done={done}>
-          <span aria-hidden="true" className="flex items-center gap-xxs">
-            {Array.from({ length: Math.min(done, DONE_DOTS) }, (_, index) => (
-              <span key={index} className="size-(--size-status-mark) rounded-full bg-success" />
-            ))}
-          </span>
-          <span>{t("mission.mini.done", { count: done })}</span>
-          <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />
-        </button>
-      ) : null}
-      <div className={cn("overflow-x-auto px-sm py-sm", mission.stale && "opacity-(--opacity-dimmed)")}>
-        {mission.nodes.length === 0 ? (
-          <p className="text-muted-foreground" data-mission-mini-planning="true">{t("mission.planning")}</p>
-        ) : graph.layers.length === 0 ? (
-          <ReportFace mission={mission} />
-        ) : (
-          <DependencyGraphView
-            graph={graph}
-            idOf={(card) => card.key}
-            flow="down"
-            gaps={{ layers: "--spacing-lg", nodes: "--spacing-sm" }}
-            // A row reads its first card, then the `+N` card for the rest (B8).
-            order="given"
-            edgeLook={(edge: GraphEdge): EdgeLook => edgeLookOf(edge, mission, stacked)}
-            draw={(card) => <MiniFace key={card.key} mission={mission} card={card} />}
-          />
-        )}
-      </div>
-      {onRecord ? (
-        <div className="border-t border-border p-xxs">
-          <button
-            type="button"
-            className="flex w-full items-center justify-between gap-sm rounded-xs px-xs py-xs text-left outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring"
-            onClick={onRecord}
-            data-mission-mini-record="true"
-          >
-            <span>{t("mission.mini.record")}</span>
-            <Kbd>{commandLabel("toggle_plan")}</Kbd>
-          </button>
-        </div>
-      ) : null}
-    </div>
+      {mission.nodes.length === 0 ? (
+        <p className="px-sm text-muted-foreground" data-mission-mini-planning="true">{t("mission.planning")}</p>
+      ) : (
+        <>
+          {live.length > 0 ? (
+            <ul className="flex min-w-0 flex-col px-xs">
+              {live.map((node) => <LiveRow key={node.key} node={node} />)}
+            </ul>
+          ) : null}
+          <p className="px-sm text-muted-foreground" data-mission-mini-tally={`${done} ${next}`}>{t("mission.mini.tally", { done, next })}</p>
+        </>
+      )}
+    </>
   );
 }
 
-function edgeLookOf(edge: GraphEdge, mission: Mission, stacked: ReadonlySet<string>): EdgeLook {
-  // A stack's edge: the pull request below is the one above's base (B7).
-  if (stacked.has(`${edge.from}>${edge.to}`)) return { tone: "text-pr-merged", dashed: true };
-  const from = mission.nodes.find((node) => node.key === edge.from);
-  if (from && (from.status === "working" || from.status === "review")) return { tone: "text-agent-working" };
-  // A line still ahead stays bright on the popover, as the plan's small map draws it.
-  return { tone: "text-muted-foreground" };
-}
-
-const FACE = "flex w-(--size-plan-node-compact) min-w-0 items-center gap-xs rounded-md border border-border bg-card px-xs py-xxs text-left";
-/** A card still waiting: dashed in the colour the plan's waiting steps use, which reads on the popover. */
-const PENDING = "border-dashed border-muted-foreground bg-transparent";
-const pending = (node: MissionNode) => node.status === "planned" || node.blocked !== null;
-
-function MiniFace({ mission, card }: { mission: Mission; card: MiniCard }) {
-  const { t } = useInterfaceTranslation();
-  if (card.kind === "node") return <NodeFace node={card.node} />;
-  if (card.kind === "report") return <ReportFace mission={mission} />;
-  const titles = card.nodes.map((node) => node.title).join(", ");
-  return (
-    <span data-dependency-node={card.key} data-mission-mini-more={card.nodes.length} className={cn(FACE, card.nodes.every(pending) && PENDING)} title={titles}>
-      <span className="min-w-0 flex-1 truncate">{t("mission.mini.more", { count: card.nodes.length })}</span>
-      {/* The folded titles, read out where the pointer's title cannot reach. */}
-      <span className="sr-only">: {titles}</span>
-    </span>
-  );
-}
-
-/** One node in one line: its status mark, its title and its pull request (D-16). */
-function NodeFace({ node }: { node: MissionNode }) {
+/** A node a worker is at: its mark, its title, its PR number and where its work is (B10). */
+function LiveRow({ node }: { node: MissionNode }) {
   const { t } = useInterfaceTranslation();
   const row = useWorkerRow(node);
-  const live = node.status === "working" || node.status === "review";
   return (
-    <span
-      data-dependency-node={node.key}
-      data-mission-mini-node={node.key}
-      data-node-status={node.status}
-      className={cn(FACE, pending(node) && PENDING, live && "border-agent-working", node.status === "failed" && "border-destructive")}
-    >
+    <li className="flex min-w-0 items-center gap-xs rounded-xs px-xs py-xxs" data-mission-mini-node={node.key} data-node-status={node.status}>
       <StatusMark mark={nodeMark(node, row?.mark ?? null)} label={t(`mission.status.${node.status}`)} />
       <span className="min-w-0 flex-1 truncate" title={node.title}>{node.title}</span>
       {node.pr != null ? <span className="shrink-0 font-mono text-micro text-muted-foreground" data-node-pr={node.pr}>#{node.pr}</span> : null}
-    </span>
+      <span className="shrink-0 text-micro text-muted-foreground" data-node-stage={node.stage ?? 0}>{t(stageWord(node))}</span>
+    </li>
   );
 }
 
-function ReportFace({ mission }: { mission: Mission }) {
+function EndedBody({ mission }: { mission: Mission }) {
   const { t } = useInterfaceTranslation();
-  const done = mission.status === "done" || mission.status === "merge_wait";
+  const results = missionResults(mission);
+  const shown = results.slice(0, POPOVER_RESULTS);
+  const lines = mission.report?.split("\n").filter((line) => line.trim() !== "").slice(0, REPORT_LINES) ?? [];
   return (
-    <span data-dependency-node={MINI_REPORT} data-mission-mini-report={mission.status} className={cn(FACE, "justify-center text-muted-foreground", !done && PENDING)}>
-      <span className="truncate">{t("mission.report")}</span>
-    </span>
+    <>
+      {lines.length > 0 ? (
+        <div className="mx-sm flex min-w-0 flex-col rounded-md border-l-2 border-mission-done bg-muted px-sm py-xs" data-mission-mini-report="true">
+          {lines.map((line, index) => <p key={index} className={cn("min-w-0 break-words", index > 0 && "text-muted-foreground")}>{line}</p>)}
+        </div>
+      ) : null}
+      {shown.length > 0 ? (
+        <ul className="flex min-w-0 flex-col gap-xxs px-sm" data-mission-mini-results={results.length}>
+          {shown.map(({ node, result }) => (
+            <li key={node.key} className="flex min-w-0 items-center gap-xs" data-mission-mini-result={node.key}>
+              <ResultTail result={result} stale={mission.github_stale} />
+              <span className="min-w-0 flex-1 truncate text-muted-foreground" title={node.title}>{node.title}</span>
+            </li>
+          ))}
+          {results.length > shown.length ? <li className="text-muted-foreground" data-mission-mini-more={results.length - shown.length}>{t("mission.mini.more", { count: results.length - shown.length })}</li> : null}
+        </ul>
+      ) : null}
+    </>
   );
 }

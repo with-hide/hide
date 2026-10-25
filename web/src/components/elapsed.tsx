@@ -49,6 +49,11 @@ export function useElapsed(since: number | null | undefined): string | null {
   return useSyncExternalStore(subscribe, () => (since == null ? null : formatElapsed(language, (timer === null ? Date.now() : now) - since)));
 }
 
+/** Now on the same clock, to the minute, so a time axis re-renders once a minute rather than every second. */
+export function useMinuteClock(): number {
+  return useSyncExternalStore(subscribe, () => Math.floor((timer === null ? Date.now() : now) / 60_000) * 60_000);
+}
+
 /**
  * The time left before `deadline` on the same clock, in the largest whole
  * unit rounded up (a Factory question's 21h left); `past` once it passed and

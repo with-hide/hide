@@ -7,7 +7,7 @@ import { LEAD, PLAN_WORLD, planInSlot, type PlanModel } from "../worlds/plan";
 
 const PANE = `[data-pane-view="${LEAD}"]`;
 const CHIP = `${PANE} [data-pane-plan-chip]`;
-/** The small map's `크게 ›`, or, when the learner closed the map, the chip that opens it again. */
+/** The checklist's `크게 ›`, or, when the learner closed it, the chip that opens it again. */
 const LARGE = `[data-pane-plan-large], body:not(:has([data-pane-plan-large])) ${CHIP}`;
 const say = (text: string) => ({ type: { pane: LEAD, text } });
 
@@ -21,7 +21,7 @@ export default chapter<PlanModel>({
     { id: "intro", target: PANE, side: "inside" },
     // Any words ask: the agent puts its plan up for review before it changes anything.
     { id: "ask", quest: true, target: PANE, side: "inside", gesture: say("Make payment retries back off and read the count from settings. Plan it first and let me review it"), done: (model) => model.stage >= 1 },
-    // Pointing at the chip, pressing it or the chord opens the small map; the shell opens it with no core event.
+    // Pointing at the chip, pressing it or the chord opens the checklist; the shell opens it with no core event.
     { id: "chip", quest: true, target: CHIP, side: "bottom", command: "toggle_plan", shown: `[data-pane-plan="${LEAD}"]` },
     { id: "large", target: LARGE, side: "right", gesture: { click: true }, done: planInSlot },
     { id: "review", target: '[data-plan-banner="review"]', side: "left" },

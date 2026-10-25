@@ -6,6 +6,7 @@ import { createActions } from "./actions";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { initializeInterfaceI18n } from "./i18n/instance";
 import { PanePlanChip } from "./PanePlanChip";
+import { PlanChecklist } from "./PlanChecklist";
 import { PlanMap } from "./PlanMap";
 import { planNowLine, planWorkLine } from "./plans";
 import type { AgentRow, PlanStep, PlanView, SnapshotRest } from "./snapshot";
@@ -78,40 +79,93 @@ async function mount(plans: PlanView[], what: "chip" | "map" = "chip") {
   return { container, actions, events, chip, popover, unmount: async () => { await act(async () => root.unmount()); } };
 }
 
-it("shows n/m while the plan runs, 검토 while it waits for review, green m/m once finished, and nothing without a plan (B7, B21)", async () => {
+const cells = (view: { chip: () => HTMLButtonElement | null }) => view.chip()?.querySelector<HTMLElement>("[data-progress-cells]")?.dataset.progressCells;
+
+it("says 계획 with a cell per step and n/m while the plan runs, 검토 while it waits for review, a green m/m once finished, and nothing without a plan (PRD mission-plan-visibility B1, B36; hide-plan B7, B21)", async () => {
   const running = await mount([plan()]);
   try {
-    expect(running.chip()?.textContent).toBe("1/3");
+    expect(running.chip()?.textContent).toBe("Plan1/3");
     expect(running.chip()?.getAttribute("data-plan-chip-state")).toBe("running");
+    // A dropped step has no cell; the current one is blue, the rest still ahead empty.
+    expect(cells(running)).toBe("done working waiting");
+    // The cells are not read out, so the name carries the exact count and the step.
+    expect(running.chip()?.getAttribute("aria-label")).toBe("Plan 1/3, now core title");
   } finally { await running.unmount(); }
   const proposed = await mount([plan({ review: "proposed" })]);
   try {
     expect(proposed.chip()?.textContent).toBe("Review");
+    expect(cells(proposed)).toBe("done hold waiting");
+    expect(proposed.chip()?.className).toContain("text-mission-hold");
     expect(proposed.chip()?.getAttribute("aria-label")).toBe("Plan waiting for review · 3 steps");
   } finally { await proposed.unmount(); }
-  const finished = await mount([plan({ progress: { current: null, next: null, done: 3, total: 3, finished: true } })]);
+  const finished = await mount([plan({ steps: plan().steps.map((one) => (one.status === "dropped" ? one : { ...one, status: "done" as const })), progress: { current: null, next: null, done: 3, total: 3, finished: true } })]);
   try {
-    expect([finished.chip()?.textContent, finished.chip()?.getAttribute("data-plan-chip-state")]).toEqual(["3/3", "finished"]);
+    expect([finished.chip()?.textContent, finished.chip()?.getAttribute("data-plan-chip-state")]).toEqual(["Plan3/3", "finished"]);
+    expect(cells(finished)).toBe("done done done");
+    expect(finished.chip()?.className).toContain("text-mission-done");
   } finally { await finished.unmount(); }
+  // A long plan keeps its width: each run of one state is one stretch, and the count stays exact.
+  const many = Array.from({ length: 30 }, (_, index) => step(`s${index}`, index < 12 ? "done" : index === 12 ? "working" : "planned"));
+  const long = await mount([plan({ steps: many, progress: { current: "s12", next: "s13", done: 12, total: 30, finished: false } })]);
+  try {
+    expect(long.chip()?.querySelectorAll("[data-progress-cells] > span")).toHaveLength(3);
+    expect(long.chip()?.textContent).toBe("Plan12/30");
+  } finally { await long.unmount(); }
   const none = await mount([]);
   try {
     expect(none.chip()).toBeNull();
   } finally { await none.unmount(); }
 });
 
-it("opens a small map, never a list, whose Larger opens the plan in the 보기 slot (B7, B11, D-29)", async () => {
-  const view = await mount([plan()]);
+it("opens a checklist in the order the steps wait on, never a map or a record footer, whose Larger opens the plan in the 보기 slot (PRD mission-plan-visibility B3, B4, B7; hide-plan B11, D-29)", async () => {
+  const view = await mount([plan({ steps: [...plan().steps.slice(0, 3), step("docs", "dropped", ["spec"], { changed: true, change: "folded into web" })] })]);
   try {
     expect(view.popover()).toBeNull();
     await act(async () => view.chip()!.focus());
-    const steps = [...view.popover()!.querySelectorAll<HTMLElement>("[data-plan-step]")];
-    expect(steps.map((node) => [node.dataset.planStep, node.dataset.stepStatus])).toEqual([["spec", "done"], ["core", "working"], ["docs", "dropped"], ["web", "planned"]]);
-    expect(view.popover()!.querySelector("[data-plan-graph=compact]")).not.toBeNull();
-    expect(view.popover()!.querySelector("[data-step-current]")?.getAttribute("data-plan-step")).toBe("core");
-    expect(view.popover()!.querySelector("[data-plan-summary]")?.textContent).toBe("Plan1/3· updated 5m ago");
-    await act(async () => view.popover()!.querySelector<HTMLButtonElement>("[data-pane-plan-large]")!.click());
+    const popover = view.popover()!;
+    const rows = [...popover.querySelectorAll<HTMLElement>("[data-plan-row]")];
+    expect(rows.map((row) => [row.dataset.planRow, row.dataset.stepStatus, row.dataset.stepParallel ?? null])).toEqual([["spec", "done", null], ["core", "working", null], ["docs", "dropped", "true"], ["web", "planned", null]]);
+    expect(popover.querySelector("[data-step-current]")?.getAttribute("data-plan-row")).toBe("core");
+    expect(popover.querySelector("[data-step-current]")?.textContent).toBe("core titleNow");
+    // Every title whole, a PR tail, a dropped step struck through, the changed step's mark reachable by the keyboard.
+    expect(popover.querySelector("[data-plan-row=web]")?.textContent).toBe("web titlePR");
+    expect(popover.querySelector("[data-plan-row=docs]")?.className).toContain("line-through");
+    expect(popover.querySelector<HTMLElement>("[data-plan-row=docs] [data-step-changed]")?.tabIndex).toBe(0);
+    expect(popover.querySelector(".truncate")).toBeNull();
+    expect(popover.querySelector("[data-plan-graph]")).toBeNull();
+    expect(popover.querySelector("[data-pane-plan-record]")).toBeNull();
+    expect(popover.querySelector("[data-plan-summary]")?.textContent).toBe("Plan1/3· updated 5m ago");
+    await act(async () => popover.querySelector<HTMLButtonElement>("[data-pane-plan-large]")!.click());
     expect(view.events.at(-1)).toEqual({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "plan", session: SESSION } } });
   } finally { await view.unmount(); }
+});
+
+it("folds a finished plan's steps into one line with the time it took and what it left (B6)", async () => {
+  const steps = [step("spec", "done", [], { output: "file" }), step("core", "done", ["spec"]), step("web", "done", ["core"], { output: "pr" }), step("docs", "dropped", ["spec"], { output: "pr" })];
+  const view = await mount([plan({ steps, progress: { current: null, next: null, done: 3, total: 3, finished: true }, created_at_unix_ms: 0, updated_at_unix_ms: 2 * 3_600_000 })]);
+  try {
+    await act(async () => view.actions.togglePlanChip());
+    const popover = view.popover()!;
+    expect(popover.querySelector("[data-plan-summary]")?.textContent).toBe("Plan finished3/3· 2h");
+    expect(popover.querySelector("[data-plan-done-steps]")?.textContent).toBe("3 steps done");
+    expect(popover.querySelector("[data-plan-row]")).toBeNull();
+    // A dropped step's output was never made.
+    expect([...popover.querySelectorAll<HTMLElement>("[data-plan-output-row]")].map((row) => row.textContent)).toEqual(["spec titlefile", "web titlePR"]);
+  } finally { await view.unmount(); }
+});
+
+it("lists every step of a finished plan outside the popover, where the plan is read afterwards (B6)", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  initializeInterfaceI18n("en");
+  const steps = [step("spec", "done", [], { output: "file" }), step("core", "done", ["spec"]), step("docs", "dropped", ["spec"])];
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  await act(async () => root.render(<TooltipProvider><PlanChecklist plan={plan({ steps, progress: { current: null, next: null, done: 2, total: 2, finished: true } })} /></TooltipProvider>));
+  try {
+    expect(container.querySelector("[data-plan-done-steps]")).toBeNull();
+    expect([...container.querySelectorAll<HTMLElement>("[data-plan-row]")].map((row) => [row.dataset.planRow, row.dataset.stepStatus])).toEqual([["spec", "done"], ["core", "done"], ["docs", "dropped"]]);
+  } finally { await act(async () => root.unmount()); }
 });
 
 it("pins on ⇧⌘U's action and closes on the second, and a pane with no plan pins nothing", async () => {

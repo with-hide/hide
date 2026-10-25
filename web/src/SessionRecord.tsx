@@ -25,7 +25,7 @@ import { recordDate } from "./sessionRecordTime";
 import { machineName } from "./screenMachine";
 import { localDeviceId } from "./snapshot";
 import type { AgentRow, Checkout, FlowResult, MissedWork, PlanView, PrSettlement, SessionRecord as RecordValue, WorkEnd, WorkOutput, WorkRequest, WorkSession } from "./snapshot";
-import { PlanGraph } from "./PlanGraph";
+import { PlanChecklist } from "./PlanChecklist";
 import { planCount, planOfSession, planWorkLine } from "./plans";
 import { statusText } from "./agentStatus";
 import { askSubjectText } from "./askSubject";
@@ -335,12 +335,12 @@ function OutputMark({ output, actions }: { output: WorkOutput; actions: Actions 
   </button>;
 }
 
-/** The session's own plan (PRD hide-plan B9, B21): its count, `끝남` once every step is done or dropped, and the map. */
+/** The session's own plan (PRD hide-plan B9, B21; PRD mission-plan-visibility D-07): its count, `끝남` once every step is done or dropped, and the checklist. */
 function RecordPlan({ plan }: { plan: PlanView }) {
   const { t } = useInterfaceTranslation();
   return <section className="mt-lg min-w-0" data-record-plan={plan.progress.finished ? "finished" : plan.review}>
     <SectionHead label={t("plan.title")} count={planCount(plan)} summary={plan.progress.finished ? t("plan.finishedWord") : null} />
-    <div className="min-w-0 overflow-x-auto"><PlanGraph plan={plan} size="compact" /></div>
+    <div className="min-w-0 text-caption"><PlanChecklist plan={plan} /></div>
   </section>;
 }
 

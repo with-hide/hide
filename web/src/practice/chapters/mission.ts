@@ -1,5 +1,5 @@
 // Chapter 8: handing a Conductor a job of several pull requests as a mission,
-// opening its small map from the pane's mission chip, answering the one
+// opening its popover from the pane's mission chip, answering the one
 // decision it asks in the conversation, and reading the mission's big map in
 // the 보기 slot.
 
@@ -8,9 +8,9 @@ import { CONDUCTOR, MISSION_WORLD, missionInSlot, type MissionModel } from "../w
 
 const PANE = `[data-pane-view="${CONDUCTOR}"]`;
 const CHIP = `${PANE} [data-pane-mission-chip]`;
-/** The small map's `크게 ›`, or, when the learner closed the map, the chip that opens it again. */
+/** The popover's `크게 ›`, or, when the learner closed it, the chip that opens it again. */
 const LARGE = `[data-mission-mini-large], body:not(:has([data-mission-mini-large])) ${CHIP}`;
-/** The small map's decision line, or, when the learner closed the map, the pane the answer is typed into. */
+/** The popover's decision line, or, when the learner closed it, the pane the answer is typed into. */
 const DECISION = `[data-mission-mini-decision], body:not(:has([data-mission-mini-decision])) ${PANE}`;
 const say = (text: string) => ({ type: { pane: CONDUCTOR, text } });
 
@@ -24,7 +24,7 @@ export default chapter<MissionModel>({
     { id: "intro", target: PANE, side: "inside" },
     // Any words make the mission: the Conductor plans it, starts its workers, and asks one decision.
     { id: "ask", quest: true, target: PANE, side: "inside", gesture: say("/hide-conductor Make payment retries configurable with backoff and docs, as 3 PRs. Start once the plan is up"), done: (model) => model.stage >= 1 },
-    // The chip and its small map, which a first plan that lands while the learner looks at the pane opens once,
+    // The chip and its popover, which a first plan that lands while the learner looks at the pane opens once,
     // pinned (missionReveal.ts). A look: ⏎ pressing the chord here would close a map the plan left pinned.
     { id: "chip", target: `${CHIP}, [data-pane-mission]`, side: "bottom", command: "toggle_plan" },
     // The decision is answered in the conversation: whatever the learner says, the Conductor changes the plan on it.
