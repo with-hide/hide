@@ -15,7 +15,7 @@ use super::Runtime;
 use crate::delivery::Actor;
 use crate::mission_events::EventLog;
 use crate::missions::{
-    Blocked, Checks, Conductor, ConductorSettings, Delivery, MISSION_LIMIT, Mission, MissionBook,
+    AnswerFailure, Blocked, Checks, Conductor, ConductorSettings, Delivery, MISSION_LIMIT, Mission, MissionBook,
     MissionCommand, MissionEnd, MissionNode, MissionScope, MissionStatus, NodeKind, NodeStatus,
     PENDING_WAKE_LIMIT, PendingWake, PrSeen, Question, Restored, Verdict, WakeEvent, Worker,
 };
@@ -200,6 +200,9 @@ pub(crate) struct MissionRuntime {
     /// waiting for the Conductor's turn (B28). Memory only; a restart shows
     /// an answer as sending until the next pass holds it again.
     pub(crate) answers_held: std::collections::HashSet<String>,
+    /// When each mission's Conductor was first seen missing while its
+    /// answer waited; only those missions are kept.
+    pub(crate) answer_absent_since: HashMap<String, u64>,
     /// The mission and events edit the published events were made from.
     pub(crate) events_made: (Option<String>, u64),
 }
@@ -577,13 +580,11 @@ impl Runtime {
                 if report.is_some() {
                     target.report = report;
                 }
-                if status != MissionStatus::MergeWait {
-                    target.decision = None;
-                    target.question = None;
-                    target.answer = None;
-                    target.answer_failed = None;
-                    target.delay = None;
-                }
+                let ended = if status == MissionStatus::MergeWait {
+                    Vec::new()
+                } else {
+                    super::mission_events::end_decision(target, now)
+                };
                 target.closed_at_unix_ms = Some(now);
                 target.updated_at_unix_ms = now;
                 if status == MissionStatus::Cancelled {
@@ -591,7 +592,11 @@ impl Runtime {
                     target.wakes.clear();
                 }
                 let changed = *target != before;
-                let events = super::mission_events::close_events(&before, target, now);
+                let mut events = super::mission_events::close_events(&before, target, now);
+                events.extend(ended);
+                if !target.status.open() {
+                    self.missions.answers_held.remove(&id);
+                }
                 crate::diagnostic!(json!({
                     "component": "missions", "kind": "mission.closed",
                     "mission": id, "end": status,
@@ -977,6 +982,8 @@ impl Runtime {
         let now = super::memory::now_ms();
         let mut recorded = Vec::new();
         let mut reopened = Vec::new();
+        // Missions a merge finished, with what ending their decision records.
+        let mut ended = Vec::new();
         let mut changed = false;
         for index in 0..self.missions.book.missions.len() {
             let mission = &self.missions.book.missions[index];
@@ -1073,8 +1080,7 @@ impl Runtime {
                 mission.status = MissionStatus::Done;
                 mission.closed_at_unix_ms = Some(now);
                 mission.updated_at_unix_ms = now;
-                mission.decision = None;
-                mission.delay = None;
+                ended.push((mission.id.clone(), super::mission_events::end_decision(mission, now)));
                 crate::diagnostic!(json!({
                     "component": "missions", "kind": "mission.closed_by_merge", "mission": mission.id,
                 }));
@@ -1105,6 +1111,10 @@ impl Runtime {
                     "mission": mission.id, "count": dropped, "cap": PENDING_WAKE_LIMIT,
                 }));
             }
+        }
+        for (id, events) in ended {
+            self.missions.answers_held.remove(&id);
+            self.record_mission_events(&id, events);
         }
         for id in reopened {
             // Two done missions of one Conductor changed in one read: the
@@ -1415,16 +1425,9 @@ impl Runtime {
             check: mission.check.clone(),
             github: mission.github.clone(),
             decision: mission.decision.clone(),
-            question: mission.decision.as_ref().map(|_| {
-                mission.question.clone().unwrap_or(Question {
-                    key: 0,
-                    why: None,
-                    options: Vec::new(),
-                    recommend: None,
-                    node: None,
-                    asked_at_unix_ms: mission.updated_at_unix_ms,
-                })
-            }),
+            // A decision from before questions has nothing beside its line
+            // and no time it was asked (answered under key 0).
+            question: mission.decision.as_ref().and(mission.question.clone()),
             answer: mission.answer.as_ref().map(|answer| AnswerView {
                 key: answer.key,
                 text: answer.text.clone(),
@@ -1437,7 +1440,13 @@ impl Runtime {
                     AnswerState::Sending
                 },
             }),
-            answer_failed: mission.answer_failed,
+            // A reason holds only while its cause does: a Conductor that took
+            // the mission over, or a device back, can be answered again (B39).
+            answer_failed: mission.answer_failed.filter(|failure| match failure {
+                AnswerFailure::ConductorGone => !self.conductor_present(&mission.conductor.actor),
+                AnswerFailure::DeviceDisconnected => self.mission_stale(mission),
+                AnswerFailure::SendFailed => true,
+            }),
             delay: mission.delay.clone(),
             report: mission.report.clone(),
             created_at_unix_ms: mission.created_at_unix_ms,

@@ -22,6 +22,8 @@ use crate::missions::NodeStatus;
 
 /// Events one mission keeps; past this the oldest goes (B21).
 pub const EVENT_LIMIT: usize = 500;
+/// The longest line an event keeps.
+const LINE_LIMIT: usize = 600;
 /// 500 events of a few hundred bytes each, with room to spare.
 const READ_CAP: u64 = 2 * 1024 * 1024;
 const SCHEMA_VERSION: u32 = 1;
@@ -99,8 +101,10 @@ impl MissionEvent {
         self
     }
 
+    /// The event's one line, cut to `LINE_LIMIT` characters, so a long
+    /// report or question never makes the file too large to read back.
     pub(crate) fn line(mut self, line: Option<&str>) -> Self {
-        self.line = line.map(str::to_owned);
+        self.line = line.and_then(|line| crate::display_text::one_line(line, LINE_LIMIT));
         self
     }
 }
@@ -221,6 +225,34 @@ impl MissionEventStore {
             }
         }
         out
+    }
+
+    /// Deletes the files of missions the book no longer holds (D-22): a
+    /// delete that failed, or a stop between the book's save and the
+    /// delete, is finished at the next start. Called only with a book that
+    /// was read, so an unreadable one deletes nothing.
+    pub(crate) fn sweep<'a>(&self, missions: impl Iterator<Item = &'a str>) {
+        let kept: std::collections::HashSet<&str> = missions.collect();
+        let entries = match std::fs::read_dir(&self.dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(error) => {
+                crate::diagnostic!(json!({
+                    "component": "missions", "kind": "mission_events.sweep_failed",
+                    "message": error.to_string(),
+                }));
+                return;
+            }
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(id) = name.to_str().and_then(|name| name.strip_suffix(".json")) else {
+                continue;
+            };
+            if !kept.contains(id) {
+                self.remove(id);
+            }
+        }
     }
 
     pub(crate) fn save(&self, mission: &str, log: Arc<EventLog>) {
@@ -346,6 +378,20 @@ mod tests {
         assert_eq!(restored.get("mission-1"), Some(&log));
         assert!(!restored.contains_key("mission-2"));
         assert!(!folder.join("mission-2.json").exists());
+    }
+
+    #[test]
+    fn a_start_deletes_the_files_of_missions_the_book_no_longer_holds() {
+        let dir = tempfile::tempdir().unwrap();
+        for id in ["mission-1", "mission-2"] {
+            std::fs::write(dir.path().join(format!("{id}.json")), r#"{"schema_version":1,"events":[]}"#).unwrap();
+        }
+        {
+            let store = MissionEventStore::new(dir.path().to_path_buf());
+            store.sweep(["mission-1"].into_iter());
+        }
+        assert!(dir.path().join("mission-1.json").exists());
+        assert!(!dir.path().join("mission-2.json").exists());
     }
 
     #[test]

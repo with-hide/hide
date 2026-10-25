@@ -345,6 +345,7 @@ impl Core {
             );
             let logs = match &restored {
                 crate::missions::Restored::Read(book) => {
+                    events.sweep(book.missions.iter().map(|mission| mission.id.as_str()));
                     events.restore(book.missions.iter().map(|mission| mission.id.as_str()))
                 }
                 _ => std::collections::HashMap::new(),

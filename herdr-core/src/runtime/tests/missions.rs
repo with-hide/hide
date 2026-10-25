@@ -1476,8 +1476,17 @@ fn an_answer_whose_conductor_left_or_whose_question_changed_is_not_delivered() {
     command(&mut runtime, "sender", json!({"op": "decide", "line": "Merge now?"})).unwrap();
     assert!(runtime.missions.book.missions[0].answer.is_none());
     assert!(runtime.mission_answer_event("mission-1", 2, None, Some("yes".into())));
-    // Its pane closed before the answer reached it (D-30).
+    // Its pane closed before the answer reached it (D-30): a short absence
+    // only waits, as after a restart before the panes are read again.
+    let observed = runtime.delivery_observations.remove("sender").unwrap();
+    assert!(runtime.mission_answers_due().is_empty());
+    assert!(runtime.missions.book.missions[0].answer.is_some());
+    runtime.delivery_observations.insert("sender".into(), observed);
+    assert_eq!(runtime.mission_answers_due().len(), 1);
+    assert!(runtime.missions.answer_absent_since.is_empty());
     runtime.delivery_observations.remove("sender");
+    assert!(runtime.mission_answers_due().is_empty());
+    *runtime.missions.answer_absent_since.get_mut("mission-1").unwrap() -= 30_000;
     assert!(runtime.mission_answers_due().is_empty());
     let mission = &runtime.missions.book.missions[0];
     assert_eq!((mission.answer.is_none(), mission.answer_failed), (true, Some(AnswerFailure::ConductorGone)));
@@ -1485,8 +1494,13 @@ fn an_answer_whose_conductor_left_or_whose_question_changed_is_not_delivered() {
     // With no Conductor there, the banner's answer is refused with its reason.
     assert!(runtime.mission_answer_event("mission-1", 2, None, Some("yes".into())));
     assert_eq!(runtime.missions.book.missions[0].answer_failed, Some(AnswerFailure::ConductorGone));
+    runtime.refresh_missions();
+    assert_eq!(runtime.snapshot.missions.items[0].answer_failed, Some(AnswerFailure::ConductorGone));
     // A question cleared with no banner answer was answered in the conversation.
     command(&mut runtime, "recipient", json!({"op": "take", "mission": "mission-1"})).unwrap();
+    // The reason holds only while no Conductor is there (B39).
+    runtime.refresh_missions();
+    assert_eq!(runtime.snapshot.missions.items[0].answer_failed, None);
     command(&mut runtime, "recipient", json!({"op": "decide", "line": null})).unwrap();
     assert_eq!(
         runtime.missions.events["mission-1"].events.last().unwrap().source,

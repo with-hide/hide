@@ -160,7 +160,9 @@ impl Runtime {
         for event in events {
             log.push(event);
         }
-        if log.dropped != before {
+        // The first drop and each hundredth after it, so a full log does not
+        // write a line per event.
+        if log.dropped != before && (before == 0 || log.dropped / 100 != before / 100) {
             crate::diagnostic!(json!({
                 "component": "missions", "kind": "mission_events.dropped",
                 "mission": mission, "dropped": log.dropped,
@@ -229,16 +231,19 @@ impl Runtime {
         }
         let mut events = Vec::new();
         let key_before = mission.question.as_ref().map_or(0, |question| question.key);
+        let asked = mission.question.as_ref().and_then(|question| question.node.clone());
         if let Some(answer) = mission.answer.as_ref().filter(|answer| answer.key == key_before) {
             if !answer.delivered {
                 // The Conductor changed its question before reading this.
-                events.push(
-                    MissionEvent::new(now, EventKind::AnswerUndelivered).line(Some(&answer.text)),
-                );
+                let mut event =
+                    MissionEvent::new(now, EventKind::AnswerUndelivered).line(Some(&answer.text));
+                event.node = asked;
+                events.push(event);
             }
         } else if line.is_none() && mission.decision.is_some() {
             let mut event = MissionEvent::new(now, EventKind::Answered);
             event.source = Some(AnswerSource::Conversation);
+            event.node = asked;
             events.push(event);
         }
         let target = self.missions.book.get_mut(id).ok_or("mission_unknown")?;
@@ -376,19 +381,32 @@ impl Runtime {
     }
 
     /// The answers the doorbell is to type now. An answer whose Conductor
-    /// is gone is dropped here: the banner goes back to before it was sent
-    /// and the history says it was not delivered (D-30, B39).
+    /// has been gone for `ABSENT_GRACE_MS` is dropped here: the banner goes
+    /// back to before it was sent and the history says it was not delivered
+    /// (D-30, B39). A shorter absence, such as the panes not yet read after
+    /// a restart or a Herdr reconnect, only waits, as a letter does.
     pub(crate) fn mission_answers_due(&mut self) -> Vec<AnswerWork> {
         let now = super::memory::now_ms();
         let language = self.interface_language();
         let mut due = Vec::new();
         let mut gone = Vec::new();
+        let mut absent = Vec::new();
         for mission in &self.missions.book.missions {
             let Some(answer) = mission.answer.as_ref().filter(|answer| !answer.delivered) else {
                 continue;
             };
-            if !mission.status.open() || !self.conductor_present(&mission.conductor.actor) {
-                gone.push((mission.id.clone(), answer.text.clone()));
+            let asked = mission.question.as_ref().and_then(|question| question.node.clone());
+            if !mission.status.open() {
+                gone.push((mission.id.clone(), answer.text.clone(), asked));
+                continue;
+            }
+            if !self.conductor_present(&mission.conductor.actor) {
+                let since = self.missions.answer_absent_since.get(&mission.id).copied().unwrap_or(now);
+                if now.saturating_sub(since) >= ABSENT_GRACE_MS {
+                    gone.push((mission.id.clone(), answer.text.clone(), asked));
+                } else {
+                    absent.push((mission.id.clone(), since));
+                }
                 continue;
             }
             due.push(AnswerWork {
@@ -399,7 +417,10 @@ impl Runtime {
                 line: answer_line(mission.decision.as_deref().unwrap_or_default(), &answer.text, language),
             });
         }
-        for (id, text) in gone {
+        // Only the missions still waiting on an absent Conductor keep the
+        // time it went, so the map stays bounded by the open answers.
+        self.missions.answer_absent_since = absent.into_iter().collect();
+        for (id, text, asked) in gone {
             if let Some(mission) = self.missions.book.get_mut(&id) {
                 mission.answer = None;
                 mission.answer_failed = Some(AnswerFailure::ConductorGone);
@@ -410,10 +431,9 @@ impl Runtime {
                 "mission": id, "reason": "conductor_gone",
             }));
             self.save_missions();
-            self.record_mission_events(
-                &id,
-                vec![MissionEvent::new(now, EventKind::AnswerUndelivered).line(Some(&text))],
-            );
+            let mut event = MissionEvent::new(now, EventKind::AnswerUndelivered).line(Some(&text));
+            event.node = asked;
+            self.record_mission_events(&id, vec![event]);
             self.announce_missions();
         }
         due
@@ -444,7 +464,10 @@ impl Runtime {
     /// The doorbell held an answer: the banner shows it waits for the
     /// Conductor's turn (B28).
     pub(crate) fn mission_answer_held(&mut self, mission: &str) -> bool {
-        if !self.missions.answers_held.insert(mission.to_owned()) {
+        let waiting = self.missions.book.get(mission).is_some_and(|mission| {
+            mission.status.open() && mission.answer.as_ref().is_some_and(|answer| !answer.delivered)
+        });
+        if !waiting || !self.missions.answers_held.insert(mission.to_owned()) {
             return false;
         }
         self.missions.book_edit = self.missions.book_edit.wrapping_add(1);
@@ -481,7 +504,8 @@ impl Runtime {
             return;
         };
         self.missions.answers_held.remove(id);
-        let event = match result {
+        let asked = mission.question.as_ref().and_then(|question| question.node.clone());
+        let mut event = match result {
             Ok(()) => {
                 answer.delivered = true;
                 let mut event = MissionEvent::new(now, EventKind::Answered).line(Some(&answer.text));
@@ -499,6 +523,7 @@ impl Runtime {
                 MissionEvent::new(now, EventKind::AnswerUndelivered).line(Some(&text))
             }
         };
+        event.node = asked;
         self.save_missions();
         self.record_mission_events(id, vec![event]);
         self.announce_missions();
@@ -551,6 +576,28 @@ pub(crate) fn close_events(before: &Mission, after: &Mission, now: u64) -> Vec<M
         out.push(MissionEvent::new(now, EventKind::Cancelled));
     }
     out
+}
+
+/// How long a Conductor may be missing before an answer waiting for it is
+/// dropped as not delivered: longer than a restart takes to read the panes
+/// again, or a Herdr reconnect.
+const ABSENT_GRACE_MS: u64 = 30_000;
+
+/// Ends a mission's decision with the mission (B29, D-30): clears the
+/// question, the answer and why one failed, and records an answer not yet
+/// typed as not delivered.
+pub(crate) fn end_decision(mission: &mut Mission, now: u64) -> Vec<MissionEvent> {
+    let asked = mission.question.as_ref().and_then(|question| question.node.clone());
+    let undelivered = mission.answer.take().filter(|answer| !answer.delivered).map(|answer| {
+        let mut event = MissionEvent::new(now, EventKind::AnswerUndelivered).line(Some(&answer.text));
+        event.node = asked;
+        event
+    });
+    mission.decision = None;
+    mission.question = None;
+    mission.answer_failed = None;
+    mission.delay = None;
+    undelivered.into_iter().collect()
 }
 
 /// A node's pull request merged, as GitHub answered (B31).
