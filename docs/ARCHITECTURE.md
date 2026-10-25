@@ -12,9 +12,15 @@ The core owns the persisted `ui_state.product_analytics_enabled` choice, default
 The web shell emits `product_analytics_connected` once after its first snapshot per page lifetime, without recounting WebSocket reconnects.
 The router's content-free `AiUsageSink::started` callback runs immediately before each actual backend invocation, including retries and fallbacks; joined duplicate requests, admission refusals and calls cancelled before invocation add none.
 This counts invocations, not successful answers or billed calls, and is separate from the local usage ledger.
-`herdr-core/src/product_analytics.rs` admits only `hide_connected` and `hide_ai_called` and accepts no caller-supplied properties.
-The daemon's `product_analytics` worker sends those event names, a random installation UUID, an event UUID and timestamp to PostHog US over TLS; the only properties are `distinct_id`, `$process_person_profile: false`, `$geoip_disable: true` and `$ip: null`.
-No prompt, response, conversation, code, path, file name, provider, model, token count, account identity, device name or local usage ledger enters that transport.
+`hide_agent_started` counts native agent conversations, not panes, turns or launches: the link worker sends it when `apply_panes` writes `pane_first_at` on a `links.sqlite3` session row that had none, the first time any Hide pane on any device carried that session, whether the operator typed the agent or `hide agent spawn` started it.
+The column outlives the daemon, so a restart, a reboot that restores panes, a released tab attached again, a window reload, a resume or a wake of the same session finds it set and sends nothing; a shell pane carries no session and sends nothing.
+The worker applies the pane facts as soon as their set changes and again every 60 seconds, so the event lags the core learning the pane's session by at most one link-worker pass.
+Version 11 of the store marks every session row it already held, so an upgrade sends nothing for sessions seen before it.
+Two recounts are accepted: a row that retention or an archive delete removes is first again if a pane carries that session later, and a store set aside as corrupt and rebuilt counts the sessions its panes then carry once more.
+`herdr-core/src/product_analytics.rs` admits only `hide_connected`, `hide_ai_called` and `hide_agent_started`, and accepts no caller-supplied properties; the agent is a `hide_session::Agent`, and a kind the session reader does not name sends nothing.
+The daemon's `product_analytics` worker sends those event names, a random installation UUID, an event UUID and timestamp to PostHog US over TLS.
+Every event's properties are exactly `distinct_id`, `$process_person_profile: false`, `$geoip_disable: true`, `$ip: null`, `app_version` (the build's `HIDE_BUILD_VERSION`, which `hide --version` reports) and `os` (`macos`, `linux` or `windows`, fixed by the compile target); `hide_agent_started` adds `agent`, one of `codex`, `claude`, `grok`, `pi`, `omp`, `cursor`, `opencode` or `antigravity`, spelled in that module.
+No prompt, response, conversation, code, path, file name, session id, provider, model, project name, token count, account identity, device name or local usage ledger enters that transport.
 The private `product-analytics-id` file under the core state directory holds the random UUID; it derives from neither the account nor hardware, and remains stable across restarts and moves with the core's state.
 The server necessarily observes the connection's source IP; project-side Discard client IP data complements the event flags, and this design does not assert that the events are legally anonymous or that opt-out is sufficient in every jurisdiction.
 The owning operator must disclose the purpose, data fields, US destination and opt-out in the product's privacy notice, and assess prior consent where applicable.
@@ -23,7 +29,7 @@ Its owner joins it outside `Mutex<Runtime>`; transport failure, a full queue or 
 An already-started send may finish after opt-out; nothing observed while disabled is retained or replayed on re-enable.
 The worker is enabled from persisted state before AI workers start; an absent build token, a privileged device fixture HOME or a HOME carrying `~/.hide/product-analytics-disabled` starts no transport.
 All browser/desktop and package smoke fixture homes write that disable-only marker on every system; it grants no fixture service-control authority.
-See [the build input](BUILD.md#product-analytics-build-input) and [Settings](UI_BEHAVIOR.md#privacy); transport tests use a real loopback HTTP peer, router tests distinguish invocations from retries and cancellation, and the Settings journey restarts the daemon after an opt-out.
+See [the build input](BUILD.md#product-analytics-build-input) and [Settings](UI_BEHAVIOR.md#privacy); transport tests use a real loopback HTTP peer and pin each event's exact properties, router tests distinguish invocations from retries and cancellation, a core test restarts on the same state to show one session counts once, and the Settings journey restarts the daemon after an opt-out.
 
 ## State placement and publication
 

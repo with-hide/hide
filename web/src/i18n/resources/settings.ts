@@ -3,7 +3,7 @@ import type { Catalog, Catalogs } from "../schema";
 export const settingsEnglish = {
   "settings.tabs.privacy": "Privacy",
   "settings.productAnalytics": "Share usage statistics",
-  "settings.productAnalyticsDetail": "Collects connection and AI call counts. No conversations or code are sent.",
+  "settings.productAnalyticsDetail": "Collects connection, AI call and agent start counts with the app version and OS. No conversations or code are sent.",
 
   "settings.close": "Close Settings",
   "settings.section": "Settings section",
@@ -133,7 +133,7 @@ export const settingsEnglish = {
 const ko = {
   "settings.tabs.privacy": "개인정보",
   "settings.productAnalytics": "사용 통계 보내기",
-  "settings.productAnalyticsDetail": "접속 횟수와 AI 호출 횟수를 모아요. 대화 내용과 코드는 보내지 않아요.",
+  "settings.productAnalyticsDetail": "접속, AI 호출, 에이전트 시작 횟수와 앱 버전·OS를 모아요. 대화 내용과 코드는 보내지 않아요.",
 
   "settings.close": "설정 닫기",
   "settings.section": "설정 항목",
@@ -263,7 +263,7 @@ const ko = {
 const ja = {
   "settings.tabs.privacy": "プライバシー",
   "settings.productAnalytics": "利用統計を送信",
-  "settings.productAnalyticsDetail": "接続と AI の呼び出し回数を収集します。会話やコードは送信しません。",
+  "settings.productAnalyticsDetail": "接続、AI の呼び出し、エージェント起動の回数とアプリのバージョン・OS を収集します。会話やコードは送信しません。",
 
   "settings.close": "設定を閉じる",
   "settings.section": "設定項目",
@@ -393,7 +393,7 @@ const ja = {
 const zhCN = {
   "settings.tabs.privacy": "隐私",
   "settings.productAnalytics": "发送使用统计",
-  "settings.productAnalyticsDetail": "收集连接和 AI 调用次数。不发送对话或代码。",
+  "settings.productAnalyticsDetail": "收集连接、AI 调用和智能体启动次数，以及应用版本和操作系统。不发送对话或代码。",
 
   "settings.close": "关闭设置",
   "settings.section": "设置分类",

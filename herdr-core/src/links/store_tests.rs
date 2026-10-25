@@ -1592,3 +1592,44 @@ fn a_record_from_before_named_pull_requests_reads_its_files_again_and_finds_them
         vec![("s-review", SessionRole::Worked, Some("7번 리뷰해 줘"))]
     );
 }
+
+/// `pane_first_at` (version 11): an upgrade marks every session the record
+/// already held, so only a session no pane carried before is first, once.
+#[test]
+fn a_session_is_first_carried_once_and_an_upgrade_marks_every_held_session() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("links.sqlite3");
+    let (store, _) = LinkStore::open(&path).unwrap();
+    store
+        .connection
+        .execute_batch(
+            "ALTER TABLE sessions DROP COLUMN pane_first_at; PRAGMA user_version=10;
+             INSERT INTO sessions(device,agent,id,started_at) VALUES('local','claude','held',1000);",
+        )
+        .unwrap();
+    drop(store);
+    let (mut store, _) = LinkStore::open(&path).unwrap();
+    let pane = |id: &str| PaneFact {
+        device_id: DEVICE.into(),
+        agent: "claude".into(),
+        session_id: id.into(),
+        cwd: ROOT.into(),
+        branch: None,
+    };
+    let first = store.apply_panes(&[pane("held"), pane("new")], T0).unwrap();
+    assert_eq!(
+        first
+            .iter()
+            .map(|s| s.session_id.as_str())
+            .collect::<Vec<_>>(),
+        ["new"]
+    );
+    drop(store);
+    let (mut store, _) = LinkStore::open(&path).unwrap();
+    assert!(
+        store
+            .apply_panes(&[pane("held"), pane("new")], T0 + MIN)
+            .unwrap()
+            .is_empty()
+    );
+}

@@ -2627,7 +2627,7 @@ A stored value this build does not know opens Hide with only the `ui_state.color
 ### Privacy
 
 Privacy is the last Settings tab and holds Send usage statistics, enabled by default and disabled while disconnected.
-Its short note says that connection and AI call counts are collected and that conversations and code are not sent.
+Its short note says that connection, AI call and agent start counts are collected with the app version and operating system, and that conversations and code are not sent.
 The core persists the choice, shares it between windows and preserves it against stale generic UI saves.
 Turning it off discards waiting events and prevents new ones; a request already in flight may finish, and turning it back on never replays disabled events.
 Product analytics has no autocapture, session recording, person profiles or location enrichment; [the architecture contract](ARCHITECTURE.md#product-usage-statistics) owns the PostHog US destination, exact wire fields and worker limits.

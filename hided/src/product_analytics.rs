@@ -11,6 +11,13 @@ use serde_json::json;
 const ENDPOINT: &str = "https://us.i.posthog.com/i/v0/e/";
 const QUEUE_LIMIT: usize = 128;
 const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
+/// The system this build runs on; a build for any other target fails here.
+#[cfg(target_os = "macos")]
+const OS: &str = "macos";
+#[cfg(target_os = "linux")]
+const OS: &str = "linux";
+#[cfg(target_os = "windows")]
+const OS: &str = "windows";
 
 struct Capture {
     event: Event,
@@ -161,12 +168,7 @@ fn run(client: Arc<Client>, id: String, token: String, endpoint: String) {
             "event": capture.event.name(),
             "uuid": uuid,
             "timestamp": capture.timestamp,
-            "properties": {
-                "distinct_id": id,
-                "$process_person_profile": false,
-                "$geoip_disable": true,
-                "$ip": null
-            }
+            "properties": properties(&id, capture.event)
         })
         .to_string();
         // No retries or disk spool: delivery is best effort, and external
@@ -184,6 +186,23 @@ fn run(client: Arc<Client>, id: String, token: String, endpoint: String) {
             Err(_) => diagnostic("send_failed"),
         }
     }
+}
+
+/// Every value is the installation id, a build or platform constant, or the
+/// event's own closed vocabulary.
+fn properties(id: &str, event: Event) -> serde_json::Value {
+    let mut properties = json!({
+        "distinct_id": id,
+        "$process_person_profile": false,
+        "$geoip_disable": true,
+        "$ip": null,
+        "app_version": crate::VERSION,
+        "os": OS
+    });
+    if let Some(agent) = event.agent() {
+        properties["agent"] = agent.into();
+    }
+    properties
 }
 
 fn random_id() -> Result<String, &'static str> {
@@ -269,7 +288,7 @@ mod tests {
         let (received, bodies) = mpsc::channel();
         let (release, gate) = mpsc::channel();
         let peer = std::thread::spawn(move || {
-            for _ in 0..2 {
+            for _ in 0..3 {
                 let (mut stream, _) = server.accept().unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(10)))
@@ -315,10 +334,27 @@ mod tests {
         worker.client.capture(Event::Connected);
         release.send(()).unwrap();
         let second = bodies.recv_timeout(Duration::from_secs(10)).unwrap();
+        worker
+            .client
+            .capture(Event::AgentStarted(hide_session::Agent::OpenCode));
+        release.send(()).unwrap();
+        let third = bodies.recv_timeout(Duration::from_secs(10)).unwrap();
         assert_eq!(first["event"], "hide_ai_called");
         assert_eq!(second["event"], "hide_connected");
+        assert_eq!(third["event"], "hide_agent_started");
         assert_ne!(first["uuid"], second["uuid"]);
-        for body in [first, second] {
+        assert_ne!(second["uuid"], third["uuid"]);
+        let common = json!({
+            "distinct_id": id, "$process_person_profile": false,
+            "$geoip_disable": true, "$ip": null,
+            "app_version": env!("HIDE_BUILD_VERSION"), "os": std::env::consts::OS
+        });
+        assert_eq!(first["properties"], common);
+        assert_eq!(second["properties"], common);
+        let mut started = common.clone();
+        started["agent"] = "opencode".into();
+        assert_eq!(third["properties"], started);
+        for body in [first, second, third] {
             let mut keys: Vec<_> = body
                 .as_object()
                 .unwrap()
@@ -329,13 +365,6 @@ mod tests {
             assert_eq!(
                 keys,
                 ["api_key", "event", "properties", "timestamp", "uuid"]
-            );
-            assert_eq!(
-                body["properties"],
-                json!({
-                    "distinct_id": id, "$process_person_profile": false,
-                    "$geoip_disable": true, "$ip": null
-                })
             );
             assert!(valid_id(body["uuid"].as_str().unwrap()));
             body["timestamp"]

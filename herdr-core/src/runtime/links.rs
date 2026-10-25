@@ -127,6 +127,20 @@ impl Sink for RuntimeSink {
         self.apply(move |runtime| runtime.ingest_archive_record_deleted(request, answer));
     }
 
+    fn agent_started(&self, agent: hide_session::Agent) {
+        // Only the sink's handle is taken under the lock; the capture is the
+        // sink's own nonblocking enqueue and publishes nothing.
+        let sink = self.runtime.upgrade().and_then(|runtime| {
+            runtime
+                .lock()
+                .ok()
+                .and_then(|runtime| runtime.product_analytics.clone())
+        });
+        if let Some(sink) = sink {
+            sink.capture(crate::product_analytics::Event::AgentStarted(agent));
+        }
+    }
+
     fn devices(&self) -> Vec<(String, Arc<dyn crate::node_access::NodeLink>)> {
         self.runtime
             .upgrade()
