@@ -19,7 +19,7 @@ const checkout: Checkout = { id: "checkout", workspace_id: "project", label: "Fi
 const layout: AgentLayout = { root: { area: { id: "a1", active: "t1", displays: tabs.map(tab => ({ id: tab.id! })) } }, active_area: "a1", canvases: {}, group_id: "group", limits: { areas: 6, depth: 3, displays: 64 }, display_count: 3 };
 function Controls() {
   const move = usePaneMove()!;
-  return <><div data-agent-tab-bar="a1"><span data-area-item="t2">Target</span><button data-agent-new-tab="a1"><PaneMovePlus /></button></div><div data-pane-view="p1" onPointerDown={event => move.press("p1", event)}>Source</div><div data-pane-view="p2">Sibling</div><button data-menu-move="" onClick={() => { const root = move.menu("p1")[0]!; const area = root.children![0]!; move.select(area.children![0]!.id); }}>Move</button><span data-busy="">{String(move.mutationBlocked("p1"))}:{String(move.mutationBlocked("p4"))}</span><PaneMovePreview areaId="a1" /></>;
+  return <><div data-agent-tab-bar="a1"><span data-area-item="t2">Target</span><button data-agent-new-tab="a1"><PaneMovePlus /></button></div><div data-pane-view="p1" onPointerDown={event => move.press("p1", "Source", event)}>Source</div><div data-pane-view="p2">Sibling</div><button data-menu-move="" onClick={() => { const root = move.menu("p1")[0]!; const area = root.children![0]!; move.select(area.children![0]!.id); }}>Move</button><span data-busy="">{String(move.mutationBlocked("p1"))}:{String(move.mutationBlocked("p4"))}</span><PaneMovePreview areaId="a1" /></>;
 }
 
 describe("pane move gesture", () => {

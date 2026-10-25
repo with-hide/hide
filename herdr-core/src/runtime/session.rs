@@ -3110,6 +3110,7 @@ impl Runtime {
             // A pull request's checks are a wait the lineage decides and an
             // end the read axis compares, so they are laid before both.
             self.lay_checks(&mut agents);
+            self.lay_start_prompts(&mut agents, ReadRecordScope::Local, live_pane_ids.as_ref());
             crate::agent_state::apply_lineage(
                 &mut agents,
                 &self.snapshot.navigator.workspaces,
@@ -4901,6 +4902,58 @@ impl Runtime {
             .then_some(self.live_generation)
     }
 
+    /// Lays on each row Herdr is still starting whether the start Hide made
+    /// in its pane carried the operator's first prompt
+    /// (`AgentStart::Starting`), a fact only the start request holds. The
+    /// pane of the task start in flight is kept until its row settles or the
+    /// pane is gone, so neither order of the start's answer and Herdr's
+    /// report leaves a starting row without it. One task starts at a time,
+    /// so the set holds the few rows still starting; past
+    /// `START_PROMPT_LIMIT` a pane is logged and left out, and its row closes
+    /// as one started with no prompt.
+    pub(super) fn lay_start_prompts(
+        &mut self,
+        agents: &mut [SidebarAgentSnapshot],
+        scope: ReadRecordScope<'_>,
+        live_pane_ids: Option<&HashSet<String>>,
+    ) {
+        const START_PROMPT_LIMIT: usize = 16;
+        let prompted = self.snapshot.task_operation.as_ref().and_then(|operation| {
+            let launch = self.task_agent_launch.as_ref()?;
+            (operation.agent_phase.as_deref() == Some("starting")
+                && launch.task == operation.id
+                && launch.prompt.is_some())
+            .then(|| operation.pane_id.clone())
+            .flatten()
+        });
+        if let Some(pane_id) = prompted
+            && !self.start_prompts.contains(&pane_id)
+        {
+            if self.start_prompts.len() < START_PROMPT_LIMIT {
+                self.start_prompts.insert(pane_id);
+            } else {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "agent_start", "kind": "start_prompt.over_limit",
+                    "pane_id": pane_id, "limit": START_PROMPT_LIMIT,
+                }));
+            }
+        }
+        for agent in agents.iter_mut() {
+            match &mut agent.start {
+                crate::agent_state::AgentStart::Starting { first_prompt } => {
+                    *first_prompt = self.start_prompts.contains(&agent.pane_id);
+                }
+                crate::agent_state::AgentStart::Settled => {
+                    self.start_prompts.remove(&agent.pane_id);
+                }
+            }
+        }
+        if let Some(live) = live_pane_ids {
+            self.start_prompts
+                .retain(|pane_id| !scope.owns(pane_id) || live.contains(pane_id));
+        }
+    }
+
     pub(crate) fn pending_task_agent_start(&self, id: u64) -> Option<live::PendingAgentStart> {
         let operation = self.snapshot.task_operation.as_ref()?;
         if operation.id != id
@@ -5013,6 +5066,13 @@ impl Runtime {
         let Some(operation) = self.snapshot.task_operation.as_mut() else {
             return false;
         };
+        // A start that definitely failed ran no prompt, so its pane no
+        // longer holds one a close could drop.
+        if matches!(outcome, live::TaskAgentOutcome::Failed(_))
+            && let Some(pane_id) = &operation.pane_id
+        {
+            self.start_prompts.remove(pane_id);
+        }
         let (phase, failure) = match outcome {
             live::TaskAgentOutcome::Started => ("started", None),
             live::TaskAgentOutcome::Failed(failure) => ("failed", Some(failure)),

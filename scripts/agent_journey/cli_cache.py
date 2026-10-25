@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import platform
 import shutil
+import stat
 import tempfile
 import time
 
@@ -15,18 +16,29 @@ from agent_live_check.sandbox import verify_write_boundary
 
 
 def size(root, cap):
-    """Count links themselves, not the trees they point to; bound metadata work too."""
+    """Count links themselves, not the trees they point to; bound metadata work too.
+    A file that goes between its folder's listing and its own read holds
+    nothing: Node 24 replaces its compile-cache files under a pin's `tmp`
+    while a run's CLI is running."""
     total = count = 0
     pending = [root]
     while pending:
         path = pending.pop()
-        info = path.lstat()
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            if path == root:
+                raise
+            continue
         count += 1
         total += info.st_size
         if total > cap or count > 100_000:
             raise ProtectionError("journey_cli_cache_over_budget: remove unused pins from the cache before retrying")
-        if path.is_dir() and not path.is_symlink():
-            pending.extend(path.iterdir())
+        if stat.S_ISDIR(info.st_mode):
+            try:
+                pending.extend(path.iterdir())
+            except FileNotFoundError:
+                continue
     return total
 
 

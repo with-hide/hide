@@ -1,7 +1,7 @@
 import { closeDecision, closeSheet, stopWorkOf, subtreeOf } from "../test/legacyAgentScope";
 import { legacyAgentRow } from "../test/legacyAgentRow";
 import { describe, expect, it } from "vitest";
-import { agentClosing, statusUnknownNotice, stopWorkCopy, subtreeTitle } from "./close";
+import { agentClosing, foldQuietRows, statusUnknownNotice, stopWorkCopy, subtreeTitle, treeCloseProgress, type SubtreeRow, type SubtreeState } from "./close";
 import { subtreeSummaryWords } from "./components/subtree-list";
 import { createInterfaceI18n } from "./i18n/instance";
 import type { AgentRow, PaneRow } from "./snapshot";
@@ -144,6 +144,39 @@ describe("agentClosing", () => {
     expect(agentClosing([op("tree.close", "p2", "failed")], "p2")).toBe(false);
     expect(agentClosing([op("tree.close", "p3", "closing")], "p2")).toBe(false);
     expect(agentClosing(undefined, "p2")).toBe(false);
+  });
+});
+
+describe("treeCloseProgress", () => {
+  const op = (target_id: string, phase: string, stage = "tree", scope_id = "tree:1") => ({ id: `${scope_id}:${target_id}`, kind: "tree.close", target_id, scope_id, phase, stage, message: null, retryable: false });
+
+  it("counts the panes a running tree close has closed on its target's row only", () => {
+    const operations = [op("c1", "completed"), op("c2", "completed"), op("c3", "closing"), op("p1", "waiting", "target"), op("other", "waiting", "target", "tree:2")];
+    expect(treeCloseProgress(operations, "p1")).toBe("2/4");
+    expect(treeCloseProgress(operations, "c3"), "a child row keeps its plain closing word").toBeNull();
+    expect(treeCloseProgress([op("p1", "failed", "target")], "p1")).toBeNull();
+    expect(treeCloseProgress(undefined, "p1")).toBeNull();
+  });
+});
+
+describe("foldQuietRows", () => {
+  const row = (pane: string, depth: number, state: SubtreeState, target = false) => ({ agent: legacyAgentRow({ pane_id: pane }) as AgentRow, depth, target, state }) as SubtreeRow;
+  const ids = (rows: SubtreeRow[]) => rows.map((r) => r.agent.pane_id);
+
+  const filler = Array.from({ length: 6 }, (_, index) => row(`f${index}`, 1, "quiet"));
+
+  it("folds the quiet children of a long list and keeps the target, what needs the operator and the path to it", () => {
+    const rows = [row("p1", 0, "working", true), row("c1", 1, "quiet"), row("c2", 1, "quiet"), row("g1", 2, "waiting"), row("c3", 1, "quiet"), row("g2", 2, "quiet"), row("c4", 1, "unread"), ...filler];
+    const { shown, folded } = foldQuietRows(rows);
+    expect(ids(shown)).toEqual(["p1", "c2", "g1", "c4"]);
+    expect(ids(folded)).toEqual(["c1", "c3", "g2", ...ids(filler)]);
+  });
+
+  it("lists every row of a list that fits whole, and folds nothing when only one row would", () => {
+    const small = [row("p1", 0, "quiet", true), row("c1", 1, "quiet"), row("g1", 2, "quiet")];
+    expect(foldQuietRows(small)).toEqual({ shown: small, folded: [] });
+    const busy = [row("p1", 0, "quiet", true), row("c1", 1, "quiet"), ...Array.from({ length: 10 }, (_, index) => row(`w${index}`, 1, "working"))];
+    expect(foldQuietRows(busy)).toEqual({ shown: busy, folded: [] });
   });
 });
 

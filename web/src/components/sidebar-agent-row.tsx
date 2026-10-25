@@ -2,7 +2,7 @@ import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
 import { memo, useRef, type KeyboardEvent } from "react";
 import { AgentRowMark } from "../AgentRowMark";
 import { agentProductName } from "../agentAdapters";
-import { agentClosing } from "../close";
+import { agentClosing, treeCloseProgress } from "../close";
 import { useInterfaceTranslation } from "../i18n/client";
 import { useShellStore } from "../store";
 import { branchChip, forkLabel, lineParts, lineTone, markTone, markWords, rowAccessibleName, rowDimmed, rowSentence, sidebarLine, treeLine } from "../agentRow";
@@ -25,6 +25,7 @@ import { MissionChip } from "./mission-chip";
 import { EntryContextMenu, type MenuEntry } from "./entry-menu";
 import { DeviceChip } from "./device-chip";
 import { StatusMark } from "./status-mark";
+import { beginAgentDrag } from "../agentReference";
 import { Badge } from "./ui/badge";
 import { Keycap } from "./ui/keycap";
 import { Hint } from "./ui/tooltip";
@@ -138,6 +139,8 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   const main = useRef<HTMLButtonElement>(null);
   // Each row reads only the facts it draws, so a snapshot that moves nothing here renders nothing.
   const closing = useShellStore((s) => agentClosing(s.rest?.status?.async_operations, agent.pane_id));
+  // The target of a close with its children counts the panes gone so far, so a long close shows it moves.
+  const closingProgress = useShellStore((s) => treeCloseProgress(s.rest?.status?.async_operations, agent.pane_id));
   const agentPrStaleness = useAgentStaleness(agent, family);
   const line = tree ? treeLine(agent) : sidebarLine(agent);
   const branch = branchShown ? branchChip(agent) : null;
@@ -200,6 +203,8 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
           className="absolute inset-0 rounded-sm outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
           onClick={() => onOpen(agent.pane_id)}
           onKeyDown={onKeyDown}
+          draggable={!unreachable}
+          onDragStart={(event) => beginAgentDrag(agent, event)}
         />
       </Hint>
       {tree ? <TreeRails place={tree.place} /> : null}
@@ -218,7 +223,7 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
             {starred(agent) ? <RevisitStar /> : null}
             {closing ? (
               <span aria-hidden="true" className="pointer-events-none shrink-0 text-caption text-muted-foreground" data-agent-closing="true">
-                {t("agents.closing")}
+                {closingProgress ? t("agents.closingProgress", { progress: closingProgress }) : t("agents.closing")}
               </span>
             ) : null}
             {branch ? (

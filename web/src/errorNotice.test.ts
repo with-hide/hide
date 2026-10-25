@@ -21,6 +21,10 @@ describe("the failures the operator is told about", () => {
     expect(errorNotice(error("view_layout.unknown_display", 1))?.text).toBe("The view did not change. Try again.");
     expect(errorNotice(error("view_layout.stale_workspace", 1))).toBeNull();
     expect(errorNotice(error("file.save_failed", 1))).toBeNull();
+    // A close with children says the limit it met, never an earlier close that is not there.
+    expect(errorNotice(error("tree_close.capacity", 1))).toEqual({ text: "Hide is already running as many closes as it can at once, so nothing was closed. Close again once some of them finish.", refreshable: false });
+    expect(errorNotice(error("tree_close.status_unknown", 1))?.refreshable).toBe(true);
+    expect(errorNotice(error("tree_close.in_progress", 1))).toBeNull();
     expect(errorNotice(null)).toBeNull();
   });
 });

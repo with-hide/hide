@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_journey import cells
 from agent_journey.daemon import Daemon
 from agent_live_check.processes import ProcessError
-from agent_journey.local import (codex_login_refusal, grok_login_refusal, pi_login_refusal,
+from agent_journey.local import (codex_login_refusal, grok_login_refusal, omp_login_refusal, pi_login_refusal,
                                  trust_codex, trust_grok)
 
 CHECKOUT = Path(__file__).resolve().parents[2]
@@ -292,6 +292,37 @@ class LocalRoute(unittest.TestCase):
             self.assertIn("run pi once yourself", refusal)
             auth.write_text(json.dumps({"openai": {"type": "oauth", "expires": "soon"}}))
             self.assertIn("unreadable", pi_login_refusal(auth, HOUR, now))
+
+    def test_an_omp_login_database_copy_is_judged_by_its_oauth_expiry(self):
+        import sqlite3
+        now = datetime.datetime(2026, 10, 18, tzinfo=datetime.timezone.utc).timestamp()
+        with tempfile.TemporaryDirectory() as temporary:
+            database = Path(temporary) / "agent.db"
+            self.assertIn("not logged in", omp_login_refusal(database, HOUR, now))
+
+            def logins(*rows):
+                database.unlink(missing_ok=True)
+                with sqlite3.connect(database) as connection:
+                    connection.execute("CREATE TABLE auth_credentials (provider TEXT, credential_type TEXT, "
+                                       "data TEXT, disabled_cause TEXT DEFAULT NULL)")
+                    connection.executemany("INSERT INTO auth_credentials VALUES (?, ?, ?, ?)", rows)
+                connection.close()
+
+            logins()
+            self.assertIn("not logged in", omp_login_refusal(database, HOUR, now))
+            logins(("openai-codex", "oauth", json.dumps({"refresh": "r", "expires": (now + 3 * HOUR) * 1000}), None))
+            self.assertIsNone(omp_login_refusal(database, HOUR, now))
+            self.assertIn("login near refresh (3.0 h left, the run needs 4.0 h)", omp_login_refusal(database, 4 * HOUR, now))
+            # A disabled login is not the one omp would use.
+            logins(("openai-codex", "oauth", json.dumps({"expires": (now - HOUR) * 1000}), "revoked"),
+                   ("openai", "api_key", json.dumps({"key": "k"}), None))
+            self.assertIsNone(omp_login_refusal(database, HOUR, now))
+            logins(("openai-codex", "oauth", json.dumps({"expires": (now - HOUR) * 1000}), None))
+            self.assertIn("run omp once yourself", omp_login_refusal(database, HOUR, now))
+            logins(("openai-codex", "oauth", json.dumps({"expires": "soon"}), None))
+            self.assertIn("unreadable", omp_login_refusal(database, HOUR, now))
+            database.write_bytes(b"not a database")
+            self.assertIn("unreadable", omp_login_refusal(database, HOUR, now))
 
     def test_grok_trust_adds_one_entry_for_the_resolved_repository(self):
         import tomllib

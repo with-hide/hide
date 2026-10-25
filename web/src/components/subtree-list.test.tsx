@@ -59,3 +59,34 @@ it("names a descendant on this window's own machine This Mac, not by the host na
     useShellStore.setState(saved, true);
   }
 });
+
+// The operator's case: 33 children whose agents ended and one still working.
+it("folds the finished children under one line that opens, keeping the working one in the tree", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const agent = (pane: string, status: "working" | "idle") => legacyAgentRow({ id: `agent:${pane}`, pane_id: pane, identity_label: pane, agent_kind: "claude", mark: status === "working" ? "going" : "quiet", status_code: status, activity: status }) as AgentRow;
+  const children = Array.from({ length: 33 }, (_, index) => ({ agent: agent(`c${index}`, index === 7 ? "working" : "idle"), depth: 1, target: false, state: index === 7 ? "working" : "quiet" }));
+  const subtree = {
+    ids: children.map((row) => row.agent.pane_id),
+    rows: [{ agent: agent("parent", "idle"), depth: 0, target: true, state: "quiet" }, ...children],
+    counts: { working: 1, waiting: 0, unread: 0, unknown: 0 },
+    unknown: false,
+    targetUnknown: false,
+  } as Subtree;
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const rows = () => [...container.querySelectorAll("[data-subtree-row]")].map((row) => row.getAttribute("data-subtree-row"));
+  try {
+    await act(async () => root.render(<TooltipProvider><SubtreeList subtree={subtree} targetDevice={undefined} /></TooltipProvider>));
+    expect(rows()).toEqual(["parent", "c7"]);
+    const fold = container.querySelector<HTMLButtonElement>("[data-subtree-fold]")!;
+    expect(fold.textContent).toBe("32 finished children");
+    expect(fold.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => fold.click());
+    expect(fold.getAttribute("aria-expanded")).toBe("true");
+    expect(rows()).toHaveLength(34);
+    expect(rows().slice(0, 3)).toEqual(["parent", "c7", "c0"]);
+  } finally {
+    await act(async () => root.unmount());
+  }
+});

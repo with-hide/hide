@@ -10,6 +10,7 @@ import { usePaneAgents } from "./PaneHeaderBand";
 import { PlanChecklist } from "./PlanChecklist";
 import { PlanSummaryLine } from "./PlanMap";
 import { planCells, planCount, planOfPane, planProposed, stepOf } from "./plans";
+import { shellDragging } from "./shellDrag";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 
@@ -122,6 +123,8 @@ export function usePaneChipPopover(paneId: string, present: boolean) {
   }, [present, pinned, setPinned]);
   const open = present && (pinned || hovered || focused);
   const enter = () => {
+    // A pane or agent dragged across the chip is not pointing at it.
+    if (shellDragging()) return;
     if (leave.current !== null) window.clearTimeout(leave.current);
     leave.current = null;
     setHovered(true);

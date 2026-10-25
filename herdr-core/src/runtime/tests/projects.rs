@@ -3317,6 +3317,124 @@ fn a_plain_folder_tab_goes_to_its_marked_workspace_and_marks_a_new_one_when_the_
     let _ = std::fs::remove_dir_all(&path);
 }
 
+/// Herdr's list while it starts the agent a task started in `w1:p9`, as the
+/// pinned 0.9.5 answers: first with no agent kind, then with it.
+fn starting_task_agent(
+    kind: Option<&str>,
+    status: &str,
+    seq: u64,
+    pending: bool,
+) -> SessionSnapshotPayload {
+    crate::sidebar::owned_label_fixture(serde_json::json!({
+        "agents": [{
+            "pane_id": "w1:p9", "workspace_label": "Fixture", "agent": kind,
+            "agent_status": status, "state_change_seq": seq, "launch_pending": pending
+        }],
+        "tabs": [{"workspace_id": "w1", "tab_id": "t1", "label": ""}],
+        "layouts": [{
+            "workspace_id": "w1", "tab_id": "t1", "zoomed": false,
+            "area": {"x": 0, "y": 0, "width": 80, "height": 24},
+            "focused_pane_id": "w1:p9",
+            "panes": [{"pane_id": "w1:p9",
+                       "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
+            "splits": []
+        }]
+    }))
+    .expect("session payload")
+}
+
+/// An agent a task starts with the operator's first prompt asks before its
+/// pane closes while Herdr is still starting it, whichever of the start's
+/// answer and Herdr's report comes first; one started with no prompt closes
+/// at once. Both say Starting, and neither asks for a status check.
+#[test]
+fn a_starting_agent_asks_before_closing_only_when_its_start_carried_a_first_prompt() {
+    for prompt in [Some("fix the tests"), None] {
+        let mut runtime = runtime();
+        let id = runtime
+            .begin_task_operation(
+                "agent_start",
+                Some("/tmp/hide-agent-task".into()),
+                None,
+                None,
+                Some("claude".into()),
+            )
+            .unwrap();
+        runtime.set_task_agent_launch(
+            id,
+            prompt.map(str::to_owned),
+            Vec::new(),
+            Default::default(),
+        );
+        assert!(runtime.ingest_task_operation_result(
+            id,
+            Ok(live::WorktreeTaskOutcome {
+                path: "/tmp/hide-agent-task".into(),
+                pane_id: "w1:p9".into(),
+                created_tab_id: None,
+                purpose_error: None,
+                unconfirmed_purpose_token: None,
+                issue_error: None,
+                shell: crate::agent_start::ShellStart::Plain,
+            }),
+        ));
+        let row = |runtime: &Runtime| {
+            let row = runtime
+                .snapshot()
+                .navigator
+                .agents
+                .iter()
+                .find(|agent| agent.pane_id == "w1:p9")
+                .cloned()
+                .expect("the started agent's row");
+            (
+                row.status_code,
+                row.requires_close_confirmation,
+                row.requires_close_status_check,
+            )
+        };
+        let starting = (AgentStatusCode::Starting, prompt.is_some(), false);
+        assert!(runtime.ingest_session(Ok(starting_task_agent(None, "unknown", 0, true))));
+        assert_eq!(
+            row(&runtime),
+            starting,
+            "{prompt:?} before the start's answer"
+        );
+        // The start's answer lands before Herdr reports the agent.
+        assert!(runtime.ingest_task_agent_result(id, live::TaskAgentOutcome::Started));
+        assert!(runtime.ingest_session(Ok(starting_task_agent(
+            Some("claude"),
+            "unknown",
+            0,
+            true
+        ))));
+        assert_eq!(
+            row(&runtime),
+            starting,
+            "{prompt:?} after the start's answer"
+        );
+        // Herdr reports the agent: what it does decides from here on.
+        assert!(runtime.ingest_session(Ok(starting_task_agent(Some("claude"), "idle", 1, false))));
+        assert_eq!(
+            row(&runtime),
+            (AgentStatusCode::Idle, false, false),
+            "{prompt:?} settled"
+        );
+        // A later start in the same pane carries nothing over.
+        assert!(runtime.ingest_session(Ok(starting_task_agent(
+            Some("claude"),
+            "unknown",
+            0,
+            true
+        ))));
+        assert_eq!(
+            row(&runtime),
+            (AgentStatusCode::Starting, false, false),
+            "{prompt:?} a later start"
+        );
+    }
+}
+
 /// The chosen agent starts after the creation is published, and its answer
 /// lands on its own axis: a failure keeps the created pane and path, and only
 /// a definite failure is offered again.

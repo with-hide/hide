@@ -436,8 +436,8 @@ function paneIdMatches(entries: SearchEntry[], query: string): SearchEntry[] {
 
 /**
  * The entries matching `query`, best first. A query holding `:`, as every
- * Herdr pane id does (`w9J:p52`, as `$HERDR_PANE_ID` or Copy pane ID gives
- * it), puts the agents whose id holds it ahead of everything, on every device;
+ * Herdr pane id does (`w9J:p52`, as `$HERDR_PANE_ID` gives it or Copy name
+ * and ID carries it), puts the agents whose id holds it ahead of everything, on every device;
  * a name with a colon (`fix: bug`) is held by no id, and without a colon no id
  * matches, so a name or a number never finds a pane by its id. A number (`273`, or with a hash) puts the
  * issues and then the pull requests numbered exactly that ahead of every title

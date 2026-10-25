@@ -309,6 +309,7 @@ impl SleepRecord {
         SessionAgentPayload {
             record: None,
             telemetry_stale: false,
+            launch_pending: false,
             id: Some(
                 self.agent_name
                     .clone()
@@ -684,6 +685,7 @@ mod tests {
             record_summary: None,
             record_metadata: None,
             telemetry_stale: false,
+            start: Default::default(),
             close_session: None,
             state: Default::default(),
             resolved: None,

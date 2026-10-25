@@ -9,7 +9,7 @@ import type { ProjectSettings, ProjectSettingsWrite } from "./projectSettings";
 import type { AgentLogoMode, PaneTurnRowMode, UsagePreferences } from "./generated/hided-ws";
 
 /** The status codes the core sends in `status_code`; the catalogs name one word for each (agents.status.*). */
-export type AgentStatusCode = "error" | "question" | "approval" | "working" | "done" | "idle" | "unknown" | "waiting" | "unfinished" | "stopped" | "attached" | "sleeping" | "waking" | "sleep_failed";
+export type AgentStatusCode = "error" | "question" | "approval" | "working" | "done" | "idle" | "unknown" | "starting" | "waiting" | "unfinished" | "stopped" | "attached" | "sleeping" | "waking" | "sleep_failed";
 
 /** Whose move is next (`RowMark`): the operator's, in progress (the agent works, or `waiting` on proven work, D-25), unread as finished, unread otherwise, nothing (resting), a state Hide cannot read, or asleep (status-marks D-21). */
 export type RowMark = "turn" | "going" | "waiting" | "done" | "unread" | "quiet" | "unknown" | "asleep";

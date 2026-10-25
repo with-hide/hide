@@ -541,8 +541,9 @@ impl From<res::AgentInfo> for ProjectedAgent {
         let declared_parent_session = declared(PARENT_SESSION_TOKEN);
         Self {
             pane_id: v.pane_id,
-            // `terminal_id` and `launch_pending` serve only the start settle,
-            // a workaround for herdrdev/herdr#3853 that goes with them.
+            // `terminal_id` serves only the start settle, a workaround for
+            // herdrdev/herdr#3853 that goes with it; `launch_pending` also
+            // says the agent is starting (`agent_state::agent_starting`).
             terminal_id: v.terminal_id,
             name: v.name,
             workspace_id: v.workspace_id,

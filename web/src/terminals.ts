@@ -706,6 +706,11 @@ export function pasteText(paneId: string, text: string) {
   instances.get(paneId)?.term.paste(text);
 }
 
+/** Types an agent reference (`agentReference.ts`) as input, with a space to keep typing after it and never Enter. */
+export function typeReference(paneId: string, text: string) {
+  pasteText(paneId, `${text} `);
+}
+
 /** Explorer Copy retains file identity only while the system text still matches. */
 export function pasteExplorerCopy(paneId: string, text: string): boolean {
   const held = useUiStore.getState().explorerClipboard;
