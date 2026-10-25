@@ -11,16 +11,20 @@ HOME and is pointed at its own folder in the private daemon home by the
 variable it documents for that (CLAUDE_CONFIG_DIR, CODEX_HOME, GROK_HOME,
 PI_CODING_AGENT_DIR, OpenCode's XDG folders), which holds the candidate's
 hooks or extension and, but for Claude, whose login stays the operator's
-keychain entry, a copy of the operator's login; agy has no such variable, so
-it is not measured here.
+keychain entry, a copy of the operator's login. omp has no such variable, so
+it runs in the private daemon home itself, as hided and omp share one HOME in
+the product; agy has none either and signs in through the keychain of its
+HOME, so it is not measured here.
 """
 
+import contextlib
 import datetime
 import json
 import os
 from pathlib import Path
 import re
 import shlex
+import sqlite3
 import sys
 import time
 import tomllib
@@ -113,13 +117,24 @@ ROUTES = {
         "login": lambda root, status, margin: pi_login_refusal(root / "auth.json", margin),
     },
     "omp": {
-        # omp 18.7.0 names a checkout's session folder from its own HOME,
-        # which local mode keeps as the operator's, while the candidate's
-        # reader names it from the daemon's private HOME.
-        "unmeasured": ("omp names its session folder from its own HOME, and local mode's candidate daemon has a "
-                       "private HOME, so Hide's reader names another folder for the same checkout and refuses the "
-                       "session (label_session_default_directory_required); in the product hided and omp share one "
-                       "HOME; the fake model and CI lanes measure it"),
+        "args": lambda home: [],
+        # omp 18.7.0 names a checkout's session folder from its own HOME and
+        # no variable moves it, so it runs in the daemon's private HOME, where
+        # Hide's reader names the same folder, as hided and omp share one HOME
+        # in the product. Its agent folder holds its login database and the
+        # operator's model roles (`config.yml`).
+        "env": lambda home: {"HOME": str(home)},
+        "unset": [],
+        "sessions": lambda operator, home: home,
+        "known": [],
+        "shared": {},
+        "roots": [".omp/agent"],
+        "untrusted": None,
+        "config": ".omp/agent",
+        "copies": [[".omp/agent/agent.db", "agent.db"], [".omp/agent/config.yml", "config.yml"]],
+        "provenance": "The daemon's private HOME holding a copy of the login database and model roles; a refresh "
+                      "stays in the copy.",
+        "login": lambda root, status, margin: omp_login_refusal(root / "agent.db", margin),
     },
     "opencode": {
         "args": lambda home: [],
@@ -271,6 +286,29 @@ def pi_login_refusal(auth, margin, now=None):
     if expiries is None:
         return "not logged in: sign in with /login in pi yourself; the journey never logs in"
     return expiry_refusal("pi", expiries, margin, now)
+
+
+def omp_login_refusal(database, margin, now=None):
+    """omp keeps its logins in its agent database (`auth_credentials`): an
+    OAuth login whose `expires` is in ms, or a key, which never refreshes.
+    `database` is the run's copy, never the operator's original."""
+    if not database.is_file():
+        return "not logged in: sign in with /login in omp yourself; the journey never logs in"
+    try:
+        with contextlib.closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True)) as connection:
+            rows = connection.execute(
+                "SELECT credential_type, data FROM auth_credentials WHERE disabled_cause IS NULL").fetchall()
+        logins = [(kind, json.loads(data)) for kind, data in rows]
+        expiries = [entry.get("expires") for kind, entry in logins if kind == "oauth"]
+    except (sqlite3.Error, ValueError, TypeError, AttributeError):
+        return expiry_refusal("omp", [], margin, now)
+    if not logins:
+        return "not logged in: sign in with /login in omp yourself; the journey never logs in"
+    if not expiries:
+        return None
+    if not all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in expiries):
+        return expiry_refusal("omp", [], margin, now)
+    return expiry_refusal("omp", [value / 1000 for value in expiries], margin, now)
 
 
 def opencode_login_refusal(auth, margin, now=None):
