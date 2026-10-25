@@ -462,7 +462,12 @@ impl Runtime {
             return;
         };
         // A sleeping session's pane is closed on purpose and its wake
-        // continues the registration, so its absence ends nothing.
+        // continues the registration, so its absence ends nothing; nor does a
+        // tree close's, whose one reopen continues it (`tree_reopen.rs`).
+        let tree_held = self
+            .tree_held_registrations()
+            .map(|registration| registration.id.clone())
+            .collect::<Vec<_>>();
         let held: HashSet<&str> = self
             .snapshot
             .ui_state
@@ -472,6 +477,7 @@ impl Runtime {
             .filter_map(|record| record.registration.as_ref())
             .chain(self.snapshot.ui_state.session_archive.held_registrations())
             .map(|registration| registration.id.as_str())
+            .chain(tree_held.iter().map(String::as_str))
             .chain(self.registration_rebinds.keys().map(String::as_str))
             .collect();
         let read =
@@ -1568,7 +1574,8 @@ impl Runtime {
                     && self.delivery_connected.contains(&watch.target.device_id)
                     && !self.delivery_overflow.contains(&watch.target.device_id)
                     && !self.dormant_holds_actor(&watch.target)
-                    && !self.archive_holds_actor(&watch.target);
+                    && !self.archive_holds_actor(&watch.target)
+                    && !self.tree_holds_actor(&watch.target);
                 let source = crate::delivery::worker::ActivitySource {
                     link: if self.node == watch.target.device_id {
                         Some(Arc::clone(&self.own_node))

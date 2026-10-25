@@ -697,7 +697,8 @@ impl Runtime {
             .count();
         self.snapshot.recent_closed.top_label =
             self.reopenable().map(|item| item.label().to_owned());
-        self.snapshot.recent_closed.restoring = self.reopen_in_flight.is_some();
+        self.snapshot.recent_closed.restoring =
+            self.reopen_in_flight.is_some() || self.tree_reopen_running();
         self.snapshot.recent_closed.pending = self
             .close_capture_order
             .iter()
@@ -729,10 +730,13 @@ impl Runtime {
             .filter(|operation| operation.request.retain_for_reopen);
         let queueable =
             newest_close.is_some_and(PendingClose::settling) && self.reopen_after_close.is_none();
-        self.snapshot.recent_closed.can_reopen = queueable
-            || (self.reopenable().is_some()
-                && (!local || self.close_capture_order.is_empty())
-                && self.reopen_in_flight.is_none());
+        let tree_recording = local && self.tree_capture_pending();
+        self.snapshot.recent_closed.can_reopen = !tree_recording
+            && (queueable
+                || (self.reopenable().is_some()
+                    && (!local || self.close_capture_order.is_empty())
+                    && self.reopen_in_flight.is_none()
+                    && !self.tree_reopen_running()));
         self.snapshot.recent_closed.reopen_blocked_reason =
             newest_close.filter(|_| !queueable).map(|operation| {
                 if operation.phase == "unknown" {
@@ -741,11 +745,15 @@ impl Runtime {
                     "The latest close is still being confirmed.".to_owned()
                 }
             });
+        if tree_recording {
+            self.snapshot.recent_closed.reopen_blocked_reason =
+                Some("The latest close is still being confirmed.".to_owned());
+        }
         self.sync_async_operations();
     }
 
     pub(super) fn push_recent_closed(&mut self, item: ClosedItem) {
-        push_bounded(&mut self.recent_closed, item);
+        self.push_closed_item(item);
         self.sync_recent_closed_snapshot();
     }
 
@@ -2123,15 +2131,16 @@ impl Runtime {
                 && operation.request.retain_for_reopen
                 && operation.phase == "completed"
                 && operation.item.is_some();
-            if operation.phase == "completed"
-                && operation.request.retain_for_reopen
-                && let Some(item) = operation.item
-            {
-                push_bounded(&mut self.recent_closed, item);
+            let item = operation
+                .item
+                .filter(|_| operation.phase == "completed" && operation.request.retain_for_reopen);
+            if let Some(item) = self.settle_captured_close(&key, item) {
+                self.push_closed_item(item);
             }
             changed = true;
         }
         if changed {
+            self.push_ready_tree_entries();
             self.sync_recent_closed_snapshot();
             // A close waiting behind one that just left its tab takes its turn.
             self.pump_geometry_queues();
@@ -2582,13 +2591,28 @@ impl Runtime {
     }
 
     pub(super) fn reopen_closed(&mut self) -> bool {
-        if let Some(key) = self.reopen_in_flight.as_deref() {
+        if let Some(key) = self.reopen_in_flight.as_deref().or(self.tree_reopen_key()) {
             crate::diagnostic!(serde_json::json!({
                 "component": "recent_closed",
                 "kind": "recent_closed.reopen_in_flight",
                 "key": key,
             }));
             return false;
+        }
+        // A tree close records its one entry only once all of its closes
+        // have settled; until then a reopen would reach an older item.
+        if self.reopen_device() == self.node.as_str() && self.tree_capture_pending() {
+            crate::diagnostic!(serde_json::json!({
+                "component": "recent_closed",
+                "kind": "recent_closed.reopen_waits_for_tree_close",
+            }));
+            self.set_reopen_notices(vec![live::ReopenNotice {
+                pane_id: None,
+                message: "Close is still being confirmed; reopening is temporarily unavailable"
+                    .to_owned(),
+            }]);
+            self.sync_recent_closed_snapshot();
+            return true;
         }
         if self.reopen_device() == self.node.as_str()
             && let Some(key) = self.close_capture_order.back().cloned()
@@ -2639,6 +2663,14 @@ impl Runtime {
             }));
             return false;
         };
+        if let ClosedItem::Tree { key, members } = &item {
+            return self.reopen_tree(key.clone(), members);
+        }
+        self.reopen_item(item)
+    }
+
+    /// Reopens one closed item: the newest, or a member of a tree entry.
+    pub(super) fn reopen_item(&mut self, item: ClosedItem) -> bool {
         if matches!(item, ClosedItem::Draft { .. }) {
             return self.reopen_agent_draft(item);
         }
@@ -2710,6 +2742,7 @@ impl Runtime {
             ),
             ClosedItem::File { .. } => (true, true, None),
             ClosedItem::Draft { .. } => unreachable!("draft reopen is local"),
+            ClosedItem::Tree { .. } => unreachable!("a tree reopens one member at a time"),
         };
         // A tab made again lands in its checkout's owner (D-16), found by the
         // checkout the item was closed from, else by its folder.
@@ -2753,7 +2786,7 @@ impl Runtime {
                     &self.node,
                 ))
             }
-            ClosedItem::File { .. } | ClosedItem::Draft { .. } => None,
+            ClosedItem::File { .. } | ClosedItem::Draft { .. } | ClosedItem::Tree { .. } => None,
         };
         // With View areas the reopened file takes a display, so a Workspace
         // at its display cap refuses it here and the item stays.
@@ -2782,7 +2815,9 @@ impl Runtime {
                     context.checkout_path.clone(),
                     format!("reopen:{}", item.key()),
                 )),
-                ClosedItem::File { .. } | ClosedItem::Draft { .. } => None,
+                ClosedItem::File { .. } | ClosedItem::Draft { .. } | ClosedItem::Tree { .. } => {
+                    None
+                }
             }
         } else {
             None
@@ -2868,13 +2903,19 @@ impl Runtime {
             return false;
         }
         self.reopen_in_flight = None;
+        // A member of a tree entry: the agents it brought back, which the
+        // registrations it held move to.
+        let behind = self.tree_member_behind(key);
+        let mut tree_agents = None;
         match result {
             Err(message) => {
                 let reserved = match &request.item {
                     ClosedItem::Pane { context, .. } | ClosedItem::Tab { context, .. } => {
                         self.has_agent_effect(&context.checkout_path, &format!("reopen:{key}"))
                     }
-                    ClosedItem::File { .. } | ClosedItem::Draft { .. } => false,
+                    ClosedItem::File { .. }
+                    | ClosedItem::Draft { .. }
+                    | ClosedItem::Tree { .. } => false,
                 };
                 let reservation = if reserved {
                     " Its tab place stays reserved."
@@ -2998,7 +3039,14 @@ impl Runtime {
                     ) => self.agent_can_show_created(&context.checkout_path, id),
                     _ => true,
                 };
-                if can_show && let Some(pane_id) = outcome.focused_pane_id {
+                if outcome.consumed {
+                    tree_agents = Some(outcome.agents.clone());
+                }
+                // A tree's descendants come back behind its target.
+                if can_show
+                    && !behind
+                    && let Some(pane_id) = outcome.focused_pane_id
+                {
                     self.snapshot.terminal.pane_id = Some(pane_id.clone());
                     self.snapshot.focused.surface = Surface::Terminal;
                     self.snapshot.focused.pane_id = Some(pane_id.clone());
@@ -3008,6 +3056,7 @@ impl Runtime {
                 self.set_reopen_notices(outcome.notices);
             }
         }
+        self.tree_member_settled(key, tree_agents.as_deref());
         self.sync_recent_closed_snapshot();
         true
     }

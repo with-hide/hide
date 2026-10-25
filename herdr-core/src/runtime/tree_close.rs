@@ -585,10 +585,20 @@ impl Runtime {
             _ => NodeSlot::None,
         };
         let state = match started {
-            Ok(handle) => NodeState::Closing {
-                started_at_unix_ms: unix_milliseconds(),
-                handle,
-            },
+            Ok(handle) => {
+                // A target's own close records what Reopen closed brings back
+                // as one entry (`tree_reopen.rs`); a removal's or an
+                // archive's does not.
+                if let (NodeHandle::Local(key), TreeFinal::Close) =
+                    (&handle, &self.tree_closes[index].then)
+                {
+                    self.capture_tree_node(&tree_id, key);
+                }
+                NodeState::Closing {
+                    started_at_unix_ms: unix_milliseconds(),
+                    handle,
+                }
+            }
             Err(reason) => NodeState::Failed(reason),
         };
         self.record_node_state(index, position, state);
@@ -806,6 +816,7 @@ impl Runtime {
                 self.finish_archive_close(id, &closed, cause);
             }
             TreeFinal::Close => {
+                self.finish_tree_capture(&tree.id);
                 if failed > 0 {
                     // The ordinary close's own notice already names a pane
                     // that was refused; this says the rest stayed open.

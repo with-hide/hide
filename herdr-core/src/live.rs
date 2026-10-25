@@ -2021,6 +2021,7 @@ fn run_herdr_reopen(
         ),
         ClosedItem::File { .. } => unreachable!("file reopen uses the filesystem worker"),
         ClosedItem::Draft { .. } => unreachable!("draft reopen is local"),
+        ClosedItem::Tree { .. } => unreachable!("a tree reopens one member at a time"),
     }
 }
 
