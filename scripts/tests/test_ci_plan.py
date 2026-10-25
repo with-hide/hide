@@ -726,8 +726,9 @@ class Workflows(unittest.TestCase):
         # added, then the agent CLIs' Linux and Windows installs, which only a
         # pin change plans; a job beyond these is a new decision, made with
         # this number. The independent shared web build adds one job so it
-        # does not serialize the daemon and shell builds.
-        self.assertLessEqual(most, 33, "a run starts more jobs than the suites and native SDK contracts need")
+        # does not serialize the daemon and shell builds, offset by the measured
+        # reduction from six web shards to five.
+        self.assertLessEqual(most, 32, "a run starts more jobs than the suites and native SDK contracts need")
         testing = (ROOT / "docs/TESTING.md").read_text()
         self.assertIn(f"starts at most {most} jobs", testing)
 

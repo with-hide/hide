@@ -44,7 +44,7 @@
 # `@platform` tests, the macOS mailbox lane and the rest of the OS contract to
 # `nightly.yml`.
 # Everything else runs on Linux: the Rust suite, the unit suites, the invariant
-# checks, the whole web end-to-end, dealt out to six shards by `web-e2e.yml`,
+# checks, the whole web end-to-end, dealt out to five shards by `web-e2e.yml`,
 # and the remote mailbox lane over private SSH (`remote-mailbox`).
 # `nightly.yml` runs the web end-to-end's `@platform` tests on macOS, and the
 # rest of the web end-to-end is the same code on every system, so the move of
@@ -515,16 +515,15 @@ jobs:
       lane: linux
       runner: ubuntu-latest
       herdr-platform: linux-x86_64
-      # Six shards: the suite is about 68 minutes of tests (4109 s recorded,
-      # 2026-10-18; it was 30 on 2026-10-06). Four shards ran 984 to 1111 s of their 1200 s step
-      # (medians over 20 main runs); five would plan 822 s each, over the 720 s
-      # a shard is sized for; six plan 686 s. Six was cut to four on 2026-10-05
-      # because 23 of 99 runs waited over 10 minutes for a Linux shard at the
-      # organization's 20 jobs at once, with a full run then asking for 23.
-      # The daemon and web builds are shared in parallel jobs, adding one
-      # job against that limit; retain six until a later
-      # measured duration-table/count update (docs/TESTING.md).
-      shards: 6
+      # Five shards: the approved single-run recording after fixture readiness
+      # (379 Linux tests, run 40243767490 attempt 1, 2026-10-25) totals 3246 s.
+      # Four plan 811.8 s, above the unchanged 720 s budget; five plan at most
+      # 649.5 s. This is one sample, not the usual 20-run median or a wall-time
+      # forecast (docs/TESTING.md). The organization runs 20 jobs at once:
+      # six were cut to four in 2026-10-05 after 23 of 99 runs queued a Linux
+      # shard over 10 minutes, then returned to six as the suite grew.
+      # Parallel daemon/web builds add one job; one fewer shard offsets it.
+      shards: 5
 
   # The remote mailbox crate-boundary lane (hided/tests/it/remote_delivery.rs,
   # docs/TESTING.md), in `remote-mailbox.yml`. It has its own job because it was
