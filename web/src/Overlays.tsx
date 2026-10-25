@@ -241,7 +241,7 @@ function StopWorkClose({ actions, kind, stopWork, footer }: { actions: Actions; 
  * What Close only this leaves is said by its tooltip and its accessible
  * description (B5, D-42).
  */
-function SubtreeClose({ actions, kind, targetId, subtree, footer }: { actions: Actions; kind: "pane" | "tab"; targetId: string | null; subtree: Subtree; footer: RefObject<HTMLDivElement | null> }) {
+export function SubtreeClose({ actions, kind, targetId, subtree, footer }: { actions: Actions; kind: "pane" | "tab"; targetId: string | null; subtree: Subtree; footer: RefObject<HTMLDivElement | null> }) {
   const count = subtree.rows.filter((row) => !row.target).length;
   const targetDevice = subtree.rows.find((row) => row.target)?.agent.device_id;
   const closeAllBlocked = subtree.unknown || subtree.targetUnknown;

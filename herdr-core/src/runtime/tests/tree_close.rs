@@ -132,6 +132,11 @@ pub(super) fn tree_catalog() -> session_sync::PrecomputedCatalog {
 pub(super) const EVERY: [&str; 5] = ["w1:p1", "w1:p2", "w1:p3", "w1:p4", "w5:p5"];
 
 pub(super) fn tree_runtime(status: &[(&str, &str)]) -> Runtime {
+    live_runtime(tree_payload(&EVERY, status))
+}
+
+/// A runtime connected to a Herdr that takes every request, showing `payload`.
+fn live_runtime(payload: SessionSnapshotPayload) -> Runtime {
     let mut runtime = runtime();
     runtime.restore_hint_pending = false;
     let socket_path = std::env::temp_dir()
@@ -149,9 +154,7 @@ pub(super) fn tree_runtime(status: &[(&str, &str)]) -> Runtime {
         api_connector: Arc::new(hide_herdr_client::LocalSocketConnector::new(&socket_path)),
         node: Arc::new(hide_node::Local::of_process()),
     });
-    assert!(
-        runtime.ingest_session_with_catalog(Ok(tree_payload(&EVERY, status)), Some(tree_catalog()))
-    );
+    assert!(runtime.ingest_session_with_catalog(Ok(payload), Some(tree_catalog())));
     runtime
 }
 
@@ -394,59 +397,284 @@ fn a_refused_descendant_keeps_its_ancestors_open_while_the_other_branch_closes()
     assert!(!started(&runtime).contains(&"w1:p2".to_owned()));
 }
 
-#[test]
-fn a_tree_that_cannot_start_every_local_close_starts_none() {
-    let mut runtime = tree_runtime(&[]);
-    for index in 0..19 {
-        runtime.ensure_pending_close_from_request(&close_capture_request(&format!("held-{index}")));
+/// A parent `w1:p1` with `children` delegated children, each in its own tab
+/// as a delegated child opens, and an unrelated root `w1:q`, all in project A;
+/// only the panes in `present` are open.
+fn wide_payload(children: usize, present: &[String]) -> SessionSnapshotPayload {
+    let mut all = vec![("w1:t1".to_owned(), "w1:p1".to_owned(), None)];
+    all.push(("w1:tq".to_owned(), "w1:q".to_owned(), None));
+    for index in 0..children {
+        all.push((
+            format!("w1:tc{index}"),
+            format!("w1:c{index}"),
+            Some("w1:p1"),
+        ));
     }
-    close_tree(&mut runtime, pane_target("w1:p2"), &["w1:p3"], true);
-    assert!(!started(&runtime).contains(&"w1:p3".to_owned()));
-    assert!(runtime.tree_closes.is_empty());
-    assert_eq!(
-        runtime
-            .snapshot()
-            .status
-            .last_error
-            .as_ref()
-            .map(|error| error.kind.as_str()),
-        Some("tree_close.capacity")
-    );
+    let (mut tabs, mut panes, mut layouts, mut agents) = (vec![], vec![], vec![], vec![]);
+    for (index, (tab, pane, parent)) in all.iter().enumerate() {
+        if !present.contains(pane) {
+            continue;
+        }
+        panes.push(serde_json::json!({"pane_id": pane, "cwd": A}));
+        tabs.push(serde_json::json!({"workspace_id": "w1", "tab_id": tab, "label": ""}));
+        layouts.push(serde_json::json!({
+            "workspace_id": "w1",
+            "tab_id": tab,
+            "zoomed": false,
+            "area": {"x": 0, "y": 0, "width": 80, "height": 24},
+            "focused_pane_id": pane,
+            "panes": [{"pane_id": pane, "rect": {"x": 0, "y": 0, "width": 80, "height": 24}}],
+            "splits": []
+        }));
+        agents.push(serde_json::json!({
+            "id": format!("agent-{pane}"),
+            "pane_id": pane,
+            "agent": "claude",
+            "agent_status": "idle",
+            "spawned_from_pane_id": parent,
+            "state_change_seq": index + 1,
+            "tokens": {"task": format!("Task {pane}")}
+        }));
+    }
+    crate::sidebar::owned_label_fixture(serde_json::json!({
+        "agents": agents,
+        "focused_workspace_id": "w1",
+        "focused_pane_id": "w1:p1",
+        "workspaces": [
+            {"workspace_id": "w1", "label": "a", "active_tab_id": "w1:t1"},
+            {"workspace_id": "w5", "label": "b", "active_tab_id": null}
+        ],
+        "tabs": tabs,
+        "panes": panes,
+        "layouts": layouts
+    }))
+    .expect("wide session payload")
 }
 
-#[test]
-fn an_admitted_tree_keeps_room_for_its_later_closes() {
-    let mut runtime = tree_runtime(&[]);
-    for index in 0..16 {
-        runtime.ensure_pending_close_from_request(&close_capture_request(&format!("held-{index}")));
-    }
-    // Four local closes fit exactly; three are still waiting.
-    close_tree(
-        &mut runtime,
-        pane_target("w1:p1"),
-        &["w1:p2", "w1:p3"],
-        true,
-    );
-    assert_eq!(runtime.tree_close_reserved_slots(), 2);
-    // An ordinary close may not take the room the tree still needs.
-    let event = serde_json::to_vec(&serde_json::json!({
-        "schema_version": SCHEMA_VERSION,
-        "kind": "close_pane",
-        "payload": {"pane_id": "w1:p4", "confirmed": true}
-    }))
-    .unwrap();
-    runtime.dispatch_json(&event);
+fn wide_children(children: usize) -> Vec<String> {
+    (0..children).map(|index| format!("w1:c{index}")).collect()
+}
+
+fn ingest_wide(runtime: &mut Runtime, children: usize, present: &[String]) {
+    runtime.ingest_session_with_catalog(Ok(wide_payload(children, present)), Some(tree_catalog()));
+}
+
+fn close_pane(runtime: &mut Runtime, pane: &str) {
     runtime.dispatch_json(
         &serde_json::to_vec(&serde_json::json!({
             "schema_version": SCHEMA_VERSION,
             "kind": "close_pane",
-            "payload": {"pane_id": "w5:p5", "confirmed": true}
+            "payload": {"pane_id": pane, "confirmed": true}
         }))
         .unwrap(),
     );
-    assert!(!started(&runtime).contains(&"w5:p5".to_owned()));
+}
+
+fn last_error_kind(runtime: &Runtime) -> Option<String> {
+    runtime
+        .snapshot()
+        .status
+        .last_error
+        .as_ref()
+        .map(|error| error.kind.clone())
+}
+
+#[test]
+fn a_tree_wider_than_the_close_slots_is_admitted_and_closes_every_pane() {
+    // The operator's case: 33 children whose agents ended, each pane left
+    // open in its own tab, so the close names 34 local panes, more than the
+    // 20 close records Hide keeps at once.
+    const CHILDREN: usize = 33;
+    let mut present = wide_children(CHILDREN);
+    present.extend(["w1:p1".to_owned(), "w1:q".to_owned()]);
+    let mut runtime = live_runtime(wide_payload(CHILDREN, &present));
+    let children = wide_children(CHILDREN);
+    let listed = children.iter().map(String::as_str).collect::<Vec<_>>();
+
+    close_tree(&mut runtime, pane_target("w1:p1"), &listed, true);
+    assert_eq!(runtime.tree_closes.len(), 1, "the whole tree is admitted");
+    assert_eq!(last_error_kind(&runtime), None);
+    let running = started(&runtime).len();
+    assert!(
+        (1..crate::recent_closed::RECENT_CLOSED_LIMIT).contains(&running),
+        "the children start a slot at a time, leaving room: {running}"
+    );
+
+    // An ordinary close beside the tree still finds a slot.
+    close_pane(&mut runtime, "w1:q");
+    assert!(started(&runtime).contains(&"w1:q".to_owned()));
+    present.retain(|pane| pane != "w1:q");
+
+    let mut rounds = 0;
+    while !runtime.tree_closes.is_empty() {
+        rounds += 1;
+        assert!(rounds <= CHILDREN + 1, "the tree keeps moving");
+        let closing = started(&runtime);
+        assert!(
+            !closing.is_empty(),
+            "a node holds a slot until the tree ends"
+        );
+        present.retain(|pane| !closing.contains(pane));
+        ingest_wide(&mut runtime, CHILDREN, &present);
+    }
+    assert!(
+        present.is_empty(),
+        "every listed pane and the target closed"
+    );
+    assert_eq!(
+        last_error_kind(&runtime),
+        None,
+        "nothing was refused halfway"
+    );
+}
+
+#[test]
+fn a_tree_with_no_free_close_slot_is_refused_with_the_limit_and_one_free_slot_runs_it() {
+    let mut runtime = tree_runtime(&[]);
+    hold_closes(&mut runtime, 19);
+    // p4's own close runs at the front of the queue throughout.
+    close_pane(&mut runtime, "w1:p4");
+    close_tree(&mut runtime, pane_target("w1:p2"), &["w1:p3"], true);
+    assert!(!started(&runtime).contains(&"w1:p3".to_owned()));
+    assert!(runtime.tree_closes.is_empty());
+    let error = runtime.snapshot().status.last_error.clone().unwrap();
+    assert_eq!(error.kind, "tree_close.capacity");
+    assert!(
+        !error.message.contains("earlier close"),
+        "the refusal names the limit, not an earlier close: {}",
+        error.message
+    );
+
+    // With one slot free the same close runs through it, a node at a time.
+    settle_held(&mut runtime, 0..1);
+    close_tree(&mut runtime, pane_target("w1:p2"), &["w1:p3"], true);
+    assert_eq!(runtime.tree_closes.len(), 1);
+    assert!(started(&runtime).contains(&"w1:p3".to_owned()));
+    sent(&mut runtime, "w1:p3");
     leave(&mut runtime, &["w1:p1", "w1:p2", "w1:p4", "w5:p5"]);
+    assert!(
+        !started(&runtime).contains(&"w1:p2".to_owned()),
+        "p3's finished record keeps the slot while it queues behind p4's close"
+    );
+    leave(&mut runtime, &["w1:p1", "w1:p2", "w5:p5"]);
+    assert!(
+        started(&runtime).contains(&"w1:p2".to_owned()),
+        "the target takes the slot its child's close left"
+    );
+}
+
+#[test]
+fn an_admitted_tree_keeps_its_slots_while_ordinary_closes_take_the_rest() {
+    let mut runtime = tree_runtime(&[]);
+    hold_closes(&mut runtime, 16);
+    close_pane(&mut runtime, "w1:p4");
+    // Three slots are free and the tree takes two of them.
+    close_tree(&mut runtime, pane_target("w1:p2"), &["w1:p3"], true);
+    assert!(started(&runtime).contains(&"w1:p3".to_owned()));
+    close_pane(&mut runtime, "w5:p5");
+    assert!(
+        started(&runtime).contains(&"w5:p5".to_owned()),
+        "an ordinary close gets the free slot"
+    );
+    close_pane(&mut runtime, "w1:p1");
+    assert!(
+        !started(&runtime).contains(&"w1:p1".to_owned()),
+        "the slot the tree still needs is not taken"
+    );
+    // p3's finished record waits behind p4's close in the queue, so the
+    // target starts on the tree's second slot.
+    sent(&mut runtime, "w1:p3");
+    leave(&mut runtime, &["w1:p1", "w1:p2", "w1:p4", "w5:p5"]);
+    assert!(
+        runtime
+            .close_operations
+            .values()
+            .any(|operation| operation.target_id == "w1:p3"),
+        "p3's record is still queued"
+    );
     assert!(started(&runtime).contains(&"w1:p2".to_owned()));
+}
+
+#[test]
+fn a_node_waiting_for_a_slot_held_behind_an_unresolved_close_fails_at_once() {
+    let mut runtime = tree_runtime(&[]);
+    hold_closes(&mut runtime, 19);
+    // One slot: p3 takes it, and its record cannot leave the queue while the
+    // close in front waits for the operator (a failed replacement shell).
+    close_tree(&mut runtime, pane_target("w1:p2"), &["w1:p3"], true);
+    let front = runtime.close_operations.get_mut("held-0").unwrap();
+    front.phase = "failed".to_owned();
+    front.request.context.replacement_shell = true;
+    sent(&mut runtime, "w1:p3");
+    leave(&mut runtime, &["w1:p1", "w1:p2", "w1:p4", "w5:p5"]);
+    assert!(
+        runtime.tree_closes.is_empty(),
+        "the target fails instead of waiting forever"
+    );
+    assert!(!started(&runtime).contains(&"w1:p2".to_owned()));
+    assert_eq!(
+        last_error_kind(&runtime).as_deref(),
+        Some("tree_close.incomplete")
+    );
+}
+
+/// `count` ordinary closes of other tabs, each still preparing.
+fn hold_closes(runtime: &mut Runtime, count: usize) {
+    for index in 0..count {
+        runtime.ensure_pending_close_from_request(&close_capture_request(&format!("held-{index}")));
+    }
+}
+
+/// The held closes `range` finish and leave the close queue.
+fn settle_held(runtime: &mut Runtime, range: std::ops::Range<usize>) {
+    for index in range {
+        runtime
+            .close_operations
+            .get_mut(&format!("held-{index}"))
+            .unwrap()
+            .phase = "completed".to_owned();
+    }
+    runtime.promote_close_reservations();
+}
+
+/// Herdr has taken `pane`'s close, so the topology confirms it rather than
+/// cancelling a close that never left.
+fn sent(runtime: &mut Runtime, pane: &str) {
+    runtime
+        .close_operations
+        .values_mut()
+        .find(|operation| operation.target_id == pane)
+        .unwrap()
+        .phase = "awaiting_topology".to_owned();
+}
+
+#[test]
+fn the_target_record_carries_the_trees_progress() {
+    let mut runtime = tree_runtime(&[]);
+    close_tree(
+        &mut runtime,
+        pane_target("w1:p1"),
+        &["w1:p2", "w1:p3", "w1:p4", "w5:p5"],
+        true,
+    );
+    leave(&mut runtime, &["w1:p1", "w1:p2", "w1:p4"]);
+    let operations = runtime.snapshot().status.async_operations.clone();
+    let target = operations
+        .iter()
+        .find(|operation| operation.kind == "tree.close" && operation.stage == "target")
+        .expect("the target's record");
+    assert_eq!(target.target_id, "w1:p1");
+    let tree = operations
+        .iter()
+        .filter(|operation| operation.scope_id == target.scope_id)
+        .collect::<Vec<_>>();
+    assert_eq!(tree.len(), 5);
+    assert_eq!(
+        tree.iter()
+            .filter(|operation| operation.phase == "completed")
+            .count(),
+        2
+    );
 }
 
 #[test]

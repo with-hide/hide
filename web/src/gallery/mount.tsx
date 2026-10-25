@@ -22,6 +22,7 @@ import { UsageScene } from "./UsageScene";
 import { ProjectSettingsScene } from "./ProjectSettingsScene";
 import { SessionWorkScene } from "./SessionWorkScene";
 import { PrCardScene } from "./PrCardScene";
+import { CloseTreeScene } from "./CloseTreeScene";
 import { MissionScene } from "./MissionScene";
 import { PlanScene } from "./PlanScene";
 import { PracticeScene, practiceSceneParams } from "./PracticeScene";
@@ -47,6 +48,11 @@ export function mountGallery(root: Root) {
     }
     if (scene === "project-settings") {
       root.render(<StrictMode><ProjectSettingsScene params={params} /></StrictMode>);
+      return;
+    }
+    if (scene === "close-tree") {
+      document.title = "hide · Close tree scene";
+      root.render(<StrictMode><CloseTreeScene params={params} /></StrictMode>);
       return;
     }
     if (scene === "pr-card") {
