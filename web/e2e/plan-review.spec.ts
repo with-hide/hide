@@ -71,7 +71,7 @@ test("a plan put up for review asks on the pane, the agent's approval clears it,
 
     await plan(agent, ["approve"]);
     await expect(chip).toHaveAttribute("data-plan-chip-state", "running");
-    await expect(chip).toHaveText("1/4");
+    await expect(chip).toHaveText("Plan1/4");
     await expect(page.locator('[data-pane-header-band="answer"]')).toHaveCount(0);
     await expect(sidebar).not.toContainText("Plan review");
 
@@ -82,13 +82,14 @@ test("a plan put up for review asks on the pane, the agent's approval clears it,
     const refused = JSON.parse((await agent(["plan", "node", "web", "--status", "done"])).out.trim().split("\n").at(-1)!) as Answer;
     expect([refused.ok, refused.reason]).toEqual([false, "plan_order_refused"]);
     await plan(agent, ["node", "core", "--status", "done"]);
-    await expect(chip).toHaveText("2/4");
+    await expect(chip).toHaveText("Plan2/4");
 
-    // The chip's popover is the small map; Larger draws it in the 보기 slot.
+    // The chip's popover is the checklist; Larger draws the map in the 보기 slot (PRD mission-plan-visibility B3, D-07).
     await chip.hover();
     const popover = page.locator("[data-pane-plan]");
-    await expect(popover.locator("[data-plan-step]")).toHaveCount(4);
-    await expect(popover.locator('[data-plan-step="core"]')).toHaveAttribute("data-step-status", "done");
+    await expect(popover.locator("[data-plan-row]")).toHaveCount(4);
+    await expect(popover.locator('[data-plan-row="core"]')).toHaveAttribute("data-step-status", "done");
+    await expect(popover.locator("[data-plan-graph]")).toHaveCount(0);
     await screenshot(page, "plan-chip-popover");
     await popover.locator("[data-pane-plan-large]").click();
     const map = page.locator('aside[data-detail="plan"]');

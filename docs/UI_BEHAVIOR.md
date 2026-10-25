@@ -1340,54 +1340,75 @@ A pane head's agent-tree button and a started backlog item (from ⌘K, a record 
 
 ### A mission's map
 
-A Conductor's mission (PRD software-factory-conductor) is drawn as a map in the 보기 slot, read from the core's mission record; the map edits nothing, and the operator changes a mission by talking to its Conductor.
-Only the operator opens the map: the Conductor pane's `크게 ›`, the sidebar row's mission chip, the rail's slot button or the Overview (B14; PRD mission-pane-chip D-02); no plan opens it by itself.
-Before the first plan the map is one `계획 중` line (B19).
-A summary row counts the elapsed time, the agents running over the cap, the nodes done over those in the plan, the decisions waiting and, while it is gone, `Conductor 없음` (B21).
-The nodes are drawn top down by what they wait on: every node that waits on nothing starts on the top row, and the edges meet one `보고·인계` card at the bottom.
-A card carries its status mark, title, worker line, elapsed time and one line: its PR mark and number, `↰ #N 위` when it is stacked on another, its branch for a direct change, or its last line (B15, B52).
-The worker line is the model and the effort (`<model>·<effort>`, `자동` while the Conductor chooses the effort), never the agent's name, which its logo beside the words already says: a working or review card shows the model its pane runs (the launch Hide recorded for that pane, `overview_graph.sessions`) and falls back to the plan's model, a planned card shows the plan's, and a worker with no model (an agent that takes none) shows the effort alone.
-A change card's left band is its pull request's state colour and its bar has four numberless steps, work, PR or branch, review, merge or main; a research or verify card draws no steps, its status mark says where it is (D-42).
-A card that waits on a failed or dropped node says so, and a stacked edge is dashed in the merged colour; a card that waits on a node not done yet names nothing, the edge above it does.
-Pressing a card opens its detail beside it with `터미널로 이동`, `기록` and `PR 카드` where they apply.
-A change card's last line is `지금: <단계> (n/m)` from its worker's own plan, and the Conductor's `--line` when the worker put up none (PRD hide-plan B16).
-Its detail's PR row carries the same four steps with their names, `코드 → PR → 리뷰 → 머지`, and the worker's plan sits folded under `이 에이전트의 계획 · <N분 전 갱신>`, opening to the plan's small map (B15).
+A Conductor's mission (PRD software-factory-conductor; PRD mission-plan-visibility) is drawn in the 보기 slot as one page that scrolls down, read from the core's mission record; the page edits nothing, and the operator changes a mission by talking to its Conductor.
+Only the operator opens it: the Conductor pane's `크게 ›`, the sidebar row's mission chip, the rail's slot button or the Overview (B14; PRD mission-pane-chip D-02); no plan opens it by itself.
+The page reads top down, with no tabs: the head, a banner only when the operator has something to decide or no Conductor holds the mission, the map at the slot's full width, and one `흐름` table (B12).
+A finished or cancelled mission puts the Conductor's report and a results table between the head and the map (B23, B24).
+
+The head is the mission's state (`계획 중`, `진행 중`, `머지 대기`, `✓ 끝남` or a grey `취소`), its time (`n시간째` while it runs, `n시간 걸림` once it ends), a cell per node in the plan in its state's colour, and `n / m 끝`; below it one legend line counts each state that has nodes in it, `끝 3 · 리뷰 1 · 작업 1 · 판단 1 · 대기 2`, with `맞춤 / 100%` at its end (B13).
+The head carries no PR count, no main count and no cap; the results and the map carry those.
+Every state colour is one token of `design/tokens.json` (`--mission-done`, `-working`, `-review`, `-hold`, `-failed`, `-waiting`, `-cancelled`), and the legend's swatch, a card's border, a chip's cell and a flow bar use the same one (B14).
 A decision the Conductor waits on is one banner with `대화로 이동`; a mission whose Conductor is gone shows `Conductor 없음` with `이어받기`, which starts a new agent in the mission's checkout told to take the mission, and the core refuses a second Conductor while the first is there (B44).
+Before the first plan the page is the head and one `계획 중` line (B19).
+
+The nodes are drawn top down by what they wait on: every node that waits on nothing starts on the top row, and the edges meet one `보고·인계` card at the bottom.
+A card's whole border is its node's state: green done (its words dimmed), blue working, purple in review, yellow held for a decision, red failed, and a dashed grey border for a node still waiting; a card at work, in review or held glows faintly outside its border, and no card has a left band (B14).
+A cancelled mission's unfinished cards are dashed grey and rest, and no edge from them is lit.
+A card carries its status mark, title, badges, worker line with its result at the end, a change node's four step cells, and, while its worker is at it, one line of where it is (B15).
+The worker line is the model and the effort (`<model>·<effort>`, `자동` while the Conductor chooses the effort), never the agent's name, which its logo beside the words already says: a working or review card shows the model its pane runs (the launch Hide recorded for that pane, `overview_graph.sessions`) and falls back to the plan's model, a planned card shows the plan's, and a worker with no model (an agent that takes none) shows the effort alone.
+A result is drawn by the node's kind and only when the record holds it (B22): a pull request is `⑂ #n` in its PR state's colour, which is the only place the PR state's colour shows, with `↰ #N 기반` when it is stacked on another; a direct change is its branch; research is `결론 ▸`, whose line opens in its row; a verify node is its line.
+A mission with no pull request shows no PR number anywhere.
+A change card's four step cells are code, PR, review and merge for a pull request and code, checks, review and main for a direct change, the step it is at in its state's colour; a research or verify card draws no steps (B15).
+A card tried twice or more carries `↻n`, and a card the last replan changed carries `✎` with its reason on hover or focus (B16).
+A card with no result and no worker at it says why it waits on a failed or dropped node, else its kind; a stacked edge is dashed in the merged colour, and an edge from a card at work is drawn in the working colour while the mission is open.
 Every node is drawn, done ones too, so the map keeps one shape from the first plan to the last report.
-A map wider than the slot is shrunk to the slot's width, so every edge shows at once and the slot scrolls only down; `맞춤 / 100%` at the summary row's end draws it at its own size with scrolling instead, and a card's detail always opens at full size.
-A card whose worker is at it (working or in review) is outlined in the working colour, its PR band kept, and its outgoing edges are drawn in the same colour.
-When the device that runs the mission disconnects, the map keeps its last values dimmed under a note and invents no number (B20).
+A map wider than the slot is shrunk to the slot's width, so every edge shows at once and the page scrolls only down; `100%` draws it at its own size, scrolling sideways.
+Pressing a card scrolls the `흐름` table to that node's row and opens it, showing the row whatever the table's filter hid (B20).
+
+The `흐름` table has a row per node in the order they wait on each other: its status mark, its title with its kind in one word (`조사`, `직접`, `검증`; a pull request change says none), its result, and a bar on one time axis for the whole mission, from its start to now while it runs or to its end (B17).
+The axis carries four times, the last one `지금` while the mission runs, and `전체 · 지금 · 끝남` filters the rows to every node, the ones not finished, or the finished ones.
+Until the core records a mission's events, a row's bar is one stretch in its state's colour from the node's start to its finish, or to the axis end while it runs, and no bar before it starts (B19).
+Pressing a row, or Enter or Space on it, opens it: when the node started and finished, its kind, worker, attempts, what it waits on, its PR steps, review, current line, why it changed and its done criterion, `터미널로 이동`, `기록` and `PR 카드` for a node with a pull request, and the worker's own plan folded under `이 에이전트의 계획 · <N분 전 갱신>`, which opens to the plan's checklist (B20).
+A finished mission's report shows its first three lines with `펼치기`, and its results table lists each done node that left something with its kind and result, the research conclusion written out (B23).
+When the device that runs the mission disconnects, the page keeps its last values dimmed under a note and invents no number (B20, PRD mission-plan-visibility B38).
 A build from before missions opens with an empty 보기 slot when the saved slot held a map; the rest of the saved screen loads as it was.
 
 ### A mission on its Conductor's pane
 
-A Conductor's pane shows its mission on its head (PRD mission-pane-chip), where a plan chip would be, so a mission's progress stays with the pane that runs it and follows the operator nowhere else.
-The mission chip sits right after the title with the waypoints mark: `계획 중` (dim) before the first plan, `미션 n/m` once there is one, the nodes done over those in the plan, `판단 1` in the warning colour while a decision waits on an open mission, a colour it keeps while its map is open, `머지 대기`, `완료` with a green `m/m` once done, and `취소` (dim) (B1, B2).
+A Conductor's pane shows its mission on its head (PRD mission-pane-chip; PRD mission-plan-visibility), where a plan chip would be, so a mission's progress stays with the pane that runs it and follows the operator nowhere else.
+The mission chip sits right after the title: the waypoints mark, the word for its state, a cell per node in the plan and `n/m` (B8).
+It reads `계획 중` (dim) before the first plan and no cells, `미션` with the cells and `n/m` while the mission runs, `판단 1` in the decision colour while a decision waits on an open mission, a colour it keeps while its popover is open, `머지 대기`, a green check with `미션` and `m/m` once done, and a grey `취소` once cancelled.
+A cell is a node in its state's colour, in the order the nodes wait on each other, and a dropped node has none; past 20 nodes each run of one state is drawn as one stretch as long as its nodes, so the chip keeps its width while `n/m` stays exact (B8).
+The chip's accessible name says the mission, its state, its count and the first node at work (`미션 … · 미션 4/10 지금 <node>`), since the cells are not read out (B36).
 The pane shows the mission chip instead of its session's own plan chip, whose plan stays in the session record (D-07); a pane that conducts nothing shows no mission chip, and while the core cannot read the mission record the pane shows none, as the sidebar row does (B10).
-The chip opens, pins and closes its small map as the plan chip does ([A plan's map](#a-plans-map)): the pointer or the keyboard's focus opens it, a press, Enter or Space on the focused chip, or the Show plan chord (⇧⌘U, Alt+Shift+U on Windows and Linux) pins it, and a second press, the chord or Esc closes a pinned map, the keyboard staying where it was; Esc on a map the pointer only shows goes to the terminal (B3, B4).
-The popover has the plan popover's width; its head is `미션 n/m`, or the chip's state word, `· 판단 1` while a decision waits, and `크게 ›`, which opens the big map in the 보기 slot and closes the popover (B5).
-While a decision waits its first line is `! <decision>` in the warning colour with `대화로`, which brings the Conductor pane forward with the keyboard in its terminal (B9).
-Done nodes are not drawn: one line with a dot per done node and `끝남 N ▸` stands for them, and pressing it opens the big map (B6).
-The nodes still to do are drawn top down by what they wait on as one-line cards (status mark, title, PR number) into one `보고·인계` card; a failed card has the destructive outline, a waiting card is dashed and a stacked edge is dashed in the merged colour, and a dropped node, which left the plan, is not drawn (B7).
-A row of more than two cards shows its first card and one `+N개` card, which every edge into or out of the folded nodes meets (B8).
-Before the first plan the map is one `계획 중` line, and when the mission's device does not answer it keeps its last values dimmed under the big map's note (B10); the footer is `Conductor 기록 열기` with the chord.
+The pane's second row shows `! <decision>` in the decision colour while a decision waits, else `도는 중 n · <first node> 외 k` while workers are at nodes, in the progress place; with no node at work it falls back to the agent's own progress (B9).
+The chip opens, pins and closes its popover as the plan chip does ([A plan's map](#a-plans-map)): the pointer or the keyboard's focus opens it, a press, Enter or Space on the focused chip, or the Show plan chord (⇧⌘U, Alt+Shift+U on Windows and Linux) pins it, and a second press, the chord or Esc closes a pinned popover, the keyboard staying where it was; Esc on a popover the pointer only shows goes to the terminal (B3, B4).
+The popover has the plan popover's width and no map, which is drawn only in the 보기 slot; `크게 ›` at its head opens the page there and closes the popover, and there is no record footer, the pane ⋯ menu and the sidebar row opening the record (B7).
+While the mission is open its head is `미션 n/m`, or the chip's state word; while a decision waits its first line is `! <decision>` with `대화로`, which brings the Conductor pane forward with the keyboard in its terminal; then a row per node at work (status mark, title, PR number and where it is: `코드`, `PR`, `리뷰`, `머지`, `검사`, `main`, `조사` or `검증`), and one line `끝남 k · 다음 j` (B10).
+Once the mission ends its head is `✓ 끝남 · <걸린 시간>`, or a grey `취소 · <걸린 시간>`, then the first two lines of the Conductor's report and at most three results by kind with `+N개` for the rest (B11).
+Before the first plan the popover is one `계획 중` line, and when the mission's device does not answer it keeps its last values dimmed under the big map's note (B10).
 When a mission's first plan lands while the operator looks at its Conductor pane, the keyboard pane of the visible Agent tab of the Workspace in front in a window that is shown and focused (the desktop host's report, or a browser tab's own focus), that pane's popover opens pinned once and the keyboard stays in the terminal; anywhere else, another pane, tab, Workspace, window or app, nothing opens and only the chip changes (B12, B13; D-03, D-06).
 The page decides it from two consecutive frames it received, a mission going from no nodes to some or first appearing with nodes, so a load, a reconnect or a restart opens nothing, nor does a replan (B14; `web/src/missionReveal.ts`).
+The sidebar row's and the Overview record's mission chip keep their words and wear the mission's state colour: the decision colour while one waits, else working, review while it waits to merge, done or cancelled (B35).
 
 ### A plan's map
 
-A session's own plan (PRD hide-plan) shows in three places, all the same drawing (`PlanGraph`, the mission map's `DependencyGraphView` with a one-line card per step): the pane head's chip, the 보기 slot and a mission node's detail ([A mission's map](#a-missions-map)).
-The plan chip sits where the task chip was, between the title and the PR chip, only while the pane's session has a plan and conducts no mission ([A mission on its Conductor's pane](#a-mission-on-its-conductors-pane)): the list-checks mark with `n/m`, `검토` in the warning colour while the plan waits for the operator's review, and a green `m/m` once every step is done or dropped.
-The pointer or the keyboard's focus on it opens a small map, a press or ⇧⌘U (Alt+Shift+U on Windows and Linux) pins it, and a second press, ⇧⌘U or Esc closes it; it never takes the keyboard from the terminal.
-The popover's head is `계획 n/m · <N분 전 갱신> · 크게 ›` (`계획 끝남 m/m` once finished), then the map, `맡긴 일 N · 끝남 k` for a pane with children and `기록 열기` with the chord.
+A session's own plan (PRD hide-plan; PRD mission-plan-visibility D-07) is read as a checklist in the pane head chip's popover, in the session record and folded in a mission node's row, and drawn as a map (`PlanGraph`, the mission map's `DependencyGraphView` with a one-line card per step) only in the 보기 slot.
+The plan chip sits where the task chip was, between the title and the PR chip, only while the pane's session has a plan and conducts no mission ([A mission on its Conductor's pane](#a-mission-on-its-conductors-pane)): the list-checks mark, the word `계획`, a cell per step and `n/m`; `검토` in the warning colour with the current step's cell in it while the plan waits for the operator's review; and a green check with `계획` and `m/m` once every step is done or dropped (B1).
+A cell is a step in the checklist's order, done green, the current one blue, the rest empty, and a dropped step has none; past 20 steps each run of one state is one stretch, so the chip keeps its width while `n/m` stays exact, and its accessible name says `계획 n/m, 지금 <단계>` (B1, B36).
+The pointer or the keyboard's focus on it opens the checklist, a press or ⇧⌘U (Alt+Shift+U on Windows and Linux) pins it, and a second press, ⇧⌘U or Esc closes it; it never takes the keyboard from the terminal.
+The popover's head is `계획 n/m · <N분 전 갱신> · 크게 ›`, then the checklist and `맡긴 일 N · 끝남 k` for a pane with children; it has no map and no record footer, the pane ⋯ menu and the sidebar row opening the record (B3, B7).
+The checklist runs in the order the steps wait on each other, a step beside an earlier one at the same depth indented once: a done step has a check and dim words, the current one a blue mark, a raised background and `지금`, a step still ahead an empty circle, and a dropped one is struck through and dimmed; every title is whole, wrapping when long, an `output` of `pr` or `file` is a small tail, and a step the last `set` changed carries the history mark with its reason on hover or keyboard focus (B3, B4).
+A list taller than the popover scrolls inside it, and opening it shows the current step (B5).
+A finished plan's head is `계획 끝남 m/m · <걸린 시간>`, from the plan's making to its last update, and its checklist folds into one line `✓ m단계 끝` and the outputs its done steps left (B6).
 `크게 ›` and the pane ⋯ menu's `계획` open the map in the 보기 slot; the lane opens if closed and the keyboard stays in the terminal, and putting a plan up never opens it by itself.
-The steps run top down by what they wait on, parallel ones side by side: a done step is filled, the current one carries the working colour and `지금`, one that waits on a step not finished yet is dashed, a dropped one is struck through and dimmed, an `output` of `pr` or `file` is a small tail, and a step the last `set` changed carries the history mark with its reason.
+On the map the steps run top down by what they wait on, parallel ones side by side: a done step is filled, the current one carries the working colour and `지금`, one that waits on a step not finished yet is dashed, a dropped one is struck through and dimmed, an `output` of `pr` or `file` is a small tail, and a step the last `set` changed carries the history mark with its reason.
 An edge from a finished step is faint and one still ahead is bright.
 In the 보기 slot the head says `계획 n/m · <N분 전 갱신>` (`계획 N단계` while it waits for review), and pressing a card opens its detail: its state, its line, what it waits on and why it changed.
 While the plan waits for review a band says `검토 기다림 · 대화에서 답하세요` with one button, `대화로`, which goes to the pane; there is no button that approves, and the band goes once the agent runs `hide plan approve`.
 A finished plan's band says `끝남`; a plan whose session is gone draws one line saying so.
 While a plan runs, the pane's second row shows the current step and its line, `<단계> · <line>`, in the progress place; while it waits for review the row is the ask band, `Plan review · N steps` (`계획 검토 · N단계` in Korean) worded by the shell from the subject the core sends, and the sidebar's second line says the same ([status-model.md](status-model.md#a-plan-waiting-for-review-is-a-question)).
-The session record has a `계획` section with the count, `끝남` once finished, and the small map, kept after the session ends; while the session works its `지금` box says the current step and its line as the second row does.
+The session record has a `계획` section with the count, `끝남` once finished, and the checklist, kept after the session ends; while the session works its `지금` box says the current step and its line as the second row does.
 Settings › Agents lists the three skills Hide installs, `hide`, `hide-conductor` (waypoints) and `hide-plan` (list-checks), each with one line on what it is for and the help it points at; they come and go with each agent's switch.
 
 ### The session record
@@ -2389,7 +2410,7 @@ Chapter 4 (`delegate`) hands work on by saying it to a lead agent, in three ways
 The lead takes the learner's own words for the first three; the last goes only when the request holds the copied ID, and the lead asks for it otherwise.
 The agents' answers and letters are the world's script, drawn in the panes and the list; the learner only types the requests and chooses the menu item.
 
-Chapter 8 hands a Conductor a job of several pull requests as a mission: its world draws the plan, the workers in delegated tabs under the Conductor and the one decision it asks as an ordinary question, in `missions` the way the core keeps them, and the learner's answer in the conversation changes the plan; the first plan opens the pane chip's small map by itself under the shell's own rule ([A mission on its Conductor's pane](#a-mission-on-its-conductors-pane)), and the big map opens only from `크게 ›`, as a lane call the world numbers.
+Chapter 8 hands a Conductor a job of several pull requests as a mission: its world draws the plan, the workers in delegated tabs under the Conductor and the one decision it asks as an ordinary question, in `missions` the way the core keeps them, and the learner's answer in the conversation changes the plan; the first plan opens the pane chip's popover by itself under the shell's own rule ([A mission on its Conductor's pane](#a-mission-on-its-conductors-pane)), and the big map opens only from `크게 ›`, as a lane call the world numbers.
 
 Chapter 7 asks an agent to plan before it changes anything, opens the plan from the pane's plan chip and large in the 보기 slot, and approves it in the conversation, because Hide has no button that approves a plan; its world draws `plans` and lays the review on the agent's row as the core's question, and any words sent to the agent put the plan up, then approve it and start the first step.
 

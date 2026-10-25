@@ -1,48 +1,72 @@
-import { ChevronRightIcon, GitBranchIcon, HistoryIcon, XIcon } from "lucide-react";
-import { useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { PlanGraph } from "./PlanGraph";
+import { CheckIcon, ChevronRightIcon, GitBranchIcon, PencilIcon } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { PlanChecklist } from "./PlanChecklist";
 import { planNowLine } from "./plans";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
 import { DependencyGraphView, type EdgeLook } from "./DependencyGraph";
 import type { GraphEdge } from "./dependencyLayout";
-import { formatElapsed, useElapsed } from "./components/elapsed";
+import { formatElapsed, useElapsed, useMinuteClock } from "./components/elapsed";
+import { ProgressCells, TONE_BORDER, TONE_FILL, ToneSwatch } from "./components/mission-tone";
 import { PrMark } from "./components/pr-mark";
 import { StatusMark } from "./components/status-mark";
 import { Button } from "./components/ui/button";
-import { Popover, PopoverAnchor, PopoverContent } from "./components/ui/popover";
 import { ToggleGroup, ToggleGroupItem } from "./components/ui/toggle-group";
 import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
-import { requireInterfaceLanguage } from "./i18n/locale";
+import { formatDateTime } from "./i18n/format";
+import { requireInterfaceLanguage, type InterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
-import { launchModelOf, missionCounts, missionOf, missionOpen, nodeLine, nodeMark, stackWaiting, stepsOf, workerWords, kindWord } from "./missions";
+import {
+  flowShows,
+  flowSpan,
+  kindWord,
+  launchModelOf,
+  missionCells,
+  missionCounts,
+  missionLegend,
+  missionOf,
+  missionOpen,
+  missionResults,
+  nodeBar,
+  nodeLine,
+  nodeMark,
+  nodeResult,
+  nodeTone,
+  orderedNodes,
+  stackWaiting,
+  stepsOf,
+  workerWords,
+  type FlowFilter,
+  type LegendTone,
+  type NodeResult,
+} from "./missions";
 import { allAgents, agentsByPane } from "./paneAgents";
-import { PR_LOOK, staleLabel } from "./prMark";
+import { staleLabel } from "./prMark";
 import { layerDependencies } from "./projectBoard";
 import { machineName } from "./screenMachine";
 import { sessionOfAgent } from "./sessionWork";
-import type { Mission, MissionNode, PlanView, PrState } from "./snapshot";
+import type { Mission, MissionNode, MissionStatus, PlanView, RowMark } from "./snapshot";
 import { useShellStore } from "./store";
+import type { MessageKey } from "./i18n/catalogs";
 
-// A mission's map in the lane's 보기 slot (PRD software-factory-conductor
-// D-06, D-14, D-42, B14-B21, B43): its nodes top down by what they wait on,
-// each card with its worker, its PR mark and its four steps, and one line on
-// top only when the operator has something to decide or no Conductor holds
-// it. Every value is the core's (`MissionView`); the map words and draws it.
+// A mission's detail in the lane's 보기 slot (PRD software-factory-conductor
+// D-06, B14-B21, B43; PRD mission-plan-visibility D-10-D-14, D-19, D-25,
+// B12-B17, B19, B20, B22-B24): one page that scrolls down, its head with the
+// state, the time and a cell per node, a line only when the operator has
+// something to decide or no Conductor holds it, the map at the slot's full
+// width and one 흐름 table, a row per node on the mission's time axis. A
+// finished or cancelled mission puts its report and results first. Every
+// value is the core's (`MissionView`); the page words and draws it.
 
 /** The card that stands for the report every node ends in; a node key is letters, digits, `-`, `_` and `.`, so none is this. */
 const REPORT = "#report";
 
-/** The left band's colour on a card with a pull request (D-42 A): the PR mark's own state colour. */
-const BAND: Record<PrState, string> = {
-  failed: "border-l-pr-failed",
-  pending: "border-l-pr-pending",
-  mergeable: "border-l-pr-mergeable",
-  draft: "border-l-pr-draft",
-  merged: "border-l-pr-merged",
-  closed: "border-l-pr-closed",
-};
+/** A report longer than this many lines shows its first ones and `펼치기` (B23). */
+const REPORT_FOLD_LINES = 3;
+
+/** How many marks the time axis has, its two ends included (B17). */
+const AXIS_TICKS = 4;
 
 export function MissionMap({ missionId, actions }: { missionId: string; actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -59,13 +83,23 @@ function MapState({ text, tone, state }: { text: string; tone?: string; state: s
 
 function MissionBody({ mission, actions }: { mission: Mission; actions: Actions }) {
   const { t } = useInterfaceTranslation();
-  const [selected, setSelected] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [filter, setFilter] = useState<FlowFilter>("all");
   const [zoom, setZoom] = useState<Zoom>("fit");
   const device = useShellStore((s) => (mission.stale ? machineName(s.rest?.navigator?.devices, mission.device_id, t) : null));
-  const present = mission.conductor.present;
-  const takeover = !present && missionOpen(mission);
+  const open = missionOpen(mission);
+  const ended = mission.status === "done" || mission.status === "cancelled";
+  const takeover = !mission.conductor.present && open;
+  // A card pressed on the map opens its row, shown whatever the filter hid, and pressed again closes it (B20).
+  const openRow = (key: string) => {
+    if (expanded === key) return setExpanded(null);
+    const node = mission.nodes.find((candidate) => candidate.key === key);
+    if (node && !flowShows(node, filter)) setFilter("all");
+    setExpanded(key);
+  };
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-mission={mission.id} data-mission-status={mission.status} data-mission-stale={mission.stale || undefined}>
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto" data-mission={mission.id} data-mission-status={mission.status} data-mission-stale={mission.stale || undefined} data-mission-scroll="true">
+      <Head mission={mission} zoom={mission.nodes.length > 0 ? zoom : null} onZoom={setZoom} />
       {takeover ? (
         <Banner
           mark={<span aria-hidden="true" className="size-(--size-agent-mark) shrink-0 rounded-full border border-dashed border-muted-foreground" />}
@@ -73,26 +107,30 @@ function MissionBody({ mission, actions }: { mission: Mission; actions: Actions 
           action={<Button size="sm" onClick={() => actions.takeOverMission(mission.id)} data-mission-takeover="true">{t("mission.takeOver")}</Button>}
           data-mission-banner="no-conductor"
         />
-      ) : mission.decision && missionOpen(mission) ? (
+      ) : mission.decision && open ? (
         <Banner
           mark={<StatusMark mark="turn" />}
           text={t("mission.decide", { line: mission.decision })}
-          tone="text-warning"
+          tone="text-mission-hold"
           action={<Button size="sm" variant="secondary" onClick={() => actions.openAgent(mission.conductor.pane_id)} data-mission-conversation="true">{t("mission.toConversation")}</Button>}
           data-mission-banner="decision"
         />
       ) : null}
-      {/* Before the first plan the map is one line (B19). */}
-      {mission.nodes.length > 0 ? <Summary mission={mission} zoom={zoom} onZoom={setZoom} /> : null}
-      {mission.delay && missionOpen(mission) ? <p className="px-md pb-xs text-caption text-muted-foreground" data-mission-delay="true">{t("mission.delay", { line: mission.delay })}</p> : null}
+      {mission.delay && open ? <p className="px-md pb-xs text-caption text-muted-foreground" data-mission-delay="true">{t("mission.delay", { line: mission.delay })}</p> : null}
       {device ? <p className="px-md pb-xs text-caption text-muted-foreground" data-mission-stale-note="true">{t("mission.stale", { device })}</p> : null}
-      <div className={cn("min-h-0 flex-1 overflow-auto px-md pb-md pt-xs", mission.stale && "opacity-(--opacity-dimmed)")} data-mission-scroll="true">
+      <div className={cn("flex min-w-0 flex-col", mission.stale && "opacity-(--opacity-dimmed)")} data-mission-values={mission.stale ? "stale" : "live"}>
+        {ended ? <Ending mission={mission} /> : null}
         {mission.nodes.length === 0 ? (
-          <p className="text-body text-muted-foreground" data-mission-planning="true">{t("mission.planning")}</p>
+          <p className="px-md py-sm text-body text-muted-foreground" data-mission-planning="true">{t("mission.planning")}</p>
         ) : (
-          <FitWidth fit={zoom === "fit"}>
-            <Graph mission={mission} nodes={mission.nodes} selected={selected} onSelect={setSelected} actions={actions} />
-          </FitWidth>
+          <>
+            <div className={cn("min-w-0 px-md pb-md pt-sm", zoom === "actual" && "overflow-x-auto")}>
+              <FitWidth fit={zoom === "fit"}>
+                <Graph mission={mission} selected={expanded} onSelect={openRow} />
+              </FitWidth>
+            </div>
+            <FlowTable mission={mission} filter={filter} onFilter={setFilter} expanded={expanded} onExpand={setExpanded} actions={actions} />
+          </>
         )}
       </div>
     </div>
@@ -104,9 +142,8 @@ type Zoom = "fit" | "actual";
 
 /**
  * The map shrunk to the width it has, never grown: a wide row of nodes stays
- * one row, so what waits on what is read at a glance, and a card's detail
- * opens at full size. The box holds the shrunk size, so the slot scrolls only
- * down, or both ways at 100%.
+ * one row, so what waits on what is read at a glance. The box holds the
+ * shrunk size, so the page scrolls only down, or the map sideways at 100%.
  */
 function FitWidth({ fit, children }: { fit: boolean; children: ReactNode }) {
   const room = useRef<HTMLDivElement>(null);
@@ -144,7 +181,7 @@ function FitWidth({ fit, children }: { fit: boolean; children: ReactNode }) {
 
 function Banner({ mark, text, tone, action, ...data }: { mark: ReactNode; text: string; tone?: string; action: ReactNode } & Record<`data-${string}`, string>) {
   return (
-    <div className="mx-md mt-sm flex min-w-0 items-center gap-sm rounded-md bg-muted px-sm py-xs" {...data}>
+    <div className="mx-md mb-xs flex min-w-0 items-center gap-sm rounded-md bg-muted px-sm py-xs" {...data}>
       {mark}
       <span className={cn("min-w-0 flex-1 truncate text-body", tone)} title={text}>{text}</span>
       {action}
@@ -152,49 +189,155 @@ function Banner({ mark, text, tone, action, ...data }: { mark: ReactNode; text: 
   );
 }
 
-/** The numbers above the map (B19, B21): what the record holds, in the words of the mission's state. */
-function Summary({ mission, zoom, onZoom }: { mission: Mission; zoom: Zoom; onZoom: (zoom: Zoom) => void }) {
+const PILL: Record<MissionStatus, { key: MessageKey; tone: string }> = {
+  planning: { key: "mission.pill.planning", tone: "bg-muted text-muted-foreground" },
+  running: { key: "mission.pill.running", tone: "bg-mission-working/15 text-mission-working" },
+  merge_wait: { key: "mission.pill.mergeWait", tone: "bg-mission-review/15 text-mission-review" },
+  done: { key: "mission.pill.done", tone: "bg-mission-done/15 text-mission-done" },
+  cancelled: { key: "mission.pill.cancelled", tone: "bg-muted text-mission-cancelled" },
+};
+
+/**
+ * The head (B13): the mission's state, its time, a cell per node and
+ * `n / m 끝`, then one legend line counting each state with nodes in it. No
+ * PR count, no main count and no cap: the results and the map carry those.
+ */
+function Head({ mission, zoom, onZoom }: { mission: Mission; zoom: Zoom | null; onZoom: (zoom: Zoom) => void }) {
   const { t, i18n } = useInterfaceTranslation();
   const language = requireInterfaceLanguage(i18n.language);
-  const running = useElapsed(mission.status === "running" ? mission.started_at_unix_ms : null);
-  const { done, total, dropped } = missionCounts(mission);
-  const stack = stackWaiting(mission);
-  const items: { label: string; value: string; key: string }[] = [];
-  if (mission.status === "planning") {
-    items.push({ key: "planning", label: t("mission.planning"), value: "" });
-    items.push({ key: "nodes", label: t("mission.nodes"), value: String(mission.nodes.length) });
-    items.push({ key: "scope", label: t("mission.scope"), value: t(`mission.scope.${mission.scope}`) });
-  } else {
-    if (mission.status === "running" && running) items.push({ key: "elapsed", label: t("mission.elapsed"), value: running });
-    else if (mission.started_at_unix_ms != null) items.push({ key: "total", label: t("mission.total"), value: formatElapsed(language, (mission.closed_at_unix_ms ?? mission.started_at_unix_ms) - mission.started_at_unix_ms) });
-    if (mission.status === "running") items.push({ key: "agents", label: t("mission.agents"), value: `${mission.running}/${mission.cap}` });
-    items.push({ key: "done", label: t("mission.done"), value: `${done}/${total}` });
-    if (dropped > 0) items.push({ key: "dropped", label: t("mission.dropped"), value: String(dropped) });
-    if (mission.decision && missionOpen(mission)) items.push({ key: "decisions", label: t("mission.decisions"), value: "1" });
-    if (mission.status === "merge_wait") items.push({ key: "merge-wait", label: t("mission.mergeWait"), value: t("mission.stack", { count: stack }) });
-    if (mission.status === "done") items.push({ key: "finished", label: t("mission.finished"), value: "" });
-    if (mission.status === "cancelled") items.push({ key: "cancelled", label: t("mission.cancelled"), value: "" });
-    if (!mission.conductor.present && missionOpen(mission)) items.push({ key: "conductor", label: t("mission.conductor"), value: t("mission.none") });
-  }
+  const running = useElapsed(mission.status !== "done" && mission.status !== "cancelled" ? mission.started_at_unix_ms : null);
+  const { done, total } = missionCounts(mission);
+  const took = mission.started_at_unix_ms != null && mission.closed_at_unix_ms != null ? formatElapsed(language, mission.closed_at_unix_ms - mission.started_at_unix_ms) : null;
+  const time = took ? t("mission.elapsed.total", { elapsed: took }) : running ? t("mission.elapsed.running", { elapsed: running }) : null;
+  const pill = PILL[mission.status];
+  const legend = missionLegend(mission);
   return (
-    <div className="flex min-w-0 flex-wrap items-baseline gap-x-lg gap-y-xxs px-md pb-xs pt-sm text-body" data-mission-summary="true">
-      {items.map((item) => (
-        <span key={item.key} className="flex items-baseline gap-xs" data-mission-stat={item.key}>
-          <span className="text-muted-foreground">{item.label}</span>
-          {item.value ? <span className="font-semibold tabular-nums text-foreground">{item.value}</span> : null}
+    <div className="flex min-w-0 flex-col gap-xs px-md pb-sm pt-sm" data-mission-summary="true">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-md gap-y-xs text-body">
+        <span className={cn("flex shrink-0 items-center gap-xxs rounded-full px-sm text-caption font-semibold", pill.tone)} data-mission-pill={mission.status}>
+          {mission.status === "done" ? <CheckIcon aria-hidden="true" className="size-(--size-icon-sm)" /> : null}
+          {t(pill.key)}
         </span>
-      ))}
-      <ToggleGroup type="single" value={zoom} onValueChange={(value) => value && onZoom(value as Zoom)} aria-label={t("mission.zoom")} className="ml-auto self-center" data-mission-zoom={zoom}>
-        <ToggleGroupItem size="sm" value="fit" data-mission-zoom-choice="fit">{t("mission.zoom.fit")}</ToggleGroupItem>
-        <ToggleGroupItem size="sm" value="actual" data-mission-zoom-choice="actual">{t("mission.zoom.actual")}</ToggleGroupItem>
-      </ToggleGroup>
+        {time ? <span className="shrink-0 text-caption text-muted-foreground" data-mission-stat="time">{time}</span> : null}
+        {mission.nodes.length > 0 ? (
+          <>
+            <ProgressCells tones={missionCells(mission)} size="head" className="max-w-(--size-pr-popover)" />
+            <span className="shrink-0 text-caption text-muted-foreground" data-mission-stat="done">
+              {t("mission.doneOf", { done: String(done), total: String(total) })}
+            </span>
+          </>
+        ) : null}
+      </div>
+      {legend.length > 0 || zoom ? (
+        <div className="flex min-w-0 items-center gap-md">
+          <ul aria-label={t("mission.legend")} className="flex min-w-0 flex-1 flex-wrap gap-x-md gap-y-xxs text-caption text-muted-foreground" data-mission-legend={legend.map((entry) => `${entry.tone}:${entry.count}`).join(" ")}>
+            {legend.map((entry) => (
+              <li key={entry.tone} className="flex items-center gap-xs">
+                <ToneSwatch tone={entry.tone} />
+                {t(`mission.legend.${entry.tone}`)}
+                <span className="font-semibold tabular-nums text-foreground">{entry.count}</span>
+              </li>
+            ))}
+          </ul>
+          {/* How big the map below is drawn (맞춤 / 100%). */}
+          {zoom ? (
+            <ToggleGroup type="single" value={zoom} onValueChange={(value) => value && onZoom(value as Zoom)} aria-label={t("mission.zoom")} className="shrink-0" data-mission-zoom={zoom}>
+              <ToggleGroupItem size="sm" value="fit" data-mission-zoom-choice="fit">{t("mission.zoom.fit")}</ToggleGroupItem>
+              <ToggleGroupItem size="sm" value="actual" data-mission-zoom-choice="actual">{t("mission.zoom.actual")}</ToggleGroupItem>
+            </ToggleGroup>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
 
+/** A finished or cancelled mission's first part (B23, B24): the Conductor's report and the results table. */
+function Ending({ mission }: { mission: Mission }) {
+  const { t } = useInterfaceTranslation();
+  const [unfolded, setUnfolded] = useState(false);
+  const lines = mission.report?.split("\n") ?? [];
+  const long = lines.length > REPORT_FOLD_LINES;
+  const shown = long && !unfolded ? lines.slice(0, REPORT_FOLD_LINES) : lines;
+  const results = missionResults(mission);
+  return (
+    <div className="flex min-w-0 flex-col gap-sm px-md pb-sm">
+      {mission.report ? (
+        <div className={cn("flex min-w-0 flex-col gap-xxs rounded-md border-l-2 bg-muted px-sm py-xs text-body", mission.status === "done" ? "border-mission-done" : "border-mission-cancelled")} data-mission-report-text={unfolded ? "open" : "folded"}>
+          <p className="min-w-0 whitespace-pre-wrap break-words">{shown.join("\n")}</p>
+          {long ? (
+            <button type="button" aria-expanded={unfolded} onClick={() => setUnfolded(!unfolded)} className="w-fit rounded-xs text-caption text-primary outline-none hover:underline focus-visible:ring-1 focus-visible:ring-ring" data-mission-report-toggle="true">
+              {t(unfolded ? "mission.report.collapse" : "mission.report.expand")}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      {results.length > 0 ? (
+        <table className="w-full table-fixed border-collapse text-body" data-mission-results={results.length}>
+          <thead>
+            <tr className="border-b border-border text-left text-caption text-muted-foreground">
+              <th className="py-xxs pr-sm font-normal">{t("mission.flow.task")}</th>
+              <th className="w-(--size-flow-result) py-xxs pr-sm font-normal">{t("mission.results.kind")}</th>
+              <th className="py-xxs font-normal">{t("mission.flow.result")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {results.map(({ node, result }) => (
+              <tr key={node.key} className="border-b border-border/50" data-mission-result-row={node.key}>
+                <td className="truncate py-xxs pr-sm" title={node.title}>{node.title}</td>
+                <td className="py-xxs pr-sm text-muted-foreground">{t(shortKind(node))}</td>
+                <td className="min-w-0 py-xxs"><ResultTail result={result} stale={mission.github_stale} full /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : null}
+    </div>
+  );
+}
+
+/** A node's kind in one word (B17, B23): `조사`, `직접`, `검증`, or `PR` for a change through a pull request. */
+function shortKind(node: MissionNode): MessageKey {
+  if (node.kind === "research") return "mission.kind.short.research";
+  if (node.kind === "verify") return "mission.kind.short.verify";
+  return node.delivery === "direct" ? "mission.kind.short.direct" : "mission.kind.short.pr";
+}
+
+/**
+ * What a node left, by its kind (B22): `⑂ #n` in its pull request's state
+ * colour, a direct change's branch, `결론 ▸` for research or a verify node's
+ * line; `full` writes the conclusion itself, as the results table does.
+ */
+export function ResultTail({ result, stale, full = false }: { result: NodeResult; stale: boolean; full?: boolean }) {
+  const { t } = useInterfaceTranslation();
+  switch (result.kind) {
+    case "pr":
+      return result.state ? <PrMark state={result.state} number={result.number} stale={stale} data-node-pr={result.number} /> : <span className="shrink-0 font-mono text-caption text-subtle-foreground" data-node-pr={result.number}>#{result.number}</span>;
+    case "branch":
+      return (
+        <span className="flex min-w-0 items-center gap-xxs text-caption text-subtle-foreground" data-node-branch={result.branch}>
+          <GitBranchIcon aria-hidden="true" className="size-(--size-pr-icon) shrink-0" />
+          <span className="truncate font-mono">{result.branch}</span>
+        </span>
+      );
+    case "conclusion":
+      return full ? (
+        <span className="min-w-0 break-words text-caption" data-node-conclusion="full">{t("mission.result.conclusion")}: {result.line}</span>
+      ) : (
+        <span className="flex shrink-0 items-center text-caption text-foreground" title={result.line} data-node-conclusion="folded">
+          {t("mission.result.conclusion")}
+          <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />
+        </span>
+      );
+    case "verify":
+      return <span className={cn("min-w-0 text-caption text-muted-foreground", full ? "break-words" : "truncate")} title={result.line} data-node-verify="true">{result.line}</span>;
+  }
+}
+
 type GraphCard = { key: string; node: MissionNode | null };
 
-function Graph({ mission, nodes, selected, onSelect, actions }: { mission: Mission; nodes: MissionNode[]; selected: string | null; onSelect: (key: string | null) => void; actions: Actions }) {
+function Graph({ mission, selected, onSelect }: { mission: Mission; selected: string | null; onSelect: (key: string) => void }) {
+  const nodes = mission.nodes;
   const graph = useMemo(() => {
     const shown = new Set(nodes.map((node) => node.key));
     const cards: GraphCard[] = [...nodes.map((node) => ({ key: node.key, node })), { key: REPORT, node: null }];
@@ -213,7 +356,8 @@ function Graph({ mission, nodes, selected, onSelect, actions }: { mission: Missi
     const to = byKey.get(edge.to);
     // A stack's edge: the pull request below is the one above's base (B15).
     if (from && to && from.pr != null && to.base_pr === from.pr) return { tone: "text-pr-merged", dashed: true };
-    if (from && (from.status === "working" || from.status === "review")) return { tone: "text-agent-working" };
+    // A line from a node at work is lit only while the mission is open; a cancelled mission's work stopped.
+    if (from && (from.status === "working" || from.status === "review") && missionOpen(mission)) return { tone: "text-mission-working" };
     return { tone: "text-border" };
   };
   return (
@@ -224,23 +368,10 @@ function Graph({ mission, nodes, selected, onSelect, actions }: { mission: Missi
       gaps={{ layers: "--size-mission-layer-gap", nodes: "--size-mission-node-gap" }}
       edgeLook={edgeLook}
       draw={(card) =>
-        card.node ? (
-          <NodeCard key={card.key} mission={mission} node={card.node} open={selected === card.key} onOpen={(open) => onSelect(open ? card.key : null)} actions={actions} />
-        ) : (
-          <ReportCard key={card.key} mission={mission} />
-        )
+        card.node ? <NodeCard key={card.key} mission={mission} node={card.node} selected={selected === card.key} onSelect={() => onSelect(card.key)} /> : <ReportCard key={card.key} mission={mission} />
       }
     />
   );
-}
-
-/** A node's duration: to its finish, or counting while it runs. */
-function Duration({ node }: { node: MissionNode }) {
-  const { i18n } = useInterfaceTranslation();
-  const language = requireInterfaceLanguage(i18n.language);
-  const running = useElapsed(node.finished_at_unix_ms == null ? node.started_at_unix_ms : null);
-  const text = node.started_at_unix_ms == null ? null : node.finished_at_unix_ms != null ? formatElapsed(language, node.finished_at_unix_ms - node.started_at_unix_ms) : running;
-  return text ? <span className="shrink-0 tabular-nums text-caption text-muted-foreground" data-mission-duration="true">{text}</span> : null;
 }
 
 /** The worker's live row, whose status mark the card wears (B15). */
@@ -252,129 +383,110 @@ export function useWorkerRow(node: MissionNode) {
   });
 }
 
-function NodeCard({ mission, node, open, onOpen, actions }: { mission: Mission; node: MissionNode; open: boolean; onOpen: (open: boolean) => void; actions: Actions }) {
+/**
+ * A node on the map (B14-B16): its whole border is its state, a card with a
+ * worker at it or a decision glows, and it carries its status mark, title,
+ * badges, worker, result, a change node's four steps and a working node's
+ * line. Pressing it opens its row in the 흐름 table below (B20).
+ */
+function NodeCard({ mission, node, selected, onSelect }: { mission: Mission; node: MissionNode; selected: boolean; onSelect: () => void }) {
   const { t, i18n } = useInterfaceTranslation();
   const row = useWorkerRow(node);
   const launchModel = useShellStore((s) => launchModelOf(s.rest, mission, node));
-  const card = useRef<HTMLButtonElement>(null);
-  const mark = nodeMark(node, row?.mark ?? null);
+  const tone = nodeTone(mission, node);
+  const mark = shownMark(node, tone, row?.mark ?? null);
   const worker = workerWords(node, launchModel, t("mission.auto"));
-  // The worker's own plan says where it is, else the Conductor's `--line` (B16, D-18).
-  const nowText = (node.plan ? planNowLine(node.plan, t) : null) ?? node.line;
-  const lineText = node.blocked === null && node.plan ? (planNowLine(node.plan, t) ?? nodeLine(node, t)) : nodeLine(node, t);
-  const staleTip = staleLabel({ stale: mission.github_stale, lastRead: mission.github_read_at_unix_ms }, t, requireInterfaceLanguage(i18n.language));
-  const pending = node.status === "planned" || node.blocked !== null;
-  const attention = node.status === "failed" || node.status === "waiting";
   const moving = node.status === "working" || node.status === "review";
+  // The worker's own plan says where it is, else the Conductor's `--line` (PRD hide-plan B16, D-18).
+  const nowText = moving ? ((node.plan ? planNowLine(node.plan, t) : null) ?? node.line) : null;
+  const result = nodeResult(node);
+  const staleTip = staleLabel({ stale: mission.github_stale, lastRead: mission.github_read_at_unix_ms }, t, requireInterfaceLanguage(i18n.language));
+  // A node with no result and no worker at it still says why it waits or what it is (B51, B53).
+  const quietLine = !result && !nowText ? nodeLine(node, t) : null;
+  const attention = node.status === "failed" || node.blocked === "upstream_failed";
   return (
-    <Popover open={open} onOpenChange={onOpen}>
-      <PopoverAnchor asChild>
-        <button
-          ref={card}
-          type="button"
-          onClick={() => onOpen(!open)}
-          aria-expanded={open}
-          aria-label={`${node.title} · ${t(`mission.status.${node.status}`)}`}
-          data-dependency-node={node.key}
-          data-mission-node={node.key}
-          data-node-status={node.status}
-          data-node-blocked={node.blocked ?? undefined}
-          data-node-moving={moving || undefined}
-          className={cn(
-            "flex w-(--size-mission-node) min-w-0 flex-col gap-xxs rounded-md border border-border bg-card px-sm py-xs text-left outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring",
-            pending && "border-dashed bg-transparent",
-            node.status === "failed" && "border-destructive",
-            // A worker at it is outlined in the working colour, so what runs now reads at a glance, even on a shrunk map.
-            moving && "border-agent-working ring-1 ring-agent-working",
-            // The band after the failed outline, so the outline leaves the band its PR colour.
-            node.pr_state && "border-l-(length:--size-mission-band)",
-            node.pr_state && BAND[node.pr_state],
-            node.status === "dropped" && "opacity-(--opacity-dimmed)",
-            open && "ring-1 ring-primary",
-          )}
-        >
-          <span className="flex min-w-0 items-center gap-xs">
-            <StatusMark mark={mark} />
-            <span className={cn("min-w-0 flex-1 truncate text-body font-semibold", node.status === "dropped" && "line-through")} title={node.title}>{node.title}</span>
-            {node.change ? (
-              <Hint label={t("mission.changed")}>
-                <HistoryIcon aria-label={t("mission.changed")} className="size-(--size-icon-sm) shrink-0 text-muted-foreground" data-node-changed="true" />
-              </Hint>
-            ) : null}
-          </span>
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-label={`${node.title} · ${t(`mission.status.${node.status}`)}`}
+      aria-pressed={selected}
+      data-dependency-node={node.key}
+      data-mission-node={node.key}
+      data-node-status={node.status}
+      data-node-tone={tone}
+      data-node-blocked={node.blocked ?? undefined}
+      data-node-moving={moving || undefined}
+      className={cn(
+        "flex w-(--size-mission-node) min-w-0 flex-col gap-xxs rounded-md border bg-card px-sm py-xs text-left outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring",
+        TONE_BORDER[tone],
+        selected && "outline-1 outline-offset-2 outline-primary",
+      )}
+    >
+      <span className="flex min-w-0 items-center gap-xs">
+        <StatusMark mark={mark} />
+        <span className={cn("min-w-0 flex-1 truncate text-body font-semibold", tone === "done" && "text-muted-foreground", node.status === "dropped" && "line-through")} title={node.title}>{node.title}</span>
+        <Badges node={node} />
+      </span>
+      {worker || result || node.base_pr != null ? (
+        <span className="flex min-w-0 items-center gap-xs text-caption text-subtle-foreground">
           {worker ? (
-            <span className="flex min-w-0 items-center gap-xs text-caption text-subtle-foreground">
+            <>
               <AgentMark kind={node.worker?.agent} />
               <span className="min-w-0 flex-1 truncate" data-node-worker={worker}>{worker}</span>
-              <Duration node={node} />
-            </span>
-          ) : null}
-          <span className="flex min-w-0 items-center gap-xs">
-            <Delivery node={node} staleTip={staleTip} stale={mission.github_stale} fallback={lineText} attention={attention} />
-            <Steps node={node} />
-          </span>
-          {(node.pr_state || node.branch) && nowText ? <span className={cn("min-w-0 truncate text-caption", attention ? "text-destructive" : "text-muted-foreground")} title={nowText} data-node-now={node.plan ? "plan" : "line"}>{nowText}</span> : null}
-        </button>
-      </PopoverAnchor>
-      <PopoverContent
-        align="start"
-        side="bottom"
-        className="w-(--size-mission-popover)"
-        data-mission-detail={node.key}
-        // The keyboard stays where it was, as everything the 보기 slot opens leaves it.
-        onOpenAutoFocus={(event) => event.preventDefault()}
-        onCloseAutoFocus={(event) => event.preventDefault()}
-        // Focus going back to the terminal is not a dismissal, and the card's own press toggles it.
-        onFocusOutside={(event) => event.preventDefault()}
-        onInteractOutside={(event) => {
-          if (event.target instanceof Node && card.current?.contains(event.target)) event.preventDefault();
-        }}
-      >
-        <NodeDetail mission={mission} node={node} onClose={() => onOpen(false)} actions={actions} />
-      </PopoverContent>
-    </Popover>
+            </>
+          ) : <span className="flex-1" />}
+          {result ? (staleTip && result.kind === "pr" ? <Hint label={staleTip}><span className="flex min-w-0 shrink items-center"><ResultTail result={result} stale={mission.github_stale} /></span></Hint> : <ResultTail result={result} stale={mission.github_stale} />) : null}
+          {node.base_pr != null ? <span className="shrink-0 font-mono text-caption text-pr-merged" data-node-base={node.base_pr}>↰ {t("mission.base", { number: String(node.base_pr) })}</span> : null}
+        </span>
+      ) : null}
+      <Steps node={node} tone={tone} />
+      {nowText ? <span className="min-w-0 truncate text-caption text-foreground" title={nowText} data-node-now={node.plan ? "plan" : "line"}>{nowText}</span> : null}
+      {quietLine ? <span className={cn("min-w-0 truncate text-caption", attention ? "text-mission-failed" : "text-muted-foreground")} title={quietLine} data-node-line="true">{quietLine}</span> : null}
+    </button>
   );
 }
 
-/** The card's third line: the PR mark and the base of a stack, or the branch of a direct change, or the node's own line (D-48, D-53). */
-function Delivery({ node, stale, staleTip, fallback, attention }: { node: MissionNode; stale: boolean; staleTip: string | null; fallback: string; attention: boolean }) {
-  const { t } = useInterfaceTranslation();
-  if (node.pr != null && node.pr_state) {
-    const mark = (
-      <span className="flex min-w-0 flex-1 items-center gap-xs" data-node-pr={node.pr}>
-        <PrMark state={node.pr_state} number={node.pr} stale={stale} />
-        {node.base_pr != null ? <span className="truncate font-mono text-caption text-pr-merged" data-node-base={node.base_pr}>↰ {t("mission.base", { number: String(node.base_pr) })}</span> : null}
-      </span>
-    );
-    return staleTip ? <Hint label={staleTip}>{mark}</Hint> : mark;
-  }
-  if (node.kind === "change" && node.branch) {
-    return (
-      <span className="flex min-w-0 flex-1 items-center gap-xxs text-caption text-subtle-foreground" data-node-branch={node.branch}>
-        <GitBranchIcon aria-hidden="true" className="size-(--size-pr-icon) shrink-0" />
-        <span className="truncate font-mono">{node.branch}</span>
-      </span>
-    );
-  }
-  return <span className={cn("min-w-0 flex-1 truncate text-caption", attention ? "text-destructive" : "text-muted-foreground")} title={fallback} data-node-line="true">{fallback}</span>;
+/** A node's status mark: a cancelled mission's unfinished node is at rest, whatever its last status said (B24). */
+function shownMark(node: MissionNode, tone: ReturnType<typeof nodeTone>, worker: RowMark | null): RowMark {
+  return tone === "cancelled" ? "quiet" : nodeMark(node, worker);
 }
 
-/** The four steps of a change node (D-42 B): work, PR or branch, review, merge or main; a research or verify node draws none, its status mark says where it is. */
-function Steps({ node }: { node: MissionNode }) {
+/** `↻n` for a node tried twice or more, `✎` for one the last replan changed, its reason on hover or focus (B16). */
+function Badges({ node }: { node: MissionNode }) {
+  const { t } = useInterfaceTranslation();
+  return (
+    <>
+      {node.attempts >= 2 ? (
+        <Hint label={t("mission.badge.attempts", { count: node.attempts })}>
+          <span aria-label={t("mission.badge.attempts", { count: node.attempts })} className="shrink-0 rounded-xs bg-muted px-xxs font-mono text-micro text-mission-failed" data-node-attempts={node.attempts}>↻{node.attempts}</span>
+        </Hint>
+      ) : null}
+      {node.change ? (
+        <Hint label={`${t("mission.changed")} · ${node.change}`}>
+          <span aria-label={`${t("mission.changed")} · ${node.change}`} className="flex shrink-0 items-center rounded-xs bg-muted px-xxs text-mission-review" data-node-changed="true">
+            <PencilIcon aria-hidden="true" className="size-(--size-icon-sm)" />
+          </span>
+        </Hint>
+      ) : null}
+    </>
+  );
+}
+
+/** A change node's four steps (B15): code, PR or checks, review, merge or main, the step it is at in its state's colour; research and verify draw none. */
+function Steps({ node, tone }: { node: MissionNode; tone: ReturnType<typeof nodeTone> }) {
   const { t } = useInterfaceTranslation();
   const steps = stepsOf(node);
   if (steps === 0) return null;
   const reached = node.stage ?? 0;
   const failing = node.status === "failed" || node.pr_state === "failed";
-  const moving = node.status === "working" || node.status === "review";
   const label = t("mission.step", { step: reached, steps: t(node.delivery === "direct" ? "mission.steps.direct" : "mission.steps.pr") });
+  const current: LegendTone = failing ? "failed" : tone === "working" || tone === "review" || tone === "hold" || tone === "cancelled" ? tone : "done";
   return (
-    <span role="img" aria-label={label} className="flex shrink-0 items-center gap-xxs" data-node-steps={reached}>
+    <span role="img" aria-label={label} className="flex min-w-0 items-center gap-xxs" data-node-steps={reached}>
       {Array.from({ length: steps }, (_, index) => {
         const filled = index < reached;
-        const last = index === reached - 1;
-        const tone = !filled ? "bg-muted" : last && failing ? "bg-pr-failed" : last && moving && node.status !== "done" ? "bg-agent-working" : "bg-success";
-        return <span key={index} aria-hidden="true" className={cn("h-(--size-mission-step-h) w-(--size-mission-step) rounded-full", tone)} />;
+        const last = index === reached - 1 && node.status !== "done";
+        return <span key={index} aria-hidden="true" className={cn("h-(--size-mission-step-h) flex-1 rounded-full", !filled ? "bg-muted" : last ? TONE_FILL[current] : TONE_FILL.done)} />;
       })}
     </span>
   );
@@ -386,7 +498,7 @@ function ReportCard({ mission }: { mission: Mission }) {
   const note = mission.status === "done" ? t("mission.report.done") : mission.status === "merge_wait" && stack > 0 ? t("mission.report.stack") : mission.status === "cancelled" ? t("mission.cancelled") : t("mission.report.waiting");
   const done = mission.status === "done" || mission.status === "merge_wait";
   return (
-    <div data-dependency-node={REPORT} data-mission-report={mission.status} className={cn("flex w-(--size-mission-node) items-center justify-center gap-xs rounded-xl border border-border px-md py-sm", done ? "bg-card" : "border-dashed")}>
+    <div data-dependency-node={REPORT} data-mission-report={mission.status} className={cn("flex w-(--size-mission-node) items-center justify-center gap-xs rounded-xl border px-md py-sm", done ? "border-mission-done/60 bg-card" : "border-dashed border-mission-waiting")}>
       <StatusMark mark={mission.status === "done" ? "done" : "quiet"} />
       <span className="text-body font-semibold">{t("mission.report")}</span>
       <span className="text-caption text-muted-foreground">{note}</span>
@@ -394,9 +506,111 @@ function ReportCard({ mission }: { mission: Mission }) {
   );
 }
 
-/** A node's detail (B15, B18): its rows, and the way to its terminal, its record and its PR card. */
-function NodeDetail({ mission, node, onClose, actions }: { mission: Mission; node: MissionNode; onClose: () => void; actions: Actions }) {
+const ROW_GRID = "grid grid-cols-[var(--size-agent-mark)_minmax(0,var(--size-flow-title))_var(--size-flow-result)_minmax(0,1fr)] items-center gap-sm";
+
+/** `HH:MM` on the axis, with the day once the axis spans more than one (B17). */
+function axisTime(language: InterfaceLanguage, at: number, long: boolean): string {
+  return formatDateTime(language, at, long ? { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" } : { hour: "2-digit", minute: "2-digit" });
+}
+
+/**
+ * The 흐름 table (B17, B19, B20): a row per node in the order they wait on
+ * each other, its state, title and kind, result and one bar on the mission's
+ * time axis, from its start to its finish or to now. `전체 · 지금 · 끝남`
+ * filters the rows; pressing a row, or Enter on it, opens it.
+ */
+function FlowTable({ mission, filter, onFilter, expanded, onExpand, actions }: { mission: Mission; filter: FlowFilter; onFilter: (filter: FlowFilter) => void; expanded: string | null; onExpand: (key: string | null) => void; actions: Actions }) {
+  const { t, i18n } = useInterfaceTranslation();
+  const language = requireInterfaceLanguage(i18n.language);
+  const now = useMinuteClock();
+  const span = flowSpan(mission, now);
+  const rows = orderedNodes(mission).filter((node) => flowShows(node, filter));
+  const long = span.to - span.from > 86_400_000;
+  const open = mission.closed_at_unix_ms == null;
+  const ticks = Array.from({ length: AXIS_TICKS }, (_, index) => {
+    const at = span.from + ((span.to - span.from) * index) / (AXIS_TICKS - 1);
+    return index === AXIS_TICKS - 1 && open ? t("mission.flow.nowTick") : axisTime(language, at, long);
+  });
+  return (
+    <section className="flex min-w-0 flex-col border-t border-border px-md pb-md pt-sm" data-mission-flow={filter}>
+      <div className="flex min-w-0 items-center gap-sm pb-xs">
+        <h3 className="text-body font-semibold">{t("mission.flow")}</h3>
+        <span className="flex-1" />
+        <ToggleGroup type="single" value={filter} onValueChange={(value) => value && onFilter(value as FlowFilter)} aria-label={t("mission.flow.filter")} data-mission-flow-filter={filter}>
+          <ToggleGroupItem size="sm" value="all" data-mission-flow-choice="all">{t("mission.flow.all")}</ToggleGroupItem>
+          <ToggleGroupItem size="sm" value="now" data-mission-flow-choice="now">{t("mission.flow.now")}</ToggleGroupItem>
+          <ToggleGroupItem size="sm" value="finished" data-mission-flow-choice="finished">{t("mission.flow.finished")}</ToggleGroupItem>
+        </ToggleGroup>
+      </div>
+      <div className={cn(ROW_GRID, "px-xs pb-xxs text-micro text-muted-foreground")} aria-hidden="true">
+        <span />
+        <span>{t("mission.flow.task")}</span>
+        <span>{t("mission.flow.result")}</span>
+        <span className="flex justify-between tabular-nums" data-mission-flow-axis={ticks.join("|")}>
+          {ticks.map((tick, index) => <span key={index}>{tick}</span>)}
+        </span>
+      </div>
+      {rows.length === 0 ? <p className="px-xs py-xs text-caption text-muted-foreground" data-mission-flow-empty="true">{t("mission.flow.empty")}</p> : null}
+      <ul className="flex min-w-0 flex-col">
+        {rows.map((node) => (
+          <FlowRow key={node.key} mission={mission} node={node} span={span} open={expanded === node.key} onOpen={(next) => onExpand(next ? node.key : null)} actions={actions} />
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function FlowRow({ mission, node, span, open, onOpen, actions }: { mission: Mission; node: MissionNode; span: { from: number; to: number }; open: boolean; onOpen: (open: boolean) => void; actions: Actions }) {
   const { t } = useInterfaceTranslation();
+  const row = useWorkerRow(node);
+  const ref = useRef<HTMLButtonElement>(null);
+  const tone = nodeTone(mission, node);
+  const bar = nodeBar(node, span);
+  const result = nodeResult(node);
+  const kind = shortKind(node);
+  // An opened row comes into view, as a card pressed on the map asks (B20).
+  useEffect(() => {
+    if (open) ref.current?.scrollIntoView?.({ block: "nearest" });
+  }, [open]);
+  return (
+    <li className="flex min-w-0 flex-col" data-flow-row={node.key} data-node-tone={tone}>
+      <button
+        ref={ref}
+        type="button"
+        aria-expanded={open}
+        onClick={() => onOpen(!open)}
+        className={cn(ROW_GRID, "rounded-xs px-xs py-xxs text-left text-body outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring", open && "bg-accent", (tone === "waiting" || tone === "cancelled" || tone === "dropped") && "text-muted-foreground")}
+      >
+        <StatusMark mark={shownMark(node, tone, row?.mark ?? null)} label={t(`mission.status.${node.status}`)} />
+        <span className="flex min-w-0 items-baseline gap-xs">
+          <span className={cn("min-w-0 truncate", node.status === "dropped" && "line-through")} title={node.title}>{node.title}</span>
+          {kind !== "mission.kind.short.pr" ? <span className="shrink-0 text-micro text-muted-foreground">{t(kind)}</span> : null}
+        </span>
+        <span className="flex min-w-0 items-center">{result ? <ResultTail result={result} stale={mission.github_stale} /> : null}</span>
+        <span className="relative h-(--size-flow-track) min-w-0 rounded-xs bg-muted/30" data-flow-track={node.key}>
+          {bar ? (
+            <span
+              className={cn("absolute top-1/2 h-(--size-flow-bar) -translate-y-1/2 rounded-xs", TONE_FILL[tone === "dropped" ? "cancelled" : tone], tone === "waiting" && "bg-mission-waiting")}
+              style={{ left: `${bar.left}%`, width: `max(${bar.width}%, var(--size-hairline))` }}
+              data-flow-bar={`${bar.left.toFixed(1)} ${bar.width.toFixed(1)}`}
+            />
+          ) : null}
+        </span>
+      </button>
+      {open ? <FlowDetail mission={mission} node={node} actions={actions} /> : null}
+    </li>
+  );
+}
+
+/**
+ * An opened row (B19, B20): when the node started and finished, what the map
+ * card has no room for, the way to its terminal, its record and its PR card,
+ * and the worker's own plan, folded. A mission recorded before its events
+ * shows its times and no list of events.
+ */
+function FlowDetail({ mission, node, actions }: { mission: Mission; node: MissionNode; actions: Actions }) {
+  const { t, i18n } = useInterfaceTranslation();
+  const language = requireInterfaceLanguage(i18n.language);
   const row = useWorkerRow(node);
   // Derived outside the selector: it builds a new session each call, which a selector must not return.
   const rest = useShellStore((s) => s.rest);
@@ -404,57 +618,49 @@ function NodeDetail({ mission, node, onClose, actions }: { mission: Mission; nod
   const depends = node.depends_on.map((key) => mission.nodes.find((other) => other.key === key)?.title ?? key);
   const worker = node.worker;
   const nowLine = (node.plan ? planNowLine(node.plan, t) : null) ?? node.line;
-  const rows: [string, ReactNode][] = [
+  const time = (at: number) => formatDateTime(language, at, { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  const fields: [string, ReactNode][] = [
     [t("mission.field.kind"), t(kindWord(node.kind))],
     ...(worker ? [[t("mission.field.agent"), (
-      <span className="flex min-w-0 items-center gap-xs"><AgentMark kind={worker.agent} /><span className="truncate">{[worker.agent, worker.model].filter(Boolean).join(" · ")}</span></span>
+      <span className="flex min-w-0 items-center gap-xs"><AgentMark kind={worker.agent} /><span className="truncate">{[worker.agent, worker.model, worker.effort_auto && worker.effort ? t("mission.effortAuto", { effort: worker.effort }) : worker.effort].filter(Boolean).join(" · ")}</span></span>
     )] as [string, ReactNode]] : []),
-    ...(worker?.effort ? [[t("mission.field.effort"), worker.effort_auto ? t("mission.effortAuto", { effort: worker.effort }) : worker.effort] as [string, ReactNode]] : []),
-    ...(node.started_at_unix_ms != null ? [[t("mission.field.elapsed"), <Duration key="d" node={node} />] as [string, ReactNode]] : []),
     ...(node.attempts > 0 ? [[t("mission.field.attempts"), String(node.attempts)] as [string, ReactNode]] : []),
     ...(depends.length > 0 ? [[t("mission.field.depends"), depends.join(", ")] as [string, ReactNode]] : []),
-    // The PR row carries the four steps with their names; the steps are drawn, never counted (D-17).
-    ...(stepsOf(node) > 0 ? [[t("mission.field.pr"), (
-      <span className="flex min-w-0 flex-wrap items-center gap-xs">
-        {node.pr != null && node.pr_state ? <><PrMark state={node.pr_state} number={node.pr} stale={mission.github_stale} /><span className={PR_LOOK[node.pr_state].tone}>{t(PR_LOOK[node.pr_state].word)}</span></> : node.pr != null ? `#${node.pr}` : <span className="text-muted-foreground">{t("mission.prNotYet")}</span>}
-        <Steps node={node} />
-        <span className="text-caption text-muted-foreground" data-node-step-names="true">{t(node.delivery === "direct" ? "mission.steps.direct" : "mission.steps.pr")}</span>
-      </span>
-    )] as [string, ReactNode]] : node.pr != null ? [[t("mission.field.pr"), node.pr_state ? (
-      <span className="flex items-center gap-xs"><PrMark state={node.pr_state} number={node.pr} stale={mission.github_stale} /><span className={PR_LOOK[node.pr_state].tone}>{t(PR_LOOK[node.pr_state].word)}</span></span>
-    ) : `#${node.pr}`] as [string, ReactNode]] : []),
-    ...(node.branch ? [[t("mission.field.branch"), <span key="b" className="font-mono">{node.branch}</span>] as [string, ReactNode]] : []),
+    ...(stepsOf(node) > 0 ? [[t("mission.field.pr"), <span key="s" className="text-muted-foreground" data-node-step-names="true">{t(node.delivery === "direct" ? "mission.steps.direct" : "mission.steps.pr")}</span>] as [string, ReactNode]] : []),
     ...(node.review ? [[t("mission.field.review"), node.review] as [string, ReactNode]] : []),
     ...(nowLine ? [[t("mission.field.now"), nowLine] as [string, ReactNode]] : []),
     ...(node.change ? [[t("mission.field.change"), node.change] as [string, ReactNode]] : []),
     ...(node.criteria ? [[t("mission.field.criteria"), node.criteria] as [string, ReactNode]] : []),
   ];
   return (
-    <div className="flex flex-col gap-sm">
-      <div className="flex min-w-0 items-center gap-xs">
-        <StatusMark mark={nodeMark(node, row?.mark ?? null)} />
-        <span className="min-w-0 flex-1 truncate text-body font-semibold">{node.title}</span>
-        <Button variant="ghost" size="icon-sm" aria-label={t("mission.closeNode")} onClick={onClose}><XIcon /></Button>
-      </div>
-      <dl className="grid grid-cols-[auto_1fr] gap-x-md gap-y-xs text-body">
-        {rows.map(([label, value]) => (
+    <div className="ml-lg flex min-w-0 flex-col gap-sm border-l border-border py-xs pl-md" data-mission-detail={node.key}>
+      {node.started_at_unix_ms != null ? (
+        <p className="flex flex-wrap gap-x-md text-caption text-muted-foreground tabular-nums" data-flow-times="true">
+          <span>{t("mission.flow.started", { time: time(node.started_at_unix_ms) })}</span>
+          {node.finished_at_unix_ms != null ? <span>{t("mission.flow.ended", { time: time(node.finished_at_unix_ms) })}</span> : null}
+        </p>
+      ) : null}
+      <dl className="grid grid-cols-[auto_1fr] gap-x-md gap-y-xxs text-caption">
+        {fields.map(([label, value]) => (
           <div key={label} className="contents">
             <dt className="text-muted-foreground">{label}</dt>
             <dd className="min-w-0 break-words">{value}</dd>
           </div>
         ))}
       </dl>
-      {node.plan ? <OwnPlan plan={node.plan} /> : null}
       <div className="flex flex-wrap gap-xs">
         <Button size="sm" disabled={!node.pane_id || !row} onClick={() => node.pane_id && actions.openAgent(node.pane_id)} data-node-terminal="true">{t("mission.goTerminal")}</Button>
         <Button size="sm" variant="secondary" disabled={!session} onClick={() => session && actions.openChildRecord(session)} data-node-record="true">{t("mission.record")}</Button>
-        <Button size="sm" variant="secondary" disabled={node.pr == null || !node.pr_url} onClick={() => node.pr != null && node.pr_url && actions.openSessionPullRequest({ workspace_id: mission.workspace_id, url: node.pr_url, number: node.pr })} data-node-pr-card="true">{t("mission.prCard")}</Button>
+        {node.pr != null ? (
+          <Button size="sm" variant="secondary" disabled={!node.pr_url} onClick={() => node.pr_url && actions.openSessionPullRequest({ workspace_id: mission.workspace_id, url: node.pr_url, number: node.pr! })} data-node-pr-card="true">{t("mission.prCard")}</Button>
+        ) : null}
       </div>
+      {node.plan ? <OwnPlan plan={node.plan} /> : null}
     </div>
   );
 }
 
-/** The worker's own plan in a node's detail, folded (B15, D-17): its head says only when it was updated, and opening it draws the same map. */
+/** The worker's own plan in a node's row, folded (B20): its head says only when it was updated, and opening it lists the steps. */
 function OwnPlan({ plan }: { plan: PlanView }) {
   const { t } = useInterfaceTranslation();
   const [open, setOpen] = useState(false);
@@ -464,9 +670,10 @@ function OwnPlan({ plan }: { plan: PlanView }) {
       <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="flex min-w-0 items-center gap-xs rounded-xs text-left text-body outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring" data-node-plan-toggle="true">
         <ChevronRightIcon aria-hidden="true" className={cn("size-(--size-icon-sm) shrink-0 text-muted-foreground transition-transform", open && "rotate-90")} />
         <span className="font-semibold">{t("plan.own")}</span>
-        {elapsed ? <span className="text-caption text-muted-foreground">{t("plan.updated", { elapsed })}</span> : null}
+        {elapsed ? <span className="text-caption text-muted-foreground">· {t("plan.updated", { elapsed })}</span> : null}
       </button>
-      {open ? <div className="min-w-0 overflow-x-auto"><PlanGraph plan={plan} size="compact" /></div> : null}
+      {open ? <div className="min-w-0 text-caption"><PlanChecklist plan={plan} /></div> : null}
     </div>
   );
 }
+

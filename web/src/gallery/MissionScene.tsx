@@ -1,9 +1,11 @@
 // The real mission map and Settings › Conductor over invented values (PRD
 // software-factory-conductor), one state per `state` parameter: plan,
 // running, decision, stack, no-conductor, stale, failed, wide (a row wider
-// than the slot, shrunk to fit), settings. The
-// Conductor pane's head with its mission chip and pinned small map (PRD
-// mission-pane-chip) is `pane-running`, `pane-decision` and `pane-first-plan`.
+// than the slot, shrunk to fit), done, cancelled, no-pr (a finished mission
+// with no pull request), settings. The Conductor pane's head with its mission
+// chip and pinned popover (PRD mission-pane-chip, mission-plan-visibility) is
+// `pane-running`, `pane-decision`, `pane-first-plan`, `pane-done` and
+// `pane-cancelled`.
 // Nothing leaves this scene.
 import { useLayoutEffect, useMemo } from "react";
 import { AgentMark } from "../AgentMark";
@@ -21,7 +23,10 @@ import { useUiStore } from "../ui";
 /** The Conductor's pane, as its agent row and the mission name it. */
 const CONDUCTOR_PANE = "w1:p1";
 /** A pane state reads the map state it draws small. */
-const PANE_STATES: Record<string, string> = { "pane-running": "running", "pane-decision": "decision", "pane-first-plan": "plan" };
+const PANE_STATES: Record<string, string> = { "pane-running": "running", "pane-decision": "decision", "pane-first-plan": "plan", "pane-done": "done", "pane-cancelled": "cancelled" };
+
+/** The report a finished mission's Conductor left, invented for the boards. */
+const REPORT = "이슈 네 개 정리 끝. 화면 PR까지 모두 머지.\n남은 일: 알림 문구 다듬기는 다음 미션으로.\n검증은 격리 앱에서 6개 항목 통과.\n머지 순서는 API, 화면.";
 
 const MINUTE = 60_000;
 /** An issue or pull request number as the boards write it, built so no literal reads as a color. */
@@ -55,6 +60,29 @@ function plan(state: string, now: number): MissionNode[] {
       ]),
     ];
   }
+  if (state === "no-pr") {
+    // A release with no pull request: research, two direct changes on main and a check (PRD mission-plan-visibility B22, B23).
+    return [
+      node("rules", "열린 PR 정리 기준 정하기", { kind: "research", delivery: null, worker: opus("high"), ...done(180, 30), line: "19개 중 12개 닫기" }),
+      node("bump", "1.0.0 버전 커밋", { delivery: "direct", depends_on: ["rules"], worker: astra("medium"), ...done(150, 20), branch: "release/1.0.0", stage: 4 }),
+      node("notes", "릴리스 노트", { delivery: "direct", depends_on: ["rules"], worker: sonnet, ...done(150, 40), branch: "release/notes", stage: 4 }),
+      node("agents", "Mac 에이전트 확인", { kind: "verify", delivery: null, depends_on: ["bump"], worker: astra("medium"), ...done(110, 50), line: "7개 항목 통과" }),
+      node("order", "배포 순서 확인", { kind: "research", delivery: null, depends_on: ["notes"], worker: opus("medium"), ...done(100, 20), line: "private 먼저, site 뒤" }),
+    ];
+  }
+  if (state === "done" || state === "cancelled") {
+    const cancelled = state === "cancelled";
+    return [
+      node("cause", `${no(1487)} 원인 조사`, { kind: "research", delivery: null, worker: opus("xhigh"), ...done(300, 40), line: "reopen 때 셀 초기화가 먼저 돎" }),
+      node("api", "API 추가", { worker: astra("high"), ...done(300, 120), pr: 1503, pr_state: "merged", stage: 4 }),
+      node("fix-1481", `이슈 ${no(1481)} 수정`, { delivery: "direct", worker: astra("high"), ...done(290, 60), branch: "fix-1481", stage: 4 }),
+      node("fix-1487", `${no(1487)} 수정`, { depends_on: ["cause"], worker: astra("medium"), ...done(250, 90), pr: 1506, pr_state: "merged", stage: 4, attempts: 2 }),
+      cancelled
+        ? node("screen", "API 쓰는 화면", { depends_on: ["api"], worker: astra("high"), status: "working", started_at_unix_ms: ago(170), pr: 1504, base_pr: 1503, pr_state: "pending", stage: 2 })
+        : node("screen", "API 쓰는 화면", { depends_on: ["api"], worker: astra("high"), ...done(170, 110), pr: 1504, base_pr: 1503, pr_state: "merged", stage: 4 }),
+      node("together", "함께 확인", { kind: "verify", delivery: null, depends_on: ["screen", "fix-1487"], worker: sonnet, ...(cancelled ? {} : done(55, 25)), line: cancelled ? null : "6개 항목 통과" }),
+    ];
+  }
   if (planned) {
     return [
       node("cause", `${no(1487)} 원인 조사`, { kind: "research", delivery: null, worker: opus(null) }),
@@ -80,17 +108,22 @@ function plan(state: string, now: number): MissionNode[] {
   ];
 }
 
+/** How many minutes before now each state's mission started; the rest started 44 minutes ago. */
+const STARTED_AGO: Record<string, number> = { stack: 72, done: 300, cancelled: 300, "no-pr": 180 };
+
 function scene(state: string, now: number): { mission: Mission; rest: SnapshotRest } {
   const nodes = plan(state, now);
   const mission: Mission = {
     id: "mission-1", title: "이슈 정리", workspace_id: "hide", project: "/projects/herdr-ide", checkout_path: "/projects/herdr-ide", device_id: "local",
-    status: state === "plan" ? "planning" : state === "stack" ? "merge_wait" : "running",
+    status: state === "plan" ? "planning" : state === "stack" ? "merge_wait" : state === "done" || state === "no-pr" ? "done" : state === "cancelled" ? "cancelled" : "running",
     scope: "pr", cap: 4,
     conductor: { pane_id: CONDUCTOR_PANE, name: "이슈 정리 · Conductor", agent_kind: "claude", session: { device_id: "local", agent: "claude", session_id: "scene-conductor" }, present: state !== "no-conductor" },
     nodes, merge_order: ["api", "screen"], check: "cargo test && pnpm test", github: "octocat",
     decision: state === "decision" ? "화면 PR 방식 선택" : state === "no-conductor" ? `${no(1503)}이 머지되어 ${no(1504)}를 옮겨야 해요` : null,
-    delay: null, report: null,
-    created_at_unix_ms: now - 50 * MINUTE, started_at_unix_ms: state === "plan" ? null : now - (state === "stack" ? 72 : 44) * MINUTE, closed_at_unix_ms: state === "stack" ? now : null,
+    delay: null, report: state === "done" ? REPORT : state === "no-pr" ? "1.0.0 릴리스 끝. private 배포, 사이트 반영, floor 올림." : null,
+    created_at_unix_ms: now - 320 * MINUTE,
+    started_at_unix_ms: state === "plan" ? null : now - (STARTED_AGO[state] ?? 44) * MINUTE,
+    closed_at_unix_ms: state === "stack" ? now : state === "done" ? now - 30 * MINUTE : state === "cancelled" ? now - 60 * MINUTE : state === "no-pr" ? now - 20 * MINUTE : null,
     running: state === "decision" ? 1 : state === "running" || state === "wide" ? 4 : 0,
     // A device that disconnected leaves its last values, dimmed (B20).
     stale: state === "stale", github_stale: state === "stale", github_read_at_unix_ms: state === "stale" ? now - 25 * MINUTE : now,
@@ -129,7 +162,7 @@ export function MissionScene({ params }: { params: URLSearchParams }) {
   useLayoutEffect(() => {
     const agents = pane ? [{ pane_id: CONDUCTOR_PANE, device_id: "local" } as unknown as AgentRow] : [];
     useShellStore.setState({ rest: fixture.rest, agents, connection: "live" });
-    // The small map pinned, as a press, the Show plan chord or a first plan watched leaves it.
+    // The popover pinned, as a press, the Show plan chord or a first plan watched leaves it.
     useUiStore.setState({ planPane: pane ? CONDUCTOR_PANE : null });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");

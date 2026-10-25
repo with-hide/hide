@@ -1,16 +1,15 @@
-import { ChevronRightIcon, ListChecksIcon } from "lucide-react";
+import { CheckIcon, ChevronRightIcon, ListChecksIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import type { Actions } from "./actions";
-import { Kbd } from "./components/ui/kbd";
+import { ProgressCells } from "./components/mission-tone";
 import { Popover, PopoverAnchor, PopoverContent } from "./components/ui/popover";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
 import { paneChildren } from "./paneChildren";
 import { usePaneAgents } from "./PaneHeaderBand";
-import { PlanGraph } from "./PlanGraph";
+import { PlanChecklist } from "./PlanChecklist";
 import { PlanSummaryLine } from "./PlanMap";
-import { planCount, planOfPane, planProposed } from "./plans";
-import { commandLabel } from "./shortcutLabels";
+import { planCells, planCount, planOfPane, planProposed, stepOf } from "./plans";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 
@@ -18,12 +17,13 @@ import { useUiStore } from "./ui";
 const LEAVE_MS = 150;
 
 /**
- * The pane head's plan chip (PRD hide-plan B7, D-11, D-29), where the task
- * chip was: `n/m` with the list-checks mark, `검토` while the plan waits for
- * review, green `m/m` once finished, and nothing for a pane with no plan.
- * The pointer or the keyboard's focus opens the small map; a press or ⇧⌘U
- * pins it, and a second press, ⇧⌘U or Esc closes it. Opening never takes the
- * keyboard from the terminal.
+ * The pane head's plan chip (PRD hide-plan B7, D-11, D-29; PRD
+ * mission-plan-visibility B1, B3-B7), where the task chip was: the word
+ * `계획`, a cell per step and `n/m`, `검토` in the warning colour while the
+ * plan waits for review, a green check and `m/m` once finished, and nothing
+ * for a pane with no plan. The pointer or the keyboard's focus opens the
+ * checklist; a press or ⇧⌘U pins it, and a second press, ⇧⌘U or Esc closes
+ * it. Opening never takes the keyboard from the terminal.
  */
 export function PanePlanChip({ paneId, actions }: { paneId: string; actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -33,7 +33,15 @@ export function PanePlanChip({ paneId, actions }: { paneId: string; actions: Act
   const { close } = chip;
   const proposed = planProposed(plan);
   const finished = plan.progress.finished;
-  const label = proposed ? t("plan.chipReview", { count: plan.progress.total }) : finished ? t("plan.chipFinished", { progress: planCount(plan) }) : t("plan.chip", { progress: planCount(plan) });
+  const current = stepOf(plan, plan.progress.current);
+  const label = proposed
+    ? t("plan.chipReview", { count: plan.progress.total })
+    : finished
+      ? t("plan.chipFinished", { progress: planCount(plan) })
+      : current
+        ? t("plan.chipNow", { progress: planCount(plan), step: current.title })
+        : t("plan.chip", { progress: planCount(plan) });
+  const Mark = finished ? CheckIcon : ListChecksIcon;
   return (
     <Popover {...chip.popover}>
       <PopoverAnchor asChild>
@@ -43,13 +51,15 @@ export function PanePlanChip({ paneId, actions }: { paneId: string; actions: Act
           data-pane-plan-chip={paneId}
           data-plan-chip-state={proposed ? "review" : finished ? "finished" : "running"}
           className={cn(
-            "flex h-(--size-sidebar-line-detail) shrink-0 items-center gap-xxs rounded-xs border border-border bg-background px-xs font-mono text-micro text-muted-foreground outline-none hover:bg-popover hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:border-ring data-[state=open]:text-foreground",
-            proposed && "border-warning text-warning",
-            finished && "text-success",
+            "flex h-(--size-sidebar-line-detail) shrink-0 items-center gap-xxs rounded-xs border border-border bg-background px-xs text-micro text-muted-foreground outline-none hover:bg-popover hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:border-ring data-[state=open]:text-foreground",
+            proposed && "border-mission-hold text-mission-hold data-[state=open]:border-mission-hold data-[state=open]:text-mission-hold",
+            finished && "text-mission-done data-[state=open]:text-mission-done",
           )}
         >
-          <ListChecksIcon aria-hidden="true" className="size-(--size-icon-sm)" />
-          <span className="tabular-nums">{proposed ? t("plan.review") : planCount(plan)}</span>
+          <Mark aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
+          <span className="whitespace-nowrap">{proposed ? t("plan.review") : t("plan.title")}</span>
+          <ProgressCells tones={planCells(plan)} size="chip" />
+          {proposed ? null : <span className="font-mono tabular-nums">{planCount(plan)}</span>}
         </button>
       </PopoverAnchor>
       <PopoverContent
@@ -76,24 +86,10 @@ export function PanePlanChip({ paneId, actions }: { paneId: string; actions: Act
               <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />
             </button>
           </div>
-          <div className="overflow-x-auto px-sm py-sm">
-            <PlanGraph plan={plan} size="compact" />
+          <div className="px-xs py-sm">
+            <PlanChecklist plan={plan} revealCurrent />
           </div>
           <Delegated paneId={paneId} />
-          <div className="border-t border-border p-xxs">
-            <button
-              type="button"
-              className="flex w-full items-center justify-between gap-sm rounded-xs px-xs py-xs text-left outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring"
-              onClick={() => {
-                close();
-                actions.openSessionRecord(plan.session);
-              }}
-              data-pane-plan-record="true"
-            >
-              <span>{t("sessionWork.openRecord")}</span>
-              <Kbd>{commandLabel("toggle_plan")}</Kbd>
-            </button>
-          </div>
         </div>
       </PopoverContent>
     </Popover>
@@ -101,7 +97,7 @@ export function PanePlanChip({ paneId, actions }: { paneId: string; actions: Act
 }
 
 /**
- * What a pane head chip with a small map shares (PRD hide-plan B7,
+ * What a pane head chip with a popover shares (PRD hide-plan B7,
  * mission-pane-chip D-01): the pointer or the keyboard's focus opens it, a
  * press or the Show plan chord pins it through `ui.planPane`, and a second
  * press, the chord or Esc closes it. Opening never takes the keyboard from

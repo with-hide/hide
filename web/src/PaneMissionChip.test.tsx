@@ -13,9 +13,11 @@ import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import type { DispatchFn } from "./ws";
 
-// The Conductor pane's mission chip and small map (PRD mission-pane-chip
-// B1-B10, B12-B14, B17): what the chip reads, how the map opens, pins and
-// closes, where its controls lead, and when a first plan opens it.
+// The Conductor pane's mission chip and its popover (PRD mission-pane-chip
+// B1-B4, B10, B12-B14, B17; PRD mission-plan-visibility B7-B11, B36): what
+// the chip reads, how the popover opens, pins and closes, what it lists while
+// the mission runs and once it ends, where its controls lead, and when a
+// first plan opens it.
 
 // The layout worker is not under test here: the graph stays in its plain layers.
 vi.mock("./dependencyLayout", async (original) => ({
@@ -86,23 +88,28 @@ async function mount(missions: Mission[], { pane = "p1", plans = [] as PlanView[
   return { container, actions, events, chip, popover, press, escape, unmount: async () => { await act(async () => root.unmount()); } };
 }
 
-it("reads each state in words beside the waypoints mark, in the plan chip's place, and a pane that conducts nothing keeps its plan chip (B1, B2, B17)", async () => {
-  const cases: [Partial<Mission>, string, string][] = [
-    [{ status: "planning", nodes: [] }, "planning", "Planning"],
-    [{}, "running", "Mission1/3"],
-    [{ decision: "Which base for the screen PR?" }, "decision", "1 to decide"],
-    [{ status: "merge_wait" }, "merge_wait", "Waiting to merge"],
-    [{ status: "done", nodes: NODES.map((row) => ({ ...row, status: "done" as const })), closed_at_unix_ms: 9 }, "done", "Done3/3"],
-    [{ status: "cancelled", closed_at_unix_ms: 9 }, "cancelled", "Cancelled"],
+it("reads each state in words with a cell per node, in the plan chip's place, and a pane that conducts nothing keeps its plan chip (B8, B36, PRD mission-pane-chip B1, B2, B17)", async () => {
+  const allDone = NODES.map((row) => ({ ...row, status: "done" as const }));
+  const cases: [Partial<Mission>, string, string, string | undefined][] = [
+    [{ status: "planning", nodes: [] }, "planning", "Planning", undefined],
+    [{}, "running", "Mission1/3", "done working waiting"],
+    [{ decision: "Which base for the screen PR?" }, "decision", "1 to decide", "done working waiting"],
+    [{ status: "merge_wait" }, "merge_wait", "Waiting to merge", "done working waiting"],
+    [{ status: "done", nodes: allDone, closed_at_unix_ms: 9 }, "done", "Mission3/3", "done done done"],
+    [{ status: "cancelled", closed_at_unix_ms: 9 }, "cancelled", "Cancelled", "done cancelled cancelled"],
   ];
-  for (const [extra, state, text] of cases) {
+  for (const [extra, state, text, cells] of cases) {
     const view = await mount([mission(extra)], { plans: [plan()] });
     try {
       expect([view.chip()?.dataset.missionChipState, view.chip()?.textContent]).toEqual([state, text]);
-      // A decision and a done mission keep their colour while the map is open.
-      if (state === "decision") expect(view.chip()?.className).toContain("data-[state=open]:text-warning");
-      if (state === "done") expect(view.chip()?.className).toContain("data-[state=open]:text-success");
+      // One cell per node in the plan, in its state's colour; no cell before the first plan.
+      expect(view.chip()?.querySelector<HTMLElement>("[data-progress-cells]")?.dataset.progressCells).toBe(cells);
+      // A decision and a done mission keep their colour while the popover is open.
+      if (state === "decision") expect(view.chip()?.className).toContain("data-[state=open]:text-mission-hold");
+      if (state === "done") expect(view.chip()?.className).toContain("data-[state=open]:text-mission-done");
       expect(view.chip()?.getAttribute("aria-label")).toMatch(/^Mission Ship the API · /);
+      // The name says the exact count and the node at work, since the cells are not read out.
+      if (state === "running") expect(view.chip()?.getAttribute("aria-label")).toBe("Mission Ship the API · Mission 1/3 now api title");
       expect(view.container.querySelector("[data-pane-plan-chip]")).toBeNull();
     } finally { await view.unmount(); }
   }
@@ -160,25 +167,61 @@ it("pins on the Show plan chord's action, and the chord again or Esc closes it (
   } finally { await view.unmount(); }
 });
 
-it("draws the done nodes as one line and the rest top down into the report, each card one line with its mark, title and PR (B5-B7)", async () => {
-  const view = await mount([mission()]);
+it("lists the nodes a worker is at with their step, one tally line and no map or record footer while the mission runs (B7, B10)", async () => {
+  const nodes = [
+    node("spec", { status: "done" }),
+    node("api", { status: "working", pr: PR, stage: 2, depends_on: ["spec"] }),
+    node("probe", { kind: "research", delivery: null, status: "review", depends_on: ["spec"] }),
+    node("ui", { depends_on: ["api"] }),
+    node("held", { status: "held" }),
+  ];
+  const view = await mount([mission({ nodes })]);
   try {
     await act(async () => view.actions.togglePlanChip());
-    const map = view.popover()!;
-    expect(map.querySelector("[data-mission-mini-head]")?.textContent).toBe("Mission1/3");
-    expect(map.querySelector("[data-mission-mini-done]")?.textContent).toBe("1 done");
-    const cards = [...map.querySelectorAll<HTMLElement>("[data-dependency-node]")].map((card) => card.dataset.dependencyNode);
-    expect(cards).toEqual(["api", "ui", "#report"]);
-    expect(map.querySelector("[data-mission-mini-node=api]")?.textContent).toBe(`api title${PR_TEXT}`);
-    expect(map.querySelector("[data-mission-mini-node=ui]")?.className).toContain("border-dashed");
+    const popover = view.popover()!;
+    expect(popover.querySelector("[data-mission-mini-head]")?.textContent).toBe("Mission1/5");
+    const rows = [...popover.querySelectorAll<HTMLElement>("[data-mission-mini-node]")].map((row) => [row.dataset.missionMiniNode, row.textContent]);
+    expect(rows).toEqual([["api", `api title${PR_TEXT}PR`], ["probe", "probe titleResearch"]]);
+    expect(popover.querySelector("[data-mission-mini-tally]")?.textContent).toBe("1 done · 2 next");
+    // The map is drawn only in the 보기 slot, and the record opens from the pane menu and the sidebar.
+    expect(popover.querySelector("[data-dependency-node]")).toBeNull();
+    expect(popover.textContent).not.toContain("record");
     await view.press("[data-mission-mini-large]");
     expect(view.events.at(-1)).toEqual({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "mission", mission: "mission-1" } } });
     expect(view.popover()).toBeNull();
-    await act(async () => view.actions.togglePlanChip());
-    await view.press("[data-mission-mini-done]");
-    expect(view.events.at(-1)).toEqual({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "mission", mission: "mission-1" } } });
-    expect(view.popover()).toBeNull();
   } finally { await view.unmount(); }
+});
+
+it("shows a finished mission's time, the report's first two lines and at most three results by kind, and a cancelled one in grey (B11, B22)", async () => {
+  const hour = 3_600_000;
+  const nodes = [
+    node("one", { status: "done", pr: PR, pr_state: "merged" }),
+    node("two", { status: "done", delivery: "direct", branch: "fix/tab" }),
+    node("three", { status: "done", kind: "research", delivery: null, line: "the cell resets first" }),
+    node("four", { status: "done", kind: "verify", delivery: null, line: "6 of 6 pass" }),
+    node("five", { status: "done", kind: "research", delivery: null }),
+  ];
+  const done = await mount([mission({ status: "done", nodes, started_at_unix_ms: 0, closed_at_unix_ms: 3 * hour, report: "All merged.\nOne step left for later.\nThird line." })]);
+  try {
+    await act(async () => done.actions.togglePlanChip());
+    const popover = done.popover()!;
+    expect(popover.querySelector("[data-mission-mini-head]")?.textContent).toBe("Finished· 3h");
+    expect(popover.querySelector("[data-mission-mini-report]")?.textContent).toBe("All merged.One step left for later.");
+    const results = [...popover.querySelectorAll<HTMLElement>("[data-mission-mini-result]")].map((row) => row.dataset.missionMiniResult);
+    expect(results).toEqual(["one", "two", "three"]);
+    expect(popover.querySelector("[data-mission-mini-result=one] [data-pr-mark=merged]")).not.toBeNull();
+    expect(popover.querySelector("[data-mission-mini-result=two] [data-node-branch]")?.textContent).toBe("fix/tab");
+    // A research node with no recorded conclusion left nothing to list.
+    expect(popover.querySelector("[data-mission-mini-more]")?.textContent).toBe("+1 more");
+    expect(popover.querySelector("[data-mission-mini-tally]")).toBeNull();
+  } finally { await done.unmount(); }
+  const cancelled = await mount([mission({ status: "cancelled", started_at_unix_ms: 0, closed_at_unix_ms: hour })]);
+  try {
+    await act(async () => cancelled.actions.togglePlanChip());
+    const head = cancelled.popover()!.querySelector<HTMLElement>("[data-mission-mini-head]")!;
+    expect([head.dataset.missionMiniHead, head.textContent]).toEqual(["cancelled", "Cancelled· 1h"]);
+    expect(head.querySelector(".text-mission-cancelled")).not.toBeNull();
+  } finally { await cancelled.unmount(); }
 });
 
 it("leads with the decision and its way to the conversation, which brings the Conductor pane forward (B5, B9)", async () => {
@@ -186,7 +229,7 @@ it("leads with the decision and its way to the conversation, which brings the Co
   try {
     await act(async () => view.actions.togglePlanChip());
     const map = view.popover()!;
-    expect(map.querySelector("[data-mission-mini-head]")?.textContent).toBe("Mission1/3 · 1 to decide");
+    expect(map.querySelector("[data-mission-mini-head]")?.textContent).toBe("Mission1/3");
     expect(map.querySelector("[data-mission-mini-decision]")?.textContent).toBe("! Which base for the screen PR?To conversation");
     await view.press("[data-mission-mini-conversation]");
     expect(view.events.at(-1)).toMatchObject({ kind: "focus_pane", payload: { pane_id: "p1" } });
@@ -194,19 +237,13 @@ it("leads with the decision and its way to the conversation, which brings the Co
   } finally { await view.unmount(); }
 });
 
-it("shows one 계획 중 line before the first plan, and a +N card for a row of more than two (B8, B10)", async () => {
+it("shows one 계획 중 line before the first plan (B10)", async () => {
   const planning = await mount([mission({ status: "planning", nodes: [] })]);
   try {
     await act(async () => planning.actions.togglePlanChip());
     expect(planning.popover()!.querySelector("[data-mission-mini-planning]")?.textContent).toBe("Planning");
-    expect(planning.popover()!.querySelector("[data-dependency-node]")).toBeNull();
+    expect(planning.popover()!.querySelector("[data-mission-mini-tally]")).toBeNull();
   } finally { await planning.unmount(); }
-  const wide = await mount([mission({ status: "planning", nodes: [node("a"), node("b"), node("c"), node("d")] })]);
-  try {
-    await act(async () => wide.actions.togglePlanChip());
-    const more = wide.popover()!.querySelector<HTMLElement>("[data-mission-mini-more]");
-    expect(more?.textContent).toBe("+3 more: b title, c title, d title");
-  } finally { await wide.unmount(); }
 });
 
 it("opens the map pinned once when the first plan lands on the pane the operator looks at, and nothing anywhere else (B12-B14)", async () => {

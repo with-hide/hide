@@ -38,7 +38,9 @@ export const plansEnglish = {
   "plan.field.line": "Now",
   "plan.field.depends": "Waits on",
   "plan.field.change": "Changed because",
-  "mission.prNotYet": "No PR yet",
+  "plan.doneSteps": "{{count}} steps done",
+  "plan.chipNow": "Plan {{progress}}, now {{step}}",
+  "plan.steplist": "Plan steps",
 } as const;
 
 const ko: Catalog<typeof plansEnglish> = {
@@ -76,7 +78,9 @@ const ko: Catalog<typeof plansEnglish> = {
   "plan.field.line": "지금",
   "plan.field.depends": "기다리는 단계",
   "plan.field.change": "바뀐 이유",
-  "mission.prNotYet": "PR 아직 없음",
+  "plan.doneSteps": "{{count}}단계 끝",
+  "plan.chipNow": "계획 {{progress}}, 지금 {{step}}",
+  "plan.steplist": "계획 단계",
 };
 
 const zh: Catalog<typeof plansEnglish> = {
@@ -114,7 +118,9 @@ const zh: Catalog<typeof plansEnglish> = {
   "plan.field.line": "现在",
   "plan.field.depends": "等待的步骤",
   "plan.field.change": "更改原因",
-  "mission.prNotYet": "尚未创建 PR",
+  "plan.doneSteps": "{{count}} 步已完成",
+  "plan.chipNow": "计划 {{progress}}，当前 {{step}}",
+  "plan.steplist": "计划步骤",
 };
 
 const ja: Catalog<typeof plansEnglish> = {
@@ -152,7 +158,9 @@ const ja: Catalog<typeof plansEnglish> = {
   "plan.field.line": "今",
   "plan.field.depends": "待っているステップ",
   "plan.field.change": "変更の理由",
-  "mission.prNotYet": "PR未作成",
+  "plan.doneSteps": "{{count}} 段階完了",
+  "plan.chipNow": "計画 {{progress}}、いま {{step}}",
+  "plan.steplist": "計画の段階",
 };
 
 export const plansCatalogs = { en: plansEnglish, ko, "zh-CN": zh, ja } satisfies Catalogs<typeof plansEnglish>;

@@ -124,6 +124,32 @@ export function layerDependencies<T>(nodes: readonly T[], idOf: (node: T) => str
 }
 
 /**
+ * A list read top down by what each item waits on (PRD mission-plan-visibility
+ * D-07, B3, B17): an item's depth is the longest chain of items before it,
+ * the list is ordered by depth and then as given, and an item that shares its
+ * depth with an earlier one is `parallel` to it. A cycle, which a source
+ * should not allow, is cut where it closes, as `layerDependencies` cuts it.
+ */
+export function orderByDependencies<T>(items: readonly T[], idOf: (item: T) => string, dependsOn: (item: T) => readonly string[]): { item: T; depth: number; parallel: boolean }[] {
+  const byId = new Map(items.map((item) => [idOf(item), item]));
+  const depth = new Map<string, number>();
+  const visiting = new Set<string>();
+  const depthOf = (item: T): number => {
+    const id = idOf(item);
+    const known = depth.get(id);
+    if (known !== undefined) return known;
+    if (visiting.has(id)) return -1;
+    visiting.add(id);
+    const found = Math.max(-1, ...dependsOn(item).flatMap((key) => (byId.has(key) ? [depthOf(byId.get(key)!)] : []))) + 1;
+    visiting.delete(id);
+    depth.set(id, found);
+    return found;
+  };
+  const ordered = items.map((item, index) => ({ item, index, depth: depthOf(item) })).sort((a, b) => a.depth - b.depth || a.index - b.index);
+  return ordered.map(({ item, depth: at }, position) => ({ item, depth: at, parallel: position > 0 && ordered[position - 1]!.depth === at }));
+}
+
+/**
  * The arrows left once every arrow implied by a longer path is dropped
  * (PRD software-factory-ui D-08): with A→B→C, A→C is not drawn. The data
  * keeps every edge; this is a drawing step, used by the Factory graph only.

@@ -12,13 +12,11 @@ import { planGraph, stepMark } from "./plans";
 import type { PlanStep, PlanView } from "./snapshot";
 
 // A plan's steps top down by what they wait on (PRD hide-plan D-10, B12):
-// the mission map's graph with a one-line card per step. One drawing at two
-// sizes: `compact` in the pane chip's popover and folded in a mission node's
-// detail, `large` in the 보기 slot, where a card opens its step's detail.
+// the mission map's graph with a one-line card per step, drawn only in the
+// 보기 slot, where a card opens its step's detail. Everywhere else a plan is
+// read as its checklist (PRD mission-plan-visibility D-07, `PlanChecklist`).
 
-export type PlanGraphSize = "compact" | "large";
-
-export function PlanGraph({ plan, size }: { plan: PlanView; size: PlanGraphSize }) {
+export function PlanGraph({ plan }: { plan: PlanView }) {
   const [selected, setSelected] = useState<string | null>(null);
   const graph = useMemo(() => planGraph(plan), [plan]);
   const byKey = useMemo(() => new Map(plan.steps.map((step) => [step.key, step])), [plan]);
@@ -29,28 +27,21 @@ export function PlanGraph({ plan, size }: { plan: PlanView; size: PlanGraphSize 
     if (from?.status === "done" || from?.status === "dropped") return { tone: "text-border" };
     return { tone: "text-muted-foreground" };
   };
-  const large = size === "large";
   return (
-    <div data-plan-graph={size}>
+    <div data-plan-graph="large">
       <DependencyGraphView
         graph={graph}
         idOf={(step) => step.key}
         flow="down"
-        gaps={large ? { layers: "--size-mission-layer-gap", nodes: "--size-mission-node-gap" } : { layers: "--spacing-lg", nodes: "--spacing-sm" }}
+        gaps={{ layers: "--size-mission-layer-gap", nodes: "--size-mission-node-gap" }}
         edgeLook={edgeLook}
-        draw={(step) =>
-          large ? (
-            <StepCard key={step.key} plan={plan} step={step} open={selected === step.key} onOpen={(open) => setSelected(open ? step.key : null)} />
-          ) : (
-            <StepFace key={step.key} plan={plan} step={step} compact />
-          )
-        }
+        draw={(step) => <StepCard key={step.key} plan={plan} step={step} open={selected === step.key} onOpen={(open) => setSelected(open ? step.key : null)} />}
       />
     </div>
   );
 }
 
-function StepFace({ plan, step, compact, open }: { plan: PlanView; step: PlanStep; compact: boolean; open?: boolean }) {
+function StepFace({ plan, step, open }: { plan: PlanView; step: PlanStep; open: boolean }) {
   const { t } = useInterfaceTranslation();
   const current = plan.progress.current === step.key && !plan.progress.finished;
   return (
@@ -60,8 +51,7 @@ function StepFace({ plan, step, compact, open }: { plan: PlanView; step: PlanSte
       data-step-status={step.status}
       data-step-current={current || undefined}
       className={cn(
-        "flex min-w-0 items-center gap-xs rounded-md border border-border bg-card text-left",
-        compact ? "w-(--size-plan-node-compact) px-xs py-xxs" : "w-(--size-mission-node) px-sm py-xs",
+        "flex w-(--size-mission-node) min-w-0 items-center gap-xs rounded-md border border-border bg-card px-sm py-xs text-left",
         step.waiting && "border-dashed border-muted-foreground bg-transparent",
         current && "border-agent-working",
         step.status === "dropped" && "opacity-(--opacity-dimmed)",
@@ -69,7 +59,7 @@ function StepFace({ plan, step, compact, open }: { plan: PlanView; step: PlanSte
       )}
     >
       <StatusMark mark={stepMark(step)} />
-      <span className={cn("min-w-0 flex-1 truncate", compact ? "text-caption" : "text-body", step.status === "dropped" && "line-through")} title={step.title}>
+      <span className={cn("min-w-0 flex-1 truncate text-body", step.status === "dropped" && "line-through")} title={step.title}>
         {step.title}
       </span>
       {step.changed ? (
@@ -105,7 +95,7 @@ function StepCard({ plan, step, open, onOpen }: { plan: PlanView; step: PlanStep
           aria-label={`${step.title} · ${t(`plan.status.${step.status}`)}`}
           className="rounded-md text-left outline-none hover:[&>span]:bg-accent focus-visible:ring-1 focus-visible:ring-ring"
         >
-          <StepFace plan={plan} step={step} compact={false} open={open} />
+          <StepFace plan={plan} step={step} open={open} />
         </button>
       </PopoverAnchor>
       <PopoverContent

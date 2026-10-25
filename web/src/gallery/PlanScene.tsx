@@ -1,13 +1,13 @@
 // A session's own plan over invented values (PRD hide-plan), one state per
-// `state` parameter: running, review, finished. The small map the pane chip
-// opens sits beside the large one the 보기 slot draws, both the real
-// components. Nothing leaves this scene.
+// `state` parameter: running, review, finished. The checklist the pane chip
+// opens (PRD mission-plan-visibility B3-B6) sits beside the map the 보기 slot
+// draws, both the real components. Nothing leaves this scene.
 import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { useFollowInterfaceLanguage } from "../i18n/translator";
 import { requireInterfaceLanguage } from "../i18n/locale";
-import { PlanGraph } from "../PlanGraph";
+import { PlanChecklist } from "../PlanChecklist";
 import { PlanMap, PlanSummaryLine } from "../PlanMap";
 import type { PlanStep, PlanView, SnapshotRest } from "../snapshot";
 import { useShellStore } from "../store";
@@ -71,7 +71,7 @@ export function PlanScene({ params }: { params: URLSearchParams }) {
       <div style={{ width }} className="flex h-full min-w-0 gap-lg bg-background p-lg text-foreground" data-gallery-scene="plan" data-plan-scene={state}>
         <div className="flex w-(--size-pr-popover) shrink-0 flex-col self-start rounded-md border border-border bg-popover text-caption" data-plan-scene-popover="true">
           <div className="px-sm pt-sm"><PlanSummaryLine plan={shown} /></div>
-          <div className="overflow-x-auto px-sm py-sm"><PlanGraph plan={shown} size="compact" /></div>
+          <div className="px-xs py-sm"><PlanChecklist plan={shown} /></div>
         </div>
         <div className="flex min-h-0 min-w-0 flex-1 flex-col rounded-md border border-border">
           <PlanMap session={SESSION} actions={actions} />

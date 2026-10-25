@@ -73,12 +73,14 @@ test("the Conductor's first plan shows on its pane, the map follows the record, 
     await expect(small).toHaveCount(0);
 
     // The first plan opens nothing in the lane; the operator looks at the
-    // Conductor pane, so its small map opens pinned (mission-pane-chip B11, B12).
+    // Conductor pane, so its popover opens pinned (mission-pane-chip B11, B12).
     await mission(conductor, ["mission", "plan", "--json", JSON.stringify(PLAN)]);
     await expect(paneChip).toHaveAttribute("data-mission-chip-state", "running");
     await expect(paneChip).toContainText("0/3");
     await expect(small).toBeVisible();
-    await expect(small.locator("[data-mission-mini-node]")).toHaveCount(3);
+    // No worker is at a node yet: no row, and the tally counts none done and three ahead (mission-plan-visibility B10).
+    await expect(small.locator("[data-mission-mini-node]")).toHaveCount(0);
+    await expect(small.locator("[data-mission-mini-tally]")).toHaveAttribute("data-mission-mini-tally", "0 3");
     await expect(map).toHaveCount(0);
     await screenshot(page, "mission-pane-first-plan");
     // `크게 ›` opens the big map in the 보기 slot and closes the popover (B5).
@@ -102,18 +104,19 @@ test("the Conductor's first plan shows on its pane, the map follows the record, 
     await expect(map.locator("[data-mission-status]")).toHaveAttribute("data-mission-status", "running");
     const node = map.locator('[data-mission-node="api"]');
     await expect(node).toHaveAttribute("data-node-status", "working");
-    await expect(node.locator("[data-node-line]")).toHaveText("엔드포인트 작성 중");
+    await expect(node.locator("[data-node-now]")).toHaveText("엔드포인트 작성 중");
     // Its worker row names the model the plan chose (the Conductor's own pane runs no Hide launch, so the plan's stands), with the time it has worked.
     await expect(node.locator("[data-node-worker]")).toHaveAttribute("data-node-worker", "opus");
     // A research node draws no step cells; the change node draws its four.
     await expect(map.locator('[data-mission-node="cause"] [data-node-steps]')).toHaveCount(0);
     await expect(node.locator("[data-node-steps]")).toHaveCount(1);
-    await expect(node.locator("[data-mission-duration]")).toBeVisible();
+    // Its row in the flow table draws its bar from its start (mission-plan-visibility B19).
+    await expect(map.locator('[data-flow-row="api"] [data-flow-bar]')).toBeVisible();
     await mission(conductor, ["mission", "decide", "--line", "화면 PR 방식 선택"]);
     await expect(map.locator('[data-mission-banner="decision"]')).toContainText("화면 PR 방식 선택");
-    // A card opens its detail beside it in the app too, where the terminal keeps the keyboard.
+    // A card opens its row in the flow table in the app too, where the terminal keeps the keyboard, and a second press closes it (B20).
     await node.click();
-    await expect(page.locator('[data-mission-detail="api"]')).toBeVisible();
+    await expect(map.locator('[data-flow-row="api"] [data-mission-detail="api"]')).toBeVisible();
     await node.click();
     await expect(page.locator('[data-mission-detail="api"]')).toHaveCount(0);
     await screenshot(page, "mission-map-running");
@@ -125,7 +128,7 @@ test("the Conductor's first plan shows on its pane, the map follows the record, 
     const shown = await mission(conductor, ["mission", "show"]);
     expect(JSON.stringify(shown.result)).toContain("together");
     await expect(map).toHaveCount(0);
-    // Nor does a replan open the pane's small map again (B12).
+    // Nor does a replan open the pane's popover again (B12).
     await expect(small).toHaveCount(0);
     // The Conductor's row carries the mission mark, and pressing it opens the map again (B14).
     const chip = page.locator("nav[data-sidebar] [data-mission-chip]");

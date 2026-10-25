@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { chipWords, conductedBy, firstPlans, kindWord, missionMiniGraph, missionOfPane, paneChipWords, MINI_REPORT, launchModelOf, missionCounts, nodeLine, nodeMark, stackWaiting, stepsOf, takeOverPrompt, takeOverProvider, workerWords } from "./missions";
+import { chipWords, conductedBy, firstPlans, flowShows, flowSpan, kindWord, missionCells, missionLegend, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, nodeBar, nodeResult, nodeTone, paneChipWords, launchModelOf, missionCounts, nodeLine, nodeMark, stackWaiting, stageWord, stepsOf, takeOverPrompt, takeOverProvider, workerWords } from "./missions";
 import type { Mission, MissionNode, SnapshotRest } from "./snapshot";
 
 // What the map and the Conductor row read from a mission (PRD
@@ -120,7 +120,7 @@ describe("the Conductor pane's chip (PRD mission-pane-chip B2, B10)", () => {
     expect(words({ status: "running", nodes: planned })).toEqual(["running", "Mission", "1/2"]);
     expect(words({ status: "running", nodes: planned, decision: "Which base?" })).toEqual(["decision", "1 to decide", null]);
     expect(words({ status: "merge_wait", nodes: planned })).toEqual(["merge_wait", "Waiting to merge", null]);
-    expect(words({ status: "done", nodes: planned, decision: "stale ask" })).toEqual(["done", "Done", "1/2"]);
+    expect(words({ status: "done", nodes: planned, decision: "stale ask" })).toEqual(["done", "Mission", "1/2"]);
     expect(words({ status: "cancelled", nodes: planned })).toEqual(["cancelled", "Cancelled", null]);
   });
 
@@ -133,35 +133,84 @@ describe("the Conductor pane's chip (PRD mission-pane-chip B2, B10)", () => {
   });
 });
 
-describe("the small map (PRD mission-pane-chip B6-B8)", () => {
-  const keys = (m: Mission) => missionMiniGraph(m).graph.layers.map((layer) => layer.map((card) => card.key));
-  it("counts the done nodes apart and draws the rest top down into the report, leaving dropped nodes out", () => {
-    const m = mission("m", { nodes: [node("spec", { status: "done" }), node("api", { status: "working", depends_on: ["spec"] }), node("ui", { depends_on: ["api"] }), node("old", { status: "dropped" })] });
-    const { done, graph } = missionMiniGraph(m);
-    expect(done).toBe(1);
-    expect(keys(m)).toEqual([["api"], ["ui"], [MINI_REPORT]]);
-    expect(graph.edges).toEqual([{ from: "api", to: "ui" }, { from: "ui", to: MINI_REPORT }]);
+describe("a node's state colour (PRD mission-plan-visibility D-11, B8, B13, B14, B35)", () => {
+  it("reads each status as one of the map's states, a blocked node waiting and a cancelled mission's unfinished node cancelled", () => {
+    const m = mission("m");
+    const tones = (["planned", "working", "waiting", "review", "held", "done", "failed", "dropped"] as const).map((status) => nodeTone(m, node("n", { status })));
+    expect(tones).toEqual(["waiting", "working", "waiting", "review", "hold", "done", "failed", "dropped"]);
+    expect(nodeTone(m, node("n", { blocked: "upstream_failed" }))).toBe("waiting");
+    const cancelled = mission("m", { status: "cancelled" });
+    expect(["done", "failed", "working", "planned"].map((status) => nodeTone(cancelled, node("n", { status: status as MissionNode["status"] })))).toEqual(["done", "failed", "cancelled", "cancelled"]);
   });
 
-  it("draws nothing but the count once every node is done, and nothing at all before the plan", () => {
-    expect(missionMiniGraph(mission("m", { nodes: [node("a", { status: "done" })] }))).toMatchObject({ done: 1, graph: { layers: [] } });
-    expect(missionMiniGraph(mission("m"))).toMatchObject({ done: 0, graph: { layers: [] } });
+  it("counts the states with nodes in them in the legend's order, and draws a cell per node in the plan in the order they wait on each other", () => {
+    const m = mission("m", { nodes: [node("ui", { depends_on: ["api"] }), node("api", { status: "working" }), node("old", { status: "dropped" }), node("spec", { status: "done" }), node("ask", { status: "held" })] });
+    expect(missionLegend(m)).toEqual([{ tone: "done", count: 1 }, { tone: "working", count: 1 }, { tone: "hold", count: 1 }, { tone: "waiting", count: 1 }]);
+    expect(missionCells(m)).toEqual(["working", "done", "hold", "waiting"]);
   });
 
-  it("keeps two cards in a row and folds a third into one +N card that every edge of a folded node meets", () => {
-    const two = mission("m", { nodes: [node("a"), node("b")] });
-    expect(keys(two)).toEqual([["a", "b"], [MINI_REPORT]]);
-    const m = mission("m", { nodes: [node("a"), node("b"), node("c"), node("d"), node("x", { depends_on: ["b"] }), node("y", { depends_on: ["c", "d"] })] });
-    const { graph } = missionMiniGraph(m);
-    expect(keys(m)).toEqual([["a", "#more-0"], ["x", "y"], [MINI_REPORT]]);
-    const more = graph.layers[0]![1]!;
-    expect(more.kind === "more" ? more.nodes.map((n) => n.key) : null).toEqual(["b", "c", "d"]);
-    expect(graph.edges.map((edge) => `${edge.from}>${edge.to}`).sort()).toEqual(["#more-0>x", "#more-0>y", `a>${MINI_REPORT}`, `x>${MINI_REPORT}`, `y>${MINI_REPORT}`]);
+  it("colours a mission's own chip by its decision, else its state", () => {
+    expect(missionTone(mission("m", { decision: "Which base?" }))).toBe("hold");
+    expect(missionTone(mission("m", { status: "done", decision: "stale ask" }))).toBe("done");
+    expect([missionTone(mission("m", { status: "planning" })), missionTone(mission("m", { status: "merge_wait" })), missionTone(mission("m", { status: "cancelled" }))]).toEqual(["waiting", "review", "cancelled"]);
+  });
+});
+
+describe("what a running mission's pane says (PRD mission-plan-visibility B9, B10)", () => {
+  const nodes = [node("spec", { status: "done" }), node("api", { title: "API", status: "working", depends_on: ["spec"] }), node("ui", { title: "UI", status: "review", depends_on: ["spec"] }), node("docs", { status: "held" }), node("later", { depends_on: ["ui"] })];
+  it("leads with the waiting decision, else the nodes at work, and says nothing with none at work or once the mission ended", () => {
+    expect(missionWorkLine(mission("m", { nodes, decision: "Which base?" }), t)).toEqual({ decision: true, text: "! Which base?" });
+    expect(missionWorkLine(mission("m", { nodes }), t)).toEqual({ decision: false, text: "Running 2 · API and 1 more" });
+    expect(missionWorkLine(mission("m", { nodes: nodes.slice(0, 2) }), t)?.text).toBe("Running 1 · API");
+    expect(missionWorkLine(mission("m", { nodes: [node("a")] }), t)).toBeNull();
+    expect(missionWorkLine(mission("m", { nodes, status: "done", decision: "stale ask" }), t)).toBeNull();
   });
 
-  it("marks a stack's edge, the base pull request below the one above", () => {
-    const m = mission("m", { nodes: [node("low", { pr: 7, status: "review" }), node("high", { pr: 8, base_pr: 7, depends_on: ["low"] }), node("side", { depends_on: ["low"] })] });
-    expect([...missionMiniGraph(m).stacked]).toEqual(["low>high"]);
+  it("tallies the done nodes and those still ahead of any worker", () => {
+    expect(missionTally(mission("m", { nodes }))).toEqual({ done: 1, next: 2 });
+  });
+
+  it("names where each node's work is: a change node's step of four, else its kind", () => {
+    const names = [node("a"), node("b", { stage: 2 }), node("c", { stage: 3 }), node("d", { stage: 4 }), node("e", { delivery: "direct", stage: 2 }), node("f", { delivery: "direct", stage: 4 }), node("g", { kind: "research" }), node("h", { kind: "verify" })].map((one) => t(stageWord(one)));
+    expect(names).toEqual(["Code", "PR", "Review", "Merge", "Checks", "main", "Research", "Verify"]);
+  });
+});
+
+describe("what a node left (PRD mission-plan-visibility B11, B22)", () => {
+  it("is its pull request, a direct change's branch, a research conclusion or a verify line, and nothing the record does not hold", () => {
+    expect(nodeResult(node("a", { pr: 7, pr_state: "merged" }))).toEqual({ kind: "pr", number: 7, state: "merged" });
+    expect(nodeResult(node("b", { delivery: "direct", branch: "fix/x" }))).toEqual({ kind: "branch", branch: "fix/x" });
+    expect(nodeResult(node("c", { kind: "research", line: "cache first" }))).toEqual({ kind: "conclusion", line: "cache first" });
+    expect(nodeResult(node("d", { kind: "verify", line: "6 of 6" }))).toEqual({ kind: "verify", line: "6 of 6" });
+    expect([nodeResult(node("e")), nodeResult(node("f", { kind: "research" })), nodeResult(node("g", { line: "a change's own line is no result" }))]).toEqual([null, null, null]);
+  });
+
+  it("lists only the done nodes that left something, in order", () => {
+    const m = mission("m", { nodes: [node("b", { status: "done", pr: 8, depends_on: ["a"] }), node("a", { status: "done", kind: "research", line: "why" }), node("c", { status: "working", pr: 9 }), node("d", { status: "done" })] });
+    expect(missionResults(m).map(({ node: one }) => one.key)).toEqual(["a", "b"]);
+  });
+});
+
+describe("the flow table's time axis (PRD mission-plan-visibility B17, B19)", () => {
+  it("runs from the mission's start to its close, or to now while it is open", () => {
+    expect(flowSpan(mission("m", { started_at_unix_ms: 100 }), 500)).toEqual({ from: 100, to: 500 });
+    expect(flowSpan(mission("m", { started_at_unix_ms: null, created_at_unix_ms: 50, closed_at_unix_ms: 250 }), 900)).toEqual({ from: 50, to: 250 });
+  });
+
+  it("draws one bar from a node's start to its finish, to the axis end while it runs, and none before it starts", () => {
+    const span = { from: 0, to: 1000 };
+    expect(nodeBar(node("a", { started_at_unix_ms: 250, finished_at_unix_ms: 500 }), span)).toEqual({ left: 25, width: 25 });
+    expect(nodeBar(node("b", { started_at_unix_ms: 800 }), span)).toEqual({ left: 80, width: 20 });
+    expect(nodeBar(node("c"), span)).toBeNull();
+    // A time outside the axis is held to it, never drawn past its ends.
+    expect(nodeBar(node("d", { started_at_unix_ms: -100, finished_at_unix_ms: 2000 }), span)).toEqual({ left: 0, width: 100 });
+  });
+
+  it("filters to the nodes not finished, or the finished ones", () => {
+    const statuses = ["planned", "working", "held", "done", "failed", "dropped"] as const;
+    expect(statuses.filter((status) => flowShows(node("n", { status }), "now"))).toEqual(["planned", "working", "held"]);
+    expect(statuses.filter((status) => flowShows(node("n", { status }), "finished"))).toEqual(["done", "failed", "dropped"]);
+    expect(statuses.every((status) => flowShows(node("n", { status }), "all"))).toBe(true);
   });
 });
 

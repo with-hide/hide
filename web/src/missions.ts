@@ -8,7 +8,7 @@ import type { TFunction } from "i18next";
 import type { MessageKey } from "./i18n/catalogs";
 import { PROVIDER_KINDS, type ProviderKind } from "./agentPicker";
 import { agentsByPane } from "./paneAgents";
-import { layerDependencies, type LayeredGraph } from "./projectBoard";
+import { orderByDependencies } from "./projectBoard";
 import type { AgentRow, AgentStartChoice, Mission, MissionNode, RowMark, SnapshotRest } from "./snapshot";
 
 export function missionOf(rest: SnapshotRest | null | undefined, id: string): Mission | null {
@@ -176,65 +176,171 @@ export function paneChipWords(mission: Mission): { state: PaneChipState; key: Me
     case "merge_wait":
       return { state: "merge_wait", key: "mission.pane.mergeWait", counts: null };
     case "done":
-      return { state: "done", key: "mission.pane.done", counts };
+      return { state: "done", key: "mission.chip", counts };
     case "cancelled":
       return { state: "cancelled", key: "mission.pane.cancelled", counts: null };
   }
 }
 
-/** The card the small map's paths end in; a node key is letters, digits, `-`, `_` and `.`, so none is this. */
-export const MINI_REPORT = "#report";
+/**
+ * A node's state as the map's colour says it (PRD mission-plan-visibility
+ * D-11, B14): the whole card border, the legend, the chip's cell and the flow
+ * row's bar share it. A node that cannot start yet waits; once the mission is
+ * cancelled, a node it never finished is cancelled, and a dropped node left
+ * the plan, so it counts in neither the legend nor the chip.
+ */
+export type NodeTone = "done" | "working" | "review" | "hold" | "failed" | "waiting" | "cancelled" | "dropped";
 
-/** A row of the small map keeps this many cards; past it, its first card and one `+N` card (B8). */
-export const MINI_ROW_CARDS = 2;
+export function nodeTone(mission: Mission, node: MissionNode): NodeTone {
+  if (node.status === "dropped") return "dropped";
+  if (mission.status === "cancelled" && node.status !== "done" && node.status !== "failed") return "cancelled";
+  if (node.blocked) return "waiting";
+  switch (node.status) {
+    case "done":
+      return "done";
+    case "working":
+      return "working";
+    case "review":
+      return "review";
+    case "held":
+      return "hold";
+    case "failed":
+      return "failed";
+    case "planned":
+    case "waiting":
+      return "waiting";
+  }
+}
 
-/** A card of the small map: a node, the `+N` card standing for a row's folded nodes, or the report. */
-export type MiniCard = { key: string; kind: "node"; node: MissionNode } | { key: string; kind: "more"; nodes: MissionNode[] } | { key: string; kind: "report" };
+/** The legend's order (B13): what finished, what moves, what waits on the operator, what is still ahead. */
+export const LEGEND_TONES = ["done", "review", "working", "hold", "failed", "waiting", "cancelled"] as const satisfies readonly NodeTone[];
 
-/** An edge of the small map, and whether a stack's base runs along it (B7). */
-export type MiniEdge = { from: string; to: string; stacked: boolean };
+export type LegendTone = (typeof LEGEND_TONES)[number];
+
+/** The head's legend (B13): each state with nodes in it and how many, in `LEGEND_TONES` order. */
+export function missionLegend(mission: Mission): { tone: LegendTone; count: number }[] {
+  const counts = new Map<NodeTone, number>();
+  for (const node of mission.nodes) counts.set(nodeTone(mission, node), (counts.get(nodeTone(mission, node)) ?? 0) + 1);
+  return LEGEND_TONES.flatMap((tone) => (counts.get(tone) ? [{ tone, count: counts.get(tone)! }] : []));
+}
+
+/** The nodes top down by what they wait on, a dropped node where it stood (B17). */
+export function orderedNodes(mission: Mission): MissionNode[] {
+  return orderByDependencies(mission.nodes, (node) => node.key, (node) => node.depends_on).map(({ item }) => item);
+}
+
+/** The chip's and the head's bar (B8, B13): one cell per node in the plan, in order. */
+export function missionCells(mission: Mission): LegendTone[] {
+  return orderedNodes(mission).flatMap((node) => {
+    const tone = nodeTone(mission, node);
+    return tone === "dropped" ? [] : [tone];
+  });
+}
+
+/** The colour a mission's own chip wears on the sidebar row and the Overview (B35): its decision, else its state. */
+export function missionTone(mission: Mission): LegendTone {
+  if (mission.decision && missionOpen(mission)) return "hold";
+  switch (mission.status) {
+    case "planning":
+      return "waiting";
+    case "running":
+      return "working";
+    case "merge_wait":
+      return "review";
+    case "done":
+      return "done";
+    case "cancelled":
+      return "cancelled";
+  }
+}
+
+/** The nodes a worker is at now, working or in review, in order (B9, B10). */
+export function liveNodes(mission: Mission): MissionNode[] {
+  return orderedNodes(mission).filter((node) => node.status === "working" || node.status === "review");
+}
+
+/** The running popover's last line (B10): the nodes done, and those still ahead of any worker. */
+export function missionTally(mission: Mission): { done: number; next: number } {
+  const ahead = (node: MissionNode) => node.status === "planned" || node.status === "waiting" || node.status === "held";
+  return { done: mission.nodes.filter((node) => node.status === "done").length, next: mission.nodes.filter(ahead).length };
+}
 
 /**
- * The Conductor pane's small map (PRD mission-pane-chip D-04, D-05, B6-B8):
- * the done nodes counted apart, the ones still to do top down by what they
- * wait on into the report card, and a row of more than two cards as its
- * first card and one `+N` card that every edge of a folded node meets. A
- * dropped node left the plan, as `missionCounts` reads it, so it is not drawn.
+ * The Conductor pane's second line (B9, D-21): the decision waiting on the
+ * operator first, else `도는 중 n · <first> 외 k`; nothing with no worker at it.
  */
-export function missionMiniGraph(mission: Mission): { done: number; graph: LayeredGraph<MiniCard>; stacked: ReadonlySet<string> } {
-  const done = mission.nodes.filter((node) => node.status === "done").length;
-  const nodes = mission.nodes.filter((node) => node.status !== "done" && node.status !== "dropped");
-  const empty = { layers: [], edges: [], unrelated: [] };
-  if (nodes.length === 0) return { done, graph: empty, stacked: new Set() };
-  const cards: MiniCard[] = [...nodes.map((node): MiniCard => ({ key: node.key, kind: "node", node })), { key: MINI_REPORT, kind: "report" }];
-  const byKey = new Map(cards.map((card) => [card.key, card]));
-  const depended = new Set(nodes.flatMap((node) => node.depends_on));
-  const layered = layerDependencies(cards, (card) => card.key, (card) => {
-    // Every node no other node still to do waits on ends in the report.
-    if (card.kind === "report") return nodes.filter((node) => !depended.has(node.key)).map((node) => byKey.get(node.key)!);
-    return card.kind === "node" ? card.node.depends_on.flatMap((key) => byKey.get(key) ?? []) : [];
+export function missionWorkLine(mission: Mission, t: TFunction<"translation">): { decision: boolean; text: string } | null {
+  if (mission.decision && missionOpen(mission)) return { decision: true, text: `! ${mission.decision}` };
+  if (!missionOpen(mission)) return null;
+  const live = liveNodes(mission);
+  const [first] = live;
+  if (!first) return null;
+  const head = t("mission.line.running", { count: live.length });
+  const rest = live.length > 1 ? t("mission.line.others", { title: first.title, count: live.length - 1 }) : first.title;
+  return { decision: false, text: `${head} · ${rest}` };
+}
+
+const PR_STAGES: readonly MessageKey[] = ["mission.stage.code", "mission.stage.pr", "mission.stage.review", "mission.stage.merge"];
+const DIRECT_STAGES: readonly MessageKey[] = ["mission.stage.code", "mission.stage.check", "mission.stage.review", "mission.stage.main"];
+
+/** Where a node's work is, named (B10): a change node's step of four, else its kind's one word. */
+export function stageWord(node: MissionNode): MessageKey {
+  if (node.kind === "research") return "mission.stage.research";
+  if (node.kind === "verify") return "mission.stage.verify";
+  const stages = node.delivery === "direct" ? DIRECT_STAGES : PR_STAGES;
+  return stages[Math.min(Math.max(node.stage ?? 1, 1), STAGE_STEPS) - 1]!;
+}
+
+/**
+ * What a node left behind, by its kind (B22, D-14): its pull request, a
+ * direct change's branch, a research node's conclusion or a verify node's
+ * line. Null when the record holds none, so nothing is drawn for it.
+ */
+export type NodeResult =
+  | { kind: "pr"; number: number; state: MissionNode["pr_state"] }
+  | { kind: "branch"; branch: string }
+  | { kind: "conclusion"; line: string }
+  | { kind: "verify"; line: string };
+
+export function nodeResult(node: MissionNode): NodeResult | null {
+  if (node.pr != null) return { kind: "pr", number: node.pr, state: node.pr_state };
+  if (node.kind === "change") return node.branch ? { kind: "branch", branch: node.branch } : null;
+  if (!node.line) return null;
+  return node.kind === "research" ? { kind: "conclusion", line: node.line } : { kind: "verify", line: node.line };
+}
+
+/** A finished or cancelled mission's results (B11, B23, B24): each done node that left something, in order. */
+export function missionResults(mission: Mission): { node: MissionNode; result: NodeResult }[] {
+  return orderedNodes(mission).flatMap((node) => {
+    const result = node.status === "done" ? nodeResult(node) : null;
+    return result ? [{ node, result }] : [];
   });
-  const into = new Map<string, string>();
-  const layers = layered.layers.map((layer, index) => {
-    if (layer.length <= MINI_ROW_CARDS) return layer;
-    const [first, ...rest] = layer;
-    const more: MiniCard = { key: `#more-${index}`, kind: "more", nodes: rest.flatMap((card) => (card.kind === "node" ? [card.node] : [])) };
-    for (const card of rest) into.set(card.key, more.key);
-    return [first!, more];
-  });
-  const nodeOf = new Map(nodes.map((node) => [node.key, node]));
-  const edges = new Map<string, MiniEdge>();
-  for (const edge of layered.edges) {
-    const from = into.get(edge.from) ?? edge.from;
-    const to = into.get(edge.to) ?? edge.to;
-    const below = nodeOf.get(edge.from);
-    const above = nodeOf.get(edge.to);
-    const stacked = below?.pr != null && above?.base_pr === below.pr;
-    const id = `${from}>${to}`;
-    edges.set(id, { from, to, stacked: (edges.get(id)?.stacked ?? false) || stacked });
-  }
-  const stacked = new Set([...edges.entries()].flatMap(([id, edge]) => (edge.stacked ? [id] : [])));
-  return { done, graph: { layers, edges: [...edges.values()].map(({ from, to }) => ({ from, to })), unrelated: [] }, stacked };
+}
+
+/** The flow table's time axis (B17): the mission's start to its close, or to now while it is open. */
+export function flowSpan(mission: Mission, now: number): { from: number; to: number } {
+  const from = mission.started_at_unix_ms ?? mission.created_at_unix_ms;
+  return { from, to: Math.max(from + 1, mission.closed_at_unix_ms ?? now) };
+}
+
+/**
+ * A node's one bar on that axis, as percentages (B19): from its start to its
+ * finish, or to the axis end while it has not finished; none before it starts.
+ */
+export function nodeBar(node: MissionNode, span: { from: number; to: number }): { left: number; width: number } | null {
+  if (node.started_at_unix_ms == null) return null;
+  const length = span.to - span.from;
+  const start = Math.min(Math.max(node.started_at_unix_ms, span.from), span.to);
+  const end = Math.min(Math.max(node.finished_at_unix_ms ?? span.to, start), span.to);
+  return { left: ((start - span.from) / length) * 100, width: ((end - start) / length) * 100 };
+}
+
+/** The flow table's filter (B17): every node, the ones not finished, or the finished ones. */
+export type FlowFilter = "all" | "now" | "finished";
+
+export function flowShows(node: MissionNode, filter: FlowFilter): boolean {
+  const finished = node.status === "done" || node.status === "failed" || node.status === "dropped";
+  return filter === "all" || (filter === "finished") === finished;
 }
 
 /**

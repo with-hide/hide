@@ -6,7 +6,7 @@ import { windowIsActive } from "./viewFocus";
 
 // A mission's first plan shows on its Conductor pane (PRD mission-pane-chip
 // D-03, D-06, B12-B14): only when the operator is looking at that pane does
-// its chip's small map open pinned, once, with the keyboard left in the
+// its chip's popover open pinned, once, with the keyboard left in the
 // terminal; anywhere else only the chip changes. The rule reads two
 // consecutive frames this page received while live: a full snapshot, as after
 // a load or a restart, and the first frame after a reconnect, which resumes
