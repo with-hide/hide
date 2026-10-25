@@ -1495,6 +1495,24 @@ fn an_answer_whose_conductor_left_or_whose_question_changed_is_not_delivered() {
 }
 
 #[test]
+fn a_conductor_whose_agent_the_doorbell_does_not_ring_takes_no_banner_answer() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running(&mut runtime);
+    command(&mut runtime, "sender", json!({"op": "decide", "line": "Which base?", "options": ["main", "#1503"]})).unwrap();
+    runtime.refresh_missions();
+    assert!(runtime.snapshot.missions.items[0].conductor.takes_answers);
+    runtime.missions.book.missions[0].conductor.actor.kind = "opencode".into();
+    runtime.missions.book_edit += 1;
+    runtime.refresh_missions();
+    assert!(!runtime.snapshot.missions.items[0].conductor.takes_answers);
+    assert_eq!(runtime.answer_mission("mission-1", 1, Some(1), None).unwrap_err(), "mission_answer_unsupported");
+    assert!(!runtime.mission_answer_event("mission-1", 1, Some(1), None));
+    let mission = &runtime.missions.book.missions[0];
+    assert_eq!((mission.answer.is_none(), mission.answer_failed), (true, None));
+}
+
+#[test]
 fn only_the_mission_open_in_the_slot_sends_its_events() {
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();

@@ -109,6 +109,10 @@ pub struct ConductorView {
     /// The Conductor's pane runs its session now; absent shows `Conductor
     /// 없음 · 이어받기` (B43).
     pub present: bool,
+    /// Its agent takes an answer typed from the map's banner: the doorbell
+    /// types only into the agents it rings (PRD mission-plan-visibility
+    /// B26), and the banner sends any other to the conversation.
+    pub takes_answers: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -1404,6 +1408,7 @@ impl Runtime {
                 agent_kind: mission.conductor.actor.kind.clone(),
                 session: mission.conductor.session.clone(),
                 present: self.conductor_present(&mission.conductor.actor),
+                takes_answers: crate::delivery::doorbell::bell_target(&mission.conductor.actor.kind),
             },
             nodes,
             merge_order: mission.merge_order.clone(),

@@ -275,6 +275,7 @@ fn mission(
             agent_kind: "claude".into(),
             session: None,
             present,
+            takes_answers: true,
         },
         nodes: vec![NodeView {
             key: "fix".into(),

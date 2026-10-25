@@ -294,6 +294,11 @@ impl Runtime {
         if mission.answer.as_ref().is_some_and(|answer| answer.key == key) {
             return Ok(false);
         }
+        // The doorbell types only into an agent it rings; nothing would ever
+        // take this answer, and the banner offers none for it.
+        if !crate::delivery::doorbell::bell_target(&mission.conductor.actor.kind) {
+            return Err("mission_answer_unsupported".into());
+        }
         if !self.conductor_present(&mission.conductor.actor) {
             return Err("mission_conductor_gone".into());
         }
