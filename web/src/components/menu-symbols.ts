@@ -21,9 +21,9 @@ export const menuSymbols = {
 } as const;
 
 export type MenuSymbol = keyof typeof menuSymbols;
-export type MenuGroup = "split" | "move" | "relations" | "fork" | "copy";
+export type MenuGroup = "split" | "move" | "relations" | "fork";
 export const menuGroupSymbols: Record<MenuGroup, MenuSymbol> = {
-  split: "split_right", move: "right", relations: "relations", fork: "fork", copy: "copy",
+  split: "split_right", move: "right", relations: "relations", fork: "fork",
 };
 
 export type MenuPresentation = {

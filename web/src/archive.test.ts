@@ -62,8 +62,8 @@ describe("where 세션 보관 is offered", () => {
   it("puts it below Sleep agent in the pane menu, or first when the agent cannot sleep", () => {
     const offered = { kind: "offered", unavailable: null } as const;
     const ids = (row: object) => paneMenuItems({ id: "w1:p1", children: null, lineage_path: [], ...row } as unknown as PaneRow, "reviewer", offered).map((item) => item.id);
-    expect(ids({ sleep_action: { available: true }, fork: { available: true } })).toEqual(["sleep_agent", "archive_session", "fork_agent", "fork_agent_side", "copy_name", "copy_pane_id", "close_pane"]);
-    expect(ids({ fork: { available: true } })).toEqual(["fork_agent", "fork_agent_side", "archive_session", "copy_name", "copy_pane_id", "close_pane"]);
+    expect(ids({ sleep_action: { available: true }, fork: { available: true } })).toEqual(["sleep_agent", "archive_session", "fork_agent", "fork_agent_side", "copy_reference", "close_pane"]);
+    expect(ids({ fork: { available: true } })).toEqual(["fork_agent", "fork_agent_side", "archive_session", "copy_reference", "close_pane"]);
   });
 });
 

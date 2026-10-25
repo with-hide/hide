@@ -24,8 +24,8 @@ export default chapter<DelegateModel>({
     { id: "received", target: pane(DOCS), side: "left" },
     {
       id: "copy", quest: true, target: `${pane(SIGNUP)} header, [role="menu"]`, side: "left",
-      gesture: { menu: { at: `${pane(SIGNUP)} header`, path: ['[data-menu-group="copy"]', '[data-menu-item="copy_pane_id"]'] } },
-      done: (model) => model.copied === SIGNUP,
+      gesture: { menu: { at: `${pane(SIGNUP)} header`, path: ['[data-menu-item="copy_reference"]'] } },
+      done: (model) => model.copied?.includes(`pane ${SIGNUP}`) === true,
     },
     { id: "paste", quest: true, target: pane(LEAD), side: "inside", gesture: say(`${SIGNUP} update the signup copy for the new timeout`), done: (model) => model.stage >= 4 },
     { id: "end", target: "[data-sidebar-box] [data-sidebar]", side: "right" },

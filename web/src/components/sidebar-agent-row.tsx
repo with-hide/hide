@@ -25,6 +25,7 @@ import { MissionChip } from "./mission-chip";
 import { EntryContextMenu, type MenuEntry } from "./entry-menu";
 import { DeviceChip } from "./device-chip";
 import { StatusMark } from "./status-mark";
+import { beginAgentDrag } from "../agentReference";
 import { Badge } from "./ui/badge";
 import { Keycap } from "./ui/keycap";
 import { Hint } from "./ui/tooltip";
@@ -200,6 +201,8 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
           className="absolute inset-0 rounded-sm outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring"
           onClick={() => onOpen(agent.pane_id)}
           onKeyDown={onKeyDown}
+          draggable={!unreachable}
+          onDragStart={(event) => beginAgentDrag(agent, event)}
         />
       </Hint>
       {tree ? <TreeRails place={tree.place} /> : null}

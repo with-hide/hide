@@ -7,6 +7,7 @@ import { CircleAlertIcon, EllipsisIcon, Maximize2Icon, MoonIcon, TerminalSquareI
 import { memo, useEffect, useRef } from "react";
 import type { Actions } from "./actions";
 import { refusalText, submitFiles } from "./attachments";
+import { agentDrag, referenceLands } from "./agentReference";
 import { explorerDrag } from "./explorerDrag";
 import { remoteTargetOfPane } from "./remote";
 import { localDeviceId } from "./snapshot";
@@ -32,7 +33,7 @@ import type { AgentSleep, AgentStatusCode, PaneRow, RowMark, TerminalPane } from
 import { PaneNoticeBody } from "./PaneNotice";
 import { caughtUp } from "./operatorFocus";
 import { useShellStore } from "./store";
-import { attachTerminal, bracketedPaste, focusTerminal, pasteExplorerCopy, pasteExplorerFile, requestView, setTextScale, terminalLinkAt, terminalSelectionText } from "./terminals";
+import { attachTerminal, bracketedPaste, focusTerminal, pasteExplorerCopy, pasteExplorerFile, requestView, setTextScale, terminalLinkAt, terminalSelectionText, typeReference } from "./terminals";
 
 /**
  * Transport states with a live stream; anything else is drawn as a caption in
@@ -204,6 +205,17 @@ export const PaneView = memo(function PaneView({
   // A dropped file or a pasted image stages through hided and reaches the
   // terminal as the core's own `terminal_attachment` (B14).
   const drop = (event: React.DragEvent) => {
+    // A sidebar agent row types its reference, for this agent to address it.
+    const agent = agentDrag.current;
+    if (agent) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!acceptsAgentDrag()) return;
+      actions.focusPane(paneId);
+      focusTerminal(paneId);
+      typeReference(paneId, agent.text);
+      return;
+    }
     const item = explorerDrag.current;
     if (item) {
       event.preventDefault();
@@ -218,6 +230,11 @@ export const PaneView = memo(function PaneView({
     if (files.length === 0) return;
     event.preventDefault();
     void submitFiles(paneId, files, false, bracketedPaste(paneId));
+  };
+
+  const acceptsAgentDrag = () => {
+    const agent = agentDrag.current;
+    return agent !== null && referenceLands(useShellStore.getState().rest, agent.paneId, paneId);
   };
 
   const acceptsExplorerDrag = () => {
@@ -331,6 +348,11 @@ export const PaneView = memo(function PaneView({
       data-menu-open={paneMenu.open ? "true" : "false"}
       data-transport={transport?.transport_state ?? ""}
       onDragOver={(event) => {
+        if (agentDrag.current) {
+          event.preventDefault();
+          event.dataTransfer.dropEffect = acceptsAgentDrag() ? "copy" : "none";
+          return;
+        }
         if (explorerDrag.current) {
           event.preventDefault();
           event.dataTransfer.dropEffect = acceptsExplorerDrag() ? "copy" : "none";
