@@ -53,7 +53,8 @@ import {
 import { editorHost, revealHost } from "./host";
 import { commandLabel } from "./shortcutLabels";
 import type { Digit } from "./shortcuts";
-import { contextAgents, contextAllWorkspaces, contextWorkspaces, deviceCatalogLine, herdrPaneId, remoteContext, remoteView } from "./remote";
+import { contextAgents, contextAllWorkspaces, contextWorkspaces, deviceCatalogLine, remoteContext, remoteView } from "./remote";
+import { agentReference } from "./agentReference";
 import { agentMenu, checkoutMenu, checkoutRemoving, FOLDER_CHECKOUT_ITEMS, folderMenu, primaryCheckout, projectMenu, remotePurposeProblem, type MenuHost, type MenuItem } from "./workspaceManage";
 import { projectIssueSource, projectRepository, settingsTarget } from "./projectSettings";
 import { machineName, windowDeviceId, windowFirst } from "./screenMachine";
@@ -1727,12 +1728,10 @@ function useAgentRowMenu(actions: Actions): AgentRowMenu {
         switch (item) {
           case "show_agent":
             return actions.openAgent(agent.pane_id);
-          case "copy_title":
-            return actions.copyText(agent.identity_label, "title");
+          case "copy_reference":
+            return actions.copyText(agentReference(agent), "agent reference");
           case "copy_session_id":
             return agent.session_id ? actions.copyText(agent.session_id, "session id") : undefined;
-          case "copy_pane_id":
-            return actions.copyText(herdrPaneId(agent.pane_id), "pane id");
           case "close_tab":
             return actions.closeTabOfPane(agent.pane_id);
         }

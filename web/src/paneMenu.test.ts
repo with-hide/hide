@@ -9,8 +9,8 @@ const context = (over: Partial<TerminalMenuContext>): TerminalMenuContext => ({ 
 describe("a right-click in a terminal", () => {
   it("edits the text, then lays out the tab, then offers the header's pane actions", () => {
     const items = terminalMenuItems(pane, "reviewer", context({ selection: true }));
-    expect(items.map((item) => item.id)).toEqual(["copy", "paste", "select_all", "find", "split_right", "split_down", "toggle_zoom", "copy_name", "copy_pane_id", "close_pane"]);
-    expect(items.filter((item) => item.separated).map((item) => item.id)).toEqual(["split_right", "copy_name", "close_pane"]);
+    expect(items.map((item) => item.id)).toEqual(["copy", "paste", "select_all", "find", "split_right", "split_down", "toggle_zoom", "copy_reference", "close_pane"]);
+    expect(items.filter((item) => item.separated).map((item) => item.id)).toEqual(["split_right", "copy_reference", "close_pane"]);
     expect(items.find((item) => item.id === "split_down")?.shortcut).toBe("⌘⇧D");
   });
 
@@ -81,8 +81,8 @@ describe("the pane menu's Fork agent items", () => {
 
   it("follows Sleep agent, apart from the copy items", () => {
     const items = paneMenuItems({ id: "w1:p1", children: null, lineage_path: [], fork: { available: true }, sleep_action: { available: true } } as unknown as PaneRow, "reviewer");
-    expect(items.map((item) => item.id)).toEqual(["sleep_agent", "fork_agent", "fork_agent_side", "copy_name", "copy_pane_id", "close_pane"]);
-    expect(items.filter((item) => item.separated).map((item) => item.id)).toEqual(["copy_name", "close_pane"]);
+    expect(items.map((item) => item.id)).toEqual(["sleep_agent", "fork_agent", "fork_agent_side", "copy_reference", "close_pane"]);
+    expect(items.filter((item) => item.separated).map((item) => item.id)).toEqual(["copy_reference", "close_pane"]);
   });
 });
 
@@ -91,7 +91,7 @@ describe("the pane menu's Show in Overview item", () => {
   const row = { id: "w1:p1", children: null, lineage_path: [], sleep_action: { available: true } } as unknown as PaneRow;
 
   it("leads an agent pane's actions", () => {
-    expect(paneMenuItems(row, "reviewer", undefined, undefined, true).map((item) => item.id)).toEqual(["open_in_overview", "sleep_agent", "copy_name", "copy_pane_id", "close_pane"]);
+    expect(paneMenuItems(row, "reviewer", undefined, undefined, true).map((item) => item.id)).toEqual(["open_in_overview", "sleep_agent", "copy_reference", "close_pane"]);
     expect(paneMenuItems(row, "reviewer", undefined, undefined, true)[0]).toMatchObject({ label: "Show in Overview", unavailable: null });
   });
 
@@ -108,7 +108,7 @@ describe("the pane menu's Plan item", () => {
   const row = { id: "w1:p1", children: null, lineage_path: [], sleep_action: { available: true } } as unknown as PaneRow;
 
   it("follows Show in Overview on a pane whose session has a plan, and is absent otherwise", () => {
-    expect(paneMenuItems(row, "reviewer", undefined, undefined, true, true).map((item) => item.id)).toEqual(["open_in_overview", "open_plan", "sleep_agent", "copy_name", "copy_pane_id", "close_pane"]);
+    expect(paneMenuItems(row, "reviewer", undefined, undefined, true, true).map((item) => item.id)).toEqual(["open_in_overview", "open_plan", "sleep_agent", "copy_reference", "close_pane"]);
     expect(paneMenuItems(row, "reviewer", undefined, undefined, true, true)[1]).toMatchObject({ label: "Plan", unavailable: null });
     expect(paneMenuItems(row, "reviewer", undefined, undefined, true).some((item) => item.id === "open_plan")).toBe(false);
     expect(terminalMenuItems(row, "reviewer", context({}), undefined, undefined, true, true).some((item) => item.id === "open_plan")).toBe(true);

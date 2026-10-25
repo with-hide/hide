@@ -45,8 +45,8 @@ async function key(target: Element, key: string) {
   });
 }
 const copies: MenuEntry[] = [
-  { id: "copy_title", label: "Session title", icon: "copy", group: "copy", unavailable: null },
-  { id: "copy_id", label: "Session ID", icon: "id", group: "copy", unavailable: "Conversation not reported yet" },
+  { id: "copy_title", label: "Session title", icon: "copy", group: "fork", unavailable: null },
+  { id: "copy_id", label: "Session ID", icon: "id", group: "fork", unavailable: "Conversation not reported yet" },
 ];
 
 it("closes a newly unavailable submenu and keeps it closed when availability returns", async () => {
@@ -101,7 +101,7 @@ it("shows one shared refusal on a disabled group and offers no executable child"
   await open(copies.map((item) => ({ ...item, unavailable: "Device disconnected" })), selected);
   const group = document.querySelector<HTMLElement>("[data-menu-group]")!;
   expect(group.getAttribute("aria-disabled")).toBe("true");
-  expect(group.textContent).toBe("Copy detailsDevice disconnected");
+  expect(group.textContent).toBe("Fork sessionDevice disconnected");
   await key(group, "ArrowRight");
   expect(document.querySelectorAll('[role="menu"]')).toHaveLength(1);
   expect(document.querySelectorAll("[data-menu-reason]")).toHaveLength(1);

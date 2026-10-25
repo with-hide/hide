@@ -18,6 +18,7 @@ import { issueDate } from "./projectBoard";
 import { FOLDED_GROUPS, opensCard, type PrEntry, type PrGroupView, type PrListModel } from "./prWork";
 import { GROUP_TONE, ReasonLine } from "./prReason";
 import { IssuePicker } from "./PrLinks";
+import { beginAgentDrag } from "./agentReference";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 
@@ -203,7 +204,7 @@ function AgentMarks({ entry, actions }: { entry: PrEntry; actions: Actions }) {
         const said = rowLine(agent);
         return (
           <AgentMessagePopover key={agent.pane_id} agent={agent} place={entry.pr.head_branch ?? ""} fallback={said?.text ?? agent.identity_label} tone={said ? lineTone(said, agent) : "text-muted-foreground"} onOpen={() => actions.openAgent(agent.pane_id)}>
-            <button type="button" aria-label={t("work.row.agent", { name: agent.identity_label })} className="inline-flex rounded-xs outline-none focus-visible:ring-1 focus-visible:ring-ring" onClick={own(() => actions.openAgent(agent.pane_id))} data-pr-agent={agent.pane_id}>
+            <button type="button" aria-label={t("work.row.agent", { name: agent.identity_label })} className="inline-flex rounded-xs outline-none focus-visible:ring-1 focus-visible:ring-ring" onClick={own(() => actions.openAgent(agent.pane_id))} draggable onDragStart={(event) => beginAgentDrag(agent, event)} data-pr-agent={agent.pane_id}>
               <StatusMark mark={agent.mark} className={markTone(agent)} />
             </button>
           </AgentMessagePopover>

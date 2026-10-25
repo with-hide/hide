@@ -286,7 +286,7 @@ export function checkoutMenu(workspace: Workspace, checkout: Checkout, host: Men
 }
 
 export type AgentMenuItem = MenuPresentation & {
-  id: "show_agent" | "copy_title" | "copy_session_id" | "copy_pane_id" | "close_tab";
+  id: "show_agent" | "copy_reference" | "copy_session_id" | "close_tab";
   label: string;
   unavailable: string | null;
   separated?: boolean;
@@ -295,7 +295,7 @@ export type AgentMenuItem = MenuPresentation & {
 
 /**
  * An agent row's menu (PRD sidebar-context-menus D-04, D-06): go to its pane,
- * copy what names it, close the tab it is in through the tab close
+ * copy its reference (name and pane id) or its session id, close the tab it is in through the tab close
  * confirmation. `showChord` is the ⌥n that selects the same row, or "" when
  * it holds no number on this host. Herdr 0.9.1 can neither mark a pane seen
  * nor stop an agent, so neither is offered (D-05).
@@ -303,9 +303,8 @@ export type AgentMenuItem = MenuPresentation & {
 export function agentMenu(agent: AgentRow, showChord: string, t: TFunction<"translation">): AgentMenuItem[] {
   return [
     { id: "show_agent", icon: "terminal", label: t("workspace.menu.showAgent"), unavailable: null, shortcut: showChord },
-    { id: "copy_title", group: "copy", menuLabel: t("menus.sessionTitle"), icon: "copy", label: t("workspace.menu.copyTitle"), unavailable: null, separated: true },
-    { id: "copy_session_id", group: "copy", menuLabel: t("menus.sessionId"), icon: "id", label: t("workspace.menu.copySession"), unavailable: agent.session_id ? null : t("workspace.unavailable.noSession") },
-    { id: "copy_pane_id", group: "copy", menuLabel: t("menus.terminalId"), icon: "id", label: t("workspace.menu.copyPaneId"), unavailable: null },
+    { id: "copy_reference", icon: "copy", label: t("panes.menu.copyReference"), unavailable: null, separated: true },
+    { id: "copy_session_id", icon: "id", label: t("workspace.menu.copySession"), unavailable: agent.session_id ? null : t("workspace.unavailable.noSession") },
     { id: "close_tab", icon: "close", label: t("workspace.menu.closeTab"), unavailable: null, separated: true },
   ];
 }

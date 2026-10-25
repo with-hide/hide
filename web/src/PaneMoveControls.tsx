@@ -11,16 +11,17 @@ import { MOVE_EDGES, movePaneReason, movingTab, paneEdge, paneLocation, sameMove
 import type { Checkout, LayoutNode, PaneRow } from "./snapshot";
 import { deviceConnected } from "./devices";
 import { agentEntries } from "./workspace";
-import { holdShellDrag } from "./shellDrag";
+import { DRAG_CHIP_CLASS, holdShellDrag } from "./shellDrag";
 import { useShellStore } from "./store";
 import { mountTerminalPreview } from "./terminals";
 
 type Target = { destination: PaneMoveDestination; rect: DOMRect; stamp: string };
-type Gesture = { source: PaneMoveSource; stamp: string; pointerId: number; origin: { x: number; y: number }; dragging: boolean; target: Target | null };
+type Gesture = { source: PaneMoveSource; label: string; stamp: string; pointerId: number; origin: { x: number; y: number }; dragging: boolean; target: Target | null };
 type Preview = { areaId: string; tabId: string; requestId: string };
 type MoveContext = {
   active: boolean;
-  press: (paneId: string, event: React.PointerEvent<HTMLElement>) => void;
+  /** `title` is the name the pane's header shows, which the chip under the pointer repeats. */
+  press: (paneId: string, title: string, event: React.PointerEvent<HTMLElement>) => void;
   mutationBlocked: (paneId: string) => boolean;
   menu: (paneId: string) => MenuEntry[];
   select: (id: string) => boolean;
@@ -64,6 +65,9 @@ export function PaneMoveProvider({ checkout, layout, deviceId, actions, children
   const [unconfirmed, setUnconfirmed] = useState(false);
   const [dismissed, setDismissed] = useState<string | null>(null);
   const gesture = useRef<Gesture | null>(null);
+  // The chip under the pointer moves by its style, so a pointer move renders nothing.
+  const chip = useRef<HTMLDivElement>(null);
+  const pointer = useRef({ x: 0, y: 0 });
   const hover = useRef<{ key: string; timer: ReturnType<typeof setTimeout> } | null>(null);
   const cancelGesture = useRef<() => void>(() => {});
   const latest = useRef({ checkout, layout, deviceId });
@@ -176,6 +180,8 @@ export function PaneMoveProvider({ checkout, layout, deviceId, actions, children
         releaseDrag = holdShellDrag("move", "data-agent-drag");
       }
       event.preventDefault();
+      pointer.current = { x: event.clientX, y: event.clientY };
+      if (chip.current) chip.current.style.transform = `translate(${event.clientX}px, ${event.clientY}px)`;
       const refused = runtime.current.unavailable(current.source);
       if (refused || runtime.current.stamp(current.source.tab_id) !== current.stamp) { setReason(refused ?? "stale"); finish(true); return; }
       const next = runtime.current.resolve(event.clientX, event.clientY);
@@ -237,7 +243,7 @@ export function PaneMoveProvider({ checkout, layout, deviceId, actions, children
       return !!tabId && (movingTab(operations, tabId) || !!(held && request && [request.source.tab_id, "tab_id" in request.destination ? request.destination.tab_id : ""].includes(tabId)));
     },
     select: (id) => { const choice = menuTargets.get(id); if (!choice) return false; run(choice.source, choice.destination); return true; },
-    press: (paneId, event) => {
+    press: (paneId, title, event) => {
       if (event.button !== 0 || !event.isPrimary || gesture.current) return;
       const source = paneLocation(checkout, layout, paneId);
       if (!source) return;
@@ -245,7 +251,7 @@ export function PaneMoveProvider({ checkout, layout, deviceId, actions, children
       // Keep terminal keys and selection while a header press becomes a drag.
       // Click still reaches the existing record button below the threshold.
       event.preventDefault();
-      gesture.current = { source, stamp: stamp(source.tab_id), pointerId: event.pointerId, origin: { x: event.clientX, y: event.clientY }, dragging: false, target: null };
+      gesture.current = { source, label: title, stamp: stamp(source.tab_id), pointerId: event.pointerId, origin: { x: event.clientX, y: event.clientY }, dragging: false, target: null };
     },
   };
   const overlayStyle = target ? (() => {
@@ -266,7 +272,7 @@ export function PaneMoveProvider({ checkout, layout, deviceId, actions, children
       {operation?.phase === "failed" ? <Button size="sm" variant="ghost" onClick={() => setDismissed(operation.id)}>{t("workspace.dismiss")}</Button> : null}
     </div> : null}
     {children}
-    {active ? createPortal(<div className="pointer-events-none fixed inset-0 z-50" aria-hidden="true">{overlayStyle ? <div className="absolute flex items-center justify-center overflow-hidden border-2 border-primary bg-primary/20 px-sm text-center text-caption text-foreground" style={overlayStyle} data-pane-move-target={target!.destination.type}>{target!.destination.type === "new_tab" ? t("menus.paneMove.newTab") : t(`menus.${target!.destination.type === "pane" ? target!.destination.edge : "right"}`)}</div> : null}{reason ? <div className="absolute bottom-lg left-1/2 max-w-full -translate-x-1/2 rounded-sm bg-popover px-sm py-xs text-caption text-popover-foreground shadow-sm">{t(`menus.paneMove.${reason === "pending" ? "busy" : reason}`)}</div> : null}</div>, document.body) : null}
+    {active ? createPortal(<div className="pointer-events-none fixed inset-0 z-50" aria-hidden="true">{overlayStyle ? <div className="absolute flex items-center justify-center overflow-hidden border-2 border-primary bg-primary/20 px-sm text-center text-caption text-foreground" style={overlayStyle} data-pane-move-target={target!.destination.type}>{target!.destination.type === "new_tab" ? t("menus.paneMove.newTab") : t(`menus.${target!.destination.type === "pane" ? target!.destination.edge : "right"}`)}</div> : null}<div ref={chip} className="absolute left-0 top-0" style={{ transform: `translate(${pointer.current.x}px, ${pointer.current.y}px)` }} data-pane-move-chip="true"><div className={`ml-sm mt-sm ${DRAG_CHIP_CLASS}`}>{gesture.current?.label}</div></div>{reason ? <div className="absolute bottom-lg left-1/2 max-w-full -translate-x-1/2 rounded-sm bg-popover px-sm py-xs text-caption text-popover-foreground shadow-sm">{t(`menus.paneMove.${reason === "pending" ? "busy" : reason}`)}</div> : null}</div>, document.body) : null}
   </div></Context.Provider>;
 }
 
