@@ -29,7 +29,7 @@ async function choose(page: Page, mode: "shown" | "hidden") {
 }
 
 test("hidden by default, a menu that checks the core's value, and logos that return in the sidebar, the tab and the 태스크 list", async ({ page }) => {
-  const herdr = await startHerdr();
+  const herdr = await startHerdr({ readiness: "registered" });
   const daemon = await startHided(herdr, "agent-logo-menu");
   const sent = countSent(page);
   try {
@@ -86,7 +86,7 @@ test("hidden by default, a menu that checks the core's value, and logos that ret
 });
 
 test("the choice follows a second window at once and survives a daemon restart", async ({ page, browser }) => {
-  const herdr = await startHerdr();
+  const herdr = await startHerdr({ readiness: "registered" });
   let daemon = await startHided(herdr, "agent-logo-persist");
   const other = await (await browser.newContext()).newPage();
   try {

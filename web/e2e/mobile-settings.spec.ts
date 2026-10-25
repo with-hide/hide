@@ -14,7 +14,7 @@ test.describe.configure({ timeout: 120_000 });
 
 test("a ready Mac is one line, the QR waits for Show QR, and the push dropdown on Notifications describes one mode", async ({ page }) => {
   await page.setViewportSize({ width: 1100, height: 800 });
-  const herdr = await startHerdr();
+  const herdr = await startHerdr({ readiness: "registered" });
   const tailscale = new FakeTailscale();
   let daemon: Daemon | null = null;
   try {

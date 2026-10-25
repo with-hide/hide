@@ -16,7 +16,7 @@ async function open(page: Page, daemon: Daemon): Promise<void> {
 
 test("a pane taken over by another agent is a root, and so is a child of a parent pane that was", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const herdr = await startHerdr();
+  const herdr = await startHerdr({ readiness: "registered" });
   let daemon: Daemon | null = null;
   try {
     const [parent, child] = herdr.panes;

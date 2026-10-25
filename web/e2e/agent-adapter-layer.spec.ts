@@ -12,7 +12,7 @@ test.skip(process.platform === "win32", "the kit installs POSIX hooks");
 
 test("Basic chips expose three accessible groups in all four languages and return keyboard focus", async ({ page }) => {
   test.setTimeout(180_000);
-  const herdr = await startHerdr();
+  const herdr = await startHerdr({ readiness: "registered" });
   let daemon: Daemon | undefined;
   try {
     const home = path.join(fs.mkdtempSync(path.join(herdr.root, "ad-")), "home");

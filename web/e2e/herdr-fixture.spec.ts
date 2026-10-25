@@ -5,7 +5,8 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { herdrBinary, startHerdr } from "./herdr-fixture";
+import { herdrBinary, setFixtureLifecycle, startHerdr } from "./herdr-fixture";
+import { herdrGate } from "./herdr-gate";
 import { fixtureProgram } from "./platform-fixture";
 
 /** A CLI-side rendezvous orders the starts, without substituting any Herdr answer. */
@@ -81,4 +82,80 @@ test("fixture waits for the sibling start before cleaning up a failed pair", { t
     const fixtureRoot = fs.readFileSync(path.join(root, "fixture-root"), "utf8");
     expect(fs.existsSync(fixtureRoot)).toBe(false);
   });
+});
+
+test("registered setup waits for an observed interactive answer before its first input", { tag: "@platform" }, async () => {
+  const began = Date.now();
+  const fixture = await startHerdr({ readiness: "registered" });
+  const setupMs = Date.now() - began;
+  let gate: Awaited<ReturnType<typeof herdrGate>> | undefined;
+  let pending: Promise<void> | undefined;
+  try {
+    // Even a fast machine cannot turn registration into permission to send input.
+    expect(() => fixture.run(["pane", "send-text", fixture.panes[0], "too early"])).toThrow("requires await fixture.ready()");
+    gate = await herdrGate(fixture);
+    fixture.env.HERDR_SOCKET_PATH = gate.socket;
+    const held = gate.arm("agent.get");
+    let completed = false;
+    pending = Promise.all([fixture.ready(), fixture.ready()]).then(() => { completed = true; });
+    pending.catch(() => undefined);
+    await held;
+    expect(completed).toBe(false);
+    expect(gate.params("agent.get")).toHaveLength(1);
+    await gate.release();
+    await pending;
+    console.info("fixture startup sample", JSON.stringify({ readiness: "registered", setupMs, readyAfterMs: Date.now() - began }));
+    fixture.env.HERDR_SOCKET_PATH = fixture.socket;
+    for (const [index, pane] of fixture.panes.entries()) {
+      const agent = fixture.run(["agent", "get", pane]) as { result: { agent: { interactive_ready: boolean; launch_pending: boolean } } };
+      expect(agent.result.agent.interactive_ready).toBe(true);
+      expect(agent.result.agent.launch_pending).not.toBe(true);
+      const marker = `registered-first-input-${index}`;
+      execFileSync(fixture.bin, ["pane", "send-text", pane, marker], { env: fixture.env, timeout: 30_000 });
+      await expect.poll(() => fs.readFileSync(fixture.inputLogs[index]!, "utf8")).toBe(marker);
+    }
+    await setFixtureLifecycle(fixture, fixture.panes[0], "working");
+    await fixture.ready(); // Startup success remains true during a later turn.
+  } finally {
+    fixture.env.HERDR_SOCKET_PATH = fixture.socket;
+    try { fixture.stop(); } finally {
+      await gate?.stop();
+      if (pending) await Promise.allSettled([pending]);
+    }
+  }
+});
+
+test("stopping a registered fixture cancels its pending readiness reader", { tag: "@platform" }, async () => {
+  const fixture = await startHerdr({ readiness: "registered" });
+  let gate: Awaited<ReturnType<typeof herdrGate>> | undefined;
+  let pending: Promise<void> | undefined;
+  try {
+    gate = await herdrGate(fixture);
+    fixture.env.HERDR_SOCKET_PATH = gate.socket;
+    const held = gate.arm("agent.get");
+    pending = fixture.ready();
+    pending.catch(() => undefined);
+    await held;
+    fixture.env.HERDR_SOCKET_PATH = fixture.socket;
+    fixture.stop();
+    await expect(pending).rejects.toThrow();
+    expect(fs.existsSync(fixture.root)).toBe(false);
+  } finally {
+    fixture.env.HERDR_SOCKET_PATH = fixture.socket;
+    try { fixture.stop(); } finally {
+      await gate?.stop();
+      if (pending) await Promise.allSettled([pending]);
+    }
+  }
+});
+
+test("registered readiness fails when an initial agent has exited", { tag: "@platform" }, async () => {
+  const fixture = await startHerdr({ readiness: "registered" });
+  try {
+    fixture.run(["pane", "close", fixture.panes[0]]);
+    await expect(fixture.ready()).rejects.toThrow("agent.get refused");
+    expect(() => fixture.run(["agent", "prompt", "two", "too early"])).toThrow("requires await fixture.ready()");
+  } finally {
+    fixture.stop();
+  }
 });

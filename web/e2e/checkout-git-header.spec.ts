@@ -9,7 +9,7 @@ import { enterWorkspace, screenshot } from "./wire";
 
 test("checkout header reads working files with Changes closed, current-SHA statuses, and idempotent Changes", async ({ page }) => {
   test.setTimeout(90_000);
-  const herdr = await startHerdr();
+  const herdr = await startHerdr({ readiness: "registered" });
   let daemon: Daemon | undefined;
   try {
     const fixture = checkoutGitFixture(herdr, { historyCount: 6 });
@@ -78,7 +78,7 @@ test("checkout header reads working files with Changes closed, current-SHA statu
 
 test("a commit pushed to origin shows as one to receive, with its row and GitHub page, without a manual fetch", async ({ page }) => {
   test.setTimeout(90_000);
-  const herdr = await startHerdr();
+  const herdr = await startHerdr({ readiness: "registered" });
   let daemon: Daemon | undefined;
   try {
     // A GitHub-named origin whose fetch is rewritten to a local bare repository, so the header

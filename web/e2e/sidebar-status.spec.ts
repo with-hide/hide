@@ -14,7 +14,7 @@ const WAIT_SENTENCE = "하위 작업 위임 후 자식이 계보 투영과 테�
 
 test("roots stay in one sidebar, open their children in place, and the header's tree button opens the tree", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const herdr = await startHerdr();
+  const herdr = await startHerdr({ readiness: "registered" });
   let daemon: Daemon | null = null;
   try {
     const [parent, child] = herdr.panes;

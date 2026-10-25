@@ -20,7 +20,7 @@ function overflows(scroller: Locator): Promise<boolean> {
 }
 
 test("file and diff views open wrapped and Wrap turns it off per tab", async ({ page }) => {
-  const herdr = await startHerdr();
+  const herdr = await startHerdr({ readiness: "registered" });
   let daemon: Awaited<ReturnType<typeof startHided>> | null = null;
   try {
     const repoDir = path.join(herdr.root, "wrap-repo");

@@ -36,7 +36,7 @@ function sentHints(page: Page): Hints[] {
 // @platform: The usage child gets a restricted environment that differs per OS (USERPROFILE and SystemRoot on Windows), and a Node-based `claude` only starts with it.
 test("weekly usage: a loading, an available and an unavailable row, and the hints the page sends", { tag: "@platform" }, async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const herdr = await startHerdr();
+  const herdr = await startHerdr({ readiness: "registered" });
   const usage = usageShim();
   let daemon: Daemon | null = null;
   try {

@@ -21,7 +21,7 @@ function git(cwd: string, args: string[]): void {
 
 test("a worktree with only a delegated child draws no checkout line, and the root's tree reaches the child", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const herdr = await startHerdr();
+  const herdr = await startHerdr({ readiness: "registered" });
   let daemon: Daemon | null = null;
   try {
     const main = path.join(herdr.root, "proj");

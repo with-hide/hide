@@ -8,7 +8,7 @@ import { enterWorkspace, showTasks } from "./wire";
 
 test("prompt elapsed survives state changes and restart, advances only on a prompt, and clears for a new session", async ({ page }) => {
   test.setTimeout(120_000);
-  const herdr = await startHerdr();
+  const herdr = await startHerdr({ readiness: "registered" });
   let daemon: Daemon | null = null;
   try {
     const pane = herdr.panes[0]!;

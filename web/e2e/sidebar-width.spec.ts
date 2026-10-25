@@ -43,7 +43,7 @@ async function dragEdge(page: Page, edge: Locator, dx: number): Promise<() => Pr
 
 test("the sidebar's edge drags between its bounds, lands once, survives a reload and resets on a double-click", async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
-  const herdr = await startHerdr();
+  const herdr = await startHerdr({ readiness: "registered" });
   const daemon = await startHided(herdr, "sidebar-width");
   try {
     const folder = path.join(herdr.root, "notes");

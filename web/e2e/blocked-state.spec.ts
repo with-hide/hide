@@ -37,7 +37,7 @@ async function expectRead(page: Page, pane: string, mark: string) {
 
 test("a blocked turn draws the turn mark in Needs You that dims once read, and an unfinished turn a plain dot to read outside it", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  const herdr = await startHerdr();
+  const herdr = await startHerdr({ readiness: "registered" });
   let daemon: Daemon | null = null;
   try {
     const [blocked, unfinished] = herdr.panes;
@@ -77,7 +77,7 @@ test("a read block stays read when Herdr marks its tab seen after the operator m
   // neighbouring row, so the core holds the read it made while the pane was
   // still done and Herdr's own bookkeeping must not make it news.
   await page.setViewportSize({ width: 1440, height: 900 });
-  const herdr = await startHerdr();
+  const herdr = await startHerdr({ readiness: "registered" });
   let gate: Awaited<ReturnType<typeof herdrGate>> | null = null;
   let daemon: Daemon | null = null;
   try {
