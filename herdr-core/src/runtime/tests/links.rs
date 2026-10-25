@@ -1757,3 +1757,134 @@ fn a_parents_request_stays_the_childs_work_when_the_parents_screen_title_changes
         "{header}"
     );
 }
+
+#[derive(Debug, Default)]
+struct RecordedStatistics(Mutex<Vec<crate::product_analytics::Event>>);
+
+impl crate::product_analytics::Sink for RecordedStatistics {
+    fn set_enabled(&self, _enabled: bool) {}
+    fn capture(&self, event: crate::product_analytics::Event) {
+        self.0.lock().unwrap().push(event);
+    }
+}
+
+impl RecordedStatistics {
+    fn take(&self) -> Vec<crate::product_analytics::Event> {
+        std::mem::take(&mut self.0.lock().unwrap())
+    }
+}
+
+/// A core on `state`, whose own node's agent files live in an empty `home`,
+/// with panes `p-a`, `p-b` and `p-c` carrying the given sessions.
+fn statistics_runtime(
+    state: &Path,
+    home: &Path,
+    sessions: &[(&str, &str, &str)],
+    statistics: &Arc<RecordedStatistics>,
+) -> Runtime {
+    let mut runtime = Runtime::new(
+        CoreOptions {
+            schema_version: SCHEMA_VERSION,
+            home: None,
+            node_id: crate::node::test_node(),
+            herdr_socket_path: Some("/tmp/herdr-core-pet-runtime.sock".to_owned()),
+            herdr_bin_path: None,
+            app_state_path: state.to_string_lossy().into_owned(),
+            host_helper_root: None,
+            host_cli_dir: None,
+            workspace_views_path: None,
+            shortcut_import_path: None,
+            local_issues_path: None,
+            effects_held: false,
+            machine_name: None,
+            account_state_folder: false,
+        },
+        environment::EnvironmentReport {
+            statuses: Vec::new(),
+            home_path: None,
+            codex_home: None,
+        },
+        Arc::new(hide_node::Local::new(Some(home.to_path_buf()))),
+        crate::node::test_devices(),
+    );
+    runtime.snapshot.navigator.workspaces = vec![record_workspace(
+        crate::node::TEST_NODE,
+        "w",
+        &["p-a", "p-b", "p-c", "p-shell"],
+    )];
+    runtime.snapshot.navigator.agents = sessions
+        .iter()
+        .map(|(pane, kind, session)| {
+            let mut agent = record_agent(pane, session, None);
+            agent.agent_kind = (*kind).into();
+            agent
+        })
+        .collect();
+    runtime.install_product_analytics(statistics.clone());
+    runtime
+}
+
+/// `hide_agent_started` is sent from the link record's `pane_first_at`: a
+/// session a pane carries again, in another place or after the core
+/// restarts on the same state, is not counted again; a new one is, and a
+/// shell pane sends nothing.
+#[test]
+fn a_session_a_pane_carries_is_counted_once_across_a_restart() {
+    use crate::product_analytics::Event::AgentStarted;
+    use hide_session::Agent;
+    let state = scratch_dir("herdr-core-statistics-state-");
+    let home = scratch_dir("herdr-core-statistics-home-");
+    let path = state.path().join("state.json");
+    let statistics = Arc::new(RecordedStatistics::default());
+
+    let shared = Arc::new(Mutex::new(statistics_runtime(
+        &path,
+        home.path(),
+        &[("p-a", "claude", "session-a")],
+        &statistics,
+    )));
+    let worker = super::super::links::spawn_worker(&shared, ChangeNotifier::noop())
+        .expect("the link worker starts");
+    wait(&shared, "the first session's start", |_| {
+        !statistics.0.lock().unwrap().is_empty()
+    });
+    assert_eq!(statistics.take(), [AgentStarted(Agent::Claude)]);
+
+    // The same session seen again from another folder, beside a new session
+    // in another pane: one pass applies both, and only the new one counts.
+    {
+        let mut runtime = shared.lock().unwrap();
+        runtime.snapshot.navigator.workspaces[0].checkouts[0].tabs[0].panes[0].cwd =
+            "/repo/sub".into();
+        let mut codex = record_agent("p-b", "session-b", None);
+        codex.agent_kind = "codex".into();
+        runtime.snapshot.navigator.agents.push(codex);
+        runtime.feed_links();
+    }
+    wait(&shared, "the second session's start", |_| {
+        !statistics.0.lock().unwrap().is_empty()
+    });
+    assert_eq!(statistics.take(), [AgentStarted(Agent::Codex)]);
+    drop(worker);
+    drop(shared);
+
+    // A restart over the same state restores both panes and adds a third.
+    let shared = Arc::new(Mutex::new(statistics_runtime(
+        &path,
+        home.path(),
+        &[
+            ("p-a", "claude", "session-a"),
+            ("p-b", "codex", "session-b"),
+            ("p-c", "claude", "session-c"),
+        ],
+        &statistics,
+    )));
+    let worker = super::super::links::spawn_worker(&shared, ChangeNotifier::noop())
+        .expect("the link worker starts again");
+    wait(&shared, "the third session's start", |_| {
+        !statistics.0.lock().unwrap().is_empty()
+    });
+    // The worker is joined first, so a recount in the same pass is seen.
+    drop(worker);
+    assert_eq!(statistics.take(), [AgentStarted(Agent::Claude)]);
+}

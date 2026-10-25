@@ -26,7 +26,7 @@ use std::time::Duration;
 #[path = "ledger_store.rs"]
 mod ledger;
 
-const SCHEMA_VERSION: i64 = 10;
+const SCHEMA_VERSION: i64 = 11;
 
 const SCHEMA: &str = "
 CREATE TABLE projects(key TEXT PRIMARY KEY, device TEXT NOT NULL, root TEXT NOT NULL,
@@ -974,16 +974,39 @@ impl LinkStore {
     }
 
     /// The sessions Hide panes carry now, with where each works: a span on
-    /// the pane's branch that grows while the pane stays (D-15).
-    pub fn apply_panes(&mut self, panes: &[PaneFact], now: u64) -> Result<(), String> {
+    /// the pane's branch that grows while the pane stays (D-15). Answers the
+    /// sessions no pane had carried before, which `pane_first_at` keeps across
+    /// restarts until retention or a delete removes the row.
+    pub fn apply_panes(
+        &mut self,
+        panes: &[PaneFact],
+        now: u64,
+    ) -> Result<Vec<SessionIdentity>, String> {
         let tx = self.connection.transaction().map_err(failed)?;
+        let mut first = Vec::new();
         for pane in panes {
             let agent = pane.agent.as_str();
+            let seen: Option<Option<i64>> = tx
+                .query_row(
+                    "SELECT pane_first_at FROM sessions WHERE device=?1 AND agent=?2 AND id=?3",
+                    params![pane.device_id, agent, pane.session_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(failed)?;
+            if seen.flatten().is_none() {
+                first.push(SessionIdentity {
+                    device_id: pane.device_id.clone(),
+                    agent: pane.agent.clone(),
+                    session_id: pane.session_id.clone(),
+                });
+            }
             tx.execute(
-                "INSERT INTO sessions(device,agent,id,cwd,interactive,started_at,ended_at) \
-                 VALUES(?1,?2,?3,?4,1,?5,?5) ON CONFLICT(device,agent,id) DO UPDATE SET \
+                "INSERT INTO sessions(device,agent,id,cwd,interactive,started_at,ended_at,pane_first_at) \
+                 VALUES(?1,?2,?3,?4,1,?5,?5,?5) ON CONFLICT(device,agent,id) DO UPDATE SET \
                  cwd=COALESCE(cwd,excluded.cwd), interactive=COALESCE(interactive,1), \
-                 ended_at=MAX(COALESCE(ended_at,0),excluded.ended_at)",
+                 ended_at=MAX(COALESCE(ended_at,0),excluded.ended_at), \
+                 pane_first_at=COALESCE(pane_first_at,excluded.pane_first_at)",
                 params![pane.device_id, agent, pane.session_id, pane.cwd, now as i64],
             )
             .map_err(failed)?;
@@ -1029,7 +1052,8 @@ impl LinkStore {
                 .map_err(failed)?;
             }
         }
-        tx.commit().map_err(failed)
+        tx.commit().map_err(failed)?;
+        Ok(first)
     }
 
     /// Which session `hide agent spawn` started for which (D-27), and the
@@ -2233,6 +2257,13 @@ UPDATE cursors SET checkpoint=NULL, stamp='';
 DELETE FROM meta WHERE key='listed_at' OR key LIKE 'listed_at:%';
 ";
 
+/// When a Hide pane first carried each session (version 11), the durable
+/// point a `hide_agent_started` statistic is sent from. Every session the
+/// store already holds counts as carried, so an upgrade sends nothing. A
+/// store a test rolled back to an earlier version may already hold the column.
+const PANE_SEEN_COLUMN: &str = "ALTER TABLE sessions ADD COLUMN pane_first_at INTEGER;";
+const PANE_SEEN_MARK: &str = "UPDATE sessions SET pane_first_at=COALESCE(started_at, ended_at, 0) WHERE pane_first_at IS NULL;";
+
 /// The project ids a node conversion or a core move gave new ids, so the
 /// old session search file's `policy`, which is never written (D-20), still
 /// names each project's Copied history days. Version 4.
@@ -2288,9 +2319,16 @@ fn migrate(connection: &Connection) -> Result<(), OpenFailure> {
         } else {
             ""
         };
+        let pane_seen = if version >= 11 {
+            String::new()
+        } else if version > 0 && has_column(connection, "sessions", "pane_first_at")? {
+            PANE_SEEN_MARK.to_owned()
+        } else {
+            format!("{PANE_SEEN_COLUMN} {PANE_SEEN_MARK}")
+        };
         connection
             .execute_batch(&format!(
-                "BEGIN IMMEDIATE; {initial} {work_ledger} {origins} {backlog} {aliases} {observations} {metadata} {flows} {closed_flows} {plans} {named} {reread} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;"
+                "BEGIN IMMEDIATE; {initial} {work_ledger} {origins} {backlog} {aliases} {observations} {metadata} {flows} {closed_flows} {plans} {named} {reread} {pane_seen} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;"
             ))
             .map_err(|error| {
                 let _ = connection.execute_batch("ROLLBACK");
@@ -2298,6 +2336,16 @@ fn migrate(connection: &Connection) -> Result<(), OpenFailure> {
             })?;
     }
     name_read_files(connection)
+}
+
+fn has_column(connection: &Connection, table: &str, column: &str) -> Result<bool, OpenFailure> {
+    connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name=?2)",
+            [table, column],
+            |row| row.get(0),
+        )
+        .map_err(classify)
 }
 
 /// The pull requests a read's tool calls named, joined to session `id`. The

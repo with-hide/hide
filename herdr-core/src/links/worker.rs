@@ -76,6 +76,8 @@ pub trait Sink: Send + 'static {
     fn pruned(&self, _sessions: Vec<SessionIdentity>) {}
     /// How a delete of named sessions' lines went (B29, B30).
     fn deleted(&self, _request: String, _answer: Result<(), String>) {}
+    /// A session a Hide pane carried for the first time (`pane_first_at`).
+    fn agent_started(&self, _agent: hide_session::Agent) {}
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -959,8 +961,21 @@ fn run(client: &LinkClient, paths: &Paths, own: &dyn NodeLink, sink: &impl Sink)
         }
         if state.panes_at.is_none_or(|at| at.elapsed() >= PANES_EVERY) {
             if !state.panes.is_empty() {
-                let result = store.apply_panes(&state.panes, now_ms());
-                state.wrote(result, "panes");
+                match store.apply_panes(&state.panes, now_ms()) {
+                    Ok(first) => {
+                        state.wrote(Ok(()), "panes");
+                        // A kind the session reader does not name is dropped:
+                        // the statistic's vocabulary is closed.
+                        for session in first {
+                            if let Some(agent) = hide_session::Agent::from_kind(&session.agent) {
+                                sink.agent_started(agent);
+                            }
+                        }
+                    }
+                    Err(code) => {
+                        state.wrote(Err(code), "panes");
+                    }
+                }
                 for pane in state.panes.iter() {
                     update_context(
                         client,

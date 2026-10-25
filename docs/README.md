@@ -6,7 +6,7 @@ A document's location or an old PRD citation does not make it current authority.
 
 ## Current sources of truth
 
-Product usage statistics: [wire, ownership and privacy](ARCHITECTURE.md#product-usage-statistics), [Settings](UI_BEHAVIOR.md#privacy), [build input](BUILD.md#product-analytics-build-input); owners are `hided/src/product_analytics.rs`, `herdr-core/src/product_analytics.rs`, the AI router, and `web/e2e/product-analytics.spec.ts`.
+Product usage statistics: [wire, ownership and privacy](ARCHITECTURE.md#product-usage-statistics), [Settings](UI_BEHAVIOR.md#privacy), [build input](BUILD.md#product-analytics-build-input); owners are `hided/src/product_analytics.rs`, `herdr-core/src/product_analytics.rs`, the AI router, the link worker's pane pass (`herdr-core/src/links/`), and `web/e2e/product-analytics.spec.ts`.
 
 | Question | Read | Executable authority or enforcement |
 | --- | --- | --- |

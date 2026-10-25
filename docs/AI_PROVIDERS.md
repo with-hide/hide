@@ -7,7 +7,7 @@ This guide owns the boundary's rules; the code under `hide-ai/src/` and the test
 ## Ownership split
 
 Optional product statistics count each backend invocation through a content-free `AiUsageSink::started` callback, separately from local token and cost accounting.
-Only the `hide_ai_called` event, random installation ID and time leave through that channel; [product usage statistics](ARCHITECTURE.md#product-usage-statistics) owns its complete privacy and opt-out contract.
+Only the `hide_ai_called` event, random installation ID, time, app version and operating system leave through that channel; [product usage statistics](ARCHITECTURE.md#product-usage-statistics) owns its complete privacy and opt-out contract.
 
 A feature owns its prompt, its output schema, and the parsing of the answer into its own type.
 It submits an `AiRequest` (feature id, caller-made request id, subject id, system prompt, input, schema, deadline, schema version, output language) and receives an `AiResult`: a `serde_json::Value` already validated against that schema, and the provider that produced it.
