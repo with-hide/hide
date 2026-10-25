@@ -463,15 +463,12 @@ jobs:
         id: web-deps
         if: ${{ !cancelled() }}
         run: bash scripts/verify-web.sh install --ignore-scripts
-      - name: Web shell typecheck and unit suite, desktop app typecheck
+      - name: Web shell unit suite
         if: ${{ !cancelled() && steps.web-deps.outcome == 'success' }}
         timeout-minutes: 10
-        run: |
-          bash scripts/verify-web.sh web typecheck
-          bash scripts/verify-web.sh web lint
-          bash scripts/verify-web.sh web test
-          bash scripts/verify-web.sh desktop typecheck
-          bash scripts/verify-web.sh desktop lint
+        # Typecheck and lint are OS-independent and run in Linux `checks`.
+        # Vitest stays here: its platform and process tests must run on Windows.
+        run: bash scripts/verify-web.sh web test
       - name: Desktop app unit suite
         if: ${{ !cancelled() && steps.web-deps.outcome == 'success' }}
         timeout-minutes: 10
@@ -519,13 +516,13 @@ jobs:
       runner: ubuntu-latest
       herdr-platform: linux-x86_64
       # Six shards: the suite is about 68 minutes of tests (4109 s recorded,
-      # 2026-10-18; it was 30 on 2026-10-06) and every shard repeats about two
-      # minutes of setup. Four shards ran 984 to 1111 s of their 1200 s step
+      # 2026-10-18; it was 30 on 2026-10-06). Four shards ran 984 to 1111 s of their 1200 s step
       # (medians over 20 main runs); five would plan 822 s each, over the 720 s
       # a shard is sized for; six plan 686 s. Six was cut to four on 2026-10-05
       # because 23 of 99 runs waited over 10 minutes for a Linux shard at the
-      # organization's 20 jobs at once, with a full run asking for 23; a full
-      # run now asks for 25, a web shell change for 14 (docs/TESTING.md).
+      # organization's 20 jobs at once, with a full run then asking for 23.
+      # The daemon and web build are now shared; retain six until a later
+      # measured duration-table/count update (docs/TESTING.md).
       shards: 6
 
   # The remote mailbox crate-boundary lane (hided/tests/it/remote_delivery.rs,

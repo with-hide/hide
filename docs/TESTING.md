@@ -406,6 +406,7 @@ When one does, fix the rule in `scripts/ci-plan.py` with a case in its test; a t
 A path is narrower than every lane only by being named in `POLICY_ONLY`, `NAMED_LANES`, `UNIT_TEST_PATHS` or `READERS`, with its reader in a comment and a case in `NamedPaths`; a new or unknown path plans every lane until someone names it.
 `UNIT_TEST_PATHS` follows the desktop Vitest include list, not a general filename heuristic.
 Desktop unit tests are outside the explicit entry graphs in `desktop/scripts/build.mjs`; both retained jobs run the unit suites, including Windows.
+Linux `checks` runs both packages' typecheck and lint once; `windows check` retains both Vitest suites and every Windows Rust contract without repeating those OS-independent checks.
 Web tests keep their existing app lanes: `herdr-core/src/sidebar.rs` scans every TypeScript file under `web/src`, including tests, and Tailwind scans test files under the Vite web root as CSS inputs.
 Unregistered test conventions keep their folder's existing lanes, and a mixed change keeps the union of every changed file's lanes.
 Registered desktop unit tests are not package inputs even when a broad input pattern such as `updater*` names them.
@@ -468,7 +469,7 @@ A run that plans every lane a pull request can plan starts at most 32 jobs, nine
 | `plan`, `policy`, `rust`, `checks`, `windows check`, `verify` | 6 | `checks` merges `web checks` and `desktop checks`: both install the same dependencies, run for a minute or two and start a runner each |
 | `windows e2e` | 1 | the reusable workflow no longer starts a `plan` job that only fanned the shard numbers out; a matrix picks its list by index |
 | `windows desktop` | 1 | the desktop `@platform` tests on Windows, the one job that starts the Electron app there in a pull request; it keeps the window it drew as the run's artifact |
-| `web e2e` (Linux) | 7 | one build, which also downloads the zsh packages the `fetch zsh` job used to, and six shards dealt by recorded durations: six were cut to four on 2026-10-05 so fewer jobs queued at the 20-job limit, and went back to six on 2026-10-18 when the suite had grown to 68 minutes of tests and four shards ran 984 to 1111 s of their 1200 s step |
+| `web e2e` (Linux) | 7 | one daemon and web shell build, which also downloads the zsh packages the `fetch zsh` job used to, and six shards dealt by recorded durations: six were cut to four on 2026-10-05 so fewer jobs queued at the 20-job limit, and went back to six on 2026-10-18 when the suite had grown to 68 minutes of tests and four shards ran 984 to 1111 s of their 1200 s step |
 | `os contract` (Linux, Windows), `os contract (macOS)` | 3 | one job per system, the macOS leg planned only for its two crates |
 | `agy contract` (Windows) | 1 | agy's hook block, trust, conversations and Hide AI backend, and the real agy reading Hide's block, where the hook commands and install folder differ; `rust` runs the same tests on Linux and the nightly runs all three systems |
 | `omp SDK contract` (Linux, macOS, Windows) | 3 | both supported exact npm SDK versions on Bun 1.3.14, with synthetic stored login and localhost inference; the native SQLite, Bun runtime and package resolution need each system |
@@ -483,6 +484,11 @@ The median wall time and the share of runs whose Linux shards waited more than 1
 The `plan` job's summary lists each lane with the paths that chose it.
 
 ### Balancing the e2e shards
+
+The multi-shard web lane builds the daemon and web shell once in its existing build job, then each shard downloads the same run's binaries and `web-dist-<lane>` into the paths its fixtures read.
+The shell build uses the same checkout, Node, pnpm, frozen lockfile, command and environment as the single-shard build; [BUILD.md](BUILD.md#two-entrypoints) owns the artifact and failure contract.
+Each shard still installs its test dependencies and runs its unchanged discovery, selection, execution and reporting steps.
+A single shard builds in place, with no additional job or artifact transfer.
 
 Playwright's `--shard` cuts the tests in file order into runs of equal count, and a test takes from 1 second to a minute, so with four shards one web shard job took 11 minutes and another 6 (run `37402687007`, 2026-10-06).
 It also runs a project's dependencies whole in every shard that holds a dependent test, which in the desktop suite is every background test (below).

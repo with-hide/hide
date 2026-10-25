@@ -150,6 +150,15 @@ There is no skip-build flag, freshness marker or reuse of a previous job's deskt
 An invalid package/action pair or more than 128 trailing arguments exits 2; the no-argument gate retains both packages' typecheck, lint, unit tests and build coverage.
 `test_ci_verification_entrypoints.py` checks this external command boundary without building or installing; it complements the real build tests below.
 
+In `web-e2e.yml`, a lane with several shards builds the web shell once in its existing daemon build job.
+Both jobs check out the same workflow commit and use Node 22, pnpm 10 and the frozen workspace lockfile, with the same web build command and environment.
+The build uploads `web/dist` as `web-dist-<lane>` with one-day retention and an error on missing output; each shard downloads that named artifact from its own workflow run into `web/dist` before Playwright.
+The lane suffix separates simultaneous reusable calls, as it does for `hided-debug-<lane>`; there is no cross-run lookup or cache of built shell output.
+The HTML, CSS and JavaScript need no executable bits; the daemon binaries still restore theirs after download on Unix.
+A failed build stops the shards and a missing artifact fails the download step, without rebuilding or accepting stale output.
+A single-shard lane skips the shared build job and retains its in-place daemon and web builds, including the nightly macOS and Windows web lanes.
+Every shard still installs dependencies for Playwright and test discovery; test selection and reporting remain shard-owned.
+
 The build regression tests in `test_verification_builds.py` use a tiny real Cargo workspace, not compiler mocks.
 They check that a caller's `CARGO_TARGET_DIR` cannot move the release binaries, that output stays in the checkout, warm build reuse, a core value change, a changed failing test, and compiler and prerequisite failure propagation.
 They require macOS with Cargo.

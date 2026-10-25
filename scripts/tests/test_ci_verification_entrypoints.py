@@ -129,6 +129,80 @@ if name == 'playwright' and '--list' in args:
         self.assertFalse(self.tool_calls("vite", "web"))
         self.assertFalse(self.tool_calls("vitest", "web"))
 
+    def test_windows_runs_both_unit_suites_without_repeating_static_checks(self):
+        self.enable_package_scripts()
+        steps = yaml.safe_load((ROOT / ".github/workflows/pr.yml").read_text())["jobs"]["windows-check"]["steps"]
+        for package, name in (("web", "Web shell unit suite"), ("desktop", "Desktop app unit suite")):
+            with self.subTest(package=package):
+                self.record.unlink(missing_ok=True)
+                result = self.workflow_step("pr.yml", "windows-check", name)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.tool_calls("vitest", package), [["run"]])
+                self.record.unlink()
+                result = self.workflow_step("pr.yml", "windows-check", name, FAIL_PROGRAM="vitest")
+                self.assertEqual(result.returncode, 23, result.stderr)
+        # Check every step, so putting a duplicate back under another name fails.
+        commands = "\n".join(step.get("run", "") for step in steps)
+        for package in ("web", "desktop"):
+            for action in ("typecheck", "lint", "build"):
+                self.assertNotIn(f"verify-web.sh {package} {action}", commands)
+        linux = yaml.safe_load((ROOT / ".github/workflows/pr.yml").read_text())["jobs"]["checks"]["steps"]
+        linux_commands = "\n".join(step.get("run", "") for step in linux)
+        for command in ("web build", "web lint", "desktop typecheck", "desktop lint"):
+            self.assertIn(f"verify-web.sh {command}", linux_commands)
+
+    def test_web_shards_share_current_run_output_and_single_shard_keeps_its_build(self):
+        lane = yaml.safe_load((ROOT / ".github/workflows/web-e2e.yml").read_text())
+        build, e2e = (lane["jobs"][key] for key in ("build", "e2e"))
+        self.assertEqual(build["if"], "${{ inputs.shards > 1 }}")
+        self.assertEqual(e2e["needs"], "build")
+        self.assertIn('contains(fromJSON(\'["success","skipped"]\'), needs.build.result)', e2e["if"])
+        self.assertNotIn("continue-on-error", build)
+        self.assertEqual(build["runs-on"], e2e["runs-on"])
+        self.assertEqual(build.get("env", {}), e2e.get("env", {}))
+
+        def one(job, *, name=None, uses=None):
+            return next(step for step in job["steps"]
+                        if (step.get("name") == name if name else step.get("uses", "").startswith(uses)))
+
+        # Both preparations consume the same commit, lockfile and build inputs.
+        for action in ("actions/checkout@", "pnpm/action-setup@", "actions/setup-node@"):
+            left, right = (one(job, uses=action) for job in (build, e2e))
+            self.assertEqual(left["uses"], right["uses"])
+            self.assertEqual(left.get("with", {}), right.get("with", {}))
+        for name in ("Install web dependencies", "Build the web shell"):
+            left, right = (one(job, name=name) for job in (build, e2e))
+            self.assertEqual(left["run"], right["run"])
+            self.assertEqual(left.get("env", {}), right.get("env", {}))
+        self.assertNotIn("if", one(build, name="Build the web shell"))
+        self.assertEqual(one(e2e, name="Build the web shell")["if"], "${{ inputs.shards == 1 }}")
+        upload = one(build, name="Keep the web shell for the shards")
+        download = one(e2e, name="Fetch the web shell from the build job")
+        self.assertEqual(upload["uses"], "actions/upload-artifact@v7")
+        self.assertEqual(upload["with"], {"name": "web-dist-${{ inputs.lane }}", "path": "web/dist",
+                                          "if-no-files-found": "error", "retention-days": 1})
+        self.assertEqual(download["uses"], "actions/download-artifact@v8")
+        # No token/run-id lookup: download-artifact defaults to this run.
+        self.assertEqual(download["with"], {"name": upload["with"]["name"], "path": "web/dist"})
+        self.assertEqual(download["if"], "${{ inputs.shards > 1 }}")
+        for step in (upload, download):
+            self.assertNotIn("continue-on-error", step)
+        self.assertEqual(lane["permissions"], {"contents": "read", "issues": "write"})
+
+        # Exercise the actual build command's prerequisite failure boundary.
+        self.enable_package_scripts()
+        for job in ("build", "e2e"):
+            with self.subTest(job=job):
+                self.record.unlink(missing_ok=True)
+                result = self.workflow_step("web-e2e.yml", job, "Build the web shell")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.tool_calls("tsc", "web"), [["--noEmit"]])
+                self.assertEqual(self.tool_calls("vite", "web"), [["build"]])
+                self.record.unlink()
+                result = self.workflow_step("web-e2e.yml", job, "Build the web shell", FAIL_PROGRAM="tsc")
+                self.assertEqual(result.returncode, 23, result.stderr)
+                self.assertFalse(self.tool_calls("vite", "web"))
+
     def test_full_gate_stops_on_a_type_error_before_bundling_or_desktop(self):
         self.enable_package_scripts()
         result = self.run_entry("verify-web.sh", FAIL_PROGRAM="tsc")
