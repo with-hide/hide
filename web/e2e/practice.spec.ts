@@ -1,7 +1,8 @@
 // The practice window (UI_BEHAVIOR.md, Practice window) on an isolated pinned
 // Herdr and hided: opened from the shell's Help menu, every chapter played to
-// its end with Enter alone without a call to the system clipboard, and the
-// chapter list then reads every chapter as seen from the progress the core kept. The chapters run the shell's own
+// its end with Enter alone, and again by the guide's button, without a call to
+// the system clipboard, and the chapter list then reads every chapter as seen
+// from the progress the core kept. The chapters run the shell's own
 // components, so a change that moves what a step points at, presses or waits
 // for stops this journey at that step and names it. A chapter started over
 // from any step plays to its end the same way: nothing the shell's screen held
@@ -61,17 +62,30 @@ async function pasteByHand(practice: Page): Promise<void> {
   await expect.poll(() => practiceState(practice), { message: "the pasted request did not reach the signup agent" }).toMatch(/^delegate:end:/);
 }
 
-/** Presses Enter from the chapter list until it comes back to it, each press waiting for the practice to move. */
-async function playEveryChapter(practice: Page, chapters: number): Promise<void> {
+/** One press of the guide: ⏎, or its bubble's button where the bubble shows one. */
+type GuidePress = (practice: Page) => Promise<void>;
+const pressEnter: GuidePress = (practice) => practice.keyboard.press("Enter");
+/**
+ * The bubble's button, as a mouse presses it, on every step that shows one: all but the chapter list, where ⏎ plays
+ * the chosen chapter, and an open palette, which hides the bubble's button and keeps ⏎ for itself.
+ */
+const pressButton: GuidePress = async (practice) => {
+  const guiding = await practice.locator("[data-practice-layer]").count();
+  if (!guiding || (await practice.locator("[data-palette]").count())) return practice.keyboard.press("Enter");
+  await practice.locator("[data-practice-layer] [data-practice-go]").click();
+};
+
+/** Presses the guide from the chapter list until it comes back to it, each press waiting for the practice to move. */
+async function playEveryChapter(practice: Page, chapters: number, press: GuidePress = pressEnter): Promise<void> {
   let now = await practiceState(practice);
   let presses = 0;
   do {
     expect(presses, `the practice stopped moving at ${now}`).toBeLessThan(chapters * PRESSES_PER_CHAPTER);
     const before = now;
     if (now.startsWith("delegate:paste:")) await pasteByHand(practice);
-    else await practice.keyboard.press("Enter");
+    else await press(practice);
     presses += 1;
-    await expect.poll(() => practiceState(practice), { message: `Enter at ${before} moved nothing`, timeout: 10_000 }).not.toBe(before);
+    await expect.poll(() => practiceState(practice), { message: `a press at ${before} moved nothing`, timeout: 10_000 }).not.toBe(before);
     now = await practiceState(practice);
   } while (now !== "hub");
 }
@@ -115,6 +129,16 @@ test("the practice window plays every chapter with Enter alone and the core keep
     const count = await chapters.count();
     await expect(chapters.and(practice.locator('[data-status="new"]'))).toHaveCount(count);
     await playEveryChapter(practice, count);
+    await expect(chapters.and(practice.locator('[data-status="done"]'))).toHaveCount(count);
+  });
+});
+
+// The guide is not part of the screen it teaches: a press on its button leaves the keyboard in the pane that held it,
+// so a step whose chord acts where the keyboard is (⌘W closes that pane, ⌃⇥ starts from it) plays as ⏎ plays it.
+test("the practice window plays every chapter by the guide's button as it does with Enter", async ({ page }) => {
+  await withPractice(page, async (practice, chapters) => {
+    const count = await chapters.count();
+    await playEveryChapter(practice, count, pressButton);
     await expect(chapters.and(practice.locator('[data-status="done"]'))).toHaveCount(count);
   });
 });
