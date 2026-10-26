@@ -109,11 +109,25 @@ struct Host<'a> {
 }
 
 impl Host<'_> {
+    /// Whether the Project was turned off or the core is stopping, which
+    /// ends the run at once with what it wrote kept.
+    fn stopping(&mut self) -> bool {
+        let stopping = self.input.budget.stop.is_set();
+        if stopping {
+            self.stopped = Some("stopped".into());
+        }
+        stopping
+    }
+
     /// Writes the answer's edits one by one, keeping each outcome for the
-    /// next turn. A pen that can no longer save stops the run.
+    /// next turn. A pen that can no longer save stops the run, as a stop
+    /// between two edits does.
     fn write(&mut self, edits: Vec<NotebookEdit>) -> Step {
         self.carried.edits.clear();
         for edit in edits.into_iter().take(policy::EDITS_PER_TURN) {
+            if self.stopping() {
+                return Step::Stop;
+            }
             let kind = edit.kind();
             let outcome = match self.pen.write(edit) {
                 Ok(written) => {
@@ -141,10 +155,13 @@ impl Host<'_> {
         Step::Continue
     }
 
-    fn read(&mut self, reads: Vec<Read>) {
+    fn read(&mut self, reads: Vec<Read>) -> Step {
         self.carried.reads.clear();
         let mut budget = policy::READ_TURN_BYTES;
         for read in reads.into_iter().take(policy::READS_PER_TURN) {
+            if self.stopping() {
+                return Step::Stop;
+            }
             let (value, outcome) = reads::fulfil(&read, &self.input.records, self.reads, budget);
             budget =
                 budget.saturating_sub(serde_json::to_string(&value).map_or(budget, |s| s.len()));
@@ -154,6 +171,7 @@ impl Host<'_> {
             }
             self.carried.reads.push(value);
         }
+        Step::Continue
     }
 }
 
@@ -193,10 +211,10 @@ impl TurnHost for Host<'_> {
         if answer.done {
             return Ok(Step::Finish);
         }
-        if turn.phase != Phase::Final {
-            self.read(answer.reads);
+        if turn.phase == Phase::Final {
+            return Ok(Step::Continue);
         }
-        Ok(Step::Continue)
+        Ok(self.read(answer.reads))
     }
 }
 
