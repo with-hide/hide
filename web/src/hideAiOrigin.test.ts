@@ -43,21 +43,21 @@ describe("what a home-owned row says and where it opens (PRD hide-ai-work-home D
     expect(homeTurnLine(ko, { kind: "pr_review", pr_number: 924 })).toBe("PR #924 리뷰");
     expect(homeTurnLine(ko, { kind: "ci_failed", pr_number: 924 })).toBe("CI 실패");
     expect(homeTurnLine(en, { kind: "pr_review", pr_number: 924 })).toBe("PR #924 review");
-    expect(hideAiWords(ko, { task: MEMORY, home: "memory", turn: { kind: "pr_review", pr_number: 924 } })).toBe("Hide AI · Memory 반영하기 · m72 · PR #924 리뷰");
-    expect(hideAiWords(ko, { task: MEMORY, home: "memory" })).toBe("Hide AI · Memory 반영하기 · m72");
+    expect(hideAiWords(ko, { task: MEMORY, home: "suggestions", turn: { kind: "pr_review", pr_number: 924 } })).toBe("Hide AI · Memory 반영하기 · m72 · PR #924 리뷰");
+    expect(hideAiWords(ko, { task: MEMORY, home: "suggestions" })).toBe("Hide AI · Memory 반영하기 · m72");
   });
 
   const rest = { navigator: { workspaces: [{ id: "ws-1", device_id: "mac" }] } } as unknown as SnapshotRest;
   const row = (hideAi: AgentRow["hide_ai"]) => ({ hide_ai: hideAi });
 
   it("opens the Project's Memory on the attempt's card, and nothing else until the core names the Project", () => {
-    expect(homeOpening(rest, row({ task: MEMORY, home: "memory", workspace_id: "ws-1" }))).toEqual({ deviceId: "mac", workspaceId: "ws-1", number: 72 });
+    expect(homeOpening(rest, row({ task: MEMORY, home: "suggestions", workspace_id: "ws-1" }))).toEqual({ deviceId: "mac", workspaceId: "ws-1", number: 72 });
     const unnamed: [string, AgentRow["hide_ai"]][] = [
       ["no home (a kind this build does not know)", { task: MEMORY, workspace_id: "ws-1" }],
-      ["no Project yet", { task: MEMORY, home: "memory" }],
-      ["a Project the catalog lacks", { task: MEMORY, home: "memory", workspace_id: "other" }],
-      ["a task naming no card", { task: { kind: "memory_promote" }, home: "memory", workspace_id: "ws-1" }],
-      ["not a card name", { task: { kind: "memory_promote", target: "72" }, home: "memory", workspace_id: "ws-1" }],
+      ["no Project yet", { task: MEMORY, home: "suggestions" }],
+      ["a Project the catalog lacks", { task: MEMORY, home: "suggestions", workspace_id: "other" }],
+      ["a task naming no card", { task: { kind: "memory_promote" }, home: "suggestions", workspace_id: "ws-1" }],
+      ["not a card name", { task: { kind: "memory_promote", target: "72" }, home: "suggestions", workspace_id: "ws-1" }],
     ];
     for (const [name, hideAi] of unnamed) expect(homeOpening(rest, row(hideAi)), name).toBeNull();
     expect(homeOpening(rest, undefined)).toBeNull();

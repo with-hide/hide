@@ -75,8 +75,12 @@ export type RaisedAsk = {
 /** What Hide AI started an agent for, as codes the screen words (`memory_promote`, the card `m72`). */
 export type HideAiTask = { kind: string; target?: string };
 
-/** The screen that owns what a Hide AI task does (PRD hide-ai-work-home D-10); a kind the core has no home for carries none. */
-export type HideAiHome = "memory";
+/**
+ * The screen that owns what a Hide AI task does (PRD hide-ai-work-home D-10); a kind the core has no home for carries none.
+ * The 제안 tab owns a Memory card's promotion and a suggestion's application (PRD hide-ai-suggestions D-02); until the shell
+ * draws that tab, a card's row still opens in the Memory tool.
+ */
+export type HideAiHome = "suggestions";
 
 /** What the home waits for the operator to do, beyond what the agent itself asks (D-14); the core decides it. */
 export type HomeTurn = { kind: "pr_review" | "ci_failed"; pr_number: number };
