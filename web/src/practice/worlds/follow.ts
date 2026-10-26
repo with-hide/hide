@@ -255,6 +255,11 @@ function snapshot(model: FollowModel, nowMs: number): WorldSnapshot {
       ui_state: { ...rest.ui_state, sidebar_lens: "tasks" },
       status: { ...rest.status, pane_focus_request: model.focus },
       terminal: { headers: headers(model.beat, nowMs) },
+      // The core's proof of each agent's session, which a pane's 개요에서 보기 needs to choose it on the map.
+      overview_graph: {
+        available: true, limit: 2000, retained_count: 0, truncated: false, retention_ms: 30 * 24 * 60 * MINUTE, letters: [],
+        sessions: Object.values(agents).flatMap((row) => (row.session_id ? [{ device_id: "local", pane_id: row.pane_id, session_digest: row.session_id, launch_model: null, launch_effort: null }] : [])),
+      },
     },
   };
 }

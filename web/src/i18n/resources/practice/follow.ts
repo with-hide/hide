@@ -78,7 +78,7 @@ const ko = {
   "practice.follow.overview.quest": "팀 지도",
   "practice.follow.overview.kick": "팀 전체",
   "practice.follow.overview.title": "모든 에이전트를 한 장으로",
-  "practice.follow.overview.text": "개요가 작업 화면 위에 열려요. 터미널 헤더의 ⋯ 메뉴나 우클릭 메뉴 맨 위의 개요에서 보기를 고르면 그 에이전트를 고른 채로 열려요.",
+  "practice.follow.overview.text": "개요가 작업 화면 위에 열려요. 터미널 헤더의 ⋯ 메뉴나 우클릭 메뉴 맨 위의 개요에서 보기를 누르면 그 에이전트가 선택된 채로 열려요.",
   "practice.follow.map.kick": "개요",
   "practice.follow.map.title": "누가 누구를 시작했는지",
   "practice.follow.map.text": "선은 부모와 자식을 잇고, 나를 기다리는 에이전트를 ‘나’에 이어요. 표시의 색이 상태예요.",
