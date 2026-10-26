@@ -79,6 +79,10 @@ pub struct ProjectState {
     /// automatic attempt starts and an attempt is followed (B13, B21).
     #[serde(default)]
     pub location: Option<ProjectLocation>,
+    /// The last run failed, so nothing rose from it: the Project shows
+    /// `조사 못 함` and the next run investigates even with no new records.
+    #[serde(default)]
+    pub uninvestigated: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

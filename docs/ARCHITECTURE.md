@@ -548,6 +548,7 @@ One worker thread owns its only writer and takes commands over a bounded queue o
 What only the lock knows is laid on the worker's read as it is published: whether Hide AI can investigate, GitHub's answer for the Project, the signals that cannot record here (corrections with Memory off, pull request signals without GitHub) and the `GitHub 연결 필요` hold on a line whose outcome is a pull request.
 
 The day's runs start three minutes after the operator is back at the machine, once a local day per Project, one Project at a time.
+A run that fails raises nothing from the scores alone (D-35): what it left unread is grouped by tag and keeps collecting records, the Project's status is `not_investigated` (`조사 못 함`), raised lines and watches stay as they were, and the next day's run investigates even when no record came since; only a run that investigates raises.
 Only the desktop host sees that moment: it posts `/hide-ai-wake` with the daemon's token as the app attaches, as the machine wakes and as the screen unlocks, and the daemon dispatches it as one `hide_ai_wake` event; a wake while a day is due or running is absorbed, and Linux reports no unlock ([What each system supports](INSTALL.md#what-each-system-supports)).
 The header switch turns suggestions and Memory reading off together and, turned on, gives each back what it had; Memory keeps its own consent and its own switch.
 

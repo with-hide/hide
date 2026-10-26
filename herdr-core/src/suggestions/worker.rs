@@ -1187,7 +1187,7 @@ impl Worker {
         if !state.settings.active() || state.last_completed_day.as_deref() == Some(today.as_str()) {
             return false;
         }
-        if index.fresh().next().is_none() {
+        if index.fresh().next().is_none() && !state.uninvestigated {
             self.complete(project, AnalysisEnd::Done, 0);
             self.auto_apply(project, sink);
             self.publish_if_opened(project, sink);
@@ -1267,16 +1267,20 @@ impl Worker {
         }
     }
 
-    /// Ends `project`'s day: a run that failed having written nothing is
-    /// judged by the scores alone (D-35, `not_investigated`); then what rose
-    /// is raised and the day is kept as done, so it never runs twice a day.
+    /// Ends `project`'s day, which is kept as done so it never runs twice a
+    /// day. A run that failed raises nothing from the scores alone (D-35):
+    /// what it left unread is grouped by tag when it wrote nothing
+    /// (`not_investigated`), the Project shows `조사 못 함`, and the next
+    /// run investigates whether or not new records came; raised lines and
+    /// watches stay as they are. Any other end raises what rose.
     fn complete(&mut self, project: &str, end: AnalysisEnd, edits: usize) {
         let today = self.today();
+        let failed = end == AnalysisEnd::Partial(PartialReason::Failed);
         let mut ended = match end {
             AnalysisEnd::Done => "done",
             AnalysisEnd::Partial(reason) => reason.as_str(),
         };
-        if end == AnalysisEnd::Partial(PartialReason::Failed) && edits == 0 {
+        if failed && edits == 0 {
             self.group_by_tag(project);
             ended = "not_investigated";
         }
@@ -1284,7 +1288,9 @@ impl Worker {
             "component": "suggestions", "kind": "run.ended",
             "project_id": project, "end": ended, "edits": edits,
         }));
-        self.raise(project);
+        if !failed {
+            self.raise(project);
+        }
         let now = self.now();
         let Ok(store) = self.store.as_mut() else {
             return;
@@ -1296,6 +1302,7 @@ impl Worker {
         state.last_completed_day = Some(today);
         state.last_run_at_unix_ms = Some(now);
         state.last_run_end = Some(ended.to_owned());
+        state.uninvestigated = failed;
         if let Err(code) = store.save_state(project, &state) {
             log_store("complete", &code);
         }
@@ -1482,7 +1489,7 @@ mod tests {
     use super::*;
     use crate::model::{SuggestionGroup, SuggestionState, SuggestionsStatus};
     use crate::suggestions::ledger::SessionRef;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
     const START: u64 = 400 * policy::DAY_MS + 9 * 3_600_000;
     const WAIT: Duration = Duration::from_secs(10);
@@ -1527,6 +1534,7 @@ mod tests {
 
     struct Fixture {
         worker: Option<SuggestionWorker>,
+        analysis: AnalysisFactory,
         clock: Arc<AtomicU64>,
         reads: Receiver<ProjectSuggestionsSnapshot>,
         restored: Receiver<String>,
@@ -1537,12 +1545,17 @@ mod tests {
 
     impl Fixture {
         fn new() -> Self {
+            Self::with_analysis(Arc::new(|| Box::new(TagGrouping) as Box<dyn Analysis>))
+        }
+
+        fn with_analysis(analysis: AnalysisFactory) -> Self {
             let dir = tempfile::tempdir().unwrap();
             let store = dir.path().join("suggestions.sqlite3");
             let clock = Arc::new(AtomicU64::new(START));
-            let (worker, reads, restored, handed) = Self::spawn(&store, &clock);
+            let (worker, reads, restored, handed) = Self::spawn(&store, &clock, &analysis);
             Self {
                 worker: Some(worker),
+                analysis,
                 clock,
                 reads,
                 restored,
@@ -1555,6 +1568,7 @@ mod tests {
         fn spawn(
             store: &std::path::Path,
             clock: &Arc<AtomicU64>,
+            analysis: &AnalysisFactory,
         ) -> (
             SuggestionWorker,
             Receiver<ProjectSuggestionsSnapshot>,
@@ -1570,7 +1584,7 @@ mod tests {
                 store: store.to_owned(),
                 clock: Arc::new(move || time.load(Ordering::SeqCst)),
                 zone: jiff::tz::TimeZone::UTC,
-                analysis: Arc::new(|| Box::new(TagGrouping) as Box<dyn Analysis>),
+                analysis: Arc::clone(analysis),
                 resolver: Box::new(|project: &ProjectRef, _| {
                     Ok(format!("project{}", project.path))
                 }),
@@ -1598,7 +1612,8 @@ mod tests {
         /// hided restart does.
         fn restart(&mut self) {
             self.worker.take();
-            let (worker, reads, restored, handed) = Self::spawn(&self.store, &self.clock);
+            let (worker, reads, restored, handed) =
+                Self::spawn(&self.store, &self.clock, &self.analysis);
             self.worker = Some(worker);
             self.reads = reads;
             self.restored = restored;
@@ -1718,6 +1733,73 @@ mod tests {
             read.status,
             SuggestionsStatus::Idle,
             "a row waits to be chosen"
+        );
+    }
+
+    /// An investigation that fails on the days `fails` says, and otherwise
+    /// groups as the shipped analysis does; it counts its runs.
+    struct Flaky {
+        fails: Arc<AtomicBool>,
+        runs: Arc<AtomicUsize>,
+    }
+
+    impl Analysis for Flaky {
+        fn name(&self) -> &'static str {
+            "flaky"
+        }
+        fn uses_provider(&self) -> bool {
+            false
+        }
+        fn run(&mut self, input: &AnalysisInput, pen: &mut dyn NotebookPen) -> AnalysisEnd {
+            self.runs.fetch_add(1, Ordering::SeqCst);
+            if self.fails.load(Ordering::SeqCst) {
+                return AnalysisEnd::Partial(PartialReason::Failed);
+            }
+            TagGrouping.run(input, pen)
+        }
+    }
+
+    /// D-35 as the mission decided it: a run that fails raises nothing from
+    /// the scores alone and leaves a raised line as it was; the Project
+    /// shows `조사 못 함`, and the next day's run investigates though no
+    /// record came since, and only then does the waiting line rise.
+    #[test]
+    fn a_failed_investigation_raises_nothing_until_a_run_investigates() {
+        let fails = Arc::new(AtomicBool::new(false));
+        let runs = Arc::new(AtomicUsize::new(0));
+        let (flaky, counted) = (Arc::clone(&fails), Arc::clone(&runs));
+        let fixture = Fixture::with_analysis(Arc::new(move || {
+            Box::new(Flaky {
+                fails: Arc::clone(&flaky),
+                runs: Arc::clone(&counted),
+            }) as Box<dyn Analysis>
+        }));
+        fixture.open();
+        fixture.fail_in_sessions("cargo test", &["s1", "s2", "s3"]);
+        fixture.wake_and_wait_out_the_delay();
+        fixture.read_until(|read| chosen(read) == ["s1"]);
+
+        fails.store(true, Ordering::SeqCst);
+        fixture.clock.fetch_add(policy::DAY_MS, Ordering::SeqCst);
+        fixture.fail_in_sessions("pnpm lint", &["s4", "s5", "s6"]);
+        fixture.wake_and_wait_out_the_delay();
+        let read = fixture.read_until(|read| read.status == SuggestionsStatus::NotInvestigated);
+        assert_eq!(
+            chosen(&read),
+            ["s1"],
+            "nothing new rose; the raised line stays"
+        );
+
+        fails.store(false, Ordering::SeqCst);
+        fixture.clock.fetch_add(policy::DAY_MS, Ordering::SeqCst);
+        fixture.wake_and_wait_out_the_delay();
+        let read = fixture.read_until(|read| chosen(read).len() == 2);
+        assert_eq!(chosen(&read), ["s2", "s1"]);
+        assert_eq!(read.status, SuggestionsStatus::Idle);
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            3,
+            "the third day ran with no new record"
         );
     }
 

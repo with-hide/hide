@@ -80,7 +80,7 @@
   "suggestion_apply_mode": ["confirm", "auto_pr"],
   "suggestion_outcome": ["pr", "issue"],
   "suggestions_unavailable": ["unregistered", "unreadable"],
-  "suggestions_status": ["first_run_pending", "investigating", "none_today", "idle", "off"],
+  "suggestions_status": ["first_run_pending", "investigating", "none_today", "not_investigated", "idle", "off"],
   "suggestions_ai": ["ready", "not_ready", "cannot_investigate"],
   "suggestions_github": ["connected", "missing"],
   "suggestion_signal_unavailable": ["no_github", "memory_off"],

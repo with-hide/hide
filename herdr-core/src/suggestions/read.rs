@@ -271,6 +271,8 @@ pub fn project(input: &ReadInput<'_>) -> ProjectSuggestionsSnapshot {
         SuggestionsStatus::Investigating
     } else if input.state.last_completed_day.is_none() {
         SuggestionsStatus::FirstRunPending
+    } else if input.state.uninvestigated {
+        SuggestionsStatus::NotInvestigated
     } else if input.state.last_completed_day.as_deref() == Some(input.today)
         && !rows.iter().any(|row| row.group == SuggestionGroup::Choose)
     {
