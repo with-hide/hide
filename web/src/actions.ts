@@ -1755,6 +1755,17 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       });
     },
 
+    /**
+     * The operator's answer to a mission's decision from its banner (PRD
+     * mission-plan-visibility B26): the option pressed, counted from 1, or
+     * what was written. The core types it into the Conductor's conversation
+     * as the operator's own input, refuses it once the question with `key`
+     * changed, and keeps the first answer to the same question.
+     */
+    answerMission(missionId: string, key: number, answer: { option: number } | { text: string } | { resend: true }) {
+      dispatch({ schema_version: 2, kind: "mission_answer", payload: { mission: missionId, key, ...answer } });
+    },
+
     /** The fields of Settings › Conductor one edit changes (D-31, B48); the core keeps the rest and checks the result before it is kept. */
     setConductorSettings(patch: Partial<import("./snapshot").ConductorSettings>) {
       dispatch({ schema_version: 2, kind: "conductor_settings_set", payload: patch });

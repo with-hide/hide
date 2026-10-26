@@ -6,7 +6,7 @@
 use super::*;
 use crate::delivery::{Actor, worker::Worker};
 use crate::handle::ChangeNotifier;
-use crate::missions::{MissionCommand, MissionStatus, NodeStatus};
+use crate::missions::{AnswerFailure, MissionCommand, MissionStatus, NodeStatus};
 use crate::model::{
     DetailItem, GithubProjectSnapshot, GithubSnapshot, PullRequestBadge, PullRequestChecks,
     PullRequestSnapshot, ReviewDecision,
@@ -1323,4 +1323,630 @@ fn a_conductors_worker_outside_the_candidates_is_refused() {
         prepare_spawn(&mut runtime, &conductor, None).unwrap_err(),
         "mission_candidate_refused"
     );
+}
+
+/// A created, planned and started mission conducted by `sender`.
+fn running(runtime: &mut Runtime) {
+    command(
+        runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(runtime, "sender", plan()).unwrap();
+    command(runtime, "sender", json!({"op": "start"})).unwrap();
+}
+
+fn kinds(runtime: &Runtime) -> Vec<String> {
+    runtime.missions.events["mission-1"]
+        .events
+        .iter()
+        .map(|event| {
+            serde_json::to_value(event.kind)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect()
+}
+
+#[test]
+fn a_decision_carries_its_reason_choices_recommendation_and_node_and_refuses_what_is_not_one() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running(&mut runtime);
+    for (asked, code) in [
+        (
+            json!({"line": "Q", "options": ["a", "b"], "recommend": 3}),
+            "mission_recommend_invalid",
+        ),
+        (
+            json!({"line": "Q", "options": ["1", "2", "3", "4", "5", "6"]}),
+            "mission_options_too_many",
+        ),
+        (
+            json!({"line": "Q", "node": "nowhere"}),
+            "mission_node_unknown",
+        ),
+        (
+            json!({"line": null, "options": ["a"]}),
+            "mission_question_without_line",
+        ),
+        (
+            json!({"line": "Q", "options": ["two\nlines"]}),
+            "mission_option_invalid",
+        ),
+    ] {
+        let mut request = json!({"op": "decide"});
+        request
+            .as_object_mut()
+            .unwrap()
+            .extend(asked.as_object().unwrap().clone());
+        assert_eq!(command(&mut runtime, "sender", request).unwrap_err(), code);
+    }
+    let ask = json!({"op": "decide", "line": "Which base?", "why": "Two PRs touch it",
+        "options": ["main", "#1503"], "recommend": 2, "node": "fix"});
+    let (answer, changed) = command(&mut runtime, "sender", ask.clone()).unwrap();
+    assert!(changed);
+    let question = &answer["mission"]["question"];
+    assert_eq!(
+        (
+            question["key"].clone(),
+            question["options"].clone(),
+            question["recommend"].clone(),
+            question["node"].clone()
+        ),
+        (json!(1), json!(["main", "#1503"]), json!(2), json!("fix"))
+    );
+    // The same question again changes nothing and keeps its key.
+    assert!(!command(&mut runtime, "sender", ask).unwrap().1);
+    // `--line` alone still asks, under a new key.
+    let (answer, _) = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Ship it?"}),
+    )
+    .unwrap();
+    assert_eq!(answer["mission"]["question"]["key"], 2);
+    assert_eq!(answer["mission"]["question"]["options"], json!(null));
+}
+
+#[test]
+fn a_commit_is_a_direct_changes_and_a_verdict_a_verify_nodes() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "plan", "plan": {"nodes": [
+            {"key": "fix", "title": "Fix it", "kind": "change", "delivery": "direct"},
+            {"key": "pr", "title": "Open it", "kind": "change", "delivery": "pr"},
+            {"key": "check", "title": "Check it", "kind": "verify"},
+        ]}}),
+    )
+    .unwrap();
+    let node = |key: &str, patch: Value| json!({"op": "node", "node": key, "patch": patch});
+    for (key, patch, code) in [
+        (
+            "pr",
+            json!({"commit": "abc1234"}),
+            "mission_field_kind_invalid",
+        ),
+        (
+            "fix",
+            json!({"verdict": "pass"}),
+            "mission_field_kind_invalid",
+        ),
+        (
+            "check",
+            json!({"commit": "abc1234"}),
+            "mission_field_kind_invalid",
+        ),
+        (
+            "fix",
+            json!({"commit": "not-a-sha"}),
+            "mission_commit_invalid",
+        ),
+        (
+            "check",
+            json!({"checks": {"passed": 7, "total": 6}}),
+            "mission_checks_invalid",
+        ),
+    ] {
+        assert_eq!(
+            command(&mut runtime, "sender", node(key, patch)).unwrap_err(),
+            code,
+            "{key}"
+        );
+    }
+    command(
+        &mut runtime,
+        "sender",
+        node("fix", json!({"commit": "abc1234def"})),
+    )
+    .unwrap();
+    let (answer, _) = command(
+        &mut runtime,
+        "sender",
+        node(
+            "check",
+            json!({"verdict": "fail", "checks": {"passed": 4, "total": 6}}),
+        ),
+    )
+    .unwrap();
+    let nodes = &answer["mission"]["nodes"];
+    assert_eq!(nodes[0]["commit"], "abc1234def");
+    assert_eq!(
+        (nodes[2]["verdict"].clone(), nodes[2]["checks"].clone()),
+        (json!("fail"), json!({"passed": 4, "total": 6}))
+    );
+}
+
+#[test]
+fn each_change_is_one_event_and_the_same_change_again_is_none() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running(&mut runtime);
+    let node = |patch: Value| json!({"op": "node", "node": "fix", "patch": patch});
+    command(&mut runtime, "sender", node(json!({"status": "working"}))).unwrap();
+    command(&mut runtime, "sender", node(json!({"status": "working"}))).unwrap();
+    command(&mut runtime, "sender", node(json!({"pr": 1503}))).unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        node(json!({"status": "failed", "line": "CI failed"})),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        node(json!({"status": "working", "attempts": 2})),
+    )
+    .unwrap();
+    // A replan that changes one node says so; the same plan again says nothing.
+    let mut replan = plan();
+    replan["plan"]["nodes"][0]["title"] = json!("Find the real cause");
+    replan["plan"]["nodes"][0]["change"] = json!("The first read was wrong");
+    command(&mut runtime, "sender", replan.clone()).unwrap();
+    command(&mut runtime, "sender", replan).unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "cancelled", "report": "Stopped.\nNothing merged."}),
+    )
+    .unwrap();
+    assert_eq!(
+        kinds(&runtime),
+        [
+            "planned",
+            "node",
+            "pr_opened",
+            "node",
+            "retried",
+            "node",
+            "replanned",
+            "reported",
+            "cancelled"
+        ]
+    );
+    let log = &runtime.missions.events["mission-1"];
+    assert_eq!(log.events[3].line.as_deref(), Some("CI failed"));
+    assert_eq!(
+        (log.events[6].count, log.events[6].line.as_deref()),
+        (Some(1), Some("The first read was wrong"))
+    );
+    assert_eq!(log.events[7].line.as_deref(), Some("Stopped."));
+}
+
+#[test]
+fn a_banner_answer_waits_for_its_question_and_is_kept_once() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Which base?", "options": ["main", "#1503"]}),
+    )
+    .unwrap();
+    // An answer to a question the Conductor no longer asks is refused and shows nothing.
+    assert!(!runtime.mission_answer_event("mission-1", 9, Some(1), None, false));
+    assert!(runtime.missions.book.missions[0].answer.is_none());
+    assert!(runtime.mission_answer_event("mission-1", 1, Some(2), None, false));
+    // The same question answered again keeps the first answer.
+    assert!(!runtime.mission_answer_event("mission-1", 1, None, Some("main".into()), false));
+    runtime.refresh_missions();
+    let view = runtime.snapshot.missions.items[0].answer.clone().unwrap();
+    assert_eq!(
+        (view.text.as_str(), view.state),
+        ("#1503", crate::runtime::missions::AnswerState::Sending)
+    );
+    let due = runtime.mission_answers_due();
+    assert_eq!(due.len(), 1);
+    assert!(due[0].line.contains("Which base?") && due[0].line.ends_with("#1503"));
+    runtime.mission_answer_held("mission-1");
+    runtime.refresh_missions();
+    assert_eq!(
+        runtime.snapshot.missions.items[0]
+            .answer
+            .as_ref()
+            .unwrap()
+            .state,
+        crate::runtime::missions::AnswerState::Waiting
+    );
+    runtime.mission_answer_typing("mission-1", 1);
+    runtime.mission_answer_sent("mission-1", 1, Ok(()));
+    assert!(
+        runtime.mission_answers_due().is_empty(),
+        "a typed answer is typed once"
+    );
+    // Clearing the question after the banner's answer adds no second answer.
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": null}),
+    )
+    .unwrap();
+    assert_eq!(kinds(&runtime)[1..], ["asked", "answered"]);
+    assert_eq!(
+        runtime.missions.events["mission-1"].events[2].source,
+        Some(crate::mission_events::AnswerSource::Banner)
+    );
+}
+
+#[test]
+fn an_answer_whose_conductor_left_or_whose_question_changed_is_not_delivered() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Which base?"}),
+    )
+    .unwrap();
+    assert!(runtime.mission_answer_event("mission-1", 1, None, Some("main, please".into()), false));
+    // The Conductor changed its question before the answer was typed.
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Merge now?"}),
+    )
+    .unwrap();
+    assert!(runtime.missions.book.missions[0].answer.is_none());
+    assert!(runtime.mission_answer_event("mission-1", 2, None, Some("yes".into()), false));
+    // Its pane closed before the answer reached it (D-30): a short absence
+    // only waits, as after a restart before the panes are read again.
+    let observed = runtime.delivery_observations.remove("sender").unwrap();
+    assert!(runtime.mission_answers_due().is_empty());
+    assert!(runtime.missions.book.missions[0].answer.is_some());
+    runtime
+        .delivery_observations
+        .insert("sender".into(), observed);
+    assert_eq!(runtime.mission_answers_due().len(), 1);
+    assert!(runtime.missions.answer_absent_since.is_empty());
+    runtime.delivery_observations.remove("sender");
+    assert!(runtime.mission_answers_due().is_empty());
+    *runtime
+        .missions
+        .answer_absent_since
+        .get_mut("mission-1")
+        .unwrap() -= 30_000;
+    assert!(runtime.mission_answers_due().is_empty());
+    let mission = &runtime.missions.book.missions[0];
+    assert_eq!(
+        (mission.answer.is_none(), mission.answer_failed),
+        (true, Some(AnswerFailure::ConductorGone))
+    );
+    assert_eq!(
+        kinds(&runtime)[1..],
+        ["asked", "answer_undelivered", "asked", "answer_undelivered"]
+    );
+    // With no Conductor there, the banner's answer is refused with its reason.
+    assert!(runtime.mission_answer_event("mission-1", 2, None, Some("yes".into()), false));
+    assert_eq!(
+        runtime.missions.book.missions[0].answer_failed,
+        Some(AnswerFailure::ConductorGone)
+    );
+    runtime.refresh_missions();
+    assert_eq!(
+        runtime.snapshot.missions.items[0].answer_failed,
+        Some(AnswerFailure::ConductorGone)
+    );
+    // A question cleared with no banner answer was answered in the conversation.
+    command(
+        &mut runtime,
+        "recipient",
+        json!({"op": "take", "mission": "mission-1"}),
+    )
+    .unwrap();
+    // The reason holds only while no Conductor is there (B39).
+    runtime.refresh_missions();
+    assert_eq!(runtime.snapshot.missions.items[0].answer_failed, None);
+    command(
+        &mut runtime,
+        "recipient",
+        json!({"op": "decide", "line": null}),
+    )
+    .unwrap();
+    assert_eq!(
+        runtime.missions.events["mission-1"]
+            .events
+            .last()
+            .unwrap()
+            .source,
+        Some(crate::mission_events::AnswerSource::Conversation)
+    );
+}
+
+#[test]
+fn closing_a_mission_ends_its_decision_and_records_an_answer_never_typed() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Which base?"}),
+    )
+    .unwrap();
+    assert!(runtime.mission_answer_event("mission-1", 1, None, Some("main".into()), false));
+    runtime.mission_answer_held("mission-1");
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "cancelled"}),
+    )
+    .unwrap();
+    let mission = &runtime.missions.book.missions[0];
+    assert_eq!(
+        (
+            mission.decision.is_none(),
+            mission.question.is_none(),
+            mission.answer.is_none(),
+            mission.answer_failed
+        ),
+        (true, true, true, None)
+    );
+    assert!(runtime.missions.answers_held.is_empty());
+    assert!(runtime.mission_answers_due().is_empty());
+    assert_eq!(
+        kinds(&runtime)
+            .iter()
+            .filter(|kind| *kind == "answer_undelivered")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn an_answer_herdr_may_have_typed_is_typed_again_only_when_the_operator_sends_it_again() {
+    use crate::runtime::mission_events::AnswerSendFailure;
+    use crate::runtime::missions::AnswerState;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Which base?"}),
+    )
+    .unwrap();
+    assert!(runtime.mission_answer_event("mission-1", 1, None, Some("main".into()), false));
+    // Sending again is refused while the answer is still to be typed.
+    assert!(!runtime.mission_answer_event("mission-1", 1, None, None, true));
+    assert_eq!(runtime.mission_answers_due().len(), 1);
+    // The prompt is asked: the answer reads as sending, and the book already
+    // holds it as unconfirmed, so a stop before Herdr's reply never types it
+    // again after a restart.
+    runtime.mission_answer_typing("mission-1", 1);
+    runtime.refresh_missions();
+    assert_eq!(
+        runtime.snapshot.missions.items[0]
+            .answer
+            .as_ref()
+            .unwrap()
+            .state,
+        AnswerState::Sending
+    );
+    assert!(
+        runtime.missions.book.missions[0]
+            .answer
+            .as_ref()
+            .unwrap()
+            .unconfirmed
+    );
+    assert!(runtime.mission_answers_due().is_empty());
+    // A press of 다시 보내기 from a stale screen while the prompt is in flight adds nothing.
+    assert!(!runtime.mission_answer_event("mission-1", 1, None, None, true));
+    assert!(
+        runtime.missions.book.missions[0]
+            .answer
+            .as_ref()
+            .unwrap()
+            .unconfirmed
+    );
+    // Herdr's reply to the prompt timed out: the answer may be in the conversation.
+    runtime.mission_answer_sent(
+        "mission-1",
+        1,
+        Err(AnswerSendFailure::MaybeTyped("herdr_call_failed")),
+    );
+    assert!(
+        runtime.mission_answers_due().is_empty(),
+        "nothing types it again on its own"
+    );
+    runtime.refresh_missions();
+    let view = &runtime.snapshot.missions.items[0];
+    assert_eq!(
+        (view.answer.as_ref().unwrap().state, view.answer_failed),
+        (AnswerState::Unconfirmed, None)
+    );
+    // Another answer to the same question is still the first one.
+    assert!(!runtime.mission_answer_event("mission-1", 1, None, Some("other".into()), false));
+    // The operator sends it again: typed once more, and a second press adds nothing.
+    assert!(runtime.mission_answer_event("mission-1", 1, None, None, true));
+    assert!(!runtime.mission_answer_event("mission-1", 1, None, None, true));
+    let due = runtime.mission_answers_due();
+    assert_eq!(due.len(), 1);
+    assert!(due[0].line.ends_with("main"));
+    runtime.mission_answer_typing("mission-1", 1);
+    runtime.mission_answer_sent("mission-1", 1, Ok(()));
+    // A late second report for the same prompt changes nothing.
+    runtime.mission_answer_sent(
+        "mission-1",
+        1,
+        Err(AnswerSendFailure::MaybeTyped("herdr_format")),
+    );
+    assert!(
+        runtime.missions.book.missions[0]
+            .answer
+            .as_ref()
+            .unwrap()
+            .delivered
+    );
+    assert!(runtime.mission_answers_due().is_empty());
+    // A question cleared after it adds no answer of its own.
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": null}),
+    )
+    .unwrap();
+    assert_eq!(
+        kinds(&runtime)[1..],
+        ["asked", "answer_unconfirmed", "answered"]
+    );
+    // A failure before the prompt was asked gives the question back to answer again.
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Merge now?"}),
+    )
+    .unwrap();
+    assert!(runtime.mission_answer_event("mission-1", 2, None, Some("yes".into()), false));
+    runtime.mission_answer_sent(
+        "mission-1",
+        2,
+        Err(AnswerSendFailure::NotTyped("herdr_parameters")),
+    );
+    let mission = &runtime.missions.book.missions[0];
+    assert_eq!(
+        (mission.answer.is_none(), mission.answer_failed),
+        (true, Some(AnswerFailure::SendFailed))
+    );
+}
+
+#[test]
+fn the_open_missions_published_events_share_the_cores_list() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running(&mut runtime);
+    runtime.snapshot.ui_state.detail.items = vec![DetailItem::Mission {
+        mission: "mission-1".into(),
+    }];
+    runtime.snapshot.ui_state.detail.shown = true;
+    runtime.refresh_mission_events();
+    let held = &runtime.missions.events["mission-1"].events;
+    assert!(std::sync::Arc::ptr_eq(
+        held,
+        &runtime.snapshot.mission_events.events
+    ));
+    // A new event leaves the published list as it was until the next refresh.
+    let published = std::sync::Arc::clone(&runtime.snapshot.mission_events.events);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Which base?"}),
+    )
+    .unwrap();
+    assert_eq!(
+        published.len() + 1,
+        runtime.missions.events["mission-1"].events.len()
+    );
+    // The event itself is shared too, not copied.
+    assert!(std::sync::Arc::ptr_eq(
+        &published[0],
+        &runtime.missions.events["mission-1"].events[0]
+    ));
+    runtime.refresh_mission_events();
+    assert_eq!(
+        runtime.snapshot.mission_events.events.len(),
+        published.len() + 1
+    );
+}
+
+#[test]
+fn a_conductor_whose_agent_the_doorbell_does_not_ring_takes_no_banner_answer() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Which base?", "options": ["main", "#1503"]}),
+    )
+    .unwrap();
+    runtime.refresh_missions();
+    assert!(runtime.snapshot.missions.items[0].conductor.takes_answers);
+    runtime.missions.book.missions[0].conductor.actor.kind = "opencode".into();
+    runtime.missions.book_edit += 1;
+    runtime.refresh_missions();
+    assert!(!runtime.snapshot.missions.items[0].conductor.takes_answers);
+    assert_eq!(
+        runtime
+            .answer_mission("mission-1", 1, Some(1), None, false)
+            .unwrap_err(),
+        "mission_answer_unsupported"
+    );
+    assert!(!runtime.mission_answer_event("mission-1", 1, Some(1), None, false));
+    let mission = &runtime.missions.book.missions[0];
+    assert_eq!(
+        (mission.answer.is_none(), mission.answer_failed),
+        (true, None)
+    );
+}
+
+#[test]
+fn only_the_mission_open_in_the_slot_sends_its_events() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running(&mut runtime);
+    runtime.refresh_mission_events();
+    assert_eq!(runtime.snapshot.mission_events.mission, None);
+    assert!(runtime.snapshot.mission_events.events.is_empty());
+    runtime.open_detail(DetailItem::Mission {
+        mission: "mission-1".into(),
+    });
+    runtime.refresh_mission_events();
+    assert_eq!(
+        runtime.snapshot.mission_events.mission.as_deref(),
+        Some("mission-1")
+    );
+    assert_eq!(runtime.snapshot.mission_events.events.len(), 1);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "cause", "patch": {"status": "working"}}),
+    )
+    .unwrap();
+    runtime.refresh_mission_events();
+    assert_eq!(runtime.snapshot.mission_events.events.len(), 2);
+    // The events go with their mission's deleted session (D-22).
+    let session = runtime.missions.book.missions[0]
+        .conductor
+        .session
+        .clone()
+        .unwrap();
+    assert!(runtime.drop_missions_of(&[(session.device_id, session.session_id)]));
+    assert!(!runtime.missions.events.contains_key("mission-1"));
+    runtime.refresh_mission_events();
+    assert!(runtime.snapshot.mission_events.events.is_empty());
 }

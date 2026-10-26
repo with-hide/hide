@@ -3,8 +3,8 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { chipWords, conductedBy, firstPlans, flowShows, flowSpan, kindWord, missionCells, missionLegend, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, nodeBar, nodeResult, nodeTone, paneChipWords, launchModelOf, missionCounts, nodeLine, nodeMark, stackWaiting, stageWord, stepsOf, takeOverPrompt, takeOverProvider, workerWords } from "./missions";
-import type { Mission, MissionNode, SnapshotRest } from "./snapshot";
+import { chipWords, conductedBy, firstPlans, flowShows, flowSpan, kindWord, missionCells, missionLegend, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, nodeBar, nodeMarks, nodeResult, nodeTone, paneChipWords, launchModelOf, missionCounts, nodeLine, nodeMark, stackWaiting, stageWord, stepsOf, takeOverPrompt, takeOverProvider, workerWords } from "./missions";
+import type { Mission, MissionEvent, MissionNode, SnapshotRest } from "./snapshot";
 
 // What the map and the Conductor row read from a mission (PRD
 // software-factory-conductor B14-B21, B44, B46): the core decides every value,
@@ -14,11 +14,11 @@ const t = initializeInterfaceI18n("en").getFixedT(null, "translation");
 const contract = JSON.parse(fs.readFileSync(path.resolve(__dirname, "../../contracts/snapshot-wire-enums.json"), "utf8"));
 
 function node(key: string, extra: Partial<MissionNode> = {}): MissionNode {
-  return { key, title: key, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: null, started_at_unix_ms: null, finished_at_unix_ms: null, ...extra };
+  return { key, title: key, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: null, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, verdict: null, checks: null, ...extra };
 }
 
 function mission(id: string, extra: Partial<Mission> = {}): Mission {
-  return { id, title: `Mission ${id}`, workspace_id: "w", project: "/repo", checkout_path: "/repo", device_id: "mac", status: "running", scope: "pr", cap: 4, conductor: { pane_id: "p1", name: "conductor", agent_kind: "claude", session: { device_id: "mac", agent: "claude", session_id: "s-1" }, present: true }, nodes: [], merge_order: [], check: null, github: null, decision: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: 1, closed_at_unix_ms: null, running: 0, stale: false, github_stale: false, github_read_at_unix_ms: null, ...extra };
+  return { id, title: `Mission ${id}`, workspace_id: "w", project: "/repo", checkout_path: "/repo", device_id: "mac", status: "running", scope: "pr", cap: 4, conductor: { pane_id: "p1", name: "conductor", agent_kind: "claude", session: { device_id: "mac", agent: "claude", session_id: "s-1" }, present: true, takes_answers: true }, nodes: [], merge_order: [], check: null, github: null, decision: null, question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: 1, closed_at_unix_ms: null, running: 0, stale: false, github_stale: false, github_read_at_unix_ms: null, ...extra };
 }
 
 const rest = (items: Mission[]) => ({ missions: { items } }) as unknown as SnapshotRest;
@@ -234,4 +234,11 @@ describe("a first plan landing (PRD mission-pane-chip D-06, B12-B14)", () => {
     expect(firstPlans({} as SnapshotRest, rest([planned]))).toEqual([]);
     expect(firstPlans({ missions: { items: [], failed: "unreadable" } } as unknown as SnapshotRest, rest([planned]))).toEqual([]);
   });
+});
+
+it("marks a node's decision and each answer to it on its bar: delivered, not delivered, or not confirmed (B18, B26)", () => {
+  const event = (at: number, kind: MissionEvent["kind"], nodeKey = "screen"): MissionEvent => ({ at_unix_ms: at, kind, node: nodeKey });
+  const events = [event(0, "asked"), event(25, "answer_unconfirmed"), event(50, "answered"), event(75, "answer_undelivered"), event(80, "answered", "other")];
+  const marks = nodeMarks({ key: "screen" } as MissionNode, events, { from: 0, to: 100 });
+  expect(marks.map((mark) => [mark.at, mark.kind])).toEqual([[0, "asked"], [25, "unconfirmed"], [50, "answered"], [75, "undelivered"]]);
 });

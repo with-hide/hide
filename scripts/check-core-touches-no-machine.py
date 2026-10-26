@@ -80,6 +80,12 @@ STORES = {
     "herdr-core/src/links/store.rs": (6, "the core's link graph store"),
     "herdr-core/src/usage_ledger/store.rs": (1, "the core's usage ledger and retained daily totals"),
     "herdr-core/src/local_issues.rs": (5, "the core's local issue store"),
+    "herdr-core/src/mission_events.rs": (
+        4,
+        "the core's per-mission event logs beside missions.json, which a core move "
+        "copies; its folder is made, each log written, and an ended mission's log "
+        "deleted or swept",
+    ),
     "herdr-core/src/latest_file.rs": (
         4,
         "the write and read of a core store that keeps only its latest value "

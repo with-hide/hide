@@ -340,7 +340,20 @@ impl Core {
             let missions =
                 crate::missions::MissionStore::new(hide_kit::layout::missions(directory));
             let restored = missions.restore();
-            lock_recover(&runtime).install_mission_store(missions, restored);
+            let events = crate::mission_events::MissionEventStore::new(
+                hide_kit::layout::mission_events(directory),
+            );
+            let logs = match &restored {
+                crate::missions::Restored::Read(book) => {
+                    events.sweep(book.missions.iter().map(|mission| mission.id.as_str()));
+                    events.restore(book.missions.iter().map(|mission| mission.id.as_str()))
+                }
+                _ => std::collections::HashMap::new(),
+            };
+            let mut guard = lock_recover(&runtime);
+            guard.install_mission_store(missions, restored);
+            guard.install_mission_events(events, logs);
+            drop(guard);
         }
         // Before any coordinator starts, because each builds its label worker
         // on these, and before the kit runs, because the plugin state the

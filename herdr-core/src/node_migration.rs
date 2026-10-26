@@ -73,6 +73,8 @@ pub const MOVES_WITH_CORE: &[&str] = &[
     hide_kit::layout::PRODUCT_ANALYTICS_ID,
     LOCAL_ISSUES,
     MISSIONS,
+    // Mission ids and node keys only; no machine is named in it.
+    hide_kit::layout::MISSION_EVENTS,
     PROJECT_MEMORY,
     SESSION_SEARCH,
     FACTORY,

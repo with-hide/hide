@@ -168,6 +168,14 @@ pub fn missions(state_dir: &Path) -> PathBuf {
     state_dir.join("missions.json")
 }
 
+/// The folder of each mission's event history, one file per mission, deleted
+/// with its mission; its owner is the core's mission event store.
+pub const MISSION_EVENTS: &str = "mission-events";
+
+pub fn mission_events(state_dir: &Path) -> PathBuf {
+    state_dir.join(MISSION_EVENTS)
+}
+
 /// The last GitHub answer per project, restored when the daemon starts; its
 /// owner is the core's GitHub store.
 pub fn github_snapshot(state_dir: &Path) -> PathBuf {

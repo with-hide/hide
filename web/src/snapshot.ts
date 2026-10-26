@@ -1258,6 +1258,47 @@ export type MissionNodeStatus = "planned" | "working" | "waiting" | "review" | "
 /** Why a node waits on an earlier one (`mission_blocked`, D-46). */
 export type MissionBlocked = "upstream_failed" | "upstream_dropped";
 
+/** A verify node's verdict (`mission_verdict`, PRD mission-plan-visibility B33). */
+export type MissionVerdict = "pass" | "fail";
+
+/** What the Conductor asked beside its decision (`Question`, B25, B32); `key` names it, so an answer to a changed question is refused. */
+export type MissionQuestion = {
+  key: number;
+  why: string | null;
+  options?: string[];
+  /** The recommended option, counted from 1. */
+  recommend: number | null;
+  /** The node the decision stopped. */
+  node: string | null;
+  asked_at_unix_ms: number;
+};
+
+/** Where the operator's answer is (`mission_answer_state`, B26, B28). */
+export type MissionAnswerState = "sending" | "waiting" | "delivered" | "unconfirmed";
+/** The operator's answer from the banner (`AnswerView`); `option` counts from 1, none for a written answer. */
+export type MissionAnswer = { key: number; text: string; option: number | null; state: MissionAnswerState };
+/** Why the last answer did not reach the Conductor (`mission_answer_failure`, B28, B39). */
+export type MissionAnswerFailure = "conductor_gone" | "device_disconnected" | "send_failed";
+
+/** What a mission event records (`mission_event_kind`, B31). */
+export type MissionEventKind = "planned" | "replanned" | "node" | "retried" | "pr_opened" | "pr_merged" | "landed" | "asked" | "answered" | "answer_undelivered" | "answer_unconfirmed" | "reported" | "cancelled";
+
+/** One event of a mission (`MissionEvent`, D-15): only the fields its kind carries are present. */
+export type MissionEvent = {
+  at_unix_ms: number;
+  kind: MissionEventKind;
+  node?: string;
+  status?: MissionNodeStatus;
+  line?: string;
+  options?: string[];
+  count?: number;
+  pr?: number;
+  source?: "banner" | "conversation";
+};
+
+/** The events of the mission open in the 보기 slot (`MissionEventsSnapshot`, D-22): `dropped` past the 500 kept (B21). */
+export type MissionEventsSnapshot = { mission: string | null; events: MissionEvent[]; dropped: number };
+
 /** The agent a node or a candidate names, with its model and effort. */
 export type MissionWorker = { agent: string; model?: string | null; effort?: string | null; effort_auto?: boolean };
 
@@ -1289,6 +1330,10 @@ export type MissionNode = {
   criteria: string | null;
   started_at_unix_ms: number | null;
   finished_at_unix_ms: number | null;
+  /** A direct change's commit on main (B33). */
+  commit: string | null;
+  verdict: MissionVerdict | null;
+  checks: { passed: number; total: number } | null;
   /** The worker's own plan (PRD hide-plan D-17, D-18). */
   plan?: PlanView | null;
 };
@@ -1304,12 +1349,17 @@ export type Mission = {
   status: MissionStatus;
   scope: MissionScope;
   cap: number;
-  conductor: { pane_id: string; name: string; agent_kind: string; session: WorkSession | null; present: boolean };
+  /** `takes_answers`: its agent takes an answer typed from the banner, which the doorbell types only into the agents it rings (B26). */
+  conductor: { pane_id: string; name: string; agent_kind: string; session: WorkSession | null; present: boolean; takes_answers: boolean };
   nodes: MissionNode[];
   merge_order: string[];
   check: string | null;
   github: string | null;
   decision: string | null;
+  /** What the Conductor said beside `decision`; null for a decision from before it. */
+  question: MissionQuestion | null;
+  answer: MissionAnswer | null;
+  answer_failed: MissionAnswerFailure | null;
   delay: string | null;
   report: string | null;
   created_at_unix_ms: number;
@@ -2353,6 +2403,8 @@ export type SnapshotRest = {
   overview_graph?: OverviewGraphMetadata;
   /** Every mission and its map (PRD software-factory-conductor). */
   missions?: MissionsSnapshot;
+  /** The events of the mission open in the 보기 slot (PRD mission-plan-visibility D-22). */
+  mission_events?: MissionEventsSnapshot;
   /** Each pane's own plan (PRD hide-plan). */
   plans?: PlansSnapshot;
   git_worktrees_loading?: boolean;

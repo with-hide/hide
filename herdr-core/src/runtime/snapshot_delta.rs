@@ -96,6 +96,8 @@ impl Runtime {
         // A mission's map follows its workers, its Conductor's pane and its
         // pull requests; the section is sent again only when it moved.
         self.refresh_missions();
+        // The open mission's events, sent for that mission only.
+        self.refresh_mission_events();
         // A pane's plan follows its session and the plan book.
         self.refresh_plans();
         self.note_snapshot_sent();

@@ -137,7 +137,7 @@ const PR_URL = (number: number) => `https://example.com/${PLACE.project}/pull/${
 const NODE: Omit<MissionNode, "key" | "title" | "status" | "worker"> = {
   kind: "change", depends_on: [], blocked: null, delivery: "pr", agent_id: null, pane_id: null, machine: null,
   pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 1,
-  line: null, change: null, review: null, criteria: null, started_at_unix_ms: null, finished_at_unix_ms: null, plan: null,
+  line: null, change: null, review: null, criteria: null, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, verdict: null, checks: null, plan: null,
 };
 
 /** The plan's three nodes, as the record holds them at `stage`. */
@@ -178,9 +178,9 @@ function mission(model: MissionModel): Mission | null {
     id: MISSION_ID, title: TITLE, workspace_id: PLACE.project, project: PLACE.label, checkout_path: `/work/${PLACE.project}`, device_id: "local",
     status: "running", scope: "pr", cap: 2,
     // No session: this practice keeps no record to open.
-    conductor: { pane_id: CONDUCTOR, name: TITLE, agent_kind: "claude", session: null, present: true },
+    conductor: { pane_id: CONDUCTOR, name: TITLE, agent_kind: "claude", session: null, present: true, takes_answers: true },
     nodes: nodes(model), merge_order: ["config", "backoff"], check: "pnpm test", github: "practice-bot",
-    decision: model.stage === 1 ? DECISION : null, delay: null, report: null,
+    decision: model.stage === 1 ? DECISION : null, question: null, answer: null, answer_failed: null, delay: null, report: null,
     created_at_unix_ms: model.startedAt - 10 * 60_000, started_at_unix_ms: model.startedAt - 9 * 60_000, closed_at_unix_ms: null,
     running: 1, stale: false, github_stale: false, github_read_at_unix_ms: now,
   };

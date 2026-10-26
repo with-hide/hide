@@ -1,6 +1,7 @@
 // The real mission map and Settings › Conductor over invented values (PRD
 // software-factory-conductor), one state per `state` parameter: plan,
-// running, decision, stack, no-conductor, stale, failed, wide (a row wider
+// running, decision, decision-sent (its answer waiting for the Conductor's
+// turn), decision-unconfirmed (its answer typed without Herdr confirming it), stack, no-conductor, stale, failed, wide (a row wider
 // than the slot, shrunk to fit), done, cancelled, no-pr (a finished mission
 // with no pull request), settings. The Conductor pane's head with its mission
 // chip and pinned popover (PRD mission-pane-chip, mission-plan-visibility) is
@@ -16,7 +17,7 @@ import { requireInterfaceLanguage } from "../i18n/locale";
 import { MissionMap } from "../MissionMap";
 import { PaneWorkChip } from "../PaneMissionChip";
 import { ConductorTab } from "../settings/ConductorTab";
-import type { AgentRow, Mission, MissionNode, SnapshotRest } from "../snapshot";
+import type { AgentRow, Mission, MissionEvent, MissionNode, SnapshotRest } from "../snapshot";
 import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
 
@@ -33,7 +34,7 @@ const MINUTE = 60_000;
 const no = (n: number) => `#${n}`;
 
 function node(key: string, title: string, extra: Partial<MissionNode>): MissionNode {
-  return { key, title, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: null, started_at_unix_ms: null, finished_at_unix_ms: null, ...extra };
+  return { key, title, kind: "change", depends_on: [], status: "planned", blocked: null, delivery: "pr", worker: null, agent_id: null, pane_id: null, machine: null, pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 0, line: null, change: null, review: null, criteria: null, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, verdict: null, checks: null, ...extra };
 }
 
 const opus = (effort: string | null) => ({ agent: "claude", model: "Opus", effort, effort_auto: true });
@@ -64,9 +65,9 @@ function plan(state: string, now: number): MissionNode[] {
     // A release with no pull request: research, two direct changes on main and a check (PRD mission-plan-visibility B22, B23).
     return [
       node("rules", "열린 PR 정리 기준 정하기", { kind: "research", delivery: null, worker: opus("high"), ...done(180, 30), line: "19개 중 12개 닫기" }),
-      node("bump", "1.0.0 버전 커밋", { delivery: "direct", depends_on: ["rules"], worker: astra("medium"), ...done(150, 20), branch: "release/1.0.0", stage: 4 }),
+      node("bump", "1.0.0 버전 커밋", { delivery: "direct", depends_on: ["rules"], worker: astra("medium"), ...done(150, 20), branch: "release/1.0.0", stage: 4, commit: "c216793eb4a1" }),
       node("notes", "릴리스 노트", { delivery: "direct", depends_on: ["rules"], worker: sonnet, ...done(150, 40), branch: "release/notes", stage: 4 }),
-      node("agents", "Mac 에이전트 확인", { kind: "verify", delivery: null, depends_on: ["bump"], worker: astra("medium"), ...done(110, 50), line: "7개 항목 통과" }),
+      node("agents", "Mac 에이전트 확인", { kind: "verify", delivery: null, depends_on: ["bump"], worker: astra("medium"), ...done(110, 50), line: "7개 항목 통과", verdict: "pass", checks: { passed: 7, total: 7 } }),
       node("order", "배포 순서 확인", { kind: "research", delivery: null, depends_on: ["notes"], worker: opus("medium"), ...done(100, 20), line: "private 먼저, site 뒤" }),
     ];
   }
@@ -102,7 +103,7 @@ function plan(state: string, now: number): MissionNode[] {
     node("api", "API 추가", { worker: astra("high"), ...done(40, 17), pr: 1503, pr_state: state === "no-conductor" ? "merged" : "mergeable", stage: state === "no-conductor" ? 4 : 3 }),
     node("fix-1487", `${no(1487)} 수정`, { depends_on: ["cause"], worker: astra("medium"), ...(stack ? done(30, 12) : working(5)), pr: 1506, pr_state: stack ? "mergeable" : "pending", stage: stack ? 3 : 3 }),
     state === "decision"
-      ? node("screen", "API 쓰는 화면", { depends_on: ["api"], worker: astra("high"), status: "failed", started_at_unix_ms: ago(21), pr: 1504, base_pr: 1503, pr_state: "failed", stage: 3, attempts: 2, line: "CI 실패 · 시도 2/2", review: "리뷰 전 · CI 통과 뒤 시작" })
+      ? node("screen", "API 쓰는 화면", { depends_on: ["api"], worker: astra("high"), status: "held", started_at_unix_ms: ago(21), pr: 1504, base_pr: 1503, pr_state: "failed", stage: 3, attempts: 2, line: "CI 실패 · 시도 2/2", review: "리뷰 전 · CI 통과 뒤 시작" })
       : node("screen", "API 쓰는 화면", { depends_on: ["api"], worker: astra("high"), pane_id: stack ? null : SCREEN_PANE, ...(stack ? done(33, 33) : working(12)), status: stack ? "waiting" : "working", pr: 1504, base_pr: 1503, pr_state: state === "no-conductor" ? "pending" : "mergeable", stage: state === "no-conductor" ? 2 : 3, line: state === "no-conductor" ? "옮기기 필요" : stack ? `아래 ${no(1503)} 머지 대기` : null }),
     node("together", "함께 확인", { kind: "verify", delivery: null, depends_on: ["screen", "api"], worker: sonnet, ...(stack ? done(8, 4) : {}), line: stack ? "합친 변경 ✓" : null }),
   ];
@@ -111,15 +112,57 @@ function plan(state: string, now: number): MissionNode[] {
 /** How many minutes before now each state's mission started; the rest started 44 minutes ago. */
 const STARTED_AGO: Record<string, number> = { stack: 72, done: 300, cancelled: 300, "no-pr": 180 };
 
-function scene(state: string, now: number): { mission: Mission; rest: SnapshotRest } {
+/**
+ * The events a mission of these nodes would have recorded (PRD
+ * mission-plan-visibility D-15, B18): its plan, each node's start, review
+ * and end, its merges, the decision and the cancel.
+ */
+function history(mission: Mission, now: number): MissionEvent[] {
+  const start = mission.started_at_unix_ms;
+  if (start == null) return [];
+  const events: MissionEvent[] = [{ at_unix_ms: start, kind: "planned", count: mission.nodes.length }];
+  for (const one of mission.nodes) {
+    if (one.started_at_unix_ms == null) continue;
+    const begun = one.started_at_unix_ms;
+    const end = one.finished_at_unix_ms ?? now;
+    if (one.attempts >= 2) {
+      const failedAt = begun + (end - begun) * 0.35;
+      events.push({ at_unix_ms: begun, kind: "node", node: one.key, status: "working" });
+      events.push({ at_unix_ms: failedAt, kind: "node", node: one.key, status: "failed", line: "CI 실패" });
+      events.push({ at_unix_ms: failedAt + MINUTE, kind: "retried", node: one.key, count: 2 });
+      events.push({ at_unix_ms: failedAt + MINUTE, kind: "node", node: one.key, status: "working" });
+    } else events.push({ at_unix_ms: begun, kind: "node", node: one.key, status: "working" });
+    if (one.pr != null) events.push({ at_unix_ms: begun + (end - begun) * 0.4, kind: "pr_opened", node: one.key, pr: one.pr });
+    if (one.pr != null && one.finished_at_unix_ms != null) events.push({ at_unix_ms: begun + (end - begun) * 0.7, kind: "node", node: one.key, status: "review" });
+    if (one.status === "held") events.push({ at_unix_ms: now - 8 * MINUTE, kind: "node", node: one.key, status: "held", line: one.line ?? undefined });
+    if (one.finished_at_unix_ms != null && (one.status === "done" || one.status === "waiting")) {
+      events.push({ at_unix_ms: one.finished_at_unix_ms, kind: "node", node: one.key, status: one.status });
+      if (one.pr_state === "merged") events.push({ at_unix_ms: one.finished_at_unix_ms, kind: "pr_merged", node: one.key, pr: one.pr! });
+      if (one.commit) events.push({ at_unix_ms: one.finished_at_unix_ms, kind: "landed", node: one.key, line: one.commit });
+    }
+  }
+  if (mission.question) events.push({ at_unix_ms: mission.question.asked_at_unix_ms, kind: "asked", node: mission.question.node ?? undefined, line: mission.decision ?? undefined, options: mission.question.options });
+  if (mission.status === "cancelled" && mission.closed_at_unix_ms != null) events.push({ at_unix_ms: mission.closed_at_unix_ms, kind: "cancelled" });
+  if (mission.report && mission.closed_at_unix_ms != null) events.push({ at_unix_ms: mission.closed_at_unix_ms, kind: "reported" });
+  return events.sort((a, b) => a.at_unix_ms - b.at_unix_ms);
+}
+
+function scene(shown: string, now: number): { mission: Mission; rest: SnapshotRest } {
+  // An answer sent from the banner draws the decision with that answer on it.
+  const state = shown === "decision-sent" || shown === "decision-unconfirmed" ? "decision" : shown;
   const nodes = plan(state, now);
   const mission: Mission = {
     id: "mission-1", title: "이슈 정리", workspace_id: "hide", project: "/projects/herdr-ide", checkout_path: "/projects/herdr-ide", device_id: "local",
     status: state === "plan" ? "planning" : state === "stack" ? "merge_wait" : state === "done" || state === "no-pr" ? "done" : state === "cancelled" ? "cancelled" : "running",
     scope: "pr", cap: 4,
-    conductor: { pane_id: CONDUCTOR_PANE, name: "이슈 정리 · Conductor", agent_kind: "claude", session: { device_id: "local", agent: "claude", session_id: "scene-conductor" }, present: state !== "no-conductor" },
+    conductor: { pane_id: CONDUCTOR_PANE, name: "이슈 정리 · Conductor", agent_kind: "claude", session: { device_id: "local", agent: "claude", session_id: "scene-conductor" }, present: state !== "no-conductor", takes_answers: true },
     nodes, merge_order: ["api", "screen"], check: "cargo test && pnpm test", github: "octocat",
-    decision: state === "decision" ? "화면 PR 방식 선택" : state === "no-conductor" ? `${no(1503)}이 머지되어 ${no(1504)}를 옮겨야 해요` : null,
+    decision: state === "decision" ? "화면 PR을 어디에 올릴까요?" : state === "no-conductor" ? `${no(1503)}이 머지되어 ${no(1504)}를 옮겨야 해요` : null,
+    question: state === "decision"
+      ? { key: 2, why: `API PR ${no(1503)}이 아직 리뷰 중이라 그 위에 쌓으면 리베이스가 생길 수 있어요`, options: [`${no(1503)} 위에 쌓기`, `${no(1503)} 머지 뒤 main에서`, "화면 PR을 둘로 나누기"], recommend: 1, node: "screen", asked_at_unix_ms: now - 8 * MINUTE }
+      : null,
+    answer: shown === "decision-sent" || shown === "decision-unconfirmed" ? { key: 2, text: `${no(1503)} 위에 쌓기`, option: 1, state: shown === "decision-sent" ? "waiting" : "unconfirmed" } : null,
+    answer_failed: null,
     delay: null, report: state === "done" ? REPORT : state === "no-pr" ? "1.0.0 릴리스 끝. private 배포, 사이트 반영, floor 올림." : null,
     created_at_unix_ms: now - 320 * MINUTE,
     started_at_unix_ms: state === "plan" ? null : now - (STARTED_AGO[state] ?? 44) * MINUTE,
@@ -130,6 +173,7 @@ function scene(state: string, now: number): { mission: Mission; rest: SnapshotRe
   };
   const rest = {
     missions: state === "failed" ? { items: [], failed: "unreadable" } : { items: [mission] },
+    mission_events: { mission: mission.id, events: history(mission, now), dropped: 0 },
     navigator: { devices: [{ id: "local", kind: "local", label: "This Mac", kit: { agents: [
       { id: "claude-code", label: "Claude Code", availability: "available", enabled: true },
       { id: "codex", label: "Codex", availability: "available", enabled: true },

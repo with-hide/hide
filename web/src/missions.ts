@@ -9,7 +9,7 @@ import type { MessageKey } from "./i18n/catalogs";
 import { PROVIDER_KINDS, type ProviderKind } from "./agentPicker";
 import { agentsByPane } from "./paneAgents";
 import { orderByDependencies } from "./projectBoard";
-import type { AgentRow, AgentStartChoice, Mission, MissionNode, RowMark, SnapshotRest } from "./snapshot";
+import type { AgentRow, AgentStartChoice, Mission, MissionEvent, MissionEventsSnapshot, MissionNode, MissionVerdict, RowMark, SnapshotRest } from "./snapshot";
 
 export function missionOf(rest: SnapshotRest | null | undefined, id: string): Mission | null {
   return rest?.missions?.items.find((mission) => mission.id === id) ?? null;
@@ -293,31 +293,159 @@ export function stageWord(node: MissionNode): MessageKey {
 
 /**
  * What a node left behind, by its kind (B22, D-14): its pull request, a
- * direct change's branch, a research node's conclusion or a verify node's
- * line. A research or verify node's line is a result only once the node
- * ended (done, or a failed check); while it runs the line is its progress.
- * Null when the record holds none, so nothing is drawn for it.
+ * direct change's commit on main or else its branch, a research node's
+ * conclusion, a verify node's recorded verdict or else its line. A research
+ * or verify node's line is a result only once the node ended (done, or a
+ * failed check); while it runs the line is its progress. Null when the
+ * record holds none, so nothing is drawn for it.
  */
 export type NodeResult =
   | { kind: "pr"; number: number; state: MissionNode["pr_state"] }
+  | { kind: "commit"; commit: string }
   | { kind: "branch"; branch: string }
   | { kind: "conclusion"; line: string }
+  | { kind: "verdict"; verdict: MissionVerdict; checks: { passed: number; total: number } | null }
   | { kind: "verify"; line: string };
 
 export function nodeResult(node: MissionNode): NodeResult | null {
   if (node.pr != null) return { kind: "pr", number: node.pr, state: node.pr_state };
-  if (node.kind === "change") return node.branch ? { kind: "branch", branch: node.branch } : null;
+  if (node.kind === "change") return node.commit ? { kind: "commit", commit: node.commit } : node.branch ? { kind: "branch", branch: node.branch } : null;
+  if (node.kind === "verify" && node.verdict) return { kind: "verdict", verdict: node.verdict, checks: node.checks };
   if (!node.line) return null;
   if (node.kind === "research") return node.status === "done" ? { kind: "conclusion", line: node.line } : null;
   return node.status === "done" || node.status === "failed" ? { kind: "verify", line: node.line } : null;
 }
 
-/** A finished or cancelled mission's results (B11, B23, B24): each done node that left something, in order. */
+/** A commit as the results show it: its first seven digits. */
+export function shortCommit(commit: string): string {
+  return commit.slice(0, 7);
+}
+
+/** A finished or cancelled mission's results (B11, B23, B24): each done node that left something, and a verify node with its verdict, in order. */
 export function missionResults(mission: Mission): { node: MissionNode; result: NodeResult }[] {
   return orderedNodes(mission).flatMap((node) => {
-    const result = node.status === "done" ? nodeResult(node) : null;
+    const result = node.status === "done" || (node.kind === "verify" && node.verdict) ? nodeResult(node) : null;
     return result ? [{ node, result }] : [];
   });
+}
+
+/** The events the core sends for `missionId`, which it does only for the mission open in the 보기 slot (D-22). */
+export function missionEventsOf(rest: SnapshotRest | null | undefined, missionId: string): MissionEventsSnapshot | null {
+  const events = rest?.mission_events;
+  return events && events.mission === missionId ? events : null;
+}
+
+/** One stretch of a node's bar (B18): worked, in review, an attempt that failed, or stopped on a decision or a free place. */
+export type SegmentTone = "worked" | "review" | "failed" | "paused";
+/** A mark on a bar or on the axis (B18, B31): ⑂ a merge, ↓ main, ! a decision, ✓ its answer, ⊘ an answer not delivered, ✎ a replan, × the cancel. */
+export type FlowMarkKind = "merged" | "landed" | "asked" | "answered" | "undelivered" | "unconfirmed" | "replanned" | "cancelled";
+
+/** The marks a decision leaves, wherever it sits. */
+function decisionMark(event: MissionEvent): FlowMarkKind | null {
+  switch (event.kind) {
+    case "asked":
+      return "asked";
+    case "answered":
+      return "answered";
+    case "answer_undelivered":
+      return "undelivered";
+    case "answer_unconfirmed":
+      return "unconfirmed";
+    default:
+      return null;
+  }
+}
+
+/** Where on the axis a moment falls, as a percentage. */
+function axisAt(at: number, span: { from: number; to: number }): number {
+  return ((Math.min(Math.max(at, span.from), span.to) - span.from) / (span.to - span.from)) * 100;
+}
+
+/**
+ * A node's bar from its events (B18): from each status it moved to until the
+ * next, a working stretch that ended in a failure red, a finished node's
+ * bar ending where it finished, and a node still at work running to the
+ * axis end, its end `live` while the mission is open. Null when the node has
+ * no status event, as in a mission recorded before its events, so the bar
+ * is the one its times draw (B19).
+ */
+export function nodeSegments(mission: Mission, node: MissionNode, events: MissionEvent[], span: { from: number; to: number }): { segments: { left: number; width: number; tone: SegmentTone }[]; live: boolean } | null {
+  const moves = events.filter((event) => event.kind === "node" && event.node === node.key && event.status);
+  if (moves.length === 0) return null;
+  const segments: { left: number; width: number; tone: SegmentTone }[] = [];
+  moves.forEach((move, index) => {
+    const next = moves[index + 1];
+    const status = move.status!;
+    if (status === "done" || status === "dropped" || (status === "failed" && !next)) return;
+    const end = next?.at_unix_ms ?? span.to;
+    const tone: SegmentTone = status === "working" ? (next?.status === "failed" ? "failed" : "worked") : status === "review" ? "review" : "paused";
+    const left = axisAt(move.at_unix_ms, span);
+    const width = axisAt(end, span) - left;
+    if (width > 0) segments.push({ left, width, tone });
+  });
+  const last = moves[moves.length - 1]!.status;
+  return { segments, live: missionOpen(mission) && (last === "working" || last === "review") };
+}
+
+/** The marks on a node's bar (B18): its merges, its commits on main and the decisions that named it. */
+export function nodeMarks(node: MissionNode, events: MissionEvent[], span: { from: number; to: number }): { at: number; kind: FlowMarkKind; event: MissionEvent }[] {
+  return events.flatMap((event) => {
+    if (event.node !== node.key) return [];
+    const kind: FlowMarkKind | null = event.kind === "pr_merged" ? "merged" : event.kind === "landed" ? "landed" : decisionMark(event);
+    return kind ? [{ at: axisAt(event.at_unix_ms, span), kind, event }] : [];
+  });
+}
+
+/** The marks on the axis itself (B18, B24, B31): each replan, a decision that named no node with its answer, and the cancel. */
+export function axisMarks(events: MissionEvent[], span: { from: number; to: number }): { at: number; kind: FlowMarkKind; event: MissionEvent }[] {
+  return events.flatMap((event) => {
+    const kind: FlowMarkKind | null = event.kind === "replanned" ? "replanned" : event.kind === "cancelled" ? "cancelled" : event.node ? null : decisionMark(event);
+    return kind ? [{ at: axisAt(event.at_unix_ms, span), kind, event }] : [];
+  });
+}
+
+/** An event in words (B20, B31): what happened, and the one line it carried. */
+export function eventWords(event: MissionEvent, t: TFunction<"translation">): { what: string; line: string | null } {
+  const line = event.line ?? null;
+  switch (event.kind) {
+    case "planned":
+      return { what: t("mission.event.planned", { count: event.count ?? 0 }), line: null };
+    case "replanned":
+      return { what: t("mission.event.replanned", { count: event.count ?? 0 }), line };
+    case "node":
+      return { what: event.status ? t(`mission.status.${event.status}`) : t("mission.event.node"), line };
+    case "retried":
+      return { what: t("mission.event.retried", { count: event.count ?? 0 }), line: null };
+    case "pr_opened":
+      return { what: t("mission.event.prOpened", { number: String(event.pr ?? "") }), line: null };
+    case "pr_merged":
+      return { what: t("mission.event.prMerged", { number: String(event.pr ?? "") }), line: null };
+    case "landed":
+      return { what: t("mission.event.landed"), line: line ? shortCommit(line) : null };
+    case "asked":
+      return { what: t("mission.event.asked"), line: [line, ...(event.options ?? [])].filter(Boolean).join(" / ") || null };
+    case "answered":
+      return { what: t(event.source === "banner" ? "mission.event.answered.banner" : "mission.event.answered.conversation"), line };
+    case "answer_undelivered":
+      return { what: t("mission.event.undelivered"), line };
+    case "answer_unconfirmed":
+      return { what: t("mission.event.unconfirmed"), line };
+    case "reported":
+      return { what: t("mission.event.reported"), line: null };
+    case "cancelled":
+      return { what: t("mission.event.cancelled"), line: null };
+  }
+}
+
+/**
+ * The question a held node's `!` carries (B16, B25): the mission's decision
+ * on the node it names, or on every held node when it names none, as a
+ * decision from before `--node` did.
+ */
+export function heldQuestion(mission: Mission, node: MissionNode): string | null {
+  if (node.status !== "held" || nodeTone(mission, node) === "cancelled" || !mission.decision) return null;
+  const named = mission.question?.node;
+  return named == null || named === node.key ? mission.decision : null;
 }
 
 /** The flow table's time axis (B17): the mission's start to its close, or to now while it is open. */

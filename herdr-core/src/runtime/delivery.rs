@@ -1487,15 +1487,12 @@ impl Runtime {
         Ok(current.clone())
     }
 
-    /// The final memory guard immediately before the off-lock pane write.
-    /// The refusal names what moved since the verdict, for the diagnostic
-    /// log.
-    pub(crate) fn delivery_bell_current(
+    /// The pane as it is now, if nothing moved since `observed`: the same
+    /// agent and session, status, state sequence and last input.
+    pub(crate) fn delivery_pane_unmoved(
         &self,
-        id: &str,
         observed: &Observation,
-        reserved: Option<u8>,
-    ) -> Result<(), crate::delivery::doorbell::Hold> {
+    ) -> Result<&Observation, crate::delivery::doorbell::Hold> {
         use crate::delivery::doorbell::Hold;
         let current = self
             .delivery_observations
@@ -1512,6 +1509,20 @@ impl Runtime {
         if current.last_input_at_unix_ms != observed.last_input_at_unix_ms {
             return Err(Hold::Input);
         }
+        Ok(current)
+    }
+
+    /// The final memory guard immediately before the off-lock pane write.
+    /// The refusal names what moved since the verdict, for the diagnostic
+    /// log.
+    pub(crate) fn delivery_bell_current(
+        &self,
+        id: &str,
+        observed: &Observation,
+        reserved: Option<u8>,
+    ) -> Result<(), crate::delivery::doorbell::Hold> {
+        use crate::delivery::doorbell::Hold;
+        let current = self.delivery_pane_unmoved(observed)?;
         let now = unix_milliseconds();
         let letter = self
             .delivery_ledger
@@ -2004,6 +2015,40 @@ pub(crate) mod tests {
             node: Arc::new(hide_node::Local::of_process()),
         });
         observation
+    }
+
+    /// `pane` conducts a running mission in `/checkouts/fixture` whose
+    /// decision `Which base?` the operator answered `main` from the banner.
+    pub(crate) fn answered_mission(runtime: &mut Runtime, pane: &str) {
+        runtime
+            .worktree_catalog
+            .projects
+            .push(crate::model::ProjectWorktreesSnapshot {
+                root_path: "/checkouts/fixture".into(),
+                ..Default::default()
+            });
+        let context = authority(&observed(runtime, pane).actor).context;
+        for command in [
+            json!({"op": "create", "title": "Fix the bug"}),
+            json!({"op": "plan", "plan": {"nodes": [{"key": "fix", "title": "Fix it", "kind": "change", "delivery": "pr"}]}}),
+            json!({"op": "start"}),
+            json!({"op": "decide", "line": "Which base?"}),
+        ] {
+            runtime
+                .mission_command(
+                    crate::node::TEST_NODE,
+                    pane,
+                    &context,
+                    serde_json::from_value(command).unwrap(),
+                )
+                .unwrap();
+        }
+        assert!(runtime.mission_answer_event("mission-1", 1, None, Some("main".into()), false));
+    }
+
+    /// The banner's answer to that mission's decision.
+    pub(crate) fn mission_answer(runtime: &Runtime) -> Option<crate::missions::Answer> {
+        runtime.missions.book.missions[0].answer.clone()
     }
 
     /// The pane as the core observes it now.

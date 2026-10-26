@@ -11,9 +11,11 @@ hide mission create --title <title> [--scope pr|merge] [--cap <n>] [--github <ac
 hide mission plan [--mission <id>] (--file <plan.json> | --json <plan>)
 hide mission node <key> [--status <status>] [--agent-id <id>] [--pr <n>] [--base-pr <n>] [--branch <name>]
                         [--attempts <n>] [--line <text>] [--change <text>] [--review <text>]
+                        [--commit <sha>] [--verdict pass|fail] [--checks <passed>/<total>]
                         [--no-agent-id] [--no-pr] [--no-base-pr] [--no-branch] [--no-line] [--no-change] [--no-review]
+                        [--no-commit] [--no-verdict] [--no-checks]
 hide mission start
-hide mission decide (--line <text> | --clear)
+hide mission decide (--line <text> [--why <text>] [--option <text>]... [--recommend <n>] [--node <key>] | --clear)
 hide mission delay (--line <text> | --clear)
 hide mission close --as done|merge_wait|cancelled [--report <text> | --report-file <path>]
 hide mission reopen
@@ -126,6 +128,8 @@ Every worker's brief, change or verify, says in its first line what the node is,
 ## 4. While it runs
 
 - Keep each node's line current: `--line` says what it does now, its conclusion or its check's result; `--pr`, `--base-pr` and `--branch` name what it made.
+  When a `direct` change reaches main, record its commit with `--commit <sha>`; when a `verify` node ends, record `--verdict pass|fail` and `--checks <passed>/<total>`.
+  Hide refuses them on any other kind of node, and the map shows them as the node's result.
 - Hide wakes you with a letter when one of the mission's pull requests merges, gets a review asking for changes, or gets a new commit.
   When a lower pull request of a stack changes, bring the change into the one above it with a merge, never a rebase.
 - Never force push and never rebase; the repository's own rules (merge commands, checks before a merge) come first.
@@ -133,7 +137,10 @@ Every worker's brief, change or verify, says in its first line what the node is,
   The same problem unsolved after two attempts goes to the operator with what you tried and what you need decided.
 - Ask at once, without attempts, when the goal, the finish line or the scope would change, or when only a person can act (a login that expired, an approval a branch rule needs, a permission refused).
   If `gh` stops being signed in, the account changes, or GitHub refuses a permission, stop all GitHub work and ask.
-- When you need the operator, ask in conversation and put the one line on the map: `hide mission decide --line <what to decide>`; clear it with `--clear` once answered.
+- When you need the operator, ask in conversation and put the question on the map: `hide mission decide --line <what to decide>`; clear it with `--clear` once answered.
+  When the answer is one of a few choices, give each with `--option` (at most 5, one line each), mark the one you would take with `--recommend <its number, from 1>`, say in one line why it matters with `--why`, and name the node it stopped with `--node`, which you also set `--status held`.
+  The operator can then answer on the map: the answer arrives in this conversation as their own message, `[판단 답] <your question> → <their answer>` (worded in their language), and you act on it as if they had typed it, then clear the decision.
+  Changing the question with another `decide --line` drops an answer you have not received yet, so ask again only when the question really changed.
 - An upstream node that failed or was dropped holds everything after it; the map shows it waiting. Replan before anything after it starts.
 
 ## 5. Instructions

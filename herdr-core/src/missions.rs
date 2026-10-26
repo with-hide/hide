@@ -41,6 +41,13 @@ const TOUCH_LIMIT: usize = 32;
 const TITLE_LIMIT: usize = 200;
 const LINE_LIMIT: usize = 600;
 const REPORT_LIMIT: usize = 16 * 1024;
+/// Choices one decision offers the operator (PRD mission-plan-visibility
+/// B32), each short enough to be a button.
+pub const OPTION_LIMIT: usize = 5;
+const OPTION_TEXT_LIMIT: usize = 120;
+/// The longest answer the operator writes in the banner (B27), counted in
+/// characters as the banner counts them.
+pub const ANSWER_LIMIT: usize = 500;
 const READ_CAP: u64 = 8 * 1024 * 1024;
 /// The size a change may bring the saved book to: under the read cap with
 /// room for the file's own framing, so what is written is always read back.
@@ -191,6 +198,73 @@ impl WakeEvent {
     }
 }
 
+/// A verify node's result (PRD mission-plan-visibility B33).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Verdict {
+    Pass,
+    Fail,
+}
+
+/// How many of a verify node's checks passed.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Checks {
+    pub passed: u32,
+    pub total: u32,
+}
+
+/// What the Conductor asks the operator beside its question (PRD
+/// mission-plan-visibility D-13, B25, B32). `key` names this question, so an
+/// answer to one the Conductor has since changed is refused (B26).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Question {
+    pub key: u64,
+    #[serde(default)]
+    pub why: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<String>,
+    /// The recommended option, counted from 1 as the command names it.
+    #[serde(default)]
+    pub recommend: Option<u8>,
+    /// The node the decision stopped.
+    #[serde(default)]
+    pub node: Option<String>,
+    pub asked_at_unix_ms: u64,
+}
+
+/// The operator's answer to the question with `key`, from the banner (B26):
+/// kept until it is typed into the Conductor's conversation, so a restart
+/// neither loses nor repeats it (engineering #11).
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Answer {
+    pub key: u64,
+    pub text: String,
+    /// The option it chose, counted from 1; none for a written answer.
+    #[serde(default)]
+    pub option: Option<u8>,
+    pub at_unix_ms: u64,
+    #[serde(default)]
+    pub delivered: bool,
+    /// Typing it may have reached the conversation without Herdr saying so:
+    /// it is not typed again until the operator sends it again (B26).
+    #[serde(default)]
+    pub unconfirmed: bool,
+}
+
+/// Why the operator's last answer from the banner did not reach the
+/// Conductor (B28, B39).
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnswerFailure {
+    /// No Conductor runs the mission to read it.
+    ConductorGone,
+    /// The device the mission's project is on does not answer.
+    DeviceDisconnected,
+    /// Typing it into the conversation failed.
+    SendFailed,
+}
+
 /// Wakes a mission keeps unsent; past this the oldest is dropped and
 /// logged, and the Conductor's own `hide mission show` still reads the
 /// pull request as it is.
@@ -241,6 +315,13 @@ pub struct MissionNode {
     pub finished_at_unix_ms: Option<u64>,
     #[serde(default)]
     pub pr_seen: Option<PrSeen>,
+    /// A direct change's commit on main (B22, B33).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<Verdict>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checks: Option<Checks>,
 }
 
 /// The session that conducts a mission (D-23). `actor` is the delivery
@@ -294,6 +375,20 @@ pub struct Mission {
     /// What the operator has to decide now; the map's one line (B17).
     #[serde(default)]
     pub decision: Option<String>,
+    /// What the Conductor said beside that line; none for a mission written
+    /// before it, whose decision is a line alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question: Option<Question>,
+    /// How many questions this mission has asked; the next one's key.
+    #[serde(default)]
+    pub question_seq: u64,
+    /// The operator's answer from the banner to the current question.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer: Option<Answer>,
+    /// Why the last answer from the banner did not reach the Conductor,
+    /// shown once beside the question until the next answer (B28).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer_failed: Option<AnswerFailure>,
     /// Why new nodes wait on usage (B13).
     #[serde(default)]
     pub delay: Option<String>,
@@ -551,7 +646,8 @@ pub enum MissionCommand {
         #[serde(default)]
         mission: Option<String>,
     },
-    /// Sets or clears the operator's one line (B17).
+    /// Sets or clears the operator's one line (B17), with its reason,
+    /// choices, recommended choice and stopped node (B32).
     Decide {
         #[serde(default)]
         mission: Option<String>,
@@ -559,6 +655,14 @@ pub enum MissionCommand {
         /// out is refused rather than read as a clear.
         #[serde(deserialize_with = "present")]
         line: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        why: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        options: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        recommend: Option<u8>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        node: Option<String>,
     },
     /// Sets or clears why new nodes wait on usage (B13).
     Delay {
@@ -610,7 +714,26 @@ impl MissionCommand {
             | Self::Reopen { mission }
             | Self::Show { mission } => id_ok(mission),
             Self::Node { mission, node, .. } => id_ok(mission) && valid_key(node),
-            Self::Decide { mission, line } | Self::Delay { mission, line } => {
+            Self::Decide {
+                mission,
+                line,
+                why,
+                options,
+                node,
+                ..
+            } => {
+                // The choices' count and length are refused with their own
+                // reasons (`check_question`); here only a frame no command
+                // could mean is.
+                id_ok(mission)
+                    && line
+                        .as_deref()
+                        .is_none_or(|line| valid_text(line, LINE_LIMIT))
+                    && valid_line(why, LINE_LIMIT)
+                    && options.len() <= NODE_LIMIT
+                    && node.as_deref().is_none_or(valid_key)
+            }
+            Self::Delay { mission, line } => {
                 id_ok(mission)
                     && line
                         .as_deref()
@@ -739,6 +862,25 @@ pub struct NodePatch {
         skip_serializing_if = "Option::is_none"
     )]
     pub worker: Option<Option<Worker>>,
+    /// A direct change's commit on main (B33).
+    #[serde(
+        default,
+        deserialize_with = "double",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub commit: Option<Option<String>>,
+    #[serde(
+        default,
+        deserialize_with = "double",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub verdict: Option<Option<Verdict>>,
+    #[serde(
+        default,
+        deserialize_with = "double",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub checks: Option<Option<Checks>>,
 }
 
 fn null_is_empty<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
@@ -883,6 +1025,9 @@ pub(crate) fn apply_plan(
                 started_at_unix_ms: None,
                 finished_at_unix_ms: None,
                 pr_seen: None,
+                commit: None,
+                verdict: None,
+                checks: None,
             });
             node.title.clone_from(&input.title);
             node.kind = input.kind;
@@ -943,6 +1088,25 @@ pub(crate) fn apply_patch(
     {
         return Err("mission_text_invalid".into());
     }
+    // A commit is a direct change's and a verdict a verify node's (B33).
+    let direct = node.kind == NodeKind::Change && node.delivery == Some(Delivery::Direct);
+    if (patch.commit.is_some() && !direct)
+        || ((patch.verdict.is_some() || patch.checks.is_some()) && node.kind != NodeKind::Verify)
+    {
+        return Err("mission_field_kind_invalid".into());
+    }
+    if patch.commit.as_ref().is_some_and(|commit| {
+        commit
+            .as_deref()
+            .is_some_and(|commit| !valid_commit(commit))
+    }) {
+        return Err("mission_commit_invalid".into());
+    }
+    if patch.checks.as_ref().is_some_and(|checks| {
+        checks.is_some_and(|checks| checks.total == 0 || checks.passed > checks.total)
+    }) {
+        return Err("mission_checks_invalid".into());
+    }
     if let Some(Some(worker)) = &patch.worker {
         check_worker(
             &worker.agent,
@@ -978,6 +1142,9 @@ pub(crate) fn apply_patch(
     take!(change);
     take!(review);
     take!(worker);
+    take!(commit);
+    take!(verdict);
+    take!(checks);
     if patch.pr.is_some() && next.pr != node.pr {
         // A new pull request starts its own wakes from what GitHub says now.
         next.pr_seen = None;
@@ -986,6 +1153,45 @@ pub(crate) fn apply_patch(
         next.attempts = attempts;
     }
     Ok(next)
+}
+
+/// A commit as Git names one: 7 to 64 hexadecimal digits.
+fn valid_commit(value: &str) -> bool {
+    (7..=64).contains(&value.len()) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// The question a `decide` asks, or why it is refused (B32): its choices
+/// within their count and length, a recommendation that names one of them,
+/// and a node of the plan. A clear carries nothing beside it.
+pub(crate) fn check_question(
+    mission: &Mission,
+    line: Option<&str>,
+    why: Option<&str>,
+    options: &[String],
+    recommend: Option<u8>,
+    node: Option<&str>,
+) -> Result<(), String> {
+    if line.is_none()
+        && (why.is_some() || !options.is_empty() || recommend.is_some() || node.is_some())
+    {
+        return Err("mission_question_without_line".into());
+    }
+    if options.len() > OPTION_LIMIT {
+        return Err("mission_options_too_many".into());
+    }
+    if options
+        .iter()
+        .any(|option| !valid_text(option, OPTION_TEXT_LIMIT) || option.contains('\n'))
+    {
+        return Err("mission_option_invalid".into());
+    }
+    if recommend.is_some_and(|choice| choice == 0 || usize::from(choice) > options.len()) {
+        return Err("mission_recommend_invalid".into());
+    }
+    if node.is_some_and(|key| mission.node(key).is_none()) {
+        return Err("mission_node_unknown".into());
+    }
+    Ok(())
 }
 
 /// Where another open mission touches the same issue or path as one of this
@@ -1095,6 +1301,21 @@ pub fn next_action(code: &str) -> &'static str {
         }
         "mission_model_missing" => {
             "Name the model of every worker that takes one: fill it from the candidate's fixed model, your choice from the catalog, or the catalog's cli_default_model"
+        }
+        "mission_question_without_line" => {
+            "Give --why, --option, --recommend and --node with --line; --clear takes none of them"
+        }
+        "mission_options_too_many" => "Offer at most 5 options; leave the rest to the conversation",
+        "mission_option_invalid" => "Write each option as one line of at most 120 characters",
+        "mission_recommend_invalid" => {
+            "Recommend an option by its number, counted from 1 in the order of --option"
+        }
+        "mission_field_kind_invalid" => {
+            "Record --commit on a direct change node and --verdict or --checks on a verify node"
+        }
+        "mission_commit_invalid" => "Give the commit as 7 to 64 hexadecimal digits",
+        "mission_checks_invalid" => {
+            "Give --checks as <passed>/<total> with total above 0 and passed at most total"
         }
         "mission_text_invalid" | "mission_plan_invalid" => {
             "Check the command's text and JSON and retry"
@@ -1278,6 +1499,10 @@ mod tests {
             check: None,
             github: None,
             decision: None,
+            question: None,
+            question_seq: 0,
+            answer: None,
+            answer_failed: None,
             delay: None,
             report: None,
             created_at_unix_ms: 1,

@@ -156,6 +156,7 @@ section!(RestSections, Snapshot, s, {
     delivery_watches: Vec<crate::delivery::watch::View> => s.delivery_watches,
     overview_graph: OverviewGraphSnapshot => s.overview_graph,
     missions: crate::runtime::missions::MissionsSnapshot => s.missions,
+    mission_events: crate::runtime::mission_events::MissionEventsSnapshot => s.mission_events,
     plans: crate::runtime::plans::PlansSnapshot => s.plans,
     sessions: SessionsSnapshot => s.sessions,
     card: CheckoutCardSnapshot => s.card,
