@@ -71,14 +71,20 @@ pub struct ProjectState {
     pub last_run_at_unix_ms: Option<u64>,
     #[serde(default)]
     pub last_run_end: Option<String>,
-    /// When lines were raised, for the week's cap and the quiet fortnight;
-    /// only the last [`policy::QUIET_SPAN_MS`] are kept.
+    /// When lines were raised, for the week's cap; only the last
+    /// [`policy::WEEK_MS`] are kept.
     #[serde(default)]
     pub raised_at: Vec<u64>,
     /// The machine and folder the Project was last named from, where an
     /// automatic attempt starts and an attempt is followed (B13, B21).
     #[serde(default)]
     pub location: Option<ProjectLocation>,
+    /// Since when the Project has raised nothing: its first look at what
+    /// rose, then its last raise. A Normal Project quiet for
+    /// [`policy::QUIET_SPAN_MS`] from it raises its strongest line under the
+    /// threshold (D-10).
+    #[serde(default)]
+    pub quiet_since: Option<u64>,
     /// The last run failed, so nothing rose from it: the Project shows
     /// `조사 못 함` and the next run investigates even with no new records.
     #[serde(default)]

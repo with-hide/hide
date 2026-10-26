@@ -1070,15 +1070,21 @@ impl Worker {
             .collect::<Vec<_>>();
         state
             .raised_at
-            .retain(|at| now.saturating_sub(*at) < policy::QUIET_SPAN_MS);
+            .retain(|at| now.saturating_sub(*at) < policy::WEEK_MS);
+        let first_look = state.quiet_since.is_none();
+        let quiet_since = *state.quiet_since.get_or_insert(now);
         let chosen = scoring::choose(
             &scored,
             open,
             &state.raised_at,
+            quiet_since,
             state.settings.quantity,
             now,
         );
         if chosen.is_empty() {
+            if first_look && let Err(code) = store.save_state(project, &state) {
+                log_store("raise", &code);
+            }
             return;
         }
         for id in &chosen {
@@ -1097,6 +1103,7 @@ impl Worker {
                 return log_store("raise", &code);
             }
             state.raised_at.push(now);
+            state.quiet_since = Some(now);
             crate::diagnostic!(json!({
                 "component": "suggestions", "kind": "line.raised",
                 "project_id": project, "line": id.0, "points": (points * 100.0).round() / 100.0,
@@ -1742,6 +1749,34 @@ mod tests {
             SuggestionsStatus::Idle,
             "a row waits to be chosen"
         );
+    }
+
+    /// D-10: a new Project's first look raises nothing under Normal's
+    /// threshold; only fourteen quiet days from that look raise its
+    /// strongest line: not on day 13, on day 14.
+    #[test]
+    fn a_weak_line_waits_fourteen_quiet_days_from_the_first_look() {
+        let fixture = Fixture::new();
+        fixture.open();
+        fixture.fail_in_sessions("cargo test", &["s1"]);
+        fixture.wake_and_wait_out_the_delay();
+        let read = fixture.read_until(|read| read.status == SuggestionsStatus::NoneToday);
+        assert!(chosen(&read).is_empty(), "day 0");
+
+        let looked = fixture.clock.load(Ordering::SeqCst);
+        fixture
+            .clock
+            .store(looked + 13 * policy::DAY_MS, Ordering::SeqCst);
+        fixture.wake_and_wait_out_the_delay();
+        let read = fixture.read_until(|read| read.status == SuggestionsStatus::NoneToday);
+        assert!(chosen(&read).is_empty(), "day 13");
+
+        fixture
+            .clock
+            .store(looked + 14 * policy::DAY_MS, Ordering::SeqCst);
+        fixture.wake_and_wait_out_the_delay();
+        let read = fixture.read_until(|read| !chosen(read).is_empty());
+        assert_eq!(chosen(&read), ["s1"], "day 14");
     }
 
     /// An investigation that fails on the days `fails` says, and otherwise
