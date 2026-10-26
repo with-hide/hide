@@ -544,7 +544,7 @@ A line's pain is counted from its records (`scoring`): each session record weigh
 
 `suggestions.sqlite3` in the daemon's state folder (`hide_kit::layout::suggestions_store`) holds the records, the notebooks and each Project's settings, and moves with the core like the Memory store.
 A Project keeps records for 90 days and at most 20,000 of them, and a notebook of at most 200 lines: a new line first takes the place of the oldest struck or finished line no work holds, then of the oldest line that never rose, and a notebook of raised and busy lines alone refuses it (D-46).
-One worker thread owns its only writer and takes commands over a bounded queue of 256; the runtime lock is taken only to hand a command over and to lay the worker's read on the snapshot, and a store that cannot be read is set aside and rebuilt empty, which the log records.
+One worker thread owns its only writer and takes commands over a bounded queue of 256: the runtime hands a command over without waiting, and a full queue drops it with a diagnostic, while a run's own thread waits for room to hand over its edits and its end, so a run is never left held; the runtime lock is taken only to hand a command over and to lay the worker's read on the snapshot, and a store that cannot be read is set aside and rebuilt empty, which the log records.
 What only the lock knows is laid on the worker's read as it is published: whether Hide AI can investigate, GitHub's answer for the Project, the signals that cannot record here (corrections with Memory off, pull request signals without GitHub) and the `GitHub 연결 필요` hold on a line whose outcome is a pull request.
 
 The day's runs start three minutes after the operator is back at the machine, once a local day per Project, one Project at a time.

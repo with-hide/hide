@@ -278,6 +278,17 @@ impl SuggestionClient {
     }
 }
 
+impl SuggestionClient {
+    /// Hands `command` over, waiting for room: a run's own thread delivers
+    /// its edits and its end this way, so a full queue delays them and never
+    /// drops them, which would leave the run held forever. Never called
+    /// under the runtime lock. A worker stopping a run drains its queue, so
+    /// this answers false once the worker is gone rather than waiting on it.
+    fn deliver(&self, command: Command) -> bool {
+        self.0.send(command).is_ok()
+    }
+}
+
 impl SuggestionWorker {
     pub(crate) fn spawn(options: Options, sink: impl Sink) -> Result<Self, String> {
         let (sender, receiver) = mpsc::sync_channel(QUEUE);
@@ -1234,7 +1245,7 @@ impl Worker {
                 let mut analysis = analysis;
                 let mut pen = pen;
                 let end = analysis.run(&input, &mut pen);
-                pen.client.send(Command::RunEnded {
+                pen.client.deliver(Command::RunEnded {
                     project: input.project_id.clone(),
                     end,
                     edits: pen.edits,
@@ -1410,18 +1421,11 @@ impl NotebookPen for ChannelPen {
 
     fn write(&mut self, edit: NotebookEdit) -> Result<Written, PenRefused> {
         let (reply, answer) = mpsc::channel();
-        // The run thread may wait for room in the queue; it is never the
-        // runtime lock's holder.
-        if self
-            .client
-            .0
-            .send(Command::Pen {
-                project: self.project.clone(),
-                edit,
-                reply,
-            })
-            .is_err()
-        {
+        if !self.client.deliver(Command::Pen {
+            project: self.project.clone(),
+            edit,
+            reply,
+        }) {
             return Err(PenRefused::Stopped);
         }
         let (written, notebook) = answer.recv().map_err(|_| PenRefused::Stopped)??;
@@ -2028,6 +2032,149 @@ mod tests {
         let read = fixture.next_read();
         assert_ne!(read.status, SuggestionsStatus::Investigating);
         assert_eq!(shown(&read), shown(&before));
+    }
+
+    /// A run that ends while the worker's queue is full still ends: its end
+    /// waits for room instead of being dropped, so the round goes on to the
+    /// next Project, whose line is then raised.
+    #[test]
+    fn a_run_that_ends_on_a_full_queue_still_lets_the_next_project_run() {
+        /// The first run says it started, waits to be let go and writes
+        /// nothing; every later run groups by tag.
+        struct Held {
+            first: Arc<std::sync::Mutex<Option<(mpsc::Sender<()>, Receiver<()>)>>>,
+        }
+        impl Analysis for Held {
+            fn name(&self) -> &'static str {
+                "held"
+            }
+            fn uses_provider(&self) -> bool {
+                false
+            }
+            fn run(&mut self, input: &AnalysisInput, pen: &mut dyn NotebookPen) -> AnalysisEnd {
+                if let Some((started, release)) = self.first.lock().unwrap().take() {
+                    started.send(()).unwrap();
+                    release.recv().unwrap();
+                    return AnalysisEnd::Done;
+                }
+                TagGrouping.run(input, pen)
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (started_tx, started) = mpsc::channel();
+        let (release_run, held) = mpsc::channel();
+        let first = Arc::new(std::sync::Mutex::new(Some((started_tx, held))));
+        let (entered_tx, entered) = mpsc::channel();
+        let (release_resolve, resolving) = mpsc::channel::<()>();
+        let (reads_tx, reads) = mpsc::channel();
+        let clock = Arc::new(AtomicU64::new(START));
+        let time = Arc::clone(&clock);
+        let worker = SuggestionWorker::spawn(
+            Options {
+                store: dir.path().join("suggestions.sqlite3"),
+                clock: Arc::new(move || time.load(Ordering::SeqCst)),
+                zone: jiff::tz::TimeZone::UTC,
+                analysis: Arc::new(move || {
+                    Box::new(Held {
+                        first: Arc::clone(&first),
+                    }) as Box<dyn Analysis>
+                }),
+                // The worker answers nothing while it names this folder.
+                resolver: Box::new(move |project: &ProjectRef, _| {
+                    if project.path == "/slow" {
+                        entered_tx.send(()).unwrap();
+                        resolving.recv().unwrap();
+                    }
+                    Ok(format!("project{}", project.path))
+                }),
+            },
+            TestSink {
+                reads: reads_tx,
+                restored: mpsc::channel().0,
+                orders: mpsc::channel().0,
+                followed: mpsc::channel().0,
+                gate: RunGate {
+                    ai_ready: false,
+                    usage_ok: true,
+                    language: hide_ai::OutputLanguage::English,
+                },
+            },
+        )
+        .unwrap();
+        let client = worker.client();
+        let at = |path: &str| ProjectRef {
+            node: NodeId::parse("test-node").unwrap(),
+            path: path.into(),
+        };
+        let failed = |path: &str| Command::Observe {
+            project: at(path),
+            facts: ["s1", "s2", "s3"]
+                .iter()
+                .map(|session| Observation {
+                    signal: Signal::FailedTool,
+                    tag: "cargo test".into(),
+                    session: Some(SessionRef {
+                        agent: "claude".into(),
+                        id: (*session).into(),
+                    }),
+                    pr: None,
+                    checkout: Some(path.into()),
+                    at_unix_ms: START,
+                    always: false,
+                })
+                .collect(),
+        };
+        let read_until = |done: &dyn Fn(&ProjectSuggestionsSnapshot) -> bool| loop {
+            let read = reads.recv_timeout(WAIT).expect("a read");
+            if done(&read) {
+                return read;
+            }
+        };
+        client.send(Command::Open {
+            workspace_id: "w1".into(),
+            project: at("/a"),
+        });
+        client.send(failed("/a"));
+        client.send(failed("/b"));
+        client.send(Command::Wake);
+        client.send(Command::IntroSeen);
+        read_until(&|_| true);
+        read_until(&|_| true);
+        clock.fetch_add(policy::WAKE_DELAY_MS + 1, Ordering::SeqCst);
+        client.send(Command::IntroSeen);
+        started
+            .recv_timeout(WAIT)
+            .expect("the round's first run started");
+
+        client.send(failed("/slow"));
+        entered
+            .recv_timeout(WAIT)
+            .expect("the worker is naming a folder");
+        let mut queued = 0;
+        while client.send(Command::IntroSeen) {
+            queued += 1;
+        }
+        assert!(queued <= QUEUE, "the queue filled");
+        release_run.send(()).unwrap();
+        release_resolve.send(()).unwrap();
+
+        let read = read_until(&|read| !chosen(read).is_empty());
+        assert_eq!(
+            chosen(&read),
+            ["s1"],
+            "the next Project ran after the full queue"
+        );
+        client.send(Command::Open {
+            workspace_id: "w2".into(),
+            project: at("/b"),
+        });
+        let read = read_until(&|read| read.workspace_id == "w2");
+        assert_eq!(
+            read.status,
+            SuggestionsStatus::NoneToday,
+            "the held run ended"
+        );
+        drop(worker);
     }
 
     #[test]
