@@ -129,14 +129,21 @@ describe("the Hide AI tool", () => {
     expect(q("[data-hide-ai-intro]")).toBeNull();
   });
 
-  it("draws the tab's state in one line, and 조사 중 beside the owl with the rows as they were (B17)", async () => {
+  it("draws the tab's state in one line, and 조사 중 or 조사 못 함 beside the owl with the rows as they were (B17, D-35)", async () => {
     await render(suggestionsProject({ status: "first_run_pending" }));
     expect(q("[data-suggestions-status]")?.textContent).toBe("First investigation the next time you open Hide");
     await render(suggestionsProject({ status: "investigating", rows: [suggestionRow("s1")] }));
     expect(q("[data-hide-ai-investigating]")?.textContent).toBe("Investigating");
     expect(q("[data-suggestions-status]")).toBeNull();
     expect(q('[data-suggestion="s1"]')).not.toBeNull();
+    // A run that could not investigate says so quietly beside the owl and keeps the rows (D-35).
+    await render(suggestionsProject({ status: "not_investigated", rows: [suggestionRow("s1")] }));
+    expect(q("[data-hide-ai-not-investigated]")?.textContent).toBe("Couldn't investigate");
+    expect(q("[data-hide-ai-investigating]")).toBeNull();
+    expect(q("[data-suggestions-status]")).toBeNull();
+    expect(q('[data-suggestion="s1"]')).not.toBeNull();
     await render(suggestionsProject({ status: "none_today" }));
+    expect(q("[data-hide-ai-not-investigated]")).toBeNull();
     expect(q("[data-suggestions-status]")?.textContent).toBe("No suggestions today");
     await render(suggestionsProject({ status: "off", rows: [suggestionRow("s1")] }));
     expect(q("[data-suggestion]")).toBeNull();

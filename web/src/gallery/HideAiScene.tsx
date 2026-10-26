@@ -13,7 +13,7 @@ import { useUiStore } from "../ui";
 import type { LaneFrame, LaneSizes, WorkspaceView } from "../workspace";
 import { memorySceneProject } from "./MemoryScene";
 
-export const HIDE_AI_SCENE_STATES = ["new", "applying", "applied", "settings", "off", "first_run", "memory"] as const;
+export const HIDE_AI_SCENE_STATES = ["new", "applying", "applied", "settings", "off", "first_run", "not_investigated", "memory"] as const;
 export type HideAiSceneState = (typeof HIDE_AI_SCENE_STATES)[number];
 export type HideAiSceneLanguage = "en" | "ko" | "zh-CN" | "ja";
 export type HideAiSceneParams = { theme: "light" | "dark"; state: HideAiSceneState; width: number; language: HideAiSceneLanguage };
@@ -90,6 +90,7 @@ export function hideAiSceneProject(state: HideAiSceneState, workspaceId = "herdr
     case "applying": return { ...base, rows: [...APPLYING_ROWS, ...APPLIED_ROWS], counts: { suggestions: 2, rail: 3 } };
     case "applied": return { ...base, status: "none_today", rows: APPLIED_ROWS, counts: { suggestions: 0, rail: 1 } };
     case "off": return { ...base, enabled: false, counts: { suggestions: 0, rail: 0 } };
+    case "not_investigated": return { ...base, status: "not_investigated", rows: [...APPLYING_ROWS, ...APPLIED_ROWS], counts: { suggestions: 2, rail: 3 } };
     case "first_run": return { ...base, intro_seen: false, status: "first_run_pending", rows: [], counts: { suggestions: 0, rail: 1 } };
   }
 }

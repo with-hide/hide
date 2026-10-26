@@ -60,13 +60,14 @@ export function SuggestionsTab({ project, actions }: { project: ProjectSuggestio
   );
 }
 
-/** The tab's one line (D-44); `조사 중` sits in the head beside the owl, and the rows stay as they were. */
+/** The tab's one line (D-44); `조사 중` and `조사 못 함` sit in the head beside the owl, and the rows stay as they were. */
 function statusLine(project: ProjectSuggestions, open: number): "suggestions.status.firstRun" | "suggestions.status.noneToday" | "suggestions.status.off" | null {
   switch (project.status) {
     case "first_run_pending": return "suggestions.status.firstRun";
     case "none_today": return open === 0 ? "suggestions.status.noneToday" : null;
     case "off": return "suggestions.status.off";
     case "investigating":
+    case "not_investigated":
     case "idle": return null;
   }
 }

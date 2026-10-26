@@ -50,7 +50,7 @@ export function HideAiTool({ actions }: { actions: Actions }) {
   );
 }
 
-/** The head (B3, B17, B19): the owl, `Hide AI · <project>`, `조사 중` while a run goes, the AI chip, the switch, ⚙ and ×. */
+/** The head (B3, B17, B19): the owl, `Hide AI · <project>`, `조사 중` while a run goes or `조사 못 함` after one could not investigate, the AI chip, the switch, ⚙ and ×. */
 function Head({ projectId, project, actions }: { projectId: string; project: ProjectSuggestions | null; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const label = useShellStore((state) => catalogWorkspaces(state.rest).find((row) => row.id === projectId)?.label ?? projectId);
@@ -69,6 +69,10 @@ function Head({ projectId, project, actions }: { projectId: string; project: Pro
         <span className="min-w-0 truncate text-subtle-foreground"><span aria-hidden="true">· </span>{label}</span>
         {ready && project.enabled && project.status === "investigating" ? (
           <span role="status" className="shrink-0 text-micro text-subtle-foreground" data-hide-ai-investigating="true">{t("hideAiTool.investigating")}</span>
+        ) : null}
+        {/* The last run could not investigate, so nothing new rose from it; quiet, since the next run settles it (D-35). */}
+        {ready && project.enabled && project.status === "not_investigated" ? (
+          <span role="status" className="shrink-0 text-micro text-subtle-foreground" data-hide-ai-not-investigated="true">{t("hideAiTool.notInvestigated")}</span>
         ) : null}
       </span>
       {ready && project.enabled && provider ? (

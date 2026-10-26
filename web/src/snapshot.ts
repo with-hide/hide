@@ -2233,7 +2233,7 @@ export type SuggestionApplyMode = "confirm" | "auto_pr";
 /** `suggestion_outcome`: what applying a suggestion makes (D-15, D-50). */
 export type SuggestionOutcome = "pr" | "issue";
 /** `suggestions_status`: the tab's one line (D-44). */
-export type SuggestionsStatus = "first_run_pending" | "investigating" | "none_today" | "idle" | "off";
+export type SuggestionsStatus = "first_run_pending" | "investigating" | "none_today" | "not_investigated" | "idle" | "off";
 /** `suggestion_group`: 고를 것, 반영 중 and the folded 반영됨 (D-07). */
 export type SuggestionGroup = "choose" | "applying" | "applied";
 /** `suggestion_state`: a row's mark (D-37). */
