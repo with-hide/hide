@@ -52,12 +52,6 @@ impl Signal {
         }
     }
 
-    pub(crate) fn parse(value: &str) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|signal| signal.as_str() == value)
-    }
-
     /// Whether the record is read from GitHub, which rests while no GitHub
     /// connection answers (D-41).
     pub(crate) fn needs_github(self) -> bool {

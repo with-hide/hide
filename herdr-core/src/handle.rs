@@ -81,6 +81,7 @@ pub struct Core {
     _kit: Option<crate::kit::KitPump>,
     _session_sync: Option<crate::session_sync::SessionSyncHandle>,
     _links: Option<crate::links::worker::LinkWorker>,
+    _suggestions: Option<crate::suggestions::worker::SuggestionWorker>,
     _usage_ledger: Option<crate::usage_ledger::worker::Worker>,
     labels: Option<Arc<crate::labels::LabelServices>>,
     own_node: Arc<dyn crate::node_access::NodeLink>,
@@ -111,6 +112,7 @@ impl Drop for Core {
         self._kit.take();
         self._usage_ledger.take();
         self._links.take();
+        self._suggestions.take();
         self._terminal_reports.take();
         self._changes.take();
         self._fetch.take();
@@ -191,6 +193,7 @@ impl Core {
             _kit: None,
             _session_sync: None,
             _links: None,
+            _suggestions: None,
             _usage_ledger: None,
             _delivery: None,
             labels: None,
@@ -405,6 +408,18 @@ impl Core {
                 None
             }
         };
+        let suggestions = match crate::runtime::suggestions::spawn_worker(
+            &runtime,
+            notifier.clone(),
+        ) {
+            Ok(worker) => Some(worker),
+            Err(message) => {
+                crate::diagnostic!(
+                    serde_json::json!({"component":"suggestions","kind":"worker.start_failed","message":message})
+                );
+                None
+            }
+        };
         let session_sync = if let (Some(socket_path), Some(own_herdr)) =
             (options.herdr_socket_path.as_deref(), own_herdr)
         {
@@ -497,6 +512,7 @@ impl Core {
             own_node,
             _session_sync: session_sync,
             _links: links,
+            _suggestions: suggestions,
             _usage_ledger: usage_ledger,
             labels,
             runtime,

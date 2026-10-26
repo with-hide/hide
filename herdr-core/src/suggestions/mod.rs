@@ -8,6 +8,10 @@
 //! - [`scoring`]: the counted pain of a line and which lines are raised.
 //! - [`policy`]: every score, threshold, cap, budget and schedule value.
 //! - [`settings`]: a Project's switches, quantity and apply mode.
+//! - [`lifecycle`]: a raised line's attempt, watch and escalation.
+//! - [`store`]: `suggestions.sqlite3`, written by the suggestion worker alone.
+//! - [`worker`]: the thread that owns the store, records, runs and raises.
+//! - [`read`]: the 제안 tab as the worker reads it for the screen.
 //!
 //! Everything a run decides is read back from the notebook it leaves, so
 //! the way problems are found can change without the ledger, the lifecycle,
@@ -15,7 +19,11 @@
 
 pub mod analysis;
 pub mod ledger;
+pub mod lifecycle;
 pub mod notebook;
 pub mod policy;
+pub mod read;
 pub mod scoring;
 pub mod settings;
+pub mod store;
+pub(crate) mod worker;
