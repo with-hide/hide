@@ -3,8 +3,9 @@ import { DRAG_CHIP_CLASS, holdShellDrag } from "./shellDrag";
 import { localDeviceId, type AgentRow, type SnapshotRest } from "./snapshot";
 
 // An agent reference is the one line that names another pane for the agent
-// in this one: `@<name> (pane <id> · <task>)`. The menu copies it and a
-// sidebar row dropped on a terminal types it; the agent that reads it sends
+// in this one: `@<name> (pane <id> · <task>)`. The menu copies it, a
+// sidebar row dropped on a terminal types it, and a pane header's @ types the
+// one chosen from its list into that pane; the agent that reads it sends
 // its letter to the pane id, which `hide request send` takes on the machine
 // that owns the pane.
 
@@ -79,4 +80,12 @@ export function beginAgentDrag(agent: Parameters<typeof agentReference>[0], even
   window.addEventListener("dragend", end, true);
   window.addEventListener("mousemove", end, true);
   window.addEventListener("pointerdown", end, true);
+}
+
+/**
+ * The agents a pane's @ can name, in the order given: every agent whose
+ * reference lands in `paneId` (another pane on the same device).
+ */
+export function mentionCandidates<A extends Pick<AgentRow, "pane_id">>(rest: SnapshotRest | null, agents: readonly A[], paneId: string): A[] {
+  return agents.filter((agent) => referenceLands(rest, agent.pane_id, paneId));
 }

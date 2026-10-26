@@ -46,11 +46,11 @@ export function selectedMovePane(tab: Tab): string | null {
   return selected && tab.panes.some(pane => pane.id === selected) ? selected : tab.panes.length === 1 ? tab.panes[0]!.id : null;
 }
 
-/** Only the first header row's title and unused space initiate a gesture. */
+/** Only the first header row's grip, title and unused space initiate a gesture. */
 export function paneMoveStartTarget(header: HTMLElement, target: EventTarget | null): boolean {
   if (!(target instanceof Element) || !header.contains(target)) return false;
   if (target.closest("[data-pane-move-excluded], [data-pane-status-mark]")) return false;
   // The record button and title wrappers also own padding/gaps with no content.
   // Those gaps look like the rest of the unused header, so they share its gesture.
-  return target === header || !!target.closest("[data-pane-move-title], [data-pane-move-blank], [data-pane-record]");
+  return target === header || !!target.closest("[data-pane-move-grip], [data-pane-move-title], [data-pane-move-blank], [data-pane-record]");
 }

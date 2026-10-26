@@ -10,7 +10,7 @@ const LEAD = '[data-pane-view="lead"]';
 export default chapter<FollowModel>({
   id: "follow",
   number: 3,
-  version: 1,
+  version: 2,
   world: FOLLOW_WORLD,
   quest: true,
   steps: [
@@ -22,7 +22,11 @@ export default chapter<FollowModel>({
     { id: "child", quest: true, target: '[data-agent-child="repro"]', side: "right", gesture: { click: true }, done: (model) => focusedOn(model) === "repro" },
     { id: "parent", quest: true, target: '[data-pane-return="lead"]', side: "bottom", gesture: { click: true }, done: (model) => focusedOn(model) === "lead" },
     { id: "answered", target: `${LEAD} [data-pane-header-band]`, side: "bottom" },
-    { id: "overview", quest: true, target: `${LEAD} header`, side: "bottom", command: "overview", shown: "[data-overview-graph]" },
+    // 개요에서 보기, first in the pane's menu (⋯ or right-click), opens the Overview with this agent chosen.
+    {
+      id: "overview", quest: true, target: `${LEAD} header, [role="menu"]`, side: "bottom",
+      gesture: { menu: { at: `${LEAD} header`, path: ['[data-menu-item="open_in_overview"]'] } }, shown: "[data-overview-graph]",
+    },
     { id: "map", target: "[data-overview-graph]", side: "inside" },
     { id: "end", side: "center" },
   ],
