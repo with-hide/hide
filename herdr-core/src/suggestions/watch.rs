@@ -1,14 +1,14 @@
 //! The watch after a fix merged (PRD hide-ai-suggestions B15, D-13, D-14):
-//! only sessions in checkouts shown to hold the merge count, and the watch
-//! ends one way, in this order: the same line comes back and is suggested
-//! again one step stronger; else enough sessions passed and the fix worked;
-//! else its time ran out and the watch ends unknown, silently. A pull
-//! request's failure never counts: whether its branch has the merge is not
-//! known to the core, and what is not known does not count. Pure: the
-//! worker loads the line and its records around it.
+//! only sessions in checkouts shown to hold the merge count, and pull
+//! requests whose head GitHub showed to have the merge commit; what is not
+//! known to hold the merge does not count. The watch ends one way, in this
+//! order: the same line comes back and is suggested again one step
+//! stronger; else enough sessions passed and the fix worked; else its time
+//! ran out and the watch ends unknown, silently. Pure: the worker loads the
+//! line and its records around it, and the runtime asks GitHub.
 
-use super::ledger::{Record, SessionRef};
-use super::lifecycle::LineLife;
+use super::ledger::{PrRef, Record, SessionRef};
+use super::lifecycle::{LineLife, Watch};
 use super::notebook::{Line, LineId, Notebook, Stage};
 use super::policy;
 use super::store::ProjectLocation;
@@ -24,6 +24,13 @@ pub(crate) struct WatchedLine {
     pub merged_at_unix_ms: u64,
     pub base: Option<String>,
     pub holding: BTreeSet<String>,
+    /// The pull request that merged, whose merge commit is asked for while
+    /// `merge_commit` is unknown.
+    pub pr: PrRef,
+    pub merge_commit: Option<String>,
+    /// Heads of the line's pull request records after the merge that GitHub
+    /// was not asked about yet, at most [`policy::WATCH_HEADS`].
+    pub heads: BTreeSet<String>,
 }
 
 /// How a watch ended.
@@ -78,6 +85,79 @@ pub(crate) fn saw_session(
         && watch.sessions.insert(session.clone())
 }
 
+/// Keeps what GitHub said about a watched line: its merge commit, and
+/// whether each head asked about has that commit. Answers about another
+/// merge commit than the one the watch keeps are dropped. Answers whether
+/// the watch changed.
+pub(crate) fn judged(
+    line: &Line,
+    life: &mut LineLife,
+    merge_commit: String,
+    heads: BTreeMap<String, bool>,
+) -> bool {
+    if line.stage != Stage::Watching {
+        return false;
+    }
+    let Some(watch) = life.watch.as_mut() else {
+        return false;
+    };
+    let mut changed = false;
+    match &watch.merge_commit {
+        Some(kept) if *kept != merge_commit => return false,
+        Some(_) => {}
+        None => {
+            watch.merge_commit = Some(merge_commit);
+            changed = true;
+        }
+    }
+    for (head, contains) in heads {
+        changed |= watch.heads.insert(head, contains) != Some(contains);
+    }
+    changed
+}
+
+/// Whether `record`, one of a watched line's, is the problem coming back
+/// with the fix in place: after the merge, in a session in a checkout that
+/// holds it, or on a pull request head shown to have the merge commit.
+fn came_back(watch: &Watch, record: &Record) -> bool {
+    let fact = &record.fact;
+    if fact.at_unix_ms <= watch.merged_at_unix_ms {
+        return false;
+    }
+    match &fact.pr {
+        Some(_) => fact
+            .head
+            .as_ref()
+            .is_some_and(|head| watch.heads.get(head) == Some(&true)),
+        None => {
+            fact.session.is_some()
+                && fact
+                    .checkout
+                    .as_deref()
+                    .is_some_and(|checkout| holds(&watch.holding, checkout))
+        }
+    }
+}
+
+/// The heads of a watched line's pull request records after the merge that
+/// GitHub has not answered about, oldest record first.
+fn unasked_heads(watch: &Watch, records: &[Record]) -> BTreeSet<String> {
+    let mut heads = BTreeSet::new();
+    for record in records {
+        let fact = &record.fact;
+        let Some(head) = fact.head.as_ref().filter(|_| fact.pr.is_some()) else {
+            continue;
+        };
+        if fact.at_unix_ms > watch.merged_at_unix_ms && !watch.heads.contains_key(head) {
+            heads.insert(head.clone());
+            if heads.len() == policy::WATCH_HEADS {
+                break;
+            }
+        }
+    }
+    heads
+}
+
 /// Ends the watch when it is over, in B15's order, and answers how.
 /// `records` are the line's own.
 pub(crate) fn settle(
@@ -90,16 +170,7 @@ pub(crate) fn settle(
         return None;
     }
     let watch = life.watch.as_ref()?;
-    let recurred = records.iter().any(|record| {
-        let fact = &record.fact;
-        fact.at_unix_ms > watch.merged_at_unix_ms
-            && fact.pr.is_none()
-            && fact.session.is_some()
-            && fact
-                .checkout
-                .as_deref()
-                .is_some_and(|checkout| holds(&watch.holding, checkout))
-    });
+    let recurred = records.iter().any(|record| came_back(watch, record));
     let span = if watch.ci {
         policy::WATCH_CI_SPAN_MS
     } else {
@@ -132,12 +203,13 @@ pub(crate) fn settle(
     Some(end)
 }
 
-/// The Project's lines being watched.
+/// The Project's lines being watched; `records_of` loads a line's records.
 pub(crate) fn watched(
     project_id: &str,
     location: &ProjectLocation,
     notebook: &Notebook,
     lives: &BTreeMap<LineId, LineLife>,
+    records_of: impl Fn(&Line) -> Vec<Record>,
 ) -> Vec<WatchedLine> {
     notebook
         .lines
@@ -152,6 +224,9 @@ pub(crate) fn watched(
                 merged_at_unix_ms: watch.merged_at_unix_ms,
                 base: watch.base.clone(),
                 holding: watch.holding.clone(),
+                pr: watch.pr.clone(),
+                merge_commit: watch.merge_commit.clone(),
+                heads: unasked_heads(watch, &records_of(line)),
             })
         })
         .collect()
@@ -160,10 +235,14 @@ pub(crate) fn watched(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::suggestions::ledger::{Observation, PrRef, RecordId, Signal};
-    use crate::suggestions::lifecycle::Watch;
+    use crate::suggestions::ledger::{Observation, RecordId, Signal};
 
     const MERGED: u64 = 10_000;
+    const MERGE: &str = "0123456789abcdef0123456789abcdef01234567";
+    /// A pull request head GitHub said has the merge commit, and one it
+    /// said has not.
+    const WITH_FIX: &str = "1111111111111111111111111111111111111111";
+    const WITHOUT_FIX: &str = "2222222222222222222222222222222222222222";
 
     fn watching(ci: bool) -> (Line, LineLife) {
         let line = Line {
@@ -191,6 +270,8 @@ mod tests {
                 ci,
                 holding: BTreeSet::from(["/repo".to_owned()]),
                 sessions: BTreeSet::new(),
+                merge_commit: Some(MERGE.into()),
+                heads: BTreeMap::new(),
             }),
             ..Default::default()
         };
@@ -218,6 +299,27 @@ mod tests {
                 checkout: Some(checkout.into()),
                 at_unix_ms: at,
                 always: false,
+                head: None,
+            },
+        }
+    }
+
+    /// A check of pull request `number` that failed on `head` at `at`.
+    fn check_failure(at: u64, number: u32, head: &str) -> Record {
+        Record {
+            id: RecordId(at),
+            fact: Observation {
+                signal: Signal::CheckFailed,
+                tag: "verify".into(),
+                session: None,
+                pr: Some(PrRef {
+                    number,
+                    url: format!("https://github.com/acme/app/pull/{number}"),
+                }),
+                checkout: None,
+                at_unix_ms: at,
+                always: false,
+                head: Some(head.into()),
             },
         }
     }
@@ -308,10 +410,8 @@ mod tests {
         assert!(life.watch.is_none() && life.attempt.is_none());
     }
 
-    /// D-14: with nothing to say, the watch ends after 30 days, a CI line's
-    /// after 14, silently; a recurrence wins over enough sessions, and
-    /// another pull request's failure is none, since whether its branch has
-    /// the merge is not known.
+    /// D-14: with nothing to say, the watch ends after 30 days, a CI
+    /// line's after 14, silently; a recurrence wins over enough sessions.
     #[test]
     fn a_quiet_watch_runs_out_and_a_recurrence_comes_first() {
         let (mut line, mut life) = watching(true);
@@ -327,17 +427,6 @@ mod tests {
         for id in ["a", "b", "c", "d", "e"] {
             saw_session(&line, &mut life, &session(id), "/repo", MERGED + 1);
         }
-        let mut quiet = (line.clone(), life.clone());
-        assert_eq!(
-            settle(
-                &mut quiet.0,
-                &mut quiet.1,
-                &[failure(MERGED + 2, "/repo", Some(41))],
-                MERGED + 3
-            ),
-            Some(WatchEnd::Effective),
-            "another pull request's failure after the merge is not counted"
-        );
         assert_eq!(
             settle(
                 &mut line,
@@ -348,5 +437,69 @@ mod tests {
             Some(WatchEnd::Recurred),
             "a session's failure with the merge comes before enough sessions"
         );
+    }
+
+    /// B15: a pull request's failure after the merge counts only on a head
+    /// GitHub showed to have the merge commit; one shown not to have it,
+    /// or not asked about yet, does not count.
+    #[test]
+    fn a_pull_request_failure_counts_only_on_a_head_that_has_the_merge() {
+        let (mut line, mut life) = watching(true);
+        let records = [
+            check_failure(MERGED - 1, 41, WITH_FIX),
+            check_failure(MERGED + 1, 42, WITHOUT_FIX),
+            check_failure(MERGED + 2, 43, WITH_FIX),
+        ];
+        let watch = life.watch.clone().unwrap();
+        assert_eq!(
+            unasked_heads(&watch, &records),
+            BTreeSet::from([WITHOUT_FIX.to_owned(), WITH_FIX.to_owned()]),
+            "only heads failing after the merge are asked about"
+        );
+        assert_eq!(
+            settle(&mut line, &mut life, &records, MERGED + 3),
+            None,
+            "a head not asked about yet does not count"
+        );
+
+        assert!(judged(
+            &line,
+            &mut life,
+            MERGE.into(),
+            BTreeMap::from([(WITHOUT_FIX.to_owned(), false)])
+        ));
+        assert_eq!(
+            settle(&mut line, &mut life, &records[..2], MERGED + 3),
+            None,
+            "a head without the merge commit does not count"
+        );
+        assert!(
+            !judged(
+                &line,
+                &mut life,
+                "3333333333333333333333333333333333333333".into(),
+                BTreeMap::from([(WITH_FIX.to_owned(), true)])
+            ),
+            "an answer about another merge commit is dropped"
+        );
+
+        assert!(judged(
+            &line,
+            &mut life,
+            MERGE.into(),
+            BTreeMap::from([(WITH_FIX.to_owned(), true)])
+        ));
+        assert_eq!(
+            settle(&mut line, &mut life, &records[..2], MERGED + 3),
+            None,
+            "the head with the fix failed only before the merge"
+        );
+        assert_eq!(
+            settle(&mut line, &mut life, &records, MERGED + 3),
+            Some(WatchEnd::Recurred),
+            "a head with the merge commit failing the same way is the problem back"
+        );
+        assert_eq!(line.stage, Stage::Suggested);
+        assert_eq!(line.level, 1);
     }
 }

@@ -459,6 +459,8 @@ pub fn allowed(arguments: &[&str]) -> bool {
         || is_conditional_read(arguments)
         || is_pull_digest_read(arguments)
         || is_checks_verdict_read(arguments)
+        || is_merge_commit_read(arguments)
+        || is_compare_read(arguments)
         || matches!(
             arguments,
             ["pr", "list", "--state", "open", "--limit", PULL_REQUEST_LIMIT, "--json", OPEN_CHECK_FIELDS]
@@ -599,6 +601,67 @@ pub fn checks_verdict_arguments(
         filter.to_owned(),
         format!("repos/{repository}/commits/{commit}/{tail}"),
     ])
+}
+
+/// What a merged pull request's merge made on its base: the one commit a
+/// watch after the merge asks every later head about. `gh` prints `null`
+/// for a pull request that did not merge.
+pub const MERGE_COMMIT_JQ: &str = ".merge_commit_sha";
+
+/// `gh api --jq MERGE_COMMIT_JQ repos/OWNER/NAME/pulls/NUMBER`.
+pub fn merge_commit_arguments(repository: &str, number: u32) -> Option<Vec<String>> {
+    if !is_repository(repository) {
+        return None;
+    }
+    Some(vec![
+        "api".to_owned(),
+        "--jq".to_owned(),
+        MERGE_COMMIT_JQ.to_owned(),
+        format!("repos/{repository}/pulls/{number}"),
+    ])
+}
+
+fn is_merge_commit_read(arguments: &[&str]) -> bool {
+    let ["api", "--jq", MERGE_COMMIT_JQ, endpoint] = arguments else {
+        return false;
+    };
+    endpoint
+        .strip_prefix("repos/")
+        .and_then(|rest| rest.rsplit_once("/pulls/"))
+        .is_some_and(|(repository, number)| is_repository(repository) && is_number(number))
+}
+
+/// How a head stands against a commit: `ahead` or `identical` when the head
+/// has the commit in its history, `behind` or `diverged` when it does not.
+pub const COMPARE_STATUS_JQ: &str = ".status";
+
+/// `gh api --jq COMPARE_STATUS_JQ repos/OWNER/NAME/compare/BASE...HEAD`, of
+/// two exact commits.
+pub fn compare_arguments(repository: &str, base: &str, head: &str) -> Option<Vec<String>> {
+    if !is_repository(repository) || !is_commit(base) || !is_commit(head) {
+        return None;
+    }
+    Some(vec![
+        "api".to_owned(),
+        "--jq".to_owned(),
+        COMPARE_STATUS_JQ.to_owned(),
+        format!("repos/{repository}/compare/{base}...{head}"),
+    ])
+}
+
+fn is_compare_read(arguments: &[&str]) -> bool {
+    let ["api", "--jq", COMPARE_STATUS_JQ, endpoint] = arguments else {
+        return false;
+    };
+    let Some((repository, range)) = endpoint
+        .strip_prefix("repos/")
+        .and_then(|rest| rest.split_once("/compare/"))
+    else {
+        return false;
+    };
+    range
+        .split_once("...")
+        .is_some_and(|(base, head)| is_repository(repository) && is_commit(base) && is_commit(head))
 }
 
 /// The check runs list as the poll reads it: a hundred a page, so a commit
@@ -1387,6 +1450,41 @@ mod tests {
             "--jq",
             PULL_DIGEST_JQ,
             pulls
+        ]));
+    }
+
+    #[test]
+    fn a_merge_watch_reads_one_merge_commit_and_compares_two_exact_commits() {
+        const MERGE: &str = "0123456789abcdef0123456789abcdef01234567";
+        const HEAD: &str = "89abcdef0123456789abcdef0123456789abcdef";
+        for arguments in [
+            merge_commit_arguments("acme/app", 12).expect("a pull request"),
+            compare_arguments("acme/app", MERGE, HEAD).expect("two commits"),
+        ] {
+            let borrowed: Vec<&str> = arguments.iter().map(String::as_str).collect();
+            assert!(allowed(&borrowed), "{borrowed:?}");
+        }
+        assert!(merge_commit_arguments("../app", 12).is_none());
+        assert!(compare_arguments("acme/app", "main", HEAD).is_none());
+        assert!(compare_arguments("acme/app", MERGE, "feature").is_none());
+        assert!(!allowed(&["api", "--jq", ".", "repos/acme/app/pulls/12"]));
+        assert!(!allowed(&[
+            "api",
+            "--jq",
+            MERGE_COMMIT_JQ,
+            "repos/acme/app/pulls/12/files"
+        ]));
+        assert!(!allowed(&[
+            "api",
+            "--jq",
+            COMPARE_STATUS_JQ,
+            "repos/acme/app/compare/main...feature"
+        ]));
+        assert!(!allowed(&[
+            "api",
+            "--jq",
+            ".files",
+            &format!("repos/acme/app/compare/{MERGE}...{HEAD}")
         ]));
     }
 

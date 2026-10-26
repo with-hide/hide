@@ -247,6 +247,7 @@ fn send_suggestion_records(
             checkout: Some(cwd.to_owned()),
             at_unix_ms: if at == 0 { now } else { at },
             always: false,
+            head: None,
         })
         .collect();
     client.send(Command::Observe {

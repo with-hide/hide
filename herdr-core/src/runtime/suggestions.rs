@@ -364,6 +364,7 @@ impl Runtime {
                         checkout: None,
                         at_unix_ms: at,
                         always: false,
+                        head: pr.head_oid.clone(),
                     };
                     let open = pr.merged_at_unix_ms.is_none() && pr.closed_at_unix_ms.is_none();
                     if open {

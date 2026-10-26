@@ -89,6 +89,10 @@ pub struct Observation {
     /// lets one record cross the threshold (D-11).
     #[serde(default)]
     pub always: bool,
+    /// The head commit of the pull request a GitHub record was seen on, so
+    /// a watch after a merge can ask whether that head had the fix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
 }
 
 /// A pull request a record names.
@@ -197,6 +201,7 @@ mod tests {
             checkout: None,
             at_unix_ms: 1,
             always: false,
+            head: None,
         }
     }
 
@@ -225,6 +230,7 @@ mod tests {
             checkout: None,
             at_unix_ms: 1,
             always: false,
+            head: None,
         };
         assert_eq!(check(3).key(), check(3).key());
         assert_ne!(check(3).key(), check(4).key());

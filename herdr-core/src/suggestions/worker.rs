@@ -16,7 +16,7 @@ use super::analysis::{
 use super::apply::{self as applying, ApplyOrder, FollowedAttempt};
 use super::ledger::{Observation, RecordIndex, SessionRef, Signal};
 use super::lifecycle::{AttemptMove, AttemptPhase};
-use super::notebook::{LineId, Notebook, NotebookEdit, Outcome, Stage, Strike, StruckBy};
+use super::notebook::{Line, LineId, Notebook, NotebookEdit, Outcome, Stage, Strike, StruckBy};
 use super::policy::{self, Quantity};
 use super::read::{self, ReadInput};
 use super::scoring;
@@ -27,7 +27,7 @@ use crate::model::ProjectSuggestionsSnapshot;
 use crate::node::NodeId;
 use crate::node_access::NodeLink;
 use serde_json::json;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
@@ -158,6 +158,14 @@ pub(crate) enum Command {
         line: LineId,
         checkouts: BTreeSet<String>,
     },
+    /// What GitHub said of a watched line's merge: its merge commit, and
+    /// whether each pull request head asked about has it.
+    HeadsJudged {
+        project_id: String,
+        line: LineId,
+        merge_commit: String,
+        heads: BTreeMap<String, bool>,
+    },
     /// What the runtime saw happen to an attempt (B11-B14).
     Attempted {
         project_id: String,
@@ -252,6 +260,7 @@ impl SuggestionClient {
             Command::Attempted { .. } => "attempted",
             Command::SessionSeen { .. } => "session_seen",
             Command::Holding { .. } => "holding",
+            Command::HeadsJudged { .. } => "heads_judged",
         };
         match self.0.try_send(command) {
             Ok(()) => true,
@@ -529,9 +538,10 @@ impl Worker {
                     let _ = run.join.join();
                 }
                 self.complete(&project, end, edits);
-                if self.settle(&project) {
-                    self.publish_followed(sink);
-                }
+                // The run may have put new pull request records on a
+                // watched line, whose heads the runtime then asks about.
+                self.settle(&project);
+                self.publish_followed(sink);
                 self.auto_apply(&project, sink);
                 self.publish_if_opened(&project, sink);
             }
@@ -554,6 +564,19 @@ impl Worker {
                 line,
                 checkouts,
             } => self.hold(&project_id, line, checkouts),
+            Command::HeadsJudged {
+                project_id,
+                line,
+                merge_commit,
+                heads,
+            } => {
+                if self.judge_heads(&project_id, line, merge_commit, heads) {
+                    if self.settle(&project_id) {
+                        self.publish_if_opened(&project_id, sink);
+                    }
+                    self.publish_followed(sink);
+                }
+            }
             Command::Attempted {
                 project_id,
                 line,
@@ -827,6 +850,39 @@ impl Worker {
         }
     }
 
+    /// Keeps what GitHub said about a watched line's merge; answers whether
+    /// the watch changed.
+    fn judge_heads(
+        &mut self,
+        project: &str,
+        line_id: LineId,
+        merge_commit: String,
+        heads: BTreeMap<String, bool>,
+    ) -> bool {
+        let Ok(store) = self.store.as_mut() else {
+            return false;
+        };
+        let (notebook, lives) = match store.notebook(project) {
+            Ok(loaded) => loaded,
+            Err(code) => {
+                log_store("watch", &code);
+                return false;
+            }
+        };
+        let Some(line) = notebook.line(line_id) else {
+            return false;
+        };
+        let mut life = lives.get(&line_id).cloned().unwrap_or_default();
+        if !watching::judged(line, &mut life, merge_commit, heads) {
+            return false;
+        }
+        if let Err(code) = store.save_line(project, line, &life) {
+            log_store("watch", &code);
+            return false;
+        }
+        true
+    }
+
     /// Ends each watch of the Project that is over (B15); answers whether
     /// any ended.
     fn settle(&mut self, project: &str) -> bool {
@@ -911,7 +967,17 @@ impl Worker {
                 Ok((state, (notebook, lives))) => {
                     if let Some(location) = &state.location {
                         followed.extend(applying::followed(&project, location, &notebook, &lives));
-                        watches.extend(watching::watched(&project, location, &notebook, &lives));
+                        let records_of = |line: &Line| {
+                            store
+                                .records_of(&project, &line.records)
+                                .unwrap_or_else(|code| {
+                                    log_store("followed", &code);
+                                    Vec::new()
+                                })
+                        };
+                        watches.extend(watching::watched(
+                            &project, location, &notebook, &lives, records_of,
+                        ));
                     }
                 }
                 Err(code) => log_store("followed", &code),
@@ -1684,6 +1750,7 @@ mod tests {
                         checkout: Some("/repo".into()),
                         at_unix_ms: at,
                         always: false,
+                        head: None,
                     })
                     .collect(),
             });
@@ -2173,6 +2240,7 @@ mod tests {
                     checkout: Some(path.into()),
                     at_unix_ms: START,
                     always: false,
+                    head: None,
                 })
                 .collect(),
         };
@@ -2284,6 +2352,7 @@ mod tests {
                 checkout: None,
                 at_unix_ms: START,
                 always: false,
+                head: None,
             }],
         });
         client.send(Command::Wake);

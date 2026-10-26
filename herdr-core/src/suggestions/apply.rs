@@ -264,6 +264,8 @@ pub(crate) fn moved(
                     .as_ref()
                     .is_some_and(|(signal, _)| *signal == Signal::CheckFailed),
                 sessions: BTreeSet::new(),
+                merge_commit: None,
+                heads: BTreeMap::new(),
             });
             line.stage = Stage::Watching;
         }

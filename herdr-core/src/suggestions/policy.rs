@@ -102,6 +102,15 @@ pub(crate) const WATCH_SESSIONS: usize = 5;
 /// sessions, when the watch ends unknown; a CI line's ends sooner (D-14).
 pub(crate) const WATCH_SPAN_MS: u64 = 30 * DAY_MS;
 pub(crate) const WATCH_CI_SPAN_MS: u64 = 14 * DAY_MS;
+/// The most pull request heads one check asks GitHub about for a watched
+/// line; the rest wait for the next check.
+pub(crate) const WATCH_HEADS: usize = 16;
+/// After a GitHub read for a watched line failed, it is asked again no
+/// sooner than this.
+pub(crate) const WATCH_RETRY_MS: u64 = 60 * MINUTE_MS;
+/// The most (merge commit, head) answers the runtime remembers; past it
+/// the set starts over, which costs at most one more read each.
+pub(crate) const WATCH_ANSWERS: usize = 1024;
 /// The strongest fix a recurrence asks for (D-13): 0 a document, 1 a script
 /// or check, 2 a hook.
 pub(crate) const MAX_FIX_LEVEL: u8 = 2;
