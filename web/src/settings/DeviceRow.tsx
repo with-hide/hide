@@ -236,6 +236,23 @@ function DeviceAttention({ device, actions, onAct, onAllow }: { device: Device; 
         </Note>
       </div>
     ) : null,
+    remote && kit?.herdr_start_failed ? (
+      <div key="herdr-start" className="flex flex-wrap items-center gap-x-sm gap-y-xs" data-device-herdr-start-failed={device.id}>
+        <Status tone="warn">{t("devices.herdrStartFailed")}</Status>
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={kit.busy}
+          onClick={() => {
+            onAct();
+            actions.reinstallKit(device.id);
+          }}
+          data-device-herdr-start-retry={device.id}
+        >
+          {t("common.retry")}
+        </Button>
+      </div>
+    ) : null,
     kitShown ? <KitProblem key="kit" device={device} actions={actions} onAct={onAct} /> : null,
     device.test ? <DeviceTest key="test" test={device.test} language={requireInterfaceLanguage(i18n.language)} /> : null,
   ].filter((row) => row !== null);

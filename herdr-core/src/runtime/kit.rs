@@ -397,6 +397,14 @@ impl Runtime {
             }));
         }
         let mut snapshot = KitSnapshot::from_report(report);
+        // A status read has no server update outcome. Keep the actionable
+        // failure until a later install confirms what happened to Herdr.
+        if report.herdr.is_none() {
+            snapshot.herdr_start_failed = self
+                .kit_states
+                .get(device_id)
+                .is_some_and(|state| state.herdr_start_failed);
+        }
         self.diagnose_kit_reasons(device_id, report);
         snapshot.busy = self.kit_install_queued(device_id);
         // A refusal reaches the operator once per change, not on every read
@@ -765,9 +773,9 @@ impl Runtime {
             self.set_error("kit.unavailable", cause.as_str(), false);
             return true;
         }
-        // A pass that stopped judged nothing, so there is nothing to name:
-        // Try again runs the pass again, which checks again what stopped it.
-        if state.refused.is_some() {
+        // A pass that stopped, or could not start Herdr, needs another
+        // automatic pass even when every individual kit part is installed.
+        if state.refused.is_some() || state.herdr_start_failed {
             return self.queue_kit_scope(device_id, Scope::automatic());
         }
         // Naming parts or agents narrows the repair to what is named.

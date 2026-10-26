@@ -456,6 +456,8 @@ The organization runs 20 jobs at once and five of them on macOS, so a pull reque
 
 A change to `herdr-core` or `hided` alone, outside `hided/build.rs` and `hided/src/cli.rs`, therefore starts one macOS lane, `desktop e2e`, as two shard jobs.
 The remote mailbox lane includes `hided/tests/it/device_bootstrap.rs`: it installs the real helper and pin into a private SSH account with no Herdr server, checks terminal startup after the kit, and removes the helper and SSH link before asking the surviving server for its session.
+Its second journey checks that a compatible running server connects its terminal services before the automatic kit pass.
+Both journeys confirm their private server and SSH exits before passing, including the server bootstrap detached from its helper.
 Its Herdr handoff tests also move a device server on the older Herdr 0.8.2 protocol with its pane still running.
 What only macOS shows for such a change outside the app's suite (the OS contract's macOS leg, the web `@platform` tests and the remote mailbox lane on macOS) is found by the next nightly, which opens a `nightly-failure` issue when it fails; the cost is that delay.
 Until issue #1288 a web shell or crate change left `desktop e2e` out, and a desktop spec that asserted what the change did failed first on main's full run: #1106 (the session record, `session-work-ledger.spec.ts`) and #1147 (the file tree a lane close keeps, `right-lane.spec.ts`) kept main red 92 and 103 minutes on 2026-10-15.

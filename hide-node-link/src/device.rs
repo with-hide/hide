@@ -428,7 +428,8 @@ pub struct Established {
     /// How the build's files reached the device on this connection.
     pub upload: Upload,
     /// The automatic kit pass completed before starting Herdr-dependent
-    /// services. Older transports leave it to the core after connection.
+    /// services when Herdr was unreadable. A normal connection leaves it
+    /// to the core after helper readiness.
     pub kit: Option<Result<Box<hide_kit::KitReport>, String>>,
 }
 

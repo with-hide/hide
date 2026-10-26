@@ -257,6 +257,50 @@ fn a_bootstrapped_helpers_report_is_published_without_another_install_pass() {
     assert!(helper.calls().is_empty());
 }
 
+/// A start failure remains actionable across status reads, and the same
+/// install retry clears it once the node confirms the server started.
+#[test]
+fn a_failed_device_server_start_reaches_its_row_until_a_retry_starts_it() {
+    use hide_kit::device_herdr::HerdrUpdate;
+    let helper = KitDevice::answering(Ok(with_herdr(Some(HerdrUpdate::Failed {
+        stage: "start".to_owned(),
+        reason: "private process detail".to_owned(),
+        version: Some("pinned".to_owned()),
+        server_version: None,
+    }))));
+    let shared = with_consent(Some(helper.clone()));
+    shared
+        .lock()
+        .unwrap()
+        .queue_device_kit(DEVICE, KitJob::Apply(hide_kit::Scope::automatic()));
+    settle(&shared);
+    assert!(
+        kit(&shared).herdr_start_failed,
+        "the row lost the start failure"
+    );
+    *helper.answer.lock().unwrap() = Ok(with_herdr(None));
+    shared
+        .lock()
+        .unwrap()
+        .queue_device_kit(DEVICE, KitJob::Status);
+    settle(&shared);
+    assert!(
+        kit(&shared).herdr_start_failed,
+        "a status read erased the failure"
+    );
+    *helper.answer.lock().unwrap() = Ok(with_herdr(Some(HerdrUpdate::Started {
+        version: "pinned".to_owned(),
+        pid: 42,
+    })));
+    dispatch(
+        &shared,
+        "kit_reinstall",
+        serde_json::json!({ "device_id": DEVICE }),
+    );
+    settle(&shared);
+    assert!(!kit(&shared).herdr_start_failed);
+}
+
 /// B13: a connected device's kit is installed by the connection pass, with
 /// the consent's command folder and the registration's Herdr socket, and its
 /// row shows each part the way This Mac's does.

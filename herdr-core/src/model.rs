@@ -937,6 +937,9 @@ pub struct KitSnapshot {
     pub unavailable: Option<KitUnavailable>,
     /// An install is running for this machine; Reinstall shows its progress.
     pub busy: bool,
+    /// Starting the device's pinned Herdr failed. The row offers another
+    /// install pass; diagnostic details stay in the log.
+    pub herdr_start_failed: bool,
     /// Every part, in the kit's own order; empty until the machine was first
     /// checked.
     pub components: Vec<KitComponentSnapshot>,
@@ -1163,6 +1166,10 @@ impl KitSnapshot {
         Self {
             unavailable: None,
             busy: false,
+            herdr_start_failed: matches!(
+                report.herdr.as_deref(),
+                Some(hide_kit::device_herdr::HerdrUpdate::Failed { stage, .. }) if stage == "start"
+            ),
             // Reinstall repairs what is on: a hook part of an agent that is
             // switched off is not a repair, and the pass would refuse it.
             offers_reinstall: components.iter().any(|part| {

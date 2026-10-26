@@ -1356,6 +1356,16 @@ impl RusshRemoteClient {
             .and_then(|status| status.version.clone())
     }
 
+    pub(crate) fn herdr_session_readable(&self) -> bool {
+        lock_recover(&self.herdr_status)
+            .as_ref()
+            .is_some_and(|status| {
+                status.running
+                    && status.protocol.map(u64::from)
+                        == Some(hide_herdr_client::HERDR_PROTOCOL_REVISION)
+            })
+    }
+
     pub(crate) fn forget_herdr_socket(&self) {
         *lock_recover(&self.herdr_status) = None;
     }

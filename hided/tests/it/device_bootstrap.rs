@@ -32,25 +32,39 @@ struct Device {
     pinned: PathBuf,
     ssh: Option<Ssh>,
     link: Option<Arc<dyn NodeLink>>,
+    server_pid: Option<u32>,
 }
 
 impl Drop for Device {
     fn drop(&mut self) {
-        if let Some(link) = self.link.take() {
-            link.close("bootstrap test ended");
-        }
-        let mut command = self.environment.command(&self.pinned);
-        command
-            .env("HERDR_SOCKET_PATH", &self.socket)
-            .args(["server", "stop"]);
-        let _ = super::support::remote_delivery::capture(command);
-        if let Some(mut ssh) = self.ssh.take() {
-            let _ = ssh.stop();
+        if let Err(error) = self.stop() {
+            eprintln!("bootstrap fixture cleanup failed: {error:#}");
         }
     }
 }
 
 impl Device {
+    fn stop(&mut self) -> Result<()> {
+        if let Some(link) = self.link.take() {
+            link.close("bootstrap test ended");
+        }
+        if let Some(pid) = self.server_pid {
+            let mut command = self.environment.command(&self.pinned);
+            command
+                .env("HERDR_SOCKET_PATH", &self.socket)
+                .args(["server", "stop"]);
+            successful(command)?;
+            wait_for("bootstrap server confirmed exit", || {
+                Ok((!hide_platform::process::is_alive(pid)).then_some(()))
+            })?;
+            self.server_pid = None;
+        }
+        if let Some(ssh) = self.ssh.as_mut() {
+            ssh.stop()?;
+        }
+        self.ssh = None;
+        Ok(())
+    }
     fn fresh() -> Result<Self> {
         let pinned = PathBuf::from(
             std::env::var_os("HIDE_E2E_HERDR_BIN").context("set HIDE_E2E_HERDR_BIN")?,
@@ -68,6 +82,7 @@ impl Device {
             pinned,
             ssh: None,
             link: None,
+            server_pid: None,
         })
     }
 
@@ -152,6 +167,43 @@ impl Device {
     }
 }
 
+/// A running compatible server needs no bootstrap ahead of helper
+/// readiness. Its kit is left to the core's normal post-connection pass.
+#[test]
+#[ignore = "real private SSH and pinned Herdr; the remote mailbox lane supplies the binary"]
+fn a_readable_server_connects_its_services_before_the_automatic_kit() -> Result<()> {
+    let mut device = Device::fresh()?;
+    let user_bin = device.environment.home.join(".local/bin");
+    std::fs::create_dir_all(&user_bin)?;
+    std::os::unix::fs::symlink(&device.pinned, user_bin.join("herdr"))?;
+    let mut command = device.environment.command(&device.pinned);
+    command
+        .arg("server")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    let mut server = hide_platform::process::OwnedChild::spawn(&mut command)?;
+    wait_for("compatible server readiness", || {
+        Ok(device.snapshot().ok().map(|_| ()))
+    })?;
+    let established = device.connect()?;
+    ensure!(
+        established.kit.is_none(),
+        "a readable server blocked readiness on the kit"
+    );
+    ensure!(
+        established.node.terminals.is_ok(),
+        "terminal services were not ready"
+    );
+    device.snapshot()?;
+    device.stop()?;
+    server.kill_tree()?;
+    wait_for("compatible server confirmed exit", || {
+        Ok(server.try_wait()?.map(|_| ()))
+    })?;
+    Ok(())
+}
+
 #[test]
 #[ignore = "real candidate helper and pinned Herdr over loopback SSH; set HIDE_E2E_HERDR_BIN"]
 fn a_fresh_device_bootstraps_before_terminal_start_and_keeps_herdr_after_removal() -> Result<()> {
@@ -189,6 +241,7 @@ fn a_fresh_device_bootstraps_before_terminal_start_and_keeps_herdr_after_removal
         "unreadable fresh session: {snapshot}"
     );
     let pid = *pid;
+    device.server_pid = Some(pid);
     let _: hide_node_link::protocol::KitRemoved = call_as(
         established.node.host.as_ref(),
         Call::Kit {
@@ -213,5 +266,6 @@ fn a_fresh_device_bootstraps_before_terminal_start_and_keeps_herdr_after_removal
         "server ended with its node or SSH link"
     );
     device.snapshot()?;
+    device.stop()?;
     Ok(())
 }

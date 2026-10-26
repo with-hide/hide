@@ -56,6 +56,19 @@ async function mount(next: ReturnType<typeof state>) {
 
 const sent = (events: Parameters<DispatchFn>[0][], kind: string) => events.filter((event) => event.kind === kind);
 
+it("shows a failed Herdr start on an unavailable device and retries its install", async () => {
+  const view = await mount(state([remote("mini", { state: "unavailable", kit: kit([part("cli", "installed")], { herdr_start_failed: true }) })]));
+  try {
+    expect(view.row("mini")?.textContent).toContain("Herdr could not start on this device. Try again.");
+    const retry = view.q('[data-device-herdr-start-retry="mini"]');
+    expect(retry?.textContent).toBe("Retry");
+    await act(async () => { retry?.click(); });
+    expect(sent(view.events, "kit_reinstall")).toEqual([{ schema_version: 2, kind: "kit_reinstall", payload: { device_id: "mini" } }]);
+  } finally {
+    await view.unmount();
+  }
+});
+
 it("says nothing about a healthy kit on a device row, and names the device by alias, platform and Herdr version (B54)", async () => {
   const { row, q, unmount } = await mount(state([remote("mini")]));
   const mini = row("mini")!;
