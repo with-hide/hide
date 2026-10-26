@@ -349,6 +349,18 @@ fn a_failed_check_and_a_merge_after_changes_are_handed_on_once() {
         sent(&commands).is_empty(),
         "the same read sends nothing again"
     );
+    runtime.github.projects[0].pull_requests[0].head_oid = Some(format!("{:040x}", 70));
+    runtime.feed_suggestion_prs();
+    assert_eq!(
+        sent(&commands),
+        [(
+            Signal::CheckFailed,
+            "verify".to_owned(),
+            Some(7),
+            Some(format!("{:040x}", 70))
+        )],
+        "the same check failing on a new head is sent again"
+    );
 
     reviewed.merged_at_unix_ms = Some(1_000);
     reviewed.review = None;
