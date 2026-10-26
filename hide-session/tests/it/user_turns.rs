@@ -60,6 +60,7 @@ impl Session {
             checkpoint: None,
             subagents: BTreeMap::new(),
             turns: None,
+            tools: None,
         };
         Self {
             home,

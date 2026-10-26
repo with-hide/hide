@@ -50,6 +50,9 @@ pub struct LabelTranscriptRequest {
     /// when the read starts over.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turns: Option<TurnTracker>,
+    /// The current turn's tool calls and failures, continued the same way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<crate::tools::ToolTracker>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -141,6 +144,7 @@ pub fn read_work_turn(home: &Path, turn: &WorkTurnRequest) -> Result<WorkTurn, S
         checkpoint: None,
         subagents: BTreeMap::new(),
         turns: None,
+        tools: None,
     };
     if turn.agent == Agent::OpenCode {
         request.checkpoint = Some(
@@ -337,6 +341,15 @@ pub struct LabelTranscript {
     /// known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turns: Option<TurnTracker>,
+    /// The current turn's tool calls and failures as far as this read
+    /// reached, for the next request; `None` for a format not read for them
+    /// and from a device helper that predates it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<crate::tools::ToolTracker>,
+    /// The kinds of call a turn this read saw end left failed (PRD
+    /// hide-ai-suggestions D-45).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed_tools: Vec<crate::tools::FailedTool>,
 }
 
 /// How many of a Claude Code session's subagent files are read.
@@ -480,6 +493,7 @@ pub fn read(home: &Path, request: &LabelTranscriptRequest) -> Result<LabelTransc
         }
         turns
     });
+    let (tools, failed_tools) = fold_tools(request, &parsed);
     let mut pr_sightings = parsed.pr_sightings.clone();
     let mut subagents = BTreeMap::new();
     let mut subagents_pending = false;
@@ -539,7 +553,46 @@ pub fn read(home: &Path, request: &LabelTranscriptRequest) -> Result<LabelTransc
         memory_receipts,
         subagents,
         turns,
+        tools,
+        failed_tools,
     })
+}
+
+/// Folds a read's tool steps and the person's messages that end turns, in
+/// record order, into the tracker the request carried; a read that starts
+/// over starts a new one. A format not read for tool calls carries none.
+fn fold_tools(
+    request: &LabelTranscriptRequest,
+    parsed: &crate::ParsedSession,
+) -> (
+    Option<crate::tools::ToolTracker>,
+    Vec<crate::tools::FailedTool>,
+) {
+    if !request.agent.reads_tool_failures() {
+        return (None, Vec::new());
+    }
+    let mut tools = match (&request.checkpoint, &parsed.rescan_reason) {
+        (Some(_), None) => request.tools.clone().unwrap_or_default(),
+        _ => crate::tools::ToolTracker::default(),
+    };
+    let humans = parsed
+        .events
+        .iter()
+        .zip(&parsed.event_offsets)
+        .filter(|(event, _)| event.kind == EventKind::Human)
+        .map(|(_, offset)| *offset);
+    let mut humans = humans.peekable();
+    let mut ended = Vec::new();
+    for (offset, at, steps) in &parsed.tool_steps {
+        while let Some(human) = humans.next_if(|human| human < offset) {
+            tools.human(human, &mut ended);
+        }
+        tools.fold(*offset, *at, steps.clone());
+    }
+    for human in humans {
+        tools.human(human, &mut ended);
+    }
+    (Some(tools), ended)
 }
 
 /// Shared location and native ownership proof for conversation and activity
@@ -748,6 +801,7 @@ mod tests {
             checkpoint,
             subagents: BTreeMap::new(),
             turns: None,
+            tools: None,
         }
     }
 

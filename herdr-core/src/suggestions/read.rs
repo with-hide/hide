@@ -135,7 +135,7 @@ fn evidence(line: &Line, input: &ReadInput<'_>) -> Vec<SuggestionEvidenceSnapsho
             gone: false,
         })
         .collect::<Vec<_>>();
-    rows.sort_by(|a, b| b.at_unix_ms.cmp(&a.at_unix_ms));
+    rows.sort_by_key(|row| std::cmp::Reverse(row.at_unix_ms));
     rows.truncate(EVIDENCE_ROWS);
     rows
 }

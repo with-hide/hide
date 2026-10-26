@@ -563,6 +563,7 @@ mod tests {
                 checkpoint: None,
                 subagents: Default::default(),
                 turns: Some(Default::default()),
+                tools: None,
             },
         }
     }

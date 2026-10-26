@@ -753,6 +753,7 @@ fn a_plan_read_from_the_session_file_puts_the_row_in_needs_you() {
             checkpoint: None,
             subagents: Default::default(),
             turns: None,
+            tools: None,
         },
     )
     .unwrap();

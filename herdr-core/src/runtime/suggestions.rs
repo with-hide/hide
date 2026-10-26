@@ -22,6 +22,7 @@ use crate::suggestions::worker::{
 use hide_node_link::gh::GithubFailureCategory;
 use serde::Deserialize;
 use serde_json::json;
+use std::collections::HashSet;
 use std::sync::{Arc, Weak};
 
 #[derive(Default)]
@@ -35,7 +36,17 @@ pub(super) struct SuggestionsWork {
     pub(super) read: Option<Arc<ProjectSuggestionsSnapshot>>,
     /// The lock's facts the section was last composed with.
     laid: Option<LockFacts>,
+    /// The pull request records already handed to the worker, so a GitHub
+    /// read that moved nothing for them sends nothing.
+    sent_prs: HashSet<String>,
+    /// Open pull requests a review asked changes of, until they merge
+    /// (B4: a review's change that was fixed and merged).
+    changes_requested: HashSet<String>,
 }
+
+/// The most pull request keys either set keeps; past it the set starts
+/// over, which costs at most one resend the store folds.
+const PR_KEYS: usize = 8192;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct OpenedProject {
@@ -153,9 +164,9 @@ impl Runtime {
         let workspace = self
             .catalog_workspaces()
             .find(|workspace| workspace.id == workspace_id)?;
-        let (node, link) = match self.linked_node(&workspace.device_id) {
-            Ok((node, link)) => (node, Some(link)),
-            Err("link_down") => (crate::node::NodeId::parse(&workspace.device_id).ok()?, None),
+        let node = match self.linked_node(&workspace.device_id) {
+            Ok((node, _)) => node,
+            Err("link_down") => crate::node::NodeId::parse(&workspace.device_id).ok()?,
             Err(_) => return None,
         };
         Some((
@@ -167,7 +178,6 @@ impl Runtime {
             ProjectRef {
                 node,
                 path: workspace.path.clone(),
-                link,
             },
         ))
     }
@@ -299,6 +309,85 @@ impl Runtime {
             },
             number: None,
         })
+    }
+
+    /// Hands the worker what GitHub's reads say went wrong in each Project's
+    /// pull requests (B4, D-19): each check an open one failed, and each
+    /// that merged after a review asked for changes. Only what was not sent
+    /// before leaves the lock.
+    pub(super) fn feed_suggestion_prs(&mut self) {
+        use crate::model::ReviewDecision;
+        use crate::suggestions::ledger::{Observation, PrRef};
+        let Some(client) = self.suggestions_work.client.clone() else {
+            return;
+        };
+        let now = unix_milliseconds();
+        let work = &mut self.suggestions_work;
+        let nodes = std::iter::once((self.node.clone(), &self.github)).chain(
+            self.device_github.iter().filter_map(|(device, github)| {
+                crate::node::NodeId::parse(device)
+                    .ok()
+                    .map(|node| (node, github))
+            }),
+        );
+        let mut batches = Vec::new();
+        for (node, github) in nodes {
+            for project in &github.projects {
+                let mut facts = Vec::new();
+                for pr in &project.pull_requests {
+                    let unit = format!(
+                        "{}\u{1f}{}\u{1f}{}",
+                        node.as_str(),
+                        project.root_path,
+                        pr.number
+                    );
+                    let fact = |signal: Signal, tag: String, at: u64| Observation {
+                        signal,
+                        tag,
+                        session: None,
+                        pr: Some(PrRef {
+                            number: pr.number,
+                            url: pr.url.clone(),
+                        }),
+                        checkout: None,
+                        at_unix_ms: at,
+                        always: false,
+                    };
+                    let open = pr.merged_at_unix_ms.is_none() && pr.closed_at_unix_ms.is_none();
+                    if open {
+                        for check in &pr.work.failed_checks {
+                            let tag = check.name.clone().unwrap_or_else(|| "check".to_owned());
+                            if remember(&mut work.sent_prs, format!("{unit}\u{1f}c\u{1f}{tag}")) {
+                                facts.push(fact(Signal::CheckFailed, tag, now));
+                            }
+                        }
+                        if pr.review == Some(ReviewDecision::ChangesRequested) {
+                            remember(&mut work.changes_requested, unit);
+                        }
+                    } else if let Some(merged) = pr.merged_at_unix_ms
+                        && work.changes_requested.remove(&unit)
+                    {
+                        facts.push(fact(
+                            Signal::ChangeRequest,
+                            "changes_requested".to_owned(),
+                            merged,
+                        ));
+                    }
+                }
+                if !facts.is_empty() {
+                    batches.push((
+                        ProjectRef {
+                            node: node.clone(),
+                            path: project.root_path.clone(),
+                        },
+                        facts,
+                    ));
+                }
+            }
+        }
+        for (project, facts) in batches {
+            client.send(Command::Observe { project, facts });
+        }
     }
 
     pub(super) fn note_suggestions_intro_seen(&mut self) -> bool {
@@ -495,6 +584,17 @@ fn lay_facts(project: &mut ProjectSuggestionsSnapshot, facts: LockFacts, memory_
     }
 }
 
+/// Adds `key` to a bounded set; whether it was new.
+fn remember(set: &mut HashSet<String>, key: String) -> bool {
+    if set.contains(&key) {
+        return false;
+    }
+    if set.len() >= PR_KEYS {
+        set.clear();
+    }
+    set.insert(key)
+}
+
 /// Hands the worker's reads to the runtime and answers its questions under
 /// a short lock; a runtime that is gone answers nothing.
 struct RuntimeSink {
@@ -532,15 +632,19 @@ impl Sink for RuntimeSink {
         let Some(runtime) = self.runtime.upgrade() else {
             return closed;
         };
-        let gate = match runtime.lock() {
-            Ok(guard) => guard.suggestions_gate(),
-            Err(_) => closed,
-        };
-        gate
+        runtime
+            .lock()
+            .map_or(closed, |guard| guard.suggestions_gate())
     }
 
     fn restore_memory(&self, workspace_id: String) {
         self.apply(move |runtime| runtime.set_memory_enabled(workspace_id, true));
+    }
+
+    fn link(&self, node: &crate::node::NodeId) -> Option<Arc<dyn crate::node_access::NodeLink>> {
+        let runtime = self.runtime.upgrade()?;
+        let guard = runtime.lock().ok()?;
+        guard.linked_node(node.as_str()).ok().map(|(_, link)| link)
     }
 }
 
@@ -568,6 +672,8 @@ pub(crate) fn spawn_worker(
     )?;
     let mut guard = runtime.lock().map_err(|_| "runtime lock poisoned")?;
     guard.suggestions_work.client = Some(worker.client());
+    // What the GitHub reads restored at start already say.
+    guard.feed_suggestion_prs();
     // A Project the tool opened before the worker was there is opened now.
     if let Some(opened) = guard.suggestions_work.opened.clone()
         && let Some((_, project)) = guard.suggestion_project(&opened.workspace_id)

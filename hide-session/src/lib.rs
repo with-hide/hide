@@ -45,6 +45,7 @@ pub mod session_activity;
 mod sightings;
 mod sqlite;
 pub mod stamp;
+pub mod tools;
 pub mod turns;
 pub mod usage;
 
@@ -335,6 +336,12 @@ impl Agent {
     pub const fn waits_while_working(self) -> bool {
         self.format().waits_while_working()
     }
+    /// Whether its records say which tool calls failed (`tools`): every
+    /// format but agy's, whose transcript carries no result, and Cursor's,
+    /// which is not read for them.
+    pub const fn reads_tool_failures(self) -> bool {
+        !matches!(self, Self::Antigravity | Self::Cursor)
+    }
     pub const fn reports_wake_devices(self) -> bool {
         self.format().reports_wake_devices()
     }
@@ -611,6 +618,10 @@ pub struct ParsedSession {
     /// The turn records of an agent that reports them, each with its record's
     /// offset, in record order (`turns`); empty for every other agent.
     pub turn_marks: Vec<(u64, turns::TurnMark)>,
+    /// What each record says about tool calls and their results, with the
+    /// record's offset and time (`tools`); empty for a format not read for
+    /// them.
+    pub tool_steps: Vec<(u64, u64, Vec<tools::ToolStep>)>,
     /// A plan awaiting approval that the session's current state, not one
     /// of its records, says is pending (Grok's `plan_mode.json`).
     pub plan_hold: Option<turns::UserTurnContent>,
@@ -1427,6 +1438,7 @@ pub(crate) fn parse_events_followed(
                 wake: agent
                     .reports_wake_devices()
                     .then_some(turns::wake::claude as turns::wake::Parser),
+                tools: Some(tools::claude as tools::Parser),
                 human_starts_turn: true,
                 large: None,
             },
@@ -1441,6 +1453,7 @@ pub(crate) fn parse_events_followed(
             Turns {
                 parser: Some(turns::native::codex),
                 wake: None,
+                tools: Some(tools::codex as tools::Parser),
                 human_starts_turn: false,
                 large: None,
             },
@@ -1455,6 +1468,7 @@ pub(crate) fn parse_events_followed(
             Turns {
                 parser: Some(grok::turn),
                 wake: None,
+                tools: Some(tools::grok as tools::Parser),
                 human_starts_turn: true,
                 large: Some(grok::reduced_line),
             },
@@ -1469,6 +1483,7 @@ pub(crate) fn parse_events_followed(
             Turns {
                 parser: None,
                 wake: None,
+                tools: Some(tools::pi as tools::Parser),
                 human_starts_turn: false,
                 large: None,
             },
@@ -1483,6 +1498,7 @@ pub(crate) fn parse_events_followed(
             Turns {
                 parser: Some(turns::native::omp),
                 wake: None,
+                tools: Some(tools::pi as tools::Parser),
                 human_starts_turn: true,
                 large: None,
             },
@@ -1497,6 +1513,7 @@ pub(crate) fn parse_events_followed(
             Turns {
                 parser: None,
                 wake: None,
+                tools: None,
                 human_starts_turn: false,
                 large: None,
             },
@@ -1515,6 +1532,8 @@ struct Turns {
     /// on; only a format that declares it can prove one
     /// ([`Agent::reports_wake_devices`]).
     wake: Option<turns::wake::Parser>,
+    /// Reads tool calls and whether each failed (`tools`).
+    tools: Option<tools::Parser>,
     human_starts_turn: bool,
     large: Option<fn(&str) -> Option<String>>,
 }
@@ -1534,6 +1553,7 @@ fn parse_lines_at(
     let Turns {
         parser: turn,
         wake,
+        tools,
         human_starts_turn,
         large,
     } = turns;
@@ -1582,6 +1602,13 @@ fn parse_lines_at(
                 Ok(Some(mark)) => parsed.turn_marks.push((line_offset, mark)),
                 Err(reason) => parsed.skipped(reason),
                 Ok(None) => {}
+            }
+        }
+        if let Some(tools) = tools {
+            let steps = tools(&value);
+            if !steps.is_empty() {
+                let at = timestamp_ms(value.get("timestamp")).unwrap_or(0);
+                parsed.tool_steps.push((line_offset, at, steps));
             }
         }
         let after = &contents.as_bytes()[usize::try_from(relative_offset)

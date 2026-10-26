@@ -49,33 +49,22 @@ pub(crate) type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
 /// investigation replaces it (D-49).
 pub(crate) type AnalysisFactory = Arc<dyn Fn() -> Box<dyn Analysis> + Send + Sync>;
 
-/// A folder on a machine whose Project a command is about, with the node
-/// that reads it.
-#[derive(Clone)]
+/// A folder on a machine whose Project a command is about.
+#[derive(Clone, Debug)]
 pub(crate) struct ProjectRef {
     pub node: NodeId,
     pub path: String,
-    pub link: Option<Arc<dyn NodeLink>>,
 }
 
-impl std::fmt::Debug for ProjectRef {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ProjectRef")
-            .field("node", &self.node)
-            .finish_non_exhaustive()
-    }
-}
-
-/// Names a folder's Project; production asks the folder's node.
-pub(crate) type Resolver = Box<dyn FnMut(&ProjectRef) -> Result<String, String> + Send>;
+/// Names a folder's Project with the link to its node, when the node is
+/// reachable; production asks the node.
+pub(crate) type Resolver =
+    Box<dyn FnMut(&ProjectRef, Option<Arc<dyn NodeLink>>) -> Result<String, String> + Send>;
 
 /// The resolver that asks the folder's node (`hide_project`).
 pub(crate) fn node_resolver() -> Resolver {
-    Box::new(|project: &ProjectRef| {
-        let link = project
-            .link
-            .as_ref()
-            .ok_or_else(|| "node_unavailable".to_owned())?;
+    Box::new(|project: &ProjectRef, link: Option<Arc<dyn NodeLink>>| {
+        let link = link.ok_or_else(|| "node_unavailable".to_owned())?;
         crate::memory_hook::project_identity(
             link.as_ref(),
             &project.node,
@@ -123,6 +112,12 @@ pub(crate) enum Command {
         project: ProjectRef,
         facts: Vec<Observation>,
     },
+    /// Facts about a Project whose identity the source already holds
+    /// (Memory's).
+    ObserveProject {
+        project_id: String,
+        facts: Vec<Observation>,
+    },
     Settings {
         project: ProjectRef,
         change: SettingsChange,
@@ -166,6 +161,8 @@ pub(crate) trait Sink: Send + 'static {
     fn gate(&self) -> RunGate;
     /// Turns the Project's Memory back on, as the head switch found it.
     fn restore_memory(&self, workspace_id: String);
+    /// The link to `node` while it is reachable, to name a folder's Project.
+    fn link(&self, node: &NodeId) -> Option<Arc<dyn NodeLink>>;
 }
 
 pub(crate) struct Options {
@@ -213,7 +210,7 @@ impl SuggestionClient {
         let kind = match &command {
             Command::Open { .. } => "open",
             Command::Close => "close",
-            Command::Observe { .. } => "observe",
+            Command::Observe { .. } | Command::ObserveProject { .. } => "observe",
             Command::Settings { .. } => "settings",
             Command::Action { .. } => "action",
             Command::IntroSeen => "intro_seen",
@@ -367,12 +364,12 @@ impl Worker {
         }
     }
 
-    fn resolve(&mut self, project: &ProjectRef) -> Option<String> {
+    fn resolve(&mut self, project: &ProjectRef, sink: &impl Sink) -> Option<String> {
         let key = (project.node.clone(), project.path.clone());
         if let Some(id) = self.identities.get(&key) {
             return Some(id.clone());
         }
-        match (self.options.resolver)(project) {
+        match (self.options.resolver)(project, sink.link(&project.node)) {
             Ok(id) => {
                 if self.identities.len() >= IDENTITY_CACHE {
                     self.identities.clear();
@@ -396,19 +393,20 @@ impl Worker {
                 workspace_id,
                 project,
             } => {
-                let id = self.resolve(&project);
+                let id = self.resolve(&project, sink);
                 self.opened = Some((workspace_id, id));
                 self.publish(sink);
             }
             Command::Close => self.opened = None,
             Command::Observe { project, facts } => {
-                let Some(id) = self.resolve(&project) else {
+                let Some(id) = self.resolve(&project, sink) else {
                     return;
                 };
                 self.observe(&id, facts);
             }
+            Command::ObserveProject { project_id, facts } => self.observe(&project_id, facts),
             Command::Settings { project, change } => {
-                let Some(id) = self.resolve(&project) else {
+                let Some(id) = self.resolve(&project, sink) else {
                     return;
                 };
                 self.change_settings(&id, change, sink);
@@ -420,7 +418,7 @@ impl Worker {
                 line,
                 action,
             } => {
-                let Some(id) = self.resolve(&project) else {
+                let Some(id) = self.resolve(&project, sink) else {
                     return;
                 };
                 self.act(&id, line, action);
@@ -768,15 +766,13 @@ impl Worker {
         }
         let analysis = (self.options.analysis)();
         let gate = sink.gate();
-        if analysis.uses_provider() {
-            if !gate.ai_ready || !gate.usage_ok {
-                crate::diagnostic!(json!({
-                    "component": "suggestions", "kind": "run.deferred",
-                    "project_id": project,
-                    "reason": if gate.ai_ready { "usage_limit" } else { "ai_not_ready" },
-                }));
-                return false;
-            }
+        if analysis.uses_provider() && (!gate.ai_ready || !gate.usage_ok) {
+            crate::diagnostic!(json!({
+                "component": "suggestions", "kind": "run.deferred",
+                "project_id": project,
+                "reason": if gate.ai_ready { "usage_limit" } else { "ai_not_ready" },
+            }));
+            return false;
         }
         let stop = StopFlag::default();
         let input = AnalysisInput {
@@ -1065,6 +1061,9 @@ mod tests {
         fn restore_memory(&self, workspace_id: String) {
             let _ = self.restored.send(workspace_id);
         }
+        fn link(&self, _node: &NodeId) -> Option<Arc<dyn NodeLink>> {
+            None
+        }
     }
 
     struct Fixture {
@@ -1108,7 +1107,9 @@ mod tests {
                 clock: Arc::new(move || time.load(Ordering::SeqCst)),
                 zone: jiff::tz::TimeZone::UTC,
                 analysis: Arc::new(|| Box::new(TagGrouping) as Box<dyn Analysis>),
-                resolver: Box::new(|project: &ProjectRef| Ok(format!("project{}", project.path))),
+                resolver: Box::new(|project: &ProjectRef, _| {
+                    Ok(format!("project{}", project.path))
+                }),
             };
             let sink = TestSink {
                 reads: reads_tx,
@@ -1213,7 +1214,6 @@ mod tests {
         ProjectRef {
             node: NodeId::parse("test-node").unwrap(),
             path: "/repo".into(),
-            link: None,
         }
     }
 
@@ -1364,7 +1364,7 @@ mod tests {
                 clock: Arc::new(move || time.load(Ordering::SeqCst)),
                 zone: jiff::tz::TimeZone::UTC,
                 analysis: Arc::new(|| Box::new(Asks) as Box<dyn Analysis>),
-                resolver: Box::new(|_: &ProjectRef| Ok("project".into())),
+                resolver: Box::new(|_: &ProjectRef, _| Ok("project".into())),
             },
             TestSink {
                 reads: reads_tx,

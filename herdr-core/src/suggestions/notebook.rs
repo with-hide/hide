@@ -273,6 +273,7 @@ impl Notebook {
     }
 
     /// The line holding `record`, if any.
+    #[cfg(test)]
     pub(crate) fn line_of(&self, record: RecordId) -> Option<LineId> {
         self.lines
             .iter()
