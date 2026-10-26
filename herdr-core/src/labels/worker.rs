@@ -50,6 +50,7 @@ use crate::links::ledger::{
     without_attachments,
 };
 use crate::links::worker::LinkClient;
+use crate::suggestions::ledger::Signal;
 
 /// The minimum interval between native-file current-metadata reads, also
 /// used for the single follow-up when a starting turn has no prompt yet.
@@ -188,6 +189,8 @@ pub(crate) struct ObservedAgent {
 
 pub(crate) struct WorkerConfig {
     pub(crate) ledger: Arc<std::sync::Mutex<Option<LinkClient>>>,
+    /// Where a turn's failed tool calls go (PRD hide-ai-suggestions B4).
+    pub(crate) suggestions: SuggestionsHandle,
     /// The store key: the core's node id, or `device:<id>`.
     pub(crate) target: String,
     /// Where the Herdr server's generator lock is (D-10); see `generator`.
@@ -202,6 +205,58 @@ pub(crate) struct WorkerConfig {
 }
 
 pub(crate) type Wake = Arc<dyn Fn() + Send + Sync>;
+/// The suggestion worker's client once it started; shared by every worker.
+pub(crate) type SuggestionsHandle =
+    Arc<std::sync::Mutex<Option<crate::suggestions::worker::SuggestionClient>>>;
+
+/// Hands what went wrong in a pane's turn (a tool call left failed, a stop
+/// for the operator) to the suggestion worker as records of the pane's
+/// session in its folder; without a session or a folder there is nothing to
+/// count them by. A time of zero is now.
+fn send_suggestion_records(
+    suggestions: &SuggestionsHandle,
+    target: &str,
+    agent: Agent,
+    session: Option<&str>,
+    cwd: Option<&str>,
+    facts: Vec<(Signal, String, u64)>,
+) {
+    use crate::suggestions::ledger::{Observation, SessionRef};
+    use crate::suggestions::worker::{Command, ProjectRef};
+    let (Some(session), Some(cwd)) = (session, cwd) else {
+        return;
+    };
+    let Some(client) = suggestions.lock().ok().and_then(|client| client.clone()) else {
+        return;
+    };
+    let node = target.strip_prefix("device:").unwrap_or(target);
+    let Ok(node) = crate::node::NodeId::parse(node) else {
+        return;
+    };
+    let now = crate::runtime::unix_milliseconds();
+    let facts = facts
+        .into_iter()
+        .map(|(signal, tag, at)| Observation {
+            signal,
+            tag,
+            session: Some(SessionRef {
+                agent: agent.as_str().to_owned(),
+                id: session.to_owned(),
+            }),
+            pr: None,
+            checkout: Some(cwd.to_owned()),
+            at_unix_ms: if at == 0 { now } else { at },
+            always: false,
+        })
+        .collect();
+    client.send(Command::Observe {
+        project: ProjectRef {
+            node,
+            path: cwd.to_owned(),
+        },
+        facts,
+    });
+}
 
 enum WorkerResult {
     Read {
@@ -333,6 +388,12 @@ struct PaneState {
     /// The skip reasons already logged, so a cap that holds on every read
     /// (more subagent files than one read takes) is logged once.
     skip_reasons_logged: std::collections::BTreeSet<String>,
+    /// The current turn's tool calls and failures, carried from read to
+    /// read in this process (PRD hide-ai-suggestions D-45).
+    tools: Option<hide_session::tools::ToolTracker>,
+    /// The session whose waits were handed on as suggestion records, and
+    /// which kinds, so a wait is sent once a session.
+    waits_sent: Option<(String, Vec<&'static str>)>,
 }
 
 impl PaneState {
@@ -348,6 +409,7 @@ impl PaneState {
 
 pub(crate) struct LabelWorker {
     ledger: Arc<std::sync::Mutex<Option<LinkClient>>>,
+    suggestions: SuggestionsHandle,
     target: String,
     store: Arc<LabelStore>,
     analyzer: Arc<LabelAnalyzer>,
@@ -410,6 +472,7 @@ impl LabelWorker {
         )?;
         Ok(Self {
             ledger: config.ledger,
+            suggestions: config.suggestions,
             records,
             generator: GeneratorLock::new(config.lock, &config.target, Arc::clone(&wake)),
             target: config.target,
@@ -595,6 +658,8 @@ impl LabelWorker {
                             end_retried: None,
                             context_wait: None,
                             skip_reasons_logged: Default::default(),
+                            tools: None,
+                            waits_sent: None,
                         },
                     );
                 }
@@ -1201,6 +1266,7 @@ impl LabelWorker {
                 checkpoint,
                 subagents,
                 turns,
+                tools: pane.tools.clone().filter(|_| same_file),
             },
             discover: pane.reported_reference.is_none(),
             import_legacy: !pane.metadata_loaded,
@@ -1574,6 +1640,58 @@ impl LabelWorker {
         let pane = self.panes.get_mut(pane_id).expect("checked above");
         if verdicts_forgotten {
             pane.claimed_submit = None;
+        }
+        pane.tools = transcript.tools.clone();
+        let mut failed_tools = transcript.failed_tools.clone();
+        // A stopped agent's turn is over once its records are read through.
+        if !transcript.has_more
+            && matches!(pane.status.as_str(), "idle" | "done")
+            && let Some(tools) = pane.tools.as_mut()
+        {
+            failed_tools.extend(tools.end_turn());
+        }
+        let session = record.native_session_id.as_deref();
+        let mut facts = failed_tools
+            .into_iter()
+            .map(|failure| (Signal::FailedTool, failure.head, failure.at_unix_ms))
+            .collect::<Vec<_>>();
+        // The agent stopped for the operator: a native question, or Herdr's
+        // `blocked` (a permission or input prompt). A plan waiting for
+        // approval is the turn's own end, not a stop.
+        let waits = [
+            (record
+                .turns
+                .as_ref()
+                .and_then(hide_session::turns::TurnTracker::waiting)
+                == Some(hide_session::turns::Waiting::Question))
+            .then_some("question"),
+            (pane.status == "blocked").then_some("blocked"),
+        ];
+        if let Some(session) = session {
+            if pane
+                .waits_sent
+                .as_ref()
+                .is_none_or(|(sent, _)| sent != session)
+            {
+                pane.waits_sent = Some((session.to_owned(), Vec::new()));
+            }
+            let sent = &mut pane.waits_sent.as_mut().expect("set above").1;
+            for wait in waits.into_iter().flatten() {
+                if !sent.contains(&wait) {
+                    sent.push(wait);
+                    facts.push((Signal::AgentWait, wait.to_owned(), 0));
+                }
+            }
+        }
+        if !facts.is_empty() {
+            send_suggestion_records(
+                &self.suggestions,
+                &target,
+                pane.agent,
+                session,
+                pane.cwd.as_deref(),
+                facts,
+            );
         }
         let submits = self.input.submits(&target, pane_id);
         let bells = self.input.bells(&target, pane_id);
@@ -2441,6 +2559,32 @@ impl LabelWorker {
                     {
                         crate::diagnostic!(
                             json!({"component":"labels","kind":"ledger.enqueue_failed","pane_id":pane_id,"code":code})
+                        );
+                    }
+                }
+                // A problem the turn's judgment says was left over is a
+                // suggestion record of the session, weighed low (PRD
+                // hide-ai-suggestions D-30).
+                if outcome.phase == AnalysisPhase::TurnEnd
+                    && let Some(judgment) = analysis.work.as_ref()
+                    && let Some(pane) = self.panes.get(pane_id)
+                {
+                    let problems = judgment
+                        .missed
+                        .iter()
+                        .filter(|missed| missed.kind == crate::links::ledger::MissedKind::Problem)
+                        .map(|missed| {
+                            (Signal::LabelMissed, missed.text.clone(), outcome.at_unix_ms)
+                        })
+                        .collect::<Vec<_>>();
+                    if !problems.is_empty() {
+                        send_suggestion_records(
+                            &self.suggestions,
+                            &self.target,
+                            pane.agent,
+                            record.native_session_id.as_deref(),
+                            pane.cwd.as_deref(),
+                            problems,
                         );
                     }
                 }

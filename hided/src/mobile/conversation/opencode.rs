@@ -94,6 +94,7 @@ impl Session {
                 checkpoint: Some(checkpoint.clone()),
                 subagents: Default::default(),
                 turns: None,
+                tools: None,
             },
         )
         .map_err(refused)?;

@@ -527,6 +527,9 @@ impl crate::suggestions::worker::Sink for ReadySink {
         }
     }
     fn restore_memory(&self, _: String) {}
+    fn link(&self, _: &crate::node::NodeId) -> Option<Arc<dyn crate::node_access::NodeLink>> {
+        None
+    }
 }
 
 #[test]
@@ -569,7 +572,7 @@ fn an_investigation_that_gets_no_answer_leaves_the_day_to_the_tag_grouping() {
                     plan.stop.token(),
                 ))
             }),
-            resolver: Box::new(|_: &ProjectRef| Ok("project".into())),
+            resolver: Box::new(|_: &ProjectRef, _| Ok("project".into())),
         },
         ReadySink(reads_tx),
     )
@@ -577,7 +580,6 @@ fn an_investigation_that_gets_no_answer_leaves_the_day_to_the_tag_grouping() {
     let project = || ProjectRef {
         node: crate::node::NodeId::parse("test-node").unwrap(),
         path: "/repo".into(),
-        link: None,
     };
     let client = worker.client();
     client.send(Command::Open {

@@ -219,6 +219,7 @@ pub(crate) fn request(agent: Agent) -> LabelTranscriptRequest {
         checkpoint: None,
         subagents: BTreeMap::new(),
         turns: None,
+        tools: None,
     }
 }
 
@@ -270,6 +271,7 @@ fn subagent_poll_fixture() -> (tempfile::TempDir, PathBuf, LabelTranscriptReques
         checkpoint: None,
         subagents: BTreeMap::new(),
         turns: None,
+        tools: None,
     };
     (home, folder, request)
 }
@@ -4847,4 +4849,107 @@ mod antigravity {
         );
         assert!(located.is_err());
     }
+}
+
+/// A Claude Code turn's tool calls as the label worker reads them (PRD
+/// hide-ai-suggestions D-45): a command that failed and then passed in the
+/// same turn is not kept, one still failed when the next turn began is, and
+/// the turn still open carries its failure into the next read.
+#[test]
+fn a_turn_hands_on_only_the_tool_calls_it_left_failed() {
+    let home = tempfile::tempdir().unwrap();
+    let project = home.path().join(".claude/projects/-work-app");
+    std::fs::create_dir_all(&project).unwrap();
+    let path = project.join("tools-session.jsonl");
+    let at = |second: u32| format!("2026-10-03T01:00:{second:02}Z");
+    let human = |second: u32, text: &str| {
+        serde_json::json!({"type":"user","sessionId":"tools-session","origin":{"kind":"human"},
+            "timestamp":at(second),"message":{"role":"user","content":text}})
+    };
+    let call = |second: u32, id: &str, command: &str| {
+        serde_json::json!({"type":"assistant","sessionId":"tools-session","timestamp":at(second),
+            "message":{"role":"assistant","content":[{"type":"tool_use","id":id,"name":"Bash",
+            "input":{"command":command}}]}})
+    };
+    let result = |second: u32, id: &str, failed: bool| {
+        serde_json::json!({"type":"user","sessionId":"tools-session","timestamp":at(second),
+            "message":{"role":"user","content":[{"type":"tool_result","tool_use_id":id,
+            "is_error":failed,"content":"output"}]}})
+    };
+    let write = |records: &[serde_json::Value]| {
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .unwrap();
+        for record in records {
+            std::io::Write::write_all(&mut file, format!("{record}\n").as_bytes()).unwrap();
+        }
+    };
+    write(&[
+        human(1, "fix the build"),
+        call(2, "t1", "cargo test -p app"),
+        result(3, "t1", true),
+        call(4, "t2", "cargo test -p app"),
+        result(5, "t2", false),
+        call(6, "t3", "cd web && npm run lint"),
+        result(7, "t3", true),
+        human(8, "now push it"),
+        call(9, "t4", "git push origin main"),
+        result(10, "t4", true),
+    ]);
+    let request = LabelTranscriptRequest {
+        agent: Agent::Claude,
+        reference_kind: "path".to_owned(),
+        reference_value: path.display().to_string(),
+        cwd: None,
+        checkpoint: None,
+        subagents: BTreeMap::new(),
+        turns: None,
+        tools: None,
+    };
+    let first = read(home.path(), &request).unwrap();
+    let heads = |transcript: &LabelTranscript| {
+        transcript
+            .failed_tools
+            .iter()
+            .map(|failure| failure.head.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        heads(&first),
+        ["npm run"],
+        "cargo test passed later in its turn"
+    );
+
+    write(&[
+        call(11, "t5", "git push origin main"),
+        result(12, "t5", false),
+    ]);
+    let next = read(
+        home.path(),
+        &LabelTranscriptRequest {
+            checkpoint: Some(first.checkpoint.clone()),
+            turns: first.turns.clone(),
+            tools: first.tools.clone(),
+            ..request.clone()
+        },
+    )
+    .unwrap();
+    assert!(next.failed_tools.is_empty());
+    let mut tools = next.tools.clone().unwrap();
+    assert!(
+        tools.end_turn().is_empty(),
+        "the push passed on its second try"
+    );
+
+    let mut open = first.tools.clone().unwrap();
+    assert_eq!(
+        open.end_turn()
+            .into_iter()
+            .map(|failure| failure.head)
+            .collect::<Vec<_>>(),
+        ["git push"],
+        "the turn still open carries its failure"
+    );
 }

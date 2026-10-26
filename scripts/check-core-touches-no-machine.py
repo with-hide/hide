@@ -78,6 +78,11 @@ STORES = {
     "herdr-core/src/labels/store.rs": (3, "the core's agent label store"),
     "herdr-core/src/labels/import.rs": (1, "reads the core's own earlier label store once"),
     "herdr-core/src/links/store.rs": (6, "the core's link graph store"),
+    "herdr-core/src/suggestions/store.rs": (
+        4,
+        "the core's suggestion store (records, notebooks, settings), set aside "
+        "and rebuilt when it cannot be read",
+    ),
     "herdr-core/src/usage_ledger/store.rs": (1, "the core's usage ledger and retained daily totals"),
     "herdr-core/src/local_issues.rs": (5, "the core's local issue store"),
     "herdr-core/src/mission_events.rs": (
