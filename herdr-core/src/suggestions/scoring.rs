@@ -223,7 +223,7 @@ mod tests {
                 Signal::FailedTool,
                 Some("a"),
                 None,
-                NOW - policy::DECAY_HALF_LIFE_MS,
+                NOW - policy::FULL_WEIGHT_MS - policy::DECAY_HALF_LIFE_MS,
             )],
         };
         let score = score(&line_of(&index), &index, NOW);

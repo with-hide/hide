@@ -71,7 +71,7 @@ mod session_archive;
 mod session_state;
 mod snapshot_delta;
 mod ssh_hosts;
-mod suggestions;
+pub(crate) mod suggestions;
 mod tab_focus;
 mod terminal;
 mod terminal_input;
@@ -3108,7 +3108,7 @@ fn read_mark(made: u64) -> String {
     )
 }
 
-fn unix_milliseconds() -> u64 {
+pub(crate) fn unix_milliseconds() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)

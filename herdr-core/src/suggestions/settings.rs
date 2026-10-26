@@ -17,21 +17,6 @@ pub enum ApplyMode {
     AutoPr,
 }
 
-impl ApplyMode {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Confirm => "confirm",
-            Self::AutoPr => "auto_pr",
-        }
-    }
-
-    pub(crate) fn parse(value: &str) -> Option<Self> {
-        [Self::Confirm, Self::AutoPr]
-            .into_iter()
-            .find(|mode| mode.as_str() == value)
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Settings {
     /// The tool head's switch for the whole of Hide AI in this Project

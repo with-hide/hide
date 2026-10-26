@@ -18,7 +18,10 @@ pub(crate) const LABEL_ONLY_SESSION_POINTS: f64 = 0.5;
 /// A distinct pull request counts one point while it is this recent.
 pub(crate) const PR_POINTS: f64 = 1.0;
 pub(crate) const PR_WINDOW_MS: u64 = 14 * DAY_MS;
-/// An older record weighs less: its points halve every this long.
+/// An older record weighs less (D-12): a record keeps its full points this
+/// long, so three sessions this week are three points, and after it its
+/// points halve every [`DECAY_HALF_LIFE_MS`].
+pub(crate) const FULL_WEIGHT_MS: u64 = 7 * DAY_MS;
 pub(crate) const DECAY_HALF_LIFE_MS: u64 = 30 * DAY_MS;
 
 /// How many suggestions the operator wants (D-09, D-10).
@@ -32,21 +35,8 @@ pub enum Quantity {
 }
 
 impl Quantity {
+    #[cfg(test)]
     pub(crate) const ALL: [Self; 3] = [Self::Few, Self::Normal, Self::Many];
-
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::Few => "few",
-            Self::Normal => "normal",
-            Self::Many => "many",
-        }
-    }
-
-    pub(crate) fn parse(value: &str) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|quantity| quantity.as_str() == value)
-    }
 
     /// The score a line reaches to become a suggestion (D-12).
     pub(crate) fn threshold(self) -> f64 {
@@ -117,14 +107,11 @@ pub(crate) const MAX_FIX_LEVEL: u8 = 2;
 
 /// The daily investigation (D-34, D-36): one run a Project a day, started
 /// this long after the app opened, the device woke or the screen unlocked,
-/// bounded by turns and wall time.
-pub(crate) const RUNS_PER_DAY: u32 = 1;
+/// bounded by turns and wall time. Days the app stayed closed are caught up
+/// in that one run, which reads every record not yet seen.
 pub(crate) const WAKE_DELAY_MS: u64 = 3 * MINUTE_MS;
 pub(crate) const RUN_TURNS: u32 = 30;
 pub(crate) const RUN_SPAN_MS: u64 = 20 * MINUTE_MS;
-/// The most days a catch-up run looks back over, so a Project unopened for
-/// months is read once and not day by day.
-pub(crate) const CATCH_UP_DAYS: u64 = 30;
 
 /// The investigation's turns (D-35, D-38): the last few turns before the
 /// final one ask the model to wrap up, and one turn is given at most this
@@ -169,10 +156,11 @@ pub(crate) const CI_LOG_LINES: usize = 200;
 pub(crate) const READ_PATH_CHARS: usize = 240;
 pub(crate) const READ_LINE_CHARS: usize = 400;
 
-/// The weight a record of `age_ms` keeps: halves every
-/// [`DECAY_HALF_LIFE_MS`], never above one.
+/// The weight a record of `age_ms` keeps: one for [`FULL_WEIGHT_MS`], then
+/// halving every [`DECAY_HALF_LIFE_MS`].
 pub(crate) fn decay(age_ms: u64) -> f64 {
-    0.5_f64.powf(age_ms as f64 / DECAY_HALF_LIFE_MS as f64)
+    let aged = age_ms.saturating_sub(FULL_WEIGHT_MS);
+    0.5_f64.powf(aged as f64 / DECAY_HALF_LIFE_MS as f64)
 }
 
 #[cfg(test)]
@@ -180,10 +168,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_record_weighs_half_after_one_half_life_and_never_more_than_one() {
+    fn a_record_weighs_full_for_a_week_then_halves_each_half_life() {
         assert_eq!(decay(0), 1.0);
-        assert!((decay(DECAY_HALF_LIFE_MS) - 0.5).abs() < 1e-9);
-        assert!((decay(2 * DECAY_HALF_LIFE_MS) - 0.25).abs() < 1e-9);
+        assert_eq!(
+            decay(FULL_WEIGHT_MS),
+            1.0,
+            "this week's sessions count whole"
+        );
+        assert!((decay(FULL_WEIGHT_MS + DECAY_HALF_LIFE_MS) - 0.5).abs() < 1e-9);
+        assert!((decay(FULL_WEIGHT_MS + 2 * DECAY_HALF_LIFE_MS) - 0.25).abs() < 1e-9);
     }
 
     #[test]
@@ -198,8 +191,5 @@ mod tests {
         );
         assert!(Quantity::ALL.iter().all(|q| q.open_cap() <= STORED_NEW_CAP));
         assert_eq!(Quantity::default(), Quantity::Normal);
-        for quantity in Quantity::ALL {
-            assert_eq!(Quantity::parse(quantity.as_str()), Some(quantity));
-        }
     }
 }

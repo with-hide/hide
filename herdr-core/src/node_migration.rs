@@ -70,6 +70,7 @@ pub const MOVES_WITH_CORE: &[&str] = &[
     DELIVERY_LEDGER,
     LINKS,
     hide_kit::layout::USAGE_STORE,
+    hide_kit::layout::SUGGESTIONS_STORE,
     hide_kit::layout::PRODUCT_ANALYTICS_ID,
     LOCAL_ISSUES,
     MISSIONS,
@@ -146,6 +147,12 @@ pub const KEYS: &[(&str, &str, Mechanism, Moves)] = &[
     (
         hide_kit::layout::USAGE_STORE,
         "native node ids in devices, events, daily, cursors and backfills; qualified paths",
+        Mechanism::Owned,
+        Moves::Stays,
+    ),
+    (
+        hide_kit::layout::SUGGESTIONS_STORE,
+        "every project column: a Project identity, the native node id and its root",
         Mechanism::Owned,
         Moves::Stays,
     ),
