@@ -67,6 +67,11 @@ async function pasteByHand(practice: Page): Promise<void> {
   await expect.poll(() => practiceState(practice), { message: "the pasted request did not reach the signup agent" }).toMatch(/^delegate:end:/);
 }
 
+/** Waits out a step ⏎ performed while its result is shown, so the next Enter is the next step's and not the one that skips the wait. */
+async function settled(practice: Page): Promise<void> {
+  await expect(practice.locator("[data-practice-settling]")).toHaveCount(0);
+}
+
 /** Presses Enter from the chapter list until it comes back to it, each press waiting for the practice to move. */
 async function playEveryChapter(practice: Page, chapters: number): Promise<void> {
   let now = await practiceState(practice);
@@ -78,6 +83,7 @@ async function playEveryChapter(practice: Page, chapters: number): Promise<void>
     else await practice.keyboard.press("Enter");
     presses += 1;
     await expect.poll(() => practiceState(practice), { message: `Enter at ${before} moved nothing`, timeout: 10_000 }).not.toBe(before);
+    await settled(practice);
     now = await practiceState(practice);
   } while (now !== "hub");
 }
@@ -135,6 +141,7 @@ async function pressTo(practice: Page, id: string, at: number | null): Promise<v
     expect(presses, `the practice stopped moving at ${now}`).toBeLessThan(PRESSES_PER_CHAPTER);
     await practice.keyboard.press("Enter");
     await expect.poll(() => practiceState(practice), { message: `Enter at ${now} moved nothing`, timeout: 10_000 }).not.toBe(now);
+    await settled(practice);
   }
 }
 

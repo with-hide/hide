@@ -26,15 +26,28 @@ function chordOf(id: CommandId) {
   return (command && hostChord(command, host)) ?? null;
 }
 
+/**
+ * How much slower than its base times the coach plays what ⏎ does in the
+ * learner's place, so a hand that moves and a screen that changes can be
+ * followed. Every time below is a base time scaled by the pace the coach plays
+ * at: this one for a step the learner asked for, 1 for the steps it replays on
+ * its own (`이어서`, `이전`), which only bring the screen to where it was.
+ */
+const PACE = 1.5;
+
 /** How long a held chord's switcher stays up before the coach lets go of its modifier, so the list is seen. */
 const HOLD_MS = 700;
+/** How long the hand points at what it is about to press, drag or open before it does. */
+const POINT_MS = 250;
+/** How long a step the coach performed stays once the world says it is done, so its result is seen before the next step. */
+const SETTLE_MS = 500;
 
 /**
  * Presses `id`'s chord the way a keyboard would, so the shell's own listener
  * runs the command. A held chord (⌃⇥, ⌥⇥) moves when its modifier is let go,
  * so the coach lets go of it too.
  */
-function pressCommand(id: CommandId) {
+function pressCommand(id: CommandId, pace: number) {
   const chord = chordOf(id);
   if (!chord) throw new Error(`Practice step names ${id}, which this host has no chord for`);
   const key = chord.code.replace(/^Key|^Digit/, "");
@@ -42,18 +55,23 @@ function pressCommand(id: CommandId) {
   target.dispatchEvent(new KeyboardEvent("keydown", { key, code: chord.code, metaKey: !!chord.meta, altKey: !!chord.alt, shiftKey: !!chord.shift, ctrlKey: !!chord.ctrl, bubbles: true, cancelable: true }));
   const release = isCycleCommand(id) ? releaseModifier(chord) : null;
   if (!release) return;
-  window.setTimeout(() => (document.activeElement ?? document.body).dispatchEvent(new KeyboardEvent("keyup", { key: release, bubbles: true, cancelable: true })), HOLD_MS);
+  window.setTimeout(() => (document.activeElement ?? document.body).dispatchEvent(new KeyboardEvent("keyup", { key: release, bubbles: true, cancelable: true })), HOLD_MS * pace);
 }
 
-/** Presses the middle of what `selector` marks as a hand would, on whatever is drawn there: a terminal hears presses, not clicks. */
-function pressTarget(selector: string | undefined) {
+/**
+ * Presses the middle of what `selector` marks as a hand would, on whatever is
+ * drawn there: a terminal hears presses, not clicks. The hand points there
+ * first, and leaves once the press is seen.
+ */
+async function pressTarget(selector: string | undefined, pace: number, follow: (point: Point | null) => void): Promise<void> {
   const marked = selector ? document.querySelector<HTMLElement>(selector) : null;
   if (!marked) throw new Error(`Practice step target ${selector ?? "(none)"} is not on screen`);
-  const box = marked.getBoundingClientRect();
-  const x = box.left + box.width / 2;
-  const y = box.top + box.height / 2;
+  const at = middle(marked);
+  follow(at);
+  await pause(POINT_MS * pace);
   // The bubble may sit over the target; the press lands on the target's own topmost element there.
-  pressAt(document.elementsFromPoint(x, y).find((hit) => marked.contains(hit)) ?? marked, { x, y });
+  pressAt(document.elementsFromPoint(at.x, at.y).find((hit) => marked.contains(hit)) ?? marked, at);
+  window.setTimeout(() => follow(null), 250 * pace);
 }
 
 /** A hand's press on `element` at `point`: down, up, then the click. */
@@ -67,7 +85,7 @@ function pressAt(element: Element, point: Point) {
 }
 
 /** Drags a pane header onto another pane's edge as a hand would, so the shell's own drag runs the move; `follow` sees the pointer. */
-function dragPane(drag: PracticeDrag, follow: (point: Point | null) => void) {
+function dragPane(drag: PracticeDrag, pace: number, follow: (point: Point | null) => void) {
   const header = document.querySelector<HTMLElement>(drag.from);
   const target = document.querySelector<HTMLElement>(drag.to);
   if (!header || !target) return;
@@ -83,7 +101,7 @@ function dragPane(drag: PracticeDrag, follow: (point: Point | null) => void) {
   header.dispatchEvent(new PointerEvent("pointerdown", pointer("pointerdown", start)));
   const began = performance.now();
   const glide = (now: number) => {
-    const t = Math.min(1, (now - began) / 900);
+    const t = Math.min(1, (now - began) / (900 * pace));
     const eased = t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2;
     const at = { x: start.x + (end.x - start.x) * eased, y: start.y + (end.y - start.y) * eased };
     follow(at);
@@ -93,10 +111,10 @@ function dragPane(drag: PracticeDrag, follow: (point: Point | null) => void) {
       window.dispatchEvent(new PointerEvent("pointerup", pointer("pointerup", end)));
       // A mouse released after a drag also clicks; the shell swallows that click (`suppressDragClick`), and left waiting it would eat the learner's next one.
       window.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0, clientX: end.x, clientY: end.y }));
-      window.setTimeout(() => follow(null), 250);
-    }, 350);
+      window.setTimeout(() => follow(null), 250 * pace);
+    }, 350 * pace);
   };
-  window.setTimeout(() => requestAnimationFrame(glide), 250);
+  window.setTimeout(() => requestAnimationFrame(glide), POINT_MS * pace);
 }
 
 /** How long typed words stay in the prompt before ⏎ sends them, so the learner reads what was said. */
@@ -110,17 +128,17 @@ const LETTER_MS = 90;
  * a practice terminal reaches no program. Into a field: letter by letter, in
  * place of what it held, each letter an input the field's own handler hears.
  */
-function typeInto(typing: PracticeTyping): Promise<void> {
-  if ("input" in typing) return typeInField(typing.input, typing.text);
+function typeInto(typing: PracticeTyping, pace: number): Promise<void> {
+  if ("input" in typing) return typeInField(typing.input, typing.text, pace);
   if (!terminalFor(typing.pane)) throw new Error(`Practice step types into ${typing.pane}, which has no terminal on screen`);
   pasteText(typing.pane, `\x15${typing.text}`);
   return new Promise((resolve) => window.setTimeout(() => {
     pasteText(typing.pane, "\r");
     resolve();
-  }, READ_MS));
+  }, READ_MS * pace));
 }
 
-async function typeInField(selector: string, text: string): Promise<void> {
+async function typeInField(selector: string, text: string, pace: number): Promise<void> {
   const field = document.querySelector<HTMLInputElement>(selector);
   if (!field) throw new Error(`Practice step types into ${selector}, which is not on screen`);
   const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
@@ -128,7 +146,7 @@ async function typeInField(selector: string, text: string): Promise<void> {
   for (let at = 0; at <= text.length; at += 1) {
     setValue.call(field, text.slice(0, at));
     field.dispatchEvent(new Event("input", { bubbles: true }));
-    await pause(LETTER_MS);
+    await pause(LETTER_MS * pace);
   }
 }
 
@@ -175,12 +193,12 @@ const pause = (ms: number) => new Promise((resolve) => window.setTimeout(resolve
  * or list: right-clicking it (`menu`) or pressing it (`press`), then presses
  * each of `menu.path` in turn.
  */
-async function chooseFromMenu(menu: PracticeMenu | PracticePick, open: "menu" | "press", follow: (point: Point | null) => void): Promise<void> {
+async function chooseFromMenu(menu: PracticeMenu | PracticePick, open: "menu" | "press", pace: number, follow: (point: Point | null) => void): Promise<void> {
   const marked = document.querySelector<HTMLElement>(menu.at);
   if (!marked) throw new Error(`Practice menu target ${menu.at} is not on screen`);
   let hand = middle(marked);
   follow(hand);
-  await pause(250);
+  await pause(POINT_MS * pace);
   const element = document.elementsFromPoint(hand.x, hand.y).find((hit) => marked.contains(hit)) ?? marked;
   // A list the learner opened already is chosen from as it is: pressing its control again would close it.
   if (open === "press") {
@@ -189,9 +207,9 @@ async function chooseFromMenu(menu: PracticeMenu | PracticePick, open: "menu" | 
   for (const [at, selector] of menu.path.entries()) {
     const item = await appeared(selector, 3000);
     if (!item) throw new Error(`Practice menu item ${selector} never appeared`);
-    await pause(300);
-    hand = await glide(hand, middle(item), 450, follow);
-    await pause(200);
+    await pause(300 * pace);
+    hand = await glide(hand, middle(item), 450 * pace, follow);
+    await pause(200 * pace);
     const after = menu.path[at + 1];
     for (let press = 0; ; press += 1) {
       // The menu may have drawn the item again since it was found; press the one on screen.
@@ -201,7 +219,7 @@ async function chooseFromMenu(menu: PracticeMenu | PracticePick, open: "menu" | 
     }
   }
   // The step is done once the last item is pressed; the hand leaves on its own, so the next ⏎ is not held back.
-  window.setTimeout(() => follow(null), 250);
+  window.setTimeout(() => follow(null), 250 * pace);
 }
 
 /** The first words `element` shows: a row's title before its subtitle, a card's heading. */
@@ -347,6 +365,34 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
   // The model as it is now, for a press that reads it after this render.
   const current = useRef(model);
   current.current = model;
+
+  // What ⏎ does is played at the learner's pace; the steps the coach replays on its own go at the quick one.
+  const pace = index < resume ? 1 : PACE;
+  // The step ⏎ performed, and the wait before the step after it while its result is seen.
+  const performed = useRef<PracticeStep | null>(null);
+  const settle = useRef<{ timer: number; move: () => void } | null>(null);
+  const [settling, setSettling] = useState(false);
+  /** Moves past `step` once it is done: at once when the learner did it, after a moment when ⏎ did it in their place. */
+  const done = useCallback(() => {
+    if (settle.current) return;
+    const at = index;
+    const move = () => {
+      settle.current = null;
+      performed.current = null;
+      setSettling(false);
+      if (last) setEnded(true);
+      else setIndex((value) => (value === at ? value + 1 : value));
+    };
+    if (performed.current !== step || index < resume) return move();
+    settle.current = { timer: window.setTimeout(move, SETTLE_MS * PACE), move };
+    setSettling(true);
+  }, [index, last, resume, step]);
+  // A step left another way (back, a restart) takes its wait with it.
+  useEffect(() => () => {
+    if (settle.current) window.clearTimeout(settle.current.timer);
+    settle.current = null;
+    setSettling(false);
+  }, [index]);
   // A step the world can finish is done when the world says so, however the learner did it.
   const seen = useRef(model);
   useEffect(() => {
@@ -354,11 +400,8 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
     seen.current = model;
     // While a palette or a switcher the shell opened is up, the change came from its own keys, not the step's chord.
     if (step.command && !shellLayerOpen(useUiStore.getState())) setFlash(commandLabel(step.command));
-    if (step.done?.(model)) {
-      if (last) setEnded(true);
-      else setIndex((value) => value + 1);
-    }
-  }, [last, model, step]);
+    if (step.done?.(model)) done();
+  }, [done, model, step]);
   useEffect(() => {
     if (!flash) return undefined;
     const timer = window.setTimeout(() => setFlash(null), 900);
@@ -372,10 +415,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
     let frame = requestAnimationFrame(function follow() {
       const marked = rectOf(step.target);
       setRing((before) => (same(before, marked) ? before : marked));
-      if (step.shown && rectOf(step.shown)) {
-        if (last) setEnded(true);
-        else setIndex((value) => (value === index ? value + 1 : value));
-      }
+      if (step.shown && rectOf(step.shown)) done();
       setZones((before) => {
         const now = step.zones ? ZONES.map((zone) => rectOf(zone.selector)) : [];
         return now.length === before.length && now.every((rect, at) => same(rect, before[at] ?? null)) ? before : now;
@@ -391,7 +431,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
       frame = requestAnimationFrame(follow);
     });
     return () => cancelAnimationFrame(frame);
-  }, [chapter.world.examples, index, last, step]);
+  }, [chapter.world.examples, done, step]);
 
   const advance = useCallback(() => {
     if (last) setEnded(true);
@@ -411,24 +451,26 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
   }, [step]);
 
   const perform = useCallback(() => {
+    // ⏎ while a performed step's result is shown moves on without waiting out the rest.
+    if (settle.current) return settle.current.move();
     if (playing.current === step) return;
     if (!acts(step)) return advance();
+    performed.current = step;
     // A field the step types into is opened first by the step's command: ⌘K, then the words.
-    if (step.gesture && "type" in step.gesture && "input" in step.gesture.type && !document.querySelector(step.gesture.type.input) && step.command) return pressCommand(step.command);
+    if (step.gesture && "type" in step.gesture && "input" in step.gesture.type && !document.querySelector(step.gesture.type.input) && step.command) return pressCommand(step.command, pace);
     if (step.gesture && "type" in step.gesture) {
       const typing = step.gesture.type;
       // The learner's own words in a prompt are sent as they are, for the world to judge; the example goes only into an
       // empty one. A field that holds words never reaches here: ⏎ there is the palette's, and the palette hides the button.
       if ("pane" in typing && promptWords(chapter.world, current.current, typing.pane)) return pasteText(typing.pane, "\r");
-      return play(typeInto(typing));
+      return play(typeInto(typing, pace));
     }
-    if (step.gesture && "menu" in step.gesture) return play(chooseFromMenu(step.gesture.menu, "menu", setHand));
-    if (step.gesture && "pick" in step.gesture) return play(chooseFromMenu(step.gesture.pick, "press", setHand));
-    if (step.gesture && "drag" in step.gesture) return dragPane(step.gesture.drag, setHand);
-    if (step.gesture && "click" in step.gesture) return pressTarget(step.target);
-    if (pressed) return pressTarget(step.target);
-    if (step.command) pressCommand(step.command);
-  }, [advance, chapter.world, play, pressed, step]);
+    if (step.gesture && "menu" in step.gesture) return play(chooseFromMenu(step.gesture.menu, "menu", pace, setHand));
+    if (step.gesture && "pick" in step.gesture) return play(chooseFromMenu(step.gesture.pick, "press", pace, setHand));
+    if (step.gesture && "drag" in step.gesture) return dragPane(step.gesture.drag, pace, setHand);
+    if ((step.gesture && "click" in step.gesture) || pressed) return play(pressTarget(step.target, pace, setHand));
+    if (step.command) pressCommand(step.command, pace);
+  }, [advance, chapter.world, pace, play, pressed, step]);
 
   useEffect(() => {
     if (index >= resume) return undefined;
@@ -503,7 +545,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
   const title = say(`practice.${chapter.id}.title`);
 
   return (
-    <div className="pc-layer" data-practice-layer data-practice-step={step.id} data-practice-index={index} data-practice-steps={chapter.steps.length} data-practice-ended={ended || undefined}>
+    <div className="pc-layer" data-practice-layer data-practice-step={step.id} data-practice-index={index} data-practice-steps={chapter.steps.length} data-practice-ended={ended || undefined} data-practice-settling={settling || undefined}>
       <style>{COACH_CSS}</style>
       {/* What the coach points with, all of it stepping aside while the shell's palette or switcher is up; the chord, marks and hand still sit above the bubble (`z-index` in the style). */}
       {ended ? <EndCard chapter={chapter} next={next} title={title} say={say} onFinish={finish} onRestart={onRestart} onHub={onHub} /> : palette ? null : (
