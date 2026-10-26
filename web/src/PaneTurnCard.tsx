@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FocusEvent, type KeyboardEvent, type ReactNode } from "react";
+import { useRef, useState, type FocusEvent, type KeyboardEvent, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import type { Actions } from "./actions";
 import { askWhat } from "./components/agent-tree";
@@ -9,18 +9,12 @@ import { cn } from "./lib/utils";
 import { agentsByPane, allAgents } from "./paneAgents";
 import { sessionOfAgentOn } from "./sessionWork";
 import { localDeviceId, type AgentRow, type LabelEnd, type PaneHeader, type PaneTurnRequest, type RequestSender } from "./snapshot";
-import { shellDragging } from "./shellDrag";
 import { useShellStore } from "./store";
-
-/** How long the pointer may cross the gap between a trigger and its card before the card closes. */
-const LEAVE_MS = 150;
 
 /** The handlers a turn card's trigger wears. */
 export type TurnCardTrigger = {
   open: boolean;
   pinned: boolean;
-  onPointerEnter: () => void;
-  onPointerLeave: () => void;
   onFocus: () => void;
   onBlur: (event: FocusEvent) => void;
   /** Moves the keyboard into an open card on Tab. */
@@ -32,43 +26,25 @@ export type TurnCardTrigger = {
 /**
  * The pane's turn card (PRD pane-last-request D-05, B6-B9): what the
  * operator asked, what the agent is doing about it and the turns before,
- * under the request on the pane's second row, its only trigger. The pointer
- * or the keyboard's focus on the request opens it; a press pins it and a
- * second press or Esc closes it. Opening never takes the keyboard from the
- * terminal, and Esc on a card neither pinned nor focused stays the terminal's.
+ * under the request on the pane's second row, its only trigger. A press or
+ * the keyboard's focus on the request opens it, never the pointer passing
+ * over, which kept raising it in the way of the terminal; a second press or
+ * Esc closes it. Opening never takes the keyboard from the terminal.
  */
 export function PaneTurnCard({ paneId, actions, trigger }: { paneId: string; actions: Actions; trigger: (state: TurnCardTrigger) => ReactNode }) {
-  const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
   const [pinned, setPinned] = useState(false);
   // Closed from inside with the keyboard sent back to the trigger: the
   // trigger's focus does not reopen it until the pointer or focus comes anew.
   const [dismissed, setDismissed] = useState(false);
-  const leave = useRef<number | null>(null);
   const anchor = useRef<HTMLSpanElement>(null);
   const content = useRef<HTMLDivElement>(null);
-  useEffect(() => () => {
-    if (leave.current !== null) window.clearTimeout(leave.current);
-  }, []);
   const agent = agentsByPane(useShellStore((state) => allAgents(state.agents, state.rest?.status?.remote))).get(paneId);
   const header = useShellStore((state) => state.rest?.terminal?.headers?.[paneId]);
   const localId = useShellStore((state) => localDeviceId(state.rest));
-  const open = !dismissed && (pinned || hovered || focused);
-  const enter = () => {
-    // A pane or agent dragged across the trigger is not pointing at it.
-    if (shellDragging()) return;
-    if (leave.current !== null) window.clearTimeout(leave.current);
-    leave.current = null;
-    setDismissed(false);
-    setHovered(true);
-  };
-  const exit = () => {
-    if (leave.current !== null) window.clearTimeout(leave.current);
-    leave.current = window.setTimeout(() => setHovered(false), LEAVE_MS);
-  };
+  const open = !dismissed && (pinned || focused);
   const close = () => {
     setPinned(false);
-    setHovered(false);
     setFocused(false);
   };
   // The keyboard moves between the trigger and the card as one place, so the
@@ -94,8 +70,6 @@ export function PaneTurnCard({ paneId, actions, trigger }: { paneId: string; act
   const state: TurnCardTrigger = {
     open,
     pinned,
-    onPointerEnter: enter,
-    onPointerLeave: exit,
     onFocus: () => setFocused(true),
     onBlur: blur,
     onKeyDown: (event) => {
@@ -112,9 +86,7 @@ export function PaneTurnCard({ paneId, actions, trigger }: { paneId: string; act
   };
   const session = agent ? sessionOfAgentOn(agent, localId) : null;
   return (
-    // Esc reaches the card through the shell's layer only while it is pinned
-    // or focused; a card the pointer only shows leaves Esc to the terminal.
-    <Popover open={open && agent !== undefined} onOpenChange={(next) => (next ? undefined : dismiss())} modal={false} escape={pinned || focused}>
+    <Popover open={open && agent !== undefined} onOpenChange={(next) => (next ? undefined : dismiss())} modal={false}>
       <PopoverAnchor asChild>
         <span ref={anchor} className="flex min-w-0 items-center">{trigger(state)}</span>
       </PopoverAnchor>
@@ -128,8 +100,6 @@ export function PaneTurnCard({ paneId, actions, trigger }: { paneId: string; act
           data-pane-turn-card={paneId}
           onOpenAutoFocus={(event) => event.preventDefault()}
           onCloseAutoFocus={(event) => event.preventDefault()}
-          onPointerEnter={enter}
-          onPointerLeave={exit}
           // A click on the card's text focuses the card itself, which is
           // not the keyboard moving in.
           onFocus={(event) => {
@@ -153,10 +123,8 @@ export function PaneTurnCard({ paneId, actions, trigger }: { paneId: string; act
             if (event.target instanceof Node && anchor.current?.contains(event.target)) event.preventDefault();
           }}
           onEscapeKeyDown={(event) => {
-            // Esc closes a pinned or focused card and stops there, so an
-            // agent CLI in the focused terminal is not interrupted by it; a
-            // card the pointer only shows leaves Esc to the terminal.
-            if (!pinned && !focused) return event.preventDefault();
+            // Esc closes the card and stops there, so an agent CLI in the
+            // focused terminal is not interrupted by it.
             event.stopPropagation();
             dismiss();
           }}

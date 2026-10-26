@@ -9,6 +9,7 @@ mod connect_build;
 mod connect_stop;
 mod core_move;
 mod core_move_checks;
+mod device_bootstrap;
 mod handshake;
 mod held_letter_notice;
 mod herdr_handoff;

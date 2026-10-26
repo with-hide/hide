@@ -192,7 +192,7 @@ pub(crate) fn hook_diagnosis(
 
 /// One record per install pass on any machine, naming each part's outcome;
 /// the reasons are the operator's diagnostic detail (engineering rule 10).
-fn completed(device_id: &str, scope: &hide_kit::Scope, report: &hide_kit::KitReport) {
+pub(crate) fn completed(device_id: &str, scope: &hide_kit::Scope, report: &hide_kit::KitReport) {
     crate::diagnostic!(json!({
         "component": "kit",
         "kind": "apply.completed",

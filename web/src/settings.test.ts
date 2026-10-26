@@ -240,7 +240,10 @@ describe("settings rules", () => {
       expect(terms).toContain(named);
     }
     // The kit no longer touches Codex's daemon setting (PRD settings-cleanup D-12), so the consent says nothing of it.
-    expect(lines).toHaveLength(5);
+    expect(lines).toHaveLength(6);
+    expect(terms).toContain("starts a server when none runs");
+    expect(terms).toContain("Saved Herdr profiles keep their server");
+    expect(terms).toContain("Its Herdr server and files still in use stay");
     expect(terms).not.toMatch(/daemon_auto_start|per pane/);
     expect(terms).toContain("~/hide");
     expect(terms).not.toContain("changes no hook");
