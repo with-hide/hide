@@ -8672,6 +8672,7 @@ mod wire_enum_tests {
             SuggestionsStatus::FirstRunPending,
             SuggestionsStatus::Investigating,
             SuggestionsStatus::NoneToday,
+            SuggestionsStatus::NotInvestigated,
             SuggestionsStatus::Idle,
             SuggestionsStatus::Off,
         ];
@@ -8680,6 +8681,7 @@ mod wire_enum_tests {
                 SuggestionsStatus::FirstRunPending
                 | SuggestionsStatus::Investigating
                 | SuggestionsStatus::NoneToday
+                | SuggestionsStatus::NotInvestigated
                 | SuggestionsStatus::Idle
                 | SuggestionsStatus::Off => {}
             }

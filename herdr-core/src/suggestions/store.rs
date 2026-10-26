@@ -71,14 +71,24 @@ pub struct ProjectState {
     pub last_run_at_unix_ms: Option<u64>,
     #[serde(default)]
     pub last_run_end: Option<String>,
-    /// When lines were raised, for the week's cap and the quiet fortnight;
-    /// only the last [`policy::QUIET_SPAN_MS`] are kept.
+    /// When lines were raised, for the week's cap; only the last
+    /// [`policy::WEEK_MS`] are kept.
     #[serde(default)]
     pub raised_at: Vec<u64>,
     /// The machine and folder the Project was last named from, where an
     /// automatic attempt starts and an attempt is followed (B13, B21).
     #[serde(default)]
     pub location: Option<ProjectLocation>,
+    /// Since when the Project has raised nothing: its first look at what
+    /// rose, then its last raise. A Normal Project quiet for
+    /// [`policy::QUIET_SPAN_MS`] from it raises its strongest line under the
+    /// threshold (D-10).
+    #[serde(default)]
+    pub quiet_since: Option<u64>,
+    /// The last run failed, so nothing rose from it: the Project shows
+    /// `조사 못 함` and the next run investigates even with no new records.
+    #[serde(default)]
+    pub uninvestigated: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -120,10 +130,11 @@ fn sibling(path: &Path, suffix: &str) -> PathBuf {
     path.with_file_name(name)
 }
 
-/// What a prune took away.
+/// What a prune took away: the records, and the lines' references to them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Pruned {
     pub records: usize,
+    pub references: usize,
 }
 
 impl SuggestionStore {
@@ -327,9 +338,55 @@ impl SuggestionStore {
                 params![project, policy::RECORD_CAP as i64],
             )
             .map_err(failed)?;
+        let records = old + over;
+        let references = if records == 0 {
+            0
+        } else {
+            Self::drop_references(tx, project)?
+        };
         Ok(Pruned {
-            records: old + over,
+            records,
+            references,
         })
+    }
+
+    /// Takes the references to records no longer kept off every line, in
+    /// the prune's transaction, so no line holds more than the ledger's own
+    /// bounds; answers how many went.
+    fn drop_references(tx: &Transaction<'_>, project: &str) -> Result<usize, String> {
+        let kept = tx
+            .prepare_cached("SELECT id FROM records WHERE project=?1")
+            .map_err(failed)?
+            .query_map([project], |row| row.get::<_, i64>(0))
+            .map_err(failed)?
+            .map(|id| id.map(|id| RecordId(id as u64)))
+            .collect::<Result<std::collections::HashSet<_>, _>>()
+            .map_err(failed)?;
+        let lines = tx
+            .prepare_cached("SELECT id, line FROM lines WHERE project=?1")
+            .map_err(failed)?
+            .query_map([project], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(failed)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(failed)?;
+        let mut dropped = 0;
+        for (id, text) in lines {
+            let mut line: Line = decode(&text)?;
+            let before = line.records.len();
+            line.records.retain(|record| kept.contains(record));
+            if line.records.len() == before {
+                continue;
+            }
+            dropped += before - line.records.len();
+            tx.execute(
+                "UPDATE lines SET line=?3 WHERE project=?1 AND id=?2",
+                params![project, id, encode(&line)?],
+            )
+            .map_err(failed)?;
+        }
+        Ok(dropped)
     }
 
     /// The records of `ids` the Project still keeps, in the order asked.
@@ -591,6 +648,51 @@ mod tests {
         let kept = store.records("p").unwrap();
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].0.fact.tag, "new");
+    }
+
+    /// A line's references go with the records they name, so one problem
+    /// that recurs for years holds no more than the ledger keeps.
+    #[test]
+    fn a_pruned_record_leaves_every_line_that_named_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, _) = SuggestionStore::open(&path(dir.path())).unwrap();
+        let old = NOW - policy::RECORD_RETENTION_MS - 1;
+        store
+            .record(
+                "p",
+                vec![
+                    failed_tool("cargo test", "a", old),
+                    failed_tool("cargo test", "b", NOW - DAY_MS),
+                ],
+                NOW - DAY_MS,
+            )
+            .unwrap();
+        let (mut notebook, _) = store.notebook("p").unwrap();
+        let index = store.index("p", &notebook).unwrap();
+        let applied = notebook
+            .apply(
+                NotebookEdit::NewLine {
+                    discomfort: None,
+                    records: vec![RecordId(1), RecordId(2)],
+                    basis: None,
+                    outcome: None,
+                },
+                &index,
+                NOW - DAY_MS,
+            )
+            .unwrap();
+        store.save_edit("p", &notebook, &applied).unwrap();
+
+        let (_, pruned) = store.record("p", Vec::new(), NOW).unwrap();
+        assert_eq!(
+            pruned,
+            Pruned {
+                records: 1,
+                references: 1
+            }
+        );
+        let (notebook, _) = store.notebook("p").unwrap();
+        assert_eq!(notebook.lines[0].records, [RecordId(2)]);
     }
 
     #[test]

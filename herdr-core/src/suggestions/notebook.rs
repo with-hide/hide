@@ -313,17 +313,21 @@ impl Notebook {
     }
 
     /// Room for one more line: at the cap, the oldest struck or ended line
-    /// that no work holds goes (D-46).
+    /// that no work holds goes first, then the oldest line that never rose
+    /// (D-46); a notebook of raised and busy lines alone refuses.
     fn make_room(&mut self, applied: &mut Applied) -> Result<(), EditRefused> {
         if self.lines.len() < policy::NOTEBOOK_LINE_CAP {
             return Ok(());
         }
-        let oldest = self
-            .lines
-            .iter()
-            .filter(|line| !line.stage.busy() && (line.struck.is_some() || line.stage.ended()))
-            .min_by_key(|line| (line.updated_at_unix_ms, line.id))
-            .map(|line| line.id)
+        let oldest = |pick: fn(&Line) -> bool| {
+            self.lines
+                .iter()
+                .filter(|line| !line.stage.busy() && pick(line))
+                .min_by_key(|line| (line.updated_at_unix_ms, line.id))
+                .map(|line| line.id)
+        };
+        let oldest = oldest(|line| line.struck.is_some() || line.stage.ended())
+            .or_else(|| oldest(|line| line.stage == Stage::Candidate))
             .ok_or(EditRefused::NotebookFull)?;
         let at = self
             .lines
@@ -669,17 +673,16 @@ mod tests {
         assert_eq!(notebook.line_of(RecordId(1)), Some(LineId(2)));
     }
 
+    /// D-46: at the cap the oldest struck or ended line goes first, then
+    /// the oldest line that never rose; raised and busy lines stay, and a
+    /// notebook of only those refuses.
     #[test]
-    fn a_full_notebook_drops_its_oldest_struck_or_ended_line_and_refuses_when_none() {
+    fn a_full_notebook_drops_ended_lines_first_then_the_oldest_candidate() {
         let index = index(1..=1);
         let mut notebook = Notebook::default();
         for at in 0..policy::NOTEBOOK_LINE_CAP as u64 {
             notebook.apply(new_line(&[1]), &index, at).unwrap();
         }
-        assert_eq!(
-            notebook.apply(new_line(&[1]), &index, 500),
-            Err(EditRefused::NotebookFull)
-        );
         notebook.lines[5].struck = Some(Strike {
             by: StruckBy::Analysis,
             reason: None,
@@ -687,9 +690,25 @@ mod tests {
         });
         notebook.lines[9].stage = Stage::Effective;
         notebook.lines[9].updated_at_unix_ms = 7;
-        let applied = notebook.apply(new_line(&[1]), &index, 501).unwrap();
-        assert_eq!(applied.evicted, [LineId(6)], "the older of the two goes");
-        assert_eq!(notebook.lines.len(), policy::NOTEBOOK_LINE_CAP);
-        assert!(notebook.line(LineId(10)).is_some());
+        notebook.lines[0].stage = Stage::Suggested;
+        notebook.lines[1].stage = Stage::Applying;
+        let mut evicted = Vec::new();
+        for at in 500..503 {
+            let applied = notebook.apply(new_line(&[1]), &index, at).unwrap();
+            evicted.extend(applied.evicted);
+            assert_eq!(notebook.lines.len(), policy::NOTEBOOK_LINE_CAP);
+        }
+        assert_eq!(
+            evicted,
+            [LineId(6), LineId(10), LineId(3)],
+            "struck, then ended, then the oldest line that never rose"
+        );
+        for line in &mut notebook.lines {
+            line.stage = Stage::Suggested;
+        }
+        assert_eq!(
+            notebook.apply(new_line(&[1]), &index, 600),
+            Err(EditRefused::NotebookFull)
+        );
     }
 }

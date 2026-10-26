@@ -15,6 +15,8 @@
 //! - [`store`]: `suggestions.sqlite3`, written by the suggestion worker alone.
 //! - [`worker`]: the thread that owns the store, records, runs and raises.
 //! - [`read`]: the 제안 tab as the worker reads it for the screen.
+//! - `replay` (tests only): a past month of this machine's records run
+//!   through the same fold, grouping, scores and caps (D-12).
 //!
 //! Everything a run decides is read back from the notebook it leaves, so
 //! the way problems are found can change without the ledger, the lifecycle,
@@ -27,6 +29,8 @@ pub mod lifecycle;
 pub mod notebook;
 pub mod policy;
 pub mod read;
+#[cfg(test)]
+mod replay;
 pub mod scoring;
 pub mod settings;
 pub mod store;

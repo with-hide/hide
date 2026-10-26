@@ -75,6 +75,14 @@ pub struct Attempt {
     pub pr: Option<PrRef>,
     #[serde(default)]
     pub issue_url: Option<String>,
+    /// An issue line's title, kept so a create whose answer was lost is found
+    /// again by it (B14).
+    #[serde(default)]
+    pub issue_title: Option<String>,
+    /// Since when an earlier create of this line's issue may have landed
+    /// unconfirmed: a retry looks for that issue before creating another.
+    #[serde(default)]
+    pub issue_since: Option<u64>,
     /// Why it failed, as a code the screen words.
     #[serde(default)]
     pub failure: Option<String>,

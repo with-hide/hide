@@ -15,7 +15,7 @@ use std::sync::Condvar;
 /// repository named outright: creates are numbered from 41, and creates and
 /// closes wait while the gate is shut; anything not scripted fails as
 /// offline.
-struct FakeGh {
+pub(super) struct FakeGh {
     calls: Mutex<Vec<String>>,
     open: Mutex<bool>,
     opened: Condvar,
@@ -24,15 +24,15 @@ struct FakeGh {
     create_prints: Mutex<Option<String>>,
     /// The issues the reconcile query answers, and whether the signed-in
     /// account wrote each.
-    reconcile: Mutex<Vec<(u32, String, bool)>>,
+    pub(super) reconcile: Mutex<Vec<(u32, String, bool)>>,
     /// The repository each create was pinned to (`GH_REPO`).
-    create_repositories: Mutex<Vec<Option<String>>>,
+    pub(super) create_repositories: Mutex<Vec<Option<String>>>,
     /// A call starting with this panics in the worker that made it.
     panics: Mutex<Option<&'static str>>,
 }
 
 impl FakeGh {
-    fn new() -> Arc<Self> {
+    pub(super) fn new() -> Arc<Self> {
         Arc::new(Self {
             calls: Mutex::new(Vec::new()),
             open: Mutex::new(true),
@@ -50,7 +50,7 @@ impl FakeGh {
         self.opened.notify_all();
     }
 
-    fn calls(&self, prefix: &str) -> Vec<String> {
+    pub(super) fn calls(&self, prefix: &str) -> Vec<String> {
         self.calls
             .lock()
             .unwrap()
