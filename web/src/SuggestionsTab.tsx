@@ -144,16 +144,19 @@ function Lines({ row, open, project, actions }: { row: SuggestionRow; open: bool
       ) : null}
       {row.group === "choose" && row.cause ? (
         <span className={cn("min-w-0 text-muted-foreground", !open && "truncate")} title={row.cause} data-suggestion-cause="true">
-          <span className="text-warning">{t("suggestions.cause")}</span> · {row.cause}
+          <span className="font-medium text-subtle-foreground">{t("suggestions.cause")}</span> · {row.cause}
         </span>
       ) : null}
       {row.group === "choose" && row.hold === "auto_pr_unreviewed" ? <span className="text-muted-foreground" data-suggestion-hold="auto_pr_unreviewed">{t("suggestions.waitsForAutoPr")}</span> : null}
       {row.group !== "choose" && attempt ? (
         <span className="flex min-w-0 items-center gap-sm" data-suggestion-attempt={row.attempt?.phase}>
-          <span className={cn("min-w-0 truncate", attempt.tone === "warning" ? "text-warning" : attempt.tone === "destructive" ? "text-destructive" : "text-muted-foreground")} title={attempt.text}>{attempt.text}</span>
+          {row.attempt?.phase === "pr_open" && row.attempt.url ? (
+            <PrLink project={project} actions={actions} url={row.attempt.url} label={attempt.text} className="min-w-0 truncate text-warning hover:text-warning" />
+          ) : (
+            <span className={cn("min-w-0 truncate", attempt.tone === "warning" ? "text-warning" : attempt.tone === "destructive" ? "text-destructive" : "text-muted-foreground")} title={attempt.text}>{attempt.text}</span>
+          )}
           {row.attempt && (row.attempt.phase === "starting" || row.attempt.phase === "working") ? <Elapsed since={row.attempt.started_at_unix_ms} className="shrink-0 text-muted-foreground" /> : null}
           {row.attempt?.url && row.attempt.phase !== "pr_open" ? <PrLink project={project} actions={actions} url={row.attempt.url} label={row.outcome === "issue" && row.attempt.pr_number === null ? t("suggestions.openIssue") : t("suggestions.openPr", { number: String(row.attempt.pr_number ?? "") })} /> : null}
-          {row.attempt?.phase === "pr_open" && row.attempt.url ? <PrLink project={project} actions={actions} url={row.attempt.url} label={t("suggestions.openPr", { number: String(row.attempt.pr_number ?? "") })} /> : null}
           <AgentLink agentId={row.attempt?.agent_id ?? null} actions={actions} />
         </span>
       ) : null}
@@ -171,10 +174,10 @@ function previousPrLabel(t: ReturnType<typeof useInterfaceTranslation>["t"], url
 }
 
 /** A pull request or issue the row names: a pull request opens in the PR panel, an issue in the browser. */
-function PrLink({ project, actions, url, label }: { project: ProjectSuggestions; actions: Actions; url: string; label: string }) {
+function PrLink({ project, actions, url, label, className }: { project: ProjectSuggestions; actions: Actions; url: string; label: string; className?: string }) {
   const number = Number(/\/pull\/(\d+)/.exec(url)?.[1] ?? Number.NaN);
   return (
-    <button type="button" className="pointer-events-auto shrink-0 text-subtle-foreground underline-offset-4 hover:text-foreground hover:underline" onClick={() => (Number.isFinite(number) ? actions.openSessionPullRequest({ workspace_id: project.workspace_id, number, url }) : actions.openLink(url, false))} data-suggestion-link={url}>
+    <button type="button" className={cn("pointer-events-auto shrink-0 text-subtle-foreground underline-offset-4 hover:text-foreground hover:underline", className)} title={label} onClick={() => (Number.isFinite(number) ? actions.openSessionPullRequest({ workspace_id: project.workspace_id, number, url }) : actions.openLink(url, false))} data-suggestion-link={url}>
       {label}
     </button>
   );

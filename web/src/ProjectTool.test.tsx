@@ -38,12 +38,6 @@ function snapshot(projectStatus: ProjectStatus | undefined, detail: { kind: "wor
   } as unknown as SnapshotRest;
 }
 
-const memory = (questions: ProjectMemory["questions"]): ProjectMemory => ({
-  workspace_id: "p", unavailable: null, loading: false, enabled: true, capacity_reached: false, evicted_cards: 0, evicted_through_unix_ms: null,
-  rows: [{ number: 3, title: "card 3", kind: "rule", human_source_count: 1, provided_session_count: 0, pull_count: 0, updated_at_unix_ms: Date.now(), verifying: false, promotion: null }],
-  questions, analysis: "idle", consent_required: false, usable_cards: 1, checking_card: null, check_resume_at_unix_ms: null, forgotten: null, pending_action: null, expanded: null, search: null,
-});
-
 describe("the Project tool", () => {
   let container: HTMLDivElement;
   let root: Root;

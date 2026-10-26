@@ -30,14 +30,14 @@ export function HideAiTool({ actions }: { actions: Actions }) {
   const projectId = useShellStore((state) => frontCheckout(state.rest)?.workspace_id ?? null);
   const suggestions = useShellStore((state) => state.suggestions?.project ?? null);
   const opened = suggestions && suggestions.workspace_id === projectId ? suggestions : null;
-  if (!projectId) return <p className="p-lg text-caption text-muted-foreground">{t("history.openWorkspace")}</p>;
+  if (!projectId) return <p className="px-md py-lg text-caption text-muted-foreground">{t("history.openWorkspace")}</p>;
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-hide-ai-tool={projectId} data-hide-ai={opened ? (opened.loading ? "loading" : opened.enabled ? "on" : "off") : "loading"}>
       <Head projectId={projectId} project={opened} actions={actions} />
       {!opened || (opened.loading && !opened.unavailable) ? (
-        <p role="status" className="p-lg text-caption text-muted-foreground">{t("memory.reading")}</p>
+        <p role="status" className="px-md py-lg text-caption text-muted-foreground">{t("memory.reading")}</p>
       ) : opened.unavailable ? (
-        <div className="flex flex-col items-start gap-sm p-lg" data-hide-ai-unavailable={opened.unavailable}>
+        <div className="flex flex-col items-start gap-sm px-md py-lg" data-hide-ai-unavailable={opened.unavailable}>
           <p className="break-keep text-caption text-subtle-foreground">{t(opened.unavailable === "unregistered" ? "hideAiTool.unregistered" : "hideAiTool.unreadable")}</p>
           {opened.unavailable === "unreadable" ? <Button size="sm" variant="secondary" onClick={() => actions.memoryOpen(opened.workspace_id)}>{t("memory.readAgain")}</Button> : null}
         </div>
@@ -95,7 +95,7 @@ function Head({ projectId, project, actions }: { projectId: string; project: Pro
 function Off() {
   const { t } = useInterfaceTranslation();
   return (
-    <div className="flex flex-col gap-xs p-lg" data-hide-ai-off="true">
+    <div className="flex flex-col gap-xs px-md py-lg" data-hide-ai-off="true">
       <span className="text-body text-foreground">{t("hideAiTool.off.title")}</span>
       <p className="break-keep text-caption text-muted-foreground">{t("hideAiTool.off.body")}</p>
     </div>

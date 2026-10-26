@@ -16,6 +16,7 @@ import { SessionWorkflowScene } from "./SessionWorkflowScene";
 import { CoreMoveScene, coreMoveSceneParams } from "./CoreMoveScene";
 import { NodeProjectScene, nodeProjectSceneParams } from "./NodeProjectScene";
 import { LandingScene, landingSceneParams } from "./LandingScene";
+import { HideAiScene, hideAiSceneParams } from "./HideAiScene";
 import { MemoryScene, memorySceneParams } from "./MemoryScene";
 import { OverviewScene, overviewSceneParams } from "./OverviewScene";
 import { UsageScene } from "./UsageScene";
@@ -121,6 +122,11 @@ export function mountGallery(root: Root) {
     if (scene === "landing") {
       document.title = "hide · Landing shots scene";
       root.render(<StrictMode><LandingScene {...landingSceneParams(params)} /></StrictMode>);
+      return;
+    }
+    if (scene === "hide-ai") {
+      document.title = "hide · Hide AI scene";
+      root.render(<StrictMode><HideAiScene {...hideAiSceneParams(params)} /></StrictMode>);
       return;
     }
     if (scene === "memory") {
