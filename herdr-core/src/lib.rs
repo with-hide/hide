@@ -77,6 +77,7 @@ mod session_sync;
 mod sidebar;
 mod split_tree;
 mod start_claim;
+pub mod suggestions;
 pub mod tasks;
 mod terminal_attachments;
 pub mod terminal_reports;
