@@ -40,7 +40,7 @@ type Playing = { chapter: PracticeChapter; resume: number; run: number };
  * focus still waiting for a world that is gone, an open overlay, a focus, a
  * copied file. The player then fills the stores from its new world.
  */
-function freshShell() {
+export function freshShell() {
   useShellStore.setState(useShellStore.getInitialState(), true);
   useUiStore.setState(useUiStore.getInitialState(), true);
   resetRecent();
@@ -119,7 +119,7 @@ export function PracticeApp({ opening = null }: { opening?: string | null }) {
 
   if (playing) {
     const next = nextChapter(playing.chapter);
-    return <PracticePlayer key={playing.run} chapter={playing.chapter} next={next} resume={playing.resume} operator={operator} onStep={onStep} onStart={(target) => start(target, 0)} onHub={() => setPlaying(null)} />;
+    return <PracticePlayer key={playing.run} chapter={playing.chapter} next={next} resume={playing.resume} operator={operator} onStep={onStep} onStart={start} onHub={() => setPlaying(null)} />;
   }
   return <PracticeHub progress={progress} unsaved={unanswered && !answer} onStart={start} />;
 }

@@ -7,6 +7,11 @@ import type { Catalog, Catalogs } from "../schema";
 
 export const practiceEnglish = {
   "practice.mode": "Practice · Chapter {{number}} {{title}}",
+  "practice.exit": "Exit",
+  "practice.finish": "Finish",
+  "practice.ended": "Chapter {{number}} done",
+  "practice.upNext": "Up next · Chapter {{number}} {{title}}",
+  "practice.again": "↺ Again",
   "practice.count": "{{index}} / {{total}}",
   "practice.next": "Next",
   "practice.try": "Try it",
@@ -48,6 +53,11 @@ export const practiceEnglish = {
 
 const ko = {
   "practice.mode": "연습 모드 · {{number}}편 {{title}}",
+  "practice.exit": "나가기",
+  "practice.finish": "마치기",
+  "practice.ended": "{{number}}편 완료",
+  "practice.upNext": "다음 · {{number}}편 {{title}}",
+  "practice.again": "↺ 다시",
   "practice.count": "{{index}} / {{total}}",
   "practice.next": "다음",
   "practice.try": "해 보기",
@@ -89,6 +99,11 @@ const ko = {
 
 const zhCN = {
   "practice.mode": "练习模式 · 第 {{number}} 章 {{title}}",
+  "practice.exit": "退出",
+  "practice.finish": "完成",
+  "practice.ended": "第 {{number}} 章完成",
+  "practice.upNext": "下一章 · 第 {{number}} 章 {{title}}",
+  "practice.again": "↺ 再来一遍",
   "practice.count": "{{index}} / {{total}}",
   "practice.next": "下一步",
   "practice.try": "试一试",
@@ -130,6 +145,11 @@ const zhCN = {
 
 const ja = {
   "practice.mode": "練習モード · 第{{number}}章 {{title}}",
+  "practice.exit": "やめる",
+  "practice.finish": "終える",
+  "practice.ended": "第{{number}}章 完了",
+  "practice.upNext": "次 · 第{{number}}章 {{title}}",
+  "practice.again": "↺ もう一度",
   "practice.count": "{{index}} / {{total}}",
   "practice.next": "次へ",
   "practice.try": "やってみる",

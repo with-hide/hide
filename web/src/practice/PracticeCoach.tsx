@@ -294,6 +294,8 @@ type Props = {
   onStep: (step: number, finished: boolean) => void;
   onNext: () => void;
   onRestart: () => void;
+  /** Starts the chapter over and plays it again up to `step`, where the learner stands at its start. */
+  onRewind: (step: number) => void;
   onHub: () => void;
 };
 
@@ -303,10 +305,12 @@ const REPLAY_MS = 120;
 /** Whether a step waits for something to happen, rather than being a look the learner presses on from. */
 const acts = (step: PracticeStep) => !!(step.done || step.shown);
 
-export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, onRestart, onHub }: Props) {
+export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, onRestart, onRewind, onHub }: Props) {
   const { t } = useInterfaceTranslation();
   const say = (key: string, values?: Record<string, unknown>) => t(key as MessageKey, values as never) as string;
   const [index, setIndex] = useState(0);
+  // Past the last step the chapter is over: the end card says so before the next chapter starts.
+  const [ended, setEnded] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
   const [ring, setRing] = useState<Rect | null>(null);
   const [zones, setZones] = useState<(Rect | null)[]>([]);
@@ -339,8 +343,11 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
     seen.current = model;
     // While a palette or a switcher the shell opened is up, the change came from its own keys, not the step's chord.
     if (step.command && !shellLayerOpen(useUiStore.getState())) setFlash(commandLabel(step.command));
-    if (step.done?.(model)) setIndex((value) => value + 1);
-  }, [model, step]);
+    if (step.done?.(model)) {
+      if (last) setEnded(true);
+      else setIndex((value) => value + 1);
+    }
+  }, [last, model, step]);
   useEffect(() => {
     if (!flash) return undefined;
     const timer = window.setTimeout(() => setFlash(null), 900);
@@ -354,7 +361,10 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
     let frame = requestAnimationFrame(function follow() {
       const marked = rectOf(step.target);
       setRing((before) => (same(before, marked) ? before : marked));
-      if (step.shown && rectOf(step.shown)) setIndex((value) => (value === index ? value + 1 : value));
+      if (step.shown && rectOf(step.shown)) {
+        if (last) setEnded(true);
+        else setIndex((value) => (value === index ? value + 1 : value));
+      }
       setZones((before) => {
         const now = step.zones ? ZONES.map((zone) => rectOf(zone.selector)) : [];
         return now.length === before.length && now.every((rect, at) => same(rect, before[at] ?? null)) ? before : now;
@@ -370,13 +380,13 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
       frame = requestAnimationFrame(follow);
     });
     return () => cancelAnimationFrame(frame);
-  }, [chapter.world.examples, index, step]);
+  }, [chapter.world.examples, index, last, step]);
 
   const advance = useCallback(() => {
-    if (!last) return setIndex((value) => value + 1);
-    if (next) onNext();
-    else onHub();
-  }, [last, next, onNext, onHub]);
+    if (last) setEnded(true);
+    else setIndex((value) => value + 1);
+  }, [last]);
+  const finish = useCallback(() => (next ? onNext() : onHub()), [next, onNext, onHub]);
 
   // A gesture that takes a while plays once: ⏎ pressed again on its step waits for it. The world
   // can finish the step before the gesture's last pause, and ⏎ on the step after is that step's.
@@ -414,13 +424,32 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
     return () => window.clearTimeout(timer);
   }, [index, perform, resume]);
 
-  const back = index > 0 && !acts(step) && !acts(chapter.steps[index - 1]!);
+  // The world as each step began, so going back knows whether the screen is still the one the step before showed.
+  const began = useRef<unknown[]>([]);
+  useEffect(() => {
+    began.current[index] = current.current;
+  }, [index]);
+
+  // Back goes to the step before as it began: over a look that left the world as it was, the bubble only moves back;
+  // over a step that changed something, or after the learner changed something, the chapter is played again up to it.
+  const back = index > 0 && index >= resume;
+  const goBack = useCallback(() => {
+    const before = index - 1;
+    if (!acts(chapter.steps[before]!) && began.current[before] === current.current) setIndex(before);
+    else onRewind(before);
+  }, [chapter.steps, index, onRewind]);
 
   // ⏎ performs the step, → moves on from a look and ← goes back over one; every other key reaches the shell
   // untouched, and while a palette the shell opened is up every key is the palette's but the ⏎ held below.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (!event.isTrusted || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || event.isComposing) return;
+      if (ended) {
+        if (event.key !== "Enter") return;
+        event.preventDefault();
+        event.stopPropagation();
+        return finish();
+      }
       // A step that types into the palette's field keeps ⏎ while the field is empty, to type its words;
       // past them ⏎ is the palette's, which opens the row it highlights.
       const types = field !== null && !fieldFilled(field);
@@ -437,15 +466,15 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
         event.preventDefault();
         event.stopPropagation();
         perform();
-      } else if (event.key === "ArrowLeft" && back) {
+      } else if (event.key === "ArrowLeft" && back && !acts(step)) {
         event.preventDefault();
         event.stopPropagation();
-        setIndex((value) => value - 1);
+        goBack();
       }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [back, field, perform, step]);
+  }, [back, ended, field, finish, goBack, perform, step]);
 
   const words = (part: string) => say(`practice.${chapter.id}.${step.id}.${part}`);
   // A step that types into a palette says how to type, not the palette's chord, which would close it; past its words, nothing.
@@ -456,15 +485,15 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
     : step.gesture && "drag" in step.gesture ? say("practice.via.drag")
     : step.gesture && "type" in step.gesture ? say("practice.via.type")
     : step.gesture && "menu" in step.gesture ? say("practice.via.menu") : null;
-  const go = last ? (next ? say("practice.toChapter", { number: next.number }) : say("practice.toHub")) : acts(step) ? say("practice.try") : say("practice.next");
+  const go = last ? say("practice.finish") : acts(step) ? say("practice.try") : say("practice.next");
   const place = besideLayer(bubblePlace(ring, step.side, size), layerBox, size);
   const title = say(`practice.${chapter.id}.title`);
 
   return (
-    <div className="pc-layer" data-practice-layer data-practice-step={step.id} data-practice-index={index} data-practice-steps={chapter.steps.length}>
+    <div className="pc-layer" data-practice-layer data-practice-step={step.id} data-practice-index={index} data-practice-steps={chapter.steps.length} data-practice-ended={ended || undefined}>
       <style>{COACH_CSS}</style>
       {/* What the coach points with, all of it stepping aside while the shell's palette or switcher is up; the chord, marks and hand still sit above the bubble (`z-index` in the style). */}
-      {palette ? null : (
+      {ended ? <EndCard chapter={chapter} next={next} title={title} say={say} onFinish={finish} onRestart={onRestart} onHub={onHub} /> : palette ? null : (
         <>
           {zones.length ? <div className="pc-zdim" /> : null}
           {zones.map((rect, at) => rect ? (
@@ -482,20 +511,22 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
         <button type="button" onClick={onHub} data-practice-hub-open>{say("practice.hub")}</button>
         <span>{say("practice.mode", { number: chapter.number, title })}</span>
       </div>
-      <div ref={bubble} key={step.id} className="pc-bubble" style={{ left: place.x, top: place.y }}>
+      {ended ? null : <div ref={bubble} key={step.id} className="pc-bubble" style={{ left: place.x, top: place.y }}>
         {place.arrow ? <div className="pc-arrow" style={place.arrow} /> : null}
         <div className="pc-kick"><span>{words("kick")}</span><span>{say("practice.count", { index: index + 1, total: chapter.steps.length })}</span></div>
         <h3>{words("title")}</h3>
         <p>{words("text")}</p>
         {via ? <div className="pc-via">{via}</div> : null}
         <div className="pc-row">
+          {/* Leaving is always where the eye is, a stuck step included; it goes to the chapter list. */}
+          <button type="button" className="pc-exit" onClick={onHub} data-practice-exit>{say("practice.exit")}</button>
           <div className="pc-dots">{chapter.steps.map((row, at) => <i key={row.id} className={at === index ? "on" : at < index ? "done" : ""} />)}</div>
           {/* While a palette is up every key and press is its own; a press out here would close it. */}
-          {back && !palette ? <button type="button" className="pc-back" onClick={() => setIndex((value) => value - 1)}>{say("practice.back")}</button> : null}
+          {back && !palette ? <button type="button" className="pc-back" onClick={goBack} data-practice-back>{say("practice.back")}</button> : null}
           {palette ? null : <button type="button" className="pc-go" onClick={perform}>{go} <span className="pc-kc">⏎</span></button>}
         </div>
-      </div>
-      {chapter.quest ? <QuestCard chapter={chapter} index={index} title={title} say={say} onRestart={onRestart} /> : null}
+      </div>}
+      {chapter.quest && !ended ? <QuestCard chapter={chapter} index={index} title={title} say={say} onRestart={onRestart} /> : null}
     </div>
   );
 }
@@ -534,9 +565,49 @@ function besideLayer(place: Placement, palette: Rect | null, size: { w: number; 
 
 type Say = (key: string, values?: Record<string, unknown>) => string;
 
+/** The chapter's tasks, as its quest card lists them, with the index of each one's step. */
+const tasksOf = (chapter: PracticeChapter) => chapter.steps.flatMap((step, at) => (step.quest ? [{ step, at }] : []));
+
+/** A task's chord as keycaps, where this host has one. */
+function TaskKeys({ step }: { step: PracticeStep }) {
+  return step.command && chordOf(step.command) ? <span className="pc-k"><Keys id={step.command} /></span> : null;
+}
+
+type EndProps = { chapter: PracticeChapter; next: PracticeChapter | null; title: string; say: Say; onFinish: () => void; onRestart: () => void; onHub: () => void };
+
+/** The chapter finished: what it taught, from its quest card, and where to go next; ⏎ is the next chapter, or the list after the last. */
+function EndCard({ chapter, next, title, say, onFinish, onRestart, onHub }: EndProps) {
+  const tasks = chapter.quest ? tasksOf(chapter) : [];
+  const toHub = say("practice.toHub");
+  const upNext = next ? say("practice.upNext", { number: next.number, title: say(`practice.${next.id}.title`) }) : null;
+  const go = next ? say("practice.toChapter", { number: next.number }) : toHub;
+  return (
+    <>
+      <div className="pc-zdim pc-end-dim" />
+      <div className="pc-end" data-practice-end>
+        <div className="pc-end-head">
+          <span className="pc-badge">✓</span>
+          <div><div className="pc-kick">{say("practice.ended", { number: chapter.number })}</div><h3>{title}</h3></div>
+        </div>
+        {tasks.length ? (
+          <ul className="pc-learned">
+            {tasks.map(({ step }) => <li key={step.id}>{say(`practice.${chapter.id}.${step.id}.quest`)}<TaskKeys step={step} /></li>)}
+          </ul>
+        ) : null}
+        {upNext ? <p className="pc-up">{upNext}</p> : null}
+        <div className="pc-row">
+          <button type="button" className="pc-back pc-again" onClick={onRestart} data-practice-again>{say("practice.again")}</button>
+          {next ? <button type="button" className="pc-go pc-sub" onClick={onHub} data-practice-end-hub>{toHub}</button> : null}
+          <button type="button" className="pc-go" onClick={onFinish} data-practice-end-go>{go} <span className="pc-kc">⏎</span></button>
+        </div>
+      </div>
+    </>
+  );
+}
+
 function QuestCard({ chapter, index, title, say, onRestart }: { chapter: PracticeChapter; index: number; title: string; say: Say; onRestart: () => void }) {
   const { t } = useInterfaceTranslation();
-  const listed = chapter.steps.flatMap((step, at) => (step.quest ? [{ step, at }] : []));
+  const listed = tasksOf(chapter);
   const done = listed.filter((row) => row.at < index).length;
   return (
     <div className="pc-quest" data-practice-quest>
@@ -550,7 +621,7 @@ function QuestCard({ chapter, index, title, say, onRestart }: { chapter: Practic
           <li key={step.id} className={row < done ? "done" : row === done ? "cur" : ""}>
             <span className="pc-ck" />
             {say(`practice.${chapter.id}.${step.id}.quest`)}
-            {step.command && chordOf(step.command) ? <span className="pc-k"><Keys id={step.command} /></span> : null}
+            <TaskKeys step={step} />
           </li>
         ))}
       </ol>

@@ -31,12 +31,13 @@ function watchClipboard() {
   }
 }
 
-/** Where the practice window stands: the chapter list, or a chapter's step and how many events its world has answered. */
+/** Where the practice window stands: the chapter list, or a chapter's step (or its end card) and how many events its world has answered. */
 function practiceState(page: Page): Promise<string> {
   return page.evaluate(() => {
     const root = document.querySelector("[data-practice-chapter]");
     if (!root) return document.querySelector("[data-practice-hub]") ? "hub" : "none";
-    const step = document.querySelector("[data-practice-layer]")?.getAttribute("data-practice-step");
+    const layer = document.querySelector("[data-practice-layer]");
+    const step = layer?.hasAttribute("data-practice-ended") ? "ended" : layer?.getAttribute("data-practice-step");
     return `${root.getAttribute("data-practice-chapter")}:${step}:${root.getAttribute("data-practice-moves")}`;
   });
 }
@@ -155,6 +156,44 @@ test("every chapter started over from each of its steps plays to its end with En
       if ((await practiceState(practice)) !== "hub") await practice.locator("[data-practice-hub-open]").click();
       await expect(row).toHaveAttribute("data-status", "done");
     }
+  });
+});
+
+test("Back over a step that changed the screen plays the chapter again up to that step as it began", async ({ page }) => {
+  await withPractice(page, async (practice) => {
+    await practice.locator('[data-practice-hub-chapter="screen"] [data-practice-play]').click();
+    const layer = practice.locator('[data-practice-chapter="screen"] [data-practice-layer]');
+    const focused = practice.locator('[data-pane-view][data-focused="true"]');
+    // Split, then jump back to the agent: two steps that each changed the screen.
+    await pressTo(practice, "screen", 2);
+    await expect(focused).toHaveAttribute("data-pane-view", "lead");
+    // Back to the jump: the split is there and the keyboard is in the new pane again, as the jump step began.
+    await layer.locator("[data-practice-back]").click();
+    await expect(layer).toHaveAttribute("data-practice-index", "1");
+    await expect(practice.locator("[data-pane-view]")).toHaveCount(2);
+    await expect(focused).not.toHaveAttribute("data-pane-view", "lead");
+    // Back to the split: one pane, before anything was split.
+    await layer.locator("[data-practice-back]").click();
+    await expect(layer).toHaveAttribute("data-practice-index", "0");
+    await expect(practice.locator("[data-pane-view]")).toHaveCount(1);
+    await expect(layer.locator("[data-practice-back]")).toHaveCount(0);
+  });
+});
+
+test("the bubble's Exit leaves from any step, and a finished chapter stops on its end card", async ({ page }) => {
+  await withPractice(page, async (practice) => {
+    await practice.locator('[data-practice-hub-chapter="switch"] [data-practice-play]').click();
+    await practice.locator('[data-practice-chapter="switch"] [data-practice-exit]').click();
+    await expect(practice.locator("[data-practice-hub]")).toBeVisible();
+    // The last step's button finishes the chapter on its end card, which lists the tasks and leads back to the list.
+    await practice.locator('[data-practice-hub-chapter="switch"] [data-practice-play]').click();
+    await pressTo(practice, "switch", 4);
+    await practice.keyboard.press("Enter");
+    const end = practice.locator('[data-practice-chapter="switch"] [data-practice-end]');
+    await expect(end).toBeVisible();
+    await expect(end.locator("li")).toHaveCount(3);
+    await end.locator("[data-practice-end-hub]").click();
+    await expect(practice.locator('[data-practice-hub-chapter="switch"]')).toHaveAttribute("data-status", "done");
   });
 });
 
