@@ -85,8 +85,21 @@ test("a pane's @ lists the other agents and types the chosen one's reference int
     const read = (log: string) => (fs.existsSync(log) ? fs.readFileSync(log, "utf8") : "");
     const [targetLog, agentLog] = herdr.inputLogs.map((log) => ({ log, before: read(log).length }));
 
-    await page.locator(`[data-pane-mention="${target}"]`).click();
+    const mention = page.locator(`[data-pane-mention="${target}"]`);
     const list = page.locator(`[data-pane-mention-list="${target}"]`);
+    // The @ opens and closes its list, and Escape hands the keyboard back to it.
+    await mention.click();
+    await expect(list).toBeVisible();
+    await mention.click();
+    await expect(list).toHaveCount(0);
+    await mention.click();
+    await expect(list.locator("input")).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(list).toHaveCount(0);
+    await expect(mention).toBeFocused();
+
+    await mention.click();
+    await expect(list.locator("input")).toBeFocused();
     await expect(list.locator(`[data-pane-mention-choice="${agent}"]`)).toBeVisible();
     // The pane's own agent is not offered: its reference would name it to itself.
     await expect(list.locator(`[data-pane-mention-choice="${target}"]`)).toHaveCount(0);
@@ -100,6 +113,23 @@ test("a pane's @ lists the other agents and types the chosen one's reference int
     expect(read(targetLog!.log).slice(targetLog!.before)).not.toMatch(/[\r\n]/);
     expect(read(agentLog!.log).slice(agentLog!.before)).toBe("");
     await expect(page.locator(`[data-pane-view="${target}"] .xterm-helper-textarea`)).toBeFocused();
+
+    // The grip and zoom show on the pane that holds the keyboard; on the other pane only
+    // while its header is pointed at, and nothing in that row moves when they show.
+    const grip = (pane: string) => page.locator(`[data-pane-view="${pane}"] [data-pane-move-grip]`);
+    const zoom = (pane: string) => page.locator(`[data-pane-view="${pane}"] [data-pane-zoom="false"]`);
+    await expect(grip(target!)).toHaveCSS("opacity", "1");
+    await expect(zoom(target!)).toHaveCSS("opacity", "1");
+    await page.mouse.move(1, 1);
+    await expect(grip(agent!)).toHaveCSS("opacity", "0");
+    await expect(zoom(agent!)).toHaveCSS("opacity", "0");
+    const other = page.locator(`[data-pane-view="${agent}"] > header`);
+    const places = () => Promise.all([other.locator("[data-pane-move-title]").first().boundingBox(), other.locator("[data-pane-mention]").boundingBox()]);
+    const before = await places();
+    await other.locator("[data-pane-move-title]").first().hover();
+    await expect(grip(agent!)).toHaveCSS("opacity", "1");
+    await expect(zoom(agent!)).toHaveCSS("opacity", "1");
+    expect(await places()).toEqual(before);
   } finally {
     daemon.stop();
     herdr.stop();

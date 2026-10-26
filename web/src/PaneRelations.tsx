@@ -196,7 +196,7 @@ export function paneMenuItems(pane: PaneRow, title: string, archive: ArchiveOffe
   }
   if (revisitEntry && !pane.sleep_action) agentActions.push(revisitEntry);
   if (archiveEntry && !pane.sleep_action) agentActions.push(archiveEntry);
-  // 개요에서 보기 (PRD pane-open-in-overview D-07, B11): the header button's action, on an agent pane only.
+  // 개요에서 보기 (PRD pane-open-in-overview D-07, B11): first among an agent pane's own items, and nowhere else on the pane.
   if (plan) agentActions.unshift({ id: "open_plan", icon: "plan", label: translate("panes.menu.plan"), unavailable: null });
   if (overview) agentActions.unshift({ id: "open_in_overview", icon: "overview", label: translate("panes.menu.openInOverview"), unavailable: null });
   if (agentActions.length > 0) items.push(...agentActions.map((item, index) => (index === 0 ? { ...item, separated: items.length > 0 } : item)));

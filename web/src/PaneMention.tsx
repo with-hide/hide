@@ -5,10 +5,10 @@ import { AgentMark } from "./AgentMark";
 import { agentReference, mentionCandidates } from "./agentReference";
 import { Button } from "./components/ui/button";
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from "./components/ui/command";
-import { Popover, PopoverAnchor, PopoverContent } from "./components/ui/popover";
+import { Popover, PopoverContent, PopoverTrigger } from "./components/ui/popover";
 import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
-import { usePaneAgents } from "./PaneHeaderBand";
+import { allAgents } from "./paneAgents";
 import { useShellStore } from "./store";
 import { focusTerminal, typeReference } from "./terminals";
 
@@ -16,16 +16,17 @@ import { focusTerminal, typeReference } from "./terminals";
  * An agent pane's @: the other agents on its device, found by name or task,
  * and the one chosen typed into this pane's prompt as its reference, with no
  * Enter, so the operator only adds what to say. The list is read when it
- * opens; choosing hands the keyboard back to this pane's terminal.
+ * opens; choosing hands the keyboard to this pane's terminal, and Escape back
+ * to the @.
  */
 export function PaneMention({ paneId, actions }: { paneId: string; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const [open, setOpen] = useState(false);
-  const agents = usePaneAgents();
-  // A closed @ reads nothing, so a snapshot that moves no agent renders no header.
+  // A closed @ reads nothing from the store, so it adds no work to the header's renders.
+  const agents = useShellStore((state) => (open ? allAgents(state.agents, state.rest?.status?.remote) : null));
   const rest = useShellStore((state) => (open ? state.rest : null));
   const chosen = useRef(false);
-  const candidates = open ? mentionCandidates(rest, agents, paneId) : [];
+  const candidates = agents ? mentionCandidates(rest, agents, paneId) : [];
   const choose = (reference: string) => {
     chosen.current = true;
     setOpen(false);
@@ -36,22 +37,18 @@ export function PaneMention({ paneId, actions }: { paneId: string; actions: Acti
   const label = t("panes.mention.button");
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <Hint label={label}>
-        <PopoverAnchor asChild>
+      <Hint label={label} active={!open}>
+        <PopoverTrigger asChild>
           <Button
             variant="ghost"
             size="icon-sm"
             className="shrink-0 text-subtle-foreground hover:bg-popover hover:text-foreground data-[state=open]:bg-secondary data-[state=open]:text-foreground"
             aria-label={label}
-            aria-haspopup="dialog"
-            aria-expanded={open}
-            data-state={open ? "open" : "closed"}
             data-pane-mention={paneId}
-            onClick={() => setOpen(!open)}
           >
             <AtSignIcon aria-hidden="true" />
           </Button>
-        </PopoverAnchor>
+        </PopoverTrigger>
       </Hint>
       <PopoverContent
         align="end"
