@@ -22,7 +22,7 @@ use super::*;
 use crate::model::{PullRequestBadge, PullRequestChecks, PullRequestSnapshot};
 use crate::node::NodeId;
 use crate::suggestions::apply::{ApplyBrief, ApplyOrder, FollowedAttempt, issue_text};
-use crate::suggestions::ledger::{PrRef, Signal};
+use crate::suggestions::ledger::PrRef;
 use crate::suggestions::lifecycle::{AttemptMove, AttemptPhase};
 use crate::suggestions::notebook::{LineId, Outcome};
 use crate::suggestions::watch::WatchedLine;
@@ -778,6 +778,7 @@ fn prompt(brief: &ApplyBrief, language: hide_ai::OutputLanguage) -> String {
 mod tests {
     use super::*;
     use crate::model::ReviewDecision;
+    use crate::suggestions::ledger::Signal;
     use crate::suggestions::store::ProjectLocation;
 
     fn followed(phase: AttemptPhase, pr: Option<u32>) -> FollowedAttempt {
