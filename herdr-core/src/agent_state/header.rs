@@ -197,8 +197,7 @@ pub(crate) fn of(
     // it, so a child's new ask is not hidden behind one already seen.
     let leads = matches!(own, Some("approval" | "answer"))
         || agent.state.verb == super::RequestVerb::Blocked;
-    if !leads && let Some(lead) = agent.raised.first()
-    {
+    if !leads && let Some(lead) = agent.raised.first() {
         return Header {
             request: turn_request(agent),
             band: Some(Band {
