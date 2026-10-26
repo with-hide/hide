@@ -601,7 +601,7 @@ impl Worker {
                     crate::diagnostic!(json!({
                         "component": "suggestions", "kind": "records.kept",
                         "project_id": project, "written": written.len(),
-                        "pruned": pruned.records,
+                        "pruned": pruned.records, "references_pruned": pruned.references,
                     }));
                 }
                 !written.is_empty()
