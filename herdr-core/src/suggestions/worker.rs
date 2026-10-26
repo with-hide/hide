@@ -211,6 +211,14 @@ pub(crate) trait Sink: Send + 'static {
     /// Whether an automatic attempt may start in the Project at `location`
     /// now: GitHub answers there (D-41).
     fn can_apply(&self, location: &ProjectLocation, outcome: Outcome) -> bool;
+    /// The sessions of `sessions` on `node` whose record a press can still
+    /// open, so the rest are drawn gone (B10); `None` when that cannot be
+    /// read.
+    fn kept_sessions(
+        &self,
+        node: &str,
+        sessions: &BTreeSet<SessionRef>,
+    ) -> Option<BTreeSet<SessionRef>>;
 }
 
 pub(crate) struct Options {
@@ -1470,6 +1478,8 @@ impl Worker {
                 let (notebook, lives) = store.notebook(project)?;
                 let index = store.index(project, &notebook)?;
                 let intro_seen = store.meta(INTRO_SEEN)?.is_some();
+                let sources =
+                    evidence_sources(store, project, &state, &notebook, &lives, &index, sink)?;
                 Ok::<_, String>(read::project(&ReadInput {
                     workspace_id: &workspace_id,
                     state: &state,
@@ -1479,6 +1489,7 @@ impl Worker {
                     investigating,
                     intro_seen,
                     today: &today,
+                    sources: &sources,
                 }))
             })(),
             (_, Err(code)) => Err(code.clone()),
@@ -1494,6 +1505,40 @@ impl Worker {
         });
         sink.read(workspace_id, read);
     }
+}
+
+/// What a read's evidence needs beyond the index: each pull request's
+/// address from its record, and which sessions the link record on the
+/// Project's machine still holds (B10).
+fn evidence_sources(
+    store: &SuggestionStore,
+    project: &str,
+    state: &super::store::ProjectState,
+    notebook: &Notebook,
+    lives: &BTreeMap<LineId, super::lifecycle::LineLife>,
+    index: &RecordIndex,
+    sink: &impl Sink,
+) -> Result<read::EvidenceSources, String> {
+    let shown = read::shown_evidence(notebook, lives, index);
+    let prs = shown
+        .iter()
+        .filter(|record| record.pr.is_some())
+        .map(|record| record.id)
+        .collect::<Vec<_>>();
+    let pr_urls = store
+        .records_of(project, &prs)?
+        .into_iter()
+        .filter_map(|record| Some((record.id, record.fact.pr?.url)))
+        .collect();
+    let sessions = shown
+        .iter()
+        .filter_map(|record| record.session.clone())
+        .collect::<BTreeSet<_>>();
+    let kept = match &state.location {
+        Some(location) if !sessions.is_empty() => sink.kept_sessions(&location.node, &sessions),
+        _ => None,
+    };
+    Ok(read::EvidenceSources { kept, pr_urls })
 }
 
 /// The pen a run on its own thread writes with: each edit goes to the
@@ -1595,7 +1640,11 @@ mod tests {
         orders: mpsc::Sender<ApplyOrder>,
         followed: mpsc::Sender<Vec<FollowedAttempt>>,
         gate: RunGate,
+        /// The sessions whose record can no longer be opened.
+        gone: Gone,
     }
+
+    type Gone = Arc<std::sync::Mutex<BTreeSet<SessionRef>>>;
 
     impl Sink for TestSink {
         fn read(&self, _workspace_id: String, read: ProjectSuggestionsSnapshot) {
@@ -1619,6 +1668,14 @@ mod tests {
         fn can_apply(&self, _location: &ProjectLocation, _outcome: Outcome) -> bool {
             true
         }
+        fn kept_sessions(
+            &self,
+            _node: &str,
+            sessions: &BTreeSet<SessionRef>,
+        ) -> Option<BTreeSet<SessionRef>> {
+            let gone = self.gone.lock().unwrap();
+            Some(sessions.difference(&gone).cloned().collect())
+        }
     }
 
     /// What the worker handed the runtime to start and follow.
@@ -1636,6 +1693,7 @@ mod tests {
         handed: Handed,
         _dir: tempfile::TempDir,
         store: PathBuf,
+        gone: Gone,
     }
 
     impl Fixture {
@@ -1649,7 +1707,8 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let store = dir.path().join("suggestions.sqlite3");
             let clock = Arc::new(AtomicU64::new(START));
-            let (worker, reads, restored, handed) = Self::spawn(&store, &clock, &analysis);
+            let gone = Gone::default();
+            let (worker, reads, restored, handed) = Self::spawn(&store, &clock, &analysis, &gone);
             Self {
                 worker: Some(worker),
                 analysis,
@@ -1659,6 +1718,7 @@ mod tests {
                 handed,
                 _dir: dir,
                 store,
+                gone,
             }
         }
 
@@ -1666,6 +1726,7 @@ mod tests {
             store: &std::path::Path,
             clock: &Arc<AtomicU64>,
             analysis: &AnalysisFactory,
+            gone: &Gone,
         ) -> (
             SuggestionWorker,
             Receiver<ProjectSuggestionsSnapshot>,
@@ -1696,6 +1757,7 @@ mod tests {
                     usage_ok: true,
                     language: hide_ai::OutputLanguage::English,
                 },
+                gone: Arc::clone(gone),
             };
             (
                 SuggestionWorker::spawn(options, sink).unwrap(),
@@ -1710,7 +1772,7 @@ mod tests {
         fn restart(&mut self) {
             self.worker.take();
             let (worker, reads, restored, handed) =
-                Self::spawn(&self.store, &self.clock, &self.analysis);
+                Self::spawn(&self.store, &self.clock, &self.analysis, &self.gone);
             self.worker = Some(worker);
             self.reads = reads;
             self.restored = restored;
@@ -1832,6 +1894,75 @@ mod tests {
             SuggestionsStatus::Idle,
             "a row waits to be chosen"
         );
+    }
+
+    /// B10: evidence whose session the link record no longer holds is drawn
+    /// gone on the next read, and a pull request's evidence carries the
+    /// address its record was seen with, so both open or neither does.
+    #[test]
+    fn evidence_whose_session_is_gone_is_drawn_gone_and_a_pull_request_has_its_address() {
+        let fixture = Fixture::new();
+        fixture.open();
+        fixture.fail_in_sessions("cargo test", &["s1", "s2", "s3"]);
+        let at = fixture.clock.load(Ordering::SeqCst);
+        fixture.send(Command::Observe {
+            project: project(),
+            facts: [41, 42, 43]
+                .into_iter()
+                .map(|number| Observation {
+                    signal: Signal::CheckFailed,
+                    tag: "ci / test".into(),
+                    session: None,
+                    pr: Some(super::super::ledger::PrRef {
+                        number,
+                        url: format!("https://github.com/acme/app/pull/{number}"),
+                    }),
+                    checkout: None,
+                    at_unix_ms: at,
+                    always: false,
+                    head: None,
+                })
+                .collect(),
+        });
+        fixture.wake_and_wait_out_the_delay();
+        let read = fixture.read_until(|read| chosen(read).len() == 2);
+        let evidence = |read: &ProjectSuggestionsSnapshot| {
+            read.rows
+                .iter()
+                .flat_map(|row| &row.evidence)
+                .map(|evidence| {
+                    let name = evidence
+                        .session_id
+                        .clone()
+                        .or(evidence.url.clone())
+                        .expect("a session or an address");
+                    (name, evidence.gone)
+                })
+                .collect::<BTreeMap<_, _>>()
+        };
+        let open = |names: &[&str]| {
+            names
+                .iter()
+                .map(|name| ((*name).to_owned(), false))
+                .collect::<BTreeMap<_, _>>()
+        };
+        let all = [
+            "s1",
+            "s2",
+            "s3",
+            "https://github.com/acme/app/pull/41",
+            "https://github.com/acme/app/pull/42",
+            "https://github.com/acme/app/pull/43",
+        ];
+        assert_eq!(evidence(&read), open(&all));
+
+        fixture.gone.lock().unwrap().insert(SessionRef {
+            agent: "claude".into(),
+            id: "s2".into(),
+        });
+        let mut expected = open(&all);
+        expected.insert("s2".into(), true);
+        assert_eq!(evidence(&fixture.open()), expected);
     }
 
     /// D-10: a new Project's first look raises nothing under Normal's
@@ -2238,6 +2369,7 @@ mod tests {
                     usage_ok: true,
                     language: hide_ai::OutputLanguage::English,
                 },
+                gone: Gone::default(),
             },
         )
         .unwrap();
@@ -2352,6 +2484,7 @@ mod tests {
                     usage_ok: true,
                     language: hide_ai::OutputLanguage::English,
                 },
+                gone: Gone::default(),
             },
         )
         .unwrap();

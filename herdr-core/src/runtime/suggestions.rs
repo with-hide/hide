@@ -612,7 +612,7 @@ fn lay_facts(project: &mut ProjectSuggestionsSnapshot, facts: LockFacts, memory_
     }
     if github_missing {
         for row in &mut project.rows {
-            if row.state == SuggestionState::New && row.outcome == Outcome::Pr {
+            if row.state == SuggestionState::New {
                 row.hold = Some(SuggestionHold::GithubNeeded);
             }
         }
@@ -644,6 +644,9 @@ pub(super) fn cache_cleared(cache: &str, limit: usize) {
 struct RuntimeSink {
     runtime: Weak<Mutex<Runtime>>,
     notifier: ChangeNotifier,
+    /// The link record, read on the worker's thread for which sessions'
+    /// records a press can still open (B10).
+    links: std::path::PathBuf,
 }
 
 impl RuntimeSink {
@@ -713,6 +716,40 @@ impl Sink for RuntimeSink {
         runtime.lock().is_ok_and(|guard| {
             guard.suggestions_github(&node, &location.path) == SuggestionsGithub::Connected
         })
+    }
+
+    fn kept_sessions(
+        &self,
+        node: &str,
+        sessions: &std::collections::BTreeSet<crate::suggestions::ledger::SessionRef>,
+    ) -> Option<std::collections::BTreeSet<crate::suggestions::ledger::SessionRef>> {
+        let asked = sessions
+            .iter()
+            .map(|session| crate::links::ledger::SessionIdentity {
+                device_id: node.to_owned(),
+                agent: session.agent.clone(),
+                session_id: session.id.clone(),
+            })
+            .collect::<Vec<_>>();
+        let held = crate::links::store::LinkStore::open_read_only(&self.links)
+            .and_then(|store| store.held(&asked));
+        match held {
+            Ok(held) => Some(
+                held.into_iter()
+                    .map(|session| crate::suggestions::ledger::SessionRef {
+                        agent: session.agent,
+                        id: session.session_id,
+                    })
+                    .collect(),
+            ),
+            Err(code) => {
+                crate::diagnostic!(json!({
+                    "component": "suggestions", "kind": "evidence.unread",
+                    "node": node, "code": code,
+                }));
+                None
+            }
+        }
     }
 }
 
@@ -834,6 +871,7 @@ pub(crate) fn spawn_worker(
         RuntimeSink {
             runtime: Arc::downgrade(runtime),
             notifier,
+            links: hide_kit::layout::links_store(directory),
         },
     )?;
     let mut guard = runtime.lock().map_err(|_| "runtime lock poisoned")?;

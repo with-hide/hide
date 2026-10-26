@@ -159,8 +159,11 @@ fn the_tab_shows_the_workers_read_with_hide_ai_and_github_laid_on_it() {
         .collect::<Vec<_>>();
     assert_eq!(
         holds,
-        [("s1", Some(SuggestionHold::GithubNeeded)), ("s2", None)],
-        "only a pull request needs GitHub"
+        [
+            ("s1", Some(SuggestionHold::GithubNeeded)),
+            ("s2", Some(SuggestionHold::GithubNeeded)),
+        ],
+        "a pull request and an issue both need GitHub"
     );
     let unavailable = read
         .settings

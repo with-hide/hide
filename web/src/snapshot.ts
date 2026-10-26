@@ -1818,6 +1818,8 @@ export type KitRefusal = {
 };
 
 export type Kit = {
+  /** The device could not start its pinned Herdr; retry an install pass. */
+  herdr_start_failed?: boolean;
   unavailable: KitUnavailable | null;
   busy: boolean;
   /** The machine's last pass or read stopped before changing anything; its parts and agents are then empty. */

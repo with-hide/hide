@@ -689,7 +689,9 @@ pub fn parse_herdr_server_status(
             operation_id,
             host_id,
             RemoteStage::Herdr,
-            format!("herdr is not installed on {host_id}, or not under {REMOTE_HERDR_PATH}"),
+            format!(
+                "Herdr was not found on {host_id}. Allow and install Hide's helper to install the Herdr Hide brings."
+            ),
             false,
             true,
         ));
@@ -736,7 +738,9 @@ pub fn parse_herdr_server_status(
             operation_id,
             host_id,
             RemoteStage::Herdr,
-            format!("Herdr server is not running on {host_id}; run `herdr` there once to start it"),
+            format!(
+                "Herdr is not running on {host_id}. Hide's allowed helper starts the Herdr server when it connects."
+            ),
             true,
             true,
         ));
@@ -1350,6 +1354,16 @@ impl RusshRemoteClient {
         lock_recover(&self.herdr_status)
             .as_ref()
             .and_then(|status| status.version.clone())
+    }
+
+    pub(crate) fn herdr_session_readable(&self) -> bool {
+        lock_recover(&self.herdr_status)
+            .as_ref()
+            .is_some_and(|status| {
+                status.running
+                    && status.protocol.map(u64::from)
+                        == Some(hide_herdr_client::HERDR_PROTOCOL_REVISION)
+            })
     }
 
     pub(crate) fn forget_herdr_socket(&self) {
@@ -2762,12 +2776,22 @@ mod tests {
         assert!(not_running.diagnostic().action_required);
         assert!(not_running.diagnostic().retryable);
         assert!(not_running.to_string().contains("not running on mini"));
+        assert!(
+            not_running
+                .to_string()
+                .contains("helper starts the Herdr server")
+        );
 
         let not_installed = parse_herdr_server_status("mini", &status_output(127, ""))
             .expect_err("a missing binary is a failure");
         assert!(not_installed.diagnostic().action_required);
         assert!(!not_installed.diagnostic().retryable);
-        assert!(not_installed.to_string().contains("not installed on mini"));
+        assert!(not_installed.to_string().contains("not found on mini"));
+        assert!(
+            not_installed
+                .to_string()
+                .contains("Allow and install Hide's helper")
+        );
 
         let unreadable = parse_herdr_server_status("mini", &status_output(0, "usage: herdr"))
             .expect_err("non-JSON output is a failure");

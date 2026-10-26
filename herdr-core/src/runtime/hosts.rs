@@ -403,7 +403,10 @@ impl Runtime {
             self.set_host_phase(device_id, HostPhase::NotAllowed);
             return self.refresh_device_snapshots();
         }
-        let consent = self.carried_consent(device_id, consent);
+        let mut consent = self.carried_consent(device_id, consent);
+        if consent.cli_dir.is_none() {
+            consent.cli_dir = Some(self.host_cli_dir.clone());
+        }
         let Some(client) = self
             .remote_connections
             .get(device_id)
@@ -498,6 +501,11 @@ impl Runtime {
                         (Ok(HostReady::Arrived(node)), Some((hear_close, on_close)))
                     }
                 };
+                if let Ok(HostReady::Dialed(established)) = &result
+                    && let Some(Ok(report)) = &established.kit
+                {
+                    crate::kit::completed(&device, &hide_kit::Scope::automatic(), report);
+                }
                 let Some(runtime) = context.runtime.upgrade() else {
                     return;
                 };
@@ -729,7 +737,7 @@ impl Runtime {
         };
         match result {
             Ok(ready) => {
-                let (node, dialed) = match ready {
+                let (node, dialed, kit) = match ready {
                     HostReady::Dialed(established) => {
                         let Established {
                             node,
@@ -737,10 +745,11 @@ impl Runtime {
                             installed,
                             helper_path,
                             upload,
+                            kit,
                         } = established;
-                        (node, Some((identity, installed, helper_path, upload)))
+                        (node, Some((identity, installed, helper_path, upload)), kit)
                     }
-                    HostReady::Arrived(node) => (node, None),
+                    HostReady::Arrived(node) => (node, None, None),
                 };
                 self.ingest_device_machine_id(
                     device_id,
@@ -814,10 +823,30 @@ impl Runtime {
                 // without asking (B10, B13, B19): a device's from the helper
                 // this core installed, a node's that dials this core from
                 // the app or build it runs, through its link.
-                self.queue_device_kit(
-                    device_id,
-                    super::KitJob::Apply(hide_kit::Scope::automatic()),
-                );
+                if let Some(report) = kit {
+                    // A read or automatic pass that waited for this link
+                    // is already answered. Keep an explicit repair or
+                    // agent choice, and start it after the bootstrap.
+                    if report.is_ok()
+                        && self.device_kit_pending.get(device_id).is_some_and(|job| {
+                            *job == super::KitJob::Status
+                                || *job == super::KitJob::Apply(hide_kit::Scope::automatic())
+                        })
+                    {
+                        self.device_kit_pending.remove(device_id);
+                    }
+                    self.ingest_device_kit_answer(
+                        device_id,
+                        super::DeviceKitAnswer::Report(report.map(|report| *report)),
+                        None,
+                    );
+                    self.start_device_kit(device_id);
+                } else {
+                    self.queue_device_kit(
+                        device_id,
+                        super::KitJob::Apply(hide_kit::Scope::automatic()),
+                    );
+                }
             }
             Err(error) => {
                 let message = error.to_string();
