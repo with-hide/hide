@@ -800,9 +800,10 @@ impl Worker {
                 // An attempt still at work keeps its line; a failed one, or
                 // one whose checks failed, may be let go (B12).
                 if line.stage == Stage::Applying
-                    && life.attempt.as_ref().is_some_and(|a| {
-                        a.phase.followed() && a.phase != AttemptPhase::CiFailed
-                    })
+                    && life
+                        .attempt
+                        .as_ref()
+                        .is_some_and(|a| a.phase.followed() && a.phase != AttemptPhase::CiFailed)
                 {
                     crate::diagnostic!(json!({
                         "component": "suggestions", "kind": "action.line_busy",
@@ -1585,7 +1586,11 @@ mod tests {
             }),
         });
         fixture.read_until(|read| {
-            read.rows[0].attempt.as_ref().and_then(|attempt| attempt.pr_number) == Some(12)
+            read.rows[0]
+                .attempt
+                .as_ref()
+                .and_then(|attempt| attempt.pr_number)
+                == Some(12)
         });
         fixture.restart();
         let read = fixture.open();
@@ -1597,7 +1602,11 @@ mod tests {
         fixture.fail_in_sessions("npm run build", &["s4", "s5", "s6"]);
         fixture.clock.fetch_add(policy::DAY_MS, Ordering::SeqCst);
         fixture.wake_and_wait_out_the_delay();
-        let order = fixture.handed.orders.recv_timeout(WAIT).expect("an automatic order");
+        let order = fixture
+            .handed
+            .orders
+            .recv_timeout(WAIT)
+            .expect("an automatic order");
         assert_eq!(order.line, LineId(2));
         assert!(order.auto);
     }

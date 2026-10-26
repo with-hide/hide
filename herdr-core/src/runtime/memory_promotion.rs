@@ -2152,7 +2152,10 @@ fn spawn_when_free(
     promotion: &Promotion,
     start: &PromotionStart,
 ) -> Result<String, String> {
-    spawn_hide_agent_when_free(start, &promotion_spawn(project_id, number, promotion, start)?)
+    spawn_hide_agent_when_free(
+        start,
+        &promotion_spawn(project_id, number, promotion, start)?,
+    )
 }
 
 fn spawn_agent(
@@ -2161,7 +2164,10 @@ fn spawn_agent(
     promotion: &Promotion,
     start: &PromotionStart,
 ) -> Result<String, String> {
-    spawn_hide_agent(start, &promotion_spawn(project_id, number, promotion, start)?)
+    spawn_hide_agent(
+        start,
+        &promotion_spawn(project_id, number, promotion, start)?,
+    )
 }
 
 fn promotion_spawn(
@@ -2194,7 +2200,10 @@ fn promotion_spawn(
 
 /// The coordination spawn with Hide as origin (a handoff, so the agent is
 /// the operator's root with no watch); answers its coordination id.
-pub(super) fn spawn_hide_agent(start: &PromotionStart, spawn: &HideSpawn) -> Result<String, String> {
+pub(super) fn spawn_hide_agent(
+    start: &PromotionStart,
+    spawn: &HideSpawn,
+) -> Result<String, String> {
     let dialect = hide_agent_adapter::adapter(&start.kind)
         .and_then(|row| row.start)
         .ok_or("agent_not_startable")?;

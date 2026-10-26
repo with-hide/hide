@@ -82,9 +82,8 @@ pub(crate) fn begin(
     now: u64,
 ) -> Result<(Outcome, String, String, ApplyBrief), NotReady> {
     let previous = life.attempt.as_ref();
-    let continues = previous.filter(|attempt| {
-        matches!(attempt.phase, AttemptPhase::Failed | AttemptPhase::CiFailed)
-    });
+    let continues = previous
+        .filter(|attempt| matches!(attempt.phase, AttemptPhase::Failed | AttemptPhase::CiFailed));
     let ready = if retry {
         line.stage == Stage::Applying && continues.is_some()
     } else {
@@ -357,7 +356,13 @@ mod tests {
             "nothing failed"
         );
 
-        assert!(moved(&mut suggested, &mut life, 1_000, AttemptMove::CiFailed(pr(9)), 3_000));
+        assert!(moved(
+            &mut suggested,
+            &mut life,
+            1_000,
+            AttemptMove::CiFailed(pr(9)),
+            3_000
+        ));
         let (_, again, _, brief) =
             begin(&mut suggested, &mut life, &index, true, false, 4_000).unwrap();
         assert_eq!(again, branch);
@@ -378,7 +383,13 @@ mod tests {
         let mut applying = line(Stage::Suggested);
         let mut life = LineLife::default();
         begin(&mut applying, &mut life, &index, false, true, 1_000).unwrap();
-        assert!(!moved(&mut applying, &mut life, 999, AttemptMove::PrOpen(pr(7)), 2_000));
+        assert!(!moved(
+            &mut applying,
+            &mut life,
+            999,
+            AttemptMove::PrOpen(pr(7)),
+            2_000
+        ));
         assert!(moved(
             &mut applying,
             &mut life,
@@ -390,9 +401,21 @@ mod tests {
             2_000
         ));
         assert!(life.attempt.as_ref().unwrap().holds_next_auto());
-        assert!(moved(&mut applying, &mut life, 1_000, AttemptMove::Reviewed, 3_000));
+        assert!(moved(
+            &mut applying,
+            &mut life,
+            1_000,
+            AttemptMove::Reviewed,
+            3_000
+        ));
         assert!(!life.attempt.as_ref().unwrap().holds_next_auto());
-        assert!(!moved(&mut applying, &mut life, 1_000, AttemptMove::Reviewed, 3_500));
+        assert!(!moved(
+            &mut applying,
+            &mut life,
+            1_000,
+            AttemptMove::Reviewed,
+            3_500
+        ));
 
         let mut merged = applying.clone();
         let mut merged_life = life.clone();
@@ -411,7 +434,13 @@ mod tests {
         assert!(watch.ci, "a CI line's watch");
         assert_eq!(watch.pr, pr(7));
 
-        assert!(moved(&mut applying, &mut life, 1_000, AttemptMove::Closed, 5_000));
+        assert!(moved(
+            &mut applying,
+            &mut life,
+            1_000,
+            AttemptMove::Closed,
+            5_000
+        ));
         assert_eq!(applying.stage, Stage::Candidate);
         assert_eq!(applying.struck.unwrap().by, StruckBy::Operator);
     }
@@ -440,10 +469,22 @@ mod tests {
         begin(&mut notebook.lines[1], life, &index, false, true, 1_000).unwrap();
         assert_eq!(next_auto(&notebook, &lives), None);
         let life = lives.get_mut(&LineId(2)).unwrap();
-        moved(&mut notebook.lines[1], life, 1_000, AttemptMove::PrOpen(pr(5)), 2_000);
+        moved(
+            &mut notebook.lines[1],
+            life,
+            1_000,
+            AttemptMove::PrOpen(pr(5)),
+            2_000,
+        );
         assert_eq!(next_auto(&notebook, &lives), None, "open and unreviewed");
         let life = lives.get_mut(&LineId(2)).unwrap();
-        moved(&mut notebook.lines[1], life, 1_000, AttemptMove::Reviewed, 3_000);
+        moved(
+            &mut notebook.lines[1],
+            life,
+            1_000,
+            AttemptMove::Reviewed,
+            3_000,
+        );
         assert_eq!(next_auto(&notebook, &lives), Some(LineId(3)));
 
         let location = ProjectLocation {

@@ -7,8 +7,9 @@
 
 use super::*;
 use crate::model::{
-    MemoryAction, ProjectSuggestionsSnapshot, SignalUnavailable, SuggestionCountsSnapshot, SuggestionGroup,
-    SuggestionHold, SuggestionState, SuggestionsAi, SuggestionsGithub, SuggestionsSnapshot,
+    MemoryAction, ProjectSuggestionsSnapshot, SignalUnavailable, SuggestionCountsSnapshot,
+    SuggestionGroup, SuggestionHold, SuggestionState, SuggestionsAi, SuggestionsGithub,
+    SuggestionsSnapshot,
 };
 use crate::suggestions::ledger::Signal;
 use crate::suggestions::notebook::Outcome;

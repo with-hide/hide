@@ -370,7 +370,9 @@ fn a_press_on_a_memory_row_is_memorys_own_action() {
 /// Needs You turn.
 #[test]
 fn a_followed_attempt_follows_its_branchs_pull_request() {
-    use crate::model::{GithubProjectSnapshot, PullRequestBadge, PullRequestChecks, PullRequestSnapshot};
+    use crate::model::{
+        GithubProjectSnapshot, PullRequestBadge, PullRequestChecks, PullRequestSnapshot,
+    };
     use crate::suggestions::apply::FollowedAttempt;
     use crate::suggestions::lifecycle::{AttemptMove, AttemptPhase};
     use crate::suggestions::notebook::{LineId, Outcome};
@@ -440,5 +442,8 @@ fn a_followed_attempt_follows_its_branchs_pull_request() {
         .expect("the home's facts");
     assert_eq!(home.pull.map(|pull| pull.number), Some(31));
     runtime.track_suggestion_attempts();
-    assert!(commands.try_recv().is_err(), "the same answer moves nothing again");
+    assert!(
+        commands.try_recv().is_err(),
+        "the same answer moves nothing again"
+    );
 }
