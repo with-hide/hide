@@ -36,6 +36,9 @@ Edits, at most eight a turn, applied in order:
 - pass: records you looked at that belong to no problem.
 
 Rules:
+- A tag is the key Hide grouped records by, not a problem. A line with a basis and no cause was grouped by its tag alone before anyone looked: check it before you keep it, split off records that are a different problem, and strike it with the reason when its records share no cause you can name.
+- A CI check's name, such as a lane or a job, says where it failed, not why. Read the log, put each failure on the line of its own cause, and pass failures that are only the pull request's unfinished work.
+- A shell command's head (cat, rg, grep, sed, ls, head, find and the like) is usually a search that found nothing while the agent was exploring, which is normal work. Pass such records unless the session shows the agent was stuck on them, and strike a line that holds only those.
 - Prefer attaching to an existing line over writing a new one. A struck line still takes new sightings of its problem, which keeps it from being raised again.
 - Write a cause only when one root cause fits in one sentence and one pull request or one issue would deal with it.
 - Every fresh record should end on a line or in a pass. A record you do not reach is handed to you again tomorrow.

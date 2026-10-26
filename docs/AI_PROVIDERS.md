@@ -95,6 +95,7 @@ A turn sends, within the 64 KiB request input (every number is in `herdr-core/sr
 
 The model answers one JSON object (`PlainJson`, schema `suggestions_investigation.v1`): at most eight notebook edits, applied in order and each saved before the next is taken, at most four reads for the next turn, its notes, and whether it is done.
 It runs nothing itself.
+A line the grouping by tag made, before anyone looked, is a key and not yet a problem: the prompt asks the model to check it, to split a CI check's records by the cause its log shows, and to pass or strike what is only a check's name or a shell command's head from exploring (`cat`, `rg`, `sed` and the like).
 A read is a request Hide fulfils with its own fixed tools on the node that holds the Project, on the investigation's worker, off the runtime lock and off the session-sync thread.
 The Project's folder is found the first time a read needs it: of the catalog Projects on this machine and on linked devices, the one whose node names this Project, the folder that is its root asked first (`ProjectReads`).
 A Project no linked node names answers every read `project_unreachable`, and the run goes on with the records alone.
