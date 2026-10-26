@@ -173,8 +173,8 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
 /**
  * The request half of the turn: the request's one line in quiet text, with
  * no word before it on screen (its name still says `요청`), a button the
- * keyboard reaches. The pointer or focus on it opens the turn
- * card and a press pins it; it never takes the keyboard from the terminal.
+ * keyboard reaches. A press or focus on it opens the turn card, the
+ * pointer passing over does not; it never takes the keyboard from the terminal.
  */
 function TurnRequestButton({ paneId, request, state }: { paneId: string; request: NonNullable<PaneHeader["request"]>; state: TurnCardTrigger }) {
   const { t } = useInterfaceTranslation();
@@ -190,8 +190,6 @@ function TurnRequestButton({ paneId, request, state }: { paneId: string; request
       className="flex min-w-0 items-center gap-xxs rounded-xs px-xxs -mx-xxs text-subtle-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:text-foreground"
       onMouseDown={(event) => event.preventDefault()}
       onClick={state.onToggle}
-      onPointerEnter={state.onPointerEnter}
-      onPointerLeave={state.onPointerLeave}
       onFocus={state.onFocus}
       onBlur={state.onBlur}
       onKeyDown={state.onKeyDown}
@@ -224,8 +222,6 @@ export function PaneAskMark({ paneId, header, actions }: { paneId: string; heade
       className={cn("flex h-(--size-sidebar-line-detail) shrink-0 items-center gap-xxs rounded-xs border px-xs text-micro outline-none hover:bg-popover focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-secondary", unfinished(band) ? "border-border" : "border-warning/60", band.read && "opacity-(--opacity-read-status)")}
       onMouseDown={(event) => event.preventDefault()}
       onClick={state.onToggle}
-      onPointerEnter={state.onPointerEnter}
-      onPointerLeave={state.onPointerLeave}
       onFocus={state.onFocus}
       onBlur={state.onBlur}
       onKeyDown={state.onKeyDown}
