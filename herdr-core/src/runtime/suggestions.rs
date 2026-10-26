@@ -684,8 +684,12 @@ impl Sink for RuntimeSink {
         self.apply(move |runtime| runtime.start_suggestion_apply(order));
     }
 
-    fn followed(&self, attempts: Vec<crate::suggestions::apply::FollowedAttempt>) {
-        self.apply(move |runtime| runtime.follow_suggestion_attempts(attempts));
+    fn followed(
+        &self,
+        attempts: Vec<crate::suggestions::apply::FollowedAttempt>,
+        watches: Vec<crate::suggestions::watch::WatchedLine>,
+    ) {
+        self.apply(move |runtime| runtime.follow_suggestion_attempts(attempts, watches));
     }
 
     fn can_apply(&self, location: &ProjectLocation, _outcome: Outcome) -> bool {

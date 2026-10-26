@@ -436,7 +436,7 @@ fn a_followed_attempt_follows_its_branchs_pull_request() {
         issue_url: None,
         reviewed: false,
     };
-    runtime.follow_suggestion_attempts(vec![attempt]);
+    runtime.follow_suggestion_attempts(vec![attempt], Vec::new());
     match commands.try_recv() {
         Ok(Command::Attempted {
             line,

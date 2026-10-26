@@ -198,14 +198,19 @@ pub(crate) fn moved(
             attempt.phase = AttemptPhase::Failed;
             attempt.failure = Some(code);
         }
-        AttemptMove::Merged { pr, at_unix_ms } => {
+        AttemptMove::Merged {
+            pr,
+            at_unix_ms,
+            base,
+        } => {
             attempt.phase = AttemptPhase::Merged;
             attempt.reviewed = true;
             attempt.pr = Some(pr.clone());
             life.watch = Some(Watch {
                 merged_at_unix_ms: at_unix_ms,
                 pr,
-                merge_commit: None,
+                base,
+                holding: BTreeSet::new(),
                 ci: line
                     .basis
                     .as_ref()
@@ -425,7 +430,8 @@ mod tests {
             1_000,
             AttemptMove::Merged {
                 pr: pr(7),
-                at_unix_ms: 4_000
+                at_unix_ms: 4_000,
+                base: Some("main".into()),
             },
             4_000
         ));
@@ -433,6 +439,7 @@ mod tests {
         let watch = merged_life.watch.unwrap();
         assert!(watch.ci, "a CI line's watch");
         assert_eq!(watch.pr, pr(7));
+        assert_eq!(watch.base.as_deref(), Some("main"));
 
         assert!(moved(
             &mut applying,

@@ -25,6 +25,7 @@ use crate::suggestions::apply::{ApplyBrief, ApplyOrder, FollowedAttempt};
 use crate::suggestions::ledger::{PrRef, Signal};
 use crate::suggestions::lifecycle::{AttemptMove, AttemptPhase};
 use crate::suggestions::notebook::{LineId, Outcome};
+use crate::suggestions::watch::WatchedLine;
 use crate::suggestions::worker::Command;
 use serde_json::json;
 
@@ -39,6 +40,10 @@ type AttemptKey = (String, u64, u64);
 pub(super) struct ApplyWork {
     /// Every attempt the worker last said is still to follow.
     followed: Vec<FollowedAttempt>,
+    /// Every line the worker last said is watched after its merge.
+    watched: Vec<WatchedLine>,
+    /// The holding checkouts last handed over for each watched line.
+    holding_sent: HashMap<(String, u64), BTreeSet<String>>,
     /// Each followed attempt's agent and what GitHub shows of its pull
     /// request, by the agent's coordination id: the facts its row's home
     /// turn is judged from. Replaced whole by each check.
@@ -73,12 +78,22 @@ fn key_of(attempt: &FollowedAttempt) -> AttemptKey {
 
 impl Runtime {
     /// The worker's list of attempts to follow, replacing the last.
-    pub(super) fn follow_suggestion_attempts(&mut self, followed: Vec<FollowedAttempt>) -> bool {
+    pub(super) fn follow_suggestion_attempts(
+        &mut self,
+        followed: Vec<FollowedAttempt>,
+        watched: Vec<WatchedLine>,
+    ) -> bool {
         let work = &mut self.suggestions_work.apply;
         let keys = followed.iter().map(key_of).collect::<HashSet<_>>();
         work.gone.retain(|key, _| keys.contains(key));
         work.unseen.retain(|key, _| keys.contains(key));
         work.followed = followed;
+        let lines = watched
+            .iter()
+            .map(|line| (line.project_id.clone(), line.line.0))
+            .collect::<HashSet<_>>();
+        work.holding_sent.retain(|key, _| lines.contains(key));
+        work.watched = watched;
         self.track_suggestion_attempts();
         false
     }
@@ -260,7 +275,8 @@ impl Runtime {
     /// a minute and only while one is followed.
     pub(super) fn tick_suggestion_attempts(&mut self, now_unix_ms: u64) {
         let work = &self.suggestions_work.apply;
-        if work.followed.is_empty() || now_unix_ms < work.next_unix_ms {
+        if (work.followed.is_empty() && work.watched.is_empty()) || now_unix_ms < work.next_unix_ms
+        {
             return;
         }
         self.track_suggestion_attempts();
@@ -301,6 +317,62 @@ impl Runtime {
         self.suggestions_work.apply.homes = homes;
         for (key, change) in moves {
             self.move_attempt(&key, change);
+        }
+        self.judge_watch_holding();
+    }
+
+    /// Hands the worker, for each watched line, the checkouts that hold its
+    /// merge (B15), when that changed. The node's worktree facts say it
+    /// without Git under the lock: the base branch's own checkout was
+    /// measured and fetched after the merge and is not behind its upstream,
+    /// so the local base has the merge, and a checkout that is the base or
+    /// is not behind it holds it too. A repository whose base is checked
+    /// out nowhere holds nothing yet: a checkout that cannot be shown to
+    /// hold the merge is not counted.
+    fn judge_watch_holding(&mut self) {
+        let mut sends = Vec::new();
+        for watched in &self.suggestions_work.apply.watched {
+            let Ok(node) = NodeId::parse(&watched.location.node) else {
+                continue;
+            };
+            let worktrees = if node == self.node {
+                self.worktree_catalog.project(&watched.location.path)
+            } else {
+                self.device_worktrees
+                    .get(node.as_str())
+                    .and_then(|device| device.projects.get(&watched.location.path))
+            };
+            let holding = worktrees.map_or_else(BTreeSet::new, |project| {
+                holding_checkouts(
+                    &project.worktrees,
+                    watched
+                        .base
+                        .as_deref()
+                        .or(project.default_branch.as_deref()),
+                    watched.merged_at_unix_ms,
+                )
+            });
+            let key = (watched.project_id.clone(), watched.line.0);
+            let last = self
+                .suggestions_work
+                .apply
+                .holding_sent
+                .get(&key)
+                .unwrap_or(&watched.holding);
+            if *last != holding {
+                sends.push((key, holding));
+            }
+        }
+        for ((project_id, line), checkouts) in sends {
+            self.suggestions_work
+                .apply
+                .holding_sent
+                .insert((project_id.clone(), line), checkouts.clone());
+            self.send_suggestions(Command::Holding {
+                project_id,
+                line: LineId(line),
+                checkouts,
+            });
         }
     }
 
@@ -417,6 +489,40 @@ impl Runtime {
     }
 }
 
+/// The checkouts of a repository that hold a merge into `base` made at
+/// `merged_at`, judged from the node's worktree facts alone.
+fn holding_checkouts(
+    worktrees: &[crate::model::WorktreeSnapshot],
+    base: Option<&str>,
+    merged_at: u64,
+) -> BTreeSet<String> {
+    let Some(base) = base else {
+        return BTreeSet::new();
+    };
+    let after = |at: Option<u64>| at.is_some_and(|at| at > merged_at);
+    let current = |worktree: &crate::model::WorktreeSnapshot| {
+        !worktree.missing && after(worktree.measured_at_unix_ms)
+    };
+    let base_holds = worktrees.iter().any(|worktree| {
+        worktree.branch.as_deref() == Some(base)
+            && current(worktree)
+            && after(worktree.last_fetch_at_unix_ms)
+            && worktree.behind_upstream == Some(0)
+    });
+    if !base_holds {
+        return BTreeSet::new();
+    }
+    worktrees
+        .iter()
+        .filter(|worktree| current(worktree))
+        .filter(|worktree| {
+            worktree.branch.as_deref() == Some(base)
+                || (worktree.base_branch.as_deref() == Some(base) && worktree.behind == 0)
+        })
+        .map(|worktree| worktree.path.clone())
+        .collect()
+}
+
 /// Keeps a move on the local copy, so the next check does not hand the
 /// same move over again before the worker's list says it landed.
 fn note_move(attempt: &mut FollowedAttempt, change: &AttemptMove) {
@@ -491,6 +597,7 @@ fn pull_request_change(
             return Some(AttemptMove::Merged {
                 pr,
                 at_unix_ms: pull.merged_at_unix_ms.unwrap_or(now),
+                base: Some(pull.base_branch.clone()),
             });
         }
         PullRequestBadge::Closed => return Some(AttemptMove::Closed),
@@ -740,6 +847,47 @@ mod tests {
             pull_request_change(&seen, &open, false, 0),
             Some(AttemptMove::Closed)
         );
+    }
+
+    /// B15: a checkout holds the merge only once the base's own checkout was
+    /// fetched and measured after it and is not behind its upstream, and
+    /// then when it is the base or not behind it; nothing is counted while
+    /// that cannot be shown.
+    #[test]
+    fn only_checkouts_shown_to_hold_the_merge_are_counted() {
+        use crate::model::WorktreeSnapshot;
+        let merged = 1_000;
+        let worktree = |path: &str, branch: &str, behind: u32| WorktreeSnapshot {
+            path: path.into(),
+            branch: Some(branch.into()),
+            base_branch: Some("main".into()),
+            behind,
+            behind_upstream: Some(0),
+            measured_at_unix_ms: Some(merged + 1),
+            last_fetch_at_unix_ms: Some(merged + 1),
+            ..Default::default()
+        };
+        let mut worktrees = vec![
+            worktree("/repo", "main", 0),
+            worktree("/repo.worktrees/new", "feature", 0),
+            worktree("/repo.worktrees/old", "older", 3),
+        ];
+        assert_eq!(
+            holding_checkouts(&worktrees, Some("main"), merged),
+            BTreeSet::from(["/repo".to_owned(), "/repo.worktrees/new".to_owned()])
+        );
+        worktrees[0].behind_upstream = Some(2);
+        assert!(
+            holding_checkouts(&worktrees, Some("main"), merged).is_empty(),
+            "the local base has not caught up"
+        );
+        worktrees[0].behind_upstream = Some(0);
+        worktrees[0].last_fetch_at_unix_ms = Some(merged - 1);
+        assert!(
+            holding_checkouts(&worktrees, Some("main"), merged).is_empty(),
+            "not fetched since the merge"
+        );
+        assert!(holding_checkouts(&worktrees, None, merged).is_empty());
     }
 
     /// D-29: an issue carries the check and the pull requests, never the

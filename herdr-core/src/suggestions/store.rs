@@ -332,6 +332,28 @@ impl SuggestionStore {
         })
     }
 
+    /// The records of `ids` the Project still keeps, in the order asked.
+    pub fn records_of(&self, project: &str, ids: &[RecordId]) -> Result<Vec<Record>, String> {
+        let mut statement = self
+            .connection
+            .prepare_cached("SELECT fact FROM records WHERE project=?1 AND id=?2")
+            .map_err(failed)?;
+        let mut records = Vec::with_capacity(ids.len());
+        for id in ids {
+            let fact = statement
+                .query_row(params![project, id.0 as i64], |row| row.get::<_, String>(0))
+                .optional()
+                .map_err(failed)?;
+            if let Some(fact) = fact {
+                records.push(Record {
+                    id: *id,
+                    fact: decode(&fact)?,
+                });
+            }
+        }
+        Ok(records)
+    }
+
     /// Every record the Project keeps, oldest number first.
     pub fn records(&self, project: &str) -> Result<Vec<(Record, bool)>, String> {
         let mut statement = self

@@ -5977,6 +5977,15 @@ fn a_pane_hands_its_failed_tools_and_its_stops_to_the_suggestions() {
     };
     observe(&mut worker, &observed);
     settle(&mut worker, &woken);
+    match commands.try_recv() {
+        Ok(Command::SessionSeen {
+            session, checkout, ..
+        }) => {
+            assert_eq!(session.id, "tools");
+            assert_eq!(checkout, "/work/app");
+        }
+        _ => panic!("a session new to the pane is seen once, for the watch"),
+    }
     let sent = |commands: &Receiver<Command>| match commands.try_recv() {
         Ok(Command::Observe { project, facts }) => {
             assert_eq!(project.path, "/work/app");

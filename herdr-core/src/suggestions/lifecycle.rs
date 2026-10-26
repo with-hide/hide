@@ -120,6 +120,8 @@ pub(crate) enum AttemptMove {
     Merged {
         pr: PrRef,
         at_unix_ms: u64,
+        /// The branch it merged into.
+        base: Option<String>,
     },
     /// Its pull request closed unmerged: the operator's `안 함`.
     Closed,
@@ -137,10 +139,16 @@ pub(crate) enum AttemptMove {
 pub struct Watch {
     pub merged_at_unix_ms: u64,
     pub pr: PrRef,
-    /// The merge commit a checkout must hold for its records to count.
-    pub merge_commit: Option<String>,
+    /// The branch the pull request merged into, which a checkout must have
+    /// caught up with for its records to count.
+    #[serde(default)]
+    pub base: Option<String>,
     /// A CI line ends its watch sooner after the pull request closed.
     pub ci: bool,
+    /// The checkouts that hold the merge, by path on the Project's machine,
+    /// as the runtime last judged them from the node's worktree facts.
+    #[serde(default)]
+    pub holding: BTreeSet<String>,
     /// Sessions in a checkout holding the merge, so far.
     #[serde(default)]
     pub sessions: BTreeSet<SessionRef>,
