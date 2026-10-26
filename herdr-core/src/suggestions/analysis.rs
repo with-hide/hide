@@ -12,12 +12,35 @@ use super::notebook::{EditRefused, LineId, Notebook, NotebookEdit, Outcome};
 use std::collections::BTreeMap;
 use std::time::Instant;
 
-/// What one run may spend (D-36): turns and wall time. The deterministic
-/// grouping spends neither.
-#[derive(Clone, Copy, Debug)]
+/// What one run may spend (D-36): turns and wall time, and the flag that
+/// ends it early, set when the Project is turned off or the core stops. An
+/// implementation that waits on anything checks `stop` and returns soon
+/// after it is set. The deterministic grouping spends none of it.
+#[derive(Clone, Debug)]
 pub struct AnalysisBudget {
     pub max_turns: u32,
     pub deadline: Instant,
+    pub stop: StopFlag,
+}
+
+/// A run's stop: set once, read from any thread. It is a provider cancel
+/// token, so a stop also ends a provider turn in flight.
+#[derive(Clone, Debug, Default)]
+pub struct StopFlag(hide_ai::CancelToken);
+
+impl StopFlag {
+    pub fn set(&self) {
+        self.0.cancel();
+    }
+
+    pub fn is_set(&self) -> bool {
+        self.0.is_cancelled()
+    }
+
+    /// The token a provider call made for this run is given.
+    pub fn token(&self) -> hide_ai::CancelToken {
+        self.0.clone()
+    }
 }
 
 /// What a run is handed (D-32): the Project, the records with their counts
@@ -98,6 +121,11 @@ pub enum AnalysisEnd {
 pub trait Analysis: Send {
     /// The name diagnostics carry for runs of this kind.
     fn name(&self) -> &'static str;
+    /// Whether a run asks the operator's AI provider, so it waits for Hide
+    /// AI to be ready and the usage limit to be clear (D-21, D-36).
+    fn uses_provider(&self) -> bool {
+        true
+    }
     fn run(&mut self, input: &AnalysisInput, pen: &mut dyn NotebookPen) -> AnalysisEnd;
 }
 
@@ -122,6 +150,10 @@ impl TagGrouping {
 impl Analysis for TagGrouping {
     fn name(&self) -> &'static str {
         "tag_grouping"
+    }
+
+    fn uses_provider(&self) -> bool {
+        false
     }
 
     fn run(&mut self, input: &AnalysisInput, pen: &mut dyn NotebookPen) -> AnalysisEnd {
@@ -238,6 +270,7 @@ mod tests {
             budget: AnalysisBudget {
                 max_turns: 0,
                 deadline: Instant::now() + Duration::from_secs(60),
+                stop: StopFlag::default(),
             },
         }
     }

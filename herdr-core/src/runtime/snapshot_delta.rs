@@ -103,6 +103,8 @@ impl Runtime {
         self.refresh_mission_events();
         // A pane's plan follows its session and the plan book.
         self.refresh_plans();
+        // The 제안 tab follows Hide AI's readiness and GitHub's answer.
+        self.refresh_suggestions();
         self.note_snapshot_sent();
         if self.delta.usage_edit != self.usage_edit {
             self.delta.revision += 1;
