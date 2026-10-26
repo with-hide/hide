@@ -103,6 +103,10 @@ export const suggestionsEnglish = {
   "suggestions.settings.memoryNote": "Keeps memories from conversations and gives them to agents",
   "suggestions.settings.deleteMemory": "Delete this project's memories",
   "suggestions.failure.agent_not_started": "The agent didn't start",
+  "suggestions.failure.shell_starting": "The shell didn't finish starting",
+  "suggestions.failure.start_failed": "Couldn't start the agent",
+  "suggestions.failure.card_not_processed": "The agent didn't write this memory in",
+  "suggestions.failure.unbuilt": "Not built yet, so the docs were left as they are",
   "suggestions.failure.no_pr": "Ended without a PR",
 } as const;
 
@@ -207,6 +211,10 @@ const ko: Messages = {
   "suggestions.settings.memoryNote": "대화에서 기억을 만들어 에이전트에게 줘요",
   "suggestions.settings.deleteMemory": "이 프로젝트의 기억 지우기",
   "suggestions.failure.agent_not_started": "에이전트가 시작하지 못했어요",
+  "suggestions.failure.shell_starting": "셸이 시작을 마치지 못했어요",
+  "suggestions.failure.start_failed": "에이전트를 띄우지 못했어요",
+  "suggestions.failure.card_not_processed": "에이전트가 이 기억을 반영하지 않았어요",
+  "suggestions.failure.unbuilt": "아직 만들어지지 않아 문서는 그대로 뒀어요",
   "suggestions.failure.no_pr": "PR 없이 끝났어요",
 };
 
@@ -309,6 +317,10 @@ const zhCN: Messages = {
   "suggestions.settings.memoryNote": "从对话中生成记忆并提供给智能体",
   "suggestions.settings.deleteMemory": "删除此项目的记忆",
   "suggestions.failure.agent_not_started": "智能体未能启动",
+  "suggestions.failure.shell_starting": "Shell 未完成启动",
+  "suggestions.failure.start_failed": "无法启动智能体",
+  "suggestions.failure.card_not_processed": "智能体没有写入这条记忆",
+  "suggestions.failure.unbuilt": "尚未实现，文档保持不变",
   "suggestions.failure.no_pr": "未创建 PR 就结束了",
 };
 
@@ -411,6 +423,10 @@ const ja: Messages = {
   "suggestions.settings.memoryNote": "会話から記憶を作ってエージェントに渡します",
   "suggestions.settings.deleteMemory": "このプロジェクトの記憶を消す",
   "suggestions.failure.agent_not_started": "エージェントが起動しませんでした",
+  "suggestions.failure.shell_starting": "シェルの起動が終わりませんでした",
+  "suggestions.failure.start_failed": "エージェントを起動できませんでした",
+  "suggestions.failure.card_not_processed": "エージェントはこの記憶を反映しませんでした",
+  "suggestions.failure.unbuilt": "まだ作られていないため、文書はそのままです",
   "suggestions.failure.no_pr": "PR なしで終わりました",
 };
 

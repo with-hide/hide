@@ -77,9 +77,9 @@ export type HideAiTask = { kind: string; target?: string };
 
 /**
  * The screen that owns what a Hide AI task does (PRD hide-ai-work-home D-10); a kind the core has no home for carries none.
- * Both are the Hide AI tool's 제안 tab now: a Memory promotion is one of its rows (PRD hide-ai-suggestions D-02, B2).
+ * Every known kind's home is the Hide AI tool's 제안 tab: a Memory promotion is one of its rows (PRD hide-ai-suggestions D-02, B2).
  */
-export type HideAiHome = "memory" | "suggestions";
+export type HideAiHome = "suggestions";
 
 /** What the home waits for the operator to do, beyond what the agent itself asks (D-14); the core decides it. */
 export type HomeTurn = { kind: "pr_review" | "ci_failed"; pr_number: number };

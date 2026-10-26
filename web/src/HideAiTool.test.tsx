@@ -208,13 +208,36 @@ describe("the Hide AI tool", () => {
     expect(q('[data-suggestion="s2"] [data-suggestion-attempt]')?.textContent).toContain(`PR ${"#"}1711 review`);
     expect(q('[data-suggestion="s2"] [data-suggestion-retry]')).toBeNull();
     expect(q('[data-suggestion="s3"] [data-suggestion-attempt]')?.textContent).toContain("CI failed");
-    expect(q('[data-suggestion="s4"] [data-suggestion-attempt]')?.textContent).toContain("Ended without a PR · The agent didn't start");
+    expect(q('[data-suggestion="s4"] [data-suggestion-attempt]')?.textContent).toContain("The agent didn't start");
     await click('[data-suggestion-retry="s3"]');
     await click('[data-suggestion="s4"] [data-suggestion-dismiss="s4"]');
     expect(sent("suggestion_action")).toEqual([
       { workspace_id: "p", id: "s3", action: "retry" },
       { workspace_id: "p", id: "s4", action: "dismiss" },
     ]);
+  });
+
+  it("words a Memory card's failed way into the documents, with its card id and the core's detail (D-02, B12)", async () => {
+    const failed = (failure: string, cause: string | null) => ({ group: "applying" as const, state: "my_turn" as const, source: "memory" as const, cause, attempt: { phase: "failed" as const, started_at_unix_ms: 1, pr_number: null, url: null, agent_id: null, failure } });
+    await render(suggestionsProject({ rows: [
+      suggestionRow("m8", failed("shell_starting", "[oh-my-zsh] Would you like to update? [Y/n]")),
+      suggestionRow("m14", failed("unbuilt", "The backlog screen is not built yet")),
+      suggestionRow("m15", failed("card_not_processed", null)),
+      suggestionRow("m16", failed("start_failed", null)),
+      suggestionRow("m17", failed("a_code_of_a_newer_build", null)),
+    ] }));
+    const line = (id: string) => q(`[data-suggestion="${id}"] [data-suggestion-attempt]`)?.textContent;
+    expect(line("m8")).toBe("The shell didn't finish starting");
+    expect(q('[data-suggestion="m8"] [data-suggestion-failure-detail]')?.textContent).toBe("[oh-my-zsh] Would you like to update? [Y/n]");
+    expect(line("m14")).toBe("Not built yet, so the docs were left as they are");
+    expect(q('[data-suggestion="m14"] [data-suggestion-failure-detail]')?.textContent).toBe("The backlog screen is not built yet");
+    expect(line("m15")).toBe("The agent didn't write this memory in");
+    expect(q('[data-suggestion="m15"] [data-suggestion-failure-detail]')).toBeNull();
+    expect(line("m16")).toBe("Couldn't start the agent");
+    expect(line("m17")).toBe("Ended without a PR");
+    expect(q('[data-suggestion="m8"] [data-suggestion-memory]')?.textContent).toBe("m8");
+    await click('[data-suggestion-retry="m14"]');
+    expect(sent("suggestion_action")).toEqual([{ workspace_id: "p", id: "m14", action: "retry" }]);
   });
 
   it("folds 반영됨 with how many worked, and keeps the watch a quiet line inside it (B15)", async () => {

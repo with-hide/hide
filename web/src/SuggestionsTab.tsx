@@ -118,6 +118,7 @@ function Row({ row, project, actions }: { row: SuggestionRow; project: ProjectSu
       <div className="pointer-events-none relative grid min-w-0 grid-cols-[auto_1fr] gap-x-sm gap-y-xs px-xs py-sm">
         <SuggestionMarkIcon mark={mark} />
         <div className={cn("flex min-w-0 items-start gap-xs", working && "opacity-(--opacity-dimmed)")}>
+          {row.source === "memory" ? <span className="mt-xxs shrink-0 font-mono text-caption text-subtle-foreground" data-suggestion-memory={row.id}>{row.id}</span> : null}
           <span className={cn("min-w-0 flex-1 break-words break-keep text-body", row.group === "applied" ? "text-subtle-foreground" : "text-foreground", !open && "line-clamp-2")} title={title}>{title}</span>
           {row.auto ? <span className="mt-xxs shrink-0 rounded-sm bg-secondary px-xs text-micro font-medium text-subtle-foreground" data-suggestion-auto="true">{t("suggestions.auto")}</span> : null}
         </div>
@@ -159,6 +160,9 @@ function Lines({ row, open, project, actions }: { row: SuggestionRow; open: bool
           {row.attempt?.url && row.attempt.phase !== "pr_open" ? <PrLink project={project} actions={actions} url={row.attempt.url} label={row.outcome === "issue" && row.attempt.pr_number === null ? t("suggestions.openIssue") : t("suggestions.openPr", { number: String(row.attempt.pr_number ?? "") })} /> : null}
           <AgentLink agentId={row.attempt?.agent_id ?? null} actions={actions} />
         </span>
+      ) : null}
+      {row.group === "applying" && row.attempt?.phase === "failed" && row.cause ? (
+        <span className={cn("min-w-0 break-words text-muted-foreground", !open && "truncate")} title={row.cause} data-suggestion-failure-detail="true">{row.cause}</span>
       ) : null}
       {row.group === "applied" && row.state === "watching" && row.watch ? (
         <span className="text-muted-foreground" data-suggestion-watch={`${row.watch.sessions_seen}/${row.watch.sessions_needed}`}>{t("suggestions.watching", { seen: row.watch.sessions_seen, needed: row.watch.sessions_needed })}</span>

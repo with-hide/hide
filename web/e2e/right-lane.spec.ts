@@ -221,7 +221,7 @@ test("the rail draws the viewing column's buttons over a rule and one divider be
     // The Hide AI tool's head names the project beside its owl, with the switch for all of Hide AI, ⚙ and × (PRD hide-ai-suggestions B1, B3).
     await showTool(page, "memory");
     const hideAiHeader = page.locator('aside[data-lane="memory"] [data-lane-header]');
-    await expect(hideAiHeader.locator('[data-lane-scope-kind="project"]')).toContainText("Hide AI · fixture");
+    await expect(hideAiHeader.locator('[data-lane-scope-kind="project"]')).toContainText(/Hide AI\s*· fixture/);
     await expect(hideAiHeader.locator("[data-hide-ai-icon]")).toHaveCount(1);
     await expect(hideAiHeader.getByRole("switch")).toHaveCount(1);
     await expect(hideAiHeader.getByRole("button")).toHaveCount(2);

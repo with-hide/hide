@@ -54,9 +54,9 @@ export function attemptLine(t: TFunction<"translation">, row: Pick<SuggestionRow
     case "pr_open": return { text: attempt.pr_number === null ? t("suggestions.attempt.writingPr") : t("suggestions.attempt.prReview", { number: String(attempt.pr_number) }), tone: "warning", retry: false };
     case "ci_failed": return { text: t("suggestions.attempt.ciFailed"), tone: "destructive", retry: true };
     case "failed": {
+      // A known reason says what went wrong in place of the generic ending; an unknown code reads as the ending.
       const reason = attempt.failure ? failureWords(t, attempt.failure) : null;
-      const ended = t(issue ? "suggestions.attempt.failedIssue" : "suggestions.attempt.failed");
-      return { text: reason && reason !== ended ? `${ended} · ${reason}` : ended, tone: "warning", retry: true };
+      return { text: reason ?? t(issue ? "suggestions.attempt.failedIssue" : "suggestions.attempt.failed"), tone: "warning", retry: true };
     }
     case "issue_open": return { text: t("suggestions.attempt.issueOpen"), tone: "muted", retry: false };
     case "merged": return { text: t("suggestions.attempt.merged"), tone: "muted", retry: false };
@@ -67,6 +67,10 @@ export function attemptLine(t: TFunction<"translation">, row: Pick<SuggestionRow
 const FAILURE_KEYS: Record<string, MessageKey> = {
   agent_not_started: "suggestions.failure.agent_not_started",
   no_pr: "suggestions.failure.no_pr",
+  shell_starting: "suggestions.failure.shell_starting",
+  start_failed: "suggestions.failure.start_failed",
+  card_not_processed: "suggestions.failure.card_not_processed",
+  unbuilt: "suggestions.failure.unbuilt",
 };
 
 function failureWords(t: TFunction<"translation">, code: string): string | null {

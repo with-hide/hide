@@ -34,7 +34,7 @@ it("opens the Hide AI tool's 제안 tab on the attempt's row for a row its home 
     { pane_id: "w1:p2" },
     // A kind this build has no home for, and a home whose Project the core has not named yet.
     { pane_id: "w1:p3", hide_ai: { task: { kind: "future_kind" } } },
-    { pane_id: "w1:p4", hide_ai: { task: MEMORY, home: "memory" } },
+    { pane_id: "w1:p4", hide_ai: { task: MEMORY, home: "suggestions" } },
   ]);
   actions.openListedAgent("w1:p1");
   expect(events.map((event) => [event.kind, event.payload])).toEqual(expect.arrayContaining([["memory_open", { workspace_id: "ws-1" }]]));
