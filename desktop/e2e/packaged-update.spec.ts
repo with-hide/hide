@@ -4,7 +4,11 @@
 // installer of N+1 then replaces N while the Herdr server and the daemon keep
 // running. The package lane runs it on Windows and Linux (deb), where both
 // builds are made from one package with `desktop/scripts/installers.mjs`; a
-// macOS update needs two Developer ID builds and is not run here.
+// macOS update needs two Developer ID builds and is not run here. It is also
+// a poor fit for this test there: an app a terminal or Playwright starts may
+// not write its own bundle, so Squirrel asks for an administrator password
+// to install, and after Restart it reopens the app from launchd with the
+// account's real profile (docs/INSTALL.md, What each system supports).
 //
 //   HIDE_E2E_UPDATE_APP      the installed N's executable
 //   HIDE_E2E_UPDATE_FEED     the folder holding N+1's installer and update file
