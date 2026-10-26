@@ -683,6 +683,8 @@ impl Worker {
         else {
             return refused("not_ready");
         };
+        let begun = life.attempt.as_ref().expect("begin wrote the attempt");
+        let (issue_title, issue_since) = (begun.issue_title.clone(), begun.issue_since);
         if let Err(code) = store.save_line(project, &line, &life) {
             return log_store("apply", &code);
         }
@@ -701,6 +703,8 @@ impl Worker {
             branch,
             agent_name,
             brief,
+            issue_title,
+            issue_since,
         });
     }
 

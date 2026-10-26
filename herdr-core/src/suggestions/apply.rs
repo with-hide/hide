@@ -26,6 +26,10 @@ pub(crate) struct ApplyOrder {
     pub branch: String,
     pub agent_name: String,
     pub brief: ApplyBrief,
+    /// An issue line's title and, on a retry, since when the line's issue
+    /// may already exist (the attempt's fields of the same names).
+    pub issue_title: Option<String>,
+    pub issue_since: Option<u64>,
 }
 
 /// What the line says, for the agent's prompt or the issue's text.
@@ -60,6 +64,8 @@ pub(crate) struct FollowedAttempt {
     pub repository: Option<String>,
     pub pr: Option<PrRef>,
     pub issue_url: Option<String>,
+    pub issue_title: Option<String>,
+    pub issue_since: Option<u64>,
     pub reviewed: bool,
 }
 
@@ -72,7 +78,9 @@ pub(crate) enum NotReady {
 
 /// Begins an attempt on `line`: a new suggestion on a press or by itself, or
 /// a failed attempt on `다시 시도`, which continues the same branch and pull
-/// request (B12). The line moves to 반영 중 and its attempt is `starting`.
+/// request (B12), or for an issue line the same title, looked for since the
+/// first try before another is made (B14). The line moves to 반영 중 and
+/// its attempt is `starting`.
 pub(crate) fn begin(
     line: &mut Line,
     life: &mut LineLife,
@@ -102,6 +110,15 @@ pub(crate) fn begin(
     let repository = continues.and_then(|attempt| attempt.repository.clone());
     let outcome = line.outcome.unwrap_or(Outcome::Pr);
     let brief = brief(line, index, pr.clone());
+    let (issue_title, issue_since) = match outcome {
+        Outcome::Pr => (None, None),
+        Outcome::Issue => (
+            continues
+                .and_then(|attempt| attempt.issue_title.clone())
+                .or_else(|| Some(issue_text(&brief).0)),
+            continues.map(|attempt| attempt.issue_since.unwrap_or(attempt.started_at_unix_ms)),
+        ),
+    };
     life.attempt = Some(Attempt {
         started_at_unix_ms: now,
         auto,
@@ -112,12 +129,46 @@ pub(crate) fn begin(
         repository,
         pr,
         issue_url: None,
+        issue_title,
+        issue_since,
         failure: None,
         reviewed: false,
     });
     line.stage = Stage::Applying;
     line.updated_at_unix_ms = now;
     Ok((outcome, branch, agent_name, brief))
+}
+
+/// An issue's title and body (B14, D-29): the check or command the line
+/// rests on and the pull requests it happened in, and nothing an agent's
+/// session said, whatever the repository's visibility.
+pub(crate) fn issue_text(brief: &ApplyBrief) -> (String, String) {
+    let (signal, tag) = brief
+        .basis
+        .clone()
+        .unwrap_or((Signal::FailedTool, "unknown".to_owned()));
+    let title = match signal {
+        Signal::CheckFailed => format!("CI check `{tag}` keeps failing"),
+        Signal::ChangeRequest => format!("Reviews keep asking for changes: `{tag}`"),
+        _ => format!("Recurring failure: `{tag}`"),
+    };
+    let mut body = vec![format!(
+        "Hide found this {} recurring in {} records.",
+        signal.as_str(),
+        brief.records
+    )];
+    if !brief.prs.is_empty() {
+        body.push(format!(
+            "Pull requests: {}",
+            brief
+                .prs
+                .iter()
+                .map(|number| format!("#{number}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    (title, body.join("\n\n"))
 }
 
 fn brief(line: &Line, index: &RecordIndex, pr: Option<PrRef>) -> ApplyBrief {
@@ -289,6 +340,8 @@ pub(crate) fn followed(
                 repository: attempt.repository.clone(),
                 pr: attempt.pr.clone(),
                 issue_url: attempt.issue_url.clone(),
+                issue_title: attempt.issue_title.clone(),
+                issue_since: attempt.issue_since,
                 reviewed: attempt.reviewed,
             })
         })
@@ -338,6 +391,33 @@ mod tests {
     /// B11, B12: a press begins one attempt on its own branch; a retry
     /// after a failure continues the same branch and pull request; neither
     /// begins on a line in the wrong place.
+    /// B14: a retry of an issue line keeps the first try's title and looks
+    /// for its issue from the first try on, however many retries came since.
+    #[test]
+    fn an_issue_retry_keeps_the_title_and_looks_since_the_first_try() {
+        let mut line = line(Stage::Suggested);
+        line.outcome = Some(Outcome::Issue);
+        let index = RecordIndex::default();
+        let mut life = LineLife::default();
+        begin(&mut line, &mut life, &index, false, false, 100).unwrap();
+        let first = life.attempt.clone().unwrap();
+        assert_eq!(
+            first.issue_title.as_deref(),
+            Some("CI check `verify` keeps failing")
+        );
+        assert_eq!(
+            first.issue_since, None,
+            "a first try has nothing to look for"
+        );
+        for retried in [300, 400] {
+            life.attempt.as_mut().unwrap().phase = AttemptPhase::Failed;
+            begin(&mut line, &mut life, &index, true, false, retried).unwrap();
+            let attempt = life.attempt.as_ref().unwrap();
+            assert_eq!(attempt.issue_title, first.issue_title);
+            assert_eq!(attempt.issue_since, Some(100), "since the first try");
+        }
+    }
+
     #[test]
     fn an_attempt_begins_on_a_new_suggestion_and_a_retry_continues_its_branch() {
         let index = RecordIndex::default();

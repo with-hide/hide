@@ -434,6 +434,8 @@ fn a_followed_attempt_follows_its_branchs_pull_request() {
         repository: Some("acme/app".into()),
         pr: None,
         issue_url: None,
+        issue_title: None,
+        issue_since: None,
         reviewed: false,
     };
     runtime.follow_suggestion_attempts(vec![attempt], Vec::new());
@@ -459,5 +461,114 @@ fn a_followed_attempt_follows_its_branchs_pull_request() {
     assert!(
         commands.try_recv().is_err(),
         "the same answer moves nothing again"
+    );
+}
+
+/// B14: an issue attempt Hide never heard back from (it quit while `gh`
+/// created) is looked for, never made again: found, it opens; not found, it
+/// fails and `다시 시도` is offered. A retry looks again since the first try
+/// before it creates, so a create whose answer was lost makes no second
+/// issue.
+#[test]
+fn an_issue_whose_create_went_unanswered_is_found_before_another_is_made() {
+    use super::backlog::FakeGh;
+    use crate::suggestions::apply::{ApplyBrief, ApplyOrder, FollowedAttempt};
+    use crate::suggestions::ledger::Signal;
+    use crate::suggestions::lifecycle::{AttemptMove, AttemptPhase};
+    use crate::suggestions::notebook::{LineId, Outcome};
+    use crate::suggestions::store::ProjectLocation;
+    use crate::suggestions::worker::{Command, SuggestionClient};
+    let gh = FakeGh::new();
+    let mut runtime = runtime();
+    runtime.own_node = gh.clone();
+    let (client, commands) = SuggestionClient::for_test();
+    runtime.suggestions_work.client = Some(client);
+    let location = ProjectLocation {
+        node: runtime.node.as_str().to_owned(),
+        path: "/repo".into(),
+    };
+    let shared = SharedRuntime::new(runtime);
+    shared
+        .lock()
+        .unwrap()
+        .install_worker_context(shared.weak(), ChangeNotifier::noop());
+    let title = "CI check `verify` keeps failing";
+    let started = crate::runtime::unix_milliseconds() - 5 * 60_000;
+    let unanswered = |line: u64| FollowedAttempt {
+        project_id: "p".into(),
+        location: location.clone(),
+        line: LineId(line),
+        started_at_unix_ms: started,
+        outcome: Outcome::Issue,
+        phase: AttemptPhase::Starting,
+        branch: format!("hide-suggestion-s{line}-x"),
+        agent_id: None,
+        repository: None,
+        pr: None,
+        issue_url: None,
+        issue_title: Some(title.into()),
+        issue_since: None,
+        reviewed: false,
+    };
+    let retry = |line: u64| ApplyOrder {
+        project_id: "p".into(),
+        location: location.clone(),
+        line: LineId(line),
+        started_at_unix_ms: started + 1,
+        auto: false,
+        outcome: Outcome::Issue,
+        branch: format!("hide-suggestion-s{line}-x"),
+        agent_name: format!("suggestion-apply-s{line}-x"),
+        brief: ApplyBrief {
+            basis: Some((Signal::CheckFailed, "verify".into())),
+            records: 3,
+            ..Default::default()
+        },
+        issue_title: Some(title.into()),
+        issue_since: Some(started),
+    };
+    let moved = |line: u64| loop {
+        match commands.recv_timeout(Duration::from_secs(10)) {
+            Ok(Command::Attempted {
+                line: moved,
+                change,
+                ..
+            }) if moved == LineId(line) => return change,
+            Ok(_) => {}
+            Err(_) => panic!("line {line}'s attempt moved"),
+        }
+    };
+    let issue = |number: u32| AttemptMove::IssueOpen {
+        url: format!("https://github.com/acme/project/issues/{number}"),
+    };
+
+    gh.reconcile.lock().unwrap().push((7, title.into(), true));
+    shared
+        .lock()
+        .unwrap()
+        .follow_suggestion_attempts(vec![unanswered(1)], Vec::new());
+    assert_eq!(moved(1), issue(7), "the issue the lost create made");
+    gh.reconcile.lock().unwrap().clear();
+    shared
+        .lock()
+        .unwrap()
+        .follow_suggestion_attempts(vec![unanswered(2)], Vec::new());
+    assert_eq!(moved(2), AttemptMove::Failed("issue_failed".into()));
+
+    gh.reconcile.lock().unwrap().push((7, title.into(), true));
+    shared.lock().unwrap().start_suggestion_apply(retry(3));
+    assert_eq!(moved(3), issue(7), "a retry adopts the earlier issue");
+    assert!(
+        gh.calls("issue create").is_empty(),
+        "nothing was made again"
+    );
+
+    gh.reconcile.lock().unwrap().clear();
+    shared.lock().unwrap().start_suggestion_apply(retry(4));
+    assert_eq!(moved(4), issue(41), "none was found, so one is made");
+    assert_eq!(
+        *gh.create_repositories.lock().unwrap(),
+        [Some("acme/project".to_owned())],
+        "in the repository it looked in"
     );
 }
