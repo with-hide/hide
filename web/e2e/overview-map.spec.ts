@@ -153,7 +153,7 @@ test("Overview's work map keeps a hidden project and a dropped session across a 
   } finally { daemon?.stop(); herdr.stop(); }
 });
 
-// PRD pane-open-in-overview B1, B2, B4-B7, B12: an agent pane's header opens the Overview's Work map with
+// PRD pane-open-in-overview B4-B7, B12: an agent pane's menu opens the Overview's Work map with
 // that pane's session chosen, its hidden project shown again, framed, and Escape steps back to the pane.
 test("a pane's Show in Overview opens Work with its session chosen and gives the keyboard back", async ({ page }) => {
   const herdr = await startHerdr({ readiness: "registered" });
@@ -174,21 +174,10 @@ test("a pane's Show in Overview opens Work with its session chosen and gives the
     await openOverview(page, "projects");
     await page.keyboard.press("Escape");
     await expect(page.locator("[data-overview-page]")).toHaveCount(0);
-    // B1, B2: hidden until the header is pointed at or holds the keyboard, and nothing moves when it shows.
-    const header = page.locator(`[data-pane-view="${pane}"] > header`);
-    const button = header.locator(`[data-pane-open-overview="${pane}"]`);
-    const title = header.locator("[data-pane-move-title]").first();
-    await page.mouse.move(1, 1);
-    await expect(button).toHaveCSS("opacity", "0");
-    const before = await title.boundingBox();
-    await title.hover();
-    await expect(button).toHaveCSS("opacity", "1");
-    await expect(button).toHaveAccessibleName("Show in Overview");
-    expect(await title.boundingBox()).toEqual(before);
-    await page.mouse.move(1, 1);
-    await button.focus();
-    await expect(button).toHaveCSS("opacity", "1");
-    await button.click();
+    // The pane menu's first item opens it; the header keeps no button of its own.
+    await page.locator(`[data-pane-menu="${pane}"]`).click();
+    await expect(page.locator('[data-menu-item]').first()).toHaveAttribute("data-menu-item", "open_in_overview");
+    await page.locator('[data-menu-item="open_in_overview"]').click();
     await expect(page.locator('[data-main-view="work"]')).toBeVisible();
     await expect(graph).toHaveAttribute("data-graph-phase", "ready", { timeout: 30_000 });
     // B5: chosen, with its details open and the camera on it.
