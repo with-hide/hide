@@ -232,7 +232,7 @@ describe("the Memory tab", () => {
     const mark = container.querySelector("[data-memory-card='3'] [data-memory-verifying]");
     expect(mark).toBeNull();
     expect(container.querySelectorAll("[data-memory-checks]")).toHaveLength(1);
-    expect(container.querySelector("[data-memory-checks]")?.textContent).toContain("Unverified cards wait for a check");
+    expect(container.querySelector("[data-memory-checks]")?.textContent).toContain("Unverified memories wait for a check");
     expect(container.querySelector("[data-memory-card='3']")?.className).toContain("opacity-");
     expect(container.querySelector("[data-memory-card='7'] [data-memory-verifying]")).toBeNull();
     // One status line at a time: a promotion that runs draws its own.
@@ -251,7 +251,7 @@ describe("the Memory tab", () => {
     expect(container.querySelector("[data-memory-card='3'] [data-memory-verifying]")?.textContent).toBe("Checking");
     expect(container.querySelector("[data-memory-card='7'] [data-memory-verifying]")).toBeNull();
     expect(container.querySelectorAll("[data-memory-checks]")).toHaveLength(1);
-    expect(container.querySelector("[data-memory-empty]")?.textContent).toContain("Each card becomes available as it passes");
+    expect(container.querySelector("[data-memory-empty]")?.textContent).toContain("Each memory becomes available as it passes");
   });
 
   it("names the day's budget and leaves re-consent to the switch", async () => {
@@ -322,13 +322,13 @@ describe("the Memory tab", () => {
 
   it("says once how many older cards made room, and says full only when nothing can", async () => {
     await render(memory({ evicted_cards: 2, evicted_through_unix_ms: 50 }));
-    expect(container.querySelector("[data-memory-evicted]")?.textContent).toBe("2 older cards were cleared to make room for new ones.");
+    expect(container.querySelector("[data-memory-evicted]")?.textContent).toBe("2 older memories were cleared to make room for new ones.");
     expect(container.textContent).not.toContain("Memory is full");
     expect(sent("memory_evictions_seen")).toEqual([{ workspace_id: "p", through_unix_ms: 50 }]);
 
     // The core counts them seen; the open tab keeps its line and says nothing again.
     await render(memory({ evicted_cards: 0, evicted_through_unix_ms: null }));
-    expect(container.querySelector("[data-memory-evicted]")?.textContent).toBe("2 older cards were cleared to make room for new ones.");
+    expect(container.querySelector("[data-memory-evicted]")?.textContent).toBe("2 older memories were cleared to make room for new ones.");
     expect(sent("memory_evictions_seen")).toHaveLength(1);
 
     // Opened again, the tab has nothing to say until another card is cleared.
@@ -337,12 +337,12 @@ describe("the Memory tab", () => {
     await render(memory({ evicted_cards: 0, evicted_through_unix_ms: null }));
     expect(container.querySelector("[data-memory-evicted]")).toBeNull();
     await render(memory({ evicted_cards: 1, evicted_through_unix_ms: 80 }));
-    expect(container.querySelector("[data-memory-evicted]")?.textContent).toBe("1 older card was cleared to make room for new ones.");
+    expect(container.querySelector("[data-memory-evicted]")?.textContent).toBe("1 older memory was cleared to make room for new ones.");
     expect(sent("memory_evictions_seen")).toEqual([{ workspace_id: "p", through_unix_ms: 50 }, { workspace_id: "p", through_unix_ms: 80 }]);
 
     await render(memory({ evicted_cards: 2, evicted_through_unix_ms: 90, capacity_reached: true }));
     expect(container.querySelector("[data-memory-evicted]")).toBeNull();
-    expect(container.textContent).toContain("This Project's Memory is full, so new cards are not kept.");
+    expect(container.textContent).toContain("This Project's Memory is full, so new memories are not kept.");
   });
 
   it("offers a forgotten card back and a replaced text's undo by card number", async () => {
