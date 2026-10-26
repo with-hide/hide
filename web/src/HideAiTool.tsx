@@ -58,6 +58,8 @@ function Head({ projectId, project, actions }: { projectId: string; project: Pro
   const answering = ai?.refusal?.using ?? ai?.provider ?? null;
   const provider = answering ? ai?.providers.find((row) => row.id === answering) ?? null : null;
   const ready = project !== null && !project.loading && project.unavailable === null;
+  // Hide AI asks nothing while it cannot investigate or every agent is past the usage limit (D-06): the chip stays, dimmed.
+  const asksNothing = ready && (project.ai !== "ready" || (ai?.refusal?.reason === "past_limit" && !ai.refusal.using));
   const switchId = `hide-ai-switch-${projectId}`;
   return (
     <div className="flex h-(--size-tab-strip) shrink-0 items-center gap-xs border-b border-border pl-md pr-xs text-caption" data-lane-header="true">
@@ -70,7 +72,7 @@ function Head({ projectId, project, actions }: { projectId: string; project: Pro
         ) : null}
       </span>
       {ready && project.enabled && provider ? (
-        <span className="flex min-w-0 max-w-1/3 shrink items-center gap-xxs rounded-sm bg-secondary px-xs text-micro text-subtle-foreground" data-hide-ai-chip={provider.agent}>
+        <span className={cn("flex min-w-0 max-w-1/3 shrink items-center gap-xxs rounded-sm bg-secondary px-xs text-micro text-subtle-foreground", asksNothing && "opacity-(--opacity-dimmed)")} data-hide-ai-chip={provider.agent} data-hide-ai-chip-dimmed={asksNothing ? "true" : undefined}>
           <AgentLogo agent={provider.agent} label={provider.label} />
           <span className="truncate">{provider.label}</span>
         </span>
@@ -134,10 +136,10 @@ function Body({ project, actions }: { project: ProjectSuggestions; actions: Acti
 function TabCount({ value, name, count }: { value: HideAiTab; name: string; count: number }) {
   const { t } = useInterfaceTranslation();
   return (
-    <TabsTrigger value={value} aria-description={count > 0 ? t("hideAiTool.tabCount", { count }) : undefined} data-hide-ai-tab={value}>
+    <TabsTrigger value={value} aria-description={count > 0 ? t("hideAiTool.tabCount", { count }) : undefined} data-hide-ai-tool-tab={value}>
       {name}
       {count > 0 ? (
-        <span aria-hidden="true" className={cn("flex h-(--size-icon) min-w-(--size-icon) items-center justify-center rounded-full bg-warning px-xxs text-micro tabular-nums text-background")} data-hide-ai-tab-count={count}>
+        <span aria-hidden="true" className={cn("flex h-(--size-icon) min-w-(--size-icon) items-center justify-center rounded-full bg-warning px-xxs text-micro tabular-nums text-background")} data-hide-ai-tool-tab-count={count}>
           {count}
         </span>
       ) : null}

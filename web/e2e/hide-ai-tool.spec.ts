@@ -40,17 +40,17 @@ test("Hide AI opens the front checkout's Project with its two tabs, and its head
     // investigation comes, and shows the one-time line once, which it marks seen.
     await expect(tool).toHaveAttribute("data-hide-ai", "on", { timeout: 15_000 });
     await expect(tool.locator('[data-hide-ai-switch="on"]')).toBeEnabled();
-    await expect(tool.locator('[data-hide-ai-tab="suggestions"]')).toHaveAttribute("aria-selected", "true");
+    await expect(tool.locator('[data-hide-ai-tool-tab="suggestions"]')).toHaveAttribute("aria-selected", "true");
     await expect(tool.locator('[data-suggestions-status="first_run_pending"]')).toBeVisible();
     await expect(tool.locator("[data-hide-ai-intro]")).toBeVisible();
     await expect.poll(() => sent.get("suggestions_intro_seen") ?? 0).toBe(1);
     // Nothing to do yet: no tab number and no rail number.
-    await expect(tool.locator("[data-hide-ai-tab-count]")).toHaveCount(0);
+    await expect(tool.locator("[data-hide-ai-tool-tab-count]")).toHaveCount(0);
     await expect(page.locator('[data-lane-tool="memory"] [data-lane-todo-count]')).toHaveCount(0);
 
     // The Memory tab keeps Memory's own switch: a Project that never turned
     // Memory on shows its disclosure and the button that turns it on.
-    await tool.locator('[data-hide-ai-tab="memory"]').click();
+    await tool.locator('[data-hide-ai-tool-tab="memory"]').click();
     await expect(tool.locator('[data-memory="off"]')).toBeVisible({ timeout: 15_000 });
     await expect(tool.locator('[data-memory-switch="off"]')).toContainText("Turn on Memory");
     await expect(tool.locator("[data-memory-cards]")).toHaveCount(0);
@@ -66,7 +66,7 @@ test("Hide AI opens the front checkout's Project with its two tabs, and its head
     await tool.locator("[data-hide-ai-switch]").click();
     await expect.poll(() => last.get("hide_ai_switch")).toEqual({ workspace_id: workspaceId, on: true });
     await expect(tool).toHaveAttribute("data-hide-ai", "on", { timeout: 15_000 });
-    await expect(tool.locator('[data-hide-ai-tab="memory"]')).toBeVisible();
+    await expect(tool.locator('[data-hide-ai-tool-tab="memory"]')).toBeVisible();
   } finally {
     daemon?.stop();
     herdr.stop();

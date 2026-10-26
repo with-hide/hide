@@ -91,13 +91,13 @@ describe("the Hide AI tool", () => {
     expect(container.textContent).toContain("Reading");
     await render(suggestionsProject({ rows: [suggestionRow("s1"), suggestionRow("s2")], counts: { suggestions: 2, rail: 3 } }));
     expect(q("[data-hide-ai-tool]")?.textContent).toContain("Hide AI· herdr-ide");
-    expect(q('[data-hide-ai-tab="suggestions"] [data-hide-ai-tab-count]')?.textContent).toBe("2");
-    expect(q('[data-hide-ai-tab="memory"] [data-hide-ai-tab-count]')?.textContent).toBe("1");
+    expect(q('[data-hide-ai-tool-tab="suggestions"] [data-hide-ai-tool-tab-count]')?.textContent).toBe("2");
+    expect(q('[data-hide-ai-tool-tab="memory"] [data-hide-ai-tool-tab-count]')?.textContent).toBe("1");
     expect(q('[data-lane-tool="memory"] [data-lane-todo-count]')?.textContent).toBe("3");
     expect(q('[data-lane-tool="memory"] [data-hide-ai-icon]')).not.toBeNull();
     expect(q('[data-lane-tool="memory"]')?.getAttribute("aria-label")).toBe("Hide AI");
     await render(suggestionsProject({ counts: { suggestions: 0, rail: 0 } }));
-    expect(q("[data-hide-ai-tab-count]")).toBeNull();
+    expect(q("[data-hide-ai-tool-tab-count]")).toBeNull();
     expect(q('[data-lane-tool="memory"] [data-lane-todo-count]')).toBeNull();
   });
 
@@ -239,7 +239,7 @@ describe("the Hide AI tool", () => {
     await act(async () => useUiStore.getState().showHideAiTab("memory"));
     await act(async () => useUiStore.getState().showHideAiTab("suggestions", "m72"));
     await render(suggestionsProject({ rows: [suggestionRow("s1"), suggestionRow("m72", { source: "memory", group: "applying", state: "my_turn", attempt: { phase: "pr_open", started_at_unix_ms: 1, pr_number: 924, url: "https://github.com/acme/one/pull/924", agent_id: null, failure: null } })] }));
-    expect(q('[data-hide-ai-tab="suggestions"]')?.getAttribute("aria-selected")).toBe("true");
+    expect(q('[data-hide-ai-tool-tab="suggestions"]')?.getAttribute("aria-selected")).toBe("true");
     expect(q('[data-suggestion="m72"]')?.getAttribute("data-suggestion-open")).toBe("true");
     expect(q('[data-suggestion="s1"]')?.getAttribute("data-suggestion-open")).toBeNull();
   });
