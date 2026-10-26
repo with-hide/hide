@@ -4,7 +4,9 @@
 //! known to hold the merge does not count. The watch ends one way, in this
 //! order: the same line comes back and is suggested again one step
 //! stronger; else enough sessions passed and the fix worked; else its time
-//! ran out and the watch ends unknown, silently. Pure: the worker loads the
+//! ran out and the watch ends unknown, silently. A pull request head
+//! GitHub has not answered about holds the watch from ending effective
+//! until the answer comes or the time runs out. Pure: the worker loads the
 //! line and its records around it, and the runtime asks GitHub.
 
 use super::ledger::{PrRef, Record, SessionRef};
@@ -139,6 +141,20 @@ fn came_back(watch: &Watch, record: &Record) -> bool {
     }
 }
 
+/// Whether a pull request record after the merge waits on GitHub's answer
+/// about its head; until it comes, the watch cannot say the fix worked.
+fn awaits_answer(watch: &Watch, records: &[Record]) -> bool {
+    records.iter().any(|record| {
+        let fact = &record.fact;
+        fact.pr.is_some()
+            && fact.at_unix_ms > watch.merged_at_unix_ms
+            && fact
+                .head
+                .as_ref()
+                .is_some_and(|head| !watch.heads.contains_key(head))
+    })
+}
+
 /// The heads of a watched line's pull request records after the merge that
 /// GitHub has not answered about, oldest record first.
 fn unasked_heads(watch: &Watch, records: &[Record]) -> BTreeSet<String> {
@@ -178,7 +194,7 @@ pub(crate) fn settle(
     };
     let end = if recurred {
         WatchEnd::Recurred
-    } else if watch.sessions.len() >= policy::WATCH_SESSIONS {
+    } else if watch.sessions.len() >= policy::WATCH_SESSIONS && !awaits_answer(watch, records) {
         WatchEnd::Effective
     } else if now.saturating_sub(watch.merged_at_unix_ms) > span {
         WatchEnd::Expired
@@ -436,6 +452,80 @@ mod tests {
             ),
             Some(WatchEnd::Recurred),
             "a session's failure with the merge comes before enough sessions"
+        );
+    }
+
+    /// B15: a head still being asked about holds the watch from ending
+    /// effective, however many sessions passed; its answer then decides,
+    /// and with no answer the time runs out quietly.
+    #[test]
+    fn an_unanswered_head_keeps_enough_sessions_from_ending_the_watch_effective() {
+        let (mut line, mut life) = watching(false);
+        let records = [check_failure(MERGED + 1, 41, WITH_FIX)];
+        for id in ["a", "b", "c", "d", "e"] {
+            saw_session(&line, &mut life, &session(id), "/repo", MERGED + 2);
+        }
+        assert_eq!(
+            settle(&mut line, &mut life, &records, MERGED + 3),
+            None,
+            "the fifth session does not end it while the head is unanswered"
+        );
+        let (mut quiet, mut quiet_life) = (line.clone(), life.clone());
+        assert_eq!(
+            settle(
+                &mut quiet,
+                &mut quiet_life,
+                &records,
+                MERGED + policy::WATCH_SPAN_MS + 1
+            ),
+            Some(WatchEnd::Expired),
+            "never answered, it ends unknown, not effective"
+        );
+
+        assert!(judged(
+            &line,
+            &mut life,
+            MERGE.into(),
+            BTreeMap::from([(WITH_FIX.to_owned(), true)])
+        ));
+        assert_eq!(
+            settle(&mut line, &mut life, &records, MERGED + 4),
+            Some(WatchEnd::Recurred)
+        );
+        assert_eq!(line.stage, Stage::Suggested);
+        assert_eq!(line.level, 1);
+        assert_eq!(life.escalated_from.as_ref().map(|pr| pr.number), Some(40));
+    }
+
+    /// B4, B15: a pull request's one record moved from a head without the
+    /// fix to a newer head with it is asked about again and brings the
+    /// line back.
+    #[test]
+    fn a_pull_request_failing_again_on_a_head_with_the_fix_recurs() {
+        let (mut line, mut life) = watching(true);
+        assert!(judged(
+            &line,
+            &mut life,
+            MERGE.into(),
+            BTreeMap::from([(WITHOUT_FIX.to_owned(), false)])
+        ));
+        let before = [check_failure(MERGED + 1, 41, WITHOUT_FIX)];
+        assert_eq!(settle(&mut line, &mut life, &before, MERGED + 2), None);
+        let moved = [check_failure(MERGED + 3, 41, WITH_FIX)];
+        let watch = life.watch.clone().unwrap();
+        assert_eq!(
+            unasked_heads(&watch, &moved),
+            BTreeSet::from([WITH_FIX.to_owned()])
+        );
+        assert!(judged(
+            &line,
+            &mut life,
+            MERGE.into(),
+            BTreeMap::from([(WITH_FIX.to_owned(), true)])
+        ));
+        assert_eq!(
+            settle(&mut line, &mut life, &moved, MERGED + 4),
+            Some(WatchEnd::Recurred)
         );
     }
 

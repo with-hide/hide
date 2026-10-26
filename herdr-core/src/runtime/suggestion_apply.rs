@@ -489,6 +489,7 @@ impl Runtime {
                 for (head, contains) in &heads {
                     if work.contains.len() >= policy::WATCH_ANSWERS {
                         work.contains.clear();
+                        super::suggestions::cache_cleared("watch_answers", policy::WATCH_ANSWERS);
                     }
                     work.contains
                         .insert((merge_commit.clone(), head.clone()), *contains);
