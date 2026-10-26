@@ -258,6 +258,39 @@ fn send_suggestion_records(
     });
 }
 
+fn send_session_seen(
+    suggestions: &SuggestionsHandle,
+    target: &str,
+    agent: Agent,
+    session: &str,
+    cwd: Option<&str>,
+) {
+    use crate::suggestions::ledger::SessionRef;
+    use crate::suggestions::worker::{Command, ProjectRef};
+    let Some(cwd) = cwd else {
+        return;
+    };
+    let Some(client) = suggestions.lock().ok().and_then(|client| client.clone()) else {
+        return;
+    };
+    let Ok(node) = crate::node::NodeId::parse(target.strip_prefix("device:").unwrap_or(target))
+    else {
+        return;
+    };
+    client.send(Command::SessionSeen {
+        project: ProjectRef {
+            node,
+            path: cwd.to_owned(),
+        },
+        session: SessionRef {
+            agent: agent.as_str().to_owned(),
+            id: session.to_owned(),
+        },
+        checkout: cwd.to_owned(),
+        at_unix_ms: crate::runtime::unix_milliseconds(),
+    });
+}
+
 enum WorkerResult {
     Read {
         pane: String,
@@ -1674,6 +1707,15 @@ impl LabelWorker {
                 .is_none_or(|(sent, _)| sent != session)
             {
                 pane.waits_sent = Some((session.to_owned(), Vec::new()));
+                // A session new to this pane, once, for the watch after a
+                // merge (PRD hide-ai-suggestions B15).
+                send_session_seen(
+                    &self.suggestions,
+                    &target,
+                    pane.agent,
+                    session,
+                    pane.cwd.as_deref(),
+                );
             }
             let sent = &mut pane.waits_sent.as_mut().expect("set above").1;
             for wait in waits.into_iter().flatten() {

@@ -7,8 +7,9 @@
 
 use super::*;
 use crate::model::{
-    MemoryAction, ProjectSuggestionsSnapshot, SignalUnavailable, SuggestionCountsSnapshot, SuggestionGroup,
-    SuggestionHold, SuggestionState, SuggestionsAi, SuggestionsGithub, SuggestionsSnapshot,
+    MemoryAction, ProjectSuggestionsSnapshot, SignalUnavailable, SuggestionCountsSnapshot,
+    SuggestionGroup, SuggestionHold, SuggestionState, SuggestionsAi, SuggestionsGithub,
+    SuggestionsSnapshot,
 };
 use crate::suggestions::analysis::{Analysis, TagGrouping};
 use crate::suggestions::investigation::node::{Checkout, ProjectReads};
@@ -18,6 +19,7 @@ use crate::suggestions::notebook::Outcome;
 use crate::suggestions::policy::Quantity;
 use crate::suggestions::read::line_of_row;
 use crate::suggestions::settings::ApplyMode;
+use crate::suggestions::store::ProjectLocation;
 use crate::suggestions::worker::{
     AnalysisFactory, Command, LineAction, Options, ProjectRef, RunGate, RunPlan, SettingsChange,
     Sink, SuggestionClient, SuggestionWorker,
@@ -42,6 +44,8 @@ pub(super) struct SuggestionsWork {
     /// The Memory facts its Memory rows were last drawn from (D-02).
     laid_memory: Option<super::suggestion_memory::MemoryFacts>,
     pub(super) promoting: super::suggestion_memory::PromotingCache,
+    /// The attempts applying lines, started and followed here (B11-B14).
+    pub(super) apply: super::suggestion_apply::ApplyWork,
     /// The pull request records already handed to the worker, so a GitHub
     /// read that moved nothing for them sends nothing.
     sent_prs: HashSet<String>,
@@ -188,7 +192,7 @@ impl Runtime {
         ))
     }
 
-    fn send_suggestions(&self, command: Command) {
+    pub(super) fn send_suggestions(&self, command: Command) {
         if let Some(client) = self.suggestions_work.client.as_ref() {
             client.send(command);
         }
@@ -229,13 +233,8 @@ impl Runtime {
         let action = match payload.action {
             SuggestionActionKind::Dismiss => LineAction::Dismiss,
             SuggestionActionKind::Restore => LineAction::Restore,
-            SuggestionActionKind::Apply | SuggestionActionKind::Retry => {
-                crate::diagnostic!(json!({
-                    "component": "suggestions", "kind": "action.unsupported",
-                    "workspace_id": payload.workspace_id, "id": payload.id,
-                }));
-                return false;
-            }
+            SuggestionActionKind::Apply => LineAction::Apply,
+            SuggestionActionKind::Retry => LineAction::Retry,
         };
         let Some(line) = line_of_row(&payload.id) else {
             crate::diagnostic!(json!({
@@ -467,13 +466,18 @@ impl Runtime {
     /// Whether GitHub answers for the opened Project (D-41): a missing `gh`,
     /// a signed-out one or no GitHub remote. A network failure keeps the
     /// last answer.
-    fn suggestions_github(&self, opened: &OpenedProject) -> SuggestionsGithub {
-        let catalog = if opened.node == self.node {
-            self.github.project(&opened.root)
+    /// Whether GitHub answers for the Project at `root` on `node` (D-41).
+    pub(super) fn suggestions_github(
+        &self,
+        node: &crate::node::NodeId,
+        root: &str,
+    ) -> SuggestionsGithub {
+        let catalog = if *node == self.node {
+            self.github.project(root)
         } else {
             self.device_github
-                .get(opened.node.as_str())
-                .and_then(|github| github.project(&opened.root))
+                .get(node.as_str())
+                .and_then(|github| github.project(root))
         };
         match catalog.and_then(|project| project.status.failure_category) {
             Some(
@@ -489,7 +493,7 @@ impl Runtime {
         let opened = self.suggestions_work.opened.as_ref()?;
         Some(LockFacts {
             ai: self.suggestions_ai(),
-            github: self.suggestions_github(opened),
+            github: self.suggestions_github(&opened.node, &opened.root),
         })
     }
 
@@ -678,6 +682,30 @@ impl Sink for RuntimeSink {
         let guard = runtime.lock().ok()?;
         guard.linked_node(node.as_str()).ok().map(|(_, link)| link)
     }
+
+    fn apply(&self, order: crate::suggestions::apply::ApplyOrder) {
+        self.apply(move |runtime| runtime.start_suggestion_apply(order));
+    }
+
+    fn followed(
+        &self,
+        attempts: Vec<crate::suggestions::apply::FollowedAttempt>,
+        watches: Vec<crate::suggestions::watch::WatchedLine>,
+    ) {
+        self.apply(move |runtime| runtime.follow_suggestion_attempts(attempts, watches));
+    }
+
+    fn can_apply(&self, location: &ProjectLocation, _outcome: Outcome) -> bool {
+        let Ok(node) = crate::node::NodeId::parse(&location.node) else {
+            return false;
+        };
+        let Some(runtime) = self.runtime.upgrade() else {
+            return false;
+        };
+        runtime.lock().is_ok_and(|guard| {
+            guard.suggestions_github(&node, &location.path) == SuggestionsGithub::Connected
+        })
+    }
 }
 
 /// What a run's investigation is made of, read under the lock: the
@@ -804,6 +832,7 @@ pub(crate) fn spawn_worker(
     guard.suggestions_work.client = Some(worker.client());
     // What the GitHub reads restored at start already say.
     guard.feed_suggestion_prs();
+    guard.track_suggestion_attempts();
     // A Project the tool opened before the worker was there is opened now.
     if let Some(opened) = guard.suggestions_work.opened.clone()
         && let Some((_, project)) = guard.suggestion_project(&opened.workspace_id)

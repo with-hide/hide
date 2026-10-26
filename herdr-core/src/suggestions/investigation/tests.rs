@@ -530,6 +530,16 @@ impl crate::suggestions::worker::Sink for ReadySink {
     fn link(&self, _: &crate::node::NodeId) -> Option<Arc<dyn crate::node_access::NodeLink>> {
         None
     }
+    fn apply(&self, _: crate::suggestions::apply::ApplyOrder) {}
+    fn followed(
+        &self,
+        _: Vec<crate::suggestions::apply::FollowedAttempt>,
+        _: Vec<crate::suggestions::watch::WatchedLine>,
+    ) {
+    }
+    fn can_apply(&self, _: &crate::suggestions::store::ProjectLocation, _: Outcome) -> bool {
+        false
+    }
 }
 
 #[test]

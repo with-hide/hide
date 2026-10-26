@@ -75,6 +75,16 @@ pub struct ProjectState {
     /// only the last [`policy::QUIET_SPAN_MS`] are kept.
     #[serde(default)]
     pub raised_at: Vec<u64>,
+    /// The machine and folder the Project was last named from, where an
+    /// automatic attempt starts and an attempt is followed (B13, B21).
+    #[serde(default)]
+    pub location: Option<ProjectLocation>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectLocation {
+    pub node: String,
+    pub path: String,
 }
 
 /// How the store came to be open.
@@ -320,6 +330,28 @@ impl SuggestionStore {
         Ok(Pruned {
             records: old + over,
         })
+    }
+
+    /// The records of `ids` the Project still keeps, in the order asked.
+    pub fn records_of(&self, project: &str, ids: &[RecordId]) -> Result<Vec<Record>, String> {
+        let mut statement = self
+            .connection
+            .prepare_cached("SELECT fact FROM records WHERE project=?1 AND id=?2")
+            .map_err(failed)?;
+        let mut records = Vec::with_capacity(ids.len());
+        for id in ids {
+            let fact = statement
+                .query_row(params![project, id.0 as i64], |row| row.get::<_, String>(0))
+                .optional()
+                .map_err(failed)?;
+            if let Some(fact) = fact {
+                records.push(Record {
+                    id: *id,
+                    fact: decode(&fact)?,
+                });
+            }
+        }
+        Ok(records)
     }
 
     /// Every record the Project keeps, oldest number first.

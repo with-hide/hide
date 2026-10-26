@@ -84,16 +84,71 @@ pub struct Attempt {
     pub reviewed: bool,
 }
 
+impl Attempt {
+    /// An automatic attempt nobody has reviewed yet, from its start to its
+    /// pull request's first review: it holds the next automatic one (D-29).
+    pub(crate) fn holds_next_auto(&self) -> bool {
+        self.auto
+            && !self.reviewed
+            && matches!(
+                self.phase,
+                AttemptPhase::Starting
+                    | AttemptPhase::Working
+                    | AttemptPhase::PrOpen
+                    | AttemptPhase::CiFailed
+            )
+    }
+}
+
+/// What the runtime saw happen to an attempt, handed back for the worker to
+/// save (B11-B14). Each names the attempt by its start, so a move meant for
+/// an earlier attempt of the same line changes nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum AttemptMove {
+    /// Its agent showed, with its coordination id and the repository it
+    /// works against.
+    Started {
+        agent_id: String,
+        repository: Option<String>,
+    },
+    /// Its pull request is open, or its checks pass again.
+    PrOpen(PrRef),
+    /// Its pull request's checks failed and the agent is not working.
+    CiFailed(PrRef),
+    /// Someone reviewed its pull request.
+    Reviewed,
+    Merged {
+        pr: PrRef,
+        at_unix_ms: u64,
+        /// The branch it merged into.
+        base: Option<String>,
+    },
+    /// Its pull request closed unmerged: the operator's `안 함`.
+    Closed,
+    IssueOpen {
+        url: String,
+    },
+    IssueClosed,
+    /// It ended with no pull request or issue, with a code the screen words.
+    Failed(String),
+}
+
 /// The watch after a merge (B15): counted only from sessions and pull
 /// requests in checkouts that hold the merge commit.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Watch {
     pub merged_at_unix_ms: u64,
     pub pr: PrRef,
-    /// The merge commit a checkout must hold for its records to count.
-    pub merge_commit: Option<String>,
+    /// The branch the pull request merged into, which a checkout must have
+    /// caught up with for its records to count.
+    #[serde(default)]
+    pub base: Option<String>,
     /// A CI line ends its watch sooner after the pull request closed.
     pub ci: bool,
+    /// The checkouts that hold the merge, by path on the Project's machine,
+    /// as the runtime last judged them from the node's worktree facts.
+    #[serde(default)]
+    pub holding: BTreeSet<String>,
     /// Sessions in a checkout holding the merge, so far.
     #[serde(default)]
     pub sessions: BTreeSet<SessionRef>,

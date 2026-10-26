@@ -183,19 +183,15 @@ fn settings(settings: &Settings, notebook: &Notebook) -> SuggestionSettingsSnaps
     }
 }
 
-/// Whether an automatic pull request nobody reviewed yet is open, which
-/// holds the next automatic apply (D-29).
+/// Whether an automatic attempt nobody reviewed yet is being made or open,
+/// which holds the next automatic apply (D-29).
 pub fn unreviewed_auto_pr(notebook: &Notebook, lives: &BTreeMap<LineId, LineLife>) -> bool {
     notebook.lines.iter().any(|line| {
         line.stage == Stage::Applying
             && lives
                 .get(&line.id)
                 .and_then(|life| life.attempt.as_ref())
-                .is_some_and(|attempt| {
-                    attempt.auto
-                        && !attempt.reviewed
-                        && matches!(attempt.phase, AttemptPhase::PrOpen | AttemptPhase::CiFailed)
-                })
+                .is_some_and(|attempt| attempt.holds_next_auto())
     })
 }
 

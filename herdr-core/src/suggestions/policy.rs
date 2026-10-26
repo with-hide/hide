@@ -98,6 +98,13 @@ pub(crate) const EDIT_RECORDS: usize = 500;
 /// When watching after a merge ends (D-14): this many sessions in a checkout
 /// that holds the merge.
 pub(crate) const WATCH_SESSIONS: usize = 5;
+/// ...or this long after the merge with neither a recurrence nor enough
+/// sessions, when the watch ends unknown; a CI line's ends sooner (D-14).
+pub(crate) const WATCH_SPAN_MS: u64 = 30 * DAY_MS;
+pub(crate) const WATCH_CI_SPAN_MS: u64 = 14 * DAY_MS;
+/// The strongest fix a recurrence asks for (D-13): 0 a document, 1 a script
+/// or check, 2 a hook.
+pub(crate) const MAX_FIX_LEVEL: u8 = 2;
 
 /// The daily investigation (D-34, D-36): one run a Project a day, started
 /// this long after the app opened, the device woke or the screen unlocked,
