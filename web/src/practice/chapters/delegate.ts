@@ -1,9 +1,9 @@
 // Chapter 4: three ways to hand work to another agent, all by saying it to the
 // lead: a child it starts and keeps talking to, an open agent it finds by what
-// it does, and an agent named by the name and ID copied from its pane's menu.
+// it does, and an agent named by the name and ID the lead pane's @ types in.
 
 import { chapter } from "../chapter";
-import { CHILD, DELEGATE_WORLD, DOCS, LEAD, SIGNUP, type DelegateModel } from "../worlds/delegate";
+import { CHILD, DELEGATE_WORLD, DOCS, LEAD, SIGNUP, SIGNUP_REFERENCE, type DelegateModel } from "../worlds/delegate";
 
 const pane = (id: string) => `[data-pane-view="${id}"]`;
 const say = (text: string) => ({ type: { pane: LEAD, text } });
@@ -11,7 +11,7 @@ const say = (text: string) => ({ type: { pane: LEAD, text } });
 export default chapter<DelegateModel>({
   id: "delegate",
   number: 4,
-  version: 1,
+  version: 2,
   world: DELEGATE_WORLD,
   quest: true,
   steps: [
@@ -22,12 +22,14 @@ export default chapter<DelegateModel>({
     { id: "report", target: pane(LEAD), side: "inside" },
     { id: "letter", quest: true, target: pane(LEAD), side: "inside", gesture: say("Tell the docs writer the timeout changed"), done: (model) => model.stage >= 3 },
     { id: "received", target: pane(DOCS), side: "left" },
+    // The lead's @ types the signup agent's reference into the lead's prompt with no Enter; a sidebar row dropped on
+    // the terminal, or Copy name and ID then Paste, types the same reference.
     {
-      id: "copy", quest: true, target: `${pane(SIGNUP)} header, [role="menu"]`, side: "left",
-      gesture: { menu: { at: `${pane(SIGNUP)} header`, path: ['[data-menu-item="copy_reference"]'] } },
-      done: (model) => model.copied?.includes(`pane ${SIGNUP}`) === true,
+      id: "mention", quest: true, target: `${pane(LEAD)} [data-pane-mention], [data-pane-mention-list]`, side: "bottom",
+      gesture: { pick: { at: `${pane(LEAD)} [data-pane-mention]`, path: [`[data-pane-mention-choice="${SIGNUP}"]`] } },
+      done: (model) => model.draft.includes(`pane ${SIGNUP}`),
     },
-    { id: "paste", quest: true, target: pane(LEAD), side: "inside", gesture: say(`${SIGNUP} update the signup copy for the new timeout`), done: (model) => model.stage >= 4 },
+    { id: "send", quest: true, target: pane(LEAD), side: "inside", gesture: say(`${SIGNUP_REFERENCE} update the signup copy for the new timeout`), done: (model) => model.stage >= 4 },
     { id: "end", target: "[data-sidebar-box] [data-sidebar]", side: "right" },
   ],
 });
