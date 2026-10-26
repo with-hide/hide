@@ -2766,12 +2766,22 @@ mod tests {
         assert!(not_running.diagnostic().action_required);
         assert!(not_running.diagnostic().retryable);
         assert!(not_running.to_string().contains("not running on mini"));
+        assert!(
+            not_running
+                .to_string()
+                .contains("helper starts the Herdr server")
+        );
 
         let not_installed = parse_herdr_server_status("mini", &status_output(127, ""))
             .expect_err("a missing binary is a failure");
         assert!(not_installed.diagnostic().action_required);
         assert!(!not_installed.diagnostic().retryable);
-        assert!(not_installed.to_string().contains("not installed on mini"));
+        assert!(not_installed.to_string().contains("not found on mini"));
+        assert!(
+            not_installed
+                .to_string()
+                .contains("Allow and install Hide's helper")
+        );
 
         let unreadable = parse_herdr_server_status("mini", &status_output(0, "usage: herdr"))
             .expect_err("non-JSON output is a failure");
