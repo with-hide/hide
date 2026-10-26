@@ -51,10 +51,6 @@ pub(super) struct SuggestionsWork {
     changes_requested: HashSet<String>,
 }
 
-/// The most pull request keys either set keeps; past it the set starts
-/// over, which costs at most one resend the store folds.
-const PR_KEYS: usize = 8192;
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct OpenedProject {
     pub(super) workspace_id: String,
@@ -622,7 +618,7 @@ fn remember(set: &mut HashSet<String>, key: String) -> bool {
     if set.contains(&key) {
         return false;
     }
-    if set.len() >= PR_KEYS {
+    if set.len() >= crate::suggestions::policy::PR_KEYS {
         set.clear();
     }
     set.insert(key)

@@ -34,17 +34,11 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError
 use std::thread;
 use std::time::{Duration, Instant};
 
-/// The most commands waiting; one past it is dropped and logged.
-pub(crate) const QUEUE: usize = 256;
 /// How long the worker waits for nothing in particular before it looks at
 /// the clock again.
 const IDLE: Duration = Duration::from_secs(60);
-/// How often the worker looks for watches whose time ran out.
-const SETTLE_EVERY_MS: u64 = 60 * 60 * 1000;
 /// The meta key the one-time intro line is remembered under (B3).
 const INTRO_SEEN: &str = "intro_seen";
-/// The most Project identities the worker remembers by folder.
-const IDENTITY_CACHE: usize = 512;
 /// How long a node is given to name a folder's Project.
 const IDENTITY_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -238,7 +232,7 @@ impl SuggestionClient {
     /// A client whose commands a test reads instead of a worker.
     #[cfg(test)]
     pub(crate) fn for_test() -> (Self, Receiver<Command>) {
-        let (sender, receiver) = mpsc::sync_channel(QUEUE);
+        let (sender, receiver) = mpsc::sync_channel(policy::QUEUE);
         (Self(sender), receiver)
     }
 
@@ -264,7 +258,7 @@ impl SuggestionClient {
             Err(TrySendError::Full(_)) => {
                 crate::diagnostic!(json!({
                     "component": "suggestions", "kind": "queue.full", "command": kind,
-                    "limit": QUEUE,
+                    "limit": policy::QUEUE,
                 }));
                 false
             }
@@ -291,7 +285,7 @@ impl SuggestionClient {
 
 impl SuggestionWorker {
     pub(crate) fn spawn(options: Options, sink: impl Sink) -> Result<Self, String> {
-        let (sender, receiver) = mpsc::sync_channel(QUEUE);
+        let (sender, receiver) = mpsc::sync_channel(policy::QUEUE);
         let stop = StopFlag::default();
         let worker_stop = stop.clone();
         let own = SuggestionClient(sender.clone());
@@ -403,7 +397,7 @@ impl Worker {
             }
             self.advance_runs(sink);
             if self.now() >= self.settle_at {
-                self.settle_at = self.now() + SETTLE_EVERY_MS;
+                self.settle_at = self.now() + policy::SETTLE_EVERY_MS;
                 self.settle_all(sink);
             }
         }
@@ -434,7 +428,7 @@ impl Worker {
         }
         match (self.options.resolver)(project, sink.link(&project.node)) {
             Ok(id) => {
-                if self.identities.len() >= IDENTITY_CACHE {
+                if self.identities.len() >= policy::IDENTITY_CACHE {
                     self.identities.clear();
                 }
                 self.identities.insert(key, id.clone());
@@ -636,7 +630,7 @@ impl Worker {
                 return log_store("locate", &code);
             }
         }
-        if self.located.len() >= IDENTITY_CACHE {
+        if self.located.len() >= policy::IDENTITY_CACHE {
             self.located.clear();
         }
         self.located.insert(project.to_owned());
@@ -2078,10 +2072,12 @@ mod tests {
     /// next Project, whose line is then raised.
     #[test]
     fn a_run_that_ends_on_a_full_queue_still_lets_the_next_project_run() {
+        /// Says the run started, then waits to be let go.
+        type Gate = (mpsc::Sender<()>, Receiver<()>);
         /// The first run says it started, waits to be let go and writes
         /// nothing; every later run groups by tag.
         struct Held {
-            first: Arc<std::sync::Mutex<Option<(mpsc::Sender<()>, Receiver<()>)>>>,
+            first: Arc<std::sync::Mutex<Option<Gate>>>,
         }
         impl Analysis for Held {
             fn name(&self) -> &'static str {
@@ -2193,7 +2189,7 @@ mod tests {
         while client.send(Command::IntroSeen) {
             queued += 1;
         }
-        assert!(queued <= QUEUE, "the queue filled");
+        assert!(queued <= policy::QUEUE, "the queue filled");
         release_run.send(()).unwrap();
         release_resolve.send(()).unwrap();
 

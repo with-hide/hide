@@ -18,13 +18,6 @@ use crate::model::{
 };
 use std::collections::BTreeMap;
 
-/// The most rows the folded 반영됨 group carries, newest first.
-pub(crate) const APPLIED_ROWS: usize = 20;
-/// The most evidence links a row carries, newest first.
-const EVIDENCE_ROWS: usize = 10;
-/// The most dismissed lines ⚙ lists, newest first.
-const DISMISSED_ROWS: usize = 50;
-
 /// The row id of a notebook line, as every `suggestion_action` names it.
 pub fn row_id(line: LineId) -> String {
     format!("s{}", line.0)
@@ -136,7 +129,7 @@ fn evidence(line: &Line, input: &ReadInput<'_>) -> Vec<SuggestionEvidenceSnapsho
         })
         .collect::<Vec<_>>();
     rows.sort_by_key(|row| std::cmp::Reverse(row.at_unix_ms));
-    rows.truncate(EVIDENCE_ROWS);
+    rows.truncate(super::policy::EVIDENCE_ROWS);
     rows
 }
 
@@ -173,7 +166,7 @@ fn settings(settings: &Settings, notebook: &Notebook) -> SuggestionSettingsSnaps
             .collect(),
         dismissed: dismissed
             .into_iter()
-            .take(DISMISSED_ROWS)
+            .take(super::policy::DISMISSED_ROWS)
             .map(|(_, line)| SuggestionDismissedSnapshot {
                 id: row_id(line.id),
                 discomfort: line.discomfort.clone(),
@@ -262,7 +255,7 @@ pub fn project(input: &ReadInput<'_>) -> ProjectSuggestionsSnapshot {
             return true;
         }
         applied += 1;
-        applied <= APPLIED_ROWS
+        applied <= super::policy::APPLIED_ROWS
     });
     let settings_on = input.state.settings.active();
     let status = if !settings_on {

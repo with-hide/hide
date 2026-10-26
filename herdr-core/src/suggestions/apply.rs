@@ -10,9 +10,6 @@ use super::notebook::{Line, LineId, Notebook, Outcome, Stage, Strike, StruckBy};
 use super::store::ProjectLocation;
 use std::collections::{BTreeMap, BTreeSet};
 
-/// The most pull requests a brief names.
-const BRIEF_PRS: usize = 10;
-
 /// An attempt for the runtime to start: an agent that opens a pull request
 /// in its own worktree, or Hide's own issue (B14).
 #[derive(Clone, Debug, PartialEq)]
@@ -183,7 +180,7 @@ fn brief(line: &Line, index: &RecordIndex, pr: Option<PrRef>) -> ApplyBrief {
         .iter()
         .filter_map(|entry| entry.pr)
         .filter(|number| seen.insert(*number))
-        .take(BRIEF_PRS)
+        .take(super::policy::BRIEF_PRS)
         .collect();
     ApplyBrief {
         discomfort: line.discomfort.clone(),
