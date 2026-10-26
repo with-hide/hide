@@ -96,7 +96,7 @@ A closed lane that a tool icon, an open, a reveal or the 보기 slot opens shows
 Pressing the documents or 보기 button brings it to the front of the viewing column; pressed while it is in front, it folds the viewing column, and pressing it again brings the same content back (B11).
 The Project icon is a briefcase and the Explorer icon an open folder, so neither repeats the Overview's dashboard mark or the other's folder.
 The Project icon carries a warning-coloured number counting its project's 할 일, no number at 0, its hint ending in it, such as `할 일 2`; worktrees to remove, memory to move into documents and bots' pull requests are never in it (B38).
-The Memory icon carries the same warning-coloured number counting what the Project's Memory asks (`처리할 것`, see Project Memory: the Memory tool), none at 0 or while Memory is off, its hint ending in `처리할 것 4`.
+The Hide AI icon carries the same warning-coloured number, the sum of its 제안 and Memory tabs' numbers (see Hide AI: the Hide AI tool), none at 0 or while Hide AI is off, its hint ending in `제안 3 · Memory 1`.
 At the rail's bottom, just above its `…`, the pin is an icon of its own, in the same place whether the lane is up or closed and whichever column it shows: an empty pin while unpinned, a filled pin drawn pressed while pinned, and its hint says what a press does (B15).
 The rail's `…` menu holds Expand, which moves both columns together, and with the lane closed the `…` is off (B15).
 A Workspace seen for the first time shows Agent Views alone, its lane closed.
@@ -128,7 +128,7 @@ A pull request's card, a session's record, a mission's map, or a project's workt
 A changed file pressed on a card opens its diff among the documents in the viewing column, the card staying on the rail's 보기 button, which brings it back (B10).
 Closing a document tab closes that view alone, the unsaved-draft protection as it was; closing the last one closes the viewing column, the lane staying while it has a tool column and closing otherwise, and the 보기 slot never comes forward on its own (B12).
 ⇧⌘E (`Toggle Explorer tool`) and ⇧⌘G (`Toggle Changes tool`) press that tool's rail icon: the tool column opens on it, swaps to it, or closes when it already shows it (PRD lane-two-columns D-08; sidebar-task-lens D-19, D-29); `Toggle Project tool` and `Toggle Hide AI tool` do the same for the Project and Hide AI icons and have no chord until one is bound.
-⇧⌘L (`Open Project Memory`) opens the Memory tool, and ⇧⌘R (`Open PR list`) turns the sidebar to its PR list, the whole device's, showing the sidebar when it is hidden; neither closes what it opened when pressed again (B25).
+⇧⌘L (`Open Project Memory`) opens the Hide AI tool on its Memory tab, and ⇧⌘R (`Open PR list`) turns the sidebar to its PR list, the whole device's, showing the sidebar when it is hidden; neither closes what it opened when pressed again (B25).
 `Toggle documents` presses the documents button and has no chord until one is bound.
 On Windows and Linux these chords are Alt+Shift+E, L, R and G; in a browser tab Chrome keeps ⇧⌘R for reload, so the PR list is ⌥⇧R there, and ⌥⌘1-4 do nothing anywhere.
 A chord the operator had bound to `Toggle Memory tool` or `Toggle PRs tool` runs `Open Project Memory` or `Open PR list` instead, unless that command has a chord of its own (B25).
@@ -697,10 +697,10 @@ Web owners: `web/src/PaneView.tsx`, `web/src/PaneHeaderBand.tsx`, `web/src/PaneM
 
 ### Work Hide AI does for a home
 
-Hide AI starts agents for the operator by itself (today a Memory card's `반영하기`), and the work belongs to a screen, its home, not to the operator's agent lists (PRD hide-ai-work-home).
-The Memory tool's To resolve row is the home of a promotion: it shows the progress, the pull request, the failure and the agent link, and it is where the work is read and acted on.
+Hide AI starts agents for the operator by itself (today a suggestion's `PR 만들기` or `이슈 만들기` in the Hide AI tool's 제안 tab, and a Memory promotion already under way), and the work belongs to a screen, its home, not to the operator's agent lists (PRD hide-ai-work-home).
+The 제안 tab's row being applied is the home of that work: it shows the progress, the pull request, the failure and the agent link, and it is where the work is read and acted on (PRD hide-ai-suggestions B11).
 The fact that Hide AI started an agent comes only from the coordination record of the spawn (`docs/delivery.md`), never from a branch or worktree name: a checkout the operator made by hand on a branch called `hide-memory-m9` is an ordinary checkout.
-The work is named in words, `Memory 반영하기 · m72`, and never by an icon of its own, because Hide AI will start other work, each kind with its own home.
+The work is named in words, `제안 반영하기 · s12` for a suggestion and `Memory 반영하기 · m72` for a promotion that was under way, and never by an icon of its own, because Hide AI will start other work, each kind with its own home.
 `docs/status-model.md`, Work Hide AI does for a home, owns the ownership value, the group rule and the turn table; this section owns what the screen draws.
 
 While the agent works, finishes or rests, the work is in no list: not the sidebar's tree or Working, not the 태스크 list's 작업 중, 끝남 or 쉬는 중, not the phone's list, not Overview's requests and graph, and it moves no badge, rail count, checkout count, desktop notification or push.
@@ -714,9 +714,9 @@ The home has a turn: the attempt's pull request is open, ready, passing or unche
 A draft, running checks and a requested change are the author's turn and draw nothing.
 A row has one line, and its second line is the agent's ask or its block's cause, then `CI 실패`, then `PR #n 리뷰`; the core decides the turn and the screen only words it.
 The row's accessible name carries `Hide AI`, the task and the turn (`Hide AI · Memory 반영하기 · m72 · PR #924 리뷰`).
-An attempt with no live agent (a failure with no pull request, an open pull request after the operator closed the pane) never has a row; the Memory tool alone shows it, as it did.
+An attempt with no live agent (a failure with no pull request, an open pull request after the operator closed the pane) never has a row; the 제안 tab alone shows it.
 
-Choosing the row, by click, by its digit or from its desktop notification, does not go to the pane: it opens the lane on the Memory tool of the row's Project with that attempt's To resolve row open, and the `Agent ↗` link there opens the pane.
+Choosing the row, by click, by its digit or from its desktop notification, does not go to the pane: it opens the lane on the Hide AI tool's 제안 tab of the row's Project with that row open, and the `에이전트 ↗` link there opens the pane.
 A row whose Project the core has not yet named opens the pane as any row does.
 The phone's Needs You row opens the agent's detail.
 The digits that number agent rows follow the drawn order, so a Hide AI row is numbered with the Needs You rows above the tree and no checkout of its own takes a digit.
@@ -863,7 +863,7 @@ Web owner: `web/src/terminalLinks.ts` (detection), `web/src/terminalLinkProvider
 
 Web owner: `web/src/ProjectTool.tsx`, `web/src/projectStatus.ts` and `web/src/ProjectDetail.tsx` (the worktree table and the cost in the 보기 slot); core owner: `herdr-core/src/agent_state/tally/project_status.rs` (the 현황 counts and the 할 일) and `herdr-core/src/usage_ledger/project_cost.rs` (the cost).
 The Project tool is the rail's first tool and is about the project of the checkout in front (PRD lane-two-columns D-14, B26).
-Its head names the project, then its repository, path and machine on one dim line, then ⚙, which opens Project Settings, and `✕`, which closes the tool column; under it 현황, the tool's only page, since Memory is a tool of its own (see Project Memory: the Memory tool).
+Its head names the project, then its repository, path and machine on one dim line, then ⚙, which opens Project Settings, and `✕`, which closes the tool column; under it 현황, the tool's only page, since Hide AI is a tool of its own (see Hide AI: the Hide AI tool).
 
 현황 is four tiles, then 할 일 (D-15).
 Each tile says where it goes at its top right, `사이드바` or `보기`, and `닫기 ✕` while the viewing column shows what it opened, which a second press folds (B32).
@@ -889,54 +889,72 @@ Past five rows the list shows five in that order and `+N 더`, which shows the r
 
 The core derives the counts and the 할 일 only on a publish whose inputs moved, and nothing on that path reads a file or runs a process (B42; [ARCHITECTURE.md](ARCHITECTURE.md#project-status-and-cost)).
 
-## Project Memory: the Memory tool
+## Hide AI: the Hide AI tool
 
-Web owner: `web/src/MemoryTab.tsx`, `web/src/memoryList.ts`; core owner: `herdr-core/src/runtime/project_memory.rs`, `herdr-core/src/runtime/memory_promotion.rs`.
-Memory is a rail tool of its own, under the Project tool, and shows the Project of the checkout in front: what to handle, what is in progress, the cards and the search (PRD project-memory-v2 D-17, B19-B32; operator decision 2026-10-23, replacing lane-two-columns D-20 and B39-B40).
-Its header reads `Memory · <project>` behind the Project's folder icon and ends with `✕`, which closes the tool column.
-The core opens one Project's Memory per daemon; the rail, whatever the lane holds, names its Project when it shows, when the front Project changes and when its window comes forward after another window named another Project, so the Memory icon's dot is current, and the tool reads until the core answers for its own.
-Its head is the `Auto memory 사용` switch and the Hide AI chip, the agent Hide AI asks now with its logo (the listed agent standing in while Runs on is past the usage limit or cannot answer); with Memory off, one line says what is sent where and a `데이터 삭제` link sits under it while the Project has cards.
+Web owners: `web/src/HideAiTool.tsx` (the head, the tabs, the one-time line, the off state), `web/src/SuggestionsTab.tsx` and `web/src/suggestionList.ts` (the 제안 tab), `web/src/HideAiSettings.tsx` (⚙), `web/src/components/hide-ai-icon.tsx` (the icon), `web/src/MemoryTab.tsx` and `web/src/memoryList.ts` (the Memory tab); core owners: `herdr-core/src/model/suggestions.rs` and `herdr-core/src/runtime/suggestions.rs` (the `suggestions` section), `herdr-core/src/runtime/project_memory.rs` and `herdr-core/src/runtime/memory_promotion.rs` (Memory).
+Hide AI is the rail's second tool, under the Project tool, in the place Memory had, and shows the Project of the checkout in front (PRD hide-ai-suggestions D-01, B1).
+Its icon is Hide's owl face drawn as a line with a small sparkle at its top right, one colour like every rail icon (D-25).
+Inside it are two tabs, `제안` and `Memory`; each tab carries a warning-coloured number of what the operator has to do in it, none at 0, and the rail icon carries their sum, its hint ending in `제안 3 · Memory 1`.
+The core counts both: 제안's number is its new suggestions and its rows that are the operator's turn, Memory's is its document disagreements, and both are 0 while the head switch is off (B3).
+The lane keeps the tool's id `memory`, so a saved lane, a chord and `Toggle Hide AI tool` (`toggle_lane_memory`) reach it as before; ⇧⌘L, a Memory card number under a conversation and Project Settings' `Open project Memory` open it on the Memory tab, and a Needs You row on 제안.
+The tab shown and the 제안 row open are this window's, not the core's.
+
+Its head reads `Hide AI · <project>` beside the owl, then the Hide AI chip (the agent Hide AI asks now with its logo, the listed agent standing in while Runs on is past the usage limit), the switch for all of Hide AI in this Project, ⚙ and `✕`, which closes the tool column.
+The switch is on from the start; turned off, neither 제안 nor Memory reads anything, Hide AI makes no call for the Project, the rail and the tabs count nothing, and the tool says `Hide AI가 꺼져 있어요` with one line on what turning it on reads (B3).
+Turning it on gives each of the two back as it was.
+The first time the tool opens with Hide AI on, two lines above the tabs say that investigating uses the operator's own subscription and what is sent; they stay while the tool stays open and are not shown again (B3, D-36).
+While the Project is still being read the tool says so; a Project that is not registered, or whose Hide AI could not be read, says that in one line, the second with `다시 읽기`.
+
+### The 제안 tab
+
+The 제안 tab lists what Hide AI suggests fixing, the fixes under way and the ones applied (D-05 to D-07).
+The core decides every group, mark, hold and count; the screen draws them and every press is one `suggestion_action` (`apply`, `dismiss`, `restore`, `retry`) naming the row by its id (`s12` for a suggestion, `m72` for a memory on its way into the documents).
+The tab has one line for its state and no more (D-44): `다음에 Hide를 열 때 첫 조사` before the first investigation, `오늘은 제안 없음` when today's run left nothing open, and `제안이 꺼져 있어요` with `켜기` when ⚙ turned suggestions off; while a run goes, `조사 중` sits small beside the owl in the head and the rows stay as they were.
+A failure the operator cannot act on, such as a run that hit its turn or time limit or the usage limit, goes to the diagnostic log and draws nothing.
+
+The rows fall into `고를 것`, `반영 중` and the folded `반영됨`, each head with its count, and a row's mark says whose move it is (D-37): a green open circle for a new suggestion, a yellow dot for the operator's turn, a blue turning ring with dimmed text while Hide AI works; a row under 반영됨 has no mark.
+A suggestion's title is its discomfort in a person's words, or, for a line the grouping wrote alone, its signal and tag (`같은 명령이 계속 실패해요: cargo test`); under it `놓친 것 · <cause>`, and its buttons (B10).
+Pressing the row opens it in place to `고칠 것` and `근거`, each piece of evidence a line with its agent's logo, `세션` or `PR #n`, the signal and its time; a session opens its record and a pull request its card, and evidence whose session or pull request is gone stays dimmed and opens nothing.
+Its button is `PR 만들기`, or `이슈 만들기` when the fix is outside the repository or not settled yet (B14); with GitHub not connected or not permitted `GitHub 연결 필요` stands in the button's place and the suggestion stays (B18).
+`⋯ › 안 함` takes the suggestion away, and the same problem is not suggested again however much piles up until ⚙ restores it (B16).
+A suggestion that came back after its fix merged reads `문서로는 안 됐어요` with the last pull request, and its fix is one step stronger (B15).
+In a Project whose ⚙ says `자동으로 PR 열기` a new suggestion goes to 반영 중 by itself and wears `자동`; while an automatic pull request waits unreviewed, the next one waits in 고를 것 with `자동 PR 리뷰를 기다려요` and can still be applied by hand (B13).
+Hide never merges.
+
+A row being applied says what its agent does: `PR 만드는 중` (`이슈 만드는 중`) with the time since it started and `에이전트 ↗` while the agent lives, then `PR #n 리뷰` in the warning colour with the pull request once it is open and the operator's turn; `CI 실패` in the destructive colour, or `PR 없이 끝났어요` with its reason, keeps the row there with `다시 시도` and `안 함` (B11, B12).
+An open issue reads `이슈 열림` with the issue.
+A merged row folds under `반영됨 N · 효과 있었음 M`; while the watch runs its line is the quiet `지켜보는 중 · 세션 2/5`, a row whose problem did not come back reads `효과 있었음`, and nothing else is said (B15).
+A row being applied whose agent lives is also one row in the sidebar's and the 태스크 list's Needs You while it is the operator's turn (see Work Hide AI does for a home), and choosing that row opens this tool on 제안 with the row open (B11); a Memory promotion already under way before this change is one of these rows, named by its memory (B2).
+
+⚙ opens a sheet under the head (D-26, B19).
+At its top `조사하는 AI` and the chip of the agent Settings › Hide AI chose, which opens that page; when that agent cannot promise to only read (OpenCode), `이 AI로는 조사할 수 없음` stands under it and no investigation runs.
+The 제안 group has its own switch, `제안 양` (`적게`, `보통`, `많이`, each with what it means and how many a week), `반영 방식` (`확인하고 반영` or `자동으로 PR 열기`), one switch per signal, and `'안 함'으로 둔 제안 N`, which unfolds to each one with `되살리기`.
+A signal that cannot be read here is off with its reason under it: `GitHub 저장소가 아니에요` for CI and review, `Memory가 꺼져 있어요` for the operator's corrections (B5).
+The Memory group has Memory's own switch and `이 프로젝트의 기억 지우기`, which asks first, naming the Project and the number of memories.
+Last, one line on what is sent.
+With the head switch off every switch in the sheet is dimmed.
+
+### The Memory tab
+
+The Memory tab is whether a memory is right: its questions, the memories and the search (D-02); a memory's way into the documents, a promotion that failed and a decision nothing builds yet are rows of the 제안 tab.
+User text says `기억` where it said `카드`, in all four languages (D-03); the tool and the tab keep the name Memory.
+
+The core opens one Project's Memory per daemon; the rail, whatever the lane holds, names its Project when it shows, when the front Project changes and when its window comes forward after another window named another Project, so the Hide AI icon's number is current, and the tool reads until the core answers for its own.
 Turning the switch on when this Mac's agent hooks do not carry Memory yet updates them first and turns it on once they land.
 A press before Hide has first read those hooks, right after it starts, shows the switch pending, waits for that read and then runs as pressed; a read that fails refuses the press, and a press for another Project meanwhile is refused as busy.
-While a pass analyzes the Project, a small `분석 중` chip sits beside the switch; with Hide AI off or unable to run, the chip dims and one line with `Hide AI 설정 열기` says verified cards are still used; when every agent is past the usage limit the same dimmed state reads "Hide AI is paused: every agent is past your usage limit this week. Saved cards are still used." (PRD hide-ai-usage-limit D-06).
 A Project on any linked device shows the same Memory controls and cards as this machine's Projects, read from the core's store with the device's own Project identity.
 The disclosure says cards stay in Hide's Memory, and the delete confirmation removes them from this Project's Memory; neither claims the screen's device owns the store.
 An unavailable link or Memory reader uses the existing unreadable state; its reason is recorded in the diagnostic log.
-`처리할 것` appears, and the rail's Memory icon carries its count, while the Project has a suggestion, an unresolved document comparison, a failed placement or a decision nothing builds yet.
 Each compact row has a one-line title and one-line reason, truncating long text; `Compare` reads and opens the document excerpt and original operator words with their dates only when requested.
-A confirmed enduring operator correction offers `Fix the doc` and `Card is wrong`; unresolved authority first offers `Card is right` and `Doc is right`, and cannot be selected until answered.
+A confirmed enduring operator correction offers `Fix the doc` and `Memory is wrong`; unresolved authority first offers `Memory is right` and `Doc is right`, and cannot be selected until answered.
 Dates remain provenance and never decide authority.
 Choosing the document marks the card Outdated; choosing the card turns the row into a document correction proposal.
-Eligible rows have checkboxes; selecting one to five shows `N selected · up to 5 per PR`, `Clear` and `Open one PR`, and at five the other checkboxes are disabled.
-The row's single-card action uses the same batch path.
-While any row is selected, per-row promotion and dismissal buttons are hidden; unknown-authority answer buttons remain so those comparisons can be settled before selection.
-Promotion reasons omit zero counts and use short source-session counts.
-Started single or batch promotions remain in To resolve, in the same two-line format as the questions: a PR mark in the checkbox slot, the first title and `+N` for additional cards with the disclosure indicator, then the status, elapsed time where measured, subdued card numbers and links.
-Before a PR exists the row says Writing PR with the durable attempt's elapsed time; cards bound to the same running agent and attempt share a row.
-After confirmation, cards with the same PR number share a row, and `PR <number>` opens the existing PR panel.
-The catalog's failed checks use destructive text, requested changes and an agent asking the operator use warning text, and writing or awaiting review is neutral.
-`Agent ↗` appears only while writing or needing attention and only when a real pane is known; a quiet review row keeps only its disclosure indicator.
-After PR creation the agent link requires a Hide AI promotion origin and that agent's live PR association with the catalog's full repository-qualified URL, rather than a name or branch guess.
-This applies equally to promotions already open before upgrade; PR numbers remain plain identifier digits in all four languages.
-Every To resolve row expands from its title, reason or empty space, or its single disclosure button with Enter or Space; the chevron only indicates expansion.
-Checkboxes, links and action buttons perform only their own actions.
-An ordinary question opens its current body, cited files and sources below its action buttons, while a document disagreement opens Compare content.
-A progress row opens a two-line body preview aligned with its title and status; a single card does not repeat its title, while a batch labels each preview with its card number and title.
-The progress row keeps medium inset spacing around its header and preview, with a small gap above the expanded body, so its content stays clear of the hover surface and bottom rule.
-PR and agent actions appear once, in the status line, and an expanded row also exposes its known agent there when the collapsed status does not need that link.
-Merged promotions leave To resolve and become document pointers; closed-unmerged promotions leave To resolve as ordinary cards and are not suggested again at that revision.
-A promotion row whose agent is alive is also in Needs You while the operator has something to do (`PR #n 리뷰` or `CI 실패`), and choosing that row opens this tab with it open (Work Hide AI does for a home); the row here still shows the progress, the pull request and the agent link whether or not it is in Needs You.
 When the pull request merges or closes, its agent ends and its worktree goes with the branch kept, so a closed attempt's `Agent ↗` link leaves with the pane.
-A card that was not processed returns with `Card was not processed · Ended without a PR` in warning text and the agent's reason behind the row; every failed row offers Retry, continuing the shared branch and PR, and `Don't promote`, which leaves an ordinary card.
 When a promotion reports a card outdated, its empty, clean worktree is released after its agent has left; committed or uncommitted work stays and a later promotion continues on that same branch and PR.
 An accepted outdated report returns the card to verification with its original sources intact.
 An outdated card sharing a batch waits while any sibling still runs, has an open PR or follows a building branch.
-A card whose decision the code does not have yet, which another branch builds, stays in To resolve as a progress row, `Goes in with the PR that builds it`, with `Agent ↗` to that branch's agent and `PR <number>` once its pull request is open; it asks nothing, puts no dot on the tab and is still given to agents, and that pull request's merge makes it a document pointer like any merged promotion.
-When nothing builds it, one row says `Not built yet · no work underway` with a clock mark in the checkbox slot and the agent's reason behind the row, and offers only `Keep as is`, which leaves an ordinary card that is not asked about again, its document disagreement included, until its text changes.
-A new rule, lesson or decision suggestion keeps its source-session counts and dismissal until its revision changes; at most three new suggestions are open.
-`카드 N` lists the other cards, two lines each: the number and title, then the kind, how many sessions it was given to, how many times it was pulled, how many of its sources are the operator's words, and when it changed.
+`기억 N` lists the other memories, two lines each: the number and title, then the kind, how many sessions it was given to, how many times it was pulled, how many of its sources are the operator's words, and when it changed.
 The first five show, the rest fold under `그 외 N`, and a card shown in full is never folded; the search above them shows every match, best first, and is the Project's, so every window shows the same query and only the one typed into sends it.
-A searched promotion card also shows its running status and the name that opens its pane, with no name before the session appears; expanding a progress row does not duplicate it in Cards.
 Once merged, its ordinary card dims and shows the file it went into, or the merged pull request's mark when no file was named, with `파일에 반영됨 · 전달 안 함`.
 A personal preference carries `Personal`, remains available to agents and never appears as a document suggestion.
 Unresolved fact disagreements remain withheld and readable in ordinary card detail, with no unsupported document correction action; rule, lesson and decision disagreements are eligible for correction.
@@ -944,7 +962,7 @@ A confirmed enduring correction says `Correction confirmed · document update pe
 It retains the original human source and document quote; unrelated document commits do not ask the same authority question again.
 When the owning document incorporates it, background reconciliation turns the card into the existing document pointer without another promotion.
 Turning Memory off retains cards and analysis progress; its setting explains that enabling it again catches up on unprocessed conversations, including conversations from the disabled period.
-A Project at its 10,000-card limit makes room for a new card by forgetting its least recently used one, and the tab says so in one quiet line under the head, `N older cards were cleared to make room for new ones.` (`새 카드를 남기려고 오래된 카드 N개를 지웠어요.`), counting the cards forgotten that way since the tab last said so.
+A Project at its 10,000-card limit makes room for a new card by forgetting its least recently used one, and the tab says so in one quiet line under the head, `N older memories were cleared to make room for new ones.` (`새 기억을 남기려고 오래된 기억 N개를 지웠어요.`), counting the cards forgotten that way since the tab last said so.
 The line is said once: it counts as seen once it is in view on a visible page, stays while the tab is open, and the next time the tab opens it is gone until another card is cleared, when it counts only the new ones.
 `hide memory undo mN` brings one of the newest 1,000 cleared cards back, and so does `되돌리기` on a card just forgotten, but not while the Project is at its limit: the undo is refused with `mN cannot come back while this Project's Memory is full; forget another card first`.
 A card added by hand is never cleared this way.
@@ -960,11 +978,10 @@ With Memory off, stored cards are retained but the list and its empty slot stay 
 An older consent shows a short re-consent explanation under the existing off disclosure and points to the switch above; it never enables or injects on its own.
 The core supplies the usable count, current card and reasons, and the shell only draws them; no banner, alert, toast or panel is added.
 The checking mark is one line in the lane at its 360px minimum in all four languages, and the card is still listed and opens in full; an unverified card is not given to agents until the check ends (PRD memory-card-quality D-13, B6, B19).
-When the agent is gone and GitHub cannot say whether its pull request came (gh missing or logged out, or GitHub not answering), the line reads `PR을 확인하지 못함 · <reason>` with no spinner and nothing to press, since restoring GitHub settles it; it is not asked about in `처리할 것`.
 A card on its way into the repository is never folded under `그 외 N`, and a card opened from a conversation clears a search that leaves it out.
 A card opens in place: `N분 전에 바뀜 · 이전 내용` when a text replaced another (the earlier text with `되돌리기`), its body, its cited files, its sources with their runtime, time and whether they are the operator's words, and `지우기`.
 A forgotten card leaves `mN 지움 · 되돌리기` at the bottom of the tab until it is undone or another card is forgotten.
-The `⋯` beside `카드 N` holds `데이터 삭제`, which asks first, naming the Project and the number of cards, because it cannot be undone.
+The `⋯` beside `기억 N` holds `데이터 삭제`, which asks first, naming the Project and the number of memories, because it cannot be undone.
 An empty Project says no cards yet and when sessions are analyzed.
 
 ## Terminal image attachment boundary
@@ -2641,13 +2658,13 @@ A refusal reaches only the agent, as an English reason naming the protection and
 The group promises a guardrail, not security (B28).
 
 Memory uses the existing consent and kit; its row shows hook preparation, pending writes and project-scoped failure with Retry, while retaining the confirmed value.
-That Retry applies only to enabling or disabling Memory; card actions stay in the Memory tool with their existing confirmations.
+That Retry applies only to enabling or disabling Memory; card actions stay in the Hide AI tool's Memory tab with their existing confirmations.
 Memory promotion PR rows retain their original repository-qualified link after Connections changes; checks, status and agent identity join only that exact URL.
 A legacy promotion whose original repository cannot be proven shows PR verification unavailable and keeps its PR button disabled.
 Turning it off keeps existing cards.
 While the dialog is open its project owns the daemon's single Memory read slot, and the tool rail's project is restored when it closes.
-Open project Memory is one scoped navigation intent that closes the dialog and opens that project's usable checkout with the right lane on the Memory tool; a delayed remote focus changes the lane only on arrival, and refusal leaves the earlier checkout's lane unchanged.
-The shell waits for both the target checkout and its Memory tool; the core's lane call then brings the lane forward, over the agents in a narrow window.
+Open project Memory is one scoped navigation intent that closes the dialog and opens that project's usable checkout with the right lane on the Hide AI tool's Memory tab; a delayed remote focus changes the lane only on arrival, and refusal leaves the earlier checkout's lane unchanged.
+The shell waits for both the target checkout and its Hide AI tool; the core's lane call then brings the lane forward, over the agents in a narrow window.
 A newer explicit navigation cancels the delayed Memory choice so its later arrival cannot take the screen back.
 Without a usable checkout it gives a local recovery reason.
 All pages use the four interface languages, existing settings rows, system controls, dialog keyboard containment and theme tokens.
