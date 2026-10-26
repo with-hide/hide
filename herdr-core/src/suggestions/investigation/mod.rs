@@ -14,6 +14,7 @@
 //! did not reach stay fresh for the next run. None of it reaches the screen;
 //! the diagnostic log carries counts and the end, never content (B23).
 
+pub mod node;
 mod prompt;
 pub mod reads;
 
