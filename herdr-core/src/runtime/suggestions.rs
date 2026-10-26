@@ -7,7 +7,7 @@
 
 use super::*;
 use crate::model::{
-    ProjectSuggestionsSnapshot, SignalUnavailable, SuggestionCountsSnapshot, SuggestionGroup,
+    MemoryAction, ProjectSuggestionsSnapshot, SignalUnavailable, SuggestionCountsSnapshot, SuggestionGroup,
     SuggestionHold, SuggestionState, SuggestionsAi, SuggestionsGithub, SuggestionsSnapshot,
 };
 use crate::suggestions::analysis::{Analysis, TagGrouping};
@@ -39,6 +39,9 @@ pub(super) struct SuggestionsWork {
     pub(super) read: Option<Arc<ProjectSuggestionsSnapshot>>,
     /// The lock's facts the section was last composed with.
     laid: Option<LockFacts>,
+    /// The Memory facts its Memory rows were last drawn from (D-02).
+    laid_memory: Option<super::suggestion_memory::MemoryFacts>,
+    pub(super) promoting: super::suggestion_memory::PromotingCache,
     /// The pull request records already handed to the worker, so a GitHub
     /// read that moved nothing for them sends nothing.
     sent_prs: HashSet<String>,
@@ -209,6 +212,20 @@ impl Runtime {
         else {
             return false;
         };
+        if let Some(number) = super::suggestion_memory::card_of_row(&payload.id) {
+            let action = match payload.action {
+                SuggestionActionKind::Apply | SuggestionActionKind::Retry => MemoryAction::Promote,
+                SuggestionActionKind::Dismiss => MemoryAction::Dismiss,
+                SuggestionActionKind::Restore => {
+                    crate::diagnostic!(json!({
+                        "component": "suggestions", "kind": "action.unsupported",
+                        "workspace_id": payload.workspace_id, "id": payload.id,
+                    }));
+                    return false;
+                }
+            };
+            return self.apply_memory_row_action(payload.workspace_id, number, action);
+        }
         let action = match payload.action {
             SuggestionActionKind::Dismiss => LineAction::Dismiss,
             SuggestionActionKind::Restore => LineAction::Restore,
@@ -479,9 +496,16 @@ impl Runtime {
     /// Composes the section again when Hide AI's readiness or GitHub's
     /// answer moved under it; a delta that moved neither costs two reads.
     pub(super) fn refresh_suggestions(&mut self) {
-        if self.suggestion_facts() != self.suggestions_work.laid {
+        if self.suggestion_facts() != self.suggestions_work.laid
+            || self.opened_memory_facts() != self.suggestions_work.laid_memory
+        {
             self.compose_suggestions();
         }
+    }
+
+    fn opened_memory_facts(&mut self) -> Option<super::suggestion_memory::MemoryFacts> {
+        let workspace_id = self.suggestions_work.opened.as_ref()?.workspace_id.clone();
+        self.suggestion_memory_facts(&workspace_id)
     }
 
     /// Lays the lock's facts on the worker's last read and publishes the
@@ -489,6 +513,8 @@ impl Runtime {
     pub(super) fn compose_suggestions(&mut self) -> bool {
         let facts = self.suggestion_facts();
         self.suggestions_work.laid = facts;
+        let memory = self.opened_memory_facts();
+        self.suggestions_work.laid_memory = memory.clone();
         let memory_on = self
             .suggestions_work
             .opened
@@ -511,6 +537,9 @@ impl Runtime {
                         loading: true,
                         ..ProjectSuggestionsSnapshot::default()
                     });
+                if let Some(memory) = &memory {
+                    super::suggestion_memory::lay_memory_rows(&mut project, memory);
+                }
                 lay_facts(&mut project, facts, memory_on);
                 project.counts = self.suggestion_counts(&project);
                 project

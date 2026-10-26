@@ -71,6 +71,7 @@ mod session_archive;
 mod session_state;
 mod snapshot_delta;
 mod ssh_hosts;
+mod suggestion_memory;
 pub(crate) mod suggestions;
 mod tab_focus;
 mod terminal;

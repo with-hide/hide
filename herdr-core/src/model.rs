@@ -3358,6 +3358,10 @@ pub struct MemoryPromotionAgentSnapshot {
     /// The pane the agent runs in now, which the name jumps to; absent once
     /// it left its pane.
     pub pane_id: Option<String>,
+    /// Its coordination id, which the 제안 tab's row names it by; none for
+    /// an agent another branch's worktree shows.
+    #[serde(skip)]
+    pub agent_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

@@ -360,6 +360,7 @@ impl Runtime {
                 Some(MemoryPromotionAgentSnapshot {
                     name: record.wire_name().to_owned(),
                     pane_id: (!record.ended).then(|| record.pane.clone()),
+                    agent_id: Some(record.id.clone()),
                 })
             }),
             _ => None,
@@ -401,6 +402,7 @@ impl Runtime {
         Some(MemoryPromotionAgentSnapshot {
             name: chip.label.clone(),
             pane_id: Some(chip.pane_id.clone()),
+            agent_id: None,
         })
     }
 

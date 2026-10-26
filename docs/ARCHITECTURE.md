@@ -548,6 +548,10 @@ The day's runs start three minutes after the operator is back at the machine, on
 Only the desktop host sees that moment: it posts `/hide-ai-wake` with the daemon's token as the app attaches, as the machine wakes and as the screen unlocks, and the daemon dispatches it as one `hide_ai_wake` event; a wake while a day is due or running is absorbed, and Linux reports no unlock ([What each system supports](INSTALL.md#what-each-system-supports)).
 The header switch turns suggestions and Memory reading off together and, turned on, gives each back what it had; Memory keeps its own consent and its own switch.
 
+A Memory card's way into the repository's documents is drawn in the 제안 tab, not the Memory tab (D-02): Memory still decides which card is suggested and follows its promotion ([Project sessions and Memory](#project-sessions-and-memory)), and `runtime/suggestion_memory.rs` draws the Memory section's promote, failed and unbuilt questions and each card on its way as a row named by the card (`m72`), whose press is Memory's own `promote` or `dismiss`.
+A suggested card is a new suggestion only while the notebook's new lines leave room under the quantity's open cap, which replaces Memory's own cap of three (D-42), and Memory reads as many candidates as the tab stores.
+The Memory list is walked for cards on their way once per read of it, never per delta, and the tab is composed again only when those cards, the questions or their agents' turns moved.
+
 ### Moving a live pane
 
 `runtime/pane_move.rs` admits one typed intent with captured checkout, device, group, source and destination references, reserving both participating tabs before any native mutation.
