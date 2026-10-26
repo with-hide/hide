@@ -59,6 +59,9 @@ pub enum SuggestionsStatus {
     Investigating,
     /// Today's run ended and nothing is there to choose: `오늘은 제안 없음`.
     NoneToday,
+    /// The last run could not investigate, so nothing new rose from it:
+    /// `조사 못 함` beside the owl, quietly, until a run investigates (D-35).
+    NotInvestigated,
     /// Nothing to say.
     Idle,
     /// The head switch or `제안만 끄기` is off.

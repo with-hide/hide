@@ -1,9 +1,11 @@
 //! The watch after a fix merged (PRD hide-ai-suggestions B15, D-13, D-14):
-//! only sessions and pull requests in checkouts that hold the merge count,
-//! and the watch ends one way, in this order: the same line comes back and
-//! is suggested again one step stronger; else enough sessions passed and
-//! the fix worked; else its time ran out and the watch ends unknown,
-//! silently. Pure: the worker loads the line and its records around it.
+//! only sessions in checkouts shown to hold the merge count, and the watch
+//! ends one way, in this order: the same line comes back and is suggested
+//! again one step stronger; else enough sessions passed and the fix worked;
+//! else its time ran out and the watch ends unknown, silently. A pull
+//! request's failure never counts: whether its branch has the merge is not
+//! known to the core, and what is not known does not count. Pure: the
+//! worker loads the line and its records around it.
 
 use super::ledger::{Record, SessionRef};
 use super::lifecycle::LineLife;
@@ -91,13 +93,12 @@ pub(crate) fn settle(
     let recurred = records.iter().any(|record| {
         let fact = &record.fact;
         fact.at_unix_ms > watch.merged_at_unix_ms
-            && match (&fact.pr, &fact.checkout) {
-                // A check or a review on another pull request, made after
-                // the merge.
-                (Some(pr), _) => pr.number != watch.pr.number,
-                (None, Some(checkout)) => fact.session.is_some() && holds(&watch.holding, checkout),
-                (None, None) => false,
-            }
+            && fact.pr.is_none()
+            && fact.session.is_some()
+            && fact
+                .checkout
+                .as_deref()
+                .is_some_and(|checkout| holds(&watch.holding, checkout))
     });
     let span = if watch.ci {
         policy::WATCH_CI_SPAN_MS
@@ -308,7 +309,9 @@ mod tests {
     }
 
     /// D-14: with nothing to say, the watch ends after 30 days, a CI line's
-    /// after 14, silently; a recurrence wins over enough sessions.
+    /// after 14, silently; a recurrence wins over enough sessions, and
+    /// another pull request's failure is none, since whether its branch has
+    /// the merge is not known.
     #[test]
     fn a_quiet_watch_runs_out_and_a_recurrence_comes_first() {
         let (mut line, mut life) = watching(true);
@@ -324,15 +327,26 @@ mod tests {
         for id in ["a", "b", "c", "d", "e"] {
             saw_session(&line, &mut life, &session(id), "/repo", MERGED + 1);
         }
+        let mut quiet = (line.clone(), life.clone());
+        assert_eq!(
+            settle(
+                &mut quiet.0,
+                &mut quiet.1,
+                &[failure(MERGED + 2, "/repo", Some(41))],
+                MERGED + 3
+            ),
+            Some(WatchEnd::Effective),
+            "another pull request's failure after the merge is not counted"
+        );
         assert_eq!(
             settle(
                 &mut line,
                 &mut life,
-                &[failure(MERGED + 2, "/x", Some(41))],
+                &[failure(MERGED + 2, "/repo/web", None)],
                 MERGED + 3
             ),
             Some(WatchEnd::Recurred),
-            "another pull request's failure after the merge"
+            "a session's failure with the merge comes before enough sessions"
         );
     }
 }

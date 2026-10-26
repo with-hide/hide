@@ -21,8 +21,8 @@ use super::memory_promotion::{
 use super::*;
 use crate::model::{PullRequestBadge, PullRequestChecks, PullRequestSnapshot};
 use crate::node::NodeId;
-use crate::suggestions::apply::{ApplyBrief, ApplyOrder, FollowedAttempt};
-use crate::suggestions::ledger::{PrRef, Signal};
+use crate::suggestions::apply::{ApplyBrief, ApplyOrder, FollowedAttempt, issue_text};
+use crate::suggestions::ledger::PrRef;
 use crate::suggestions::lifecycle::{AttemptMove, AttemptPhase};
 use crate::suggestions::notebook::{LineId, Outcome};
 use crate::suggestions::watch::WatchedLine;
@@ -217,10 +217,52 @@ impl Runtime {
     }
 
     /// Hide's own issue for an issue line (B14), written in the repository
-    /// the Project's connection names.
+    /// the Project's connection names; a retry first looks for the issue an
+    /// earlier try may have made unconfirmed.
     fn start_suggestion_issue(&mut self, key: AttemptKey, node: &NodeId, order: ApplyOrder) {
+        let (title, body) = issue_text(&order.brief);
+        let title = order.issue_title.unwrap_or(title);
+        self.line_issue(
+            key,
+            node,
+            &order.location.path,
+            title,
+            Some(body),
+            order.issue_since,
+        );
+    }
+
+    /// An issue attempt left starting by a create Hide never heard back
+    /// from (Hide quit while `gh` ran): the issue it may have made is looked
+    /// for, and found it opens the attempt, else the attempt fails and
+    /// `다시 시도` looks again before creating.
+    fn recover_suggestion_issue(&mut self, attempt: &FollowedAttempt, node: &NodeId) {
+        let key = key_of(attempt);
+        let Some(title) = attempt.issue_title.clone() else {
+            self.move_attempt(&key, AttemptMove::Failed("issue_failed".into()));
+            return;
+        };
+        let since = attempt.issue_since.unwrap_or(attempt.started_at_unix_ms);
+        let path = attempt.location.path.clone();
+        self.line_issue(key, node, &path, title, None, Some(since));
+    }
+
+    /// Finds or makes a line's issue off the lock: when an earlier create
+    /// may have landed since `since`, the issue it made is looked for
+    /// through the repository and adopted; otherwise, with a `body`, one is
+    /// created. A look that cannot rule the earlier issue out creates
+    /// nothing, so a retry never makes a second issue.
+    fn line_issue(
+        &mut self,
+        key: AttemptKey,
+        node: &NodeId,
+        path: &str,
+        title: String,
+        body: Option<String>,
+        since: Option<u64>,
+    ) {
         let machine = (*node != self.node).then(|| node.as_str().to_owned());
-        let place = match self.github_place(machine.as_deref(), &order.location.path) {
+        let place = match self.github_place(machine.as_deref(), path) {
             Ok(place) => place,
             Err(reason) => {
                 crate::diagnostic!(json!({
@@ -231,15 +273,40 @@ impl Runtime {
                 return;
             }
         };
-        let (title, body) = issue_text(&order.brief);
         let link = self.own_node();
         let carried = key.clone();
+        self.suggestions_work.apply.starting.insert(key.clone());
         let spawned = self.spawn_issue_worker(
             "suggestion-issue",
-            move || crate::github::create_issue(link.as_ref(), &place, &title, &body),
-            move |runtime, created| {
-                let change = match created {
-                    Ok(issue) => AttemptMove::IssueOpen { url: issue.url },
+            move || -> Result<Option<crate::issues::IssueSnapshot>, String> {
+                let mut place = place;
+                if let Some(since) = since {
+                    let repository = crate::github::issue_repository(link.as_ref(), &place)?;
+                    let found = crate::github::reconcile_issue_attempt(
+                        link.as_ref(),
+                        &place,
+                        &repository,
+                        &title,
+                        since,
+                        &[],
+                    )?;
+                    if found.is_some() {
+                        return Ok(found);
+                    }
+                    // A create names the repository just searched, so a
+                    // remote changed since cannot send it elsewhere.
+                    place = crate::github::Where::Repository(repository);
+                }
+                let Some(body) = body else {
+                    return Ok(None);
+                };
+                crate::github::create_issue(link.as_ref(), &place, &title, &body).map(Some)
+            },
+            move |runtime, made| {
+                runtime.suggestions_work.apply.starting.remove(&carried);
+                let change = match made {
+                    Ok(Some(issue)) => AttemptMove::IssueOpen { url: issue.url },
+                    Ok(None) => AttemptMove::Failed("issue_failed".into()),
                     Err(reason) => {
                         crate::diagnostic!(json!({
                             "component": "suggestions", "kind": "apply.issue_failed",
@@ -254,6 +321,7 @@ impl Runtime {
             },
         );
         if let Err(reason) = spawned {
+            self.suggestions_work.apply.starting.remove(&key);
             crate::diagnostic!(json!({
                 "component": "suggestions", "kind": "apply.issue_failed",
                 "project_id": key.0, "line": key.1, "reason": reason,
@@ -295,6 +363,7 @@ impl Runtime {
         }
         let mut homes = HashMap::new();
         let mut moves = Vec::new();
+        let mut unanswered = Vec::new();
         for index in 0..self.suggestions_work.apply.followed.len() {
             let attempt = self.suggestions_work.apply.followed[index].clone();
             let key = key_of(&attempt);
@@ -306,6 +375,15 @@ impl Runtime {
             };
             let change = match attempt.outcome {
                 Outcome::Pr => self.pull_request_move(&attempt, &key, &node, now, &mut homes),
+                // No create runs for it here, so its answer was lost.
+                Outcome::Issue
+                    if attempt.phase == AttemptPhase::Starting
+                        && attempt.issue_url.is_none()
+                        && now >= attempt.started_at_unix_ms + TRACK_INTERVAL_MS =>
+                {
+                    unanswered.push((attempt, node));
+                    continue;
+                }
                 Outcome::Issue => self.issue_move(&attempt, &node),
             };
             if let Some(change) = change {
@@ -317,6 +395,9 @@ impl Runtime {
         self.suggestions_work.apply.homes = homes;
         for (key, change) in moves {
             self.move_attempt(&key, change);
+        }
+        for (attempt, node) in unanswered {
+            self.recover_suggestion_issue(&attempt, &node);
         }
         self.judge_watch_holding();
     }
@@ -693,42 +774,11 @@ fn prompt(brief: &ApplyBrief, language: hide_ai::OutputLanguage) -> String {
     )
 }
 
-/// An issue's title and body (B14, D-29): the check or command the line
-/// rests on and the pull requests it happened in, and nothing an agent's
-/// session said, whatever the repository's visibility.
-fn issue_text(brief: &ApplyBrief) -> (String, String) {
-    let (signal, tag) = brief
-        .basis
-        .clone()
-        .unwrap_or((Signal::FailedTool, "unknown".to_owned()));
-    let title = match signal {
-        Signal::CheckFailed => format!("CI check `{tag}` keeps failing"),
-        Signal::ChangeRequest => format!("Reviews keep asking for changes: `{tag}`"),
-        _ => format!("Recurring failure: `{tag}`"),
-    };
-    let mut body = vec![format!(
-        "Hide found this {} recurring in {} records.",
-        signal.as_str(),
-        brief.records
-    )];
-    if !brief.prs.is_empty() {
-        body.push(format!(
-            "Pull requests: {}",
-            brief
-                .prs
-                .iter()
-                .map(|number| format!("#{number}"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-    }
-    (title, body.join("\n\n"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::model::ReviewDecision;
+    use crate::suggestions::ledger::Signal;
     use crate::suggestions::store::ProjectLocation;
 
     fn followed(phase: AttemptPhase, pr: Option<u32>) -> FollowedAttempt {
@@ -750,6 +800,8 @@ mod tests {
                 url: format!("https://github.com/acme/app/pull/{number}"),
             }),
             issue_url: None,
+            issue_title: None,
+            issue_since: None,
             reviewed: false,
         }
     }

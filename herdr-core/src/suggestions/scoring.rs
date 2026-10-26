@@ -87,12 +87,14 @@ pub fn rises(line: &Line, score: &Score, quantity: Quantity) -> bool {
 
 /// The lines to raise now (D-10, D-42), strongest first: as many as the open
 /// cap, the stored cap and the week's cap leave, of the lines that rose. A
-/// Normal Project that raised nothing for [`policy::QUIET_SPAN_MS`] raises
+/// Normal Project that raised nothing for [`policy::QUIET_SPAN_MS`] since
+/// `quiet_since` (its first look at what rose, then its last raise) raises
 /// its strongest line that answers the questions even under the threshold.
 pub fn choose(
     candidates: &[(&Line, Score)],
     open: usize,
     raised_at: &[u64],
+    quiet_since: u64,
     quantity: Quantity,
     now: u64,
 ) -> Vec<LineId> {
@@ -125,9 +127,7 @@ pub fn choose(
         .take(slots)
         .map(|(line, _)| line.id)
         .collect::<Vec<_>>();
-    let quiet = raised_at
-        .iter()
-        .all(|at| now.saturating_sub(*at) >= policy::QUIET_SPAN_MS);
+    let quiet = now.saturating_sub(quiet_since) >= policy::QUIET_SPAN_MS;
     if risen.is_empty() && open == 0 && quiet && quantity.fills_a_quiet_fortnight() {
         return ranked
             .first()
@@ -291,12 +291,15 @@ mod tests {
         ];
         let candidates = lines.iter().map(|(l, s)| (l, *s)).collect::<Vec<_>>();
         assert_eq!(
-            choose(&candidates, 0, &[], Quantity::Normal, NOW),
+            choose(&candidates, 0, &[], NOW, Quantity::Normal, NOW),
             [LineId(2), LineId(3), LineId(4)]
         );
-        assert_eq!(choose(&candidates, 0, &[], Quantity::Few, NOW), [LineId(2)]);
         assert_eq!(
-            choose(&candidates, 2, &[], Quantity::Normal, NOW),
+            choose(&candidates, 0, &[], NOW, Quantity::Few, NOW),
+            [LineId(2)]
+        );
+        assert_eq!(
+            choose(&candidates, 2, &[], NOW, Quantity::Normal, NOW),
             [LineId(2)],
             "two already open leave one of three"
         );
@@ -305,6 +308,7 @@ mod tests {
                 &candidates,
                 0,
                 &[NOW - DAY_MS, NOW - 2 * DAY_MS],
+                NOW - DAY_MS,
                 Quantity::Normal,
                 NOW
             ),
@@ -316,6 +320,7 @@ mod tests {
                 &candidates,
                 0,
                 &[NOW - 8 * DAY_MS; 3],
+                NOW - 8 * DAY_MS,
                 Quantity::Normal,
                 NOW
             )
@@ -325,19 +330,20 @@ mod tests {
         );
     }
 
+    /// D-10: Normal raises its strongest line under the threshold only once
+    /// fourteen days passed since it began looking or last raised: not on
+    /// day 0 or day 13, on day 14; never for Few, never with one open.
     #[test]
     fn a_quiet_fortnight_raises_normals_strongest_line_under_the_threshold() {
         let lines = [scored(1, 1.0), scored(2, 2.5)];
         let candidates = lines.iter().map(|(l, s)| (l, *s)).collect::<Vec<_>>();
-        assert_eq!(
-            choose(&candidates, 0, &[], Quantity::Normal, NOW),
-            [LineId(2)]
-        );
-        assert!(choose(&candidates, 0, &[], Quantity::Few, NOW).is_empty());
-        assert!(
-            choose(&candidates, 0, &[NOW - 13 * DAY_MS], Quantity::Normal, NOW).is_empty(),
-            "a raise within the fortnight keeps it waiting"
-        );
-        assert!(choose(&candidates, 1, &[], Quantity::Normal, NOW).is_empty());
+        let quiet_for = |days: u64, quantity, open| {
+            choose(&candidates, open, &[], NOW - days * DAY_MS, quantity, NOW)
+        };
+        assert!(quiet_for(0, Quantity::Normal, 0).is_empty(), "day 0");
+        assert!(quiet_for(13, Quantity::Normal, 0).is_empty(), "day 13");
+        assert_eq!(quiet_for(14, Quantity::Normal, 0), [LineId(2)], "day 14");
+        assert!(quiet_for(14, Quantity::Few, 0).is_empty());
+        assert!(quiet_for(14, Quantity::Normal, 1).is_empty());
     }
 }

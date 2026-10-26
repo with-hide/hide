@@ -283,6 +283,7 @@ fn replay(mut facts: Vec<Observation>, since: u64, now: u64) -> ProjectReplay {
         for handled in [false, true] {
             let mut stage = BTreeMap::new();
             let mut raised_at = Vec::new();
+            let mut quiet_since = None;
             let mut count = 0;
             for (end, notebook, index) in &notebooks {
                 let open = if handled {
@@ -296,10 +297,12 @@ fn replay(mut facts: Vec<Observation>, since: u64, now: u64) -> ProjectReplay {
                     .filter(|line| !stage.contains_key(&line.id))
                     .map(|line| (line, scoring::score(line, index, *end)))
                     .collect::<Vec<_>>();
-                raised_at.retain(|at| end.saturating_sub(*at) < policy::QUIET_SPAN_MS);
-                for id in scoring::choose(&scored, open, &raised_at, quantity, *end) {
+                raised_at.retain(|at| end.saturating_sub(*at) < policy::WEEK_MS);
+                let since = *quiet_since.get_or_insert(*end);
+                for id in scoring::choose(&scored, open, &raised_at, since, quantity, *end) {
                     stage.insert(id, Stage::Suggested);
                     raised_at.push(*end);
+                    quiet_since = Some(*end);
                     count += 1;
                     if handled
                         && let Some((signal, tag)) =

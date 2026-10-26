@@ -113,6 +113,25 @@ pub(crate) const MAX_FIX_LEVEL: u8 = 2;
 pub(crate) const WAKE_DELAY_MS: u64 = 3 * MINUTE_MS;
 pub(crate) const RUN_TURNS: u32 = 30;
 pub(crate) const RUN_SPAN_MS: u64 = 20 * MINUTE_MS;
+/// How often the worker looks for watches whose time ran out.
+pub(crate) const SETTLE_EVERY_MS: u64 = 60 * MINUTE_MS;
+
+/// The worker's bounds: the most commands waiting, one past it dropped and
+/// logged; the most Project identities it remembers by folder.
+pub(crate) const QUEUE: usize = 256;
+pub(crate) const IDENTITY_CACHE: usize = 512;
+/// The runtime's bound on the pull request facts it remembers handing over;
+/// past it the set starts over, which costs at most one resend the store
+/// folds.
+pub(crate) const PR_KEYS: usize = 8192;
+
+/// What the 제안 tab and an attempt carry: the most rows the folded 반영됨
+/// group shows, evidence links a row carries and dismissed lines ⚙ lists,
+/// newest first; the most pull requests an attempt's brief names.
+pub(crate) const APPLIED_ROWS: usize = 20;
+pub(crate) const EVIDENCE_ROWS: usize = 10;
+pub(crate) const DISMISSED_ROWS: usize = 50;
+pub(crate) const BRIEF_PRS: usize = 10;
 
 /// The investigation's turns (D-35, D-38): the last few turns before the
 /// final one ask the model to wrap up, and one turn is given at most this

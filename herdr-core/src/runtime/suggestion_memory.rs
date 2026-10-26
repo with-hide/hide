@@ -13,7 +13,7 @@ use crate::model::{
     SuggestionSource, SuggestionState,
 };
 use crate::suggestions::notebook::Outcome;
-use crate::suggestions::read::APPLIED_ROWS;
+use crate::suggestions::policy::APPLIED_ROWS;
 use std::collections::BTreeSet;
 
 /// What the Memory rows are drawn from, compared on each delta so the tab

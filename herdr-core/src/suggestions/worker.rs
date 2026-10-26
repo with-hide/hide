@@ -34,17 +34,11 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError
 use std::thread;
 use std::time::{Duration, Instant};
 
-/// The most commands waiting; one past it is dropped and logged.
-pub(crate) const QUEUE: usize = 256;
 /// How long the worker waits for nothing in particular before it looks at
 /// the clock again.
 const IDLE: Duration = Duration::from_secs(60);
-/// How often the worker looks for watches whose time ran out.
-const SETTLE_EVERY_MS: u64 = 60 * 60 * 1000;
 /// The meta key the one-time intro line is remembered under (B3).
 const INTRO_SEEN: &str = "intro_seen";
-/// The most Project identities the worker remembers by folder.
-const IDENTITY_CACHE: usize = 512;
 /// How long a node is given to name a folder's Project.
 const IDENTITY_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -246,7 +240,7 @@ impl SuggestionClient {
     /// A client whose commands a test reads instead of a worker.
     #[cfg(test)]
     pub(crate) fn for_test() -> (Self, Receiver<Command>) {
-        let (sender, receiver) = mpsc::sync_channel(QUEUE);
+        let (sender, receiver) = mpsc::sync_channel(policy::QUEUE);
         (Self(sender), receiver)
     }
 
@@ -272,7 +266,7 @@ impl SuggestionClient {
             Err(TrySendError::Full(_)) => {
                 crate::diagnostic!(json!({
                     "component": "suggestions", "kind": "queue.full", "command": kind,
-                    "limit": QUEUE,
+                    "limit": policy::QUEUE,
                 }));
                 false
             }
@@ -286,9 +280,20 @@ impl SuggestionClient {
     }
 }
 
+impl SuggestionClient {
+    /// Hands `command` over, waiting for room: a run's own thread delivers
+    /// its edits and its end this way, so a full queue delays them and never
+    /// drops them, which would leave the run held forever. Never called
+    /// under the runtime lock. A worker stopping a run drains its queue, so
+    /// this answers false once the worker is gone rather than waiting on it.
+    fn deliver(&self, command: Command) -> bool {
+        self.0.send(command).is_ok()
+    }
+}
+
 impl SuggestionWorker {
     pub(crate) fn spawn(options: Options, sink: impl Sink) -> Result<Self, String> {
-        let (sender, receiver) = mpsc::sync_channel(QUEUE);
+        let (sender, receiver) = mpsc::sync_channel(policy::QUEUE);
         let stop = StopFlag::default();
         let worker_stop = stop.clone();
         let own = SuggestionClient(sender.clone());
@@ -400,7 +405,7 @@ impl Worker {
             }
             self.advance_runs(sink);
             if self.now() >= self.settle_at {
-                self.settle_at = self.now() + SETTLE_EVERY_MS;
+                self.settle_at = self.now() + policy::SETTLE_EVERY_MS;
                 self.settle_all(sink);
             }
         }
@@ -431,7 +436,7 @@ impl Worker {
         }
         match (self.options.resolver)(project, sink.link(&project.node)) {
             Ok(id) => {
-                if self.identities.len() >= IDENTITY_CACHE {
+                if self.identities.len() >= policy::IDENTITY_CACHE {
                     self.identities.clear();
                 }
                 self.identities.insert(key, id.clone());
@@ -598,7 +603,7 @@ impl Worker {
                     crate::diagnostic!(json!({
                         "component": "suggestions", "kind": "records.kept",
                         "project_id": project, "written": written.len(),
-                        "pruned": pruned.records,
+                        "pruned": pruned.records, "references_pruned": pruned.references,
                     }));
                 }
                 !written.is_empty()
@@ -633,7 +638,7 @@ impl Worker {
                 return log_store("locate", &code);
             }
         }
-        if self.located.len() >= IDENTITY_CACHE {
+        if self.located.len() >= policy::IDENTITY_CACHE {
             self.located.clear();
         }
         self.located.insert(project.to_owned());
@@ -680,6 +685,8 @@ impl Worker {
         else {
             return refused("not_ready");
         };
+        let begun = life.attempt.as_ref().expect("begin wrote the attempt");
+        let (issue_title, issue_since) = (begun.issue_title.clone(), begun.issue_since);
         if let Err(code) = store.save_line(project, &line, &life) {
             return log_store("apply", &code);
         }
@@ -698,6 +705,8 @@ impl Worker {
             branch,
             agent_name,
             brief,
+            issue_title,
+            issue_since,
         });
     }
 
@@ -1063,15 +1072,21 @@ impl Worker {
             .collect::<Vec<_>>();
         state
             .raised_at
-            .retain(|at| now.saturating_sub(*at) < policy::QUIET_SPAN_MS);
+            .retain(|at| now.saturating_sub(*at) < policy::WEEK_MS);
+        let first_look = state.quiet_since.is_none();
+        let quiet_since = *state.quiet_since.get_or_insert(now);
         let chosen = scoring::choose(
             &scored,
             open,
             &state.raised_at,
+            quiet_since,
             state.settings.quantity,
             now,
         );
         if chosen.is_empty() {
+            if first_look && let Err(code) = store.save_state(project, &state) {
+                log_store("raise", &code);
+            }
             return;
         }
         for id in &chosen {
@@ -1090,6 +1105,7 @@ impl Worker {
                 return log_store("raise", &code);
             }
             state.raised_at.push(now);
+            state.quiet_since = Some(now);
             crate::diagnostic!(json!({
                 "component": "suggestions", "kind": "line.raised",
                 "project_id": project, "line": id.0, "points": (points * 100.0).round() / 100.0,
@@ -1195,7 +1211,7 @@ impl Worker {
         if !state.settings.active() || state.last_completed_day.as_deref() == Some(today.as_str()) {
             return false;
         }
-        if index.fresh().next().is_none() {
+        if index.fresh().next().is_none() && !state.uninvestigated {
             self.complete(project, AnalysisEnd::Done, 0);
             self.auto_apply(project, sink);
             self.publish_if_opened(project, sink);
@@ -1246,7 +1262,7 @@ impl Worker {
                 let mut analysis = analysis;
                 let mut pen = pen;
                 let end = analysis.run(&input, &mut pen);
-                pen.client.send(Command::RunEnded {
+                pen.client.deliver(Command::RunEnded {
                     project: input.project_id.clone(),
                     end,
                     edits: pen.edits,
@@ -1279,16 +1295,20 @@ impl Worker {
         }
     }
 
-    /// Ends `project`'s day: a run that failed having written nothing is
-    /// judged by the scores alone (D-35, `not_investigated`); then what rose
-    /// is raised and the day is kept as done, so it never runs twice a day.
+    /// Ends `project`'s day, which is kept as done so it never runs twice a
+    /// day. A run that failed raises nothing from the scores alone (D-35):
+    /// what it left unread is grouped by tag when it wrote nothing
+    /// (`not_investigated`), the Project shows `조사 못 함`, and the next
+    /// run investigates whether or not new records came; raised lines and
+    /// watches stay as they are. Any other end raises what rose.
     fn complete(&mut self, project: &str, end: AnalysisEnd, edits: usize) {
         let today = self.today();
+        let failed = end == AnalysisEnd::Partial(PartialReason::Failed);
         let mut ended = match end {
             AnalysisEnd::Done => "done",
             AnalysisEnd::Partial(reason) => reason.as_str(),
         };
-        if end == AnalysisEnd::Partial(PartialReason::Failed) && edits == 0 {
+        if failed && edits == 0 {
             self.group_by_tag(project);
             ended = "not_investigated";
         }
@@ -1296,7 +1316,9 @@ impl Worker {
             "component": "suggestions", "kind": "run.ended",
             "project_id": project, "end": ended, "edits": edits,
         }));
-        self.raise(project);
+        if !failed {
+            self.raise(project);
+        }
         let now = self.now();
         let Ok(store) = self.store.as_mut() else {
             return;
@@ -1308,6 +1330,7 @@ impl Worker {
         state.last_completed_day = Some(today);
         state.last_run_at_unix_ms = Some(now);
         state.last_run_end = Some(ended.to_owned());
+        state.uninvestigated = failed;
         if let Err(code) = store.save_state(project, &state) {
             log_store("complete", &code);
         }
@@ -1415,18 +1438,11 @@ impl NotebookPen for ChannelPen {
 
     fn write(&mut self, edit: NotebookEdit) -> Result<Written, PenRefused> {
         let (reply, answer) = mpsc::channel();
-        // The run thread may wait for room in the queue; it is never the
-        // runtime lock's holder.
-        if self
-            .client
-            .0
-            .send(Command::Pen {
-                project: self.project.clone(),
-                edit,
-                reply,
-            })
-            .is_err()
-        {
+        if !self.client.deliver(Command::Pen {
+            project: self.project.clone(),
+            edit,
+            reply,
+        }) {
             return Err(PenRefused::Stopped);
         }
         let (written, notebook) = answer.recv().map_err(|_| PenRefused::Stopped)??;
@@ -1494,7 +1510,7 @@ mod tests {
     use super::*;
     use crate::model::{SuggestionGroup, SuggestionState, SuggestionsStatus};
     use crate::suggestions::ledger::SessionRef;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
     const START: u64 = 400 * policy::DAY_MS + 9 * 3_600_000;
     const WAIT: Duration = Duration::from_secs(10);
@@ -1539,6 +1555,7 @@ mod tests {
 
     struct Fixture {
         worker: Option<SuggestionWorker>,
+        analysis: AnalysisFactory,
         clock: Arc<AtomicU64>,
         reads: Receiver<ProjectSuggestionsSnapshot>,
         restored: Receiver<String>,
@@ -1549,12 +1566,19 @@ mod tests {
 
     impl Fixture {
         fn new() -> Self {
+            Self::with_analysis(Arc::new(|_: &RunPlan<'_>| {
+                Box::new(TagGrouping) as Box<dyn Analysis>
+            }))
+        }
+
+        fn with_analysis(analysis: AnalysisFactory) -> Self {
             let dir = tempfile::tempdir().unwrap();
             let store = dir.path().join("suggestions.sqlite3");
             let clock = Arc::new(AtomicU64::new(START));
-            let (worker, reads, restored, handed) = Self::spawn(&store, &clock);
+            let (worker, reads, restored, handed) = Self::spawn(&store, &clock, &analysis);
             Self {
                 worker: Some(worker),
+                analysis,
                 clock,
                 reads,
                 restored,
@@ -1567,6 +1591,7 @@ mod tests {
         fn spawn(
             store: &std::path::Path,
             clock: &Arc<AtomicU64>,
+            analysis: &AnalysisFactory,
         ) -> (
             SuggestionWorker,
             Receiver<ProjectSuggestionsSnapshot>,
@@ -1582,7 +1607,7 @@ mod tests {
                 store: store.to_owned(),
                 clock: Arc::new(move || time.load(Ordering::SeqCst)),
                 zone: jiff::tz::TimeZone::UTC,
-                analysis: Arc::new(|_: &RunPlan<'_>| Box::new(TagGrouping) as Box<dyn Analysis>),
+                analysis: Arc::clone(analysis),
                 resolver: Box::new(|project: &ProjectRef, _| {
                     Ok(format!("project{}", project.path))
                 }),
@@ -1610,7 +1635,8 @@ mod tests {
         /// hided restart does.
         fn restart(&mut self) {
             self.worker.take();
-            let (worker, reads, restored, handed) = Self::spawn(&self.store, &self.clock);
+            let (worker, reads, restored, handed) =
+                Self::spawn(&self.store, &self.clock, &self.analysis);
             self.worker = Some(worker);
             self.reads = reads;
             self.restored = restored;
@@ -1730,6 +1756,101 @@ mod tests {
             read.status,
             SuggestionsStatus::Idle,
             "a row waits to be chosen"
+        );
+    }
+
+    /// D-10: a new Project's first look raises nothing under Normal's
+    /// threshold; only fourteen quiet days from that look raise its
+    /// strongest line: not on day 13, on day 14.
+    #[test]
+    fn a_weak_line_waits_fourteen_quiet_days_from_the_first_look() {
+        let fixture = Fixture::new();
+        fixture.open();
+        fixture.fail_in_sessions("cargo test", &["s1"]);
+        fixture.wake_and_wait_out_the_delay();
+        let read = fixture.read_until(|read| read.status == SuggestionsStatus::NoneToday);
+        assert!(chosen(&read).is_empty(), "day 0");
+
+        let looked = fixture.clock.load(Ordering::SeqCst);
+        fixture
+            .clock
+            .store(looked + 13 * policy::DAY_MS, Ordering::SeqCst);
+        fixture.wake_and_wait_out_the_delay();
+        let read = fixture.read_until(|read| read.status == SuggestionsStatus::NoneToday);
+        assert!(chosen(&read).is_empty(), "day 13");
+
+        fixture
+            .clock
+            .store(looked + 14 * policy::DAY_MS, Ordering::SeqCst);
+        fixture.wake_and_wait_out_the_delay();
+        let read = fixture.read_until(|read| !chosen(read).is_empty());
+        assert_eq!(chosen(&read), ["s1"], "day 14");
+    }
+
+    /// An investigation that fails on the days `fails` says, and otherwise
+    /// groups as the shipped analysis does; it counts its runs.
+    struct Flaky {
+        fails: Arc<AtomicBool>,
+        runs: Arc<AtomicUsize>,
+    }
+
+    impl Analysis for Flaky {
+        fn name(&self) -> &'static str {
+            "flaky"
+        }
+        fn uses_provider(&self) -> bool {
+            false
+        }
+        fn run(&mut self, input: &AnalysisInput, pen: &mut dyn NotebookPen) -> AnalysisEnd {
+            self.runs.fetch_add(1, Ordering::SeqCst);
+            if self.fails.load(Ordering::SeqCst) {
+                return AnalysisEnd::Partial(PartialReason::Failed);
+            }
+            TagGrouping.run(input, pen)
+        }
+    }
+
+    /// D-35 as the mission decided it: a run that fails raises nothing from
+    /// the scores alone and leaves a raised line as it was; the Project
+    /// shows `조사 못 함`, and the next day's run investigates though no
+    /// record came since, and only then does the waiting line rise.
+    #[test]
+    fn a_failed_investigation_raises_nothing_until_a_run_investigates() {
+        let fails = Arc::new(AtomicBool::new(false));
+        let runs = Arc::new(AtomicUsize::new(0));
+        let (flaky, counted) = (Arc::clone(&fails), Arc::clone(&runs));
+        let fixture = Fixture::with_analysis(Arc::new(move |_: &RunPlan<'_>| {
+            Box::new(Flaky {
+                fails: Arc::clone(&flaky),
+                runs: Arc::clone(&counted),
+            }) as Box<dyn Analysis>
+        }));
+        fixture.open();
+        fixture.fail_in_sessions("cargo test", &["s1", "s2", "s3"]);
+        fixture.wake_and_wait_out_the_delay();
+        fixture.read_until(|read| chosen(read) == ["s1"]);
+
+        fails.store(true, Ordering::SeqCst);
+        fixture.clock.fetch_add(policy::DAY_MS, Ordering::SeqCst);
+        fixture.fail_in_sessions("pnpm lint", &["s4", "s5", "s6"]);
+        fixture.wake_and_wait_out_the_delay();
+        let read = fixture.read_until(|read| read.status == SuggestionsStatus::NotInvestigated);
+        assert_eq!(
+            chosen(&read),
+            ["s1"],
+            "nothing new rose; the raised line stays"
+        );
+
+        fails.store(false, Ordering::SeqCst);
+        fixture.clock.fetch_add(policy::DAY_MS, Ordering::SeqCst);
+        fixture.wake_and_wait_out_the_delay();
+        let read = fixture.read_until(|read| chosen(read).len() == 2);
+        assert_eq!(chosen(&read), ["s2", "s1"]);
+        assert_eq!(read.status, SuggestionsStatus::Idle);
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            3,
+            "the third day ran with no new record"
         );
     }
 
@@ -1958,6 +2079,151 @@ mod tests {
         let read = fixture.next_read();
         assert_ne!(read.status, SuggestionsStatus::Investigating);
         assert_eq!(shown(&read), shown(&before));
+    }
+
+    /// A run that ends while the worker's queue is full still ends: its end
+    /// waits for room instead of being dropped, so the round goes on to the
+    /// next Project, whose line is then raised.
+    #[test]
+    fn a_run_that_ends_on_a_full_queue_still_lets_the_next_project_run() {
+        /// Says the run started, then waits to be let go.
+        type Gate = (mpsc::Sender<()>, Receiver<()>);
+        /// The first run says it started, waits to be let go and writes
+        /// nothing; every later run groups by tag.
+        struct Held {
+            first: Arc<std::sync::Mutex<Option<Gate>>>,
+        }
+        impl Analysis for Held {
+            fn name(&self) -> &'static str {
+                "held"
+            }
+            fn uses_provider(&self) -> bool {
+                false
+            }
+            fn run(&mut self, input: &AnalysisInput, pen: &mut dyn NotebookPen) -> AnalysisEnd {
+                if let Some((started, release)) = self.first.lock().unwrap().take() {
+                    started.send(()).unwrap();
+                    release.recv().unwrap();
+                    return AnalysisEnd::Done;
+                }
+                TagGrouping.run(input, pen)
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (started_tx, started) = mpsc::channel();
+        let (release_run, held) = mpsc::channel();
+        let first = Arc::new(std::sync::Mutex::new(Some((started_tx, held))));
+        let (entered_tx, entered) = mpsc::channel();
+        let (release_resolve, resolving) = mpsc::channel::<()>();
+        let (reads_tx, reads) = mpsc::channel();
+        let clock = Arc::new(AtomicU64::new(START));
+        let time = Arc::clone(&clock);
+        let worker = SuggestionWorker::spawn(
+            Options {
+                store: dir.path().join("suggestions.sqlite3"),
+                clock: Arc::new(move || time.load(Ordering::SeqCst)),
+                zone: jiff::tz::TimeZone::UTC,
+                analysis: Arc::new(move |_: &RunPlan<'_>| {
+                    Box::new(Held {
+                        first: Arc::clone(&first),
+                    }) as Box<dyn Analysis>
+                }),
+                // The worker answers nothing while it names this folder.
+                resolver: Box::new(move |project: &ProjectRef, _| {
+                    if project.path == "/slow" {
+                        entered_tx.send(()).unwrap();
+                        resolving.recv().unwrap();
+                    }
+                    Ok(format!("project{}", project.path))
+                }),
+            },
+            TestSink {
+                reads: reads_tx,
+                restored: mpsc::channel().0,
+                orders: mpsc::channel().0,
+                followed: mpsc::channel().0,
+                gate: RunGate {
+                    ai_ready: false,
+                    usage_ok: true,
+                    language: hide_ai::OutputLanguage::English,
+                },
+            },
+        )
+        .unwrap();
+        let client = worker.client();
+        let at = |path: &str| ProjectRef {
+            node: NodeId::parse("test-node").unwrap(),
+            path: path.into(),
+        };
+        let failed = |path: &str| Command::Observe {
+            project: at(path),
+            facts: ["s1", "s2", "s3"]
+                .iter()
+                .map(|session| Observation {
+                    signal: Signal::FailedTool,
+                    tag: "cargo test".into(),
+                    session: Some(SessionRef {
+                        agent: "claude".into(),
+                        id: (*session).into(),
+                    }),
+                    pr: None,
+                    checkout: Some(path.into()),
+                    at_unix_ms: START,
+                    always: false,
+                })
+                .collect(),
+        };
+        let read_until = |done: &dyn Fn(&ProjectSuggestionsSnapshot) -> bool| loop {
+            let read = reads.recv_timeout(WAIT).expect("a read");
+            if done(&read) {
+                return read;
+            }
+        };
+        client.send(Command::Open {
+            workspace_id: "w1".into(),
+            project: at("/a"),
+        });
+        client.send(failed("/a"));
+        client.send(failed("/b"));
+        client.send(Command::Wake);
+        client.send(Command::IntroSeen);
+        read_until(&|_| true);
+        read_until(&|_| true);
+        clock.fetch_add(policy::WAKE_DELAY_MS + 1, Ordering::SeqCst);
+        client.send(Command::IntroSeen);
+        started
+            .recv_timeout(WAIT)
+            .expect("the round's first run started");
+
+        client.send(failed("/slow"));
+        entered
+            .recv_timeout(WAIT)
+            .expect("the worker is naming a folder");
+        let mut queued = 0;
+        while client.send(Command::IntroSeen) {
+            queued += 1;
+        }
+        assert!(queued <= policy::QUEUE, "the queue filled");
+        release_run.send(()).unwrap();
+        release_resolve.send(()).unwrap();
+
+        let read = read_until(&|read| !chosen(read).is_empty());
+        assert_eq!(
+            chosen(&read),
+            ["s1"],
+            "the next Project ran after the full queue"
+        );
+        client.send(Command::Open {
+            workspace_id: "w2".into(),
+            project: at("/b"),
+        });
+        let read = read_until(&|read| read.workspace_id == "w2");
+        assert_eq!(
+            read.status,
+            SuggestionsStatus::NoneToday,
+            "the held run ended"
+        );
+        drop(worker);
     }
 
     #[test]
