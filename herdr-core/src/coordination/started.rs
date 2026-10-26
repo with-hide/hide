@@ -300,7 +300,7 @@ pub(crate) mod tests {
         let known = hide_started(&ledger);
         assert_eq!(
             known.agents[0].task.as_ref().unwrap().kind.home(),
-            Some(crate::coordination::TaskHome::Memory)
+            Some(crate::coordination::TaskHome::Suggestions)
         );
     }
 

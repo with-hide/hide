@@ -96,14 +96,8 @@ pub(crate) const TAG_CHARS: usize = 120;
 pub(crate) const EDIT_RECORDS: usize = 500;
 
 /// When watching after a merge ends (D-14): this many sessions in a checkout
-/// that holds the merge, or this long, or for a CI line this long after the
-/// pull request closed.
+/// that holds the merge.
 pub(crate) const WATCH_SESSIONS: usize = 5;
-pub(crate) const WATCH_SPAN_MS: u64 = 30 * DAY_MS;
-pub(crate) const WATCH_CI_SPAN_MS: u64 = 14 * DAY_MS;
-/// The strongest fix level a recurrence escalates to (D-13): a document,
-/// then a script or a check, then a hook.
-pub(crate) const MAX_FIX_LEVEL: u8 = 2;
 
 /// The daily investigation (D-34, D-36): one run a Project a day, started
 /// this long after the app opened, the device woke or the screen unlocked,

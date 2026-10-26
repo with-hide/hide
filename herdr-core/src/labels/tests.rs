@@ -323,10 +323,23 @@ impl Harness {
         source: Arc<dyn TranscriptSource>,
         ledger: Arc<Mutex<Option<crate::links::worker::LinkClient>>>,
     ) -> (LabelWorker, Receiver<()>) {
+        self.spawn_with_handles(store, target, socket_name, source, ledger, Arc::default())
+    }
+
+    fn spawn_with_handles(
+        &self,
+        store: Arc<LabelStore>,
+        target: &str,
+        socket_name: &str,
+        source: Arc<dyn TranscriptSource>,
+        ledger: Arc<Mutex<Option<crate::links::worker::LinkClient>>>,
+        suggestions: super::worker::SuggestionsHandle,
+    ) -> (LabelWorker, Receiver<()>) {
         let (wake, woken) = channel();
         let wake = Mutex::new(wake);
         let worker = LabelWorker::spawn(
             WorkerConfig {
+                suggestions,
                 target: target.to_owned(),
                 // Each worker is a core of its own, with a node of its own,
                 // meeting the others at the lock beside the server's socket.
@@ -5907,4 +5920,90 @@ fn only_a_parents_reply_or_request_answers_what_its_child_asked() {
         &message("🦉 lead 답장: 이렇게 해 주세요"),
         &[]
     ));
+}
+
+/// A turn's tool call left failed and the agent's stop for the operator are
+/// handed to the suggestion worker as records of the pane's session in its
+/// folder (PRD hide-ai-suggestions B4, D-45), each stop once a session.
+#[test]
+fn a_pane_hands_its_failed_tools_and_its_stops_to_the_suggestions() {
+    use crate::suggestions::ledger::Signal;
+    use crate::suggestions::worker::{Command, SuggestionClient};
+    let harness = Harness::new();
+    let project = harness.home.path().join(".claude/projects/-project");
+    std::fs::create_dir_all(&project).unwrap();
+    let path = project.join("tools.jsonl");
+    let records = [
+        json!({"type":"user","sessionId":"tools","timestamp":"2026-10-01T00:00:00Z",
+            "origin":{"kind":"human"},"message":{"role":"user","content":"fix the build"}}),
+        json!({"type":"assistant","sessionId":"tools","timestamp":"2026-10-01T00:00:01Z",
+            "message":{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Bash",
+            "input":{"command":"cargo test"}}]}}),
+        json!({"type":"user","sessionId":"tools","timestamp":"2026-10-01T00:00:02Z",
+            "message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1",
+            "is_error":true,"content":"failed"}]}}),
+        json!({"type":"assistant","sessionId":"tools","timestamp":"2026-10-01T00:00:03Z",
+            "message":{"role":"assistant","content":[{"type":"text","text":"tests fail"}]}}),
+    ];
+    std::fs::write(
+        &path,
+        records
+            .iter()
+            .map(|record| format!("{record}\n"))
+            .collect::<String>(),
+    )
+    .unwrap();
+    let (client, commands) = SuggestionClient::for_test();
+    let source: Arc<dyn TranscriptSource> = {
+        let node: Arc<dyn crate::node_access::NodeLink> = Arc::new(hide_node::Local::new(Some(
+            harness.home.path().to_path_buf(),
+        )));
+        Arc::new(super::NodeTranscripts::new(Box::new(move || {
+            Ok(Arc::clone(&node))
+        })))
+    };
+    let (mut worker, woken) = harness.spawn_with_handles(
+        harness.store(),
+        LOCAL_TARGET,
+        "local.sock",
+        source,
+        Arc::default(),
+        Arc::new(Mutex::new(Some(client))),
+    );
+    worker.set_summaries(false, Instant::now());
+    let mut observed = ObservedAgent {
+        cwd: Some("/work/app".into()),
+        ..agent(&path, "done", 1)
+    };
+    observe(&mut worker, &observed);
+    settle(&mut worker, &woken);
+    let sent = |commands: &Receiver<Command>| match commands.try_recv() {
+        Ok(Command::Observe { project, facts }) => {
+            assert_eq!(project.path, "/work/app");
+            facts
+                .into_iter()
+                .map(|fact| {
+                    assert_eq!(fact.session.as_ref().unwrap().id, "tools");
+                    (fact.signal, fact.tag)
+                })
+                .collect::<Vec<_>>()
+        }
+        _ => Vec::new(),
+    };
+    assert_eq!(
+        sent(&commands),
+        [(Signal::FailedTool, "cargo test".to_owned())]
+    );
+
+    for seq in [2, 3] {
+        observed.status = Some("blocked".into());
+        observed.state_change_seq = seq;
+        observe(&mut worker, &observed);
+        settle(&mut worker, &woken);
+    }
+    assert_eq!(sent(&commands), [(Signal::AgentWait, "blocked".to_owned())]);
+    assert!(
+        commands.try_recv().is_err(),
+        "a stop is sent once a session"
+    );
 }

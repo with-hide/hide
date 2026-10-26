@@ -784,6 +784,7 @@ fn load_opencode_detail(
         checkpoint: None,
         subagents: Default::default(),
         turns: None,
+        tools: None,
     };
     let mut events = Vec::new();
     let mut receipts = Vec::new();

@@ -456,6 +456,7 @@ impl ConversationCursor {
             }
             parsed.pr_sightings.extend(line.pr_sightings);
             parsed.turn_marks.extend(line.turn_marks);
+            parsed.tool_steps.extend(line.tool_steps);
             pending.clear();
         }
         parsed.links = found.finish();

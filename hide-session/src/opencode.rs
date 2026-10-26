@@ -671,6 +671,7 @@ pub fn read_conversation(
         checkpoint: saved,
         subagents: Default::default(),
         turns: None,
+        tools: None,
     };
     let page = with_read(home, |connection, schema| {
         read_connection(
@@ -803,6 +804,11 @@ fn read_connection(
         receipt_times: Vec::new(),
         skipped: std::collections::BTreeMap::new(),
         turn_error: None,
+        tools: match (&request.checkpoint, &rescanned) {
+            (Some(_), None) => request.tools.clone().unwrap_or_default(),
+            _ => crate::tools::ToolTracker::default(),
+        },
+        failed_tools: Vec::new(),
     };
     // The witness of the message before the next one read: the checkpoint's
     // own (verified above) until this read passes a message.
@@ -886,6 +892,8 @@ fn read_connection(
         memory_receipts: transcript.receipts,
         subagents: Default::default(),
         turns: Some(turns),
+        tools: Some(transcript.tools),
+        failed_tools: transcript.failed_tools,
     };
     Ok(Page {
         transcript,
@@ -1194,6 +1202,10 @@ struct Read {
     /// A question record Hide cannot fold; the read is refused, as a native
     /// file's is, rather than reporting a wait it does not know.
     turn_error: Option<SkipReason>,
+    /// The current turn's tool calls and failures (`crate::tools`), and
+    /// what the turns this read saw end left failed.
+    tools: crate::tools::ToolTracker,
+    failed_tools: Vec<crate::tools::FailedTool>,
 }
 
 impl Read {
@@ -1213,6 +1225,7 @@ impl Read {
         let mut text = Vec::new();
         let mut images = 0_u32;
         let mut questions = Vec::new();
+        let mut steps = Vec::new();
         for part in parts {
             let Ok(part) = serde_json::from_str::<Value>(part) else {
                 self.skip("malformed_json");
@@ -1226,6 +1239,7 @@ impl Read {
                         self.turn_error.get_or_insert(reason);
                     }
                 }
+                steps.extend(crate::tools::opencode_part(&part));
             }
             match part.get("type").and_then(Value::as_str) {
                 Some("text") => {
@@ -1255,7 +1269,14 @@ impl Read {
                 _ => {}
             }
         }
-        self.event(role, text, images, at, offset, questions)
+        let (human, questions) = self.event(role, text, images, at, offset, questions);
+        if human {
+            self.tools.human(offset, &mut self.failed_tools);
+        }
+        if !steps.is_empty() {
+            self.tools.fold(offset, at, steps);
+        }
+        (human, questions)
     }
 
     /// The event a message's words make, and its question marks: a person's

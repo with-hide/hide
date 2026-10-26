@@ -256,3 +256,111 @@ fn each_suggestion_event_hands_the_worker_one_command() {
     runtime.dispatch_json(&memory_open(None));
     assert!(matches!(commands.try_recv(), Ok(Command::Close)));
 }
+
+/// What GitHub's reads say went wrong in a Project's pull requests reaches
+/// the worker once (B4, D-19): each check an open pull request failed, and
+/// one that merged after a review asked for changes.
+#[test]
+fn a_failed_check_and_a_merge_after_changes_are_handed_on_once() {
+    use crate::model::{GithubProjectSnapshot, PrFailedCheck, PullRequestSnapshot, ReviewDecision};
+    use crate::suggestions::ledger::Signal;
+    use crate::suggestions::worker::{Command, SuggestionClient};
+    let mut runtime = runtime();
+    let (client, commands) = SuggestionClient::for_test();
+    runtime.suggestions_work.client = Some(client);
+    let pr = |number: u32| {
+        let mut pr = PullRequestSnapshot {
+            closing_issues: Vec::new(),
+            title: format!("Pull request {number}"),
+            checks: crate::model::PullRequestChecks::Failed,
+            number,
+            head_branch: format!("work-{number}"),
+            base_branch: "main".into(),
+            url: format!("https://github.com/acme/app/pull/{number}"),
+            badge: crate::model::PullRequestBadge::Open,
+            review: None,
+            is_draft: false,
+            merged_at_unix_ms: None,
+            updated_at_unix_ms: None,
+            created_at_unix_ms: None,
+            closed_at_unix_ms: None,
+            head_oid: None,
+            cross_repository: false,
+            work: Default::default(),
+        };
+        pr.work.failed_checks = vec![PrFailedCheck {
+            name: Some("verify".into()),
+            url: None,
+        }];
+        pr
+    };
+    let mut reviewed = pr(8);
+    reviewed.work.failed_checks.clear();
+    reviewed.review = Some(ReviewDecision::ChangesRequested);
+    runtime.github.projects = vec![GithubProjectSnapshot {
+        root_path: "/repo".into(),
+        pull_requests: vec![pr(7), reviewed.clone()],
+        ..Default::default()
+    }];
+    let sent = |commands: &std::sync::mpsc::Receiver<Command>| match commands.try_recv() {
+        Ok(Command::Observe { project, facts }) => {
+            assert_eq!(project.path, "/repo");
+            facts
+                .into_iter()
+                .map(|fact| (fact.signal, fact.tag, fact.pr.map(|pr| pr.number)))
+                .collect::<Vec<_>>()
+        }
+        _ => Vec::new(),
+    };
+    runtime.feed_suggestion_prs();
+    assert_eq!(
+        sent(&commands),
+        [(Signal::CheckFailed, "verify".to_owned(), Some(7))]
+    );
+    runtime.feed_suggestion_prs();
+    assert!(
+        sent(&commands).is_empty(),
+        "the same read sends nothing again"
+    );
+
+    reviewed.merged_at_unix_ms = Some(1_000);
+    reviewed.review = None;
+    runtime.github.projects[0].pull_requests[1] = reviewed;
+    runtime.feed_suggestion_prs();
+    assert_eq!(
+        sent(&commands),
+        [(
+            Signal::ChangeRequest,
+            "changes_requested".to_owned(),
+            Some(8)
+        )]
+    );
+}
+
+/// A press on a Memory row (`m3`) is Memory's own action on that card
+/// (D-02): apply promotes it, and nothing reaches the notebook's worker.
+#[test]
+fn a_press_on_a_memory_row_is_memorys_own_action() {
+    use crate::suggestions::worker::SuggestionClient;
+    let mut runtime = runtime();
+    let (client, commands) = SuggestionClient::for_test();
+    runtime.suggestions_work.client = Some(client);
+    let (workspace, _) = opened_project(&mut runtime);
+    while commands.try_recv().is_ok() {}
+    runtime.dispatch_json(&event(
+        "suggestion_action",
+        serde_json::json!({"workspace_id": workspace, "id": "m3", "action": "apply"}),
+    ));
+    assert!(commands.try_recv().is_err(), "not a notebook line");
+    let memory = runtime
+        .snapshot
+        .memory
+        .as_ref()
+        .and_then(|memory| memory.project.as_ref())
+        .expect("the opened Project's Memory");
+    assert_eq!(
+        memory.action_failure.or(memory.pending_action),
+        Some(crate::model::MemoryAction::Promote),
+        "Memory took the promotion, here refused for want of its writer"
+    );
+}

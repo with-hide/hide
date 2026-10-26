@@ -313,6 +313,7 @@ fn labels_archive_and_search_share_native_graph_and_checkpoint_ownership() {
         checkpoint: None,
         subagents: Default::default(),
         turns: None,
+        tools: None,
     };
     let first = label_transcript::read(fixture.home.path(), &request).unwrap();
     assert_eq!(

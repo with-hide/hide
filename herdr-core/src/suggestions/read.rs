@@ -19,7 +19,7 @@ use crate::model::{
 use std::collections::BTreeMap;
 
 /// The most rows the folded 반영됨 group carries, newest first.
-const APPLIED_ROWS: usize = 20;
+pub(crate) const APPLIED_ROWS: usize = 20;
 /// The most evidence links a row carries, newest first.
 const EVIDENCE_ROWS: usize = 10;
 /// The most dismissed lines ⚙ lists, newest first.
@@ -135,7 +135,7 @@ fn evidence(line: &Line, input: &ReadInput<'_>) -> Vec<SuggestionEvidenceSnapsho
             gone: false,
         })
         .collect::<Vec<_>>();
-    rows.sort_by(|a, b| b.at_unix_ms.cmp(&a.at_unix_ms));
+    rows.sort_by_key(|row| std::cmp::Reverse(row.at_unix_ms));
     rows.truncate(EVIDENCE_ROWS);
     rows
 }

@@ -532,6 +532,26 @@ Schema 16 adds both tables and the trigger; the writer keeps the v15 store as `.
 A read-only hook refuses the store until the writer moved it and answers without Memory meanwhile, and an earlier build refuses a v16 store with `WrongSchema` (D-13, B14).
 Regression owners: the tests of `hide-memory/src/store/hold.rs`, `a_card_a_prompt_gave_the_caller_is_held_shown_and_an_agents_release_spends_its_report` and `only_a_release_from_a_pane_with_no_agent_gives_the_report_back` in `herdr-core/src/memory_command.rs`, `hide_memory_reads_a_person_only_in_a_pane_no_agent_runs_in` in `herdr-core/src/runtime/tests/workspace_control.rs`, `a_reported_card_is_named_to_its_sessions_analysis_and_comes_back_after_it` and `an_opencode_session_is_analyzed_once_by_message_and_its_report_ends_by_that_analysis` in `herdr-core/src/runtime/memory_analysis.rs`, and `hook_memory_context_with_a_trust_attribute_is_injected_in_every_message_shape` in `hide-session/src/lib.rs`.
 
+### Hide AI suggestions
+
+Hide AI 제안 (`herdr-core/src/suggestions/`) turns what keeps going wrong in a Project into a short list of fixes the operator can apply, from facts the core already reads.
+A record is one problem seen once in one session or one pull request (`ledger`): a tool call left failed at a turn's end and a wait for the operator (the label worker's read of a pane), a correction (a Memory card the Memory pass made, merged or superseded), a problem the label judge missed (`LabelMissed`), and a failed check or a merge after a review asked for changes (GitHub's reads).
+The same fact in the same session or pull request is counted once, so a session that fails one tool ten times weighs as one.
+Which records belong to one problem is decided at one boundary (`analysis`, D-49): a run reads the Project's new records and its notebook, the list of problems earlier runs left, and answers notebook edits; today the deterministic `TagGrouping` stands behind it, and a run on a provider replaces it without the ledger, scoring, lifecycle or screen changing, since everything after the run is read back from the notebook.
+A line's pain is counted from its records (`scoring`): each session record weighs fully for a week and halves every 30 days after, and a line becomes a suggestion at 3 points (2 when the operator asks for many), within the quantity's caps on open and weekly suggestions and at most five new ones kept (`policy`).
+
+`suggestions.sqlite3` in the daemon's state folder (`hide_kit::layout::suggestions_store`) holds the records, the notebooks and each Project's settings, and moves with the core like the Memory store.
+One worker thread owns its only writer and takes commands over a bounded queue of 256; the runtime lock is taken only to hand a command over and to lay the worker's read on the snapshot, and a store that cannot be read is set aside and rebuilt empty, which the log records.
+What only the lock knows is laid on the worker's read as it is published: whether Hide AI can investigate, GitHub's answer for the Project, the signals that cannot record here (corrections with Memory off, pull request signals without GitHub) and the `GitHub 연결 필요` hold on a line whose outcome is a pull request.
+
+The day's runs start three minutes after the operator is back at the machine, once a local day per Project, one Project at a time.
+Only the desktop host sees that moment: it posts `/hide-ai-wake` with the daemon's token as the app attaches, as the machine wakes and as the screen unlocks, and the daemon dispatches it as one `hide_ai_wake` event; a wake while a day is due or running is absorbed, and Linux reports no unlock ([What each system supports](INSTALL.md#what-each-system-supports)).
+The header switch turns suggestions and Memory reading off together and, turned on, gives each back what it had; Memory keeps its own consent and its own switch.
+
+A Memory card's way into the repository's documents is drawn in the 제안 tab, not the Memory tab (D-02): Memory still decides which card is suggested and follows its promotion ([Project sessions and Memory](#project-sessions-and-memory)), and `runtime/suggestion_memory.rs` draws the Memory section's promote, failed and unbuilt questions and each card on its way as a row named by the card (`m72`), whose press is Memory's own `promote` or `dismiss`.
+A suggested card is a new suggestion only while the notebook's new lines leave room under the quantity's open cap, which replaces Memory's own cap of three (D-42), and Memory reads as many candidates as the tab stores.
+The Memory list is walked for cards on their way once per read of it, never per delta, and the tab is composed again only when those cards, the questions or their agents' turns moved.
+
 ### Moving a live pane
 
 `runtime/pane_move.rs` admits one typed intent with captured checkout, device, group, source and destination references, reserving both participating tabs before any native mutation.
