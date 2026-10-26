@@ -6,7 +6,7 @@
 
 use super::ledger::{PrRef, SessionRef};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// One line's story past the notebook.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -160,4 +160,12 @@ pub struct Watch {
     /// Sessions in a checkout holding the merge, so far.
     #[serde(default)]
     pub sessions: BTreeSet<SessionRef>,
+    /// The commit the merge made on the base, once GitHub named it.
+    #[serde(default)]
+    pub merge_commit: Option<String>,
+    /// Each pull request head asked about, and whether its history has the
+    /// merge commit: a pull request's record counts only on a head shown to
+    /// have it.
+    #[serde(default)]
+    pub heads: BTreeMap<String, bool>,
 }

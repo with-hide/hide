@@ -272,8 +272,9 @@ fn each_suggestion_event_hands_the_worker_one_command() {
 }
 
 /// What GitHub's reads say went wrong in a Project's pull requests reaches
-/// the worker once (B4, D-19): each check an open pull request failed, and
-/// one that merged after a review asked for changes.
+/// the worker once (B4, D-19): each check an open pull request failed, on
+/// the head it failed on, and one that merged after a review asked for
+/// changes.
 #[test]
 fn a_failed_check_and_a_merge_after_changes_are_handed_on_once() {
     use crate::model::{GithubProjectSnapshot, PrFailedCheck, PullRequestSnapshot, ReviewDecision};
@@ -298,7 +299,7 @@ fn a_failed_check_and_a_merge_after_changes_are_handed_on_once() {
             updated_at_unix_ms: None,
             created_at_unix_ms: None,
             closed_at_unix_ms: None,
-            head_oid: None,
+            head_oid: Some(format!("{number:040x}")),
             cross_repository: false,
             work: Default::default(),
         };
@@ -321,7 +322,14 @@ fn a_failed_check_and_a_merge_after_changes_are_handed_on_once() {
             assert_eq!(project.path, "/repo");
             facts
                 .into_iter()
-                .map(|fact| (fact.signal, fact.tag, fact.pr.map(|pr| pr.number)))
+                .map(|fact| {
+                    (
+                        fact.signal,
+                        fact.tag,
+                        fact.pr.map(|pr| pr.number),
+                        fact.head,
+                    )
+                })
                 .collect::<Vec<_>>()
         }
         _ => Vec::new(),
@@ -329,7 +337,12 @@ fn a_failed_check_and_a_merge_after_changes_are_handed_on_once() {
     runtime.feed_suggestion_prs();
     assert_eq!(
         sent(&commands),
-        [(Signal::CheckFailed, "verify".to_owned(), Some(7))]
+        [(
+            Signal::CheckFailed,
+            "verify".to_owned(),
+            Some(7),
+            Some(format!("{:040x}", 7))
+        )]
     );
     runtime.feed_suggestion_prs();
     assert!(
@@ -346,7 +359,8 @@ fn a_failed_check_and_a_merge_after_changes_are_handed_on_once() {
         [(
             Signal::ChangeRequest,
             "changes_requested".to_owned(),
-            Some(8)
+            Some(8),
+            Some(format!("{:040x}", 8))
         )]
     );
 }
@@ -571,4 +585,109 @@ fn an_issue_whose_create_went_unanswered_is_found_before_another_is_made() {
         [Some("acme/project".to_owned())],
         "in the repository it looked in"
     );
+}
+
+/// B15: a watched line's pull request heads are asked about off the lock,
+/// the merge commit once and then each head through GitHub's compare, and
+/// the answers reach the worker. A pair already answered is not asked
+/// again, and after a read fails the line waits before it is asked again.
+#[test]
+fn a_watched_line_asks_github_whether_each_head_has_the_merge() {
+    use super::backlog::FakeGh;
+    use crate::suggestions::ledger::PrRef;
+    use crate::suggestions::notebook::LineId;
+    use crate::suggestions::store::ProjectLocation;
+    use crate::suggestions::watch::WatchedLine;
+    use crate::suggestions::worker::{Command, SuggestionClient};
+    use std::collections::{BTreeMap, BTreeSet};
+    const MERGE: &str = "0123456789abcdef0123456789abcdef01234567";
+    const WITH_FIX: &str = "1111111111111111111111111111111111111111";
+    const WITHOUT_FIX: &str = "2222222222222222222222222222222222222222";
+    const UNREAD: &str = "3333333333333333333333333333333333333333";
+    let gh = FakeGh::new();
+    gh.api.lock().unwrap().extend([
+        ("repos/acme/app/pulls/12".to_owned(), format!("{MERGE}\n")),
+        (
+            format!("repos/acme/app/compare/{MERGE}...{WITH_FIX}"),
+            "ahead\n".to_owned(),
+        ),
+        (
+            format!("repos/acme/app/compare/{MERGE}...{WITHOUT_FIX}"),
+            "diverged\n".to_owned(),
+        ),
+    ]);
+    let mut runtime = runtime();
+    runtime.own_node = gh.clone();
+    let (client, commands) = SuggestionClient::for_test();
+    runtime.suggestions_work.client = Some(client);
+    let watched = |line: u64, merge_commit: Option<&str>, heads: &[&str]| WatchedLine {
+        project_id: "p".into(),
+        location: ProjectLocation {
+            node: "local".into(),
+            path: "/repo".into(),
+        },
+        line: LineId(line),
+        merged_at_unix_ms: 1,
+        base: Some("main".into()),
+        holding: BTreeSet::new(),
+        pr: PrRef {
+            number: 12,
+            url: "https://github.com/acme/app/pull/12".into(),
+        },
+        merge_commit: merge_commit.map(str::to_owned),
+        heads: heads.iter().map(|head| (*head).to_owned()).collect(),
+    };
+    let shared = SharedRuntime::new(runtime);
+    shared
+        .lock()
+        .unwrap()
+        .install_worker_context(shared.weak(), ChangeNotifier::noop());
+    let judged = |line: u64| loop {
+        match commands.recv_timeout(Duration::from_secs(10)) {
+            Ok(Command::HeadsJudged {
+                line: judged,
+                merge_commit,
+                heads,
+                ..
+            }) if judged == LineId(line) => return (merge_commit, heads),
+            Ok(_) => {}
+            Err(_) => panic!("line {line}'s heads were judged"),
+        }
+    };
+    let compares = || gh.calls("api --jq .status").len();
+
+    shared.lock().unwrap().follow_suggestion_attempts(
+        Vec::new(),
+        vec![watched(3, None, &[WITH_FIX, WITHOUT_FIX, UNREAD])],
+    );
+    assert_eq!(
+        judged(3),
+        (
+            MERGE.to_owned(),
+            BTreeMap::from([(WITH_FIX.to_owned(), true), (WITHOUT_FIX.to_owned(), false)])
+        ),
+        "the heads read before the unread one are answered"
+    );
+    assert_eq!(gh.calls("api --jq .merge_commit_sha").len(), 1);
+    assert_eq!(compares(), 3);
+
+    shared
+        .lock()
+        .unwrap()
+        .follow_suggestion_attempts(Vec::new(), vec![watched(3, Some(MERGE), &[UNREAD])]);
+    assert_eq!(compares(), 3, "a line whose read failed waits");
+
+    shared
+        .lock()
+        .unwrap()
+        .follow_suggestion_attempts(Vec::new(), vec![watched(4, Some(MERGE), &[WITH_FIX])]);
+    assert_eq!(
+        judged(4),
+        (
+            MERGE.to_owned(),
+            BTreeMap::from([(WITH_FIX.to_owned(), true)])
+        ),
+    );
+    assert_eq!(compares(), 3, "an answered pair is not asked again");
+    assert_eq!(gh.calls("api --jq .merge_commit_sha").len(), 1);
 }

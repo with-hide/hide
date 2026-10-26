@@ -86,6 +86,7 @@ fn session_facts(
             checkout: Some(checkout.clone()),
             at_unix_ms: at,
             always: false,
+            head: None,
         };
         let mut failed = Vec::new();
         let mut waited = None;
