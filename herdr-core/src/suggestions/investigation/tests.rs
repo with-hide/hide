@@ -540,6 +540,13 @@ impl crate::suggestions::worker::Sink for ReadySink {
     fn can_apply(&self, _: &crate::suggestions::store::ProjectLocation, _: Outcome) -> bool {
         false
     }
+    fn kept_sessions(
+        &self,
+        _: &str,
+        _: &std::collections::BTreeSet<SessionRef>,
+    ) -> Option<std::collections::BTreeSet<SessionRef>> {
+        None
+    }
 }
 
 #[test]
