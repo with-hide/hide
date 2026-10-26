@@ -215,6 +215,20 @@ fn each_suggestion_event_hands_the_worker_one_command() {
             ..
         })
     ));
+    for (name, expected) in [("apply", LineAction::Apply), ("retry", LineAction::Retry)] {
+        runtime.dispatch_json(&event(
+            "suggestion_action",
+            serde_json::json!({"workspace_id": workspace, "id": "s3", "action": name}),
+        ));
+        match commands.try_recv() {
+            Ok(Command::Action {
+                line: LineId(3),
+                action,
+                ..
+            }) => assert_eq!(action, expected),
+            _ => panic!("{name} reaches the worker"),
+        }
+    }
 
     runtime.dispatch_json(&event(
         "suggestion_settings",

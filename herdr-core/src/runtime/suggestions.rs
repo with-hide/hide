@@ -230,13 +230,8 @@ impl Runtime {
         let action = match payload.action {
             SuggestionActionKind::Dismiss => LineAction::Dismiss,
             SuggestionActionKind::Restore => LineAction::Restore,
-            SuggestionActionKind::Apply | SuggestionActionKind::Retry => {
-                crate::diagnostic!(json!({
-                    "component": "suggestions", "kind": "action.unsupported",
-                    "workspace_id": payload.workspace_id, "id": payload.id,
-                }));
-                return false;
-            }
+            SuggestionActionKind::Apply => LineAction::Apply,
+            SuggestionActionKind::Retry => LineAction::Retry,
         };
         let Some(line) = line_of_row(&payload.id) else {
             crate::diagnostic!(json!({
