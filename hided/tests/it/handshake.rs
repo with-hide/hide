@@ -1788,3 +1788,38 @@ async fn a_window_cannot_say_whether_windows_are_attached() {
     assert_eq!(answer["type"], "error");
     assert_eq!(answer["message"], "ui_attached is sent by the daemon only");
 }
+
+async fn post_json(url: &str, token: Option<&str>, body: &str) -> u16 {
+    use http_body_util::Full;
+    use hyper_util::client::legacy::Client;
+    use hyper_util::rt::TokioExecutor;
+    let client = Client::builder(TokioExecutor::new()).build_http::<Full<hyper::body::Bytes>>();
+    let mut request = hyper::Request::builder()
+        .method("POST")
+        .uri(url)
+        .header("content-type", "application/json");
+    if let Some(token) = token {
+        request = request.header("authorization", format!("Bearer {token}"));
+    }
+    let request = request
+        .body(Full::new(hyper::body::Bytes::from(body.to_owned())))
+        .unwrap();
+    client.request(request).await.unwrap().status().as_u16()
+}
+
+/// The desktop host's app-open, wake and unlock reach the core as one event
+/// with the daemon's token only (PRD hide-ai-suggestions B6).
+#[tokio::test]
+async fn a_wake_is_taken_only_with_the_token_and_a_known_cause() {
+    let (_dir, running) = start().await;
+    let url = format!("http://127.0.0.1:{}/hide-ai-wake", running.port);
+    let wake = r#"{"cause":"unlock"}"#;
+    assert_eq!(post_json(&url, None, wake).await, 401);
+    assert_eq!(post_json(&url, Some("not-the-token"), wake).await, 401);
+    assert_eq!(
+        post_json(&url, Some(&running.token), r#"{"cause":"lunch"}"#).await,
+        400
+    );
+    assert_eq!(post_json(&url, Some(&running.token), wake).await, 204);
+    running.stop();
+}
