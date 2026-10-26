@@ -18,11 +18,12 @@
 //! record and nothing the connect fails on.
 //!
 //! A device's node keeps a rule of its own ([`device_update`], PRD
-//! device-herdr-update): Hide never starts a device's server, so the server
-//! on the device's registered socket is the operator's, and it is handed to
-//! the pinned copy the build brought whenever it runs an older stable
-//! release of Herdr (D-04, D-06). A failed handoff is tried once per server
-//! process and pin (D-13).
+//! device-herdr-update): the server on the device's registered socket is
+//! handed to the pinned copy the build brought whenever it runs an older
+//! stable release of Herdr (D-04, D-06). When no server answers, the node
+//! starts that copy and gives it to the account, detached from both the
+//! node and SSH (device-herdr-bootstrap D2). A failed handoff is tried once
+//! per server process and pin (D-13).
 //!
 //! This machine's server the operator runs from their own older Herdr is
 //! moved by the core as soon as a look offers it, once per server (operator
@@ -727,7 +728,8 @@ fn hand_over(
 
 /// What a device's node does after its kit has applied: the server on the
 /// device's registered `socket` is handed to `pinned`, the copy of Herdr the
-/// build brought, when it runs an older stable release; `record` keeps the
+/// build brought, when it runs an older stable release, or started when
+/// none answers; `record` keeps the
 /// handoffs that failed, so each is tried once per server process and pin.
 /// Nothing here fails the kit pass: every outcome is an answer.
 pub fn device_update(pinned: &Path, socket: &Path, record: &Path) -> HerdrUpdate {
@@ -749,7 +751,12 @@ pub fn device_update(pinned: &Path, socket: &Path, record: &Path) -> HerdrUpdate
     };
     let from_pid = match program_on(socket) {
         Ok(Some((pid, _))) => pid,
-        Ok(None) => return HerdrUpdate::NoServer { version },
+        Ok(None) => {
+            return match start_device_server(pinned, &pinned_file, socket) {
+                Ok(pid) => HerdrUpdate::Started { version, pid },
+                Err(reason) => failed("start", reason, Some(&version), None),
+            };
+        }
         Err(error) => return failed("program", error.to_string(), Some(&version), None),
     };
     let pong = match ask(socket, "ping", herdr_core::wire::ping_params())
@@ -817,6 +824,106 @@ pub fn device_update(pinned: &Path, socket: &Path, record: &Path) -> HerdrUpdate
             }
         }
     }
+}
+
+/// The short-lived starter exits before this returns: the server is then
+/// reparented outside the node's process tree as well as its process group.
+/// SSH cleanup of the node cannot end the account's server.
+fn start_device_server(
+    pinned: &Path,
+    pinned_file: &hide_platform::fs::identity::FileId,
+    socket: &Path,
+) -> Result<u32, String> {
+    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    let mut command = hide_platform::programs::command(executable);
+    command
+        .arg("node")
+        .arg("start-herdr")
+        .arg(pinned)
+        .arg(socket);
+    let finished = hide_platform::process::run_to_end(
+        &mut command,
+        HANDOFF_WITHIN + ASK_WITHIN,
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .map_err(|error| format!("the Herdr starter failed: {error:?}"))?;
+    if !finished.succeeded() {
+        return Err(format!(
+            "the Herdr starter exited {:?}: {}",
+            finished.code,
+            finished.stderr.trim()
+        ));
+    }
+    let pid: u32 = finished
+        .stdout
+        .trim()
+        .parse()
+        .map_err(|error| format!("the Herdr starter returned no pid: {error}"))?;
+    match program_on(socket).map_err(|error| error.to_string())? {
+        Some((answering, image)) if answering == pid && image.file == *pinned_file => Ok(pid),
+        _ => Err("the started Herdr no longer answers on its socket".to_owned()),
+    }
+}
+
+/// Internal `hided node start-herdr` entrypoint. Its only successful exit
+/// gives the server to the account; all failed starts still own and end
+/// their child. It holds no SSH descriptor and starts at most one server.
+#[cfg(unix)]
+#[allow(clippy::disallowed_methods)] // bounded readiness polling, not a readiness delay
+pub(crate) fn start_detached_device_server(pinned: &Path, socket: &Path) -> Result<u32, String> {
+    use std::process::Stdio;
+
+    let pinned_file = file_id(pinned).map_err(|error| error.to_string())?;
+    let mut command = hide_platform::programs::command(pinned);
+    command
+        .arg("server")
+        .env("HERDR_SOCKET_PATH", socket)
+        .env_remove("HERDR_SESSION")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    hide_platform::process::detach(&mut command).map_err(|error| error.to_string())?;
+    let mut child = hide_platform::process::OwnedChild::spawn(&mut command)
+        .map_err(|error| format!("starting the pinned Herdr: {error}"))?;
+    let pid = child.id();
+    let deadline = Instant::now() + HANDOFF_WITHIN;
+    loop {
+        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+            return Err(format!(
+                "the pinned Herdr exited before answering: {status}"
+            ));
+        }
+        if let Some((answering, image)) = program_on(socket).map_err(|error| error.to_string())? {
+            if answering != pid || image.file != pinned_file {
+                return Err("another server took the socket while Herdr was starting".to_owned());
+            }
+            // A listening socket alone is not an answering server.
+            if hide_herdr_client::request_with_timeout(
+                socket,
+                "ping",
+                herdr_core::wire::ping_params()?,
+                deadline
+                    .saturating_duration_since(Instant::now())
+                    .min(ASK_WITHIN),
+            )
+            .map_err(|error| error.to_string())
+            .and_then(herdr_core::wire::server_pong)
+            .is_ok()
+            {
+                child.release();
+                return Ok(pid);
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err("the pinned Herdr did not answer before the startup deadline".to_owned());
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn start_detached_device_server(_pinned: &Path, _socket: &Path) -> Result<u32, String> {
+    Err("starting a device Herdr server requires macOS or Linux".to_owned())
 }
 
 /// What a device's server is due, from its Herdr's version, the pin's and

@@ -26,6 +26,14 @@ pub fn run(args: &[OsString]) -> Result<(), String> {
         .map(|arg| arg.to_str().ok_or_else(|| USAGE.to_owned()))
         .collect::<Result<_, _>>()?;
     match words.as_slice() {
+        ["start-herdr", pinned, socket] => {
+            let pid = crate::herdr_handoff::start_detached_device_server(
+                std::path::Path::new(pinned),
+                std::path::Path::new(socket),
+            )?;
+            println!("{pid}");
+            Ok(())
+        }
         ["serve"] => {
             // The link that started this node is where its records are read:
             // a device's own stderr reaches no log.

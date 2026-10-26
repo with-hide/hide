@@ -3,7 +3,7 @@
 //! status decided here, off the lock, from the notebook, each line's story
 //! and the records. The runtime lays only the facts the lock has on it.
 
-use super::ledger::{RecordIndex, Signal};
+use super::ledger::{RecordEntry, RecordId, RecordIndex, SessionRef, Signal};
 use super::lifecycle::{AttemptPhase, LineLife};
 use super::notebook::{Line, LineId, Notebook, Outcome, Stage, StruckBy};
 use super::policy;
@@ -16,7 +16,7 @@ use crate::model::{
     SuggestionRowSnapshot, SuggestionSettingsSnapshot, SuggestionSignalSnapshot, SuggestionSource,
     SuggestionState, SuggestionWatchSnapshot, SuggestionsStatus,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// The row id of a notebook line, as every `suggestion_action` names it.
 pub fn row_id(line: LineId) -> String {
@@ -43,6 +43,55 @@ pub struct ReadInput<'a> {
     pub intro_seen: bool,
     /// Today's local date, `YYYY-MM-DD`.
     pub today: &'a str,
+    pub sources: &'a EvidenceSources,
+}
+
+/// What the store's index lacks about the evidence a read shows (B10).
+#[derive(Debug, Default)]
+pub struct EvidenceSources {
+    /// The shown sessions whose record can still be opened; `None` when
+    /// that could not be read, which leaves every session openable.
+    pub kept: Option<BTreeSet<SessionRef>>,
+    /// The address of each shown record's pull request.
+    pub pr_urls: BTreeMap<RecordId, String>,
+}
+
+/// The records a line shows as its evidence: one per session or pull
+/// request, newest first, at most [`policy::EVIDENCE_ROWS`].
+fn shown<'a>(line: &Line, index: &'a RecordIndex) -> Vec<&'a RecordEntry> {
+    let mut seen = BTreeSet::new();
+    let mut shown = line
+        .records
+        .iter()
+        .filter_map(|id| index.get(*id))
+        .filter(|record| {
+            let unit = record
+                .session
+                .as_ref()
+                .map(|session| (session.agent.clone(), session.id.clone()))
+                .or_else(|| record.pr.map(|pr| ("pr".to_owned(), pr.to_string())));
+            seen.insert(unit)
+        })
+        .collect::<Vec<_>>();
+    shown.sort_by_key(|record| std::cmp::Reverse(record.at_unix_ms));
+    shown.truncate(policy::EVIDENCE_ROWS);
+    shown
+}
+
+/// Every record a read of `notebook` shows as evidence, so its sources can
+/// be asked before the read.
+pub fn shown_evidence<'a>(
+    notebook: &Notebook,
+    lives: &BTreeMap<LineId, LineLife>,
+    index: &'a RecordIndex,
+) -> Vec<&'a RecordEntry> {
+    let empty = LineLife::default();
+    notebook
+        .lines
+        .iter()
+        .filter(|line| group_and_state(line, lives.get(&line.id).unwrap_or(&empty)).is_some())
+        .flat_map(|line| shown(line, index))
+        .collect()
 }
 
 fn group_and_state(line: &Line, life: &LineLife) -> Option<(SuggestionGroup, SuggestionState)> {
@@ -100,19 +149,9 @@ fn attempt(life: &LineLife) -> Option<SuggestionAttemptSnapshot> {
 }
 
 fn evidence(line: &Line, input: &ReadInput<'_>) -> Vec<SuggestionEvidenceSnapshot> {
-    let mut seen = std::collections::BTreeSet::new();
-    let mut rows = line
-        .records
-        .iter()
-        .filter_map(|id| input.index.get(*id))
-        .filter(|record| {
-            let unit = record
-                .session
-                .as_ref()
-                .map(|session| (session.agent.clone(), session.id.clone()))
-                .or_else(|| record.pr.map(|pr| ("pr".to_owned(), pr.to_string())));
-            seen.insert(unit)
-        })
+    let sources = input.sources;
+    shown(line, input.index)
+        .into_iter()
         .map(|record| SuggestionEvidenceSnapshot {
             kind: if record.session.is_some() {
                 SuggestionEvidenceKind::Session
@@ -123,14 +162,18 @@ fn evidence(line: &Line, input: &ReadInput<'_>) -> Vec<SuggestionEvidenceSnapsho
             agent: record.session.as_ref().map(|s| s.agent.clone()),
             session_id: record.session.as_ref().map(|s| s.id.clone()),
             pr_number: record.pr,
-            url: None,
+            url: record
+                .pr
+                .and_then(|_| sources.pr_urls.get(&record.id).cloned()),
             at_unix_ms: record.at_unix_ms,
-            gone: false,
+            gone: record.session.as_ref().is_some_and(|session| {
+                sources
+                    .kept
+                    .as_ref()
+                    .is_some_and(|kept| !kept.contains(session))
+            }),
         })
-        .collect::<Vec<_>>();
-    rows.sort_by_key(|row| std::cmp::Reverse(row.at_unix_ms));
-    rows.truncate(super::policy::EVIDENCE_ROWS);
-    rows
+        .collect()
 }
 
 fn basis(line: &Line) -> Option<SuggestionBasisSnapshot> {

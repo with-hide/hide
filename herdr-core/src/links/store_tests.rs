@@ -871,6 +871,16 @@ fn copied_history_off_removes_a_session_whose_file_is_gone() {
         None,
     );
     ingest(&mut store, home.path(), &path);
+    let identity = |id: &str| SessionIdentity {
+        device_id: DEVICE.into(),
+        agent: "claude".into(),
+        session_id: id.into(),
+    };
+    let asked = [identity("s1"), identity("never-read")];
+    assert_eq!(
+        store.held(&asked).unwrap(),
+        BTreeSet::from([identity("s1")])
+    );
     assert_eq!(
         store
             .prune(
@@ -895,6 +905,10 @@ fn copied_history_off_removes_a_session_whose_file_is_gone() {
         1
     );
     assert!(panel(&store, 7).is_empty());
+    assert!(
+        store.held(&asked).unwrap().is_empty(),
+        "a pruned session's record can no longer be opened"
+    );
 }
 
 #[test]

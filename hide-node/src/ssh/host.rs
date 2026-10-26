@@ -1123,6 +1123,54 @@ pub fn establish(
     }
     host.take_readers(hello.protocol, readers)
         .map_err(EstablishError::Helper)?;
+    // Only an unreadable account needs the kit before its services start.
+    // A normal connection publishes helper readiness first, and the core
+    // runs its automatic kit pass afterwards. Named profiles remain
+    // attachment-only and follow that normal order too.
+    let kit = if client.herdr_session.is_some() {
+        None
+    } else {
+        let known = client
+            .cached_herdr_socket()
+            .or_else(|| client.herdr_socket.clone());
+        let socket = match client.herdr_socket_path() {
+            Ok(socket) => Some(socket),
+            Err(error) => {
+                crate::diagnostic!(json!({
+                    "component": "remote_host",
+                    "kind": "host.herdr_socket_unread",
+                    "target": target,
+                    "reason": error.to_string(),
+                }));
+                // No socket was learned. The installed node resolves
+                // Herdr's own default for its account, before starting it.
+                known
+            }
+        };
+        if client.herdr_session_readable() {
+            None
+        } else {
+            establish_stage(target, "kit", since);
+            Some(
+                call_as::<hide_kit::KitReport>(
+                    &host,
+                    Call::Kit {
+                        action: hide_node_link::protocol::KitAction::Apply,
+                        cli_dir: consent
+                            .cli_dir
+                            .clone()
+                            .unwrap_or_else(|| DEFAULT_CLI_DIR.to_owned()),
+                        herdr_socket: socket,
+                        preserve_herdr_server: false,
+                        retirement_projects: retirement_projects.to_vec(),
+                    },
+                    Duration::from_secs(180),
+                )
+                .map(Box::new)
+                .map_err(|error| error.to_string()),
+            )
+        }
+    };
     if panes.is_some() {
         establish_stage(target, "panes", since);
         start_panes(client, &host);
@@ -1161,6 +1209,7 @@ pub fn establish(
         installed,
         helper_path,
         upload,
+        kit,
     })
 }
 
