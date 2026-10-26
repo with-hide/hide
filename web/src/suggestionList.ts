@@ -71,6 +71,7 @@ const FAILURE_KEYS: Record<string, MessageKey> = {
   start_failed: "suggestions.failure.start_failed",
   card_not_processed: "suggestions.failure.card_not_processed",
   unbuilt: "suggestions.failure.unbuilt",
+  issue_failed: "suggestions.failure.issue_failed",
 };
 
 function failureWords(t: TFunction<"translation">, code: string): string | null {

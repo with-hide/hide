@@ -225,6 +225,7 @@ describe("the Hide AI tool", () => {
       suggestionRow("m15", failed("card_not_processed", null)),
       suggestionRow("m16", failed("start_failed", null)),
       suggestionRow("m17", failed("a_code_of_a_newer_build", null)),
+      suggestionRow("s18", { ...failed("issue_failed", null), source: "notebook", outcome: "issue" }),
     ] }));
     const line = (id: string) => q(`[data-suggestion="${id}"] [data-suggestion-attempt]`)?.textContent;
     expect(line("m8")).toBe("The shell didn't finish starting");
@@ -235,6 +236,7 @@ describe("the Hide AI tool", () => {
     expect(q('[data-suggestion="m15"] [data-suggestion-failure-detail]')).toBeNull();
     expect(line("m16")).toBe("Couldn't start the agent");
     expect(line("m17")).toBe("Ended without a PR");
+    expect(line("s18")).toBe("Couldn't open the issue");
     expect(q('[data-suggestion="m8"] [data-suggestion-memory]')?.textContent).toBe("m8");
     await click('[data-suggestion-retry="m14"]');
     expect(sent("suggestion_action")).toEqual([{ workspace_id: "p", id: "m14", action: "retry" }]);

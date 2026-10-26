@@ -107,6 +107,7 @@ export const suggestionsEnglish = {
   "suggestions.failure.start_failed": "Couldn't start the agent",
   "suggestions.failure.card_not_processed": "The agent didn't write this memory in",
   "suggestions.failure.unbuilt": "Not built yet, so the docs were left as they are",
+  "suggestions.failure.issue_failed": "Couldn't open the issue",
   "suggestions.failure.no_pr": "Ended without a PR",
 } as const;
 
@@ -215,6 +216,7 @@ const ko: Messages = {
   "suggestions.failure.start_failed": "에이전트를 띄우지 못했어요",
   "suggestions.failure.card_not_processed": "에이전트가 이 기억을 반영하지 않았어요",
   "suggestions.failure.unbuilt": "아직 만들어지지 않아 문서는 그대로 뒀어요",
+  "suggestions.failure.issue_failed": "이슈를 열지 못했어요",
   "suggestions.failure.no_pr": "PR 없이 끝났어요",
 };
 
@@ -321,6 +323,7 @@ const zhCN: Messages = {
   "suggestions.failure.start_failed": "无法启动智能体",
   "suggestions.failure.card_not_processed": "智能体没有写入这条记忆",
   "suggestions.failure.unbuilt": "尚未实现，文档保持不变",
+  "suggestions.failure.issue_failed": "无法创建议题",
   "suggestions.failure.no_pr": "未创建 PR 就结束了",
 };
 
@@ -427,6 +430,7 @@ const ja: Messages = {
   "suggestions.failure.start_failed": "エージェントを起動できませんでした",
   "suggestions.failure.card_not_processed": "エージェントはこの記憶を反映しませんでした",
   "suggestions.failure.unbuilt": "まだ作られていないため、文書はそのままです",
+  "suggestions.failure.issue_failed": "Issue を作成できませんでした",
   "suggestions.failure.no_pr": "PR なしで終わりました",
 };
 
