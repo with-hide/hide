@@ -3,7 +3,7 @@ import { usePaneMove } from "./PaneMoveControls";
 import { useKeyboardOwner } from "./viewFocus";
 import type { TFunction } from "i18next";
 import { markWords } from "./agentRow";
-import { CircleAlertIcon, EllipsisIcon, Maximize2Icon, MoonIcon, TerminalSquareIcon, WaypointsIcon, XIcon } from "lucide-react";
+import { CircleAlertIcon, EllipsisIcon, GripVerticalIcon, Maximize2Icon, MoonIcon, TerminalSquareIcon, XIcon } from "lucide-react";
 import { memo, useEffect, useRef } from "react";
 import type { Actions } from "./actions";
 import { refusalText, submitFiles } from "./attachments";
@@ -23,6 +23,7 @@ import { PaneAskMark, PaneForkMark, PaneHeaderBand, PanePrChip, PaneRecordButton
 import { PaneWorkChip } from "./PaneMissionChip";
 import { PaneViews } from "./ViewComments";
 import { PaneConnectionChip } from "./PaneConnection";
+import { PaneMention } from "./PaneMention";
 import { AncestorPath, usePaneMenu, type TerminalMenuContext } from "./PaneRelations";
 import { chordLabel, commandLabel } from "./shortcutLabels";
 import { keySystem } from "./host";
@@ -194,6 +195,8 @@ export const PaneView = memo(function PaneView({
   const paneId = pane.id;
   const owner = useKeyboardOwner();
   const input = owner.kind === "pane" && owner.paneId === paneId;
+  // The grip and the zoom show on the pane that holds the keyboard, and on any other while it is pointed at.
+  const tools = input ? "" : "opacity-0 group-hover/header:opacity-100 group-focus-within/header:opacity-100 hoverless:opacity-100";
   const dispatch = actions.dispatch;
   const title = paneTitle(pane);
   const recordAgent = agentsByPane(usePaneAgents()).get(paneId);
@@ -374,6 +377,13 @@ export const PaneView = memo(function PaneView({
           paneMenu.openAt(event.clientX, event.clientY);
         }}
       >
+        {/* The header's first row is this pane: its state on the left, what can be done to it on the right, each in a place that does not move.
+            The grip says the header moves the pane; it shows while the header is pointed at or holds the keyboard, its place kept. */}
+        <Hint label={t("panes.move.grip")}>
+          <span data-pane-move-grip="true" className={`-mx-xxs flex shrink-0 cursor-grab text-subtle-foreground ${tools}`}>
+            <GripVerticalIcon className="size-(--size-icon-sm)" aria-hidden="true" />
+          </span>
+        </Hint>
         <AncestorPath pane={pane} actions={actions} />
         {agentKind ? (
           <PaneRecordButton
@@ -406,28 +416,14 @@ export const PaneView = memo(function PaneView({
           </>
         )}
         {agentKind ? <PaneForkMark pane={pane} actions={actions} /> : null}
+        {agentKind ? <PanePrChip paneId={paneId} actions={actions} /> : null}
+        {agentKind ? <PaneWorkChip paneId={paneId} actions={actions} /> : null}
+        {agentKind ? <PaneViews paneId={paneId} name={title} actions={actions} /> : null}
         {agentKind ? <PaneAskMark paneId={paneId} header={header} actions={actions} /> : null}
         {agentKind && lettersWaiting > 0 ? <PaneLetterButton paneId={paneId} letters={lettersWaiting} onDeliver={actions.deliverLettersNow} /> : null}
-        {agentKind ? <PaneWorkChip paneId={paneId} actions={actions} /> : null}
-        {agentKind ? <PanePrChip paneId={paneId} actions={actions} /> : null}
-        {agentKind ? <PaneViews paneId={paneId} name={title} actions={actions} /> : null}
         <span data-pane-move-blank="true" className="h-full flex-1" />
         <PaneConnectionChip pane={pane} actions={actions} local={local} />
-        {/* 개요에서 보기 (PRD pane-open-in-overview D-01, D-08): shown while the header is pointed at or holds the keyboard, its place kept so nothing moves. */}
-        {agentKind ? (
-          <Hint label={t("panes.menu.openInOverview")}>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className="shrink-0 text-subtle-foreground opacity-0 hover:bg-popover hover:text-foreground group-hover/header:opacity-100 group-focus-within/header:opacity-100 hoverless:opacity-100"
-              aria-label={t("panes.menu.openInOverview")}
-              data-pane-open-overview={paneId}
-              onClick={() => actions.openPaneInOverview(paneId)}
-            >
-              <WaypointsIcon aria-hidden="true" />
-            </Button>
-          </Hint>
-        ) : null}
+        {agentKind ? <PaneMention paneId={paneId} actions={actions} /> : null}
         {zoomed ? (
           <Hint label={zoomChord ? t("panes.unzoomChord", { chord: zoomChord }) : t("panes.unzoom")}>
             <Button
@@ -448,7 +444,7 @@ export const PaneView = memo(function PaneView({
               {hidden > 0 ? <span>+{hidden}</span> : null}
             </Button>
           </Hint>
-        ) : paneCount > 1 ? <Hint label={t("panes.menu.zoom")}><Button variant="ghost" size="icon-sm" className="shrink-0 text-subtle-foreground hover:bg-popover" aria-label={t("panes.menu.zoom")} data-pane-zoom="false" disabled={moving} onClick={() => actions.toggleZoom(paneId)}><Maximize2Icon aria-hidden="true" /></Button></Hint> : null}
+        ) : paneCount > 1 ? <Hint label={t("panes.menu.zoom")}><Button variant="ghost" size="icon-sm" className={`shrink-0 text-subtle-foreground hover:bg-popover ${tools}`} aria-label={t("panes.menu.zoom")} data-pane-zoom="false" disabled={moving} onClick={() => actions.toggleZoom(paneId)}><Maximize2Icon aria-hidden="true" /></Button></Hint> : null}
         <Hint label={t("panes.actions", { name: title })}>
           <Button
             variant="ghost"

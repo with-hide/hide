@@ -2,7 +2,9 @@
 // `@<name> (pane <id> · <task>)`, and a sidebar agent row dropped on another
 // pane's terminal types that same reference and a space into the agent's
 // PTY there, never Enter, and focuses it; a drop on the agent's own pane types
-// nothing. A capture of the menu lands in HIDE_E2E_SCREENSHOT_DIR.
+// nothing. A pane's header @ lists the other agents on its device and types the
+// one chosen into its own prompt the same way. Captures of the menu and the @
+// list land in HIDE_E2E_SCREENSHOT_DIR.
 
 import { expect, test, type Page } from "@playwright/test";
 import fs from "node:fs";
@@ -65,6 +67,39 @@ test("an agent row dropped on another terminal types its reference there and not
     await quietFor(page, 500, "a refused drop types nothing into the agent's own pane");
     expect(read(agentLog!.log).slice(agentLog!.before)).toBe("");
     await expect(page.locator(`[data-pane-view="${target}"]`)).toHaveAttribute("data-focused", "true");
+  } finally {
+    daemon.stop();
+    herdr.stop();
+  }
+});
+
+test("a pane's @ lists the other agents and types the chosen one's reference into that pane", async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 900 });
+  const herdr = await startHerdr();
+  const daemon = await startHided(herdr, "agent-reference-mention").catch((error) => { herdr.stop(); throw error; });
+  try {
+    const [target, agent] = herdr.panes;
+    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
+    await enterWorkspace(page, "fixture");
+    await expect(page.locator(`nav[data-sidebar] [data-agent-open="${agent}"]`)).toBeVisible({ timeout: 30_000 });
+    const read = (log: string) => (fs.existsSync(log) ? fs.readFileSync(log, "utf8") : "");
+    const [targetLog, agentLog] = herdr.inputLogs.map((log) => ({ log, before: read(log).length }));
+
+    await page.locator(`[data-pane-mention="${target}"]`).click();
+    const list = page.locator(`[data-pane-mention-list="${target}"]`);
+    await expect(list.locator(`[data-pane-mention-choice="${agent}"]`)).toBeVisible();
+    // The pane's own agent is not offered: its reference would name it to itself.
+    await expect(list.locator(`[data-pane-mention-choice="${target}"]`)).toHaveCount(0);
+    await screenshot(page, "agent-reference-pane-mention");
+    // Typing narrows the list; Enter chooses, and the list closes.
+    await page.keyboard.type(agent);
+    await page.keyboard.press("Enter");
+    await expect(list).toHaveCount(0);
+
+    await expect.poll(() => read(targetLog!.log).slice(targetLog!.before)).toMatch(new RegExp(`@[^\\r\\n]+ \\(pane ${agent}( · [^\\r\\n]+)?\\) $`));
+    expect(read(targetLog!.log).slice(targetLog!.before)).not.toMatch(/[\r\n]/);
+    expect(read(agentLog!.log).slice(agentLog!.before)).toBe("");
+    await expect(page.locator(`[data-pane-view="${target}"] .xterm-helper-textarea`)).toBeFocused();
   } finally {
     daemon.stop();
     herdr.stop();

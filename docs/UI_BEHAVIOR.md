@@ -530,10 +530,12 @@ The browser display's toolbar and its loading, load failed, and plain browser ta
 
 ### Agent panes and the Agents explorer
 
-A pane header is a quiet identity row: the ancestor path, the status mark, the agent's logo, title, the fork mark, the letters-waiting pill, the PR mark, the limited-integration icon, and the retained overflow, zoom and close controls at the right end.
-An agent pane's header also holds `개요에서 보기`, a graph icon before zoom whose tooltip and accessible name say the same, drawn only while the header is pointed at or holds the keyboard, and keeping its place while hidden so the title and chips never move; a shell pane has none (PRD pane-open-in-overview B1-B3).
-It opens the Overview on Work with the pane's session chosen, as a click on it there would, and the pane menu offers the same item first among the agent's own actions, with no shortcut (B11).
-Dragging the title or unused space in the first header row moves that pane after the pointer crosses the ordinary drag threshold; a short title click still opens its record.
+A pane header's first row is the pane: its state on the left, what can be done to it on the right, and nothing in it changes place when a control shows or hides; the turn row under it is the conversation.
+On the left stand the move grip, the ancestor path, the status mark, the agent's logo and title, then the fork mark, the PR mark, the plan chip, the views chip, the Answer tag and the letters-waiting pill; on the right stand `@`, zoom, the overflow control and close, after the limited-integration icon.
+The grip and zoom are drawn on the pane that holds the keyboard and, on any other pane, only while its header is pointed at, keeping their place while hidden; a zoomed pane's zoom chip is always drawn, since it names the panes it hides.
+`개요에서 보기` is the pane menu's first item among the agent's own actions, with no shortcut and no header button; it opens the Overview on Work with the pane's session chosen, as a click on it there would (PRD pane-open-in-overview B11; the header button of B1-B3 was folded into the menu by operator decision).
+An agent pane's `@` lists the other agents on the same device, found by name, task or project as typed; choosing one types its reference, as Copy name and ID writes it, into this pane's prompt with no Enter and gives this pane's terminal the keyboard; the pane's own agent and a device's agents elsewhere are not offered, because the id would name nothing there, and a shell pane has no `@`.
+Dragging the grip, the title or unused space in the first header row moves that pane after the pointer crosses the ordinary drag threshold; a short title click still opens its record.
 While the drag runs, a chip with the pane's name follows the pointer, and a card or hint a hover opens (the turn card, the plan chip, a hint) stays closed until the drag ends.
 Header buttons, relationship rows and terminal text keep their existing actions.
 A pane drops on another pane's left, right, top or bottom edge in the selected group's Agent areas, on a tab title to join beside its selected pane, or on that area's New tab button to separate into a tab.
@@ -690,7 +692,7 @@ Hover, focus, selection and the open popover change fill and ring without adding
 A row is at least 28 high, or 44 with its second line, and grows with text scale rather than spilling.
 While a close names a pane, its row retains closing feedback.
 ⌥1 to ⌥9 select the first nine visible root occurrences top to bottom, counting duplicate raised/tree rows only once; tree children carry no number.
-Web owners: `web/src/PaneView.tsx`, `web/src/PaneHeaderBand.tsx`, `web/src/PaneRelations.tsx`, `web/src/components/sidebar-agent-row.tsx`, `web/src/components/agent-tree.tsx` (the verb, ask line, descendant mark, rails and chevron the three surfaces share), `web/src/components/pr-mark.tsx` and `web/src/prMark.ts` (the PR mark every surface draws), `web/src/components/letter-mark.tsx` (the letters-waiting pill and envelope), `web/src/components/agent-tree-popover.tsx`, and `web/src/sidebarTree.ts`.
+Web owners: `web/src/PaneView.tsx`, `web/src/PaneHeaderBand.tsx`, `web/src/PaneMention.tsx` (the header `@`), `web/src/PaneRelations.tsx`, `web/src/components/sidebar-agent-row.tsx`, `web/src/components/agent-tree.tsx` (the verb, ask line, descendant mark, rails and chevron the three surfaces share), `web/src/components/pr-mark.tsx` and `web/src/prMark.ts` (the PR mark every surface draws), `web/src/components/letter-mark.tsx` (the letters-waiting pill and envelope), `web/src/components/agent-tree-popover.tsx`, and `web/src/sidebarTree.ts`.
 
 ### Work Hide AI does for a home
 
