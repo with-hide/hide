@@ -19,7 +19,7 @@ import { focusTerminal, typeReference } from "./terminals";
  * opens; choosing hands the keyboard to this pane's terminal, and Escape back
  * to the @.
  */
-export function PaneMention({ paneId, actions }: { paneId: string; actions: Actions }) {
+export function PaneMention({ paneId, actions, className = "" }: { paneId: string; actions: Actions; className?: string }) {
   const { t } = useInterfaceTranslation();
   const [open, setOpen] = useState(false);
   // A closed @ reads nothing from the store, so it adds no work to the header's renders.
@@ -35,6 +35,7 @@ export function PaneMention({ paneId, actions }: { paneId: string; actions: Acti
     typeReference(paneId, reference);
   };
   const label = t("panes.mention.button");
+  // `className` may hide a closed @; an open one stays drawn while the pointer is on its list.
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <Hint label={label} active={!open}>
@@ -42,7 +43,7 @@ export function PaneMention({ paneId, actions }: { paneId: string; actions: Acti
           <Button
             variant="ghost"
             size="icon-sm"
-            className="shrink-0 text-subtle-foreground hover:bg-popover hover:text-foreground data-[state=open]:bg-secondary data-[state=open]:text-foreground"
+            className={`shrink-0 text-subtle-foreground hover:bg-popover hover:text-foreground data-[state=open]:bg-secondary data-[state=open]:text-foreground ${open ? "" : className}`}
             aria-label={label}
             data-pane-mention={paneId}
           >
