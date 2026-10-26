@@ -343,6 +343,7 @@ A screen with no composer where the declaration puts it is `not_found`.
 The declarations were measured on 2026-10-21 under Herdr 0.9.5 at 60 columns (Claude Code 2.1.306, Codex 0.163.0, Grok 1.0.62, OpenCode 2.0.29, Pi 1.0.4, omp 18.7.0, Antigravity 1.4.4): type `hello 안녕하세요`, Backspace it all, paste 12 lines, Backspace twice, clear; `hide-agent-adapter/tests/it/composer.rs` judges those captures.
 Grok's predicted next prompt and its Windows marker were measured on 2026-10-22 with Grok 1.0.52, the pinned version, after a turn ended (the earlier captures had none), on its own and with `GROK_FORCE_LEGACY_CONSOLE=1`, the console a Windows pane gets; its source draws the suggestion with `ghost_text_style`, dim and italic, on every system.
 Only Claude Code and Codex are rung, so only their drafts are released today; the other declarations serve the agent journey's `composer` cell and a bell target added later.
+Antigravity's declaration also clears the composer of an agy fork's pane before Hide types `/fork` there ([UI_BEHAVIOR.md](UI_BEHAVIOR.md), Antigravity's Fork): it is read for any agy version, since a screen it cannot confirm empty is typed into as before and logged as `fork.composer_unconfirmed`, so a declaration that no longer matches agy never stops a fork.
 [INSTALL.md](INSTALL.md#what-each-system-supports) records what has not been measured (narrow panes, the light theme, Windows and Linux).
 
 #### Catching an agent's screen change

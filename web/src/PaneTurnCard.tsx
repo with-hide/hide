@@ -188,7 +188,8 @@ export function turnResponse(t: TFunction<"translation">, header: PaneHeader | u
   if (band?.raised) return { verb: t(`agentSessions.verb.${band.raised.verb}`), asks: true, text: askWhat(t, band.raised.verb, band.raised.what, band.raised.subject) };
   if (band) {
     if (band.kind === "approval" || band.kind === "answer") return { verb: t(`agentSessions.verb.${band.kind}`), asks: true, text: askWhat(t, band.kind, band.reason, band.subject) };
-    return { verb: t(band.kind === "blocked" ? "agentSessions.tag.blocked" : "agentSessions.tag.stopped"), asks: true, text: band.reason };
+    // Work left is not the operator's to answer, so it is not drawn as an ask.
+    return band.kind === "blocked" ? { verb: t("agentSessions.tag.blocked"), asks: true, text: band.reason } : { verb: statusText(t, "unfinished"), asks: false, text: band.reason };
   }
   if (header?.finished) return { verb: t("paneTurn.finished"), asks: false, text: header.progress ?? null };
   if (header?.working) return { verb: statusText(t, "working"), asks: false, text: header.progress ?? null };

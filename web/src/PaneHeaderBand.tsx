@@ -102,19 +102,22 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
   const childConnection = children?.unavailableDevice ? notConnectedText(devices?.status?.remote, devices?.navigator?.devices, children.unavailableDevice, t) : null;
   const mode = usePaneTurnRowMode();
   const off = mode === "off";
-  // Off keeps only the children button; a raised descendant's ask stays on its warning border.
-  const band = off ? null : header?.band ?? null;
-  // A running plan's current step and its line take the progress place (PRD hide-plan B7).
-  const planLine = useShellStore((state) => {
-    const plan = planOfPane(state.rest, paneId);
-    return plan ? planWorkLine(plan) : null;
-  });
   // A Conductor's pane says its waiting decision, else the nodes a worker is
   // at, and nothing when no node runs: the mission line owns the place, so
   // the Conductor's own plan or progress does not stand in (PRD
   // mission-plan-visibility B9, D-21).
   const mission = useShellStore((state) => missionOfPane(state.rest, allAgents(state.agents, state.rest?.status?.remote), paneId));
   const missionLine = mission ? missionWorkLine(mission, t) : null;
+  // Off keeps only the children button; a raised descendant's ask stays on
+  // its warning border. A waiting decision is the operator's to answer and
+  // the Conductor's own work left is not, so the decision takes its place.
+  const ownBand = off ? null : header?.band ?? null;
+  const band = ownBand?.kind === "stopped" && !ownBand.raised && missionLine?.decision ? null : ownBand;
+  // A running plan's current step and its line take the progress place (PRD hide-plan B7).
+  const planLine = useShellStore((state) => {
+    const plan = planOfPane(state.rest, paneId);
+    return plan ? planWorkLine(plan) : null;
+  });
   const ownProgress = band || off ? null : mission ? missionLine?.text ?? null : planLine ?? header?.progress ?? null;
   const request = off ? null : header?.request ?? null;
   const finished = !band && !off && (header?.finished ?? false);
@@ -141,8 +144,8 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
   // to show, draws no answer at all, so two lines never add an empty one.
   const answered = (kind !== "request" && kind !== "children") || childConnection !== null;
   // An ask is the one row the operator acts on, so it keeps the raised
-  // surface; a quiet turn sits in the head's surface.
-  const tone = band ? "bg-secondary border-l-2 border-warning text-foreground" : "bg-card border-t border-border text-muted-foreground";
+  // surface; work left and a quiet turn sit in the head's surface.
+  const tone = band && !unfinished(band) ? "bg-secondary border-l-2 border-warning text-foreground" : "bg-card border-t border-border text-muted-foreground";
   const twoLines = mode === "two_lines";
   return <div className="absolute inset-x-0 top-0 z-10 bg-background">
     {/* One row whether or not it leads with a request, so the tree's
@@ -218,7 +221,7 @@ export function PaneAskMark({ paneId, header, actions }: { paneId: string; heade
       aria-expanded={state.open}
       data-pane-ask-mark={paneId}
       data-state={state.open ? "open" : "closed"}
-      className={cn("flex h-(--size-sidebar-line-detail) shrink-0 items-center gap-xxs rounded-xs border border-warning/60 px-xs text-micro outline-none hover:bg-popover focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-secondary", band.read && "opacity-(--opacity-read-status)")}
+      className={cn("flex h-(--size-sidebar-line-detail) shrink-0 items-center gap-xxs rounded-xs border px-xs text-micro outline-none hover:bg-popover focus-visible:ring-1 focus-visible:ring-ring data-[state=open]:bg-secondary", unfinished(band) ? "border-border" : "border-warning/60", band.read && "opacity-(--opacity-read-status)")}
       onMouseDown={(event) => event.preventDefault()}
       onClick={state.onToggle}
       onPointerEnter={state.onPointerEnter}
@@ -227,16 +230,21 @@ export function PaneAskMark({ paneId, header, actions }: { paneId: string; heade
       onBlur={state.onBlur}
       onKeyDown={state.onKeyDown}
     >
-      <span className="font-semibold text-warning" data-verb={band.kind}>{verb}</span>
+      <span className={cn("font-semibold", unfinished(band) ? "text-foreground" : "text-warning")} data-verb={band.kind}>{verb}</span>
       <Elapsed since={band.since_unix_ms} className="font-mono text-muted-foreground" />
     </button>
   )} />;
 }
 
-/** The pane's own ask's verb, as the row's ask starts with it. */
+/** The pane's own ask's verb, as the row's ask starts with it; a stop is work left, `일 남음`, as the row's line says. */
 function bandVerbWords(t: TFunction<"translation">, kind: PaneBand["kind"]): string {
   if (kind === "approval" || kind === "answer") return t(`agentSessions.verb.${kind}`);
-  return t(kind === "blocked" ? "agentSessions.tag.blocked" : "agentSessions.tag.stopped");
+  return kind === "blocked" ? t("agentSessions.tag.blocked") : statusText(t, "unfinished");
+}
+
+/** The pane's own work left: not the operator's to answer, so it is drawn without the warning colour. */
+function unfinished(band: PaneBand): boolean {
+  return band.kind === "stopped" && !band.raised;
 }
 
 /**
@@ -276,7 +284,7 @@ function AskBand({ paneId, band, navigation, unreachable, failed, actions, hasTr
   const read = !raised && band.read;
   return <>
     <span className={cn("flex min-w-0 flex-[3] items-center gap-xs", read && "opacity-(--opacity-read-status)")} data-pane-band-read={read ? "true" : undefined}>
-      {raised ? <VerbText verb={raised.verb} /> : band.kind === "approval" || band.kind === "answer" ? <VerbText verb={band.kind} /> : <span className="shrink-0 font-semibold text-warning" data-verb={band.kind}>{t(band.kind === "blocked" ? "agentSessions.tag.blocked" : "agentSessions.tag.stopped")}</span>}
+      {raised ? <VerbText verb={raised.verb} /> : band.kind === "approval" || band.kind === "answer" ? <VerbText verb={band.kind} /> : <span className={cn("shrink-0 font-semibold", unfinished(band) ? "text-foreground" : "text-warning")} data-verb={band.kind}>{bandVerbWords(t, band.kind)}</span>}
       {raised && originTitle ? <Hint label={who!}><span className="flex min-w-0 max-w-1/3 shrink items-center gap-xxs font-semibold" data-pane-band-who={raised.raised_pane_id}><span className="min-w-0 truncate">{originTitle}</span><span className="shrink-0 text-muted-foreground">({t(originDepth > 2 ? "panes.children.descendant" : "panes.children.direct")})</span></span></Hint> : null}
       <Hint label={navigation ?? what ?? ""}><span className={cn("min-w-0 flex-1 truncate", failed && "text-destructive")} role={failed ? "alert" : navigation ? "status" : undefined} data-pane-band-navigation={navigation ? failed ? "failed" : "pending" : undefined}>{navigation ?? what}</span></Hint>
     </span>

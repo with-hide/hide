@@ -4,9 +4,11 @@
 // would, since a practice understands no words: the lead
 // starts a child in a tab of its own and later passes it an instruction, the
 // child reports back by letter, the lead finds an open agent by what it does
-// and writes to it, and a name and ID copied from a pane's menu names the agent
-// that gets the last piece of work.
+// and writes to it, and a name and ID the lead pane's @ types in (or a sidebar
+// row dropped on it, or a menu's copy pasted) names the agent that gets the
+// last piece of work.
 
+import { agentReference } from "../../agentReference";
 import type { AgentRow, AgentState } from "../../snapshot";
 import { PRACTICE_COPY, type PracticeWorld, type WorldSnapshot } from "../world";
 import { agent, applyDesk, deskSnapshot, keyText, shellScreen, typed, withLineage, type DeskModel, type PracticePlace } from "./kit";
@@ -62,10 +64,18 @@ function resting(row: AgentRow): AgentRow {
 const working = (pane_id: string, agent_kind: string, elapsed: string) =>
   agent({ pane_id, identity_label: LABELS[pane_id]!, agent_kind, group: "working", mark: "going", status_code: "working", activity: "working", elapsed });
 
+const SIGNUP_ROW = resting(working(SIGNUP, "claude", "20m"));
+
+/** The signup agent's reference, as the lead's @, a dropped sidebar row or Copy name and ID types it. */
+export const SIGNUP_REFERENCE = agentReference(SIGNUP_ROW);
+
+/** An agent reference (`agentReference.ts`) in a prompt: `@<name> (pane <id> · <task>)`. */
+const REFERENCE = /@[^\s(]+ \(pane [^)]*\)/gu;
+
 function initial(): DelegateModel {
   const lead = working(LEAD, "claude", "4m");
   const docs = resting(working(DOCS, "codex", "12m"));
-  const signup = resting(working(SIGNUP, "claude", "20m"));
+  const signup = SIGNUP_ROW;
   const pane = (row: AgentRow) => ({ id: row.pane_id, agent: row, title: row.identity_label });
   const desk: DeskModel = {
     panes: [pane(lead), pane(docs), pane(signup)],
@@ -166,7 +176,7 @@ function leadScreen(model: DelegateModel, cols: number): string {
     rows.push("", `${OWL}🦉  Letter from ${LABELS[CHILD]}${RESET}`, `  ${GREEN}✓${RESET} The timeout test passes on sqlite. 12 passed.`);
   }
   if (model.stage >= 3) rows.push(...said(asked(3)), ...ran("hide agent list", `${LABELS[DOCS]} · ${LABELS[SIGNUP]} · ${LABELS[CHILD]}`), ...ran(`hide request send ${DOCS} …`, `Letter sent to ${LABELS[DOCS]} (Codex)`));
-  if (model.unnamed !== null) rows.push(...said(model.unnamed), "● Which agent should get it? Paste its name and ID into the request.");
+  if (model.unnamed !== null) rows.push(...said(model.unnamed), "● Which agent should get it? Choose it with the @ on my header.");
   if (model.stage >= 4) rows.push(...said(asked(4)), ...ran(`hide request send ${SIGNUP} …`, `Letter sent to ${SIGNUP} (${LABELS[SIGNUP]})`));
   if (model.stage === 1) rows.push("", `${CLAUDE}✻ Waiting on 1 child… ${DIM}(esc to interrupt)${RESET}`);
   rows.push("", rule(cols), `${DIM}>${RESET} ${model.draft}`, rule(cols));
@@ -229,7 +239,8 @@ export const DELEGATE_WORLD: PracticeWorld<DelegateModel> = {
     return desk ? { ...model, desk } : null;
   },
   snapshot,
-  prompt: (model, paneId) => (paneId === LEAD ? model.draft : ""),
+  // A reference alone is not the learner's words yet: ⏎ types the step's example in its place, reference and all.
+  prompt: (model, paneId) => (paneId === LEAD ? model.draft.replace(REFERENCE, "") : ""),
   panes: (model) => model.desk.panes.map((pane) => pane.id),
   // A pane the learner opened, a new tab or a split, is a shell with no agent in it.
   screen: (model, paneId, cols) => SCREENS[paneId]?.(model, cols) ?? shellScreen(PLACE),

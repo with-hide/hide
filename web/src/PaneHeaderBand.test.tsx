@@ -559,7 +559,7 @@ it("words the pane's own ask by its verb and dims it once it is read", async () 
     [own("approval", null), "ApprovalStopped at a permission request"],
     [own("answer", "Deploy to staging first?"), "QuestionDeploy to staging first?"],
     [own("blocked", "gh login expired"), "Blockedgh login expired"],
-    [own("stopped", "Three tests left"), "StoppedThree tests left"],
+    [own("stopped", "Three tests left"), "UnfinishedThree tests left"],
   ];
   for (const [value, text] of cases) {
     const { container, unmount } = await mount(value, [], { paneId: "solo" });
@@ -568,6 +568,10 @@ it("words the pane's own ask by its verb and dims it once it is read", async () 
       expect(row.textContent).toBe(text);
       expect(row.querySelector("[data-pane-band-read]")).toBeNull();
       expect(row.querySelector("[data-pane-band-open]")).toBeNull();
+      // Only what the operator answers is drawn in the warning colour; work left is not an ask.
+      const asks = value.band!.kind !== "stopped";
+      expect(row.className.includes("border-warning")).toBe(asks);
+      expect(row.querySelector("[data-verb]")!.className.includes("text-warning")).toBe(asks);
     } finally { await unmount(); }
   }
   const { container, unmount } = await mount(own("answer", "Deploy to staging first?", true), [], { paneId: "solo" });
@@ -785,6 +789,8 @@ it("puts the pane's own ask on its head only while the turn row is off", async (
   };
   expect((await draw(own, "off"))?.getAttribute("aria-label")).toBe("Approval: Stopped at a permission request");
   expect(await draw(own, "one_line")).toBeNull();
+  const left = await draw({ ...own, band: { ...own.band!, kind: "stopped", reason: "Three tests left" } }, "off");
+  expect([left?.getAttribute("aria-label"), left?.className.includes("border-warning")]).toEqual(["Unfinished: Three tests left", false]);
   // A raised descendant's ask stays on the children button, not the parent's head.
   expect(await draw(header, "off")).toBeNull();
 });
@@ -805,6 +811,18 @@ it("says a Conductor's waiting decision on its second line, else the nodes at wo
     expect([line.dataset.paneMissionLine, line.textContent]).toEqual(["decision", "! Which base?"]);
     expect(line.className).toContain("text-mission-hold");
   } finally { await deciding.unmount(); }
+  // The Conductor's own work left gives the place to the decision; its own question does not.
+  const ownBand = (kind: PaneBand["kind"]): PaneHeader => ({ working: false, notice: null, band: { kind, reason: "Waiting for the workers", since_unix_ms: null, read: false, action: null, more: 0 } });
+  const stopped = await mount(ownBand("stopped"), [conductor], { rest: rest("Which base?") });
+  try {
+    expect(stopped.container.querySelector("[data-pane-header-band]")?.getAttribute("data-pane-header-band")).toBe("progress");
+    expect(stopped.container.querySelector<HTMLElement>("[data-pane-own-progress]")?.textContent).toBe("! Which base?");
+  } finally { await stopped.unmount(); }
+  const asking = await mount(ownBand("answer"), [conductor], { rest: rest("Which base?") });
+  try {
+    expect(asking.container.querySelector("[data-pane-header-band]")?.getAttribute("data-pane-header-band")).toBe("answer");
+    expect(asking.container.querySelector("[data-pane-own-progress]")).toBeNull();
+  } finally { await asking.unmount(); }
   // No node at work: the mission line owns the place, so the agent's own progress does not stand in.
   const resting = await mount({ working: true, notice: null, band: null, progress: "Reading the inbox" }, [conductor], { rest: rest(null, [node("api", "done"), node("docs", "planned")]) });
   try {
