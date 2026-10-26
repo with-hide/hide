@@ -105,7 +105,7 @@ it("shows the decision with why, the node it stopped, its wait and the choices, 
     const banner = map.q('[data-mission-banner="decision"]')!;
     expect(banner.querySelector("[data-mission-question]")?.textContent).toBe("Which base for the screen PR?");
     expect(banner.querySelector("[data-mission-banner-why]")?.textContent).toBe("Two PRs touch the same file");
-    expect(banner.querySelector("[data-mission-banner-node]")?.textContent).toBe("API screen held");
+    expect(banner.querySelector("[data-mission-banner-node]")?.textContent).toBe("API screen · awaiting decision");
     expect(banner.querySelector("[data-mission-banner-waited]")?.textContent).toBe("waiting 2m");
     expect([...banner.querySelectorAll("[data-mission-option]")].map((button) => button.textContent)).toEqual(["Stack on the API PRRecommended", "Wait for the API PR to merge"]);
     expect(banner.querySelector("[data-mission-recommended]")?.getAttribute("data-mission-option")).toBe("1");

@@ -61,7 +61,7 @@ const PANE_HEADER_CASES: [string, string, Omit<PaneHeader, "working">][] = [
   ["approval-case", "03 · 승인이 필요함", { ...NO_NOTICE, band: { kind: "approval", reason: "권한 승인을 기다리고 있어요", since_unix_ms: null, read: false, action: null, more: 0 } }],
   ["blocked-case", "04 · 막힘", { ...NO_NOTICE, band: { kind: "blocked", reason: "접근 권한을 확인해 주세요", since_unix_ms: null, read: false, action: null, more: 0 } }],
   ["raised-case", "05 · 자식에게 사용자 승인이 필요함", { ...NO_NOTICE, band: { kind: "raised", reason: null, since_unix_ms: null, read: false, action: { pane_id: PANE_RAISED.open_pane_id, label: PANE_RAISED.title }, more: 0, raised: PANE_RAISED } }],
-  ["stopped", "06 · 현재 세션이 멈춤", { ...NO_NOTICE, band: { kind: "stopped", reason: "응답이 중단됐어요", since_unix_ms: null, read: false, action: null, more: 0 } }],
+  ["stopped", "06 · 일이 남음", { ...NO_NOTICE, band: { kind: "stopped", reason: "응답이 중단됐어요", since_unix_ms: null, read: false, action: null, more: 0 } }],
   ["solo", "07 · 자식 없이 진행 중", { ...NO_NOTICE, progress: "상황별 헤더 시안을 정리하고 있어요" }],
   ["tree-only", "08 · progress 없음 · 자식 있음", NO_NOTICE],
   ["empty", "09 · progress도 자식도 없음", NO_NOTICE],

@@ -285,7 +285,9 @@ pub(crate) fn of(
 
 /// The pane's own turn, from its request verb (docs/status-model.md, Quiet
 /// pane headers). A question the operator has read still waits for a reply,
-/// as its row's mark does, so reading the pane does not take the band away.
+/// as its row's mark does, so reading the pane does not take the band away;
+/// a block the operator has read stays a block, read, as its row's `!` does,
+/// and only work left is a stop.
 fn own_ask(agent: &SidebarAgentSnapshot) -> Option<&'static str> {
     use super::RequestVerb;
     use super::escalation::Verb;
@@ -295,6 +297,7 @@ fn own_ask(agent: &SidebarAgentSnapshot) -> Option<&'static str> {
             _ => "answer",
         }),
         RequestVerb::Blocked => Some("blocked"),
+        RequestVerb::Stopped if agent.demand == "error" => Some("blocked"),
         RequestVerb::Stopped => Some("stopped"),
         RequestVerb::Working => None,
         _ if agent.demand == "question" => Some("answer"),

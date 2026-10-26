@@ -312,8 +312,9 @@ fn pane_header_keeps_only_own_live_working_progress() {
     );
 }
 
-/// B25, D-07, D-23: a blocked pane names its block in its own band, a stopped
-/// pane keeps the stop band, and a pane that waits has no band at all.
+/// B25, D-07, D-23: a blocked pane names its block in its own band, read or
+/// not, a pane with work left keeps the stop band, and a pane that waits has
+/// no band at all.
 #[test]
 fn pane_bands_name_a_block_and_a_stop_and_leave_a_wait_unmarked() {
     use crate::agent_state::{RequestVerb, header};
@@ -325,6 +326,10 @@ fn pane_bands_name_a_block_and_a_stop_and_leave_a_wait_unmarked() {
     assert_eq!(band_of(&agent).expect("a block has a band").kind, "blocked");
     agent.state.verb = RequestVerb::Stopped;
     assert_eq!(band_of(&agent).expect("a stop has a band").kind, "stopped");
+    agent.demand = "error".into();
+    let read_block = band_of(&agent).expect("a read block keeps its band");
+    assert_eq!((read_block.kind.as_str(), read_block.more), ("blocked", 0));
+    agent.demand = "none".into();
     agent.state.verb = RequestVerb::Waiting;
     assert!(band_of(&agent).is_none(), "a wait is drawn without a band");
 }
