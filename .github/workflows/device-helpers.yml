@@ -1,0 +1,101 @@
+# Native Linux builds reuse the same release recipe as the Linux package.
+# The Mac runner cross-builds only Intel Mac using Apple's SDK.
+# No release artifacts or build directories cross runs or source revisions.
+name: device helpers
+
+on:
+  workflow_call:
+    inputs:
+      source-sha:
+        description: Full source SHA to check out and record in every helper.
+        type: string
+        required: true
+      version:
+        description: Same version as the Mac package, with or without v.
+        type: string
+        required: true
+      build-order:
+        description: Same decimal build order as the Mac package (0 for a PR fixture).
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      source-sha:
+        description: Full source SHA to build.
+        type: string
+        required: true
+      version:
+        description: Same version as the Mac package.
+        type: string
+        required: true
+      build-order:
+        description: Same decimal build order as the Mac package.
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: helper (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 50
+    env:
+      HIDE_POSTHOG_PROJECT_TOKEN: ${{ vars.HIDE_POSTHOG_PROJECT_TOKEN }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-x86_64
+            runner: macos-15
+            target: x86_64-apple-darwin
+          - platform: linux-x86_64
+            runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - platform: linux-aarch64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: with-hide/hide
+          ref: ${{ inputs.source-sha }}
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: bash scripts/verify-web.sh install
+      - name: Install the target in the pinned toolchain
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          . scripts/toolchain-env.sh
+          rustup target add "$TARGET"
+      - name: Build the complete helper kit
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          SOURCE_SHA: ${{ inputs.source-sha }}
+          VERSION: ${{ inputs.version }}
+          BUILD_ORDER: ${{ inputs.build-order }}
+        run: node desktop/scripts/device-helpers.mjs build "$PLATFORM" "$VERSION" "$SOURCE_SHA" "$BUILD_ORDER"
+      - name: Run the built device CLI
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          SOURCE_SHA: ${{ inputs.source-sha }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          folder="desktop/out/device-helpers/$PLATFORM"
+          "$folder/hided" node --version
+          "$folder/hide" version --json > "$folder/version.json"
+          jq -e --arg commit "$SOURCE_SHA" --arg version "${VERSION#v}" '.commit == $commit and .version == $version' "$folder/version.json"
+          rm "$folder/version.json"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hide-device-helper-${{ matrix.platform }}
+          path: desktop/out/device-helpers/${{ matrix.platform }}/
+          if-no-files-found: error
+          retention-days: 7

@@ -186,7 +186,7 @@ PACKAGE_PATHS = (
     "contracts/herdr-bundle.json", "scripts/fetch-herdr-runtime.*",
     "scripts/verify-cargo.sh", "scripts/verify-web.sh", "scripts/toolchain-env.sh",
     "hided/build.rs", "hided/src/cli.rs", "hide-kit/*", "hide-agent-hooks/*",
-    ".github/workflows/package.yml", ".github/workflows/release.yml",
+    ".github/workflows/package.yml", ".github/workflows/device-helpers.yml", ".github/workflows/release.yml",
     # The updater and the release files it reads, and the specs only this lane runs.
     "desktop/src/main/updater*", "scripts/check-release-assets.mjs", "desktop/e2e/packaged-*",
 )

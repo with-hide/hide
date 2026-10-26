@@ -141,6 +141,34 @@ downloaded_windows=$temporary_root/herdr-windows.zip
 }
 target_windows_sha256=$(/usr/bin/shasum -a 256 "$downloaded_windows" | /usr/bin/awk '{print $1}')
 
+# Device platforms travel with the Mac app. Keep their verified bytes in the
+# same manifest as the host assets, including when extending the current pin.
+extra_pins=$temporary_root/device-pins.json
+print -r -- '{}' > "$extra_pins"
+platforms_added=false
+for device_platform in macos-x86_64 linux-aarch64; do
+  device_key=${device_platform//-/_}
+  device_url="https://github.com/${target_repo}/releases/download/${target_tag}/herdr-${device_platform}"
+  device_file=$temporary_root/herdr-$device_platform
+  /usr/bin/curl --fail --location --silent --show-error "$device_url" --output "$device_file" || {
+    print -u2 -- "error: required device release asset could not be downloaded: $device_url"
+    exit 1
+  }
+  device_sha=$(/usr/bin/shasum -a 256 "$device_file" | /usr/bin/awk '{print $1}')
+  previous_sha=$(jq -r --arg key "$device_key" '.[$key].sha256 // empty' "$manifest")
+  if [[ "$current_repo" == "$target_repo" && "$current_tag" == "$target_tag" ]]; then
+    if [[ -z "$previous_sha" ]]; then
+      platforms_added=true
+    elif [[ "$previous_sha" != "$device_sha" ]]; then
+      print -u2 -- "error: $target_tag is already pinned but its $device_platform asset digest changed"
+      exit 1
+    fi
+  fi
+  jq --arg key "$device_key" --arg platform "$device_platform" --arg url "$device_url" --arg sha "$device_sha" \
+    '.[$key] = {platform: $platform, source_url: $url, sha256: $sha}' "$extra_pins" > "$extra_pins.next"
+  mv "$extra_pins.next" "$extra_pins"
+done
+
 # The contract is whatever this exact binary answers; nothing is fetched from
 # a second place that could disagree with the asset that ships.
 target_contract=$temporary_root/herdr-api.schema.json
@@ -167,6 +195,7 @@ if [[ "$current_repo" == "$target_repo" && "$current_tag" == "$target_tag" ]]; t
   fi
   if cmp -s <(jq -S . "$contract") <(jq -S . "$target_contract"); then
     outcome=unchanged
+    [[ "$platforms_added" != true ]] || outcome=platforms_added
   elif [[ "$dry_run" == true ]]; then
     print -u2 -- "error: $target_tag is already pinned but contracts/herdr-api.schema.json is not what its binary reports"
     print -u2 -- "the contract drifted from the pin; rerun without --dry-run to regenerate it"
@@ -192,7 +221,7 @@ derived_documents=(
 
 replacements_json=$temporary_root/replacements.json
 print -r -- '[]' > "$replacements_json"
-[[ "$outcome" == unchanged || "$outcome" == contract_regenerated ]] || for relative in $derived_documents; do
+[[ "$outcome" == unchanged || "$outcome" == contract_regenerated || "$outcome" == platforms_added ]] || for relative in $derived_documents; do
   document=$project_root/$relative
   [[ -f "$document" ]] || {
     print -u2 -- "error: document quoting the pin is missing: $relative"
@@ -249,7 +278,7 @@ PYDOC
   mv "$replacements_json.next" "$replacements_json"
 done
 
-if [[ "$outcome" == bumped ]]; then
+if [[ "$outcome" == bumped || ( "$outcome" == platforms_added && "$dry_run" == false ) ]]; then
   jq --arg repo "$target_repo" --arg tag "$target_tag" \
      --arg version "$target_version" \
      --arg source_url "$target_url" \
@@ -258,9 +287,12 @@ if [[ "$outcome" == bumped ]]; then
      --arg linux_sha256 "$target_linux_sha256" \
      --arg windows_url "$target_windows_url" \
      --arg windows_sha256 "$target_windows_sha256" \
+     --argjson device_pins "$(cat "$extra_pins")" \
      '.repo = $repo | .tag = $tag | .version = $version | .source_url = $source_url | .sha256 = $sha256
       | .linux_x86_64 = {platform: "linux-x86_64", source_url: $linux_url, sha256: $linux_sha256}
-      | .windows_x86_64 = {platform: "windows-x86_64", source_url: $windows_url, sha256: $windows_sha256}' \
+      | .windows_x86_64 = {platform: "windows-x86_64", source_url: $windows_url, sha256: $windows_sha256}
+      | . + $device_pins
+      | .verification = "This file is the single source of the pin for host and device platforms. scripts/fetch-herdr-runtime.sh and .ps1 verify the bytes against it; native lanes execute the matching platform. desktop/scripts/package.mjs carries the host asset and, on Mac, each Unix device asset. contracts/herdr-api.schema.json is the schema the pinned host binary reports. Change the pin with scripts/bump-herdr.sh <release-tag>."' \
      "$manifest" > "$manifest.next"
   mv "$manifest.next" "$manifest"
 fi

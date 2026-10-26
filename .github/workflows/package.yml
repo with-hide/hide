@@ -79,6 +79,40 @@ permissions:
   contents: read
 
 jobs:
+  helper-identity:
+    if: ${{ inputs.include-macos }}
+    runs-on: ubuntu-latest
+    outputs:
+      source-sha: ${{ steps.identity.outputs.commit }}
+      version: ${{ steps.identity.outputs.version }}
+      build-order: ${{ steps.identity.outputs.order }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: with-hide/hide
+          ref: ${{ inputs.source-sha || github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Resolve one identity for the Mac app and its device helpers
+        id: identity
+        env:
+          HIDE_VERSION: ${{ inputs.version }}
+          HIDE_BUILD_ORDER: ${{ inputs.build-order }}
+        run: |
+          identity=$(node desktop/scripts/build-identity.mjs)
+          echo "$identity" | jq -r 'to_entries[] | "\(.key)=\(.value)"' >> "$GITHUB_OUTPUT"
+
+  device-helpers:
+    needs: helper-identity
+    if: ${{ inputs.include-macos }}
+    uses: ./.github/workflows/device-helpers.yml
+    with:
+      source-sha: ${{ needs.helper-identity.outputs.source-sha }}
+      version: ${{ needs.helper-identity.outputs.version }}
+      build-order: ${{ needs.helper-identity.outputs.build-order }}
+
   package:
     name: package (${{ matrix.system }})
     env:
@@ -103,6 +137,7 @@ jobs:
         run: git config --global core.autocrlf false
       - uses: actions/checkout@v7
         with:
+          repository: with-hide/hide
           ref: ${{ inputs.source-sha || github.sha }}
       - uses: pnpm/action-setup@v6
         with:
@@ -292,6 +327,7 @@ jobs:
 
   macos-package:
     name: package (macos)
+    needs: [helper-identity, device-helpers]
     env:
       HIDE_POSTHOG_PROJECT_TOKEN: ${{ vars.HIDE_POSTHOG_PROJECT_TOKEN }}
     if: ${{ inputs.include-macos }}
@@ -303,6 +339,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          repository: with-hide/hide
           ref: ${{ inputs.source-sha || github.sha }}
       - uses: pnpm/action-setup@v6
         with:
@@ -314,8 +351,8 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
       - name: Name the version
         env:
-          REQUESTED: ${{ inputs.version }}
-          REQUESTED_ORDER: ${{ inputs.build-order }}
+          REQUESTED: ${{ needs.helper-identity.outputs.version }}
+          REQUESTED_ORDER: ${{ needs.helper-identity.outputs.build-order }}
         run: |
           version="${REQUESTED#v}"
           echo "HIDE_VERSION=$version" >> "$GITHUB_ENV"
@@ -335,6 +372,18 @@ jobs:
       - name: Install dependencies
         timeout-minutes: 5
         run: bash scripts/verify-web.sh install
+      - uses: actions/download-artifact@v8
+        with:
+          name: hide-device-helper-macos-x86_64
+          path: desktop/out/device-helpers/macos-x86_64
+      - uses: actions/download-artifact@v8
+        with:
+          name: hide-device-helper-linux-x86_64
+          path: desktop/out/device-helpers/linux-x86_64
+      - uses: actions/download-artifact@v8
+        with:
+          name: hide-device-helper-linux-aarch64
+          path: desktop/out/device-helpers/linux-aarch64
       - name: Install the Developer ID certificate and the notary key
         # The certificate goes into a keychain of this job's own, put on the
         # search list so codesign finds it; the step names the one Developer

@@ -27,7 +27,7 @@ PACKAGE_INPUTS = (
     "contracts/herdr-bundle.json", "scripts/fetch-herdr-runtime.sh", "scripts/fetch-herdr-runtime.ps1",
     "scripts/verify-cargo.sh", "scripts/verify-web.sh", "scripts/toolchain-env.sh",
     "hided/build.rs", "hided/src/cli.rs", "hide-kit/src/lib.rs", "hide-agent-hooks/src/main.rs",
-    ".github/workflows/package.yml", ".github/workflows/release.yml",
+    ".github/workflows/package.yml", ".github/workflows/device-helpers.yml", ".github/workflows/release.yml",
 )
 
 

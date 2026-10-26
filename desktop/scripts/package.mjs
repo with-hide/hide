@@ -12,7 +12,8 @@
 // builds an unsigned per-user installer and Linux x64 an unsigned deb and rpm
 // (operator decision 2026-10-03, PRD auto-update D-07: no paid signing outside
 // macOS). Each is built on its own system, because the release binaries come from that
-// system's cargo build; nothing is cross-built.
+// system's cargo build. A Mac also consumes the three device helper artifacts
+// built by device-helpers.yml at this exact source, version and build order.
 //
 // The CLI finds `hided` beside its own file and the daemon offers its own
 // program to a device, which runs it as `hided node serve`, so all of them
@@ -28,6 +29,8 @@ import { packager } from "@electron/packager";
 import { applyFuses, assertFuses } from "./fuses.mjs";
 import { APP_ID, buildInstallers } from "./installers.mjs";
 import { assertNotarized, developerIdOptions, macosSigning, notarizeApp } from "./macos-signing.mjs";
+import { orderOnMain, resolveVersion } from "./build-identity.mjs";
+import { DEVICE_PLATFORMS, assertDeviceExecutable, deviceHelperResources } from "./device-helpers.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repo = path.resolve(root, "..");
@@ -36,15 +39,6 @@ const resources = path.join(root, "resources");
 
 /** Runs a tool in the repository; its stdout is the answer, unless `stdio` shows it instead. */
 const run = (file, args, options = {}) => execFileSync(file, args, { cwd: repo, stdio: ["ignore", "pipe", "inherit"], encoding: "utf8", ...options })?.trim() ?? "";
-
-/** The first-parent count of the last commit HEAD shares with main. */
-function orderOnMain() {
-  if (run("git", ["rev-parse", "--is-shallow-repository"]) === "true") {
-    throw new Error("a shallow checkout cannot count the package's place in main's history: fetch it, or set HIDE_BUILD_ORDER");
-  }
-  const base = run("git", ["merge-base", "HEAD", "origin/main"]);
-  return run("git", ["rev-list", "--first-parent", "--count", base]);
-}
 
 // Windows starts pnpm's `.cmd` shim only through a shell; the arguments here
 // are fixed words, so the shell has nothing to reinterpret.
@@ -83,34 +77,6 @@ const SYSTEMS = {
   },
 };
 
-// The app version comes from the release tag (release.yml passes
-// HIDE_VERSION). A local build is named after the newest release tag behind
-// it and its own commit, `0.4.0-main.<commit>`: it never claims a release it
-// is not, even on a tagged commit, and orders with the releases it follows
-// (hided's build_order reads MAJOR.MINOR.PATCH). That shape is no release
-// number, so the app never updates itself from it (src/main/updater.ts).
-function resolveVersion() {
-  const requested = process.env.HIDE_VERSION?.replace(/^v/, "");
-  if (requested) {
-    if (!/^[0-9]/.test(requested)) throw new Error(`HIDE_VERSION is not a version: '${requested}'`);
-    return requested;
-  }
-  let tag;
-  try {
-    tag = run("git", ["describe", "--tags", "--match", "v[0-9]*", "--abbrev=0"]);
-  } catch {
-    tag = "";
-  }
-  const release = /^v([0-9]+\.[0-9]+\.[0-9]+)/.exec(tag)?.[1];
-  if (!release) throw new Error(`HIDE_VERSION is unset and no v<version> tag is behind this tree (got '${tag || "nothing"}')`);
-  // A semver identifier of digits alone may not start with 0, so a commit
-  // that happens to be all digits keeps git's own `g` mark.
-  const short = run("git", ["rev-parse", "--short=8", "HEAD"]);
-  const commit = /^[0-9]+$/.test(short) ? `g${short}` : short;
-  const dirty = run("git", ["status", "--porcelain", "--untracked-files=no"]) !== "";
-  return `${release}-main.${commit}${dirty ? ".dirty" : ""}`;
-}
-
 const platform = process.platform;
 const system = SYSTEMS[platform];
 if (!system) throw new Error(`hide has no package for ${platform}`);
@@ -143,6 +109,11 @@ if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error(`the package's commit could 
 // names it in HIDE_BUILD_ORDER, or is refused.
 const order = process.env.HIDE_BUILD_ORDER || orderOnMain();
 if (!/^[0-9]+$/.test(order)) throw new Error(`the package's build order could not be read (got '${order}')`);
+// Required artifacts are checked before the native release build. No partial
+// Mac app may silently leave another supported system without its kit.
+const deviceHelpers = platform === "darwin"
+  ? deviceHelperResources(path.join(out, "device-helpers"), { version, commit, order })
+  : [];
 run("bash", ["scripts/verify-cargo.sh", "release"], { stdio: "inherit", env: { ...process.env, HIDE_VERSION: version, HIDE_COMMIT: commit, HIDE_BUILD_ORDER: order } });
 const herdr = system.herdr();
 
@@ -152,10 +123,20 @@ const shipped = [
   [`hide${exe}`, path.join(cargoRelease, `hide${exe}`)],
   [`hide-agent-hooks${exe}`, path.join(cargoRelease, `hide-agent-hooks${exe}`)],
   [`herdr${exe}`, herdr.executable],
+  ...deviceHelpers,
 ];
-const missing = shipped.filter(([, source]) => {
+if (platform === "darwin") {
+  for (const devicePlatform of Object.keys(DEVICE_PLATFORMS)) {
+    const source = run("zsh", ["scripts/fetch-herdr-runtime.sh", "--platform", devicePlatform]);
+    assertDeviceExecutable(fs.readFileSync(source), devicePlatform);
+    shipped.push([`herdr-${devicePlatform}`, source]);
+  }
+}
+const missing = shipped.filter(([name, source]) => {
   try {
-    fs.accessSync(source, fs.constants.X_OK);
+    // Downloaded workflow artifacts lose executable bits; staging restores
+    // them. Native programs must already be runnable by this builder.
+    fs.accessSync(source, name.includes("-macos-") || name.includes("-linux-") ? fs.constants.R_OK : fs.constants.X_OK);
     return !fs.statSync(source).isFile();
   } catch {
     return true;
@@ -290,6 +271,7 @@ for (const [name] of shipped) {
   const file = path.join(bundledResources, name);
   fs.accessSync(file, fs.constants.X_OK);
   if (!fs.statSync(file).isFile()) throw new Error(`${name} did not land as a file in ${bundledResources}`);
+  if (name.includes("-macos-") || name.includes("-linux-")) console.log(`device_resource=${name} bytes=${fs.statSync(file).size}`);
 }
 for (const companion of herdr.companions) {
   const name = path.basename(companion);
@@ -298,8 +280,22 @@ for (const companion of herdr.companions) {
 if (platform === "darwin") {
   const helper = path.join(bundle, "Contents", "MacOS", path.basename(notificationHelper));
   if (!fs.statSync(helper, { throwIfNoEntry: false })?.isFile()) throw new Error(`the notification permission helper did not land at ${helper}`);
-  // A Developer ID bundle was signed inside the packager and is notarized below.
-  if (signing.mode === "adhoc") run("/usr/bin/codesign", ["--force", "--deep", "--sign", "-", "--timestamp=none", bundle], { stdio: "inherit" });
+  // Linux ELFs are inert data here. Both Mac architectures are executable
+  // code and must carry the same signature path as the native programs.
+  const macPrograms = shipped.filter(([name]) => !name.includes("-linux-")).map(([name]) => path.join(bundledResources, name));
+  if (signing.mode === "adhoc") {
+    for (const file of macPrograms) run("/usr/bin/codesign", ["--force", "--sign", "-", "--timestamp=none", file], { stdio: "inherit" });
+    run("/usr/bin/codesign", ["--force", "--deep", "--sign", "-", "--timestamp=none", bundle], { stdio: "inherit" });
+  }
+  for (const file of macPrograms) {
+    run("/usr/bin/codesign", ["--verify", "--strict", file], { stdio: "inherit" });
+    if (signing.mode === "developer-id") {
+      const signature = spawnSync("/usr/bin/codesign", ["-dv", file], { encoding: "utf8" }).stderr;
+      if (!signature.includes("Authority=Developer ID Application:") || !/flags=0x[0-9a-f]+\([^)]*runtime/.test(signature)) {
+        throw new Error(`${path.basename(file)} needs a Developer ID hardened-runtime signature`);
+      }
+    }
+  }
   run("/usr/bin/codesign", ["--verify", "--deep", "--strict", "--verbose=2", bundle], { stdio: "inherit" });
   // Signing the bundle again must not have given the helper another identity.
   const signed = spawnSync("/usr/bin/codesign", ["-dv", helper], { encoding: "utf8" }).stderr;
