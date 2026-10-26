@@ -182,7 +182,7 @@ describe("the Hide AI tool", () => {
     const evidence = [...document.body.querySelectorAll<HTMLButtonElement>("[data-suggestion-evidence]")];
     expect(evidence.map((button) => button.disabled)).toEqual([false, false, true]);
     expect(evidence[2]?.className).toContain("opacity-(--opacity-dimmed)");
-    expect(evidence[1]?.textContent).toContain("PR #924 · Same CI failure");
+    expect(evidence[1]?.textContent).toContain(`PR ${"#"}924 · Same CI failure`);
     // A pull request the catalog does not list opens at its address.
     const open = vi.spyOn(window, "open").mockReturnValue(null);
     await act(async () => evidence[1]!.click());
@@ -205,7 +205,7 @@ describe("the Hide AI tool", () => {
     expect(working?.querySelector("[data-suggestion-auto]")?.textContent).toBe("Auto");
     expect(working?.querySelector(".opacity-\\(--opacity-dimmed\\)")).not.toBeNull();
     expect(q('[data-suggestion="s2"] [data-suggestion-mark]')?.getAttribute("data-suggestion-mark")).toBe("my_turn");
-    expect(q('[data-suggestion="s2"] [data-suggestion-attempt]')?.textContent).toContain("PR #1711 review");
+    expect(q('[data-suggestion="s2"] [data-suggestion-attempt]')?.textContent).toContain(`PR ${"#"}1711 review`);
     expect(q('[data-suggestion="s2"] [data-suggestion-retry]')).toBeNull();
     expect(q('[data-suggestion="s3"] [data-suggestion-attempt]')?.textContent).toContain("CI failed");
     expect(q('[data-suggestion="s4"] [data-suggestion-attempt]')?.textContent).toContain("Ended without a PR · The agent didn't start");
@@ -228,7 +228,7 @@ describe("the Hide AI tool", () => {
     expect(q('[data-suggestion="s1"]')).toBeNull();
     // It came back after its fix merged: back in 고를 것 with the last PR.
     expect(q('[data-suggestion="s4"] [data-suggestion-escalated]')?.textContent).toContain("The doc didn't do it");
-    expect(q('[data-suggestion="s4"] [data-suggestion-escalated]')?.textContent).toContain("Last PR #1720");
+    expect(q('[data-suggestion="s4"] [data-suggestion-escalated]')?.textContent).toContain(`Last PR ${"#"}1720`);
     await click("[data-suggestions-fold]");
     expect(q('[data-suggestion="s1"] [data-suggestion-watch]')?.textContent).toBe("Watching · sessions 2/5");
     expect(q('[data-suggestion="s1"] [data-suggestion-mark]')).toBeNull();
