@@ -57,6 +57,8 @@ describe("the Memory tab's card list", () => {
 
   it("names a row's time as minutes, hours, yesterday, then the date", () => {
     const now = new Date(2026, 9, 12, 15, 0).getTime();
+    expect(memoryTime(now - 20_000, "ko", now)).toBe("지금");
+    expect(memoryTime(now - 20_000, "en", now)).toBe("now");
     expect(memoryTime(now - 12 * 60_000, "ko", now)).toBe("12분 전");
     expect(memoryTime(now - 3 * 3_600_000, "ko", now)).toBe("3시간 전");
     expect(memoryTime(new Date(2026, 9, 11, 9, 0).getTime(), "ko", now)).toBe("어제");

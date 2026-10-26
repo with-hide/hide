@@ -41,6 +41,8 @@ export function visibleCards(cards: MemoryRow[], expanded: number | null, all: b
 /** A row's time: minutes or hours ago today, yesterday, then the date. */
 export function memoryTime(unixMs: number, language: InterfaceLanguage, now = Date.now()): string {
   const elapsed = Math.max(0, now - unixMs);
+  // Under a minute is "now": zero minutes would read "this minute" (`현재 분`).
+  if (elapsed < 60_000) return formatRelativeTime(language, 0, "second");
   if (elapsed < 60 * 60_000) return formatRelativeTime(language, -Math.floor(elapsed / 60_000), "minute");
   const then = new Date(unixMs);
   const today = new Date(now);
