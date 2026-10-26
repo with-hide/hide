@@ -1,7 +1,7 @@
 # Background AI providers
 
 `hide-ai/` is the one boundary through which a Hide feature asks a language model for something in the background.
-Its consumers are the core's agent label analyzer (`herdr-core/src/labels/analyzer.rs`), Project Memory extraction under `hide-memory/`, and the Start dialog's worktree name; later features reuse the same boundary rather than a provider client of their own.
+Its consumers are the core's agent label analyzer (`herdr-core/src/labels/analyzer.rs`), Project Memory extraction under `hide-memory/`, the Start dialog's worktree name, and the suggestion investigation (`herdr-core/src/suggestions/investigation/`); later features reuse the same boundary rather than a provider client of their own.
 This guide owns the boundary's rules; the code under `hide-ai/src/` and the tests under `hide-ai/tests/` are its executable authority.
 
 ## Ownership split
@@ -72,6 +72,53 @@ Logs retain request, feature, provider, Project/session subject IDs, counts, dur
 The existing verification and promotion-check answers include `docs_disagree` with a shown repository path and exact conflicting quote; no extra conflict call is made.
 Authority is decided from direct operator evidence and semantic scope; source and file times are provenance and never select the winner.
 An unresolved disagreement needs an operator answer.
+
+## The suggestion investigation
+
+Hide AI 제안 (PRD hide-ai-suggestions) finds recurring problems with feature id `suggestions_investigation`, the one feature that asks over several turns (`herdr-core/src/suggestions/investigation/`).
+It is the core's analysis that edits a Project's notebook: its input is the record index and the notebook, its output the edits it writes, and nothing else in the suggestion area depends on how it works inside.
+The turns are `hide_ai::run_turns` (`hide-ai/src/turns.rs`): each turn is one `AiRouter::execute`, so provider selection and fallback, the usage limit, duplicate suppression, cancellation, process ownership and usage counting are the router's, and every turn is a call.
+No provider keeps a conversation between turns: each turn's request carries everything the model needs, so Claude, Codex, Grok, Pi, omp and Antigravity take part the same way through the one-shot surfaces below, and Codex's thread stays ephemeral per turn.
+OpenCode answers `Unsupported` as it does for any request, so no investigation runs on it.
+
+A turn sends, within the 64 KiB request input (every number is in `herdr-core/src/suggestions/policy.rs`):
+
+- the turn's number, the turns left and its phase;
+- the notebook: each line's number, stage, discomfort, cause, fix and outcome, how many records it has and its newest record numbers, open lines first, at most 20 KiB;
+- the fresh records grouped by signal and tag: their numbers, how many sessions, the pull request numbers and how many days ago, never the words around them, at most 12 KiB;
+- the model's own notes from the turn before (at most 1,000 characters), the outcome of each edit it made, and the results of the reads it asked for, at most 24 KiB together and 8 KiB each.
+
+The model answers one JSON object (`PlainJson`, schema `suggestions_investigation.v1`): at most eight notebook edits, applied in order and each saved before the next is taken, at most four reads for the next turn, its notes, and whether it is done.
+It runs nothing itself.
+A read is a request Hide fulfils with its own fixed tools on the node that holds the Project, on the investigation's worker, off the runtime lock and off the session-sync thread:
+
+| Read | What Hide runs | Bound |
+| --- | --- | --- |
+| `session` | the session a record happened in, through the session readers (`Call::SessionConversation`), around the record or from an event number | 16 events, at most 40, 2,000 characters an event |
+| `ci_log` | the failed check's page from the pull request's checks (`gh pr view`), then `gh run view --job <id> --log-failed`, which the node cuts to its last 256 KiB | the last 200 lines; a check not on GitHub Actions is refused |
+| `file` | the file's first 256 KiB (`Call::Bytes`), as numbered lines | 120 lines, at most 200 |
+| `search` | `git grep` of tracked text files for a fixed text, case ignored (`GitCommand::Grep`) | 5 lines a file, 40 shown, 64 KiB from the node |
+| `git_log` | `git log` of the repository or of one path (`GitCommand::Log`) | 10 commits, at most 20 |
+
+Every result passes the Memory redactor (`hide_memory::redact`) before it is put in a request, and is cut to its bound.
+A path with a credential file anywhere in it (the rule Memory's checks use: `.env*`, keys and certificates, names containing `secret` or `credential`) or Git's own folder, whose configuration can hold a token, is refused before anything is read, and a search hit in such a file is not shown.
+Each line a result keeps is at most 400 characters.
+
+A run has 30 turns and 20 minutes (`RUN_TURNS`, `RUN_SPAN_MS`), and one turn is given at most two minutes.
+The four turns before the last ask the model to wrap up.
+The last turn, at the turn limit or once less than a turn's time is left, offers no read and asks for the final edits; a turn that got no usable answer (an answer the schema refused twice, a timeout, a lost completion) is followed by that last turn.
+Every turn is admitted against the machine-wide daily call cap before it is asked, and the usage ledger counts the turns with Memory's calls (`memory`), since both are the Hide AI tool.
+
+The run's end is what the core's analysis boundary reads:
+
+- `done`: the model said so.
+- `turn_limit` or `time_limit`: the last turn was answered; records it did not reach stay fresh for the next run.
+- `usage_paused`: the usage limit or the daily call cap; nothing more is asked, and the run resumes later.
+- `failed`: no agent could answer (not signed in, unavailable, a cap of the router), or no turn got a usable answer; a run with no usable answer wrote nothing, and the core then judges the records by score alone.
+- `stopped`: the notebook could not be saved, the Project was turned off or the core is stopping.
+
+None of it reaches the screen (design principle 13).
+The diagnostic log's `suggestions` `investigation.finished` carries the Project, the run, the end and its cause class, the turns asked and answered, the reads by tool and those refused, the edits by kind and those refused, the fresh records and the duration; never a prompt, a record's words, a file, a path or an answer.
 
 ## Providers
 
@@ -353,7 +400,7 @@ In the web shell the daemon holds that flag for every connected page: each page 
 
 ### What leaves the machine
 
-Hide AI sends redacted conversation summaries, Project Memory batches and a pull request's title, body start, file names and check names (for a card's summary) to the agent the operator chose in Settings (Runs on) and to the agents the operator added under fallback, and to no other.
+Hide AI sends redacted conversation summaries, Project Memory batches, a pull request's title, body start, file names and check names (for a card's summary), and a suggestion investigation's record index, notebook and the redacted session excerpts, CI log ends and repository files its reads open to the agent the operator chose in Settings (Runs on) and to the agents the operator added under fallback, and to no other.
 A registered agent that is neither chosen nor in the fallback list is never asked a request: its program may be installed and logged in, and it is only inspected, for the Settings screen, which starts no model turn.
 Because the list is the operator's, adding an agent to it is the consent for that agent, and Project Memory's disclosure names it (its version moves when this description changes, so earlier opt-ins are asked again).
 
@@ -653,6 +700,7 @@ The label worker parks a turn for good on a settled failure and asks again after
 
 ## Logging
 
+The suggestion investigation's own line is described under [The suggestion investigation](#the-suggestion-investigation).
 The router emits `ai.attempt`, `ai.request.finished`, `ai.request.joined`, `ai.fallback`, `ai.usage_limit`, `ai.provider.degraded`, `ai.provider.recovered`, `ai.budget.exceeded`, `ai.app_server.over_budget` and, once per UTC day, `ai.daily_rollup`; the codex backend emits `ai.app_server.idle_exit`, `ai.codex_home.swept` and `ai.codex_home.sweep_failed`.
 A line carries the request id, feature id, provider, outcome class, attempt, duration, input length, output tokens and schema version; an `ai.attempt` line also carries `thinking_tokens` when the provider reported some above zero, and `effort` when the attempt asked its provider for one.
 Every `ai.request.finished` of a provider that declares itself measurable (`AiBackend::measurable()`, today only codex, whose app-server is resident) also carries the app-server pid and the process measurement (`app_server_pid`, `descendants`, `rss_bytes`), or `measurement=unavailable` where the platform cannot measure it.
