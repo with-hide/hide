@@ -273,6 +273,7 @@ class Selection(unittest.TestCase):
                 self.assertNotIn("package", plan(path)["lanes"])
         self.assertEqual(set(plan("hide-kit/src/lib.rs")["lanes"]) & MACOS_LANES, {"desktop-e2e", "package"})
         self.assertEqual(plan(".github/workflows/package.yml")["lanes"], ["policy", "package"])
+        self.assertEqual(plan(".github/workflows/device-helpers.yml")["lanes"], ["policy", "package"])
 
     def test_the_desktop_lane_follows_what_the_app_runs(self):
         for path in (
