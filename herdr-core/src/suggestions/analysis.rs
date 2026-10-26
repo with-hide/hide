@@ -10,8 +10,6 @@
 use super::ledger::{RecordId, RecordIndex, Signal};
 use super::notebook::{EditRefused, LineId, Notebook, NotebookEdit, Outcome};
 use std::collections::BTreeMap;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 /// What one run may spend (D-36): turns and wall time, and the flag that
@@ -25,17 +23,23 @@ pub struct AnalysisBudget {
     pub stop: StopFlag,
 }
 
-/// A run's stop: set once, read from any thread.
+/// A run's stop: set once, read from any thread. It is a provider cancel
+/// token, so a stop also ends a provider turn in flight.
 #[derive(Clone, Debug, Default)]
-pub struct StopFlag(Arc<AtomicBool>);
+pub struct StopFlag(hide_ai::CancelToken);
 
 impl StopFlag {
     pub fn set(&self) {
-        self.0.store(true, Ordering::Release);
+        self.0.cancel();
     }
 
     pub fn is_set(&self) -> bool {
-        self.0.load(Ordering::Acquire)
+        self.0.is_cancelled()
+    }
+
+    /// The token a provider call made for this run is given.
+    pub fn token(&self) -> hide_ai::CancelToken {
+        self.0.clone()
     }
 }
 
