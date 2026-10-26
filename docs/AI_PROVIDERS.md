@@ -123,7 +123,7 @@ The run's end is what the core's analysis boundary reads:
 - `done`: the model said so.
 - `turn_limit` or `time_limit`: the last turn was answered; records it did not reach stay fresh for the next run.
 - `usage_paused`: the usage limit or the daily call cap; nothing more is asked, and the run resumes later.
-- `failed`: no agent could answer (not signed in, unavailable, a cap of the router), or no turn got a usable answer; a run with no usable answer wrote nothing, and the core then judges the records by score alone, through the grouping by signal and tag (`not_investigated`).
+- `failed`: no agent could answer (not signed in, unavailable, a cap of the router), or no turn got a usable answer; a run with no usable answer wrote nothing; the core then groups what it left unread by tag and raises nothing that day, and the tab says `조사 못 함` (`not_investigated`, `docs/ARCHITECTURE.md`).
 - `stopped`: the notebook could not be saved, the Project was turned off or the core is stopping.
 
 None of it reaches the screen (design principle 13).

@@ -8,7 +8,7 @@
 //! and cancellation.
 //!
 //! A run that gets no usable answer writes nothing and ends `failed`, which
-//! the core reads as "조사 못 함" and judges by score alone (D-35). A usage
+//! the core reads as "조사 못 함": nothing is raised that day (D-35). A usage
 //! limit or the daily call cap ends it `usage_paused`; an agent that cannot
 //! answer ends it `failed` having written nothing new, so the records it
 //! did not reach stay fresh for the next run. None of it reaches the screen;

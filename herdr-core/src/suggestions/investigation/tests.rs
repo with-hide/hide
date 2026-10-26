@@ -543,8 +543,8 @@ impl crate::suggestions::worker::Sink for ReadySink {
 }
 
 #[test]
-fn an_investigation_that_gets_no_answer_leaves_the_day_to_the_tag_grouping() {
-    use crate::model::{SuggestionGroup, SuggestionState};
+fn an_investigation_that_gets_no_answer_raises_nothing_and_says_so() {
+    use crate::model::{SuggestionGroup, SuggestionState, SuggestionsStatus};
     use crate::suggestions::ledger::Observation;
     use crate::suggestions::worker::{Command, Options, ProjectRef, RunPlan, SuggestionWorker};
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -621,21 +621,19 @@ fn an_investigation_that_gets_no_answer_leaves_the_day_to_the_tag_grouping() {
     reads.recv_timeout(wait).unwrap();
     clock.fetch_add(policy::WAKE_DELAY_MS + 1, Ordering::SeqCst);
     client.send(Command::IntroSeen);
-    let read =
-        loop {
-            let read = reads.recv_timeout(wait).expect("a read");
-            if read.rows.iter().any(|row| {
-                row.group == SuggestionGroup::Choose && row.state == SuggestionState::New
-            }) {
-                break read;
-            }
-        };
-    assert_eq!(
-        read.rows[0].basis.as_ref().map(|basis| basis.tag.as_str()),
-        Some("cargo test"),
-        "the line is the tag grouping's"
+    let read = loop {
+        let read = reads.recv_timeout(wait).expect("a read");
+        if read.status == SuggestionsStatus::NotInvestigated {
+            break read;
+        }
+    };
+    assert!(
+        !read
+            .rows
+            .iter()
+            .any(|row| row.group == SuggestionGroup::Choose && row.state == SuggestionState::New),
+        "scores alone raise nothing"
     );
-    assert_eq!(read.rows[0].evidence.len(), 3);
     assert_eq!(
         asked.asked.lock().unwrap().len(),
         2,
