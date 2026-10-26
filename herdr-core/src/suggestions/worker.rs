@@ -479,12 +479,12 @@ impl Worker {
                 let Some(id) = self.resolve(&project, sink) else {
                     return;
                 };
-                if self.observe(&id, facts) {
+                if self.observe(&id, facts, sink) {
                     self.locate(&id, &project);
                 }
             }
             Command::ObserveProject { project_id, facts } => {
-                self.observe(&project_id, facts);
+                self.observe(&project_id, facts, sink);
             }
             Command::Settings { project, change } => {
                 let Some(id) = self.resolve(&project, sink) else {
@@ -547,9 +547,11 @@ impl Worker {
                 }
                 self.complete(&project, end, edits);
                 // The run may have put new pull request records on a
-                // watched line, whose heads the runtime then asks about.
-                self.settle(&project);
+                // watched line: the runtime asks about their heads first.
                 self.publish_followed(sink);
+                if self.settle(&project) {
+                    self.publish_followed(sink);
+                }
                 self.auto_apply(&project, sink);
                 self.publish_if_opened(&project, sink);
             }
@@ -601,7 +603,7 @@ impl Worker {
 
     /// Records the facts the Project's switches let in; answers whether the
     /// store took any.
-    fn observe(&mut self, project: &str, facts: Vec<Observation>) -> bool {
+    fn observe(&mut self, project: &str, facts: Vec<Observation>, sink: &impl Sink) -> bool {
         let now = self.now();
         let Ok(store) = self.store.as_mut() else {
             return false;
@@ -620,22 +622,27 @@ impl Worker {
         if kept.is_empty() {
             return false;
         }
-        match store.record(project, kept, now) {
-            Ok((written, pruned)) => {
-                if !written.is_empty() || pruned.records > 0 {
-                    crate::diagnostic!(json!({
-                        "component": "suggestions", "kind": "records.kept",
-                        "project_id": project, "written": written.len(),
-                        "pruned": pruned.records, "references_pruned": pruned.references,
-                    }));
-                }
-                !written.is_empty()
-            }
+        let recorded = match store.record(project, kept, now) {
+            Ok(recorded) => recorded,
             Err(code) => {
                 log_store("observe", &code);
-                false
+                return false;
             }
+        };
+        let (written, moved, pruned) = (recorded.written, recorded.moved, recorded.pruned);
+        if !written.is_empty() || !moved.is_empty() || pruned.records > 0 {
+            crate::diagnostic!(json!({
+                "component": "suggestions", "kind": "records.kept",
+                "project_id": project, "written": written.len(), "moved": moved.len(),
+                "pruned": pruned.records, "references_pruned": pruned.references,
+            }));
         }
+        if !moved.is_empty() {
+            // A watched line's record may now name a head GitHub was not
+            // asked about.
+            self.publish_followed(sink);
+        }
+        !written.is_empty()
     }
 
     /// Remembers the machine and folder `project` was named from, once per

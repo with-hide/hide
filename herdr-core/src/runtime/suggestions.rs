@@ -327,9 +327,9 @@ impl Runtime {
     }
 
     /// Hands the worker what GitHub's reads say went wrong in each Project's
-    /// pull requests (B4, D-19): each check an open one failed, and each
-    /// that merged after a review asked for changes. Only what was not sent
-    /// before leaves the lock.
+    /// pull requests (B4, D-19): each check an open one failed, again on
+    /// each new head it fails on, and each that merged after a review asked
+    /// for changes. Only what was not sent before leaves the lock.
     pub(super) fn feed_suggestion_prs(&mut self) {
         use crate::model::ReviewDecision;
         use crate::suggestions::ledger::{Observation, PrRef};
@@ -371,14 +371,16 @@ impl Runtime {
                     };
                     let open = pr.merged_at_unix_ms.is_none() && pr.closed_at_unix_ms.is_none();
                     if open {
+                        let head = pr.head_oid.as_deref().unwrap_or_default();
                         for check in &pr.work.failed_checks {
                             let tag = check.name.clone().unwrap_or_else(|| "check".to_owned());
-                            if remember(&mut work.sent_prs, format!("{unit}\u{1f}c\u{1f}{tag}")) {
+                            let key = format!("{unit}\u{1f}c\u{1f}{tag}\u{1f}{head}");
+                            if remember(&mut work.sent_prs, "sent_prs", key) {
                                 facts.push(fact(Signal::CheckFailed, tag, now));
                             }
                         }
                         if pr.review == Some(ReviewDecision::ChangesRequested) {
-                            remember(&mut work.changes_requested, unit);
+                            remember(&mut work.changes_requested, "changes_requested", unit);
                         }
                     } else if let Some(merged) = pr.merged_at_unix_ms
                         && work.changes_requested.remove(&unit)
@@ -618,14 +620,23 @@ fn lay_facts(project: &mut ProjectSuggestionsSnapshot, facts: LockFacts, memory_
 }
 
 /// Adds `key` to a bounded set; whether it was new.
-fn remember(set: &mut HashSet<String>, key: String) -> bool {
+fn remember(set: &mut HashSet<String>, cache: &str, key: String) -> bool {
     if set.contains(&key) {
         return false;
     }
     if set.len() >= crate::suggestions::policy::PR_KEYS {
         set.clear();
+        cache_cleared(cache, crate::suggestions::policy::PR_KEYS);
     }
     set.insert(key)
+}
+
+/// A suggestions cache crossed its bound and starts over.
+pub(super) fn cache_cleared(cache: &str, limit: usize) {
+    crate::diagnostic!(json!({
+        "component": "suggestions", "kind": "cache.full",
+        "cache": cache, "limit": limit,
+    }));
 }
 
 /// Hands the worker's reads to the runtime and answers its questions under

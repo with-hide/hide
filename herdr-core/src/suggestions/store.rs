@@ -130,6 +130,15 @@ fn sibling(path: &Path, suffix: &str) -> PathBuf {
     path.with_file_name(name)
 }
 
+/// What one `record` call kept: the new records, the records a pull
+/// request's failure on a newer head moved, and what the prune took away.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Recorded {
+    pub written: Vec<RecordId>,
+    pub moved: Vec<RecordId>,
+    pub pruned: Pruned,
+}
+
 /// What a prune took away: the records, and the lines' references to them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Pruned {
@@ -275,14 +284,15 @@ impl SuggestionStore {
 
     /// Keeps `facts` as records of `project`, each fact folding into the
     /// record already kept under its key (B4: once per session or pull
-    /// request), and prunes past the age and count bounds. Answers the
-    /// records it wrote.
+    /// request), and prunes past the age and count bounds. A pull request's
+    /// failure on a head other than the one kept moves its one record to
+    /// that head and time, so a watch asks about the head it failed on last.
     pub fn record(
         &mut self,
         project: &str,
         facts: Vec<Observation>,
         now: u64,
-    ) -> Result<(Vec<RecordId>, Pruned), String> {
+    ) -> Result<Recorded, String> {
         let tx = self.connection.transaction().map_err(failed)?;
         Self::ensure(&tx, project)?;
         let mut next: u64 = tx
@@ -293,6 +303,7 @@ impl SuggestionStore {
             )
             .map_err(failed)? as u64;
         let mut written = Vec::new();
+        let mut moved = Vec::new();
         for fact in facts {
             let Some(fact) = fact.normalized() else {
                 continue;
@@ -309,6 +320,22 @@ impl SuggestionStore {
             if inserted == 1 {
                 written.push(RecordId(next));
                 next += 1;
+            } else if fact.head.is_some() {
+                let (id, kept): (i64, String) = tx
+                    .query_row(
+                        "SELECT id, fact FROM records WHERE project=?1 AND key=?2",
+                        params![project, key],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .map_err(failed)?;
+                if decode::<Observation>(&kept)?.head != fact.head {
+                    tx.execute(
+                        "UPDATE records SET at=?3, fact=?4 WHERE project=?1 AND id=?2",
+                        params![project, id, fact.at_unix_ms as i64, encode(&fact)?],
+                    )
+                    .map_err(failed)?;
+                    moved.push(RecordId(id as u64));
+                }
             }
         }
         tx.execute(
@@ -318,7 +345,11 @@ impl SuggestionStore {
         .map_err(failed)?;
         let pruned = Self::prune_in(&tx, project, now)?;
         tx.commit().map_err(failed)?;
-        Ok((written, pruned))
+        Ok(Recorded {
+            written,
+            moved,
+            pruned,
+        })
     }
 
     fn prune_in(tx: &Transaction<'_>, project: &str, now: u64) -> Result<Pruned, String> {
@@ -569,7 +600,7 @@ impl SuggestionStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::suggestions::ledger::{SessionRef, Signal};
+    use crate::suggestions::ledger::{PrRef, SessionRef, Signal};
     use crate::suggestions::notebook::{NotebookEdit, Stage};
     use crate::suggestions::policy::DAY_MS;
 
@@ -597,7 +628,7 @@ mod tests {
         let file = path(dir.path());
         let (mut store, opened) = SuggestionStore::open(&file).unwrap();
         assert_eq!(opened, Opened::Fresh);
-        let (written, _) = store
+        let written = store
             .record(
                 "p",
                 vec![
@@ -607,15 +638,17 @@ mod tests {
                 ],
                 NOW,
             )
-            .unwrap();
+            .unwrap()
+            .written;
         assert_eq!(
             written,
             [RecordId(1), RecordId(2)],
             "the second sighting folds"
         );
-        let (written, _) = store
+        let written = store
             .record("p", vec![failed_tool("cargo test", "a", NOW + 5)], NOW)
-            .unwrap();
+            .unwrap()
+            .written;
         assert!(
             written.is_empty(),
             "a later sighting in the same session folds too"
@@ -628,6 +661,41 @@ mod tests {
         assert_eq!(records.len(), 2);
         assert!(records.iter().all(|(_, fresh)| *fresh));
         assert!(store.records("other").unwrap().is_empty());
+    }
+
+    /// B4, B15: a pull request's check stays one record, but a failure on
+    /// a newer head moves it there, with that failure's time; the same
+    /// head again moves nothing.
+    #[test]
+    fn a_pull_request_failure_on_a_newer_head_moves_its_one_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, _) = SuggestionStore::open(&path(dir.path())).unwrap();
+        let check = |head: &str, at: u64| Observation {
+            signal: Signal::CheckFailed,
+            tag: "verify".into(),
+            session: None,
+            pr: Some(PrRef {
+                number: 41,
+                url: "https://github.com/acme/app/pull/41".into(),
+            }),
+            checkout: None,
+            at_unix_ms: at,
+            always: false,
+            head: Some(head.into()),
+        };
+        let first = store.record("p", vec![check("a", NOW)], NOW).unwrap();
+        assert_eq!(first.written, [RecordId(1)]);
+        let newer = store.record("p", vec![check("b", NOW + 5)], NOW).unwrap();
+        assert_eq!(
+            (newer.written, newer.moved),
+            (Vec::new(), vec![RecordId(1)])
+        );
+        let again = store.record("p", vec![check("b", NOW + 9)], NOW).unwrap();
+        assert!(again.moved.is_empty(), "the same head moves nothing");
+        let kept = store.records("p").unwrap();
+        assert_eq!(kept.len(), 1, "still one pull request");
+        assert_eq!(kept[0].0.fact.head.as_deref(), Some("b"));
+        assert_eq!(kept[0].0.fact.at_unix_ms, NOW + 5);
     }
 
     #[test]
@@ -644,7 +712,7 @@ mod tests {
                 NOW - DAY_MS,
             )
             .unwrap();
-        let (_, pruned) = store.record("p", Vec::new(), NOW).unwrap();
+        let pruned = store.record("p", Vec::new(), NOW).unwrap().pruned;
         assert_eq!(pruned.records, 1);
         let kept = store.records("p").unwrap();
         assert_eq!(kept.len(), 1);
@@ -684,7 +752,7 @@ mod tests {
             .unwrap();
         store.save_edit("p", &notebook, &applied).unwrap();
 
-        let (_, pruned) = store.record("p", Vec::new(), NOW).unwrap();
+        let pruned = store.record("p", Vec::new(), NOW).unwrap().pruned;
         assert_eq!(
             pruned,
             Pruned {
