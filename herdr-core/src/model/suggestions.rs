@@ -215,7 +215,8 @@ pub struct SuggestionRowSnapshot {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SuggestionHold {
-    /// `GitHub 연결 필요` stands where `PR 만들기` would (D-41).
+    /// `GitHub 연결 필요` stands where `PR 만들기` or `이슈 만들기` would:
+    /// a pull request and an issue both need GitHub (D-41).
     GithubNeeded,
     /// An automatic pull request nobody reviewed yet holds the next one
     /// (D-29).
@@ -236,8 +237,9 @@ pub enum SuggestionEvidenceKind {
     Pr,
 }
 
-/// One piece of evidence a row links (B10); one whose session or pull
-/// request is gone is drawn dimmed and cannot be opened.
+/// One piece of evidence a row links (B10); a session whose record is gone
+/// is drawn dimmed and cannot be opened, and a pull request opens by its
+/// `url`.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct SuggestionEvidenceSnapshot {
     pub kind: SuggestionEvidenceKind,
