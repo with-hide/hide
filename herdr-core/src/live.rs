@@ -3855,9 +3855,10 @@ const ANTIGRAVITY_FORK_WAIT: Duration = Duration::from_secs(30);
 const ANTIGRAVITY_FORK_POLL: Duration = Duration::from_millis(250);
 /// Backspaces sent before each read of agy's composer while it is cleared
 /// for `/fork`, and the most sent in all: a read says whether the composer
-/// is empty, not how much it holds.
+/// is empty, not how much it holds, and the stray answer it clears is a few
+/// characters (`27;1$y`).
 const ANTIGRAVITY_ERASE_BATCH: usize = 8;
-const ANTIGRAVITY_ERASE_LIMIT: usize = 400;
+const ANTIGRAVITY_ERASE_LIMIT: usize = 64;
 /// How many reads of an agent's records in a row may meet the agent writing
 /// them before the reader gives up: 5 s of polls, far past one write.
 const NATIVE_READ_IN_MOTION_LIMIT: usize = 20;
@@ -3934,15 +3935,16 @@ fn fork_antigravity(
         Instant::now() + ANTIGRAVITY_FORK_WAIT,
     )
     .map_err(|error| format!("agy's conversation to fork could not be read: {error}"))?;
-    // The mark's read may have waited on agy writing its index: `/fork` is
-    // typed only into a pane still idle, never into a turn that began since.
+    clear_antigravity_composer(connector, pane_id, deadline)?;
+    // The mark's read may have waited on agy writing its index, and the
+    // composer's clearing on agy redrawing: `/fork` is typed only into a pane
+    // still idle, never into a turn that began since.
     if control_request(connector, "pane.get", wire::pane_target_params(pane_id)?)
         .and_then(wire::pane_agent_status)?
         != "idle"
     {
         return Err("agy started working before /fork could be typed".into());
     }
-    clear_antigravity_composer(connector, pane_id)?;
     control_request(
         connector,
         "pane.send_input",
@@ -3988,15 +3990,34 @@ fn fork_antigravity(
 /// it, `/fork` is a prompt and not the command. The pane is the one this
 /// fork opened, so what its composer holds is erased, each erase judged by
 /// the screen with agy's composer declaration, the one delivery reads a
-/// held letter's composer by (`docs/delivery.md`, Reading the composer). A
-/// screen that shows no composer as declared is typed into as before.
+/// held letter's composer by (`docs/delivery.md`, Reading the composer).
+/// A screen the declaration cannot confirm empty (no composer as declared,
+/// a cut screen, or text that outlasts the erase, as a hint a later agy
+/// draws might) is typed into as before and logged, so a declaration that
+/// no longer matches agy's screen never stops a fork. Bounded by the
+/// fork's `deadline` and `ANTIGRAVITY_ERASE_LIMIT`.
 #[allow(clippy::disallowed_methods)] // a production wait, not test code: agy redraws between erases
-fn clear_antigravity_composer(connector: &dyn ApiConnector, pane_id: &str) -> Result<(), String> {
+fn clear_antigravity_composer(
+    connector: &dyn ApiConnector,
+    pane_id: &str,
+    deadline: Instant,
+) -> Result<(), String> {
     use hide_agent_adapter::composer::Verdict;
     let composer = hide_agent_adapter::adapter("agy")
         .and_then(|row| row.composer.supported())
         .ok_or("agy declares no composer to read before /fork")?;
     let mut sent = 0;
+    let unconfirmed = |reason: &str, sent: usize| {
+        crate::diagnostic!(serde_json::json!({
+            "component": "pane_fork",
+            "kind": "fork.composer_unconfirmed",
+            "pane_id": pane_id,
+            "agent": "agy",
+            "reason": reason,
+            "backspaces": sent,
+        }));
+        Ok(())
+    };
     loop {
         let screen = control_request(
             connector,
@@ -4006,25 +4027,13 @@ fn clear_antigravity_composer(connector: &dyn ApiConnector, pane_id: &str) -> Re
         .and_then(wire::pane_text)?;
         // A cut screen may have lost the composer's rows.
         if screen.truncated {
-            return Err(
-                "agy's screen was cut, so its composer could not be read before /fork".into(),
-            );
+            return unconfirmed("read_truncated", sent);
         }
         match composer.judge(&screen.text) {
             Verdict::Empty => return Ok(()),
-            Verdict::NotFound => {
-                crate::diagnostic!(serde_json::json!({
-                    "component": "pane_fork",
-                    "kind": "fork.composer_not_found",
-                    "pane_id": pane_id,
-                    "agent": "agy",
-                }));
-                return Ok(());
-            }
-            Verdict::Holds if sent >= ANTIGRAVITY_ERASE_LIMIT => {
-                return Err(format!(
-                    "agy's composer still held text after {sent} Backspaces, so /fork was not typed"
-                ));
+            Verdict::NotFound => return unconfirmed("not_found", sent),
+            Verdict::Holds if sent >= ANTIGRAVITY_ERASE_LIMIT || Instant::now() >= deadline => {
+                return unconfirmed("not_empty", sent);
             }
             Verdict::Holds => {
                 control_request(
@@ -5448,12 +5457,18 @@ mod tests {
         // its first read, with no second one.
         // `stray`: the composer holds text before `/fork` (Herdr's answer to
         // agy's mode query, `27;1$y`, #1529), which is erased first.
+        // `stuck`: text outlasts the erase, as a hint a later agy draws in an
+        // empty composer might, and `/fork` is typed as before.
+        // `no-composer`: the screen shows no composer as declared, and
+        // `/fork` is typed as before.
         const AGY_EMPTY: &str =
             include_str!("../../hide-agent-adapter/tests/fixtures/composer/agy-0-empty.ansi");
         const AGY_TYPED: &str =
             include_str!("../../hide-agent-adapter/tests/fixtures/composer/agy-1-typed.ansi");
         for case in [
             "stray",
+            "stuck",
+            "no-composer",
             "success",
             "ambiguous",
             "moved",
@@ -5497,11 +5512,13 @@ mod tests {
             let index_home = home.path().to_path_buf();
             let index_cwd = cwd.clone();
             let statuses = Arc::new(Mutex::new(vec!["working", "idle"]));
-            let held = Arc::new(Mutex::new(case == "stray"));
+            let held = Arc::new(Mutex::new(matches!(case, "stray" | "stuck")));
             let herdr = FakeHerdr::start("agy-fork", move |method, params| match method {
                 "pane.read" => {
                     assert_eq!(params["format"], "ansi");
-                    let text = if *held.lock().unwrap() {
+                    let text = if case == "no-composer" {
+                        "$ "
+                    } else if *held.lock().unwrap() {
                         AGY_TYPED
                     } else {
                         AGY_EMPTY
@@ -5513,7 +5530,9 @@ mod tests {
                 }
                 "pane.send_keys" => {
                     assert_eq!(params["keys"], json!(vec!["backspace"; 8]));
-                    *held.lock().unwrap() = false;
+                    if case == "stray" {
+                        *held.lock().unwrap() = false;
+                    }
                     json!({"type":"ok"})
                 }
                 "pane.get" => {
@@ -5528,7 +5547,10 @@ mod tests {
                         "tab_id":"w1:t2","focused":false,"agent_status":status,"revision":1}})
                 }
                 "pane.send_input" => {
-                    assert!(!*held.lock().unwrap(), "/fork was typed behind text");
+                    assert!(
+                        case == "stuck" || !*held.lock().unwrap(),
+                        "/fork was typed behind text"
+                    );
                     assert_eq!(params["text"], "/fork");
                     assert_eq!(params["keys"], json!(["enter"]));
                     // agy writes the fork's row at the source's step count.
@@ -5584,27 +5606,37 @@ mod tests {
                 launch: Default::default(),
             };
             let result = fork_antigravity(&herdr.connector(), &node, &request, "child-pane");
+            // Eight erases of eight reach the limit of 64.
+            let mut stuck = vec!["pane.get", "pane.get", "pane.read"];
+            for _ in 0..8 {
+                stuck.extend(["pane.send_keys", "pane.read"]);
+            }
+            stuck.extend(["pane.get", "pane.send_input", "pane.report_agent_session"]);
             let expected: &[&str] = match case {
                 "stray" => {
                     assert_eq!(result, Ok(()), "{case}");
                     &[
                         "pane.get",
                         "pane.get",
-                        "pane.get",
                         "pane.read",
                         "pane.send_keys",
                         "pane.read",
+                        "pane.get",
                         "pane.send_input",
                         "pane.report_agent_session",
                     ]
                 }
-                "success" | "moved" | "in-motion" => {
+                "stuck" => {
+                    assert_eq!(result, Ok(()), "{case}");
+                    &stuck
+                }
+                "success" | "moved" | "in-motion" | "no-composer" => {
                     assert_eq!(result, Ok(()), "{case}");
                     &[
                         "pane.get",
                         "pane.get",
-                        "pane.get",
                         "pane.read",
+                        "pane.get",
                         "pane.send_input",
                         "pane.report_agent_session",
                     ]
@@ -5640,8 +5672,8 @@ mod tests {
                     &[
                         "pane.get",
                         "pane.get",
-                        "pane.get",
                         "pane.read",
+                        "pane.get",
                         "pane.send_input",
                     ]
                 }
