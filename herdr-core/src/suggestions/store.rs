@@ -587,6 +587,7 @@ mod tests {
             checkout: Some("/repo".into()),
             at_unix_ms: at,
             always: false,
+            head: None,
         }
     }
 

@@ -2246,6 +2246,7 @@ fn send_corrections(
             checkout: Some(root.to_owned()),
             at_unix_ms: at,
             always: false,
+            head: None,
         })
         .collect();
     client.send(crate::suggestions::worker::Command::ObserveProject {

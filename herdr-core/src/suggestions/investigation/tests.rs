@@ -608,6 +608,7 @@ fn an_investigation_that_gets_no_answer_raises_nothing_and_says_so() {
                     id: session.into(),
                 }),
                 pr: None,
+                head: None,
                 checkout: Some("/repo".into()),
                 at_unix_ms: START,
                 always: false,

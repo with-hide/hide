@@ -29,6 +29,8 @@ pub(super) struct FakeGh {
     pub(super) create_repositories: Mutex<Vec<Option<String>>>,
     /// A call starting with this panics in the worker that made it.
     panics: Mutex<Option<&'static str>>,
+    /// What an `api --jq FILTER ENDPOINT` read prints, by endpoint.
+    pub(super) api: Mutex<HashMap<String, String>>,
 }
 
 impl FakeGh {
@@ -42,6 +44,7 @@ impl FakeGh {
             reconcile: Mutex::new(Vec::new()),
             create_repositories: Mutex::new(Vec::new()),
             panics: Mutex::new(None),
+            api: Mutex::new(HashMap::new()),
         })
     }
 
@@ -108,6 +111,13 @@ impl FakeGh {
                 }}}})
                 .to_string(),
             );
+        }
+        if let Some(stdout) = line
+            .strip_prefix("api --jq ")
+            .and_then(|rest| rest.rsplit_once(' '))
+            .and_then(|(_, endpoint)| self.api.lock().unwrap().get(endpoint).cloned())
+        {
+            return output(stdout);
         }
         GhAnswer::Failed {
             category: GithubFailureCategory::NetworkOrRateLimit,

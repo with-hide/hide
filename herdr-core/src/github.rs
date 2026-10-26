@@ -1161,6 +1161,54 @@ pub(crate) fn issue_repository(node: &dyn NodeLink, place: &Where) -> Result<Str
         .ok_or_else(|| "issue_repository_invalid".into())
 }
 
+/// The commit a merged pull request's merge made on its base, or `None`
+/// when GitHub says it did not merge.
+pub(crate) fn merge_commit(
+    node: &dyn NodeLink,
+    repository: &str,
+    number: u32,
+) -> Result<Option<String>, String> {
+    let arguments = hide_node_link::gh::merge_commit_arguments(repository, number)
+        .ok_or("merge_commit_repository_invalid")?;
+    let arguments = arguments.iter().map(String::as_str).collect::<Vec<_>>();
+    let output = gh_at(node, &Where::Repository(repository.to_owned()), &arguments)
+        .map_err(|failure| format!("merge commit unread: {}", failure.reason))?;
+    parse_merge_commit(&output)
+}
+
+fn parse_merge_commit(output: &str) -> Result<Option<String>, String> {
+    match output.trim() {
+        "" | "null" => Ok(None),
+        sha if hide_node_link::gh::is_commit(sha) => Ok(Some(sha.to_owned())),
+        _ => Err("merge commit unreadable".into()),
+    }
+}
+
+/// Whether `head` has `commit` in its history, by GitHub's compare of the
+/// two: `ahead` or `identical` says it has, `behind` or `diverged` that it
+/// has not; anything else is not known and an error.
+pub(crate) fn contains_commit(
+    node: &dyn NodeLink,
+    repository: &str,
+    commit: &str,
+    head: &str,
+) -> Result<bool, String> {
+    let arguments = hide_node_link::gh::compare_arguments(repository, commit, head)
+        .ok_or("compare_commits_invalid")?;
+    let arguments = arguments.iter().map(String::as_str).collect::<Vec<_>>();
+    let output = gh_at(node, &Where::Repository(repository.to_owned()), &arguments)
+        .map_err(|failure| format!("compare unread: {}", failure.reason))?;
+    parse_compare_status(&output)
+}
+
+fn parse_compare_status(output: &str) -> Result<bool, String> {
+    match output.trim() {
+        "ahead" | "identical" => Ok(true),
+        "behind" | "diverged" => Ok(false),
+        _ => Err("compare status unreadable".into()),
+    }
+}
+
 /// Reconcile an uncertain create through the repository connection, not
 /// the eventually updated search index. Crossing the page bound refuses a
 /// new create unless this page already proves the attempted time is covered.
@@ -2585,6 +2633,22 @@ fn run_gh_call_at(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_compare_says_contains_only_for_ahead_or_identical() {
+        assert_eq!(parse_compare_status("ahead\n"), Ok(true));
+        assert_eq!(parse_compare_status("identical"), Ok(true));
+        assert_eq!(parse_compare_status("behind"), Ok(false));
+        assert_eq!(parse_compare_status("diverged"), Ok(false));
+        assert!(parse_compare_status("").is_err());
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        assert_eq!(
+            parse_merge_commit(&format!("{sha}\n")),
+            Ok(Some(sha.into()))
+        );
+        assert_eq!(parse_merge_commit("null\n"), Ok(None));
+        assert!(parse_merge_commit("main").is_err());
+    }
 
     /// A fixture `gh` answers at once; a one-second deadline read a loaded
     /// machine's slow shell start as a timeout, the network category.

@@ -16,7 +16,7 @@ use super::analysis::{
 use super::apply::{self as applying, ApplyOrder, FollowedAttempt};
 use super::ledger::{Observation, RecordIndex, SessionRef, Signal};
 use super::lifecycle::{AttemptMove, AttemptPhase};
-use super::notebook::{LineId, Notebook, NotebookEdit, Outcome, Stage, Strike, StruckBy};
+use super::notebook::{Line, LineId, Notebook, NotebookEdit, Outcome, Stage, Strike, StruckBy};
 use super::policy::{self, Quantity};
 use super::read::{self, ReadInput};
 use super::scoring;
@@ -27,7 +27,7 @@ use crate::model::ProjectSuggestionsSnapshot;
 use crate::node::NodeId;
 use crate::node_access::NodeLink;
 use serde_json::json;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
@@ -166,6 +166,14 @@ pub(crate) enum Command {
         line: LineId,
         checkouts: BTreeSet<String>,
     },
+    /// What GitHub said of a watched line's merge: its merge commit, and
+    /// whether each pull request head asked about has it.
+    HeadsJudged {
+        project_id: String,
+        line: LineId,
+        merge_commit: String,
+        heads: BTreeMap<String, bool>,
+    },
     /// What the runtime saw happen to an attempt (B11-B14).
     Attempted {
         project_id: String,
@@ -260,6 +268,7 @@ impl SuggestionClient {
             Command::Attempted { .. } => "attempted",
             Command::SessionSeen { .. } => "session_seen",
             Command::Holding { .. } => "holding",
+            Command::HeadsJudged { .. } => "heads_judged",
         };
         match self.0.try_send(command) {
             Ok(()) => true,
@@ -537,9 +546,10 @@ impl Worker {
                     let _ = run.join.join();
                 }
                 self.complete(&project, end, edits);
-                if self.settle(&project) {
-                    self.publish_followed(sink);
-                }
+                // The run may have put new pull request records on a
+                // watched line, whose heads the runtime then asks about.
+                self.settle(&project);
+                self.publish_followed(sink);
                 self.auto_apply(&project, sink);
                 self.publish_if_opened(&project, sink);
             }
@@ -562,6 +572,19 @@ impl Worker {
                 line,
                 checkouts,
             } => self.hold(&project_id, line, checkouts),
+            Command::HeadsJudged {
+                project_id,
+                line,
+                merge_commit,
+                heads,
+            } => {
+                if self.judge_heads(&project_id, line, merge_commit, heads) {
+                    if self.settle(&project_id) {
+                        self.publish_if_opened(&project_id, sink);
+                    }
+                    self.publish_followed(sink);
+                }
+            }
             Command::Attempted {
                 project_id,
                 line,
@@ -835,6 +858,39 @@ impl Worker {
         }
     }
 
+    /// Keeps what GitHub said about a watched line's merge; answers whether
+    /// the watch changed.
+    fn judge_heads(
+        &mut self,
+        project: &str,
+        line_id: LineId,
+        merge_commit: String,
+        heads: BTreeMap<String, bool>,
+    ) -> bool {
+        let Ok(store) = self.store.as_mut() else {
+            return false;
+        };
+        let (notebook, lives) = match store.notebook(project) {
+            Ok(loaded) => loaded,
+            Err(code) => {
+                log_store("watch", &code);
+                return false;
+            }
+        };
+        let Some(line) = notebook.line(line_id) else {
+            return false;
+        };
+        let mut life = lives.get(&line_id).cloned().unwrap_or_default();
+        if !watching::judged(line, &mut life, merge_commit, heads) {
+            return false;
+        }
+        if let Err(code) = store.save_line(project, line, &life) {
+            log_store("watch", &code);
+            return false;
+        }
+        true
+    }
+
     /// Ends each watch of the Project that is over (B15); answers whether
     /// any ended.
     fn settle(&mut self, project: &str) -> bool {
@@ -919,7 +975,17 @@ impl Worker {
                 Ok((state, (notebook, lives))) => {
                     if let Some(location) = &state.location {
                         followed.extend(applying::followed(&project, location, &notebook, &lives));
-                        watches.extend(watching::watched(&project, location, &notebook, &lives));
+                        let records_of = |line: &Line| {
+                            store
+                                .records_of(&project, &line.records)
+                                .unwrap_or_else(|code| {
+                                    log_store("followed", &code);
+                                    Vec::new()
+                                })
+                        };
+                        watches.extend(watching::watched(
+                            &project, location, &notebook, &lives, records_of,
+                        ));
                     }
                 }
                 Err(code) => log_store("followed", &code),
@@ -1041,7 +1107,9 @@ impl Worker {
         }));
     }
 
-    /// Raises what the scores and caps let rise (D-12, D-42).
+    /// Raises what the scores and caps let rise (D-12, D-42), unless the
+    /// Project's last run failed: until a run investigates, nothing rises
+    /// from the scores alone, whatever asks (D-35).
     fn raise(&mut self, project: &str) {
         let now = self.now();
         let Ok(store) = self.store.as_mut() else {
@@ -1056,7 +1124,7 @@ impl Worker {
             Ok(loaded) => loaded,
             Err(code) => return log_store("raise", &code),
         };
-        if !state.settings.active() {
+        if !state.settings.active() || state.uninvestigated {
             return;
         }
         let open = notebook
@@ -1300,7 +1368,8 @@ impl Worker {
     /// what it left unread is grouped by tag when it wrote nothing
     /// (`not_investigated`), the Project shows `조사 못 함`, and the next
     /// run investigates whether or not new records came; raised lines and
-    /// watches stay as they are. Any other end raises what rose.
+    /// watches stay as they are. Any other end raises what rose, once the
+    /// day is saved as investigated.
     fn complete(&mut self, project: &str, end: AnalysisEnd, edits: usize) {
         let today = self.today();
         let failed = end == AnalysisEnd::Partial(PartialReason::Failed);
@@ -1316,9 +1385,6 @@ impl Worker {
             "component": "suggestions", "kind": "run.ended",
             "project_id": project, "end": ended, "edits": edits,
         }));
-        if !failed {
-            self.raise(project);
-        }
         let now = self.now();
         let Ok(store) = self.store.as_mut() else {
             return;
@@ -1332,8 +1398,9 @@ impl Worker {
         state.last_run_end = Some(ended.to_owned());
         state.uninvestigated = failed;
         if let Err(code) = store.save_state(project, &state) {
-            log_store("complete", &code);
+            return log_store("complete", &code);
         }
+        self.raise(project);
     }
 
     /// The deterministic grouping over the store directly, for a run that
@@ -1697,6 +1764,7 @@ mod tests {
                         checkout: Some("/repo".into()),
                         at_unix_ms: at,
                         always: false,
+                        head: None,
                     })
                     .collect(),
             });
@@ -1813,7 +1881,8 @@ mod tests {
     /// D-35 as the mission decided it: a run that fails raises nothing from
     /// the scores alone and leaves a raised line as it was; the Project
     /// shows `조사 못 함`, and the next day's run investigates though no
-    /// record came since, and only then does the waiting line rise.
+    /// record came since, and only then does the waiting line rise. A
+    /// settings change or a row's action in between raises nothing either.
     #[test]
     fn a_failed_investigation_raises_nothing_until_a_run_investigates() {
         let fails = Arc::new(AtomicBool::new(false));
@@ -1841,11 +1910,26 @@ mod tests {
             "nothing new rose; the raised line stays"
         );
 
+        let read = fixture.settings(SettingsChange::Quantity(Quantity::Many));
+        assert_eq!(read.settings.quantity, Quantity::Many);
+        assert_eq!(chosen(&read), ["s1"], "a settings change raises nothing");
+        fixture.send(Command::Action {
+            project: project(),
+            line: LineId(1),
+            action: LineAction::Dismiss,
+        });
+        let read = fixture.read_until(|read| chosen(read).is_empty());
+        assert!(
+            !shown(&read).contains(&"s2"),
+            "the freed place is not filled from the scores"
+        );
+        assert_eq!(read.status, SuggestionsStatus::NotInvestigated);
+
         fails.store(false, Ordering::SeqCst);
         fixture.clock.fetch_add(policy::DAY_MS, Ordering::SeqCst);
         fixture.wake_and_wait_out_the_delay();
-        let read = fixture.read_until(|read| chosen(read).len() == 2);
-        assert_eq!(chosen(&read), ["s2", "s1"]);
+        let read = fixture.read_until(|read| !chosen(read).is_empty());
+        assert_eq!(chosen(&read), ["s2"]);
         assert_eq!(read.status, SuggestionsStatus::Idle);
         assert_eq!(
             runs.load(Ordering::SeqCst),
@@ -2170,6 +2254,7 @@ mod tests {
                     checkout: Some(path.into()),
                     at_unix_ms: START,
                     always: false,
+                    head: None,
                 })
                 .collect(),
         };
@@ -2281,6 +2366,7 @@ mod tests {
                 checkout: None,
                 at_unix_ms: START,
                 always: false,
+                head: None,
             }],
         });
         client.send(Command::Wake);

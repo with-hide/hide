@@ -25,6 +25,7 @@ use crate::suggestions::apply::{ApplyBrief, ApplyOrder, FollowedAttempt, issue_t
 use crate::suggestions::ledger::PrRef;
 use crate::suggestions::lifecycle::{AttemptMove, AttemptPhase};
 use crate::suggestions::notebook::{LineId, Outcome};
+use crate::suggestions::policy;
 use crate::suggestions::watch::WatchedLine;
 use crate::suggestions::worker::Command;
 use serde_json::json;
@@ -44,6 +45,13 @@ pub(super) struct ApplyWork {
     watched: Vec<WatchedLine>,
     /// The holding checkouts last handed over for each watched line.
     holding_sent: HashMap<(String, u64), BTreeSet<String>>,
+    /// Watched lines with a GitHub read in flight.
+    asking: HashSet<(String, u64)>,
+    /// Watched lines whose last GitHub read failed, with when to ask again.
+    ask_after: HashMap<(String, u64), u64>,
+    /// What GitHub answered of each (merge commit, head) pair, so a pair is
+    /// not asked again while the worker's list catches up with the answer.
+    contains: HashMap<(String, String), bool>,
     /// Each followed attempt's agent and what GitHub shows of its pull
     /// request, by the agent's coordination id: the facts its row's home
     /// turn is judged from. Replaced whole by each check.
@@ -93,6 +101,7 @@ impl Runtime {
             .map(|line| (line.project_id.clone(), line.line.0))
             .collect::<HashSet<_>>();
         work.holding_sent.retain(|key, _| lines.contains(key));
+        work.ask_after.retain(|key, _| lines.contains(key));
         work.watched = watched;
         self.track_suggestion_attempts();
         false
@@ -400,6 +409,118 @@ impl Runtime {
             self.recover_suggestion_issue(&attempt, &node);
         }
         self.judge_watch_holding();
+        self.judge_watch_heads(now);
+    }
+
+    /// Asks GitHub, off the lock, what a watched line needs before a pull
+    /// request's failure can count (B15): the commit the fix's merge made,
+    /// once, then for each head the line's pull request records failed on
+    /// after the merge, whether that head has the commit. The watch keeps
+    /// each answer, so a (merge commit, head) pair is asked once; a read
+    /// that fails counts nothing and is asked again after
+    /// [`policy::WATCH_RETRY_MS`].
+    fn judge_watch_heads(&mut self, now: u64) {
+        let work = &mut self.suggestions_work.apply;
+        let mut asks = Vec::new();
+        let mut known = Vec::new();
+        for watched in &work.watched {
+            let key = (watched.project_id.clone(), watched.line.0);
+            if (watched.merge_commit.is_some() && watched.heads.is_empty())
+                || work.asking.contains(&key)
+                || work.ask_after.get(&key).is_some_and(|at| now < *at)
+            {
+                continue;
+            }
+            let Some(repository) = crate::links::repository_of(&watched.pr.url) else {
+                continue;
+            };
+            let mut heads = watched.heads.clone();
+            if let Some(merge) = &watched.merge_commit {
+                let answered = heads
+                    .iter()
+                    .filter_map(|head| {
+                        let contains = work.contains.get(&(merge.clone(), head.clone()))?;
+                        Some((head.clone(), *contains))
+                    })
+                    .collect::<BTreeMap<_, _>>();
+                heads.retain(|head| !answered.contains_key(head));
+                if !answered.is_empty() {
+                    known.push((key.clone(), merge.clone(), answered));
+                }
+                if heads.is_empty() {
+                    continue;
+                }
+            }
+            asks.push(WatchAsk {
+                key,
+                repository,
+                number: watched.pr.number,
+                merge_commit: watched.merge_commit.clone(),
+                heads,
+            });
+        }
+        for ((project_id, line), merge_commit, heads) in known {
+            self.send_suggestions(Command::HeadsJudged {
+                project_id,
+                line: LineId(line),
+                merge_commit,
+                heads,
+            });
+        }
+        for ask in asks {
+            self.ask_watch_heads(ask);
+        }
+    }
+
+    fn ask_watch_heads(&mut self, ask: WatchAsk) {
+        let link = self.own_node();
+        let key = ask.key.clone();
+        let carried = key.clone();
+        self.suggestions_work.apply.asking.insert(key.clone());
+        let spawned = self.spawn_issue_worker(
+            "suggestion-watch",
+            move || ask.read(link.as_ref()),
+            move |runtime, (merge_commit, heads, failure)| {
+                runtime.note_watch_read(&carried, failure);
+                let Some(merge_commit) = merge_commit else {
+                    return false;
+                };
+                let work = &mut runtime.suggestions_work.apply;
+                for (head, contains) in &heads {
+                    if work.contains.len() >= policy::WATCH_ANSWERS {
+                        work.contains.clear();
+                    }
+                    work.contains
+                        .insert((merge_commit.clone(), head.clone()), *contains);
+                }
+                runtime.send_suggestions(Command::HeadsJudged {
+                    project_id: carried.0,
+                    line: LineId(carried.1),
+                    merge_commit,
+                    heads,
+                });
+                false
+            },
+        );
+        if let Err(reason) = spawned {
+            self.note_watch_read(&key, Some(reason));
+        }
+    }
+
+    /// Ends a watched line's read; a failed one is asked again only after
+    /// [`policy::WATCH_RETRY_MS`].
+    fn note_watch_read(&mut self, key: &(String, u64), failure: Option<String>) {
+        let work = &mut self.suggestions_work.apply;
+        work.asking.remove(key);
+        let Some(reason) = failure else {
+            return;
+        };
+        work.ask_after
+            .insert(key.clone(), unix_milliseconds() + policy::WATCH_RETRY_MS);
+        crate::diagnostic!(json!({
+            "component": "suggestions", "kind": "watch.github_unread",
+            "project_id": key.0, "line": key.1, "reason": reason,
+        }));
     }
 
     /// Hands the worker, for each watched line, the checkouts that hold its
@@ -567,6 +688,50 @@ impl Runtime {
             )
             .find(|agent| agent.pane_id == record.pane || agent.pane_id.ends_with(&device_pane))
             .is_some_and(|agent| agent.activity == "working")
+    }
+}
+
+/// One watched line's question to GitHub.
+struct WatchAsk {
+    key: (String, u64),
+    repository: String,
+    number: u32,
+    merge_commit: Option<String>,
+    heads: BTreeSet<String>,
+}
+
+/// What a watch read learned: the merge commit, the heads answered, and
+/// why the rest went unread.
+type WatchRead = (Option<String>, BTreeMap<String, bool>, Option<String>);
+
+impl WatchAsk {
+    /// Off the lock: the merge commit while it is unknown, then each head
+    /// in turn until a read fails.
+    fn read(self, link: &dyn crate::node_access::NodeLink) -> WatchRead {
+        let merge = match self.merge_commit {
+            Some(merge) => merge,
+            None => match crate::github::merge_commit(link, &self.repository, self.number) {
+                Ok(Some(merge)) => merge,
+                Ok(None) => {
+                    return (
+                        None,
+                        BTreeMap::new(),
+                        Some("pull request not merged".into()),
+                    );
+                }
+                Err(reason) => return (None, BTreeMap::new(), Some(reason)),
+            },
+        };
+        let mut heads = BTreeMap::new();
+        for head in self.heads {
+            match crate::github::contains_commit(link, &self.repository, &merge, &head) {
+                Ok(contains) => {
+                    heads.insert(head, contains);
+                }
+                Err(reason) => return (Some(merge), heads, Some(reason)),
+            }
+        }
+        (Some(merge), heads, None)
     }
 }
 
