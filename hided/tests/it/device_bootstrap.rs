@@ -226,6 +226,8 @@ fn a_fresh_device_bootstraps_before_terminal_start_and_keeps_herdr_after_removal
             report.herdr
         );
     };
+    let pid = *pid;
+    device.server_pid = Some(pid);
     ensure!(version == &super::private_herdr::pinned_version());
     ensure!(
         established.node.terminals.is_ok(),
@@ -240,8 +242,6 @@ fn a_fresh_device_bootstraps_before_terminal_start_and_keeps_herdr_after_removal
             == Some(hide_herdr_client::HERDR_PROTOCOL_REVISION),
         "unreadable fresh session: {snapshot}"
     );
-    let pid = *pid;
-    device.server_pid = Some(pid);
     let _: hide_node_link::protocol::KitRemoved = call_as(
         established.node.host.as_ref(),
         Call::Kit {
