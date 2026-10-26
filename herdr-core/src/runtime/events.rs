@@ -2160,7 +2160,10 @@ impl Runtime {
                 self.open_archive_detail(&payload.kind, &payload.id, payload.preview)
             }
             Event::MemoryAction(payload) => self.apply_memory_action(payload),
-            Event::MemoryOpen(payload) => self.open_project_memory(payload.workspace_id),
+            Event::MemoryOpen(payload) => {
+                let memory = self.open_project_memory(payload.workspace_id.clone());
+                self.open_suggestions(payload.workspace_id) | memory
+            }
             Event::ProjectMemoryNavigate(payload) => self.navigate_project_memory(payload),
             Event::MemoryExpand(payload) => {
                 self.expand_memory_card(&payload.workspace_id, payload.number)

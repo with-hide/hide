@@ -74,5 +74,20 @@
   "memory_action": ["enable", "disable", "delete", "forget", "undo", "promote", "dismiss", "card_right", "doc_right"],
   "view_feedback_send_state": ["sending", "sent", "waiting", "reopening", "failed"],
   "view_feedback_send_reason": ["attachments_full", "letter_unsaved", "letters_full", "shot_copy", "reopen_failed", "closed"],
-  "observed_freshness": ["fresh", "stale", "failed"]
+  "observed_freshness": ["fresh", "stale", "failed"],
+  "suggestion_signal": ["failed_tool", "agent_wait", "correction", "label_missed", "check_failed", "change_request"],
+  "suggestion_quantity": ["few", "normal", "many"],
+  "suggestion_apply_mode": ["confirm", "auto_pr"],
+  "suggestion_outcome": ["pr", "issue"],
+  "suggestions_unavailable": ["unregistered", "unreadable"],
+  "suggestions_status": ["first_run_pending", "investigating", "none_today", "idle", "off"],
+  "suggestions_ai": ["ready", "not_ready", "cannot_investigate"],
+  "suggestions_github": ["connected", "missing"],
+  "suggestion_signal_unavailable": ["no_github", "memory_off"],
+  "suggestion_group": ["choose", "applying", "applied"],
+  "suggestion_state": ["new", "my_turn", "hide_ai_working", "watching", "effective", "applied"],
+  "suggestion_source": ["notebook", "memory"],
+  "suggestion_hold": ["github_needed", "auto_pr_unreviewed"],
+  "suggestion_evidence_kind": ["session", "pr"],
+  "suggestion_attempt_phase": ["starting", "working", "pr_open", "ci_failed", "failed", "issue_open", "merged"]
 }

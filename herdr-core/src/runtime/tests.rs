@@ -121,6 +121,7 @@ mod snapshot_delta;
 #[path = "tests/ssh_hosts.rs"]
 mod ssh_hosts_list;
 mod start_geometry;
+mod suggestions;
 #[path = "tests/terminal.rs"]
 mod terminal;
 #[path = "tests/tree_close.rs"]

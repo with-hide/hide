@@ -7,6 +7,7 @@
 //!   with the deterministic [`analysis::TagGrouping`] behind it today.
 //! - [`scoring`]: the counted pain of a line and which lines are raised.
 //! - [`policy`]: every score, threshold, cap, budget and schedule value.
+//! - [`settings`]: a Project's switches, quantity and apply mode.
 //!
 //! Everything a run decides is read back from the notebook it leaves, so
 //! the way problems are found can change without the ledger, the lifecycle,
@@ -17,3 +18,4 @@ pub mod ledger;
 pub mod notebook;
 pub mod policy;
 pub mod scoring;
+pub mod settings;

@@ -71,6 +71,7 @@ mod session_archive;
 mod session_state;
 mod snapshot_delta;
 mod ssh_hosts;
+mod suggestions;
 mod tab_focus;
 mod terminal;
 mod terminal_input;
@@ -1550,6 +1551,8 @@ pub struct Runtime {
     memory_work: memory_analysis::MemoryWork,
     /// The named Project's Memory reads and action (`runtime/project_memory.rs`).
     project_memory: project_memory::ProjectMemoryWork,
+    /// The Hide AI tool's 제안 tab (`runtime/suggestions.rs`).
+    suggestions_work: suggestions::SuggestionsWork,
     editor_tab_history: Vec<String>,
     worker_context: Option<RuntimeWorkerContext>,
     /// The last moment any agent was working or waiting on the user. The pet
@@ -2331,6 +2334,7 @@ impl Runtime {
             work_clock_minute: 0,
             memory_work: Default::default(),
             project_memory: Default::default(),
+            suggestions_work: Default::default(),
             editor_tab_history: Vec::new(),
             worker_context: None,
             pending_session_resolutions: BTreeMap::new(),
