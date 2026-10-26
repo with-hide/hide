@@ -474,7 +474,10 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
   const title = say(`practice.${chapter.id}.title`);
 
   return (
-    <div className="pc-layer" data-practice-layer data-practice-step={step.id} data-practice-index={index} data-practice-steps={chapter.steps.length}>
+    // The guide is not part of the screen it teaches, so a press on its bubble or card is no press on the screen: the
+    // keyboard stays in the pane that held it, so a chord the step presses (⌘W, ⌃⇥) acts there, as the learner's own
+    // key does afterwards, and a popover or menu the screen has open stays open, as the next step may point into it.
+    <div className="pc-layer" data-practice-layer data-keyboard-stays="true" onPointerDown={(event) => event.stopPropagation()} onMouseDown={(event) => event.preventDefault()} data-practice-step={step.id} data-practice-index={index} data-practice-steps={chapter.steps.length}>
       <style>{COACH_CSS}</style>
       {/* What the coach points with, all of it stepping aside while the shell's palette or switcher is up; the chord, marks and hand still sit above the bubble (`z-index` in the style). */}
       {palette ? null : (
@@ -505,7 +508,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
           <div className="pc-dots">{chapter.steps.map((row, at) => <i key={row.id} className={at === index ? "on" : at < index ? "done" : ""} />)}</div>
           {/* While a palette is up every key and press is its own; a press out here would close it. */}
           {back && !palette ? <button type="button" className="pc-back" onClick={() => setIndex((value) => value - 1)}>{say("practice.back")}</button> : null}
-          {palette ? null : <button type="button" className="pc-go" onClick={perform}>{go} <span className="pc-kc">⏎</span></button>}
+          {palette ? null : <button type="button" className="pc-go" onClick={perform} data-practice-go>{go} <span className="pc-kc">⏎</span></button>}
         </div>
       </div>
       {chapter.quest ? <QuestCard chapter={chapter} index={index} title={title} say={say} onRestart={onRestart} /> : null}
