@@ -689,7 +689,9 @@ pub fn parse_herdr_server_status(
             operation_id,
             host_id,
             RemoteStage::Herdr,
-            format!("herdr is not installed on {host_id}, or not under {REMOTE_HERDR_PATH}"),
+            format!(
+                "Herdr was not found on {host_id}. Allow and install Hide's helper to install the Herdr Hide brings."
+            ),
             false,
             true,
         ));
@@ -736,7 +738,9 @@ pub fn parse_herdr_server_status(
             operation_id,
             host_id,
             RemoteStage::Herdr,
-            format!("Herdr server is not running on {host_id}; run `herdr` there once to start it"),
+            format!(
+                "Herdr is not running on {host_id}. Hide's allowed helper starts the Herdr server when it connects."
+            ),
             true,
             true,
         ));

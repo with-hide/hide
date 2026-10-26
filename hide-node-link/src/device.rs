@@ -427,6 +427,9 @@ pub struct Established {
     pub helper_path: String,
     /// How the build's files reached the device on this connection.
     pub upload: Upload,
+    /// The automatic kit pass completed before starting Herdr-dependent
+    /// services. Older transports leave it to the core after connection.
+    pub kit: Option<Result<Box<hide_kit::KitReport>, String>>,
 }
 
 /// Hears why a link ended, once.

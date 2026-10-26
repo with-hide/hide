@@ -216,6 +216,47 @@ fn with_consent(helper: Option<Arc<KitDevice>>) -> SharedRuntime {
     device_runtime(Some(consent), helper)
 }
 
+/// Bootstrap's kit report reaches the row even before a session can be
+/// read. A second automatic pass must not repeat its installation effects.
+#[test]
+fn a_bootstrapped_helpers_report_is_published_without_another_install_pass() {
+    let shared = with_consent(None);
+    let helper = KitDevice::answering(Err("no second install was requested".to_owned()));
+    let mut connected = established(helper.clone(), None);
+    connected.kit = Some(Ok(Box::new(with_herdr(Some(
+        hide_kit::device_herdr::HerdrUpdate::Started {
+            version: "pinned".to_owned(),
+            pid: 42,
+        },
+    )))));
+    {
+        let mut runtime = shared.lock().unwrap();
+        runtime.start_device_host(DEVICE);
+        runtime.queue_device_kit(DEVICE, KitJob::Status);
+        let generation = runtime.device_host_generation(DEVICE);
+        runtime.ingest_host_established(
+            DEVICE,
+            generation,
+            Ok(hosts::HostReady::Dialed(connected)),
+        );
+    }
+    let state = kit(&shared);
+    assert_eq!(
+        state
+            .components
+            .iter()
+            .find(|part| part.id == ComponentId::Cli)
+            .unwrap()
+            .state,
+        ComponentState::Installed
+    );
+    assert!(
+        !state.busy,
+        "the completed bootstrap queued another automatic install"
+    );
+    assert!(helper.calls().is_empty());
+}
+
 /// B13: a connected device's kit is installed by the connection pass, with
 /// the consent's command folder and the registration's Herdr socket, and its
 /// row shows each part the way This Mac's does.
@@ -2082,6 +2123,7 @@ pub(super) fn established(
         installed: false,
         helper_path: "/home/me/.local/share/hide/host-helper/0123456789abcdef/hided".to_owned(),
         upload: Default::default(),
+        kit: None,
     }
 }
 
@@ -2358,7 +2400,10 @@ fn a_device_reads_its_servers_own_version_and_device_advice_for_an_older_protoco
     assert_eq!(status.state, "protocol_mismatch");
     assert_eq!(status.herdr_version.as_deref(), Some("0.8.0"));
     let message = status.message.expect("the device row says why");
-    assert!(message.contains("restart Herdr on the device"), "{message}");
+    assert!(
+        message.contains("Allow and install Hide's helper"),
+        "{message}"
+    );
     assert!(!message.contains("reopen Hide"), "{message}");
 }
 

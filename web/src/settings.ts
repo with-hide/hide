@@ -300,6 +300,7 @@ export function hostLine(host: DeviceHost | undefined, t: Translate): { text: st
 export function kitConsentTerms(helperRoot: string | null, cliDir: string | null, t: Translate): string[] {
   return [
     t("devices.terms.copy", { root: helperRoot ?? t("devices.helperFolder") }),
+    t("devices.terms.herdr"),
     t("devices.terms.configure", { cliDir: cliDir ?? t("devices.commandFolder") }),
     t("devices.terms.runtime"),
     t("devices.terms.confirm"),

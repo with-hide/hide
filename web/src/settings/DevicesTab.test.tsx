@@ -151,7 +151,7 @@ it("shows a reinstall under way, and the first install, as one pending line", as
   await first.unmount();
 });
 
-it("shows the helper only when it needs the operator while the connection is fine, with the actions that fix it (B54)", async () => {
+it("shows helper failures on a connected device and consent before Herdr can connect (B54, bootstrap B1-B2)", async () => {
   const stopped = remote("mini", { host: { ...host, state: "unavailable", message: "The helper did not answer." } });
   const unavailable = await mount(state([stopped]));
   expect(unavailable.q('[data-device-host="mini:unavailable"]')?.textContent).toContain("helper unavailable");
@@ -168,6 +168,23 @@ it("shows the helper only when it needs the operator while the connection is fin
   const down = await mount(state([remote("mini", { state: "unavailable", host: { ...host, state: "unavailable" } })]));
   expect(down.q('[data-device-host="mini:unavailable"]')).toBeNull();
   await down.unmount();
+
+  for (const problem of ["device_unavailable", "device_protocol_behind"]) {
+    const blocked = await mount(state([remote("studio", {
+      state: "unavailable", problem,
+      message: problem === "device_protocol_behind" ? "Herdr 0.8.2 uses an older protocol" : "Herdr was not found",
+      host: { ...host, consent: "none", state: "not_allowed", helper_root: null },
+    })]));
+    try {
+      expect(blocked.q('[data-device-host="studio:not_allowed"]')?.textContent).toContain("helper not allowed");
+      await act(async () => { blocked.q('[data-device-host-allow-inline="studio"]')?.click(); });
+      expect(document.body.querySelector('[data-device-host-allow-confirm="studio"]')).not.toBeNull();
+      await act(async () => { (document.body.querySelector('[data-device-host-allow-go]') as HTMLButtonElement).click(); });
+      expect(sent(blocked.events, "device_host_consent")).toEqual([{ schema_version: 2, kind: "device_host_consent", payload: { device_id: "studio", allow: true } }]);
+    } finally {
+      await blocked.unmount();
+    }
+  }
 });
 
 it("opens Add device from one button above the list, and shows the Add dialog only then (B50)", async () => {

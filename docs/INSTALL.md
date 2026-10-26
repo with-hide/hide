@@ -436,9 +436,12 @@ An agent you ask to add a machine does it with `hide device add <alias> [--name 
 The command registers the machine without Hide's helper, and its answer tells the agent to ask you to choose Allow and install on the machine's row in Settings › Devices: installing writes that account's hook files, which only you agree to, and until then the machine's files, Git and terminals wait.
 A remove is refused while a file tab of that machine is open, because Settings stores the tab's draft first and the command cannot; a command run on a connected machine is refused with `machine_not_permitted`.
 
-The remote machine needs Herdr installed where a non-login shell finds it (`~/.local/bin`, Homebrew, or the system paths) and a running `herdr server` the first time; hide does not install Herdr or start a server there.
-hide asks that machine `herdr status server --json` to learn where the server socket is, so nothing about the remote user or home directory is configured on this side.
-After that the machine's Herdr follows this app: when its system and processor are ones the app carries (an Apple Silicon Mac from the Mac app, a Linux x64 machine from the Linux package), each connection puts this app's pinned Herdr in `~/.hide/host-helper/herdr`, once per Herdr version, and moves the Herdr server on the registered socket onto it when that server runs an older Herdr release, with its panes and the agents in them still running.
+The remote machine does not need Herdr installed or a server running first.
+For a system and processor the app carries, Add or Allow and install puts the helper and pinned Herdr there before asking Herdr for a readable session; an older-protocol server does not block this step.
+Hide keeps an explicitly registered socket or one already learned from `herdr status server --json`; without either, the device uses Herdr's account default (`$XDG_CONFIG_HOME/herdr/herdr.sock`, otherwise `~/.config/herdr/herdr.sock` on macOS and Linux).
+If nothing answers there, the helper starts the pinned headless server, which keeps running after the helper or SSH connection ends.
+A saved named Herdr profile keeps its resolved socket and server, without starting or replacing one.
+The machine's Herdr follows this app: when its system and processor are ones the app carries (an Apple Silicon Mac from the Mac app, a Linux x64 machine from the Linux package), each connection puts this app's pinned Herdr in `~/.hide/host-helper/herdr`, once per Herdr version, and moves the Herdr server on the registered socket onto it when that server runs an older Herdr release, with its panes and the agents in them still running.
 A server on another socket, one already on that version or newer, and a preview build are left as they are, and the `herdr` you installed there is never changed.
 Hide's own Herdr calls on that machine use the pinned copy, and an older copy is removed once no server there runs it.
 When the server cannot be moved, the machine's row says its Herdr is older than Hide's and what to do: restart Herdr there when its work is safe, and Hide moves it on the next connection, or update that machine's Herdr when it is too old to hand its panes over; a move that failed is not tried again for the same server.
@@ -453,6 +456,7 @@ A device's session gets its Project's Memory from this Mac's store through the d
 The store stays on this Mac and is never copied to the device.
 A machine allowed by an earlier version of Hide gets the whole kit on its next connection without asking again; a machine added without the helper installs nothing until you press Allow and install on its row.
 Only machines on the platform this build carries get the kit; another platform shows why on its row and is only viewed and driven.
+Removing a machine never stops its Herdr server, including one Hide started.
 Removing a machine while it is connected takes Hide's hook entries, the `hide` link and the helper folder `~/.hide/host-helper` off it, and leaves `~/.hide/kit` and `~/.hide/agent-hooks`; removing it while it is not connected leaves them there, where they do no harm, and adding it again replaces them.
 When a Herdr server on that machine still runs the Herdr copy Hide moved it to, the helper folder stays with that copy and the removal says so; delete `~/.hide/host-helper` there once that server has stopped.
 Each device row in Settings shows whether the remote session is connected and, when it is not, the reason in the words the connection failed with; `Test` runs the SSH, authentication, Herdr, protocol, PTY, SFTP, and Git stages one after another and lists the first one that needs attention on that host.

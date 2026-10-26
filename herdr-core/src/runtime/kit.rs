@@ -1184,7 +1184,11 @@ impl Runtime {
                 .get(&registration.id)
                 .and_then(|connection| connection.transport.device().cached_herdr_socket())
         } else {
-            registration.herdr_socket_path.clone()
+            registration.herdr_socket_path.clone().or_else(|| {
+                self.remote_connections
+                    .get(&registration.id)
+                    .and_then(|connection| connection.transport.device().cached_herdr_socket())
+            })
         }
     }
 
@@ -1495,6 +1499,7 @@ impl Runtime {
                 cause: *cause,
             }),
             HerdrUpdate::NoServer { .. }
+            | HerdrUpdate::Started { .. }
             | HerdrUpdate::Current { .. }
             | HerdrUpdate::Kept { .. }
             | HerdrUpdate::HandedOff { .. } => None,

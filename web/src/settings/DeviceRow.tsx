@@ -185,12 +185,12 @@ function DeviceAttention({ device, actions, onAct, onAllow }: { device: Device; 
   const remote = device.kind === "remote" && device.dials_in !== true;
   const problem = remote && device.state !== "ready" ? deviceProblemLine(device.problem, device.ssh_alias, t) : null;
   const host = device.host;
-  // A helper that is not running matters while the connection itself is fine;
-  // a device that is not connected already says so on its row.
-  const helper = remote && device.state === "ready" && host && host.consent !== "this_machine" && host.state !== "ready" ? hostLine(host, t) : null;
+  const needsAllow = host !== undefined && (host.consent !== "granted" || host.state === "identity_changed");
+  // Consent starts the helper that installs or updates Herdr, including
+  // when Herdr cannot yet supply a readable session.
+  const helper = remote && (device.state === "ready" || needsAllow) && host && host.consent !== "this_machine" && host.state !== "ready" ? hostLine(host, t) : null;
   const kit = device.kit;
   const kitShown = kit !== undefined && (Boolean(kit.unavailable) || Boolean(kit.refused) || kit.busy || kitProblems(kit).length > 0);
-  const needsAllow = host !== undefined && (host.consent !== "granted" || host.state === "identity_changed");
   const rows = [
     problem ? (
       <div key="problem" className="space-y-xxs" data-device-problem={`${device.id}:${device.problem}`}>

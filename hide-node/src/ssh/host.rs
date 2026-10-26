@@ -1123,6 +1123,53 @@ pub fn establish(
     }
     host.take_readers(hello.protocol, readers)
         .map_err(EstablishError::Helper)?;
+    // The helper and its pin must work before a session can be read. A
+    // missing or older-protocol Herdr cannot be a prerequisite for the kit
+    // that starts or updates it. Named profiles retain their attachment-only
+    // contract and must resolve their own socket rather than the default.
+    establish_stage(target, "kit", since);
+    let socket = if client.herdr_session.is_some() {
+        client
+            .herdr_socket_path()
+            .map(Some)
+            .map_err(|error| error.to_string())
+    } else {
+        let known = client
+            .cached_herdr_socket()
+            .or_else(|| client.herdr_socket.clone());
+        Ok(known.or_else(|| match client.herdr_socket_path() {
+            Ok(socket) => Some(socket),
+            Err(error) => {
+                crate::diagnostic!(json!({
+                    "component": "remote_host",
+                    "kind": "host.herdr_socket_unread",
+                    "target": target,
+                    "reason": error.to_string(),
+                }));
+                // No socket was learned. The installed node resolves
+                // Herdr's own default for its account, before starting it.
+                None
+            }
+        }))
+    };
+    let kit = socket.and_then(|herdr_socket| {
+        call_as::<hide_kit::KitReport>(
+            &host,
+            Call::Kit {
+                action: hide_node_link::protocol::KitAction::Apply,
+                cli_dir: consent
+                    .cli_dir
+                    .clone()
+                    .unwrap_or_else(|| DEFAULT_CLI_DIR.to_owned()),
+                herdr_socket,
+                preserve_herdr_server: client.herdr_session.is_some(),
+                retirement_projects: retirement_projects.to_vec(),
+            },
+            Duration::from_secs(180),
+        )
+        .map(Box::new)
+        .map_err(|error| error.to_string())
+    });
     if panes.is_some() {
         establish_stage(target, "panes", since);
         start_panes(client, &host);
@@ -1161,6 +1208,7 @@ pub fn establish(
         installed,
         helper_path,
         upload,
+        kit: Some(kit),
     })
 }
 

@@ -75,7 +75,7 @@ pub(crate) fn device_protocol_behind(received_protocol: u64, version: Option<&st
         None => "Herdr".to_owned(),
     };
     format!(
-        "This device's {herdr} uses protocol {received_protocol}, but Hide requires protocol {HERDR_PROTOCOL_REVISION}. Hide moves the device's Herdr server to its own Herdr when the device connects; if it stays, restart Herdr on the device when its work is safe, or update that machine's Herdr."
+        "This device's {herdr} uses protocol {received_protocol}, but Hide requires protocol {HERDR_PROTOCOL_REVISION}. Allow and install Hide's helper to move the server to the Herdr Hide brings. An allowed helper does this when it connects."
     )
 }
 
