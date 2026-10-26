@@ -28,7 +28,7 @@ The row stays in the agent data, so ⌘K, tabs, the pane header's owl and `hide 
 `agent_state::listed_for_operator` is the one decision: a `HideAi` row is a member of the sidebar's tree roots, the device's tasks, Overview's requests and graph, the phone's list, the checkout counts and the pet only while it is in Needs You, and no tree draws it even then (the raised Needs You and the 태스크 list do).
 Its group is Needs You or Seen and never Working or Done, so it moves no Working or Done badge, rail count or notification.
 It is in Needs You when the agent itself asks (a question, approval or block, read like any row's) or when the home has a turn for the operator.
-The home's turn is computed by the core from what the Memory promotion module already follows, the attempt's pull request in the machine's PR catalog, and published on the row as `hide_ai.turn`:
+The home's turn is computed by the core from what the home's own tracker already follows (the Memory promotion module for `memory_promote`, `runtime/suggestion_apply.rs` for `suggestion_apply`), the attempt's pull request in the machine's PR catalog, and published on the row as `hide_ai.turn`:
 
 | The attempt's pull request | Turn |
 | --- | --- |

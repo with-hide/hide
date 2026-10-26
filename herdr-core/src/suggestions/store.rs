@@ -75,6 +75,16 @@ pub struct ProjectState {
     /// only the last [`policy::QUIET_SPAN_MS`] are kept.
     #[serde(default)]
     pub raised_at: Vec<u64>,
+    /// The machine and folder the Project was last named from, where an
+    /// automatic attempt starts and an attempt is followed (B13, B21).
+    #[serde(default)]
+    pub location: Option<ProjectLocation>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectLocation {
+    pub node: String,
+    pub path: String,
 }
 
 /// How the store came to be open.

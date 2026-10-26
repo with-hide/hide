@@ -13,18 +13,20 @@ use super::analysis::{
     Analysis, AnalysisBudget, AnalysisEnd, AnalysisInput, NotebookPen, PartialReason, PenRefused,
     StopFlag, TagGrouping, Written,
 };
+use super::apply::{self as applying, ApplyOrder, FollowedAttempt};
 use super::ledger::{Observation, RecordIndex, Signal};
-use super::notebook::{LineId, Notebook, NotebookEdit, Stage, Strike, StruckBy};
+use super::lifecycle::{AttemptMove, AttemptPhase};
+use super::notebook::{LineId, Notebook, NotebookEdit, Outcome, Stage, Strike, StruckBy};
 use super::policy::{self, Quantity};
 use super::read::{self, ReadInput};
 use super::scoring;
 use super::settings::ApplyMode;
-use super::store::SuggestionStore;
+use super::store::{ProjectLocation, SuggestionStore};
 use crate::model::ProjectSuggestionsSnapshot;
 use crate::node::NodeId;
 use crate::node_access::NodeLink;
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
@@ -100,6 +102,10 @@ pub(crate) enum LineAction {
     Dismiss,
     /// ⚙'s `되살리기`: the strike goes and the line is judged again.
     Restore,
+    /// `PR 만들기` or `이슈 만들기` on a new suggestion (B11, B14).
+    Apply,
+    /// `다시 시도` on an attempt that failed (B12).
+    Retry,
 }
 
 pub(crate) enum Command {
@@ -140,6 +146,13 @@ pub(crate) enum Command {
         end: AnalysisEnd,
         edits: usize,
     },
+    /// What the runtime saw happen to an attempt (B11-B14).
+    Attempted {
+        project_id: String,
+        line: LineId,
+        started_at_unix_ms: u64,
+        change: AttemptMove,
+    },
 }
 
 /// Whether a run that asks a provider may start (D-21, D-36), and the
@@ -163,6 +176,13 @@ pub(crate) trait Sink: Send + 'static {
     fn restore_memory(&self, workspace_id: String);
     /// The link to `node` while it is reachable, to name a folder's Project.
     fn link(&self, node: &NodeId) -> Option<Arc<dyn NodeLink>>;
+    /// Starts an attempt: an agent for a pull request, or Hide's issue.
+    fn apply(&self, order: ApplyOrder);
+    /// Every attempt still to follow, replacing the last list.
+    fn followed(&self, attempts: Vec<FollowedAttempt>);
+    /// Whether an automatic attempt may start in the Project at `location`
+    /// now: GitHub answers there (D-41).
+    fn can_apply(&self, location: &ProjectLocation, outcome: Outcome) -> bool;
 }
 
 pub(crate) struct Options {
@@ -217,6 +237,7 @@ impl SuggestionClient {
             Command::Wake => "wake",
             Command::Pen { .. } => "pen",
             Command::RunEnded { .. } => "run_ended",
+            Command::Attempted { .. } => "attempted",
         };
         match self.0.try_send(command) {
             Ok(()) => true,
@@ -292,6 +313,8 @@ struct Worker {
     due_at: Option<u64>,
     /// Projects whose run is still to come in this round.
     round: Vec<String>,
+    /// Projects whose location was saved in this run of the worker.
+    located: HashSet<String>,
 }
 
 impl Worker {
@@ -317,6 +340,7 @@ impl Worker {
             run: None,
             due_at: None,
             round: Vec::new(),
+            located: HashSet::new(),
         }
     }
 
@@ -329,6 +353,7 @@ impl Worker {
     }
 
     fn run(mut self, receiver: &Receiver<Command>, sink: &impl Sink) {
+        self.publish_followed(sink);
         loop {
             if self.stop.is_set() {
                 self.finish_run_on_stop(receiver);
@@ -394,6 +419,9 @@ impl Worker {
                 project,
             } => {
                 let id = self.resolve(&project, sink);
+                if let Some(id) = &id {
+                    self.locate(id, &project);
+                }
                 self.opened = Some((workspace_id, id));
                 self.publish(sink);
             }
@@ -402,15 +430,21 @@ impl Worker {
                 let Some(id) = self.resolve(&project, sink) else {
                     return;
                 };
-                self.observe(&id, facts);
+                if self.observe(&id, facts) {
+                    self.locate(&id, &project);
+                }
             }
-            Command::ObserveProject { project_id, facts } => self.observe(&project_id, facts),
+            Command::ObserveProject { project_id, facts } => {
+                self.observe(&project_id, facts);
+            }
             Command::Settings { project, change } => {
                 let Some(id) = self.resolve(&project, sink) else {
                     return;
                 };
+                self.locate(&id, &project);
                 self.change_settings(&id, change, sink);
                 self.raise(&id);
+                self.auto_apply(&id, sink);
                 self.publish_if_opened(&id, sink);
             }
             Command::Action {
@@ -421,9 +455,17 @@ impl Worker {
                 let Some(id) = self.resolve(&project, sink) else {
                     return;
                 };
-                self.act(&id, line, action);
+                self.locate(&id, &project);
+                match action {
+                    LineAction::Apply | LineAction::Retry => {
+                        self.apply_line(&id, line, action == LineAction::Retry, false, sink);
+                    }
+                    LineAction::Dismiss | LineAction::Restore => self.act(&id, line, action),
+                }
                 self.raise(&id);
+                self.auto_apply(&id, sink);
                 self.publish_if_opened(&id, sink);
+                self.publish_followed(sink);
             }
             Command::IntroSeen => {
                 if let Ok(store) = self.store.as_mut()
@@ -455,26 +497,43 @@ impl Worker {
                     let _ = run.join.join();
                 }
                 self.complete(&project, end, edits);
+                self.auto_apply(&project, sink);
                 self.publish_if_opened(&project, sink);
+            }
+            Command::Attempted {
+                project_id,
+                line,
+                started_at_unix_ms,
+                change,
+            } => {
+                self.attempted(&project_id, line, started_at_unix_ms, change);
+                self.auto_apply(&project_id, sink);
+                self.publish_if_opened(&project_id, sink);
+                self.publish_followed(sink);
             }
         }
     }
 
-    fn observe(&mut self, project: &str, facts: Vec<Observation>) {
+    /// Records the facts the Project's switches let in; answers whether the
+    /// store took any.
+    fn observe(&mut self, project: &str, facts: Vec<Observation>) -> bool {
         let now = self.now();
         let Ok(store) = self.store.as_mut() else {
-            return;
+            return false;
         };
         let state = match store.state(project) {
             Ok(state) => state,
-            Err(code) => return log_store("observe", &code),
+            Err(code) => {
+                log_store("observe", &code);
+                return false;
+            }
         };
         let kept = facts
             .into_iter()
             .filter(|fact| state.settings.records(fact.signal))
             .collect::<Vec<_>>();
         if kept.is_empty() {
-            return;
+            return false;
         }
         match store.record(project, kept, now) {
             Ok((written, pruned)) => {
@@ -485,9 +544,189 @@ impl Worker {
                         "pruned": pruned.records,
                     }));
                 }
+                !written.is_empty()
             }
-            Err(code) => log_store("observe", &code),
+            Err(code) => {
+                log_store("observe", &code);
+                false
+            }
         }
+    }
+
+    /// Remembers the machine and folder `project` was named from, once per
+    /// Project in a run of the worker (B13, B21).
+    fn locate(&mut self, project: &str, at: &ProjectRef) {
+        if self.located.contains(project) {
+            return;
+        }
+        let Ok(store) = self.store.as_mut() else {
+            return;
+        };
+        let location = ProjectLocation {
+            node: at.node.as_str().to_owned(),
+            path: at.path.clone(),
+        };
+        let mut state = match store.state(project) {
+            Ok(state) => state,
+            Err(code) => return log_store("locate", &code),
+        };
+        if state.location.as_ref() != Some(&location) {
+            state.location = Some(location);
+            if let Err(code) = store.save_state(project, &state) {
+                return log_store("locate", &code);
+            }
+        }
+        if self.located.len() >= IDENTITY_CACHE {
+            self.located.clear();
+        }
+        self.located.insert(project.to_owned());
+    }
+
+    /// Begins an attempt on a line and hands it to the runtime to start
+    /// (B11-B14).
+    fn apply_line(
+        &mut self,
+        project: &str,
+        line_id: LineId,
+        retry: bool,
+        auto: bool,
+        sink: &impl Sink,
+    ) {
+        let now = self.now();
+        let Ok(store) = self.store.as_mut() else {
+            return;
+        };
+        let loaded = store.state(project).and_then(|state| {
+            let (notebook, lives) = store.notebook(project)?;
+            let index = store.index(project, &notebook)?;
+            Ok((state, notebook, lives, index))
+        });
+        let (state, notebook, lives, index) = match loaded {
+            Ok(loaded) => loaded,
+            Err(code) => return log_store("apply", &code),
+        };
+        let refused = |reason: &str| {
+            crate::diagnostic!(json!({
+                "component": "suggestions", "kind": "apply.refused",
+                "project_id": project, "line": line_id.0, "reason": reason,
+            }));
+        };
+        let Some(location) = state.location else {
+            return refused("unlocated");
+        };
+        let Some(mut line) = notebook.line(line_id).cloned() else {
+            return refused("unknown_line");
+        };
+        let mut life = lives.get(&line_id).cloned().unwrap_or_default();
+        let Ok((outcome, branch, agent_name, brief)) =
+            applying::begin(&mut line, &mut life, &index, retry, auto, now)
+        else {
+            return refused("not_ready");
+        };
+        if let Err(code) = store.save_line(project, &line, &life) {
+            return log_store("apply", &code);
+        }
+        crate::diagnostic!(json!({
+            "component": "suggestions", "kind": "apply.started",
+            "project_id": project, "line": line_id.0, "auto": auto, "retry": retry,
+            "outcome": match outcome { Outcome::Pr => "pr", Outcome::Issue => "issue" },
+        }));
+        sink.apply(ApplyOrder {
+            project_id: project.to_owned(),
+            location,
+            line: line_id,
+            started_at_unix_ms: now,
+            auto,
+            outcome,
+            branch,
+            agent_name,
+            brief,
+        });
+    }
+
+    /// Saves what the runtime saw happen to an attempt.
+    fn attempted(&mut self, project: &str, line_id: LineId, started: u64, change: AttemptMove) {
+        let now = self.now();
+        let Ok(store) = self.store.as_mut() else {
+            return;
+        };
+        let (notebook, lives) = match store.notebook(project) {
+            Ok(loaded) => loaded,
+            Err(code) => return log_store("attempt", &code),
+        };
+        let Some(mut line) = notebook.line(line_id).cloned() else {
+            return;
+        };
+        let mut life = lives.get(&line_id).cloned().unwrap_or_default();
+        if !applying::moved(&mut line, &mut life, started, change, now) {
+            return;
+        }
+        if let Err(code) = store.save_line(project, &line, &life) {
+            return log_store("attempt", &code);
+        }
+        let phase = life.attempt.as_ref().map(|attempt| attempt.phase);
+        crate::diagnostic!(json!({
+            "component": "suggestions", "kind": "attempt.moved",
+            "project_id": project, "line": line_id.0,
+            "phase": phase.map(phase_code),
+        }));
+    }
+
+    /// Applies the next new suggestion by itself in a Project whose mode
+    /// is `자동으로 PR 열기` (B13).
+    fn auto_apply(&mut self, project: &str, sink: &impl Sink) {
+        let Ok(store) = self.store.as_ref() else {
+            return;
+        };
+        let loaded = store
+            .state(project)
+            .and_then(|state| Ok((state, store.notebook(project)?)));
+        let (state, (notebook, lives)) = match loaded {
+            Ok(loaded) => loaded,
+            Err(code) => return log_store("auto_apply", &code),
+        };
+        if !state.settings.active() || state.settings.apply_mode != ApplyMode::AutoPr {
+            return;
+        }
+        let Some(location) = state.location.as_ref() else {
+            return;
+        };
+        let Some(line) = applying::next_auto(&notebook, &lives) else {
+            return;
+        };
+        let outcome = notebook
+            .line(line)
+            .and_then(|line| line.outcome)
+            .unwrap_or(Outcome::Pr);
+        if sink.can_apply(location, outcome) {
+            self.apply_line(project, line, false, true, sink);
+        }
+    }
+
+    /// Hands the runtime every attempt still to follow, in every Project.
+    fn publish_followed(&self, sink: &impl Sink) {
+        let Ok(store) = self.store.as_ref() else {
+            return;
+        };
+        let projects = match store.projects() {
+            Ok(projects) => projects,
+            Err(code) => return log_store("followed", &code),
+        };
+        let mut followed = Vec::new();
+        for project in projects {
+            let loaded = store
+                .state(&project)
+                .and_then(|state| Ok((state, store.notebook(&project)?)));
+            match loaded {
+                Ok((state, (notebook, lives))) => {
+                    if let Some(location) = &state.location {
+                        followed.extend(applying::followed(&project, location, &notebook, &lives));
+                    }
+                }
+                Err(code) => log_store("followed", &code),
+            }
+        }
+        sink.followed(followed);
     }
 
     fn change_settings(&mut self, project: &str, change: SettingsChange, sink: &impl Sink) {
@@ -558,8 +797,12 @@ impl Worker {
         let life = lives.get(&line_id).cloned().unwrap_or_default();
         match action {
             LineAction::Dismiss => {
+                // An attempt still at work keeps its line; a failed one, or
+                // one whose checks failed, may be let go (B12).
                 if line.stage == Stage::Applying
-                    && life.attempt.as_ref().is_some_and(|a| a.phase.followed())
+                    && life.attempt.as_ref().is_some_and(|a| {
+                        a.phase.followed() && a.phase != AttemptPhase::CiFailed
+                    })
                 {
                     crate::diagnostic!(json!({
                         "component": "suggestions", "kind": "action.line_busy",
@@ -584,6 +827,8 @@ impl Worker {
                 }
                 line.struck = None;
             }
+            // Begun by `apply_line`, never here.
+            LineAction::Apply | LineAction::Retry => return,
         }
         line.updated_at_unix_ms = now;
         if let Err(code) = store.save_line(project, &line, &life) {
@@ -592,7 +837,7 @@ impl Worker {
         crate::diagnostic!(json!({
             "component": "suggestions", "kind": "line.acted",
             "project_id": project, "line": line_id.0,
-            "action": match action { LineAction::Dismiss => "dismiss", LineAction::Restore => "restore" },
+            "action": if action == LineAction::Dismiss { "dismiss" } else { "restore" },
         }));
     }
 
@@ -761,6 +1006,7 @@ impl Worker {
         }
         if index.fresh().next().is_none() {
             self.complete(project, AnalysisEnd::Done, 0);
+            self.auto_apply(project, sink);
             self.publish_if_opened(project, sink);
             return false;
         }
@@ -1022,6 +1268,19 @@ impl NotebookPen for StorePen<'_> {
     }
 }
 
+fn phase_code(phase: AttemptPhase) -> &'static str {
+    match phase {
+        AttemptPhase::Starting => "starting",
+        AttemptPhase::Working => "working",
+        AttemptPhase::PrOpen => "pr_open",
+        AttemptPhase::CiFailed => "ci_failed",
+        AttemptPhase::Failed => "failed",
+        AttemptPhase::IssueOpen => "issue_open",
+        AttemptPhase::Merged => "merged",
+        AttemptPhase::Closed => "closed",
+    }
+}
+
 fn log_store(during: &str, code: &str) {
     crate::diagnostic!(json!({
         "component": "suggestions", "kind": "store.failed", "during": during, "code": code,
@@ -1048,6 +1307,8 @@ mod tests {
     struct TestSink {
         reads: mpsc::Sender<ProjectSuggestionsSnapshot>,
         restored: mpsc::Sender<String>,
+        orders: mpsc::Sender<ApplyOrder>,
+        followed: mpsc::Sender<Vec<FollowedAttempt>>,
         gate: RunGate,
     }
 
@@ -1064,6 +1325,21 @@ mod tests {
         fn link(&self, _node: &NodeId) -> Option<Arc<dyn NodeLink>> {
             None
         }
+        fn apply(&self, order: ApplyOrder) {
+            let _ = self.orders.send(order);
+        }
+        fn followed(&self, attempts: Vec<FollowedAttempt>) {
+            let _ = self.followed.send(attempts);
+        }
+        fn can_apply(&self, _location: &ProjectLocation, _outcome: Outcome) -> bool {
+            true
+        }
+    }
+
+    /// What the worker handed the runtime to start and follow.
+    struct Handed {
+        orders: Receiver<ApplyOrder>,
+        followed: Receiver<Vec<FollowedAttempt>>,
     }
 
     struct Fixture {
@@ -1071,6 +1347,7 @@ mod tests {
         clock: Arc<AtomicU64>,
         reads: Receiver<ProjectSuggestionsSnapshot>,
         restored: Receiver<String>,
+        handed: Handed,
         _dir: tempfile::TempDir,
         store: PathBuf,
     }
@@ -1080,12 +1357,13 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let store = dir.path().join("suggestions.sqlite3");
             let clock = Arc::new(AtomicU64::new(START));
-            let (worker, reads, restored) = Self::spawn(&store, &clock);
+            let (worker, reads, restored, handed) = Self::spawn(&store, &clock);
             Self {
                 worker: Some(worker),
                 clock,
                 reads,
                 restored,
+                handed,
                 _dir: dir,
                 store,
             }
@@ -1098,9 +1376,12 @@ mod tests {
             SuggestionWorker,
             Receiver<ProjectSuggestionsSnapshot>,
             Receiver<String>,
+            Handed,
         ) {
             let (reads_tx, reads) = mpsc::channel();
             let (restored_tx, restored) = mpsc::channel();
+            let (orders_tx, orders) = mpsc::channel();
+            let (followed_tx, followed) = mpsc::channel();
             let time = Arc::clone(clock);
             let options = Options {
                 store: store.to_owned(),
@@ -1114,6 +1395,8 @@ mod tests {
             let sink = TestSink {
                 reads: reads_tx,
                 restored: restored_tx,
+                orders: orders_tx,
+                followed: followed_tx,
                 gate: RunGate {
                     ai_ready: false,
                     usage_ok: true,
@@ -1124,6 +1407,7 @@ mod tests {
                 SuggestionWorker::spawn(options, sink).unwrap(),
                 reads,
                 restored,
+                Handed { orders, followed },
             )
         }
 
@@ -1131,10 +1415,11 @@ mod tests {
         /// hided restart does.
         fn restart(&mut self) {
             self.worker.take();
-            let (worker, reads, restored) = Self::spawn(&self.store, &self.clock);
+            let (worker, reads, restored, handed) = Self::spawn(&self.store, &self.clock);
             self.worker = Some(worker);
             self.reads = reads;
             self.restored = restored;
+            self.handed = handed;
         }
 
         fn send(&self, command: Command) {
@@ -1217,6 +1502,10 @@ mod tests {
         }
     }
 
+    fn shown(read: &ProjectSuggestionsSnapshot) -> Vec<&str> {
+        read.rows.iter().map(|row| row.id.as_str()).collect()
+    }
+
     fn chosen(read: &ProjectSuggestionsSnapshot) -> Vec<&str> {
         read.rows
             .iter()
@@ -1247,6 +1536,70 @@ mod tests {
             SuggestionsStatus::Idle,
             "a row waits to be chosen"
         );
+    }
+
+    /// B11-B13, B20: a press hands the runtime one attempt to start and to
+    /// follow; what the runtime saw is saved and survives a restart; in the
+    /// automatic mode a raised line is applied without a press, marked
+    /// automatic.
+    #[test]
+    fn a_pressed_line_is_handed_on_and_its_moves_are_kept() {
+        let mut fixture = Fixture::new();
+        fixture.open();
+        fixture.fail_in_sessions("cargo test", &["s1", "s2", "s3"]);
+        fixture.wake_and_wait_out_the_delay();
+        fixture.read_until(|read| !chosen(read).is_empty());
+
+        fixture.send(Command::Action {
+            project: project(),
+            line: LineId(1),
+            action: LineAction::Apply,
+        });
+        let order = fixture.handed.orders.recv_timeout(WAIT).expect("an order");
+        assert_eq!(order.line, LineId(1));
+        assert_eq!(order.outcome, Outcome::Pr);
+        assert_eq!(order.location.path, "/repo");
+        assert!(!order.auto);
+        assert_eq!(
+            order.brief.basis,
+            Some((Signal::FailedTool, "cargo test".to_owned()))
+        );
+        let followed = loop {
+            let list = fixture.handed.followed.recv_timeout(WAIT).expect("a list");
+            if !list.is_empty() {
+                break list;
+            }
+        };
+        assert_eq!(followed[0].phase, AttemptPhase::Starting);
+        let read = fixture.read_until(|read| read.rows.iter().any(|row| row.attempt.is_some()));
+        assert_eq!(read.rows[0].group, SuggestionGroup::Applying);
+        assert_eq!(read.rows[0].state, SuggestionState::HideAiWorking);
+
+        fixture.send(Command::Attempted {
+            project_id: "project/repo".into(),
+            line: LineId(1),
+            started_at_unix_ms: order.started_at_unix_ms,
+            change: AttemptMove::PrOpen(crate::suggestions::ledger::PrRef {
+                number: 12,
+                url: "https://github.com/acme/app/pull/12".into(),
+            }),
+        });
+        fixture.read_until(|read| {
+            read.rows[0].attempt.as_ref().and_then(|attempt| attempt.pr_number) == Some(12)
+        });
+        fixture.restart();
+        let read = fixture.open();
+        let attempt = read.rows[0].attempt.clone().expect("kept across a restart");
+        assert_eq!(attempt.pr_number, Some(12));
+        assert_eq!(read.rows[0].state, SuggestionState::MyTurn);
+
+        fixture.settings(SettingsChange::ApplyMode(ApplyMode::AutoPr));
+        fixture.fail_in_sessions("npm run build", &["s4", "s5", "s6"]);
+        fixture.clock.fetch_add(policy::DAY_MS, Ordering::SeqCst);
+        fixture.wake_and_wait_out_the_delay();
+        let order = fixture.handed.orders.recv_timeout(WAIT).expect("an automatic order");
+        assert_eq!(order.line, LineId(2));
+        assert!(order.auto);
     }
 
     #[test]
@@ -1318,7 +1671,8 @@ mod tests {
         fixture.settings(SettingsChange::Signal(Signal::AgentWait, false));
         fixture.fail_in_sessions("cargo test", &["s1", "s2"]);
         fixture.wake_and_wait_out_the_delay();
-        let before = fixture.read_until(|read| !chosen(read).is_empty());
+        // The automatic mode applies the line it raised at once.
+        let before = fixture.read_until(|read| !shown(read).is_empty());
 
         fixture.restart();
         let after = fixture.open();
@@ -1331,7 +1685,7 @@ mod tests {
                 .iter()
                 .any(|signal| signal.signal == Signal::AgentWait && !signal.enabled)
         );
-        assert_eq!(chosen(&after), chosen(&before));
+        assert_eq!(shown(&after), shown(&before));
         assert_eq!(after.intro_seen, before.intro_seen);
 
         // The day already ran: a second wake the same day starts nothing.
@@ -1339,7 +1693,7 @@ mod tests {
         fixture.wake_and_wait_out_the_delay();
         let read = fixture.next_read();
         assert_ne!(read.status, SuggestionsStatus::Investigating);
-        assert_eq!(chosen(&read), chosen(&before));
+        assert_eq!(shown(&read), shown(&before));
     }
 
     #[test]
@@ -1369,6 +1723,8 @@ mod tests {
             TestSink {
                 reads: reads_tx,
                 restored,
+                orders: mpsc::channel().0,
+                followed: mpsc::channel().0,
                 gate: RunGate {
                     ai_ready: false,
                     usage_ok: true,

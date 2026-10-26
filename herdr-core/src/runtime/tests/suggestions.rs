@@ -364,3 +364,81 @@ fn a_press_on_a_memory_row_is_memorys_own_action() {
         "Memory took the promotion, here refused for want of its writer"
     );
 }
+
+/// B11: an attempt whose branch has a pull request in the PR catalog is
+/// handed to the worker as open, once, with its home's facts kept for the
+/// Needs You turn.
+#[test]
+fn a_followed_attempt_follows_its_branchs_pull_request() {
+    use crate::model::{GithubProjectSnapshot, PullRequestBadge, PullRequestChecks, PullRequestSnapshot};
+    use crate::suggestions::apply::FollowedAttempt;
+    use crate::suggestions::lifecycle::{AttemptMove, AttemptPhase};
+    use crate::suggestions::notebook::{LineId, Outcome};
+    use crate::suggestions::store::ProjectLocation;
+    use crate::suggestions::worker::{Command, SuggestionClient};
+    let mut runtime = runtime();
+    let (client, commands) = SuggestionClient::for_test();
+    runtime.suggestions_work.client = Some(client);
+    let started = crate::runtime::unix_milliseconds();
+    runtime.github.projects = vec![GithubProjectSnapshot {
+        root_path: "/repo".into(),
+        pull_requests: vec![PullRequestSnapshot {
+            closing_issues: Vec::new(),
+            title: "Fix the check".into(),
+            checks: PullRequestChecks::Passing,
+            number: 31,
+            head_branch: "hide-suggestion-s2-x".into(),
+            base_branch: "main".into(),
+            url: "https://github.com/acme/app/pull/31".into(),
+            badge: PullRequestBadge::Open,
+            review: None,
+            is_draft: false,
+            merged_at_unix_ms: None,
+            updated_at_unix_ms: None,
+            created_at_unix_ms: Some(started),
+            closed_at_unix_ms: None,
+            head_oid: None,
+            cross_repository: false,
+            work: Default::default(),
+        }],
+        ..Default::default()
+    }];
+    let attempt = FollowedAttempt {
+        project_id: "p".into(),
+        location: ProjectLocation {
+            node: runtime.node.as_str().to_owned(),
+            path: "/repo".into(),
+        },
+        line: LineId(2),
+        started_at_unix_ms: started,
+        outcome: Outcome::Pr,
+        phase: AttemptPhase::Working,
+        branch: "hide-suggestion-s2-x".into(),
+        agent_id: Some("agent-2".into()),
+        repository: Some("acme/app".into()),
+        pr: None,
+        issue_url: None,
+        reviewed: false,
+    };
+    runtime.follow_suggestion_attempts(vec![attempt]);
+    match commands.try_recv() {
+        Ok(Command::Attempted {
+            line,
+            started_at_unix_ms,
+            change: AttemptMove::PrOpen(pr),
+            ..
+        }) => {
+            assert_eq!((line, started_at_unix_ms), (LineId(2), started));
+            assert_eq!(pr.number, 31);
+        }
+        _ => panic!("the open pull request is handed on"),
+    }
+    let home = runtime
+        .suggestions_work
+        .apply
+        .home_attempt("agent-2")
+        .expect("the home's facts");
+    assert_eq!(home.pull.map(|pull| pull.number), Some(31));
+    runtime.track_suggestion_attempts();
+    assert!(commands.try_recv().is_err(), "the same answer moves nothing again");
+}
