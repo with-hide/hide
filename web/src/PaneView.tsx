@@ -195,7 +195,7 @@ export const PaneView = memo(function PaneView({
   const paneId = pane.id;
   const owner = useKeyboardOwner();
   const input = owner.kind === "pane" && owner.paneId === paneId;
-  // The grip and the zoom show on the pane that holds the keyboard, and on any other while it is pointed at.
+  // The grip, `@` and the zoom show on the pane that holds the keyboard, and on any other while it is pointed at.
   const tools = input ? "" : "opacity-0 group-hover/header:opacity-100 group-focus-within/header:opacity-100 hoverless:opacity-100";
   const dispatch = actions.dispatch;
   const title = paneTitle(pane);
@@ -423,7 +423,7 @@ export const PaneView = memo(function PaneView({
         {agentKind && lettersWaiting > 0 ? <PaneLetterButton paneId={paneId} letters={lettersWaiting} onDeliver={actions.deliverLettersNow} /> : null}
         <span data-pane-move-blank="true" className="h-full flex-1" />
         <PaneConnectionChip pane={pane} actions={actions} local={local} />
-        {agentKind ? <PaneMention paneId={paneId} actions={actions} /> : null}
+        {agentKind ? <PaneMention paneId={paneId} actions={actions} className={tools} /> : null}
         {zoomed ? (
           <Hint label={zoomChord ? t("panes.unzoomChord", { chord: zoomChord }) : t("panes.unzoom")}>
             <Button
