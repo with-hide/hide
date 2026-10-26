@@ -1389,7 +1389,9 @@ fn load_opened_memory(
         .promotion_suggestions(
             &identity.id,
             super::memory::now_ms(),
-            hide_memory::PROMOTION_OPEN_LIMIT,
+            // The 제안 tab's cap on new suggestions replaces Memory's own
+            // (PRD hide-ai-suggestions D-42); it keeps as many as it stores.
+            crate::suggestions::policy::STORED_NEW_CAP,
         )
         .map_err(|error| error.to_string())?;
     Ok(OpenedMemoryLoad {

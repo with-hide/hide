@@ -1180,7 +1180,7 @@ fn a_home_owned_row_is_listed_only_while_the_operator_has_something_to_do() {
         let mut agents = rows();
         agents[1].hide_ai = Some(HideAiSnapshot {
             task: None,
-            home: Some(TaskHome::Memory),
+            home: Some(TaskHome::Suggestions),
             workspace_id: Some("p".into()),
             turn,
         });

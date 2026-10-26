@@ -19,7 +19,7 @@ use crate::model::{
 use std::collections::BTreeMap;
 
 /// The most rows the folded 반영됨 group carries, newest first.
-const APPLIED_ROWS: usize = 20;
+pub(crate) const APPLIED_ROWS: usize = 20;
 /// The most evidence links a row carries, newest first.
 const EVIDENCE_ROWS: usize = 10;
 /// The most dismissed lines ⚙ lists, newest first.

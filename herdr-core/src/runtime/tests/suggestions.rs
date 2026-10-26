@@ -336,3 +336,31 @@ fn a_failed_check_and_a_merge_after_changes_are_handed_on_once() {
         )]
     );
 }
+
+/// A press on a Memory row (`m3`) is Memory's own action on that card
+/// (D-02): apply promotes it, and nothing reaches the notebook's worker.
+#[test]
+fn a_press_on_a_memory_row_is_memorys_own_action() {
+    use crate::suggestions::worker::SuggestionClient;
+    let mut runtime = runtime();
+    let (client, commands) = SuggestionClient::for_test();
+    runtime.suggestions_work.client = Some(client);
+    let (workspace, _) = opened_project(&mut runtime);
+    while commands.try_recv().is_ok() {}
+    runtime.dispatch_json(&event(
+        "suggestion_action",
+        serde_json::json!({"workspace_id": workspace, "id": "m3", "action": "apply"}),
+    ));
+    assert!(commands.try_recv().is_err(), "not a notebook line");
+    let memory = runtime
+        .snapshot
+        .memory
+        .as_ref()
+        .and_then(|memory| memory.project.as_ref())
+        .expect("the opened Project's Memory");
+    assert_eq!(
+        memory.action_failure.or(memory.pending_action),
+        Some(crate::model::MemoryAction::Promote),
+        "Memory took the promotion, here refused for want of its writer"
+    );
+}
