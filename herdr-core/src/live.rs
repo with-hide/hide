@@ -3859,6 +3859,10 @@ const ANTIGRAVITY_FORK_POLL: Duration = Duration::from_millis(250);
 /// characters (`27;1$y`).
 const ANTIGRAVITY_ERASE_BATCH: usize = 8;
 const ANTIGRAVITY_ERASE_LIMIT: usize = 64;
+/// The clearing's own bound, counted from its start: the waits before it
+/// may have spent the fork's opening wait on a slow start, the case the
+/// stray answer comes with.
+const ANTIGRAVITY_CLEAR_WAIT: Duration = Duration::from_secs(10);
 /// How many reads of an agent's records in a row may meet the agent writing
 /// them before the reader gives up: 5 s of polls, far past one write.
 const NATIVE_READ_IN_MOTION_LIMIT: usize = 20;
@@ -3935,7 +3939,7 @@ fn fork_antigravity(
         Instant::now() + ANTIGRAVITY_FORK_WAIT,
     )
     .map_err(|error| format!("agy's conversation to fork could not be read: {error}"))?;
-    clear_antigravity_composer(connector, pane_id, deadline)?;
+    clear_antigravity_composer(connector, pane_id, Instant::now() + ANTIGRAVITY_CLEAR_WAIT)?;
     // The mark's read may have waited on agy writing its index, and the
     // composer's clearing on agy redrawing: `/fork` is typed only into a pane
     // still idle, never into a turn that began since.
@@ -3994,8 +3998,8 @@ fn fork_antigravity(
 /// A screen the declaration cannot confirm empty (no composer as declared,
 /// a cut screen, or text that outlasts the erase, as a hint a later agy
 /// draws might) is typed into as before and logged, so a declaration that
-/// no longer matches agy's screen never stops a fork. Bounded by the
-/// fork's `deadline` and `ANTIGRAVITY_ERASE_LIMIT`.
+/// no longer matches agy's screen never stops a fork. Bounded by
+/// `deadline` and `ANTIGRAVITY_ERASE_LIMIT`.
 #[allow(clippy::disallowed_methods)] // a production wait, not test code: agy redraws between erases
 fn clear_antigravity_composer(
     connector: &dyn ApiConnector,
