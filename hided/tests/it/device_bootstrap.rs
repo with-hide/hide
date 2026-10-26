@@ -48,17 +48,34 @@ impl Device {
         if let Some(link) = self.link.take() {
             link.close("bootstrap test ended");
         }
-        if let Some(pid) = self.server_pid {
+        // A kit reply can be lost after it started the detached server.
+        // This socket belongs only to the fixture's private account.
+        let socket_server = match hide_platform::ipc::LocalStream::connect(&self.socket) {
+            Ok(stream) => Some(stream.peer_pid()),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+                ) =>
+            {
+                None
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if socket_server.is_some() {
             let mut command = self.environment.command(&self.pinned);
             command
                 .env("HERDR_SOCKET_PATH", &self.socket)
                 .args(["server", "stop"]);
             successful(command)?;
+        }
+        let socket_pid = socket_server.transpose()?;
+        for pid in [socket_pid, self.server_pid].into_iter().flatten() {
             wait_for("bootstrap server confirmed exit", || {
                 Ok((!hide_platform::process::is_alive(pid)).then_some(()))
             })?;
-            self.server_pid = None;
         }
+        self.server_pid = None;
         if let Some(ssh) = self.ssh.as_mut() {
             ssh.stop()?;
         }
