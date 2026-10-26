@@ -9,6 +9,9 @@
 //! - [`policy`]: every score, threshold, cap, budget and schedule value.
 //! - [`settings`]: a Project's switches, quantity and apply mode.
 //! - [`lifecycle`]: a raised line's attempt, watch and escalation.
+//! - [`apply`]: how an attempt begins and moves, and what the runtime is
+//!   given to start and follow it.
+//! - [`watch`]: the watch after a merge and how it ends.
 //! - [`store`]: `suggestions.sqlite3`, written by the suggestion worker alone.
 //! - [`worker`]: the thread that owns the store, records, runs and raises.
 //! - [`read`]: the 제안 tab as the worker reads it for the screen.
@@ -18,6 +21,7 @@
 //! apply, the watch or the screen changing (D-49).
 
 pub mod analysis;
+pub(crate) mod apply;
 pub mod ledger;
 pub mod lifecycle;
 pub mod notebook;
@@ -26,4 +30,5 @@ pub mod read;
 pub mod scoring;
 pub mod settings;
 pub mod store;
+pub(crate) mod watch;
 pub(crate) mod worker;

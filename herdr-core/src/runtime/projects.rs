@@ -1781,6 +1781,7 @@ impl Runtime {
         // A check that failed or a merge after a review's changes is a
         // suggestion record (PRD hide-ai-suggestions B4).
         self.feed_suggestion_prs();
+        self.track_suggestion_attempts();
         self.settle_answered_reads(&answered);
         true
     }
@@ -3487,6 +3488,7 @@ impl Runtime {
         }
         self.device_github.insert(device_id.to_owned(), merged);
         self.feed_suggestion_prs();
+        self.track_suggestion_attempts();
         self.refresh_device_catalog(device_id)
     }
 

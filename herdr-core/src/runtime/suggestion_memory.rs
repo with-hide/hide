@@ -8,9 +8,9 @@
 use super::*;
 use crate::model::{
     HomeTurn, MemoryAction, MemoryPromotionSnapshot, MemoryPromotionState, MemoryQuestionSnapshot,
-    MemoryRowSnapshot, MemoryStartFailureCode, ProjectSuggestionsSnapshot,
-    SuggestionAttemptPhase, SuggestionAttemptSnapshot, SuggestionGroup, SuggestionHold,
-    SuggestionRowSnapshot, SuggestionSource, SuggestionState,
+    MemoryRowSnapshot, MemoryStartFailureCode, ProjectSuggestionsSnapshot, SuggestionAttemptPhase,
+    SuggestionAttemptSnapshot, SuggestionGroup, SuggestionHold, SuggestionRowSnapshot,
+    SuggestionSource, SuggestionState,
 };
 use crate::suggestions::notebook::Outcome;
 use crate::suggestions::read::APPLIED_ROWS;
@@ -163,7 +163,12 @@ pub(super) fn lay_memory_rows(project: &mut ProjectSuggestionsSnapshot, facts: &
                     continue;
                 }
                 room -= 1;
-                row(*number, title, SuggestionGroup::Choose, SuggestionState::New)
+                row(
+                    *number,
+                    title,
+                    SuggestionGroup::Choose,
+                    SuggestionState::New,
+                )
             }
             MemoryQuestionSnapshot::Failed {
                 number,
@@ -176,7 +181,9 @@ pub(super) fn lay_memory_rows(project: &mut ProjectSuggestionsSnapshot, facts: &
                     SuggestionGroup::Applying,
                     SuggestionState::MyTurn,
                 );
-                row.cause = start_failure.as_ref().and_then(|failure| failure.detail.clone());
+                row.cause = start_failure
+                    .as_ref()
+                    .and_then(|failure| failure.detail.clone());
                 row.attempt = Some(ended(
                     started_at(facts, *number),
                     match start_failure.as_ref().map(|failure| failure.code) {
@@ -360,7 +367,9 @@ mod tests {
         project
     }
 
-    fn drawn(project: &ProjectSuggestionsSnapshot) -> Vec<(&str, SuggestionGroup, SuggestionState)> {
+    fn drawn(
+        project: &ProjectSuggestionsSnapshot,
+    ) -> Vec<(&str, SuggestionGroup, SuggestionState)> {
         project
             .rows
             .iter()
@@ -444,7 +453,12 @@ mod tests {
         assert_eq!(attempt("m7").phase, SuggestionAttemptPhase::Merged);
         let unbuilt = project.rows.iter().find(|row| row.id == "m3").unwrap();
         assert_eq!(unbuilt.cause.as_deref(), Some("the switch is not built"));
-        assert!(project.rows.iter().all(|row| row.source == SuggestionSource::Memory));
+        assert!(
+            project
+                .rows
+                .iter()
+                .all(|row| row.source == SuggestionSource::Memory)
+        );
     }
 
     /// D-42: a suggested card is a new suggestion only while the notebook's
@@ -471,13 +485,21 @@ mod tests {
         });
         project.rows[0].id = "s1".into();
         lay_memory_rows(&mut project, &facts);
-        let ids = project.rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>();
+        let ids = project
+            .rows
+            .iter()
+            .map(|row| row.id.as_str())
+            .collect::<Vec<_>>();
         assert_eq!(ids, ["s1", "m1", "m2", "m4"], "Normal opens three");
 
         let mut off = tab();
         off.settings.suggestions_enabled = false;
         lay_memory_rows(&mut off, &facts);
-        let ids = off.rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>();
+        let ids = off
+            .rows
+            .iter()
+            .map(|row| row.id.as_str())
+            .collect::<Vec<_>>();
         assert_eq!(ids, ["m4"]);
     }
 
