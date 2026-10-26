@@ -633,17 +633,21 @@ function turnAgent(): AgentRow {
   } as Partial<AgentRow>);
 }
 
-// PRD pane-last-request B6-B9: the pointer or focus on the request opens the
-// turn card under it, a press pins it, and Esc closes a pinned card and stops
-// there; a card the pointer only shows leaves Esc to the terminal.
-it("opens the turn card from the request and pins it on a press until Esc", async () => {
+// PRD pane-last-request B6-B9: a press or focus on the request opens the turn
+// card under it, the pointer passing over opens nothing, and Esc closes the
+// card and stops there.
+it("opens the turn card from the request on a press, not on hover, until Esc", async () => {
   const value: PaneHeader = { working: false, notice: null, band: { kind: "answer", reason: "Bundle questions 1-3 into one PR?", since_unix_ms: null, read: false, action: null, more: 0 }, request: { text: "Proceed as proposed + check unclear states", images: 0 } };
   const { container, unmount } = await mount(value, [turnAgent()], { paneId: "solo", rest: { status: { pane_focus_request: null }, terminal: { headers: { solo: value } } } as SnapshotRest });
   const card = () => document.querySelector<HTMLElement>("[data-pane-turn-card=solo]");
   const button = () => container.querySelector<HTMLButtonElement>("[data-pane-turn-request=solo]")!;
   try {
     expect(card()).toBeNull();
-    await act(async () => button().dispatchEvent(new MouseEvent("pointerover", { bubbles: true })));
+    await act(async () => { button().dispatchEvent(new MouseEvent("pointerover", { bubbles: true })); vi.advanceTimersByTime(1_000); });
+    expect(card(), "the pointer passing over opens nothing").toBeNull();
+    await act(async () => button().click());
+    expect(button().hasAttribute("aria-pressed")).toBe(false);
+    expect(button().getAttribute("aria-expanded")).toBe("true");
     expect(card()?.querySelector("[data-turn-card-summary]")?.textContent).toBe("Proceed as proposed + check unclear states");
     expect(card()?.querySelector("[data-turn-card-original]")?.textContent).toContain("ok do that.");
     expect(card()?.querySelector("[data-turn-card-later]")?.textContent).toBe("Next request from lead");
@@ -655,17 +659,11 @@ it("opens the turn card from the request and pins it on a press until Esc", asyn
       ["Proposal for the white ring after finishing", "Done · Two options drafted"],
     ]);
     expect(card()?.querySelector("[data-turn-card-record]")?.textContent).toBe("Open record");
-    // A card the pointer only shows leaves Esc to the terminal.
-    const passed = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
-    await act(async () => document.body.dispatchEvent(passed));
-    expect(card()).not.toBeNull();
     await act(async () => { button().dispatchEvent(new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body })); vi.advanceTimersByTime(200); });
-    expect(card()).toBeNull();
+    expect(card(), "an opened card stays when the pointer leaves").not.toBeNull();
     await act(async () => button().click());
-    expect(button().hasAttribute("aria-pressed")).toBe(false);
-    expect(button().getAttribute("aria-expanded")).toBe("true");
-    await act(async () => { button().dispatchEvent(new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body })); vi.advanceTimersByTime(200); });
-    expect(card(), "a pinned card stays when the pointer leaves").not.toBeNull();
+    expect(card(), "a second press closes it").toBeNull();
+    await act(async () => button().click());
     await act(async () => document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
     expect(card()).toBeNull();
     await act(async () => button().focus());
@@ -679,8 +677,7 @@ it("opens the turn card from the request and pins it on a press until Esc", asyn
 // with Tab from the focused request, the card stays open while focus is in
 // it, Shift+Tab goes back, Tab past its end closes it on the request, and
 // the shell's Esc (its innermost layer) closes it and returns focus without
-// reopening it. A card the pointer only shows is no Esc layer, so Esc stays
-// the terminal's.
+// reopening it.
 it("moves the keyboard into the turn card with Tab and back", async () => {
   const value: PaneHeader = { working: false, notice: null, band: { kind: "answer", reason: "Bundle questions 1-3 into one PR?", since_unix_ms: null, read: false, action: null, more: 0 }, request: { text: "Proceed as proposed + check unclear states", images: 0 } };
   const { container, unmount } = await mount(value, [turnAgent()], { paneId: "solo", rest: { status: { pane_focus_request: null }, terminal: { headers: { solo: value } } } as SnapshotRest });
@@ -690,10 +687,7 @@ it("moves the keyboard into the turn card with Tab and back", async () => {
   const key = (target: Element, init: KeyboardEventInit) => act(async () => { target.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init })); });
   const layers = () => useUiStore.getState().escapeLayers;
   try {
-    await act(async () => button().dispatchEvent(new MouseEvent("pointerover", { bubbles: true })));
-    expect(card()).not.toBeNull();
-    expect(layers(), "a hover card leaves Esc to the terminal").toHaveLength(0);
-    await act(async () => { button().dispatchEvent(new MouseEvent("pointerout", { bubbles: true, relatedTarget: document.body })); vi.advanceTimersByTime(200); });
+    expect(layers(), "a closed card leaves Esc to the terminal").toHaveLength(0);
     await act(async () => button().focus());
     expect(card()).not.toBeNull();
     expect(layers()).toHaveLength(1);
