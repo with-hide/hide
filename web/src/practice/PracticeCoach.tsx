@@ -12,7 +12,7 @@ import { hostChord, hostRegistry, isCycleCommand, releaseModifier, type CommandI
 import { useShellStore } from "../store";
 import { pasteText, terminalFor } from "../terminals";
 import { useUiStore } from "../ui";
-import type { PracticeChapter, PracticeDrag, PracticeMenu, PracticeStep, PracticeTyping } from "./chapter";
+import type { PracticeChapter, PracticeDrag, PracticeMenu, PracticePick, PracticeStep, PracticeTyping } from "./chapter";
 import { COACH_CSS } from "./coachStyle";
 import type { PracticeWorld } from "./world";
 
@@ -53,8 +53,12 @@ function pressTarget(selector: string | undefined) {
   const x = box.left + box.width / 2;
   const y = box.top + box.height / 2;
   // The bubble may sit over the target; the press lands on the target's own topmost element there.
-  const element = document.elementsFromPoint(x, y).find((hit) => marked.contains(hit)) ?? marked;
-  const at = { bubbles: true, cancelable: true, composed: true, isPrimary: true, button: 0, detail: 1, clientX: x, clientY: y, pointerType: "mouse" };
+  pressAt(document.elementsFromPoint(x, y).find((hit) => marked.contains(hit)) ?? marked, { x, y });
+}
+
+/** A hand's press on `element` at `point`: down, up, then the click. */
+function pressAt(element: Element, point: Point) {
+  const at = { bubbles: true, cancelable: true, composed: true, isPrimary: true, button: 0, detail: 1, clientX: point.x, clientY: point.y, pointerType: "mouse" };
   element.dispatchEvent(new PointerEvent("pointerdown", { ...at, buttons: 1 }));
   element.dispatchEvent(new MouseEvent("mousedown", { ...at, buttons: 1 }));
   element.dispatchEvent(new PointerEvent("pointerup", at));
@@ -166,15 +170,22 @@ function glide(from: Point, to: Point, ms: number, follow: (point: Point | null)
 
 const pause = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
-/** Right-clicks what `menu.at` marks as a hand would, so the shell opens its own menu, then presses each of `menu.path` in turn. */
-async function chooseFromMenu(menu: PracticeMenu, follow: (point: Point | null) => void): Promise<void> {
+/**
+ * Opens what `menu.at` marks as a hand would, so the shell opens its own menu
+ * or list: right-clicking it (`menu`) or pressing it (`press`), then presses
+ * each of `menu.path` in turn.
+ */
+async function chooseFromMenu(menu: PracticeMenu | PracticePick, open: "menu" | "press", follow: (point: Point | null) => void): Promise<void> {
   const marked = document.querySelector<HTMLElement>(menu.at);
   if (!marked) throw new Error(`Practice menu target ${menu.at} is not on screen`);
   let hand = middle(marked);
   follow(hand);
   await pause(250);
   const element = document.elementsFromPoint(hand.x, hand.y).find((hit) => marked.contains(hit)) ?? marked;
-  element.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, composed: true, button: 2, buttons: 2, clientX: hand.x, clientY: hand.y }));
+  // A list the learner opened already is chosen from as it is: pressing its control again would close it.
+  if (open === "press") {
+    if (!menu.path[0] || !document.querySelector(menu.path[0])) pressAt(element, hand);
+  } else element.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, composed: true, button: 2, buttons: 2, clientX: hand.x, clientY: hand.y }));
   for (const [at, selector] of menu.path.entries()) {
     const item = await appeared(selector, 3000);
     if (!item) throw new Error(`Practice menu item ${selector} never appeared`);
@@ -401,7 +412,8 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
       if ("pane" in typing && promptWords(chapter.world, current.current, typing.pane)) return pasteText(typing.pane, "\r");
       return play(typeInto(typing));
     }
-    if (step.gesture && "menu" in step.gesture) return play(chooseFromMenu(step.gesture.menu, setHand));
+    if (step.gesture && "menu" in step.gesture) return play(chooseFromMenu(step.gesture.menu, "menu", setHand));
+    if (step.gesture && "pick" in step.gesture) return play(chooseFromMenu(step.gesture.pick, "press", setHand));
     if (step.gesture && "drag" in step.gesture) return dragPane(step.gesture.drag, setHand);
     if (step.gesture && "click" in step.gesture) return pressTarget(step.target);
     if (pressed) return pressTarget(step.target);
@@ -455,7 +467,8 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
     : step.command ? <WithKeys id={step.command} text={say("practice.via.key", { keys: KEYS_MARK })} />
     : step.gesture && "drag" in step.gesture ? say("practice.via.drag")
     : step.gesture && "type" in step.gesture ? say("practice.via.type")
-    : step.gesture && "menu" in step.gesture ? say("practice.via.menu") : null;
+    : step.gesture && "menu" in step.gesture ? say("practice.via.menu")
+    : step.gesture && "pick" in step.gesture ? say("practice.via.pick") : null;
   const go = last ? (next ? say("practice.toChapter", { number: next.number }) : say("practice.toHub")) : acts(step) ? say("practice.try") : say("practice.next");
   const place = besideLayer(bubblePlace(ring, step.side, size), layerBox, size);
   const title = say(`practice.${chapter.id}.title`);

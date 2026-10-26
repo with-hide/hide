@@ -3,10 +3,10 @@
 // the learner sends play the next part of the script, since a practice
 // understands no words. The first words are the mission: the Conductor plans
 // it, starts its workers in tabs of their own, one node finishes, and it asks
-// one decision (`hide mission decide`), which its row asks as any agent asks.
-// The next words answer it: the Conductor folds one node into another, clears
-// the decision and goes on. The map edits nothing: the mission changes only
-// by what is said to its Conductor, as in Hide.
+// one decision (`hide mission decide`) with its choices, which its row asks as
+// any agent asks. A choice pressed on the map's banner, an answer written
+// there, or the next words said to the Conductor answer it: the Conductor
+// folds one node into another, clears the decision and goes on.
 
 import type { AgentRow, AgentState, DetailItem, Mission, MissionNode, PaneHeader } from "../../snapshot";
 import type { CoreEvent, PracticeWorld, WorldSnapshot } from "../world";
@@ -22,6 +22,8 @@ const WORKER_TAB = "t2";
 const MISSION_ID = "practice-mission";
 const TITLE = "Payment retries";
 const DECISION = "Fold the retry docs into the backoff PR?";
+/** The decision's choices, as `hide mission decide --option` gives them; the first is the one recommended. */
+const OPTIONS = ["Yes, fold the docs into the backoff PR", "No, keep the docs as their own PR"];
 
 /** 0 before the mission, 1 once it runs and a decision waits, 2 once the decision is answered and the plan changed. */
 export type MissionStage = 0 | 1 | 2;
@@ -180,13 +182,29 @@ function mission(model: MissionModel): Mission | null {
     // No session: this practice keeps no record to open.
     conductor: { pane_id: CONDUCTOR, name: TITLE, agent_kind: "claude", session: null, present: true, takes_answers: true },
     nodes: nodes(model), merge_order: ["config", "backoff"], check: "pnpm test", github: "practice-bot",
-    decision: model.stage === 1 ? DECISION : null, question: null, answer: null, answer_failed: null, delay: null, report: null,
+    decision: model.stage === 1 ? DECISION : null,
+    question: model.stage === 1 ? { key: 1, why: "Both change docs/retries.md, so two PRs would conflict.", options: OPTIONS, recommend: 1, node: "docs", asked_at_unix_ms: model.startedAt } : null,
+    answer: null, answer_failed: null, delay: null, report: null,
     created_at_unix_ms: model.startedAt - 10 * 60_000, started_at_unix_ms: model.startedAt - 9 * 60_000, closed_at_unix_ms: null,
     running: 1, stale: false, github_stale: false, github_read_at_unix_ms: now,
   };
 }
 
 // --- The Conductor's prompt ------------------------------------------------------------
+
+/**
+ * The decision answered with `words`: `hide mission decide --clear`, so the
+ * row stops asking and the Conductor goes back to work on the changed plan.
+ */
+function answered(model: MissionModel, words: string): MissionModel {
+  return {
+    ...model, stage: 2, said: [...model.said, words],
+    desk: withConductor(model.desk, (row) => ({
+      ...conductorRow({ group: "working", mark: "going", status_code: "working", elapsed: "1s" }),
+      lineage_child_pane_ids: row.lineage_child_pane_ids, lineage_collapsed: false, direct_child_counts: COUNTS(1), descendant_counts: COUNTS(1),
+    })),
+  };
+}
 
 /**
  * The prompt, sent: the first words are the mission, the next the decision's
@@ -196,23 +214,26 @@ function mission(model: MissionModel): Mission | null {
 function submit(model: MissionModel): MissionModel {
   const words = model.draft.trim();
   if (!words) return { ...model, draft: "" };
-  const sent = { ...model, draft: "", said: [...model.said, words] };
   const now = Date.now();
   switch (model.stage) {
     case 0:
-      return { ...sent, stage: 1, startedAt: now, desk: started(model.desk, now) };
+      return { ...model, draft: "", said: [words], stage: 1, startedAt: now, desk: started(model.desk, now) };
     case 1:
-      // `hide mission decide --clear`: the row stops asking and the Conductor goes back to work.
-      return {
-        ...sent, stage: 2,
-        desk: withConductor(model.desk, (row) => ({
-          ...conductorRow({ group: "working", mark: "going", status_code: "working", elapsed: "1s" }),
-          lineage_child_pane_ids: row.lineage_child_pane_ids, lineage_collapsed: false, direct_child_counts: COUNTS(1), descendant_counts: COUNTS(1),
-        })),
-      };
+      return answered({ ...model, draft: "" }, words);
     default:
-      return sent;
+      return { ...model, draft: "", said: [...model.said, words] };
   }
+}
+
+/**
+ * The banner's answer, as the core types it into the Conductor's conversation:
+ * the question, then the choice pressed or the words written. An answer to
+ * another mission or question, or once nothing is asked, is refused.
+ */
+function answerLine(model: MissionModel, payload: Record<string, unknown>): string | null {
+  if (model.stage !== 1 || payload.mission !== MISSION_ID || payload.key !== 1) return null;
+  const answer = typeof payload.option === "number" ? OPTIONS[payload.option - 1] : typeof payload.text === "string" ? payload.text.trim() : undefined;
+  return answer ? `[Decision answer] ${DECISION} → ${answer}` : null;
 }
 
 // --- The events --------------------------------------------------------------------------
@@ -223,6 +244,10 @@ function apply(model: MissionModel, event: CoreEvent): MissionModel | null {
     // Only the Conductor is talked to here; keys typed into another pane reach no one.
     case "key":
       return p.pane_id === CONDUCTOR && typeof p.bytes_base64 === "string" ? typed(model, keyText(p.bytes_base64), submit) : null;
+    case "mission_answer": {
+      const line = answerLine(model, p);
+      return line ? answered(model, line) : null;
+    }
     // The map opens in the 보기 slot as a lane call, the way the core numbers one; a record or a card this world keeps none of.
     case "detail_open": {
       const item = p.item as DetailItem;
@@ -307,7 +332,7 @@ function conductorScreen(model: MissionModel, cols: number): string {
       "",
       `● ${YELLOW}One thing to decide:${RESET} backoff and the docs change the same file.`,
       `  ${DECISION}`,
-      ...ran("hide mission decide --line …", "Asked on the map"),
+      ...ran("hide mission decide --option … --recommend 1", "Asked on the map"),
     );
   }
   if (model.stage >= 2) {

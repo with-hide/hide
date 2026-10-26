@@ -35,13 +35,13 @@ const en = {
   "practice.follow.overview.quest": "Team map",
   "practice.follow.overview.kick": "The whole team",
   "practice.follow.overview.title": "Every agent on one map",
-  "practice.follow.overview.text": "The Overview opens over your work. The map button in a pane's header opens it with that agent chosen.",
+  "practice.follow.overview.text": "The Overview opens over your work. Show in Overview, first in a pane's ⋯ menu or its right-click menu, opens it with that agent chosen.",
   "practice.follow.map.kick": "Overview",
   "practice.follow.map.title": "Who started whom",
   "practice.follow.map.text": "Lines join each parent to its children, and the agents waiting for you to You. The color of each mark says how it stands.",
   "practice.follow.end.kick": "End of chapter 3",
   "practice.follow.end.title": "You can follow any agent now",
-  "practice.follow.end.text": "The list, the header, the card, a child and back. Esc closes the Overview.",
+  "practice.follow.end.text": "The list, the header, the card, a child and back. Esc closes the agent's panel, then the Overview.",
 };
 
 const ko = {
@@ -78,13 +78,13 @@ const ko = {
   "practice.follow.overview.quest": "팀 지도",
   "practice.follow.overview.kick": "팀 전체",
   "practice.follow.overview.title": "모든 에이전트를 한 장으로",
-  "practice.follow.overview.text": "개요가 작업 화면 위에 열려요. 터미널 헤더의 지도 버튼을 누르면 그 에이전트를 고른 채로 열려요.",
+  "practice.follow.overview.text": "개요가 작업 화면 위에 열려요. 터미널 헤더의 ⋯ 메뉴나 우클릭 메뉴 맨 위의 개요에서 보기를 누르면 그 에이전트가 선택된 채로 열려요.",
   "practice.follow.map.kick": "개요",
   "practice.follow.map.title": "누가 누구를 시작했는지",
   "practice.follow.map.text": "선은 부모와 자식을 잇고, 나를 기다리는 에이전트를 ‘나’에 이어요. 표시의 색이 상태예요.",
   "practice.follow.end.kick": "3편 끝",
   "practice.follow.end.title": "이제 어떤 에이전트든 따라갈 수 있어요",
-  "practice.follow.end.text": "목록, 헤더, 대화 카드, 자식, 그리고 부모로. Esc를 누르면 개요가 닫혀요.",
+  "practice.follow.end.text": "목록, 헤더, 대화 카드, 자식, 그리고 부모로. Esc를 누르면 에이전트 패널이, 한 번 더 누르면 개요가 닫혀요.",
 } satisfies Catalog<typeof en>;
 
 const zhCN = {
@@ -121,13 +121,13 @@ const zhCN = {
   "practice.follow.overview.quest": "团队地图",
   "practice.follow.overview.kick": "整个团队",
   "practice.follow.overview.title": "所有智能体在一张图上",
-  "practice.follow.overview.text": "概览会在工作区上方打开。点窗格标题栏里的地图按钮，会打开并选中那个智能体。",
+  "practice.follow.overview.text": "概览会在工作区上方打开。在窗格标题栏的 ⋯ 菜单或右键菜单里，选第一项“在概览中查看”，会打开并选中那个智能体。",
   "practice.follow.map.kick": "概览",
   "practice.follow.map.title": "谁启动了谁",
   "practice.follow.map.text": "线条连接父智能体和子智能体，等你的智能体会连到“我”。标记的颜色就是状态。",
   "practice.follow.end.kick": "第 3 章完",
   "practice.follow.end.title": "现在你可以跟进任何智能体了",
-  "practice.follow.end.text": "列表、标题栏、对话卡片、子智能体，再回到父智能体。按 Esc 关闭概览。",
+  "practice.follow.end.text": "列表、标题栏、对话卡片、子智能体，再回到父智能体。按 Esc 先关闭智能体面板，再按一次关闭概览。",
 } satisfies Catalog<typeof en>;
 
 const ja = {
@@ -164,13 +164,13 @@ const ja = {
   "practice.follow.overview.quest": "チームの地図",
   "practice.follow.overview.kick": "チーム全体",
   "practice.follow.overview.title": "すべてのエージェントを一枚に",
-  "practice.follow.overview.text": "概要が作業画面の上に開きます。ペインのヘッダーの地図ボタンを押すと、そのエージェントを選んだ状態で開きます。",
+  "practice.follow.overview.text": "概要が作業画面の上に開きます。ペインのヘッダーの ⋯ メニューか右クリックメニューの先頭「概要で表示」を選ぶと、そのエージェントを選んだ状態で開きます。",
   "practice.follow.map.kick": "概要",
   "practice.follow.map.title": "誰が誰を始めたか",
   "practice.follow.map.text": "線が親と子をつなぎ、あなたを待つエージェントは「自分」につながります。印の色が状態を表します。",
   "practice.follow.end.kick": "第 3 章 おわり",
   "practice.follow.end.title": "どのエージェントでも追いかけられます",
-  "practice.follow.end.text": "リスト、ヘッダー、会話カード、子エージェント、そして親へ。Esc で概要を閉じます。",
+  "practice.follow.end.text": "リスト、ヘッダー、会話カード、子エージェント、そして親へ。Esc でエージェントのパネルを、もう一度で概要を閉じます。",
 } satisfies Catalog<typeof en>;
 
 export default { en, ko, "zh-CN": zhCN, ja } satisfies Catalogs<typeof en>;

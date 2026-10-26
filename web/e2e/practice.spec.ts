@@ -42,11 +42,14 @@ function practiceState(page: Page): Promise<string> {
 }
 
 /**
- * Chapter 4's paste step by hand, as a learner would: the lead pane's Paste
- * takes the pane ID the chapter copied, never the system clipboard, and the
- * learner's own words then go with Enter as they are.
+ * Chapter 4's mention step by hand, the way the step says also works: the
+ * signup agent's Copy name and ID, then the lead pane's Paste, which takes
+ * the copy the chapter made, never the system clipboard; the learner's own
+ * words then go with Enter as they are.
  */
 async function pasteByHand(practice: Page): Promise<void> {
+  await practice.locator('[data-pane-view="w1:p3"] header').click({ button: "right" });
+  await practice.locator('[role="menu"] [data-menu-item="copy_reference"]').click();
   const lead = practice.locator('[data-pane-view="w1:p1"] .xterm');
   // The guide's bubble sits inside the pane; its lower left corner is the terminal's own.
   const box = await lead.boundingBox();
@@ -54,6 +57,8 @@ async function pasteByHand(practice: Page): Promise<void> {
   const corner = { x: 24, y: box.height - 24 };
   await lead.click({ button: "right", position: corner });
   await practice.locator('[role="menu"] [data-menu-item="paste"]').click();
+  // The pasted reference finishes the mention step as @ would.
+  await expect.poll(() => practiceState(practice), { message: "the pasted reference did not reach the lead's prompt" }).toMatch(/^delegate:send:/);
   await lead.click({ position: corner });
   await practice.keyboard.type(" update the signup copy");
   await practice.keyboard.press("Enter");
@@ -68,7 +73,7 @@ async function playEveryChapter(practice: Page, chapters: number): Promise<void>
   do {
     expect(presses, `the practice stopped moving at ${now}`).toBeLessThan(chapters * PRESSES_PER_CHAPTER);
     const before = now;
-    if (now.startsWith("delegate:paste:")) await pasteByHand(practice);
+    if (now.startsWith("delegate:mention:")) await pasteByHand(practice);
     else await practice.keyboard.press("Enter");
     presses += 1;
     await expect.poll(() => practiceState(practice), { message: `Enter at ${before} moved nothing`, timeout: 10_000 }).not.toBe(before);

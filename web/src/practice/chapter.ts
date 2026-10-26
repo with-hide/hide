@@ -20,6 +20,9 @@ export type PracticeTyping = { pane: string; text: string } | { input: string; t
 /** A menu opened by right-clicking what `at` marks, then each of `path` pressed in turn: a submenu, then its item. */
 export type PracticeMenu = { at: string; path: string[] };
 
+/** A control `at` marks pressed, then each of `path` pressed in turn: a popover's list, then its choice. */
+export type PracticePick = { at: string; path: string[] };
+
 export type PracticeStep<M = unknown> = {
   id: string;
   /** Listed on the quest card; a step without it is not a task of its own. */
@@ -32,8 +35,8 @@ export type PracticeStep<M = unknown> = {
   zones?: true;
   /** The command the step teaches; ⏎ presses its chord unless the step has a gesture. */
   command?: CommandId;
-  /** What ⏎ does in the learner's place: press the target, drag a pane, type, or choose from a right-click menu. */
-  gesture?: { click: true } | { drag: PracticeDrag } | { type: PracticeTyping } | { menu: PracticeMenu };
+  /** What ⏎ does in the learner's place: press the target, drag a pane, type, choose from a right-click menu, or press a control and choose from its list. */
+  gesture?: { click: true } | { drag: PracticeDrag } | { type: PracticeTyping } | { menu: PracticeMenu } | { pick: PracticePick };
   /** Done when the world says so; a step without it is a look, done when the learner presses on. */
   done?: (model: M) => boolean;
   /**
