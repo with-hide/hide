@@ -256,3 +256,41 @@ fn each_suggestion_event_hands_the_worker_one_command() {
     runtime.dispatch_json(&memory_open(None));
     assert!(matches!(commands.try_recv(), Ok(Command::Close)));
 }
+
+/// A day's run investigates only while Hide AI can (B19, D-39, D-49): with
+/// no agent chosen, with OpenCode or with the worker's gate shut, it groups
+/// by tag.
+#[test]
+fn a_run_investigates_only_while_hide_ai_can() {
+    use crate::suggestions::analysis::StopFlag;
+    use crate::suggestions::worker::{RunGate, RunPlan};
+    let mut runtime = runtime();
+    runtime.ingest_session(Ok(context_payload()));
+    let runtime = Arc::new(Mutex::new(runtime));
+    let factory = super::super::suggestions::analysis_factory(Arc::downgrade(&runtime));
+    let stop = StopFlag::default();
+    let chosen = |ai_ready| {
+        factory(&RunPlan {
+            project_id: "project",
+            gate: RunGate {
+                ai_ready,
+                usage_ok: true,
+                language: hide_ai::OutputLanguage::English,
+            },
+            stop: &stop,
+        })
+        .name()
+    };
+    assert_eq!(chosen(true), "tag_grouping", "no agent chosen");
+    let settings = |provider| hide_ai::AiSettings {
+        provider,
+        chosen: true,
+        enabled: true,
+        ..hide_ai::AiSettings::default()
+    };
+    runtime.lock().unwrap().ai_settings = Some(settings(hide_ai::ProviderId::CLAUDE));
+    assert_eq!(chosen(true), "investigation");
+    assert_eq!(chosen(false), "tag_grouping", "the gate shut");
+    runtime.lock().unwrap().ai_settings = Some(settings(hide_ai::ProviderId::OPENCODE));
+    assert_eq!(chosen(true), "tag_grouping", "OpenCode cannot investigate");
+}

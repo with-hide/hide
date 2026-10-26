@@ -45,9 +45,17 @@ const IDENTITY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The current time in Unix milliseconds; a test passes its own.
 pub(crate) type Clock = Arc<dyn Fn() -> u64 + Send + Sync>;
-/// Makes the analysis a run uses; the deterministic grouping until an
-/// investigation replaces it (D-49).
-pub(crate) type AnalysisFactory = Arc<dyn Fn() -> Box<dyn Analysis> + Send + Sync>;
+/// Makes the analysis a run uses (D-49): production's investigates with
+/// Hide AI when its gate is open and groups by tag otherwise.
+pub(crate) type AnalysisFactory = Arc<dyn Fn(&RunPlan<'_>) -> Box<dyn Analysis> + Send + Sync>;
+
+/// What a run's analysis is chosen and made with.
+pub(crate) struct RunPlan<'a> {
+    pub project_id: &'a str,
+    pub gate: RunGate,
+    /// The run's stop, which an analysis that waits ends its wait on.
+    pub stop: &'a StopFlag,
+}
 
 /// A folder on a machine whose Project a command is about, with the node
 /// that reads it.
@@ -177,12 +185,12 @@ pub(crate) struct Options {
 }
 
 impl Options {
-    pub(crate) fn production(store: PathBuf) -> Self {
+    pub(crate) fn production(store: PathBuf, analysis: AnalysisFactory) -> Self {
         Self {
             store,
             clock: Arc::new(crate::runtime::unix_milliseconds),
             zone: jiff::tz::TimeZone::system(),
-            analysis: Arc::new(|| Box::new(TagGrouping) as Box<dyn Analysis>),
+            analysis,
             resolver: node_resolver(),
         }
     }
@@ -766,8 +774,13 @@ impl Worker {
             self.publish_if_opened(project, sink);
             return false;
         }
-        let analysis = (self.options.analysis)();
         let gate = sink.gate();
+        let stop = StopFlag::default();
+        let analysis = (self.options.analysis)(&RunPlan {
+            project_id: project,
+            gate,
+            stop: &stop,
+        });
         if analysis.uses_provider() {
             if !gate.ai_ready || !gate.usage_ok {
                 crate::diagnostic!(json!({
@@ -778,7 +791,6 @@ impl Worker {
                 return false;
             }
         }
-        let stop = StopFlag::default();
         let input = AnalysisInput {
             project_id: project.to_owned(),
             records: index.clone(),
@@ -1107,7 +1119,7 @@ mod tests {
                 store: store.to_owned(),
                 clock: Arc::new(move || time.load(Ordering::SeqCst)),
                 zone: jiff::tz::TimeZone::UTC,
-                analysis: Arc::new(|| Box::new(TagGrouping) as Box<dyn Analysis>),
+                analysis: Arc::new(|_: &RunPlan<'_>| Box::new(TagGrouping) as Box<dyn Analysis>),
                 resolver: Box::new(|project: &ProjectRef| Ok(format!("project{}", project.path))),
             };
             let sink = TestSink {
@@ -1363,7 +1375,7 @@ mod tests {
                 store: dir.path().join("suggestions.sqlite3"),
                 clock: Arc::new(move || time.load(Ordering::SeqCst)),
                 zone: jiff::tz::TimeZone::UTC,
-                analysis: Arc::new(|| Box::new(Asks) as Box<dyn Analysis>),
+                analysis: Arc::new(|_: &RunPlan<'_>| Box::new(Asks) as Box<dyn Analysis>),
                 resolver: Box::new(|_: &ProjectRef| Ok("project".into())),
             },
             TestSink {

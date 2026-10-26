@@ -81,6 +81,11 @@ The turns are `hide_ai::run_turns` (`hide-ai/src/turns.rs`): each turn is one `A
 No provider keeps a conversation between turns: each turn's request carries everything the model needs, so Claude, Codex, Grok, Pi, omp and Antigravity take part the same way through the one-shot surfaces below, and Codex's thread stays ephemeral per turn.
 OpenCode answers `Unsupported` as it does for any request, so no investigation runs on it.
 
+A Project's daily run is the investigation while Hide AI can take it: Hide AI on, an agent chosen, and that agent not OpenCode (B19, D-39).
+Otherwise it is the deterministic grouping by signal and tag, which asks no one.
+The choice is made when the run starts (`runtime/suggestions.rs`, `analysis_factory`), from what the runtime lock holds; an investigation whose usage limit is near does not start, and the day waits for a later wake (D-36).
+The router is Memory's (`crate::ai::memory_router`), with the usage limit.
+
 A turn sends, within the 64 KiB request input (every number is in `herdr-core/src/suggestions/policy.rs`):
 
 - the turn's number, the turns left and its phase;
@@ -90,7 +95,9 @@ A turn sends, within the 64 KiB request input (every number is in `herdr-core/sr
 
 The model answers one JSON object (`PlainJson`, schema `suggestions_investigation.v1`): at most eight notebook edits, applied in order and each saved before the next is taken, at most four reads for the next turn, its notes, and whether it is done.
 It runs nothing itself.
-A read is a request Hide fulfils with its own fixed tools on the node that holds the Project, on the investigation's worker, off the runtime lock and off the session-sync thread:
+A read is a request Hide fulfils with its own fixed tools on the node that holds the Project, on the investigation's worker, off the runtime lock and off the session-sync thread.
+The Project's folder is found the first time a read needs it: of the catalog Projects on this machine and on linked devices, the one whose node names this Project, the folder that is its root asked first (`ProjectReads`).
+A Project no linked node names answers every read `project_unreachable`, and the run goes on with the records alone.
 
 | Read | What Hide runs | Bound |
 | --- | --- | --- |
@@ -107,14 +114,15 @@ Each line a result keeps is at most 400 characters.
 A run has 30 turns and 20 minutes (`RUN_TURNS`, `RUN_SPAN_MS`), and one turn is given at most two minutes.
 The four turns before the last ask the model to wrap up.
 The last turn, at the turn limit or once less than a turn's time is left, offers no read and asks for the final edits; a turn that got no usable answer (an answer the schema refused twice, a timeout, a lost completion) is followed by that last turn.
-Every turn is admitted against the machine-wide daily call cap before it is asked, and the usage ledger counts the turns with Memory's calls (`memory`), since both are the Hide AI tool.
+Every turn is admitted against Memory's machine-wide daily call cap, in Memory's store, before it is asked, and the usage ledger counts the turns with Memory's calls (`memory`), since both are the Hide AI tool.
+The run's stop (the Project turned off, or the core stopping) is the provider call's cancel token, so it ends a turn in flight, and it is checked again before each edit and each read.
 
 The run's end is what the core's analysis boundary reads:
 
 - `done`: the model said so.
 - `turn_limit` or `time_limit`: the last turn was answered; records it did not reach stay fresh for the next run.
 - `usage_paused`: the usage limit or the daily call cap; nothing more is asked, and the run resumes later.
-- `failed`: no agent could answer (not signed in, unavailable, a cap of the router), or no turn got a usable answer; a run with no usable answer wrote nothing, and the core then judges the records by score alone.
+- `failed`: no agent could answer (not signed in, unavailable, a cap of the router), or no turn got a usable answer; a run with no usable answer wrote nothing, and the core then judges the records by score alone, through the grouping by signal and tag (`not_investigated`).
 - `stopped`: the notebook could not be saved, the Project was turned off or the core is stopping.
 
 None of it reaches the screen (design principle 13).

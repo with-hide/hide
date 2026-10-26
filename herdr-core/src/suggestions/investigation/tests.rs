@@ -14,17 +14,20 @@ use serde_json::{Value, json};
 
 use super::reads::{Excerpt, ReadRefused, ReadTools, SearchHit, SessionWindow};
 use super::*;
-use crate::suggestions::analysis::{AnalysisBudget, MemoryPen};
+use crate::suggestions::analysis::{AnalysisBudget, MemoryPen, StopFlag};
 use crate::suggestions::ledger::{RecordEntry, RecordId, RecordIndex, SessionRef, Signal};
 use crate::suggestions::notebook::{LineId, Notebook, Outcome};
 
 const SECRET: &str = "ghp_abcdefghijklmnopqrstuvwxyz0123";
 
-/// A provider that answers from a script and keeps every request.
+/// A provider that answers from a script and keeps every request. With
+/// `stops`, it sets that flag while it is asked and answers as a provider
+/// whose call was cancelled does.
 #[derive(Default)]
 struct Provider {
     answers: Mutex<VecDeque<Result<Value, AiError>>>,
     asked: Mutex<Vec<AiRequest>>,
+    stops: Option<StopFlag>,
 }
 
 impl AiBackend for Provider {
@@ -37,8 +40,14 @@ impl AiBackend for Provider {
     fn models(&self) -> ModelCatalog {
         ModelCatalog::Offered(Vec::new())
     }
-    fn execute(&self, request: &AiRequest, _: &CancelToken) -> Result<AiResponse, AiError> {
+    fn execute(&self, request: &AiRequest, cancel: &CancelToken) -> Result<AiResponse, AiError> {
         self.asked.lock().unwrap().push(request.clone());
+        if let Some(stop) = &self.stops {
+            stop.set();
+            if cancel.is_cancelled() {
+                return Err(AiError::Cancelled);
+            }
+        }
         let answer = self.answers.lock().unwrap().pop_front();
         answer
             .expect("the script answers every turn")
@@ -133,6 +142,7 @@ impl Run {
             provider: Arc::new(Provider {
                 answers: Mutex::new(answers.into()),
                 asked: Mutex::default(),
+                stops: None,
             }),
             shelf: Shelf::default(),
             input: AnalysisInput {
@@ -148,6 +158,7 @@ impl Run {
                 budget: AnalysisBudget {
                     max_turns,
                     deadline: start + Duration::from_secs(20 * 60),
+                    stop: StopFlag::default(),
                 },
             },
             calls_allowed: None,
@@ -178,7 +189,7 @@ impl Run {
                 }
                 None => Ok(()),
             }),
-            CancelToken::new(),
+            self.input.budget.stop.token(),
         )
         .with_clock(Box::new(move || start))
         .run(&self.input, pen)
@@ -428,4 +439,195 @@ fn a_pen_that_cannot_save_stops_the_run_with_what_it_saved() {
         run.shelf.asked.lock().unwrap().is_empty(),
         "no read after the stop"
     );
+}
+
+/// A pen whose Project is turned off as its first edit is saved.
+struct TurnedOff<'a> {
+    pen: MemoryPen<'a>,
+    stop: StopFlag,
+}
+
+impl NotebookPen for TurnedOff<'_> {
+    fn notebook(&self) -> &Notebook {
+        self.pen.notebook()
+    }
+    fn write(&mut self, edit: NotebookEdit) -> Result<Written, PenRefused> {
+        let written = self.pen.write(edit);
+        self.stop.set();
+        written
+    }
+}
+
+#[test]
+fn a_stop_between_two_edits_keeps_the_first_and_asks_nothing_more() {
+    let run = Run::new(
+        vec![turn(
+            json!([{"tool": "search", "text": "cargo test"}]),
+            json!([
+                {"edit": "new_line", "discomfort": "테스트가 깨진다", "records": [1]},
+                {"edit": "new_line", "discomfort": "질문에서 멈춘다", "records": [3]}
+            ]),
+            false,
+        )],
+        30,
+    );
+    let mut pen = TurnedOff {
+        pen: run.pen(),
+        stop: run.input.budget.stop.clone(),
+    };
+    assert_eq!(
+        run.investigate(&mut pen),
+        AnalysisEnd::Partial(PartialReason::Stopped)
+    );
+    assert_eq!(pen.pen.notebook.lines.len(), 1, "the first edit stays");
+    assert!(
+        run.shelf.asked.lock().unwrap().is_empty(),
+        "no read after the stop"
+    );
+    assert_eq!(run.provider.asked.lock().unwrap().len(), 1, "no next turn");
+}
+
+#[test]
+fn a_stop_while_a_turn_is_asked_cancels_the_call_and_writes_nothing() {
+    let mut run = Run::new(
+        vec![turn(
+            json!([]),
+            json!([{"edit": "new_line", "discomfort": "테스트가 깨진다", "records": [1]}]),
+            false,
+        )],
+        30,
+    );
+    let answers = run.provider.answers.lock().unwrap().drain(..).collect();
+    run.provider = Arc::new(Provider {
+        answers: Mutex::new(answers),
+        asked: Mutex::default(),
+        stops: Some(run.input.budget.stop.clone()),
+    });
+    let mut pen = run.pen();
+    assert_eq!(
+        run.investigate(&mut pen),
+        AnalysisEnd::Partial(PartialReason::Stopped)
+    );
+    assert!(pen.notebook.lines.is_empty());
+    assert_eq!(run.provider.asked.lock().unwrap().len(), 1);
+}
+
+/// The worker's side of a run, as the runtime gives it: Hide AI ready.
+struct ReadySink(std::sync::mpsc::Sender<crate::model::ProjectSuggestionsSnapshot>);
+
+impl crate::suggestions::worker::Sink for ReadySink {
+    fn read(&self, _: String, read: crate::model::ProjectSuggestionsSnapshot) {
+        let _ = self.0.send(read);
+    }
+    fn gate(&self) -> crate::suggestions::worker::RunGate {
+        crate::suggestions::worker::RunGate {
+            ai_ready: true,
+            usage_ok: true,
+            language: OutputLanguage::Korean,
+        }
+    }
+    fn restore_memory(&self, _: String) {}
+}
+
+#[test]
+fn an_investigation_that_gets_no_answer_leaves_the_day_to_the_tag_grouping() {
+    use crate::model::{SuggestionGroup, SuggestionState};
+    use crate::suggestions::ledger::Observation;
+    use crate::suggestions::worker::{Command, Options, ProjectRef, RunPlan, SuggestionWorker};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    const START: u64 = 400 * policy::DAY_MS + 9 * 3_600_000;
+    let provider = Arc::new(Provider {
+        answers: Mutex::new(vec![Err(AiError::Timeout), Err(AiError::Timeout)].into()),
+        asked: Mutex::default(),
+        stops: None,
+    });
+    let asked = Arc::clone(&provider);
+    let dir = tempfile::tempdir().unwrap();
+    let clock = Arc::new(AtomicU64::new(START));
+    let time = Arc::clone(&clock);
+    let (reads_tx, reads) = std::sync::mpsc::channel();
+    let worker = SuggestionWorker::spawn(
+        Options {
+            store: dir.path().join("suggestions.sqlite3"),
+            clock: Arc::new(move || time.load(Ordering::SeqCst)),
+            zone: jiff::tz::TimeZone::UTC,
+            analysis: Arc::new(move |plan: &RunPlan<'_>| {
+                let router = AiRouter::with_sleep(
+                    vec![Arc::clone(&provider) as Arc<dyn AiBackend>],
+                    RouterConfig {
+                        priority: vec![ProviderId::CLAUDE],
+                        ..RouterConfig::default()
+                    },
+                    Arc::new(NoopLogSink),
+                    Box::new(|_| {}),
+                );
+                Box::new(Investigation::new(
+                    Arc::new(router),
+                    Box::new(Shelf::default()),
+                    Box::new(|| Ok(())),
+                    plan.stop.token(),
+                ))
+            }),
+            resolver: Box::new(|_: &ProjectRef| Ok("project".into())),
+        },
+        ReadySink(reads_tx),
+    )
+    .unwrap();
+    let project = || ProjectRef {
+        node: crate::node::NodeId::parse("test-node").unwrap(),
+        path: "/repo".into(),
+        link: None,
+    };
+    let client = worker.client();
+    client.send(Command::Open {
+        workspace_id: "w1".into(),
+        project: project(),
+    });
+    client.send(Command::Observe {
+        project: project(),
+        facts: ["s1", "s2", "s3"]
+            .into_iter()
+            .map(|session| Observation {
+                signal: Signal::FailedTool,
+                tag: "cargo test".into(),
+                session: Some(SessionRef {
+                    agent: "claude".into(),
+                    id: session.into(),
+                }),
+                pr: None,
+                checkout: Some("/repo".into()),
+                at_unix_ms: START,
+                always: false,
+            })
+            .collect(),
+    });
+    client.send(Command::Wake);
+    client.send(Command::IntroSeen);
+    let wait = Duration::from_secs(10);
+    reads.recv_timeout(wait).unwrap();
+    reads.recv_timeout(wait).unwrap();
+    clock.fetch_add(policy::WAKE_DELAY_MS + 1, Ordering::SeqCst);
+    client.send(Command::IntroSeen);
+    let read =
+        loop {
+            let read = reads.recv_timeout(wait).expect("a read");
+            if read.rows.iter().any(|row| {
+                row.group == SuggestionGroup::Choose && row.state == SuggestionState::New
+            }) {
+                break read;
+            }
+        };
+    assert_eq!(
+        read.rows[0].basis.as_ref().map(|basis| basis.tag.as_str()),
+        Some("cargo test"),
+        "the line is the tag grouping's"
+    );
+    assert_eq!(read.rows[0].evidence.len(), 3);
+    assert_eq!(
+        asked.asked.lock().unwrap().len(),
+        2,
+        "the turn and the final turn were asked"
+    );
+    drop(worker);
 }

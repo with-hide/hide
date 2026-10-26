@@ -19,8 +19,11 @@ use super::super::ledger::SessionRef;
 use super::super::policy;
 use super::reads::{Excerpt, ReadRefused, ReadTools, SearchHit, SessionWindow};
 use crate::github::Where;
+use crate::node::NodeId;
 
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long a candidate's node is given to name the Project that holds it.
+const IDENTITY_TIMEOUT: Duration = Duration::from_secs(5);
 const SESSION_TIMEOUT: Duration = Duration::from_secs(60);
 /// The most characters one event of a session shows.
 const EVENT_CHARS: usize = 2_000;
@@ -31,8 +34,8 @@ pub struct NodeReads {
     /// The checkout the reads run in, as the node spells it.
     root: String,
     project: hide_project::ProjectIdentity,
-    /// Where `gh` reads the Project's repository.
-    github: Where,
+    /// Where `gh` reads the Project's repository, when it is known.
+    github: Option<Where>,
     /// The Project's sessions, read once a run.
     sessions: Option<Vec<ProjectSession>>,
 }
@@ -42,7 +45,7 @@ impl NodeReads {
         node: Arc<dyn NodeLink>,
         root: String,
         project: hide_project::ProjectIdentity,
-        github: Where,
+        github: Option<Where>,
     ) -> Self {
         Self {
             node,
@@ -76,6 +79,102 @@ impl NodeReads {
             READ_TIMEOUT,
         )
         .map_err(refused)
+    }
+}
+
+/// A folder the Project may be checked out in, with the node that holds it
+/// and where `gh` reads its repository.
+pub(crate) struct Checkout {
+    pub node: NodeId,
+    pub link: Arc<dyn NodeLink>,
+    pub root: String,
+    pub github: Option<Where>,
+}
+
+/// The read tools of one Project, whose checkout is found the first time a
+/// read needs it: each candidate's node names the Project that holds it,
+/// starting with the folder that is the Project's own root, and the first
+/// that names this Project is read. A Project no candidate names refuses
+/// every read as `project_unreachable`.
+pub(crate) struct ProjectReads {
+    project_id: String,
+    candidates: Vec<Checkout>,
+    found: Option<Result<NodeReads, ReadRefused>>,
+}
+
+impl ProjectReads {
+    pub(crate) fn new(project_id: String, candidates: Vec<Checkout>) -> Self {
+        Self {
+            project_id,
+            candidates,
+            found: None,
+        }
+    }
+
+    fn reads(&mut self) -> Result<&mut NodeReads, ReadRefused> {
+        if self.found.is_none() {
+            self.found = Some(self.locate());
+        }
+        match self.found.as_mut() {
+            Some(Ok(reads)) => Ok(reads),
+            Some(Err(refused)) => Err(refused.clone()),
+            None => Err(ReadRefused::Unavailable("project_unreachable".into())),
+        }
+    }
+
+    fn locate(&mut self) -> Result<NodeReads, ReadRefused> {
+        let mut candidates = std::mem::take(&mut self.candidates);
+        // A Project's id is its node and root, so the folder that is its
+        // root is asked first and usually alone.
+        candidates.sort_by_key(|checkout| {
+            hide_project::project_id(checkout.node.as_str(), std::path::Path::new(&checkout.root))
+                != self.project_id
+        });
+        for checkout in candidates {
+            let Ok(identity) = crate::memory_hook::project_identity(
+                checkout.link.as_ref(),
+                &checkout.node,
+                &checkout.root,
+                IDENTITY_TIMEOUT,
+            ) else {
+                continue;
+            };
+            if identity.id == self.project_id {
+                return Ok(NodeReads::new(
+                    checkout.link,
+                    checkout.root,
+                    identity,
+                    checkout.github,
+                ));
+            }
+        }
+        Err(ReadRefused::Unavailable("project_unreachable".into()))
+    }
+}
+
+impl ReadTools for ProjectReads {
+    fn session(
+        &mut self,
+        session: &SessionRef,
+        window: SessionWindow,
+    ) -> Result<Excerpt, ReadRefused> {
+        self.reads()?.session(session, window)
+    }
+
+    fn ci_log(&mut self, pr: u32, check: &str) -> Result<Excerpt, ReadRefused> {
+        self.reads()?.ci_log(pr, check)
+    }
+
+    fn file(&mut self, path: &str, from_line: u32, lines: u32) -> Result<Excerpt, ReadRefused> {
+        self.reads()?.file(path, from_line, lines)
+    }
+
+    fn search(&mut self, text: &str, path: Option<&str>) -> Result<Vec<SearchHit>, ReadRefused> {
+        self.reads()?.search(text, path)
+    }
+
+    fn git_log(&mut self, path: Option<&str>, count: u32) -> Result<Excerpt, ReadRefused> {
+        self.reads()?.git_log(path, count)
     }
 }
 
@@ -262,7 +361,11 @@ impl ReadTools for NodeReads {
                 .into(),
             )
         };
-        let feedback = crate::github::pr_feedback(&*self.node, &self.github, pr)
+        let github = self
+            .github
+            .as_ref()
+            .ok_or_else(|| ReadRefused::Unavailable("github_repository_unknown".into()))?;
+        let feedback = crate::github::pr_feedback(&*self.node, github, pr)
             .map_err(|_| ReadRefused::Unavailable("github_unreadable".into()))?;
         let url = feedback
             .failed_checks
@@ -279,8 +382,7 @@ impl ReadTools for NodeReads {
             .ok_or_else(|| ReadRefused::Unavailable("check_has_no_page".into()))?;
         let job = actions_job(&url)
             .ok_or_else(|| ReadRefused::Unavailable("check_not_on_github_actions".into()))?;
-        let log =
-            crate::github::failed_job_log(&*self.node, &self.github, job).map_err(unavailable)?;
+        let log = crate::github::failed_job_log(&*self.node, github, job).map_err(unavailable)?;
         let lines: Vec<&str> = log.lines().collect();
         let start = lines.len().saturating_sub(policy::CI_LOG_LINES);
         Ok(Excerpt {
@@ -468,7 +570,7 @@ mod tests {
                 device_id: "local".into(),
                 kind: hide_project::ProjectKind::Git,
             },
-            Where::Checkout(root.to_path_buf()),
+            Some(Where::Checkout(root.to_path_buf())),
         );
 
         let file = reads.file("scripts/test.sh", 2, 5).unwrap();
