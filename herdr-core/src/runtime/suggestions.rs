@@ -11,7 +11,7 @@ use crate::model::{
     SuggestionGroup, SuggestionHold, SuggestionState, SuggestionsAi, SuggestionsGithub,
     SuggestionsSnapshot,
 };
-use crate::suggestions::ledger::{SessionRef, Signal};
+use crate::suggestions::ledger::Signal;
 use crate::suggestions::notebook::Outcome;
 use crate::suggestions::policy::Quantity;
 use crate::suggestions::read::line_of_row;
@@ -718,8 +718,8 @@ impl Sink for RuntimeSink {
     fn kept_sessions(
         &self,
         node: &str,
-        sessions: &std::collections::BTreeSet<SessionRef>,
-    ) -> Option<std::collections::BTreeSet<SessionRef>> {
+        sessions: &std::collections::BTreeSet<crate::suggestions::ledger::SessionRef>,
+    ) -> Option<std::collections::BTreeSet<crate::suggestions::ledger::SessionRef>> {
         let asked = sessions
             .iter()
             .map(|session| crate::links::ledger::SessionIdentity {
@@ -733,7 +733,7 @@ impl Sink for RuntimeSink {
         match held {
             Ok(held) => Some(
                 held.into_iter()
-                    .map(|session| SessionRef {
+                    .map(|session| crate::suggestions::ledger::SessionRef {
                         agent: session.agent,
                         id: session.session_id,
                     })
