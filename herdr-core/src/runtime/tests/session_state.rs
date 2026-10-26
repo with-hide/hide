@@ -221,6 +221,14 @@ fn pane_bands_prioritize_connection_then_own_demand_then_raised_descendants() {
         })
     );
     assert!(!raised.working);
+    // A block the operator has read does not hide a descendant's new ask.
+    agent.state.verb = RequestVerb::Stopped;
+    agent.demand = "error".into();
+    let read_block = header::of(&pane, Some(&agent), None, None).band.unwrap();
+    assert_eq!(read_block.kind, "raised");
+    agent.state.verb = RequestVerb::Blocked;
+    let unread_block = header::of(&pane, Some(&agent), None, None).band.unwrap();
+    assert_eq!((unread_block.kind.as_str(), unread_block.more), ("blocked", 2));
     // The root's own approval leads; its raised descendants are 외 N건.
     agent.demand = "question".into();
     agent.state.verb = RequestVerb::Answer;

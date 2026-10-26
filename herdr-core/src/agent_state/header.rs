@@ -192,10 +192,12 @@ pub(crate) fn of(
         return Header::default();
     };
     let own = own_ask(agent);
-    // The pane's own approval, answer or block comes before a raised
-    // descendant's ask; a stop comes after it.
-    if !matches!(own, Some("approval" | "answer" | "blocked"))
-        && let Some(lead) = agent.raised.first()
+    // The pane's own approval, answer or unread block comes before a raised
+    // descendant's ask; a block the operator has read and a stop come after
+    // it, so a child's new ask is not hidden behind one already seen.
+    let leads = matches!(own, Some("approval" | "answer"))
+        || agent.state.verb == super::RequestVerb::Blocked;
+    if !leads && let Some(lead) = agent.raised.first()
     {
         return Header {
             request: turn_request(agent),
