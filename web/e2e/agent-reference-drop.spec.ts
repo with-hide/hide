@@ -134,6 +134,10 @@ test("a pane's @ lists the other agents and types the chosen one's reference int
     await expect(at(agent!)).toHaveCSS("opacity", "1");
     await expect(zoom(agent!)).toHaveCSS("opacity", "1");
     expect(await places()).toEqual(before);
+    // The keyboard reaching a hidden @ draws it.
+    await page.mouse.move(1, 1);
+    await at(agent!).focus();
+    await expect(at(agent!)).toHaveCSS("opacity", "1");
     // An open list keeps its @ drawn after the pointer leaves the header for the list.
     await at(agent!).click();
     const otherList = page.locator(`[data-pane-mention-list="${agent}"]`);
