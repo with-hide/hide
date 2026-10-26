@@ -116,7 +116,7 @@ export function DecisionBanner({ mission, device, actions }: { mission: Mission;
         <StatusMark mark="turn" />
         <span className="min-w-0 flex-1 truncate text-body font-semibold" title={mission.decision ?? undefined} data-mission-question="true">{mission.decision}</span>
         {stopped ? (
-          <span className="max-w-(--size-flow-title) shrink-0 truncate rounded-xs bg-muted px-xs text-caption text-mission-hold" title={stopped.title} data-mission-banner-node={stopped.key}>
+          <span className="max-w-(--size-flow-title) shrink-0 truncate rounded-xs bg-muted px-xs text-caption text-mission-hold" title={t("mission.banner.stopped", { node: stopped.title })} data-mission-banner-node={stopped.key}>
             {t("mission.banner.stopped", { node: stopped.title })}
           </span>
         ) : null}
