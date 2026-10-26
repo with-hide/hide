@@ -93,6 +93,21 @@ class Splitting(unittest.TestCase):
         self.assertEqual(notes, ['the heaviest of 2 shards plans 21 s, over the 20 s this lane sizes a shard for; '
                                  'add a shard (docs/TESTING.md, "Balancing the e2e shards")'])
 
+    def test_the_web_lane_uses_the_fewest_shards_within_its_recorded_work_budget(self):
+        # Policy: size from recorded test work within 60% of the 1200s cap.
+        # A count of four violates the approved recording's budget; six spends
+        # another runner even though five fits. Read the caller's actual count.
+        workflow = (ROOT / ".github/workflows/pr.yml").read_text()
+        lane = re.split(r"\n(?=  [a-z0-9-]+:\n)",
+                        workflow.split("\n  web-e2e:\n", 1)[1], maxsplit=1)[0]
+        count = int(re.search(r"shards: (\d+)", lane).group(1))
+        table = json.loads((ROOT / "web/e2e/shard-durations.json").read_text(encoding="utf-8"))
+        _, load = shard.split(sorted(table), table, count)
+        self.assertLessEqual(max(load), 720)
+        self.assertGreater(count, 1)
+        _, smaller = shard.split(sorted(table), table, count - 1)
+        self.assertGreater(max(smaller), 720)
+
     def test_the_committed_tables_name_only_whole_tests_of_existing_specs(self):
         for suite in ("web/e2e", "desktop/e2e"):
             table = json.loads((ROOT / suite / "shard-durations.json").read_text(encoding="utf-8"))

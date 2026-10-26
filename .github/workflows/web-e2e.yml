@@ -14,10 +14,11 @@
 # the tests `scripts/e2e-shard.py` deals it from the durations in
 # web/e2e/shard-durations.json, so the shards take about the same time.
 #
-# With more than one shard the daemon is built once, in the `build` job, and
-# every shard downloads it to the path the fixtures read, `target/debug`. A
-# single shard builds in place: a second job would only add its own setup. On
-# Linux the `build` job also downloads the zsh packages the shards install.
+# With more than one shard the daemon and web shell each build once, in
+# parallel jobs, and every shard waits for both and downloads their output
+# to `target/debug` and `web/dist`.
+# A single shard builds in place: a second job would only add its own setup.
+# On Linux the `build` job also downloads the zsh packages the shards install.
 name: web e2e lane
 
 on:
@@ -52,7 +53,7 @@ permissions:
 
 jobs:
   # One cargo build for the whole lane. The debug `hided` reads `web/dist` from
-  # disk at run time, so the binaries are all a shard needs from cargo; the
+  # disk at run time, so the shell is a separate artifact; the
   # `hide` CLI comes from the same package and `workspace-cli.spec.ts` runs it.
   #
   # On Linux it also hands the shards the zsh packages. The Ubuntu mirror serves
@@ -129,12 +130,51 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # Independent of the daemon build: neither debug output embeds the other.
+  build-web:
+    name: build web shell ${{ inputs.lane }}
+    if: ${{ inputs.shards > 1 }}
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Keep line endings as committed
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+        timeout-minutes: 5
+      - uses: pnpm/action-setup@v6
+        timeout-minutes: 5
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        timeout-minutes: 5
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install web dependencies
+        timeout-minutes: 5
+        run: bash scripts/verify-web.sh install
+      - name: Build the web shell
+        timeout-minutes: 5
+        run: bash scripts/verify-web.sh web build
+      - name: Keep the web shell for the shards
+        uses: actions/upload-artifact@v7
+        timeout-minutes: 5
+        with:
+          name: web-dist-${{ inputs.lane }}
+          path: web/dist
+          if-no-files-found: error
+          retention-days: 1
+
   e2e:
     name: web e2e ${{ inputs.lane }} ${{ matrix.shard }}/${{ inputs.shards }}
-    needs: build
-    # `build` is skipped for a single shard; a failed or cancelled one still
-    # stops the shards, and the lane reports the failure.
-    if: ${{ !cancelled() && contains(fromJSON('["success","skipped"]'), needs.build.result) }}
+    needs: [build, build-web]
+    # Both builds are skipped for a single shard; a failure or cancellation
+    # in either still stops the shards, and the lane reports the failure.
+    if: ${{ !cancelled() && contains(fromJSON('["success","skipped"]'), needs.build.result) && contains(fromJSON('["success","skipped"]'), needs.build-web.result) }}
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 40
     defaults:
@@ -188,8 +228,16 @@ jobs:
         timeout-minutes: 5
         run: bash scripts/verify-web.sh install
       - name: Build the web shell
+        if: ${{ inputs.shards == 1 }}
         timeout-minutes: 5
         run: bash scripts/verify-web.sh web build
+      - name: Fetch the web shell from the build job
+        if: ${{ inputs.shards > 1 }}
+        uses: actions/download-artifact@v8
+        timeout-minutes: 5
+        with:
+          name: web-dist-${{ inputs.lane }}
+          path: web/dist
       - name: Fetch zsh from the build job
         if: runner.os == 'Linux' && inputs.shards > 1
         uses: actions/download-artifact@v8

@@ -417,6 +417,7 @@ When one does, fix the rule in `scripts/ci-plan.py` with a case in its test; a t
 A path is narrower than every lane only by being named in `POLICY_ONLY`, `NAMED_LANES`, `UNIT_TEST_PATHS` or `READERS`, with its reader in a comment and a case in `NamedPaths`; a new or unknown path plans every lane until someone names it.
 `UNIT_TEST_PATHS` follows the desktop Vitest include list, not a general filename heuristic.
 Desktop unit tests are outside the explicit entry graphs in `desktop/scripts/build.mjs`; both retained jobs run the unit suites, including Windows.
+Linux `checks` runs both packages' typecheck and lint once; `windows check` retains both Vitest suites and every Windows Rust contract without repeating those OS-independent checks.
 Web tests keep their existing app lanes: `herdr-core/src/sidebar.rs` scans every TypeScript file under `web/src`, including tests, and Tailwind scans test files under the Vite web root as CSS inputs.
 Unregistered test conventions keep their folder's existing lanes, and a mixed change keeps the union of every changed file's lanes.
 Registered desktop unit tests are not package inputs even when a broad input pattern such as `updater*` names them.
@@ -471,7 +472,7 @@ A passing fixture does not prove paid-service authentication or standalone suppo
 
 ### How many jobs a run starts
 
-A run that plans every lane a pull request can plan starts at most 32 jobs, nine more than the 2026-10-05 shape of run `37324202934` before the macOS and mailbox work: that work saved one, the e2e suites outgrew their shards' step caps, which took a second macOS desktop shard and two more web shards ([Balancing the e2e shards](#balancing-the-e2e-shards)), the agent journey's Linux stand-in job and Windows forms job added two, and the `agent CLIs` installs on Linux and Windows, which only a change to `contracts/agent-clis.json` or an installer plans, added two.
+A run that plans every lane a pull request can plan starts at most 32 jobs, nine more than the 2026-10-05 shape of run `37324202934` before the macOS and mailbox work: that work saved one, the e2e suites outgrew their shards' step caps, which took a second macOS desktop shard and two more web shards ([Balancing the e2e shards](#balancing-the-e2e-shards)), the agent journey's Linux stand-in job and Windows forms job added two, and the `agent CLIs` installs on Linux and Windows, which only a change to `contracts/agent-clis.json` or an installer plans, added two, and building the shared web shell in parallel with the daemon adds one while reducing the web lane to five shards saves one.
 `scripts/tests/test_ci_plan.py` counts them from the workflows:
 
 | Jobs | Count | Why |
@@ -479,7 +480,7 @@ A run that plans every lane a pull request can plan starts at most 32 jobs, nine
 | `plan`, `policy`, `rust`, `checks`, `windows check`, `verify` | 6 | `checks` merges `web checks` and `desktop checks`: both install the same dependencies, run for a minute or two and start a runner each |
 | `windows e2e` | 1 | the reusable workflow no longer starts a `plan` job that only fanned the shard numbers out; a matrix picks its list by index |
 | `windows desktop` | 1 | the desktop `@platform` tests on Windows, the one job that starts the Electron app there in a pull request; it keeps the window it drew as the run's artifact |
-| `web e2e` (Linux) | 7 | one build, which also downloads the zsh packages the `fetch zsh` job used to, and six shards dealt by recorded durations: six were cut to four on 2026-10-05 so fewer jobs queued at the 20-job limit, and went back to six on 2026-10-18 when the suite had grown to 68 minutes of tests and four shards ran 984 to 1111 s of their 1200 s step |
+| `web e2e` (Linux) | 7 | parallel daemon and web shell builds, with the daemon job also downloading the zsh packages, and five shards dealt by recorded durations: six were cut to four in 2026-10-05 after queues at the 20-job limit, returned to six as the suite grew, and five now meet the 720-second budget after the readiness changes ([Balancing the e2e shards](#balancing-the-e2e-shards)) |
 | `os contract` (Linux, Windows), `os contract (macOS)` | 3 | one job per system, the macOS leg planned only for its two crates |
 | `agy contract` (Windows) | 1 | agy's hook block, trust, conversations and Hide AI backend, and the real agy reading Hide's block, where the hook commands and install folder differ; `rust` runs the same tests on Linux and the nightly runs all three systems |
 | `omp SDK contract` (Linux, macOS, Windows) | 3 | both supported exact npm SDK versions on Bun 1.3.14, with synthetic stored login and localhost inference; the native SQLite, Bun runtime and package resolution need each system |
@@ -494,6 +495,12 @@ The median wall time and the share of runs whose Linux shards waited more than 1
 The `plan` job's summary lists each lane with the paths that chose it.
 
 ### Balancing the e2e shards
+
+The multi-shard web lane builds the daemon and web shell once in independent parallel build jobs, then each shard waits for both and downloads the same run's binaries and `web-dist-<lane>` into the paths its fixtures read.
+The shell build uses the same checkout, Node, pnpm, frozen lockfile, command and environment as the single-shard build; [BUILD.md](BUILD.md#two-entrypoints) owns the artifact and failure contract.
+Each shard still installs its test dependencies and runs its unchanged discovery, selection, execution and reporting steps.
+A single shard builds in place, with no additional job or artifact transfer.
+The separate shell build adds one job against the organization's 20-job limit, offset by reducing six shards to five; lane measurements include both build queues and setup before the final shard completes.
 
 Playwright's `--shard` cuts the tests in file order into runs of equal count, and a test takes from 1 second to a minute, so with four shards one web shard job took 11 minutes and another 6 (run `37402687007`, 2026-10-06).
 It also runs a project's dependencies whole in every shard that holds a dependent test, which in the desktop suite is every background test (below).
@@ -511,9 +518,13 @@ A lane sizes its shards to plan at most 60 % of that cap, and `split --budget <s
 Both lanes pass 720 seconds.
 A macOS shard costs one of the five macOS runners the organization runs at once and about 4.5 minutes of its own setup (checkout, the caches, the cargo build of the CLI binaries and the web build), so the macOS lanes add the fewest shards that keep that margin.
 
-The web table is the median over 20 main runs of a passing test's duration on the Linux runner (2026-10-18); on it the six shards plan 684 to 686 seconds each.
-The first recording (2026-10-06, four shards of 472 seconds, where Playwright's count split planned 306 to 577) had fallen behind a suite that grew from 1779 to 4109 seconds of tests in twelve days, 166 of its 332 tests new: half the tests weighed the median, and the four shards ran 984 to 1111 seconds of their 1200-second step.
-On the new table four shards would plan 1027 seconds each and five 822, both over the 720-second budget, so the lane runs six.
+The current web table records the 379 passing Linux tests in run [40243767490, attempt 1](https://github.com/with-hide/hide/actions/runs/40243767490), measured after the fixture readiness changes on 2026-10-25.
+Its source head is `956f56c75ccbd70817bad42af0b37e49104c9417`, tested merge `93596b76cfd420e5bf0031aa9bb394ba1fd170aa`; all six original Playwright JSON reports had no failure, flaky result or retry.
+This is an approved single-run recording, an exception to the normal refresh from about twenty successful runs below; each passing result's milliseconds become seconds rounded to 0.1 second.
+The unrounded test durations total 3246.341 seconds; the unchanged splitter and rounded table plan at most 811.8 seconds with four shards, 649.5 with five and 541.3 with six.
+Five is the smallest count within the unchanged 720-second test-work budget, leaving 70.5 seconds of planning margin; the e2e step still caps a stalled run at 1200 seconds.
+These weights include fixture setup and teardown charged to a test, but exclude report overhead, runner setup and queues; one observation is neither a wall-time forecast nor p95 or causal speedup evidence.
+The prior table was a median over twenty main runs on 2026-10-18, when the growing suite required six shards; the new recording replaces its stale weights rather than changing assertions, retries, timeouts or test selection.
 Only the pull request's Linux lane deals by it: the nightly's macOS and Windows web lanes run one shard each.
 
 The desktop table, `desktop/e2e/shard-durations.json`, is the median over 20 runs of each test on the macOS runner (2026-10-17), and 0 for a test those runs only skipped (the packaged-app, device and SSH tests, which that lane skips); it deals the whole macOS suite in two shards, in a pull request (`pr.yml`) and in the nightly, while the Linux and Windows `@platform` legs run one shard each.

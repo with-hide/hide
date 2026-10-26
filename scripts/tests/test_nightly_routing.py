@@ -57,7 +57,7 @@ def suites(lane):
     return Counter(found)
 
 
-WEB_LINUX = ("web-e2e.yml", "ubuntu-latest", "", 6, False)
+WEB_LINUX = ("web-e2e.yml", "ubuntu-latest", "", 5, False)
 WEB_MACOS = ("web-e2e.yml", "macos-15", "@platform", 1, False)
 WEB_WINDOWS = ("web-e2e.yml", "windows-latest", "@platform", 1, False)
 DESKTOP_MACOS = ("desktop-e2e.yml", "macos-15", "", 2, False)
