@@ -67,6 +67,57 @@ fn a_document_time_is_the_committed_file_time_and_dirty_or_untracked_is_unknown(
     assert_eq!(read("missing.md"), "");
 }
 
+/// A suggestion investigation's two repository reads: the history of the
+/// repository or of one path, and a search of tracked files that answers
+/// nothing, not a failure, when nothing matches and never an untracked file.
+#[test]
+fn a_history_and_a_search_read_only_what_the_repository_tracks() {
+    use hide_node_link::git::GitCommand;
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    repository(root);
+    fs::create_dir_all(root.join("scripts")).unwrap();
+    fs::write(
+        root.join("scripts/test.sh"),
+        "#!/bin/sh\ncargo test --workspace\n",
+    )
+    .unwrap();
+    fs::write(root.join("README.md"), "Run Cargo Test first\n").unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-qm", "Add the test script"]);
+    fs::write(root.join("notes.txt"), "cargo test untracked\n").unwrap();
+    let run = |command: GitCommand| hide_host::git_command::run(root, &command).unwrap();
+
+    let found = run(GitCommand::Grep {
+        text: "cargo test".into(),
+        path: None,
+    });
+    let mut hits: Vec<_> = found
+        .lines()
+        .map(|line| line.splitn(3, '\0').collect::<Vec<_>>())
+        .collect();
+    hits.sort();
+    assert_eq!(
+        hits,
+        [
+            vec!["README.md", "1", "Run Cargo Test first"],
+            vec!["scripts/test.sh", "2", "cargo test --workspace"],
+        ]
+    );
+    let none = run(GitCommand::Grep {
+        text: "no such words".into(),
+        path: Some("scripts".into()),
+    });
+    assert_eq!(none, "");
+
+    let history = run(GitCommand::Log {
+        path: Some("scripts/test.sh".into()),
+        count: 5,
+    });
+    assert_eq!(history.lines().count(), 1);
+    assert!(history.ends_with("Add the test script"), "{history}");
+}
+
 fn query(scope: &str, selected: Option<&str>, committed: bool, base: Option<&str>) -> ChangesQuery {
     ChangesQuery {
         scope: scope.to_owned(),

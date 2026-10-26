@@ -183,6 +183,22 @@ pub enum GitCommand {
     DocumentTime {
         path: String,
     },
+    /// The newest `count` commits (at most [`LOG_COUNT_MAX`]), of the
+    /// repository or of one repository-relative path, one a line: short
+    /// commit, date and subject. A Hide AI suggestion investigation reads
+    /// it once a day.
+    Log {
+        path: Option<String>,
+        count: u32,
+    },
+    /// The lines of tracked text files holding `text`, as fixed text with
+    /// case ignored, at most [`GREP_PER_FILE`] a file, under one
+    /// repository-relative path when named: `path NUL line NUL text` a
+    /// line, at most [`GREP_OUTPUT_BYTES`]. No match answers nothing.
+    Grep {
+        text: String,
+        path: Option<String>,
+    },
     /// The branch the worktree has checked out.
     CurrentBranch,
     Checkout {
@@ -230,14 +246,7 @@ impl GitCommand {
             ]),
             Self::ListFiles => owned(&["ls-files", "-z"]),
             Self::DocumentTime { path } => {
-                if path.is_empty()
-                    || path.starts_with('/')
-                    || path.contains('\\')
-                    || path.split('/').any(|part| part == "..")
-                    || path.contains('\0')
-                {
-                    return Err("invalid_document_path".into());
-                }
+                let path = repository_path(path).map_err(|_| "invalid_document_path")?;
                 owned(&[
                     "--literal-pathspecs",
                     "log",
@@ -246,6 +255,55 @@ impl GitCommand {
                     "--",
                     path,
                 ])
+            }
+            Self::Log { path, count } => {
+                if !(1..=LOG_COUNT_MAX).contains(count) {
+                    return Err("invalid_log_count".into());
+                }
+                let count = count.to_string();
+                let mut args = vec![
+                    "--literal-pathspecs",
+                    "log",
+                    "--no-color",
+                    "-n",
+                    &count,
+                    "--date=short",
+                    "--format=%h %ad %s",
+                    "--",
+                ];
+                if let Some(path) = path {
+                    args.push(repository_path(path)?);
+                }
+                owned(&args)
+            }
+            Self::Grep { text, path } => {
+                if text.is_empty()
+                    || text.chars().count() > GREP_TEXT_CHARS
+                    || text.chars().any(char::is_control)
+                {
+                    return Err("invalid_grep_text".into());
+                }
+                let per_file = GREP_PER_FILE.to_string();
+                // `-e` keeps a text that begins with `-` a pattern.
+                let mut args = vec![
+                    "--literal-pathspecs",
+                    "grep",
+                    "--no-color",
+                    "-n",
+                    "-z",
+                    "-I",
+                    "-F",
+                    "-i",
+                    "--max-count",
+                    &per_file,
+                    "-e",
+                    text,
+                    "--",
+                ];
+                if let Some(path) = path {
+                    args.push(repository_path(path)?);
+                }
+                owned(&args)
             }
             Self::CurrentBranch => owned(&["symbolic-ref", "--quiet", "--short", "HEAD"]),
             // The closing `--` makes git read the name as a branch only; a
@@ -285,6 +343,29 @@ impl GitCommand {
             ]),
         }
     }
+}
+
+/// The most commits [`GitCommand::Log`] answers.
+pub const LOG_COUNT_MAX: u32 = 50;
+/// The longest text [`GitCommand::Grep`] looks for, in characters.
+pub const GREP_TEXT_CHARS: usize = 200;
+/// The most lines [`GitCommand::Grep`] answers from one file.
+pub const GREP_PER_FILE: u32 = 5;
+/// The most bytes of output [`GitCommand::Grep`] answers; the rest is cut.
+pub const GREP_OUTPUT_BYTES: u64 = 64 * 1024;
+
+/// A path below the repository's root that a command names after `--`:
+/// relative, no `..`, no backslash and no NUL.
+pub fn repository_path(path: &str) -> Result<&str, String> {
+    if path.is_empty()
+        || path.starts_with('/')
+        || path.contains('\\')
+        || path.split('/').any(|part| part == "..")
+        || path.contains('\0')
+    {
+        return Err("invalid_repository_path".into());
+    }
+    Ok(path)
 }
 
 /// A revision git reads as one: never an option, never a refspec or range.
@@ -392,6 +473,55 @@ mod tests {
                 "origin",
                 "+refs/heads/main:refs/remotes/origin/main"
             ]
+        );
+    }
+
+    /// A history or a search names its text and path, never an argument:
+    /// a text that begins with `-` stays the pattern, a path stays below the
+    /// root, and the counts are bounded.
+    #[test]
+    fn a_history_or_search_keeps_its_text_a_pattern_and_its_path_below_the_root() {
+        let grep = GitCommand::Grep {
+            text: "--output=/tmp/x".into(),
+            path: Some("scripts".into()),
+        }
+        .args()
+        .unwrap();
+        let at = grep.iter().position(|arg| arg == "-e").unwrap();
+        assert_eq!(grep[at + 1], "--output=/tmp/x");
+        assert_eq!(grep[grep.len() - 2..], ["--", "scripts"]);
+        for path in ["../outside", "/etc", "a\\b", ""] {
+            let grep = GitCommand::Grep {
+                text: "x".into(),
+                path: Some(path.into()),
+            };
+            let log = GitCommand::Log {
+                path: Some(path.into()),
+                count: 5,
+            };
+            assert!(grep.args().is_err() && log.args().is_err(), "{path:?}");
+        }
+        for count in [0, LOG_COUNT_MAX + 1] {
+            assert!(GitCommand::Log { path: None, count }.args().is_err());
+        }
+        assert!(
+            GitCommand::Grep {
+                text: "a\nb".into(),
+                path: None
+            }
+            .args()
+            .is_err()
+        );
+        assert_eq!(
+            GitCommand::Log {
+                path: None,
+                count: 3
+            }
+            .args()
+            .unwrap()
+            .last()
+            .map(String::as_str),
+            Some("--")
         );
     }
 }
