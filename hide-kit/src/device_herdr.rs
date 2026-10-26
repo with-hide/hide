@@ -49,8 +49,10 @@ pub fn pinned_for_account(home: &Path) -> Option<PathBuf> {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum HerdrUpdate {
-    /// Nothing answers on the socket.
+    /// An older helper found no server. Retained for its reports.
     NoServer { version: String },
+    /// The node started the pinned headless server on the registered socket.
+    Started { version: String, pid: u32 },
     /// The server's Herdr is already the pinned version, whatever file it
     /// runs.
     Current { version: String },
@@ -118,6 +120,22 @@ mod tests {
     use std::sync::atomic::AtomicBool;
 
     use super::*;
+
+    #[test]
+    fn a_started_server_has_its_own_report_and_device_record() {
+        let outcome = HerdrUpdate::Started {
+            version: "pinned".to_owned(),
+            pid: 42,
+        };
+        let value = serde_json::json!({"outcome":"started","version":"pinned","pid":42});
+        assert_eq!(serde_json::to_value(&outcome).unwrap(), value);
+        assert_eq!(
+            serde_json::from_value::<HerdrUpdate>(value).unwrap(),
+            outcome
+        );
+        assert_eq!(outcome.record("device")["outcome"], "started");
+        assert_eq!(outcome.record("device")["device_id"], "device");
+    }
 
     /// A helper root whose `herdr/current` holds a pinned copy. A real
     /// folder stands in for the link the node points, which is what the

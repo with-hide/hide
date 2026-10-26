@@ -194,7 +194,7 @@ fn pane_process(herdr: &PrivateHerdr, root: &Path, label: &str) -> (String, u32)
 }
 
 /// B5, B4, B13: a device server already on the pinned release stays as it
-/// is, whatever file it runs; no server is no server; and nothing touches
+/// is, whatever file it runs; and nothing touches
 /// the operator's own `herdr` or a server on another socket.
 #[test]
 #[ignore = "needs the pinned Herdr: set HIDE_E2E_HERDR_BIN and run with --ignored"]
@@ -215,12 +215,6 @@ fn a_device_server_on_the_pinned_release_is_left_running_its_own_herdr() {
     assert_eq!(server_pid(&herdr.socket), pid);
     assert_eq!(image_of(pid).unwrap().file, file_id(&operator).unwrap());
     assert_eq!(std::fs::read(&operator).unwrap(), before);
-    assert_eq!(
-        device.update(&device.root.path().join("none.sock")),
-        HerdrUpdate::NoServer {
-            version: crate::private_herdr::pinned_version()
-        }
-    );
 }
 
 /// B2, B4, B11, B13: a server the operator started from an older Herdr on
@@ -230,8 +224,17 @@ fn a_device_server_on_the_pinned_release_is_left_running_its_own_herdr() {
 #[test]
 #[ignore = "needs the pinned and an older Herdr: set HIDE_E2E_HERDR_BIN and HIDE_E2E_HERDR_OLDER_BIN and run with --ignored"]
 fn an_older_device_server_moves_to_the_pinned_copy_with_its_pane() {
+    older_device_server_moves_with_its_pane(older_bin());
+}
+
+#[test]
+#[ignore = "needs the pinned Herdr and one on an older protocol: set HIDE_E2E_HERDR_BIN and HIDE_E2E_HERDR_OLDER_PROTOCOL_BIN and run with --ignored"]
+fn an_older_protocol_device_server_moves_to_the_pin_with_its_pane() {
+    older_device_server_moves_with_its_pane(older_protocol_bin());
+}
+
+fn older_device_server_moves_with_its_pane(older: PathBuf) {
     let pinned = pinned_bin();
-    let older = older_bin();
     let device = DeviceHome::new(&pinned);
     let operator = device.operator_herdr("operator", &older);
     let before = std::fs::read(&operator).unwrap();

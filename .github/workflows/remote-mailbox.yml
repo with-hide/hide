@@ -121,7 +121,7 @@ jobs:
         timeout-minutes: 10
         env:
           HIDE_E2E_HERDR_BIN: ${{ steps.herdr.outputs.bin }}
-        run: bash scripts/verify-cargo.sh nextest --profile ci -p hided --test it -E 'test(/^(remote_delivery|held_letter_notice)::/)' --run-ignored only
+        run: bash scripts/verify-cargo.sh nextest --profile ci -p hided --test it -E 'test(/^(remote_delivery|held_letter_notice|device_bootstrap)::/)' --run-ignored only
       - name: A screen machine whose core runs on another machine
         # hided/tests/it/remote_core.rs (PRD core-host-node-remote-core): a
         # node-role hided attached over this lane's loopback SSH to a core
