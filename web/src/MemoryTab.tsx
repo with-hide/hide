@@ -1,11 +1,9 @@
-import { ChevronDownIcon, ChevronRightIcon, ClockIcon, FileIcon, LoaderCircleIcon, MoreHorizontalIcon, SettingsIcon, SparklesIcon, Trash2Icon, Undo2Icon, UserIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon, FileIcon, LoaderCircleIcon, MoreHorizontalIcon, SettingsIcon, SparklesIcon, Trash2Icon, Undo2Icon, UserIcon } from "lucide-react";
 import { useUiStore } from "./ui";
-import { sameGithubPullRequest } from "./pullRequestIdentity";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentLogo } from "./components/agent-logo";
 import { PrMark } from "./components/pr-mark";
-import { Elapsed } from "./components/elapsed";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -26,9 +24,8 @@ import { formatDateTime } from "./i18n/format";
 import type { MessageKey } from "./i18n/catalogs";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
-import { cardName, memoryCards, memoryTime, sourceTime, visibleCards, memoryProgress, memoryProgressAgent, memoryProgressStatus, selectableMemoryQuestions, type MemoryProgress } from "./memoryList";
-import { allAgents } from "./navigation";
-import { catalogWorkspaces, frontCheckout, type AgentRow, type PullRequest, type MemoryCard, type MemoryCardKind, type MemoryQuestion, type MemoryStartFailure, type MemoryRow, type ProjectMemory } from "./snapshot";
+import { cardName, memoryCards, memoryTabQuestions, memoryTime, selectableMemoryQuestions, sourceTime, visibleCards } from "./memoryList";
+import { catalogWorkspaces, frontCheckout, type MemoryCard, type MemoryCardKind, type MemoryQuestion, type MemoryRow, type ProjectMemory } from "./snapshot";
 import { useShellStore } from "./store";
 
 const KIND: Record<MemoryCardKind, MessageKey> = { rule: "memory.kind.rule", decision: "memory.kind.decision", lesson: "memory.kind.lesson", fact: "memory.kind.fact", preference: "memory.kind.preference" };
@@ -169,11 +166,20 @@ function MemoryBody({ project, actions }: { project: ProjectMemory; actions: Act
   return (
     <div className="relative flex min-h-0 flex-1 flex-col" data-memory={project.enabled ? "on" : "off"}>
       <div className="flex min-h-0 flex-1 flex-col gap-lg overflow-auto p-lg">
-        <Header project={project} actions={actions} busy={busy} />
+        {project.enabled && project.analysis === "analyzing" ? (
+          <span role="status" className="flex w-fit items-center gap-xxs rounded-sm border border-border px-xs text-micro text-subtle-foreground" data-memory-analysis="analyzing">
+            <LoaderCircleIcon aria-hidden="true" className="size-(--size-icon-sm) animate-spin" />
+            {t("memory.analyzing")}
+          </span>
+        ) : null}
         {project.enabled ? null : (
-          <div className="-mt-sm flex flex-col items-start gap-sm">
+          <div className="flex flex-col items-start gap-sm">
             <p className="break-keep [overflow-wrap:anywhere] text-caption text-subtle-foreground">{t("memory.disclosure")}</p>
             {project.consent_required ? <p className="break-keep text-caption text-subtle-foreground" data-memory-consent="required">{t("memory.reconsent")}</p> : null}
+            {/* Memory alone is off while Hide AI is on: it turns on here or in ⚙ (PRD hide-ai-suggestions D-26). */}
+            <Button size="sm" variant="outline" disabled={busy || project.unavailable !== null} onClick={() => actions.memoryAction(id, "enable")} data-memory-switch="off">
+              {t("memory.turnOn")}
+            </Button>
             {count > 0 ? (
               <button type="button" className="text-caption text-muted-foreground underline-offset-4 hover:underline" onClick={() => setDeleting(true)} data-memory-delete="link">
                 {t("memory.deleteData")}
@@ -182,7 +188,7 @@ function MemoryBody({ project, actions }: { project: ProjectMemory; actions: Act
           </div>
         )}
         {project.enabled && project.analysis === "ai_not_ready" ? (
-          <div className="-mt-sm flex flex-col items-start gap-sm" data-memory-ai="not_ready">
+          <div className="flex flex-col items-start gap-sm" data-memory-ai="not_ready">
             <p className="break-keep text-caption text-subtle-foreground">{t(pastLimit ? "memory.aiPastLimit" : "memory.aiNotReady")}</p>
             <Button size="sm" variant="outline" onClick={() => actions.openSettings("hideAi")}>
               <SettingsIcon aria-hidden="true" />
@@ -190,9 +196,9 @@ function MemoryBody({ project, actions }: { project: ProjectMemory; actions: Act
             </Button>
           </div>
         ) : null}
-        {project.enabled && project.capacity_reached ? <p className="-mt-sm break-keep text-caption text-warning">{t("memory.capacity")}</p> : null}
-        {project.enabled && !project.capacity_reached && evicted > 0 ? <p ref={evictedLine} className="-mt-sm break-keep text-caption text-subtle-foreground" data-memory-evicted={evicted}>{t("memory.evicted", { count: evicted })}</p> : null}
-        {project.enabled && (project.questions.length > 0 || memoryProgress(project).length > 0) ? <Questions project={project} actions={actions} busy={busy} /> : null}
+        {project.enabled && project.capacity_reached ? <p className="break-keep text-caption text-warning">{t("memory.capacity")}</p> : null}
+        {project.enabled && !project.capacity_reached && evicted > 0 ? <p ref={evictedLine} className="break-keep text-caption text-subtle-foreground" data-memory-evicted={evicted}>{t("memory.evicted", { count: evicted })}</p> : null}
+        {project.enabled && memoryTabQuestions(project).length > 0 ? <Questions project={project} actions={actions} busy={busy} /> : null}
         {project.enabled ? <Cards project={project} actions={actions} busy={busy} onDelete={() => setDeleting(true)} /> : null}
       </div>
       {project.forgotten !== null ? (
@@ -272,23 +278,19 @@ export function MemorySettings({ project, actions, disabled }: { project: Projec
   return <div className="flex min-w-0 flex-col gap-sm"><Header project={project} actions={actions} busy={disabled || project.pending_action !== null} />{!project.enabled ? <p className="break-words text-body text-muted-foreground">{t("memory.disclosure")}</p> : null}{project.consent_required ? <p className="text-body text-muted-foreground">{t("memory.reconsent")}</p> : null}{project.pending_action !== null ? <p role="status" className="text-body text-muted-foreground">{t(project.preparing_hooks ? "projectSettings.memoryPreparing" : "projectSettings.pending")}</p> : null}{failed ? <div role="alert" className="flex flex-wrap items-center gap-sm"><p className="text-body text-destructive">{t("projectSettings.memoryFailed")}</p><Button size="sm" variant="ghost" disabled={disabled || project.pending_action !== null} onClick={() => actions.memoryAction(project.workspace_id, failed!)}>{t("projectSettings.retry")}</Button></div> : null}</div>;
 }
 
+/** `확인할 것` (PRD hide-ai-suggestions D-02): whether a memory or the document it disagrees with is right, and a batch of confirmed fixes. */
 function Questions({ project, actions, busy }: { project: ProjectMemory; actions: Actions; busy: boolean }) {
   const { t } = useInterfaceTranslation();
-  const workspace = useShellStore((state) => catalogWorkspaces(state.rest).find((row) => row.id === project.workspace_id));
-  const pulls = workspace?.pull_requests ?? [];
-  const localAgents = useShellStore((state) => state.agents);
-  const rest = useShellStore((state) => state.rest);
-  const agents = allAgents(rest?.status?.remote, localAgents, rest?.navigator?.agent_scope, rest?.navigator?.devices).map((row) => row.agent);
+  const questions = memoryTabQuestions(project);
   const eligible = selectableMemoryQuestions(project);
   const [selection, setSelection] = useState<{ project: string; numbers: number[] }>({ project: project.workspace_id, numbers: [] });
   const selected = selection.project === project.workspace_id ? selection.numbers.filter((number) => eligible.has(number)) : [];
   const toggle = (number: number) => setSelection({ project: project.workspace_id, numbers: selected.includes(number) ? selected.filter((card) => card !== number) : selected.length < 5 ? [...selected, number] : selected });
-  const groups = memoryProgress(project);
   return (
     <section className="flex min-w-0 flex-col gap-sm" data-memory-questions="true">
       <h3 className="text-caption font-medium text-warning">{t("memory.questions")}</h3>
-      {project.questions.map((question, index) => (
-        <Question key={question.number} question={question} project={project} actions={actions} busy={busy} last={index === project.questions.length - 1} selected={selected.includes(question.number)} selecting={selected.length > 0} selectionDisabled={!eligible.has(question.number) || (!selected.includes(question.number) && selected.length >= 5)} onSelect={() => toggle(question.number)} />
+      {questions.map((question, index) => question.kind !== "docs_disagree" ? null : (
+        <Question key={question.number} question={question} project={project} actions={actions} busy={busy} last={index === questions.length - 1} selected={selected.includes(question.number)} selecting={selected.length > 0} selectionDisabled={!eligible.has(question.number) || (!selected.includes(question.number) && selected.length >= 5)} onSelect={() => toggle(question.number)} />
       ))}
       {selected.length ? (
         <div className="flex flex-wrap items-center gap-sm border-t border-border pt-sm text-caption" data-memory-selection={selected.length}>
@@ -297,7 +299,6 @@ function Questions({ project, actions, busy }: { project: ProjectMemory; actions
           <Button size="sm" disabled={busy} onClick={() => actions.memoryAction(project.workspace_id, "promote", null, selected)} data-memory-open-batch="true">{t("memory.batch.open")}</Button>
         </div>
       ) : null}
-      {groups.map((group) => <ProgressRow key={group.key} group={group} pull={pulls.find((pull) => pull.number === group.pr && sameGithubPullRequest(pull.url, group.url))} agents={agents} project={project} actions={actions} />)}
     </section>
   );
 }
@@ -316,88 +317,36 @@ function AskChevron({ expanded }: { expanded: boolean }) {
   return <ChevronRightIcon aria-hidden="true" className={cn("size-(--size-icon-sm) shrink-0 text-muted-foreground", expanded && "rotate-90")} />;
 }
 
-function ProgressRow({ group, pull, agents, project, actions }: { group: MemoryProgress; pull: PullRequest | undefined; agents: AgentRow[]; project: ProjectMemory; actions: Actions }) {
-  const { t } = useInterfaceTranslation();
-  const first = group.cards[0];
-  const promotion = first.promotion;
-  const expanded = group.cards.some((row) => row.number === project.expanded?.number);
-  const agent = memoryProgressAgent(group, pull, agents);
-  const pane = agent?.pane_id ?? (group.pr === null ? promotion?.agent?.pane_id : null);
-  const status = memoryProgressStatus(group, pull, agent);
-  const reason = [t(status.key), promotion?.github_failure && promotion.github_failure !== "no_github_remote" ? t(`memory.github.${promotion.github_failure}`) : null].filter(Boolean).join(" · ");
-  return <div className="min-w-0 border-b border-border" data-memory-card={first.number} data-memory-progress="true" data-memory-pr-group={group.pr ?? undefined}>
-    <AskRow number={first.number} expanded={expanded} onToggle={() => actions.memoryExpand(project.workspace_id, expanded ? null : first.number)} className="px-md py-md">
-      <PrMark className="mt-xxs" state={pull?.state ?? "pending"} compact />
-      <div className="flex min-w-0 items-center gap-sm">
-        <span className="min-w-0 flex-1 truncate text-body" title={first.title}>{first.title}</span>
-        {group.cards.length > 1 ? <span className="shrink-0 text-caption text-muted-foreground">+{group.cards.length - 1}</span> : null}
-        <AskChevron expanded={expanded} />
-      </div>
-      <div className="col-start-2 flex min-w-0 items-center gap-sm text-caption" data-memory-running={promotion?.state === "running" ? first.number : undefined}>
-        {group.pr !== null ? <button type="button" disabled={!group.url} className="pointer-events-auto shrink-0 text-subtle-foreground hover:text-foreground disabled:opacity-50" onClick={() => group.url && actions.openSessionPullRequest({ workspace_id: project.workspace_id, number: group.pr!, url: group.url })} data-memory-open-pr={group.pr}>{t("memory.progress.pr", { number: String(group.pr) })}</button> : null}
-        <span className={cn("min-w-0 truncate", status.tone)} title={reason} data-memory-unconfirmed={promotion?.state === "unconfirmed" ? "true" : undefined}>{reason}</span>
-        {promotion?.state === "running" && group.pr === null ? <Elapsed since={promotion.started_at_unix_ms} className="shrink-0 text-muted-foreground" data-memory-elapsed={first.number} /> : null}
-        <span className="max-w-1/3 shrink-0 truncate font-mono text-muted-foreground" title={group.cards.map((row) => cardName(row.number)).join(" · ")}>{group.cards.map((row) => cardName(row.number)).join(" · ")}</span>
-        {(status.agentLink || expanded) && pane ? <button type="button" className="pointer-events-auto ml-auto shrink-0 text-subtle-foreground hover:text-foreground" aria-label={t("memory.progress.openAgent")} onClick={() => actions.openAgent(pane)} data-memory-agent={first.number}>{t("memory.progress.agent")}</button> : null}
-      </div>
-    </AskRow>
-    {expanded ? <div className="grid min-w-0 grid-cols-[auto_1fr] gap-x-sm px-md pt-sm pb-md" data-memory-progress-detail={first.number}>
-      <span aria-hidden="true" className="size-(--size-pr-icon)" />
-      <div className="flex min-w-0 flex-col gap-sm">
-        {group.cards.map((row) => <div key={row.number} className="min-w-0" data-memory-preview={row.number}>
-          {group.cards.length > 1 ? <p className="break-words text-caption text-subtle-foreground"><span className="font-mono text-muted-foreground">{cardName(row.number)}</span> · {row.title}</p> : null}
-          {row.body_preview ? <p className="line-clamp-2 whitespace-pre-wrap break-words text-caption text-muted-foreground">{row.body_preview}</p> : null}
-        </div>)}
-      </div>
-    </div> : null}
-  </div>;
-}
+type DocumentQuestion = Extract<MemoryQuestion, { kind: "docs_disagree" }>;
 
-/** A failed question's status stays on the card where the operator can retry. */
-function failureKey(failure: MemoryStartFailure | null): MessageKey {
-  switch (failure?.code) {
-    case undefined: return "memory.failed";
-    case "shell_starting": return "memory.startFailure.shellStarting";
-    case "agent_not_started": return "memory.startFailure.agentNotStarted";
-    case "card_not_processed": return "memory.startFailure.cardNotProcessed";
-    case "other": return "memory.startFailure.other";
-  }
-}
-
-function Question({ question, project, actions, busy, last, selected, selecting, selectionDisabled, onSelect }: { question: MemoryQuestion; project: ProjectMemory; actions: Actions; busy: boolean; last: boolean; selected: boolean; selecting: boolean; selectionDisabled: boolean; onSelect: () => void }) {
+/** A memory its document disagrees with: settle which is right, or, for a confirmed newer memory, fix the document. */
+function Question({ question, project, actions, busy, last, selected, selecting, selectionDisabled, onSelect }: { question: DocumentQuestion; project: ProjectMemory; actions: Actions; busy: boolean; last: boolean; selected: boolean; selecting: boolean; selectionDisabled: boolean; onSelect: () => void }) {
   const { t } = useInterfaceTranslation();
   const id = project.workspace_id;
-  const compare = question.kind === "docs_disagree";
-  const ask = compare && question.document.authority === "ask";
+  const ask = question.document.authority === "ask";
   const expanded = project.expanded?.number === question.number ? project.expanded : null;
-  const failed = question.kind === "failed";
-  const unbuilt = question.kind === "unbuilt";
-  // What the agent saw stays behind the row; its line names the state.
-  const told = question.kind === "unbuilt" ? question.reason : question.kind === "failed" && question.start_failure?.code === "card_not_processed" ? question.start_failure.detail : null;
-  const reason = question.kind === "promote" ? [question.human_session_count ? t("memory.promote.human", { count: question.human_session_count }) : null, question.pulled_session_count ? t("memory.promote.sessions", { count: question.pulled_session_count }) : null].filter(Boolean).join(" · ") || t("memory.promote.ask") : question.kind === "docs_disagree" ? t(ask ? "memory.docs.ask" : "memory.docs.newer") : question.kind === "unbuilt" ? t("memory.unbuilt") : question.start_failure?.code === "shell_starting" && question.start_failure.detail ? t("memory.startFailure.shellQuestion", { line: question.start_failure.detail }) : question.start_failure?.code === "card_not_processed" ? `${t("memory.startFailure.cardNotProcessed")} · ${t("memory.failed")}` : question.start_failure?.detail ?? t(failureKey(question.start_failure));
+  const reason = t(ask ? "memory.docs.ask" : "memory.docs.newer");
   return (
     <div className={cn("min-w-0", !last && "border-b border-border")} data-memory-question={question.kind} data-memory-card={question.number}>
       <AskRow number={question.number} expanded={!!expanded} onToggle={() => actions.memoryExpand(id, expanded ? null : question.number)}>
-      {unbuilt ? <ClockIcon aria-hidden="true" className="mt-xxs size-(--size-icon-sm) text-muted-foreground" data-memory-unbuilt={question.number} /> : <Checkbox className="pointer-events-auto mt-xxs" checked={selected} disabled={busy || selectionDisabled} onCheckedChange={onSelect} aria-label={t("memory.batch.select", { card: cardName(question.number) })} data-memory-select={question.number} />}
+        <Checkbox className="pointer-events-auto mt-xxs" checked={selected} disabled={busy || selectionDisabled} onCheckedChange={onSelect} aria-label={t("memory.batch.select", { card: cardName(question.number) })} data-memory-select={question.number} />
         <div className="flex min-w-0 items-center gap-sm">
           <span className="shrink-0 font-mono text-caption text-muted-foreground">{cardName(question.number)}</span>
           <span className="min-w-0 flex-1 truncate text-body text-foreground" title={question.title}>{question.title}</span>
         </div>
         <div className="col-start-2 flex min-w-0 items-center gap-sm">
-          <span className={cn("min-w-0 flex-1 truncate text-caption", failed ? "text-warning" : "text-muted-foreground")} title={reason} data-memory-failure={failed ? "true" : undefined}>{reason}</span>
-          {compare ? <button type="button" className="pointer-events-auto shrink-0 text-caption text-subtle-foreground hover:text-foreground" aria-expanded={!!expanded} onClick={() => actions.memoryExpand(id, expanded ? null : question.number)} data-memory-compare={question.number}>{t("memory.docs.compare")}</button> : null}
+          <span className="min-w-0 flex-1 truncate text-caption text-muted-foreground" title={reason}>{reason}</span>
+          <button type="button" className="pointer-events-auto shrink-0 text-caption text-subtle-foreground hover:text-foreground" aria-expanded={!!expanded} onClick={() => actions.memoryExpand(id, expanded ? null : question.number)} data-memory-compare={question.number}>{t("memory.docs.compare")}</button>
           <AskChevron expanded={!!expanded} />
         </div>
         {!selecting || ask ? <div className="col-start-2 flex flex-wrap items-center gap-xs">
-          {unbuilt ? <Button className="pointer-events-auto" size="sm" variant="outline" disabled={busy} onClick={() => actions.memoryAction(id, "dismiss", question.number)} data-memory-keep={question.number}>{t("memory.unbuilt.keep")}</Button> : <>
-            <Button className="pointer-events-auto" size="sm" variant="outline" disabled={busy} onClick={() => actions.memoryAction(id, ask ? "card_right" : "promote", question.number)} data-memory-promote={failed ? undefined : question.number} data-memory-retry={failed ? question.number : undefined}>
-              {t(ask ? "memory.docs.cardRight" : compare ? "memory.docs.fix" : failed ? "memory.retry" : "memory.promote.yes")}
-            </Button>
-            <Button className="pointer-events-auto" size="sm" variant="ghost" disabled={busy} onClick={() => actions.memoryAction(id, compare ? "doc_right" : "dismiss", question.number)} data-memory-dismiss={question.number}>{t(ask ? "memory.docs.docRight" : compare ? "memory.docs.cardWrong" : "memory.promote.no")}</Button>
-          </>}
+          <Button className="pointer-events-auto" size="sm" variant="outline" disabled={busy} onClick={() => actions.memoryAction(id, ask ? "card_right" : "promote", question.number)} data-memory-promote={question.number}>
+            {t(ask ? "memory.docs.cardRight" : "memory.docs.fix")}
+          </Button>
+          <Button className="pointer-events-auto" size="sm" variant="ghost" disabled={busy} onClick={() => actions.memoryAction(id, "doc_right", question.number)} data-memory-dismiss={question.number}>{t(ask ? "memory.docs.docRight" : "memory.docs.cardWrong")}</Button>
         </div> : null}
       </AskRow>
-      {expanded ? <div className="flex min-w-0 flex-col gap-sm pb-sm pl-lg">{told ? <p className="break-words text-caption text-subtle-foreground" data-memory-told={question.number}>{t("memory.agentReason", { reason: told })}</p> : null}{compare && expanded.document_comparison ? <DocumentCompare comparison={expanded.document_comparison} /> : <CardDetail card={expanded} project={project} actions={actions} busy={busy} />}</div> : null}
+      {expanded ? <div className="flex min-w-0 flex-col gap-sm pb-sm pl-lg">{expanded.document_comparison ? <DocumentCompare comparison={expanded.document_comparison} /> : <CardDetail card={expanded} project={project} actions={actions} busy={busy} />}</div> : null}
     </div>
   );
 }

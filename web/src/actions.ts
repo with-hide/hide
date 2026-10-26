@@ -63,6 +63,8 @@ import {
   type IssueSettings,
   type KitComponentId,
   type MemoryAction,
+  type SuggestionAction,
+  type SuggestionSettingsPatch,
   type ScreenIntro,
   type Tab,
   type Workspace,
@@ -1817,9 +1819,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       openDetail(item);
     },
 
-    /** ⇧⌘L (B25): the Memory tool for the Project in front. */
+    /** ⇧⌘L (B25): the Hide AI tool's Memory tab for the Project in front. */
     openFrontProjectMemory() {
       if (!workspaceInFront()) return diagnostic("project_memory: no Workspace in front");
+      useUiStore.getState().showHideAiTab("memory");
       showTool("memory");
     },
 
@@ -2034,6 +2037,26 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "memory_action", payload: { workspace_id: workspaceId, action, number, ...(numbers.length ? { numbers } : {}) } });
     },
 
+    /** One operator action on a row of the opened Project's 제안 tab (PRD hide-ai-suggestions B10-B16). */
+    suggestionAction(workspaceId: string, id: string, action: SuggestionAction) {
+      dispatch({ schema_version: 2, kind: "suggestion_action", payload: { workspace_id: workspaceId, id, action } });
+    },
+
+    /** One change in the ⚙ sheet's 제안 group (D-26); the fields left out stay as they are. */
+    suggestionSettings(workspaceId: string, patch: SuggestionSettingsPatch) {
+      dispatch({ schema_version: 2, kind: "suggestion_settings", payload: { workspace_id: workspaceId, ...patch } });
+    },
+
+    /** The Hide AI tool head's switch: all of Hide AI in this Project, 제안 and Memory (B3). */
+    hideAiSwitch(workspaceId: string, on: boolean) {
+      dispatch({ schema_version: 2, kind: "hide_ai_switch", payload: { workspace_id: workspaceId, on } });
+    },
+
+    /** The one-time line about the subscription and what is sent was shown (B3). */
+    suggestionsIntroSeen() {
+      dispatch({ schema_version: 2, kind: "suggestions_intro_seen", payload: {} });
+    },
+
     /**
      * A card number under a past conversation (B33): that Project's Memory
      * opens with the card in full, in the Memory tool of one of its checkouts.
@@ -2042,6 +2065,15 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       this.memoryOpen(workspaceId);
       this.memoryExpand(workspaceId, number);
       this.openProjectById(deviceId, workspaceId);
+      useUiStore.getState().showHideAiTab("memory");
+      showTool("memory");
+    },
+
+    /** A Project's Hide AI tool on 제안 with one row open (PRD hide-ai-suggestions B11). */
+    openSuggestion(deviceId: string, workspaceId: string, row: string) {
+      this.memoryOpen(workspaceId);
+      this.openProjectById(deviceId, workspaceId);
+      useUiStore.getState().showHideAiTab("suggestions", row);
       showTool("memory");
     },
 
@@ -2072,14 +2104,15 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     /**
      * An agent chosen in a list that shows only what the operator has to do
      * (the sidebar, Sessions, a digit): a row its home owns opens the home,
-     * the Memory tool with that attempt's row open, and any other row its pane
-     * (PRD hide-ai-work-home B11). Its pane stays one link away from there.
+     * the Hide AI tool's 제안 tab with that attempt's row open, and any other
+     * row its pane (PRD hide-ai-work-home B11, PRD hide-ai-suggestions B11).
+     * Its pane stays one link away from there.
      */
     openListedAgent(paneId: string) {
       const state = useShellStore.getState();
       const agent = agentsByPane(allPaneAgents(state.agents, state.rest?.status?.remote)).get(paneId);
       const home = homeOpening(state.rest, agent);
-      if (home) return this.openMemoryCard(home.deviceId, home.workspaceId, home.number);
+      if (home) return this.openSuggestion(home.deviceId, home.workspaceId, home.row);
       this.openAgent(paneId);
     },
 

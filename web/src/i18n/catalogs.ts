@@ -49,6 +49,7 @@ import { firstRunCatalogs, firstRunEnglish } from "./resources/firstRun";
 import { practiceCatalogs, practiceEnglish } from "./resources/practice";
 import { herdrTakeoverCatalogs, herdrTakeoverEnglish } from "./resources/herdrTakeover";
 import { memoryCatalogs, memoryEnglish } from "./resources/memory";
+import { suggestionsCatalogs, suggestionsEnglish } from "./resources/suggestions";
 import { prWorkCatalogs, prWorkEnglish } from "./resources/prWork";
 import { prListCatalogs, prListEnglish } from "./resources/prList";
 import { workCatalogs, workEnglish } from "./resources/work";
@@ -126,6 +127,7 @@ export const english = {
   ...practiceEnglish,
   ...herdrTakeoverEnglish,
   ...memoryEnglish,
+  ...suggestionsEnglish,
   ...projectSettingsEnglish,
   ...projectToolEnglish,
   ...coreErrorsEnglish,
@@ -197,6 +199,7 @@ export const catalogs = {
     ...practiceCatalogs.ko,
     ...herdrTakeoverCatalogs.ko,
     ...memoryCatalogs.ko,
+    ...suggestionsCatalogs.ko,
     ...projectSettingsCatalogs.ko,
     ...projectToolCatalogs.ko,
     ...coreErrorsCatalogs.ko,
@@ -263,6 +266,7 @@ export const catalogs = {
     ...practiceCatalogs["zh-CN"],
     ...herdrTakeoverCatalogs["zh-CN"],
     ...memoryCatalogs["zh-CN"],
+    ...suggestionsCatalogs["zh-CN"],
     ...projectSettingsCatalogs["zh-CN"],
     ...projectToolCatalogs["zh-CN"],
     ...coreErrorsCatalogs["zh-CN"],
@@ -329,6 +333,7 @@ export const catalogs = {
     ...practiceCatalogs.ja,
     ...herdrTakeoverCatalogs.ja,
     ...memoryCatalogs.ja,
+    ...suggestionsCatalogs.ja,
     ...projectSettingsCatalogs.ja,
     ...projectToolCatalogs.ja,
     ...coreErrorsCatalogs.ja,

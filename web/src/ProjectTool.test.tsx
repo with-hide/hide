@@ -7,11 +7,12 @@ import type { ProjectStatus } from "./agentScope";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { ProjectTool } from "./ProjectTool";
 import { todoView } from "./projectStatus";
-import { nextSidebarLens, type ProjectMemory, type SnapshotRest } from "./snapshot";
+import { nextSidebarLens, type ProjectMemory, type ProjectSuggestions, type SnapshotRest } from "./snapshot";
 import { useShellStore } from "./store";
 import { ToolRail } from "./Tools";
 import { useUiStore } from "./ui";
 import { emptyScope } from "../test/legacyAgentScope";
+import { suggestionsProject } from "../test/suggestionsProject";
 import type { DispatchFn } from "./ws";
 import type { UsageSnapshot } from "./generated/hided-ws";
 
@@ -67,10 +68,10 @@ describe("the Project tool", () => {
     vi.unstubAllGlobals();
   });
 
-  async function render(rest: SnapshotRest, project: ProjectMemory | null = null, usage: UsageSnapshot | null = null) {
+  async function render(rest: SnapshotRest, project: ProjectMemory | null = null, usage: UsageSnapshot | null = null, suggestions: ProjectSuggestions | null = null) {
     const actions = createActions((event) => { events.push(event); return true; });
     await act(async () => {
-      useShellStore.setState({ connection: "live", rest, memory: { project }, usage });
+      useShellStore.setState({ connection: "live", rest, memory: { project }, suggestions: { project: suggestions }, usage });
       useUiStore.setState({ screen: { kind: "workspace" }, drawnLane: { mode: "docked", view: rest.ui_state?.detail?.shown ? "detail" : "none", tool: "project", stacked: false } });
       root.render(<TooltipProvider><ToolRail actions={actions} /><ProjectTool actions={actions} /></TooltipProvider>);
     });
@@ -91,18 +92,20 @@ describe("the Project tool", () => {
     expect(container.querySelector('[data-project-todo="empty"]')).not.toBeNull();
   });
 
-  it("counts what Memory asks on the Memory icon, apart from the Project's 할 일", async () => {
-    const asks: ProjectMemory["questions"] = [{ kind: "failed", number: 9, title: "card 9", start_failure: null }];
-    await render(snapshot(status({ todo: [{ kind: "pr", number: 7 }], todo_total: 1 })), memory(asks));
+  it("counts what Hide AI asks on its icon, apart from the Project's 할 일", async () => {
+    await render(snapshot(status({ todo: [{ kind: "pr", number: 7 }], todo_total: 1 })), null, null, suggestionsProject({ counts: { suggestions: 2, rail: 3 } }));
     const project = container.querySelector('[data-lane-tool="project"]');
-    const memoryIcon = container.querySelector('[data-lane-tool="memory"]');
+    const hideAi = container.querySelector('[data-lane-tool="memory"]');
     expect(project?.querySelector("[data-lane-todo-count]")?.textContent).toBe("1");
     expect(project?.getAttribute("aria-description")).toBe("1 to do");
-    expect(memoryIcon?.querySelector("[data-lane-todo-count]")?.textContent).toBe("1");
-    expect(memoryIcon?.getAttribute("aria-description")).toBe("To handle 1");
-    await render(snapshot(status()), memory(asks));
+    expect(hideAi?.querySelector("[data-lane-todo-count]")?.textContent).toBe("3");
+    expect(hideAi?.getAttribute("aria-description")).toBe("Suggestions 2 · Memory 1");
+    await render(snapshot(status()), null, null, suggestionsProject({ counts: { suggestions: 2, rail: 3 } }));
     expect(container.querySelector('[data-lane-tool="project"] [data-lane-todo-count]')).toBeNull();
-    await render(snapshot(status()), { ...memory(asks), enabled: false });
+    // The core counts none while the head switch is off, and another Project's numbers are not this one's.
+    await render(snapshot(status()), null, null, suggestionsProject({ enabled: false }));
+    expect(container.querySelector('[data-lane-tool="memory"] [data-lane-todo-count]')).toBeNull();
+    await render(snapshot(status()), null, null, suggestionsProject({ workspace_id: "other", counts: { suggestions: 2, rail: 3 } }));
     expect(container.querySelector('[data-lane-tool="memory"] [data-lane-todo-count]')).toBeNull();
   });
 

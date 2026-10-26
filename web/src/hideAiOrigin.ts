@@ -9,6 +9,7 @@ import { catalogWorkspaces, type AgentRow, type Checkout, type HideAi, type Hide
 /** The task kinds the catalogs name; a kind of another build shows as its code (LOCALIZATION.md). */
 const TASK_KEYS: Record<string, MessageKey> = {
   memory_promote: "hideAi.task.memory_promote",
+  suggestion_apply: "hideAi.task.suggestion_apply",
 };
 
 /** `Memory 반영하기 · m72`: the work and what it is about; null when the core named no task (B10). */
@@ -59,11 +60,16 @@ export function drawnInTree(listed: readonly HideAiCheckout[] | undefined, works
   return front || holdsAgent || !hideAiCheckoutOf(listed, workspace, checkout);
 }
 
-/** Where a Needs You row its home owns opens: the Memory tool of its Project, expanded on its attempt's row (B11); null when the core has not named them. */
-export function homeOpening(rest: SnapshotRest | null, agent: Pick<AgentRow, "hide_ai"> | undefined): { deviceId: string; workspaceId: string; number: number } | null {
+/**
+ * Where a Needs You row its home owns opens: the Hide AI tool of its Project
+ * on 제안, with its attempt's row open (PRD hide-ai-suggestions B11; a Memory
+ * promotion's row is named by its card, `m72`, B2); null when the core has
+ * not named them.
+ */
+export function homeOpening(rest: SnapshotRest | null, agent: Pick<AgentRow, "hide_ai"> | undefined): { deviceId: string; workspaceId: string; row: string } | null {
   const hideAi = agent?.hide_ai;
-  const card = /^m(\d+)$/.exec(hideAi?.task?.target ?? "");
-  if (hideAi?.home !== "memory" || !hideAi.workspace_id || !card) return null;
+  const target = hideAi?.task?.target ?? "";
+  if (!hideAi?.home || !hideAi.workspace_id || !/^[ms]\d+$/.test(target)) return null;
   const workspace = catalogWorkspaces(rest).find((row) => row.id === hideAi.workspace_id);
-  return workspace ? { deviceId: workspace.device_id, workspaceId: workspace.id, number: Number(card[1]) } : null;
+  return workspace ? { deviceId: workspace.device_id, workspaceId: workspace.id, row: target } : null;
 }

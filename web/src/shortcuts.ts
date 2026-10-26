@@ -179,7 +179,7 @@ export type LaneToolCommandId = `toggle_lane_${Tool}`;
 export const LANE_TOOL_COMMANDS: readonly LaneToolCommandId[] = TOOLS.map((tool): LaneToolCommandId => `toggle_lane_${tool}`);
 const LANE_TOOL_TITLES: Record<LaneToolCommandId, string> = {
   toggle_lane_project: "Toggle Project tool",
-  toggle_lane_memory: "Toggle Memory tool",
+  toggle_lane_memory: "Toggle Hide AI tool",
   toggle_lane_explorer: "Toggle Explorer tool",
   toggle_lane_changes: "Toggle Changes tool",
 };

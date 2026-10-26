@@ -50,8 +50,9 @@ describe("what a home-owned row says and where it opens (PRD hide-ai-work-home D
   const rest = { navigator: { workspaces: [{ id: "ws-1", device_id: "mac" }] } } as unknown as SnapshotRest;
   const row = (hideAi: AgentRow["hide_ai"]) => ({ hide_ai: hideAi });
 
-  it("opens the Project's Memory on the attempt's card, and nothing else until the core names the Project", () => {
-    expect(homeOpening(rest, row({ task: MEMORY, home: "memory", workspace_id: "ws-1" }))).toEqual({ deviceId: "mac", workspaceId: "ws-1", number: 72 });
+  it("opens the Project's Hide AI tool on the attempt's row, and nothing else until the core names the Project", () => {
+    expect(homeOpening(rest, row({ task: MEMORY, home: "memory", workspace_id: "ws-1" }))).toEqual({ deviceId: "mac", workspaceId: "ws-1", row: "m72" });
+    expect(homeOpening(rest, row({ task: { kind: "suggestion_apply", target: "s12" }, home: "suggestions", workspace_id: "ws-1" }))).toEqual({ deviceId: "mac", workspaceId: "ws-1", row: "s12" });
     const unnamed: [string, AgentRow["hide_ai"]][] = [
       ["no home (a kind this build does not know)", { task: MEMORY, workspace_id: "ws-1" }],
       ["no Project yet", { task: MEMORY, home: "memory" }],
