@@ -158,7 +158,15 @@ impl Analysis for TagGrouping {
 
     fn run(&mut self, input: &AnalysisInput, pen: &mut dyn NotebookPen) -> AnalysisEnd {
         let mut groups: BTreeMap<(Signal, &str), Vec<RecordId>> = BTreeMap::new();
+        let mut passed = Vec::new();
         for entry in input.records.fresh() {
+            // A correction is named by its Memory card, which Memory itself
+            // offers into the documents (D-02); with no investigation to join
+            // it to the problem it corrected, it is passed, not lined.
+            if entry.signal == Signal::Correction {
+                passed.push(entry.id);
+                continue;
+            }
             groups
                 .entry((entry.signal, entry.tag.as_str()))
                 .or_default()
@@ -197,6 +205,14 @@ impl Analysis for TagGrouping {
                         return AnalysisEnd::Partial(PartialReason::Stopped);
                     }
                 }
+            }
+        }
+        for chunk in passed.chunks(crate::suggestions::policy::EDIT_RECORDS) {
+            let edit = NotebookEdit::Pass {
+                records: chunk.to_vec(),
+            };
+            if let Err(PenRefused::Store { .. } | PenRefused::Stopped) = pen.write(edit) {
+                return AnalysisEnd::Partial(PartialReason::Stopped);
             }
         }
         AnalysisEnd::Done
@@ -282,11 +298,16 @@ mod tests {
             entry(2, Signal::FailedTool, "cargo test", "b"),
             entry(3, Signal::AgentWait, "question", "a"),
             entry(4, Signal::CheckFailed, "verify", "c"),
+            entry(7, Signal::Correction, "m72", "a"),
         ]);
         let mut pen = MemoryPen::new(Notebook::default(), &monday.records, 1);
         assert_eq!(TagGrouping.run(&monday, &mut pen), AnalysisEnd::Done);
         let lines = &pen.notebook.lines;
-        assert_eq!(lines.len(), 3);
+        assert_eq!(lines.len(), 3, "a Memory card's correction is no line");
+        assert!(matches!(
+            pen.written.last(),
+            Some(NotebookEdit::Pass { records }) if records == &[RecordId(7)]
+        ));
         assert_eq!(lines[0].records, [RecordId(1), RecordId(2)]);
         let check = lines
             .iter()
@@ -316,7 +337,7 @@ mod tests {
         assert_eq!(
             pen.written.len(),
             2,
-            "records already on a line are not handed again"
+            "records already on a line or passed are not handed again"
         );
     }
 
