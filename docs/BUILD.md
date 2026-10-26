@@ -212,22 +212,22 @@ The guard sees only this app, so a spec that could reach another program (a brow
 A spec that needs the key window or native input (a page holding the keyboard, a pinch, a native drag) carries the `@needs-focus` tag (`NEEDS_FOCUS` in the fixture) and focuses the window itself, a browser page through `focusPage` once the host shows that page, which gives the page the keyboard only after the window's `focus` event says macOS made it the key window; `pnpm --dir desktop e2e --grep-invert @needs-focus` runs everything that leaves the operator's keyboard alone, and CI runs the whole suite.
 The suite runs the focus tests after every other one (`desktop/playwright.config.ts` puts them in a project that depends on the rest): a focus test brings its app forward and quits it, and on a machine with no other app in front, a CI runner, macOS then activates the next app that opens, which failed every background test after the first focus test.
 
-## Device helper artifacts for the Mac app
+## Device helper release bundles
 
-The Mac desktop host remains Apple Silicon; its device payloads additionally cover Intel Mac, Linux x64 and Linux ARM64.
-The pinned release publishes all three Herdr assets; their digests live only in `contracts/herdr-bundle.json`, including the new `macos_x86_64` and `linux_aarch64` entries.
-`scripts/bump-herdr.sh <release-tag>` verifies and maintains those entries together with the host platforms, refusing a missing required asset or a changed digest of the same pinned release.
-The fetch script verifies foreign bytes by digest without executing another system's program; matching native lanes still check its reported version.
+The Mac desktop host remains Apple Silicon; Intel Mac, Linux x64 and Linux ARM64 devices download their kit on first connection.
+The app carries only `Contents/Resources/device-bundles.json`, alongside its four native programs.
+Foreign helper and Herdr binaries are separate release assets, never app resources.
+The pinned release publishes all three Herdr assets; their upstream digests live only in `contracts/herdr-bundle.json`.
+`scripts/bump-herdr.sh <release-tag>` verifies those assets with the host platforms, refusing a missing required asset or a changed digest of the same pinned release.
+The fetch script verifies foreign bytes without executing them; matching native lanes also check the reported version.
 
 `.github/workflows/device-helpers.yml` is the reusable producer.
-It takes three required string inputs: `source-sha` (the full public source commit), `version` (the Mac package's version, with an optional leading `v`) and `build-order` (its decimal order, including `0` for a PR fixture).
-It explicitly checks out the public repository, so a private caller's checkout cannot become the source.
-The Mac runner uses Apple's SDK and the pinned Rust toolchain's `x86_64-apple-darwin` target for the Intel helper.
-The Linux runners build natively on `ubuntu-24.04` and `ubuntu-24.04-arm`, using the same `verify-cargo.sh` release recipe as the Linux package after the web build, without a new cross-compilation toolchain.
-Targeted builds stay in this worktree's `target/<triple>/release`; the host package's binaries stay at `target/release`.
-No caller redirects a release target directory.
-
-Each producer uploads one artifact, failing if its output is absent:
+Its required string inputs are `source-sha` (full public source commit), `version` (the app version, optionally prefixed with `v`) and `build-order` (decimal order, including `0` for a fixture).
+It explicitly checks out the public repository.
+The Mac runner cross-builds Intel with Apple's SDK and the pinned Rust target; the Linux runners build natively on `ubuntu-24.04` and `ubuntu-24.04-arm` using the existing package recipe after the web build.
+No new cross-compilation toolchain is needed.
+Targeted output stays in this worktree's `target/<triple>/release`; host release binaries stay at `target/release`.
+Never redirect a release target directory.
 
 | Artifact | Download into this checkout | Contents |
 | --- | --- | --- |
@@ -235,24 +235,42 @@ Each producer uploads one artifact, failing if its output is absent:
 | `hide-device-helper-linux-x86_64` | `desktop/out/device-helpers/linux-x86_64/` | same four files |
 | `hide-device-helper-linux-aarch64` | `desktop/out/device-helpers/linux-aarch64/` | same four files |
 
-The manifest records platform, source commit, version, build order and each program's SHA-256 before signing.
-`package.yml` resolves one identity with `desktop/scripts/build-identity.mjs`, calls the producer and downloads its artifacts from the same run before its Mac job packages anything.
-A private publisher must call this producer at its reviewed public workflow revision with the exact public source and approved version/order, then download these three artifacts from that invocation to these paths in its Mac checkout before `pnpm --dir desktop package`.
-That private workflow is maintained outside this repository; changing this producer does not establish that the private publisher has been connected or that a release has shipped.
+Each producer manifest records platform, source commit, version, build order and each helper's SHA-256 before signing.
+`package.yml` resolves one identity with `desktop/scripts/build-identity.mjs`, calls the producer and downloads these artifacts from that run.
+A local Mac package needs the same three directories at its exact identity; the identity command prints the values to give the producer.
+`desktop/scripts/device-helpers.mjs build <platform> <version> <source-sha> <build-order>` is the producer command on its matching runner after dependency installation and `rustup target add <triple>`.
+Packaging refuses missing members, a different source/version/order, digest mismatches, links, files above 256 MiB and incorrect executable headers.
+Downloaded artifacts need not retain executable mode bits.
 
-A local Mac package requires the same three directories, obtained from a producer invocation built for the local package's exact identity.
-For a local version, `node desktop/scripts/build-identity.mjs` prints that identity; source changes after the producer ran require new inputs, not a copy from another build.
-`desktop/scripts/device-helpers.mjs build <platform> <version> <source-sha> <build-order>` is the producer's command on its matching runner, after dependency installation and `rustup target add <triple>`.
-Mac packaging refuses missing members, another source/version/order, digest mismatches, links, files above 256 MiB and incorrect executable headers; there is no skip or download from another run as a fallback.
-Artifact download need not preserve executable mode bits: the package restores `0755` while staging.
+Before building the native app, `prepareDeviceBundles` copies the helpers and pinned Herdr into private worktree staging.
+It signs all four Intel Mac copies with the same Developer ID, hardened runtime and `executable.plist` entitlements as the app's native programs in release mode, or ad hoc locally, and verifies their signatures.
+Linux bytes remain unchanged.
+Only after signing does it hash the final files and build one gzip-compressed USTAR archive per platform, containing exactly four regular entries at its root: `hided`, `hide`, `hide-agent-hooks`, `herdr`.
+No paths, links, extended attributes or PAX records belong in an archive.
+The archive's name is `hide-device-<platform>-<app-version>.tar.gz`, without a leading `v` in the version.
+The uncompressed four-file total and the compressed archive are each capped at 256 MiB.
 
-The Mac app carries the twelve added executables flat in `Contents/Resources`: each of `hided`, `hide`, `hide-agent-hooks` and `herdr` suffixed with `-macos-x86_64`, `-linux-x86_64` or `-linux-aarch64`.
-The native Apple Silicon programs keep their unsuffixed names.
-The platform names match the existing `HelperPackages` lookup, so upload, kit installation and pinned Herdr handoff need no new connection path.
-Packaging checks every required resource in the finished bundle.
-Intel Mac programs and Intel Herdr go through the same Developer ID and hardened-runtime entitlement path as the Apple Silicon programs, before notarizing the enclosing app; local builds sign both Mac architectures ad hoc and verify each signature.
-Linux ELF files are resources, not macOS signed code, and retain their verified upstream/build bytes.
-Actual device startup and handoff are distinct from checking an archive's contents; the support table records those remaining runtime gaps.
+`device-bundles.json` has `format: 1`, `version`, full `commit`, decimal string `order`, and `platforms` keyed by the three platform names above.
+Each platform records `asset`, archive `sha256`, archive `size` in bytes, and `files` keyed by the four program names, each with its final `sha256` and `size`.
+Hashes are lowercase SHA-256 hex.
+The app ships this small manifest; `desktop/out/release/` receives a copy and all three archives alongside the installers and updater files.
+`desktop/out/device-bundles/` keeps the intermediate output, never anything under `/tmp`.
+
+The private publisher must call this producer at its reviewed public workflow revision, pass the approved public source/version/order, download the three artifacts into the paths above, then run `pnpm --dir desktop package` with its Developer ID settings.
+It must publish all three `hide-device-<platform>-<app-version>.tar.gz` assets and `device-bundles.json` on the **same public `v<app-version>` release** as the Mac app.
+Do not re-sign or repack an archive after the manifest is made, and do not substitute output from another source or run.
+The private workflow is maintained outside this repository; the public producer and package run do not establish that publishing is connected or a release has shipped.
+
+The connection worker fetches only `https://github.com/with-hide/hide/releases/download/v<app-version>/<asset>` with HTTPS, a 60-second request bound and at most five redirects.
+It checks archive size and hash, then exact entry names, regular-file types, sizes, program hashes and executable headers before atomically publishing a cache slot.
+The cache path belongs to `hide_kit::layout::device_bundle_cache`: `~/.hide/cache/device-bundles/`.
+A five-second process lock serializes cache access; each of three platform slots holds one verified kit, and one staging folder holds the current download.
+The maximum is 1280 MiB including the three 256 MiB kits, one 256 MiB staging kit and its 256 MiB compressed archive, plus the fixed lock file.
+A reconnect verifies and reuses its cached bytes offline; an app update replaces mismatched slots, and a failed download leaves no usable partial kit.
+Files in the cache are inert private data; upload gives the verified programs executable permission on the device.
+Missing releases, network failures and verification errors reach the existing device failure and Retry path.
+Local/main builds report that no matching device release exists; an existing developer artifact folder still takes precedence.
+Physical device startup, the private publisher and official signing/notarization remain separate verification claims.
 
 ## Developer ID signing
 

@@ -6,9 +6,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { Buffer } from "node:buffer";
 import { fileURLToPath } from "node:url";
+import { verifyMacExecutable } from "./macos-signing.mjs";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 export const HELPER_PROGRAMS = ["hided", "hide", "hide-agent-hooks"];
+export const DEVICE_PROGRAMS = [...HELPER_PROGRAMS, "herdr"];
+export const DEVICE_BUNDLE_MANIFEST = "device-bundles.json";
 export const DEVICE_PLATFORMS = {
   "macos-x86_64": { target: "x86_64-apple-darwin", os: "darwin", arch: "arm64" },
   "linux-x86_64": { target: "x86_64-unknown-linux-gnu", os: "linux", arch: "x64" },
@@ -61,6 +64,53 @@ export function deviceHelperResources(directory, identity) {
       return [`${name}-${platform}`, source];
     });
   });
+}
+
+/** Prepare release assets outside the app; only the resulting manifest ships inside it. */
+export function prepareDeviceBundles(directory, identity, output, herdrPaths, signing = null) {
+  const helpers = new Map(deviceHelperResources(directory, identity));
+  fs.rmSync(output, { recursive: true, force: true });
+  fs.mkdirSync(output, { recursive: true });
+  const platforms = {};
+  for (const platform of Object.keys(DEVICE_PLATFORMS)) {
+    const stage = path.join(output, platform);
+    fs.mkdirSync(stage);
+    const files = {};
+    for (const name of DEVICE_PROGRAMS) {
+      const source = name === "herdr" ? herdrPaths[platform] : helpers.get(`${name}-${platform}`);
+      readProgram(source, platform);
+      const target = path.join(stage, name);
+      fs.copyFileSync(source, target);
+      fs.chmodSync(target, 0o755);
+      // Sign copies, never the verified upstream or producer input. Hash only
+      // the final bytes: a Developer ID signature changes the download digest.
+      if (platform === "macos-x86_64" && signing) {
+        const args = signing.mode === "developer-id"
+          ? ["--options", "runtime", "--timestamp", "--entitlements", path.join(repo, "desktop/resources/entitlements/executable.plist")]
+          : ["--timestamp=none"];
+        execFileSync("/usr/bin/codesign", ["--force", "--sign", signing.mode === "developer-id" ? signing.identity : "-", ...args, target]);
+        verifyMacExecutable(target, signing);
+      }
+      const bytes = readProgram(target, platform);
+      files[name] = { sha256: digest(bytes), size: bytes.length };
+    }
+    const asset = `hide-device-${platform}-${identity.version}.tar.gz`;
+    const archive = path.join(output, asset);
+    // A deliberately small USTAR vocabulary: four regular files, no paths,
+    // extended attributes, links or platform-specific metadata records.
+    execFileSync("tar", ["--format", "ustar", "-czf", asset, "-C", platform, ...DEVICE_PROGRAMS], {
+      cwd: output,
+      env: { ...process.env, COPYFILE_DISABLE: "1" },
+    });
+    const bytes = fs.readFileSync(archive);
+    const size = Object.values(files).reduce((sum, file) => sum + file.size, 0);
+    if (size > 256 * 1024 * 1024 || bytes.length > 256 * 1024 * 1024) throw new Error(`${platform} device bundle exceeds 256 MiB`);
+    platforms[platform] = { asset, sha256: digest(bytes), size: bytes.length, files };
+    fs.rmSync(stage, { recursive: true });
+  }
+  const manifest = path.join(output, DEVICE_BUNDLE_MANIFEST);
+  fs.writeFileSync(manifest, `${JSON.stringify({ format: 1, ...identity, platforms }, null, 2)}\n`);
+  return manifest;
 }
 
 /** Builds with the repository's release recipe, on Linux natively and on Mac for Intel. */

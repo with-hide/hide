@@ -13,7 +13,8 @@
 // (operator decision 2026-10-03, PRD auto-update D-07: no paid signing outside
 // macOS). Each is built on its own system, because the release binaries come from that
 // system's cargo build. A Mac also consumes the three device helper artifacts
-// built by device-helpers.yml at this exact source, version and build order.
+// built by device-helpers.yml at this exact source, version and build order,
+// publishing them separately while the app carries only their manifest.
 //
 // The CLI finds `hided` beside its own file and the daemon offers its own
 // program to a device, which runs it as `hided node serve`, so all of them
@@ -28,9 +29,9 @@ import { fileURLToPath } from "node:url";
 import { packager } from "@electron/packager";
 import { applyFuses, assertFuses } from "./fuses.mjs";
 import { APP_ID, buildInstallers } from "./installers.mjs";
-import { assertNotarized, developerIdOptions, macosSigning, notarizeApp } from "./macos-signing.mjs";
+import { assertNotarized, developerIdOptions, macosSigning, notarizeApp, verifyMacExecutable } from "./macos-signing.mjs";
 import { orderOnMain, resolveVersion } from "./build-identity.mjs";
-import { DEVICE_PLATFORMS, assertDeviceExecutable, deviceHelperResources } from "./device-helpers.mjs";
+import { DEVICE_PLATFORMS, DEVICE_BUNDLE_MANIFEST, prepareDeviceBundles } from "./device-helpers.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repo = path.resolve(root, "..");
@@ -111,9 +112,11 @@ const order = process.env.HIDE_BUILD_ORDER || orderOnMain();
 if (!/^[0-9]+$/.test(order)) throw new Error(`the package's build order could not be read (got '${order}')`);
 // Required artifacts are checked before the native release build. No partial
 // Mac app may silently leave another supported system without its kit.
-const deviceHelpers = platform === "darwin"
-  ? deviceHelperResources(path.join(out, "device-helpers"), { version, commit, order })
-  : [];
+const deviceBundles = path.join(out, "device-bundles");
+const deviceManifest = platform === "darwin"
+  ? prepareDeviceBundles(path.join(out, "device-helpers"), { version, commit, order }, deviceBundles,
+      Object.fromEntries(Object.keys(DEVICE_PLATFORMS).map((name) => [name, run("zsh", ["scripts/fetch-herdr-runtime.sh", "--platform", name])])), signing)
+  : null;
 run("bash", ["scripts/verify-cargo.sh", "release"], { stdio: "inherit", env: { ...process.env, HIDE_VERSION: version, HIDE_COMMIT: commit, HIDE_BUILD_ORDER: order } });
 const herdr = system.herdr();
 
@@ -123,20 +126,10 @@ const shipped = [
   [`hide${exe}`, path.join(cargoRelease, `hide${exe}`)],
   [`hide-agent-hooks${exe}`, path.join(cargoRelease, `hide-agent-hooks${exe}`)],
   [`herdr${exe}`, herdr.executable],
-  ...deviceHelpers,
 ];
-if (platform === "darwin") {
-  for (const devicePlatform of Object.keys(DEVICE_PLATFORMS)) {
-    const source = run("zsh", ["scripts/fetch-herdr-runtime.sh", "--platform", devicePlatform]);
-    assertDeviceExecutable(fs.readFileSync(source), devicePlatform);
-    shipped.push([`herdr-${devicePlatform}`, source]);
-  }
-}
-const missing = shipped.filter(([name, source]) => {
+const missing = shipped.filter(([, source]) => {
   try {
-    // Downloaded workflow artifacts lose executable bits; staging restores
-    // them. Native programs must already be runnable by this builder.
-    fs.accessSync(source, name.includes("-macos-") || name.includes("-linux-") ? fs.constants.R_OK : fs.constants.X_OK);
+    fs.accessSync(source, fs.constants.X_OK);
     return !fs.statSync(source).isFile();
   } catch {
     return true;
@@ -156,6 +149,7 @@ const extraResource = shipped.map(([name, source]) => {
   fs.chmodSync(target, 0o755);
   return target;
 });
+if (deviceManifest) extraResource.push(deviceManifest);
 for (const companion of herdr.companions) {
   const target = path.join(staged, path.basename(companion));
   fs.cpSync(companion, target, { recursive: true });
@@ -257,7 +251,7 @@ const [outputDir] = await packager({
   ],
   ...(signing?.mode === "developer-id"
     ? developerIdOptions(signing, shipped.map(([name]) => name), path.join(resources, "entitlements"),
-        { [path.basename(notificationHelper)]: APP_BUNDLE_ID }, shipped.filter(([name]) => name.includes("-linux-")).map(([name]) => name))
+        { [path.basename(notificationHelper)]: APP_BUNDLE_ID })
     : {}),
 });
 
@@ -272,7 +266,6 @@ for (const [name] of shipped) {
   const file = path.join(bundledResources, name);
   fs.accessSync(file, fs.constants.X_OK);
   if (!fs.statSync(file).isFile()) throw new Error(`${name} did not land as a file in ${bundledResources}`);
-  if (name.includes("-macos-") || name.includes("-linux-")) console.log(`device_resource=${name} bytes=${fs.statSync(file).size}`);
 }
 for (const companion of herdr.companions) {
   const name = path.basename(companion);
@@ -281,22 +274,12 @@ for (const companion of herdr.companions) {
 if (platform === "darwin") {
   const helper = path.join(bundle, "Contents", "MacOS", path.basename(notificationHelper));
   if (!fs.statSync(helper, { throwIfNoEntry: false })?.isFile()) throw new Error(`the notification permission helper did not land at ${helper}`);
-  // Linux ELFs are inert data here. Both Mac architectures are executable
-  // code and must carry the same signature path as the native programs.
-  const macPrograms = shipped.filter(([name]) => !name.includes("-linux-")).map(([name]) => path.join(bundledResources, name));
+  const macPrograms = shipped.map(([name]) => path.join(bundledResources, name));
   if (signing.mode === "adhoc") {
     for (const file of macPrograms) run("/usr/bin/codesign", ["--force", "--sign", "-", "--timestamp=none", file], { stdio: "inherit" });
     run("/usr/bin/codesign", ["--force", "--deep", "--sign", "-", "--timestamp=none", bundle], { stdio: "inherit" });
   }
-  for (const file of macPrograms) {
-    run("/usr/bin/codesign", ["--verify", "--strict", file], { stdio: "inherit" });
-    if (signing.mode === "developer-id") {
-      const signature = spawnSync("/usr/bin/codesign", ["-dv", file], { encoding: "utf8" }).stderr;
-      if (!signature.includes("Authority=Developer ID Application:") || !/flags=0x[0-9a-f]+\([^)]*runtime/.test(signature)) {
-        throw new Error(`${path.basename(file)} needs a Developer ID hardened-runtime signature`);
-      }
-    }
-  }
+  for (const file of macPrograms) verifyMacExecutable(file, signing);
   run("/usr/bin/codesign", ["--verify", "--deep", "--strict", "--verbose=2", bundle], { stdio: "inherit" });
   // Signing the bundle again must not have given the helper another identity.
   const signed = spawnSync("/usr/bin/codesign", ["-dv", helper], { encoding: "utf8" }).stderr;
@@ -309,6 +292,17 @@ if (platform === "darwin") {
 // The installers wrap the app as it stands; a Developer ID build's dmg is
 // signed and notarized there too.
 const installers = await buildInstallers({ app: bundle, version, out: release, signing });
+if (deviceManifest) {
+  const manifest = JSON.parse(fs.readFileSync(path.join(bundledResources, DEVICE_BUNDLE_MANIFEST), "utf8"));
+  for (const [devicePlatform, { asset }] of Object.entries(manifest.platforms)) {
+    for (const name of ["hided", "hide", "hide-agent-hooks", "herdr"]) {
+      if (fs.existsSync(path.join(bundledResources, `${name}-${devicePlatform}`))) throw new Error("foreign device binaries must not ship in the app");
+    }
+    fs.copyFileSync(path.join(deviceBundles, asset), path.join(release, asset));
+  }
+  fs.copyFileSync(deviceManifest, path.join(release, DEVICE_BUNDLE_MANIFEST));
+  console.log(`device_manifest_bytes=${fs.statSync(deviceManifest).size}`);
+}
 // What a downloader of the update gets is the zip, so Gatekeeper judges the app expanded from it.
 if (signing?.mode === "developer-id") {
   const zip = Object.values(installers).find((file) => file.endsWith(".zip"));

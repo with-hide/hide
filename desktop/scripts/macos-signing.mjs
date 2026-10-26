@@ -60,17 +60,15 @@ export function macosSigning(env) {
  * Contents/Resources, `entitlements` is the folder holding the two
  * entitlement files, and `helpers` maps each program placed beside the app's
  * executable in Contents/MacOS to the code-signing identifier it is signed
- * under. `unsignedResources` names foreign data files the binary walker
- * would otherwise try to sign, such as Linux ELF device payloads.
+ * under.
  */
-export function developerIdOptions(signing, executables, entitlements, helpers = {}, unsignedResources = []) {
+export function developerIdOptions(signing, executables, entitlements, helpers = {}) {
   return {
     osxSign: {
       identity: signing.identity,
       // The packager only warns about a failed signature unless told
       // otherwise, and an unsigned app must not reach an archive.
       continueOnError: false,
-      ignore: (file) => path.basename(path.dirname(file)) === "Resources" && unsignedResources.includes(path.basename(file)),
       optionsForFile: (file) => {
         if (path.basename(path.dirname(file)) === "Resources" && executables.includes(path.basename(file))) {
           return { entitlements: path.join(entitlements, "executable.plist") };
@@ -84,6 +82,17 @@ export function developerIdOptions(signing, executables, entitlements, helpers =
       },
     },
   };
+}
+
+/** Both native app programs and the separately published Intel kit use this path. */
+export function verifyMacExecutable(file, signing) {
+  execFileSync("/usr/bin/codesign", ["--verify", "--strict", file], { stdio: "inherit" });
+  if (signing.mode === "developer-id") {
+    const signature = spawnSync("/usr/bin/codesign", ["-dv", file], { encoding: "utf8" }).stderr;
+    if (!signature.includes("Authority=Developer ID Application:") || !/flags=0x[0-9a-f]+\([^)]*runtime/.test(signature)) {
+      throw new Error(`${path.basename(file)} needs a Developer ID hardened-runtime signature`);
+    }
+  }
 }
 
 /** Submits `file` with notarytool, waits for Apple's answer and throws unless Apple accepted it. */

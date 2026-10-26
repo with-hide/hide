@@ -36,6 +36,12 @@ pub fn journey_cli_cache(home: &Path) -> PathBuf {
     hide_home(home).join("cache/journey-clis")
 }
 
+/// Release-matched foreign device kits. Three platform slots, one staging
+/// folder, and one download at a time; see `hide_node::ssh::host`.
+pub fn device_bundle_cache(home: &Path) -> PathBuf {
+    hide_home(home).join("cache/device-bundles")
+}
+
 /// Four GiB across all pins, including an in-progress installation.
 /// Crossing it refuses the run; it never evicts a CLI another run may use.
 pub const JOURNEY_CLI_CACHE_BYTES: u64 = 4 * 1024 * 1024 * 1024;

@@ -3,7 +3,8 @@ import { Buffer } from "node:buffer";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { deviceHelperResources } from "./device-helpers.mjs";
+import { deviceHelperResources, prepareDeviceBundles } from "./device-helpers.mjs";
+import { execFileSync } from "node:child_process";
 
 const identity = { commit: "a".repeat(40), version: "1.2.3", order: "42" };
 const folders = [];
@@ -39,6 +40,25 @@ function artifacts() {
 }
 
 describe("Mac device helper inputs", () => {
+  it("publishes separate four-program archives and a small manifest of their final bytes", () => {
+    const root = artifacts();
+    const herdr = Object.fromEntries(["macos-x86_64", "linux-x86_64", "linux-aarch64"].map((p) => [p, path.join(root, p, "hided")]));
+    const out = path.join(root, "bundles");
+    const file = prepareDeviceBundles(root, identity, out, herdr);
+    expect(fs.statSync(file).size).toBeLessThan(16 * 1024);
+    const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
+    expect(manifest).toMatchObject({ format: 1, ...identity });
+    for (const [platform, bundle] of Object.entries(manifest.platforms)) {
+      expect(bundle.asset).toBe(`hide-device-${platform}-1.2.3.tar.gz`);
+      const archive = fs.readFileSync(path.join(out, bundle.asset));
+      expect(bundle.sha256).toBe(createHash("sha256").update(archive).digest("hex"));
+      expect(bundle.size).toBe(archive.length);
+      expect(execFileSync("tar", ["-tzf", bundle.asset], { cwd: out, encoding: "utf8" }).trim().split("\n").sort())
+        .toEqual(["hide", "hide-agent-hooks", "hided", "herdr"].sort());
+      expect(Object.values(bundle.files).every((f) => f.size === 64 && /^[0-9a-f]{64}$/.test(f.sha256))).toBe(true);
+    }
+    expect(fs.readdirSync(out).sort()).toEqual(["device-bundles.json", ...Object.values(manifest.platforms).map((b) => b.asset)].sort());
+  });
   it("offers all nine kit programs under names the SSH payload can select", () => {
     const files = deviceHelperResources(artifacts(), identity).map(([name]) => name);
     expect(files.sort()).toEqual([
