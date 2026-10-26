@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { staple } from "./macos-signing.mjs";
+import { developerIdOptions, staple } from "./macos-signing.mjs";
+
+it("keeps foreign Linux resources out of signing while both Mac architectures use executable entitlements", () => {
+  const options = developerIdOptions({ identity: "fixture" }, ["hided", "hided-macos-x86_64", "hided-linux-aarch64"],
+    "/entitlements", {}, ["hided-linux-aarch64"]).osxSign;
+  const resource = (name) => `/out/hide.app/Contents/Resources/${name}`;
+  expect(options.ignore(resource("hided-linux-aarch64"))).toBe(true);
+  for (const name of ["hided", "hided-macos-x86_64"]) {
+    expect(options.ignore(resource(name))).toBe(false);
+    expect(options.optionsForFile(resource(name)).entitlements).toBe("/entitlements/executable.plist");
+  }
+  expect(options.ignore("/out/hide.app/Contents/MacOS/hided-linux-aarch64")).toBe(false);
+});
 
 /** A stapler answering `statuses` in order, recording each call and each pause. */
 function stapler(...statuses) {

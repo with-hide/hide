@@ -60,15 +60,17 @@ export function macosSigning(env) {
  * Contents/Resources, `entitlements` is the folder holding the two
  * entitlement files, and `helpers` maps each program placed beside the app's
  * executable in Contents/MacOS to the code-signing identifier it is signed
- * under.
+ * under. `unsignedResources` names foreign data files the binary walker
+ * would otherwise try to sign, such as Linux ELF device payloads.
  */
-export function developerIdOptions(signing, executables, entitlements, helpers = {}) {
+export function developerIdOptions(signing, executables, entitlements, helpers = {}, unsignedResources = []) {
   return {
     osxSign: {
       identity: signing.identity,
       // The packager only warns about a failed signature unless told
       // otherwise, and an unsigned app must not reach an archive.
       continueOnError: false,
+      ignore: (file) => path.basename(path.dirname(file)) === "Resources" && unsignedResources.includes(path.basename(file)),
       optionsForFile: (file) => {
         if (path.basename(path.dirname(file)) === "Resources" && executables.includes(path.basename(file))) {
           return { entitlements: path.join(entitlements, "executable.plist") };

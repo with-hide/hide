@@ -256,7 +256,8 @@ const [outputDir] = await packager({
     : []),
   ],
   ...(signing?.mode === "developer-id"
-    ? developerIdOptions(signing, shipped.map(([name]) => name), path.join(resources, "entitlements"), { [path.basename(notificationHelper)]: APP_BUNDLE_ID })
+    ? developerIdOptions(signing, shipped.map(([name]) => name), path.join(resources, "entitlements"),
+        { [path.basename(notificationHelper)]: APP_BUNDLE_ID }, shipped.filter(([name]) => name.includes("-linux-")).map(([name]) => name))
     : {}),
 });
 
