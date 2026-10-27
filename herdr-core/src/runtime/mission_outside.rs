@@ -462,9 +462,9 @@ impl Runtime {
 
     /// Moves each node to what was found: an outside node open or unread
     /// waits, in main is done and closed is failed; a direct change in main
-    /// keeps the commit Hide read there, and a mission that was waiting only
-    /// on such branches is done. A node a replan changed or settled since
-    /// the ask is left as it is.
+    /// keeps the commit Hide read there, open or unread keeps none, and a
+    /// mission that was waiting only on such branches is done. A node a
+    /// replan changed or settled since the ask is left as it is.
     fn settle_outside(&mut self, answers: Vec<(Ask, Found)>) -> bool {
         let now = super::memory::now_ms();
         let mut changed = false;
@@ -522,19 +522,24 @@ impl Runtime {
             flags_moved |= flag_moved;
             let Watch::Outside(external) = &ask.watch else {
                 // A branch read now replaces what an earlier read proved: in
-                // main at its head now, or no longer, once it moved on.
+                // main at its head now, or nothing, once it moved on or could
+                // not be read, as the branch may have moved past main unseen.
                 let node = &mut mission.nodes[at];
+                let unread = matches!(found, Found::Unread(_));
                 let proof = match (found, node.branch.clone()) {
                     (Found::InMain(Some(commit)), Some(branch)) => {
                         Some(crate::missions::Landed { branch, commit })
                     }
-                    (Found::Open, _) => None,
-                    _ => node.in_main.clone(),
+                    _ => None,
                 };
                 if proof != node.in_main {
+                    let kind = match (&proof, unread) {
+                        (Some(_), _) => "mission.branch_in_main",
+                        (None, true) => "mission.branch_proof_unread",
+                        (None, false) => "mission.branch_left_main",
+                    };
                     crate::diagnostic!(json!({
-                        "component": "missions",
-                        "kind": if proof.is_some() { "mission.branch_in_main" } else { "mission.branch_left_main" },
+                        "component": "missions", "kind": kind,
                         "mission": ask.mission, "node": ask.node,
                     }));
                     node.in_main = proof;

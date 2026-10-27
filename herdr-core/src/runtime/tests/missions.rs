@@ -2999,6 +2999,45 @@ fn a_branch_read_in_main_proves_only_that_branch_while_its_node_and_wait_stand()
     assert_eq!(mission_status(&runtime), MissionStatus::Done);
 }
 
+/// Third re-review finding 1: a branch read that could not answer proves
+/// nothing, as the branch may have moved past main unseen, so what an
+/// earlier read found in main closes the mission neither by itself nor by
+/// the Conductor's close; the node shows unread until a read finds it in
+/// main again.
+#[test]
+fn a_branch_that_could_not_be_read_again_keeps_its_mission_waiting_until_read_in_main() {
+    use crate::runtime::mission_outside::Found;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    waiting_on_branches(&mut runtime);
+    let (a1, b1) = ("a".repeat(40), "b".repeat(40));
+    land(&mut runtime, "a", Found::InMain(Some(a1.clone())));
+    assert_eq!(node_view(&runtime, "a").in_main, Some(a1.clone()));
+
+    // The next read cannot see `a` while `b` reaches main.
+    land(
+        &mut runtime,
+        "a",
+        Found::Unread("The branch feat/a is not in this repository or its last fetch".into()),
+    );
+    land(&mut runtime, "b", Found::InMain(Some(b1)));
+    assert_eq!(mission_status(&runtime), MissionStatus::MergeWait);
+    let a = node_view(&runtime, "a");
+    assert_eq!((a.in_main, a.unread), (None, true));
+    let (closed, _) = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "merge_wait"}),
+    )
+    .unwrap();
+    assert_eq!(closed["mission"]["status"], "merge_wait");
+
+    land(&mut runtime, "a", Found::InMain(Some(a1.clone())));
+    assert_eq!(mission_status(&runtime), MissionStatus::Done);
+    let a = node_view(&runtime, "a");
+    assert_eq!((a.in_main, a.unread), (Some(a1), false));
+}
+
 /// This machine's host answering a node's calls, as the core's link to it
 /// does.
 struct Host(hide_host::serve::Env);
