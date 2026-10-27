@@ -28,7 +28,8 @@ class ReleaseCandidate(unittest.TestCase):
         jobs = yaml.safe_load((WORKFLOWS / "package.yml").read_text())["jobs"]
         runs = ROOT / "agents/runs/release-candidate-tests"
         runs.mkdir(parents=True, exist_ok=True)
-        for name, job in jobs.items():
+        for name in ("package", "macos-package"):
+            job = jobs[name]
             command = next(step["run"] for step in job["steps"] if step.get("name") == "Name the version")
             for version, order, expected in [
                 ("v1.2.3-rc.1", "501", "HIDE_VERSION=1.2.3-rc.1\nHIDE_BUILD_ORDER=501\n"),

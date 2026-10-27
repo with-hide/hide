@@ -13,6 +13,7 @@ resolver = "2"
 platforms = [
     "aarch64-apple-darwin",
     "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
     "x86_64-pc-windows-msvc",
 ]
 # Versions are written as semver ranges, not the exact pins the members use:

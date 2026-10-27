@@ -53,8 +53,8 @@ LANES = (
     "desktop-e2e",
     "package",
 )
-# What a full plan runs. `package` builds release packages from cold on three
-# runners, so it runs for a change to what goes into one (PACKAGE_PATHS) and
+# What a full plan runs. `package` builds host packages and device kits from cold
+# on their runners, so it runs for a change to what goes into one (PACKAGE_PATHS) and
 # nothing else: main's push runs leave it out, the nightly calls
 # `package.yml` itself and a release builds its own. `agent-clis` installs
 # every pinned agent CLI on three runners, macOS's among them, for a change to
@@ -186,7 +186,7 @@ PACKAGE_PATHS = (
     "contracts/herdr-bundle.json", "scripts/fetch-herdr-runtime.*",
     "scripts/verify-cargo.sh", "scripts/verify-web.sh", "scripts/toolchain-env.sh",
     "hided/build.rs", "hided/src/cli.rs", "hide-kit/*", "hide-agent-hooks/*",
-    ".github/workflows/package.yml", ".github/workflows/release.yml",
+    ".github/workflows/package.yml", ".github/workflows/device-helpers.yml", ".github/workflows/release.yml",
     # The updater and the release files it reads, and the specs only this lane runs.
     "desktop/src/main/updater*", "scripts/check-release-assets.mjs", "desktop/e2e/packaged-*",
 )
@@ -321,6 +321,7 @@ NAMED_LANES = (
     ("scripts/install-agent-clis.py", AGENT_CLI_LANES),
     (".github/workflows/remote-mailbox.yml", {"remote-mailbox"}),
     (".github/workflows/package.yml", set()),
+    (".github/workflows/device-helpers.yml", set()),
     (".github/workflows/release.yml", set()),
 )
 

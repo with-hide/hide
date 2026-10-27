@@ -191,7 +191,7 @@ An acquisition failure blocks the suite at that prerequisite and retains the ups
 | `pnpm --dir desktop dev` | Bundles `desktop/dist/` with esbuild and launches the app unpackaged; it finds this worktree's `target/{debug,release}/hide` itself |
 | `pnpm --dir desktop typecheck`, `lint`, `test` | The desktop CI lane |
 | `pnpm --dir desktop e2e` | Playwright `_electron` against a private hided and pinned Herdr; needs `web/dist`, `target/debug/hide` and `hided`, and the pinned `herdr` as the web e2e does |
-| `pnpm --dir desktop package` | `desktop/scripts/package.mjs`: builds the release binaries and fetches the pinned Herdr, bundles `hided`, `hide`, `hide-agent-hooks` and `herdr` into `Contents/Resources` and the notification permission helper into `Contents/MacOS/hide-notification-status`, signed under the app's identifier, signs `desktop/out/hide-darwin-<arch>/hide.app` (bundle id `me.grab.hide.desktop`), writes the release version into the app's own `package.json` (the version the app and its updater report) and puts `desktop/resources/app-update.yml`, the updater's download folder name, in its resources; `desktop/scripts/installers.mjs` then wraps the finished app with electron-builder (`--prepackaged`, so the app and its signature are what was checked) into `desktop/out/release`: `hide-v<version>-macos-<arch>.dmg` and the `.zip` the updater installs, `latest-mac.yml` and the zip's `.blockmap`, each installer beside a `.sha256` checksum; nothing is installed. The signature is ad-hoc unless `HIDE_MACOS_SIGNING=developer-id`, which the official macOS publisher sets: every executable in the bundle, Herdr included, is then signed with the Developer ID certificate under the hardened runtime with the exceptions in `desktop/resources/entitlements/`, Apple notarizes the app and the ticket is stapled, and the run fails unless Gatekeeper accepts the app expanded from the zip as notarized; the dmg is signed, notarized and stapled too, and must pass `spctl -t open`. That mode needs `HIDE_SIGN_IDENTITY`, `HIDE_NOTARY_KEY_PATH`, `HIDE_NOTARY_KEY_ID` and `HIDE_NOTARY_ISSUER`, which `desktop/scripts/macos-signing.mjs` defines and checks together before the build. On Windows x64 and Linux x64 the same command builds that system's package, unsigned: the folder `desktop/out/hide-win32-x64/` or `hide-linux-x64/` with the same binaries (`.exe` on Windows, with Herdr's `conpty/` beside `herdr.exe`) in its `resources/`, wrapped into `desktop/out/release` as the per-user NSIS installer `hide-v<version>-windows-x64-setup.exe` with `latest.yml` and its `.blockmap` (`desktop/resources/windows/installer.nsh` stops the daemon on uninstall), or as `hide-v<version>-linux-x64.deb` and `.rpm` into `/opt/hide` with one `latest-linux.yml` (`desktop/resources/linux/` holds the package scripts that link `/usr/bin/hide` to the CLI and set up the sandbox), each installer beside a `.sha256`. `node desktop/scripts/installers.mjs <app folder> <version> <out>` wraps an already packaged Windows or Linux app again under another version, which the CI update test uses for its two builds. Each system packages only itself, and a machine of another architecture than its pinned Herdr asset is refused |
+| `pnpm --dir desktop package` | `desktop/scripts/package.mjs`: builds the release binaries and fetches the pinned Herdr, bundles `hided`, `hide`, `hide-agent-hooks` and `herdr` into `Contents/Resources` and the notification permission helper into `Contents/MacOS/hide-notification-status`, signed under the app's identifier, signs `desktop/out/hide-darwin-<arch>/hide.app` (bundle id `me.grab.hide.desktop`), writes the release version into the app's own `package.json` (the version the app and its updater report) and puts `desktop/resources/app-update.yml`, the updater's download folder name, in its resources; `desktop/scripts/installers.mjs` then wraps the finished app with electron-builder (`--prepackaged`, so the app and its signature are what was checked) into `desktop/out/release`: `hide-v<version>-macos-<arch>.dmg` and the `.zip` the updater installs, `latest-mac.yml` and the zip's `.blockmap`, each installer beside a `.sha256` checksum; nothing is installed. The signature is ad-hoc unless `HIDE_MACOS_SIGNING=developer-id`, which the official macOS publisher sets: every executable in the bundle, Herdr included, is then signed with the Developer ID certificate under the hardened runtime with the exceptions in `desktop/resources/entitlements/`, Apple notarizes the app and the ticket is stapled, and the run fails unless Gatekeeper accepts the app expanded from the zip as notarized; the dmg is signed, notarized and stapled too, and must pass `spctl -t open`. That mode needs `HIDE_SIGN_IDENTITY`, `HIDE_NOTARY_KEY_PATH`, `HIDE_NOTARY_KEY_ID` and `HIDE_NOTARY_ISSUER`, which `desktop/scripts/macos-signing.mjs` defines and checks together before the build. On Windows x64 and Linux x64 the same command builds that system's package, unsigned: the folder `desktop/out/hide-win32-x64/` or `hide-linux-x64/` with the same binaries (`.exe` on Windows, with Herdr's `conpty/` beside `herdr.exe`) in its `resources/`, wrapped into `desktop/out/release` as the per-user NSIS installer `hide-v<version>-windows-x64-setup.exe` with `latest.yml` and its `.blockmap` (`desktop/resources/windows/installer.nsh` stops the daemon on uninstall), or as `hide-v<version>-linux-x64.deb` and `.rpm` into `/opt/hide` with one `latest-linux.yml` (`desktop/resources/linux/` holds the package scripts that link `/usr/bin/hide` to the CLI and set up the sandbox), each installer beside a `.sha256`. `node desktop/scripts/installers.mjs <app folder> <version> <out>` wraps an already packaged Windows or Linux app again under another version, which the CI update test uses for its two builds. Each system packages its own desktop host, and a machine of another architecture than its host Herdr asset is refused; the Mac app also requires the foreign device helper artifacts described below |
 | `node desktop/scripts/smoke-package.mjs <installed app folder>` | On Windows or Linux only: takes the folder the system's installer put the app in, prepares its runtime (on Windows the copy under the private home that `hide runtime prepare` makes), and with a private home (stand-in `claude` and `codex` programs in `~/.local/bin`, so both agents are installed) and state folder runs the bundled `herdr --version`, the device helper, `hide-agent-hooks doctor`, and `hide connect`, `/health`, the embedded shell, first-launch CLI and hooks, a command from a fresh shell, the completed retirement row, replacement by a second package fixture, refreshed paths, same-build reuse, standalone refusal and `hide stop`, then waits for each daemon pid it started to end (ten seconds, a named failure beyond that); on Windows it also checks that the next prepare removed the first build's runtime copy; `.github/workflows/package.yml` runs it after installing each package, and `desktop/scripts/smoke-windows-installer.mjs` checks the Windows installer's install, reinstall while a Herdr server runs, and uninstall. It refuses macOS, where first-launch kit behavior is covered by the isolated desktop suite |
 
 Every build of `hide` carries the version and commit `hide version` reports (`hided/build.rs`): `HIDE_VERSION` if it was set for the build, else the crate's version, and `HIDE_COMMIT`, else for a release build the checkout's `HEAD`.
@@ -211,6 +211,67 @@ The fixture also preloads `desktop/e2e/focus-guard.cjs` into the app, which reco
 The guard sees only this app, so a spec that could reach another program (a browser, Finder, the folder picker) stubs it, as the existing ones do.
 A spec that needs the key window or native input (a page holding the keyboard, a pinch, a native drag) carries the `@needs-focus` tag (`NEEDS_FOCUS` in the fixture) and focuses the window itself, a browser page through `focusPage` once the host shows that page, which gives the page the keyboard only after the window's `focus` event says macOS made it the key window; `pnpm --dir desktop e2e --grep-invert @needs-focus` runs everything that leaves the operator's keyboard alone, and CI runs the whole suite.
 The suite runs the focus tests after every other one (`desktop/playwright.config.ts` puts them in a project that depends on the rest): a focus test brings its app forward and quits it, and on a machine with no other app in front, a CI runner, macOS then activates the next app that opens, which failed every background test after the first focus test.
+
+## Device helper release bundles
+
+The Mac desktop host remains Apple Silicon; Linux x64 and Linux ARM64 devices download their kit on first connection.
+The app carries only `Contents/Resources/device-bundles.json`, alongside its four native programs.
+Foreign helper and Herdr binaries are separate release assets, never app resources.
+The pinned release publishes both Linux Herdr assets; their upstream digests live only in `contracts/herdr-bundle.json`.
+`scripts/bump-herdr.sh <release-tag>` verifies those assets with the host platforms, refusing a missing required asset or a changed digest of the same pinned release.
+The fetch script verifies foreign bytes without executing them; matching native lanes also check the reported version.
+
+`.github/workflows/device-helpers.yml` is the reusable producer.
+Its required string inputs are `source-sha` (full public source commit), `version` (the app version, optionally prefixed with `v`) and `build-order` (decimal order, including `0` for a fixture).
+It explicitly checks out the public repository.
+The Linux runners build natively on `ubuntu-24.04` and `ubuntu-24.04-arm` using the existing package recipe after the web build.
+No new cross-compilation toolchain is needed.
+Targeted output stays in this worktree's `target/<triple>/release`; host release binaries stay at `target/release`.
+Never redirect a release target directory.
+
+| Artifact | Download into this checkout | Contents |
+| --- | --- | --- |
+| `hide-device-helper-linux-x86_64` | `desktop/out/device-helpers/linux-x86_64/` | `hided`, `hide`, `hide-agent-hooks`, `manifest.json` |
+| `hide-device-helper-linux-aarch64` | `desktop/out/device-helpers/linux-aarch64/` | same four files |
+
+Each producer manifest records platform, source commit, version, build order and each helper's SHA-256.
+`package.yml` resolves one identity with `desktop/scripts/build-identity.mjs`, calls the producer and downloads these artifacts from that run.
+A local Mac package needs the same two directories at its exact identity; the identity command prints the values to give the producer.
+`desktop/scripts/device-helpers.mjs build <platform> <version> <source-sha> <build-order>` is the producer command on its matching runner after dependency installation and `rustup target add <triple>`.
+Packaging refuses missing members, a different source/version/order, digest mismatches, links, files above 256 MiB and incorrect executable headers.
+Downloaded artifacts need not retain executable mode bits.
+
+Before building the native app, `prepareDeviceBundles` copies the helpers and pinned Herdr into private worktree staging.
+Linux bytes remain unchanged; only the native Mac app follows the existing Developer ID signing and notarization path.
+It hashes the final files and builds one gzip-compressed USTAR archive per platform, containing exactly four regular entries at its root: `hided`, `hide`, `hide-agent-hooks`, `herdr`.
+No paths, links, extended attributes or PAX records belong in an archive.
+The archive's name is `hide-device-<platform>-<app-version>.tar.gz`, without a leading `v` in the version.
+The uncompressed four-file total and the compressed archive are each capped at 256 MiB.
+
+`device-bundles.json` has `format: 1`, `version`, full `commit`, decimal string `order`, and `platforms` keyed by the two Linux platform names above.
+Each platform records `asset`, archive `sha256`, archive `size` in bytes, and `files` keyed by the four program names, each with its final `sha256` and `size`.
+Hashes are lowercase SHA-256 hex.
+The app ships this small manifest; `desktop/out/release/` receives a copy and both archives alongside the installers and updater files.
+`desktop/out/device-bundles/` keeps the intermediate output, never anything under `/tmp`.
+
+The private publisher must call this producer at its reviewed public workflow revision, pass the approved public source/version/order, download the two artifacts into the paths above, then run `pnpm --dir desktop package` with its Developer ID settings.
+It must publish both `hide-device-<platform>-<app-version>.tar.gz` assets and `device-bundles.json` on the **same public `v<app-version>` release** as the Mac app.
+Do not re-sign or repack an archive after the manifest is made, and do not substitute output from another source or run.
+The public release validator and draft writer require 18 assets in total: the existing 15 installers, checksums, updater files and blockmaps, plus both Linux bundles and their manifest.
+They verify each bundle's size and SHA-256 against the manifest; draft preparation also requires its source commit to match the release event before any GitHub request.
+The private workflow is maintained outside this repository; the public producer and package run do not establish that publishing is connected or a release has shipped.
+
+The connection worker fetches only `https://github.com/with-hide/hide/releases/download/v<app-version>/<asset>` with HTTPS, a 60-second request bound and at most five redirects.
+It checks archive size and hash, then exact entry names, regular-file types, sizes, program hashes and executable headers before atomically publishing a cache slot.
+The cache path belongs to `hide_kit::layout::device_bundle_cache`: `~/.hide/cache/device-bundles/`.
+A five-second process lock serializes cache access; each of two platform slots holds one verified kit, and one staging folder holds the current download.
+The maximum is 1024 MiB including the two 256 MiB kits, one 256 MiB staging kit and its 256 MiB compressed archive, plus the fixed lock file.
+A reconnect verifies and reuses its cached bytes offline; an app update replaces mismatched slots, and a failed download leaves no usable partial kit.
+Every exit explicitly cleans staging before releasing the cache lock; if cleanup fails, the device reason retains both failures and a structured diagnostic names the platform and release, while Drop makes a backup attempt.
+Files in the cache are inert private data; upload gives the verified programs executable permission on the device.
+Missing releases, network failures and verification errors reach the existing device failure and Retry path.
+Local/main builds report that no matching device release exists; an existing developer artifact folder still takes precedence.
+Physical device startup, the private publisher and official signing/notarization remain separate verification claims.
 
 ## Developer ID signing
 
@@ -280,7 +341,7 @@ A `vX.Y.Z` tag is a stable release, published with `make_latest: "true"`; a `vX.
 Its packages report the version without the `v`, such as `0.4.0-rc.1`, and are named for it, such as `hide-v0.4.0-rc.1-macos-arm64.zip`; the macOS bundle version and the Windows file version are the numeric prefix, `0.4.0`.
 The publisher assembles all three systems' packages before `node scripts/release-draft.mjs <tag> <event-commit-sha> <directory>` prepares the matching draft.
 The file-only entrypoint is `node scripts/check-release-assets.mjs <tag> <directory> [release-pages.json]`.
-The directory must contain exactly that tag's fifteen files (`expectedAssetNames`): the macOS ARM64 dmg and zip, the Windows x64 `setup.exe`, the Linux x64 deb and rpm, one SHA-256 sidecar per installer, `latest-mac.yml`, `latest.yml`, `latest-linux.yml`, and the zip's and the setup's `.blockmap`.
+The directory must contain exactly that tag's eighteen files (`expectedAssetNames`): the macOS ARM64 dmg and zip, the Windows x64 `setup.exe`, the Linux x64 deb and rpm, one SHA-256 sidecar per installer, `latest-mac.yml`, `latest.yml`, `latest-linux.yml`, the zip's and the setup's `.blockmap`, both Linux device bundles and `device-bundles.json`.
 The gate rejects a missing target, extra or mixed-version files, symbolic links, empty files, an incorrectly named sidecar, and a mismatched digest, and reads each update file strictly: its version must be the tag's, and every file it names must be in the release with the SHA-512 digest and size it states, since the app's updater refuses a download that differs; hashing streams bytes rather than retaining each package in memory.
 Before any release write, the writer checks that the current tag still resolves to the event commit; the workflow passes its contents-write token as `GH_TOKEN`.
 A missing credential, moved tag, or failed initial API read blocks preparation before writes; package workflow artifacts remain available.
