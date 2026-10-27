@@ -3197,6 +3197,115 @@ fn a_git_mission_in_a_repository_with_no_remote_follows_its_branches_into_main()
     assert_eq!(published["nodes"][1]["in_main"], json!(landed));
 }
 
+/// verify-screen's finding on #1729: a direct change already in main is
+/// read there as soon as its node is done, while the mission still runs, so
+/// the map shows `→ main` and not `합치기 남음`; the node turning done starts
+/// the read through the worker and this machine's node with no other
+/// trigger, a running mission does not close on it, and a close as
+/// `merge_wait` after it is done at once.
+#[test]
+fn a_direct_change_already_in_main_is_read_there_when_it_is_done_while_its_mission_runs() {
+    use std::sync::mpsc;
+    use std::time::Instant;
+    let folder = tempfile::tempdir().unwrap();
+    let repo = std::fs::canonicalize(folder.path()).unwrap();
+    for args in [
+        &["init", "-q", "-b", "trunk"][..],
+        &["config", "user.name", "Fixture"],
+        &["config", "user.email", "fixture@example.invalid"],
+        &["config", "commit.gpgsign", "false"],
+        &["commit", "-q", "--allow-empty", "-m", "seed"],
+        &["checkout", "-q", "-b", "land-a"],
+        &["commit", "-q", "--allow-empty", "-m", "land-a"],
+        &["checkout", "-q", "trunk"],
+        &["merge", "-q", "--no-ff", "-m", "land-a", "land-a"],
+    ] {
+        git_in(&repo, args);
+    }
+    let landed = git_in(&repo, &["rev-parse", "land-a"]);
+    let root = hide_platform::path::to_wire(&repo).unwrap();
+
+    let fixture = conducting();
+    let (changed, changes) = mpsc::channel();
+    {
+        let mut runtime = fixture.runtime.lock().unwrap();
+        runtime.install_worker_context(
+            Arc::downgrade(&fixture.runtime),
+            ChangeNotifier::announcing(move || {
+                let _ = changed.send(());
+            }),
+        );
+        runtime.own_node = Arc::new(hide_node::Local::new(Some(repo.clone())));
+        runtime
+            .worktree_catalog
+            .projects
+            .push(crate::model::ProjectWorktreesSnapshot {
+                root_path: root.clone(),
+                base_branch: Some("trunk".into()),
+                ..Default::default()
+            });
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "create", "title": "Land a"}),
+        )
+        .unwrap();
+        runtime.missions.book.missions[0].project = root.clone();
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "plan", "plan": {"nodes": [
+                {"key": "a", "title": "A", "kind": "change", "delivery": "direct", "criteria": ["a works"]},
+            ]}}),
+        )
+        .unwrap();
+        command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+        with_worker_and_reviewer(&mut runtime);
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "node", "node": "a", "patch": {"status": "working", "agent_id": "agent-2", "branch": "land-a"}}),
+        )
+        .unwrap();
+        command(&mut runtime, "recipient", record_of("a", "c1", json!({}))).unwrap();
+        assert_eq!(node_view(&runtime, "a").in_main, None);
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "node", "node": "a", "patch": {"status": "done"}}),
+        )
+        .unwrap();
+    }
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        {
+            let runtime = fixture.runtime.lock().unwrap();
+            if node_view(&runtime, "a").in_main.is_some() {
+                break;
+            }
+        }
+        changes
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .expect("the done branch was read before the deadline");
+    }
+    let mut runtime = fixture.runtime.lock().unwrap();
+    let (shown, _) = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "show", "mission": "mission-1"}),
+    )
+    .unwrap();
+    assert_eq!(shown["mission"]["nodes"][0]["in_main"], json!(landed));
+    assert_eq!(mission_status(&runtime), MissionStatus::Running);
+    let (closed, _) = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "merge_wait"}),
+    )
+    .unwrap();
+    assert_eq!(closed["mission"]["status"], "done");
+}
+
 /// Review finding 7 on the live path, as verify-core ran it: a plan of 32
 /// branches Hide cannot find and one in main is read when the plan is
 /// admitted, through the read worker and this machine's node, and the pass

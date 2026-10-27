@@ -676,18 +676,24 @@ impl Runtime {
                 {
                     next.pr_seen = self.pull_seen(&current.device_id, &current.project, number);
                 }
+                let landing = lands_by_branch(&next) && next.status == NodeStatus::Done;
                 let target = self.missions.book.get_mut(&id).ok_or("mission_unknown")?;
                 let changed = target.nodes[index] != next;
                 let events = super::mission_events::node_events(&target.nodes[index], &next, now);
                 target.nodes[index] = next;
-                let waiting = target.status == MissionStatus::MergeWait;
+                // A waiting mission's node named another branch or finished
+                // again, or a direct change finished or moved to another
+                // branch while its mission runs: its branches are read now.
+                let follow = match target.status {
+                    MissionStatus::MergeWait => true,
+                    MissionStatus::Running => landing,
+                    _ => false,
+                };
                 if changed {
                     target.updated_at_unix_ms = now;
                     self.save_missions();
                     self.record_mission_events(&id, events);
-                    // A waiting mission's node named another branch or
-                    // finished again: its branches are read again now.
-                    if waiting {
+                    if follow {
                         self.follow_mission_outside(&id);
                     }
                 }
@@ -787,6 +793,7 @@ impl Runtime {
                 let changed = self.reopen_mission(&id, now)?;
                 if changed {
                     self.save_missions();
+                    self.follow_mission_outside(&id);
                 }
                 Ok((json!({"mission": self.mission_view_of(&id)}), changed))
             }
@@ -975,7 +982,7 @@ impl Runtime {
             return Err("mission_already_conducting".into());
         }
         // Work reopened can go on the same branches, so what was read in
-        // main, or is being read now, is read again at the next wait (B17).
+        // main, or is being read now, is read again (B17).
         self.missions.outside.reopened(id, &self.missions.book);
         let target = self.missions.book.get_mut(id).ok_or("mission_unknown")?;
         target.status = MissionStatus::Running;
