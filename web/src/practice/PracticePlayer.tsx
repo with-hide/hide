@@ -45,9 +45,11 @@ type Props = {
   /** Starts `chapter` over, the coach playing its steps before `resume` again on its own. */
   onStart: (chapter: PracticeChapter, resume: number) => void;
   onHub: () => void;
+  /** Leaves the practice for the real Hide. */
+  onLeave: () => void;
 };
 
-export function PracticePlayer({ chapter, next, resume, operator, onStep, onStart, onHub }: Props) {
+export function PracticePlayer({ chapter, next, resume, operator, onStep, onStart, onHub, onLeave }: Props) {
   const [model, setModel] = useState<unknown>(() => chapter.world.initial());
   // How many events the world has answered: the signal a step that takes several presses moves on.
   const [moves, setMoves] = useState(0);
@@ -134,7 +136,7 @@ export function PracticePlayer({ chapter, next, resume, operator, onStep, onStar
         <Palette actions={actions} />
         <CycleOverlay />
         <ConfirmClose actions={actions} />
-        <PracticeCoach chapter={chapter} model={model} next={next} resume={resume} onStep={onStep} onNext={() => next && onStart(next, 0)} onRestart={() => onStart(chapter, 0)} onRewind={(step) => onStart(chapter, step)} onHub={onHub} />
+        <PracticeCoach chapter={chapter} model={model} next={next} resume={resume} onStep={onStep} onNext={() => next && onStart(next, 0)} onRestart={() => onStart(chapter, 0)} onRewind={(step) => onStart(chapter, step)} onHub={onHub} onLeave={onLeave} />
       </div>
     </TooltipProvider>
   );

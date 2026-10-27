@@ -32,8 +32,8 @@ const en = {
   "practice.overview.devices.title": "Devices",
   "practice.overview.devices.text": "Agents running on another Mac or a server gather on the same screen.",
   "practice.overview.end.kick": "That's the tour",
-  "practice.overview.end.title": "Ready to try it yourself?",
-  "practice.overview.end.text": "In chapter 1 you'll split the screen, zoom, move a pane and open a tab.",
+  "practice.overview.end.title": "That was a look around the screen",
+  "practice.overview.end.text": "Next, choose whether to use Hide now or keep practicing.",
 };
 
 const ko = {
@@ -67,8 +67,8 @@ const ko = {
   "practice.overview.devices.title": "기기",
   "practice.overview.devices.text": "다른 Mac이나 서버에서 도는 에이전트도 같은 화면에 모여요.",
   "practice.overview.end.kick": "다 봤어요",
-  "practice.overview.end.title": "이제 직접 해 볼까요?",
-  "practice.overview.end.text": "1편에서 화면을 나누고, 크게 보고, pane을 옮기고, 탭을 열어 봐요.",
+  "practice.overview.end.title": "여기까지가 화면 둘러보기예요",
+  "practice.overview.end.text": "이제 바로 써 볼지, 이어서 연습할지 골라요.",
 } satisfies Catalog<typeof en>;
 
 const zhCN = {
@@ -102,8 +102,8 @@ const zhCN = {
   "practice.overview.devices.title": "设备",
   "practice.overview.devices.text": "在其他 Mac 或服务器上运行的智能体也汇集在同一个屏幕。",
   "practice.overview.end.kick": "看完了",
-  "practice.overview.end.title": "现在亲手试试？",
-  "practice.overview.end.text": "第 1 章里你会拆分屏幕、放大、移动窗格、打开标签页。",
+  "practice.overview.end.title": "界面导览到此结束",
+  "practice.overview.end.text": "接下来选择直接使用 Hide，还是继续练习。",
 } satisfies Catalog<typeof en>;
 
 const ja = {
@@ -137,8 +137,8 @@ const ja = {
   "practice.overview.devices.title": "デバイス",
   "practice.overview.devices.text": "別の Mac やサーバーで動くエージェントも同じ画面に集まります。",
   "practice.overview.end.kick": "ひと通り見ました",
-  "practice.overview.end.title": "自分でやってみましょう",
-  "practice.overview.end.text": "第 1 章では画面を分け、拡大し、ペインを移し、タブを開きます。",
+  "practice.overview.end.title": "画面めぐりはここまでです",
+  "practice.overview.end.text": "このまま Hide を使うか、練習を続けるかを選びます。",
 } satisfies Catalog<typeof en>;
 
 export default { en, ko, "zh-CN": zhCN, ja } satisfies Catalogs<typeof en>;

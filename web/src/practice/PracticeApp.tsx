@@ -51,8 +51,17 @@ function chapterById(id: string | null | undefined): PracticeChapter | null {
   return CHAPTERS.find((chapter) => chapter.id === id) ?? null;
 }
 
+/**
+ * Back to Hide: the practice window closes, and the desktop host brings the main window forward
+ * (`openPractice` in `desktop/src/main/host.ts`); a browser tab the shell opened closes back to the shell's tab.
+ */
+function leave() {
+  window.close();
+}
+
 /** `opening` is the chapter the address asks for (`practiceAddress`): the window plays it at once instead of listing the chapters. */
 export function PracticeApp({ opening = null }: { opening?: string | null }) {
+  const { t } = useInterfaceTranslation();
   const [answer, setAnswer] = useState<ShellAnswer | null>(null);
   const [unanswered, setUnanswered] = useState(false);
   const [playing, setPlaying] = useState<Playing | null>(() => {
@@ -105,6 +114,11 @@ export function PracticeApp({ opening = null }: { opening?: string | null }) {
     applyTerminalTheme();
   }, [answer?.theme, answer?.color_theme]);
 
+  // The window wears the practice's own name, playing or listing, so it is never taken for the main window.
+  useEffect(() => {
+    document.title = t("practice.hubTitle");
+  }, [t]);
+
   const progress: PracticeProgress = useMemo(() => answer?.progress ?? {}, [answer?.progress]);
   const operator: OperatorChoices = useMemo(() => ({ shortcut_bindings: answer?.shortcut_bindings, browser_shortcut_bindings: answer?.browser_shortcut_bindings }), [answer?.shortcut_bindings, answer?.browser_shortcut_bindings]);
 
@@ -119,12 +133,12 @@ export function PracticeApp({ opening = null }: { opening?: string | null }) {
 
   if (playing) {
     const next = nextChapter(playing.chapter);
-    return <PracticePlayer key={playing.run} chapter={playing.chapter} next={next} resume={playing.resume} operator={operator} onStep={onStep} onStart={start} onHub={() => setPlaying(null)} />;
+    return <PracticePlayer key={playing.run} chapter={playing.chapter} next={next} resume={playing.resume} operator={operator} onStep={onStep} onStart={start} onHub={() => setPlaying(null)} onLeave={leave} />;
   }
-  return <PracticeHub progress={progress} unsaved={unanswered && !answer} onStart={start} />;
+  return <PracticeHub progress={progress} unsaved={unanswered && !answer} onStart={start} onLeave={leave} />;
 }
 
-function PracticeHub({ progress, unsaved, onStart }: { progress: PracticeProgress; unsaved: boolean; onStart: (chapter: PracticeChapter, resume: number) => void }) {
+function PracticeHub({ progress, unsaved, onStart, onLeave }: { progress: PracticeProgress; unsaved: boolean; onStart: (chapter: PracticeChapter, resume: number) => void; onLeave: () => void }) {
   const { t } = useInterfaceTranslation();
   const rows = CHAPTERS.map((chapter) => ({ chapter, status: chapterStatus(chapter, progress[chapter.id]), step: progress[chapter.id]?.step ?? 0 }));
   const firstOpen = rows.findIndex((row) => row.status !== "done");
@@ -135,7 +149,6 @@ function PracticeHub({ progress, unsaved, onStart }: { progress: PracticeProgres
   }, [onStart, rows]);
 
   useEffect(() => {
-    document.title = t("practice.hubTitle");
     const onKey = (event: KeyboardEvent) => {
       if (event.metaKey || event.ctrlKey || event.altKey || event.isComposing) return;
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -148,14 +161,18 @@ function PracticeHub({ progress, unsaved, onStart }: { progress: PracticeProgres
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [chosen, play, rows.length, t]);
+  }, [chosen, play, rows.length]);
 
   return (
     <div className="ph-page" data-practice-hub>
       <style>{HUB_CSS}</style>
       <main className="ph-col">
-        <h1>{t("practice.hubTitle")}</h1>
+        <div className="ph-head">
+          <h1>{t("practice.hubTitle")}</h1>
+          <button type="button" className="ph-leave" onClick={onLeave} data-practice-leave>{t("practice.leave")}</button>
+        </div>
         <p className="ph-lead">{t("practice.hubLead")}</p>
+        <p className="ph-again">{t("practice.hubAgain")}</p>
         <ol className="ph-list">
           {rows.map((row, at) => {
             const total = row.chapter.steps.length;

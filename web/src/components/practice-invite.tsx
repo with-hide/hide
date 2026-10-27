@@ -32,7 +32,8 @@ export function PracticeInvite({ actions }: { actions: Actions }) {
             <span className="truncate text-caption text-muted-foreground">{t("sidebar.practiceInvite.line")}</span>
           </span>
         </button>
-        <Hint label={t("common.close")}>
+        {/* The row never comes back once closed, so the way that stays is said where it goes. */}
+        <Hint label={t("sidebar.practiceInvite.close")}>
           <Button variant="ghost" size="icon-sm" aria-label={t("common.close")} onClick={() => actions.closePracticeInvite()} className="text-muted-foreground" data-practice-invite-close="true">
             <XIcon />
           </Button>
