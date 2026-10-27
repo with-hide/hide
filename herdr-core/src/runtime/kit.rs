@@ -780,7 +780,7 @@ impl Runtime {
             if !state.busy
                 && self
                     .link_origin(device_id)
-                    .is_some_and(LinkOrigin::core_redials)
+                    .is_some_and(crate::model::LinkOrigin::core_redials)
             {
                 self.begin_device_connect(device_id);
                 if let Some(HostPhase::Ready { platform, .. }) =
