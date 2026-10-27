@@ -26,9 +26,9 @@ import { suggestionTitle } from "./suggestionList";
 
 const QUANTITIES: readonly SuggestionQuantity[] = ["few", "normal", "many"];
 const APPLY_MODES: readonly SuggestionApplyMode[] = ["confirm", "auto_pr"];
-/** Where 읽을 곳 reads (D-52); the core keeps the six signals and one switch turns a group's. */
+/** Where 읽을 곳 reads (D-52); the core keeps the seven signals and one switch turns a group's. */
 const SIGNAL_GROUPS: readonly { group: SuggestionSignalGroup; signals: readonly SuggestionSignal[] }[] = [
-  { group: "session", signals: ["failed_tool", "agent_wait", "correction", "label_missed"] },
+  { group: "session", signals: ["failed_tool", "agent_wait", "correction", "label_missed", "improvement"] },
   { group: "github", signals: ["check_failed", "change_request"] },
 ];
 
@@ -132,7 +132,8 @@ function GroupSwitch({ name, note, checked, disabled, onChange, data }: { name: 
  * 읽을 곳 (D-52, B5): `세션 기록` and `GitHub`, each with what it reads. A
  * switch is on while any signal it can read is, and one press turns the whole
  * group (`signal_group`). `GitHub` stays off with its reason when the
- * repository is not on GitHub; with Memory off, corrections are not read.
+ * repository is not on GitHub; with Memory off, corrections are not read,
+ * and with the turn-end analysis off, no improvement is recorded (B27).
  */
 function ReadFrom({ project, actions, disabled }: { project: ProjectSuggestions; actions: Actions; disabled: boolean }) {
   const { t } = useInterfaceTranslation();
@@ -145,6 +146,7 @@ function ReadFrom({ project, actions, disabled }: { project: ProjectSuggestions;
         const readable = rows.filter((row) => row.unavailable === null);
         const unavailable = readable.length === 0 ? rows.find((row) => row.unavailable !== null)?.unavailable ?? null : null;
         const correctionOff = rows.some((row) => row.signal === "correction" && row.unavailable === "memory_off") && readable.length > 0;
+        const analysisOff = rows.some((row) => row.signal === "improvement" && row.unavailable === "analysis_off") && readable.length > 0;
         const switchId = `hide-ai-read-${id}-${group}`;
         return (
           <div key={group} className="flex min-w-0 items-center gap-sm" data-hide-ai-signal-group={group} data-hide-ai-signal-group-unavailable={unavailable ?? undefined}>
@@ -153,6 +155,7 @@ function ReadFrom({ project, actions, disabled }: { project: ProjectSuggestions;
               <span className="break-keep text-micro text-muted-foreground">{t(`suggestions.settings.source.${group}.note`)}</span>
               {unavailable ? <span className="text-micro text-muted-foreground">{t(`suggestions.signalUnavailable.${unavailable}` as MessageKey)}</span> : null}
               {correctionOff ? <span className="break-keep text-micro text-muted-foreground" data-hide-ai-correction-off="true">{t("suggestions.settings.source.correctionOff")}</span> : null}
+              {analysisOff ? <span className="break-keep text-micro text-muted-foreground" data-hide-ai-analysis-off="true">{t("suggestions.settings.source.analysisOff")}</span> : null}
             </label>
             <Switch id={switchId} checked={readable.some((row) => row.enabled)} disabled={disabled || readable.length === 0} onCheckedChange={(on) => actions.suggestionSettings(id, { signal_group: { group, enabled: on } })} />
           </div>
