@@ -13,7 +13,7 @@ import { useUiStore } from "../ui";
 import type { LaneFrame, LaneSizes, WorkspaceView } from "../workspace";
 import { memorySceneProject } from "./MemoryScene";
 
-export const HIDE_AI_SCENE_STATES = ["new", "applying", "applied", "settings", "off", "first_run", "not_investigated", "memory"] as const;
+export const HIDE_AI_SCENE_STATES = ["new", "applying", "applied", "settings", "settings_unread", "off", "first_run", "not_investigated", "memory"] as const;
 export type HideAiSceneState = (typeof HIDE_AI_SCENE_STATES)[number];
 export type HideAiSceneLanguage = "en" | "ko" | "zh-CN" | "ja";
 export type HideAiSceneParams = { theme: "light" | "dark"; state: HideAiSceneState; width: number; language: HideAiSceneLanguage };
@@ -91,6 +91,17 @@ export function hideAiSceneProject(state: HideAiSceneState, workspaceId = "herdr
     case "new":
     case "settings":
     case "memory": return base;
+    // Not on GitHub and with Memory off: GitHub reads nothing, the session records read all but corrections (D-52).
+    case "settings_unread": return {
+      ...base,
+      settings: {
+        ...base.settings,
+        signals: base.settings.signals.map((row) => (
+          row.signal === "check_failed" || row.signal === "change_request" ? { ...row, enabled: false, unavailable: "no_github" as const }
+            : row.signal === "correction" ? { ...row, enabled: false, unavailable: "memory_off" as const } : row
+        )),
+      },
+    };
     case "applying": return { ...base, rows: [...APPLYING_ROWS, ...APPLIED_ROWS], counts: { suggestions: 2, rail: 3 } };
     case "applied": return { ...base, status: "none_today", rows: APPLIED_ROWS, counts: { suggestions: 0, rail: 1 } };
     case "off": return { ...base, enabled: false, counts: { suggestions: 0, rail: 0 } };
@@ -116,7 +127,7 @@ export function HideAiScene({ theme, state, width, language }: HideAiSceneParams
     ui_state: { interface_language: language },
   }) as unknown as SnapshotRest, [language]);
   useLayoutEffect(() => {
-    const memory = { ...memorySceneProject(state === "off" ? "off" : "correction"), workspace_id: "herdr-ide" };
+    const memory = { ...memorySceneProject(state === "off" || state === "settings_unread" ? "off" : "correction"), workspace_id: "herdr-ide" };
     useShellStore.setState({ rest, memory: { project: memory }, suggestions: { project: hideAiSceneProject(state) }, connection: "gone" });
     useUiStore.setState({ hideAiTab: state === "memory" ? "memory" : "suggestions", openSuggestion: state === "new" ? "s12" : null });
     document.documentElement.classList.toggle("dark", theme === "dark");
@@ -125,8 +136,13 @@ export function HideAiScene({ theme, state, width, language }: HideAiSceneParams
   // The fold and the sheet are the components' own; the scene presses them as the operator would, once the tool drew them.
   const drawn = useShellStore((store) => store.suggestions?.project?.workspace_id === "herdr-ide");
   useEffect(() => {
-    const press = state === "applied" ? "[data-suggestions-fold]" : state === "settings" ? "[data-hide-ai-settings-open]" : null;
-    if (drawn && press) document.querySelector<HTMLElement>(press)?.click();
+    const press = state === "applied" ? "[data-suggestions-fold]" : state === "settings" || state === "settings_unread" ? "[data-hide-ai-settings-open]" : null;
+    if (!drawn || !press) return;
+    document.querySelector<HTMLElement>(press)?.click();
+    if (state !== "settings_unread") return;
+    // The skipped lines unfold inside the sheet once it has opened.
+    const frame = requestAnimationFrame(() => document.querySelector<HTMLElement>("[data-hide-ai-dismissed] > button")?.click());
+    return () => cancelAnimationFrame(frame);
   }, [drawn, state]);
   return (
     <TooltipProvider>
