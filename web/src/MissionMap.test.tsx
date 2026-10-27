@@ -279,19 +279,24 @@ const card = (map: { q: (selector: string) => HTMLElement | null }, key: string)
 it("draws each card's state as its mark and border, colour only for what wants a look, with its line, result, landing tag and criteria (B26-B28)", async () => {
   const nodes = [
     node("core", { title: "제안 core: 기록·공책·점수·반영", status: "review", pr: 1703, pr_state: "mergeable", criteria: [line("c1", "own", { state: "pass" }), line("check", "check", { state: "pass" }), line("review", "review", { checkers: [checker("codex", "open", "agent-7")] }), line("ci", "ci")], criteria_met: 2, criteria_skipped: 0 }),
-    node("engine", { status: "working", depends_on: ["core"], pr: 1704, line: "replay 19/31", reopened: 1, criteria: [line("c1", "own", { state: "pass" }), line("c2", "own", { state: "skipped", skip: { reason: "only 31 sessions" } }), line("c3", "own"), line("ci", "ci")], criteria_met: 2, criteria_skipped: 1 }),
+    node("engine", { status: "working", depends_on: ["core"], pr: 1704, line: "replay 19/31", reopened: 1, worker: { agent: "claude", model: "opus", effort: "xhigh", effort_auto: false }, pane_id: "w1:p2", criteria: [line("c1", "own", { state: "pass" }), line("c2", "own", { state: "skipped", skip: { reason: "only 31 sessions" } }), line("c3", "own"), line("ci", "ci")], criteria_met: 2, criteria_skipped: 1 }),
     node("tool", { status: "held", depends_on: ["core"] }),
-    node("api", { status: "done", pr: 1650, pr_state: "mergeable" }),
+    node("api", { status: "done", pr: 1650, pr_state: "mergeable", worker: { agent: "codex", model: "gpt-6", effort: "high", effort_auto: false } }),
     node("old", { status: "done", pr: 1600, pr_state: "merged" }),
     node("branch", { status: "done", delivery: "direct", branch: "feat/a-very-long-branch-name-for-the-screen-node" }),
     node("broken", { status: "failed", line: "CI failed twice" }),
     node("outside", { title: "바깥: isolated 앱 실행기 정리", kind: "external", delivery: null, external: { pr: 1232 }, status: "waiting" }),
     node("unread", { kind: "external", delivery: null, external: { branch: "tools/runner" }, status: "waiting", unread: true }),
+    node("merged-out", { kind: "external", delivery: null, external: { pr: 1702 }, status: "done" }),
+    node("closed-out", { kind: "external", delivery: null, external: { pr: 1605 }, status: "failed" }),
+    node("v1", { status: "done", pr: 1500 }),
     node("next", { depends_on: ["engine", "outside"] }),
   ];
-  const map = await mount({ items: [mission({ nodes, decision: "Rail or slot?", question: { key: 1, why: null, recommend: null, node: "tool", asked_at_unix_ms: Date.now() } })] });
+  // The engine's worker pane was started with another effort than its plan asked.
+  const launched = [{ device_id: "mac", pane_id: "w1:p2", session_digest: "e", launch_model: "opus", launch_effort: "high" }];
+  const map = await mount({ items: [mission({ nodes, decision: "Rail or slot?", question: { key: 1, why: null, recommend: null, node: "tool", asked_at_unix_ms: Date.now() } })] }, [], launched);
   try {
-    expect(Object.fromEntries(nodes.map((n) => [n.key, card(map, n.key).dataset.nodeLook]))).toEqual({ core: "review", engine: "working", tool: "hold", api: "done", old: "landed", branch: "done", broken: "failed", outside: "external", unread: "external", next: "waiting" });
+    expect(Object.fromEntries(nodes.map((n) => [n.key, card(map, n.key).dataset.nodeLook]))).toEqual({ core: "review", engine: "working", tool: "hold", api: "done", old: "landed", branch: "done", broken: "failed", outside: "external", unread: "external", "merged-out": "landed", "closed-out": "failed", v1: "done", next: "waiting" });
     // Each mark says its state on hover and to a screen reader, and the card's name starts with the same words.
     expect(card(map, "tool").querySelector("[data-node-mark]")?.getAttribute("aria-label")).toBe("Waiting for a decision");
     expect(card(map, "tool").getAttribute("aria-label")).toBe("Node tool · Waiting for a decision · Rail or slot?");
@@ -316,11 +321,28 @@ it("draws each card's state as its mark and border, colour only for what wants a
     expect(card(map, "core").querySelector("[data-node-line]")?.textContent).toBe("left: review, CI");
     expect(card(map, "next").querySelector("[data-node-line]")?.textContent).toBe(`waiting for ${"#"}1704 바깥: isolated 앱 실행기 정리`);
     expect(card(map, "api").querySelector("[data-node-landing]")?.textContent).toBe("Merge left");
-    expect(card(map, "branch").querySelector("[data-node-landing]")?.textContent).toBe("Join left");
+    // A branch is read for joining only once the mission waits on its branches, and a PR whose state was never read says nothing.
+    expect(card(map, "branch").querySelector("[data-node-landing]")).toBeNull();
+    expect(card(map, "v1").querySelector("[data-node-landing]")).toBeNull();
     expect(card(map, "old").querySelector("[data-node-landing]")).toBeNull();
     expect(card(map, "broken").querySelector('[data-node-line="attention"]')?.textContent).toBe("CI failed twice");
     expect(card(map, "outside").querySelector("[data-node-pr]")?.textContent).toBe(`${"#"}1232`);
     expect(card(map, "unread").querySelector("[data-node-line]")?.textContent).toBe("Could not check");
+    // Who works a card leads its bottom row, as a checker's row names it: the launch, else the plan marked planned; an outside node has none.
+    const who = (key: string) => {
+      const row = card(map, key).querySelector<HTMLElement>("[data-node-worker]");
+      return row ? [row.dataset.nodeWorker, row.querySelector("[data-run]")?.getAttribute("data-run"), row.querySelector("[data-run]")?.textContent, row.parentElement?.firstElementChild === row] : null;
+    };
+    expect([who("engine"), who("api"), who("outside")]).toEqual([["claude", "launch", "opus·high", true], ["codex", "plan", "gpt-6·high (planned)", true], null]);
+    expect(card(map, "engine").getAttribute("aria-label")).toContain("Working · opus·high");
+    // Its words give way first when the row runs short; the count keeps its width.
+    expect(card(map, "engine").querySelector("[data-node-worker] [data-run]")?.className).toContain("truncate");
+    expect(card(map, "engine").querySelector("[data-node-criteria]")?.className).toContain("shrink-0");
+    // Outside is the node's kind: a dotted border and ↗ in every state, its state shown on them (B19).
+    const outside = (key: string) => [card(map, key).className.includes("border-dotted"), card(map, key).querySelector("[data-node-outside]")?.textContent, card(map, key).querySelector("[data-node-line]")?.textContent];
+    expect(["outside", "unread", "merged-out", "closed-out"].map(outside)).toEqual([[true, `↗${"#"}1232`, "waiting for main"], [true, "↗tools/runner", "Could not check"], [true, `↗${"#"}1702`, "In main"], [true, `↗${"#"}1605`, "Closed without merge"]]);
+    expect(card(map, "closed-out").className).toContain("border-mission-failed");
+    expect(card(map, "merged-out").getAttribute("aria-label")).toBe("Node merged-out · In main · Outside the mission");
     // A long title wraps to two lines and a long branch truncates inside the card (B34).
     expect(card(map, "core").querySelector("[title='제안 core: 기록·공책·점수·반영']")?.className).toContain("line-clamp-2");
     expect(card(map, "branch").querySelector("[data-node-branch] .truncate")).not.toBeNull();

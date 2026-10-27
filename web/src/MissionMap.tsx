@@ -13,7 +13,8 @@ import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
 import { MissionNodePanel } from "./MissionNodePanel";
 import { MissionTurn } from "./MissionTurn";
-import { CheckerRow, lookWord, useNodeTimes } from "./missionParts";
+import { AgentMark } from "./AgentMark";
+import { CheckerRow, lookWord, useNodeTimes, useRunWords } from "./missionParts";
 import {
   cardLine,
   checkerTally,
@@ -302,9 +303,11 @@ const LOOK_CARD: Record<NodeLook, string> = {
 
 /**
  * A node on the map (B26-B29): its state's mark and border, its title on up
- * to two lines, where it is or what it waits on with its result, how long it
- * took, `머지 남음` or `합치기 남음`, `기준 n/m` with `⤳k`, and, glued under
- * it, the strip of the other agents checking it. Pressing it picks it (B30).
+ * to two lines, where it is or what it waits on with its result, who works
+ * it (its agent's face and the model and effort as a checker's are named),
+ * `머지 남음` or `합치기 남음`, how long it took, `기준 n/m` with `⤳k`, and,
+ * glued under it, the strip of the other agents checking it. Pressing it
+ * picks it (B30).
  */
 function NodeCard({ mission, node, selected, dimmed, onSelect, events, end }: { mission: Mission; node: MissionNode; selected: boolean; dimmed: boolean; onSelect: () => void; events: MissionEvent[] | null; end: number }) {
   const { t } = useInterfaceTranslation();
@@ -317,6 +320,9 @@ function NodeCard({ mission, node, selected, dimmed, onSelect, events, end }: { 
   const landing = landingLeft(mission, node);
   const times = useNodeTimes(mission, node, events, end);
   const time = look === "hold" ? (times?.held ? t("mission.time.held", { elapsed: times.held }) : null) : times?.took ?? null;
+  // Who works it, from the same launch proof as a checker's row; an outside node has no worker.
+  const run = useRunWords(mission, node.pane_id, node.machine, node.worker);
+  const worker = node.worker ? node.worker.agent : null;
   // A mission from before criteria shows its sentence where the count would be (B23).
   const before = mission.exempt ? ownCriteria(node) : null;
   const checks = node.criteria.filter((criterion) => (criterion.kind === "review" || criterion.kind === "verify") && (criterion.checkers?.length ?? 0) > 0);
@@ -325,7 +331,7 @@ function NodeCard({ mission, node, selected, dimmed, onSelect, events, end }: { 
     <button
       type="button"
       onClick={onSelect}
-      aria-label={[node.title, word, ...badgeWords(mission, node, t), ...(tally ? [criteriaWords(tally, t)] : [])].join(" · ")}
+      aria-label={[node.title, word, ...(run ? [run.text] : []), ...badgeWords(mission, node, t), ...(tally ? [criteriaWords(tally, t)] : [])].join(" · ")}
       aria-pressed={selected}
       data-dependency-node={node.key}
       data-mission-node={node.key}
@@ -356,8 +362,16 @@ function NodeCard({ mission, node, selected, dimmed, onSelect, events, end }: { 
           {result}
         </span>
       ) : null}
-      {landing || time || tally || before ? (
+      {worker || landing || time || tally || before ? (
         <span className="flex min-w-0 items-center gap-xs text-caption text-muted-foreground">
+          {worker ? (
+            // The model and effort give way first when the row runs short, before the time and the count.
+            <span className="flex min-w-0 shrink items-center gap-xxs" data-node-worker={worker}>
+              <AgentMark kind={worker} />
+              {run ? <span className="truncate" title={run.text} data-run={run.from}>{run.text}</span> : null}
+              {landing || time ? <span aria-hidden="true" className="shrink-0">·</span> : null}
+            </span>
+          ) : null}
           {landing ? <span className="shrink-0 rounded-xs bg-mission-hold/15 px-xs text-micro font-semibold text-mission-hold" data-node-landing={landing}>{t(landing === "merge" ? "mission.landing.merge" : "mission.landing.join")}</span> : null}
           {time ? <span className="shrink-0 tabular-nums" data-node-time={look === "hold" ? "held" : "took"}>{time}</span> : null}
           <span className="flex-1" />
