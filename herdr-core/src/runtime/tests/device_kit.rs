@@ -2745,7 +2745,7 @@ fn revoking_the_helper_ends_the_devices_terminals_and_its_panes_say_why() {
 }
 
 // Records the public analytics boundary, without a transport or a PostHog project.
-#[derive(Default)]
+#[derive(Debug, Default)]
 struct DeviceStatistics(Mutex<Vec<crate::product_analytics::Event>>);
 
 impl crate::product_analytics::Sink for DeviceStatistics {
@@ -2763,8 +2763,8 @@ fn device_connect_statistics_count_each_ready_bootstrap_once() {
     use hide_kit::device_herdr::HerdrUpdate;
     let shared = with_consent(None);
     let statistics = Arc::new(DeviceStatistics::default());
-    let helper = KitDevice::answering(Ok(with_herdr(None)));
     for preserved in [false, true] {
+        let helper = KitDevice::answering(Ok(with_herdr(None)));
         let mut runtime = shared.lock().unwrap();
         if preserved {
             runtime
