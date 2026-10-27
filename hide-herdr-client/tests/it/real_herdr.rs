@@ -301,6 +301,55 @@ fn the_default_socket_is_the_one_the_pinned_herdr_uses() {
     );
 }
 
+/// Environment selectors follow the pinned binary on each operating
+/// system, including a session before any server has been started.
+#[test]
+#[ignore = "needs the pinned Herdr: set HIDE_E2E_HERDR_BIN and run with --ignored"]
+fn the_environment_socket_and_session_match_the_pinned_herdr() {
+    let bin = PathBuf::from(std::env::var_os("HIDE_E2E_HERDR_BIN").unwrap());
+    let root = if cfg!(unix) {
+        tempfile::Builder::new().prefix("hs").tempdir_in("/tmp")
+    } else {
+        tempfile::Builder::new().prefix("hs").tempdir()
+    }
+    .unwrap();
+    let home = root.path();
+    let socket = home.join("chosen.sock");
+    let config = home.join("herdr.toml");
+    for (session, override_socket) in [("work", false), ("default", false), ("work", true)] {
+        let mut command = herdr_command(&bin, home, &socket, &config);
+        command.env("HERDR_SESSION", session);
+        if !override_socket {
+            command.env_remove("HERDR_SOCKET_PATH");
+        }
+        let output = command
+            .args(["status", "server", "--json"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let status: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let variables = |key: &str| match key {
+            "HOME" | "USERPROFILE" => Some(home.as_os_str().to_owned()),
+            "XDG_CONFIG_HOME" => Some(home.join("xdg-config").into_os_string()),
+            "HERDR_SESSION" => Some(session.into()),
+            "HERDR_SOCKET_PATH" if override_socket => Some(socket.as_os_str().to_owned()),
+            _ => None,
+        };
+        assert_eq!(
+            hide_platform::host::herdr_socket_from(&variables).unwrap(),
+            PathBuf::from(status["socket"].as_str().unwrap())
+        );
+        assert_eq!(
+            status["running"], false,
+            "the private probe started a server"
+        );
+    }
+}
+
 /// The session the pinned Herdr names for a pane's agent. Hide's subagent
 /// counts take an event of any other session for a nested one and ignore it
 /// (`docs/agent-hooks.md`, Which session is the pane's), and what decides

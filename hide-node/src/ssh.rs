@@ -733,18 +733,6 @@ pub fn parse_herdr_server_status(
             true,
         ));
     }
-    if !status.running {
-        return Err(remote_error(
-            operation_id,
-            host_id,
-            RemoteStage::Herdr,
-            format!(
-                "Herdr is not running on {host_id}. Hide's allowed helper starts the Herdr server when it connects."
-            ),
-            true,
-            true,
-        ));
-    }
     Ok(status)
 }
 
@@ -2763,25 +2751,18 @@ mod tests {
     }
 
     #[test]
-    fn herdr_server_status_failures_name_what_to_do_on_the_host() {
-        let not_running = parse_herdr_server_status(
+    fn a_stopped_server_still_names_the_socket_selected_by_the_remote_environment() {
+        let status = parse_herdr_server_status(
             "mini",
-            &status_output(
-                0,
-                r#"{"status":"not_running","running":false,"version":null,"protocol":null,"capabilities":null,"compatible":null,"endpoint_compatible":null,"socket":"/Users/example/.config/herdr/herdr.sock","session":null,"restart_needed":false,"server_binary_stale":false}"#,
-            ),
+            &status_output(0, r#"{"running":false,"socket":"/srv/herdr/work.sock"}"#),
         )
-        .expect_err("a stopped server is a failure");
-        assert_eq!(not_running.stage(), RemoteStage::Herdr);
-        assert!(not_running.diagnostic().action_required);
-        assert!(not_running.diagnostic().retryable);
-        assert!(not_running.to_string().contains("not running on mini"));
-        assert!(
-            not_running
-                .to_string()
-                .contains("helper starts the Herdr server")
-        );
+        .expect("a known socket is independent of whether a server runs there");
+        assert!(!status.running);
+        assert_eq!(status.socket, "/srv/herdr/work.sock");
+    }
 
+    #[test]
+    fn herdr_server_status_failures_name_what_to_do_on_the_host() {
         let not_installed = parse_herdr_server_status("mini", &status_output(127, ""))
             .expect_err("a missing binary is a failure");
         assert!(not_installed.diagnostic().action_required);

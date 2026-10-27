@@ -288,17 +288,36 @@ fn a_failed_device_server_start_reaches_its_row_until_a_retry_starts_it() {
         kit(&shared).herdr_start_failed,
         "a status read erased the failure"
     );
-    *helper.answer.lock().unwrap() = Ok(with_herdr(Some(HerdrUpdate::Started {
-        version: "pinned".to_owned(),
-        pid: 42,
-    })));
+    let terminals = record_terminals(&mut shared.lock().unwrap());
+    let calls_before_retry = helper.calls();
     dispatch(
         &shared,
         "kit_reinstall",
         serde_json::json!({ "device_id": DEVICE }),
     );
     settle(&shared);
-    assert!(!kit(&shared).herdr_start_failed);
+    assert!(
+        helper.closed_reason().is_some(),
+        "retry must re-establish pane and terminal services"
+    );
+    assert_eq!(
+        helper.calls(),
+        calls_before_retry,
+        "retry must not only reapply the kit on the incomplete link"
+    );
+    let mut connected = established_with_terminals();
+    connected.kit = Some(Ok(Box::new(with_herdr(Some(HerdrUpdate::Started {
+        version: "pinned".to_owned(),
+        pid: 42,
+    })))));
+    let mut runtime = shared.lock().unwrap();
+    let generation = runtime.device_host_generation(DEVICE);
+    runtime.ingest_host_established(DEVICE, generation, Ok(hosts::HostReady::Dialed(connected)));
+    assert!(!runtime.kit_view(DEVICE).herdr_start_failed);
+    assert!(
+        terminals.devices().contains(&"install:studio".to_owned()),
+        "the recovered link must install the terminal route"
+    );
 }
 
 /// B13: a connected device's kit is installed by the connection pass, with

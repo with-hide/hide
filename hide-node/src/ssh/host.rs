@@ -1170,7 +1170,8 @@ pub fn establish(
                     "reason": error.to_string(),
                 }));
                 // No socket was learned. The installed node resolves
-                // Herdr's own default for its account, before starting it.
+                // Herdr's environment override or account default before
+                // starting it.
                 known
             }
         };
@@ -1523,8 +1524,9 @@ pub(super) struct Installed {
 /// change is already there, because only a verified upload is ever renamed
 /// into that private folder and reading every part back on each connection
 /// would delay every reconnect. So an install that stopped part way resumes
-/// with the files it had not sent (B18). A kit file that cannot be placed
-/// never stops the helper: the kit on the device reports that part. The
+/// with the files it had not sent (B18). Optional kit files that cannot be
+/// placed are reported by the kit on the device; a chosen Herdr and its
+/// pin must arrive before the helper can start. The
 /// helper removes older builds once it has pointed `current` at this one
 /// (`hide_host::kit`).
 async fn install(
@@ -1744,14 +1746,16 @@ async fn place_payload(
         match placed {
             Ok(true) => upload.sent += 1,
             Ok(false) => upload.reused += 1,
+            // A build that names a Herdr copy must deliver both its pin and
+            // binary; retry establishment instead of publishing a ready helper.
+            Err(error) if part.relative == hide_kit::device_herdr::HERDR_PIN => return Err(error),
             Err(error) => upload.missing.push(error.to_string()),
         }
     }
     if let Some(herdr) = &payload.herdr {
-        match place_herdr(raw, &root, herdr, owner).await {
-            Ok(true) => upload.sent += 1,
-            Ok(false) => upload.reused += 1,
-            Err(error) => upload.missing.push(error.to_string()),
+        match place_herdr(raw, &root, herdr, owner).await? {
+            true => upload.sent += 1,
+            false => upload.reused += 1,
         }
     }
     Ok(Installed {
