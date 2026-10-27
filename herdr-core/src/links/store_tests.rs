@@ -615,6 +615,131 @@ fn the_issue_panel_joins_its_pull_requests_and_names_which_one_a_session_made() 
     );
 }
 
+/// A publish pass reads a project's places, fences and repository names once
+/// and answers from them. The expected answers are written out from the
+/// fixture below, not read back from another path, so a pass that drops or
+/// adds a line fails here.
+#[test]
+fn a_pass_over_a_project_answers_what_the_fixture_says() {
+    let home = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let mut store = open(state.path());
+    let mut first = pr(7, "feat/x", T0, None);
+    first.issues = vec![("github:acme/app#3".into(), IssueSource::Closes)];
+    let mut second = pr(8, "feat/y", T0 + 30 * MIN, None);
+    second.issues = vec![("github:acme/app#3".into(), IssueSource::Closes)];
+    store
+        .apply_project(&project(vec![first, second]), T0)
+        .unwrap();
+    let maker = claude_file(
+        home.path(),
+        "s-maker",
+        ROOT,
+        "cli",
+        &[Turn {
+            at: T0 + 20 * MIN,
+            branch: "feat/y",
+            text: "두 번째 PR",
+        }],
+        Some((8, T0 + 30 * MIN)),
+    );
+    ingest(&mut store, home.path(), &maker);
+
+    let pass = store.pass(PROJECT).unwrap().unwrap();
+
+    let summary = store.summary_in(&pass, &[]).unwrap();
+    assert_eq!(summary.prs.len(), 1);
+    assert_eq!(summary.prs.get(&8), Some(&1));
+    assert_eq!(summary.issues.get("github:acme/app#3"), Some(&1));
+    assert_eq!(
+        summary.sessions.get("s-maker"),
+        Some(&vec![SessionPrChip {
+            number: 8,
+            created: true
+        }])
+    );
+
+    let eight = store.pr(PROJECT, 8).unwrap().unwrap();
+    let lines = store.pr_lines_in(&pass, &eight, Some(here())).unwrap();
+    assert_eq!(
+        lines
+            .iter()
+            .map(|line| (line.id.as_str(), line.pr, line.role))
+            .collect::<Vec<_>>(),
+        vec![("s-maker", 8, SessionRole::Created)]
+    );
+    let seven = store.pr(PROJECT, 7).unwrap().unwrap();
+    assert!(
+        store
+            .pr_lines_in(&pass, &seven, Some(here()))
+            .unwrap()
+            .is_empty()
+    );
+
+    // No ledger session names the issue, so the ledger's issue list is empty;
+    // the one session that made the pull request has one work summary.
+    assert!(store.ledger_issue_refs_in(&pass).unwrap().is_empty());
+    let work = store.ledger_summaries_in(&pass).unwrap();
+    assert_eq!(
+        work.iter()
+            .map(|item| item.session.session_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["s-maker"]
+    );
+}
+
+/// A learned place inside another project's root belongs to that project: a
+/// publish pass fences it out of this project's paths, the same as a read of
+/// the project alone does, and the expected paths are written out here.
+#[test]
+fn a_pass_fences_out_a_learned_place_inside_another_projects_root() {
+    let home = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let mut store = open(state.path());
+    store
+        .apply_project(&project(vec![pr(8, "feat/y", T0, None)]), T0)
+        .unwrap();
+    let nested = claude_file(
+        home.path(),
+        "s-nested",
+        "/work/app/sub/tree",
+        "cli",
+        &[Turn {
+            at: T0 + 20 * MIN,
+            branch: "feat/y",
+            text: "두 번째 PR",
+        }],
+        Some((8, T0 + 1_000)),
+    );
+    ingest(&mut store, home.path(), &nested);
+    store
+        .apply_project(
+            &ProjectFacts {
+                key: "project:sub".into(),
+                device_id: DEVICE.into(),
+                workspace_id: "workspace-sub".into(),
+                root: "/work/app/sub".into(),
+                repository: None,
+                repository_id: None,
+                connection_epoch: 0,
+                worktrees: Vec::new(),
+                prs: Vec::new(),
+                prs_read: false,
+                outputs: Vec::new(),
+            },
+            T0,
+        )
+        .unwrap();
+
+    let own = store.pass(PROJECT).unwrap().unwrap();
+    assert_eq!(own.paths, vec![(DEVICE.to_owned(), ROOT.to_owned())]);
+    let sub = store.pass("project:sub").unwrap().unwrap();
+    assert_eq!(
+        sub.paths,
+        vec![(DEVICE.to_owned(), "/work/app/sub".to_owned())]
+    );
+}
+
 /// A checkout's work landed when the pull requests its sessions made or
 /// worked on include a merged one and no open one; a session belongs to the
 /// deepest checkout holding its folder, and a checkout on no branch (one
@@ -1261,7 +1386,10 @@ fn direct_observation_retention_and_count_cap_preserve_exact_session_and_server_
     use crate::model::GraphParty;
     let connection = Connection::open_in_memory().unwrap();
     migrate(&connection).unwrap_or_else(|_| panic!("fixture migration failed"));
-    let mut store = LinkStore { connection };
+    let mut store = LinkStore {
+        connection,
+        issue_capacity: RefCell::default(),
+    };
     let fact = DirectFact {
         source_server: "device-local/server-one/session-named".into(),
         call_key: "call".into(),
@@ -1645,5 +1773,27 @@ fn a_session_is_first_carried_once_and_an_upgrade_marks_every_held_session() {
             .apply_panes(&[pane("held"), pane("new")], T0 + MIN)
             .unwrap()
             .is_empty()
+    );
+}
+
+#[test]
+fn a_capacity_crossing_is_reported_once_until_the_count_falls_back_under() {
+    let mut crossings = CapacityCrossings::default();
+    assert!(
+        crossings.enter(PROJECT),
+        "the first call over the cap reports"
+    );
+    assert!(
+        !crossings.enter(PROJECT),
+        "a call while still over stays quiet"
+    );
+    assert!(
+        crossings.enter("project:other"),
+        "each key crosses on its own"
+    );
+    crossings.leave(PROJECT);
+    assert!(
+        crossings.enter(PROJECT),
+        "a key that fell back under reports again"
     );
 }
