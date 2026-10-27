@@ -17,9 +17,11 @@ name: agent canary
 
 on:
   schedule:
-    # After the nightly (19:30 UTC) and Herdr's own poll (06:17 UTC), so the
-    # three do not share the runners' busiest hour.
-    - cron: "41 2 * * *"
+    # With the nightly (nightly.yml, 17:17 UTC, 02:17 in Korea), so its
+    # journeys use the runners while no pull request does. It stays its own
+    # workflow: the nightly's report job would file each failing agent again
+    # as a nightly-failure issue beside the agent's own.
+    - cron: "17 17 * * *"
   workflow_dispatch:
     inputs:
       force:
