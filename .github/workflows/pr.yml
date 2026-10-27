@@ -35,14 +35,14 @@
 # 2026-09-28 one run held all five for 26 minutes, so a second pull request
 # waited up to 70 minutes before its lanes started. A pull request therefore
 # asks for a macOS runner only for what a macOS runner alone proves: `desktop
-# e2e` for a change to what the app runs (the desktop host, the web shell and
-# every crate, issue #1288), `os contract (macos)` for a change to
-# `hide-platform` or `hide-herdr-client`, and `package`'s macOS job for a
-# change to what goes into a package, the one job that starts the packaged app
-# such a change builds.
-# Core and daemon changes add only `desktop e2e` there and leave the macOS web
-# `@platform` tests, the macOS mailbox lane and the rest of the OS contract to
-# `nightly.yml`.
+# e2e` for a change to the app's own code (the desktop host and the web shell,
+# issue #1288), `os contract (macos)` for a change to `hide-platform` or
+# `hide-herdr-client`, and `package`'s macOS job for a change to what goes into
+# a package, the one job that starts the packaged app such a change builds.
+# Core and daemon changes add no macOS job: main's push run runs `desktop e2e`
+# for them (#1147, which broke a desktop spec from herdr-core alone, is the
+# accepted risk), and `nightly.yml` the macOS web `@platform` tests, the macOS
+# mailbox lane and the rest of the OS contract.
 # Everything else runs on Linux: the Rust suite, the unit suites, the invariant
 # checks, the whole web end-to-end, dealt out to five shards by `web-e2e.yml`,
 # and the remote mailbox lane over private SSH (`remote-mailbox`).
@@ -628,8 +628,9 @@ jobs:
       contents: read
 
   # The Electron app on macOS, the system it is written against: the whole
-  # suite, for a change to what the app runs: the desktop host, the web shell
-  # or a crate.
+  # suite, for a change to the desktop host or the web shell, and in every
+  # full plan (main's push run, the nightly), which is where a crate change
+  # meets it.
   desktop-e2e:
     name: desktop e2e
     needs: plan
