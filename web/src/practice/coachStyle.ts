@@ -63,8 +63,9 @@ ${ZONES}
 .pc-flash{position:absolute;z-index:1;left:50%;top:40%;transform:translate(-50%,-50%);display:flex;gap:var(--spacing-md);animation:pc-flash .9s ${EASE} both}
 .pc-flash .pc-kc{min-width:var(--size-practice-flash-key);height:var(--size-practice-flash-key);font-size:var(--text-display);border-radius:var(--radius-xl);padding:0 var(--spacing-md);background:var(--practice-card);box-shadow:0 var(--spacing-xs) 0 var(--practice-line),${SHADOW}}
 @keyframes pc-flash{0%{opacity:0;transform:translate(-50%,-50%) scale(.85)}20%{opacity:1;transform:translate(-50%,-50%) scale(1)}75%{opacity:1}100%{opacity:0}}
-.pc-mode{position:absolute;left:50%;top:var(--spacing-xs);transform:translateX(-50%);display:flex;align-items:center;gap:var(--spacing-md);font-size:var(--text-body);font-weight:600;padding:var(--spacing-xxs) var(--spacing-md) var(--spacing-xxs) var(--spacing-xs);border-radius:var(--radius-xl);background:var(--practice-card);color:var(--practice-text);box-shadow:0 0 0 var(--size-hairline) var(--practice-line);pointer-events:auto}
+.pc-mode{position:absolute;left:50%;top:var(--spacing-xs);transform:translateX(-50%);display:flex;align-items:center;gap:var(--spacing-md);font-size:var(--text-body);font-weight:600;padding:var(--spacing-xxs) var(--spacing-xs);white-space:nowrap;border-radius:var(--radius-xl);background:var(--practice-card);color:var(--practice-text);box-shadow:0 0 0 var(--size-hairline) var(--practice-line);pointer-events:auto}
 .pc-mode button{font:inherit;font-weight:500;border:0;border-radius:var(--radius-xl);padding:var(--spacing-xxs) var(--spacing-md);background:color-mix(in srgb,var(--practice-accent) 30%,transparent);color:var(--practice-ink);cursor:pointer}
+.pc-mode button.pc-leave{background:var(--practice-accent);font-weight:600}
 .pc-quest{position:absolute;left:var(--spacing-lg);bottom:var(--spacing-lg);width:var(--size-practice-quest);background:var(--practice-card);color:var(--practice-text);border-radius:var(--radius-xl);overflow:hidden;pointer-events:auto;box-shadow:${SHADOW},0 0 0 var(--size-hairline) var(--practice-line);animation:pc-quest .5s ${EASE} both}
 @keyframes pc-quest{from{transform:translateY(var(--spacing-xxl));opacity:0}to{transform:none;opacity:1}}
 .pc-qh{padding:var(--spacing-md) var(--spacing-md) var(--spacing-sm);background:color-mix(in srgb,var(--practice-accent) 38%,var(--practice-card));color:var(--practice-ink)}
@@ -94,6 +95,9 @@ ${ZONES}
 export const HUB_CSS = `
 .ph-page{min-height:100%;overflow:auto;background:var(--background);color:var(--foreground);display:flex;justify-content:center}
 .ph-col{width:min(var(--size-practice-hub),100% - var(--spacing-xxl));padding:calc(var(--spacing-xxxl) * 2) 0 var(--spacing-xxxl)}
+.ph-head{display:flex;align-items:center;justify-content:space-between;gap:var(--spacing-md)}
+.ph-leave{flex:none;font:inherit;font-size:var(--text-subhead);font-weight:600;border:0;border-radius:var(--radius-lg);padding:var(--spacing-sm) var(--spacing-md);background:color-mix(in srgb,var(--foreground) 8%,transparent);color:var(--foreground);cursor:pointer}
+.ph-leave:hover{background:color-mix(in srgb,var(--foreground) 14%,transparent)}
 .ph-col h1{margin:0;font-size:var(--text-display);font-weight:600;letter-spacing:-.01em}
 .ph-lead{margin:var(--spacing-sm) 0 var(--spacing-xl);font-size:var(--text-title);line-height:1.55;color:var(--muted-foreground)}
 .ph-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:var(--spacing-xs)}

@@ -126,6 +126,8 @@ async function withPractice(page: Page, journey: (practice: Page, chapters: Loca
     await expect(chapters.first()).toBeVisible({ timeout: 20_000 });
     expect(await chapters.count()).toBeGreaterThan(1);
     await journey(practice, chapters);
+    // A journey that went back to Hide closed the window, and with it what is left to read.
+    if (practice.isClosed()) return;
     // The shell answered, so the line that says progress is not being kept never showed.
     await expect(practice.locator("[data-practice-unsaved]")).toHaveCount(0);
     // Every copy the chapters made went to their worlds, and no paste read the operator's clipboard.
@@ -216,11 +218,29 @@ test("Back over a step that changed the screen plays the chapter again up to tha
   });
 });
 
-test("the bubble's Exit leaves from any step, and a finished chapter stops on its end card", async ({ page }) => {
+test("the bubble's Exit closes the practice from any step, keeping where the chapter stopped", async ({ page }) => {
   await withPractice(page, async (practice) => {
     await practice.locator('[data-practice-hub-chapter="switch"] [data-practice-play]').click();
+    await pressTo(practice, "switch", 1);
+    const closed = practice.waitForEvent("close");
     await practice.locator('[data-practice-chapter="switch"] [data-practice-exit]').click();
+    await closed;
+    // The step reached went to the shell before the window went, so the list opened again offers to continue there.
+    await page.locator("[data-help-menu-trigger]").click();
+    const reopened = page.context().waitForEvent("page");
+    await page.locator('[data-help-item="practice"]').click();
+    const again = await reopened;
+    await expect(again.locator('[data-practice-hub-chapter="switch"]')).toHaveAttribute("data-status", "paused", { timeout: 20_000 });
+  });
+});
+
+test("the chapter list leads back to Hide, and a finished chapter stops on its end card", async ({ page }) => {
+  await withPractice(page, async (practice) => {
+    await practice.locator('[data-practice-hub-chapter="switch"] [data-practice-play]').click();
+    await practice.locator('[data-practice-chapter="switch"] [data-practice-hub-open]').click();
     await expect(practice.locator("[data-practice-hub]")).toBeVisible();
+    await expect(practice.locator("[data-practice-hub] [data-practice-leave]")).toBeVisible();
+    await expect(practice).toHaveTitle(/Practice Hide|Hide 연습/);
     // The last step's button finishes the chapter on its end card, which lists the tasks and leads back to the list.
     await practice.locator('[data-practice-hub-chapter="switch"] [data-practice-play]').click();
     await pressTo(practice, "switch", 4);

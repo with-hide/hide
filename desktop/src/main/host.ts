@@ -18,7 +18,7 @@ import { CHECK_UPDATES_COMMAND, SETUP_COMMAND, type HerdrRestart } from "../../.
 import type { MenuCommand } from "./menu";
 import { BINDINGS_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, EDITOR_OPEN_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, EXTERNAL_DESCRIBE_CHANNEL, EXTERNAL_LIVE_CHANNEL, EXTERNAL_OPEN_CHANNEL, EXTERNAL_READ_CHANNEL, PICK_FOLDER_CHANNEL, PRACTICE_OPEN_CHANNEL, PROBE_PATHS_CHANNEL, HERDR_RESTART_CHANNEL, QUIT_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL } from "../channel";
 import { BrowserViews, type ResolvedPage } from "./browser";
-import { practiceUrl } from "./practice";
+import { practiceBounds, practiceUrl } from "./practice";
 import { BrowserCdpGateway, CdpActionUncertain, parseBrowserControlResult, type CdpAction, type CdpActionResult, type CdpScope } from "./browserCdp";
 import {
   cliRecords,
@@ -1542,14 +1542,12 @@ export class DesktopHost {
   }
 
   private openPractice(url: string): void {
-    const size = this.window?.getNormalBounds();
     const window = new BrowserWindow({
-      width: size?.width ?? 1280,
-      height: size?.height ?? 800,
+      ...practiceBounds(this.window?.getNormalBounds()),
       minWidth: MIN_SIZE.width,
       minHeight: MIN_SIZE.height,
       show: false,
-      title: "hide",
+      // The page names it (`practice.hubTitle`), so it is never taken for the main window.
       backgroundColor: __HIDE_BACKGROUND__,
       // No preload: the page stands in for this host from its address and reaches nothing here.
       webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, spellcheck: false },
@@ -1558,6 +1556,8 @@ export class DesktopHost {
     window.once("ready-to-show", () => this.present(window, true));
     window.on("closed", () => {
       if (this.practice === window) this.practice = null;
+      // Leaving the practice, by its Back to Hide or the window's own close, lands on the real Hide.
+      if (this.window && !this.window.isDestroyed()) this.present(this.window, true);
     });
     const contents = window.webContents;
     // Nothing on the practice page leaves it: the page holds its links and windows itself

@@ -44,7 +44,7 @@ export function PracticeScene({ chapter: first, theme, system, language }: Pract
   };
   return (
     <div className="h-full" data-gallery-scene="practice">
-      <PracticePlayer key={playing.run} chapter={chapter} next={next} resume={playing.resume} operator={NO_CHOICES} onStep={ignore} onStart={start} onHub={() => start(chapter)} />
+      <PracticePlayer key={playing.run} chapter={chapter} next={next} resume={playing.resume} operator={NO_CHOICES} onStep={ignore} onStart={start} onHub={() => start(chapter)} onLeave={ignore} />
     </div>
   );
 }

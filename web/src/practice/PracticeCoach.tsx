@@ -326,6 +326,8 @@ type Props = {
   /** Starts the chapter over and plays it again up to `step`, where the learner stands at its start. */
   onRewind: (step: number) => void;
   onHub: () => void;
+  /** Leaves the practice for the real Hide. */
+  onLeave: () => void;
 };
 
 /** How long the coach waits before playing the next step it replays, so the learner sees where they are going. */
@@ -334,7 +336,7 @@ const REPLAY_MS = 120;
 /** Whether a step waits for something to happen, rather than being a look the learner presses on from. */
 const acts = (step: PracticeStep) => !!(step.done || step.shown);
 
-export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, onRestart, onRewind, onHub }: Props) {
+export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, onRestart, onRewind, onHub, onLeave }: Props) {
   const { t } = useInterfaceTranslation();
   const say = (key: string, values?: Record<string, unknown>) => t(key as MessageKey, values as never) as string;
   const [index, setIndex] = useState(0);
@@ -568,6 +570,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
       <div className="pc-mode">
         <button type="button" onClick={onHub} data-practice-hub-open>{say("practice.hub")}</button>
         <span>{say("practice.mode", { number: chapter.number, title })}</span>
+        <button type="button" className="pc-leave" onClick={onLeave} data-practice-leave>{say("practice.leave")}</button>
       </div>
       {ended ? null : <div ref={bubble} key={step.id} className="pc-bubble" style={{ left: place.x, top: place.y }}>
         {place.arrow ? <div className="pc-arrow" style={place.arrow} /> : null}
@@ -576,8 +579,8 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
         <p>{words("text")}</p>
         {via ? <div className="pc-via">{via}</div> : null}
         <div className="pc-row">
-          {/* Leaving is always where the eye is, a stuck step included; it goes to the chapter list. */}
-          <button type="button" className="pc-exit" onClick={onHub} data-practice-exit>{say("practice.exit")}</button>
+          {/* Leaving is always where the eye is, a stuck step included; it goes back to the real Hide, and the chapter list keeps where it stopped. */}
+          <button type="button" className="pc-exit" onClick={onLeave} data-practice-exit>{say("practice.exit")}</button>
           <div className="pc-dots">{chapter.steps.map((row, at) => <i key={row.id} className={at === index ? "on" : at < index ? "done" : ""} />)}</div>
           {/* While a palette is up every key and press is its own; a press out here would close it. */}
           {back && !palette ? <button type="button" className="pc-back" onClick={goBack} data-practice-back>{say("practice.back")}</button> : null}
