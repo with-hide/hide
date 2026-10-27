@@ -613,8 +613,7 @@ Lineage, the mailbox identity, labels and sleep all read the session id that int
 Among the supported agents, one gets the multi-agent collaboration tier (letters, the spawn guard, Memory and the subagent count) when its official documentation or SDK types give a hook or plugin that can both put text into the prompt and refuse a tool call; today that is Claude Code and Codex, through their native hooks, OpenCode, through Hide's plugin, Pi and omp, through Hide's extension (Pi without a subagent count, since Pi runs none), and Antigravity, through Hide's `hide` block ([Antigravity: Hide's hook block](#antigravity-hides-hook-block)), with no bell yet.
 Grok keeps the Basic tier: its hook carries the spawn guard and subagent count, takes letters through its tool and turn-end events and is a bell target at rest.
 It carries no new operator prompt's letters or Memory.
-Adding an agent to the list checks, in order: the pinned Herdr lists a target for it and which folder that target needs; the vendor's documentation confirms the folder it reads skills from and the name of the program it installs; the vendor publishes a mark (`docs/BRAND.md`) or the row draws a monogram; and whether its hooks or plugins meet the collaboration tier above.
-It is then one shared declaration, its contract fixtures, the logo manifest, and the expected kit case; the web shell reads the generated `contracts/agent-adapters.json` rather than maintaining its own order, names or links.
+A new agent follows [Adding an agent](#adding-an-agent), which starts from these facts; the web shell reads the generated `contracts/agent-adapters.json` rather than maintaining its own order, names or links.
 
 ### Adding an agent
 
@@ -630,31 +629,43 @@ Prove it on the real agent first, before any code, and pin what you measure with
 - Record the agent version every fact was proven on.
   agy moved from 1.3.6 to 1.4.0 on 2026-10-16, during the work, so every fact proven on 1.3.6 had to be proven again on 1.4.0.
 
-Add the declaration in `hide-agent-adapter/src/declarations.rs`, keeping its canonical id stable across records, hook commands and device reports.
-Aliases belong on that row: every caller uses the same borrowed, case-insensitive lookup, including surrounding-whitespace normalization.
-Select hook and installation dialects implemented by `hide-agent-hooks`, session formats implemented by `hide-session`, and launch, find and usage dialects in their existing owners; the leaf crate contains data and typed selectors only.
-Declare prompt intake, spawn refusal, subagent counts, Memory, bell eligibility and passive tool-result observation independently.
-`guidance`, `memory` and `titles` are required `Capability` declarations: choose `Support::Supported` with the typed route or reader, or `Support::Unsupported(CapabilityAbsence)` with a reason, repository evidence reference and what would close the gap.
-The shared `Support` sum type also serves usage declarations; no optional field silently decides that a feature is absent.
-Here `memory` means automatic injection into the model's context, independently of storing, extracting or searching Memory cards.
-`ContextRoute` distinguishes a native hook, a guidance hook whose output reaches the model, and a plugin's prompt event; the latter carries the start guidance and Memory index on the first prompt rather than a native `SessionStart`.
-The independent context matrix and installed-command fixtures reject a different agent's route or title reader, discarded context, missing evidence and missing native start/prompt commands or Memory invocation flags.
-Plugin host suites check first and later prompt delivery, and the generated-contract drift checks preserve the Settings and journey projections.
-The journey export refuses a startable guidance-only declaration until a probe for that combination is implemented: today's combined probe proves injection through a private Memory-card token, so it cannot silently mark guidance-only support `N/A` or attest Memory support.
-The Settings `Feature::Titles` still describes readable session features; `titles` selects the native-title reader used before a background label is available, and is a separate decision.
-The required `observation` field selects `ObservationSupport::Native(HookDialect)` or `ObservationSupport::Plugin(PluginDialect)`, or `Unsupported` with a meaningful reason.
-For native support, add a payload, the required Post events and independent neutral metadata expectations to `hide-agent-hooks/tests/fixtures/observation-native.json`.
-The shared `adapter_contract` suite checks those events in the installed configuration and the fixture output, then executes the supported native and plugin routes through the built helper on Unix.
-Each installed plugin also runs its existing host suite regardless of its observation declaration; a declaration never substitutes for the native result handler or its original-result preservation checks.
-A bell target requires a prompt hook and measured menu behavior on the pinned, isolated Herdr; adding prompt intake alone never enables its bell.
-Add independent hook and session samples, or an explicit absence reason when that format is unsupported, in `hide-agent-adapter/tests/fixtures/support.json`, and add the logo or monogram to its manifest.
-Add the owner's dialect tests and feature-gate cases, including aliases, without changing the pre-migration hook-byte fixtures.
-Generate `contracts/agent-adapters.json` with the `export_web_contract` example as described in [contracts/README.md](../contracts/README.md#agent-adapters).
-Generate `contracts/agent-journey.json` with `export_journey_contract` too.
-Add the CLI pin and the local-isolation, CI-login and fake-model routes; `scripts/tests/test_agent_journey_contract.py` rejects a registered agent missing any of them.
-Every active adapter automatically participates in the full fake-model journey without a second agent list, and the lane rejects any missing row or declared cell that did not pass, including title and usage; see [VERIFICATION.md: The CI lanes](VERIFICATION.md#the-ci-lanes).
-Choose automatic or operator-named title measurement explicitly for a new session format; the exhaustive match in `hide-agent-adapter/src/journey.rs` prevents an unknown format from inheriting automatic-title behavior.
-The leaf contract tests reject missing samples, links, logos, inconsistent capability combinations and generated-contract drift, and the existing feature and isolated-Herdr e2e suites must still pass.
+Then add it in this order.
+Each line says what to add, where, and the check that fails while it is missing; "no check" marks what only a person can see.
+`python3 -m unittest scripts/tests/test_agent_journey_contract.py` reads every piece a script or a guide holds and names, in one verdict per agent, all it still lacks; the lines below call it the journey contract.
+
+1. Herdr target: the pinned Herdr lists one for the agent (`herdr integration status`) and says which folder it needs; the journey contract, against `contracts/herdr-api.schema.json`.
+2. Vendor facts: the page that names the skills folder and the program the installer puts down, and a published mark (`docs/BRAND.md`) or a monogram; no check, so the row's `doc_url` cites that page.
+3. Declaration: an `AgentId` variant and one row of `ADAPTERS` in `hide-agent-adapter/src/declarations.rs`, with a canonical id that stays stable across records, hook commands and device reports, and the aliases on the row; the compiler and `declarations_match_independent_support_samples`.
+4. Capabilities: `guidance`, `memory` and `titles` as `Support::Supported` with the typed route or reader, or `Support::Unsupported(CapabilityAbsence)` with a reason, evidence and what would close it, and prompt intake, spawn refusal, subagent counts, bell and `observation` each declared on its own; `context_and_title_support_require_matching_routes_or_documented_absences` and the bell assertions of `declarations_match_independent_support_samples`.
+5. Hook, plugin or extension: a `HookDialect` or `PluginDialect` implemented in `hide-agent-hooks`, with its Windows form, its installed-command fixtures and, for native observation, its row in `hide-agent-hooks/tests/fixtures/observation-native.json`; the compiler's exhaustive matches, `adapter_contract` and `windows_hook_command`.
+6. Session reader: a `SessionFormat` implemented in `hide-session`, and the agent's hook and session samples (or an absence reason) and feature list in `hide-agent-adapter/tests/fixtures/support.json`; `declarations_match_independent_support_samples` and the core's `all_core_gates_accept_the_same_aliases_without_enabling_other_agents`.
+7. Composer: its declaration and six captures in `hide-agent-adapter/tests/fixtures/composer/`; `tests/it/composer.rs`.
+8. Usage: every cell of its `UsageDeclaration`, then `contracts/usage-coverage.json` regenerated; `every_usage_cell_has_an_independent_declaration_and_unshipped_absences` and `usage_coverage_is_generated_from_the_complete_registry`.
+9. Launch, resume, fork and sleep: a `LaunchDialect` in its owners, with its folder-trust answer (`LaunchDialect::trusts_worktrees`, [Folder trust for the worktrees Hide makes](#folder-trust-for-the-worktrees-hide-makes)); the compiler, the start-dialect tests of `hide-agent-adapter/tests/it/contract.rs`, the core gates test, and the fake-model journey's `start_untrusted` cell.
+10. Title measurement: automatic or operator-named for its session format, in the exhaustive match of `hide-agent-adapter/src/journey.rs`; the compiler.
+11. Skills folder and kit case: a `SkillLocation`, and the agent's expected features in `hide-kit/src/tests/agent_cases.rs`; the compiler and the kit tests, which list every id.
+12. Program: the vendor's program names in `executables`, found only through `hide_platform::programs`, with a vendor install folder outside the usual ones added there; `no_product_code_outside_the_platform_looks_for_a_program_on_its_own` refuses a search of its own, and no check sees a missing folder, so install the CLI the vendor's way on each system and see Settings find it.
+13. Minimum version: `minimum` with its evidence on the row, proven on macOS, Linux and Windows; `every_supported_agent_declares_a_comparable_minimum_version_with_its_proof`, and the journey contract for its row in [The oldest version of each agent](#the-oldest-version-of-each-agent).
+14. Logo and links: its entry in `web/src/assets/agents/manifest.json`, and an `https` `doc_url` and `install_url`; `generated_web_contract_and_logo_document_sources_are_current`.
+15. Generated contracts: `contracts/agent-adapters.json` with the `export_web_contract` example and `contracts/agent-journey.json` with `export_journey_contract` ([contracts/README.md](../contracts/README.md#agent-adapters)); their drift checks in `hide-agent-adapter/tests/it/contract.rs`.
+16. CLI pin: its row in `contracts/agent-clis.json`, at or above the minimum, with an installer `scripts/install-agent-clis.py` runs on Linux, macOS and Windows; the journey contract, `test_the_installed_cli_set_matches_the_registered_agents`, `scripts/tests/test_agent_clis.py`, and the `agent CLIs` lane on all three systems.
+17. Canary: a latest-release source for its installer in `scripts/agent_journey/latest.py`; `test_every_pinned_cli_has_a_latest_source`.
+18. Journey routes: local isolation (`scripts/agent_journey/local.py`, `ROUTES`), the disposable CI home (`ci.py`, `AGENT_ENV`) and the fake model (`fake_lane.py`, `PROVIDERS`); the journey contract, then the fake-model lane, which fails a missing row or a declared cell that did not pass on any system ([VERIFICATION.md: The CI lanes](VERIFICATION.md#the-ci-lanes)).
+19. Operator watch: the agent's folder in `scripts/agent_journey/fake_private.py`, in `WATCH` or as its files in `CONFIGURATION`; the journey contract.
+20. Live check: `scripts/agent_live_check/recipes/<id>.json`; the recipe coverage check of `scripts/tests/test_agent_live_results.py`.
+21. Hide AI: its row in `PROVIDERS` and `DESCRIPTORS` and its arm in `build_backend` (`hide-ai/src/registry.rs`, [AI_PROVIDERS.md](AI_PROVIDERS.md)); `every_supported_agent_is_a_provider_in_the_adapter_order`. Whether first run checks its sign-in (`SIGN_IN_CHECKED`, `web/src/firstRun.ts`) waits on its login files being measured; no check.
+22. Guides: its row in [Support table](#support-table) and its column in that section's feature table, its row in [The oldest version of each agent](#the-oldest-version-of-each-agent), and, in [INSTALL.md: What each system supports](INSTALL.md#what-each-system-supports), its name in the agents row and its own row under Letters to an agent while it works; the journey contract. The other sentences that name each agent (this guide's program names, Herdr folders, hook reviews, folder trust and guardrails, and INSTALL.md's other rows) have no check; read them through for the agent.
+23. Every system: a Windows or Linux gap only as a cell of INSTALL.md, What each system supports, with its reason and what would close it ([AGENTS.md](../AGENTS.md)); no check.
+
+What some lines take on:
+
+- `memory` means automatic injection into the model's context, independently of storing, extracting or searching Memory cards.
+- `ContextRoute` distinguishes a native hook, a guidance hook whose output reaches the model, and a plugin's prompt event; the latter carries the start guidance and Memory index on the first prompt rather than a native `SessionStart`.
+- The journey export refuses a startable guidance-only declaration until a probe for that combination is implemented: today's combined probe proves injection through a private Memory-card token, so it cannot mark guidance-only support `N/A` or attest Memory support.
+- The Settings `Feature::Titles` describes readable session features; `titles` selects the native-title reader used before a background label is available, and is a separate decision.
+- Each installed plugin runs its existing host suite whatever its observation declaration says; a declaration never substitutes for the native result handler or its original-result preservation checks.
+- A bell target requires a prompt hook and measured menu behavior on the pinned, isolated Herdr; adding prompt intake alone never enables its bell.
+- The owner's dialect tests and feature-gate cases, aliases included, go in without changing the pre-migration hook-byte fixtures.
 
 ### What the kit puts down
 
