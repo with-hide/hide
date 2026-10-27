@@ -12,6 +12,7 @@ import { AgentMark } from "./AgentMark";
 import { useAgentLogosShown } from "./agentLogoMode";
 import { agentProductName } from "./agentAdapters";
 import { Button } from "./components/ui/button";
+import { Keycap } from "./components/ui/keycap";
 import { Input } from "./components/ui/input";
 import { Hint, Tooltip, TooltipTrigger, TooltipContent } from "./components/ui/tooltip";
 import type { AgentRow, AsyncOperation, Checkout, StripTab, TabAgent } from "./snapshot";
@@ -26,10 +27,10 @@ const NONE: AsyncOperation[] = [];
 /** Phases of a close the core is still confirming with Herdr (`operations.rs`). */
 const IN_FLIGHT = new Set(["transmitting", "awaiting_topology", "unknown"]);
 
-export function AgentDraftTab({ id, interaction, actions }: { id: string; interaction: AreaTabInteraction; actions: Actions }) {
+export function AgentDraftTab({ id, interaction, actions, number = null }: { id: string; interaction: AreaTabInteraction; actions: Actions; number?: number | null }) {
   const { t } = useInterfaceTranslation();
   const label = t("groups.newTab");
-  return <TabButton entry={{ id, source_id: id, kind: "herdr", label, preview: false }} identity={label} agentPaneCount={0} editor={null} mark={<PanelsTopLeftIcon className="size-(--size-icon-sm) shrink-0" />} active={interaction.selected} areaActive={interaction.areaActive} closing={false} closeLabel={t("shell.closeTab", { title: label })} fit={interaction.fit} dragging={interaction.dragging} onSelect={interaction.select} onClose={() => actions.closeTab(id)} onPointerDown={interaction.press} />;
+  return <TabButton entry={{ id, source_id: id, kind: "herdr", label, preview: false }} identity={label} agentPaneCount={0} editor={null} mark={<PanelsTopLeftIcon className="size-(--size-icon-sm) shrink-0" />} active={interaction.selected} areaActive={interaction.areaActive} closing={false} closeLabel={t("shell.closeTab", { title: label })} number={number} fit={interaction.fit} dragging={interaction.dragging} onSelect={interaction.select} onClose={() => actions.closeTab(id)} onPointerDown={interaction.press} />;
 }
 
 /** "closing…" while the core is still confirming a close with Herdr. */
@@ -37,7 +38,7 @@ export function closingSuffix(targetId: string, kind: "tab.close" | "pane.close"
   return operations.some((op) => op.kind === kind && op.target_id === targetId && IN_FLIGHT.has(op.phase));
 }
 
-export function AgentTab({ entry, checkout, interaction, actions, renaming, onCancelRename }: { entry: StripTab; checkout: Checkout; interaction: AreaTabInteraction; actions: Actions; renaming: boolean; onCancelRename: () => void }) {
+export function AgentTab({ entry, checkout, interaction, actions, renaming, onCancelRename, number = null }: { entry: StripTab; checkout: Checkout; interaction: AreaTabInteraction; actions: Actions; renaming: boolean; onCancelRename: () => void; number?: number | null }) {
   const { t } = useInterfaceTranslation();
   const operations = useShellStore((s) => s.rest?.status?.async_operations) ?? NONE;
   const tab = checkout.tabs.find((row) => row.id === entry.source_id);
@@ -51,7 +52,7 @@ export function AgentTab({ entry, checkout, interaction, actions, renaming, onCa
   // Native subagents live inside that pane and are not additional panes.
   const agentPaneCount = tab?.panes.reduce((count, pane) => count + Number(pane.identity_label !== null), 0) ?? 0;
   const identity = `${agent ? t("panes.agent.tabIdentityAgent", { kind: agentProductName(agent.agent_kind), label: entry.label }) : t("panes.agent.tabIdentityTerminal", { label: entry.label })}${agent ? ` · ${markWords(t, agent)}` : ""}${agentPaneCount > 0 ? ` · ${t("panes.agent.tabPaneCount", { count: agentPaneCount })}` : ""}`;
-  return <TabButton recordAgent={recordAgent} entry={entry} editor={renaming ? <TabRenameInput key={entry.source_id} entry={entry} actions={actions} onCancel={onCancelRename} /> : null} identity={[identity, recordAgent && recordWords(t, recordAgent)].filter(Boolean).join(" · ")} agentPaneCount={agentPaneCount} mark={<TabMark agent={agent} />} active={interaction.selected} areaActive={interaction.areaActive} closeDisabled={moving} closing={closingSuffix(entry.source_id, "tab.close", operations)} closeLabel={t("shell.closeTab", { title: entry.label })} fit={interaction.fit} dragging={interaction.dragging} onSelect={interaction.select} onClose={() => actions.closeTab(entry.source_id)} onPointerDown={event => { if (!moving) interaction.press(event); }} />;
+  return <TabButton recordAgent={recordAgent} entry={entry} editor={renaming ? <TabRenameInput key={entry.source_id} entry={entry} actions={actions} onCancel={onCancelRename} /> : null} identity={[identity, recordAgent && recordWords(t, recordAgent)].filter(Boolean).join(" · ")} agentPaneCount={agentPaneCount} mark={<TabMark agent={agent} />} active={interaction.selected} areaActive={interaction.areaActive} closeDisabled={moving} closing={closingSuffix(entry.source_id, "tab.close", operations)} closeLabel={t("shell.closeTab", { title: entry.label })} number={number} fit={interaction.fit} dragging={interaction.dragging} onSelect={interaction.select} onClose={() => actions.closeTab(entry.source_id)} onPointerDown={event => { if (!moving) interaction.press(event); }} />;
 }
 
 /**
@@ -135,6 +136,7 @@ const TabButton = memo(function TabButton({
   closing,
   closeLabel,
   closeDisabled = false,
+  number,
   fit: slotFit,
   dragging,
   areaActive,
@@ -152,6 +154,8 @@ const TabButton = memo(function TabButton({
   closing: boolean;
   closeLabel: string;
   closeDisabled?: boolean;
+  /** The number ⌘n selects this tab by, shown while a ⌘ hold reveals it; null otherwise. */
+  number: number | null;
   /** How the tab draws its contents in its slot (`AreaTabInteraction.fit`). */
   fit: TabFit;
   dragging: boolean;
@@ -215,6 +219,7 @@ const TabButton = memo(function TabButton({
         </Button>
       </Hint>
       {active && areaActive ? <span className="absolute inset-x-0 bottom-0 h-[var(--size-tab-indicator)] bg-primary" /> : null}
+      {number !== null ? <Keycap number={number} className="right-auto left-xxs" /> : null}
 
     </div>
     </Hint>

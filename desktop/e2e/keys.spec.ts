@@ -106,6 +106,7 @@ test("pane chords: the macOS app's set comes across, runs once, and Settings edi
   const fixed = page.locator('[data-settings-group="numbered-chords"]');
   await expect(fixed).toContainText("Hold ⌘ to see the numbers");
   await expect(fixed).toContainText("Hold ⌥ to see the numbers");
+  await expect(fixed).toContainText("Hold ⌥⌘ to see the numbers");
   await page.locator('[data-shortcut-record="split_right"]').click();
   await page.keyboard.press("Meta+Alt+KeyR");
   await expect(page.locator('[data-shortcut-effective="split_right"]')).toHaveText("⌥⌘R");

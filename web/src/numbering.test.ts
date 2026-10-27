@@ -4,7 +4,8 @@ import { legacyAgentRow } from "../test/legacyAgentRow";
 import { describe, expect, it } from "vitest";
 import type { TreeRow } from "./agentRow";
 import { numberedTarget } from "./keyboard";
-import { agentListOrder, numberedAgents, numberedDevices, sidebarAgentNumbers, sidebarNumbers, taskListOrder } from "./numbering";
+import { agentListOrder, numberedAgents, numberedDevices, numberedTabs, numberOf, sidebarAgentNumbers, sidebarNumbers, taskListOrder } from "./numbering";
+import type { AgentLayout } from "./agentLayout";
 import type { TaskCardScope } from "./agentScope";
 
 import type { AgentRow, Checkout, SnapshotRest, Workspace } from "./snapshot";
@@ -199,5 +200,34 @@ describe("⌥n over the 태스크 list (sidebar-task-lens)", () => {
     const state = { rest: rest("projects"), agents: rows };
     expect([...sidebarNumbers(state, { raisedOpen: [], taskFoldsOpen: ["rest:"] }).values()]).toEqual([...numberedAgents(agentListOrder(state)).values()]);
     expect([...sidebarNumbers(state, { raisedOpen: [], taskFoldsOpen: [] }).values()]).not.toEqual(["ask", "works", "parent", "waits"]);
+  });
+});
+
+describe("numberedTabs", () => {
+  const area = (id: string, tabs: string[]) => ({ area: { id, active: tabs[0] ?? null, displays: tabs.map((tab) => ({ id: tab })) } });
+  const layout = (root: AgentLayout["root"], active: string): AgentLayout => ({ root, active_area: active, canvases: {}, limits: { areas: 4, depth: 2, displays: 64 }, display_count: 0 });
+
+  it("numbers the tabs left to right and gives ⌘9 the last, however few there are", () => {
+    const numbers = numberedTabs(layout(area("a1", ["t1", "t2", "t3"]), "a1"));
+    expect([1, 2, 3, 9].map((digit) => numbers.get(digit as 1))).toEqual(["t1", "t2", "t3", "t3"]);
+    expect(numbers.get(4)).toBeUndefined();
+    // The last tab's keycap reads its place, not 9.
+    expect(numberOf(numbers, "t3")).toBe(3);
+  });
+
+  it("past nine tabs, ⌘1-8 are the first eight and ⌘9 the last; the ones between have no number", () => {
+    const tabs = Array.from({ length: 11 }, (_, index) => `t${index + 1}`);
+    const numbers = numberedTabs(layout(area("a1", tabs), "a1"));
+    expect(numbers.get(8)).toBe("t8");
+    expect(numbers.get(9)).toBe("t11");
+    expect(numberOf(numbers, "t9")).toBeNull();
+    expect(numberOf(numbers, "t11")).toBe(9);
+  });
+
+  it("counts the Agent area in use when the column is split, and nothing in an empty one", () => {
+    const root = { split: { id: "s1", axis: "row" as const, ratio: 0.5, first: area("a1", ["left1", "left2"]), second: area("a2", ["right1"]) } };
+    expect(numberedTabs(layout(root, "a2")).get(1)).toBe("right1");
+    expect(numberedTabs(layout(root, "a1")).get(2)).toBe("left2");
+    expect(numberedTabs(layout(area("a1", []), "a1")).size).toBe(0);
   });
 });

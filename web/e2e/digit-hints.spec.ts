@@ -1,5 +1,5 @@
 // The browser host has no numbered chords (PRD electron-digit-shortcuts-hints
-// B3, D-09): holding ⌘ or ⌥ shows no keycap, ⌘2 and ⌥2 send nothing, and the
+// B3, D-09): holding ⌘ or ⌥ shows no keycap, ⌘2, ⌥2 and ⌥⌘2 send nothing, and the
 // ⌘/ sheet lists every family as not on this host.
 
 import { expect, test } from "@playwright/test";
@@ -40,14 +40,16 @@ test("no keycap on a ⌘ or ⌥ hold, nothing on ⌘2 or ⌥2, and the sheet say
     await screenshot(page, "digit-hints-browser-alt-hold");
     await page.keyboard.up("Alt");
 
-    // B3: ⌘2 is not a chord of this host, so nothing moves.
+    // B3: ⌘2 and ⌥⌘2 are not chords of this host, so nothing moves.
     const focused = sent.get("focus_tab") ?? 0;
+    await page.keyboard.press(chord("select_tab_2", "electron"));
     await page.keyboard.press(chord("select_device_2", "electron"));
     await page.keyboard.press("Alt+Digit2");
     await quietFor(page, 600, "a chord with a modifier left down reveals nothing");
     expect(sent.get("focus_tab") ?? 0).toBe(focused);
     expect(sent.get("focus_pane") ?? 0).toBe(0);
     expect(sent.get("focus_device") ?? 0).toBe(0);
+    expect(sent.get("agent_layout") ?? 0).toBe(0);
     await expect(canvas).toHaveAttribute("data-canvas", herdr.tab);
 
     // B3, B4: the sheet names every family, without a chord.
@@ -55,6 +57,8 @@ test("no keycap on a ⌘ or ⌥ hold, nothing on ⌘2 or ⌥2, and the sheet say
     const sheet = page.locator("[data-shortcut-sheet]");
     await expect(sheet).toBeVisible();
     await expect(sheet.locator('[data-shortcut="select_device_1"] kbd')).toHaveText("-");
+    await expect(sheet.locator('[data-shortcut="select_tab_1"]')).toContainText("Select tab 1-9");
+    await expect(sheet.locator('[data-shortcut-absent="select_tab_1"]')).toHaveText("not on this host");
     await expect(sheet.locator('[data-shortcut="select_agent_1"]')).toContainText("Select agent 1-9");
     await expect(sheet.locator('[data-shortcut-absent="select_agent_1"]')).toHaveText("not on this host");
     await expect(sheet.locator('[data-shortcut="select_device_1"]')).toContainText("Select device 1-9");
