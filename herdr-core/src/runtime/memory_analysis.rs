@@ -113,6 +113,19 @@ pub(super) struct MemoryWork {
     failed_reads: FailedReads,
     /// Each Project's analysis state and last change, by Memory's Project id.
     pub(super) projects: HashMap<String, ProjectMemoryWork>,
+    /// What the last pass's walk of each Project decided from, for the walks
+    /// that left nothing to do; the next pass skips a walk whose inputs are
+    /// the same. One entry per enabled Project at most.
+    walks: HashMap<String, WalkMemo>,
+}
+
+/// A Project's walk that found nothing to read, record or analyze: what its
+/// sessions and their part in the pass were ([`walk_key`]), and when the first
+/// of them would come due by the clock alone.
+#[derive(Clone, Debug, PartialEq)]
+struct WalkMemo {
+    key: String,
+    due_at_unix_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -175,6 +188,9 @@ struct PassOutcome {
     /// judges by a fresh weekly figure.
     wants_usage: bool,
     failed_reads: FailedReads,
+    /// The memos of the walks this pass skipped or made with nothing left to
+    /// do; every other Project is walked by the next pass.
+    walks: HashMap<String, WalkMemo>,
 }
 
 impl PassOutcome {
@@ -534,6 +550,7 @@ impl Runtime {
             language,
             cancel,
             failed_reads: work.failed_reads.clone(),
+            walks: work.walks.clone(),
             suggestions: self.suggestions_work.client.clone(),
         };
         let report_context = context.clone();
@@ -585,6 +602,7 @@ impl Runtime {
         work.closed_sessions
             .retain(|session| !outcome.settled.contains(session));
         work.failed_reads = outcome.failed_reads;
+        work.walks = outcome.walks;
         if outcome.wants_usage {
             work.usage_wanted_until_unix_ms = now_ms().saturating_add(USAGE_WANTED_MS);
         }
@@ -655,6 +673,7 @@ impl Runtime {
         if moved {
             self.cancel_memory_pass();
         }
+        self.memory_work.walks.clear();
         let mut changed = false;
         for project in self.memory_work.projects.values_mut() {
             if project.retry_at_unix_ms != 0
@@ -687,6 +706,7 @@ impl Runtime {
         if matches!(project.analysis, MemoryAnalysisState::AiNotReady) {
             project.analysis = MemoryAnalysisState::Idle;
         }
+        self.memory_work.walks.remove(project_id);
         self.memory_work.next_pass_unix_ms = 0;
     }
 
@@ -694,6 +714,7 @@ impl Runtime {
     /// deleted, and stops a pass that may be analyzing it.
     pub(super) fn quiet_project_memory(&mut self, project_id: &str) {
         self.cancel_memory_pass();
+        self.memory_work.walks.remove(project_id);
         if let Some(project) = self.memory_work.projects.get_mut(project_id) {
             project.analysis = MemoryAnalysisState::Idle;
             project.retry_at_unix_ms = 0;
@@ -953,6 +974,8 @@ struct PassInput {
     language: hide_ai::OutputLanguage,
     cancel: CancelToken,
     failed_reads: FailedReads,
+    /// What the last pass's walks left nothing to do in, by Project.
+    walks: HashMap<String, WalkMemo>,
     /// Where the cards a session taught go as the operator's corrections
     /// (PRD hide-ai-suggestions B4, D-23: only a Project with Memory on has
     /// them).
@@ -1370,8 +1393,44 @@ fn walk_project(
             "message": message,
         })),
     }
+    // Nothing the walk decides from moved since a walk that left nothing to
+    // do, and no session came due by the clock: the walk would read, record
+    // and queue nothing, so it is not made (the evidence and card checks
+    // around it keep their own schedules and run).
+    let key = walk_key(input, project_id, &sessions);
+    if let Some(memo) = input.walks.get(project_id).filter(|memo| {
+        key.as_ref() == Some(&memo.key) && memo.due_at_unix_ms.is_none_or(|due| now_ms() < due)
+    }) {
+        outcome.walks.insert(project_id.to_owned(), memo.clone());
+        reached.extend(
+            sessions
+                .iter()
+                .map(|session| (session.agent.as_str(), session.id.clone()))
+                .filter(|key| input.closed.contains(key)),
+        );
+        maintain_cards(
+            input,
+            sessions_node,
+            own_home(input, node),
+            store,
+            &mut facts,
+            project_id,
+            root,
+            deferred,
+            tally,
+            outcome,
+            maintenance_calls,
+            report,
+        );
+        return Ok(());
+    }
+    // Whether this walk leaves nothing for the next to do, and when its first
+    // session would come due by the clock.
+    let mut settled_walk = key.is_some();
+    let mut due_at_unix_ms: Option<u64> = None;
     for session in sessions {
         if input.cancel.is_cancelled() {
+            settled_walk = false;
             break;
         }
         let key = (session.agent.as_str(), session.id.clone());
@@ -1409,13 +1468,19 @@ fn walk_project(
             continue;
         }
         let Ok(stat) = session_stat(sessions_node, &session, SESSION_CALL_TIMEOUT) else {
+            settled_walk = false;
             continue;
         };
         let version = (stat.size, stat.modified_unix_ms);
         if !input.live.contains(&key) {
             match read_receipts(store, sessions_node, project_id, &session, &stat) {
-                Ok(()) => outcome.read_succeeded(RECEIPTS_FAILED, &session),
+                Ok(read) => {
+                    // A read moved the cursor; the next walk confirms it caught up.
+                    settled_walk &= !read;
+                    outcome.read_succeeded(RECEIPTS_FAILED, &session);
+                }
                 Err(message) => {
+                    settled_walk = false;
                     outcome.read_failed(RECEIPTS_FAILED, project_id, &session, version, &message);
                 }
             }
@@ -1424,19 +1489,30 @@ fn walk_project(
         if closed && !pending {
             outcome.settled.insert(key.clone());
         }
-        if input.router.is_none()
-            || deferred.is_some()
-            || input.held.contains(project_id)
-            || tally.error.is_some()
-        {
+        // Hide AI off and a held Project are in the walk's key; a deferral and
+        // a provider failure are not, so a session they hold back is walked
+        // again.
+        if input.router.is_none() || input.held.contains(project_id) {
             continue;
         }
-        let quiet = stat
+        if deferred.is_some() || tally.error.is_some() {
+            settled_walk &= !pending;
+            continue;
+        }
+        let quiet_at = stat
             .modified_unix_ms
-            .is_some_and(|modified| now_ms().saturating_sub(modified) >= MEMORY_QUIESCENCE_MS);
-        if !pending || !((closed && !input.live.contains(&key)) || quiet) {
+            .map(|modified| modified.saturating_add(MEMORY_QUIESCENCE_MS));
+        let quiet = quiet_at.is_some_and(|at| now_ms() >= at);
+        if !pending {
             continue;
         }
+        if !((closed && !input.live.contains(&key)) || quiet) {
+            if let Some(at) = quiet_at {
+                due_at_unix_ms = Some(due_at_unix_ms.map_or(at, |due| due.min(at)));
+            }
+            continue;
+        }
+        settled_walk = false;
         outcome.wants_usage = true;
         // A held-back call is logged, never shown: the Project does not turn
         // "analyzing" for a pass that will ask nothing (B5).
@@ -1460,16 +1536,19 @@ fn walk_project(
             stat,
         });
     }
-    // The operator's own instruction files are this machine's.
-    let home = input
-        .home
-        .as_ref()
-        .filter(|(own, _)| own == node)
-        .map(|(_, home)| home.as_path());
+    if let Some(key) = key.filter(|_| settled_walk) {
+        outcome.walks.insert(
+            project_id.to_owned(),
+            WalkMemo {
+                key,
+                due_at_unix_ms,
+            },
+        );
+    }
     maintain_cards(
         input,
         sessions_node,
-        home,
+        own_home(input, node),
         store,
         &mut facts,
         project_id,
@@ -1481,6 +1560,49 @@ fn walk_project(
         report,
     );
     Ok(())
+}
+
+/// The operator's own instruction files are this machine's.
+fn own_home<'a>(input: &'a PassInput, node: &NodeId) -> Option<&'a Path> {
+    input
+        .home
+        .as_ref()
+        .filter(|(own, _)| own == node)
+        .map(|(_, home)| home.as_path())
+}
+
+/// What a Project's walk decides from besides the store it writes and the
+/// clock: each listed session with its file's stamp and whether a pane holds
+/// it, let it go or an agent started it, and whether Hide AI may be asked and
+/// the Project waits for a retry. `None` when a session has no stamp
+/// (OpenCode's, an older node's), so its Project is walked on every pass.
+fn walk_key(input: &PassInput, project_id: &str, sessions: &[ProjectSession]) -> Option<String> {
+    let mut parts = vec![
+        project_id.to_owned(),
+        input.router.is_some().to_string(),
+        input.held.contains(project_id).to_string(),
+    ];
+    for session in sessions {
+        let key = (session.agent.as_str(), session.id.clone());
+        let part = serde_json::to_string(&(
+            session.agent.as_str(),
+            &session.id,
+            &session.locator,
+            &session.checkout_path,
+            session.stamp.as_ref()?,
+            &session.availability,
+            session.started_at_unix_ms,
+            session.updated_at_unix_ms,
+            input.live.contains(&key),
+            input.closed.contains(&key),
+            input.delegated.contains(&session.id),
+        ))
+        .ok()?;
+        parts.push(part);
+    }
+    Some(digest(
+        &parts.iter().map(String::as_str).collect::<Vec<_>>(),
+    ))
 }
 
 /// Re-verifies the Project's unverified cards and checks the ones about to
@@ -1728,20 +1850,21 @@ fn cursor_behind(
 }
 
 /// Records the receipts the session stored past the receipt cursor: one
-/// bounded read per pass, so a long file is caught up over several.
+/// bounded read per pass, so a long file is caught up over several. Answers
+/// whether it read.
 fn read_receipts(
     store: &mut MemoryStore,
     sessions_node: &dyn NodeLink,
     project_id: &str,
     session: &ProjectSession,
     stat: &hide_node_link::sessions::SessionStat,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let provider = session.agent.as_str();
     let saved = store
         .load_cursor(CursorReader::Receipts, project_id, provider, &session.id)
         .map_err(|error| error.to_string())?;
     if !cursor_behind(saved.as_ref(), stat) {
-        return Ok(());
+        return Ok(false);
     }
     // Joined as the label read joins a message's parts, so a receipt in a
     // later part is named by the same turn whichever reader finds it.
@@ -1783,7 +1906,7 @@ fn read_receipts(
         )
         .map_err(|error| error.to_string())?;
     log_skipped("receipts.records_skipped", project_id, session, &read);
-    Ok(())
+    Ok(true)
 }
 
 /// Logs the records a read passed over, by reason, most often a tool result
@@ -3030,6 +3153,9 @@ mod tests {
         node: Arc<dyn NodeLink>,
         /// What the last pass remembered, as the runtime keeps it.
         failed_reads: std::cell::RefCell<FailedReads>,
+        /// What the last pass's walks left nothing to do in, as the runtime
+        /// keeps it.
+        walks: std::cell::RefCell<HashMap<String, WalkMemo>>,
         check_states: std::cell::RefCell<Vec<(MemoryAnalysisState, Option<u64>)>>,
     }
 
@@ -3126,6 +3252,7 @@ mod tests {
                 }),
                 node,
                 failed_reads: Default::default(),
+                walks: Default::default(),
                 check_states: Default::default(),
             };
             fixture.write(&fixture.lines);
@@ -3239,6 +3366,7 @@ mod tests {
                 language: hide_ai::OutputLanguage::English,
                 cancel: CancelToken::new(),
                 failed_reads: self.failed_reads.borrow().clone(),
+                walks: self.walks.borrow().clone(),
                 suggestions: None,
             };
             let mut reports = Vec::new();
@@ -3263,6 +3391,7 @@ mod tests {
                 }
             });
             *self.failed_reads.borrow_mut() = outcome.failed_reads.clone();
+            *self.walks.borrow_mut() = outcome.walks.clone();
             (reports, outcome)
         }
 
@@ -3296,6 +3425,7 @@ mod tests {
                 language: hide_ai::OutputLanguage::English,
                 cancel: CancelToken::new(),
                 failed_reads: Default::default(),
+                walks: HashMap::new(),
                 suggestions: None,
             };
             let mut store = self.store();
@@ -3621,6 +3751,102 @@ mod tests {
         drop(file);
         assert!(fixture.pass(false, false).is_empty());
         assert_eq!(fixture.calls(), 1);
+    }
+
+    /// Whether the session's receipt cursor is saved: a walk that reads its
+    /// receipts saves it, and one that is not made leaves it as it is.
+    fn receipt_cursor(fixture: &Fixture) -> bool {
+        fixture
+            .store()
+            .load_cursor(
+                CursorReader::Receipts,
+                &fixture.project_id,
+                "claude",
+                SESSION,
+            )
+            .unwrap()
+            .is_some()
+    }
+
+    /// Takes the receipt cursor away behind the pass's back, so the next walk
+    /// made reads the receipts again and saves it.
+    fn forget_receipt_cursor(fixture: &Fixture) {
+        rusqlite::Connection::open(&fixture.database)
+            .unwrap()
+            .execute("DELETE FROM receipt_cursors", [])
+            .unwrap();
+    }
+
+    #[test]
+    fn a_walk_whose_sessions_did_not_move_is_skipped_until_one_moves_or_comes_due() {
+        let fixture = Fixture::new();
+        // The first walk records the receipt; the next finds nothing to read
+        // and leaves nothing to do, so the walk after it is not made.
+        assert!(fixture.pass(false, false).is_empty());
+        let seeded = |store: &MemoryStore| store.item_by_number(&fixture.project_id, 1).unwrap();
+        assert_eq!(seeded(&fixture.store()).unwrap().provided_session_count, 1);
+        assert!(fixture.pass(false, false).is_empty());
+        forget_receipt_cursor(&fixture);
+        assert!(fixture.pass(false, false).is_empty());
+        assert!(!receipt_cursor(&fixture));
+
+        // A walk whose first session came due by the clock is made again.
+        for memo in fixture.walks.borrow_mut().values_mut() {
+            memo.due_at_unix_ms = Some(1);
+        }
+        assert!(fixture.pass(false, false).is_empty());
+        assert!(receipt_cursor(&fixture));
+
+        // So is one after the transcript grew, and one whose pane let the
+        // session go, which is analyzed at once (B2).
+        assert!(fixture.pass(false, false).is_empty());
+        assert!(fixture.pass(false, false).is_empty());
+        forget_receipt_cursor(&fixture);
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&fixture.locator)
+            .unwrap();
+        std::io::Write::write_all(
+            &mut file,
+            format!(
+                "{}\n",
+                json!({"type": "user", "sessionId": SESSION, "cwd": fixture.root,
+                    "timestamp": "2026-10-11T00:01:00Z", "origin": {"kind": "human"},
+                    "message": {"role": "user", "content": "And lint before tests"}})
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        drop(file);
+        assert!(fixture.pass(false, false).is_empty());
+        assert!(receipt_cursor(&fixture));
+        assert!(fixture.pass(false, false).is_empty());
+        fixture.answer(&[]);
+        assert_eq!(fixture.pass(false, true), ["analyzing", "learned one"]);
+        assert_eq!(fixture.calls(), 1);
+    }
+
+    #[test]
+    fn a_skipped_walk_comes_due_when_its_first_pending_session_turns_quiet() {
+        let fixture = Fixture::new();
+        // Written ten minutes ago: quiet, and so due for analysis, twenty
+        // minutes on.
+        let modified_s = now_ms() / 1000 - 10 * 60;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&fixture.locator)
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(modified_s))
+            .unwrap();
+        fixture.pass(false, false);
+        let (_, outcome) = fixture.pass_for(("claude", SESSION.to_owned()), false, false);
+        assert_eq!(
+            outcome.walks[&fixture.project_id].due_at_unix_ms,
+            Some(modified_s * 1000 + MEMORY_QUIESCENCE_MS)
+        );
+        // With Hide AI off nothing comes due: the walk records receipts only.
+        let (_, outcome) = fixture.run(("claude", SESSION.to_owned()), false, false, &[], false);
+        assert_eq!(outcome.walks[&fixture.project_id].due_at_unix_ms, None);
     }
 
     #[test]
@@ -4915,6 +5141,7 @@ mod tests {
             language: hide_ai::OutputLanguage::English,
             cancel: CancelToken::new(),
             failed_reads: Default::default(),
+            walks: HashMap::new(),
             suggestions: None,
         };
         let outcome = run_pass(&input, &mut |report| {
@@ -5233,6 +5460,7 @@ mod tests {
             language: hide_ai::OutputLanguage::English,
             cancel: CancelToken::new(),
             failed_reads: Default::default(),
+            walks: HashMap::new(),
             suggestions: None,
         };
         let tasks = || {
@@ -5356,6 +5584,7 @@ mod tests {
                 language: hide_ai::OutputLanguage::English,
                 cancel: CancelToken::new(),
                 failed_reads: Default::default(),
+                walks: HashMap::new(),
                 suggestions: None,
             };
             let tasks = || {
@@ -5499,6 +5728,7 @@ mod tests {
             language: hide_ai::OutputLanguage::English,
             cancel: CancelToken::new(),
             failed_reads: Default::default(),
+            walks: HashMap::new(),
             suggestions: None,
         };
         let tasks = || {

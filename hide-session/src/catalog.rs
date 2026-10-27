@@ -69,6 +69,12 @@ pub struct ProjectSession {
     pub title: Option<String>,
     pub event_count: usize,
     pub availability: SessionAvailability,
+    /// The session file's stamp (`stamp::stamp_at`) when the listing read it,
+    /// for a reader that compares two listings; `None` for a session kept in
+    /// no file of its own (OpenCode), a file whose stamp could not be read,
+    /// and every row of a node that predates the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stamp: Option<String>,
 }
 
 #[derive(Debug)]
@@ -221,15 +227,14 @@ impl SessionCatalog {
             }
             // Taken before the bytes are read: a change during the read
             // leaves a stamp older than the bytes, so the next call reads again.
-            let stamp = file_cache::keeps(agent)
-                .then(|| crate::stamp::stamp_at(&path))
-                .flatten();
+            let stamp = crate::stamp::stamp_at(&path);
+            let kept_stamp = file_cache::keeps(agent).then(|| stamp.clone()).flatten();
             let Some(cwd) = (if agent == Agent::Cursor {
                 crate::cursor::header(&self.home, &path)
                     .ok()
                     .map(|header| header.cwd)
             } else {
-                file_cache::header_cwd(&path, stamp.clone(), || session_cwd(agent, &path))
+                file_cache::header_cwd(&path, kept_stamp.clone(), || session_cwd(agent, &path))
             }) else {
                 continue;
             };
@@ -240,12 +245,13 @@ impl SessionCatalog {
                 continue;
             }
             let session = if file_cache::keeps(agent) {
-                Some(file_cache::session(&path, stamp, |earlier| {
+                Some(file_cache::session(&path, kept_stamp, |earlier| {
                     list_transcript(agent, &path, &cwd, earlier.and_then(|(_, kept)| kept))
                 }))
             } else {
                 read_project_session(&self.home, agent, path.clone(), cwd.clone())
-            };
+            }
+            .map(|session| ProjectSession { stamp, ..session });
             if let Some(session) = session {
                 sessions.push(session);
             }
@@ -470,6 +476,7 @@ fn read_project_session(
             title: None,
             event_count: events.len(),
             availability,
+            stamp: None,
         });
     }
     let metadata = fs::metadata(&path).ok();
@@ -552,6 +559,7 @@ fn read_project_session(
         availability: unavailable.map_or(SessionAvailability::Available, |reason| {
             SessionAvailability::Unavailable { reason }
         }),
+        stamp: None,
     })
 }
 
@@ -674,6 +682,7 @@ fn list_transcript(
                 reason: reason.clone(),
             },
         },
+        stamp: None,
     };
     (session, read.ok())
 }
