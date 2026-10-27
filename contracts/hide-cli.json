@@ -2950,7 +2950,7 @@
                     "required": false,
                     "requires": [],
                     "value": {
-                        "type": "text"
+                        "type": "commit"
                     }
                 },
                 {
@@ -3453,7 +3453,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:36bf80ee70278290b2388e302ad09bfeb788995735f73456b0dac800a2dcc8ee",
+    "digest": "sha256:1e34a7f1147ff31a6eafa095ca9d3454b85cb002f87c6721db609cdd910efbed",
     "envelopes": {
         "agent": {
             "answer": "value",
@@ -3500,6 +3500,7 @@
     "value_types": {
         "approval": "not blank, at most 256 bytes, no control characters",
         "body": "not blank, at most 16384 bytes",
+        "commit": "7 to 64 hexadecimal digits",
         "json": "a JSON document of the shape hide mission help or hide plan help shows",
         "key": "non-empty, at most 256 bytes, no control characters, does not start with -",
         "one_of": "one of the listed values",

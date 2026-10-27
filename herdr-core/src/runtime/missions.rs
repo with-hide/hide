@@ -56,6 +56,10 @@ pub struct MissionView {
     /// Made before node criteria: its nodes show their sentence only and
     /// nothing is gated (PRD mission-map-git-criteria B23).
     pub exempt: bool,
+    /// Settings › Conductor's review and verify defaults as they were when
+    /// the mission was created, which its plan follows (D-22, B36); none
+    /// for a mission from before them.
+    pub checkers: Option<crate::missions::CheckerDefaults>,
     pub conductor: ConductorView,
     pub nodes: Vec<NodeView>,
     pub merge_order: Vec<String>,
@@ -1603,6 +1607,7 @@ impl Runtime {
             scope: mission.scope,
             cap: mission.cap,
             exempt: mission.exempt,
+            checkers: mission.checkers.clone(),
             conductor: ConductorView {
                 pane_id: mission.conductor.actor.pane_id.clone(),
                 name: mission.conductor.actor.name.clone(),

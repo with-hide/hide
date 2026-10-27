@@ -802,6 +802,7 @@ A node is done only when its finish lines are (PRD mission-map-git-criteria D-09
 - `hide mission defect <node> --found-by <node> --line <text>` adds the defect as a line of the node it names (at most 16, `mission_defects_too_many`), opens that node again (`reopened`, a `reopened` event, back to working), and the same defect again changes nothing (D-21, B21).
 - `--status done` on a node with a line open or failed is refused `mission_criteria_unmet` with the lines, and a close as `done` or `merge_wait` with a node neither done nor dropped `mission_nodes_unfinished`, so a failed node holds the close until it is dropped (B9, B10); a cancel is never held.
 - The view gives each node its lines as they stand now (`criteria`), how many are met and skipped (`criteria_met`, `criteria_skipped`) and how often it was reopened; a skip records a `skipped` event.
+- A mission keeps Settings › Conductor's review and verify defaults (`checkers`: mode `conductor`, `none`, `one` or `many`, rule, count 2 to 5, agent, model, effort and `other_vendor`) as they were when it was created, shown by `hide mission show`, so an edit applies from the next mission (D-22, B36).
 - A mission made before node criteria is read `exempt`: its nodes and close are not held, and it shows as it was (D-19).
 
 An outside node (`kind: external`, `external: {"pr": <n>}` or `{"branch": <name>}`, no worker, delivery, criteria or checks, `mission_external_invalid` otherwise) is followed to main by the core and never by its Conductor, which cannot set it done (D-20, B19, B20).

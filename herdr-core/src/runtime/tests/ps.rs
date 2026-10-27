@@ -270,6 +270,7 @@ fn mission(
         scope: MissionScope::Pr,
         cap: 2,
         exempt: false,
+        checkers: None,
         conductor: ConductorView {
             pane_id: conductor.into(),
             name: conductor.into(),

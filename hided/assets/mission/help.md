@@ -88,7 +88,7 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
   It adds no review and no screenshot by default.
 - A review or a verify is a checker on the node, not a node of its own: `checks` lists at most one `review` and one `verify`, each with one to five agents in `by` (worker objects) and, for several, `rule` `all` (the default) or `majority` (`mission_checkers_invalid` otherwise).
   Each adds the line `review` or `verify`, which passes only when the checker recorded it, never the node's worker; a checker the node's worker is refused (`mission_checker_is_worker`).
-  Follow `checkers` from `hide mission settings`: `none` adds no checker, `one` one, `many` `count` of them under `rule`, and `conductor` leaves it to you; with `other_vendor`, prefer an agent of another company than the node's worker, and name its model and effort as the setting says.
+  Follow the mission's `checkers` in `hide mission show`, Settings › Conductor's review and verify defaults as they were when it was created: `none` adds no checker, `one` one, `many` `count` of them under `rule`, and `conductor` leaves it to you; with `other_vendor`, prefer an agent of another company than the node's worker, and name its model and effort as the setting says.
 - One change node is one pull request unless the operator asked to review several together.
 - Stack a pull request on another only when it needs that unmerged change; otherwise every change starts from main.
   Merge from the bottom of a stack up, or as the repository's own rules say.

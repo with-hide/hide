@@ -49,7 +49,7 @@ const PR_TEXT = `#${PR}`;
 const NODES = [node("spec", { status: "done" }), node("api", { status: "working", pr: PR, depends_on: ["spec"] }), node("ui", { depends_on: ["api"] })];
 
 function mission(extra: Partial<Mission> = {}): Mission {
-  return { id: "mission-1", title: "Ship the API", workspace_id: "w", project: "/repo", checkout_path: "/repo", device_id: "mac", status: "running", scope: "pr", cap: 4, exempt: false, conductor: { pane_id: "p1", name: "conductor", agent_kind: "claude", session: SESSION, present: true, takes_answers: true }, nodes: NODES, merge_order: [], check: null, github: null, decision: null, question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: 1, closed_at_unix_ms: null, running: 1, stale: false, github_stale: false, github_read_at_unix_ms: null, ...extra };
+  return { id: "mission-1", title: "Ship the API", workspace_id: "w", project: "/repo", checkout_path: "/repo", device_id: "mac", status: "running", scope: "pr", cap: 4, exempt: false, checkers: null, conductor: { pane_id: "p1", name: "conductor", agent_kind: "claude", session: SESSION, present: true, takes_answers: true }, nodes: NODES, merge_order: [], check: null, github: null, decision: null, question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: 1, closed_at_unix_ms: null, running: 1, stale: false, github_stale: false, github_read_at_unix_ms: null, ...extra };
 }
 
 function agent(pane: string): AgentRow {

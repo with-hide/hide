@@ -153,7 +153,7 @@ export function landingMission(nowMs: number, agents: AgentRow[]): Mission {
   ];
   return {
     id: "mission-export", title: "Invoice export", workspace_id: PROJECT, project: "/work/billing-app", checkout_path: "/work/billing-app", device_id: "local",
-    status: "running", scope: "pr", cap: 4, exempt: false,
+    status: "running", scope: "pr", cap: 4, exempt: false, checkers: null,
     conductor: { pane_id: LEAD_PANE, name: "Invoice export · Conductor", agent_kind: "claude", session: leadSession(agents), present: true, takes_answers: true },
     nodes, merge_order: ["csv", "button", "sort", "empty"], check: "pnpm test", github: "example",
     decision: null, question: null, answer: null, answer_failed: null, delay: null, report: null,

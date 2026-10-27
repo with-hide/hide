@@ -1397,6 +1397,8 @@ export type Mission = {
   cap: number;
   /** Made before node criteria: its nodes show their sentence only and nothing is gated (B23). */
   exempt: boolean;
+  /** Settings › Conductor's review and verify defaults when the mission was created (B36); null for one from before them. */
+  checkers: { review: ConductorCheckDefault; verify: ConductorCheckDefault } | null;
   /** `takes_answers`: its agent takes an answer typed from the banner, which the doorbell types only into the agents it rings (B26). */
   conductor: { pane_id: string; name: string; agent_kind: string; session: WorkSession | null; present: boolean; takes_answers: boolean };
   nodes: MissionNode[];

@@ -38,6 +38,8 @@ pub enum Input {
     Body,
     /// A SHA-256 as 64 lowercase hexadecimal digits.
     Sha256,
+    /// A git commit: 7 to 64 hexadecimal digits.
+    Commit,
     /// A watch approval: not blank, at most 256 bytes, without control
     /// characters.
     Approval,
@@ -56,6 +58,7 @@ impl Input {
             Session => "session",
             Body => "body",
             Sha256 => "sha256",
+            Commit => "commit",
             Approval => "approval",
             Unsigned => "unsigned",
             Json => "json",
@@ -167,7 +170,7 @@ const fn spec(
     }
 }
 
-use Input::{Approval, Body, Json, Key, OneOf, Session, Sha256, Text, Unsigned};
+use Input::{Approval, Body, Commit, Json, Key, OneOf, Session, Sha256, Text, Unsigned};
 
 const ID: &[Arg] = &[Arg {
     name: "id",
@@ -555,7 +558,7 @@ pub const COMMANDS: &[Spec] = &[
                 conflicts: &["--pass"],
             },
             optional("--evidence", Text),
-            optional("--commit", Text),
+            optional("--commit", Commit),
             switch("--rerun"),
         ],
         rest: None,
@@ -866,6 +869,7 @@ fn body() -> Value {
             ),
             "body": format!("not blank, at most {BODY_LIMIT} bytes"),
             "approval": "not blank, at most 256 bytes, no control characters",
+            "commit": "7 to 64 hexadecimal digits",
             "unsigned": "a decimal integer from 0 to 18446744073709551615",
             "json": "a JSON document of the shape hide mission help or hide plan help shows",
             "one_of": "one of the listed values",
@@ -977,6 +981,7 @@ mod tests {
                 "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
                 "BA7816BF",
             ),
+            Commit => ("abc1234", "xyz"),
             Approval => ("approved by the lead", " "),
             Unsigned => ("1", "-1"),
             Json => ("{\"nodes\": []}", "{nodes"),
