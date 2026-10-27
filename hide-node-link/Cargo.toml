@@ -11,8 +11,8 @@ publish = false
 # the Project identity by `hide-project`, used
 # here for their types only, as are the hook diagnosis of `hide-agent-hooks`
 # and the provider answers of `hide-ai`.
-# `hide-platform` is here for its `path` module only: how a name is spelled
-# between machines.
+# `hide-platform` is here for path spelling between machines and pure
+# validation of Herdr session names.
 
 [dependencies]
 hide-agent-adapter = { path = "../hide-agent-adapter" }

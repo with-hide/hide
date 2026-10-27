@@ -421,6 +421,30 @@ fn bootstrap_keeps_the_environments_socket_when_no_server_is_running() -> Result
     device.stop()
 }
 
+#[test]
+#[ignore = "real candidate helper and pinned Herdr over loopback SSH; set HIDE_E2E_HERDR_BIN"]
+fn bootstrap_uses_the_environment_session_when_no_probe_binary_exists() -> Result<()> {
+    let mut device = Device::fresh()?;
+    let default = device.socket.clone();
+    device.socket = default.parent().unwrap().join("sessions/work/herdr.sock");
+    device.environment.set("HERDR_SESSION", "work");
+    let connected = device.connect()?;
+    let report = connected
+        .kit
+        .as_ref()
+        .context("bootstrap report")?
+        .as_ref()
+        .map_err(|reason| anyhow::anyhow!("{reason}"))?;
+    let Some(HerdrUpdate::Started { pid, .. }) = report.herdr.as_deref() else {
+        anyhow::bail!("named environment did not start Herdr: {:?}", report.herdr);
+    };
+    device.server_pid = Some(*pid);
+    device.snapshot()?;
+    ensure!(!default.exists(), "bootstrap touched the default session");
+    ensure!(connected.node.terminals.is_ok());
+    device.stop()
+}
+
 /// A required upload is retried through establishment. An incomplete pin
 /// must not replace the last valid copy or make the helper look ready.
 #[test]

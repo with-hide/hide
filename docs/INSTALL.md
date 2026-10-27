@@ -439,7 +439,7 @@ A remove is refused while a file tab of that machine is open, because Settings s
 The remote machine does not need Herdr installed or a server running first.
 For a supported system and processor, Add or Allow and install puts the helper and pinned Herdr there before asking Herdr for a readable session; an older-protocol server does not block this step.
 Hide keeps an explicitly registered socket or one already learned from `herdr status server --json`, including a socket with no running server.
-Without either, the helper honors the device's `HERDR_SOCKET_PATH` before Herdr's account default (`$XDG_CONFIG_HOME/herdr/herdr.sock`, otherwise `~/.config/herdr/herdr.sock` on macOS and Linux).
+Without either, the helper honors the device's `HERDR_SOCKET_PATH`, then `HERDR_SESSION`, before Herdr's account default (`$XDG_CONFIG_HOME/herdr/herdr.sock`, otherwise `~/.config/herdr/herdr.sock` on macOS and Linux).
 If nothing answers there, the helper starts the pinned headless server, which keeps running after the helper or SSH connection ends.
 A failed server start stays on the device row; Retry re-establishes the helper connection, pane service and terminal route together.
 A failed delivery of the pinned Herdr or its pin is an installation failure with Retry that sends it again, preserving the last valid copy and its `current` link.
