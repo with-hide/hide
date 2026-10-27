@@ -1632,7 +1632,7 @@ A copy's failure, and a drop's, is a wrapping line under the root row, not under
 Cut, Copy, Paste and Duplicate are not undone inside the app, as a rename and a move are not: a copy only adds an item, so its undo is Move to Trash on the new item, which is selected when the paste lands, and the Trash restores it; a cut item pasted is moved back the way a drag moves it back.
 
 Files and folders dragged in from the operator's file manager are copied into the checkout.
-Dropping on a folder row puts them in that folder, on the root row or on the empty room under the rows puts them at the root, and the receiving row is highlighted as a drag inside the tree highlights its folder; a file row accepts nothing.
+They land where a drag inside the tree lands (see the drag below): a folder row takes them into that folder, a file row into the folder that holds it, and the root row or the empty room under the rows at the root, and the receiving folder is tinted the same way.
 Folders come with everything under them, and a name already used in the destination becomes `name copy.ext`, never a replacement.
 The window reads the bytes with the browser's file API and hands them over the connection it already has; a path from outside every registered checkout never reaches the core, and the same route serves a checkout on another device, whose helper writes the files into its own checkout.
 Each file is uploaded to hided's staging, as a terminal attachment is, and one `path_import` event names the staged files; hided is the only maker of the core's `path_import`, and the core reads the staged files itself and has the checkout's host write the items under a hidden working folder, so a drop lands whole or not at all.
@@ -1671,8 +1671,9 @@ A device folder whose re-read is refused keeps those rows under its could-not-be
 The selection moves to the new or moved item because the core sets it explicitly; expanded folders and open file tabs inside a renamed folder follow it.
 
 A drag moves one item inside the tree.
-Dropping on a folder puts the item inside it, on a file puts it beside that file, and on the empty area puts it at the root; the receiving folder row is what highlights.
-The same parent, the item itself, and a folder inside the item show no drop indicator and accept nothing.
+Dropping on a folder puts the item inside it, on a file puts it beside that file, and on the root row or the empty area puts it at the root, so an open folder takes a drop anywhere over its rows.
+The whole receiving folder is tinted, its row and every open row under it, in the accent tint a pane move's target uses so it reads apart from the selection; the root is tinted as the whole tree and its row.
+The item's own folder, the item itself, a folder inside the item, and an item from another checkout show no tint and accept nothing.
 The drag never leaves a copy that a different app (such as Finder) could read as a file.
 
 The filter field is the Explorer's first row.
