@@ -467,7 +467,7 @@ impl LinkWorker {
     }
 }
 
-struct State {
+pub(in crate::links) struct State {
     direct: VecDeque<PendingDirect>,
     direct_facts: Option<Vec<DirectFact>>,
     direct_dirty: bool,
@@ -476,7 +476,7 @@ struct State {
     record: Option<(u64, SessionIdentity)>,
     record_answer: Option<Result<SessionRecord, String>>,
     search: Option<SearchRequest>,
-    projects: Arc<Vec<ProjectFacts>>,
+    pub(in crate::links) projects: Arc<Vec<ProjectFacts>>,
     /// Projects posted but not yet written, kept while the store is closed.
     projects_due: bool,
     panes: Arc<Vec<PaneFact>>,
@@ -509,7 +509,7 @@ struct State {
 }
 
 impl State {
-    fn new() -> Self {
+    pub(in crate::links) fn new() -> Self {
         Self {
             direct: VecDeque::new(),
             direct_facts: None,
@@ -1614,7 +1614,9 @@ fn prune(
     }
 }
 
-fn publish_summaries(store: &LinkStore, state: &mut State, sink: &impl Sink) {
+pub(in crate::links) fn publish_summaries(store: &LinkStore, state: &mut State, sink: &impl Sink) {
+    let current = state.projects.iter().map(|p| p.key.as_str()).collect();
+    store.forget_capacity_except(&current);
     let mut summaries = BTreeMap::new();
     for project in state.projects.iter() {
         // One pass reads the project's places, fences and repository names for

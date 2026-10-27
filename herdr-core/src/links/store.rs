@@ -106,6 +106,12 @@ impl CapacityCrossings {
     pub(super) fn leave(&mut self, key: &str) {
         self.0.remove(key);
     }
+
+    /// Keeps only the keys the runtime still publishes, so a project that is
+    /// dropped from publishing loses its state and is reported when it returns.
+    pub(super) fn keep(&mut self, current: &BTreeSet<&str>) {
+        self.0.retain(|key| current.contains(key.as_str()));
+    }
 }
 
 enum OpenFailure {
@@ -2182,6 +2188,11 @@ impl LinkStore {
             .optional()
             .map(Option::flatten)
             .map_err(failed)
+    }
+
+    /// Forgets the over-cap state of projects the runtime no longer publishes.
+    pub(super) fn forget_capacity_except(&self, current: &BTreeSet<&str>) {
+        self.issue_capacity.borrow_mut().keep(current);
     }
 
     /// A project's counts and chips (D-45), and which of its `checkouts`
