@@ -358,7 +358,7 @@ it("glues the other agents checking a node under its card, each with its face, t
   // The reviewer's pane was started with another effort than the plan asked; the launch is what shows.
   const map = await mount({ items: [mission({ nodes })] }, [], [{ device_id: "mac", pane_id: "w1:p4", session_digest: "r", launch_model: "gpt-6", launch_effort: "xhigh" }]);
   try {
-    const rows = (key: string) => [...card(map, key).querySelectorAll<HTMLElement>("[data-node-checker]")].map((row) => [row.dataset.nodeChecker, row.dataset.checkerState, row.querySelector("[data-run]")?.getAttribute("data-run"), row.querySelector("[data-run]")?.textContent, row.lastElementChild?.textContent]);
+    const rows = (key: string) => [...card(map, key).querySelectorAll<HTMLElement>("[data-node-checker]")].map((row) => [row.dataset.nodeChecker, row.dataset.checkerState, row.querySelector("[data-run]")?.getAttribute("data-run"), row.querySelector("[data-run]")?.getAttribute("title"), row.lastElementChild?.textContent]);
     expect(rows("core")).toEqual([["codex", "running", "launch", "gpt-6·xhigh", "reviewing"]]);
     expect(rows("all")).toEqual([["claude", "pass", "plan", "high (planned)", "✓ passed"], ["codex", "pass", "plan", "high (planned)", "✓ passed"], ["gemini", "waiting", "plan", "high (planned)", "verification to start"]]);
     expect(card(map, "all").querySelector("[data-node-check-rule]")?.textContent).toBe("all 3 pass · 2/3 passed");
@@ -445,8 +445,8 @@ it("opens the picked node's panel: its head, where it is, what it made, its fini
     expect([...panel.querySelectorAll<HTMLElement>("[data-panel-part]")].map((part) => part.dataset.panelPart)).toEqual(["head", "now", "result", "criteria", "links", "ways", "events"]);
     expect(panel.querySelector("[data-panel-title]")?.textContent).toBe("조사 에이전트: Hide가 실행하는 명령 읽기");
     // No launch recorded for its pane: the plan's model and effort, marked planned.
-    expect(panel.querySelector("[data-panel-meta]")?.textContent).toBe("Working·Change·opus·xhigh (planned)");
-    expect(panel.querySelector("[data-panel-meta] [data-run]")?.getAttribute("data-run")).toBe("plan");
+    expect(panel.querySelector("[data-panel-meta] [data-run]")?.getAttribute("title")).toBe("opus·xhigh (planned)");
+    expect([panel.querySelector("[data-panel-meta] [data-run-words]")?.textContent, panel.querySelector("[data-panel-meta] [data-run-planned]")?.textContent]).toEqual(["opus·xhigh", "(planned)"]);
     expect(panel.querySelector("[data-panel-facts]")?.textContent).toBe("took 1m · Attempt 2");
     expect([...panel.querySelectorAll<HTMLElement>("[data-plan-row]")].map((row) => row.dataset.planRow)).toEqual(["parse"]);
     // What it made: the PR in its state, the base it stacks on, the CI line and the branch.

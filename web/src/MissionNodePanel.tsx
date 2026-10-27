@@ -11,7 +11,7 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { formatDateTime } from "./i18n/format";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
-import { CheckerRow, lookWord, useNodeTimes, useRunWords, useWorkerRow } from "./missionParts";
+import { CheckerRow, lookWord, RunText, useNodeTimes, useRunWords, useWorkerRow } from "./missionParts";
 import {
   cardLine,
   criteriaTally,
@@ -67,7 +67,7 @@ export function MissionNodePanel({ mission, node, events, end, onSelect, onClose
           {worker ? (
             <>
               <span aria-hidden="true">·</span>
-              <span className="flex min-w-0 items-center gap-xxs"><AgentMark kind={node.worker?.agent} /><span className="truncate" data-run={worker.from}>{worker.text}</span></span>
+              <span className="flex min-w-0 items-center gap-xxs"><AgentMark kind={node.worker?.agent} /><RunText run={worker} /></span>
             </>
           ) : null}
         </p>

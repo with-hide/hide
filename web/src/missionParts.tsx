@@ -1,5 +1,6 @@
 import { ChevronRightIcon, GitBranchIcon } from "lucide-react";
 import type { TFunction } from "i18next";
+import type { ReactNode } from "react";
 import { AgentMark } from "./AgentMark";
 import { formatElapsed } from "./components/elapsed";
 import { PrMark } from "./components/pr-mark";
@@ -90,7 +91,7 @@ export function CheckerRow({ mission, kind, checker }: { mission: Mission; kind:
   return (
     <span className="flex min-w-0 items-center gap-xs" data-node-checker={checker.worker.agent} data-checker-state={state}>
       <AgentMark kind={checker.worker.agent} />
-      <span className="min-w-0 flex-1 truncate" title={run?.text} data-run={run?.from}>{run?.text}</span>
+      {run ? <RunText run={run} className="flex-1" /> : <span className="flex-1" />}
       <span className={cn("shrink-0", CHECKER_TONE[state])}>
         {state === "pass" ? "✓ " : state === "fail" ? "✕ " : ""}
         {status}
@@ -99,14 +100,31 @@ export function CheckerRow({ mission, kind, checker }: { mission: Mission; kind:
   );
 }
 
+/** What runs in a pane: its words, the mark a plan's words carry, and the two as one line for a hover or a name. */
+export type RunLabel = { text: string; words: string; mark: string | null; from: "launch" | "plan" };
+
 /**
  * What runs in a pane as Hide launched it, else what the plan asked marked
  * planned (B29); `from` says which, for a reader that tells them apart.
  */
-export function useRunWords(mission: Mission, paneId: string | null | undefined, machine: string | null | undefined, plan: MissionWorker | null | undefined): { text: string; from: "launch" | "plan" } | null {
+export function useRunWords(mission: Mission, paneId: string | null | undefined, machine: string | null | undefined, plan: MissionWorker | null | undefined): RunLabel | null {
   const { t } = useInterfaceTranslation();
   const launch = useShellStore((s) => launchSession(s.rest, mission, paneId, machine));
   const run = runWords(launch, plan, { auto: t("mission.auto"), defaultModel: t("conductor.defaultModel") });
   if (!run) return null;
-  return run.planned ? { text: t("mission.planned", { words: run.words }), from: "plan" } : { text: run.words, from: "launch" };
+  return run.planned
+    ? { text: t("mission.planned", { words: run.words }), words: run.words, mark: t("mission.plannedMark"), from: "plan" }
+    : { text: run.words, words: run.words, mark: null, from: "launch" };
+}
+
+/** A run's words, which truncate, before its planned mark, which never does, so a planned model never reads as launched. */
+export function RunText({ run, className, wordsClassName, children }: { run: RunLabel; className?: string; wordsClassName?: string; children?: ReactNode }) {
+  return (
+    <span className={cn("flex min-w-0 items-center gap-xxs", className)} title={run.text} data-run={run.from}>
+      {/* A grid track that starts at nothing: the words ask no width to fit in, yet take their whole width when there is room. */}
+      <span className={cn("grid min-w-0 grid-cols-[minmax(0,1fr)]", wordsClassName)} data-run-words="true"><span className="truncate">{run.words}</span></span>
+      {run.mark ? <span className="shrink-0" data-run-planned="true">{run.mark}</span> : null}
+      {children}
+    </span>
+  );
 }

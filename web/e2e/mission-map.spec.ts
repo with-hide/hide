@@ -116,7 +116,7 @@ test("the Conductor's first plan shows on its pane, the map follows the record, 
     await node.click();
     const panel = map.locator('[data-mission-panel="api"] [data-mission-detail="api"]');
     await expect(panel).toBeVisible();
-    await expect(panel.locator("[data-panel-meta]")).toContainText("opus (planned)");
+    await expect(panel.locator("[data-panel-meta] [data-run]")).toHaveAttribute("title", "opus (planned)");
     await panel.locator("[data-panel-events-toggle]").click();
     await expect(panel.locator('[data-panel-event="node"]').first()).toBeVisible();
     // Escape lets the pick go and leaves the lane open (B30).
