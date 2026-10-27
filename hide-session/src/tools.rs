@@ -8,6 +8,13 @@
 //! A failure is named by its kind only ([`head`]): a shell command's program
 //! and subcommand, or the tool's name. Neither the command line nor the
 //! result leaves this module.
+//!
+//! The tracker also counts what the current turn did, without a model (PRD
+//! hide-ai-suggestions D-56): its calls, the distinct files it read, the
+//! searches it ran more than once and the calls that failed, which the
+//! turn-end analysis is handed as one line ([`ToolSummary`]). A read is kept
+//! only as a hash of its path, and a search as its pattern cut to
+//! [`SEARCH_TEXT_LIMIT`].
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -19,16 +26,41 @@ pub const TOOL_CALL_LIMIT: usize = 64;
 pub const TOOL_FAILURE_LIMIT: usize = 32;
 /// The longest kind kept, in bytes.
 pub const HEAD_LIMIT: usize = 120;
+/// The most distinct files and searches one turn's count remembers; past
+/// either a new one is counted as more, not remembered.
+pub const FILE_LIMIT: usize = 128;
+pub const SEARCH_LIMIT: usize = 16;
+/// The longest search pattern kept, in characters.
+pub const SEARCH_TEXT_LIMIT: usize = 48;
+/// The most repeated searches a summary names.
+pub const SUMMARY_SEARCHES: usize = 3;
 
 /// One record's word about a tool call.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ToolStep {
-    /// A call of the kind `head`.
-    Call { call: String, head: String },
+    /// A call of the kind `head`, and the reads and searches it made.
+    Call {
+        call: String,
+        head: String,
+        uses: Vec<ToolUse>,
+    },
     /// The result of `call`.
     Result { call: String, failed: bool },
     /// A call and its result in one record (OpenCode's tool part).
-    Both { head: String, failed: bool },
+    Both {
+        head: String,
+        failed: bool,
+        uses: Vec<ToolUse>,
+    },
+}
+
+/// What a call did that the turn's summary counts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ToolUse {
+    /// A file read, by a hash of its path.
+    Read(u32),
+    /// A search, by its pattern.
+    Search(String),
 }
 
 pub(crate) type Parser = fn(&Value) -> Vec<ToolStep>;
@@ -57,6 +89,78 @@ pub struct ToolTracker {
     calls: Vec<OpenCall>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     failed: Vec<FailedTool>,
+    /// The person's message the counted turn began at; `None` until a read
+    /// saw one, when the count may have begun mid-turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    turn: Option<u64>,
+    #[serde(default, skip_serializing_if = "TurnUse::is_empty")]
+    used: TurnUse,
+}
+
+/// What the current turn did, counted as it is folded; kept after the
+/// agent stops until a person's message begins the next turn.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+struct TurnUse {
+    #[serde(default)]
+    calls: u32,
+    #[serde(default)]
+    failed: u32,
+    /// The distinct files read, by path hash.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    files: Vec<u32>,
+    /// Reads of a file not remembered once [`FILE_LIMIT`] were, each
+    /// counted as a new one.
+    #[serde(default)]
+    files_more: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    searches: Vec<SearchSeen>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct SearchSeen {
+    text: String,
+    times: u32,
+}
+
+impl TurnUse {
+    fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    fn count(&mut self, uses: Vec<ToolUse>) {
+        self.calls = self.calls.saturating_add(1);
+        for used in uses {
+            match used {
+                ToolUse::Read(path) => {
+                    if self.files.contains(&path) {
+                        continue;
+                    }
+                    if self.files.len() < FILE_LIMIT {
+                        self.files.push(path);
+                    } else {
+                        self.files_more = self.files_more.saturating_add(1);
+                    }
+                }
+                ToolUse::Search(text) => {
+                    if let Some(seen) = self.searches.iter_mut().find(|seen| seen.text == text) {
+                        seen.times = seen.times.saturating_add(1);
+                    } else if self.searches.len() < SEARCH_LIMIT {
+                        self.searches.push(SearchSeen { text, times: 1 });
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// One turn's tool use as the turn-end analysis is handed it (D-56).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ToolSummary {
+    pub calls: u32,
+    pub files_read: u32,
+    pub failed: u32,
+    /// Searches run more than once, with how many times, the most first.
+    pub repeated_searches: Vec<(String, u32)>,
 }
 
 impl ToolTracker {
@@ -68,7 +172,8 @@ impl ToolTracker {
         self.through = offset.saturating_add(1);
         for step in steps {
             match step {
-                ToolStep::Call { call, head } => {
+                ToolStep::Call { call, head, uses } => {
+                    self.used.count(uses);
                     if self.calls.len() == TOOL_CALL_LIMIT {
                         self.calls.remove(0);
                     }
@@ -81,7 +186,10 @@ impl ToolTracker {
                     let head = self.calls.remove(index).head;
                     self.settle(head, failed, at_unix_ms);
                 }
-                ToolStep::Both { head, failed } => self.settle(head, failed, at_unix_ms),
+                ToolStep::Both { head, failed, uses } => {
+                    self.used.count(uses);
+                    self.settle(head, failed, at_unix_ms);
+                }
             }
         }
     }
@@ -89,6 +197,7 @@ impl ToolTracker {
     fn settle(&mut self, head: String, failed: bool, at_unix_ms: u64) {
         self.failed.retain(|failure| failure.head != head);
         if failed {
+            self.used.failed = self.used.failed.saturating_add(1);
             if self.failed.len() == TOOL_FAILURE_LIMIT {
                 self.failed.remove(0);
             }
@@ -104,13 +213,39 @@ impl ToolTracker {
         }
         self.through = offset.saturating_add(1);
         ended.append(&mut self.end_turn());
+        self.turn = Some(offset);
+        self.used = TurnUse::default();
     }
 
     /// The turn is over (its agent stopped): what it left failed, each kind
-    /// once, and nothing left open.
+    /// once, and nothing left open. What it did stays counted for
+    /// [`Self::summary`] until the next turn begins.
     pub fn end_turn(&mut self) -> Vec<FailedTool> {
         self.calls.clear();
         std::mem::take(&mut self.failed)
+    }
+
+    /// What the turn begun by the person's message at `offset` did, or
+    /// `None` when the count is of another turn or began mid-turn.
+    pub fn summary(&self, offset: u64) -> Option<ToolSummary> {
+        if self.turn != Some(offset) {
+            return None;
+        }
+        let used = &self.used;
+        let mut repeated = used
+            .searches
+            .iter()
+            .filter(|seen| seen.times > 1)
+            .map(|seen| (seen.text.clone(), seen.times))
+            .collect::<Vec<_>>();
+        repeated.sort_by(|a, b| b.1.cmp(&a.1));
+        repeated.truncate(SUMMARY_SEARCHES);
+        Some(ToolSummary {
+            calls: used.calls,
+            files_read: (used.files.len() as u32).saturating_add(used.files_more),
+            failed: used.failed,
+            repeated_searches: repeated,
+        })
     }
 }
 
@@ -162,6 +297,165 @@ fn command_head(line: &str) -> Option<String> {
         })
 }
 
+/// The reads and searches a call made: a shell command's by its words, or
+/// a read or search tool's by its name and its path or pattern.
+fn uses(tool: &str, input: Option<&Value>) -> Vec<ToolUse> {
+    let Some(input) = input else {
+        return Vec::new();
+    };
+    if let Some(line) = command_of(input) {
+        return shell_uses(&line);
+    }
+    let text = |keys: &[&str]| {
+        keys.iter()
+            .find_map(|key| input.get(*key).and_then(Value::as_str))
+    };
+    match tool.trim().to_ascii_lowercase().as_str() {
+        "read" | "read_file" | "readfile" | "view" | "view_file" | "open_file" => {
+            text(&["file_path", "filePath", "path", "target_file", "file"])
+                .map(read)
+                .into_iter()
+                .collect()
+        }
+        "grep" | "glob" | "search" | "find" | "grep_search" | "file_search" | "search_files"
+        | "codebase_search" => text(&["pattern", "query", "regex", "glob_pattern", "search_term"])
+            .and_then(search)
+            .into_iter()
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The files a shell line reads and the patterns it searches for, from the
+/// programs that do only that: `cat`, `head`, `sed -n` and the like, and
+/// `rg`, `grep`, `find` and the like.
+fn shell_uses(line: &str) -> Vec<ToolUse> {
+    let mut uses = Vec::new();
+    for words in hide_shell::simple_commands(line) {
+        let mut words = words.into_iter().skip_while(|word| {
+            hide_shell::is_assignment(word) || hide_shell::is_prefix(word, false)
+        });
+        let Some(program) = words.next() else {
+            continue;
+        };
+        let args = words.collect::<Vec<_>>();
+        let program = program.rsplit(['/', '\\']).next().unwrap_or(&program);
+        match program {
+            "cat" | "head" | "tail" | "less" | "more" | "bat" | "nl" => {
+                uses.extend(operands(&args, &["-n", "-c"]).map(read));
+            }
+            "sed"
+                if args.iter().any(|arg| arg == "-n")
+                    && !args.iter().any(|arg| arg.starts_with("-i")) =>
+            {
+                uses.extend(operands(&args, &["-e", "-f"]).skip(1).map(read));
+            }
+            "rg" | "grep" | "egrep" | "fgrep" | "ag" | "ack" => {
+                uses.extend(pattern(&args).and_then(search));
+            }
+            "git" if args.first().is_some_and(|sub| sub == "grep") => {
+                uses.extend(pattern(&args[1..]).and_then(search));
+            }
+            "fd" => uses.extend(operands(&args, PATTERN_VALUE_FLAGS).next().and_then(search)),
+            "find" => uses.extend(
+                args.windows(2)
+                    .find(|pair| {
+                        matches!(pair[0].as_str(), "-name" | "-iname" | "-path" | "-regex")
+                    })
+                    .and_then(|pair| search(&pair[1])),
+            ),
+            _ => {}
+        }
+    }
+    uses
+}
+
+/// The flags of a search program that take the next word as their value.
+const PATTERN_VALUE_FLAGS: &[&str] = &[
+    "-f",
+    "-g",
+    "--glob",
+    "-t",
+    "--type",
+    "-T",
+    "--type-not",
+    "-A",
+    "-B",
+    "-C",
+    "-m",
+    "--max-count",
+    "--context",
+    "--after-context",
+    "--before-context",
+    "--include",
+    "--exclude",
+    "-M",
+    "--max-columns",
+    "-d",
+    "--max-depth",
+    "-j",
+    "--threads",
+    "-E",
+    "--encoding",
+    "-e",
+    "--regexp",
+];
+
+/// The words of `args` that are not options, skipping the value of each
+/// flag in `valued`; every word after `--` is one.
+fn operands<'a>(args: &'a [String], valued: &'a [&str]) -> impl Iterator<Item = &'a str> + 'a {
+    let mut skip = false;
+    let mut ended = false;
+    args.iter().filter_map(move |arg| {
+        if skip {
+            skip = false;
+            return None;
+        }
+        if ended {
+            return Some(arg.as_str());
+        }
+        if arg == "--" {
+            ended = true;
+            return None;
+        }
+        if arg.starts_with('-') && arg.len() > 1 {
+            skip = valued.contains(&arg.as_str());
+            return None;
+        }
+        Some(arg.as_str())
+    })
+}
+
+/// A search program's pattern: the value of `-e`, or its first operand;
+/// none for a listing of files (`rg --files`).
+fn pattern(args: &[String]) -> Option<&str> {
+    if args.iter().any(|arg| arg == "--files") {
+        return None;
+    }
+    args.windows(2)
+        .find(|pair| matches!(pair[0].as_str(), "-e" | "--regexp"))
+        .map(|pair| pair[1].as_str())
+        .or_else(|| operands(args, PATTERN_VALUE_FLAGS).next())
+}
+
+fn read(path: &str) -> ToolUse {
+    let path = path.trim();
+    ToolUse::Read(fnv1a(path.strip_prefix("./").unwrap_or(path)))
+}
+
+fn search(text: &str) -> Option<ToolUse> {
+    let text = text.trim();
+    (!text.is_empty()).then(|| ToolUse::Search(text.chars().take(SEARCH_TEXT_LIMIT).collect()))
+}
+
+/// A path's hash that stays the same across builds and machines, so a
+/// tracker read on a device and carried to the core compares alike.
+fn fnv1a(text: &str) -> u32 {
+    text.bytes().fold(0x811c_9dc5, |hash, byte| {
+        (hash ^ u32::from(byte)).wrapping_mul(0x0100_0193)
+    })
+}
+
 /// A shell tool's command line, wherever the format keeps it.
 fn command_of(input: &Value) -> Option<String> {
     match input.get("command").or_else(|| input.get("cmd"))? {
@@ -199,13 +493,15 @@ pub(crate) fn claude(item: &Value) -> Vec<ToolStep> {
         .iter()
         .filter_map(
             |block| match (role, block.get("type").and_then(Value::as_str)) {
-                (Some("assistant"), Some("tool_use")) => Some(ToolStep::Call {
-                    call: call_id(block.get("id"))?,
-                    head: head(
-                        block.get("name").and_then(Value::as_str)?,
-                        block.get("input").and_then(command_of).as_deref(),
-                    ),
-                }),
+                (Some("assistant"), Some("tool_use")) => {
+                    let name = block.get("name").and_then(Value::as_str)?;
+                    let input = block.get("input");
+                    Some(ToolStep::Call {
+                        call: call_id(block.get("id"))?,
+                        head: head(name, input.and_then(command_of).as_deref()),
+                        uses: uses(name, input),
+                    })
+                }
                 (Some("user"), Some("tool_result")) => Some(ToolStep::Result {
                     call: call_id(block.get("tool_use_id"))?,
                     failed: block.get("is_error").and_then(Value::as_bool) == Some(true),
@@ -238,14 +534,19 @@ pub(crate) fn codex(item: &Value) -> Vec<ToolStep> {
             Some(ToolStep::Call {
                 call: call()?,
                 head: head(name, arguments.as_ref().and_then(command_of).as_deref()),
+                uses: uses(name, arguments.as_ref()),
             })
         })(),
         Some("custom_tool_call") => (|| {
             let name = payload.get("name").and_then(Value::as_str)?;
-            let script = payload.get("input").and_then(Value::as_str);
+            let command = payload
+                .get("input")
+                .and_then(Value::as_str)
+                .and_then(script_command);
             Some(ToolStep::Call {
                 call: call()?,
-                head: head(name, script.and_then(script_command).as_deref()),
+                head: head(name, command.as_deref()),
+                uses: command.as_deref().map(shell_uses).unwrap_or_default(),
             })
         })(),
         Some("function_call_output" | "custom_tool_call_output") => {
@@ -349,12 +650,12 @@ pub(crate) fn pi(item: &Value) -> Vec<ToolStep> {
             .flatten()
             .filter(|block| block["type"] == "toolCall")
             .filter_map(|block| {
+                let name = block.get("name").and_then(Value::as_str)?;
+                let arguments = block.get("arguments");
                 Some(ToolStep::Call {
                     call: call_id(block.get("id"))?,
-                    head: head(
-                        block.get("name").and_then(Value::as_str)?,
-                        block.get("arguments").and_then(command_of).as_deref(),
-                    ),
+                    head: head(name, arguments.and_then(command_of).as_deref()),
+                    uses: uses(name, arguments),
                 })
             })
             .collect(),
@@ -379,9 +680,11 @@ pub(crate) fn grok(item: &Value) -> Vec<ToolStep> {
             .or_else(|| update.get("kind"))
             .and_then(Value::as_str)
             .unwrap_or("tool");
+        let input = update.get("rawInput");
         steps.push(ToolStep::Call {
             call: call.clone(),
-            head: head(name, update.get("rawInput").and_then(command_of).as_deref()),
+            head: head(name, input.and_then(command_of).as_deref()),
+            uses: uses(name, input),
         });
     }
     if matches!(kind, Some("tool_call" | "tool_call_update")) {
@@ -408,12 +711,11 @@ pub(crate) fn opencode_part(part: &Value) -> Option<ToolStep> {
         _ => return None,
     };
     let tool = part.get("tool").and_then(Value::as_str)?;
+    let input = part.pointer("/state/input");
     Some(ToolStep::Both {
-        head: head(
-            tool,
-            part.pointer("/state/input").and_then(command_of).as_deref(),
-        ),
+        head: head(tool, input.and_then(command_of).as_deref()),
         failed,
+        uses: uses(tool, input),
     })
 }
 
@@ -447,6 +749,7 @@ mod tests {
         ToolStep::Call {
             call: id.into(),
             head: head.into(),
+            uses: Vec::new(),
         }
     }
 
@@ -539,8 +842,149 @@ mod tests {
             opencode_part(&part),
             Some(ToolStep::Both {
                 head: "go test".into(),
-                failed: true
+                failed: true,
+                uses: Vec::new(),
             })
+        );
+    }
+
+    fn calling(id: &str, uses: Vec<ToolUse>) -> ToolStep {
+        ToolStep::Call {
+            call: id.into(),
+            head: "tool".into(),
+            uses,
+        }
+    }
+
+    #[test]
+    fn a_turn_counts_its_files_repeated_searches_and_failures_until_the_next_turn() {
+        let mut tracker = ToolTracker::default();
+        let mut ended = Vec::new();
+        tracker.human(1, &mut ended);
+        let mut offset = 2;
+        for path in ["vite.config.ts", "package.json", "playwright.config.ts"] {
+            tracker.fold(
+                offset,
+                0,
+                vec![calling(&format!("r{offset}"), vec![read(path)])],
+            );
+            offset += 1;
+        }
+        for _ in 0..2 {
+            tracker.fold(
+                offset,
+                0,
+                vec![calling(
+                    &format!("s{offset}"),
+                    shell_uses("rg -n \"5173\" web"),
+                )],
+            );
+            offset += 1;
+        }
+        tracker.fold(
+            offset,
+            0,
+            vec![calling("again", vec![read("./package.json")])],
+        );
+        tracker.fold(
+            offset + 1,
+            0,
+            vec![calling("x", Vec::new()), result("x", true)],
+        );
+        tracker.end_turn();
+        assert_eq!(
+            tracker.summary(1),
+            Some(ToolSummary {
+                calls: 7,
+                files_read: 3,
+                failed: 1,
+                repeated_searches: vec![("5173".into(), 2)],
+            }),
+            "a file read twice is one file, and the count outlives the agent's stop"
+        );
+        assert_eq!(
+            tracker.summary(0),
+            None,
+            "another turn's count is not this one's"
+        );
+        tracker.human(20, &mut ended);
+        assert_eq!(tracker.summary(20), Some(ToolSummary::default()));
+    }
+
+    #[test]
+    fn a_count_that_began_mid_turn_is_no_summary() {
+        let mut tracker = ToolTracker::default();
+        tracker.fold(3, 0, vec![calling("a", vec![read("a.rs")])]);
+        assert_eq!(tracker.summary(1), None);
+    }
+
+    #[test]
+    fn reads_and_searches_are_recognized_in_each_format_and_in_shell_words() {
+        let hash = |path| read(path);
+        assert_eq!(
+            shell_uses("cd web && sed -n '1,40p' src/a.ts | head -n 5"),
+            [hash("src/a.ts")]
+        );
+        assert_eq!(shell_uses("cat a.rs b.rs"), [hash("a.rs"), hash("b.rs")]);
+        assert_eq!(
+            shell_uses("rg -g '*.rs' -n PORT"),
+            [ToolUse::Search("PORT".into())]
+        );
+        assert_eq!(
+            shell_uses("grep -e 'x y' -r ."),
+            [ToolUse::Search("x y".into())]
+        );
+        assert_eq!(
+            shell_uses("git grep -n TODO"),
+            [ToolUse::Search("TODO".into())]
+        );
+        assert_eq!(
+            shell_uses("find . -name '*.md'"),
+            [ToolUse::Search("*.md".into())]
+        );
+        assert!(
+            shell_uses("rg --files web").is_empty(),
+            "a listing is no search"
+        );
+        assert!(
+            shell_uses("sed -i 's/a/b/' x").is_empty(),
+            "an edit is no read"
+        );
+        assert!(shell_uses("cargo test").is_empty());
+
+        let claude_read = json!({"type":"assistant","message":{"content":[
+            {"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/r/AGENTS.md"}},
+            {"type":"tool_use","id":"t2","name":"Grep","input":{"pattern":"5173","path":"web"}}]}});
+        let steps = claude(&claude_read);
+        assert!(
+            matches!(&steps[0], ToolStep::Call { uses, .. } if *uses == [hash("/r/AGENTS.md")])
+        );
+        assert!(
+            matches!(&steps[1], ToolStep::Call { uses, .. } if *uses == [ToolUse::Search("5173".into())])
+        );
+
+        let codex_script = json!({"type":"response_item","payload":{"type":"custom_tool_call",
+            "name":"exec","call_id":"c2","input":"text(await tools.exec_command({cmd:\"rg -n PORT web\"}))"}});
+        assert!(
+            matches!(&codex(&codex_script)[0], ToolStep::Call { uses, .. } if *uses == [ToolUse::Search("PORT".into())])
+        );
+
+        let pi_read = json!({"type":"message","message":{"role":"assistant","content":[
+            {"type":"toolCall","id":"p1","name":"read","arguments":{"path":"README.md"}}]}});
+        assert!(
+            matches!(&pi(&pi_read)[0], ToolStep::Call { uses, .. } if *uses == [hash("README.md")])
+        );
+
+        let grok_read = json!({"params":{"update":{"sessionUpdate":"tool_call","toolCallId":"g1",
+            "title":"read_file","rawInput":{"target_file":"README.md"}}}});
+        assert!(
+            matches!(&grok(&grok_read)[0], ToolStep::Call { uses, .. } if *uses == [hash("README.md")])
+        );
+
+        let opencode_read = json!({"type":"tool","tool":"read","callID":"o1",
+            "state":{"status":"completed","input":{"filePath":"/r/a.ts"}}});
+        assert!(
+            matches!(opencode_part(&opencode_read), Some(ToolStep::Both { uses, .. }) if uses == [hash("/r/a.ts")])
         );
     }
 }
