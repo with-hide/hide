@@ -626,6 +626,8 @@ Settings counts sessions and never these connections, so a pane that needs a Reo
 | Instrumentation | Connection |
 | --- | --- |
 | instrumented | `connected: true` |
+| any of these, for an agent that is on whose machine's copy is refused as too old (`KitAgentSnapshot.update`) | `update_agent`, carrying that update (versions, path, command) |
+| `session_predates_install`, for any agent, in a session that wore the `update_agent` badge on this machine | `started_before_hide` (restart it; Reopen only for Claude Code and Codex) |
 | `session_predates_install`, a Codex and the machine's shared server on, or its daemon still answering | `codex_shared_server` |
 | `session_predates_install`, any other | `started_before_hide` |
 | `hooks_not_installed`, `config_unreadable`, `hook_outdated` | `setup_needed` (fix it in the agent's row in Settings; Reopen would change nothing) |
@@ -633,7 +635,8 @@ Settings counts sessions and never these connections, so a pane that needs a Reo
 
 A Herdr live handoff or restart does not move a connected pane to `started_before_hide`: the tokens the instrumented judgement reads go with the old server, and hided puts them back from the pane's record within a few agent reads, without a hook event ([agent-hooks.md](agent-hooks.md#after-herdr-hands-off-or-restarts)).
 Until then, and for a pane on a device, a handed-off pane reads as a session that predates the install.
-`can_reopen` is false for `setup_needed` and for a pane on another device, because a Reopen restarts the session through this Mac's Herdr.
+`can_reopen` is false for `setup_needed`, `update_agent`, an agent other than Claude Code and Codex, and a pane on another device, because a Reopen restarts a Claude Code or Codex session through this Mac's Herdr and changes no agent's version.
+The `update_agent` reason is read from the machine's last kit report and the pane's agent kind on the projection pass that already judges the pane, so it adds no per-tick work; the sessions that wore it are remembered per machine (`Runtime::update_badges`) until they connect or end, so a session started on the old copy reads "restart to connect" once the update has put the piece in, and a session that never wore it keeps the rows below ([agent-hooks.md](agent-hooks.md#updating-an-agent-that-is-too-old)).
 The shared server is the machine's last kit read (`KitSnapshot::shares_codex_server`): a read that says the setting is on, or that a daemon still answers with the setting off, is what turns a Codex pane's reason into the shared server, and a later read that says neither turns it back into `started_before_hide` at once (PRD codex-daemon-apply D-07, B9).
 After a turn-off that answered `stop_failed`, only a read that says no daemon answers ends the shared server, so a daemon answer Hide could not read keeps the retry on offer (B7).
 A kit read happens at launch and on each device connection, on a Reinstall, when a Settings tab showing the kit opens and on this Mac every 5 seconds while it stays open, and in the answer to a turn-off request.

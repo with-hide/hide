@@ -195,8 +195,8 @@ const OMP_UPDATES: &[UpdateRoute] = &[
     },
 ];
 
-// "Default binary location: `~/.local/bin/agy`" and
-// "`C:\Users\<username>\AppData\Local\agy\bin`": the documented page has
+// "Default binary location: `~/.local/bin/agy`", and on Windows the user's
+// `AppData\Local\agy\bin` under the home folder: the documented page has
 // no update command, so the update is its install command, which installs
 // the newest release.
 const ANTIGRAVITY_INSTALL: &str = "https://antigravity.google/docs/getting-started?tab=cli";
