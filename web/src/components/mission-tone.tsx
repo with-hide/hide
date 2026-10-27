@@ -4,8 +4,8 @@ import { cn } from "../lib/utils";
 // One colour per node state (PRD mission-plan-visibility D-11, B35): a chip's
 // cell and the sidebar's mission chip read the `--mission-*` tokens here. The
 // mission page's head draws its cells as its cards (`HEAD_FILL`, PRD
-// mission-map-git-criteria D-02, B26): colour only for work, review, a
-// decision and a failure, done grey and work in main fainter.
+// mission-map-git-criteria B26): done green and work in main a fainter green,
+// so finished work reads apart from what waits or works at a glance.
 
 /** A cell's fill: a state with colour, an empty cell for a node still ahead. */
 export const TONE_FILL: Record<CellTone, string> = {
@@ -26,8 +26,8 @@ export const HEAD_FILL: Record<HeadCell, string> = {
   review: "bg-mission-review",
   hold: "bg-mission-hold",
   failed: "bg-mission-failed",
-  done: "bg-muted-foreground/60",
-  landed: "bg-muted-foreground/25",
+  done: "bg-mission-done",
+  landed: "bg-mission-done/40",
   cancelled: "bg-mission-cancelled",
 };
 

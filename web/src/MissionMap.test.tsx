@@ -79,12 +79,15 @@ it("reads top down as the head, 내 차례 only when the operator has something 
     expect(running.q("[data-mission-pill]")?.textContent).toBe("Running");
     expect(running.q('[data-mission-stat="time"]')?.textContent).toBe("3m so far");
     expect(running.q('[data-mission-stat="done"]')?.textContent).toBe("1 / 5 done");
-    // Its cells are drawn as the cards: done grey, the rest in their state's colour (B26).
+    // Its cells are drawn as the cards: done green, the rest in their state's colour (B26).
     expect(running.q("[data-mission-summary] [data-progress-cells]")?.getAttribute("data-progress-cells")).toBe("done hold working review waiting");
-    expect(running.q("[data-mission-summary] [data-progress-cells] span")?.className).toContain("bg-muted-foreground/60");
+    expect(running.q("[data-mission-summary] [data-progress-cells] span")?.className).toContain("bg-mission-done");
     expect(running.q("[data-mission-turn]")).toBeNull();
     expect(running.container.querySelectorAll("[data-mission-node]")).toHaveLength(6);
-    expect(running.container.querySelector("[data-mission-legend], [data-mission-flow], [data-mission-zoom], [role=tablist], [data-node-steps], [data-node-base]")).toBeNull();
+    expect(running.container.querySelector("[data-mission-legend], [data-mission-flow], [role=tablist], [data-node-steps], [data-node-base]")).toBeNull();
+    // The head carries no zoom; the map's own box does.
+    expect(running.q("[data-mission-summary] [data-mission-zoom]")).toBeNull();
+    expect(running.q("[data-mission-map] [data-mission-zoom]")).not.toBeNull();
     // Nothing picked: no panel, the map has the whole width (B30, B31).
     const parts = () => [...running.container.querySelectorAll<HTMLElement>("[data-mission-summary], [data-mission-turn], [data-mission-map], [data-mission-panel]")].map((part) => Object.keys(part.dataset)[0]);
     expect(parts()).toEqual(["missionSummary", "missionMap"]);
@@ -301,12 +304,18 @@ it("draws each card's state as its mark and border, colour only for what wants a
     expect(card(map, "tool").querySelector("[data-node-mark]")?.getAttribute("aria-label")).toBe("Waiting for a decision");
     expect(card(map, "tool").getAttribute("aria-label")).toBe("Node tool · Waiting for a decision · Rail or slot?");
     expect(card(map, "old").querySelector("[data-node-mark]")?.getAttribute("aria-label")).toBe("In main");
-    // Colour belongs to work, review, a decision and a failure; done is grey and in main has no surface.
+    // Done is a green disc on a faint green surface inside a plain border, never a green border;
+    // in main is a green check with no disc and no surface, so the two read apart.
     expect(card(map, "engine").className).toContain("border-mission-working");
     expect(card(map, "core").className).toContain("ring-mission-review/20");
     expect(card(map, "api").className).toContain("border-border");
-    expect(card(map, "api").className).not.toMatch(/mission-done/);
+    expect(card(map, "api").className).toContain("bg-mission-done/10");
+    expect(card(map, "api").className).not.toMatch(/border-mission-done/);
+    expect(card(map, "api").querySelector("[data-node-mark] circle")?.getAttribute("class")).toContain("fill-mission-done");
     expect(card(map, "old").className).toContain("bg-transparent");
+    expect(card(map, "old").className).not.toMatch(/bg-mission-done/);
+    expect(card(map, "old").querySelector("[data-node-mark] circle")).toBeNull();
+    expect(card(map, "old").querySelector("[data-node-mark] path")?.getAttribute("class")).toContain("stroke-mission-done");
     expect(card(map, "outside").className).toContain("border-dotted");
     // A pull request's number is plain on a card; its state's colours are the panel's.
     expect(card(map, "core").querySelector("[data-node-pr]")?.textContent).toBe(`${"#"}1703`);
@@ -567,15 +576,16 @@ it("shows a mission from before criteria with its old sentence and no count (B23
   } finally { await map.unmount(); }
 });
 
-it("folds a finished mission's report into one line under the head that opens to all of it, and rests a cancelled mission's unfinished cards (B24, B35)", async () => {
-  const report = "Released 1.0.0.\nNotes published.";
+it("folds a finished mission's report into its first words without Markdown marks, opens it drawn as Markdown, and rests a cancelled mission's unfinished cards (B24, B35)", async () => {
+  const report = "# Released 1.0.0\n\n## PRs\n- [x] Notes published.";
   const done = await mount({ items: [mission({ status: "done", report, nodes: [node("a", { status: "done", pr: 1, pr_state: "merged" })], started_at_unix_ms: 0, closed_at_unix_ms: 3 * 3_600_000 })] });
   try {
     expect(done.q("[data-mission-pill]")?.textContent).toBe("Finished");
     expect(done.q('[data-mission-stat="time"]')?.textContent).toBe("took 3h");
-    expect(done.q("[data-mission-report-text] p")?.textContent).toBe("Released 1.0.0.");
+    expect(done.q("[data-mission-report-text] p")?.textContent).toBe("Released 1.0.0");
     await act(async () => done.q("[data-mission-report-toggle]")!.click());
-    expect(done.q("[data-mission-report-text] p")?.textContent).toBe(report);
+    expect(done.q('[data-mission-report-text="open"] [data-mission-report-body] [data-markdown-text]')).not.toBeNull();
+    expect(done.q("[data-mission-report-text] p")).toBeNull();
     expect(done.q("[data-mission-turn]")).toBeNull();
   } finally { await done.unmount(); }
   const gone = { ...mission().conductor, present: false };
@@ -586,4 +596,23 @@ it("folds a finished mission's report into one line under the head that opens to
     expect(cancelled.container.querySelector(".text-mission-working")).toBeNull();
     expect(cancelled.q("[data-mission-turn]")).toBeNull();
   } finally { await cancelled.unmount(); }
+});
+
+it("opens the map at 맞춤 and steps it with − and + between 40% and 200%, 맞춤 bringing it back (UI_BEHAVIOR, A mission's map)", async () => {
+  const map = await mount({ items: [mission({ nodes: [node("a", { status: "working" }), node("b", { depends_on: ["a"] })] })] });
+  try {
+    const level = () => map.q("[data-mission-zoom-level]")?.textContent;
+    const step = (which: "in" | "out" | "fit") => map.q(`[data-mission-zoom-step="${which}"]`) as HTMLButtonElement;
+    const canvas = () => map.q("[data-mission-canvas]")!.dataset.missionCanvas;
+    // jsdom lays nothing out, so the whole map fits at its own size.
+    expect([level(), canvas(), step("fit").getAttribute("aria-pressed")]).toEqual(["100%", "fit", "true"]);
+    await act(async () => step("out").click());
+    expect([level(), canvas(), step("fit").getAttribute("aria-pressed")]).toEqual(["90%", "zoomed", "false"]);
+    for (let press = 0; press < 8; press += 1) await act(async () => step("out").click());
+    expect([level(), step("out").disabled]).toEqual(["40%", true]);
+    for (let press = 0; press < 20; press += 1) await act(async () => step("in").click());
+    expect([level(), step("in").disabled]).toEqual(["200%", true]);
+    await act(async () => step("fit").click());
+    expect([level(), canvas(), step("fit").getAttribute("aria-pressed")]).toEqual(["100%", "fit", "true"]);
+  } finally { await map.unmount(); }
 });

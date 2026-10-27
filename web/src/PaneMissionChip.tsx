@@ -1,4 +1,4 @@
-import { CheckIcon, ChevronRightIcon, WaypointsIcon } from "lucide-react";
+import { CheckIcon, WaypointsIcon } from "lucide-react";
 import type { Actions } from "./actions";
 import { formatElapsed } from "./components/elapsed";
 import { ProgressCells, TONE_TEXT } from "./components/mission-tone";
@@ -7,6 +7,7 @@ import { Popover, PopoverAnchor, PopoverContent } from "./components/ui/popover"
 import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
+import { markdownPlainText } from "./markdownPlain";
 import { useWorkerRow, ResultTail } from "./missionParts";
 import { allAgents } from "./paneAgents";
 import { liveNodes, missionCells, missionOfPane, missionOpen, missionResults, missionTally, nodeMark, paneChipWords, stageWord, type PaneChipState } from "./missions";
@@ -17,9 +18,10 @@ import { useShellStore } from "./store";
 
 // A Conductor pane's mission chip and its popover (PRD mission-pane-chip
 // D-01, D-07; PRD mission-plan-visibility B8, B10, B11): in the plan chip's
-// place, the same pointer, pin and Esc rules, the nodes a worker is at now
-// while the mission runs, what it left once it ends, and `크게 ›` for the
-// big map in the lane's 보기 slot. The map itself is drawn only there.
+// place, the pointer or the keyboard's focus shows the popover, the nodes a
+// worker is at now while the mission runs and what it left once it ends, and
+// a press, Enter or Space on the chip opens the mission's map in the lane's
+// 보기 slot, the one place the map is drawn.
 
 /** A finished mission's popover lists this many results; `+N` says the rest (B11). */
 export const POPOVER_RESULTS = 3;
@@ -61,6 +63,12 @@ function PaneMissionChip({ paneId, mission, actions }: { paneId: string; mission
       <PopoverAnchor asChild>
         <button
           {...chip.anchor}
+          // The press opens the map rather than pinning the popover; the Show plan chord still pins it.
+          aria-pressed={undefined}
+          onClick={() => {
+            chip.close();
+            actions.openMission(mission.id);
+          }}
           aria-label={label}
           data-pane-mission-chip={mission.id}
           data-mission-chip-state={words.state}
@@ -86,10 +94,6 @@ function PaneMissionChip({ paneId, mission, actions }: { paneId: string; mission
         <MissionPopover
           paneId={paneId}
           mission={mission}
-          onLarge={() => {
-            chip.close();
-            actions.openMission(mission.id);
-          }}
           onConversation={() => {
             chip.close();
             actions.openAgent(paneId);
@@ -104,9 +108,10 @@ function PaneMissionChip({ paneId, mission, actions }: { paneId: string; mission
  * The popover's body: an open mission's head, its decision, the nodes a
  * worker is at and one tally line (B10); a finished or cancelled mission's
  * head, its report's first lines and what it left (B11). No record footer:
- * the pane ⋯ menu and the sidebar row open the record (B7).
+ * the pane ⋯ menu and the sidebar row open the record (B7), and the chip
+ * itself opens the map, which the head's end says.
  */
-export function MissionPopover({ paneId, mission, onLarge, onConversation }: { paneId: string; mission: Mission; onLarge: () => void; onConversation: () => void }) {
+export function MissionPopover({ paneId, mission, onConversation }: { paneId: string; mission: Mission; onConversation: () => void }) {
   const { t } = useInterfaceTranslation();
   const device = useShellStore((s) => (mission.stale ? machineName(s.rest?.navigator?.devices, mission.device_id, t) : null));
   const ended = mission.status === "done" || mission.status === "cancelled";
@@ -114,15 +119,7 @@ export function MissionPopover({ paneId, mission, onLarge, onConversation }: { p
     <div className="flex min-w-0 flex-col gap-xs pb-sm [word-break:keep-all]" data-mission-popover={paneId} data-mission-popover-state={ended ? mission.status : "open"}>
       <div className="flex min-w-0 items-center gap-xs px-sm pt-sm">
         <span className="min-w-0 flex-1 truncate">{ended ? <EndedHead mission={mission} /> : <OpenHead mission={mission} />}</span>
-        <button
-          type="button"
-          className="flex shrink-0 items-center gap-xxs rounded-xs px-xs py-xxs text-primary outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring"
-          onClick={onLarge}
-          data-mission-mini-large="true"
-        >
-          {t("plan.large")}
-          <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />
-        </button>
+        <span className="shrink-0 text-micro text-muted-foreground" data-mission-mini-open="true">{t("mission.mini.open")}</span>
       </div>
       {device ? <p className="px-sm text-muted-foreground" data-mission-stale-note="true">{t("mission.stale", { device })}</p> : null}
       <div className={cn("flex min-w-0 flex-col gap-xs", mission.stale && "opacity-(--opacity-dimmed)")}>
@@ -213,7 +210,8 @@ function EndedBody({ mission }: { mission: Mission }) {
   const { t } = useInterfaceTranslation();
   const results = missionResults(mission);
   const shown = results.slice(0, POPOVER_RESULTS);
-  const lines = mission.report?.split("\n").filter((line) => line.trim() !== "").slice(0, REPORT_LINES) ?? [];
+  // The report is the Conductor's Markdown; the popover quotes its words, not its marks.
+  const lines = mission.report ? markdownPlainText(mission.report).split("\n").filter(Boolean).slice(0, REPORT_LINES) : [];
   return (
     <>
       {lines.length > 0 ? (
