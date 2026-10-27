@@ -337,6 +337,8 @@ function NodeCard({ mission, node, selected, dimmed, onSelect, events, end }: { 
         "flex w-(--size-mission-node) min-w-0 flex-col gap-xxs rounded-md border bg-card px-sm pt-xs text-left outline-none transition-opacity hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring",
         checks.length > 0 ? "pb-0" : "pb-xs",
         LOOK_CARD[look],
+        // Outside is the node's kind: the dotted border stays in whatever state it ends (B19).
+        node.kind === "external" && "border-dotted",
         selected && "outline-2 outline-offset-2 outline-primary",
         dimmed && "opacity-(--opacity-dimmed)",
       )}
@@ -377,10 +379,16 @@ function NodeCard({ mission, node, selected, dimmed, onSelect, events, end }: { 
 /** What a card names as its result (B28): its pull request's number, its branch, or its commit on main, whichever the record holds. */
 function cardResult(node: MissionNode, t: TFunction<"translation">): ReactNode {
   const result = nodeResult(node);
+  // An outside node's pull request or branch carries `↗` in every state (B19).
   if (node.kind === "external" && node.external) {
-    return "pr" in node.external
-      ? <span className="shrink-0 font-mono text-caption text-muted-foreground" data-node-pr={node.external.pr}>#{node.external.pr}</span>
-      : <span className="min-w-0 truncate font-mono text-caption text-muted-foreground" title={node.external.branch} data-node-branch={node.external.branch}>{node.external.branch}</span>;
+    return (
+      <span className="flex min-w-0 shrink items-center gap-xxs font-mono text-caption text-muted-foreground" data-node-outside="true">
+        <span aria-hidden="true" className="shrink-0">↗</span>
+        {"pr" in node.external
+          ? <span className="shrink-0" data-node-pr={node.external.pr}>#{node.external.pr}</span>
+          : <span className="truncate" title={node.external.branch} data-node-branch={node.external.branch}>{node.external.branch}</span>}
+      </span>
+    );
   }
   if (!result) return null;
   switch (result.kind) {
@@ -410,6 +418,8 @@ function criteriaWords(tally: { passed: number; total: number; skipped: number }
 /** What a card's badges say, in its accessible name: a badge inside the card's button cannot take focus of its own, so the button speaks for it. */
 function badgeWords(mission: Mission, node: MissionNode, t: TFunction): string[] {
   return [
+    // A finished outside node still says it is outside, which its state word no longer does.
+    ...(node.kind === "external" && nodeLook(mission, node) !== "external" ? [t("mission.look.external")] : []),
     ...(heldQuestion(mission, node) ? [heldQuestion(mission, node)!] : []),
     ...(node.reopened > 0 ? [t("mission.badge.reopened", { count: node.reopened })] : []),
     ...(node.change ? [`${t("mission.changed")} · ${node.change}`] : []),

@@ -348,7 +348,9 @@ export function missionResults(mission: Mission): { node: MissionNode; result: N
  * shape says the state, and colour is kept for what wants a look (working,
  * review, a decision, a failure). Finished work is grey, and once it reached
  * main it is `landed`, a faint check with no fill; an outside node watches
- * until its pull request merges or its branch reaches main.
+ * until its pull request merges or its branch reaches main. Being outside is
+ * a node's kind, not a state: its card keeps the dotted border and `↗` in
+ * every look (B19).
  */
 export type NodeLook = "waiting" | "working" | "review" | "hold" | "failed" | "done" | "landed" | "external" | "cancelled" | "dropped";
 
@@ -517,11 +519,14 @@ export function neighbours(edges: readonly { from: string; to: string }[], key: 
  */
 export function cardLine(mission: Mission, node: MissionNode, planLine: string | null, t: TFunction<"translation">): { text: string; attention: boolean } | null {
   const look = nodeLook(mission, node);
-  if (look === "cancelled" || look === "dropped" || look === "done" || look === "landed") return null;
+  if (look === "cancelled" || look === "dropped") return null;
+  // An outside node says where its pull request or branch is in every state, finished too (B19).
   if (node.kind === "external") {
     if (look === "failed") return { text: t("mission.outside.closed"), attention: true };
+    if (look === "landed") return { text: t("mission.look.landed"), attention: false };
     return { text: t(node.unread ? "mission.outside.unread" : "mission.outside.waiting"), attention: false };
   }
+  if (look === "done" || look === "landed") return null;
   if (look === "working" || look === "review") {
     const left = linesLeft(node);
     const text = planLine ?? node.line ?? (left.length > 0 ? t("mission.line.left", { lines: left.map((line) => criterionShort(line, t)).join(", ") }) : null);

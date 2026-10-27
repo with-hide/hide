@@ -342,6 +342,8 @@ describe("a card's line (PRD mission-map-git-criteria B20, B28)", () => {
     expect(cardLine(m, outside, null, t)?.text).toBe("waiting for main");
     expect(cardLine(m, { ...outside, unread: true }, null, t)?.text).toBe("Could not check");
     expect(cardLine(m, { ...outside, status: "failed" }, null, t)).toEqual({ text: "Closed without merge", attention: true });
+    // Finished, it still says where it ended (B19).
+    expect(cardLine(m, { ...outside, status: "done" }, null, t)).toEqual({ text: "In main", attention: false });
     expect(cardLine(m, node("d", { status: "done", pr: 9, pr_state: "mergeable" }), null, t)).toBeNull();
   });
 });
