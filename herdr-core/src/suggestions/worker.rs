@@ -15,7 +15,7 @@ use super::analysis::{
 };
 use super::apply::{self as applying, ApplyOrder, FollowedAttempt};
 use super::ledger::{Observation, RecordIndex, SessionRef, Signal, SignalGroup};
-use super::lifecycle::{AttemptMove, AttemptPhase, LineLife};
+use super::lifecycle::{AttemptMove, AttemptPhase};
 use super::notebook::{Line, LineId, Notebook, NotebookEdit, Outcome, Stage, Strike, StruckBy};
 use super::policy::{self, Quantity};
 use super::read::{self, ReadInput};
@@ -1662,6 +1662,7 @@ mod tests {
     use super::*;
     use crate::model::{SuggestionGroup, SuggestionState, SuggestionsStatus};
     use crate::suggestions::ledger::SessionRef;
+    use crate::suggestions::lifecycle::LineLife;
     use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
     const START: u64 = 400 * policy::DAY_MS + 9 * 3_600_000;
