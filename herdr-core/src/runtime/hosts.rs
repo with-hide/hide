@@ -454,7 +454,11 @@ impl Runtime {
     /// blocks, and a link that already ended tells its end at once, which
     /// takes the lock.
     fn spawn_host_start(&mut self, device_id: &str, generation: u64, start: HostStart) -> bool {
+        if matches!(start, HostStart::Dial { .. }) {
+            self.begin_device_connect(device_id);
+        }
         let Some(context) = self.worker_context.clone() else {
+            self.fail_device_connect_install(device_id);
             self.set_host_phase(
                 device_id,
                 HostPhase::Unavailable("The helper worker is unavailable".to_owned()),
@@ -522,6 +526,7 @@ impl Runtime {
                 }
             });
         if let Err(error) = spawned {
+            self.fail_device_connect_install(device_id);
             self.set_host_phase(
                 device_id,
                 HostPhase::Unavailable(format!("The helper worker could not start: {error}")),
@@ -756,6 +761,7 @@ impl Runtime {
                     node.hello.machine_identity.clone().into_result(),
                 );
                 let platform = format!("{} {}", node.hello.os, node.hello.arch);
+                self.device_connect_platform(device_id, &node.hello.os, &node.hello.arch);
                 let mut bound_now = false;
                 let mut helper_path = None;
                 if let Some((identity, installed, path, upload)) = dialed {
@@ -824,6 +830,9 @@ impl Runtime {
                 // this core installed, a node's that dials this core from
                 // the app or build it runs, through its link.
                 if let Some(report) = kit {
+                    let report = report.map(|report| *report);
+                    let token = self.claim_device_connect_kit(device_id);
+                    self.complete_device_connect_kit(device_id, token, &report);
                     // A read or automatic pass that waited for this link
                     // is already answered. Keep an explicit repair or
                     // agent choice, and start it after the bootstrap.
@@ -837,7 +846,7 @@ impl Runtime {
                     }
                     self.ingest_device_kit_answer(
                         device_id,
-                        super::DeviceKitAnswer::Report(report.map(|report| *report)),
+                        super::DeviceKitAnswer::Report(report),
                         None,
                     );
                     self.start_device_kit(device_id);
@@ -849,6 +858,7 @@ impl Runtime {
                 }
             }
             Err(error) => {
+                self.fail_device_connect(device_id, &error);
                 let message = error.to_string();
                 crate::diagnostic!(serde_json::json!({
                     "component": "remote_host",
@@ -926,6 +936,7 @@ impl Runtime {
         if host.generation != generation || !matches!(host.phase, HostPhase::Ready { .. }) {
             return false;
         }
+        self.fail_device_connect_install(device_id);
         self.set_host_phase(
             device_id,
             HostPhase::Unavailable(format!("The device helper disconnected: {reason}")),
@@ -952,6 +963,7 @@ impl Runtime {
     /// Ends the helper connection, if any. Work still waiting settles as
     /// unknown in its own caller.
     pub(super) fn close_device_host(&mut self, device_id: &str, reason: &str) {
+        self.forget_device_connect(device_id);
         if self.device_hosts.contains_key(device_id) {
             self.advance_host_generation(device_id);
             let host = self.device_host_entry(device_id);
