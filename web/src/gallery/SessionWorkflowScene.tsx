@@ -6,7 +6,7 @@ import { TaskLens } from "../TaskLens";
 import { TooltipProvider } from "../components/ui/tooltip";
 import type { TaskState } from "../agentScope";
 import { PaneView } from "../PaneView";
-import type { AgentRow, AgentState, PaneHeader, PrState, RaisedAsk, SessionGroup } from "../snapshot";
+import type { AgentRow, AgentState, PaneConnection, PaneHeader, PrState, RaisedAsk, SessionGroup } from "../snapshot";
 import type { RowMark, StatusTone, RequestVerb } from "../snapshot";
 import { useShellStore } from "../store";
 import { REFERENCE_FOLDS, sidebarScene } from "./sceneData";
@@ -194,5 +194,15 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
     document.documentElement.classList.toggle("light", theme === "light");
     document.documentElement.style.setProperty("--interface-scale", String(scale));
   }, [fixture, theme, scale, turnRow]);
+  // state=connection: a copy too old for Hide wears the Update needed badge, and a session started before the update
+  // put the piece in says to restart; the other headers keep the integration icon (docs/UI_BEHAVIOR.md).
+  if (kind === "pane-header" && state === "connection") {
+    const header = (id: string, connection: PaneConnection) => ({ ...fixture.pane, id, identity_label: "Group tab 기능 설계", children: { instrumented: false, uninstrumented_reason: null, uninstrumented_label: null, chips: [], ...fixture.pane.children, connection } });
+    const cases: [string, string, string, PaneConnection][] = [
+      ["update-agent", "업데이트 필요 · Claude Code 2.1.200", "claude", { connected: false, can_reopen: false, reason: "update_agent", reopen: null, update: { installed: "2.1.200", minimum: "2.1.278", path: "/Users/me/.local/share/claude/versions/2.1.200", command: "claude update" } }],
+      ["restart-agent", "업데이트 뒤 · 다시 시작하면 연결", "omp", { connected: false, can_reopen: false, reason: "started_before_hide", reopen: null }],
+    ];
+    return <TooltipProvider><div style={{ width: width ?? undefined }} className="flex flex-col gap-lg bg-background p-xl text-foreground" data-gallery-scene={kind} data-gallery-state={state}>{cases.map(([id, label, agentKind, connection]) => <div key={id} data-pane-header-case={id} className="min-w-0"><div className="pb-xs text-micro text-muted-foreground">{label}</div><div className="h-[var(--size-pane-state-example)] min-w-0 border border-border"><PaneView pane={header(id, connection)} transport={undefined} focused={false} scale={1} actions={actions} agentKind={agentKind} markSymbol="quiet" markTone="text-muted-foreground" paneCount={2} zoomed={false} /></div></div>)}</div></TooltipProvider>;
+  }
   return <TooltipProvider>{kind === "session-panel" ? <div className="flex h-full bg-background text-foreground" data-gallery-scene={kind}><TaskLens actions={actions} /></div> : <div style={{ width: width ?? undefined }} className="flex flex-col gap-lg bg-background p-xl text-foreground" data-gallery-scene={kind} data-gallery-state={state}>{(state === "child" ? PANE_HEADER_CASES.filter(([id]) => CHILD_CASES.includes(id)) : PANE_HEADER_CASES.slice(turn ? 12 : state === "edge" ? 6 : 0, turn ? 12 + TURN_CASES.length : state === "edge" ? 12 : 6)).map(([id, label]) => <div key={id} data-pane-header-case={id} className={id === "narrow" || id === "turn-narrow" || id === "child-narrow" ? "w-(--size-pane-narrow-example) max-w-full min-w-0" : "min-w-0"}><div className="pb-xs text-micro text-muted-foreground">{label}</div><div className="h-[var(--size-pane-state-example)] min-w-0 border border-border"><PaneView pane={{ ...fixture.pane, id, identity_label: CHILD_CASES.includes(id) ? "UI 검증" : content === "long" ? "긴 한국어 제목과 변경 사항을 좁은 화면에서 확인하는 작업" : "Group tab 기능 설계", lineage_path: CHILD_CASES.includes(id) ? [{ pane_id: "progress", label: content === "long" ? "긴 한국어 부모 작업 이름을 좁은 화면에서 확인하는 작업" : "Group tab 기능 설계", siblings: [] }, { pane_id: id, label: "UI 검증", siblings: [] }] : undefined }} transport={undefined} focused={false} scale={1} actions={actions} agentKind="codex" markSymbol={id === "finished" ? "done" : "quiet"} markTone={id === "finished" ? "text-success" : "text-muted-foreground"} paneCount={2} zoomed={false} /></div></div>)}</div>}</TooltipProvider>;
 }

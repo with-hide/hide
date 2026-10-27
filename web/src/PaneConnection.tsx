@@ -111,11 +111,11 @@ function ConnectionPopover({
           <Button
             variant="ghost"
             size="sm"
-            className="shrink-0 gap-xxs px-xs text-caption text-warning hover:text-warning"
+            className="shrink-0 gap-xs px-xs text-caption text-warning hover:text-warning"
             data-pane-connection={connection.reason}
             data-pane-connection-pane={paneId}
           >
-            <span aria-hidden="true" className="size-(--size-tab-status-dot) rounded-full bg-warning" />
+            <span aria-hidden="true" className="size-(--size-tab-status-dot) shrink-0 rounded-full bg-warning" />
             {t("panes.connection.updateAgent.badge")}
           </Button>
         </PopoverTrigger>

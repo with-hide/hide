@@ -44,6 +44,7 @@ export const ONBOARDING_STATES = [
   "agents-none",
   "agents-refused",
   "agents-setup",
+  "agents-update",
   "devices",
   "devices-loading",
   "devices-failed",
@@ -68,6 +69,7 @@ export const ONBOARDING_STATES = [
   "settings-done-only",
   "settings-both",
   "settings-refused",
+  "settings-update",
   "herdr-moving",
   "herdr-failed",
   "herdr-moved",
@@ -161,13 +163,21 @@ function kitAgents(state: OnboardingState, system: OnboardingSystem): KitAgent[]
   });
   // Off macOS, OpenCode is installed but Hide cannot attach to it there yet (B49).
   const pc = system !== "mac";
+  // A Claude Code older than Hide's minimum, installed by its own installer, and an omp whose install Hide cannot
+  // tell, which gets its install page (docs/agent-hooks.md, Updating an agent that is too old).
+  const tooOld = state === "agents-update" || state === "settings-update";
+  const refusedOld = state === "settings-update" ? "update_agent" : null;
+  const old = (installed: string, minimum: string, path: string, command: string | null, pieces: { hook: string; skill: string; herdr: string }): Partial<KitAgent> =>
+    tooOld ? { update: { installed, minimum, path, command }, ...(refusedOld ? { hook: { ...piece(pieces.hook, refusedOld), why: { cause: refusedOld, value: minimum } }, skill: piece(pieces.skill), herdr: piece(pieces.herdr) } : {}) } : {};
+  const claude = { hook: `${HOME}/.claude/settings.json`, skill: `${HOME}/.claude/skills/hide/SKILL.md`, herdr: `${HOME}/.claude` };
+  const omp = { hook: `${HOME}/.omp/agent/extensions/hide.ts`, skill: shared, herdr: `${HOME}/.omp/agent` };
   return [
-    row("claude-code", "Claude Code", true, { hook: `${HOME}/.claude/settings.json`, skill: `${HOME}/.claude/skills/hide/SKILL.md`, herdr: `${HOME}/.claude` }),
+    row("claude-code", "Claude Code", true, claude, old("2.1.200", "2.1.278", `${HOME}/.local/share/claude/versions/2.1.200`, "claude update", claude)),
     row("codex", "Codex", true, { hook: `${HOME}/.codex/hooks.json`, skill: shared, herdr: `${HOME}/.codex` }, state === "agents-failed" ? { enabled: true, chosen: true, hook: piece(`${HOME}/.codex/hooks.json`, "not_changed") } : {}),
     row("grok", "Grok", false, { hook: `${HOME}/.grok/hooks/hide.json`, skill: shared, herdr: `${HOME}/.grok` }),
     row("opencode", "OpenCode", true, { hook: `${HOME}/.config/opencode/plugins/hide.js`, skill: shared, herdr: `${HOME}/.config/opencode` }, pc ? { availability: "unsupported_system" } : {}),
     row("pi", "Pi", true, { hook: `${HOME}/.pi/agent/extensions/hide.ts`, skill: shared, herdr: `${HOME}/.pi/agent` }),
-    row("omp", "omp", !pc, { hook: `${HOME}/.omp/agent/extensions/hide.ts`, skill: shared, herdr: `${HOME}/.omp/agent` }),
+    row("omp", "omp", !pc, omp, state === "settings-update" ? old("18.2.1", "18.7.0", `${HOME}/src/oh-my-pi/bin/omp`, null, omp) : {}),
     row("antigravity", "Antigravity", false, { hook: `${HOME}/.gemini/config/hooks.json`, skill: `${HOME}/.gemini/config/skills/hide/SKILL.md`, herdr: `${HOME}/.gemini/config` }),
   ];
 }
