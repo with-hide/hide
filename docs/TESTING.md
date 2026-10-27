@@ -359,7 +359,6 @@ A test whose assertion requires a pipe to have no readers creates and closes tha
    Do not rename a system utility to stand in for an agent: a multicall utility can choose its implementation from the executable name and reject the agent's name.
 9. **Retries are a classification.**
    CI runs every Rust lane (Linux, macOS, Windows, the OS contract and nightly) with `scripts/verify-cargo.sh nextest --profile ci` (`retries = 1` in `.config/nextest.toml`), so a test that fails once and then passes is reported as flaky and recorded in an issue with an expiry; two failures fail the lane.
-   The one test it does not retry is the nightly's signed-in agy turn, which spends a provider's daily requests ([A real agent on CI](#a-real-agent-on-ci)).
    `nextest` does not run doc tests; the workspace has none that runs today, and a runnable one needs its own `cargo test --doc` step.
    `scripts/install-nextest.sh` installs the pinned release on a runner; a lane that runs nextest several times keeps one JUnit report per run, and `scripts/ci-flaky-report.py` reads them all.
    The pin is at least 0.9.145, because an older nextest on macOS let a test started beside another inherit the other's output pipe, and reported the test whose pipe it held as leaking (LEAK) though it had left nothing running; `.config/nextest.toml` warns a local run on an older nextest, and on macOS with 0.9.145 or later a LEAK names a child the test left behind, which rule 7 forbids.
@@ -401,7 +400,7 @@ A body edit (`edited`) starts a run too, for the checks that read the body (`che
 Marking the pull request ready (`ready_for_review`) starts the run that plans and runs the lanes, and that run's `verify` replaces the failed one.
 `verify` fails on a draft instead of being skipped because a skipped required check counts as passed, and `verify` is not started until its lanes finish: a skipped `verify` from the draft run would otherwise be the only check on the commit for the minutes after it is marked ready.
 Keep `ready_for_review` in `pr.yml`'s `types`, and keep `verify` running on a draft; `scripts/tests/test_ci_plan.py` reads the workflow for both.
-A hand run of `nightly.yml` takes a `lane` (`all`, `linux`, `macos`, `windows`, `agy`): one system's web and desktop suites, the remote mailbox lane and the agy contract, with `verify` and `package` for `all` only, or for `agy` the agent contracts alone on all three systems, agy's (signed in when the `HIDE_AGY_API_KEY` secret is set) and the `agent trust contract` of the real Claude Code and Codex, which a branch can run with `gh workflow run nightly.yml --ref <branch> -f lane=agy`; the schedule runs everything.
+A hand run of `nightly.yml` takes a `lane` (`all`, `linux`, `macos`, `windows`, `agy`): one system's web and desktop suites, the remote mailbox lane and the agy contract, with `verify` and `package` for `all` only, or for `agy` the agent contracts alone on all three systems, agy's and the `agent trust contract` of the real Claude Code and Codex, which a branch can run with `gh workflow run nightly.yml --ref <branch> -f lane=agy`; the schedule runs everything.
 The scheduled nightly and a hand run of `all` call each web and desktop suite once: `verify` owns the whole Linux web suite, Windows's `@platform` web and desktop tests and the whole macOS desktop suite; the outer workflow adds macOS's `@platform` web tests and Linux's `@platform` desktop tests.
 An OS-only hand run keeps its direct calls, with no `verify` call and no other system's web or desktop suite; `agy` starts neither suite.
 The Windows desktop call keeps its screenshots through `verify`, as its direct hand run does, and every call keeps the same failure and flaky reports and logs.
@@ -488,7 +487,7 @@ A run that plans every lane a pull request can plan starts at most 32 jobs, nine
 | `os contract` (Linux, Windows), `os contract (macOS)` | 3 | one job per system, the macOS leg planned only for its two crates |
 | `agy contract` (Windows) | 1 | agy's hook block, trust, conversations and Hide AI backend, and the real agy reading Hide's block, where the hook commands and install folder differ; `rust` runs the same tests on Linux and the nightly runs all three systems |
 | `omp SDK contract` (Linux, macOS, Windows) | 3 | both supported exact npm SDK versions on Bun 1.3.14, with synthetic stored login and localhost inference; the native SQLite, Bun runtime and package resolution need each system |
-| `agent journey` (Linux, Windows) | 2 | the journey on the compiled Claude and Codex stand-ins on Linux and its Windows forms (process jobs, private files, pane commands) on Windows, planned only for the journey's code, its contract and the stand-ins; the nightly and a release run every system with the fake model and signed-in lanes ([VERIFICATION.md](VERIFICATION.md#agent-journey)) |
+| `agent journey` (Linux, Windows) | 2 | the journey on the compiled Claude and Codex stand-ins on Linux and its Windows forms (process jobs, private files, pane commands) on Windows, planned only for the journey's code, its contract and the stand-ins; the nightly and a release run every system with the fake model lane ([VERIFICATION.md](VERIFICATION.md#agent-journey)) |
 | `agent CLIs` (Linux, Windows) | 2 | every agent CLI `contracts/agent-clis.json` pins, installed at its pin and failing on another version, planned only for the table, its reader and the installers, so a pin moves in the pull request that installs it; the nightly's journey installs them on macOS too |
 | `remote mailbox` | 1 | the lane that was the tail of the macOS `@platform` job, now on Linux and, in the nightly, on macOS |
 | `desktop e2e` | 2 | the only macOS lane of the desktop app's own changes, in two shards that build in place, because the whole suite outgrew one job's step cap ([Balancing the e2e shards](#balancing-the-e2e-shards)) |
@@ -548,19 +547,12 @@ Refresh it this way:
    `durations` reads the `ok` mark of a Windows runner and the `✓` of the others, and the project a desktop run prints before each test.
 3. Commit the table.
 
-### A real agent on CI
+### No real login on CI
 
-A lane that signs a real agent in, like the nightly `agy contract` lane, proves only what the agent does before and around its model's answer; keep its real turn to the minimum.
-
-- An API key alone may not sign the agent in: agy 1.4.0 asked for a browser sign-in until its settings also named `"modelProvider": "gemini"` (2026-10-16).
-- A free-tier quota is counted per model per day across the key's project (20 requests on 2026-10-16), and every run that signs the agent in with that key spends it, hand runs included; budget the turns to it and say how in the workflow (`agy-contract.yml` spends 4 a night and the agent journey's rotation 8 on one system, 12 of the 20, and a passing turn prints how many model responses it took).
-- A turn the provider answered nothing because that day's requests were spent is not a result: the check still asserts what came before the model (the hooks, the letter), then writes a warning annotation titled `Not measured`, the check on its first line and `provider quota exhausted (<quota ids>)` with what was not reached after it, and passes, and the nightly report keeps its lane from passing (below).
-  It is not retried (`.config/nextest.toml`): a retry spends the requests again, and once they are spent it would pass a real first failure as flaky.
-  The codes that mean a spent day are data both this check and any other signed-in check read, `contracts/provider-quota.json`: the provider's error code and status, and the quota ids that count (for Gemini, `429`, `RESOURCE_EXHAUSTED` and the per-day request quota).
-  The rule is exact, so a broken setup cannot pass as a spent day: the agent's own structured error report, never its screen, carries that code and status, and every quota it names is one of those ids with a value above 0 (agy: `spent_quota` in `hide-agent-hooks/tests/it/agy_binary.rs` for the `AGY_ERROR:` line its print mode writes, and `scripts/agent_journey/quota.py` for that line and the `errorreport.go` record an interactive agy logs, from logs written during the agent's journey only, with agy's recorded reports in `hide-agent-hooks/tests/fixtures/agy-errors/`).
-  A quota of 0 (a model the key is not served), any other quota (a per-minute limit, the tokens Hide's own context sends), a model that answered and then ran out, a 503 the agent's retries never got past and every other error fail; a check that signs another agent in adds that provider's row and writes the same annotation.
-- Assert what happens before the model answers (the hooks fired, the letter went in, a refused call carried Hide's reason) rather than what the model writes, and name the model in the workflow so a renamed one is one line to change.
-- Keep the turn's own bounds inside the test's hang guard (`.config/nextest.toml`), so a slow turn fails with the agent's report instead of being ended with nothing.
+No CI lane signs a real agent in: an agent CLI on CI runs as a compiled stand-in or as the real CLI answered by the journey's fake model, with no key ([VERIFICATION.md: The CI lanes](VERIFICATION.md#the-ci-lanes)).
+Operator decision, 2026-10-27: what only a login proves (the provider's sign-in, quota and billed usage) is the provider's, not Hide's code, and a signed-in lane cost keys and a daily quota rotation and failed for the provider's reasons.
+A real login is measured by the journey's local mode on the operator's Mac, where the agents are already signed in ([VERIFICATION.md: Local mode](VERIFICATION.md#local-mode-macos)).
+A test that needs a real agent asserts what happens before the model answers (the hooks the agent loads, the letter it is handed, a call refused with Hide's reason) against the fake model or a stand-in, never what a provider writes.
 
 ## Flaky tests
 
@@ -572,7 +564,6 @@ CI retries a failed test once, for classification and for the report, and for no
 
 - Playwright runs with `retries: 1` when `CI` is set (`web/playwright.config.ts`, `desktop/playwright.config.ts`), and the Rust workspace runs under `cargo nextest` with the `ci` profile's `retries = 1` (`.config/nextest.toml`, `scripts/verify-cargo.sh nextest`).
   Neither retries locally: a flaky test fails where it is written.
-  The nightly's signed-in agy turn is the one test CI does not retry: a retry spends the provider's daily requests again, and once they are spent it would pass a real first failure as flaky ([A real agent on CI](#a-real-agent-on-ci)).
 - A test that fails and passes its retry is flaky: the lane passes, the log marks it, and `scripts/ci-flaky-report.py` reads the tool's own report (Playwright's JSON, nextest's JUnit) and files it as an issue labelled `quarantine`, or comments on the open issue that already tracks it.
   Issue and comment lookup read every page, using the nightly report's existing bound of ten pages of 100 entries; an incomplete listing or a GitHub error stops filing and leaves the warning and unfiled-test summary below, rather than creating an issue or comment from a partial search.
   The issue names the first run, the change and the system, and carries a deadline seven days out.
@@ -644,7 +635,6 @@ The nightly's `report` job (`scripts/ci-flaky-report.py --nightly`) is the one w
 - A scheduled run on main, or a hand run of `all`, that passes a lane closes that lane's issues with a comment naming the commit and the run; a skipped or cancelled lane closes nothing.
 - One run opens at most 10 issues; the rest, with the count of failed tests a lane had no annotation room for, go into one issue, `nightly: N more failures in run <id>`, which the next scheduled run closes as it files its own.
 - A run of any other branch writes no issue.
-- A check that passed without measuring (a `Not measured` warning annotation, [A real agent on CI](#a-real-agent-on-ci)) passes its job, but its lane is not green: it closes no issue, is no lane's last green nightly, and the report lists it under "Not measured" in its job summary.
 - The report fails its job when GitHub does, so a failure it could not file shows as a red report job rather than a silence.
   `--dry-run` with `--repo` and `--run` prints what it would write for any finished run and writes nothing.
 - The report reads a failed job's log through `gh api`, which from gh 2.97 hands over a body carrying a terminal escape only when told `--allow-escape-sequences`, and every job log carries one (the runner colors each step's command), so the report and its `--dry-run` need gh 2.97 or later.

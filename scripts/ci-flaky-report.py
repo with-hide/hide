@@ -37,10 +37,8 @@ issues, so the run's cap, the recurrence comments and the closing never race:
 one issue per test or measurement a lane annotated, or, for a failed job with
 no such annotation, per lane and failed step; a comment per run attempt on the
 issue already open for the same failure; and a lane that passes a scheduled
-run on main closes its issues. A check that passed without measuring (a
-`Not measured` warning annotation) keeps its lane from passing and is listed
-in the job summary. docs/TESTING.md, "Flaky tests" and "Nightly failures",
-owns the policy.
+run on main closes its issues. docs/TESTING.md, "Flaky tests" and "Nightly
+failures", owns the policy.
 
     ci-flaky-report.py --nightly --lane-input all
     ci-flaky-report.py --nightly --repo OWNER/REPO --run RUN_ID --dry-run
@@ -105,13 +103,6 @@ ANNOTATED_TESTS = 8
 # move with any change, so every pull request merged since the lane's last
 # green nightly is a candidate.
 MEASUREMENT_TITLE = "Failed measurement"
-# A check that passed without measuring anything, written by the check as a
-# warning annotation with the check on the first line and the reason after:
-# a real agent's provider refused its turn on a quota the CI key had spent
-# (docs/TESTING.md, "A real agent on CI"). Its job passes, since the cause is
-# not the code's, but its lane is not green: it closes no issue, is no lane's
-# last green nightly, and the report lists it.
-NOT_MEASURED_TITLE = "Not measured"
 
 NIGHTLY_LABEL = "nightly-failure"
 INFRA_LABEL = "infra"
@@ -810,18 +801,10 @@ class Nightly:
             self.annotations_of[job["id"]] = listing(self.call, annotation_path(job))
         return self.annotations_of[job["id"]]
 
-    def unmeasured(self, jobs):
-        """Each check a passing job of `jobs` ran without measuring, as (lane, check, reason)."""
-        return [
-            (lane_of(job["name"]), *(annotation.get("message") or "").partition("\n")[::2])
-            for job in jobs if job["conclusion"] == "success"
-            for annotation in self.annotations(job) if annotation.get("title") == NOT_MEASURED_TITLE
-        ]
-
     def green(self, jobs, lane):
-        """Whether `lane` ran in `jobs`, every job of it passed, and none passed without measuring."""
+        """Whether `lane` ran in `jobs` and every job of it passed."""
         mine = [job for job in jobs if canonical_key(lane_of(job["name"])) == canonical_key(lane)]
-        return bool(mine) and all(job["conclusion"] == "success" for job in mine) and not self.unmeasured(mine)
+        return bool(mine) and all(job["conclusion"] == "success" for job in mine)
 
     def failures(self):
         """Each failure of this run once, in job order, and the count of failed tests no lane annotated."""
@@ -1006,8 +989,6 @@ class Nightly:
         return actions
 
     def apply(self, actions):
-        # Read before writing, so a GitHub error here leaves nothing half written.
-        unmeasured = self.unmeasured_lines()
         lines = ["### Nightly failures", ""]
         for action, number, payload in actions:
             if action == "open":
@@ -1022,14 +1003,7 @@ class Nightly:
                 lines.append(f"- closed #{number}")
         for line in lines[2:]:
             print(line[2:])
-        for line in unmeasured[2:]:
-            print(f"not measured: {line[2:]}")
-        summary((lines if actions else lines + ["Nothing to write."]) + ([""] + unmeasured if unmeasured else []))
-
-    def unmeasured_lines(self):
-        """This run's checks that passed without measuring, as a summary section; none is no section."""
-        found = self.unmeasured(self.jobs(self.run_id, self.attempt))
-        return ["### Not measured", ""] + [f"- `{lane}`: {check}: {reason}" for lane, check, reason in found] if found else []
+        summary(lines if actions else lines + ["Nothing to write."])
 
 
 def describe(actions):
@@ -1057,8 +1031,7 @@ def nightly(args, env, call=gh):
     report_run = Nightly(repo, run, attempt, args.lane_input, call, Path(__file__).resolve().parents[1], date.today())
     actions = report_run.plan()
     if args.dry_run:
-        unmeasured = report_run.unmeasured_lines()
-        print(describe(actions) + ("\n\n" + "\n".join(unmeasured) if unmeasured else ""))
+        print(describe(actions))
         return 0
     report_run.apply(actions)
     return 0

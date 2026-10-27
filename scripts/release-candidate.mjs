@@ -1,5 +1,5 @@
 // Public, unsigned candidate provenance. The workflow checks main ancestry;
-// this boundary refuses unverified sources before any build or keyed journey.
+// this boundary refuses unverified sources before any build or journey.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -34,15 +34,13 @@ export function candidateReceipt(inputs, context, verification) {
     || verification.pull_requests.length !== 0) {
     throw new Error("verification_run_id must be the successful verify push/main run of public_sha");
   }
-  const liveAgents = inputs.live_agents === undefined ? true : inputs.live_agents;
-  if (![true, false, "true", "false"].includes(liveAgents)) {
-    throw new Error("live_agents must be a boolean");
-  }
   return {
     schema: 2, repository: REPOSITORY, public_sha: inputs.public_sha, tag: inputs.tag,
     build_order: inputs.build_order, verification_run_id: inputs.verification_run_id,
     workflow_sha: context.workflowSha, run_id: context.runId, run_attempt: Number(context.runAttempt),
-    live_agents: liveAgents === true || liveAgents === "true",
+    // No candidate calls a signed-in provider since 2026-10-27 (docs/BUILD.md,
+    // Unsigned release candidates); schema 2 keeps the field its consumer reads.
+    live_agents: false,
   };
 }
 

@@ -512,7 +512,6 @@ class NamedPaths(unittest.TestCase):
             "contracts/snapshot-wire-enums.json": ({"policy", "rust", "checks"}, ["herdr-core"]),
             "contracts/agent-adapters.json": ({"policy", "rust", "checks", "web-e2e", "desktop-e2e"}, ["hide-agent-adapter"]),
             "contracts/hide-cli.json": ({"policy", "rust"}, ["hided"]),
-            "contracts/provider-quota.json": ({"policy", "rust"}, ["hide-agent-hooks"]),
             "contracts/usage-coverage.json": ({"policy", "rust"}, ["hide-agent-adapter"]),
         }
         sources = code_sources()

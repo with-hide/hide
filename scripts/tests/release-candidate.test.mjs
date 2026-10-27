@@ -21,19 +21,9 @@ test("a verified candidate records public source, workflow, version and exact ru
   assert.deepEqual(candidateReceipt(inputs, context, verification), {
     schema: 2, repository: "with-hide/hide", public_sha: publicSha, tag: "v1.2.3-rc.1",
     build_order: "501", verification_run_id: "71", workflow_sha: workflowSha, run_id: "81", run_attempt: 2,
-    live_agents: true,
+    live_agents: false,
   });
   assert.equal(candidateReceipt({ ...inputs, tag: "v1.2.3" }, context, verification).tag, "v1.2.3");
-});
-
-test("deferring live providers is explicit in provenance and malformed choices fail closed", () => {
-  for (const value of [true, false, "true", "false"]) {
-    assert.equal(candidateReceipt({ ...inputs, live_agents: value }, context, verification).live_agents,
-      value === true || value === "true");
-  }
-  for (const value of [null, "", "yes", "False", 0, 1, [], {}]) {
-    assert.throws(() => candidateReceipt({ ...inputs, live_agents: value }, context, verification), /live_agents/);
-  }
 });
 
 test("a wrong, partial, failed or PR verification cannot authorize a candidate", () => {

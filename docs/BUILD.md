@@ -303,16 +303,14 @@ The command installs nothing; [The Installed App Is The Operator's](../AGENTS.md
 `release-candidate.yml` is a manual preparation workflow on protected `main`.
 It creates no tag or release and reads no signing credential.
 Its four required string inputs are `public_sha` (a full lowercase commit SHA), `tag` (`vX.Y.Z` or `vX.Y.Z-rc.N`), `verification_run_id` (the successful `pr.yml` push/main run of that exact source), and `build_order` (a positive decimal integer no larger than 9007199254740991).
-The optional boolean `live_agents` defaults to `true`; select `false` to defer signed-in provider calls when accounts are unavailable.
-The source must already be an ancestor of main; a branch, fork, PR run, incomplete run or different source is refused before building or using provider keys.
+The source must already be an ancestor of main; a branch, fork, PR run, incomplete run or different source is refused before building.
 The workflow revision is main's dispatch revision and may differ from the source revision it builds.
 `package.yml` and `agent-journey.yml` run their steps from that dispatch revision on the source's checkout, so the workflow refuses a source at which either file differs from main; choose a newer verified source instead.
 
 The workflow reuses `package.yml` for unsigned Linux and Windows installers, including their installation, packaged-window and update checks.
 It runs the existing `agent-journey.yml` on the same source, with stand-ins on Linux and macOS, Windows form checks, and fake-model lanes on all three systems.
-With `live_agents=true`, it also requests signed-in lanes on all three systems and agy signed in on Linux only, under the journey's existing missing-key and quota policy.
-With `live_agents=false`, signed-in checks are **not measured**, as recorded in the receipt and workflow summary; package, stand-in and fake-model failures still block the receipt.
-The selection never changes an earlier failure into a pass, and a successful candidate does not establish that every provider answered.
+It signs no agent in: since 2026-10-27, by the operator's decision, a real login is measured only by the release's local run on the Mac ([CONTRIBUTING.md: Releases](../CONTRIBUTING.md#releases)), so the workflow summary records signed-in providers as **not measured**; package, stand-in and fake-model failures block the receipt.
+A successful candidate does not establish that any provider answered.
 Rerunning only the failed jobs does not make a selectable candidate: the receipt keeps the first attempt and the earlier attempt's artifacts stay beside the new ones, so a failed candidate is dispatched again with the same inputs.
 The reusable workflows' optional `source-sha` defaults to the caller commit, and `package.yml`'s optional `build-order` defaults to its existing history-based ordering, so existing callers keep their behavior.
 An explicit order allows separately prepared packages of one numeric version to share one build identity.
@@ -326,11 +324,11 @@ Only after packaging and the selected journey succeed does the workflow upload `
 
 The installer artifacts keep the names `hide-package-linux` and `hide-package-windows`; candidate artifacts expire after seven days.
 All receipt fields describe public facts, with IDs and order as decimal strings and `schema` and `run_attempt` as integers.
-Schema 2 adds the boolean `live_agents`, which records whether provider checks were requested, not their per-cell verdicts.
+Schema 2 adds the boolean `live_agents`, which records whether provider checks were requested, not their per-cell verdicts; since 2026-10-27 it is always `false`, kept so the private consumer that requires it reads the receipt unchanged.
 Consumers retaining schema 1 support must treat its missing selection as the original live-enabled workflow, never as evidence that all providers passed.
 A consumer verifies the successful manual main run, its trusted workflow revision, current attempt, matching receipt and artifact inventory before consuming it; a receipt alone proves neither GitHub origin nor that a package is signed.
 Run evidence and reports remain workflow artifacts, separate from distributable files.
-Release approval must disclose deferred or otherwise unmeasured provider coverage; this option does not waive signing, installation, update checks or version approval.
+Release approval must disclose unmeasured provider coverage; it does not waive signing, installation, update checks or version approval.
 Candidate preparation creates no public tag or Release; only the official publisher creates the approved release tag and publishes the final assets.
 
 ## Release asset gate
