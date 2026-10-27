@@ -1,27 +1,21 @@
 // Chapter 8: handing a Conductor a job of several pull requests as a mission,
-// opening its popover from the pane's mission chip, opening the mission's big
-// map in the 보기 slot, answering the one decision it asks from the map's
-// banner, and reading the mission's flow.
+// reading its popover on the pane's mission chip, pressing the chip for the
+// mission's map in the 보기 slot, answering the one decision it asks on the
+// map, and reading the mission's flow.
 
 import { chapter } from "../chapter";
 import { CONDUCTOR, MISSION_WORLD, missionInSlot, type MissionModel } from "../worlds/mission";
 
 const PANE = `[data-pane-view="${CONDUCTOR}"]`;
 const CHIP = `${PANE} [data-pane-mission-chip]`;
-/** The popover's `크게 ›`, or, when the learner closed it, the chip that opens it again. */
-const LARGE = `[data-mission-mini-large], body:not(:has([data-mission-mini-large])) ${CHIP}`;
-/** The banner's recommended choice, or, while the map is not open, what opens it: `크게 ›`, else the chip. */
-const ANSWER = [
-  "[data-mission-recommended]",
-  "body:not(:has([data-mission-recommended])) [data-mission-mini-large]",
-  `body:not(:has([data-mission-recommended], [data-mission-mini-large])) ${CHIP}`,
-].join(", ");
+/** The banner's recommended choice, or, while the map is not open, the chip that opens it. */
+const ANSWER = `[data-mission-recommended], body:not(:has([data-mission-recommended])) ${CHIP}`;
 const say = (text: string) => ({ type: { pane: CONDUCTOR, text } });
 
 export default chapter<MissionModel>({
   id: "mission",
   number: 8,
-  version: 2,
+  version: 3,
   world: MISSION_WORLD,
   quest: true,
   steps: [
@@ -31,7 +25,7 @@ export default chapter<MissionModel>({
     // The chip and its popover, which a first plan that lands while the learner looks at the pane opens once,
     // pinned (missionReveal.ts). A look: ⏎ pressing the chord here would close a map the plan left pinned.
     { id: "chip", target: `${CHIP}, [data-pane-mission]`, side: "bottom", command: "toggle_plan" },
-    { id: "large", quest: true, target: LARGE, side: "right", gesture: { click: true }, done: missionInSlot },
+    { id: "large", quest: true, target: CHIP, side: "right", gesture: { click: true }, done: missionInSlot },
     // The banner on the map takes the answer: a choice, or `직접 답하기…`; words said to the Conductor answer it too.
     { id: "answer", quest: true, target: ANSWER, side: "left", gesture: { click: true }, done: (model) => model.stage >= 2 },
     { id: "map", target: "[data-mission]", side: "left" },

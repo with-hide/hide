@@ -1,10 +1,8 @@
 // Synthetic GitHub answers and card receipts in the fixture's private home.
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { HerdrFixture } from "../../web/e2e/herdr-fixture";
 import { fixtureProgram } from "../../web/e2e/platform-fixture";
-import type { Isolated } from "./fixture";
 
 type FixturePull = { number: number; title: string; headRefName: string; baseRefName: string; state: string; reviewDecision: string; isDraft: boolean; statusCheckRollup: Record<string, string>[]; url: string; mergedAt: string | null; createdAt: string; updatedAt: string; closingIssuesReferences: never[] };
 
@@ -43,20 +41,4 @@ console.error("unsupported fixture gh command: " + args.join(" ")); process.exit
       write();
     },
   };
-}
-
-export function placedProgressBatch(run: Isolated): { branch: string; pane: string } {
-  const promotion = JSON.parse(execFileSync("python3", ["-c", String.raw`
-import json,sqlite3,sys
-db=sqlite3.connect(sys.argv[1],timeout=5)
-promotion=db.execute("SELECT branch,agent_id FROM card_promotions WHERE item_id='fixture-m1' AND state='running' AND agent_id IS NOT NULL").fetchone()
-if not promotion: raise RuntimeError('live promotion not reserved')
-db.execute("UPDATE card_promotions SET target_path='AGENTS.md' WHERE item_id IN ('fixture-m1','fixture-m2')")
-db.commit()
-print(json.dumps(dict(branch=promotion[0],agent_id=promotion[1])))
-`, path.join(run.env.HIDE_STATE_DIR!, "project-memory.sqlite3")], { encoding: "utf8", timeout: 10_000 })) as { branch: string; agent_id: string };
-  const ledger = JSON.parse(fs.readFileSync(path.join(run.env.HIDE_STATE_DIR!, "delivery-ledger.json"), "utf8")) as { agents: { id: string; pane: string }[] };
-  const agent = ledger.agents.find((agent) => agent.id === promotion.agent_id);
-  if (!agent) throw new Error("The fixture's promotion has no bound ledger agent");
-  return { branch: promotion.branch, pane: agent.pane };
 }

@@ -3,9 +3,9 @@ import { cn } from "../lib/utils";
 import { Hint } from "./ui/tooltip";
 
 // A mission card's state as a shape (PRD mission-map-git-criteria D-02,
-// B26): each look has its own form, readable without its colour, and colour
-// is kept for what wants a look (working, review, a decision, a failure).
-// Finished work is grey; work in main is a faint check with no fill. An
+// B26): each look has its own form, readable without its colour. Finished
+// work is a green disc with a check; work in main is a green check with no
+// disc, so the two read apart without the card's tag. An
 // outside node still watching is a dotted ring, its `↗` drawn beside its
 // number on the card in every state. The hover and the accessible name say
 // the same state word.
@@ -53,12 +53,12 @@ function Shape({ look }: { look: NodeLook }) {
     case "done":
       return (
         <>
-          <circle cx="6" cy="6" r="6" className="fill-muted" />
-          <path d="M3.4 6.2l1.8 1.8 3.4-3.6" fill="none" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="stroke-muted-foreground" />
+          <circle cx="6" cy="6" r="6" className="fill-mission-done" />
+          <path d="M3.4 6.2l1.8 1.8 3.4-3.6" fill="none" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="stroke-status-foreground" />
         </>
       );
     case "landed":
-      return <path d="M3.2 6.2l1.9 1.9 3.7-3.9" fill="none" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" className="stroke-muted-foreground opacity-(--opacity-dimmed)" />;
+      return <path d="M3.2 6.2l1.9 1.9 3.7-3.9" fill="none" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" className="stroke-mission-done" />;
     case "external":
       return <circle cx="6" cy="6" r="4.6" fill="none" strokeWidth="1.3" strokeDasharray="0.1 2.1" strokeLinecap="round" className="stroke-muted-foreground" />;
     case "cancelled":

@@ -5,6 +5,8 @@
 //! - [`notebook`]: the list of problems each day's run goes on editing.
 //! - [`analysis`]: the one boundary that turns records into notebook edits,
 //!   with the deterministic [`analysis::TagGrouping`] behind it today.
+//! - [`investigation`]: the analysis that edits the notebook with Hide AI
+//!   over several turns, reading through Hide's own read tools.
 //! - [`scoring`]: the counted pain of a line and which lines are raised.
 //! - [`policy`]: every score, threshold, cap, budget and schedule value.
 //! - [`settings`]: a Project's switches, quantity and apply mode.
@@ -24,6 +26,7 @@
 
 pub mod analysis;
 pub(crate) mod apply;
+pub mod investigation;
 pub mod ledger;
 pub mod lifecycle;
 pub mod notebook;

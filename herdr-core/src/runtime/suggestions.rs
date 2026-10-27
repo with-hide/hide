@@ -11,6 +11,9 @@ use crate::model::{
     SuggestionGroup, SuggestionHold, SuggestionState, SuggestionsAi, SuggestionsGithub,
     SuggestionsSnapshot,
 };
+use crate::suggestions::analysis::{Analysis, TagGrouping};
+use crate::suggestions::investigation::node::{Checkout, ProjectReads};
+use crate::suggestions::investigation::{Admission, Investigation};
 use crate::suggestions::ledger::Signal;
 use crate::suggestions::notebook::Outcome;
 use crate::suggestions::policy::Quantity;
@@ -18,8 +21,8 @@ use crate::suggestions::read::line_of_row;
 use crate::suggestions::settings::ApplyMode;
 use crate::suggestions::store::ProjectLocation;
 use crate::suggestions::worker::{
-    Command, LineAction, Options, ProjectRef, RunGate, SettingsChange, Sink, SuggestionClient,
-    SuggestionWorker,
+    AnalysisFactory, Command, LineAction, Options, ProjectRef, RunGate, RunPlan, SettingsChange,
+    Sink, SuggestionClient, SuggestionWorker,
 };
 use hide_node_link::gh::GithubFailureCategory;
 use serde::Deserialize;
@@ -751,6 +754,101 @@ impl Sink for RuntimeSink {
     }
 }
 
+/// What a run's investigation is made of, read under the lock: the
+/// operator's Hide AI and the folders the Project may be read in.
+struct InvestigationParts {
+    settings: hide_ai::AiSettings,
+    own_node: Arc<dyn crate::node_access::NodeLink>,
+    gate: Arc<hide_ai::UsageLimits>,
+    usage: Arc<dyn hide_ai::AiUsageSink>,
+    memory: PathBuf,
+    checkouts: Vec<Checkout>,
+}
+
+impl Runtime {
+    /// `None` while Hide AI cannot investigate (B19, D-39). A catalog
+    /// Project on a device whose link is down is not a candidate.
+    fn investigation_parts(&self) -> Option<InvestigationParts> {
+        if self.suggestions_ai() != SuggestionsAi::Ready {
+            return None;
+        }
+        let checkouts = self
+            .catalog_workspaces()
+            .filter_map(|workspace| {
+                let (node, link) = self.linked_node(&workspace.device_id).ok()?;
+                let machine = (node != self.node).then_some(node.as_str());
+                Some(Checkout {
+                    github: self.github_place(machine, &workspace.path).ok(),
+                    root: workspace.path.clone(),
+                    node,
+                    link,
+                })
+            })
+            .collect();
+        Some(InvestigationParts {
+            settings: self.ai_settings.clone()?,
+            own_node: self.own_node(),
+            gate: self.usage_gate(),
+            usage: self.ai_usage(),
+            memory: self.memory_database_path(),
+            checkouts,
+        })
+    }
+}
+
+/// The analysis a day's run uses (D-49): the investigation when the gate
+/// says Hide AI is ready, the deterministic grouping otherwise. Its parts
+/// are read under the lock on the worker's thread; the router is made and
+/// the Project's folder is found outside it, the folder on the run's own
+/// thread. Each turn is counted as one of Memory's Hide AI calls against
+/// the machine's daily cap, in Memory's store.
+pub(super) fn analysis_factory(runtime: Weak<Mutex<Runtime>>) -> AnalysisFactory {
+    Arc::new(move |plan: &RunPlan<'_>| {
+        let parts = plan
+            .gate
+            .ai_ready
+            .then(|| runtime.upgrade())
+            .flatten()
+            .and_then(|runtime| runtime.lock().ok()?.investigation_parts());
+        let Some(parts) = parts else {
+            return Box::new(TagGrouping) as Box<dyn Analysis>;
+        };
+        let router = Arc::new(crate::ai::memory_router(
+            &parts.own_node,
+            &parts.settings,
+            &parts.gate,
+            &parts.usage,
+        ));
+        let reads = ProjectReads::new(plan.project_id.to_owned(), parts.checkouts);
+        Box::new(Investigation::new(
+            router,
+            Box::new(reads),
+            memory_admission(parts.memory),
+            plan.stop.token(),
+        ))
+    })
+}
+
+/// Admits each turn against Memory's daily call cap; the store is opened on
+/// the first turn, on the run's thread.
+fn memory_admission(database: PathBuf) -> Admission {
+    let mut store: Option<hide_memory::MemoryStore> = None;
+    Box::new(move || {
+        let opened = match store.take() {
+            Some(opened) => opened,
+            None => super::memory::open_memory_store(&database)
+                .map_err(|_| "memory_store_unavailable".to_owned())?,
+        };
+        let admitted =
+            super::memory_analysis::admit_call(&opened).map_err(|failure| match failure {
+                super::memory_analysis::AnalysisFailure::Deferred(cap) => cap.to_owned(),
+                _ => "memory_store_unavailable".to_owned(),
+            });
+        store = Some(opened);
+        admitted
+    })
+}
+
 /// Starts the suggestion worker on the state folder's store and hands the
 /// runtime its client.
 pub(crate) fn spawn_worker(
@@ -767,7 +865,10 @@ pub(crate) fn spawn_worker(
         .filter(|directory| !directory.as_os_str().is_empty())
         .ok_or("the state folder is unknown")?;
     let worker = SuggestionWorker::spawn(
-        Options::production(hide_kit::layout::suggestions_store(directory)),
+        Options::production(
+            hide_kit::layout::suggestions_store(directory),
+            analysis_factory(Arc::downgrade(runtime)),
+        ),
         RuntimeSink {
             runtime: Arc::downgrade(runtime),
             notifier,

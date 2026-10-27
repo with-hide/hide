@@ -1,4 +1,4 @@
-// The production lane on its Memory tool over invented wire values,
+// The production lane on its Hide AI tool's Memory tab over invented wire values,
 // one state per document, for comparison with the v7 design exports (PRD
 // project-memory-v2 D-17, B19-B32). Runtime policy is tested in herdr-core.
 import { useLayoutEffect, useMemo } from "react";
@@ -8,9 +8,11 @@ import { TooltipProvider } from "../components/ui/tooltip";
 import type { Checkout, MemoryRow, ProjectMemory, SnapshotRest } from "../snapshot";
 import { useShellStore } from "../store";
 import { Lane } from "../Tools";
+import { useUiStore } from "../ui";
 import type { LaneFrame, LaneSizes, WorkspaceView } from "../workspace";
+import { hideAiSceneProject } from "./HideAiScene";
 
-export const MEMORY_SCENE_STATES = ["workspace", "correction", "off", "ai_not_ready", "analyzing", "empty", "unreadable", "promote", "writing", "writing_batch", "failed", "start_failed", "not_processed", "building", "unbuilt", "forgotten", "verifying", "reconsent", "checking", "check_budget_exhausted", "evicted", "full"] as const;
+export const MEMORY_SCENE_STATES = ["workspace", "correction", "off", "ai_not_ready", "analyzing", "empty", "unreadable", "forgotten", "verifying", "reconsent", "checking", "check_budget_exhausted", "evicted", "full"] as const;
 export type MemorySceneState = (typeof MEMORY_SCENE_STATES)[number];
 export type MemorySceneLanguage = "en" | "ko" | "zh-CN" | "ja";
 export type MemorySceneParams = { theme: "light" | "dark"; state: MemorySceneState; width: number; language: MemorySceneLanguage };
@@ -40,8 +42,6 @@ const ROWS: MemoryRow[] = [
   row(5, "커밋 메시지에 도구 이름을 넣지 않는다", "rule", 6, 4, 2, 4 * 1440 * MINUTE),
   ...Array.from({ length: 17 }, (_, index) => row(20 + index, `예시 카드 ${index + 1}`, "fact", 1, 0, 0, (7 + index) * 1440 * MINUTE)),
 ];
-/** A decision the main app does not have yet, which another branch builds. */
-const UNBUILT = row(14, "백로그는 프로젝트 이슈 출처 하나만 따른다", "decision", 2, 1, 1, 3 * 60 * MINUTE);
 const EXPANDED: ProjectMemory["expanded"] = {
   number: 12,
   body: "0.9.145 미만 nextest는 macOS에서 가짜 LEAK를 내므로, 그 버전 이상을 쓰고 LEAK는 먼저 버전을 의심한다.",
@@ -60,32 +60,13 @@ export function memorySceneProject(state: MemorySceneState): ProjectMemory {
   };
   switch (state) {
     case "workspace":
-      return { ...base, expanded: EXPANDED, questions: [
-        { kind: "promote", number: 3, title: ROWS[5]!.title, human_session_count: 3, pulled_session_count: 9 },
-        { kind: "promote", number: 5, title: ROWS[6]!.title, human_session_count: 2, pulled_session_count: 6 },
-      ] };
+      return { ...base, expanded: EXPANDED };
     case "correction": return { ...base, rows: [{ ...ROWS[6]!, title: "Use the repository verification script", body_preview: "Use the verification script so local checks and CI use the same toolchain." }], questions: [{ kind: "docs_disagree", number: ROWS[6]!.number, title: "Use the repository verification script", document: { authority: "card_newer", document: "docs/TESTING.md", document_at_unix_ms: Date.now(), operator_at_unix_ms: Date.now() - 1440 * MINUTE } }] };
     case "off": return { ...base, enabled: false, usable_cards: 0 };
     case "ai_not_ready": return { ...base, analysis: "ai_not_ready" };
     case "analyzing": return { ...base, analysis: "analyzing" };
     case "empty": return { ...base, rows: [], usable_cards: 0 };
     case "unreadable": return { ...base, unavailable: { reason: "unreadable" }, rows: [] };
-    case "promote": return { ...base, rows: ROWS.slice(1, 4).map((card, index) => ({ ...card, body_preview: [
-      "설치된 앱을 교체하기 전 운영자의 요청과 현재 버전을 확인하고 기존 앱을 백업한다.",
-      "저장소는 공개로 유지하며 라이선스 변경 내용은 저장소의 라이선스 파일에 반영한다.",
-      "릴리스 노트는 게시 전 운영자에게 보여주고 확인받은 내용으로 올린다.",
-    ][index] })) };
-    case "writing":
-    case "writing_batch": {
-      const promotion = { ...ROWS[1]!.promotion!, started_at_unix_ms: Date.now() - 4 * MINUTE };
-      const writing = { ...ROWS[1]!, promotion, body_preview: "설치된 앱은 운영자가 요청했을 때만 교체한다. 교체 전 버전을 확인하고 기존 앱을 백업한다." };
-      return { ...base, rows: state === "writing" ? [writing] : [writing, { ...ROWS[6]!, promotion, body_preview: "Rust 검증은 저장소가 제공하는 검증 스크립트로 실행한다." }] };
-    }
-    case "failed": return { ...base, rows: [ROWS[3]!], questions: [{ kind: "failed", number: 8, title: ROWS[3]!.title, start_failure: null }] };
-    case "start_failed": return { ...base, rows: [ROWS[3]!], questions: [{ kind: "failed", number: 8, title: ROWS[3]!.title, start_failure: { code: "shell_starting", detail: "[oh-my-zsh] Would you like to update? [Y/n]" } }] };
-    case "not_processed": return { ...base, rows: [UNBUILT, ROWS[6]!], expanded: { number: 14, body: UNBUILT.title, cited_paths: [], sources: [], previous: null }, questions: [{ kind: "failed", number: 14, title: UNBUILT.title, start_failure: { code: "card_not_processed", detail: "백로그와 메모가 아직 main 앱에 없어 문서를 고치지 않았습니다." } }] };
-    case "building": return { ...base, rows: [{ ...UNBUILT, promotion: { state: "building", agent: { name: "impl-overview-tasks", pane_id: "w2:p1" }, pr_number: null, target_path: "docs/UI_BEHAVIOR.md", github_failure: null } }, ROWS[6]!, ROWS[7]!] };
-    case "unbuilt": return { ...base, rows: [UNBUILT, ROWS[6]!, ROWS[7]!], questions: [{ kind: "unbuilt", number: 14, title: UNBUILT.title, reason: "백로그 출처를 고르는 화면이 아직 없고, 만드는 브랜치도 없습니다." }] };
     case "reconsent": return { ...base, enabled: false, usable_cards: 0, consent_required: true };
     case "checking": return { ...base, usable_cards: 0, analysis: "checking", checking_card: 17, rows: [{ ...ROWS[0]!, verifying: true }, { ...ROWS[5]!, verifying: true }] };
     case "check_budget_exhausted": return { ...base, usable_cards: 0, analysis: "check_budget_exhausted", check_resume_at_unix_ms: (Math.floor(Date.now() / 86_400_000) + 1) * 86_400_000, rows: [{ ...ROWS[0]!, verifying: true }, { ...ROWS[5]!, verifying: true }] };
@@ -96,7 +77,7 @@ export function memorySceneProject(state: MemorySceneState): ProjectMemory {
   }
 }
 
-/** The lane pinned on the Memory tool, the scene's width wide. */
+/** The lane pinned on the Hide AI tool (lane id `memory`), the scene's width wide. */
 const VIEW: WorkspaceView = { device_id: "local", path: "/projects/herdr-ide", open: true, documents: false, tool: "memory", pinned: true, document_width: null, detail_width: null, explorer_width: null, panel_width: null, lane_called: 0, lane_calls: 0, lane_called_side: "view" };
 const FRAME: LaneFrame = { mode: "docked", agents: 0, width: 0, view: null, tool: { field: "panel_width", width: 0, min: 360 }, stacked: false, narrowPin: false };
 const SIZES: LaneSizes = { agentMin: 480, viewMin: 360, viewIdeal: 520, lanePage: 900, explorerMin: 180, explorerIdeal: 240, panelMin: 360, panelIdeal: 400, divider: 8 };
@@ -121,7 +102,8 @@ export function MemoryScene({ theme, state, width, language }: MemorySceneParams
     ui_state: { interface_language: language },
   }) as unknown as SnapshotRest, [state, language]);
   useLayoutEffect(() => {
-    useShellStore.setState({ rest, memory: { project: memorySceneProject(state) }, connection: "gone" });
+    useShellStore.setState({ rest, memory: { project: memorySceneProject(state) }, suggestions: { project: { ...hideAiSceneProject(state === "off" ? "off" : "memory"), counts: { suggestions: 5, rail: 5 } } }, connection: "gone" });
+    useUiStore.setState({ hideAiTab: "memory" });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
   }, [rest, state, theme]);

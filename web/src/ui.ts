@@ -101,6 +101,9 @@ export function toggledFold(folds: readonly string[], fold: string): string[] {
   return folds.includes(fold) ? folds.filter((open) => open !== fold) : [...folds, fold];
 }
 
+/** The Hide AI tool's two tabs (PRD hide-ai-suggestions D-01). */
+export type HideAiTab = "suggestions" | "memory";
+
 export type Overlay = "none" | "shortcuts" | "find" | "add_project" | "file_palette" | "diff_palette" | "search" | "settings" | "project_settings";
 
 /**
@@ -219,6 +222,15 @@ type UiStore = {
   viewFocusRequest: ViewFocusRequest | null;
   /** Whether the lane takes the whole body (D-04); never sent. */
   laneExpanded: boolean;
+  /**
+   * The Hide AI tool's tab and the 제안 row shown in full, by its id (`s12`,
+   * `m72`); a Needs You row opens the tool on its row (PRD hide-ai-suggestions
+   * B11). Page-local and never sent: the core keeps no reading position here.
+   */
+  hideAiTab: HideAiTab;
+  openSuggestion: string | null;
+  /** Shows the Hide AI tool's tab, with `row` open in 제안 or none. */
+  showHideAiTab: (tab: HideAiTab, row?: string | null) => void;
   /** The column in front while a narrow pinned lane stacks its two (PRD lane-two-columns B19): a call or the rail's top buttons bring the viewing column, a tool its own. Never sent. */
   stackFront: LaneSide;
   /** What the page has read of the core's lane calls (`laneCalls.ts`). */
@@ -392,6 +404,8 @@ export const useUiStore = create<UiStore>((set, get) => ({
   agentFindRequest: null,
   viewFocusRequest: null,
   laneExpanded: false,
+  hideAiTab: "suggestions",
+  openSuggestion: null,
   stackFront: "view",
   laneCallsSeen: NO_CALLS_SEEN,
   pageWiden: null,
@@ -459,6 +473,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
     for (const key of gone) delete next[key];
     set({ browserDevices: next });
   },
+  showHideAiTab: (hideAiTab, row) => set(row === undefined ? { hideAiTab } : { hideAiTab, openSuggestion: row }),
   setLaneExpanded: (laneExpanded) => {
     if (get().laneExpanded !== laneExpanded) set({ laneExpanded });
   },

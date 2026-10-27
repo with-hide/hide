@@ -146,6 +146,49 @@ pub(crate) const EVIDENCE_ROWS: usize = 10;
 pub(crate) const DISMISSED_ROWS: usize = 50;
 pub(crate) const BRIEF_PRS: usize = 10;
 
+/// The investigation's turns (D-35, D-38): the last few turns before the
+/// final one ask the model to wrap up, and one turn is given at most this
+/// long; the final turn starts while that much of the run is left.
+pub(crate) const WRAP_UP_TURNS: u32 = 4;
+pub(crate) const TURN_SPAN_MS: u64 = 2 * MINUTE_MS;
+/// What one answer may ask: reads for the next turn and edits applied now.
+pub(crate) const READS_PER_TURN: usize = 4;
+pub(crate) const EDITS_PER_TURN: usize = 8;
+/// The model's own notes carried from one turn to the next, in characters.
+pub(crate) const NOTES_CHARS: usize = 1_000;
+
+/// A turn's request input never exceeds Hide AI's 64 KiB, split between
+/// the read results of the turn before, the notebook, the fresh records
+/// and the rest (the turn, the notes, the last edits' outcomes), each
+/// measured as the JSON it is sent as.
+pub(crate) const TURN_INPUT_BYTES: usize = 64 * 1024;
+pub(crate) const READ_TURN_BYTES: usize = 24 * 1024;
+pub(crate) const READ_RESULT_BYTES: usize = 8 * 1024;
+pub(crate) const NOTEBOOK_INPUT_BYTES: usize = 20 * 1024;
+pub(crate) const RECORDS_INPUT_BYTES: usize = 12 * 1024;
+/// The most record numbers one group of fresh records lists.
+pub(crate) const GROUP_RECORDS_SHOWN: usize = 40;
+/// The most record numbers a notebook line lists, its newest.
+pub(crate) const LINE_RECORDS_SHOWN: usize = 12;
+
+/// Each read tool's own bound, before the result's byte bound: events of
+/// a session, lines of a file, hits of a search, commits of a history, and
+/// lines from the end of a CI log.
+pub(crate) const SESSION_EVENTS: u32 = 16;
+pub(crate) const SESSION_EVENTS_MAX: u32 = 40;
+pub(crate) const FILE_LINES: u32 = 120;
+pub(crate) const FILE_LINES_MAX: u32 = 200;
+/// How much of a file is read to find the lines asked for.
+pub(crate) const FILE_SOURCE_BYTES: u64 = 256 * 1024;
+pub(crate) const SEARCH_HITS: usize = 40;
+pub(crate) const SEARCH_TEXT_CHARS: usize = 200;
+pub(crate) const GIT_LOG_COMMITS: u32 = 10;
+pub(crate) const GIT_LOG_COMMITS_MAX: u32 = 20;
+pub(crate) const CI_LOG_LINES: usize = 200;
+/// A path a read names, and the longest line of text a result keeps.
+pub(crate) const READ_PATH_CHARS: usize = 240;
+pub(crate) const READ_LINE_CHARS: usize = 400;
+
 /// The weight a record of `age_ms` keeps: one for [`FULL_WEIGHT_MS`], then
 /// halving every [`DECAY_HALF_LIFE_MS`].
 pub(crate) fn decay(age_ms: u64) -> f64 {

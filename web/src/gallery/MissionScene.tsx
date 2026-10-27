@@ -33,8 +33,8 @@ const CONDUCTOR_PANE = "w1:p1";
 /** A pane state reads the map state it draws small. */
 const PANE_STATES: Record<string, string> = { "pane-running": "running", "pane-decision": "decision", "pane-first-plan": "plan", "pane-done": "done", "pane-cancelled": "cancelled" };
 
-/** The report a finished mission's Conductor left, invented for the boards. */
-const REPORT = "이슈 네 개 정리 끝. 화면 PR까지 모두 머지.\n남은 일: 알림 문구 다듬기는 다음 미션으로.\n검증은 격리 앱에서 6개 항목 통과.\n머지 순서는 API, 화면.";
+/** The report a finished mission's Conductor left, invented for the boards, in Markdown as a Conductor writes it. */
+const REPORT = "# 이슈 정리 보고: 네 개 끝, 화면 PR까지 머지\n\n## 남은 일\n- [ ] 알림 문구 다듬기는 다음 미션으로\n\n## 검증\n- 격리 앱에서 **6개 항목** 통과\n- 머지 순서는 API, 화면";
 
 const MINUTE = 60_000;
 /** An issue or pull request number as the boards write it, built so no literal reads as a color. */

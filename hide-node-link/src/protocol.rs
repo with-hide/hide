@@ -210,7 +210,13 @@ use crate::error::HostError;
 /// as its answer rather than an error, and a diff names why it is short or
 /// absent as a code (`git::DiffNotice`). An older core would read the new
 /// check's stop as a pass, so the helper is upgraded at Hello.
-pub const PROTOCOL_VERSION: u32 = 53;
+/// 54: a Hide AI suggestion investigation reads a repository's history and
+/// searches its tracked files (`git::GitCommand::Log`, `GitCommand::Grep`)
+/// and the end of a CI job's failed log (`gh run view --job <id>
+/// --log-failed`, answered cut to its end) on the node that holds the
+/// Project (PRD hide-ai-suggestions B7). A helper on 53 would refuse them
+/// as unknown, so it is refused at Hello and upgraded.
+pub const PROTOCOL_VERSION: u32 = 54;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).

@@ -137,7 +137,7 @@ function dump(stack: Stack): void {
 
 const evidence = (stack: Stack) => process.env.HIDE_E2E_SCREENSHOT_DIR ?? stack.herdr.root;
 
-test("a promotion's agent is in Needs You only while its pull request waits for the operator, opens the Memory row, and leaves with its cleanup on merge", async ({ page }) => {
+test("a promotion's agent is in Needs You only while its pull request waits for the operator, opens its row in 제안, and leaves with its cleanup on merge", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   const stack = await start();
   try {
@@ -149,9 +149,10 @@ test("a promotion's agent is in Needs You only while its pull request waits for 
     // Opening the Memory tab makes the Project's store; the card and its promotion are seeded into it while the core is down.
     await (await showProjectRow(page, project.locator("[data-checkout]").first())).click();
     await showProjectMemory(page);
+    await page.locator('[data-lane="memory"] [data-hide-ai-tool-tab="memory"]').click();
     await expect(page.locator('[data-lane="memory"] [data-memory-switch="off"]')).toBeEnabled({ timeout: 20_000 });
     await page.locator('[data-lane="memory"] [data-memory-switch="off"]').click();
-    await expect(page.locator('[data-lane="memory"] [data-memory-switch="on"]')).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator('[data-lane="memory"] [data-memory="on"]')).toBeVisible({ timeout: 20_000 });
     const workspace = String(sent.get("memory_open")?.workspace_id);
     const session = sessionOf(stack.herdr, stack.hideAiPane);
     stack.daemon = await stack.daemon.restart((dir) => {
@@ -171,14 +172,17 @@ test("a promotion's agent is in Needs You only while its pull request waits for 
     await expect(project.locator(`[data-pane="${stack.hideAiPane}"]`)).toHaveCount(0);
     await needsYou.screenshot({ path: path.join(evidence(stack), "home-needs-you-pr-review.png") });
 
-    // B11: choosing it opens the Memory tab on that attempt's row, and does not go to its pane.
+    // B11 (hide-ai-suggestions): choosing it opens the Hide AI tool on its 제안 tab with the promotion's row m43 open, and does not go to its pane.
+    await page.locator('[data-lane="memory"] [data-hide-ai-tool-tab="memory"]').click();
     await row.locator("[data-agent-open]").click();
     const lane = page.locator('[data-lane="memory"]');
-    await expect(lane.locator('[data-memory-card="43"][data-memory-progress]')).toBeVisible({ timeout: 20_000 });
-    await expect(lane.locator('[data-memory-row-toggle="43"]')).toHaveAttribute("aria-expanded", "true");
-    await expect(lane.locator('[data-memory-progress-detail="43"]')).toBeVisible();
+    await expect(lane.locator('[data-hide-ai-tool-tab="suggestions"]')).toHaveAttribute("aria-selected", "true", { timeout: 20_000 });
+    const home = lane.locator('[data-suggestion="m43"]');
+    await expect(home).toHaveAttribute("data-suggestion-open", "true", { timeout: 20_000 });
+    await expect(home).toHaveAttribute("data-suggestion-source", "memory");
+    await expect(home.locator("[data-suggestion-attempt]")).toHaveText(`PR ${"#"}${PR} review`);
     await expect(page.locator(`[data-pane-view="${stack.hideAiPane}"][data-focused="true"]`)).toHaveCount(0);
-    await lane.screenshot({ path: path.join(evidence(stack), "home-memory-row-opened.png") });
+    await lane.screenshot({ path: path.join(evidence(stack), "home-suggestions-tab-opened.png") });
 
     // B9: checks fail while the agent rests, so the word becomes CI failed, and it is still one row.
     move(stack, { state: "OPEN", checks: "FAILURE" });

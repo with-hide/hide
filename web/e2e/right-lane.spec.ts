@@ -218,8 +218,16 @@ test("the rail draws the viewing column's buttons over a rule and one divider be
     await expect(projectHeader.locator('[data-lane-scope-kind="project"]')).toContainText("fixture");
     await expect(projectHeader.getByRole("button")).toHaveCount(2);
     await expect(projectHeader.locator('[data-lane-tool-close="project"]')).toBeVisible();
-    // Memory and every checkout tool read `name · scope`, with decoration only, and close with one ×.
-    for (const [tool, name, icon] of [["memory", "Memory", "folder"], ["explorer", "Explorer", "git-branch"], ["changes", "Changes", "git-branch"]] as const) {
+    // The Hide AI tool's head names the project beside its brain, with the switch for all of Hide AI, ⚙ and × (PRD hide-ai-suggestions B1, B3).
+    await showTool(page, "memory");
+    const hideAiHeader = page.locator('aside[data-lane="memory"] [data-lane-header]');
+    await expect(hideAiHeader.locator('[data-lane-scope-kind="project"]')).toContainText(/Hide AI\s*· fixture/);
+    await expect(hideAiHeader.locator("svg.lucide-brain")).toHaveCount(1);
+    await expect(hideAiHeader.getByRole("switch")).toHaveCount(1);
+    await expect(hideAiHeader.getByRole("button")).toHaveCount(2);
+    await expect(hideAiHeader.locator('[data-lane-tool-close="memory"]')).toBeVisible();
+    // Every checkout tool reads `name · scope`, with decoration only, and closes with one ×.
+    for (const [tool, name, icon] of [["explorer", "Explorer", "git-branch"], ["changes", "Changes", "git-branch"]] as const) {
       await showTool(page, tool);
       const header = page.locator("[data-lane-header]");
       const scope = header.locator("[data-lane-scope]");

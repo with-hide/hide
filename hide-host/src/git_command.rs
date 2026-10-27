@@ -9,6 +9,10 @@ use hide_node_link::git::GitCommand;
 
 use crate::error::{ErrorCode, HostError, HostResult};
 
+/// How much of a search's output is read before the answer is cut to
+/// `GREP_OUTPUT_BYTES`; a search that prints more fails as too broad.
+const GREP_READ_BYTES: u64 = 1024 * 1024;
+
 /// Runs `command` in `root` and answers its output, trimmed. A read, a
 /// branch check and a fetch are bounded (`worktrees::git`); a checkout and a
 /// branch setting get the long bound of a change (`git_run::CHANGE_DEADLINE`).
@@ -48,6 +52,32 @@ pub fn run(root: &Path, command: &GitCommand) -> HostResult<String> {
         }
         // A path may begin or end with a space, so the list is not trimmed.
         GitCommand::ListFiles => crate::worktrees::git(root, &args).map_err(failed),
+        GitCommand::Log { .. } => crate::worktrees::git(root, &args)
+            .map(|output| output.trim_end().to_owned())
+            .map_err(failed),
+        GitCommand::Grep { .. } => {
+            let output = crate::git_run::output(
+                crate::git_run::at(root).args(&args),
+                crate::git_run::DEADLINE,
+                Some(GREP_READ_BYTES),
+            )
+            .map_err(|error| failed(format!("git could not be run: {error}")))?
+            .ok_or_else(|| {
+                failed(format!(
+                    "git grep did not finish within {} s",
+                    crate::git_run::DEADLINE.as_secs()
+                ))
+            })?;
+            // `git grep` exits 1 when nothing matched, which is an answer.
+            if output.status.success() || output.status.code() == Some(1) {
+                let kept = output
+                    .stdout
+                    .len()
+                    .min(hide_node_link::git::GREP_OUTPUT_BYTES as usize);
+                return Ok(String::from_utf8_lossy(&output.stdout[..kept]).into_owned());
+            }
+            Err(failed(format!("git grep exited with {}", output.status)))
+        }
         GitCommand::CurrentBranch
         | GitCommand::Checkout { .. }
         | GitCommand::SetBranchConfig { .. }

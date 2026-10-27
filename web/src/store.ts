@@ -94,6 +94,7 @@ export type Frame = {
     changes?: ChangesSnapshot | null;
     documents?: DocumentsSection | null;
     memory?: import("./snapshot").MemorySection;
+    suggestions?: import("./snapshot").SuggestionsSection;
     link_panel?: import("./snapshot").LinkPanel;
     link_summaries?: import("./snapshot").LinkSummaries;
     session_record?: import("./snapshot").SessionRecordSection | null;
@@ -166,6 +167,12 @@ type Store = {
    * shell opens one; a delta without it keeps what the store holds.
    */
   memory: import("./snapshot").MemorySection | null;
+  /**
+   * The Hide AI tool's 제안 tab (`suggestions`), its own section with its own
+   * revision: absent until the tool opens a Project; a delta without it keeps
+   * what the store holds.
+   */
+  suggestions: import("./snapshot").SuggestionsSection | null;
   /** The link record of the open PR or issue panel (`link_panel`); null until one opens. */
   linkPanel: import("./snapshot").LinkPanel | null;
   /** Each Project's link counts and chips (`link_summaries`). */
@@ -309,6 +316,7 @@ export const useShellStore = create<Store>((set, get) => ({
   changes: null,
   documents: NO_DOCUMENTS,
   memory: null,
+  suggestions: null,
   linkPanel: null,
   linkSummaries: null,
   sessionRecord: null,
@@ -403,6 +411,7 @@ export const useShellStore = create<Store>((set, get) => ({
         changes: payload.changes ?? null,
         documents: payload.documents ? mergeDocuments(NO_DOCUMENTS, payload.documents) : NO_DOCUMENTS,
         memory: payload.memory ?? null,
+        suggestions: payload.suggestions ?? null,
         linkPanel: payload.link_panel ?? null,
         linkSummaries: payload.link_summaries ?? null,
         sessionRecord: payload.session_record ?? null,
@@ -413,6 +422,7 @@ export const useShellStore = create<Store>((set, get) => ({
       payload.changes !== undefined ||
       payload.documents !== undefined ||
       payload.memory !== undefined ||
+      payload.suggestions !== undefined ||
       payload.link_panel !== undefined || payload.link_summaries !== undefined ||
       payload.session_record !== undefined || payload.session_work_search !== undefined
     ) {
@@ -421,6 +431,7 @@ export const useShellStore = create<Store>((set, get) => ({
         changes: payload.changes ?? get().changes,
         documents: payload.documents ? mergeDocuments(get().documents, payload.documents) : get().documents,
         memory: payload.memory ? share(get().memory, payload.memory) : get().memory,
+        suggestions: payload.suggestions ? share(get().suggestions, payload.suggestions) : get().suggestions,
         linkPanel: payload.link_panel ? share(get().linkPanel, payload.link_panel) : get().linkPanel,
         linkSummaries: payload.link_summaries ? share(get().linkSummaries, payload.link_summaries) : get().linkSummaries,
         sessionRecord: payload.session_record !== undefined ? payload.session_record && share(get().sessionRecord, payload.session_record) : get().sessionRecord,

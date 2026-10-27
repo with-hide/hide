@@ -62,10 +62,13 @@ impl Feature {
     pub fn of(request_feature: &str) -> (Self, bool) {
         match request_feature {
             "context_label" => (Self::Labels, true),
+            // Suggestions and Memory are one Hide AI tool on the rail (PRD
+            // hide-ai-suggestions D-01), so their calls are counted together.
             "project_memory"
             | "project_memory_verify"
             | "project_memory_promote_check"
-            | "project_memory_creation_docs" => (Self::Memory, true),
+            | "project_memory_creation_docs"
+            | "suggestions_investigation" => (Self::Memory, true),
             "worktree_name" => (Self::Issue, true),
             id if id == "factory" || id.starts_with("factory_") => (Self::Factory, true),
             _ => (Self::Other, false),

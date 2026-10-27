@@ -80,7 +80,7 @@ test("the 태스크 list groups the device's tasks, folds children and resting o
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await page.locator(`nav[data-sidebar] [data-agent-open="${parent}"]`).first().click();
     // The rail has no Work tool; after the viewing column's documents button, the Project tool comes first, then Memory (B23; lane-two-columns B2, B25).
-    await expect.poll(() => page.locator("[data-lane-tool]").evaluateAll((tools) => tools.map((tool) => tool.getAttribute("aria-label")))).toEqual(["Documents", "Project", "Memory", "Explorer", "Changes"]);
+    await expect.poll(() => page.locator("[data-lane-tool]").evaluateAll((tools) => tools.map((tool) => tool.getAttribute("aria-label")))).toEqual(["Documents", "Project", "Hide AI", "Explorer", "Changes"]);
     const tasks = await showTasks(page);
     const row = (pane: string) => tasks.locator(`[data-task-row="${pane}"]`);
     const group = (name: string) => tasks.locator(`[data-task-group="${name}"]`);

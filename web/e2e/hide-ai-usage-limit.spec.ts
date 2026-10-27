@@ -115,14 +115,15 @@ async function captureSettings(page: Page, name: string) {
   }
 }
 
-/** Closes Settings and turns Auto memory on for the front Project, leaving the Memory tab shown. */
+/** Closes Settings and turns Auto memory on for the front Project, leaving the Hide AI tool on its Memory tab. */
 async function openMemory(page: Page) {
   await page.keyboard.press("Escape");
   await showProjectMemory(page);
   const memory = page.locator('[data-lane="memory"]');
+  await memory.locator('[data-hide-ai-tool-tab="memory"]').click();
   await expect(memory.locator('[data-memory-switch="off"]')).toBeEnabled({ timeout: 20_000 });
   await memory.locator('[data-memory-switch="off"]').click();
-  await expect(memory.locator('[data-memory-switch="on"]')).toBeVisible({ timeout: 20_000 });
+  await expect(memory.locator('[data-memory="on"]')).toBeVisible({ timeout: 20_000 });
   return memory;
 }
 
@@ -147,9 +148,9 @@ test("a week under the limit shows its percent, and a lower limit moves Hide AI 
     await expect(tab.locator("[data-ai-state='claude:ready']")).toContainText("Signed in · 86% this week", { timeout: 30_000 });
     await expect(tab.locator("[data-ai-using]")).toHaveCount(0);
     await captureSettings(page, "runs-settings");
-    // B4: the chip names the agent Hide AI asks now.
+    // B4: the Hide AI tool's chip names the agent Hide AI asks now.
     const runsMemory = await openMemory(page);
-    await expect(runsMemory.locator("[data-memory-ai-chip]")).toContainText("Hide AI · Claude Code");
+    await expect(runsMemory.locator("[data-hide-ai-chip]")).toContainText("Claude Code");
     await captureMemory(page, "runs-memory");
     await page.locator("[data-open-settings]").click();
     await page.locator('[data-settings-tab="hideAi"]').click();
@@ -187,7 +188,8 @@ test("Runs on past the limit hands Hide AI to the next listed agent, which shows
     await captureSettings(page, "fallback-settings");
     // B4: Memory asks Grok while Claude Code is past the limit, and says nothing is wrong.
     const memory = await openMemory(page);
-    await expect(memory.locator("[data-memory-ai-chip]")).toContainText("Hide AI · Grok");
+    await expect(memory.locator("[data-hide-ai-chip]")).toContainText("Grok");
+    await expect(memory.locator("[data-hide-ai-chip-dimmed]")).toHaveCount(0);
     await expect(memory.locator("[data-memory-ai='not_ready']")).toHaveCount(0);
     await captureMemory(page, "fallback-memory");
 
@@ -221,7 +223,7 @@ test("every agent past the limit pauses Hide AI, and Memory shows its dimmed sta
 
     const memory = await openMemory(page);
     await expect(memory.locator("[data-memory-ai='not_ready']")).toContainText("every agent is past your usage limit this week", { timeout: 20_000 });
-    await expect(memory.locator("[data-memory-ai-chip]")).toHaveClass(/opacity-/);
+    await expect(memory.locator("[data-hide-ai-chip]")).toHaveAttribute("data-hide-ai-chip-dimmed", "true");
     await captureMemory(page, "paused-memory");
   } finally {
     stop();

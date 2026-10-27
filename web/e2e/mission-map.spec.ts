@@ -85,8 +85,8 @@ test("the Conductor's first plan shows on its pane, the map follows the record, 
     await expect(small.locator("[data-mission-mini-tally]")).toHaveAttribute("data-mission-mini-tally", "0 3");
     await expect(map).toHaveCount(0);
     await screenshot(page, "mission-pane-first-plan");
-    // `크게 ›` opens the big map in the 보기 slot and closes the popover (B5).
-    await small.locator("[data-mission-mini-large]").click();
+    // A press on the chip opens the big map in the 보기 slot and closes the popover.
+    await paneChip.click();
     await expect(small).toHaveCount(0);
     await expect(map).toBeVisible();
     await expect(map.locator("[data-detail-title]")).toHaveAttribute("data-detail-title", /이슈 정리/);

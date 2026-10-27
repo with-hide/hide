@@ -125,7 +125,7 @@ it("reads each state in words with a cell per node, in the plan chip's place, an
   } finally { await unreadable.unmount(); }
 });
 
-it("opens on focus or pointing without taking the keyboard, pins on a press, and a pointer leaving closes only an unpinned map (B3)", async () => {
+it("shows its popover on focus or pointing without taking the keyboard, and a press opens the mission's map in the 보기 slot instead of pinning (B3)", async () => {
   const view = await mount([mission()]);
   try {
     expect(view.popover()).toBeNull();
@@ -144,13 +144,13 @@ it("opens on focus or pointing without taking the keyboard, pins on a press, and
     expect(view.popover()).not.toBeNull();
     await act(async () => { vi.advanceTimersByTime(1); });
     expect(view.popover()).toBeNull();
-    await act(async () => view.chip()!.click());
-    expect(useUiStore.getState().planPane).toBe("p1");
-    await point("pointerout", document.body);
-    await act(async () => { vi.advanceTimersByTime(500); });
+    // A press (Enter and Space on the focused button are presses too) opens the map and closes the popover.
+    await point("pointerover", null);
     expect(view.popover()).not.toBeNull();
     await act(async () => view.chip()!.click());
-    expect(view.popover()).toBeNull();
+    expect(view.events.at(-1)).toEqual({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "mission", mission: "mission-1" } } });
+    expect([useUiStore.getState().planPane, view.popover()]).toEqual([null, null]);
+    expect(view.chip()!.hasAttribute("aria-pressed")).toBe(false);
   } finally { await view.unmount(); }
 });
 
@@ -186,9 +186,9 @@ it("lists the nodes a worker is at with their step, one tally line and no map or
     // The map is drawn only in the 보기 slot, and the record opens from the pane menu and the sidebar.
     expect(popover.querySelector("[data-dependency-node]")).toBeNull();
     expect(popover.textContent).not.toContain("record");
-    await view.press("[data-mission-mini-large]");
-    expect(view.events.at(-1)).toEqual({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "mission", mission: "mission-1" } } });
-    expect(view.popover()).toBeNull();
+    // No `Larger`: the head's end says the chip itself opens the map.
+    expect(popover.querySelector("button:not([data-mission-mini-conversation])")).toBeNull();
+    expect(popover.querySelector("[data-mission-mini-open]")?.textContent).toBe("Click for the map");
   } finally { await view.unmount(); }
 });
 
@@ -201,12 +201,13 @@ it("shows a finished mission's time, the report's first two lines and at most th
     node("four", { status: "done", kind: "verify", delivery: null, line: "6 of 6 pass" }),
     node("five", { status: "done", kind: "research", delivery: null }),
   ];
-  const done = await mount([mission({ status: "done", nodes, started_at_unix_ms: 0, closed_at_unix_ms: 3 * hour, report: "All merged.\nOne step left for later.\nThird line." })]);
+  const done = await mount([mission({ status: "done", nodes, started_at_unix_ms: 0, closed_at_unix_ms: 3 * hour, report: "# All merged\n\n- [ ] One step left for later\n\n**Third** line." })]);
   try {
     await act(async () => done.actions.togglePlanChip());
     const popover = done.popover()!;
     expect(popover.querySelector("[data-mission-mini-head]")?.textContent).toBe("Finished· 3h");
-    expect(popover.querySelector("[data-mission-mini-report]")?.textContent).toBe("All merged.One step left for later.");
+    // The Conductor's Markdown is quoted as its words: no `#`, no `- [ ]`.
+    expect([...popover.querySelectorAll("[data-mission-mini-report] p")].map((line) => line.textContent)).toEqual(["All merged", "One step left for later"]);
     const results = [...popover.querySelectorAll<HTMLElement>("[data-mission-mini-result]")].map((row) => row.dataset.missionMiniResult);
     expect(results).toEqual(["one", "two", "three"]);
     expect(popover.querySelector("[data-mission-mini-result=one] [data-pr-mark=merged]")).not.toBeNull();

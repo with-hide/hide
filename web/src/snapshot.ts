@@ -77,8 +77,7 @@ export type HideAiTask = { kind: string; target?: string };
 
 /**
  * The screen that owns what a Hide AI task does (PRD hide-ai-work-home D-10); a kind the core has no home for carries none.
- * The 제안 tab owns a Memory card's promotion and a suggestion's application (PRD hide-ai-suggestions D-02); until the shell
- * draws that tab, a card's row still opens in the Memory tool.
+ * Every known kind's home is the Hide AI tool's 제안 tab: a Memory promotion is one of its rows (PRD hide-ai-suggestions D-02, B2).
  */
 export type HideAiHome = "suggestions";
 
@@ -2299,6 +2298,118 @@ export type ProjectMemory = {
 
 /** The `memory` section: absent until a shell opens a Project's Memory. */
 export type MemorySection = { project: ProjectMemory | null };
+
+/** What a suggestion rests on (`contracts/snapshot-wire-enums.json`: `suggestion_signal`). */
+export type SuggestionSignal = "failed_tool" | "agent_wait" | "correction" | "label_missed" | "check_failed" | "change_request";
+/** `suggestion_quantity`: how many suggestions come up a week (PRD hide-ai-suggestions D-09, D-10). */
+export type SuggestionQuantity = "few" | "normal" | "many";
+/** `suggestion_apply_mode`: whether a new suggestion waits for `문서 고치는 PR 열기` or opens its pull request by itself (D-28). */
+export type SuggestionApplyMode = "confirm" | "auto_pr";
+/** `suggestion_outcome`: what applying a suggestion makes (D-15, D-50). */
+export type SuggestionOutcome = "pr" | "issue";
+/** `suggestions_status`: the tab's one line (D-44). */
+export type SuggestionsStatus = "first_run_pending" | "investigating" | "none_today" | "not_investigated" | "idle" | "off";
+/** `suggestion_group`: 고를 것, 반영 중 and the folded 반영됨 (D-07). */
+export type SuggestionGroup = "choose" | "applying" | "applied";
+/** `suggestion_state`: a row's mark (D-37). */
+export type SuggestionState = "new" | "my_turn" | "hide_ai_working" | "watching" | "effective" | "applied";
+/** `suggestion_attempt_phase`: where applying a row stands. */
+export type SuggestionAttemptPhase = "starting" | "working" | "pr_open" | "ci_failed" | "failed" | "issue_open" | "merged";
+
+export type SuggestionBasis = { signal: SuggestionSignal; tag: string };
+
+/** One piece of evidence a row links; a `gone` one is dimmed and cannot be opened (B10). */
+export type SuggestionEvidence = {
+  kind: "session" | "pr";
+  signal: SuggestionSignal;
+  agent: string | null;
+  session_id: string | null;
+  pr_number: number | null;
+  url: string | null;
+  at_unix_ms: number;
+  gone: boolean;
+};
+
+/** One row of the 제안 tab, in the core's drawing order; `id` (`s12`, `m72`) names it in every `suggestion_action`. */
+export type SuggestionRow = {
+  id: string;
+  /** A notebook line, or a Memory card's way into the documents (D-02). */
+  source: "notebook" | "memory";
+  group: SuggestionGroup;
+  state: SuggestionState;
+  /** 불편, in a person's words. */
+  discomfort: string | null;
+  /** 놓친 것, one sentence. */
+  cause: string | null;
+  /** 고칠 것. */
+  fix: string | null;
+  outcome: SuggestionOutcome;
+  basis: SuggestionBasis | null;
+  /** Hide applied it by itself (`자동`, D-29). */
+  auto: boolean;
+  /** `suggestion_hold`: why a new suggestion waits instead of being applied. */
+  hold: "github_needed" | "auto_pr_unreviewed" | null;
+  /** The problem came back after its fix merged (`문서로는 안 됐어요`); level 1 is a script or a check, 2 a hook. */
+  escalated: { level: number; previous_pr_url: string | null } | null;
+  /** It rose again after a skip because new evidence piled up as much as before (`넘어갔지만 다시 생겼어요`, D-43). */
+  returned_after_skip: boolean;
+  evidence: SuggestionEvidence[];
+  attempt: {
+    phase: SuggestionAttemptPhase;
+    started_at_unix_ms: number;
+    pr_number: number | null;
+    url: string | null;
+    /** The applying agent's registration id while it lives. */
+    agent_id: string | null;
+    /** Why a failed attempt failed, as a code. */
+    failure: string | null;
+  } | null;
+  watch: { sessions_seen: number; sessions_needed: number } | null;
+};
+
+export type SuggestionSignalSetting = { signal: SuggestionSignal; enabled: boolean; unavailable: "no_github" | "memory_off" | null };
+
+/** The ⚙ sheet's 제안 group (D-26). */
+export type SuggestionSettings = {
+  suggestions_enabled: boolean;
+  quantity: SuggestionQuantity;
+  apply_mode: SuggestionApplyMode;
+  signals: SuggestionSignalSetting[];
+  /** Lines skipped with `넘어가기`, which ⚙ restores (D-43); `may_return` while one rise is still left to it. */
+  dismissed: { id: string; discomfort: string | null; basis: SuggestionBasis | null; may_return: boolean }[];
+};
+
+/** One Project's 제안 tab (`suggestions.project`), opened by the same `memory_open` as its Memory tab. */
+export type ProjectSuggestions = {
+  workspace_id: string;
+  loading: boolean;
+  unavailable: "unregistered" | "unreadable" | null;
+  /** The tool head's switch for the whole of Hide AI in this Project (B3). */
+  enabled: boolean;
+  /** The one-time `내 구독 사용량을 씀` line was shown (B3). */
+  intro_seen: boolean;
+  status: SuggestionsStatus;
+  /** `suggestions_ai` (B19). */
+  ai: "ready" | "not_ready" | "cannot_investigate";
+  /** `suggestions_github` (D-41). */
+  github: "connected" | "missing";
+  settings: SuggestionSettings;
+  rows: SuggestionRow[];
+  /** The 제안 tab's number and the rail's, which adds the Memory tab's own; both 0 while the head switch is off (D-01). */
+  counts: { suggestions: number; rail: number };
+};
+
+/** The `suggestions` section: absent until the Hide AI tool opens a Project. */
+export type SuggestionsSection = { project: ProjectSuggestions | null };
+
+/** What the operator does to one row (`suggestion_action`). */
+export type SuggestionAction = "apply" | "dismiss" | "restore" | "retry";
+
+/** Where ⚙'s 읽을 곳 reads (D-52): the session records' four signals or GitHub's two; one switch turns its group. */
+export type SuggestionSignalGroup = "session" | "github";
+
+/** One ⚙ change (`suggestion_settings`); the fields left out stay as they are. */
+export type SuggestionSettingsPatch = { suggestions_enabled?: boolean; quantity?: SuggestionQuantity; apply_mode?: SuggestionApplyMode; signal_group?: { group: SuggestionSignalGroup; enabled: boolean } };
 
 /** Where a pull request's issue link comes from: GitHub's closing reference or Hide's branch link. */
 export type LinkIssueSource = "closes" | "hide";

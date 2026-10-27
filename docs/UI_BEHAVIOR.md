@@ -96,7 +96,7 @@ A closed lane that a tool icon, an open, a reveal or the 보기 slot opens shows
 Pressing the documents or 보기 button brings it to the front of the viewing column; pressed while it is in front, it folds the viewing column, and pressing it again brings the same content back (B11).
 The Project icon is a briefcase and the Explorer icon an open folder, so neither repeats the Overview's dashboard mark or the other's folder.
 The Project icon carries a warning-coloured number counting its project's 할 일, no number at 0, its hint ending in it, such as `할 일 2`; worktrees to remove, memory to move into documents and bots' pull requests are never in it (B38).
-The Memory icon carries the same warning-coloured number counting what the Project's Memory asks (`처리할 것`, see Project Memory: the Memory tool), none at 0 or while Memory is off, its hint ending in `처리할 것 4`.
+The Hide AI icon carries the same warning-coloured number, the sum of its 제안 and Memory tabs' numbers (see Hide AI: the Hide AI tool), none at 0 or while Hide AI is off, its hint ending in `제안 3 · Memory 1`.
 At the rail's bottom, just above its `…`, the pin is an icon of its own, in the same place whether the lane is up or closed and whichever column it shows: an empty pin while unpinned, a filled pin drawn pressed while pinned, and its hint says what a press does (B15).
 The rail's `…` menu holds Expand, which moves both columns together, and with the lane closed the `…` is off (B15).
 A Workspace seen for the first time shows Agent Views alone, its lane closed.
@@ -127,8 +127,8 @@ Select in File Tree, a reveal, or a terminal link that names a folder turns the 
 A pull request's card, a session's record, a mission's map, or a project's worktree table or cost opens in the 보기 slot, in front of the documents in the viewing column, and leaves the tool column as it is; the documents stay on the rail's documents button, and `←` steps back through the items opened before (B9).
 A changed file pressed on a card opens its diff among the documents in the viewing column, the card staying on the rail's 보기 button, which brings it back (B10).
 Closing a document tab closes that view alone, the unsaved-draft protection as it was; closing the last one closes the viewing column, the lane staying while it has a tool column and closing otherwise, and the 보기 slot never comes forward on its own (B12).
-⇧⌘E (`Toggle Explorer tool`) and ⇧⌘G (`Toggle Changes tool`) press that tool's rail icon: the tool column opens on it, swaps to it, or closes when it already shows it (PRD lane-two-columns D-08; sidebar-task-lens D-19, D-29); `Toggle Project tool` and `Toggle Memory tool` do the same for the Project and Memory icons and have no chord until one is bound.
-⇧⌘L (`Open Project Memory`) opens the Memory tool, and ⇧⌘R (`Open PR list`) turns the sidebar to its PR list, the whole device's, showing the sidebar when it is hidden; neither closes what it opened when pressed again (B25).
+⇧⌘E (`Toggle Explorer tool`) and ⇧⌘G (`Toggle Changes tool`) press that tool's rail icon: the tool column opens on it, swaps to it, or closes when it already shows it (PRD lane-two-columns D-08; sidebar-task-lens D-19, D-29); `Toggle Project tool` and `Toggle Hide AI tool` do the same for the Project and Hide AI icons and have no chord until one is bound.
+⇧⌘L (`Open Project Memory`) opens the Hide AI tool on its Memory tab, and ⇧⌘R (`Open PR list`) turns the sidebar to its PR list, the whole device's, showing the sidebar when it is hidden; neither closes what it opened when pressed again (B25).
 `Toggle documents` presses the documents button and has no chord until one is bound.
 On Windows and Linux these chords are Alt+Shift+E, L, R and G; in a browser tab Chrome keeps ⇧⌘R for reload, so the PR list is ⌥⇧R there, and ⌥⌘1-4 select a device tile in the desktop app (⌥⌘1-9, see the device rail) and do nothing in a browser tab.
 A chord the operator had bound to `Toggle Memory tool` or `Toggle PRs tool` runs `Open Project Memory` or `Open PR list` instead, unless that command has a chord of its own (B25).
@@ -697,10 +697,10 @@ Web owners: `web/src/PaneView.tsx`, `web/src/PaneHeaderBand.tsx`, `web/src/PaneM
 
 ### Work Hide AI does for a home
 
-Hide AI starts agents for the operator by itself (today a Memory card's `반영하기`), and the work belongs to a screen, its home, not to the operator's agent lists (PRD hide-ai-work-home).
-The Memory tool's To resolve row is the home of a promotion: it shows the progress, the pull request, the failure and the agent link, and it is where the work is read and acted on.
+Hide AI starts agents for the operator by itself (today a suggestion's `PR 만들기` or `이슈 만들기` in the Hide AI tool's 제안 tab, and a Memory promotion already under way), and the work belongs to a screen, its home, not to the operator's agent lists (PRD hide-ai-work-home).
+The 제안 tab's row being applied is the home of that work: it shows the progress, the pull request, the failure and the agent link, and it is where the work is read and acted on (PRD hide-ai-suggestions B11).
 The fact that Hide AI started an agent comes only from the coordination record of the spawn (`docs/delivery.md`), never from a branch or worktree name: a checkout the operator made by hand on a branch called `hide-memory-m9` is an ordinary checkout.
-The work is named in words, `Memory 반영하기 · m72`, and never by an icon of its own, because Hide AI will start other work, each kind with its own home.
+The work is named in words, `제안 반영하기 · s12` for a suggestion and `Memory 반영하기 · m72` for a promotion that was under way, and never by an icon of its own, because Hide AI will start other work, each kind with its own home.
 `docs/status-model.md`, Work Hide AI does for a home, owns the ownership value, the group rule and the turn table; this section owns what the screen draws.
 
 While the agent works, finishes or rests, the work is in no list: not the sidebar's tree or Working, not the 태스크 list's 작업 중, 끝남 or 쉬는 중, not the phone's list, not Overview's requests and graph, and it moves no badge, rail count, checkout count, desktop notification or push.
@@ -714,9 +714,9 @@ The home has a turn: the attempt's pull request is open, ready, passing or unche
 A draft, running checks and a requested change are the author's turn and draw nothing.
 A row has one line, and its second line is the agent's ask or its block's cause, then `CI 실패`, then `PR #n 리뷰`; the core decides the turn and the screen only words it.
 The row's accessible name carries `Hide AI`, the task and the turn (`Hide AI · Memory 반영하기 · m72 · PR #924 리뷰`).
-An attempt with no live agent (a failure with no pull request, an open pull request after the operator closed the pane) never has a row; the Memory tool alone shows it, as it did.
+An attempt with no live agent (a failure with no pull request, an open pull request after the operator closed the pane) never has a row; the 제안 tab alone shows it.
 
-Choosing the row, by click, by its digit or from its desktop notification, does not go to the pane: it opens the lane on the Memory tool of the row's Project with that attempt's To resolve row open, and the `Agent ↗` link there opens the pane.
+Choosing the row, by click, by its digit or from its desktop notification, does not go to the pane: it opens the lane on the Hide AI tool's 제안 tab of the row's Project with that row open, and the `에이전트 ↗` link there opens the pane.
 A row whose Project the core has not yet named opens the pane as any row does.
 The phone's Needs You row opens the agent's detail.
 The digits that number agent rows follow the drawn order, so a Hide AI row is numbered with the Needs You rows above the tree and no checkout of its own takes a digit.
@@ -863,7 +863,7 @@ Web owner: `web/src/terminalLinks.ts` (detection), `web/src/terminalLinkProvider
 
 Web owner: `web/src/ProjectTool.tsx`, `web/src/projectStatus.ts` and `web/src/ProjectDetail.tsx` (the worktree table and the cost in the 보기 slot); core owner: `herdr-core/src/agent_state/tally/project_status.rs` (the 현황 counts and the 할 일) and `herdr-core/src/usage_ledger/project_cost.rs` (the cost).
 The Project tool is the rail's first tool and is about the project of the checkout in front (PRD lane-two-columns D-14, B26).
-Its head names the project, then its repository, path and machine on one dim line, then ⚙, which opens Project Settings, and `✕`, which closes the tool column; under it 현황, the tool's only page, since Memory is a tool of its own (see Project Memory: the Memory tool).
+Its head names the project, then its repository, path and machine on one dim line, then ⚙, which opens Project Settings, and `✕`, which closes the tool column; under it 현황, the tool's only page, since Hide AI is a tool of its own (see Hide AI: the Hide AI tool).
 
 현황 is four tiles, then 할 일 (D-15).
 Each tile says where it goes at its top right, `사이드바` or `보기`, and `닫기 ✕` while the viewing column shows what it opened, which a second press folds (B32).
@@ -889,54 +889,76 @@ Past five rows the list shows five in that order and `+N 더`, which shows the r
 
 The core derives the counts and the 할 일 only on a publish whose inputs moved, and nothing on that path reads a file or runs a process (B42; [ARCHITECTURE.md](ARCHITECTURE.md#project-status-and-cost)).
 
-## Project Memory: the Memory tool
+## Hide AI: the Hide AI tool
 
-Web owner: `web/src/MemoryTab.tsx`, `web/src/memoryList.ts`; core owner: `herdr-core/src/runtime/project_memory.rs`, `herdr-core/src/runtime/memory_promotion.rs`.
-Memory is a rail tool of its own, under the Project tool, and shows the Project of the checkout in front: what to handle, what is in progress, the cards and the search (PRD project-memory-v2 D-17, B19-B32; operator decision 2026-10-23, replacing lane-two-columns D-20 and B39-B40).
-Its header reads `Memory · <project>` behind the Project's folder icon and ends with `✕`, which closes the tool column.
-The core opens one Project's Memory per daemon; the rail, whatever the lane holds, names its Project when it shows, when the front Project changes and when its window comes forward after another window named another Project, so the Memory icon's dot is current, and the tool reads until the core answers for its own.
-Its head is the `Auto memory 사용` switch and the Hide AI chip, the agent Hide AI asks now with its logo (the listed agent standing in while Runs on is past the usage limit or cannot answer); with Memory off, one line says what is sent where and a `데이터 삭제` link sits under it while the Project has cards.
+Web owners: `web/src/HideAiTool.tsx` (the head, the tabs, the one-time line, the off state), `web/src/SuggestionsTab.tsx` and `web/src/suggestionList.ts` (the 제안 tab), `web/src/HideAiSettings.tsx` (⚙), `web/src/MemoryTab.tsx` and `web/src/memoryList.ts` (the Memory tab); core owners: `herdr-core/src/model/suggestions.rs` and `herdr-core/src/runtime/suggestions.rs` (the `suggestions` section), `herdr-core/src/runtime/project_memory.rs` and `herdr-core/src/runtime/memory_promotion.rs` (Memory).
+Hide AI is the rail's second tool, under the Project tool, in the place Memory had, and shows the Project of the checkout in front (PRD hide-ai-suggestions D-01, B1).
+Its icon is the brain the Memory tool used, one colour like every rail icon (D-25).
+Inside it are two tabs, `제안` and `Memory`; each tab carries a warning-coloured number of what the operator has to do in it, none at 0, and the rail icon carries their sum, its hint ending in `제안 3 · Memory 1`.
+The core counts both: 제안's number is its new suggestions and its rows that are the operator's turn, Memory's is its document disagreements, and both are 0 while the head switch is off (B3).
+The lane keeps the tool's id `memory`, so a saved lane, a chord and `Toggle Hide AI tool` (`toggle_lane_memory`) reach it as before; ⇧⌘L, a Memory card number under a conversation and Project Settings' `Open project Memory` open it on the Memory tab, and a Needs You row on 제안.
+The tab shown and the 제안 row open are this window's, not the core's.
+
+Its head reads `Hide AI · <project>` beside the brain, then the Hide AI chip (the agent Hide AI asks now with its logo, the listed agent standing in while Runs on is past the usage limit), the switch for all of Hide AI in this Project, ⚙ and `✕`, which closes the tool column.
+The switch is on from the start; turned off, neither 제안 nor Memory reads anything, Hide AI makes no call for the Project, the rail and the tabs count nothing, and the tool says `Hide AI가 꺼져 있어요` with one line on what turning it on reads (B3).
+Turning it on gives each of the two back as it was.
+The first time the tool opens with Hide AI on, two lines above the tabs say that investigating uses the operator's own subscription and what is sent; they stay while the tool stays open and are not shown again (B3, D-36).
+While the Project is still being read the tool says so; a Project that is not registered, or whose Hide AI could not be read, says that in one line, the second with `다시 읽기`.
+
+### The 제안 tab
+
+The 제안 tab lists what Hide AI suggests fixing, the fixes under way and the ones applied (D-05 to D-07).
+The core decides every group, mark, hold and count; the screen draws them and every press is one `suggestion_action` (`apply`, `dismiss`, `restore`, `retry`) naming the row by its id (`s12` for a suggestion, `m72` for a memory on its way into the documents).
+The tab has one line for its state and no more (D-44): `다음에 Hide를 열 때 첫 조사` before the first investigation, `오늘은 제안 없음` when today's run left nothing open, and `제안이 꺼져 있어요` with `켜기` when ⚙ turned suggestions off; while a run goes, `조사 중` sits small in the head and the rows stay as they were, and after a run that could not investigate `조사 못 함` sits there the same way until a run investigates, nothing new having risen from it (D-35).
+A failure the operator cannot act on, such as a run that hit its turn or time limit or the usage limit, goes to the diagnostic log and draws nothing.
+
+The rows fall into `고를 것`, `반영 중` and the folded `반영됨`, each head with its count, and a row's mark says whose move it is (D-37): a green open circle for a new suggestion, a yellow dot for the operator's turn, a blue turning ring with dimmed text while Hide AI works; a row under 반영됨 has no mark.
+A suggestion's title is its discomfort in a person's words, or, for a line the grouping wrote alone, its signal and tag (`같은 명령이 계속 실패해요: cargo test`); under it `놓친 것 · <cause>`, then `고칠 것`, so what a press does is read before it, and its buttons (B10, D-51).
+Pressing the row opens it in place to `근거`, each piece of evidence a line with its agent's logo, `세션` or `PR #n`, the signal and its time; a session opens its record and a pull request its card, and evidence whose session or pull request is gone stays dimmed and opens nothing.
+Its button is `문서 고치는 PR 열기`, where an agent edits the repository's files and opens a pull request, or, in the secondary style, `이슈로 남기기` when the fix is outside the repository or not settled yet, where Hide opens an issue from CI facts alone (B14); an issue's `고칠 것` is the core's reason, or `문서로는 못 고쳐요. CI 기록을 담아 이슈로 남겨요` when it gives none.
+With GitHub not connected or not permitted `GitHub 연결 필요` stands in the button's place and the suggestion stays (B18).
+Beside every choice's button, and beside `GitHub 연결 필요`, is a quiet `넘어가기` button; there is no `⋯` (D-51).
+`넘어가기` means not now: the row goes away, and new evidence of the same problem gathers on it; when as much piles up again as when it was skipped, it rises once more reading `넘어갔지만 다시 생겼어요` in the warning colour, and skipped again it does not rise (D-43, B16).
+A suggestion that came back after its fix merged reads `문서로는 안 됐어요` with the last pull request, and its fix is one step stronger (B15).
+In a Project whose ⚙ says `자동으로 PR 열기` a new suggestion goes to 반영 중 by itself and wears `자동`; while an automatic pull request waits unreviewed, the next one waits in 고를 것 with `자동 PR 리뷰를 기다려요` and can still be applied by hand (B13).
+Hide never merges.
+
+A row being applied says what its agent does: `PR 만드는 중` (`이슈 만드는 중`) with the time since it started and `에이전트 ↗` while the agent lives, then `PR #n 리뷰` in the warning colour with the pull request once it is open and the operator's turn; `CI 실패` in the destructive colour, or what stopped it in plain words (`PR 없이 끝났어요`, `에이전트가 시작하지 못했어요`, `셸이 시작을 마치지 못했어요`, `아직 만들어지지 않아 문서는 그대로 뒀어요`, with the core's detail, such as the shell's question or the agent's reason, on a quiet line under it), keeps the row there with `다시 시도` and `넘어가기` (B11, B12); a code this build has no words for reads `PR 없이 끝났어요`.
+An open issue reads `이슈 열림` with the issue.
+A merged row folds under `반영됨 N · 효과 있었음 M`; while the watch runs its line is the quiet `지켜보는 중 · 세션 2/5`, a row whose problem did not come back reads `효과 있었음`, and nothing else is said (B15).
+A row being applied whose agent lives is also one row in the sidebar's and the 태스크 list's Needs You while it is the operator's turn (see Work Hide AI does for a home), and choosing that row opens this tool on 제안 with the row open (B11); a memory on its way into the documents is one of these rows from its first offer, named by its memory with its number (`m72`) before the title, and so is a promotion already under way before this change (D-02, B2).
+
+⚙ opens a sheet under the head (D-26, B19).
+At its top `조사하는 AI` and the chip of the agent Settings › Hide AI chose, which opens that page, and under it one line, `설정 › Hide AI의 순서를 따라요. 한도에 걸리면 다음 AI로` (D-53); when that agent cannot promise to only read (OpenCode), `이 AI로는 조사할 수 없음` stands under it and no investigation runs.
+The 제안 group has its own switch, `제안 양` (`적게`, `보통`, `많이`, each with what it means and how many a week), `반영 방식` (`확인하고 반영`, `버튼을 누르면 PR이나 이슈를 열어요`, or `자동으로 PR 열기`), `읽을 곳`, and `넘어간 제안 N개`, which unfolds to each one with `되살리기` and a quiet line saying whether it can still rise once (`다시 쌓이면 한 번 올라와요`) or not (`다시 올라오지 않아요`); restoring one lets the core judge it again on what piled up.
+`읽을 곳` has two switches (D-52): `세션 기록` (`실패한 명령 · 에이전트 막힘 · 내 정정 · 세션에 남은 문제`) and `GitHub` (`CI 실패 · 리뷰 지적`).
+The core keeps six signals; a switch shows on while any signal of its group that can be read is on, and one press is one `suggestion_settings` with `signal_group`, which turns the whole group (B5).
+`GitHub` is off with `GitHub 저장소가 아니에요` under it when the repository is not on GitHub; with Memory off, `Memory가 꺼져 있어 내 정정은 읽지 않아요` stands under `세션 기록`.
+The Memory group has Memory's own switch and `이 프로젝트의 기억 지우기`, which asks first, naming the Project and the number of memories.
+Last, one line on what is sent.
+With the head switch off every switch in the sheet is dimmed.
+
+### The Memory tab
+
+The Memory tab is whether a memory is right: its questions, the memories and the search (D-02); a memory's way into the documents, a promotion that failed and a decision nothing builds yet are rows of the 제안 tab.
+User text says `기억` where it said `카드`, in all four languages (D-03); the tool and the tab keep the name Memory.
+
+The core opens one Project's Memory per daemon; the rail, whatever the lane holds, names its Project when it shows, when the front Project changes and when its window comes forward after another window named another Project, so the Hide AI icon's number is current, and the tool reads until the core answers for its own.
 Turning the switch on when this Mac's agent hooks do not carry Memory yet updates them first and turns it on once they land.
 A press before Hide has first read those hooks, right after it starts, shows the switch pending, waits for that read and then runs as pressed; a read that fails refuses the press, and a press for another Project meanwhile is refused as busy.
-While a pass analyzes the Project, a small `분석 중` chip sits beside the switch; with Hide AI off or unable to run, the chip dims and one line with `Hide AI 설정 열기` says verified cards are still used; when every agent is past the usage limit the same dimmed state reads "Hide AI is paused: every agent is past your usage limit this week. Saved cards are still used." (PRD hide-ai-usage-limit D-06).
 A Project on any linked device shows the same Memory controls and cards as this machine's Projects, read from the core's store with the device's own Project identity.
 The disclosure says cards stay in Hide's Memory, and the delete confirmation removes them from this Project's Memory; neither claims the screen's device owns the store.
 An unavailable link or Memory reader uses the existing unreadable state; its reason is recorded in the diagnostic log.
-`처리할 것` appears, and the rail's Memory icon carries its count, while the Project has a suggestion, an unresolved document comparison, a failed placement or a decision nothing builds yet.
 Each compact row has a one-line title and one-line reason, truncating long text; `Compare` reads and opens the document excerpt and original operator words with their dates only when requested.
-A confirmed enduring operator correction offers `Fix the doc` and `Card is wrong`; unresolved authority first offers `Card is right` and `Doc is right`, and cannot be selected until answered.
+A confirmed enduring operator correction offers `Fix the doc` and `Memory is wrong`; unresolved authority first offers `Memory is right` and `Doc is right`, and cannot be selected until answered.
 Dates remain provenance and never decide authority.
 Choosing the document marks the card Outdated; choosing the card turns the row into a document correction proposal.
-Eligible rows have checkboxes; selecting one to five shows `N selected · up to 5 per PR`, `Clear` and `Open one PR`, and at five the other checkboxes are disabled.
-The row's single-card action uses the same batch path.
-While any row is selected, per-row promotion and dismissal buttons are hidden; unknown-authority answer buttons remain so those comparisons can be settled before selection.
-Promotion reasons omit zero counts and use short source-session counts.
-Started single or batch promotions remain in To resolve, in the same two-line format as the questions: a PR mark in the checkbox slot, the first title and `+N` for additional cards with the disclosure indicator, then the status, elapsed time where measured, subdued card numbers and links.
-Before a PR exists the row says Writing PR with the durable attempt's elapsed time; cards bound to the same running agent and attempt share a row.
-After confirmation, cards with the same PR number share a row, and `PR <number>` opens the existing PR panel.
-The catalog's failed checks use destructive text, requested changes and an agent asking the operator use warning text, and writing or awaiting review is neutral.
-`Agent ↗` appears only while writing or needing attention and only when a real pane is known; a quiet review row keeps only its disclosure indicator.
-After PR creation the agent link requires a Hide AI promotion origin and that agent's live PR association with the catalog's full repository-qualified URL, rather than a name or branch guess.
-This applies equally to promotions already open before upgrade; PR numbers remain plain identifier digits in all four languages.
-Every To resolve row expands from its title, reason or empty space, or its single disclosure button with Enter or Space; the chevron only indicates expansion.
-Checkboxes, links and action buttons perform only their own actions.
-An ordinary question opens its current body, cited files and sources below its action buttons, while a document disagreement opens Compare content.
-A progress row opens a two-line body preview aligned with its title and status; a single card does not repeat its title, while a batch labels each preview with its card number and title.
-The progress row keeps medium inset spacing around its header and preview, with a small gap above the expanded body, so its content stays clear of the hover surface and bottom rule.
-PR and agent actions appear once, in the status line, and an expanded row also exposes its known agent there when the collapsed status does not need that link.
-Merged promotions leave To resolve and become document pointers; closed-unmerged promotions leave To resolve as ordinary cards and are not suggested again at that revision.
-A promotion row whose agent is alive is also in Needs You while the operator has something to do (`PR #n 리뷰` or `CI 실패`), and choosing that row opens this tab with it open (Work Hide AI does for a home); the row here still shows the progress, the pull request and the agent link whether or not it is in Needs You.
 When the pull request merges or closes, its agent ends and its worktree goes with the branch kept, so a closed attempt's `Agent ↗` link leaves with the pane.
-A card that was not processed returns with `Card was not processed · Ended without a PR` in warning text and the agent's reason behind the row; every failed row offers Retry, continuing the shared branch and PR, and `Don't promote`, which leaves an ordinary card.
 When a promotion reports a card outdated, its empty, clean worktree is released after its agent has left; committed or uncommitted work stays and a later promotion continues on that same branch and PR.
 An accepted outdated report returns the card to verification with its original sources intact.
 An outdated card sharing a batch waits while any sibling still runs, has an open PR or follows a building branch.
-A card whose decision the code does not have yet, which another branch builds, stays in To resolve as a progress row, `Goes in with the PR that builds it`, with `Agent ↗` to that branch's agent and `PR <number>` once its pull request is open; it asks nothing, puts no dot on the tab and is still given to agents, and that pull request's merge makes it a document pointer like any merged promotion.
-When nothing builds it, one row says `Not built yet · no work underway` with a clock mark in the checkbox slot and the agent's reason behind the row, and offers only `Keep as is`, which leaves an ordinary card that is not asked about again, its document disagreement included, until its text changes.
-A new rule, lesson or decision suggestion keeps its source-session counts and dismissal until its revision changes; at most three new suggestions are open.
-`카드 N` lists the other cards, two lines each: the number and title, then the kind, how many sessions it was given to, how many times it was pulled, how many of its sources are the operator's words, and when it changed.
+`기억 N` lists the other memories, two lines each: the number and title, then the kind, how many sessions it was given to, how many times it was pulled, how many of its sources are the operator's words, and when it changed.
 The first five show, the rest fold under `그 외 N`, and a card shown in full is never folded; the search above them shows every match, best first, and is the Project's, so every window shows the same query and only the one typed into sends it.
-A searched promotion card also shows its running status and the name that opens its pane, with no name before the session appears; expanding a progress row does not duplicate it in Cards.
 Once merged, its ordinary card dims and shows the file it went into, or the merged pull request's mark when no file was named, with `파일에 반영됨 · 전달 안 함`.
 A personal preference carries `Personal`, remains available to agents and never appears as a document suggestion.
 Unresolved fact disagreements remain withheld and readable in ordinary card detail, with no unsupported document correction action; rule, lesson and decision disagreements are eligible for correction.
@@ -944,7 +966,7 @@ A confirmed enduring correction says `Correction confirmed · document update pe
 It retains the original human source and document quote; unrelated document commits do not ask the same authority question again.
 When the owning document incorporates it, background reconciliation turns the card into the existing document pointer without another promotion.
 Turning Memory off retains cards and analysis progress; its setting explains that enabling it again catches up on unprocessed conversations, including conversations from the disabled period.
-A Project at its 10,000-card limit makes room for a new card by forgetting its least recently used one, and the tab says so in one quiet line under the head, `N older cards were cleared to make room for new ones.` (`새 카드를 남기려고 오래된 카드 N개를 지웠어요.`), counting the cards forgotten that way since the tab last said so.
+A Project at its 10,000-card limit makes room for a new card by forgetting its least recently used one, and the tab says so in one quiet line under the head, `N older memories were cleared to make room for new ones.` (`새 기억을 남기려고 오래된 기억 N개를 지웠어요.`), counting the cards forgotten that way since the tab last said so.
 The line is said once: it counts as seen once it is in view on a visible page, stays while the tab is open, and the next time the tab opens it is gone until another card is cleared, when it counts only the new ones.
 `hide memory undo mN` brings one of the newest 1,000 cleared cards back, and so does `되돌리기` on a card just forgotten, but not while the Project is at its limit: the undo is refused with `mN cannot come back while this Project's Memory is full; forget another card first`.
 A card added by hand is never cleared this way.
@@ -960,11 +982,10 @@ With Memory off, stored cards are retained but the list and its empty slot stay 
 An older consent shows a short re-consent explanation under the existing off disclosure and points to the switch above; it never enables or injects on its own.
 The core supplies the usable count, current card and reasons, and the shell only draws them; no banner, alert, toast or panel is added.
 The checking mark is one line in the lane at its 360px minimum in all four languages, and the card is still listed and opens in full; an unverified card is not given to agents until the check ends (PRD memory-card-quality D-13, B6, B19).
-When the agent is gone and GitHub cannot say whether its pull request came (gh missing or logged out, or GitHub not answering), the line reads `PR을 확인하지 못함 · <reason>` with no spinner and nothing to press, since restoring GitHub settles it; it is not asked about in `처리할 것`.
 A card on its way into the repository is never folded under `그 외 N`, and a card opened from a conversation clears a search that leaves it out.
 A card opens in place: `N분 전에 바뀜 · 이전 내용` when a text replaced another (the earlier text with `되돌리기`), its body, its cited files, its sources with their runtime, time and whether they are the operator's words, and `지우기`.
 A forgotten card leaves `mN 지움 · 되돌리기` at the bottom of the tab until it is undone or another card is forgotten.
-The `⋯` beside `카드 N` holds `데이터 삭제`, which asks first, naming the Project and the number of cards, because it cannot be undone.
+The `⋯` beside `기억 N` holds `데이터 삭제`, which asks first, naming the Project and the number of memories, because it cannot be undone.
 An empty Project says no cards yet and when sessions are analyzed.
 
 ## Terminal image attachment boundary
@@ -1351,16 +1372,16 @@ A pane head's agent-tree button and a started backlog item (from ⌘K, a record 
 ### A mission's map
 
 A Conductor's mission (PRD software-factory-conductor; PRD mission-plan-visibility; PRD mission-map-git-criteria) is drawn in the 보기 slot as one page, read from the core's mission record; the page edits nothing, and the operator changes a mission by talking to its Conductor.
-Only the operator opens it: the Conductor pane's `크게 ›`, the sidebar row's mission chip, the rail's slot button or the Overview (B14; PRD mission-pane-chip D-02); no plan opens it by itself.
+Only the operator opens it: the Conductor pane's mission chip, the sidebar row's mission chip, the rail's slot button or the Overview (B14; PRD mission-pane-chip D-02); no plan opens it by itself.
 The page reads top down, with no tabs, flow table, time bars or legend: the head, `내 차례` only when the operator has something to do, the map, and the node panel (mission-map-git-criteria B24).
 The panel opens only with a picked node, and until then the map has the slot's whole width; it stands right of the map while the slot is at least `--size-mission-wide` (900 px) wide and drops under it in a narrower slot (B30, B31, B34).
 The page reads the mission's events only while it is open: the core sends the events of the mission in the 보기 slot and of no other (D-22).
 
-The head is one line: the mission's state (`계획 중`, a blue `진행 중`, `머지 대기` in the decision colour, a grey `✓ 끝남` or a grey `취소`), its time (`n시간째` while it runs, `n시간 걸림` once it ends), a cell per node in the plan drawn as its card is (done grey, work in main fainter, an outside node empty), and `n / m 끝`.
+The head is one line: the mission's state (`계획 중`, a blue `진행 중`, `머지 대기` in the decision colour, a grey `✓ 끝남` or a grey `취소`), its time (`n시간째` while it runs, `n시간 걸림` once it ends), a cell per node in the plan drawn as its card is (done green, work in main a fainter green, an outside node empty), and `n / m 끝`.
 It ends with `검증 <강도>` (`검증 보통`), the mission's verification strength, read only: the Conductor changes it in its plan when the operator says so, and a mission from before strength shows none.
 The head carries no PR count, no main count and no cap; the map carries those.
-A finished or cancelled mission's report sits under the head as its first line, and `펼치기` opens all of it (B24).
-Every state colour is one token of `design/tokens.json` (`--mission-working`, `-review`, `-hold`, `-failed`, `-waiting`, `-cancelled`), and a head cell, a card's mark and border, and an edge use the same one.
+A finished or cancelled mission's report sits under the head as its first words without their Markdown marks (no `#`, `-` or `[ ]`), and `펼치기` opens all of it drawn as a Markdown document is (B24).
+Every state colour is one token of `design/tokens.json` (`--mission-done`, `-working`, `-review`, `-hold`, `-failed`, `-waiting`, `-cancelled`), and a head cell, a card's mark and border, and an edge use the same one.
 Before the first plan the page is the head and one `계획 중` line (B19).
 
 `내 차례 n` lists only what the operator can do, each item with its node's chip, which picks that node on the map (B25): the Conductor's decision, a worker the core raised for the operator (`<node> 일꾼 막힘: <its blocked line, or the cause>`, with `터미널로 이동`), an outside pull request closed without merging, and, while the mission waits on the operator's merge, the merge or join order (`머지 순서 #1 → #2`, `합칠 순서` for direct changes) with `대화로 ›`.
@@ -1378,7 +1399,7 @@ An answer typed without Herdr confirming it may already be in the conversation, 
 An open mission whose Conductor is gone with no decision shows `Conductor 없음` with `이어받기` in `내 차례`, which starts a new agent in the mission's checkout told to take the mission, and the core refuses a second Conductor while the first is there (B44).
 
 The nodes are drawn top down by what they wait on: every node that waits on nothing starts on the top row, and the edges meet one `보고·인계` card at the bottom.
-A card's state is a mark whose shape reads without its colour, and colour is kept for what wants a look (B26): a dashed empty ring and dashed border for 대기, a turning ring and a blue border for 작업 중 (still under a reduced-motion setting), a purple filled ring for 리뷰 중, a yellow `!` for 판단 기다림, a red `✕` for 실패, a grey `✓` for 일 끝, and a faint `✓` with no surface for 반영됨, work that reached main.
+A card's state is a mark whose shape reads without its colour, and colour is kept for what wants a look (B26): a dashed empty ring and dashed border for 대기, a turning ring and a blue border for 작업 중 (still under a reduced-motion setting), a purple filled ring for 리뷰 중, a yellow `!` for 판단 기다림, a red `✕` for 실패, a green disc with a `✓` on a faint green surface for 일 끝, and a green `✓` with no disc and no surface for 반영됨, work that reached main; a finished card's border stays the plain one, never green.
 A node outside the mission (`external`) is a dotted card with `↗` before its pull request or branch in every state, since being outside is its kind, not a state (B19); its state is drawn on top: a dotted ring and `main 반영 기다림` while it waits, `확인 못 함` when Hide could not read it, a faint ✓ and `반영됨` once it reached main, and a red ✕, a red border and `머지 없이 닫힘` when its pull request closed unmerged; a finished one's accessible name adds `미션 밖`.
 Hovering a mark says its state word, and the card's accessible name starts with the same word.
 A cancelled mission's unfinished cards are dashed grey and rest, and no edge from them is lit (B35).
@@ -1395,10 +1416,15 @@ How long a node took and how long a decision held it come only from its events (
 A card a later node's defect reopened carries `↻n` in red, counting the reopenings, and a card the last replan changed carries `✎` with its reason on hover; the attempts are the panel's (B16, B36).
 A node checked by other agents carries a strip under its card, one row per checker with its agent's mark, the model and effort its own pane was started with (only the launch choice Hide proved for the checker's `pane_id` and `machine`: a launch that set no effort shows none and one that set no model shows `기본 모델`; without a proven launch the plan's words with `(계획)`, never passed off as launched), and its state (`✓ 통과`, `✕ 실패`, `리뷰 중`, `리뷰 대기`), and a rule line when several decide (`3명 중 과반 통과 · 1/3 통과`); edges to later nodes leave from under the strip (B29).
 A defect a later node found is a red dashed edge from that node back to the one it reopened, until the defect's line passes (B21).
-A map wider than the slot is shrunk to the slot's width down to 60 %, below which the map scrolls sideways so a card stays readable.
+The map is drawn in a box that opens at `맞춤`: the whole map inside it, never larger than its own size and never below 40 %, and it keeps fitting as a panel opens beside it or the slot resizes until the operator zooms it.
+A trackpad pinch, or a wheel with ⌘ or Ctrl held (Ctrl on Windows and Linux), zooms around the pointer between 40 % and 200 %, so the card under it stays there while the map can scroll that far; a plain wheel scrolls the box.
+Dragging from an empty spot moves the map under the pointer while it is larger than its box; a press that moves less than a few pixels is still a press.
+`−`, the percent, `+` and `맞춤` sit at the box's lower right as the browser's zoom does: `−` and `+` step through Chrome's zoom levels and are off at 40 % and 200 %, `맞춤` fits it again and stays pressed while the map fits, and hovering the percent says the gestures.
+The zoom is the page's view of the moment: nothing reaches the core, and a map opened again, or another mission's, opens at `맞춤`.
+In a slot narrower than `--size-mission-wide` the box is as tall as its map, up to the slot's height, and the panel follows under it.
 
 Pressing a card, or Enter or Space on it, picks it: that card and the cards and edges one edge away stay lit, the rest dim, and its panel opens (B30).
-Pressing it again, an empty spot of the map, or Escape lets it go; Escape with nothing picked is the lane's.
+Pressing it again, an empty spot of the map (not a drag from it), or Escape lets it go; Escape with nothing picked is the lane's.
 The panel reads top down (B31): its head (mark, title, state word · kind · the worker's model and effort as the strip reads a checker's, launched or marked `(계획)`, then how long it took, how long a decision held it, its attempt and how often a defect reopened it), now (a held node's question and choices, read only; a working node's own plan checklist; a node in review its checkers; else its card line), what it made (the pull request in its state's mark and colour with the base it stacks on, the CI line, the branch, the commit, a research conclusion, a verify verdict), its finish lines, its connections, `PR 카드` when it has a pull request, `터미널로 이동` and `기록`, and its events folded under `사건 n개`.
 The finish lines are one list of ✓ ○ ⤳ ✕ (B32), each the one criterion mark the CI line also uses, whose tooltip and accessible name are the same state word (`통과`, `아직`, `넘어감`, `실패`): a node's own lines in its words, `검사 명령 통과`, `CI 통과`, and a review or verification by its checkers' names (`codex 리뷰`); a skipped line says its reason, a line passed by a rerun `재실행 1회`, one the operator decided names the decision, and a defect line names the node that found it.
 Connections list what it waits on and what waits on it by node name with the number beside it, faint; pressing one picks that node (B33).
@@ -1418,10 +1444,11 @@ The pane shows the mission chip instead of its session's own plan chip, whose pl
 The pane's second row shows `! <decision>` in the decision colour while a decision waits, else `<first node> 외 k` while workers are at nodes, in the progress place, the count left to the children button's marks beside it; with no node at work the place is empty, and neither the Conductor's own plan nor its progress stands in (B9).
 While that line names the nodes at work, the Conductor's `대기 · 자식 에이전트 N개 작업 중` is not drawn beside it, since both say the same work.
 A waiting decision also takes the place of the Conductor's own work left (`일 남음`), since a Conductor often stops after asking; its own question, approval or block, and a raised descendant's ask, still come first.
-The chip opens, pins and closes its popover as the plan chip does ([A plan's map](#a-plans-map)): the pointer or the keyboard's focus opens it, a press, Enter or Space on the focused chip, or the Show plan chord (⇧⌘U, Alt+Shift+U on Windows and Linux) pins it, and a second press, the chord or Esc closes a pinned popover, the keyboard staying where it was; Esc on a popover the pointer only shows goes to the terminal (B3, B4).
-The popover has the plan popover's width and no map, which is drawn only in the 보기 slot; `크게 ›` at its head opens the page there and closes the popover, and there is no record footer, the pane ⋯ menu and the sidebar row opening the record (B7).
+The pointer or the keyboard's focus on the chip opens its popover, as on the plan chip ([A plan's map](#a-plans-map)), and a press, Enter or Space on the chip opens the mission's map in the 보기 slot and closes the popover, so the map is one press away (B3).
+The Show plan chord (⇧⌘U, Alt+Shift+U on Windows and Linux) pins the popover, and the chord again or Esc closes it, the keyboard staying where it was; Esc on a popover the pointer only shows goes to the terminal (B4).
+The popover has the plan popover's width and no map, which is drawn only in the 보기 slot; its head ends in a dim `누르면 지도`, since the chip itself opens the page there, and there is no record footer, the pane ⋯ menu and the sidebar row opening the record (B7).
 While the mission is open its head is `미션 n/m`, or the chip's state word; while a decision waits its first line is `! <decision>` with `대화로`, which brings the Conductor pane forward with the keyboard in its terminal; then a row per node at work (status mark, title, PR number and where it is: `코드`, `PR`, `리뷰`, `머지`, `검사`, `main`, `조사` or `검증`), and one line `끝남 k · 다음 j` (B10).
-Once the mission ends its head is `✓ 끝남 · <걸린 시간>`, or a grey `취소 · <걸린 시간>`, then the first two lines of the Conductor's report and at most three results by kind with `+N개` for the rest (B11).
+Once the mission ends its head is `✓ 끝남 · <걸린 시간>`, or a grey `취소 · <걸린 시간>`, then the first two lines of the Conductor's report as words, its Markdown marks (`#`, `-`, `[ ]`, `**`) left out, and at most three results by kind with `+N개` for the rest (B11).
 Before the first plan the popover is one `계획 중` line, and when the mission's device does not answer it keeps its last values dimmed under the big map's note (B10).
 When a mission's first plan lands while the operator looks at its Conductor pane, the keyboard pane of the visible Agent tab of the Workspace in front in a window that is shown and focused (the desktop host's report, or a browser tab's own focus), that pane's popover opens pinned once and the keyboard stays in the terminal; anywhere else, another pane, tab, Workspace, window or app, nothing opens and only the chip changes (B12, B13; D-03, D-06).
 The page decides it from two consecutive frames it received, a mission going from no nodes to some or first appearing with nodes, so a load, a reconnect or a restart opens nothing, nor does a replan (B14; `web/src/missionReveal.ts`).
@@ -2441,7 +2468,7 @@ Every start of a chapter, from the list, from `처음부터`, from `이전` over
 A chapter playing dims everything but what its step marks, rings that, and puts a light bubble beside it with what happens and how: the command's chord as keycaps (`Or press ⌘D`), `Press the button, or ⇧⌘↩` for a step with a button, or `Press where it's marked` where this host has no chord for the command (⌥1 in a browser tab).
 ⏎ performs the step in the learner's place, pressing the chord, the button, dragging the pane with a hand cursor, typing what the learner would say into an agent's prompt and sending it (words the learner wrote there themselves are sent as they are, for the world to judge; the example is typed only into an empty prompt), or right-clicking, or pressing a control such as the pane head's `@`, and choosing from the shell's own menu or list with the hand; a held chord (⌃⇥, ⌥⇥) is let go a moment later, so the shell's own switcher is seen before it lands.
 The bubble's button does what ⏎ does, because a press on the guide's bubble, task card or end card is no press on the practice screen.
-It leaves the keyboard in the pane that held it, so a chord that acts where the keyboard is (⌘W closes that pane, ⌃⇥ starts from it) acts there, and so does the learner's own key afterwards; and it closes no popover or menu the screen has open, so a step that points into one (chapter 8's `크게 ›`) still finds it.
+It leaves the keyboard in the pane that held it, so a chord that acts where the keyboard is (⌘W closes that pane, ⌃⇥ starts from it) acts there, and so does the learner's own key afterwards; and it closes no popover or menu the screen has open, so a step that points into one (chapter 7's `크게 ›`) still finds it.
 What ⏎ does is played at a pace a learner can follow, one pace for every move of it (`PACE` in `PracticeCoach.tsx`): the hand points at what it presses, drags or opens before it acts, and a step it performed stays a moment once done, so its result is seen before the next bubble; ⏎ in that moment moves on at once.
 A step the learner does by their own key, click or drag moves on as soon as it is done, and the steps the coach replays on its own (`이어서`, `이전`) go at the quick pace, because they only bring the screen back to where it was.
 → moves on from a step that only looks; on a step that waits for something to happen, only ⏎ or the learner's own key, click or drag moves on.
@@ -2468,7 +2495,7 @@ The step says that a sidebar row dropped on the terminal, or the menu's Copy nam
 The lead takes the learner's own words for the first three; the last goes only when the request holds the signup agent's ID, and the lead asks for it otherwise; a reference alone is not yet the learner's words, so ⏎ types the example, reference and work, in its place.
 The agents' answers and letters are the world's script, drawn in the panes and the list; the learner only types the requests and chooses from `@`'s list.
 
-Chapter 8 hands a Conductor a job of several pull requests as a mission: its world draws the plan, the workers in delegated tabs under the Conductor and the one decision it asks as an ordinary question, in `missions` the way the core keeps them, with its choices and the one it recommends; the first plan opens the pane chip's popover by itself under the shell's own rule ([A mission on its Conductor's pane](#a-mission-on-its-conductors-pane)), the big map opens only from `크게 ›`, as a lane call the world numbers, and the learner answers on the map's decision banner: a choice pressed or `직접 답하기…` reaches the world as the core's `mission_answer`, and words said to the Conductor answer it too; either changes the plan.
+Chapter 8 hands a Conductor a job of several pull requests as a mission: its world draws the plan, the workers in delegated tabs under the Conductor and the one decision it asks as an ordinary question, in `missions` the way the core keeps them, with its choices and the one it recommends; the first plan opens the pane chip's popover by itself under the shell's own rule ([A mission on its Conductor's pane](#a-mission-on-its-conductors-pane)), the big map opens only from a press on the pane's mission chip, as a lane call the world numbers, and the learner answers on the map's decision banner: a choice pressed or `직접 답하기…` reaches the world as the core's `mission_answer`, and words said to the Conductor answer it too; either changes the plan.
 
 Chapter 7 asks an agent to plan before it changes anything, opens the plan's checklist from the pane's plan chip and the plan large in the 보기 slot, and approves it in the conversation, because Hide has no button that approves a plan; its world draws `plans` and lays the review on the agent's row as the core's question, and any words sent to the agent put the plan up, then approve it and start the first step.
 
@@ -2665,13 +2692,13 @@ A refusal reaches only the agent, as an English reason naming the protection and
 The group promises a guardrail, not security (B28).
 
 Memory uses the existing consent and kit; its row shows hook preparation, pending writes and project-scoped failure with Retry, while retaining the confirmed value.
-That Retry applies only to enabling or disabling Memory; card actions stay in the Memory tool with their existing confirmations.
+That Retry applies only to enabling or disabling Memory; card actions stay in the Hide AI tool's Memory tab with their existing confirmations.
 Memory promotion PR rows retain their original repository-qualified link after Connections changes; checks, status and agent identity join only that exact URL.
 A legacy promotion whose original repository cannot be proven shows PR verification unavailable and keeps its PR button disabled.
 Turning it off keeps existing cards.
 While the dialog is open its project owns the daemon's single Memory read slot, and the tool rail's project is restored when it closes.
-Open project Memory is one scoped navigation intent that closes the dialog and opens that project's usable checkout with the right lane on the Memory tool; a delayed remote focus changes the lane only on arrival, and refusal leaves the earlier checkout's lane unchanged.
-The shell waits for both the target checkout and its Memory tool; the core's lane call then brings the lane forward, over the agents in a narrow window.
+Open project Memory is one scoped navigation intent that closes the dialog and opens that project's usable checkout with the right lane on the Hide AI tool's Memory tab; a delayed remote focus changes the lane only on arrival, and refusal leaves the earlier checkout's lane unchanged.
+The shell waits for both the target checkout and its Hide AI tool; the core's lane call then brings the lane forward, over the agents in a narrow window.
 A newer explicit navigation cancels the delayed Memory choice so its later arrival cannot take the screen back.
 Without a usable checkout it gives a local recovery reason.
 All pages use the four interface languages, existing settings rows, system controls, dialog keyboard containment and theme tokens.
@@ -3098,7 +3125,7 @@ The sheet carries no row or explanation for a command the removed native app alo
 | Toggle device rail | none | none | none | none |
 | Toggle right lane | `⌘E` | `Ctrl+Shift+E` | `⌘E` | `Ctrl+Shift+E` |
 | Toggle Project tool | none | none | none | none |
-| Toggle Memory tool | none | none | none | none |
+| Toggle Hide AI tool | none | none | none | none |
 | Open Project Memory | `⇧⌘L` | `Alt+Shift+L` | `⇧⌘L` | `Alt+Shift+L` |
 | Open PR list | `⇧⌘R` | `Alt+Shift+R` | `⌥⇧R` | `Alt+Shift+R` |
 | Toggle documents | none | none | none | none |
