@@ -1,10 +1,11 @@
-import type { CellTone } from "../missions";
+import type { CellTone, HeadCell } from "../missions";
 import { cn } from "../lib/utils";
 
 // One colour per node state (PRD mission-plan-visibility D-11, B35): a chip's
-// or the map head's cell and the sidebar's mission chip read the
-// `--mission-*` tokens here; the map's cards draw their own looks
-// (`MissionNodeMark`, PRD mission-map-git-criteria D-02).
+// cell and the sidebar's mission chip read the `--mission-*` tokens here. The
+// mission page's head draws its cells as its cards (`HEAD_FILL`, PRD
+// mission-map-git-criteria D-02, B26): colour only for work, review, a
+// decision and a failure, done grey and work in main fainter.
 
 /** A cell's fill: a state with colour, an empty cell for a node still ahead. */
 export const TONE_FILL: Record<CellTone, string> = {
@@ -14,6 +15,19 @@ export const TONE_FILL: Record<CellTone, string> = {
   hold: "bg-mission-hold",
   failed: "bg-mission-failed",
   waiting: "bg-muted",
+  cancelled: "bg-mission-cancelled",
+};
+
+/** A mission page head cell, as its card looks: an outside node waits as an empty cell. */
+export const HEAD_FILL: Record<HeadCell, string> = {
+  waiting: "bg-muted",
+  external: "bg-muted",
+  working: "bg-mission-working",
+  review: "bg-mission-review",
+  hold: "bg-mission-hold",
+  failed: "bg-mission-failed",
+  done: "bg-muted-foreground/60",
+  landed: "bg-muted-foreground/25",
   cancelled: "bg-mission-cancelled",
 };
 
@@ -37,8 +51,9 @@ export const CELL_LIMIT = 20;
  * keeps its width and its proportions. The words beside it carry the
  * numbers, so the bar itself is hidden from a screen reader.
  */
-export function ProgressCells({ tones, size, className }: { tones: readonly CellTone[]; size: "chip" | "head"; className?: string }) {
-  const runs: { tone: CellTone; count: number }[] = [];
+export function ProgressCells<T extends string = CellTone>({ tones, fill, size, className }: { tones: readonly T[]; fill?: Record<T, string>; size: "chip" | "head"; className?: string }) {
+  const fills = fill ?? (TONE_FILL as Record<string, string>);
+  const runs: { tone: T; count: number }[] = [];
   if (tones.length > CELL_LIMIT) {
     for (const tone of tones) {
       const last = runs.at(-1);
@@ -58,7 +73,7 @@ export function ProgressCells({ tones, size, className }: { tones: readonly Cell
       )}
     >
       {cells.map((cell, index) => (
-        <span key={index} className={cn("rounded-full", TONE_FILL[cell.tone])} style={{ flexGrow: cell.count, flexBasis: 0 }} />
+        <span key={index} className={cn("rounded-full", fills[cell.tone])} style={{ flexGrow: cell.count, flexBasis: 0 }} />
       ))}
     </span>
   );

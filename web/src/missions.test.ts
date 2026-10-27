@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { cardLine, checkerState, chipWords, conductedBy, criteriaTally, criterionName, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, launchModelOf, missionCounts, nodeLine, nodeMark, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, workerWords } from "./missions";
+import { cardLine, checkerState, chipWords, conductedBy, criteriaTally, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, launchModelOf, missionCounts, nodeLine, nodeMark, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, workerWords } from "./missions";
 import type { AgentRow, Mission, MissionCriterion, MissionEvent, MissionNode, SnapshotRest } from "./snapshot";
 
 // What the map and the Conductor row read from a mission (PRD
@@ -142,6 +142,11 @@ describe("a node's state colour (PRD mission-plan-visibility D-11, B8, B35)", ()
     expect(missionCells(m)).toEqual(["working", "done", "hold", "waiting"]);
   });
 
+  it("draws the mission page's head cells as its cards: done work grey, work in main fainter, an outside node waiting (PRD mission-map-git-criteria B26)", () => {
+    const m = mission("m", { nodes: [node("spec", { status: "done", kind: "research", delivery: null }), node("api", { status: "done", pr: 3, pr_state: "merged" }), node("ui", { status: "done", pr: 4, pr_state: "mergeable", depends_on: ["api"] }), node("out", { kind: "external", delivery: null, external: { pr: 9 } }), node("old", { status: "dropped" })] });
+    expect(missionHeadCells(m)).toEqual(["done", "landed", "external", "done"]);
+  });
+
   it("colours a mission's own chip by its decision, else its state", () => {
     expect(missionTone(mission("m", { decision: "Which base?" }))).toBe("hold");
     expect(missionTone(mission("m", { status: "done", decision: "stale ask" }))).toBe("done");
@@ -234,10 +239,11 @@ describe("a card's look (PRD mission-map-git-criteria D-02, B26, B27)", () => {
 });
 
 describe("a node's finish lines (PRD mission-map-git-criteria B6, B12, B23, B28, B32)", () => {
-  it("counts n/m and the skipped from the core's counts, and none for a mission from before criteria or a node without lines", () => {
+  it("counts n as the ✓ lines alone with the skipped beside it, though the core's met count holds the skips, and none for a mission from before criteria or a node without lines", () => {
     const lines = [line("c1", "own", { state: "pass" }), line("c2", "own", { state: "skipped", skip: { reason: "only 31 sessions" } }), line("check", "check"), line("ci", "ci")];
+    // The core counts a skipped line as met (`criteria_met` = passed + skipped).
     const n = node("n", { criteria: lines, criteria_met: 2, criteria_skipped: 1 });
-    expect(criteriaTally(mission("m"), n)).toEqual({ met: 2, total: 4, skipped: 1 });
+    expect(criteriaTally(mission("m"), n)).toEqual({ passed: 1, total: 4, skipped: 1 });
     expect(criteriaTally(mission("m", { exempt: true }), n)).toBeNull();
     expect(criteriaTally(mission("m"), node("x", { kind: "external", delivery: null, external: { branch: "tools/runner" } }))).toBeNull();
   });

@@ -238,7 +238,7 @@ function Criteria({ mission, node }: { mission: Mission; node: MissionNode }) {
   const tally = criteriaTally(mission, node);
   if (!tally) return null;
   return (
-    <Part title={`${t("mission.field.criteria")} · ${tally.met}/${tally.total}`} part="criteria">
+    <Part title={`${t("mission.field.criteria")} · ${tally.passed}/${tally.total}`} part="criteria">
       <ul className="flex min-w-0 flex-col gap-xxs" data-panel-criteria={node.criteria.map((line) => `${line.key}:${line.state}`).join(" ")}>
         {node.criteria.map((line) => {
           const mark = LINE_MARK[line.state];

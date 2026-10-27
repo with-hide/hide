@@ -6,7 +6,7 @@ import { DependencyGraphView, type EdgeLook, type OverlayEdge } from "./Dependen
 import type { GraphEdge } from "./dependencyLayout";
 import { formatElapsed, useElapsed, useMinuteClock } from "./components/elapsed";
 import { MissionNodeMark } from "./components/mission-node-mark";
-import { ProgressCells } from "./components/mission-tone";
+import { HEAD_FILL, ProgressCells } from "./components/mission-tone";
 import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage } from "./i18n/locale";
@@ -21,7 +21,7 @@ import {
   defectEdges,
   heldQuestion,
   landingLeft,
-  missionCells,
+  missionHeadCells,
   missionCounts,
   missionEventsOf,
   missionOf,
@@ -113,17 +113,16 @@ function MissionBody({ mission, actions }: { mission: Mission; actions: Actions 
                 <Graph mission={mission} selected={selected} onSelect={(key) => select(selected === key ? null : key)} events={log?.events ?? null} end={end} />
               </FitWidth>
             </div>
-            <div
-              ref={panel}
-              className="flex min-w-0 flex-col border-t border-border mission-wide:min-h-0 mission-wide:w-(--size-mission-side) mission-wide:shrink-0 mission-wide:overflow-auto mission-wide:border-l mission-wide:border-t-0"
-              data-mission-panel={selected ?? "none"}
-            >
-              {node ? (
+            {/* The panel opens with a pick; until then the map has the whole width (B30, B31). */}
+            {node ? (
+              <div
+                ref={panel}
+                className="flex min-w-0 flex-col border-t border-border mission-wide:min-h-0 mission-wide:w-(--size-mission-side) mission-wide:shrink-0 mission-wide:overflow-auto mission-wide:border-l mission-wide:border-t-0"
+                data-mission-panel={node.key}
+              >
                 <MissionNodePanel mission={mission} node={node} events={log?.events ?? null} end={end} onSelect={select} onClose={() => setPicked(null)} actions={actions} />
-              ) : (
-                <p className="px-md py-sm text-caption text-muted-foreground" data-mission-panel-hint="true">{t("mission.panel.hint")}</p>
-              )}
-            </div>
+              </div>
+            ) : null}
           </div>
         )}
       </div>
@@ -208,7 +207,7 @@ function Head({ mission }: { mission: Mission }) {
       {time ? <span className="shrink-0 text-caption text-muted-foreground" data-mission-stat="time">{time}</span> : null}
       {mission.nodes.length > 0 ? (
         <>
-          <ProgressCells tones={missionCells(mission)} size="head" className="max-w-(--size-pr-popover)" />
+          <ProgressCells tones={missionHeadCells(mission)} fill={HEAD_FILL} size="head" className="max-w-(--size-pr-popover)" />
           <span className="shrink-0 text-caption text-muted-foreground tabular-nums" data-mission-stat="done">
             {t("mission.doneOf", { done: String(done), total: String(total) })}
           </span>
@@ -361,8 +360,8 @@ function NodeCard({ mission, node, selected, dimmed, onSelect, events, end }: { 
           {time ? <span className="shrink-0 tabular-nums" data-node-time={look === "hold" ? "held" : "took"}>{time}</span> : null}
           <span className="flex-1" />
           {tally ? (
-            <span className="shrink-0 tabular-nums" data-node-criteria={`${tally.met}/${tally.total}`}>
-              {t("mission.criteria.count", { met: String(tally.met), total: String(tally.total) })}
+            <span className="shrink-0 tabular-nums" data-node-criteria={`${tally.passed}/${tally.total}`}>
+              {t("mission.criteria.count", { passed: String(tally.passed), total: String(tally.total) })}
               {tally.skipped > 0 ? <span className="ml-xxs text-mission-hold" data-node-skipped={tally.skipped}>⤳{tally.skipped}</span> : null}
             </span>
           ) : before ? (
@@ -403,8 +402,8 @@ function cardResult(node: MissionNode, t: TFunction<"translation">): ReactNode {
 }
 
 /** `기준 n/m`, with the skipped count, in words for the card's accessible name. */
-function criteriaWords(tally: { met: number; total: number; skipped: number }, t: TFunction<"translation">): string {
-  const count = t("mission.criteria.count", { met: String(tally.met), total: String(tally.total) });
+function criteriaWords(tally: { passed: number; total: number; skipped: number }, t: TFunction<"translation">): string {
+  const count = t("mission.criteria.count", { passed: String(tally.passed), total: String(tally.total) });
   return tally.skipped > 0 ? `${count} · ${t("mission.criteria.skipped", { count: tally.skipped })}` : count;
 }
 

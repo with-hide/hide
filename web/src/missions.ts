@@ -229,6 +229,15 @@ export function missionCells(mission: Mission): CellTone[] {
   });
 }
 
+/** A head cell per node in the plan order, drawn as its card is (B26): dropped nodes have none. */
+export type HeadCell = Exclude<NodeLook, "dropped">;
+export function missionHeadCells(mission: Mission): HeadCell[] {
+  return orderedNodes(mission).flatMap((node) => {
+    const look = nodeLook(mission, node);
+    return look === "dropped" ? [] : [look];
+  });
+}
+
 /** The colour a mission's own chip wears on the sidebar row and the Overview (B35): its decision, else its state. */
 export function missionTone(mission: Mission): CellTone {
   if (mission.decision && missionOpen(mission)) return "hold";
@@ -360,9 +369,10 @@ export function landingLeft(mission: Mission, node: MissionNode): "merge" | "joi
 }
 
 /** A card's `기준 n/m` and `⤳k` (B28): none for a mission from before criteria (B23) or a node with no lines, as an outside one. */
-export function criteriaTally(mission: Mission, node: MissionNode): { met: number; total: number; skipped: number } | null {
+export function criteriaTally(mission: Mission, node: MissionNode): { passed: number; total: number; skipped: number } | null {
   if (mission.exempt || node.criteria.length === 0) return null;
-  return { met: node.criteria_met, total: node.criteria.length, skipped: node.criteria_skipped };
+  // The core's `criteria_met` holds the skipped lines too; `n` is the ✓ lines alone, the skips standing beside it as `⤳k`.
+  return { passed: node.criteria_met - node.criteria_skipped, total: node.criteria.length, skipped: node.criteria_skipped };
 }
 
 /** The lines a node still has to meet, open or failed, in its order (B22, B28). */

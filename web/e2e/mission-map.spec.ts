@@ -120,7 +120,7 @@ test("the Conductor's first plan shows on its pane, the map follows the record, 
     await expect(panel.locator('[data-panel-event="node"]').first()).toBeVisible();
     // Escape lets the pick go and leaves the lane open (B30).
     await page.keyboard.press("Escape");
-    await expect(map.locator('[data-mission-panel="none"]')).toBeVisible();
+    await expect(map.locator("[data-mission-panel]")).toHaveCount(0);
     await expect(map).toBeVisible();
     await screenshot(page, "mission-map-running");
 

@@ -1353,13 +1353,13 @@ A pane head's agent-tree button and a started backlog item (from ⌘K, a record 
 A Conductor's mission (PRD software-factory-conductor; PRD mission-plan-visibility; PRD mission-map-git-criteria) is drawn in the 보기 slot as one page, read from the core's mission record; the page edits nothing, and the operator changes a mission by talking to its Conductor.
 Only the operator opens it: the Conductor pane's `크게 ›`, the sidebar row's mission chip, the rail's slot button or the Overview (B14; PRD mission-pane-chip D-02); no plan opens it by itself.
 The page reads top down, with no tabs, flow table, time bars or legend: the head, `내 차례` only when the operator has something to do, the map, and the node panel (mission-map-git-criteria B24).
-The panel stands right of the map while the slot is at least `--size-mission-wide` (900 px) wide and drops under it in a narrower slot (B34).
+The panel opens only with a picked node, and until then the map has the slot's whole width; it stands right of the map while the slot is at least `--size-mission-wide` (900 px) wide and drops under it in a narrower slot (B30, B31, B34).
 The page reads the mission's events only while it is open: the core sends the events of the mission in the 보기 slot and of no other (D-22).
 
-The head is one line: the mission's state (`계획 중`, a blue `진행 중`, `머지 대기` in the decision colour, a grey `✓ 끝남` or a grey `취소`), its time (`n시간째` while it runs, `n시간 걸림` once it ends), a cell per node in the plan in its state's colour, and `n / m 끝`.
+The head is one line: the mission's state (`계획 중`, a blue `진행 중`, `머지 대기` in the decision colour, a grey `✓ 끝남` or a grey `취소`), its time (`n시간째` while it runs, `n시간 걸림` once it ends), a cell per node in the plan drawn as its card is (done grey, work in main fainter, an outside node empty), and `n / m 끝`.
 The head carries no PR count, no main count and no cap; the map carries those.
 A finished or cancelled mission's report sits under the head as its first line, and `펼치기` opens all of it (B24).
-Every state colour is one token of `design/tokens.json` (`--mission-done`, `-working`, `-review`, `-hold`, `-failed`, `-waiting`, `-cancelled`), and a head cell, a card's mark and border, and an edge use the same one.
+Every state colour is one token of `design/tokens.json` (`--mission-working`, `-review`, `-hold`, `-failed`, `-waiting`, `-cancelled`), and a head cell, a card's mark and border, and an edge use the same one.
 Before the first plan the page is the head and one `계획 중` line (B19).
 
 `내 차례 n` lists only what the operator can do, each item with its node's chip, which picks that node on the map (B25): the Conductor's decision, a worker the core raised for the operator (`<node> 일꾼 막힘: <its blocked line, or the cause>`, with `터미널로 이동`), an outside pull request closed without merging, and, while the mission waits on the operator's merge, the merge or join order (`머지 순서 #1 → #2`, `합칠 순서` for direct changes) with `대화로 ›`.
@@ -1388,7 +1388,7 @@ The line of now is the worker's own plan step (`지금: <step> (n/m)`) or the Co
 A result is drawn by the node's kind and only when the record holds it (B22): a pull request is a plain `#n`, its state's colour kept for the panel; a direct change is `→ main <first seven digits>` once the Conductor recorded its commit, else its branch, truncated within the card.
 Done work not yet in main carries `머지 남음` (a pull request) or `합치기 남음` (a direct change) in the decision colour (B27); a stack shows only as a purple dashed edge, and an edge from a card at work is drawn in the working colour while the mission is open.
 How long a node took and how long a decision held it come only from its events (`24분`, `판단 7분`), and a node with no event that moved it shows no time (B28).
-`기준 n/m` counts the lines passed or skipped, with `⤳k` for the skipped ones; a mission from before finish lines shows its old one-sentence criterion instead and no count (B23).
+`기준 n/m` counts the ✓ lines alone, with `⤳k` beside it for the skipped ones, though the core's `criteria_met` holds both; a mission from before finish lines shows its old one-sentence criterion instead and no count (B23).
 A card a later node's defect reopened carries `↻n` in red, counting the reopenings, and a card the last replan changed carries `✎` with its reason on hover; the attempts are the panel's (B16, B36).
 A node checked by other agents carries a strip under its card, one row per checker with its agent's mark, the model and effort it runs, and its state (`✓ 통과`, `✕ 실패`, `리뷰 중`, `리뷰 대기`), and a rule line when several decide (`3명 중 과반 통과 · 1/3 통과`); edges to later nodes leave from under the strip (B29).
 A defect a later node found is a red dashed edge from that node back to the one it reopened, until the defect's line passes (B21).
@@ -1396,7 +1396,6 @@ A map wider than the slot is shrunk to the slot's width down to 60 %, below whic
 
 Pressing a card, or Enter or Space on it, picks it: that card and the cards and edges one edge away stay lit, the rest dim, and its panel opens (B30).
 Pressing it again, an empty spot of the map, or Escape lets it go; Escape with nothing picked is the lane's.
-With nothing picked the panel says `노드를 누르면 여기에 상세가 떠요`.
 The panel reads top down (B31): its head (mark, title, state word · kind · worker model and effort, then how long it took, how long a decision held it, its attempt and how often a defect reopened it), now (a held node's question and choices, read only; a working node's own plan checklist; a node in review its checkers; else its card line), what it made (the pull request in its state's mark and colour with the base it stacks on, the CI line, the branch, the commit, a research conclusion, a verify verdict), its finish lines, its connections, `PR 카드` when it has a pull request, `터미널로 이동` and `기록`, and its events folded under `사건 n개`.
 The finish lines are one list of ✓ ○ ⤳ ✕ (B32): a node's own lines in its words, `검사 명령 통과`, `CI 통과`, and a review or verification by its checkers' names (`codex 리뷰`); a skipped line says its reason, a line passed by a rerun `재실행 1회`, one the operator decided names the decision, and a defect line names the node that found it.
 Connections list what it waits on and what waits on it by node name with the number beside it, faint; pressing one picks that node (B33).

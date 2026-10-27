@@ -79,15 +79,18 @@ it("reads top down as the head, 내 차례 only when the operator has something 
     expect(running.q("[data-mission-pill]")?.textContent).toBe("Running");
     expect(running.q('[data-mission-stat="time"]')?.textContent).toBe("3m so far");
     expect(running.q('[data-mission-stat="done"]')?.textContent).toBe("1 / 5 done");
+    // Its cells are drawn as the cards: done grey, the rest in their state's colour (B26).
     expect(running.q("[data-mission-summary] [data-progress-cells]")?.getAttribute("data-progress-cells")).toBe("done hold working review waiting");
+    expect(running.q("[data-mission-summary] [data-progress-cells] span")?.className).toContain("bg-muted-foreground/60");
     expect(running.q("[data-mission-turn]")).toBeNull();
     expect(running.container.querySelectorAll("[data-mission-node]")).toHaveLength(6);
     expect(running.container.querySelector("[data-mission-legend], [data-mission-flow], [data-mission-zoom], [role=tablist], [data-node-steps], [data-node-base]")).toBeNull();
-    // Nothing picked: the panel says how to fill it.
-    expect(running.q("[data-mission-panel]")?.getAttribute("data-mission-panel")).toBe("none");
+    // Nothing picked: no panel, the map has the whole width (B30, B31).
     const parts = () => [...running.container.querySelectorAll<HTMLElement>("[data-mission-summary], [data-mission-turn], [data-mission-map], [data-mission-panel]")].map((part) => Object.keys(part.dataset)[0]);
-    expect(parts()).toEqual(["missionSummary", "missionMap", "missionPanel"]);
+    expect(parts()).toEqual(["missionSummary", "missionMap"]);
     await running.rerender(mission({ nodes, decision: "Rail or slot?" }));
+    expect(parts()).toEqual(["missionSummary", "missionTurn", "missionMap"]);
+    await act(async () => running.q('[data-mission-node="b"]')!.click());
     expect(parts()).toEqual(["missionSummary", "missionTurn", "missionMap", "missionPanel"]);
   } finally { await running.unmount(); }
 });
@@ -302,8 +305,9 @@ it("draws each card's state as its mark and border, colour only for what wants a
     expect(card(map, "core").querySelector("[data-node-pr]")?.textContent).toBe(`${"#"}1703`);
     expect(card(map, "core").querySelector("[data-pr-mark]")).toBeNull();
     expect(card(map, "core").querySelector("[data-node-criteria]")?.textContent).toBe("criteria 2/4");
-    expect(card(map, "engine").querySelector("[data-node-criteria]")?.textContent).toBe("criteria 2/4⤳1");
-    expect(card(map, "engine").getAttribute("aria-label")).toContain("criteria 2/4 · 1 skipped");
+    // n is the ✓ lines alone; the skipped one stands beside it.
+    expect(card(map, "engine").querySelector("[data-node-criteria]")?.textContent).toBe("criteria 1/4⤳1");
+    expect(card(map, "engine").getAttribute("aria-label")).toContain("criteria 1/4 · 1 skipped");
     expect(card(map, "engine").querySelector("[data-node-reopened]")?.textContent).toBe("↻1");
     expect(card(map, "engine").querySelector("[data-node-line]")?.textContent).toBe("replay 19/31");
     // The review card says what is left; the waiting one what it waits for, by number.
@@ -375,15 +379,15 @@ it("lights a picked card and the cards one edge away and dims the rest, and the 
     expect([...map.container.querySelectorAll<SVGPathElement>("[data-edge-dimmed]")].map((edge) => edge.dataset.dependencyEdge).sort()).toEqual(["a>d", "c>#report", "d>#report"]);
     await act(async () => card(map, "b").click());
     expect(dimmed()).toEqual([]);
-    expect(map.q("[data-mission-panel]")?.getAttribute("data-mission-panel")).toBe("none");
+    expect(map.q("[data-mission-panel]")).toBeNull();
     await act(async () => card(map, "c").click());
     await act(async () => map.q("[data-mission-map]")!.click());
-    expect(map.q("[data-mission-panel]")?.getAttribute("data-mission-panel")).toBe("none");
+    expect(map.q("[data-mission-panel]")).toBeNull();
     await act(async () => card(map, "c").click());
     const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
     await act(async () => { card(map, "c").dispatchEvent(escape); });
     expect(escape.defaultPrevented).toBe(true);
-    expect(map.q("[data-mission-panel]")?.getAttribute("data-mission-panel")).toBe("none");
+    expect(map.q("[data-mission-panel]")).toBeNull();
     // With nothing picked, Escape is the lane's.
     const again = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
     await act(async () => { card(map, "c").dispatchEvent(again); });
@@ -426,7 +430,7 @@ it("opens the picked node's panel: its head, where it is, what it made, its fini
     // One list of ✓ ○ ⤳ ✕, a skipped line with its reason, the review by its checker's name.
     const lines = [...panel.querySelectorAll<HTMLElement>("[data-panel-line]")].map((row) => row.textContent);
     expect(lines).toEqual(["✓명령 읽기가 cat/rg 잡음을 걸러낸다", "⤳실제 세션 50개 replay세션이 31개뿐", "✕Check command passes", "✓CI passesrerun 1 time", "○codex review"]);
-    expect(panel.querySelector('[data-panel-part="criteria"] h4')?.textContent).toBe("Done when · 3/5");
+    expect(panel.querySelector('[data-panel-part="criteria"] h4')?.textContent).toBe("Done when · 2/5");
     expect(panel.querySelector('[data-panel-links="before"]')?.textContent).toBe(`Waits onCore${"#"}1703`);
     // A connection picks its node.
     await act(async () => (panel.querySelector('[data-panel-link="verify"]') as HTMLElement).click());
@@ -441,7 +445,7 @@ it("opens the picked node's panel: its head, where it is, what it made, its fini
     await act(async () => (back.querySelector("[data-panel-events-toggle]") as HTMLElement).click());
     expect([...back.querySelectorAll<HTMLElement>("[data-panel-event]")].map((row) => row.dataset.panelEvent)).toEqual(["node", "pr_opened"]);
     await act(async () => (back.querySelector("[data-panel-close]") as HTMLElement).click());
-    expect(map.q("[data-mission-panel]")?.getAttribute("data-mission-panel")).toBe("none");
+    expect(map.q("[data-mission-panel]")).toBeNull();
   } finally { await map.unmount(); }
 });
 
