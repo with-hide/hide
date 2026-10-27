@@ -1,8 +1,9 @@
 // The desktop app's numbered chords and hold hints end to end (PRD
 // electron-digit-shortcuts-hints D-09): ⌃2 moves no tab; holding ⌘ alone
-// shows each device tile's digit at its top left after the delay and moves
-// nothing, releasing hides it, a release before the delay shows nothing, a
-// number with no device does nothing, and a key pressed during the hold,
+// shows each tab's digit after the delay and moves nothing, adding ⌥ turns
+// them to the device tiles' digits, releasing hides them, a release before
+// the delay shows nothing, ⌘2 and ⌘9 choose a tab, a number with no device
+// does nothing, and a key pressed during the hold,
 // losing the window, or a menu or a sheet opening during it ends it; holding
 // ⌥ numbers the Agents rows without moving their time or fold slot, ⌥2
 // opens the second row, and in Projects a raised Needs You agent carries its
@@ -95,7 +96,7 @@ async function capture(page: Page, name: string, source: string): Promise<void> 
   fs.writeFileSync(path.join(dir, `${name}.json`), JSON.stringify({ source, method, build: "worktree desktop/dist", isolated: true }));
 }
 
-test("⌘n selects a device, ⌥n an agent, ⌃n nothing, and holding ⌘ or ⌥ shows the numbers without moving anything", async () => {
+test("⌘n selects a tab, ⌥⌘n a device, ⌥n an agent, ⌃n nothing, and holding ⌘, ⌥⌘ or ⌥ shows the numbers without moving anything", async () => {
   const tabs = [herdr.tab];
   const made = herdr.run([
     "tab", "create", "--workspace", herdr.workspace, "--cwd", path.join(herdr.root, "fixture"), "--label", "second", "--env", `PATH=${herdr.fixturePath}`, "--no-focus",
@@ -133,39 +134,64 @@ test("⌘n selects a device, ⌥n an agent, ⌃n nothing, and holding ⌘ or ⌥
     await page.keyboard.up("Meta");
     await noKeycap(page);
 
-    // B5, B7, B9: holding ⌘ alone floats each device tile's digit at its top
-    // left, This Mac first, and the tile keeps its box; no tab is numbered.
-    const tile = page.locator("[data-rail-tile]").first();
+    // B5, B7, B9: holding ⌘ alone floats each tab's digit, left to right,
+    // and the tabs keep their boxes; no device tile is numbered.
+    const tabCaps = page.locator("[data-tab-bar] [data-keycap]");
     const deviceCaps = page.locator("[data-device-rail] [data-keycap]");
-    const before = await boxes([tile]);
+    const tabsBefore = await boxes([tab(tabs[0]!), tab(tabs[1]!)]);
     await page.keyboard.down("Meta");
-    await expect(deviceCaps).toHaveText(["1"]);
-    await expect(page.locator("[data-agent-tab-bar] [data-keycap]")).toHaveCount(0);
-    expect(await boxes([tile])).toEqual(before);
-    const cap = await deviceCaps.first().boundingBox();
-    const owner = await tile.boundingBox();
-    expect(cap!.x).toBeGreaterThanOrEqual(owner!.x - 1);
-    expect(cap!.y).toBeGreaterThanOrEqual(owner!.y - 1);
+    await expect(tabCaps).toHaveText(["1", "2"]);
+    await expect(tab(tabs[1]!).locator("[data-keycap]")).toHaveText("2");
+    await expect(deviceCaps).toHaveCount(0);
+    expect(await boxes([tab(tabs[0]!), tab(tabs[1]!)])).toEqual(tabsBefore);
     const source = await app.evaluate(({ BrowserWindow }) => {
       const windows = BrowserWindow.getAllWindows();
       if (windows.length !== 1) throw new Error("Expected exactly one candidate window");
       return windows[0]!.getMediaSourceId();
     });
+    await capture(page, "digit-hints-tabs-dark", source);
+
+    // Adding ⌥ to the revealed ⌘ turns the numbers to the device tiles at
+    // once: each tile's digit at its top left, This Mac first, the tile
+    // keeping its box.
+    const tile = page.locator("[data-rail-tile]").first();
+    const before = await boxes([tile]);
+    await page.keyboard.down("Alt");
+    await expect(deviceCaps).toHaveText(["1"]);
+    await expect(tabCaps).toHaveCount(0);
+    expect(await boxes([tile])).toEqual(before);
+    const cap = await deviceCaps.first().boundingBox();
+    const owner = await tile.boundingBox();
+    expect(cap!.x).toBeGreaterThanOrEqual(owner!.x - 1);
+    expect(cap!.y).toBeGreaterThanOrEqual(owner!.y - 1);
     await capture(page, "digit-hints-devices-dark", source);
-    // B6: releasing ⌘ hides the numbers at once.
+    // B6: releasing the modifiers hides the numbers at once.
+    await page.keyboard.up("Alt");
     await page.keyboard.up("Meta");
     await expect(page.locator("[data-keycap]")).toHaveCount(0);
 
-    // B1: ⌘2 with no second device sends nothing.
-    const devicesFocused = sent.get("focus_device") ?? 0;
+    // ⌘2 chooses the second tab, ⌘1 the first, and ⌘9 the last.
     await page.keyboard.press("Meta+Digit2");
+    await expect(canvas).toHaveAttribute("data-canvas", tabs[1]!);
+    await page.keyboard.press("Meta+Digit1");
+    await expect(canvas).toHaveAttribute("data-canvas", tabs[0]!);
+    await page.keyboard.press("Meta+Digit9");
+    await expect(canvas).toHaveAttribute("data-canvas", tabs[1]!);
+    await page.keyboard.press("Meta+Digit1");
+    await expect(canvas).toHaveAttribute("data-canvas", tabs[0]!);
+    await page.locator("[data-pane-view] .xterm-helper-textarea").first().focus();
+
+    // B1: ⌥⌘2 with no second device sends nothing.
+    const devicesFocused = sent.get("focus_device") ?? 0;
+    await page.keyboard.press("Meta+Alt+Digit2");
     await quietFor(page, 400, "the shortcut with no device sends nothing");
     expect(sent.get("focus_device") ?? 0).toBe(devicesFocused);
+    await expect(canvas).toHaveAttribute("data-canvas", tabs[0]!);
 
     // B6: a key during the hold is the chord itself; the numbers go with it
     // and stay gone while ⌘ is still down.
     await page.keyboard.down("Meta");
-    await expect(deviceCaps).toHaveCount(1);
+    await expect(tabCaps).toHaveCount(2);
     await page.keyboard.press("Digit1");
     await expect(page.locator("[data-keycap]")).toHaveCount(0);
     await noKeycap(page);
@@ -173,7 +199,7 @@ test("⌘n selects a device, ⌥n an agent, ⌃n nothing, and holding ⌘ or ⌥
 
     // B6: losing the window ends the hold.
     await page.keyboard.down("Meta");
-    await expect(deviceCaps).toHaveCount(1);
+    await expect(tabCaps).toHaveCount(2);
     await page.evaluate(() => window.dispatchEvent(new Event("blur")));
     await expect(page.locator("[data-keycap]")).toHaveCount(0);
     await page.keyboard.up("Meta");
@@ -181,7 +207,7 @@ test("⌘n selects a device, ⌥n an agent, ⌃n nothing, and holding ⌘ or ⌥
     // B6: a layer opening during the hold ends it: a tab's context menu,
     // then the Settings sheet, each with ⌘ still down.
     await page.keyboard.down("Meta");
-    await expect(deviceCaps).toHaveCount(1);
+    await expect(tabCaps).toHaveCount(2);
     await tab(tabs[0]!).click({ button: "right" });
     await expect(page.getByRole("menuitem", { name: "Rename…", exact: true })).toBeVisible();
     await expect(page.locator("[data-keycap]")).toHaveCount(0);
@@ -189,7 +215,7 @@ test("⌘n selects a device, ⌥n an agent, ⌃n nothing, and holding ⌘ or ⌥
     await page.keyboard.press("Escape");
     await expect(page.getByRole("menuitem", { name: "Rename…", exact: true })).toHaveCount(0);
     await page.keyboard.down("Meta");
-    await expect(deviceCaps).toHaveCount(1);
+    await expect(tabCaps).toHaveCount(2);
     await page.locator("[data-open-settings]").click();
     await expect(page.locator('[data-settings="true"]')).toBeVisible();
     await expect(page.locator("[data-keycap]")).toHaveCount(0);
@@ -260,8 +286,12 @@ test("⌘n selects a device, ⌥n an agent, ⌃n nothing, and holding ⌘ or ⌥
       await expect(page.locator('[data-settings="true"]')).toHaveCount(0);
       await animationsFinished(page);
       await page.keyboard.down("Meta");
+      await expect(tabCaps).toHaveCount(2);
+      await capture(page, "digit-hints-tabs-light", source);
+      await page.keyboard.down("Alt");
       await expect(deviceCaps).toHaveCount(1);
       await capture(page, "digit-hints-devices-light", source);
+      await page.keyboard.up("Alt");
       await page.keyboard.up("Meta");
     }
   } finally {

@@ -24,7 +24,8 @@ import { advanceHint, clearHint, holdModifiers, idleHint, modifiersOf, NO_MODIFI
 import { browserBridge, CHECK_UPDATES_COMMAND, hostBridge, hostKind, keySystem, SETUP_COMMAND } from "./host";
 import { herdrGate } from "./herdrTakeoverRules";
 import { useSetupWalk } from "./FirstRunWizard";
-import { numberedDevices, sidebarNumbers } from "./numbering";
+import { numberedDevices, numberedTabs, sidebarNumbers } from "./numbering";
+import { areaFrame } from "./areaFrames";
 import { availableEntries, currentEntry, expectPane, expectSurface, observeEntries, observePane, observeProject, paneItem, panelItem, projectItem, reconcileCycle, recentEntries, recentProjectOrder, type CycleItem } from "./recent";
 import { projectsOf, remoteContext } from "./remote";
 import { hostChord, hostRegistry, isNumberedCommand, releaseModifier, matchHost, numberedCommand, REGISTRY, storedBindings, type CommandId, type Digit, type NumberedFamily } from "./shortcuts";
@@ -97,8 +98,12 @@ export function reconcileHeldCycle(cycle: Cycle, rest: SnapshotRest | null): Cyc
   return kept.items.length >= fewest ? { ...cycle, ...kept } : null;
 }
 
-/** What ⌥n or ⌘n selects now, or null when nothing holds that number. */
+/** What ⌘n, ⌥n or ⌥⌘n selects now, or null when nothing holds that number. */
 export function numberedTarget(family: NumberedFamily, number: Digit, state: { rest: SnapshotRest | null; agents: AgentRow[] }): string | null {
+  if (family === "tabs") {
+    const frame = areaFrame("agent");
+    return frame ? numberedTabs(frame.layout).get(number) ?? null : null;
+  }
   if (family === "devices") return numberedDevices(state.rest?.navigator?.devices).get(number) ?? null;
   return sidebarNumbers(state, useUiStore.getState()).get(number) ?? null;
 }
@@ -216,7 +221,8 @@ export function installKeyboard(actions: Actions): () => void {
       const numbered = numberedCommand(id)!;
       const target = numberedTarget(numbered.family, numbered.number, useShellStore.getState());
       if (!target) return;
-      if (numbered.family === "devices") actions.focusDevice(target);
+      if (numbered.family === "tabs") actions.selectAgentTab(target);
+      else if (numbered.family === "devices") actions.focusDevice(target);
       else actions.openListedAgent(target);
       return;
     }
