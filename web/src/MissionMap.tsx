@@ -21,6 +21,7 @@ import { DecisionBanner } from "./MissionDecision";
 import {
   axisMarks,
   eventWords,
+  ownCriteria,
   flowShows,
   flowSpan,
   kindWord,
@@ -773,7 +774,7 @@ function FlowDetail({ mission, node, events, actions }: { mission: Mission; node
     ...(nowLine ? [[t("mission.field.now"), nowLine] as [string, ReactNode]] : []),
     ...(resultLine ? [[t(resultLine.kind === "conclusion" ? "mission.result.conclusion" : "mission.result.verify"), <span key="r" data-flow-result={resultLine.kind}>{resultLine.line}</span>] as [string, ReactNode]] : []),
     ...(node.change ? [[t("mission.field.change"), node.change] as [string, ReactNode]] : []),
-    ...(node.criteria ? [[t("mission.field.criteria"), node.criteria] as [string, ReactNode]] : []),
+    ...(ownCriteria(node) ? [[t("mission.field.criteria"), ownCriteria(node)] as [string, ReactNode]] : []),
   ];
   return (
     <div className="ml-lg flex min-w-0 flex-col gap-sm border-l border-border py-xs pl-md" data-mission-detail={node.key}>

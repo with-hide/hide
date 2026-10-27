@@ -63,7 +63,14 @@ const KIND_WORD: Record<MissionNode["kind"], MessageKey> = {
   change: "mission.kind.change",
   research: "mission.kind.research",
   verify: "mission.kind.verify",
+  external: "mission.kind.external",
 };
+
+/** A node's own criteria in the Conductor's words, one after another; null when it names none. */
+export function ownCriteria(node: MissionNode): string | null {
+  const own = node.criteria.flatMap((line) => (line.kind === "own" && line.text ? [line.text] : []));
+  return own.length > 0 ? own.join(" · ") : null;
+}
 
 export function kindWord(kind: MissionNode["kind"]): MessageKey {
   return KIND_WORD[kind];
@@ -434,6 +441,10 @@ export function eventWords(event: MissionEvent, t: TFunction<"translation">): { 
       return { what: t("mission.event.reported"), line: null };
     case "cancelled":
       return { what: t("mission.event.cancelled"), line: null };
+    case "skipped":
+      return { what: t("mission.event.skipped"), line };
+    case "reopened":
+      return { what: t("mission.event.reopened"), line };
   }
 }
 
