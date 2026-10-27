@@ -615,6 +615,58 @@ fn the_issue_panel_joins_its_pull_requests_and_names_which_one_a_session_made() 
     );
 }
 
+/// A publish pass reads a project's places, fences and repository names once
+/// and answers from them: each answer equals the one a read of that project
+/// alone gives, for the summary, each pull request's lines and the ledger lists.
+#[test]
+fn a_pass_over_a_project_answers_what_each_read_answers_alone() {
+    let home = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let mut store = open(state.path());
+    let mut first = pr(7, "feat/x", T0, None);
+    first.issues = vec![("github:acme/app#3".into(), IssueSource::Closes)];
+    let mut second = pr(8, "feat/y", T0 + 30 * MIN, None);
+    second.issues = vec![("github:acme/app#3".into(), IssueSource::Closes)];
+    store
+        .apply_project(&project(vec![first, second]), T0)
+        .unwrap();
+    let maker = claude_file(
+        home.path(),
+        "s-maker",
+        ROOT,
+        "cli",
+        &[Turn {
+            at: T0 + 20 * MIN,
+            branch: "feat/y",
+            text: "두 번째 PR",
+        }],
+        Some((8, T0 + 30 * MIN)),
+    );
+    ingest(&mut store, home.path(), &maker);
+
+    let row = store.project(PROJECT).unwrap().unwrap();
+    let pass = store.pass(PROJECT).unwrap().unwrap();
+    assert_eq!(
+        store.summary_in(&pass, &[]).unwrap(),
+        store.summary(PROJECT, &[]).unwrap()
+    );
+    for number in [7, 8] {
+        let pr = store.pr(PROJECT, number).unwrap().unwrap();
+        assert_eq!(
+            store.pr_lines_in(&pass, &pr, Some(here())).unwrap(),
+            store.pr_lines(&row, &pr, Some(here())).unwrap()
+        );
+    }
+    assert_eq!(
+        store.ledger_issue_refs_in(&pass).unwrap(),
+        store.ledger_issue_refs(PROJECT).unwrap()
+    );
+    assert_eq!(
+        store.ledger_summaries_in(&pass).unwrap(),
+        store.ledger_summaries(PROJECT).unwrap()
+    );
+}
+
 /// A checkout's work landed when the pull requests its sessions made or
 /// worked on include a merged one and no open one; a session belongs to the
 /// deepest checkout holding its folder, and a checkout on no branch (one

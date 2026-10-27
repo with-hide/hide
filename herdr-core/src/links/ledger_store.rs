@@ -1,6 +1,6 @@
 //! The work ledger shares the link writer, version, size cap and retention.
 
-use super::{LinkStore, SessionKey, failed};
+use super::{LinkStore, ProjectPass, SessionKey, failed};
 use crate::labels::analysis::LabelEnd;
 use crate::links::ledger::*;
 use crate::links::{CREATED_AFTER_MS, CREATED_BEFORE_MS, SUMMARY_SESSION_LIMIT};
@@ -1882,11 +1882,20 @@ impl LinkStore {
         &self,
         project: &str,
     ) -> Result<Vec<crate::issues::IssueReference>, String> {
-        let project = self.project(project)?.ok_or("ledger_project_missing")?;
+        let pass = self.pass(project)?.ok_or("ledger_project_missing")?;
+        self.ledger_issue_refs_in(&pass)
+    }
+
+    /// [`LinkStore::ledger_issue_refs`] within a publish pass for one project.
+    pub(in crate::links) fn ledger_issue_refs_in(
+        &self,
+        pass: &ProjectPass,
+    ) -> Result<Vec<crate::issues::IssueReference>, String> {
+        let project = &pass.project;
         let Some(repo) = project.repo.as_deref() else {
             return Ok(Vec::new());
         };
-        let paths = self.project_paths(&project)?;
+        let paths = &pass.paths;
         let mut statement = self.connection.prepare("SELECT DISTINCT x.device,x.agent,x.id,x.repo,x.number FROM ledger_sightings x LEFT JOIN repo_names r ON r.name=x.repo WHERE x.kind='issue' AND COALESCE(r.repo,x.repo)=?2 ORDER BY x.at DESC LIMIT ?1").map_err(failed)?;
         let rows = statement
             .query_map(params![SUMMARY_SESSION_LIMIT as i64 + 1, repo], |r| {
@@ -1910,7 +1919,7 @@ impl LinkStore {
         for (session, repo, number) in rows {
             if self
                 .session(&key(&session))?
-                .is_some_and(|row| row.inside(&paths))
+                .is_some_and(|row| row.inside(paths))
             {
                 let reference = crate::issues::IssueReference::parse(
                     &format!("https://github.com/{repo}/issues/{number}"),
@@ -1929,8 +1938,16 @@ impl LinkStore {
     }
 
     pub fn ledger_summaries(&self, project: &str) -> Result<Vec<SessionWorkSummary>, String> {
-        let project = self.project(project)?.ok_or("ledger_project_missing")?;
-        let paths = self.project_paths(&project)?;
+        let pass = self.pass(project)?.ok_or("ledger_project_missing")?;
+        self.ledger_summaries_in(&pass)
+    }
+
+    /// [`LinkStore::ledger_summaries`] within a publish pass for one project.
+    pub(in crate::links) fn ledger_summaries_in(
+        &self,
+        pass: &ProjectPass,
+    ) -> Result<Vec<SessionWorkSummary>, String> {
+        let paths = &pass.paths;
         // A summary never loads request bodies or record trees. It reads
         // bounded counts once, then rolls each count along stored lineage.
         // An ask waits on the operator in its session's record and is no
@@ -2039,7 +2056,7 @@ impl LinkStore {
         let sessions = self
             .all_sessions()?
             .into_iter()
-            .filter(|session| session.inside(&paths))
+            .filter(|session| session.inside(paths))
             .take(SUMMARY_SESSION_LIMIT + 1)
             .collect::<Vec<_>>();
         if sessions.len() > SUMMARY_SESSION_LIMIT {

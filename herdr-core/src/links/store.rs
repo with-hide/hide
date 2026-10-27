@@ -1121,9 +1121,10 @@ impl LinkStore {
         // is on; one still open counts as now.
         let mut latest: HashMap<SessionKey, u64> = HashMap::new();
         for project in &projects {
+            let pass = self.pass_of(project)?;
             for pr in self.candidate_prs(&project.key)? {
                 let end = pr.end().unwrap_or(now);
-                for line in self.pr_lines(project, &pr, None)? {
+                for line in self.pr_lines_in(&pass, &pr, None)? {
                     for id in &line.ids {
                         let key = SessionKey {
                             device: line.device_id.clone(),
@@ -1340,7 +1341,15 @@ impl LinkStore {
     /// would widen this project over sessions that are not its own, so it is
     /// left out (D-23).
     fn project_paths(&self, project: &ProjectRow) -> Result<Vec<DevicePath>, String> {
+        Ok(self.places(project)?.0)
+    }
+
+    /// A project's places and the fences that keep its learned places to it,
+    /// read together. A pass over the project's pull requests reads both once
+    /// through [`LinkStore::pass_of`], not once per pull request.
+    fn places(&self, project: &ProjectRow) -> Result<(Vec<DevicePath>, Fences), String> {
         let mut paths = self.registered_paths(project)?;
+        let fences = self.fences(project)?;
         if let Some(repo) = project.repo.as_deref() {
             let mut statement = self
                 .connection
@@ -1360,14 +1369,50 @@ impl LinkStore {
                 )
                 .and_then(Iterator::collect)
                 .map_err(failed)?;
-            if !learned.is_empty() {
-                let fences = self.fences(project)?;
-                paths.extend(learned.into_iter().filter(|place| fences.admit(place)));
-            }
+            paths.extend(learned.into_iter().filter(|place| fences.admit(place)));
         }
         paths.sort();
         paths.dedup();
-        Ok(paths)
+        Ok((paths, fences))
+    }
+
+    /// The project, read with its places, fences and repository names for one
+    /// pass over its pull requests; `None` when the store does not hold it.
+    pub(super) fn pass(&self, key: &str) -> Result<Option<ProjectPass>, String> {
+        match self.project(key)? {
+            Some(project) => self.pass_of(&project).map(Some),
+            None => Ok(None),
+        }
+    }
+
+    /// [`LinkStore::pass`] for a project already read.
+    pub(super) fn pass_of(&self, project: &ProjectRow) -> Result<ProjectPass, String> {
+        let (paths, fences) = self.places(project)?;
+        Ok(ProjectPass {
+            project: project.clone(),
+            paths,
+            fences,
+            names: self.repo_name_table()?,
+        })
+    }
+
+    /// Every repository's names, in the table's own order.
+    fn repo_name_table(&self) -> Result<BTreeMap<String, Vec<String>>, String> {
+        let mut statement = self
+            .connection
+            .prepare_cached("SELECT name, repo FROM repo_names ORDER BY rowid")
+            .map_err(failed)?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(failed)?;
+        let mut names: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for row in rows {
+            let (name, repo) = row.map_err(failed)?;
+            names.entry(repo).or_default().push(name);
+        }
+        Ok(names)
     }
 
     fn fences(&self, project: &ProjectRow) -> Result<Fences, String> {
@@ -1497,7 +1542,19 @@ impl LinkStore {
         pr: &PrRow,
         local: Option<LocalFiles<'_>>,
     ) -> Result<Vec<LinkedSession>, String> {
-        let names = self.repo_names(&pr.repo)?;
+        let pass = self.pass_of(project)?;
+        self.pr_lines_in(&pass, pr, local)
+    }
+
+    /// [`LinkStore::pr_lines`] within a pass, so the project's places, fences
+    /// and repository names are not read again for each of its pull requests.
+    pub(super) fn pr_lines_in(
+        &self,
+        pass: &ProjectPass,
+        pr: &PrRow,
+        local: Option<LocalFiles<'_>>,
+    ) -> Result<Vec<LinkedSession>, String> {
+        let names = pass.repo_names(&pr.repo);
         let mut printed: BTreeMap<SessionKey, (u64, Option<String>)> = BTreeMap::new();
         {
             let mut statement = self
@@ -1542,16 +1599,15 @@ impl LinkStore {
             })
             .map(|(key, _)| key.clone())
             .collect();
-        let named = self.named_sessions(project, pr, &names)?;
+        let named = self.named_sessions(&pass.project, pr, &names)?;
         let start = self.window_start(pr)?;
         let end = pr.end().unwrap_or(u64::MAX);
-        let mut paths = self.project_paths(project)?;
+        let mut paths = pass.paths.clone();
         if !created.is_empty() {
-            let fences = self.fences(project)?;
             for key in &created {
                 if let Some(cwd) = self.session(key)?.and_then(|session| session.cwd) {
                     let place = (key.device.clone(), cwd);
-                    if fences.admit(&place) {
+                    if pass.fences.admit(&place) {
                         paths.push(place);
                     }
                 }
@@ -1881,21 +1937,6 @@ impl LinkStore {
         Ok(previous.map_or(0, |at| at as u64))
     }
 
-    fn repo_names(&self, repo: &str) -> Result<Vec<String>, String> {
-        let mut statement = self
-            .connection
-            .prepare_cached("SELECT name FROM repo_names WHERE repo=?1")
-            .map_err(failed)?;
-        let mut names: Vec<String> = statement
-            .query_map([repo], |row| row.get(0))
-            .and_then(Iterator::collect)
-            .map_err(failed)?;
-        if !repo.starts_with("id:") && !names.iter().any(|name| name == repo) {
-            names.push(repo.to_owned());
-        }
-        Ok(names)
-    }
-
     /// The pull request panel's sessions, capped at [`PANEL_SESSION_LIMIT`],
     /// with the full count (B6).
     pub fn pr_panel(
@@ -1934,9 +1975,10 @@ impl LinkStore {
             return Ok(IssueLinks::default());
         };
         let prs = self.issue_prs(&project.key, &super::issue_key(issue))?;
+        let pass = self.pass_of(&project)?;
         let mut sessions: Vec<LinkedSession> = Vec::new();
         for pr in &prs {
-            for line in self.pr_lines(&project, pr, local)? {
+            for line in self.pr_lines_in(&pass, pr, local)? {
                 match sessions.iter_mut().find(|held| {
                     held.device_id == line.device_id
                         && held.agent == line.agent
@@ -1974,9 +2016,10 @@ impl LinkStore {
         session_id: &str,
     ) -> Result<Vec<(PrRow, LinkedSession)>, String> {
         let mut found = Vec::new();
+        let pass = self.pass_of(project)?;
         for pr in self.candidate_prs(&project.key)? {
             if let Some(line) = self
-                .pr_lines(project, &pr, None)?
+                .pr_lines_in(&pass, &pr, None)?
                 .into_iter()
                 .find(|line| line.ids.iter().any(|id| id == session_id))
             {
@@ -2102,17 +2145,28 @@ impl LinkStore {
         project: &str,
         checkouts: &[WorktreeFact],
     ) -> Result<ProjectLinkSummary, String> {
-        let mut summary = ProjectLinkSummary::default();
-        let Some(row) = self.project(project)? else {
-            return Ok(summary);
+        let Some(pass) = self.pass(project)? else {
+            return Ok(ProjectLinkSummary::default());
         };
+        self.summary_in(&pass, checkouts)
+    }
+
+    /// [`LinkStore::summary`] within a publish pass for one project.
+    pub(super) fn summary_in(
+        &self,
+        pass: &ProjectPass,
+        checkouts: &[WorktreeFact],
+    ) -> Result<ProjectLinkSummary, String> {
+        let mut summary = ProjectLinkSummary::default();
+        let row = &pass.project;
+        let project = row.key.as_str();
         let mut by_pr: BTreeMap<u64, Vec<(String, String, String)>> = BTreeMap::new();
         let mut chips: BTreeMap<String, BTreeSet<SessionPrChip>> = BTreeMap::new();
         // Per checkout: whether a pull request its sessions worked on merged,
         // and whether one is still open.
         let mut work: BTreeMap<&str, (bool, bool)> = BTreeMap::new();
         for pr in self.candidate_prs(project)? {
-            let lines = self.pr_lines(&row, &pr, None)?;
+            let lines = self.pr_lines_in(pass, &pr, None)?;
             if lines.is_empty() {
                 continue;
             }
@@ -2868,6 +2922,30 @@ fn deepest_owner<'a>(
         .filter(|(_, (at, path))| at == device && within(place, path))
         .max_by_key(|(_, (_, path))| path.trim_end_matches('/').len())
         .map(|(key, _)| key.as_str())
+}
+
+/// What a pass over one project's pull requests reads once: the project row,
+/// its places and fences, and the repository names. The publish and prune
+/// passes ask for these on every pull request, so each is read once per project.
+pub(super) struct ProjectPass {
+    project: ProjectRow,
+    /// The folders the project's sessions work in, each on its device.
+    paths: Vec<DevicePath>,
+    fences: Fences,
+    /// Each repository's names, in the table's own order.
+    names: BTreeMap<String, Vec<String>>,
+}
+
+impl ProjectPass {
+    /// The names a pull request's repository goes by: the table's, then its
+    /// own name when the table does not hold it.
+    fn repo_names(&self, repo: &str) -> Vec<String> {
+        let mut names = self.names.get(repo).cloned().unwrap_or_default();
+        if !repo.starts_with("id:") && !names.iter().any(|name| name == repo) {
+            names.push(repo.to_owned());
+        }
+        names
+    }
 }
 
 /// What keeps a learned place (a folder a session printed this project's

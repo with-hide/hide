@@ -1611,9 +1611,25 @@ fn prune(
 fn publish_summaries(store: &LinkStore, state: &mut State, sink: &impl Sink) {
     let mut summaries = BTreeMap::new();
     for project in state.projects.iter() {
-        match store.summary(&project.key, &project.worktrees) {
+        // One pass reads the project's places, fences and repository names for
+        // its summary and for both ledger reads, not once per pull request.
+        let pass = store.pass(&project.key);
+        let summary = match &pass {
+            Ok(Some(pass)) => store.summary_in(pass, &project.worktrees),
+            Ok(None) => Ok(ProjectLinkSummary::default()),
+            Err(code) => Err(code.clone()),
+        };
+        let ledger = match &pass {
+            Ok(Some(pass)) => Ok(pass),
+            Ok(None) => Err("ledger_project_missing".to_owned()),
+            Err(code) => Err(code.clone()),
+        };
+        match summary {
             Ok(mut summary) => {
-                match store.ledger_issue_refs(&project.key) {
+                match ledger
+                    .clone()
+                    .and_then(|pass| store.ledger_issue_refs_in(pass))
+                {
                     Ok(refs) => summary.record_issues = refs,
                     Err(code) => {
                         log_write(&code, "ledger_issue_refs");
@@ -1622,7 +1638,7 @@ fn publish_summaries(store: &LinkStore, state: &mut State, sink: &impl Sink) {
                         }
                     }
                 }
-                match store.ledger_summaries(&project.key) {
+                match ledger.and_then(|pass| store.ledger_summaries_in(pass)) {
                     Ok(work) => {
                         match store.ledger_creators(&work) {
                             Ok(creators) => summary.creators = creators,
