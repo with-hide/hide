@@ -13,6 +13,7 @@ import { TitleRow } from "../TitleRow";
 import { useUiStore } from "../ui";
 import type { Tool } from "../workspace";
 import { WorkspaceScreen } from "../WorkspaceScreen";
+import { hideAiSceneProject } from "./HideAiScene";
 import { memorySceneProject } from "./MemoryScene";
 import { REFERENCE_FOLDS, sidebarScene } from "./sceneData";
 import { sceneParams, type SceneParams } from "./SidebarScene";
@@ -95,13 +96,14 @@ export function RightLaneScene({ theme, scale, content, state }: SceneParams & {
       prs: { open: 3, mergeable: 1, failed: 1, review: 1, checking: 0 },
       git: { worktrees: 1, changed: 0, unpushed: 0, removable: 0, dots: [{ checkout_id: checkout.id, state: "clean" }] },
     } };
-    // The project's Memory, so the Memory tool draws its cards and the rail counts what Memory asks.
+    // The project's Hide AI, so the tool draws its 제안 and Memory tabs and the rail counts both.
     const memory = { ...memorySceneProject("workspace"), workspace_id: workspace.id };
-    return { scene, editor: { tabs: lane.documents ? tabs : [], active_tab_id: lane.documents ? "t1" : null }, documents, listings, memory };
+    const suggestions = hideAiSceneProject("new", workspace.id);
+    return { scene, editor: { tabs: lane.documents ? tabs : [], active_tab_id: lane.documents ? "t1" : null }, documents, listings, memory, suggestions };
   }, [content, lane, open]);
   const actions = useMemo(() => createActions(() => true), []);
   useLayoutEffect(() => {
-    useShellStore.setState({ rest: fixture.scene.rest, agents: fixture.scene.agents, connection: "live", editor: fixture.editor, documents: fixture.documents, listings: fixture.listings, memory: { project: fixture.memory } });
+    useShellStore.setState({ rest: fixture.scene.rest, agents: fixture.scene.agents, connection: "live", editor: fixture.editor, documents: fixture.documents, listings: fixture.listings, memory: { project: fixture.memory }, suggestions: { project: fixture.suggestions } });
     useUiStore.setState({ screen: { kind: "workspace" }, laneExpanded: lane.expanded, stackFront: "view" });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");

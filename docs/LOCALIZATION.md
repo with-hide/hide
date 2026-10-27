@@ -138,7 +138,11 @@ One row is one thing the screen names. A word in the last column is not used for
 | The panel to the right of the tabs | lane | 레인 | レーン | 右侧面板 | 侧栏 for the lane (it names the sidebar) |
 | The device list beside the sidebar | device rail | 기기 목록 | デバイス一覧 | 设备栏 | 레일 |
 | An issue source kept on this device | local | 로컬 | ローカル | 本地 | Local |
-| The feature that keeps cards for agents | Memory | Memory | Memory | Memory | 기억, メモリ, 记忆 |
+| The feature that keeps memories for agents, and the rail tool that holds it with the suggestions | Memory, Hide AI | Memory, Hide AI | Memory, Hide AI | Memory, Hide AI | メモリ |
+| One thing Memory keeps | memory | 기억 | 記憶 | 记忆 | card, 카드, カード, 卡片 (a PR's card and a conversation card keep the word) |
+| What Hide AI suggests fixing | suggestion | 제안 | 提案 | 建议 | 추천 |
+| Put a suggestion aside for now; it can rise once more | skip | 넘어가기 | スキップ | 跳过 | Don't do this, 안 함, しない, 不处理 for a suggestion |
+| Where Hide AI reads its signals, in ⚙ | where to read | 읽을 곳 | 読む場所 | 读取哪里 | one switch per signal |
 | Agent family names | Claude Code, Codex, Grok, OpenCode, Pi, omp, Antigravity | as written | as written | as written | 代理 for an agent in zh |
 | Reasoning level | effort | effort | effort | effort | translated |
 

@@ -102,7 +102,7 @@ export async function showTool(page: Page, tool: LaneTool): Promise<void> {
   await expect(page.locator(`aside[data-lane="${tool}"]`)).toBeVisible();
 }
 
-/** Shows the Memory tool, the front checkout's Project's Memory. */
+/** Shows the Hide AI tool (lane id `memory`), the front checkout's Project's 제안 and Memory. */
 export async function showProjectMemory(page: Page): Promise<void> {
   await showTool(page, "memory");
 }

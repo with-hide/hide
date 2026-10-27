@@ -8,15 +8,11 @@ import type { ProjectStatus, ProjectTodo } from "./agentScope";
 import type { NodeUsage, ProjectCost } from "./generated/hided-ws";
 import type { InterfaceLanguage } from "./i18n/locale";
 import { openMissedWork } from "./sessionWork";
-import { catalogWorkspaces, frontCheckout, type LinkSummaries, type ProjectMemory, type SnapshotRest, type Workspace } from "./snapshot";
+import { catalogWorkspaces, frontCheckout, type LinkSummaries, type SnapshotRest, type Workspace } from "./snapshot";
 
 /** The 할 일 rows shown before `+N 더` (B37). */
 export const TODO_SHOWN = 5;
 
-/** What the project's Memory asks the operator (its 처리할 것), 0 while Memory is off or holds another project. */
-export function memoryAsks(memory: ProjectMemory | null | undefined, projectId: string): number {
-  return memory?.enabled && memory.workspace_id === projectId ? memory.questions.length : 0;
-}
 
 /** The Project of the checkout in front, or null at Home or in a device's Home folder. */
 export function frontProject(rest: SnapshotRest | null): Workspace | null {

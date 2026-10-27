@@ -27,8 +27,8 @@ function open(agents: Partial<AgentRow>[]) {
   return { events, actions };
 }
 
-// PRD hide-ai-work-home B11: a row its home owns opens the home, any other opens its pane.
-it("opens the Memory tab on the attempt's card for a row its home owns, and the pane for every other row", () => {
+// PRD hide-ai-work-home B11, hide-ai-suggestions B11: a row its home owns opens the home, any other opens its pane.
+it("opens the Hide AI tool's 제안 tab on the attempt's row for a row its home owns, and the pane for every other row", () => {
   const { events, actions } = open([
     { pane_id: "w1:p1", hide_ai: { task: MEMORY, home: "suggestions", workspace_id: "ws-1", turn: { kind: "pr_review", pr_number: 924 } } },
     { pane_id: "w1:p2" },
@@ -37,10 +37,8 @@ it("opens the Memory tab on the attempt's card for a row its home owns, and the 
     { pane_id: "w1:p4", hide_ai: { task: MEMORY, home: "suggestions" } },
   ]);
   actions.openListedAgent("w1:p1");
-  expect(events.map((event) => [event.kind, event.payload])).toEqual(expect.arrayContaining([
-    ["memory_open", { workspace_id: "ws-1" }],
-    ["memory_expand", { workspace_id: "ws-1", number: 72 }],
-  ]));
+  expect(events.map((event) => [event.kind, event.payload])).toEqual(expect.arrayContaining([["memory_open", { workspace_id: "ws-1" }]]));
+  expect(useUiStore.getState()).toMatchObject({ hideAiTab: "suggestions", openSuggestion: "m72" });
   expect(events.some((event) => event.kind === "focus_pane")).toBe(false);
   for (const pane of ["w1:p2", "w1:p3", "w1:p4"]) {
     events.length = 0;

@@ -9,7 +9,7 @@ import { isolate, launch, fitWindow, screenshot, test } from "./fixture";
 import { seedReconciliation } from "./memory-reconcile-fixture";
 import { progressGithub } from "./memory-progress-fixture";
 
-test("Memory compares sources, limits a batch and groups a confirmed PR", async () => {
+test("the Hide AI tool's Memory tab compares sources and reads at its minimum width in all four languages", async () => {
   const herdr = await startHerdr({ agents: false });
   const run = isolate(herdr, "memory-docs");
   progressGithub(herdr);
@@ -26,10 +26,10 @@ test("Memory compares sources, limits a batch and groups a confirmed PR", async 
     const launched = await launch(run.env);
     app = launched.app;
     const page = launched.page;
-    const sent = new Map<string, Record<string, unknown>>();
-    countSent(page, sent);
+    countSent(page);
     await (await showProjectRow(page, page.locator("[data-project]", { hasText: "sample" }).locator("[data-checkout]").first())).click();
     await showProjectMemory(page);
+    await page.locator('[data-lane="memory"] [data-hide-ai-tool-tab="memory"]').click();
     await expect(page.locator('[data-memory="off"]')).toBeVisible();
     await page.locator('[data-memory-switch="off"]').click();
     await expect(page.locator('[data-memory="on"]')).toBeVisible({ timeout: 30000 });
@@ -39,11 +39,13 @@ test("Memory compares sources, limits a batch and groups a confirmed PR", async 
     await expect(page.locator('[data-connection]')).toHaveCount(0);
     await showProjectMemory(page);
     const tab = page.locator('[data-lane="memory"]');
+    // The tab shown is the page's own, so a reload starts on 제안.
+    await tab.locator('[data-hide-ai-tool-tab="memory"]').click();
     await expect(tab.locator('[data-memory="on"]')).toBeVisible();
-    await expect(tab.locator('[data-memory-pr-group="72"]')).toContainText("m9 · m10");
+    // A promotion is a row of the 제안 tab now (PRD hide-ai-suggestions D-02); the Memory tab holds no PR group.
+    await expect(tab.locator("[data-memory-pr-group]")).toHaveCount(0);
     await expect(tab).toContainText("Personal");
     await expect(tab).toContainText("Outdated");
-    await expect(tab.locator('[data-memory-select="3"]')).toBeDisabled();
     const facts = { home: run.env.HOME, state: run.env.HIDE_STATE_DIR, socket: herdr.socket, fixture: "invented cards and scripted GitHub facts; no network", daemonPid: run.daemonPid(), capture: "candidate-window renderer via its own CDP; no OS capture" };
     const candidate = await app.evaluate(({ BrowserWindow }) => ({ pid: process.pid, executable: process.execPath, windows: BrowserWindow.getAllWindows().length, visible: BrowserWindow.getAllWindows()[0]?.isVisible() }));
     expect(candidate.windows).toBe(1);
@@ -55,28 +57,6 @@ test("Memory compares sources, limits a batch and groups a confirmed PR", async 
     await expect(tab.locator("[data-memory-comparison]")).toContainText("Use a pooled connection for all writes.");
     await screenshot(page, "memory-compare-dark");
     await tab.locator('[data-memory-compare="2"]').click();
-    await tab.locator('[data-memory-select="1"]').click();
-    await tab.locator('[data-memory-select="2"]').click();
-    await expect(tab.locator('[data-memory-selection="2"]')).toBeVisible();
-    await expect(tab.locator('[data-memory-promote="1"]')).toHaveCount(0);
-    await expect(tab.locator('[data-memory-promote="2"]')).toHaveCount(0);
-    await expect(tab.locator('[data-memory-promote="3"]')).toBeVisible();
-    await screenshot(page, "memory-two-selected-dark");
-    await tab.locator('[data-memory-promote="3"]').click();
-    await expect(tab.locator('[data-memory-select="3"]')).toBeEnabled();
-    for (const number of [6, 7, 8]) await tab.locator(`[data-memory-select="${number}"]`).click();
-    await expect(tab.locator('[data-memory-selection="5"]')).toBeVisible();
-    await expect(tab.locator('[data-memory-select="3"]')).toBeDisabled();
-    await tab.locator('[data-memory-pr-group="72"] [data-memory-row-toggle="9"]').click();
-    await expect(tab.locator('[data-memory-progress-detail="9"] [data-memory-preview]')).toHaveCount(2);
-    await expect(tab.locator('[data-memory-pr-group="72"]')).toContainText("Awaiting review");
-    await tab.locator('[data-memory-pr-group="72"] [data-memory-open-pr="72"]').click();
-    // The PR button asks the core for the PR's card (PRD work-tab-pr-lens B20): this
-    // fixture lists PR 72, so its card opens in the lane's 보기 slot (PRD
-    // sidebar-task-lens B14), and no Overview opens.
-    await expect.poll(() => sent.get("pr_open")).toMatchObject({ pr_number: 72 });
-    await expect(page.locator('aside[data-lane="detail"][data-detail="pull_request"] [data-pr-card="72"]')).toBeVisible();
-    await expect(page.locator("[data-overview-page]")).toHaveCount(0);
     // Return to this Memory, then the light/narrow state.
     await (await showProjectRow(page, page.locator("[data-project]", { hasText: "sample" }).locator("[data-checkout]").first())).click();
     await showProjectMemory(page);
@@ -100,7 +80,6 @@ test("Memory compares sources, limits a batch and groups a confirmed PR", async 
       await page.keyboard.press("Escape");
       await showProjectMemory(page);
       await expect.poll(() => tab.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-      await expect(tab.locator('[data-memory-pr-group="72"]')).toContainText("72");
       await tab.locator('[data-memory-cards] [data-memory-card="4"]').scrollIntoViewIfNeeded();
       await expect(tab.locator('[data-memory-outdated="4"]')).toContainText("repository-ownership-and-session-verification-guide.md");
       await expect(tab.locator('[data-memory-outdated="4"] [data-memory-document]')).toHaveAttribute("title", "docs/architecture/repository-ownership-and-session-verification-guide.md");

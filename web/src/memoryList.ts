@@ -1,8 +1,6 @@
 import { formatRelativeTime } from "./i18n/format";
 import type { InterfaceLanguage } from "./i18n/locale";
-import type { AgentRow, MemoryRow, ProjectMemory, PullRequest } from "./snapshot";
-import { githubPullRequestIdentity, sameGithubPullRequest } from "./pullRequestIdentity";
-import type { MessageKey } from "./i18n/catalogs";
+import type { MemoryQuestion, MemoryRow, ProjectMemory } from "./snapshot";
 
 /** How many cards the list shows before `그 외 N` (design v7). */
 export const MEMORY_LIST_HEAD = 5;
@@ -13,17 +11,18 @@ export function cardName(number: number): string {
 }
 
 /**
- * The list under `카드`: the search's answer in its order while one runs,
- * else every card a question does not already show. A question's card is
- * drawn once, in `물어볼 것`.
+ * The list under `기억`: the search's answer in its order while one runs,
+ * else every memory the tab's questions do not already show. A question's
+ * memory is drawn once, in `확인할 것`; one on its way into the documents
+ * stays in the list with its line, and its row is in 제안.
  */
 export function memoryCards(project: ProjectMemory): MemoryRow[] {
-  const asked = new Set(project.questions.map((question) => question.number));
+  const asked = new Set(memoryTabQuestions(project).map((question) => question.number));
   if (project.search) {
     const byNumber = new Map(project.rows.map((row) => [row.number, row]));
     return project.search.numbers.flatMap((number) => byNumber.get(number) ?? []);
   }
-  return project.rows.filter((row) => !asked.has(row.number) && !PROGRESS_STATES.includes(row.promotion?.state ?? ""));
+  return project.rows.filter((row) => !asked.has(row.number));
 }
 
 /**
@@ -42,6 +41,8 @@ export function visibleCards(cards: MemoryRow[], expanded: number | null, all: b
 /** A row's time: minutes or hours ago today, yesterday, then the date. */
 export function memoryTime(unixMs: number, language: InterfaceLanguage, now = Date.now()): string {
   const elapsed = Math.max(0, now - unixMs);
+  // Under a minute is "now": zero minutes would read "this minute" (`현재 분`).
+  if (elapsed < 60_000) return formatRelativeTime(language, 0, "second");
   if (elapsed < 60 * 60_000) return formatRelativeTime(language, -Math.floor(elapsed / 60_000), "minute");
   const then = new Date(unixMs);
   const today = new Date(now);
@@ -72,59 +73,17 @@ function pad(value: number): string {
   return String(value).padStart(2, "0");
 }
 
-export type MemoryProgress = { key: string; pr: number | null; url: string | null; cards: [MemoryRow, ...MemoryRow[]] };
-
-/** A card on its way into the repository: drawn as a progress row, never as an ordinary card. */
-const PROGRESS_STATES: readonly string[] = ["running", "unconfirmed", "pr_open", "building"];
-
-/** A confirmed PR or a single ledger-bound agent attempt, never a guessed branch/name. */
-export function memoryProgress(project: ProjectMemory): MemoryProgress[] {
-  const groups = new Map<string, MemoryProgress>();
-  for (const row of project.rows) {
-    const promotion = row.promotion;
-    if (!promotion || !PROGRESS_STATES.includes(promotion.state)) continue;
-    const pr = promotion.state === "pr_open" || promotion.state === "building" ? promotion.pr_number : null;
-    const identity = pr !== null ? githubPullRequestIdentity(promotion.pr_url) : null;
-    const url = identity !== null ? promotion.pr_url! : null;
-    const key = identity !== null ? `pr:${identity}` : promotion.state === "running" && promotion.agent?.pane_id ? `agent:${promotion.agent.pane_id}:${promotion.started_at_unix_ms ?? row.number}` : `card:${row.number}`;
-    const group = groups.get(key);
-    if (group) group.cards.push(row);
-    else groups.set(key, { key, pr, url, cards: [row] });
-  }
-  return [...groups.values()].map((group) => ({ ...group, cards: group.cards.sort((a, b) => a.number - b.number) }));
+/**
+ * What the Memory tab asks: whether a memory or the document it disagrees
+ * with is right (PRD hide-ai-suggestions D-02). A memory's way into the
+ * documents, its promotion and a promotion that failed or waits for a build
+ * are rows of the 제안 tab now.
+ */
+export function memoryTabQuestions(project: ProjectMemory): MemoryQuestion[] {
+  return project.questions.filter((question) => question.kind === "docs_disagree");
 }
 
-/** After PR creation only a Hide AI promotion origin and its live, repository-qualified PR prove the agent. */
-export function memoryProgressAgent(group: MemoryProgress, pull: PullRequest | undefined, agents: AgentRow[]): AgentRow | undefined {
-  if (group.pr === null || group.cards[0].promotion?.state === "building") {
-    const pane = group.cards[0].promotion?.agent?.pane_id;
-    return pane ? agents.find((agent) => agent.pane_id === pane) : undefined;
-  }
-  if (!pull?.url || !sameGithubPullRequest(pull.url, group.url)) return undefined;
-  return agents.find((agent) => {
-    const task = agent.hide_ai?.task;
-    return task?.kind === "memory_promote"
-      && agent.request?.pull_requests.some((row) => row.number === pull.number && sameGithubPullRequest(row.url, pull.url) && row.live && (row.created || row.duty));
-  });
-}
-
-export function memoryProgressStatus(group: MemoryProgress, pull: PullRequest | undefined, agent: AgentRow | undefined): { key: MessageKey; tone: string; agentLink: boolean } {
-  if (group.pr !== null && !group.url) return { key: "memory.unconfirmed", tone: "text-muted-foreground", agentLink: false };
-  pull = sameGithubPullRequest(pull?.url, group.url) ? pull : undefined;
-  if (pull?.state === "merged" || pull?.state === "closed") return { key: pull.state === "merged" ? "agentSessions.pr.merged" : "agentSessions.pr.closed", tone: "text-muted-foreground", agentLink: false };
-  if (pull?.checks === "failed") return { key: "agentSessions.pr.failed", tone: "text-destructive", agentLink: true };
-  if (pull?.review === "changes_requested") return { key: "board.review.changes", tone: "text-warning", agentLink: true };
-  if (group.cards[0].promotion?.state === "building") return { key: "memory.progress.building", tone: "text-muted-foreground", agentLink: true };
-  if (agent?.state.asking) return { key: "memory.progress.asking", tone: "text-warning", agentLink: true };
-  if (group.cards[0].promotion?.state === "unconfirmed") return { key: "memory.unconfirmed", tone: "text-muted-foreground", agentLink: false };
-  if (group.cards[0].promotion?.state === "running") return { key: "memory.progress.writing", tone: "text-muted-foreground", agentLink: true };
-  if (pull?.checks === "pending") return { key: "card.checkPending", tone: "text-muted-foreground", agentLink: false };
-  if (pull?.is_draft) return { key: "agentSessions.pr.draft", tone: "text-muted-foreground", agentLink: false };
-  if (pull?.review === "approved") return { key: "board.review.approved", tone: "text-muted-foreground", agentLink: false };
-  return { key: pull ? "memory.prOpen" : "memory.progress.inPr", tone: "text-muted-foreground", agentLink: false };
-}
-
-/** The questions a batch promotion takes: an unbuilt card has nothing to promote, and an `ask` comparison is answered first. */
+/** The questions a batch document fix takes: a confirmed newer memory; an `ask` comparison is answered first. */
 export function selectableMemoryQuestions(project: ProjectMemory): Set<number> {
-  return new Set(project.questions.filter((question) => question.kind === "docs_disagree" ? question.document.authority === "card_newer" : question.kind !== "unbuilt").map((question) => question.number));
+  return new Set(memoryTabQuestions(project).filter((question) => question.kind === "docs_disagree" && question.document.authority === "card_newer").map((question) => question.number));
 }
