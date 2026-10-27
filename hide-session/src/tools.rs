@@ -238,7 +238,7 @@ impl ToolTracker {
             .filter(|seen| seen.times > 1)
             .map(|seen| (seen.text.clone(), seen.times))
             .collect::<Vec<_>>();
-        repeated.sort_by(|a, b| b.1.cmp(&a.1));
+        repeated.sort_by_key(|search| std::cmp::Reverse(search.1));
         repeated.truncate(SUMMARY_SEARCHES);
         Some(ToolSummary {
             calls: used.calls,
