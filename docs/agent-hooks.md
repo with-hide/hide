@@ -472,6 +472,8 @@ A command hook pays one policy read per call and parses the payload only when so
 The prompt hook and the pre-tool hook know a pane's plan and mission work from one small file, `~/.hide/agent-hooks/plans/<pane>.json` (`hide_agent_hooks::plan_record`), written whole and private to the account: `{"version":1,"session":<native session>,"context":<plan_context>}`, under 16 KiB (PRD hide-plan D-14, D-15, D-30).
 `plan_context` is the summary the core sends ([delivery.md: Plans](delivery.md#plans)), fixed in `contracts/delivery-envelope.json`; the prompt hook writes it from its letter pull's answer, which already asks the core, and every `hide plan` command writes it from its own answer, so an approval lets the next write through in the same turn.
 A pane with no record, and a record of another session than the call's, gives neither a line nor a refusal, so a new session in a reused pane starts clean.
+A record written before node criteria still reads: a mission's missing `role` is a worker's, and missing `line`, `criteria` and `unmet` are empty, so it gives the lines it gave before.
+The other way round, a hook from before node criteria reads its records with unknown fields refused, so a record a newer core wrote reads as no record there: that hook gives no plan or mission line and refuses nothing until the kit installs the hook of the running Hide, which a Hide update does.
 
 The prompt hook adds the record's lines to the session context:
 

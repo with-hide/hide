@@ -70,13 +70,21 @@ pub struct MissionWork {
     /// The node's own criteria, or its title when it has none.
     pub range: String,
     /// `worker`, or `checker` for an agent bound to one of the node's
-    /// reviews or verifications (PRD mission-map-git-criteria B5).
+    /// reviews or verifications (PRD mission-map-git-criteria B5). A
+    /// summary from before checkers is a worker's.
+    #[serde(default = "worker_role")]
     pub role: String,
     /// The checker's line, `review` or `verify`.
+    #[serde(default)]
     pub line: Option<String>,
     /// How far the node's finish lines are (B22); none for a mission made
-    /// before them.
+    /// before them, or a summary from a core before them.
+    #[serde(default)]
     pub criteria: Option<CriteriaLeft>,
+}
+
+fn worker_role() -> String {
+    "worker".to_owned()
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -97,7 +105,9 @@ pub struct ConductorWork {
     pub working: u32,
     pub letters: u32,
     pub decision: bool,
-    /// The nodes whose worker reported them done while lines are left (B22).
+    /// The nodes whose worker reported them done while lines are left
+    /// (B22); none in a summary from a core before them.
+    #[serde(default)]
     pub unmet: Vec<String>,
 }
 
@@ -597,5 +607,45 @@ mod tests {
         assert_eq!(read(home.path(), "w1:p2", None), Some(context));
         assert_eq!(read(home.path(), "w1:p2", Some("session-b")), None);
         assert_eq!(read(home.path(), "w9:p9", None), None);
+    }
+
+    /// A summary from a core before node criteria, as its letter pull sent
+    /// it and as the hook saved it then, still reads, with the same lines:
+    /// a worker's without criteria, a Conductor's with no node listed.
+    #[test]
+    fn a_summary_from_before_node_criteria_still_reads_and_hints_as_before() {
+        let worker = serde_json::json!({"plan": null, "mission": {"mission": "mission-3", "node": "core", "scope": "pr", "range": "up to the PR; the operator merges"}, "conductor": null});
+        let conductor = serde_json::json!({"plan": null, "mission": null, "conductor": {"mission": "mission-3", "done": 2, "nodes": 5, "working": 2, "letters": 1, "decision": true}});
+        let read_worker: PlanContext = serde_json::from_value(worker.clone()).unwrap();
+        let work = read_worker.mission.as_ref().unwrap();
+        assert_eq!(
+            (work.role.as_str(), &work.line, &work.criteria),
+            ("worker", &None, &None)
+        );
+        assert_eq!(
+            hint(&read_worker, 0).as_deref(),
+            Some(
+                "Mission mission-3 · node core · range up to the PR; the operator merges · no merging · no starting agents"
+            )
+        );
+        let read_conductor: PlanContext = serde_json::from_value(conductor.clone()).unwrap();
+        assert_eq!(
+            read_conductor.conductor.as_ref().unwrap().unmet,
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            hint(&read_conductor, 0).as_deref(),
+            Some("Mission 2/5 · working 2 · letters 1 · decision waiting: yes")
+        );
+        // The record the hook wrote before the change.
+        let home = tempfile::tempdir().unwrap();
+        let path = record_path(home.path(), "w1:p2");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let saved = serde_json::json!({"version": 1, "session": "session-a", "context": worker});
+        std::fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
+        assert_eq!(
+            read(home.path(), "w1:p2", Some("session-a")),
+            Some(read_worker)
+        );
     }
 }
