@@ -6016,3 +6016,129 @@ fn a_pane_hands_its_failed_tools_and_its_stops_to_the_suggestions() {
         "a stop is sent once a session"
     );
 }
+
+/// B25, B26: a turn that looked up the same thing twice and failed nothing
+/// hands Hide's count of its tool calls to its end's analysis, and each
+/// point the answer names becomes an improvement record of the session,
+/// with its kind; a turn whose answer names none hands nothing.
+#[test]
+fn a_turn_end_reads_its_tool_count_and_hands_its_improvements_to_the_suggestions() {
+    use crate::suggestions::ledger::{ImprovementKind, Signal};
+    use crate::suggestions::worker::{Command, SuggestionClient};
+    let harness = Harness::new();
+    let project = harness.home.path().join(".claude/projects/-project");
+    std::fs::create_dir_all(&project).unwrap();
+    let path = project.join("ports.jsonl");
+    let at = |second: usize| format!("2026-10-01T00:00:{second:02}Z");
+    let call = |second: usize, id: &str, name: &str, input: Value| {
+        json!({"type":"assistant","sessionId":"ports","timestamp":at(second),
+            "message":{"role":"assistant","content":[{"type":"tool_use","id":id,"name":name,"input":input}]}})
+    };
+    let result = |second: usize, id: &str| {
+        json!({"type":"user","sessionId":"ports","timestamp":at(second),
+            "message":{"role":"user","content":[{"type":"tool_result","tool_use_id":id,"content":"ok"}]}})
+    };
+    let mut records = vec![
+        json!({"type":"user","sessionId":"ports","timestamp":at(0),
+            "origin":{"kind":"human"},"message":{"role":"user","content":"로그인 화면 e2e 고쳐 줘"}}),
+        call(1, "t1", "Read", json!({"file_path": "vite.config.ts"})),
+        result(2, "t1"),
+        call(3, "t2", "Grep", json!({"pattern": "5173"})),
+        result(4, "t2"),
+        call(
+            5,
+            "t3",
+            "Read",
+            json!({"file_path": "playwright.config.ts"}),
+        ),
+        result(6, "t3"),
+        call(7, "t4", "Bash", json!({"command": "rg -n \"5173\" web"})),
+        result(8, "t4"),
+        json!({"type":"assistant","sessionId":"ports","timestamp":at(9),
+            "message":{"role":"assistant","content":[{"type":"text","text":"포트를 5174로 맞췄습니다"}]}}),
+    ];
+    let write = |records: &[Value]| {
+        std::fs::write(
+            &path,
+            records
+                .iter()
+                .map(|record| format!("{record}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+    };
+    write(&records);
+    let (client, commands) = SuggestionClient::for_test();
+    let (mut worker, woken) = harness.spawn_with_handles(
+        harness.store(),
+        LOCAL_TARGET,
+        "local.sock",
+        Arc::new(NodeTranscripts::new({
+            let node: Arc<dyn crate::node_access::NodeLink> = Arc::new(hide_node::Local::new(
+                Some(harness.home.path().to_path_buf()),
+            ));
+            Box::new(move || Ok(Arc::clone(&node)))
+        })),
+        Arc::default(),
+        Arc::new(Mutex::new(Some(client))),
+    );
+    let point = "dev 서버와 e2e 포트 규칙이 문서에 없어 설정 파일을 뒤져 찾음";
+    harness.backend.answers.lock().unwrap().push_back(json!({
+        "goal": "로그인 e2e 포트 맞춤", "goal_update": "replace", "line": "포트를 맞춤", "end": "done",
+        "work": {"missed": [], "resolved": [], "artifacts": []},
+        "improvements": [{"kind": "no_doc", "text": point}],
+    }));
+    let mut observed = ObservedAgent {
+        cwd: Some("/work/app".into()),
+        ..agent(&path, "idle", 1)
+    };
+    observe(&mut worker, &observed);
+    settle(&mut worker, &woken);
+    let input = harness.backend.inputs.lock().unwrap()[0].clone();
+    assert!(
+        input.contains(
+            "<tool-use>calls: 4; files read: 2; same search repeated: \"5173\" x2; failed calls: 0</tool-use>"
+        ),
+        "{input}"
+    );
+    let improvements = |commands: &Receiver<Command>| {
+        commands
+            .try_iter()
+            .filter_map(|command| match command {
+                Command::Observe { facts, .. } => Some(facts),
+                _ => None,
+            })
+            .flatten()
+            .map(|fact| (fact.signal, fact.tag, fact.improvement))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        improvements(&commands),
+        [(
+            Signal::Improvement,
+            point.to_owned(),
+            Some(ImprovementKind::NoDoc)
+        )]
+    );
+
+    records.extend([
+        json!({"type":"user","sessionId":"ports","timestamp":at(10),
+            "origin":{"kind":"human"},"message":{"role":"user","content":"README 오타 고쳐 줘"}}),
+        json!({"type":"assistant","sessionId":"ports","timestamp":at(11),
+            "message":{"role":"assistant","content":[{"type":"text","text":"고쳤습니다"}]}}),
+    ]);
+    write(&records);
+    harness.backend.answers.lock().unwrap().push_back(json!({
+        "goal": "로그인 e2e 포트 맞춤", "goal_update": "keep", "line": "오타 수정", "end": "done",
+        "work": {"missed": [], "resolved": [], "artifacts": []},
+        "improvements": [],
+    }));
+    observed.state_change_seq = 2;
+    observe(&mut worker, &observed);
+    settle(&mut worker, &woken);
+    assert_eq!(harness.backend.calls(), 2);
+    assert!(
+        improvements(&commands).is_empty(),
+        "a turn with nothing to improve records nothing"
+    );
+}

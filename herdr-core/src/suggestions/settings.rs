@@ -2,7 +2,7 @@
 //! D-26, D-28, B3, B5): kept in the suggestion store, so they survive a
 //! hided restart (B20), and changed only by their own events.
 
-use super::ledger::Signal;
+use super::ledger::{Signal, SignalGroup};
 use super::policy::Quantity;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -29,8 +29,10 @@ pub struct Settings {
     pub memory_was_on: bool,
     pub quantity: Quantity,
     pub apply_mode: ApplyMode,
-    /// Signals the operator turned off (B5); a new record of one is not kept.
-    pub signals_off: BTreeSet<Signal>,
+    /// The places ⚙'s 읽을 곳 turned off (B5, D-52); a new record of a
+    /// signal read there is not kept, a signal added later included.
+    #[serde(default)]
+    pub groups_off: BTreeSet<SignalGroup>,
 }
 
 impl Default for Settings {
@@ -41,7 +43,7 @@ impl Default for Settings {
             memory_was_on: false,
             quantity: Quantity::default(),
             apply_mode: ApplyMode::default(),
-            signals_off: BTreeSet::new(),
+            groups_off: BTreeSet::new(),
         }
     }
 }
@@ -53,6 +55,11 @@ impl Settings {
     }
 
     pub(crate) fn records(&self, signal: Signal) -> bool {
-        self.active() && !self.signals_off.contains(&signal)
+        self.active() && self.reads(signal)
+    }
+
+    /// Whether ⚙ has the place `signal` is read from on.
+    pub(crate) fn reads(&self, signal: Signal) -> bool {
+        !self.groups_off.contains(&signal.group())
     }
 }

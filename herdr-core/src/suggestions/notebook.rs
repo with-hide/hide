@@ -508,6 +508,7 @@ mod tests {
                     pr: None,
                     at_unix_ms: 1,
                     always: false,
+                    improvement: None,
                     line: None,
                     fresh: true,
                 })

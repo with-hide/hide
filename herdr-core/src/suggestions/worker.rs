@@ -14,7 +14,7 @@ use super::analysis::{
     StopFlag, TagGrouping, Written,
 };
 use super::apply::{self as applying, ApplyOrder, FollowedAttempt};
-use super::ledger::{Observation, RecordIndex, SessionRef, Signal, SignalGroup};
+use super::ledger::{Observation, RecordIndex, SessionRef, SignalGroup};
 use super::lifecycle::{AttemptMove, AttemptPhase};
 use super::notebook::{Line, LineId, Notebook, NotebookEdit, Outcome, Stage, Strike, StruckBy};
 use super::policy::{self, Quantity};
@@ -1049,12 +1049,10 @@ impl Worker {
             SettingsChange::Quantity(quantity) => settings.quantity = quantity,
             SettingsChange::ApplyMode(mode) => settings.apply_mode = mode,
             SettingsChange::SignalGroup(group, on) => {
-                for signal in Signal::ALL.into_iter().filter(|s| s.group() == group) {
-                    if on {
-                        settings.signals_off.remove(&signal);
-                    } else {
-                        settings.signals_off.insert(signal);
-                    }
+                if on {
+                    settings.groups_off.remove(&group);
+                } else {
+                    settings.groups_off.insert(group);
                 }
             }
         }
@@ -1673,7 +1671,7 @@ pub(crate) fn local_day(unix_ms: u64, zone: &jiff::tz::TimeZone) -> String {
 mod tests {
     use super::*;
     use crate::model::{SuggestionGroup, SuggestionState, SuggestionsStatus};
-    use crate::suggestions::ledger::SessionRef;
+    use crate::suggestions::ledger::{ImprovementKind, SessionRef, Signal};
     use crate::suggestions::lifecycle::LineLife;
     use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
@@ -1880,6 +1878,33 @@ mod tests {
                         at_unix_ms: at,
                         always: false,
                         head: None,
+                        improvement: None,
+                    })
+                    .collect(),
+            });
+        }
+
+        /// One improvement with the same words in each session, of each
+        /// session's kind.
+        fn improve_in_sessions(&self, text: &str, sessions: &[(&str, ImprovementKind)]) {
+            let at = self.clock.load(Ordering::SeqCst);
+            self.send(Command::Observe {
+                project: project(),
+                facts: sessions
+                    .iter()
+                    .map(|(session, kind)| Observation {
+                        signal: Signal::Improvement,
+                        tag: text.into(),
+                        session: Some(SessionRef {
+                            agent: "codex".into(),
+                            id: (*session).into(),
+                        }),
+                        pr: None,
+                        checkout: Some("/repo".into()),
+                        at_unix_ms: at,
+                        always: false,
+                        head: None,
+                        improvement: Some(*kind),
                     })
                     .collect(),
             });
@@ -1967,6 +1992,7 @@ mod tests {
                     at_unix_ms: at,
                     always: false,
                     head: None,
+                    improvement: None,
                 })
                 .collect(),
         });
@@ -2119,6 +2145,76 @@ mod tests {
             runs.load(Ordering::SeqCst),
             3,
             "the third day ran with no new record"
+        );
+    }
+
+    /// B25: the same cause in three sessions rises as one line through the
+    /// same fold, grouping and scores as any record, and each evidence row
+    /// names its session's kind.
+    #[test]
+    fn improvements_from_three_sessions_rise_as_one_line_with_their_kinds() {
+        let mut fixture = Fixture::new();
+        fixture.open();
+        let text = "dev 서버와 e2e 포트 규칙이 문서에 없어 설정 파일 6개를 뒤져 찾음";
+        fixture.improve_in_sessions(
+            text,
+            &[
+                ("a", ImprovementKind::NoDoc),
+                ("b", ImprovementKind::SearchedAgain),
+                ("c", ImprovementKind::WrongGuess),
+            ],
+        );
+        fixture.wake_and_wait_out_the_delay();
+        let read = fixture.read_until(|read| !chosen(read).is_empty());
+        let row = &read.rows[0];
+        assert_eq!(
+            row.basis
+                .as_ref()
+                .map(|basis| (basis.signal, basis.tag.as_str())),
+            Some((Signal::Improvement, text))
+        );
+        let mut kinds = row
+            .evidence
+            .iter()
+            .map(|evidence| evidence.improvement)
+            .collect::<Vec<_>>();
+        kinds.sort();
+        assert_eq!(
+            kinds,
+            [
+                Some(ImprovementKind::NoDoc),
+                Some(ImprovementKind::SearchedAgain),
+                Some(ImprovementKind::WrongGuess),
+            ]
+        );
+    }
+
+    /// B5, B25: with 세션 기록 off, an improvement is not kept, as no other
+    /// session record is.
+    #[test]
+    fn the_session_switch_off_keeps_no_improvement() {
+        let mut fixture = Fixture::new();
+        fixture.open();
+        let read = fixture.settings(SettingsChange::SignalGroup(SignalGroup::Session, false));
+        assert!(
+            read.settings
+                .signals
+                .iter()
+                .filter(|signal| signal.signal.group() == SignalGroup::Session)
+                .all(|signal| !signal.enabled),
+            "the new signal is off with its group"
+        );
+        fixture.improve_in_sessions("포트 규칙", &[("a", ImprovementKind::NoDoc)]);
+        // Commands are taken in order: the read this answers comes after the
+        // observation was handled.
+        fixture.settings(SettingsChange::SignalGroup(SignalGroup::Session, true));
+        let (store, _) = SuggestionStore::open(&fixture.store).unwrap();
+        let projects = store.projects().unwrap();
+        assert!(
+            projects
+                .iter()
+                .all(|project| store.records(project).unwrap().is_empty()),
+            "{projects:?}"
         );
     }
 
@@ -2582,6 +2678,7 @@ mod tests {
                     at_unix_ms: START,
                     always: false,
                     head: None,
+                    improvement: None,
                 })
                 .collect(),
         };

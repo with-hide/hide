@@ -159,6 +159,7 @@ fn evidence(line: &Line, input: &ReadInput<'_>) -> Vec<SuggestionEvidenceSnapsho
                 SuggestionEvidenceKind::Pr
             },
             signal: record.signal,
+            improvement: record.improvement,
             agent: record.session.as_ref().map(|s| s.agent.clone()),
             session_id: record.session.as_ref().map(|s| s.id.clone()),
             pr_number: record.pr,
@@ -207,7 +208,7 @@ fn settings(
             .into_iter()
             .map(|signal| SuggestionSignalSnapshot {
                 signal,
-                enabled: !settings.signals_off.contains(&signal),
+                enabled: settings.reads(signal),
                 unavailable: None,
             })
             .collect(),

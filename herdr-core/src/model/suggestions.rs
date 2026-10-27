@@ -3,7 +3,7 @@
 //! Project the tool opened. The core decides every group, state and count
 //! here; the shell words them and dispatches the actions.
 
-use crate::suggestions::ledger::Signal;
+use crate::suggestions::ledger::{ImprovementKind, Signal};
 use crate::suggestions::notebook::Outcome;
 use crate::suggestions::policy::Quantity;
 use crate::suggestions::settings::ApplyMode;
@@ -117,6 +117,9 @@ pub enum SignalUnavailable {
     NoGithub,
     /// Memory is off in this Project, so corrections are not learned.
     MemoryOff,
+    /// Hide AI or its turn-end analysis (Settings › Hide AI's agent
+    /// summaries) is off, so no improvement is found (D-57).
+    AnalysisOff,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -251,6 +254,8 @@ pub enum SuggestionEvidenceKind {
 pub struct SuggestionEvidenceSnapshot {
     pub kind: SuggestionEvidenceKind,
     pub signal: Signal,
+    /// An improvement's kind, which the row shows as a chip (B25).
+    pub improvement: Option<ImprovementKind>,
     /// The session's agent and native id, for a session.
     pub agent: Option<String>,
     pub session_id: Option<String>,
