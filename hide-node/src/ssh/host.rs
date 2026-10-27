@@ -360,6 +360,12 @@ pub(super) fn platform_of(uname: &str) -> Result<(String, String), String> {
             ));
         }
     };
+    if os == "macos" && arch == "x86_64" {
+        return Err(
+            "Intel Mac devices are not supported; Hide ships for Apple Silicon Macs only"
+                .to_owned(),
+        );
+    }
     Ok((os.to_owned(), arch.to_owned()))
 }
 
@@ -3214,8 +3220,13 @@ mod tests {
             ("macos".to_owned(), "aarch64".to_owned())
         );
         assert_eq!(
-            platform_of("Darwin x86_64\n").unwrap(),
-            ("macos".to_owned(), "x86_64".to_owned())
+            platform_of("Darwin x86_64\n").unwrap_err(),
+            "Intel Mac devices are not supported; Hide ships for Apple Silicon Macs only"
+        );
+        assert!(platform_of("Darwin amd64").is_err());
+        assert_eq!(
+            platform_of("Linux x86_64").unwrap(),
+            ("linux".to_owned(), "x86_64".to_owned())
         );
         assert_eq!(
             platform_of("Linux aarch64").unwrap(),

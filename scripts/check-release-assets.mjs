@@ -4,6 +4,7 @@ import { createReadStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { DEVICE_PLATFORMS, DEVICE_PROGRAMS, DEVICE_BUNDLE_MANIFEST } from "../desktop/scripts/device-helpers.mjs";
 
 /**
  * The tag is the one source of a release's kind: `vX.Y.Z` is a stable
@@ -44,7 +45,10 @@ export function systemFiles(version, system) {
 /** Every file one system's package build leaves for a release, sorted. */
 export function systemAssetNames(version, system) {
   const files = systemFiles(version, system);
-  return [...files.installers.flatMap((name) => [name, `${name}.sha256`]), files.updateInfo, ...files.blockmaps].sort();
+  const devices = system === "macos"
+    ? [DEVICE_BUNDLE_MANIFEST, ...Object.keys(DEVICE_PLATFORMS).map((platform) => `hide-device-${platform}-${version}.tar.gz`)]
+    : [];
+  return [...files.installers.flatMap((name) => [name, `${name}.sha256`]), files.updateInfo, ...files.blockmaps, ...devices].sort();
 }
 
 export function expectedAssetNames(tag) {
@@ -124,7 +128,43 @@ export async function verifyUpdateInfo(version, system, directory) {
   return info;
 }
 
-export async function verifyAssets(tag, directory) {
+/** Match the device download contract to the release assets before any upload. */
+async function verifyDeviceBundles(version, directory, assets, sourceSha) {
+  const manifest = JSON.parse(await fs.readFile(path.join(directory, DEVICE_BUNDLE_MANIFEST), "utf8"));
+  const platforms = Object.keys(DEVICE_PLATFORMS).sort();
+  const sameNames = (value, names) => value !== null && typeof value === "object" && !Array.isArray(value)
+    && JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...names].sort());
+  const digest = (value) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+  const size = (value, minimum = 1) => Number.isSafeInteger(value) && value >= minimum && value <= 256 * 1024 * 1024;
+  if (!sameNames(manifest, ["format", "version", "commit", "order", "platforms"])
+    || manifest.format !== 1 || manifest.version !== version
+    || typeof manifest.commit !== "string" || !/^[a-f0-9]{40}$/.test(manifest.commit)
+    || (sourceSha !== undefined && manifest.commit !== sourceSha)
+    || typeof manifest.order !== "string" || !/^[0-9]+$/.test(manifest.order)
+    || !sameNames(manifest.platforms, platforms)) {
+    throw new Error("device-bundles.json must identify this release, source and both Linux platforms");
+  }
+  for (const platform of platforms) {
+    const bundle = manifest.platforms[platform];
+    const asset = assets.find(({ name }) => name === `hide-device-${platform}-${version}.tar.gz`);
+    if (!sameNames(bundle, ["asset", "sha256", "size", "files"])
+      || bundle.asset !== asset.name || !size(bundle.size) || bundle.size !== asset.size
+      || !digest(bundle.sha256) || `sha256:${bundle.sha256}` !== asset.digest
+      || !sameNames(bundle.files, DEVICE_PROGRAMS)) {
+      throw new Error(`${platform} device bundle differs from its manifest`);
+    }
+    let total = 0;
+    for (const file of Object.values(bundle.files)) {
+      if (!sameNames(file, ["size", "sha256"]) || !size(file.size, 64) || !digest(file.sha256)) {
+        throw new Error(`${platform} device program has invalid size or SHA-256`);
+      }
+      total += file.size;
+    }
+    if (total > 256 * 1024 * 1024) throw new Error(`${platform} device kit exceeds 256 MiB`);
+  }
+}
+
+export async function verifyAssets(tag, directory, { sourceSha } = {}) {
   const expected = expectedAssetNames(tag);
   const actual = (await fs.readdir(directory)).sort();
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
@@ -137,6 +177,8 @@ export async function verifyAssets(tag, directory) {
     const file = path.join(directory, name);
     const stat = await fs.lstat(file);
     if (!stat.isFile() || stat.size === 0) throw new Error(`${name} must be a nonempty ordinary file`);
+    if (name === DEVICE_BUNDLE_MANIFEST && stat.size > 16 * 1024) throw new Error(`${name} exceeds 16 KiB`);
+    if (name.startsWith("hide-device-") && stat.size > 256 * 1024 * 1024) throw new Error(`${name} exceeds 256 MiB`);
     if (name.endsWith(".sha256") && stat.size > 512) throw new Error(`${name} exceeds the checksum size limit`);
     const hash = createHash("sha256");
     for await (const chunk of createReadStream(file)) hash.update(chunk);
@@ -149,6 +191,7 @@ export async function verifyAssets(tag, directory) {
     if (`sha256:${match[1]}` !== asset.digest) throw new Error(`${asset.name} does not match its SHA-256`);
   }
   for (const system of SYSTEMS) await verifyUpdateInfo(tag.slice(1), system, directory);
+  await verifyDeviceBundles(tag.slice(1), directory, manifest, sourceSha);
   return manifest;
 }
 

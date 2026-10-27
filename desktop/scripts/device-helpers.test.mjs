@@ -16,19 +16,13 @@ function artifacts() {
   fs.mkdirSync(parent, { recursive: true });
   const root = fs.mkdtempSync(path.join(parent, "kit-"));
   folders.push(root);
-  for (const platform of ["macos-x86_64", "linux-x86_64", "linux-aarch64"]) {
+  for (const platform of ["linux-x86_64", "linux-aarch64"]) {
     const folder = path.join(root, platform);
     fs.mkdirSync(folder);
     const bytes = Buffer.alloc(64);
-    if (platform === "macos-x86_64") {
-      bytes.writeUInt32LE(0xfeedfacf, 0);
-      bytes.writeUInt32LE(0x01000007, 4);
-      bytes.writeUInt32LE(2, 12);
-    } else {
-      bytes.set([0x7f, 0x45, 0x4c, 0x46, 2, 1]);
-      bytes.writeUInt16LE(3, 16);
-      bytes.writeUInt16LE(platform === "linux-x86_64" ? 62 : 183, 18);
-    }
+    bytes.set([0x7f, 0x45, 0x4c, 0x46, 2, 1]);
+    bytes.writeUInt16LE(3, 16);
+    bytes.writeUInt16LE(platform === "linux-x86_64" ? 62 : 183, 18);
     const files = {};
     for (const name of ["hided", "hide", "hide-agent-hooks"]) {
       fs.writeFileSync(path.join(folder, name), bytes);
@@ -42,12 +36,13 @@ function artifacts() {
 describe("Mac device helper inputs", () => {
   it("publishes separate four-program archives and a small manifest of their final bytes", () => {
     const root = artifacts();
-    const herdr = Object.fromEntries(["macos-x86_64", "linux-x86_64", "linux-aarch64"].map((p) => [p, path.join(root, p, "hided")]));
+    const herdr = Object.fromEntries(["linux-x86_64", "linux-aarch64"].map((p) => [p, path.join(root, p, "hided")]));
     const out = path.join(root, "bundles");
     const file = prepareDeviceBundles(root, identity, out, herdr);
     expect(fs.statSync(file).size).toBeLessThan(16 * 1024);
     const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
     expect(manifest).toMatchObject({ format: 1, ...identity });
+    expect(Object.keys(manifest.platforms).sort()).toEqual(["linux-aarch64", "linux-x86_64"]);
     for (const [platform, bundle] of Object.entries(manifest.platforms)) {
       expect(bundle.asset).toBe(`hide-device-${platform}-1.2.3.tar.gz`);
       const archive = fs.readFileSync(path.join(out, bundle.asset));
@@ -59,10 +54,9 @@ describe("Mac device helper inputs", () => {
     }
     expect(fs.readdirSync(out).sort()).toEqual(["device-bundles.json", ...Object.values(manifest.platforms).map((b) => b.asset)].sort());
   });
-  it("offers all nine kit programs under names the SSH payload can select", () => {
+  it("offers all six Linux kit programs under names the SSH payload can select", () => {
     const files = deviceHelperResources(artifacts(), identity).map(([name]) => name);
     expect(files.sort()).toEqual([
-      "hided-macos-x86_64", "hide-macos-x86_64", "hide-agent-hooks-macos-x86_64",
       "hided-linux-x86_64", "hide-linux-x86_64", "hide-agent-hooks-linux-x86_64",
       "hided-linux-aarch64", "hide-linux-aarch64", "hide-agent-hooks-linux-aarch64",
     ].sort());
@@ -94,7 +88,7 @@ describe("Mac device helper inputs", () => {
 
   it("refuses a missing kit member and linked executable", () => {
     const root = artifacts();
-    const program = path.join(root, "macos-x86_64/hide");
+    const program = path.join(root, "linux-x86_64/hide");
     fs.rmSync(program);
     expect(() => deviceHelperResources(root, identity)).toThrow();
     fs.symlinkSync("hided", program);

@@ -1,5 +1,4 @@
 # Native Linux builds reuse the same release recipe as the Linux package.
-# The Mac runner cross-builds only Intel Mac using Apple's SDK.
 # No release artifacts or build directories cross runs or source revisions.
 name: device helpers
 
@@ -47,9 +46,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-x86_64
-            runner: macos-15
-            target: x86_64-apple-darwin
           - platform: linux-x86_64
             runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu

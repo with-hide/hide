@@ -10,17 +10,12 @@
     "source_url": "https://github.com/herdrdev/herdr/releases/download/v0.9.5/herdr-linux-x86_64",
     "sha256": "14d9e8bc8b4a9e0118d77c32266f76d461f09b40342eb23752960bd89f59929d"
   },
-  "verification": "This file is the single source of the pin for host and device platforms. scripts/fetch-herdr-runtime.sh and .ps1 verify the bytes against it; native lanes execute the matching platform. desktop/scripts/package.mjs carries the host asset and, on Mac, each Unix device asset. contracts/herdr-api.schema.json is the schema the pinned host binary reports. Change the pin with scripts/bump-herdr.sh <release-tag>.",
+  "verification": "This file is the single source of the pin for host and device platforms. scripts/fetch-herdr-runtime.sh and .ps1 verify the bytes against it; native lanes execute the matching platform. desktop/scripts/package.mjs carries the host asset and publishes the Linux device assets separately on Mac. contracts/herdr-api.schema.json is the schema the pinned host binary reports. Change the pin with scripts/bump-herdr.sh <release-tag>.",
   "repo": "herdrdev/herdr",
   "windows_x86_64": {
     "platform": "windows-x86_64",
     "source_url": "https://github.com/herdrdev/herdr/releases/download/v0.9.5/herdr-windows-x86_64.zip",
     "sha256": "d2c6c9c971c43a0bfdde8c692a9a1a7a45c3e4807cd01ae45662b4734fac1cbf"
-  },
-  "macos_x86_64": {
-    "platform": "macos-x86_64",
-    "source_url": "https://github.com/herdrdev/herdr/releases/download/v0.9.5/herdr-macos-x86_64",
-    "sha256": "5fb0a908ec7f6745e3e245738b06bfad56c46391c391ab3c0955fbead01f1369"
   },
   "linux_aarch64": {
     "platform": "linux-aarch64",

@@ -40,7 +40,6 @@ done
 case "$platform" in
   macos-aarch64) pin_path='' ;;
   linux-x86_64) pin_path='.linux_x86_64' ;;
-  macos-x86_64) pin_path='.macos_x86_64' ;;
   linux-aarch64) pin_path='.linux_aarch64' ;;
   *)
     print -u2 -- "error: unknown Herdr platform: $platform"

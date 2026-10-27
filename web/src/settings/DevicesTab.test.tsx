@@ -201,6 +201,20 @@ it("shows helper failures on a connected device and consent before Herdr can con
   }
 });
 
+it("shows why an Intel Mac is unsupported before a session connects, without a helper retry", async () => {
+  const message = "Intel Mac devices are not supported; Hide ships for Apple Silicon Macs only";
+  const view = await mount(state([remote("mini", {
+    state: "unavailable", problem: "device_unavailable",
+    host: { ...host, platform: "macos-x86_64", consent: "granted", state: "unsupported", message },
+  })]));
+  try {
+    expect(view.q('[data-device-host="mini:unsupported"]')?.textContent).toContain(message);
+    expect(view.q('[data-device-host-retry="mini"]')).toBeNull();
+  } finally {
+    await view.unmount();
+  }
+});
+
 it.each([
   "The matching release's device asset could not be downloaded",
   "Device archive size or SHA-256 does not match this app",

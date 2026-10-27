@@ -146,7 +146,7 @@ target_windows_sha256=$(/usr/bin/shasum -a 256 "$downloaded_windows" | /usr/bin/
 extra_pins=$temporary_root/device-pins.json
 print -r -- '{}' > "$extra_pins"
 platforms_added=false
-for device_platform in macos-x86_64 linux-aarch64; do
+for device_platform in linux-aarch64; do
   device_key=${device_platform//-/_}
   device_url="https://github.com/${target_repo}/releases/download/${target_tag}/herdr-${device_platform}"
   device_file=$temporary_root/herdr-$device_platform
@@ -292,7 +292,7 @@ if [[ "$outcome" == bumped || ( "$outcome" == platforms_added && "$dry_run" == f
       | .linux_x86_64 = {platform: "linux-x86_64", source_url: $linux_url, sha256: $linux_sha256}
       | .windows_x86_64 = {platform: "windows-x86_64", source_url: $windows_url, sha256: $windows_sha256}
       | . + $device_pins
-      | .verification = "This file is the single source of the pin for host and device platforms. scripts/fetch-herdr-runtime.sh and .ps1 verify the bytes against it; native lanes execute the matching platform. desktop/scripts/package.mjs carries the host asset and, on Mac, each Unix device asset. contracts/herdr-api.schema.json is the schema the pinned host binary reports. Change the pin with scripts/bump-herdr.sh <release-tag>."' \
+      | .verification = "This file is the single source of the pin for host and device platforms. scripts/fetch-herdr-runtime.sh and .ps1 verify the bytes against it; native lanes execute the matching platform. desktop/scripts/package.mjs carries the host asset and publishes the Linux device assets separately on Mac. contracts/herdr-api.schema.json is the schema the pinned host binary reports. Change the pin with scripts/bump-herdr.sh <release-tag>."' \
      "$manifest" > "$manifest.next"
   mv "$manifest.next" "$manifest"
 fi

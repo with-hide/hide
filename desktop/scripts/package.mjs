@@ -12,7 +12,7 @@
 // builds an unsigned per-user installer and Linux x64 an unsigned deb and rpm
 // (operator decision 2026-10-03, PRD auto-update D-07: no paid signing outside
 // macOS). Each is built on its own system, because the release binaries come from that
-// system's cargo build. A Mac also consumes the three device helper artifacts
+// system's cargo build. A Mac also consumes the two Linux device helper artifacts
 // built by device-helpers.yml at this exact source, version and build order,
 // publishing them separately while the app carries only their manifest.
 //
@@ -29,7 +29,7 @@ import { fileURLToPath } from "node:url";
 import { packager } from "@electron/packager";
 import { applyFuses, assertFuses } from "./fuses.mjs";
 import { APP_ID, buildInstallers } from "./installers.mjs";
-import { assertNotarized, developerIdOptions, macosSigning, notarizeApp, verifyMacExecutable } from "./macos-signing.mjs";
+import { assertNotarized, developerIdOptions, macosSigning, notarizeApp } from "./macos-signing.mjs";
 import { orderOnMain, resolveVersion } from "./build-identity.mjs";
 import { DEVICE_PLATFORMS, DEVICE_BUNDLE_MANIFEST, prepareDeviceBundles } from "./device-helpers.mjs";
 
@@ -115,7 +115,7 @@ if (!/^[0-9]+$/.test(order)) throw new Error(`the package's build order could no
 const deviceBundles = path.join(out, "device-bundles");
 const deviceManifest = platform === "darwin"
   ? prepareDeviceBundles(path.join(out, "device-helpers"), { version, commit, order }, deviceBundles,
-      Object.fromEntries(Object.keys(DEVICE_PLATFORMS).map((name) => [name, run("zsh", ["scripts/fetch-herdr-runtime.sh", "--platform", name])])), signing)
+      Object.fromEntries(Object.keys(DEVICE_PLATFORMS).map((name) => [name, run("zsh", ["scripts/fetch-herdr-runtime.sh", "--platform", name])])))
   : null;
 run("bash", ["scripts/verify-cargo.sh", "release"], { stdio: "inherit", env: { ...process.env, HIDE_VERSION: version, HIDE_COMMIT: commit, HIDE_BUILD_ORDER: order } });
 const herdr = system.herdr();
@@ -274,12 +274,8 @@ for (const companion of herdr.companions) {
 if (platform === "darwin") {
   const helper = path.join(bundle, "Contents", "MacOS", path.basename(notificationHelper));
   if (!fs.statSync(helper, { throwIfNoEntry: false })?.isFile()) throw new Error(`the notification permission helper did not land at ${helper}`);
-  const macPrograms = shipped.map(([name]) => path.join(bundledResources, name));
-  if (signing.mode === "adhoc") {
-    for (const file of macPrograms) run("/usr/bin/codesign", ["--force", "--sign", "-", "--timestamp=none", file], { stdio: "inherit" });
-    run("/usr/bin/codesign", ["--force", "--deep", "--sign", "-", "--timestamp=none", bundle], { stdio: "inherit" });
-  }
-  for (const file of macPrograms) verifyMacExecutable(file, signing);
+  // A Developer ID bundle was signed inside the packager and is notarized below.
+  if (signing.mode === "adhoc") run("/usr/bin/codesign", ["--force", "--deep", "--sign", "-", "--timestamp=none", bundle], { stdio: "inherit" });
   run("/usr/bin/codesign", ["--verify", "--deep", "--strict", "--verbose=2", bundle], { stdio: "inherit" });
   // Signing the bundle again must not have given the helper another identity.
   const signed = spawnSync("/usr/bin/codesign", ["-dv", helper], { encoding: "utf8" }).stderr;

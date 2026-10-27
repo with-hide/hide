@@ -6,14 +6,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { Buffer } from "node:buffer";
 import { fileURLToPath } from "node:url";
-import { verifyMacExecutable } from "./macos-signing.mjs";
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 export const HELPER_PROGRAMS = ["hided", "hide", "hide-agent-hooks"];
 export const DEVICE_PROGRAMS = [...HELPER_PROGRAMS, "herdr"];
 export const DEVICE_BUNDLE_MANIFEST = "device-bundles.json";
 export const DEVICE_PLATFORMS = {
-  "macos-x86_64": { target: "x86_64-apple-darwin", os: "darwin", arch: "arm64" },
   "linux-x86_64": { target: "x86_64-unknown-linux-gnu", os: "linux", arch: "x64" },
   "linux-aarch64": { target: "aarch64-unknown-linux-gnu", os: "linux", arch: "arm64" },
 };
@@ -23,9 +21,7 @@ const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 /** Foreign programs cannot be executed on the packager. Check their executable headers. */
 export function assertDeviceExecutable(bytes, platform) {
   let matches = false;
-  if (bytes.length >= 64 && platform === "macos-x86_64") {
-    matches = bytes.readUInt32LE(0) === 0xfeedfacf && bytes.readUInt32LE(4) === 0x01000007 && bytes.readUInt32LE(12) === 2;
-  } else if (bytes.length >= 64 && platform.startsWith("linux-")) {
+  if (bytes.length >= 64 && Object.hasOwn(DEVICE_PLATFORMS, platform)) {
     matches = bytes.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46])) && bytes[4] === 2 && bytes[5] === 1
       && [2, 3].includes(bytes.readUInt16LE(16)) && bytes.readUInt16LE(18) === (platform === "linux-x86_64" ? 62 : 183);
   }
@@ -47,7 +43,7 @@ function assertIdentity(identity) {
   }
 }
 
-/** Validates all three complete artifacts before the Mac package starts its native build. */
+/** Validates both complete artifacts before the Mac package starts its native build. */
 export function deviceHelperResources(directory, identity) {
   assertIdentity(identity);
   return Object.keys(DEVICE_PLATFORMS).flatMap((platform) => {
@@ -67,7 +63,7 @@ export function deviceHelperResources(directory, identity) {
 }
 
 /** Prepare release assets outside the app; only the resulting manifest ships inside it. */
-export function prepareDeviceBundles(directory, identity, output, herdrPaths, signing = null) {
+export function prepareDeviceBundles(directory, identity, output, herdrPaths) {
   const helpers = new Map(deviceHelperResources(directory, identity));
   fs.rmSync(output, { recursive: true, force: true });
   fs.mkdirSync(output, { recursive: true });
@@ -82,15 +78,6 @@ export function prepareDeviceBundles(directory, identity, output, herdrPaths, si
       const target = path.join(stage, name);
       fs.copyFileSync(source, target);
       fs.chmodSync(target, 0o755);
-      // Sign copies, never the verified upstream or producer input. Hash only
-      // the final bytes: a Developer ID signature changes the download digest.
-      if (platform === "macos-x86_64" && signing) {
-        const args = signing.mode === "developer-id"
-          ? ["--options", "runtime", "--timestamp", "--entitlements", path.join(repo, "desktop/resources/entitlements/executable.plist")]
-          : ["--timestamp=none"];
-        execFileSync("/usr/bin/codesign", ["--force", "--sign", signing.mode === "developer-id" ? signing.identity : "-", ...args, target]);
-        verifyMacExecutable(target, signing);
-      }
       const bytes = readProgram(target, platform);
       files[name] = { sha256: digest(bytes), size: bytes.length };
     }
@@ -113,7 +100,7 @@ export function prepareDeviceBundles(directory, identity, output, herdrPaths, si
   return manifest;
 }
 
-/** Builds with the repository's release recipe, on Linux natively and on Mac for Intel. */
+/** Builds with the repository's release recipe, natively on each Linux processor. */
 function build(platform, identity) {
   assertIdentity(identity);
   const system = DEVICE_PLATFORMS[platform];

@@ -374,10 +374,6 @@ jobs:
         run: bash scripts/verify-web.sh install
       - uses: actions/download-artifact@v8
         with:
-          name: hide-device-helper-macos-x86_64
-          path: desktop/out/device-helpers/macos-x86_64
-      - uses: actions/download-artifact@v8
-        with:
           name: hide-device-helper-linux-x86_64
           path: desktop/out/device-helpers/linux-x86_64
       - uses: actions/download-artifact@v8

@@ -189,7 +189,8 @@ function DeviceAttention({ device, actions, onAct, onAllow }: { device: Device; 
   // Consent starts the helper that installs or updates Herdr, including
   // when Herdr cannot yet supply a readable session. A failed helper kit
   // must keep its reason and Retry visible before that session connects.
-  const helper = remote && (device.state === "ready" || needsAllow || host?.state === "unavailable") && host && host.consent !== "this_machine" && host.state !== "ready" ? hostLine(host, t) : null;
+  // An unsupported platform keeps its reason visible too, without a Retry.
+  const helper = remote && (device.state === "ready" || needsAllow || host?.state === "unavailable" || host?.state === "unsupported") && host && host.consent !== "this_machine" && host.state !== "ready" ? hostLine(host, t) : null;
   const kit = device.kit;
   const kitShown = kit !== undefined && (Boolean(kit.unavailable) || Boolean(kit.refused) || kit.busy || kitProblems(kit).length > 0);
   const rows = [

@@ -13,12 +13,12 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 const MANIFEST: &str = "device-bundles.json";
-const PLATFORMS: [&str; 3] = ["macos-x86_64", "linux-x86_64", "linux-aarch64"];
+const PLATFORMS: [&str; 2] = ["linux-x86_64", "linux-aarch64"];
 const PROGRAMS: [&str; 4] = ["hided", "hide", "hide-agent-hooks", "herdr"];
 const MAX_MANIFEST: u64 = 16 * 1024;
 const MAX_BUNDLE: u64 = 256 * 1024 * 1024;
-// Three <=256 MiB slots, a <=256 MiB staging kit and <=256 MiB archive:
-// at most 1280 MiB on disk, plus the small manifest and lock. A global
+// Two <=256 MiB slots, a <=256 MiB staging kit and <=256 MiB archive:
+// at most 1024 MiB on disk, plus the small manifest and lock. A global
 // bounded lock serializes processes and threads; payload bytes are read
 // before releasing it, so another app version cannot evict a reader's kit.
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(60);
@@ -191,9 +191,9 @@ fn load(manifest: &Manifest, platform: &str, home: &Path, base: &str) -> Result<
         lock::Waited::Locked(guard) => guard,
         _ => bail!("Another device kit download is busy"),
     };
-    // Only these five names belong here. Unknown files are refused, never
+    // Only these four names belong here. Unknown files are refused, never
     // recursively removed. Staging from an interrupted attempt is reclaimed.
-    for entry in fs::read_dir(&root)?.take(6) {
+    for entry in fs::read_dir(&root)?.take(5) {
         let name = entry?.file_name();
         ensure!(
             PLATFORMS.iter().any(|p| name == *p) || name == "staging" || name == "download.lock",
@@ -418,16 +418,10 @@ fn unpack(stage: &Path, bundle: &Bundle, platform: &str) -> Result<()> {
 
 fn executable(bytes: &[u8], platform: &str) -> Result<()> {
     ensure!(bytes.len() >= 64, "Truncated device executable");
-    let valid = if platform == "macos-x86_64" {
-        bytes[..4] == [0xcf, 0xfa, 0xed, 0xfe]
-            && bytes[4..8] == [7, 0, 0, 1]
-            && bytes[12..16] == [2, 0, 0, 0]
-    } else {
-        bytes[..6] == [0x7f, b'E', b'L', b'F', 2, 1]
-            && [2, 3].contains(&u16::from_le_bytes([bytes[16], bytes[17]]))
-            && u16::from_le_bytes([bytes[18], bytes[19]])
-                == if platform == "linux-x86_64" { 62 } else { 183 }
-    };
+    let valid = bytes[..6] == [0x7f, b'E', b'L', b'F', 2, 1]
+        && [2, 3].contains(&u16::from_le_bytes([bytes[16], bytes[17]]))
+        && u16::from_le_bytes([bytes[18], bytes[19]])
+            == if platform == "linux-x86_64" { 62 } else { 183 };
     ensure!(valid, "Device executable is for another platform");
     Ok(())
 }
