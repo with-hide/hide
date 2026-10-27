@@ -559,7 +559,7 @@ No pull request is opened for a release that passes: the pins move when a change
 
 The runner and the lane judge load the same generated adapter contract through `scripts/agent_journey/contract.py`, refusing duplicate ids, missing or unknown cells, and non-boolean declarations.
 A skipped cell is never proof of support.
-`scripts/tests/test_agent_journey_contract.py` requires every active adapter's local-isolation, CI home and fake-model routes and a matching CLI pin, so adding an adapter without its journey setup fails the script suite.
+`scripts/tests/test_agent_journey_contract.py` requires every active adapter's local-isolation, CI home and fake-model routes, a matching CLI pin at or above its minimum, a Herdr target the pinned Herdr lists, its folder in the operator watch and its rows in the guides that list every agent, and names all an agent lacks in one verdict, so adding an adapter without its journey setup fails the script suite ([agent-hooks.md: Adding an agent](agent-hooks.md#adding-an-agent)).
 The adapter's independent support matrix also requires explicit guidance, automatic Memory injection and title-reader decisions, including evidence and closure conditions for an absence.
 Its journey export refuses a startable guidance-only combination without a matching probe, since the current context probe requires a private Memory-card token; a declared guidance path cannot disappear as `N/A`.
 The hook contract checks declared native context against the installed start/prompt commands and Memory invocation flag, while installed plugin host suites check first and later prompt delivery; an installed hook alone is never evidence of model-context injection.

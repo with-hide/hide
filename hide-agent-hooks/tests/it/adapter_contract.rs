@@ -222,6 +222,21 @@ fn every_supported_observation_reaches_admission() {
     }
 }
 
+/// Every agent Hide supports runs Hide AI too, offered in the order Settings
+/// lists the agents, so an agent cannot ship without its backend.
+#[test]
+fn every_supported_agent_is_a_hide_ai_provider_in_the_adapter_order() {
+    let agents: Vec<_> = hide_ai::PROVIDERS
+        .iter()
+        .map(|provider| provider.descriptor().agent)
+        .collect();
+    let adapters: Vec<_> = ADAPTERS.iter().map(|row| row.id).collect();
+    assert_eq!(
+        agents, adapters,
+        "each supported agent needs its row in PROVIDERS and DESCRIPTORS and its arm in build_backend (hide-ai/src/registry.rs), in the adapter order"
+    );
+}
+
 #[test]
 fn every_installed_hook_dialect_resolves_through_the_shared_adapter() {
     for row in ADAPTERS {
