@@ -267,7 +267,8 @@ export function missionTally(mission: Mission): { done: number; next: number } {
 
 /**
  * The Conductor pane's second line (B9, D-21): the decision waiting on the
- * operator first, else `도는 중 n · <first> 외 k`; nothing with no worker at it.
+ * operator first, else `<first> 외 k`; nothing with no worker at it. The count
+ * is left to the children button's marks beside it.
  */
 export function missionWorkLine(mission: Mission, t: TFunction<"translation">): { decision: boolean; text: string } | null {
   if (mission.decision && missionOpen(mission)) return { decision: true, text: `! ${mission.decision}` };
@@ -275,9 +276,8 @@ export function missionWorkLine(mission: Mission, t: TFunction<"translation">): 
   const live = liveNodes(mission);
   const [first] = live;
   if (!first) return null;
-  const head = t("mission.line.running", { count: live.length });
-  const rest = live.length > 1 ? t("mission.line.others", { title: first.title, count: live.length - 1 }) : first.title;
-  return { decision: false, text: `${head} · ${rest}` };
+  const text = live.length > 1 ? t("mission.line.others", { title: first.title, count: live.length - 1 }) : first.title;
+  return { decision: false, text };
 }
 
 const PR_STAGES: readonly MessageKey[] = ["mission.stage.code", "mission.stage.pr", "mission.stage.review", "mission.stage.merge"];

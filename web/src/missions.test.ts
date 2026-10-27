@@ -160,8 +160,8 @@ describe("what a running mission's pane says (PRD mission-plan-visibility B9, B1
   const nodes = [node("spec", { status: "done" }), node("api", { title: "API", status: "working", depends_on: ["spec"] }), node("ui", { title: "UI", status: "review", depends_on: ["spec"] }), node("docs", { status: "held" }), node("later", { depends_on: ["ui"] })];
   it("leads with the waiting decision, else the nodes at work, and says nothing with none at work or once the mission ended", () => {
     expect(missionWorkLine(mission("m", { nodes, decision: "Which base?" }), t)).toEqual({ decision: true, text: "! Which base?" });
-    expect(missionWorkLine(mission("m", { nodes }), t)).toEqual({ decision: false, text: "Running 2 · API and 1 more" });
-    expect(missionWorkLine(mission("m", { nodes: nodes.slice(0, 2) }), t)?.text).toBe("Running 1 · API");
+    expect(missionWorkLine(mission("m", { nodes }), t)).toEqual({ decision: false, text: "API and 1 more" });
+    expect(missionWorkLine(mission("m", { nodes: nodes.slice(0, 2) }), t)?.text).toBe("API");
     expect(missionWorkLine(mission("m", { nodes: [node("a")] }), t)).toBeNull();
     expect(missionWorkLine(mission("m", { nodes, status: "done", decision: "stale ask" }), t)).toBeNull();
   });
