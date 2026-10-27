@@ -321,8 +321,8 @@ it("draws each card's state as its mark and border, colour only for what wants a
     expect(card(map, "core").querySelector("[data-node-line]")?.textContent).toBe("left: review, CI");
     expect(card(map, "next").querySelector("[data-node-line]")?.textContent).toBe(`waiting for ${"#"}1704 바깥: isolated 앱 실행기 정리`);
     expect(card(map, "api").querySelector("[data-node-landing]")?.textContent).toBe("Merge left");
-    // A branch is read for joining only once the mission waits on its branches, and a PR whose state was never read says nothing.
-    expect(card(map, "branch").querySelector("[data-node-landing]")).toBeNull();
+    // A done branch the core reads and has not found in main is left to join; a PR whose state was never read says nothing.
+    expect(card(map, "branch").querySelector("[data-node-landing]")?.textContent).toBe("Join left");
     expect(card(map, "v1").querySelector("[data-node-landing]")).toBeNull();
     expect(card(map, "old").querySelector("[data-node-landing]")).toBeNull();
     expect(card(map, "broken").querySelector('[data-node-line="attention"]')?.textContent).toBe("CI failed twice");
@@ -521,7 +521,7 @@ it("lists only what the operator can do in 내 차례: the decision whose node c
     expect(waiting.q('[data-dependency-edge="core>ui"]')?.getAttribute("class")).toContain("text-mission-review");
     expect(waiting.q('[data-dependency-edge="core>ui"]')?.hasAttribute("data-edge-dashed")).toBe(true);
   } finally { await waiting.unmount(); }
-  // Waiting on its branches, a git mission tags the branch the core reads and has not found in main; a branch it cannot read says nothing.
+  // Waiting on its merges, a git mission tags the branch the core reads and has not found in main; a branch it cannot read says nothing.
   const branches = [node("notes", { title: "Notes", status: "done", delivery: "direct", branch: "release/notes" }), node("bump", { title: "Bump", status: "done", delivery: "direct", branch: "release/bump", unread: true })];
   const git = await mount({ items: [mission({ status: "merge_wait", nodes: branches })] });
   try {

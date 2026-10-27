@@ -231,7 +231,7 @@ describe("a card's look (PRD mission-map-git-criteria D-02, B26, B27)", () => {
     expect(nodeLook(mission("m", { status: "cancelled" }), node("n", { status: "working" }))).toBe("cancelled");
   });
 
-  it("tags finished work not in main as a merge left for a pull request the core read open and a join left for a branch it reads while the mission waits on its branches, and nothing it does not know", () => {
+  it("tags finished work not in main as a merge left for a pull request the core read open and a join left for a branch it reads while the mission runs or waits, and nothing it does not know", () => {
     const m = mission("m");
     const landing = mission("m", { status: "merge_wait" });
     expect(landingLeft(m, node("a", { status: "done", pr: 4, pr_state: "mergeable" }))).toBe("merge");
@@ -239,9 +239,10 @@ describe("a card's look (PRD mission-map-git-criteria D-02, B26, B27)", () => {
     // A pull request whose state the core never read (a mission recorded before it kept one) says nothing.
     expect(landingLeft(m, node("a", { status: "done", pr: 4, pr_state: null }))).toBeNull();
     expect(landingLeft(m, node("a", { status: "done", pr: 4, pr_state: "closed" }))).toBeNull();
-    // A branch is read only while the mission waits on its branches, and one it could not read says nothing.
+    // A done branch is read while the mission runs or waits, not once it closed; one it could not read says nothing.
     expect(landingLeft(landing, node("b", { status: "done", delivery: "direct", branch: "feat/b" }))).toBe("join");
-    expect(landingLeft(m, node("b", { status: "done", delivery: "direct", branch: "feat/b" }))).toBeNull();
+    expect(landingLeft(m, node("b", { status: "done", delivery: "direct", branch: "feat/b" }))).toBe("join");
+    expect(landingLeft(mission("m", { status: "done" }), node("b", { status: "done", delivery: "direct", branch: "feat/b" }))).toBeNull();
     expect(landingLeft(landing, node("b", { status: "done", delivery: "direct", branch: "feat/b", unread: true }))).toBeNull();
     expect(landingLeft(landing, node("b", { status: "done", delivery: "direct" }))).toBeNull();
     expect(landingLeft(m, node("c", { status: "done", pr: 5, pr_state: "merged" }))).toBeNull();

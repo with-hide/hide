@@ -374,8 +374,9 @@ export function nodeLanded(node: MissionNode): boolean {
 
 /**
  * What a finished change still waits on before main (B27), only from what
- * the core read: a pull request it read open, or a direct change's branch it
- * reads while the mission waits on its branches and has not found in main.
+ * the core read: a pull request it read open, or a done direct change's
+ * branch, which it reads while the mission runs or waits on its merges, not
+ * found in main.
  * None for a pull request whose state was never read (a mission recorded
  * before the core kept one), a branch it cannot read, work that reached main,
  * research, a verify node or a cancelled mission.
@@ -383,7 +384,8 @@ export function nodeLanded(node: MissionNode): boolean {
 export function landingLeft(mission: Mission, node: MissionNode): "merge" | "join" | null {
   if (node.kind !== "change" || node.status !== "done" || nodeLanded(node) || mission.status === "cancelled") return null;
   if (node.pr != null) return node.pr_state != null && node.pr_state !== "closed" ? "merge" : null;
-  return mission.status === "merge_wait" && node.delivery === "direct" && node.branch != null && !node.unread ? "join" : null;
+  const read = mission.status === "running" || mission.status === "merge_wait";
+  return read && node.delivery === "direct" && node.branch != null && !node.unread ? "join" : null;
 }
 
 /** A card's `기준 n/m` and `⤳k` (B28): none for a mission from before criteria (B23) or a node with no lines, as an outside one. */
