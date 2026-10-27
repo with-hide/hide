@@ -1,14 +1,19 @@
-// The real mission map and Settings › Conductor over invented values (PRD
-// software-factory-conductor), one state per `state` parameter: plan,
-// running, decision, decision-sent (its answer waiting for the Conductor's
-// turn), decision-unconfirmed (its answer typed without Herdr confirming it), stack, no-conductor, stale, failed, wide (a row wider
-// than the slot, shrunk to fit), done, cancelled, no-pr (a finished mission
-// with no pull request), settings. The Conductor pane's head with its mission
-// chip and pinned popover (PRD mission-pane-chip, mission-plan-visibility) is
-// `pane-running`, `pane-decision`, `pane-first-plan`, `pane-done` and
-// `pane-cancelled`.
+// The real mission page and Settings › Conductor over invented values (PRD
+// software-factory-conductor, mission-map-git-criteria), one state per
+// `state` parameter: plan, running (every card look: working, review with its
+// checkers, done with a merge left, in main, outside, reopened by a defect),
+// decision (a decision, a failed node, a stuck worker and an outside PR
+// closed unmerged in the operator's turn), decision-sent (its answer waiting
+// for the Conductor's turn), decision-unconfirmed (its answer typed without
+// Herdr confirming it), stack (the merge order), no-conductor, stale, failed
+// (the record unreadable), wide (a row wider than the slot, shrunk to fit),
+// done, cancelled, no-pr (a finished mission with no pull request), settings.
+// `pick=<node>` opens that node's panel and `width` narrows the slot. The
+// Conductor pane's head with its mission chip and pinned popover (PRD
+// mission-pane-chip, mission-plan-visibility) is `pane-running`,
+// `pane-decision`, `pane-first-plan`, `pane-done` and `pane-cancelled`.
 // Nothing leaves this scene.
-import { useLayoutEffect, useMemo } from "react";
+import { useEffect, useLayoutEffect, useMemo } from "react";
 import { AgentMark } from "../AgentMark";
 import { createActions } from "../actions";
 import { TooltipProvider } from "../components/ui/tooltip";
@@ -17,7 +22,7 @@ import { requireInterfaceLanguage } from "../i18n/locale";
 import { MissionMap } from "../MissionMap";
 import { PaneWorkChip } from "../PaneMissionChip";
 import { ConductorTab } from "../settings/ConductorTab";
-import type { AgentRow, Mission, MissionEvent, MissionNode, SnapshotRest } from "../snapshot";
+import type { AgentRow, Mission, MissionChecker, MissionCriterion, MissionEvent, MissionNode, MissionWorker, SnapshotRest } from "../snapshot";
 import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
 
@@ -42,6 +47,18 @@ const astra = (effort: string | null) => ({ agent: "codex", model: "Astra", effo
 const sonnet = { agent: "claude", model: "Sonnet", effort: "low", effort_auto: false };
 /** The screen node's pane, whose recorded launch runs another model than the plan named (the card shows the pane's). */
 const SCREEN_PANE = "w1:p7";
+/** The pane of the worker the core raised in the decision state. */
+const FIX_PANE = "w1:p5";
+
+/** One finish line, and a node's lines with the counts the core derives from them. */
+const line = (key: string, kind: MissionCriterion["kind"], state: MissionCriterion["state"], extra: Partial<MissionCriterion> = {}): MissionCriterion => ({ key, kind, state, ...extra });
+const own = (index: number, text: string, state: MissionCriterion["state"] = "pass", extra: Partial<MissionCriterion> = {}) => line(`c${index}`, "own", state, { text, ...extra });
+const ci = (state: MissionCriterion["state"]) => line("ci", "ci", state);
+function finish(...lines: MissionCriterion[]) {
+  const counted = (states: MissionCriterion["state"][]) => lines.filter((one) => states.includes(one.state)).length;
+  return { criteria: lines, criteria_met: counted(["pass", "skipped"]), criteria_skipped: counted(["skipped"]) };
+}
+const checker = (worker: MissionWorker, state: MissionCriterion["state"], agent_id?: string): MissionChecker => ({ worker, state, ...(agent_id ? { agent_id } : {}) });
 
 /** The eight nodes of the boards (cmm1-cmm7): four starts, two that wait, one check together. */
 function plan(state: string, now: number): MissionNode[] {
@@ -96,16 +113,28 @@ function plan(state: string, now: number): MissionNode[] {
     ];
   }
   const stack = state === "stack" || state === "no-conductor";
+  const decision = state === "decision";
+  const review = (minutes: number) => ({ status: "review" as const, started_at_unix_ms: ago(minutes) });
   return [
-    node("cause", `${no(1487)} 원인 조사`, { kind: "research", delivery: null, worker: opus("xhigh"), ...done(44, 24), line: "조사 · 결론 반영" }),
-    node("fix-1481", `이슈 ${no(1481)} 수정`, { worker: astra("high"), ...done(40, 14), pr: 1501, pr_state: "mergeable", stage: 3 }),
-    node("fix-1490", `이슈 ${no(1490)} 수정`, { worker: astra("medium"), ...done(40, 9), pr: 1505, pr_state: "mergeable", stage: 3, change: `${no(1483)}은 ${no(1490)}과 같은 원인이라 합침` }),
-    node("api", "API 추가", { worker: astra("high"), ...done(40, 17), pr: 1503, pr_state: state === "no-conductor" ? "merged" : "mergeable", stage: state === "no-conductor" ? 4 : 3 }),
-    node("fix-1487", `${no(1487)} 수정`, { depends_on: ["cause"], worker: astra("medium"), ...(stack ? done(30, 12) : working(5)), pr: 1506, pr_state: stack ? "mergeable" : "pending", stage: stack ? 3 : 3 }),
-    state === "decision"
-      ? node("screen", "API 쓰는 화면", { depends_on: ["api"], worker: astra("high"), status: "held", started_at_unix_ms: ago(21), pr: 1504, base_pr: 1503, pr_state: "failed", stage: 3, attempts: 2, line: "CI 실패 · 시도 2/2", review: "리뷰 전 · CI 통과 뒤 시작" })
-      : node("screen", "API 쓰는 화면", { depends_on: ["api"], worker: astra("high"), pane_id: stack ? null : SCREEN_PANE, ...(stack ? done(33, 33) : working(12)), status: stack ? "waiting" : "working", pr: 1504, base_pr: 1503, pr_state: state === "no-conductor" ? "pending" : "mergeable", stage: state === "no-conductor" ? 2 : 3, line: state === "no-conductor" ? "옮기기 필요" : stack ? `아래 ${no(1503)} 머지 대기` : null }),
-    node("together", "함께 확인", { kind: "verify", delivery: null, depends_on: ["screen", "api"], worker: sonnet, ...(stack ? done(8, 4) : {}), line: stack ? "합친 변경 ✓" : null }),
+    node("cause", `${no(1487)} 원인 조사`, { kind: "research", delivery: null, worker: opus("xhigh"), ...done(44, 24), line: "reopen 때 셀 초기화가 먼저 돎", ...finish(own(1, "원인을 재현 단계와 함께 적는다")) }),
+    node("fix-1481", `이슈 ${no(1481)} 수정`, { worker: astra("high"), ...done(40, 14), pr: 1501, pr_state: "mergeable", stage: 3, ...finish(own(1, "빈 목록에서도 필터가 남는다"), line("check", "check", "pass"), ci("pass")) }),
+    node("fix-1490", `이슈 ${no(1490)} 수정`, {
+      worker: astra("medium"), pr: 1505, stage: 3, change: `${no(1483)}은 ${no(1490)}과 같은 원인이라 합침`,
+      ...(stack ? { ...done(40, 9), pr_state: "mergeable" as const } : decision ? { status: "failed" as const, started_at_unix_ms: ago(30), pr_state: "failed" as const, attempts: 2, line: "CI 실패 · 시도 2/2" } : { ...review(30), pr_state: "pending" as const }),
+      ...finish(own(1, "검색어를 지우면 처음 목록으로 돌아간다"), line("check", "check", "pass"), line("review", "review", stack ? "pass" : "open", { rule: "all", checkers: [checker(opus("high"), "pass", "agent-21"), checker(sonnet, stack ? "pass" : "open", stack || decision ? undefined : "agent-22")] }), ci(decision ? "fail" : "pass")),
+    }),
+    node("api", "API 추가", { worker: astra("high"), ...done(40, 17), pr: 1503, pr_state: state === "no-conductor" ? "merged" : stack ? "mergeable" : "merged", stage: 4, ...finish(own(1, "목록 API가 페이지를 나눠 준다"), ci("pass")) }),
+    node("fix-1487", `${no(1487)} 수정`, {
+      depends_on: ["cause"], worker: astra("medium"), pane_id: FIX_PANE, pr: 1506, stage: 3, reopened: stack ? 0 : 1,
+      ...(stack ? { ...done(30, 12), pr_state: "mergeable" as const } : { ...working(5), pr_state: "pending" as const, line: "replay 19/31" }),
+      ...finish(own(1, "reopen 뒤에도 셀이 남는다"), own(2, "실제 세션 50개 replay", "skipped", { skip: { reason: "기록된 세션이 31개뿐" } }), ...(stack ? [] : [line("d1", "defect", "open", { text: "다시 열면 첫 셀만 비어 있다", found_by: "check-1487" })]), ci(stack ? "pass" : "open")),
+    }),
+    node("check-1487", `${no(1487)} 실제 앱 확인`, { kind: "verify", delivery: null, depends_on: ["fix-1487"], worker: sonnet, ...(stack ? done(16, 6) : {}), line: stack ? "5개 항목 통과" : null, ...finish(line("verify", "verify", stack ? "pass" : "open", { rule: "all", checkers: [checker(sonnet, stack ? "pass" : "open")] })) }),
+    node("outside", "바깥: isolated 앱 실행기 정리", { kind: "external", delivery: null, external: { pr: 1232 }, status: decision ? "failed" : stack ? "done" : "waiting", pr: 1232 }),
+    decision
+      ? node("screen", "API 쓰는 화면", { depends_on: ["api", "outside"], worker: astra("high"), status: "held", started_at_unix_ms: ago(21), pr: 1504, base_pr: 1503, pr_state: "pending", stage: 3, review: "리뷰 전 · CI 통과 뒤 시작", ...finish(own(1, "새 API로 목록을 그린다", "open"), ci("open")) })
+      : node("screen", "API 쓰는 화면", { depends_on: ["api", "outside"], worker: astra("high"), pane_id: stack ? null : SCREEN_PANE, ...(stack ? done(33, 33) : working(12)), status: stack ? "done" : "working", pr: 1504, base_pr: 1503, pr_state: state === "no-conductor" ? "pending" : stack ? "mergeable" : "pending", stage: state === "no-conductor" ? 2 : 3, line: state === "no-conductor" ? "옮기기 필요" : null, ...finish(own(1, "새 API로 목록을 그린다", stack ? "pass" : "open"), ci(stack ? "pass" : "open")) }),
+    node("together", "함께 확인", { kind: "verify", delivery: null, depends_on: ["screen", "fix-1487"], worker: sonnet, ...(stack ? done(8, 4) : {}), line: stack ? "합친 변경 ✓" : null, ...finish(line("verify", "verify", stack ? "pass" : "open", { rule: "majority", checkers: [checker(sonnet, stack ? "pass" : "open"), checker(astra("medium"), stack ? "pass" : "open"), checker(opus("high"), stack ? "pass" : "open")] })) }),
   ];
 }
 
@@ -134,7 +163,9 @@ function history(mission: Mission, now: number): MissionEvent[] {
     } else events.push({ at_unix_ms: begun, kind: "node", node: one.key, status: "working" });
     if (one.pr != null) events.push({ at_unix_ms: begun + (end - begun) * 0.4, kind: "pr_opened", node: one.key, pr: one.pr });
     if (one.pr != null && one.finished_at_unix_ms != null) events.push({ at_unix_ms: begun + (end - begun) * 0.7, kind: "node", node: one.key, status: "review" });
+    if (one.status === "review") events.push({ at_unix_ms: now - 6 * MINUTE, kind: "node", node: one.key, status: "review" });
     if (one.status === "held") events.push({ at_unix_ms: now - 8 * MINUTE, kind: "node", node: one.key, status: "held", line: one.line ?? undefined });
+    if (one.status === "failed") events.push({ at_unix_ms: now - 4 * MINUTE, kind: "node", node: one.key, status: "failed", line: one.line ?? undefined });
     if (one.finished_at_unix_ms != null && (one.status === "done" || one.status === "waiting")) {
       events.push({ at_unix_ms: one.finished_at_unix_ms, kind: "node", node: one.key, status: one.status });
       if (one.pr_state === "merged") events.push({ at_unix_ms: one.finished_at_unix_ms, kind: "pr_merged", node: one.key, pr: one.pr! });
@@ -156,7 +187,7 @@ function scene(shown: string, now: number): { mission: Mission; rest: SnapshotRe
     status: state === "plan" ? "planning" : state === "stack" ? "merge_wait" : state === "done" || state === "no-pr" ? "done" : state === "cancelled" ? "cancelled" : "running",
     scope: "pr", cap: 4, exempt: false, checkers: null,
     conductor: { pane_id: CONDUCTOR_PANE, name: "이슈 정리 · Conductor", agent_kind: "claude", session: { device_id: "local", agent: "claude", session_id: "scene-conductor" }, present: state !== "no-conductor", takes_answers: true },
-    nodes, merge_order: ["api", "screen"], check: "cargo test && pnpm test", github: "octocat",
+    nodes, merge_order: ["api", "fix-1481", "fix-1490", "fix-1487", "screen"], check: "cargo test && pnpm test", github: "octocat",
     decision: state === "decision" ? "화면 PR을 어디에 올릴까요?" : state === "no-conductor" ? `${no(1503)}이 머지되어 ${no(1504)}를 옮겨야 해요` : null,
     question: state === "decision"
       ? { key: 2, why: `API PR ${no(1503)}이 아직 리뷰 중이라 그 위에 쌓으면 리베이스가 생길 수 있어요`, options: [`${no(1503)} 위에 쌓기`, `${no(1503)} 머지 뒤 main에서`, "화면 PR을 둘로 나누기"], recommend: 1, node: "screen", asked_at_unix_ms: now - 8 * MINUTE }
@@ -191,7 +222,10 @@ function scene(shown: string, now: number): { mission: Mission; rest: SnapshotRe
       { agent: "claude", model: "Sonnet 5.5", effort: "low", purpose: "리뷰, 문서" },
       { agent: "pi", effort: null, purpose: "짧은 조사" },
       { agent: "grok", effort: null, purpose: "" },
-    ] } },
+    ], checkers: {
+      review: { mode: "conductor", rule: "all", count: 2, agent: "codex", model: "GPT-6-Astra", effort: "high", other_vendor: true },
+      verify: { mode: "many", rule: "all", count: 2, agent: null, model: null, effort: null, other_vendor: true },
+    } } },
   } as unknown as SnapshotRest;
   return { mission, rest };
 }
@@ -203,15 +237,31 @@ export function MissionScene({ params }: { params: URLSearchParams }) {
   const pane = PANE_STATES[state];
   const fixture = useMemo(() => scene(pane ?? state, Date.now()), [pane, state]);
   const actions = useMemo(() => createActions(() => true), []);
+  const pick = params.get("pick");
   useLayoutEffect(() => {
-    const agents = pane ? [{ pane_id: CONDUCTOR_PANE, device_id: "local" } as unknown as AgentRow] : [];
+    // The decision state's fix worker is one the core raised: its own line says why it stopped.
+    const raised = { pane_id: FIX_PANE, device_id: "local", escalation: { cause: "child_blocked", letter_id: null, since_unix_ms: Date.now() - 3 * MINUTE, human_notice: true }, request: { verb: "blocked", verb_since_unix_ms: Date.now() - 3 * MINUTE, line: "로그인이 만료되어 테스트를 못 돌림", end: "blocked", request: null, later_by: null, pull_requests: [] } };
+    const agents = (pane ? [{ pane_id: CONDUCTOR_PANE, device_id: "local" }] : state === "decision" ? [raised] : []) as unknown as AgentRow[];
     useShellStore.setState({ rest: fixture.rest, agents, connection: "live" });
     // The popover pinned, as a press, the Show plan chord or a first plan watched leaves it.
     useUiStore.setState({ planPane: pane ? CONDUCTOR_PANE : null });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
     document.documentElement.style.setProperty("--interface-scale", params.get("scale") ?? "1");
-  }, [fixture, pane, theme, params]);
+  }, [fixture, pane, state, theme, params]);
+  // A picked node is a press on its card, as the operator makes it, once the layout drew the card.
+  useEffect(() => {
+    if (!pick) return;
+    let frame = 0;
+    let left = 120;
+    const press = () => {
+      const card = document.querySelector<HTMLElement>(`[data-mission-node="${pick}"]`);
+      if (card) card.click();
+      else if ((left -= 1) > 0) frame = requestAnimationFrame(press);
+    };
+    frame = requestAnimationFrame(press);
+    return () => cancelAnimationFrame(frame);
+  }, [pick, fixture]);
   const width = Number(params.get("width") ?? (state === "settings" ? 900 : 1080));
   return (
     <TooltipProvider>
