@@ -617,12 +617,12 @@ test("the shortcut sheet marks the moved chords and ⌘F reaches the agent's own
     await page.keyboard.press(chord("shortcuts"));
     await expect(page.locator("[data-shortcut-sheet]")).toBeVisible();
     // The complete command set includes the three direct Overview/sidebar commands
-    // The two numbered families each fold into one row and have no browser chord;
+    // The three numbered families (tabs, agents, devices) each fold into one row and have no browser chord;
     // they never carry a Chrome move note (electron-digit-shortcuts-hints B3).
     // The two Explorer path copies and its Cut, Copy and Paste are rows too,
     // and so is the sidebar's Projects | Tasks switch (sidebar-task-lens D-19, D-32),
     // the pane's Show plan (hide-plan B7), and the Memory tool's toggle.
-    await expect(page.locator("[data-shortcut]")).toHaveCount(56);
+    await expect(page.locator("[data-shortcut]")).toHaveCount(57);
     for (const title of ["Overview", "Focus sidebar", "Add to backlog"]) await expect(page.locator("[data-shortcut-sheet]")).toContainText(title);
     // Add to backlog moves in a macOS browser, where Chrome keeps ⌘⇧M for its profiles; Alt+Shift+M is free on Windows and Linux.
     // Assert the exact moved commands, including the unchanged platform exceptions.
