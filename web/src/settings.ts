@@ -347,7 +347,12 @@ export function kitPartLine(part: Pick<KitComponent, "state">, t: Translate): { 
 }
 
 /** Whether Reinstall would change this part: the same four states the core repairs (B8). */
-export function kitPartNeedsReinstall(part: Pick<KitComponent, "state">): boolean {
+/**
+ * Whether Reinstall repairs a part in this state. A part refused because the agent's copy is older than Hide's minimum
+ * (`update_agent`) would be refused again; updating the agent installs it, so its row shows the update instead.
+ */
+export function kitPartNeedsReinstall(part: Pick<KitComponent, "state"> & { why?: KitComponent["why"] }): boolean {
+  if (part.why?.cause === "update_agent") return false;
   return part.state === "outdated" || part.state === "not_installed" || part.state === "removed" || part.state === "failed";
 }
 

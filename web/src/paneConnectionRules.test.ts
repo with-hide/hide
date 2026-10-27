@@ -18,6 +18,7 @@ it("offers Reopen only where the core says it can and the reason is one Reopen f
   expect(offered({ reason: "codex_shared_server" })).toBe(true);
   expect(offered({ reason: "started_before_hide", can_reopen: false })).toBe(false);
   expect(offered({ reason: "setup_needed", can_reopen: true })).toBe(false);
+  expect(offered({ reason: "update_agent", can_reopen: true })).toBe(false);
   expect(connectionCopy("setup_needed").reopen).toBeNull();
 });
 

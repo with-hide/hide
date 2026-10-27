@@ -309,8 +309,11 @@ export type PaneChildren = {
   connection?: PaneConnection | null;
 };
 
-/** Why a session is not connected: `codex_shared_server`, `started_before_hide`, or `setup_needed` (fix it in Settings, no Reopen). */
-export type PaneConnectionReason = "codex_shared_server" | "started_before_hide" | "setup_needed";
+/**
+ * Why a session is not connected: `codex_shared_server`, `started_before_hide`, `setup_needed` (fix it in Settings, no
+ * Reopen), or `update_agent` (the machine's copy of the agent is older than Hide's minimum; `update` says how to update it).
+ */
+export type PaneConnectionReason = "codex_shared_server" | "started_before_hide" | "setup_needed" | "update_agent";
 
 /** `PaneConnectionSnapshot`: `reason` is present exactly when `connected` is false; `reopen` is the last Reopen of the pane. */
 export type PaneConnection = {
@@ -319,7 +322,15 @@ export type PaneConnection = {
   can_reopen: boolean;
   reason: PaneConnectionReason | null;
   reopen: { state: "pending" } | { state: "failed"; reason: PaneReopenFailure } | null;
+  /** What updates the agent, present exactly when `reason` is `update_agent`. */
+  update?: AgentUpdate | null;
 };
+
+/**
+ * `hide_kit::AgentUpdate`: the found copy of an agent's CLI is older than Hide's minimum. `command` is the vendor's
+ * command for how that copy was installed, absent when Hide cannot tell; the screen then links the install page.
+ */
+export type AgentUpdate = { installed: string; minimum: string; path: string; command?: string | null };
 
 export type PaneReopenFailure = "start_refused" | "session_gone" | "codex_unread" | "agent_busy" | "end_refused";
 
@@ -1759,6 +1770,8 @@ export type KitAgent = {
   features?: { id: KitFeatureId; supported: boolean }[];
   /** How many of the agent's sessions run on this machine now, a sleeping agent not counted; null for an agent whose sessions Hide does not read (Partial agents) and before the machine's sessions are read. */
   sessions?: number | null;
+  /** The found copy is older than Hide's minimum and Hide puts in none of its hook, plugin or extension until it is updated; absent from an older helper. */
+  update?: AgentUpdate | null;
   doc_url: string;
 };
 

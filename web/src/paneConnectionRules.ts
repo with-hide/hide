@@ -36,10 +36,31 @@ const COPY: Record<PaneConnectionReason, ConnectionCopy> = {
     reason: "panes.connection.setupNeeded.reason",
     reopen: null,
   },
+  update_agent: {
+    title: "panes.connection.updateAgent.title",
+    reason: "panes.connection.updateAgent.reason",
+    reopen: null,
+  },
 };
 
-export function connectionCopy(reason: PaneConnectionReason): ConnectionCopy {
-  return COPY[reason];
+// A session Hide cannot reopen (another agent than Claude Code or Codex, a pane on another device) is restarted by
+// the operator, so its copy says that rather than offer a Reopen it does not have.
+const RESTART: ConnectionCopy = {
+  title: "panes.connection.startedBeforeHide.title",
+  reason: "panes.connection.startedBeforeHide.restartReason",
+  reopen: null,
+};
+
+export function connectionCopy(reason: PaneConnectionReason, canReopen = true): ConnectionCopy {
+  return reason === "started_before_hide" && !canReopen ? RESTART : COPY[reason];
+}
+
+/**
+ * Whether the header wears the small "Update needed" badge rather than the integration icon: the machine's copy of
+ * the agent is too old and the core says what updates it.
+ */
+export function wearsUpdateBadge(connection: PaneConnection & { reason: PaneConnectionReason }): boolean {
+  return connection.reason === "update_agent" && connection.update != null;
 }
 
 /** Whether the popover offers Reopen: the core says the pane can be reopened and the reason is one Reopen fixes. */

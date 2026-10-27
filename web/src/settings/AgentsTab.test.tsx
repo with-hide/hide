@@ -154,6 +154,19 @@ it("shows a failed or removed part on its own row with Reinstall, and nowhere el
   await unmount();
 });
 
+it("shows a copy too old for Hide as the versions, the one command that updates it and its path, with no Reinstall", async () => {
+  const update = { installed: "2.1.200", minimum: "2.1.278", path: "/Users/me/.local/bin/claude", command: "claude update" };
+  const set = [agent("claude-code", { update, hook: piece("failed", "update_agent"), skill: piece("failed", "update_agent") }), agent("codex")];
+  const { q, all, unmount } = await mount(state([device("local", { kit: kit(set) })]));
+  const guide = q('[data-agent-update="claude-code"]')!;
+  expect(guide.textContent).toContain("Update 2.1.200 to 2.1.278 or later to connect it to Hide");
+  expect(guide.textContent).toContain("claude update");
+  expect(guide.textContent).toContain("/Users/me/.local/bin/claude");
+  expect(all("[data-agent-problem]")).toHaveLength(0);
+  expect(q('[data-hook-reinstall="local:claude-code"]')).toBeNull();
+  await unmount();
+});
+
 it("turns an agent on or off on the machine the list is for, and not while the machine installs (B13, B67)", async () => {
   const { q, click, events, unmount } = await mount(state([device("local"), device("studio")]));
   await click(q('[data-agent-switch="local:grok:off"]'));

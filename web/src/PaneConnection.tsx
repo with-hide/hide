@@ -1,6 +1,8 @@
 import { UnlinkIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Actions } from "./actions";
+import { agentAdapter, agentProductName } from "./agentAdapters";
+import { AgentUpdateCommand } from "./AgentUpdate";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -15,7 +17,7 @@ import { Button } from "./components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "./components/ui/popover";
 import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
-import { connectionCopy, notConnected, offersReopen, offersSharedServerOff, reopenFailureKey, reopenPending, sharedServerOutcome } from "./paneConnectionRules";
+import { connectionCopy, notConnected, offersReopen, offersSharedServerOff, reopenFailureKey, reopenPending, sharedServerOutcome, wearsUpdateBadge } from "./paneConnectionRules";
 import { remoteContext } from "./remote";
 import { machineName, windowDeviceId } from "./screenMachine";
 import type { PaneRow } from "./snapshot";
@@ -30,20 +32,26 @@ import { useShellStore } from "./store";
 // Turning the shared server off also stops the one running, which disconnects
 // every Codex attached to it, so the link asks first in the device-removal
 // pattern with no button focused (PRD codex-daemon-apply B1-B3, D-06).
+// An agent whose copy is older than Hide's minimum wears a small "Update
+// needed" badge instead of the icon, and its popover says what is off and the
+// one command that updates it; no banner, sheet or notice says it elsewhere
+// (design principle 13).
 
-export function PaneConnectionChip({ pane, actions, local }: { pane: PaneRow; actions: Actions; local: boolean }) {
+export function PaneConnectionChip({ pane, agentKind, actions, local }: { pane: PaneRow; agentKind: string | null; actions: Actions; local: boolean }) {
   const connection = notConnected(pane.children?.connection);
   if (!connection) return null;
-  return <ConnectionPopover paneId={pane.id} connection={connection} actions={actions} local={local} />;
+  return <ConnectionPopover paneId={pane.id} agentKind={agentKind} connection={connection} actions={actions} local={local} />;
 }
 
 function ConnectionPopover({
   paneId,
+  agentKind,
   connection,
   actions,
   local,
 }: {
   paneId: string;
+  agentKind: string | null;
   connection: NonNullable<ReturnType<typeof notConnected>>;
   actions: Actions;
   local: boolean;
@@ -64,7 +72,11 @@ function ConnectionPopover({
   // The copy names the machine as this window does: its own is this Mac, wherever the core runs.
   const here = machineId !== null && machineId === windowDeviceId(rest?.navigator?.devices);
   const machine = machineId ? machineName(rest?.navigator?.devices, machineId, t) : "";
-  const copy = connectionCopy(connection.reason);
+  const badge = wearsUpdateBadge(connection);
+  const update = badge ? (connection.update ?? null) : null;
+  // A badge without its update names no version, so it reads as the setup problem it is.
+  const copy = connectionCopy(badge ? "update_agent" : connection.reason === "update_agent" ? "setup_needed" : connection.reason, connection.can_reopen);
+  const agent = agentProductName(agentKind) ?? "";
   const pending = reopenPending(connection);
   const failure = reopenFailureKey(connection);
   const offState = JSON.stringify(device?.kit?.codex_daemon_off ?? null);
@@ -94,19 +106,34 @@ function ConnectionPopover({
         if (!next) setAskedOff(false);
       }}
     >
-      <Hint label={t("panes.connection.chip")} active={!open}>
+      {badge ? (
         <PopoverTrigger asChild>
           <Button
             variant="ghost"
-            size="icon-sm"
-            aria-label={t("panes.connection.chip")}
+            size="sm"
+            className="shrink-0 gap-xxs px-xs text-caption text-warning hover:text-warning"
             data-pane-connection={connection.reason}
             data-pane-connection-pane={paneId}
           >
-            <UnlinkIcon className="size-(--size-icon-sm)" aria-hidden="true" />
+            <span aria-hidden="true" className="size-(--size-tab-status-dot) rounded-full bg-warning" />
+            {t("panes.connection.updateAgent.badge")}
           </Button>
         </PopoverTrigger>
-      </Hint>
+      ) : (
+        <Hint label={t("panes.connection.chip")} active={!open}>
+          <PopoverTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label={t("panes.connection.chip")}
+              data-pane-connection={connection.reason}
+              data-pane-connection-pane={paneId}
+            >
+              <UnlinkIcon className="size-(--size-icon-sm)" aria-hidden="true" />
+            </Button>
+          </PopoverTrigger>
+        </Hint>
+      )}
       <PopoverContent
         align="start"
         role="dialog"
@@ -115,7 +142,12 @@ function ConnectionPopover({
         data-pane-connection-popover={connection.reason}
       >
         <strong className="text-subhead text-foreground">{t(copy.title)}</strong>
-        <p className="text-body text-muted-foreground">{t(copy.reason)}</p>
+        <p className="text-body text-muted-foreground">
+          {update ? t(copy.reason, { agent, installed: update.installed, minimum: update.minimum }) : t(copy.reason)}
+        </p>
+        {update ? (
+          <AgentUpdateCommand agentId={agentAdapter(agentKind ?? "")?.id ?? agentKind ?? ""} label={agent} update={update} actions={actions} />
+        ) : null}
         <div className="flex items-center gap-sm">
           {offersReopen(connection) && copy.reopen ? (
             <Button size="sm" aria-busy={pending} disabled={pending} data-pane-reopen={paneId} onClick={() => once(() => actions.reopenPane(paneId))}>
