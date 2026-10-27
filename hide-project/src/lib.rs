@@ -283,6 +283,61 @@ pub mod git {
             Ok(parse_branch_value(&text, branch, "issue"))
         }
 
+        /// The default branch a repository with no remote names itself,
+        /// the last step of the default branch rule (PRD git-freshness
+        /// D-07): the branch its main worktree has out, which a clone of it
+        /// would take as its `origin/HEAD`. `None` unless the repository has
+        /// no remote at all (none in a config that names every one, nothing
+        /// under `refs/remotes` and no remote-tracking ref packed), the
+        /// main worktree is on a
+        /// branch rather than a detached HEAD, and that branch holds a
+        /// commit. Read from Git's own files, never from a Git process.
+        pub fn own_default_branch(&self) -> Option<String> {
+            let config = self.config().ok()?;
+            if !config.remotes_complete || !config.remotes.is_empty() || self.remote_refs()? {
+                return None;
+            }
+            let main = discover(&self.main_root())?;
+            let branch = main.branch()?;
+            main.head_oid()?;
+            Some(branch)
+        }
+
+        /// Whether the repository keeps anything under `refs/remotes`, or a
+        /// remote-tracking ref in `packed-refs`; `None` when that cannot be
+        /// read whole.
+        fn remote_refs(&self) -> Option<bool> {
+            match fs::read_dir(self.common_dir.join("refs/remotes")) {
+                Ok(mut entries) => {
+                    if entries.next().is_some() {
+                        return Some(true);
+                    }
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return None,
+            }
+            let packed = match open_file(&self.common_dir.join("packed-refs")) {
+                Ok(packed) => packed,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Some(false),
+                Err(_) => return None,
+            };
+            let mut read = 0;
+            for line in BufReader::new(packed.take(PACKED_REFS_LIMIT + 1)).lines() {
+                let line = line.ok()?;
+                read += line.len() as u64 + 1;
+                if read > PACKED_REFS_LIMIT {
+                    return None;
+                }
+                if line
+                    .split_once(' ')
+                    .is_some_and(|(_, name)| name.trim().starts_with("refs/remotes/"))
+                {
+                    return Some(true);
+                }
+            }
+            Some(false)
+        }
+
         /// What the repository's config says, from one read of it: every
         /// branch's note and the URL of every remote.
         pub fn config(&self) -> Result<Config, String> {
@@ -893,6 +948,44 @@ pub mod git {
             );
             fs::remove_file(repository.git_dir.join("HEAD")).unwrap();
             assert_eq!(repository.head_oid(), None, "no HEAD");
+        }
+
+        /// Review finding 14: a repository without a remote names its own
+        /// default, the branch its main worktree has out once it holds a
+        /// commit, whatever that branch is called; a remote in the config,
+        /// one an include may name, a remote-tracking ref or a detached
+        /// HEAD leaves it unnamed.
+        #[test]
+        fn a_repository_with_no_remote_names_its_main_worktrees_branch_its_default() {
+            let (_temp, repository) = repository("ref: refs/heads/trunk");
+            let config = repository.common_dir.join("config");
+            let plain = "[core]\n\tbare = false\n";
+            fs::write(&config, plain).unwrap();
+            assert_eq!(repository.own_default_branch(), None, "no commit yet");
+            fs::write(repository.common_dir.join("refs/heads/trunk"), FIRST).unwrap();
+            assert_eq!(repository.own_default_branch().as_deref(), Some("trunk"));
+
+            let packed = repository.common_dir.join("packed-refs");
+            fs::write(&packed, format!("{SECOND} refs/remotes/origin/trunk\n")).unwrap();
+            assert_eq!(repository.own_default_branch(), None, "a packed remote ref");
+            fs::write(&packed, format!("{SECOND} refs/tags/v1\n")).unwrap();
+            assert_eq!(repository.own_default_branch().as_deref(), Some("trunk"));
+            let remotes = repository.common_dir.join("refs/remotes/backup");
+            fs::create_dir_all(&remotes).unwrap();
+            fs::write(remotes.join("trunk"), SECOND).unwrap();
+            assert_eq!(repository.own_default_branch(), None, "a loose remote ref");
+            fs::remove_dir_all(repository.common_dir.join("refs/remotes")).unwrap();
+
+            for (text, why) in [
+                ("[remote \"backup\"]\n\turl = /srv/backup.git\n", "a remote"),
+                ("[include]\n\tpath = more.config\n", "an include"),
+            ] {
+                fs::write(&config, format!("{plain}{text}")).unwrap();
+                assert_eq!(repository.own_default_branch(), None, "{why}");
+            }
+            fs::write(&config, plain).unwrap();
+            fs::write(repository.git_dir.join("HEAD"), format!("{FIRST}\n")).unwrap();
+            assert_eq!(repository.own_default_branch(), None, "a detached HEAD");
         }
 
         #[test]

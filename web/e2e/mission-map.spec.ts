@@ -35,9 +35,10 @@ const PLAN = {
   scope: "pr",
   check: "true",
   nodes: [
-    { key: "cause", title: "원인 조사", kind: "research" },
-    { key: "api", title: "API 추가", kind: "change", delivery: "pr", worker: { agent: "claude", model: "opus" } },
-    { key: "screen", title: "API 쓰는 화면", kind: "change", delivery: "pr", depends_on: ["api"] },
+    // Every node names its own finish line (PRD mission-map-git-criteria B1).
+    { key: "cause", title: "원인 조사", kind: "research", criteria: ["원인을 한 줄로 적는다"] },
+    { key: "api", title: "API 추가", kind: "change", delivery: "pr", criteria: ["엔드포인트가 응답한다"], worker: { agent: "claude", model: "opus" } },
+    { key: "screen", title: "API 쓰는 화면", kind: "change", delivery: "pr", criteria: ["화면이 API 값을 보인다"], depends_on: ["api"] },
   ],
 };
 
@@ -124,7 +125,7 @@ test("the Conductor's first plan shows on its pane, the map follows the record, 
     // Closed by the operator, a later plan does not open it again.
     await map.locator("[data-detail-close]").click();
     await expect(map).toHaveCount(0);
-    await mission(conductor, ["mission", "plan", "--json", JSON.stringify({ ...PLAN, nodes: [...PLAN.nodes, { key: "together", title: "함께 확인", kind: "verify", depends_on: ["screen"] }] })]);
+    await mission(conductor, ["mission", "plan", "--json", JSON.stringify({ ...PLAN, nodes: [...PLAN.nodes, { key: "together", title: "함께 확인", kind: "verify", criteria: ["두 변경이 함께 동작한다"], depends_on: ["screen"] }] })]);
     const shown = await mission(conductor, ["mission", "show"]);
     expect(JSON.stringify(shown.result)).toContain("together");
     await expect(map).toHaveCount(0);

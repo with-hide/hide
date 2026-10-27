@@ -183,6 +183,10 @@ pub fn is_search_call(arguments: &[&str]) -> bool {
 /// `run_gh` lets it ask for.
 pub const PR_FEEDBACK_FIELDS: &str = "body,statusCheckRollup,reviews";
 
+/// The one field a mission's outside pull request is read for when the
+/// project's list does not hold it: open, closed or merged.
+pub const OUTSIDE_PR_FIELDS: &str = "state";
+
 /// What the list of every pull request asks for. `statusCheckRollup` is
 /// left out: asking GitHub for the checks of all 200 pull requests, merged
 /// and closed ones included, is what made one read take 11 - 14 seconds
@@ -500,7 +504,9 @@ pub fn allowed(arguments: &[&str]) -> bool {
             && arguments[..2] == ["pr", "view"]
             && is_number(arguments[2])
             && arguments[3] == "--json"
-            && (arguments[4] == "body" || arguments[4] == PR_FEEDBACK_FIELDS))
+            && (arguments[4] == "body"
+                || arguments[4] == PR_FEEDBACK_FIELDS
+                || arguments[4] == OUTSIDE_PR_FIELDS))
         || (arguments.len() == 7
             && arguments[..2] == ["issue", "view"]
             && arguments[3] == "--repo"
@@ -1118,6 +1124,7 @@ mod tests {
             merged("factory/1-task"),
             issues(ISSUE_LIST_FIELDS),
             issues(ISSUE_LIST_PROJECT_FIELDS),
+            vec!["pr", "view", "1232", "--json", OUTSIDE_PR_FIELDS],
         ] {
             assert!(allowed(&arguments), "{arguments:?} must be allowed");
         }
@@ -1136,6 +1143,8 @@ mod tests {
             issues("body"),
             vec!["issue", "list"],
             vec!["pr", "list"],
+            vec!["pr", "view", "main", "--json", OUTSIDE_PR_FIELDS],
+            vec!["pr", "view", "1232", "--json", "state,body"],
         ] {
             assert!(!allowed(&arguments), "{arguments:?} must be refused");
         }

@@ -520,7 +520,15 @@ impl Runtime {
         // holds, and what hangs off that (its issues, its request rows).
         self.apply_pull_requests();
         self.refresh_worktree_projection();
-        changed
+        // A local merge can bring a mission's outside branch into main (B19).
+        let mut followed = false;
+        if changed {
+            let device = self.node.as_str().to_owned();
+            for project in self.outside_projects(&device) {
+                followed |= self.follow_outside_stored(&device, &project);
+            }
+        }
+        changed || followed
     }
 
     /// The Git project a cleanup names: one of this machine's, or one of a

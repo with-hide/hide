@@ -662,6 +662,69 @@ fn draining_waits_only_for_the_entries_it_was_given() {
     assert!(theirs.exists(), "an entry nobody named stays");
 }
 
+/// A repository with no remote takes the branch its main worktree has out as
+/// its default and judges merged against it (review finding 14), and one
+/// with a remote but no `origin/HEAD` still has none.
+#[test]
+fn a_repository_with_no_remote_takes_its_main_worktrees_branch_as_its_default() {
+    let repository = repository();
+    let root = repository.path();
+    let linked_folder = tempfile::tempdir().unwrap();
+    let linked = linked_folder.path().join("feature");
+    git(
+        root,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "feature",
+            linked.to_str().unwrap(),
+        ],
+    );
+    git(&linked, &["commit", "-q", "--allow-empty", "-m", "feature"]);
+    let read = || {
+        let facts = hide_host::worktrees::read(
+            root,
+            &Default::default(),
+            None,
+            None,
+            &hide_host::worktrees::Measured::default(),
+            false,
+        )
+        .unwrap();
+        let merged = facts
+            .worktrees
+            .iter()
+            .find(|worktree| worktree.branch.as_deref() == Some("feature"))
+            .and_then(|worktree| worktree.merged);
+        (facts, merged)
+    };
+    let (facts, merged) = read();
+    assert_eq!(
+        (facts.default_branch.as_deref(), facts.base_source.as_str()),
+        (Some("main"), "repository")
+    );
+    assert_eq!(merged, Some(false));
+    git(root, &["merge", "-q", "--ff-only", "feature"]);
+    assert_eq!(read().1, Some(true));
+
+    git(
+        root,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://example.invalid/acme/app.git",
+        ],
+    );
+    let (facts, _) = read();
+    assert_eq!(
+        (facts.default_branch, facts.base_source.as_str()),
+        (None, "unknown")
+    );
+}
+
 /// The repository's default branch is the one GitHub names when this clone
 /// has it, else `origin/HEAD`'s; `merged` is measured against that default,
 /// not against a branch's pull request base (PRD git-freshness D-06, D-07).

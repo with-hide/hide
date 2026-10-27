@@ -87,9 +87,10 @@ STORES = {
         "deleted or swept",
     ),
     "herdr-core/src/latest_file.rs": (
-        4,
+        6,
         "the write and read of a core store that keeps only its latest value "
-        "(the saved GitHub answers, the panes held as a draft)",
+        "(the saved GitHub answers, the panes held as a draft, the missions), "
+        "and the one copy a store keeps of the file a schema conversion read",
     ),
     "herdr-core/src/diagnostics.rs": (7, "the core's own log file"),
     "herdr-core/src/labels/mod.rs": (

@@ -2030,7 +2030,7 @@ pub(crate) mod tests {
         let context = authority(&observed(runtime, pane).actor).context;
         for command in [
             json!({"op": "create", "title": "Fix the bug"}),
-            json!({"op": "plan", "plan": {"nodes": [{"key": "fix", "title": "Fix it", "kind": "change", "delivery": "pr"}]}}),
+            json!({"op": "plan", "plan": {"nodes": [{"key": "fix", "title": "Fix it", "kind": "change", "criteria": ["it works"], "delivery": "pr"}]}}),
             json!({"op": "start"}),
             json!({"op": "decide", "line": "Which base?"}),
         ] {

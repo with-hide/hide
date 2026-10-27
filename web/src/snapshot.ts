@@ -1249,8 +1249,8 @@ export function sameDetailItem(a: DetailItem | null | undefined, b: DetailItem):
 export type MissionStatus = "planning" | "running" | "merge_wait" | "done" | "cancelled";
 /** How far a mission goes (`mission_scope`): ready pull requests, or through the merge. */
 export type MissionScope = "pr" | "merge";
-/** A node's kind (`mission_node_kind`), each done by its own rule (D-15). */
-export type MissionNodeKind = "change" | "research" | "verify";
+/** A node's kind (`mission_node_kind`), each done by its own rule (D-15); `external` watches a pull request or branch outside the mission (PRD mission-map-git-criteria D-20). */
+export type MissionNodeKind = "change" | "research" | "verify" | "external";
 /** How a change node's work lands (`mission_delivery`). */
 export type MissionDelivery = "pr" | "direct";
 /** A node's state as its Conductor records it (`mission_node_status`). */
@@ -1260,6 +1260,42 @@ export type MissionBlocked = "upstream_failed" | "upstream_dropped";
 
 /** A verify node's verdict (`mission_verdict`, PRD mission-plan-visibility B33). */
 export type MissionVerdict = "pass" | "fail";
+
+/** A finish line's kind (`mission_criterion_kind`, PRD mission-map-git-criteria D-09-D-11, D-21). */
+export type MissionCriterionKind = "own" | "check" | "ci" | "review" | "verify" | "defect";
+/** A finish line's state as it stands now (`mission_criterion_state`); a check passed on an older commit reads open (B7). */
+export type MissionCriterionState = "open" | "pass" | "fail" | "skipped";
+/** Who recorded a line (`mission_recorded_role`, D-23). */
+export type MissionRecordedRole = "worker" | "checker" | "conductor" | "hide";
+/** How several checkers decide (`mission_check_rule`, D-07). */
+export type MissionCheckRule = "all" | "majority";
+
+/** One agent of a review or verification: what the plan asked, the registration bound to it and its own answer. */
+/** One checker of a review or verify line; `pane_id` and `machine` are the bound checker's pane now, as the core resolves it from `agent_id` (B29). */
+export type MissionChecker = { worker: MissionWorker; agent_id?: string; state: MissionCriterionState; evidence?: string; at_unix_ms?: number; pane_id?: string; machine?: string };
+
+/** One finish line of a node (`Criterion`): only the fields its kind carries are present. */
+export type MissionCriterion = {
+  key: string;
+  kind: MissionCriterionKind;
+  /** The Conductor's words, for an own line or a defect. */
+  text?: string;
+  state: MissionCriterionState;
+  by?: { role: MissionRecordedRole; name: string; agent_id?: string; at_unix_ms: number };
+  evidence?: string;
+  commit?: string;
+  reruns?: number;
+  rerunning?: boolean;
+  /** `decision` is the operator's answered question a check command or CI skip rests on (`⤳ operator 결정`). */
+  skip?: { reason: string; decision?: number };
+  rule?: MissionCheckRule;
+  checkers?: MissionChecker[];
+  /** The node whose work found a defect. */
+  found_by?: string;
+};
+
+/** What an external node watches (`External`). */
+export type MissionExternal = { pr: number } | { branch: string };
 
 /** What the Conductor asked beside its decision (`Question`, B25, B32); `key` names it, so an answer to a changed question is refused. */
 export type MissionQuestion = {
@@ -1281,7 +1317,7 @@ export type MissionAnswer = { key: number; text: string; option: number | null; 
 export type MissionAnswerFailure = "conductor_gone" | "device_disconnected" | "send_failed";
 
 /** What a mission event records (`mission_event_kind`, B31). */
-export type MissionEventKind = "planned" | "replanned" | "node" | "retried" | "pr_opened" | "pr_merged" | "landed" | "asked" | "answered" | "answer_undelivered" | "answer_unconfirmed" | "reported" | "cancelled";
+export type MissionEventKind = "planned" | "replanned" | "node" | "retried" | "pr_opened" | "pr_merged" | "landed" | "asked" | "answered" | "answer_undelivered" | "answer_unconfirmed" | "reported" | "cancelled" | "skipped" | "reopened";
 
 /** One event of a mission (`MissionEvent`, D-15): only the fields its kind carries are present. */
 export type MissionEvent = {
@@ -1294,6 +1330,8 @@ export type MissionEvent = {
   count?: number;
   pr?: number;
   source?: "banner" | "conversation";
+  /** A skipped line's key, or for `reopened` the node that found the defect. */
+  criterion?: string;
 };
 
 /** The events of the mission open in the 보기 slot (`MissionEventsSnapshot`, D-22): `dropped` past the 500 kept (B21). */
@@ -1327,11 +1365,23 @@ export type MissionNode = {
   line: string | null;
   change: string | null;
   review: string | null;
-  criteria: string | null;
+  /** The node's finish lines as they stand now (PRD mission-map-git-criteria B32). */
+  criteria: MissionCriterion[];
+  /** Lines that pass or were skipped of `criteria` (what the gate counts), and how many were skipped; B28's `기준 n/m ⤳k` shows `criteria_met - criteria_skipped` as `n`. */
+  criteria_met: number;
+  criteria_skipped: number;
+  external: MissionExternal | null;
+  /** An outside node Hide could not read: it stays waiting, the reason is in the diagnostic log (`확인 못 함`, B20). */
+  unread: boolean;
+  /** How often a later node's defect opened it again (`↻n`, B21). */
+  reopened: number;
   started_at_unix_ms: number | null;
   finished_at_unix_ms: number | null;
-  /** A direct change's commit on main (B33). */
+  /** A direct change's commit on main, as the Conductor recorded it (B33). */
   commit: string | null;
+  /** The commit of the node's branch Hide read in main for a mission waiting
+   * on its branches, while that read stands (`→ main <sha7>`, B17). */
+  in_main?: string;
   verdict: MissionVerdict | null;
   checks: { passed: number; total: number } | null;
   /** The worker's own plan (PRD hide-plan D-17, D-18). */
@@ -1349,6 +1399,10 @@ export type Mission = {
   status: MissionStatus;
   scope: MissionScope;
   cap: number;
+  /** Made before node criteria: its nodes show their sentence only and nothing is gated (B23). */
+  exempt: boolean;
+  /** Settings › Conductor's review and verify defaults when the mission was created (B36); null for one from before them. */
+  checkers: { review: ConductorCheckDefault; verify: ConductorCheckDefault } | null;
   /** `takes_answers`: its agent takes an answer typed from the banner, which the doorbell types only into the agents it rings (B26). */
   conductor: { pane_id: string; name: string; agent_kind: string; session: WorkSession | null; present: boolean; takes_answers: boolean };
   nodes: MissionNode[];
@@ -1418,7 +1472,9 @@ export type PlansSnapshot = { items: PlanView[] };
 
 /** Settings › Conductor (D-31): the cap, the default scope and the worker candidates. */
 export type ConductorCandidate = { agent: string; model?: string | null; effort?: string | null; purpose: string };
-export type ConductorSettings = { concurrency: number; default_scope: MissionScope; candidates: ConductorCandidate[] };
+/** A review or verify default (B36): the Conductor's judgement, never, always one, or several deciding by `rule`. */
+export type ConductorCheckDefault = { mode: "conductor" | "none" | "one" | "many"; rule: MissionCheckRule; count: number; agent: string | null; model: string | null; effort: string | null; other_vendor: boolean };
+export type ConductorSettings = { concurrency: number; default_scope: MissionScope; candidates: ConductorCandidate[]; checkers?: { review: ConductorCheckDefault; verify: ConductorCheckDefault } };
 
 /** The 보기 slot: what it opened, oldest first and the one it shows last, and whether the lane draws it. */
 export type DetailSlot = { items: DetailItem[]; shown: boolean };

@@ -343,6 +343,14 @@ fn a_changed_base_branch_is_the_one_guarded() {
         panic!("{outcome:?}")
     };
     assert!(refusal.unread && refusal.reason().contains("base branch"));
+    // A repository with no remote names its main worktree's branch, as the
+    // worktree reader does (review finding 14).
+    std::fs::remove_dir_all(fixture.repo.join(".git/refs/remotes")).unwrap();
+    assert_eq!(
+        fixture.shell(&fixture.repo, "git commit -m x"),
+        Some(Rule::BaseBranch)
+    );
+    assert_eq!(fixture.shell(&fixture.worktree, "git commit -m x"), None);
 }
 
 #[test]
@@ -744,7 +752,17 @@ fn the_reason_names_the_protection_and_what_to_do() {
     assert!(reason.contains("worktree"), "{reason}");
     assert!(reason.contains("Project Settings"), "{reason}");
     assert!(!reason.contains('\u{2014}'), "no em dash");
-    // With no base branch to read, the reason says who names one and where.
+    // With no base branch to read (a remote, and no origin/HEAD), the reason
+    // says who names one and where.
+    git(
+        &fixture.repo,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://example.invalid/acme/app.git",
+        ],
+    );
     fixture.policy(rules(|rules| rules.base_branch = true), None);
     let Outcome::Refuse(refusal) = fixture.decide_in(
         &fixture.repo,

@@ -139,7 +139,7 @@ const PR_URL = (number: number) => `https://example.com/${PLACE.project}/pull/${
 const NODE: Omit<MissionNode, "key" | "title" | "status" | "worker"> = {
   kind: "change", depends_on: [], blocked: null, delivery: "pr", agent_id: null, pane_id: null, machine: null,
   pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 1,
-  line: null, change: null, review: null, criteria: null, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, verdict: null, checks: null, plan: null,
+  line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, verdict: null, checks: null, plan: null,
 };
 
 /** The plan's three nodes, as the record holds them at `stage`. */
@@ -178,7 +178,7 @@ function mission(model: MissionModel): Mission | null {
   const now = Date.now();
   return {
     id: MISSION_ID, title: TITLE, workspace_id: PLACE.project, project: PLACE.label, checkout_path: `/work/${PLACE.project}`, device_id: "local",
-    status: "running", scope: "pr", cap: 2,
+    status: "running", scope: "pr", cap: 2, exempt: false, checkers: null,
     // No session: this practice keeps no record to open.
     conductor: { pane_id: CONDUCTOR, name: TITLE, agent_kind: "claude", session: null, present: true, takes_answers: true },
     nodes: nodes(model), merge_order: ["config", "backoff"], check: "pnpm test", github: "practice-bot",

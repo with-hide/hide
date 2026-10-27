@@ -71,6 +71,20 @@ impl ChangeNotifier {
     pub(crate) fn noop() -> Self {
         Self::new()
     }
+
+    /// A notifier that runs `callback` on every announcement, as though
+    /// each were read at once: for a test that waits for a worker's change
+    /// rather than for time.
+    #[cfg(test)]
+    pub(crate) fn announcing(callback: impl Fn() + Send + Sync + 'static) -> Self {
+        let notifier = Self::new();
+        let announced = Arc::clone(&notifier.announced);
+        notifier.set_callback(Some(Arc::new(move || {
+            announced.store(false, Ordering::Release);
+            callback();
+        })));
+        notifier
+    }
 }
 
 pub struct Core {

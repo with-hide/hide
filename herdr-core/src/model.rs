@@ -8352,10 +8352,18 @@ mod wire_enum_tests {
             }
             assert_wire(&contract, "mission_scope", &scopes);
             checked.insert("mission_scope");
-            let kinds = [NodeKind::Change, NodeKind::Research, NodeKind::Verify];
+            let kinds = [
+                NodeKind::Change,
+                NodeKind::Research,
+                NodeKind::Verify,
+                NodeKind::External,
+            ];
             for variant in kinds {
                 match variant {
-                    NodeKind::Change | NodeKind::Research | NodeKind::Verify => {}
+                    NodeKind::Change
+                    | NodeKind::Research
+                    | NodeKind::Verify
+                    | NodeKind::External => {}
                 }
             }
             assert_wire(&contract, "mission_node_kind", &kinds);
@@ -8411,6 +8419,59 @@ mod wire_enum_tests {
             }
             assert_wire(&contract, "mission_verdict", &verdicts);
             checked.insert("mission_verdict");
+            use crate::mission_criteria::{CriterionKind, CriterionState, Role, Rule};
+            let criterion_kinds = [
+                CriterionKind::Own,
+                CriterionKind::Check,
+                CriterionKind::Ci,
+                CriterionKind::Review,
+                CriterionKind::Verify,
+                CriterionKind::Defect,
+            ];
+            for variant in criterion_kinds {
+                match variant {
+                    CriterionKind::Own
+                    | CriterionKind::Check
+                    | CriterionKind::Ci
+                    | CriterionKind::Review
+                    | CriterionKind::Verify
+                    | CriterionKind::Defect => {}
+                }
+            }
+            assert_wire(&contract, "mission_criterion_kind", &criterion_kinds);
+            checked.insert("mission_criterion_kind");
+            let criterion_states = [
+                CriterionState::Open,
+                CriterionState::Pass,
+                CriterionState::Fail,
+                CriterionState::Skipped,
+            ];
+            for variant in criterion_states {
+                match variant {
+                    CriterionState::Open
+                    | CriterionState::Pass
+                    | CriterionState::Fail
+                    | CriterionState::Skipped => {}
+                }
+            }
+            assert_wire(&contract, "mission_criterion_state", &criterion_states);
+            checked.insert("mission_criterion_state");
+            let rules = [Rule::All, Rule::Majority];
+            for variant in rules {
+                match variant {
+                    Rule::All | Rule::Majority => {}
+                }
+            }
+            assert_wire(&contract, "mission_check_rule", &rules);
+            checked.insert("mission_check_rule");
+            let roles = [Role::Worker, Role::Checker, Role::Conductor, Role::Hide];
+            for variant in roles {
+                match variant {
+                    Role::Worker | Role::Checker | Role::Conductor | Role::Hide => {}
+                }
+            }
+            assert_wire(&contract, "mission_recorded_role", &roles);
+            checked.insert("mission_recorded_role");
             use crate::runtime::missions::AnswerState;
             let states = [
                 AnswerState::Sending,
@@ -8443,6 +8504,8 @@ mod wire_enum_tests {
                 EventKind::AnswerUnconfirmed,
                 EventKind::Reported,
                 EventKind::Cancelled,
+                EventKind::Skipped,
+                EventKind::Reopened,
             ];
             for variant in kinds {
                 match variant {
@@ -8458,7 +8521,9 @@ mod wire_enum_tests {
                     | EventKind::AnswerUndelivered
                     | EventKind::AnswerUnconfirmed
                     | EventKind::Reported
-                    | EventKind::Cancelled => {}
+                    | EventKind::Cancelled
+                    | EventKind::Skipped
+                    | EventKind::Reopened => {}
                 }
             }
             assert_wire(&contract, "mission_event_kind", &kinds);

@@ -67,8 +67,33 @@ pub struct MissionWork {
     pub node: String,
     /// `pr` or `merge`: a `pr` mission's worker never merges (D-15).
     pub scope: String,
-    /// The node's finish rule, or its title when it has none.
+    /// The node's own criteria, or its title when it has none.
     pub range: String,
+    /// `worker`, or `checker` for an agent bound to one of the node's
+    /// reviews or verifications (PRD mission-map-git-criteria B5). A
+    /// summary from before checkers is a worker's.
+    #[serde(default = "worker_role")]
+    pub role: String,
+    /// The checker's line, `review` or `verify`.
+    #[serde(default)]
+    pub line: Option<String>,
+    /// How far the node's finish lines are (B22); none for a mission made
+    /// before them, or a summary from a core before them.
+    #[serde(default)]
+    pub criteria: Option<CriteriaLeft>,
+}
+
+fn worker_role() -> String {
+    "worker".to_owned()
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CriteriaLeft {
+    pub met: u32,
+    pub total: u32,
+    /// The keys of the lines left, in the node's order.
+    pub left: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -80,6 +105,10 @@ pub struct ConductorWork {
     pub working: u32,
     pub letters: u32,
     pub decision: bool,
+    /// The nodes whose worker reported them done while lines are left
+    /// (B22); none in a summary from a core before them.
+    #[serde(default)]
+    pub unmet: Vec<String>,
 }
 
 impl PlanContext {
@@ -194,25 +223,65 @@ pub fn hint(context: &PlanContext, now: u64) -> Option<String> {
         }
     }
     if let Some(work) = &context.mission {
-        let mut line = format!(
-            "Mission {} · node {} · range {}",
-            work.mission, work.node, work.range
-        );
+        let checker = work.role == "checker";
+        let mut line = if checker {
+            format!(
+                "Mission {} · checking node {} ({}) · range {}",
+                work.mission,
+                work.node,
+                work.line.as_deref().unwrap_or("review"),
+                work.range
+            )
+        } else {
+            format!(
+                "Mission {} · node {} · range {}",
+                work.mission, work.node, work.range
+            )
+        };
+        if let Some(criteria) = &work.criteria {
+            line.push_str(&format!(" · criteria {}/{}", criteria.met, criteria.total));
+            if !criteria.left.is_empty() {
+                line.push_str(&format!(" · left: {}", criteria.left.join(", ")));
+            }
+        }
         if work.scope == "pr" {
             line.push_str(" · no merging");
         }
         line.push_str(" · no starting agents");
         lines.push(line);
+        if checker {
+            lines.push(format!(
+                "Record your verdict with `hide mission record {} {} --pass|--fail --evidence <one line>`.",
+                work.node,
+                work.line.as_deref().unwrap_or("review")
+            ));
+        } else if work
+            .criteria
+            .as_ref()
+            .is_some_and(|criteria| !criteria.left.is_empty())
+        {
+            lines.push(format!(
+                "Record each of your lines when it is done: `hide mission record {} <line> --pass|--fail --evidence <one line>`, the check line with `--commit <sha>` it ran on.",
+                work.node
+            ));
+        }
     }
     if let Some(conductor) = &context.conductor {
-        lines.push(format!(
+        let mut line = format!(
             "Mission {}/{} · working {} · letters {} · decision waiting: {}",
             conductor.done,
             conductor.nodes,
             conductor.working,
             conductor.letters,
             if conductor.decision { "yes" } else { "no" }
-        ));
+        );
+        if !conductor.unmet.is_empty() {
+            line.push_str(&format!(
+                " · reported with lines left: {}",
+                conductor.unmet.join(", ")
+            ));
+        }
+        lines.push(line);
     }
     (!lines.is_empty()).then(|| lines.join("\n"))
 }
@@ -442,6 +511,9 @@ mod tests {
                 node: "core".into(),
                 scope: scope.into(),
                 range: "up to the PR".into(),
+                role: "worker".into(),
+                line: None,
+                criteria: None,
             }),
             ..PlanContext::default()
         };
@@ -535,5 +607,45 @@ mod tests {
         assert_eq!(read(home.path(), "w1:p2", None), Some(context));
         assert_eq!(read(home.path(), "w1:p2", Some("session-b")), None);
         assert_eq!(read(home.path(), "w9:p9", None), None);
+    }
+
+    /// A summary from a core before node criteria, as its letter pull sent
+    /// it and as the hook saved it then, still reads, with the same lines:
+    /// a worker's without criteria, a Conductor's with no node listed.
+    #[test]
+    fn a_summary_from_before_node_criteria_still_reads_and_hints_as_before() {
+        let worker = serde_json::json!({"plan": null, "mission": {"mission": "mission-3", "node": "core", "scope": "pr", "range": "up to the PR; the operator merges"}, "conductor": null});
+        let conductor = serde_json::json!({"plan": null, "mission": null, "conductor": {"mission": "mission-3", "done": 2, "nodes": 5, "working": 2, "letters": 1, "decision": true}});
+        let read_worker: PlanContext = serde_json::from_value(worker.clone()).unwrap();
+        let work = read_worker.mission.as_ref().unwrap();
+        assert_eq!(
+            (work.role.as_str(), &work.line, &work.criteria),
+            ("worker", &None, &None)
+        );
+        assert_eq!(
+            hint(&read_worker, 0).as_deref(),
+            Some(
+                "Mission mission-3 · node core · range up to the PR; the operator merges · no merging · no starting agents"
+            )
+        );
+        let read_conductor: PlanContext = serde_json::from_value(conductor.clone()).unwrap();
+        assert_eq!(
+            read_conductor.conductor.as_ref().unwrap().unmet,
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            hint(&read_conductor, 0).as_deref(),
+            Some("Mission 2/5 · working 2 · letters 1 · decision waiting: yes")
+        );
+        // The record the hook wrote before the change.
+        let home = tempfile::tempdir().unwrap();
+        let path = record_path(home.path(), "w1:p2");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let saved = serde_json::json!({"version": 1, "session": "session-a", "context": worker});
+        std::fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
+        assert_eq!(
+            read(home.path(), "w1:p2", Some("session-a")),
+            Some(read_worker)
+        );
     }
 }

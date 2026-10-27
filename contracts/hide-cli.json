@@ -2665,7 +2665,11 @@
                 "mission_too_many_nodes",
                 "mission_node_in_progress",
                 "mission_dependency_unknown",
-                "mission_dependency_cycle"
+                "mission_dependency_cycle",
+                "mission_criteria_missing",
+                "mission_criteria_too_many",
+                "mission_checkers_invalid",
+                "mission_external_invalid"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -2797,6 +2801,43 @@
                 },
                 {
                     "conflicts": [
+                        "--no-commit"
+                    ],
+                    "name": "--commit",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "commit"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--no-verdict"
+                    ],
+                    "name": "--verdict",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "one_of",
+                        "values": [
+                            "pass",
+                            "fail"
+                        ]
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--no-checks"
+                    ],
+                    "name": "--checks",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "ratio"
+                    }
+                },
+                {
+                    "conflicts": [
                         "--agent-id"
                     ],
                     "name": "--no-agent-id",
@@ -2857,12 +2898,244 @@
                     "required": false,
                     "requires": [],
                     "value": null
+                },
+                {
+                    "conflicts": [
+                        "--commit"
+                    ],
+                    "name": "--no-commit",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--verdict"
+                    ],
+                    "name": "--no-verdict",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--checks"
+                    ],
+                    "name": "--no-checks",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--reviewer",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "name": "--verifier",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
                 }
             ],
             "refusals": [
                 "mission_node_unknown",
                 "mission_not_conductor",
+                "mission_closed",
+                "mission_criteria_unmet",
+                "mission_checker_is_worker",
+                "mission_checker_unknown",
+                "mission_external_invalid"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "mission"
+            ],
+            "arguments": [
+                {
+                    "name": "node",
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "name": "line",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "mission record",
+            "options": [
+                {
+                    "name": "--mission",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--fail"
+                    ],
+                    "name": "--pass",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--pass"
+                    ],
+                    "name": "--fail",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--evidence",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--commit",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "commit"
+                    }
+                },
+                {
+                    "name": "--rerun",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "mission_node_unknown",
+                "mission_criterion_unknown",
+                "mission_criterion_not_yours",
+                "mission_commit_required",
+                "mission_rerun_spent",
+                "mission_evidence_missing",
+                "mission_checkout_unknown",
                 "mission_closed"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "mission"
+            ],
+            "arguments": [
+                {
+                    "name": "node",
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "name": "line",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "mission skip",
+            "options": [
+                {
+                    "name": "--mission",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "name": "--reason",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--decision",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "unsigned"
+                    }
+                }
+            ],
+            "refusals": [
+                "mission_not_conductor",
+                "mission_node_unknown",
+                "mission_criterion_unknown",
+                "mission_skip_reason_missing",
+                "mission_criteria_protected"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "mission"
+            ],
+            "arguments": [
+                {
+                    "name": "node",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "mission defect",
+            "options": [
+                {
+                    "name": "--mission",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "name": "--found-by",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "name": "--line",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "refusals": [
+                "mission_not_conductor",
+                "mission_node_unknown",
+                "mission_external_invalid",
+                "mission_defects_too_many"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -2920,6 +3193,38 @@
                     "required": false,
                     "requires": [],
                     "value": null
+                },
+                {
+                    "name": "--why",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--option",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--recommend",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "unsigned"
+                    }
+                },
+                {
+                    "name": "--node",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
                 }
             ],
             "repeats_at_most": null,
@@ -3014,6 +3319,12 @@
                         "type": "text"
                     }
                 }
+            ],
+            "refusals": [
+                "mission_nodes_unfinished",
+                "mission_criteria_unmet",
+                "mission_not_started",
+                "mission_cancelled"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -3241,7 +3552,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:91d3932f4f088b320c36963f95ce04367755cafd82fcff623e81ba63c5080c85",
+    "digest": "sha256:9db7ce70a44ed0a353af82488c17df213d261abb0b1e4349bdf8bee388bc6077",
     "envelopes": {
         "agent": {
             "answer": "value",
@@ -3288,9 +3599,11 @@
     "value_types": {
         "approval": "not blank, at most 256 bytes, no control characters",
         "body": "not blank, at most 16384 bytes",
+        "commit": "7 to 64 hexadecimal digits",
         "json": "a JSON document of the shape hide mission help or hide plan help shows",
         "key": "non-empty, at most 256 bytes, no control characters, does not start with -",
         "one_of": "one of the listed values",
+        "ratio": "two decimal integers as <passed>/<total>, such as 6/6",
         "session": "non-empty, at most 4096 bytes, no control characters, does not start with -",
         "text": "non-empty, no control characters, does not start with --",
         "unsigned": "a decimal integer from 0 to 18446744073709551615"

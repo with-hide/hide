@@ -13,12 +13,13 @@ use serde_json::{Value, json};
 
 use super::Runtime;
 use crate::delivery::Actor;
+use crate::mission_criteria::{CheckKind, Criterion, CriterionState};
 use crate::mission_events::History;
 use crate::missions::{
-    AnswerFailure, Blocked, Checks, Conductor, ConductorSettings, Delivery, MISSION_LIMIT, Mission,
-    MissionBook, MissionCommand, MissionEnd, MissionNode, MissionScope, MissionStatus, NodeKind,
-    NodeStatus, PENDING_WAKE_LIMIT, PendingWake, PrSeen, Question, Restored, Verdict, WakeEvent,
-    Worker,
+    AnswerFailure, Blocked, Checks, Conductor, ConductorSettings, Delivery, External,
+    MISSION_LIMIT, Mission, MissionBook, MissionCommand, MissionEnd, MissionNode, MissionScope,
+    MissionStatus, NodeKind, NodeStatus, PENDING_WAKE_LIMIT, PendingWake, PrSeen, Question,
+    Restored, Verdict, WakeEvent, Worker,
 };
 use crate::model::{DetailItem, PrState, PullRequestBadge, ReviewDecision};
 use crate::workspace_control::{Caller, Context, Query};
@@ -52,6 +53,13 @@ pub struct MissionView {
     pub status: MissionStatus,
     pub scope: MissionScope,
     pub cap: u8,
+    /// Made before node criteria: its nodes show their sentence only and
+    /// nothing is gated (PRD mission-map-git-criteria B23).
+    pub exempt: bool,
+    /// Settings › Conductor's review and verify defaults as they were when
+    /// the mission was created, which its plan follows (D-22, B36); none
+    /// for a mission from before them.
+    pub checkers: Option<crate::missions::CheckerDefaults>,
     pub conductor: ConductorView,
     pub nodes: Vec<NodeView>,
     pub merge_order: Vec<String>,
@@ -146,10 +154,28 @@ pub struct NodeView {
     pub line: Option<String>,
     pub change: Option<String>,
     pub review: Option<String>,
-    pub criteria: Option<String>,
+    /// The node's finish lines as they stand now: a check command passed on
+    /// an older commit shows open (B7, B32).
+    pub criteria: Vec<Criterion>,
+    /// Lines that pass or were skipped, of `criteria`, which is what the
+    /// gate counts, and how many were skipped; B28's `기준 n/m ⤳k` shows
+    /// `criteria_met - criteria_skipped` as `n`.
+    pub criteria_met: u32,
+    pub criteria_skipped: u32,
+    pub external: Option<External>,
+    /// An outside node Hide could not read: it stays waiting, and the
+    /// reason is in the diagnostic log (B20 `확인 못 함`).
+    pub unread: bool,
+    /// How often a later node's defect opened it again (B21 `↻n`).
+    pub reopened: u8,
     pub started_at_unix_ms: Option<u64>,
     pub finished_at_unix_ms: Option<u64>,
     pub commit: Option<String>,
+    /// The commit of the node's branch Hide read in main for a mission
+    /// waiting on its branches, while that read stands (B17 `→ main
+    /// <sha7>`); `commit` is what the Conductor recorded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub in_main: Option<String>,
     pub verdict: Option<Verdict>,
     pub checks: Option<Checks>,
     /// The worker's own plan (PRD hide-plan D-17, D-18): the value its pane's
@@ -214,6 +240,8 @@ pub(crate) struct MissionRuntime {
     pub(crate) answer_absent_since: HashMap<String, u64>,
     /// The mission and events edit the published events were made from.
     pub(crate) events_made: (Option<String>, u64),
+    /// The outside nodes' reads (B19, B20).
+    pub(super) outside: super::mission_outside::Outside,
 }
 
 #[derive(Default)]
@@ -236,19 +264,36 @@ struct ViewsMadeFrom {
 }
 
 /// Every pull request the mission still stands behind is merged or closed,
-/// as GitHub last answered: a node that failed or was dropped is out of its
-/// stack, and a mission with no pull request has none to wait on.
+/// as GitHub last answered, and every direct change's branch is in main, as
+/// Hide last read it off the lock (B18, `mission_outside`): a node that
+/// failed or was dropped is out of its stack, and a mission with neither has
+/// nothing to wait on.
 fn stack_settled(mission: &Mission) -> bool {
     mission
         .nodes
         .iter()
         .filter(|node| !matches!(node.status, NodeStatus::Dropped | NodeStatus::Failed))
-        .filter(|node| node.pr.is_some())
-        .all(|node| {
-            node.pr_seen
+        .all(|node| match node.pr {
+            Some(_) => node
+                .pr_seen
                 .as_ref()
-                .is_some_and(|seen| seen.merged || seen.closed)
+                .is_some_and(|seen| seen.merged || seen.closed),
+            None => !lands_by_branch(node) || landed(node).is_some(),
         })
+}
+
+/// The commit Hide read in main for the branch the node names now, while
+/// that read stands (B17 `→ main <sha7>`).
+pub(super) fn landed(node: &crate::missions::MissionNode) -> Option<&str> {
+    node.in_main
+        .as_ref()
+        .filter(|landed| node.branch.as_deref() == Some(landed.branch.as_str()))
+        .map(|landed| landed.commit.as_str())
+}
+
+/// A change that reaches main as its branch, with no pull request.
+pub(super) fn lands_by_branch(node: &crate::missions::MissionNode) -> bool {
+    node.kind == NodeKind::Change && node.delivery == Some(Delivery::Direct) && node.pr.is_none()
 }
 
 fn seen_of(pull: &crate::model::PullRequestSnapshot) -> PrSeen {
@@ -258,6 +303,40 @@ fn seen_of(pull: &crate::model::PullRequestSnapshot) -> PrSeen {
         changes_requested: pull.review == Some(ReviewDecision::ChangesRequested),
         closed: pull.badge == PullRequestBadge::Closed,
     }
+}
+
+/// What a Conductor woken about a pull request of its own does.
+const PR_ACT: &str =
+    "move a stacked PR above it onto the change, answer the review, or check the new commit";
+
+/// Records one wake for `mission`'s Conductor and returns its letter's
+/// intent; past `PENDING_WAKE_LIMIT` the oldest are dropped, and logged.
+pub(super) fn record_wake(
+    mission: &mut Mission,
+    node: String,
+    pr: Option<u32>,
+    event: WakeEvent,
+    head: Option<String>,
+) -> String {
+    mission.wake_seq += 1;
+    let wake = PendingWake {
+        seq: mission.wake_seq,
+        node,
+        pr,
+        event,
+        head,
+    };
+    let intent = wake_intent(mission, &wake);
+    mission.wakes.push(wake);
+    if mission.wakes.len() > PENDING_WAKE_LIMIT {
+        let dropped = mission.wakes.len() - PENDING_WAKE_LIMIT;
+        mission.wakes.drain(..dropped);
+        crate::diagnostic!(json!({
+            "component": "missions", "kind": "mission.wake_dropped",
+            "mission": mission.id, "count": dropped, "cap": PENDING_WAKE_LIMIT,
+        }));
+    }
+    intent
 }
 
 /// The letter intent of one recorded wake to the mission's Conductor now:
@@ -271,7 +350,8 @@ fn wake_intent(mission: &Mission, wake: &PendingWake) -> String {
         "mission:{}:{}:{}:{}:{}:{}:{}",
         mission.id,
         wake.node,
-        wake.pr,
+        wake.pr
+            .map_or_else(|| "-".to_owned(), |number| number.to_string()),
         wake.event.as_str(),
         // `seq` makes the intent unique; a short head keeps it readable
         // and under the intent's length limit.
@@ -307,6 +387,47 @@ impl Runtime {
         }
         self.missions.store = Some(store);
         self.missions.book_edit = self.missions.book_edit.wrapping_add(1);
+    }
+
+    /// Follows mission `id`'s outside nodes and waiting branches now, for a
+    /// command that changed what is followed.
+    fn follow_mission_outside(&mut self, id: &str) -> bool {
+        let Some(mission) = self.missions.book.get(id) else {
+            return false;
+        };
+        let (device, project) = (mission.device_id.clone(), mission.project.clone());
+        self.follow_outside_stored(&device, &project)
+    }
+
+    /// Closes mission `id`, waiting for its merges, as done once its stack
+    /// is in main and every done node's lines still hold (B10, B18, B41);
+    /// whether it closed.
+    pub(super) fn close_if_landed(&mut self, id: &str, now: u64) -> bool {
+        let Some(mission) = self.missions.book.get(id) else {
+            return false;
+        };
+        if mission.status != MissionStatus::MergeWait
+            || !stack_settled(mission)
+            || self
+                .close_held(mission, self.mission_pulls(mission))
+                .is_some()
+        {
+            return false;
+        }
+        let Some(mission) = self.missions.book.get_mut(id) else {
+            return false;
+        };
+        mission.status = MissionStatus::Done;
+        mission.closed_at_unix_ms = Some(now);
+        mission.updated_at_unix_ms = now;
+        let events = super::mission_events::end_decision(mission, now);
+        crate::diagnostic!(json!({
+            "component": "missions", "kind": "mission.closed_by_branches", "mission": id,
+        }));
+        self.missions.answers_held.remove(id);
+        self.save_missions();
+        self.record_mission_events(id, events);
+        true
     }
 
     /// The pull request lists the missions' maps read were replaced.
@@ -453,6 +574,9 @@ impl Runtime {
                     scope: scope.unwrap_or(settings.default_scope),
                     cap,
                     candidates: settings.candidates.clone(),
+                    checkers: Some(settings.checkers.clone()),
+                    exempt: false,
+                    decided: Vec::new(),
                     nodes: Vec::new(),
                     merge_order: Vec::new(),
                     check: None,
@@ -499,6 +623,9 @@ impl Runtime {
                 *self.missions.book.get_mut(&id).ok_or("mission_unknown")? = next;
                 self.save_missions();
                 self.record_mission_events(&id, events);
+                // The plan's outside nodes are read now, not at the next
+                // GitHub read or fetch.
+                self.follow_mission_outside(&id);
                 Ok((
                     json!({"mission": self.mission_view_of(&id), "overlaps": overlaps}),
                     true,
@@ -516,7 +643,32 @@ impl Runtime {
                     .iter()
                     .position(|row| row.key == node)
                     .ok_or("mission_node_unknown")?;
-                let mut next = crate::missions::apply_patch(&current.nodes[index], &patch, now)?;
+                let mut bound = current.nodes[index].clone();
+                for (kind, checker) in [
+                    (CheckKind::Review, &patch.reviewer),
+                    (CheckKind::Verify, &patch.verifier),
+                ] {
+                    if let Some(checker) = checker {
+                        bound = self.bind_checker(&bound, kind, checker)?;
+                    }
+                }
+                // A node's checker never becomes its worker (B4).
+                if let Some(Some(worker)) = &patch.agent_id
+                    && Self::checks_node(&bound, worker)
+                {
+                    return Err(crate::coordination::refusal(
+                        "mission_checker_is_worker",
+                        &node,
+                    ));
+                }
+                let mut next = self.prospective_node(current, &bound, &patch, now)?;
+                // Done is held against the node as this command leaves it:
+                // a done set now, or a done node given another pull request
+                // or worker (B9).
+                let subject_moved = next.pr != bound.pr || next.agent_id != bound.agent_id;
+                if patch.status == Some(NodeStatus::Done) || subject_moved {
+                    self.gate_node_done(current, &next)?;
+                }
                 // A pull request named now starts its wakes from what GitHub
                 // says of it now, so its first change after this one wakes.
                 if next.pr != current.nodes[index].pr
@@ -524,14 +676,26 @@ impl Runtime {
                 {
                     next.pr_seen = self.pull_seen(&current.device_id, &current.project, number);
                 }
+                let landing = lands_by_branch(&next) && next.status == NodeStatus::Done;
                 let target = self.missions.book.get_mut(&id).ok_or("mission_unknown")?;
                 let changed = target.nodes[index] != next;
                 let events = super::mission_events::node_events(&target.nodes[index], &next, now);
                 target.nodes[index] = next;
+                // A waiting mission's node named another branch or finished
+                // again, or a direct change finished or moved to another
+                // branch while its mission runs: its branches are read now.
+                let follow = match target.status {
+                    MissionStatus::MergeWait => true,
+                    MissionStatus::Running => landing,
+                    _ => false,
+                };
                 if changed {
                     target.updated_at_unix_ms = now;
                     self.save_missions();
                     self.record_mission_events(&id, events);
+                    if follow {
+                        self.follow_mission_outside(&id);
+                    }
                 }
                 Ok((json!({"mission": self.mission_view_of(&id)}), changed))
             }
@@ -547,6 +711,7 @@ impl Runtime {
                     target.started_at_unix_ms = Some(now);
                     target.updated_at_unix_ms = now;
                     self.save_missions();
+                    self.follow_mission_outside(&id);
                 }
                 Ok((json!({"mission": self.mission_view_of(&id)}), changed))
             }
@@ -572,6 +737,10 @@ impl Runtime {
                 report,
             } => {
                 let id = self.conducted_mission(&actor, mission.as_deref(), false)?;
+                let current = self.missions.book.get(&id).ok_or("mission_unknown")?;
+                if current.status != MissionStatus::Cancelled {
+                    self.gate_close(current, end)?;
+                }
                 let target = self.missions.book.get_mut(&id).ok_or("mission_unknown")?;
                 let status = match (target.status, end) {
                     (MissionStatus::Cancelled, _) => return Err("mission_cancelled".into()),
@@ -610,8 +779,13 @@ impl Runtime {
                     "component": "missions", "kind": "mission.closed",
                     "mission": id, "end": status,
                 }));
+                let place = (target.device_id.clone(), target.project.clone());
                 self.save_missions();
                 self.record_mission_events(&id, events);
+                // A mission now waiting for its branches reads them at once.
+                if status == MissionStatus::MergeWait {
+                    self.follow_outside_stored(&place.0, &place.1);
+                }
                 Ok((json!({"mission": self.mission_view_of(&id)}), changed))
             }
             MissionCommand::Reopen { mission } => {
@@ -619,8 +793,48 @@ impl Runtime {
                 let changed = self.reopen_mission(&id, now)?;
                 if changed {
                     self.save_missions();
+                    self.follow_mission_outside(&id);
                 }
                 Ok((json!({"mission": self.mission_view_of(&id)}), changed))
+            }
+            MissionCommand::Record {
+                mission,
+                node,
+                line,
+                pass,
+                evidence,
+                commit,
+                rerun,
+            } => self.record_criterion(
+                &actor,
+                mission.as_deref(),
+                &node,
+                &line,
+                (pass, evidence, commit, rerun),
+                now,
+            ),
+            MissionCommand::Skip {
+                mission,
+                node,
+                line,
+                reason,
+                decision,
+            } => self.skip_criterion(
+                &actor,
+                mission.as_deref(),
+                &node,
+                &line,
+                (reason, decision),
+                now,
+            ),
+            MissionCommand::Defect {
+                mission,
+                node,
+                found_by,
+                line,
+            } => {
+                let id = self.conducted_mission(&actor, mission.as_deref(), true)?;
+                self.add_mission_defect(&actor, &id, &node, (found_by, line), now)
             }
             MissionCommand::Take { mission } => {
                 let target = self.missions.book.get(&mission).ok_or("mission_unknown")?;
@@ -767,9 +981,15 @@ impl Runtime {
         {
             return Err("mission_already_conducting".into());
         }
+        // Work reopened can go on the same branches, so what was read in
+        // main, or is being read now, is read again (B17).
+        self.missions.outside.reopened(id, &self.missions.book);
         let target = self.missions.book.get_mut(id).ok_or("mission_unknown")?;
         target.status = MissionStatus::Running;
         target.closed_at_unix_ms = None;
+        for node in &mut target.nodes {
+            node.in_main = None;
+        }
         target.updated_at_unix_ms = now;
         Ok(true)
     }
@@ -1005,6 +1225,36 @@ impl Runtime {
             if project.status.stale || !project.pull_requests_read {
                 continue;
             }
+            let (ci_changed, spent) = super::mission_criteria::read_mission_ci(
+                &mut self.missions.book.missions[index],
+                project,
+                now,
+            );
+            if ci_changed {
+                changed = true;
+                let mission = &mut self.missions.book.missions[index];
+                let mut moved = Vec::new();
+                for at in spent {
+                    // A CI failing again on the head its rerun was for sends
+                    // the node back to work (B13).
+                    let node = &mission.nodes[at];
+                    if !super::mission_criteria::back_to_work(node.status) {
+                        continue;
+                    }
+                    let patch = crate::missions::NodePatch {
+                        status: Some(NodeStatus::Working),
+                        ..crate::missions::NodePatch::default()
+                    };
+                    if let Ok(next) = crate::missions::apply_patch(node, &patch, now) {
+                        moved.extend(super::mission_events::node_events(node, &next, now));
+                        mission.nodes[at] = next;
+                    }
+                }
+                mission.updated_at_unix_ms = now;
+                let id = mission.id.clone();
+                self.record_mission_events(&id, moved);
+            }
+            let mission = &self.missions.book.missions[index];
             let mut events = Vec::new();
             let mut merged = Vec::new();
             let mut seen_updates = Vec::new();
@@ -1052,10 +1302,12 @@ impl Runtime {
             }
             // With nothing new from GitHub, the last answers still decide a
             // waiting stack, as when it was merged before the wait began.
-            if seen_updates.is_empty()
-                && events.is_empty()
-                && !(mission.status == MissionStatus::MergeWait && stack_settled(mission))
-            {
+            let closes = |runtime: &Self, mission: &Mission| {
+                mission.status == MissionStatus::MergeWait
+                    && stack_settled(mission)
+                    && runtime.close_held(mission, Some(project)).is_none()
+            };
+            if seen_updates.is_empty() && events.is_empty() && !closes(self, mission) {
                 continue;
             }
             changed = true;
@@ -1084,8 +1336,12 @@ impl Runtime {
             }
             // A mission waiting on the operator's merges is done once every
             // pull request of its stack is merged, whether or not a Conductor
-            // is there to say so (B41).
-            if mission.status == MissionStatus::MergeWait && stack_settled(mission) {
+            // is there to say so (B41), and only while every done node's
+            // lines still hold (B10): a commit no check ran on keeps it
+            // waiting, for its Conductor to see.
+            let closes = closes(self, &self.missions.book.missions[index]);
+            let mission = &mut self.missions.book.missions[index];
+            if closes {
                 mission.status = MissionStatus::Done;
                 mission.closed_at_unix_ms = Some(now);
                 mission.updated_at_unix_ms = now;
@@ -1104,24 +1360,7 @@ impl Runtime {
                 reopened.push(mission.id.clone());
             }
             for (node, pr, event, head) in events {
-                mission.wake_seq += 1;
-                let wake = PendingWake {
-                    seq: mission.wake_seq,
-                    node,
-                    pr,
-                    event,
-                    head,
-                };
-                recorded.push(wake_intent(mission, &wake));
-                mission.wakes.push(wake);
-            }
-            if mission.wakes.len() > PENDING_WAKE_LIMIT {
-                let dropped = mission.wakes.len() - PENDING_WAKE_LIMIT;
-                mission.wakes.drain(..dropped);
-                crate::diagnostic!(json!({
-                    "component": "missions", "kind": "mission.wake_dropped",
-                    "mission": mission.id, "count": dropped, "cap": PENDING_WAKE_LIMIT,
-                }));
+                recorded.push(record_wake(mission, node, Some(pr), event, head));
             }
         }
         for (id, events) in ended {
@@ -1139,6 +1378,10 @@ impl Runtime {
         }
         if changed {
             self.save_missions();
+        }
+        // The outside nodes follow the same answer (B19, B20).
+        for project in self.outside_projects(device) {
+            self.follow_outside_listed(device, &project, github.project(&project));
         }
         self.flush_mission_wakes();
         recorded
@@ -1170,13 +1413,32 @@ impl Runtime {
                 if out.len() >= WAKE_QUEUE_LIMIT {
                     return out;
                 }
-                let number = wake.pr;
-                let what = match wake.event {
-                    WakeEvent::Merged => format!("PR #{number} was merged"),
+                let pr = wake
+                    .pr
+                    .map_or_else(|| "The PR".to_owned(), |number| format!("PR #{number}"));
+                let outside = || match mission
+                    .nodes
+                    .iter()
+                    .find(|node| node.key == wake.node)
+                    .and_then(|node| node.external.as_ref())
+                {
+                    Some(External::Branch(branch)) => format!("Branch {branch}"),
+                    _ => pr.clone(),
+                };
+                let (what, act) = match wake.event {
+                    WakeEvent::Merged => (format!("{pr} was merged"), PR_ACT),
                     WakeEvent::ChangesRequested => {
-                        format!("PR #{number} received a review asking for changes")
+                        (format!("{pr} received a review asking for changes"), PR_ACT)
                     }
-                    WakeEvent::NewHead => format!("PR #{number} has a new commit"),
+                    WakeEvent::NewHead => (format!("{pr} has a new commit"), PR_ACT),
+                    WakeEvent::OutsideDone => (
+                        format!("{} is in main", outside()),
+                        "start the nodes that waited on it",
+                    ),
+                    WakeEvent::OutsideFailed => (
+                        format!("{} was closed without a merge", outside()),
+                        "replan the nodes it blocks, or ask the operator",
+                    ),
                 };
                 out.push(Wake {
                     mission: mission.id.clone(),
@@ -1184,7 +1446,7 @@ impl Runtime {
                     target: target.clone(),
                     intent,
                     body: format!(
-                        "{what} (mission {} \"{}\", node {}).\nRead the mission with `hide mission show {}` and act on it: move a stacked PR above it onto the change, answer the review, or check the new commit.",
+                        "{what} (mission {} \"{}\", node {}).\nRead the mission with `hide mission show {}` and act on it: {act}.",
                         mission.id, mission.title, wake.node, mission.id
                     ),
                 });
@@ -1328,7 +1590,7 @@ impl Runtime {
     }
 
     /// The view of one mission as the map draws it.
-    fn mission_view_of(&self, id: &str) -> Option<MissionView> {
+    pub(super) fn mission_view_of(&self, id: &str) -> Option<MissionView> {
         let mission = self.missions.book.get(id)?;
         let ledger = self.delivery_state().ok();
         let agents = worker_records(ledger.as_deref(), std::iter::once(mission));
@@ -1375,6 +1637,23 @@ impl Runtime {
                 });
                 let pr_state = pull
                     .map(|pull| PrState::of(pull.badge, pull.is_draft, pull.checks, pull.review));
+                let mut criteria: Vec<Criterion> = if node.criteria.is_empty() {
+                    Vec::new()
+                } else {
+                    self.shown_criteria(mission, node)
+                };
+                for checker in criteria.iter_mut().flat_map(|line| &mut line.checkers) {
+                    let record = checker.agent_id.as_deref().and_then(|id| agents.get(id));
+                    checker.pane_id = record.map(|record| record.pane.clone());
+                    checker.machine = record.map(|record| record.machine.clone());
+                }
+                let count = |pick: fn(CriterionState) -> bool| {
+                    u32::try_from(criteria.iter().filter(|line| pick(line.state)).count())
+                        .unwrap_or(u32::MAX)
+                };
+                let criteria_met =
+                    count(|state| matches!(state, CriterionState::Pass | CriterionState::Skipped));
+                let criteria_skipped = count(|state| state == CriterionState::Skipped);
                 NodeView {
                     key: node.key.clone(),
                     title: node.title.clone(),
@@ -1397,10 +1676,16 @@ impl Runtime {
                     line: node.line.clone(),
                     change: node.change.clone(),
                     review: node.review.clone(),
-                    criteria: node.criteria.clone(),
+                    criteria,
+                    criteria_met,
+                    criteria_skipped,
+                    external: node.external.clone(),
+                    unread: self.missions.outside.unread(&mission.id, &node.key),
+                    reopened: node.reopened,
                     started_at_unix_ms: node.started_at_unix_ms,
                     finished_at_unix_ms: node.finished_at_unix_ms,
                     commit: node.commit.clone(),
+                    in_main: landed(node).map(str::to_owned),
                     verdict: node.verdict,
                     checks: node.checks,
                     plan: record.and_then(|record| self.worker_plan(&record.machine, &record.pane)),
@@ -1424,6 +1709,8 @@ impl Runtime {
             status: mission.status,
             scope: mission.scope,
             cap: mission.cap,
+            exempt: mission.exempt,
+            checkers: mission.checkers.clone(),
             conductor: ConductorView {
                 pane_id: mission.conductor.actor.pane_id.clone(),
                 name: mission.conductor.actor.name.clone(),
@@ -1595,9 +1882,17 @@ fn worker_records<'a, 'm>(
     ledger: Option<&'a crate::delivery::ledger::Ledger>,
     missions: impl Iterator<Item = &'m Mission>,
 ) -> HashMap<&'a str, &'a crate::coordination::AgentRecord> {
+    // The nodes' workers and their bound checkers (B29).
     let wanted: std::collections::HashSet<&str> = missions
         .flat_map(|mission| &mission.nodes)
-        .filter_map(|node| node.agent_id.as_deref())
+        .flat_map(|node| {
+            node.agent_id.as_deref().into_iter().chain(
+                node.criteria
+                    .iter()
+                    .flat_map(|line| &line.checkers)
+                    .filter_map(|checker| checker.agent_id.as_deref()),
+            )
+        })
         .collect();
     let Some(ledger) = ledger.filter(|_| !wanted.is_empty()) else {
         return HashMap::new();

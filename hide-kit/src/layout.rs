@@ -174,6 +174,13 @@ pub fn missions(state_dir: &Path) -> PathBuf {
     state_dir.join("missions.json")
 }
 
+/// The schema 1 mission book as it was before its first conversion to
+/// node criteria, kept once so a downgrade can be restored by hand; its
+/// owner is the core's mission store.
+pub fn missions_before_criteria(state_dir: &Path) -> PathBuf {
+    state_dir.join("missions.v1.json")
+}
+
 /// The folder of each mission's event history, one file per mission, deleted
 /// with its mission; its owner is the core's mission event store.
 pub const MISSION_EVENTS: &str = "mission-events";

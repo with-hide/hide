@@ -471,8 +471,10 @@ pub fn read_project(
 /// entering with a known main worktree does not renew that time.
 ///
 /// The repository's default branch is the one GitHub names when this clone
-/// can resolve it, else what `origin/HEAD` names (PRD git-freshness D-07);
-/// the operator's chosen base, when it resolves, is measured against instead.
+/// can resolve it, else what `origin/HEAD` names (PRD git-freshness D-07),
+/// else, in a repository with no remote, the branch its main worktree has
+/// out; the operator's chosen base, when it resolves, is measured against
+/// instead.
 fn read_project_until(
     root: &Path,
     root_path: String,
@@ -484,9 +486,11 @@ fn read_project_until(
 ) -> RepositoryWorktrees {
     let remote_default =
         remote_default.filter(|branch| resolvable_base(root, branch, until).is_some());
-    let default_branch = remote_default
-        .map(str::to_owned)
-        .or_else(|| default_branch(root, until));
+    let (default_branch, default_source) = match remote_default {
+        Some(branch) => (Some(branch.to_owned()), "github"),
+        None => default_branch(root, until)
+            .map_or((None, "unknown"), |(branch, source)| (Some(branch), source)),
+    };
     let refs = Refs::read(root, until);
     let branches = refs.as_ref().map(Refs::branches).unwrap_or_default();
     let valid_override = base_override.filter(|base| resolvable_base(root, base, until).is_some());
@@ -504,12 +508,8 @@ fn read_project_until(
         });
     let base_source = if valid_override.is_some() {
         "specified"
-    } else if remote_default.is_some() {
-        "github"
-    } else if default_branch.is_some() {
-        "origin_head"
     } else {
-        "unknown"
+        default_source
     }
     .to_owned();
     let listed = match listed_worktrees(root, until) {
@@ -1490,12 +1490,17 @@ fn parse_left_right(output: &str) -> Option<(u32, u32)> {
     Some((left, right))
 }
 
-/// The repository's default branch is only what `origin/HEAD` names.
+/// The default branch the repository itself names, with where it was read:
+/// what `origin/HEAD` names, else, for a repository with no remote at all,
+/// the branch its main worktree has out
+/// (`hide_project::git::Repository::own_default_branch`).
 ///
-/// The main worktree's current branch is deliberately excluded: using it as
-/// a base would make a feature branch look like project policy and hide the
-/// very mismatch the migration action exists to explain.
-fn default_branch(root: &Path, until: Instant) -> Option<String> {
+/// A repository with a remote but no `origin/HEAD` has none: its main
+/// worktree's current branch is deliberately excluded there, since using it
+/// as a base would make a feature branch look like project policy and hide
+/// the very mismatch the migration action exists to explain. Without a
+/// remote the repository names its main nowhere else.
+fn default_branch(root: &Path, until: Instant) -> Option<(String, &'static str)> {
     if let Ok(output) = git_until(
         root,
         &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
@@ -1503,10 +1508,11 @@ fn default_branch(root: &Path, until: Instant) -> Option<String> {
     ) {
         let branch = output.trim().trim_start_matches("origin/").to_owned();
         if !branch.is_empty() {
-            return Some(branch);
+            return Some((branch, "origin_head"));
         }
     }
-    None
+    let branch = hide_project::git::discover(root)?.own_default_branch()?;
+    Some((branch, "repository"))
 }
 
 /// The repository's main working tree, which is what identifies a project.
