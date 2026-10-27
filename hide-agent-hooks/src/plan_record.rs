@@ -67,8 +67,25 @@ pub struct MissionWork {
     pub node: String,
     /// `pr` or `merge`: a `pr` mission's worker never merges (D-15).
     pub scope: String,
-    /// The node's finish rule, or its title when it has none.
+    /// The node's own criteria, or its title when it has none.
     pub range: String,
+    /// `worker`, or `checker` for an agent bound to one of the node's
+    /// reviews or verifications (PRD mission-map-git-criteria B5).
+    pub role: String,
+    /// The checker's line, `review` or `verify`.
+    pub line: Option<String>,
+    /// How far the node's finish lines are (B22); none for a mission made
+    /// before them.
+    pub criteria: Option<CriteriaLeft>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CriteriaLeft {
+    pub met: u32,
+    pub total: u32,
+    /// The keys of the lines left, in the node's order.
+    pub left: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -80,6 +97,8 @@ pub struct ConductorWork {
     pub working: u32,
     pub letters: u32,
     pub decision: bool,
+    /// The nodes whose worker reported them done while lines are left (B22).
+    pub unmet: Vec<String>,
 }
 
 impl PlanContext {
@@ -194,25 +213,65 @@ pub fn hint(context: &PlanContext, now: u64) -> Option<String> {
         }
     }
     if let Some(work) = &context.mission {
-        let mut line = format!(
-            "Mission {} · node {} · range {}",
-            work.mission, work.node, work.range
-        );
+        let checker = work.role == "checker";
+        let mut line = if checker {
+            format!(
+                "Mission {} · checking node {} ({}) · range {}",
+                work.mission,
+                work.node,
+                work.line.as_deref().unwrap_or("review"),
+                work.range
+            )
+        } else {
+            format!(
+                "Mission {} · node {} · range {}",
+                work.mission, work.node, work.range
+            )
+        };
+        if let Some(criteria) = &work.criteria {
+            line.push_str(&format!(" · criteria {}/{}", criteria.met, criteria.total));
+            if !criteria.left.is_empty() {
+                line.push_str(&format!(" · left: {}", criteria.left.join(", ")));
+            }
+        }
         if work.scope == "pr" {
             line.push_str(" · no merging");
         }
         line.push_str(" · no starting agents");
         lines.push(line);
+        if checker {
+            lines.push(format!(
+                "Record your verdict with `hide mission record {} {} --pass|--fail --evidence <one line>`.",
+                work.node,
+                work.line.as_deref().unwrap_or("review")
+            ));
+        } else if work
+            .criteria
+            .as_ref()
+            .is_some_and(|criteria| !criteria.left.is_empty())
+        {
+            lines.push(format!(
+                "Record each of your lines when it is done: `hide mission record {} <line> --pass|--fail --evidence <one line>`, the check line with `--commit <sha>` it ran on.",
+                work.node
+            ));
+        }
     }
     if let Some(conductor) = &context.conductor {
-        lines.push(format!(
+        let mut line = format!(
             "Mission {}/{} · working {} · letters {} · decision waiting: {}",
             conductor.done,
             conductor.nodes,
             conductor.working,
             conductor.letters,
             if conductor.decision { "yes" } else { "no" }
-        ));
+        );
+        if !conductor.unmet.is_empty() {
+            line.push_str(&format!(
+                " · reported with lines left: {}",
+                conductor.unmet.join(", ")
+            ));
+        }
+        lines.push(line);
     }
     (!lines.is_empty()).then(|| lines.join("\n"))
 }
@@ -442,6 +501,9 @@ mod tests {
                 node: "core".into(),
                 scope: scope.into(),
                 range: "up to the PR".into(),
+                role: "worker".into(),
+                line: None,
+                criteria: None,
             }),
             ..PlanContext::default()
         };

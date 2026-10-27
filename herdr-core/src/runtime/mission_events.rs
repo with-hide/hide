@@ -275,16 +275,22 @@ impl Runtime {
                 // The Conductor changed its question before reading this.
                 let mut event =
                     MissionEvent::new(now, EventKind::AnswerUndelivered).line(Some(&answer.text));
-                event.node = asked;
+                event.node.clone_from(&asked);
                 events.push(event);
             }
         } else if line.is_none() && mission.decision.is_some() {
             let mut event = MissionEvent::new(now, EventKind::Answered);
             event.source = Some(AnswerSource::Conversation);
-            event.node = asked;
+            event.node.clone_from(&asked);
             events.push(event);
         }
+        let cleared_after_answer = line.is_none() && mission.decision.is_some();
         let target = self.missions.book.get_mut(id).ok_or("mission_unknown")?;
+        // Clearing a decision is the Conductor saying the operator answered
+        // it (PRD mission-map-git-criteria B12).
+        if cleared_after_answer {
+            super::mission_criteria::note_decided(target, key_before, asked.as_deref());
+        }
         target.decision.clone_from(&line);
         target.answer = None;
         target.answer_failed = None;
@@ -395,7 +401,12 @@ impl Runtime {
             }
             _ => return Err("mission_answer_invalid".into()),
         };
+        let node = mission
+            .question
+            .as_ref()
+            .and_then(|question| question.node.clone());
         let target = self.missions.book.get_mut(id).ok_or("mission_unknown")?;
+        super::mission_criteria::note_decided(target, key, node.as_deref());
         target.answer = Some(Answer {
             key,
             text,

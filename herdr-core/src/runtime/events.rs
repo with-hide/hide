@@ -952,6 +952,9 @@ pub(super) struct ConductorSettingsSetPayload {
     pub(super) default_scope: Option<crate::missions::MissionScope>,
     #[serde(default)]
     pub(super) candidates: Option<Vec<crate::missions::Candidate>>,
+    /// The review and verify defaults (PRD mission-map-git-criteria B36).
+    #[serde(default)]
+    pub(super) checkers: Option<crate::missions::CheckerDefaults>,
 }
 
 /// `mission_answer`: the operator's answer from a mission's decision banner
@@ -3898,6 +3901,9 @@ impl Runtime {
                 }
                 if let Some(candidates) = payload.candidates {
                     settings.candidates = candidates;
+                }
+                if let Some(checkers) = payload.checkers {
+                    settings.checkers = checkers;
                 }
                 self.set_conductor_settings(settings)
             }

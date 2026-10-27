@@ -56,6 +56,12 @@ pub enum EventKind {
     AnswerUnconfirmed,
     Reported,
     Cancelled,
+    /// The Conductor went past a finish line; `criterion` is its key and
+    /// `line` the reason (PRD mission-map-git-criteria B11).
+    Skipped,
+    /// A later node's defect opened the node again; `line` is the defect,
+    /// `criterion` the node that found it and `count` how often (B21).
+    Reopened,
 }
 
 /// Where an answer came from (B31).
@@ -84,6 +90,8 @@ pub struct MissionEvent {
     pub pr: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<AnswerSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub criterion: Option<String>,
 }
 
 impl MissionEvent {
@@ -98,6 +106,7 @@ impl MissionEvent {
             count: None,
             pr: None,
             source: None,
+            criterion: None,
         }
     }
 

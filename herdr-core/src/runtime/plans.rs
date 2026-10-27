@@ -17,7 +17,7 @@ use crate::model::{AskSubject, SidebarAgentSnapshot};
 use crate::plans::{self, PLAN_LIMIT, Plan, PlanCommand, PlanView, Review, view_of};
 use crate::workspace_control::{Caller, Context, Query};
 use hide_agent_hooks::plan_record::{
-    ConductorWork, MissionWork, PlanContext, PlanSummary, StepName,
+    ConductorWork, CriteriaLeft, MissionWork, PlanContext, PlanSummary, StepName,
 };
 
 /// Whether the saved plans have been read into the core.
@@ -447,6 +447,22 @@ impl Runtime {
                 })
             })
         };
+        let checker_of = |node: &crate::missions::MissionNode| {
+            node.criteria.iter().find_map(|line| {
+                line.checkers
+                    .iter()
+                    .any(|checker| {
+                        checker.agent_id.as_deref().is_some_and(|id| {
+                            ledger.as_ref().is_some_and(|ledger| {
+                                ledger.agents.iter().any(|record| {
+                                    record.id == id && record.actor.same_identity(actor)
+                                })
+                            })
+                        })
+                    })
+                    .then(|| line.key.clone())
+            })
+        };
         let mission = self
             .missions
             .book
@@ -454,7 +470,34 @@ impl Runtime {
             .iter()
             .filter(|mission| mission.status.open())
             .find_map(|mission| {
-                let node = mission.nodes.iter().find(|node| worker_of(node))?;
+                let (node, line) = mission.nodes.iter().find_map(|node| {
+                    if worker_of(node) {
+                        Some((node, None))
+                    } else {
+                        checker_of(node).map(|line| (node, Some(line)))
+                    }
+                })?;
+                let own: Vec<&str> = node
+                    .criteria
+                    .iter()
+                    .filter(|line| line.kind == crate::mission_criteria::CriterionKind::Own)
+                    .filter_map(|line| line.text.as_deref())
+                    .collect();
+                let criteria = (!mission.exempt).then(|| {
+                    let left = self.node_unmet(mission, node);
+                    let total = node.criteria.len()
+                        + usize::from(
+                            left.iter().any(|key| key == "ci")
+                                && !node.criteria.iter().any(|line| {
+                                    line.kind == crate::mission_criteria::CriterionKind::Ci
+                                }),
+                        );
+                    CriteriaLeft {
+                        met: u32::try_from(total.saturating_sub(left.len())).unwrap_or(u32::MAX),
+                        total: u32::try_from(total).unwrap_or(u32::MAX),
+                        left,
+                    }
+                });
                 Some(MissionWork {
                     mission: mission.id.clone(),
                     node: node.key.clone(),
@@ -463,7 +506,14 @@ impl Runtime {
                         crate::missions::MissionScope::Merge => "merge",
                     }
                     .to_owned(),
-                    range: node.criteria.clone().unwrap_or_else(|| node.title.clone()),
+                    range: if own.is_empty() {
+                        node.title.clone()
+                    } else {
+                        own.join("; ")
+                    },
+                    role: if line.is_some() { "checker" } else { "worker" }.to_owned(),
+                    line,
+                    criteria,
                 })
             });
         let conductor = self.missions.book.conducted_open(actor).map(|mission| {
@@ -476,6 +526,43 @@ impl Runtime {
                         .count(),
                 )
                 .unwrap_or(u32::MAX)
+            };
+            // A node its worker reported done while lines are left (B22).
+            let reported = |node: &crate::missions::MissionNode| {
+                let Some(ledger) = ledger.as_ref() else {
+                    return false;
+                };
+                let Some(worker) = node
+                    .agent_id
+                    .as_deref()
+                    .and_then(|id| ledger.agents.iter().find(|record| record.id == id))
+                else {
+                    return false;
+                };
+                ledger.letters.iter().any(|letter| {
+                    letter.kind == "report"
+                        && letter.sender.same_identity(&worker.actor)
+                        && letter.recipient.same_identity(actor)
+                })
+            };
+            let unmet = if mission.exempt {
+                Vec::new()
+            } else {
+                mission
+                    .nodes
+                    .iter()
+                    .filter(|node| {
+                        !matches!(
+                            node.status,
+                            crate::missions::NodeStatus::Done
+                                | crate::missions::NodeStatus::Dropped
+                                | crate::missions::NodeStatus::Failed
+                        ) && node.kind != crate::missions::NodeKind::External
+                            && reported(node)
+                            && !self.node_unmet(mission, node).is_empty()
+                    })
+                    .map(|node| node.key.clone())
+                    .collect()
             };
             ConductorWork {
                 mission: mission.id.clone(),
@@ -496,6 +583,7 @@ impl Runtime {
                     .unwrap_or(u32::MAX)
                 }),
                 decision: mission.decision.is_some(),
+                unmet,
             }
         });
         PlanContext {

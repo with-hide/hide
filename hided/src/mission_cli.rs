@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 /// at: how a Conductor works with the operator and what Hide holds it to.
 pub const HELP: &str = include_str!("../assets/mission/help.md");
 
-pub const USAGE: &str = "hide mission help\nhide mission create --title <title> [--scope pr|merge] [--cap <n>] [--github <account>]\nhide mission plan [--mission <id>] (--file <plan.json> | --json <plan>)\nhide mission node <key> [--mission <id>] [--status <status>] [--agent-id <id> | --no-agent-id] [--pr <n> | --no-pr] [--base-pr <n> | --no-base-pr] [--branch <name> | --no-branch] [--attempts <n>] [--line <text> | --no-line] [--change <text> | --no-change] [--review <text> | --no-review] [--commit <sha> | --no-commit] [--verdict pass|fail | --no-verdict] [--checks <passed>/<total> | --no-checks]\nhide mission start [--mission <id>]\nhide mission decide [--mission <id>] (--line <text> [--why <text>] [--option <text>]... [--recommend <n>] [--node <key>] | --clear)\nhide mission delay [--mission <id>] (--line <text> | --clear)\nhide mission close [--mission <id>] --as done|merge_wait|cancelled [--report <text> | --report-file <path>]\nhide mission reopen [--mission <id>]\nhide mission take <id>\nhide mission show [--mission <id>]\nhide mission list\nhide mission settings";
+pub const USAGE: &str = "hide mission help\nhide mission create --title <title> [--scope pr|merge] [--cap <n>] [--github <account>]\nhide mission plan [--mission <id>] (--file <plan.json> | --json <plan>)\nhide mission node <key> [--mission <id>] [--status <status>] [--agent-id <id> | --no-agent-id] [--pr <n> | --no-pr] [--base-pr <n> | --no-base-pr] [--branch <name> | --no-branch] [--attempts <n>] [--line <text> | --no-line] [--change <text> | --no-change] [--review <text> | --no-review] [--commit <sha> | --no-commit] [--verdict pass|fail | --no-verdict] [--checks <passed>/<total> | --no-checks] [--reviewer <agent-id>] [--verifier <agent-id>]\nhide mission record <node> <line> [--mission <id>] (--pass | --fail) [--evidence <text>] [--commit <sha>] [--rerun]\nhide mission skip <node> <line> [--mission <id>] --reason <text> [--decision <key>]\nhide mission defect <node> [--mission <id>] --found-by <node> --line <text>\nhide mission start [--mission <id>]\nhide mission decide [--mission <id>] (--line <text> [--why <text>] [--option <text>]... [--recommend <n>] [--node <key>] | --clear)\nhide mission delay [--mission <id>] (--line <text> | --clear)\nhide mission close [--mission <id>] --as done|merge_wait|cancelled [--report <text> | --report-file <path>]\nhide mission reopen [--mission <id>]\nhide mission take <id>\nhide mission show [--mission <id>]\nhide mission list\nhide mission settings";
 
 /// The largest plan or report file read from disk; the daemon refuses a
 /// frame past its own limit anyway.
@@ -209,6 +209,8 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
                     "--commit",
                     "--verdict",
                     "--checks",
+                    "--reviewer",
+                    "--verifier",
                 ],
                 &[
                     "--no-agent-id",
@@ -282,11 +284,78 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
                 checks: one(&values, &set, "--checks", "--no-checks")?
                     .map(|value| value.map(checks).transpose())
                     .transpose()?,
+                reviewer: values.get("--reviewer").map(|id| key(id)).transpose()?,
+                verifier: values.get("--verifier").map(|id| key(id)).transpose()?,
             };
             MissionCommand::Node {
                 mission: mission_of(&values)?,
                 node: key(node)?,
                 patch,
+            }
+        }
+        "record" => {
+            let (positional, values, set) = flags(
+                args,
+                &["--mission", "--evidence", "--commit"],
+                &["--pass", "--fail", "--rerun"],
+            )?;
+            let [node, line] = positional.as_slice() else {
+                return Err(USAGE.to_owned());
+            };
+            let pass = match (
+                set.iter().any(|flag| flag == "--pass"),
+                set.iter().any(|flag| flag == "--fail"),
+            ) {
+                (true, false) => true,
+                (false, true) => false,
+                _ => return Err("give --pass or --fail".to_owned()),
+            };
+            MissionCommand::Record {
+                mission: mission_of(&values)?,
+                node: key(node)?,
+                line: key(line)?,
+                pass,
+                evidence: values.get("--evidence").cloned(),
+                commit: values.get("--commit").cloned(),
+                rerun: set.iter().any(|flag| flag == "--rerun"),
+            }
+        }
+        "skip" => {
+            let (positional, values, _) =
+                flags(args, &["--mission", "--reason", "--decision"], &[])?;
+            let [node, line] = positional.as_slice() else {
+                return Err(USAGE.to_owned());
+            };
+            MissionCommand::Skip {
+                mission: mission_of(&values)?,
+                node: key(node)?,
+                line: key(line)?,
+                reason: values
+                    .get("--reason")
+                    .ok_or("--reason is required")?
+                    .clone(),
+                decision: values
+                    .get("--decision")
+                    .map(|value| {
+                        value
+                            .parse::<u64>()
+                            .ok()
+                            .filter(|value| *value > 0)
+                            .ok_or_else(|| "--decision takes the question's key".to_owned())
+                    })
+                    .transpose()?,
+            }
+        }
+        "defect" => {
+            let (positional, values, _) = flags(args, &["--mission", "--found-by", "--line"], &[])?;
+            let [node] = positional.as_slice() else {
+                return Err(USAGE.to_owned());
+            };
+            MissionCommand::Defect {
+                mission: mission_of(&values)?,
+                node: key(node)?,
+                found_by: key(values.get("--found-by").ok_or("--found-by is required")?)?,
+                line: values.get("--line").ok_or("--line is required")?.clone(),
             }
         }
         "decide" => {
@@ -657,6 +726,74 @@ mod tests {
                 ..
             }))
         ));
+    }
+
+    #[test]
+    fn record_takes_one_result_and_skip_needs_its_reason() {
+        let Ok(MissionCli::Command(MissionCommand::Record {
+            node,
+            line,
+            pass,
+            commit,
+            rerun,
+            ..
+        })) = parse(
+            words(&[
+                "record", "core", "check", "--pass", "--commit", "abc1234", "--rerun",
+            ])
+            .iter(),
+        )
+        else {
+            panic!("record did not parse");
+        };
+        assert_eq!(
+            (node.as_str(), line.as_str(), pass, commit.as_deref(), rerun),
+            ("core", "check", true, Some("abc1234"), true)
+        );
+        assert!(parse(words(&["record", "core", "c1"]).iter()).is_err());
+        assert!(parse(words(&["record", "core", "c1", "--pass", "--fail"]).iter()).is_err());
+        assert!(
+            parse(words(&["record", "core", "c1", "--pass", "--commit", "xyz"]).iter()).is_err()
+        );
+        assert!(parse(words(&["skip", "core", "c1"]).iter()).is_err());
+        assert!(matches!(
+            parse(
+                words(&[
+                    "skip",
+                    "core",
+                    "ci",
+                    "--reason",
+                    "flaky on main",
+                    "--decision",
+                    "3"
+                ])
+                .iter()
+            ),
+            Ok(MissionCli::Command(MissionCommand::Skip {
+                decision: Some(3),
+                ..
+            }))
+        ));
+        assert!(matches!(
+            parse(
+                words(&[
+                    "defect",
+                    "core",
+                    "--found-by",
+                    "screen",
+                    "--line",
+                    "drops v1 nodes"
+                ])
+                .iter()
+            ),
+            Ok(MissionCli::Command(MissionCommand::Defect { .. }))
+        ));
+        let Ok(MissionCli::Command(MissionCommand::Node { patch, .. })) =
+            parse(words(&["node", "core", "--reviewer", "agent-7"]).iter())
+        else {
+            panic!("node did not parse");
+        };
+        assert_eq!(patch.reviewer.as_deref(), Some("agent-7"));
     }
 
     #[test]

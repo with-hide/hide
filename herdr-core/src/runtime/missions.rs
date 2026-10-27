@@ -13,12 +13,13 @@ use serde_json::{Value, json};
 
 use super::Runtime;
 use crate::delivery::Actor;
+use crate::mission_criteria::{CheckKind, Criterion, CriterionState};
 use crate::mission_events::History;
 use crate::missions::{
-    AnswerFailure, Blocked, Checks, Conductor, ConductorSettings, Delivery, MISSION_LIMIT, Mission,
-    MissionBook, MissionCommand, MissionEnd, MissionNode, MissionScope, MissionStatus, NodeKind,
-    NodeStatus, PENDING_WAKE_LIMIT, PendingWake, PrSeen, Question, Restored, Verdict, WakeEvent,
-    Worker,
+    AnswerFailure, Blocked, Checks, Conductor, ConductorSettings, Delivery, External,
+    MISSION_LIMIT, Mission, MissionBook, MissionCommand, MissionEnd, MissionNode, MissionScope,
+    MissionStatus, NodeKind, NodeStatus, PENDING_WAKE_LIMIT, PendingWake, PrSeen, Question,
+    Restored, Verdict, WakeEvent, Worker,
 };
 use crate::model::{DetailItem, PrState, PullRequestBadge, ReviewDecision};
 use crate::workspace_control::{Caller, Context, Query};
@@ -52,6 +53,9 @@ pub struct MissionView {
     pub status: MissionStatus,
     pub scope: MissionScope,
     pub cap: u8,
+    /// Made before node criteria: its nodes show their sentence only and
+    /// nothing is gated (PRD mission-map-git-criteria B23).
+    pub exempt: bool,
     pub conductor: ConductorView,
     pub nodes: Vec<NodeView>,
     pub merge_order: Vec<String>,
@@ -146,7 +150,16 @@ pub struct NodeView {
     pub line: Option<String>,
     pub change: Option<String>,
     pub review: Option<String>,
-    pub criteria: Option<String>,
+    /// The node's finish lines as they stand now: a check command passed on
+    /// an older commit shows open (B7, B32).
+    pub criteria: Vec<Criterion>,
+    /// Lines passed or skipped, of `criteria`, and how many were skipped
+    /// (B28 `기준 n/m`, `⤳k`).
+    pub criteria_met: u32,
+    pub criteria_skipped: u32,
+    pub external: Option<External>,
+    /// How often a later node's defect opened it again (B21 `↻n`).
+    pub reopened: u8,
     pub started_at_unix_ms: Option<u64>,
     pub finished_at_unix_ms: Option<u64>,
     pub commit: Option<String>,
@@ -453,6 +466,9 @@ impl Runtime {
                     scope: scope.unwrap_or(settings.default_scope),
                     cap,
                     candidates: settings.candidates.clone(),
+                    checkers: Some(settings.checkers.clone()),
+                    exempt: false,
+                    decided: Vec::new(),
                     nodes: Vec::new(),
                     merge_order: Vec::new(),
                     check: None,
@@ -516,7 +532,26 @@ impl Runtime {
                     .iter()
                     .position(|row| row.key == node)
                     .ok_or("mission_node_unknown")?;
-                let mut next = crate::missions::apply_patch(&current.nodes[index], &patch, now)?;
+                let mut bound = current.nodes[index].clone();
+                for (kind, checker) in [
+                    (CheckKind::Review, &patch.reviewer),
+                    (CheckKind::Verify, &patch.verifier),
+                ] {
+                    if let Some(checker) = checker {
+                        bound = self.bind_checker(&bound, kind, checker)?;
+                    }
+                }
+                // A node's checker never becomes its worker (B4).
+                if let Some(Some(worker)) = &patch.agent_id
+                    && Self::checks_node(&bound, worker)
+                {
+                    return Err(crate::coordination::refusal(
+                        "mission_checker_is_worker",
+                        &node,
+                    ));
+                }
+                self.gate_node_done(current, &bound, patch.status)?;
+                let mut next = crate::missions::apply_patch(&bound, &patch, now)?;
                 // A pull request named now starts its wakes from what GitHub
                 // says of it now, so its first change after this one wakes.
                 if next.pr != current.nodes[index].pr
@@ -572,6 +607,10 @@ impl Runtime {
                 report,
             } => {
                 let id = self.conducted_mission(&actor, mission.as_deref(), false)?;
+                let current = self.missions.book.get(&id).ok_or("mission_unknown")?;
+                if current.status != MissionStatus::Cancelled {
+                    Self::gate_close(current, end)?;
+                }
                 let target = self.missions.book.get_mut(&id).ok_or("mission_unknown")?;
                 let status = match (target.status, end) {
                     (MissionStatus::Cancelled, _) => return Err("mission_cancelled".into()),
@@ -621,6 +660,45 @@ impl Runtime {
                     self.save_missions();
                 }
                 Ok((json!({"mission": self.mission_view_of(&id)}), changed))
+            }
+            MissionCommand::Record {
+                mission,
+                node,
+                line,
+                pass,
+                evidence,
+                commit,
+                rerun,
+            } => self.record_criterion(
+                &actor,
+                mission.as_deref(),
+                &node,
+                &line,
+                (pass, evidence, commit, rerun),
+                now,
+            ),
+            MissionCommand::Skip {
+                mission,
+                node,
+                line,
+                reason,
+                decision,
+            } => self.skip_criterion(
+                &actor,
+                mission.as_deref(),
+                &node,
+                &line,
+                (reason, decision),
+                now,
+            ),
+            MissionCommand::Defect {
+                mission,
+                node,
+                found_by,
+                line,
+            } => {
+                let id = self.conducted_mission(&actor, mission.as_deref(), true)?;
+                self.add_mission_defect(&actor, &id, &node, (found_by, line), now)
             }
             MissionCommand::Take { mission } => {
                 let target = self.missions.book.get(&mission).ok_or("mission_unknown")?;
@@ -1005,6 +1083,36 @@ impl Runtime {
             if project.status.stale || !project.pull_requests_read {
                 continue;
             }
+            let (ci_changed, spent) = super::mission_criteria::read_mission_ci(
+                &mut self.missions.book.missions[index],
+                project,
+                now,
+            );
+            if ci_changed {
+                changed = true;
+                let mission = &mut self.missions.book.missions[index];
+                let mut moved = Vec::new();
+                for at in spent {
+                    // A CI failing again on the head its rerun was for sends
+                    // the node back to work (B13).
+                    let node = &mission.nodes[at];
+                    if !matches!(node.status, NodeStatus::Review | NodeStatus::Waiting) {
+                        continue;
+                    }
+                    let patch = crate::missions::NodePatch {
+                        status: Some(NodeStatus::Working),
+                        ..crate::missions::NodePatch::default()
+                    };
+                    if let Ok(next) = crate::missions::apply_patch(node, &patch, now) {
+                        moved.extend(super::mission_events::node_events(node, &next, now));
+                        mission.nodes[at] = next;
+                    }
+                }
+                mission.updated_at_unix_ms = now;
+                let id = mission.id.clone();
+                self.record_mission_events(&id, moved);
+            }
+            let mission = &self.missions.book.missions[index];
             let mut events = Vec::new();
             let mut merged = Vec::new();
             let mut seen_updates = Vec::new();
@@ -1328,7 +1436,7 @@ impl Runtime {
     }
 
     /// The view of one mission as the map draws it.
-    fn mission_view_of(&self, id: &str) -> Option<MissionView> {
+    pub(super) fn mission_view_of(&self, id: &str) -> Option<MissionView> {
         let mission = self.missions.book.get(id)?;
         let ledger = self.delivery_state().ok();
         let agents = worker_records(ledger.as_deref(), std::iter::once(mission));
@@ -1375,6 +1483,25 @@ impl Runtime {
                 });
                 let pr_state = pull
                     .map(|pull| PrState::of(pull.badge, pull.is_draft, pull.checks, pull.review));
+                let head = (!node.criteria.is_empty())
+                    .then(|| self.node_head(mission, node))
+                    .flatten();
+                let criteria: Vec<Criterion> = node
+                    .criteria
+                    .iter()
+                    .map(|line| {
+                        let mut line = line.clone();
+                        line.state = line.shown(head.as_deref());
+                        line
+                    })
+                    .collect();
+                let count = |pick: fn(CriterionState) -> bool| {
+                    u32::try_from(criteria.iter().filter(|line| pick(line.state)).count())
+                        .unwrap_or(u32::MAX)
+                };
+                let criteria_met =
+                    count(|state| matches!(state, CriterionState::Pass | CriterionState::Skipped));
+                let criteria_skipped = count(|state| state == CriterionState::Skipped);
                 NodeView {
                     key: node.key.clone(),
                     title: node.title.clone(),
@@ -1397,7 +1524,11 @@ impl Runtime {
                     line: node.line.clone(),
                     change: node.change.clone(),
                     review: node.review.clone(),
-                    criteria: node.criteria.clone(),
+                    criteria,
+                    criteria_met,
+                    criteria_skipped,
+                    external: node.external.clone(),
+                    reopened: node.reopened,
                     started_at_unix_ms: node.started_at_unix_ms,
                     finished_at_unix_ms: node.finished_at_unix_ms,
                     commit: node.commit.clone(),
@@ -1424,6 +1555,7 @@ impl Runtime {
             status: mission.status,
             scope: mission.scope,
             cap: mission.cap,
+            exempt: mission.exempt,
             conductor: ConductorView {
                 pane_id: mission.conductor.actor.pane_id.clone(),
                 name: mission.conductor.actor.name.clone(),

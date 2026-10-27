@@ -17,7 +17,7 @@
     "sender": "ci-lead"
   },
   "plan_context": {
-    "description": "The pane's plan summary (PRD hide-plan D-30): the core adds it to a prompt's letter pull as plan_context and to each hide plan answer as context, and the hook keeps it in the pane's record. These examples bind the core that makes it from a plan, the hook's prompt line and the pre-tool refusals read from the record alone. Fields are fixed: the plan's review, current and next step, count and update time; the mission node and scope a worker works on; the counts of a mission a Conductor runs.",
+    "description": "The pane's plan summary (PRD hide-plan D-30): the core adds it to a prompt's letter pull as plan_context and to each hide plan answer as context, and the hook keeps it in the pane's record. These examples bind the core that makes it from a plan, the hook's prompt line and the pre-tool refusals read from the record alone. Fields are fixed: the plan's review, current and next step, count and update time; the mission node and scope a worker or checker works on, with how many of the node's finish lines are met and which are left (null for a mission made before criteria); the counts of a mission a Conductor runs and the nodes reported done with lines left.",
     "examples": [
       {
         "name": "proposed plan",
@@ -201,11 +201,77 @@
             "mission": "mission-3",
             "node": "core",
             "scope": "pr",
-            "range": "up to the PR; the operator merges"
+            "range": "up to the PR; the operator merges",
+            "role": "worker",
+            "line": null,
+            "criteria": {
+              "met": 2,
+              "total": 5,
+              "left": ["c2", "review", "ci"]
+            }
           },
           "conductor": null
         },
-        "hint": "Mission mission-3 · node core · range up to the PR; the operator merges · no merging · no starting agents",
+        "hint": "Mission mission-3 · node core · range up to the PR; the operator merges · criteria 2/5 · left: c2, review, ci · no merging · no starting agents\nRecord each of your lines when it is done: `hide mission record core <line> --pass|--fail --evidence <one line>`, the check line with `--commit <sha>` it ran on.",
+        "commands": [
+          {
+            "tool": "shell",
+            "input": "gh pr merge 12 --squash",
+            "refused": "mission_merge"
+          },
+          {
+            "tool": "shell",
+            "input": "gh pr view 12",
+            "refused": null
+          }
+        ]
+      },
+      {
+        "name": "mission worker of a mission made before criteria",
+        "now_unix_ms": 0,
+        "context": {
+          "plan": null,
+          "mission": {
+            "mission": "mission-3",
+            "node": "core",
+            "scope": "merge",
+            "range": "up to the PR; the operator merges",
+            "role": "worker",
+            "line": null,
+            "criteria": null
+          },
+          "conductor": null
+        },
+        "hint": "Mission mission-3 · node core · range up to the PR; the operator merges · no starting agents",
+        "commands": [
+          {
+            "tool": "shell",
+            "input": "gh pr merge 12",
+            "refused": null
+          }
+        ]
+      },
+      {
+        "name": "checker of a node's review",
+        "now_unix_ms": 0,
+        "context": {
+          "plan": null,
+          "mission": {
+            "mission": "mission-3",
+            "node": "core",
+            "scope": "pr",
+            "range": "up to the PR; the operator merges",
+            "role": "checker",
+            "line": "review",
+            "criteria": {
+              "met": 2,
+              "total": 5,
+              "left": ["c2", "review", "ci"]
+            }
+          },
+          "conductor": null
+        },
+        "hint": "Mission mission-3 · checking node core (review) · range up to the PR; the operator merges · criteria 2/5 · left: c2, review, ci · no merging · no starting agents\nRecord your verdict with `hide mission record core review --pass|--fail --evidence <one line>`.",
         "commands": [
           {
             "tool": "shell",
@@ -231,7 +297,8 @@
             "nodes": 5,
             "working": 2,
             "letters": 1,
-            "decision": true
+            "decision": true,
+            "unmet": []
           }
         },
         "hint": "Mission 2/5 · working 2 · letters 1 · decision waiting: yes",
@@ -242,6 +309,25 @@
             "refused": null
           }
         ]
+      },
+      {
+        "name": "Conductor with a node reported done and lines left",
+        "now_unix_ms": 0,
+        "context": {
+          "plan": null,
+          "mission": null,
+          "conductor": {
+            "mission": "mission-3",
+            "done": 2,
+            "nodes": 5,
+            "working": 2,
+            "letters": 1,
+            "decision": true,
+            "unmet": ["core"]
+          }
+        },
+        "hint": "Mission 2/5 · working 2 · letters 1 · decision waiting: yes · reported with lines left: core",
+        "commands": []
       },
       {
         "name": "no plan and no mission",

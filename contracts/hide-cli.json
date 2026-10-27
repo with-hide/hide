@@ -2665,7 +2665,11 @@
                 "mission_too_many_nodes",
                 "mission_node_in_progress",
                 "mission_dependency_unknown",
-                "mission_dependency_cycle"
+                "mission_dependency_cycle",
+                "mission_criteria_missing",
+                "mission_criteria_too_many",
+                "mission_checkers_invalid",
+                "mission_external_invalid"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -2857,12 +2861,215 @@
                     "required": false,
                     "requires": [],
                     "value": null
+                },
+                {
+                    "name": "--reviewer",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "name": "--verifier",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
                 }
             ],
             "refusals": [
                 "mission_node_unknown",
                 "mission_not_conductor",
+                "mission_closed",
+                "mission_criteria_unmet",
+                "mission_checker_is_worker",
+                "mission_checker_unknown",
+                "mission_external_invalid"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "mission"
+            ],
+            "arguments": [
+                {
+                    "name": "node",
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "name": "line",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "mission record",
+            "options": [
+                {
+                    "name": "--mission",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "conflicts": [
+                        "--fail"
+                    ],
+                    "name": "--pass",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "conflicts": [
+                        "--pass"
+                    ],
+                    "name": "--fail",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--evidence",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--commit",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--rerun",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "mission_node_unknown",
+                "mission_criterion_unknown",
+                "mission_criterion_not_yours",
+                "mission_commit_required",
+                "mission_rerun_spent",
                 "mission_closed"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "mission"
+            ],
+            "arguments": [
+                {
+                    "name": "node",
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "name": "line",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "mission skip",
+            "options": [
+                {
+                    "name": "--mission",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "name": "--reason",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                },
+                {
+                    "name": "--decision",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "unsigned"
+                    }
+                }
+            ],
+            "refusals": [
+                "mission_not_conductor",
+                "mission_node_unknown",
+                "mission_criterion_unknown",
+                "mission_skip_reason_missing",
+                "mission_criteria_protected"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
+                "mission"
+            ],
+            "arguments": [
+                {
+                    "name": "node",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "mission defect",
+            "options": [
+                {
+                    "name": "--mission",
+                    "required": false,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "name": "--found-by",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "key"
+                    }
+                },
+                {
+                    "name": "--line",
+                    "required": true,
+                    "requires": [],
+                    "value": {
+                        "type": "text"
+                    }
+                }
+            ],
+            "refusals": [
+                "mission_not_conductor",
+                "mission_node_unknown",
+                "mission_external_invalid",
+                "mission_defects_too_many"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -3014,6 +3221,11 @@
                         "type": "text"
                     }
                 }
+            ],
+            "refusals": [
+                "mission_nodes_unfinished",
+                "mission_not_started",
+                "mission_cancelled"
             ],
             "repeats_at_most": null,
             "rest": null
@@ -3241,7 +3453,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:91d3932f4f088b320c36963f95ce04367755cafd82fcff623e81ba63c5080c85",
+    "digest": "sha256:36bf80ee70278290b2388e302ad09bfeb788995735f73456b0dac800a2dcc8ee",
     "envelopes": {
         "agent": {
             "answer": "value",

@@ -51,6 +51,7 @@ pub mod live;
 pub mod local_issues;
 pub mod memory_command;
 pub mod memory_hook;
+pub mod mission_criteria;
 pub mod mission_events;
 pub mod missions;
 mod model;

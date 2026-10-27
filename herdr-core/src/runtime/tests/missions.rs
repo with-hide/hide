@@ -12,6 +12,7 @@ use crate::model::{
     PullRequestSnapshot, ReviewDecision,
 };
 use crate::runtime::delivery::tests::{authority, fixture};
+use crate::sidebar::SessionSnapshotPayload;
 use serde_json::{Value, json};
 
 const PROJECT: &str = "/checkouts/fixture";
@@ -67,9 +68,17 @@ fn command(runtime: &mut Runtime, pane: &str, command: Value) -> Result<(Value, 
 
 fn plan() -> Value {
     json!({"op": "plan", "plan": {"nodes": [
-        {"key": "cause", "title": "Find the cause", "kind": "research"},
-        {"key": "fix", "title": "Fix it", "kind": "change", "delivery": "pr", "depends_on": ["cause"]},
+        {"key": "cause", "title": "Find the cause", "kind": "research", "criteria": ["it works"]},
+        {"key": "fix", "title": "Fix it", "kind": "change", "criteria": ["it works"], "delivery": "pr", "depends_on": ["cause"]},
     ]}})
+}
+
+/// The mission as one made before node criteria (D-19): for a test of
+/// another rule, whose nodes and close the criteria gate does not hold.
+fn without_gate(runtime: &mut Runtime) {
+    for mission in &mut runtime.missions.book.missions {
+        mission.exempt = true;
+    }
 }
 
 fn mission_slot_items(runtime: &Runtime) -> usize {
@@ -276,6 +285,7 @@ fn a_conductors_spawn_is_refused_before_the_plan_is_approved_and_on_another_mach
     assert!(prepare_spawn(&mut runtime, &conductor, None).is_ok());
 
     // A closed mission no longer holds its Conductor's spawns.
+    without_gate(&mut runtime);
     command(
         &mut runtime,
         "sender",
@@ -525,6 +535,7 @@ fn a_missions_pull_request_wakes_its_conductor_once_per_change() {
     );
 
     // A new commit on a done mission's pull request opens it again.
+    without_gate(&mut runtime);
     command(
         &mut runtime,
         "sender",
@@ -574,6 +585,7 @@ fn a_done_mission_does_not_open_beside_its_conductors_open_one() {
         node,
         &github(vec![pull(7, "a1", PullRequestBadge::Open, None)], false),
     );
+    without_gate(&mut runtime);
     command(
         &mut runtime,
         "sender",
@@ -999,7 +1011,7 @@ fn a_plan_names_the_model_of_every_worker_that_takes_one() {
     )
     .unwrap();
     let plan_with = |worker: Value, kind: &str| {
-        let mut node = json!({"key": "one", "title": "One", "kind": kind, "worker": worker});
+        let mut node = json!({"key": "one", "title": "One", "kind": kind, "worker": worker, "criteria": ["it works"]});
         if kind == "change" {
             node["delivery"] = json!("pr");
         }
@@ -1067,13 +1079,14 @@ fn a_merge_wait_mission_closes_when_its_whole_stack_is_merged() {
         &mut runtime,
         "sender",
         json!({"op": "plan", "plan": {"nodes": [
-            {"key": "api", "title": "API", "kind": "change", "delivery": "pr"},
-            {"key": "screen", "title": "Screen", "kind": "change", "delivery": "pr", "depends_on": ["api"]},
+            {"key": "api", "title": "API", "kind": "change", "criteria": ["it works"], "delivery": "pr"},
+            {"key": "screen", "title": "Screen", "kind": "change", "criteria": ["it works"], "delivery": "pr", "depends_on": ["api"]},
         ]}}),
     )
     .unwrap();
     command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
     for (node, pr) in [("api", 7), ("screen", 8)] {
+        without_gate(&mut runtime);
         command(
             &mut runtime,
             "sender",
@@ -1155,9 +1168,9 @@ fn a_merge_wait_mission_waits_only_on_the_pull_requests_left_in_its_stack() {
         &mut runtime,
         "sender",
         json!({"op": "plan", "plan": {"nodes": [
-            {"key": "api", "title": "API", "kind": "change", "delivery": "pr"},
-            {"key": "screen", "title": "Screen", "kind": "change", "delivery": "pr"},
-            {"key": "docs", "title": "Docs", "kind": "change", "delivery": "pr"},
+            {"key": "api", "title": "API", "kind": "change", "criteria": ["it works"], "delivery": "pr"},
+            {"key": "screen", "title": "Screen", "kind": "change", "criteria": ["it works"], "delivery": "pr"},
+            {"key": "docs", "title": "Docs", "kind": "change", "criteria": ["it works"], "delivery": "pr"},
         ]}}),
     )
     .unwrap();
@@ -1167,6 +1180,7 @@ fn a_merge_wait_mission_waits_only_on_the_pull_requests_left_in_its_stack() {
         ("screen", 8, "failed"),
         ("docs", 9, "done"),
     ] {
+        without_gate(&mut runtime);
         command(
             &mut runtime,
             "sender",
@@ -1221,11 +1235,12 @@ fn a_merge_wait_mission_waits_only_on_the_pull_requests_left_in_its_stack() {
         &mut runtime,
         "sender",
         json!({"op": "plan", "plan": {"nodes": [
-            {"key": "cause", "title": "Find the cause", "kind": "research"},
+            {"key": "cause", "title": "Find the cause", "kind": "research", "criteria": ["it works"]},
         ]}}),
     )
     .unwrap();
     command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    without_gate(&mut runtime);
     let (closed, _) = command(
         &mut runtime,
         "sender",
@@ -1426,9 +1441,9 @@ fn a_commit_is_a_direct_changes_and_a_verdict_a_verify_nodes() {
         &mut runtime,
         "sender",
         json!({"op": "plan", "plan": {"nodes": [
-            {"key": "fix", "title": "Fix it", "kind": "change", "delivery": "direct"},
-            {"key": "pr", "title": "Open it", "kind": "change", "delivery": "pr"},
-            {"key": "check", "title": "Check it", "kind": "verify"},
+            {"key": "fix", "title": "Fix it", "kind": "change", "criteria": ["it works"], "delivery": "direct"},
+            {"key": "pr", "title": "Open it", "kind": "change", "criteria": ["it works"], "delivery": "pr"},
+            {"key": "check", "title": "Check it", "kind": "verify", "criteria": ["it works"]},
         ]}}),
     )
     .unwrap();
@@ -1949,4 +1964,362 @@ fn only_the_mission_open_in_the_slot_sends_its_events() {
     assert!(!runtime.missions.events.contains_key("mission-1"));
     runtime.refresh_mission_events();
     assert!(runtime.snapshot.mission_events.events.is_empty());
+}
+
+/// The fixture's `recipient` pane as the node's worker and a third pane,
+/// `reviewer`, as another agent, each registered in the ledger.
+fn with_worker_and_reviewer(runtime: &mut Runtime) {
+    let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents":[
+        {"id":"sender","pane_id":"sender","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"sender-session"},
+        {"id":"recipient","pane_id":"recipient","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"recipient-session"},
+        {"id":"reviewer","pane_id":"reviewer","agent":"codex","agent_status":"working","state_change_seq":1,"lineage_session":"reviewer-session"},
+    ]}))
+    .unwrap();
+    runtime.observe_delivery(crate::node::TEST_NODE, &payload, None, None);
+    let panes = &mut runtime.snapshot.navigator.workspaces[0].checkouts[0].tabs[0].panes;
+    let mut reviewer = panes[1].clone();
+    reviewer.id = "reviewer".into();
+    panes.push(reviewer);
+    let mut ledger = crate::delivery::ledger::Ledger::default();
+    for (id, pane) in [
+        ("agent-1", "sender"),
+        ("agent-2", "recipient"),
+        ("agent-3", "reviewer"),
+    ] {
+        ledger.agents.push(crate::coordination::AgentRecord {
+            id: id.into(),
+            name: Some(pane.into()),
+            machine: crate::node::TEST_NODE.into(),
+            host_scope: "scope".into(),
+            native_machine: "fixture-machine".into(),
+            session: format!("{pane}-session"),
+            instance: pane.into(),
+            pane: pane.into(),
+            parent: (id != "agent-1").then(|| "agent-1".into()),
+            origin: None,
+            project: None,
+            actor: runtime.delivery_observations[pane].actor.clone(),
+            ended: false,
+            terminal_id: None,
+            forked: false,
+        });
+    }
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+}
+
+fn criteria_plan() -> Value {
+    json!({"op": "plan", "plan": {"check": "cargo test", "nodes": [
+        {"key": "fix", "title": "Fix it", "kind": "change", "delivery": "pr",
+         "criteria": ["the parser keeps v1 files"],
+         "checks": [{"as": "review", "by": [{"agent": "codex", "model": "gpt-6-astra"}]}]},
+        {"key": "docs", "title": "Docs", "kind": "research", "criteria": ["the guide says it"]},
+    ]}})
+}
+
+const HEAD: &str = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
+
+/// PRD mission-map-git-criteria B1-B10: a node is done only once every
+/// line is met, each line is recorded by its owner alone, the node's worker
+/// is never its reviewer, and the mission closes only with every node done
+/// or dropped.
+#[test]
+fn a_node_is_done_only_once_its_owners_met_every_line() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    let (planned, _) = command(&mut runtime, "sender", criteria_plan()).unwrap();
+    let keys: Vec<&str> = planned["mission"]["nodes"][0]["criteria"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|line| line["key"].as_str().unwrap())
+        .collect();
+    assert_eq!(keys, ["c1", "check", "review"]);
+    // The check command is a change node's line only.
+    assert_eq!(
+        planned["mission"]["nodes"][1]["criteria"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2", "pr": 7}}),
+    )
+    .unwrap();
+    let done = json!({"op": "node", "node": "fix", "patch": {"status": "done"}});
+    // A pull request GitHub has not read yet is not known to pass its CI.
+    let refused = command(&mut runtime, "sender", done.clone()).unwrap_err();
+    assert_eq!(
+        crate::coordination::split_refusal(&refused),
+        ("mission_criteria_unmet", Some("fix: c1, check, review, ci"))
+    );
+    let record = |line: &str, extra: Value| {
+        let mut command = json!({"op": "record", "node": "fix", "line": line, "pass": true});
+        for (key, value) in extra.as_object().unwrap() {
+            command[key] = value.clone();
+        }
+        command
+    };
+    // Only the worker records its own lines and the check command.
+    assert_eq!(
+        command(&mut runtime, "reviewer", record("c1", json!({}))).unwrap_err(),
+        "mission_criterion_not_yours"
+    );
+    assert_eq!(
+        command(&mut runtime, "sender", record("c1", json!({}))).unwrap_err(),
+        "mission_criterion_not_yours"
+    );
+    assert!(
+        command(
+            &mut runtime,
+            "recipient",
+            record("c1", json!({"evidence": "test added"}))
+        )
+        .unwrap()
+        .1
+    );
+    assert_eq!(
+        command(&mut runtime, "recipient", record("check", json!({}))).unwrap_err(),
+        "mission_commit_required"
+    );
+    command(
+        &mut runtime,
+        "recipient",
+        record("check", json!({"commit": &HEAD[..7]})),
+    )
+    .unwrap();
+    // The worker never reviews its own node, nor certifies the review.
+    assert_eq!(
+        command(&mut runtime, "recipient", record("review", json!({}))).unwrap_err(),
+        "mission_criterion_not_yours"
+    );
+    let bind = |id: &str| json!({"op": "node", "node": "fix", "patch": {"reviewer": id}});
+    assert_eq!(
+        crate::coordination::split_refusal(
+            &command(&mut runtime, "sender", bind("agent-2")).unwrap_err()
+        )
+        .0,
+        "mission_checker_is_worker"
+    );
+    assert_eq!(
+        command(&mut runtime, "reviewer", record("review", json!({}))).unwrap_err(),
+        "mission_criterion_not_yours"
+    );
+    command(&mut runtime, "sender", bind("agent-3")).unwrap();
+    // A bound reviewer is never made the node's worker.
+    assert_eq!(
+        crate::coordination::split_refusal(
+            &command(
+                &mut runtime,
+                "sender",
+                json!({"op": "node", "node": "fix", "patch": {"agent_id": "agent-3"}})
+            )
+            .unwrap_err()
+        )
+        .0,
+        "mission_checker_is_worker"
+    );
+    command(&mut runtime, "reviewer", record("review", json!({}))).unwrap();
+    // GitHub reads the pull request with its CI passing on that head.
+    let read = github(vec![pull(7, HEAD, PullRequestBadge::Open, None)], false);
+    runtime.github = read.clone();
+    runtime.note_mission_pulls(crate::node::TEST_NODE, &read);
+    let (shown, _) = command(&mut runtime, "sender", done.clone()).unwrap();
+    let node = &shown["mission"]["nodes"][0];
+    assert_eq!(node["status"], "done");
+    assert_eq!(node["criteria_met"], 4);
+    let by: Vec<&str> = node["criteria"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|line| line["by"]["role"].as_str().unwrap())
+        .collect();
+    assert_eq!(by, ["worker", "worker", "hide", "checker"]);
+
+    // A commit after the check passed opens the line again (B7).
+    let pushed = github(
+        vec![pull(7, &"f".repeat(40), PullRequestBadge::Open, None)],
+        false,
+    );
+    runtime.github = pushed.clone();
+    runtime.note_mission_pulls(crate::node::TEST_NODE, &pushed);
+    let view = runtime.mission_view_of("mission-1").unwrap();
+    let check = view.nodes[0]
+        .criteria
+        .iter()
+        .find(|line| line.key == "check")
+        .unwrap();
+    assert_eq!(check.state, crate::mission_criteria::CriterionState::Open);
+
+    // The mission closes as done only once every node is done or dropped.
+    let close = json!({"op": "close", "end": "done"});
+    assert_eq!(
+        crate::coordination::split_refusal(
+            &command(&mut runtime, "sender", close.clone()).unwrap_err()
+        ),
+        ("mission_nodes_unfinished", Some("docs"))
+    );
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "docs", "patch": {"status": "dropped"}}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", close).unwrap();
+}
+
+/// B11, B12, B21: the Conductor goes past a line only with a reason, past
+/// the check command only on an answered decision about the node, and a
+/// later node's defect opens the node again with the defect as a line.
+#[test]
+fn a_skip_needs_its_reason_and_the_check_command_the_operators_answer() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(&mut runtime);
+    let skip = |line: &str, reason: &str, decision: Option<u64>| {
+        let mut command = json!({"op": "skip", "node": "fix", "line": line, "reason": reason});
+        if let Some(decision) = decision {
+            command["decision"] = json!(decision);
+        }
+        command
+    };
+    assert_eq!(
+        command(&mut runtime, "sender", skip("review", " ", None)).unwrap_err(),
+        "mission_skip_reason_missing"
+    );
+    assert_eq!(
+        command(
+            &mut runtime,
+            "recipient",
+            skip("review", "small change", None)
+        )
+        .unwrap_err(),
+        "mission_criterion_not_yours"
+    );
+    assert!(
+        command(&mut runtime, "sender", skip("review", "small change", None))
+            .unwrap()
+            .1
+    );
+    // The same skip again changes nothing.
+    assert!(
+        !command(&mut runtime, "sender", skip("review", "small change", None))
+            .unwrap()
+            .1
+    );
+    let protected = |runtime: &mut Runtime, decision: Option<u64>| {
+        crate::coordination::split_refusal(
+            &command(
+                runtime,
+                "sender",
+                skip("check", "fails on main too", decision),
+            )
+            .unwrap_err(),
+        )
+        .0
+        .to_owned()
+    };
+    assert_eq!(protected(&mut runtime, None), "mission_criteria_protected");
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Skip the failing check?", "node": "fix"}),
+    )
+    .unwrap();
+    // Not yet answered.
+    assert_eq!(
+        protected(&mut runtime, Some(1)),
+        "mission_criteria_protected"
+    );
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": null}),
+    )
+    .unwrap();
+    let (shown, _) = command(
+        &mut runtime,
+        "sender",
+        skip("check", "fails on main too", Some(1)),
+    )
+    .unwrap();
+    let check = &shown["mission"]["nodes"][0]["criteria"][1];
+    assert_eq!(
+        (&check["state"], &check["skip"]["decision"]),
+        (&json!("skipped"), &json!(1))
+    );
+
+    // A defect the docs node found opens the fix again.
+    let defect =
+        json!({"op": "defect", "node": "fix", "found_by": "docs", "line": "drops a v1 node"});
+    let (shown, changed) = command(&mut runtime, "sender", defect.clone()).unwrap();
+    assert!(changed);
+    let node = &shown["mission"]["nodes"][0];
+    assert_eq!(
+        (&node["status"], &node["reopened"]),
+        (&json!("working"), &json!(1))
+    );
+    let last = node["criteria"].as_array().unwrap().last().unwrap();
+    assert_eq!(
+        (&last["key"], &last["found_by"], &last["state"]),
+        (&json!("d1"), &json!("docs"), &json!("open"))
+    );
+    assert!(!command(&mut runtime, "sender", defect).unwrap().1);
+}
+
+/// D-19, B23: a mission made before criteria is planned, finished and
+/// closed as before.
+#[test]
+fn a_mission_made_before_criteria_is_not_gated() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    let bare = json!({"op": "plan", "plan": {"nodes": [
+        {"key": "fix", "title": "Fix it", "kind": "change", "delivery": "pr"},
+    ]}});
+    assert_eq!(
+        crate::coordination::split_refusal(
+            &command(&mut runtime, "sender", bare.clone()).unwrap_err()
+        ),
+        ("mission_criteria_missing", Some("fix"))
+    );
+    without_gate(&mut runtime);
+    command(&mut runtime, "sender", bare).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "done", "pr": 7}}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "done"}),
+    )
+    .unwrap();
+    assert!(runtime.mission_view_of("mission-1").unwrap().exempt);
 }

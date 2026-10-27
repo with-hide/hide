@@ -1369,9 +1369,21 @@ fn refusal_answer(reason: String, next_action: &'static str) -> (String, String)
             format!("{next_action}; {name} conducts it now"),
         ),
         // A plan's refusal names the step or the field to fix (PRD hide-plan
-        // B1, B2).
+        // B1, B2), and a mission's the node and the lines it means (PRD
+        // mission-map-git-criteria B1, B9, B10).
         (
-            code @ ("plan_invalid" | "plan_order_refused" | "plan_too_large" | "plan_node_unknown"),
+            code @ ("plan_invalid"
+            | "plan_order_refused"
+            | "plan_too_large"
+            | "plan_node_unknown"
+            | "mission_criteria_missing"
+            | "mission_criteria_too_many"
+            | "mission_criteria_unmet"
+            | "mission_criteria_protected"
+            | "mission_checkers_invalid"
+            | "mission_checker_is_worker"
+            | "mission_external_invalid"
+            | "mission_nodes_unfinished"),
             Some(detail),
         ) => (code.to_owned(), format!("{next_action} ({detail})")),
         (code, Some("")) => (
