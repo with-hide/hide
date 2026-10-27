@@ -1244,6 +1244,49 @@ mod tests {
     }
 
     #[test]
+    fn a_transcript_replaced_by_one_of_the_same_size_is_listed_from_its_start() {
+        let home = Transcripts::new();
+        let claude = home.claude_file();
+        fs::write(&claude, home.claude("user", 1, "alpha request")).unwrap();
+        assert_eq!(shown(&home.list())[0].1, Some("alpha request"));
+
+        // Another file renamed over it, byte for byte as long: only its
+        // identity says it is not the file that was read.
+        let next = claude.with_extension("next");
+        fs::write(&next, home.claude("user", 1, "gamma request")).unwrap();
+        assert_eq!(
+            fs::metadata(&next).unwrap().len(),
+            fs::metadata(&claude).unwrap().len()
+        );
+        fs::rename(&next, &claude).unwrap();
+        assert_eq!(
+            shown(&home.list_as_cold()),
+            vec![(Agent::Claude, Some("gamma request"), 1, ONE_AM, None)]
+        );
+    }
+
+    #[test]
+    fn a_record_longer_than_one_read_window_is_read_past() {
+        let home = Transcripts::new();
+        let claude = home.claude_file();
+        let long = home.claude(
+            "assistant",
+            2,
+            &"x".repeat(crate::SESSION_INCREMENT_READ_LIMIT_BYTES as usize + 4096),
+        );
+        assert!(long.len() as u64 > crate::SESSION_INCREMENT_READ_LIMIT_BYTES);
+        fs::write(&claude, home.claude("user", 1, "alpha request") + &long).unwrap();
+        let listed = home.list_as_cold();
+        assert_eq!(shown(&listed)[0].1, Some("alpha request"));
+
+        // The record after it is read on from where the long one ended.
+        Transcripts::append(&claude, &home.claude("user", 3, "beta request"));
+        let grown = home.list_as_cold();
+        assert_eq!(grown[0].event_count, listed[0].event_count + 1);
+        assert_eq!(grown[0].updated_at_unix_ms, ONE_AM + 2 * HOUR);
+    }
+
+    #[test]
     fn a_record_appended_in_two_writes_is_counted_once_it_is_whole() {
         let home = Transcripts::new();
         let codex = home.codex_file();
