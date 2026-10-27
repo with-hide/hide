@@ -2999,6 +2999,45 @@ fn a_branch_read_in_main_proves_only_that_branch_while_its_node_and_wait_stand()
     assert_eq!(mission_status(&runtime), MissionStatus::Done);
 }
 
+/// Third re-review finding 1: a branch read that could not answer proves
+/// nothing, as the branch may have moved past main unseen, so what an
+/// earlier read found in main closes the mission neither by itself nor by
+/// the Conductor's close; the node shows unread until a read finds it in
+/// main again.
+#[test]
+fn a_branch_that_could_not_be_read_again_keeps_its_mission_waiting_until_read_in_main() {
+    use crate::runtime::mission_outside::Found;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    waiting_on_branches(&mut runtime);
+    let (a1, b1) = ("a".repeat(40), "b".repeat(40));
+    land(&mut runtime, "a", Found::InMain(Some(a1.clone())));
+    assert_eq!(node_view(&runtime, "a").in_main, Some(a1.clone()));
+
+    // The next read cannot see `a` while `b` reaches main.
+    land(
+        &mut runtime,
+        "a",
+        Found::Unread("The branch feat/a is not in this repository or its last fetch".into()),
+    );
+    land(&mut runtime, "b", Found::InMain(Some(b1)));
+    assert_eq!(mission_status(&runtime), MissionStatus::MergeWait);
+    let a = node_view(&runtime, "a");
+    assert_eq!((a.in_main, a.unread), (None, true));
+    let (closed, _) = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "merge_wait"}),
+    )
+    .unwrap();
+    assert_eq!(closed["mission"]["status"], "merge_wait");
+
+    land(&mut runtime, "a", Found::InMain(Some(a1.clone())));
+    assert_eq!(mission_status(&runtime), MissionStatus::Done);
+    let a = node_view(&runtime, "a");
+    assert_eq!((a.in_main, a.unread), (Some(a1), false));
+}
+
 /// This machine's host answering a node's calls, as the core's link to it
 /// does.
 struct Host(hide_host::serve::Env);
@@ -3255,5 +3294,138 @@ fn a_plan_of_more_outside_branches_than_one_read_takes_is_read_whole_when_admitt
         changes
             .recv_timeout(deadline.saturating_duration_since(Instant::now()))
             .expect("the outside reads answered before the deadline");
+    }
+}
+
+/// This machine's node, holding every call while it is shut and telling
+/// `entered` when the first one arrives.
+struct Held {
+    node: hide_node::Local,
+    open: std::sync::Mutex<bool>,
+    opened: std::sync::Condvar,
+    entered: std::sync::Mutex<Option<std::sync::mpsc::Sender<()>>>,
+}
+
+impl Held {
+    fn open(&self) {
+        *self.open.lock().unwrap() = true;
+        self.opened.notify_all();
+    }
+}
+
+impl crate::node_access::NodeLink for Held {
+    fn call(
+        &self,
+        call: hide_node_link::protocol::Call,
+        timeout: Duration,
+    ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+        if let Some(entered) = self.entered.lock().unwrap().take() {
+            let _ = entered.send(());
+        }
+        let mut open = self.open.lock().unwrap();
+        while !*open {
+            open = self.opened.wait(open).unwrap();
+        }
+        drop(open);
+        crate::node_access::NodeLink::call(&self.node, call, timeout)
+    }
+}
+
+/// Third re-review finding 2: a plan admitted while the project's read is
+/// out is read once that read is answered, with no GitHub read, fetch or
+/// worktree change after it; the first read's own unread answer starts no
+/// read of its own.
+#[test]
+fn a_node_followed_while_a_read_is_out_is_read_once_that_read_answers() {
+    use std::sync::mpsc;
+    use std::time::Instant;
+    let folder = tempfile::tempdir().unwrap();
+    let repo = std::fs::canonicalize(folder.path()).unwrap();
+    for args in [
+        &["init", "-q", "-b", "trunk"][..],
+        &["config", "user.name", "Fixture"],
+        &["config", "user.email", "fixture@example.invalid"],
+        &["config", "commit.gpgsign", "false"],
+        &["commit", "-q", "--allow-empty", "-m", "seed"],
+    ] {
+        git_in(&repo, args);
+    }
+    let root = hide_platform::path::to_wire(&repo).unwrap();
+    let (entered, first_call) = mpsc::channel();
+    let held = Arc::new(Held {
+        node: hide_node::Local::new(Some(repo.clone())),
+        open: std::sync::Mutex::new(false),
+        opened: std::sync::Condvar::new(),
+        entered: std::sync::Mutex::new(Some(entered)),
+    });
+
+    let fixture = conducting();
+    let (changed, changes) = mpsc::channel();
+    let outside = |key: &str, branch: &str| json!({"key": key, "title": key, "kind": "external", "external": {"branch": branch}});
+    {
+        let mut runtime = fixture.runtime.lock().unwrap();
+        runtime.install_worker_context(
+            Arc::downgrade(&fixture.runtime),
+            ChangeNotifier::announcing(move || {
+                let _ = changed.send(());
+            }),
+        );
+        runtime.own_node = held.clone();
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "create", "title": "Followed while reading"}),
+        )
+        .unwrap();
+        runtime.missions.book.missions[0].project = root.clone();
+        runtime
+            .worktree_catalog
+            .projects
+            .push(crate::model::ProjectWorktreesSnapshot {
+                root_path: root.clone(),
+                base_branch: Some("trunk".into()),
+                ..Default::default()
+            });
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "plan", "plan": {"nodes": [outside("first", "absent")]}}),
+        )
+        .unwrap();
+    }
+    first_call
+        .recv_timeout(Duration::from_secs(60))
+        .expect("the plan's read reached the node");
+    {
+        let mut runtime = fixture.runtime.lock().unwrap();
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "plan", "plan": {"nodes": [outside("first", "absent"), outside("last", "trunk")]}}),
+        )
+        .unwrap();
+        assert_eq!(node_view(&runtime, "last").status, NodeStatus::Planned);
+    }
+    held.open();
+
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        {
+            let runtime = fixture.runtime.lock().unwrap();
+            if node_view(&runtime, "last").status == NodeStatus::Done {
+                let first = node_view(&runtime, "first");
+                assert_eq!((first.status, first.unread), (NodeStatus::Waiting, true));
+                assert!(
+                    runtime
+                        .missions
+                        .outside
+                        .idle_for_test(crate::node::TEST_NODE, &root)
+                );
+                break;
+            }
+        }
+        changes
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .expect("the node planned during the read was read before the deadline");
     }
 }
