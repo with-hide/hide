@@ -389,9 +389,6 @@ impl Runtime {
         self.missions.book_edit = self.missions.book_edit.wrapping_add(1);
     }
 
-    /// Closes mission `id`, waiting for its merges, as done once its stack
-    /// is in main and every done node's lines still hold (B10, B18, B41);
-    /// whether it closed.
     /// Follows mission `id`'s outside nodes and waiting branches now, for a
     /// command that changed what is followed.
     fn follow_mission_outside(&mut self, id: &str) -> bool {
@@ -402,6 +399,9 @@ impl Runtime {
         self.follow_outside_stored(&device, &project)
     }
 
+    /// Closes mission `id`, waiting for its merges, as done once its stack
+    /// is in main and every done node's lines still hold (B10, B18, B41);
+    /// whether it closed.
     pub(super) fn close_if_landed(&mut self, id: &str, now: u64) -> bool {
         let Some(mission) = self.missions.book.get(id) else {
             return false;

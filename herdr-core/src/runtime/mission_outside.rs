@@ -20,7 +20,9 @@
 //! until every node followed then was read once (a pass): `n` followed
 //! nodes take `ceil(n / READ_LIMIT)` reads back to back, each node one `gh
 //! pr view` or at most four git calls, every call bounded by
-//! `NODE_TIMEOUT`.
+//! `NODE_TIMEOUT`. A trigger that comes while the project's read is out
+//! starts another pass once the one out ends; an answer, read or unread,
+//! starts none.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
@@ -50,6 +52,10 @@ pub(crate) struct Outside {
     /// Where each project's next read starts in its list of asks, for a
     /// project with more than one read's worth; one entry per project.
     pass: BTreeMap<Place, BTreeSet<(String, String)>>,
+    /// The projects a trigger came for while their read was out, which
+    /// read again from the start once that pass ends; one entry per
+    /// project, cleared by the pass it starts.
+    pending: BTreeSet<Place>,
     /// The outside nodes the last read could not answer, by mission and
     /// node, with why. Memory only: a restart reads them again.
     unread: BTreeMap<(String, String), String>,
@@ -68,11 +74,14 @@ impl Outside {
         *self.reopens.entry(mission.to_owned()).or_default() += 1;
     }
 
-    /// Whether `project` on `device` has no read out and no pass left.
+    /// Whether `project` on `device` has no read out, no pass left and no
+    /// trigger waiting.
     #[cfg(test)]
     pub(crate) fn idle_for_test(&self, device: &str, project: &str) -> bool {
         let place = (device.to_owned(), project.to_owned());
-        !self.reading.contains(&place) && !self.pass.contains_key(&place)
+        !self.reading.contains(&place)
+            && !self.pass.contains_key(&place)
+            && !self.pending.contains(&place)
     }
 
     pub(super) fn reopens_of(&self, mission: &str) -> u64 {
@@ -310,11 +319,10 @@ impl Runtime {
     ) -> bool {
         let mut changed = self.settle_outside(found);
         if asks.is_empty() {
-            // Nothing left to read ends the pass.
-            self.missions
-                .outside
-                .pass
-                .remove(&(device.to_owned(), project.to_owned()));
+            // Nothing left to read ends the pass and any trigger waiting.
+            let place = (device.to_owned(), project.to_owned());
+            self.missions.outside.pass.remove(&place);
+            self.missions.outside.pending.remove(&place);
         } else {
             changed |= self.read_outside(device, project, asks);
         }
@@ -373,12 +381,17 @@ impl Runtime {
     }
 
     /// Reads `asks` off the lock, unless this project's read is out; its
-    /// answer is followed when it comes back.
+    /// answer is followed when it comes back, and this trigger then too.
     fn read_outside(&mut self, device: &str, project: &str, asks: Vec<Ask>) -> bool {
         let place = (device.to_owned(), project.to_owned());
-        if self.worker_context.is_none() || self.missions.outside.reading.contains(&place) {
-            // A runtime without a worker (a test) reads nothing; a read out
-            // already answers for these nodes.
+        if self.worker_context.is_none() {
+            // A runtime without a worker (a test) reads nothing.
+            return false;
+        }
+        if self.missions.outside.reading.contains(&place) {
+            // The read out asked before this trigger: a node it added or
+            // changed is read in a pass from the start once that one ends.
+            self.missions.outside.pending.insert(place);
             return false;
         }
         let count = asks.len();
@@ -397,6 +410,10 @@ impl Runtime {
             }
             (left, more) => (left, more, read),
         };
+        if read.is_empty() {
+            // A pass that starts now answers every trigger before it.
+            self.missions.outside.pending.remove(&place);
+        }
         if more {
             if read.is_empty() {
                 crate::diagnostic!(json!({
@@ -450,8 +467,12 @@ impl Runtime {
     pub(crate) fn ingest_outside(&mut self, place: &Place, answers: Vec<(Ask, Found)>) -> bool {
         self.missions.outside.reading.remove(place);
         let mut changed = self.settle_outside(answers);
-        // A pass with nodes left reads them now, not at the next trigger.
-        if self.missions.outside.pass.contains_key(place) {
+        // A pass with nodes left reads them now, and a trigger that came
+        // while this read was out starts the next pass now, not at the next
+        // trigger; this answer itself, read or unread, sets neither.
+        if self.missions.outside.pass.contains_key(place)
+            || self.missions.outside.pending.contains(place)
+        {
             changed |= self.follow_outside_stored(&place.0, &place.1);
         }
         if changed {
