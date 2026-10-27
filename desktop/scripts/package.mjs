@@ -12,7 +12,9 @@
 // builds an unsigned per-user installer and Linux x64 an unsigned deb and rpm
 // (operator decision 2026-10-03, PRD auto-update D-07: no paid signing outside
 // macOS). Each is built on its own system, because the release binaries come from that
-// system's cargo build; nothing is cross-built.
+// system's cargo build. A Mac also consumes the two Linux device helper artifacts
+// built by device-helpers.yml at this exact source, version and build order,
+// publishing them separately while the app carries only their manifest.
 //
 // The CLI finds `hided` beside its own file and the daemon offers its own
 // program to a device, which runs it as `hided node serve`, so all of them
@@ -28,6 +30,8 @@ import { packager } from "@electron/packager";
 import { applyFuses, assertFuses } from "./fuses.mjs";
 import { APP_ID, buildInstallers } from "./installers.mjs";
 import { assertNotarized, developerIdOptions, macosSigning, notarizeApp } from "./macos-signing.mjs";
+import { orderOnMain, resolveVersion } from "./build-identity.mjs";
+import { DEVICE_PLATFORMS, DEVICE_BUNDLE_MANIFEST, prepareDeviceBundles } from "./device-helpers.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repo = path.resolve(root, "..");
@@ -36,15 +40,6 @@ const resources = path.join(root, "resources");
 
 /** Runs a tool in the repository; its stdout is the answer, unless `stdio` shows it instead. */
 const run = (file, args, options = {}) => execFileSync(file, args, { cwd: repo, stdio: ["ignore", "pipe", "inherit"], encoding: "utf8", ...options })?.trim() ?? "";
-
-/** The first-parent count of the last commit HEAD shares with main. */
-function orderOnMain() {
-  if (run("git", ["rev-parse", "--is-shallow-repository"]) === "true") {
-    throw new Error("a shallow checkout cannot count the package's place in main's history: fetch it, or set HIDE_BUILD_ORDER");
-  }
-  const base = run("git", ["merge-base", "HEAD", "origin/main"]);
-  return run("git", ["rev-list", "--first-parent", "--count", base]);
-}
 
 // Windows starts pnpm's `.cmd` shim only through a shell; the arguments here
 // are fixed words, so the shell has nothing to reinterpret.
@@ -83,34 +78,6 @@ const SYSTEMS = {
   },
 };
 
-// The app version comes from the release tag (release.yml passes
-// HIDE_VERSION). A local build is named after the newest release tag behind
-// it and its own commit, `0.4.0-main.<commit>`: it never claims a release it
-// is not, even on a tagged commit, and orders with the releases it follows
-// (hided's build_order reads MAJOR.MINOR.PATCH). That shape is no release
-// number, so the app never updates itself from it (src/main/updater.ts).
-function resolveVersion() {
-  const requested = process.env.HIDE_VERSION?.replace(/^v/, "");
-  if (requested) {
-    if (!/^[0-9]/.test(requested)) throw new Error(`HIDE_VERSION is not a version: '${requested}'`);
-    return requested;
-  }
-  let tag;
-  try {
-    tag = run("git", ["describe", "--tags", "--match", "v[0-9]*", "--abbrev=0"]);
-  } catch {
-    tag = "";
-  }
-  const release = /^v([0-9]+\.[0-9]+\.[0-9]+)/.exec(tag)?.[1];
-  if (!release) throw new Error(`HIDE_VERSION is unset and no v<version> tag is behind this tree (got '${tag || "nothing"}')`);
-  // A semver identifier of digits alone may not start with 0, so a commit
-  // that happens to be all digits keeps git's own `g` mark.
-  const short = run("git", ["rev-parse", "--short=8", "HEAD"]);
-  const commit = /^[0-9]+$/.test(short) ? `g${short}` : short;
-  const dirty = run("git", ["status", "--porcelain", "--untracked-files=no"]) !== "";
-  return `${release}-main.${commit}${dirty ? ".dirty" : ""}`;
-}
-
 const platform = process.platform;
 const system = SYSTEMS[platform];
 if (!system) throw new Error(`hide has no package for ${platform}`);
@@ -143,6 +110,13 @@ if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error(`the package's commit could 
 // names it in HIDE_BUILD_ORDER, or is refused.
 const order = process.env.HIDE_BUILD_ORDER || orderOnMain();
 if (!/^[0-9]+$/.test(order)) throw new Error(`the package's build order could not be read (got '${order}')`);
+// Required artifacts are checked before the native release build. No partial
+// Mac app may silently leave another supported system without its kit.
+const deviceBundles = path.join(out, "device-bundles");
+const deviceManifest = platform === "darwin"
+  ? prepareDeviceBundles(path.join(out, "device-helpers"), { version, commit, order }, deviceBundles,
+      Object.fromEntries(Object.keys(DEVICE_PLATFORMS).map((name) => [name, run("zsh", ["scripts/fetch-herdr-runtime.sh", "--platform", name])])))
+  : null;
 run("bash", ["scripts/verify-cargo.sh", "release"], { stdio: "inherit", env: { ...process.env, HIDE_VERSION: version, HIDE_COMMIT: commit, HIDE_BUILD_ORDER: order } });
 const herdr = system.herdr();
 
@@ -175,6 +149,7 @@ const extraResource = shipped.map(([name, source]) => {
   fs.chmodSync(target, 0o755);
   return target;
 });
+if (deviceManifest) extraResource.push(deviceManifest);
 for (const companion of herdr.companions) {
   const target = path.join(staged, path.basename(companion));
   fs.cpSync(companion, target, { recursive: true });
@@ -275,7 +250,8 @@ const [outputDir] = await packager({
     : []),
   ],
   ...(signing?.mode === "developer-id"
-    ? developerIdOptions(signing, shipped.map(([name]) => name), path.join(resources, "entitlements"), { [path.basename(notificationHelper)]: APP_BUNDLE_ID })
+    ? developerIdOptions(signing, shipped.map(([name]) => name), path.join(resources, "entitlements"),
+        { [path.basename(notificationHelper)]: APP_BUNDLE_ID })
     : {}),
 });
 
@@ -312,6 +288,17 @@ if (platform === "darwin") {
 // The installers wrap the app as it stands; a Developer ID build's dmg is
 // signed and notarized there too.
 const installers = await buildInstallers({ app: bundle, version, out: release, signing });
+if (deviceManifest) {
+  const manifest = JSON.parse(fs.readFileSync(path.join(bundledResources, DEVICE_BUNDLE_MANIFEST), "utf8"));
+  for (const [devicePlatform, { asset }] of Object.entries(manifest.platforms)) {
+    for (const name of ["hided", "hide", "hide-agent-hooks", "herdr"]) {
+      if (fs.existsSync(path.join(bundledResources, `${name}-${devicePlatform}`))) throw new Error("foreign device binaries must not ship in the app");
+    }
+    fs.copyFileSync(path.join(deviceBundles, asset), path.join(release, asset));
+  }
+  fs.copyFileSync(deviceManifest, path.join(release, DEVICE_BUNDLE_MANIFEST));
+  console.log(`device_manifest_bytes=${fs.statSync(deviceManifest).size}`);
+}
 // What a downloader of the update gets is the zip, so Gatekeeper judges the app expanded from it.
 if (signing?.mode === "developer-id") {
   const zip = Object.values(installers).find((file) => file.endsWith(".zip"));

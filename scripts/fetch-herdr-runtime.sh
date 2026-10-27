@@ -1,15 +1,14 @@
 #!/bin/zsh
 # Produces the pinned Herdr binary for an app build and prints its path.
 #
-# Usage: fetch-herdr-runtime.sh [--platform macos-aarch64|linux-x86_64]
+# Usage: fetch-herdr-runtime.sh [--platform PLATFORM]
 #
 # The asset is kept in a cache keyed by its digest, so the release build, the
 # development build and the bump script all read the same verified file and a
 # second build on the same machine downloads nothing. A cached file whose
 # digest no longer matches the pin is discarded rather than trusted.
 #
-# `--platform linux-x86_64` is the same release's Linux asset, whose digest the
-# manifest records under `linux_x86_64`; only the Linux CI checks lane asks for it.
+# Foreign device assets are digest-verified without trying to execute them.
 set -euo pipefail
 
 export LC_ALL=en_US.UTF-8
@@ -28,12 +27,12 @@ platform=macos-aarch64
 while (( $# > 0 )); do
   case "$1" in
     --platform)
-      (( $# >= 2 )) || { print -u2 -- "usage: $0 [--platform macos-aarch64|linux-x86_64]"; exit 2; }
+      (( $# >= 2 )) || { print -u2 -- "usage: $0 [--platform PLATFORM]"; exit 2; }
       platform=$2
       shift 2
       ;;
     *)
-      print -u2 -- "usage: $0 [--platform macos-aarch64|linux-x86_64]"
+      print -u2 -- "usage: $0 [--platform PLATFORM]"
       exit 2
       ;;
   esac
@@ -41,6 +40,7 @@ done
 case "$platform" in
   macos-aarch64) pin_path='' ;;
   linux-x86_64) pin_path='.linux_x86_64' ;;
+  linux-aarch64) pin_path='.linux_aarch64' ;;
   *)
     print -u2 -- "error: unknown Herdr platform: $platform"
     exit 2
@@ -94,11 +94,18 @@ actual_sha256=$(digest_of "$downloaded")
   print -u2 -- "pinned_sha256=$sha256 downloaded_sha256=$actual_sha256 url=$source_url"
   exit 1
 }
-actual_version=$("$downloaded" --version | /usr/bin/awk '{print $NF}')
-[[ "$actual_version" == "$version" ]] || {
-  print -u2 -- "error: downloaded Herdr asset reports $actual_version, not the pinned $version"
-  exit 1
-}
+host_os=$(uname -s)
+host_arch=$(uname -m)
+[[ "$host_os" != Darwin ]] || host_os=macos
+[[ "$host_os" != Linux ]] || host_os=linux
+[[ "$host_arch" != arm64 ]] || host_arch=aarch64
+if [[ "$platform" == "$host_os-$host_arch" ]]; then
+  actual_version=$("$downloaded" --version | /usr/bin/awk '{print $NF}')
+  [[ "$actual_version" == "$version" ]] || {
+    print -u2 -- "error: downloaded Herdr asset reports $actual_version, not the pinned $version"
+    exit 1
+  }
+fi
 
 mkdir -p "${cached:h}"
 install -m 755 "$downloaded" "$cached"

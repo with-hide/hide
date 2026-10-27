@@ -70,6 +70,7 @@ target/debug/examples/export_journey_contract > contracts/agent-journey.json
 `scripts/install-agent-clis.py` reads it to install each CLI on a runner and fails when a CLI answers another version, and the agent journey reads it to say in its report whether the CLI it measured answered that version, which fails its lane otherwise; a row whose installer takes no version (agy's) says so in `pinned`, and its version is checked, not installed, so a new vendor release fails until its pin moves.
 omp's binary is checked against its release's `SHA256SUMS.txt`; Grok's and agy's vendor installers publish no checksum, so only the version each answers is checked.
 Move a pin in a pull request: a change to this file or an installer plans the `agent CLIs` lane, which installs every pinned CLI on Linux and Windows; no workflow restates a version.
+The daily agent canary measures each CLI's latest release in place of these pins and keeps the result in the "Agent CLI support record" issue ([VERIFICATION.md: The agent canary](../docs/VERIFICATION.md#the-agent-canary)); a pin moves when a change needs it, such as the fix for a release the canary found failing.
 
 # hide CLI contract
 

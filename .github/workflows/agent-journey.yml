@@ -53,6 +53,16 @@ on:
         description: Also run the real CLIs against the journey's fake model, with no key.
         type: boolean
         default: false
+      stand-ins:
+        description: Run the stand-ins and the Windows forms, which measure Hide and no agent CLI.
+        type: boolean
+        default: true
+      clis-table:
+        description: >-
+          A table of contracts/agent-clis.json's shape for the fake lane to install and measure instead
+          of the pins; the daily agent canary passes each CLI's latest release (agent-canary.yml).
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -66,7 +76,7 @@ jobs:
   fixture:
     name: agent journey stand-ins (${{ matrix.system }})
     # A Windows-only run leaves no system for the stand-ins.
-    if: ${{ inputs.systems != '["windows"]' }}
+    if: ${{ inputs.stand-ins != false && inputs.systems != '["windows"]' }}
     runs-on: ${{ fromJSON('{"linux":"ubuntu-latest","macos":"macos-15"}')[matrix.system] }}
     # Every job's cap is at least the sum of its steps' caps, so a step that
     # times out still leaves the report's upload its time
@@ -148,7 +158,7 @@ jobs:
 
   windows-forms:
     name: agent journey Windows forms
-    if: ${{ contains(fromJSON(inputs.systems), 'windows') }}
+    if: ${{ inputs.stand-ins != false && contains(fromJSON(inputs.systems), 'windows') }}
     runs-on: windows-latest
     timeout-minutes: 25
     defaults:
@@ -222,6 +232,16 @@ jobs:
         if: runner.os == 'Linux'
         timeout-minutes: 5
         run: sudo apt-get install -y --no-install-recommends zsh
+      - name: Measure the CLI versions the caller named
+        # The install, the report's version check and the lane's verdict all
+        # read this table instead of the pins (scripts/agent_journey/clis.py).
+        if: ${{ inputs.clis-table != '' }}
+        timeout-minutes: 1
+        env:
+          TABLE: ${{ inputs.clis-table }}
+        run: |
+          printf '%s\n' "$TABLE" > "$RUNNER_TEMP/agent-clis.json"
+          echo "HIDE_AGENT_CLIS_TABLE=$RUNNER_TEMP/agent-clis.json" >> "$GITHUB_ENV"
       - name: Install the pinned agent CLIs
         timeout-minutes: 10
         run: '"$PYTHON" scripts/install-agent-clis.py --all'

@@ -546,6 +546,17 @@ The journey reads what hide, Herdr and the agents write as UTF-8 and refuses to 
   A missing row, missing cell, `not measured`, `pending`, or `N/A` for declared behavior fails even when the report's selected-agent list omits the agent or its own exit code says success.
   Run 39152230964 is green for those two and all other selected agents on all three systems; the workflow still runs the stand-in lane as harness coverage, and its synthetic results are kept apart from the real-CLI evidence.
 `scripts/agent-journey-lane.py` turns a report into the lane's verdict and its annotations, and the lane keeps the report as an artifact.
+
+### The agent canary
+
+Every lane above measures the pins, so a vendor release that breaks Hide would otherwise reach an operator who updated before any lane saw it.
+`.github/workflows/agent-canary.yml` runs daily: it reads each CLI's latest release where that CLI's own installer reads it (`scripts/agent-cli-latest.py`: npm's `latest` tag, Grok's `stable` channel, omp's latest GitHub release, agy's manifest) and Herdr's latest release, and runs the fake model lane on Linux, macOS and Windows with that table in place of the pins (`agent-journey.yml`'s `clis-table`, which the install, the report's version check and the lane's verdict read through `HIDE_AGENT_CLIS_TABLE`); the stand-ins, which measure no CLI, are left out.
+A day on which no version moved since the last run starts no journey, and a source that answers no version fails the run rather than measuring the pin under the latest's name.
+`scripts/agent-canary-record.py` keeps the result in one issue labelled `agent-canary`, "Agent CLI support record": per agent the latest version checked and its verdict, the last version that passed and when, and the pin, with the state the next run reads in a comment of the body, so nothing is committed.
+An agent passes only when every system's report has its row and every declared cell came out as declared; a system without a report judges no agent and is measured again the next day.
+An agent whose latest release fails gets one issue naming each system and cell, a comment when a later release fails differently, and the issue is closed when a release passes; the fix moves the pin in its own pull request, whose CI proves it on that version.
+No pull request is opened for a release that passes: the pins move when a change needs them.
+
 The runner and the lane judge load the same generated adapter contract through `scripts/agent_journey/contract.py`, refusing duplicate ids, missing or unknown cells, and non-boolean declarations.
 A skipped cell is never proof of support.
 `scripts/tests/test_agent_journey_contract.py` requires every active adapter's local-isolation, CI home and fake-model routes and a matching CLI pin, so adding an adapter without its journey setup fails the script suite.

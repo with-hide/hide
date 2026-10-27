@@ -110,7 +110,7 @@ function compareAssets(remote, manifest, complete = false) {
 
 export async function prepareDraft({ tag, sha, directory, client }) {
   if (!/^[a-f0-9]{40}$/.test(sha)) throw new Error("the release event must identify an exact commit SHA");
-  const manifest = await verifyAssets(tag, directory);
+  const manifest = await verifyAssets(tag, directory, { sourceSha: sha });
   const marker = `<!-- hide-release-source:${sha} -->`;
   async function preflight() {
     if (await client.tag(tag) !== sha) throw new Error("the current tag no longer identifies the release event commit");

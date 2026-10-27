@@ -10,11 +10,16 @@
     "source_url": "https://github.com/herdrdev/herdr/releases/download/v0.9.5/herdr-linux-x86_64",
     "sha256": "14d9e8bc8b4a9e0118d77c32266f76d461f09b40342eb23752960bd89f59929d"
   },
-  "verification": "This file is the single source of the pin. scripts/fetch-herdr-runtime.sh downloads and verifies the asset against it for every app build and e2e run, and desktop/scripts/package.mjs ships that verified binary inside hide.app. linux_x86_64 is the same release's Linux asset, which only the Linux checks lane runs for the schema comparison; its digest is recorded here for the same reason. windows_x86_64 is the same release's Windows zip (herdr.exe and its ConPTY runtime): scripts/fetch-herdr-runtime.ps1 verifies and unpacks it for the Windows lane, which is the only place it runs. contracts/herdr-api.schema.json is the schema this binary reports. Change all of it with scripts/bump-herdr.sh <release-tag>, never by hand.",
+  "verification": "This file is the single source of the pin for host and device platforms. scripts/fetch-herdr-runtime.sh and .ps1 verify the bytes against it; native lanes execute the matching platform. desktop/scripts/package.mjs carries the host asset and publishes the Linux device assets separately on Mac. contracts/herdr-api.schema.json is the schema the pinned host binary reports. Change the pin with scripts/bump-herdr.sh <release-tag>.",
   "repo": "herdrdev/herdr",
   "windows_x86_64": {
     "platform": "windows-x86_64",
     "source_url": "https://github.com/herdrdev/herdr/releases/download/v0.9.5/herdr-windows-x86_64.zip",
     "sha256": "d2c6c9c971c43a0bfdde8c692a9a1a7a45c3e4807cd01ae45662b4734fac1cbf"
+  },
+  "linux_aarch64": {
+    "platform": "linux-aarch64",
+    "source_url": "https://github.com/herdrdev/herdr/releases/download/v0.9.5/herdr-linux-aarch64",
+    "sha256": "17d7536f2da50859523680ef279dffcac8e4a235f4e46fe8da6c2ec44141897c"
   }
 }
