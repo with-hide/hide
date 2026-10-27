@@ -1,7 +1,8 @@
 use crate::file_cache;
 use crate::{
-    Agent, ConversationEvent, EventKind, SESSION_LINE_LIMIT_BYTES, SESSION_READ_LIMIT_BYTES,
-    parse_events, read_bounded, read_bounded_line,
+    Agent, ConversationCheckpoint, ConversationCursor, ConversationEvent, EventKind, ParsedSession,
+    SESSION_LINE_LIMIT_BYTES, SESSION_READ_LIMIT_BYTES, SessionError, parse_events, read_bounded,
+    read_bounded_line,
 };
 use hide_project::ProjectIdentity;
 use serde::{Deserialize, Serialize};
@@ -238,8 +239,14 @@ impl SessionCatalog {
             if identity.id != project.id {
                 continue;
             }
-            let read = || read_project_session(&self.home, agent, path.clone(), cwd.clone());
-            if let Some(session) = file_cache::session(&path, stamp, read) {
+            let session = if file_cache::keeps(agent) {
+                Some(file_cache::session(&path, stamp, |earlier| {
+                    list_transcript(agent, &path, &cwd, earlier.and_then(|(_, kept)| kept))
+                }))
+            } else {
+                read_project_session(&self.home, agent, path.clone(), cwd.clone())
+            };
+            if let Some(session) = session {
                 sessions.push(session);
             }
         }
@@ -426,6 +433,8 @@ fn session_cwd(agent: Agent, path: &Path) -> Option<PathBuf> {
     }
 }
 
+/// A session of an agent other than Claude Code and Codex
+/// ([`list_transcript`]), read whole on every listing.
 fn read_project_session(
     home: &Path,
     agent: Agent,
@@ -544,6 +553,129 @@ fn read_project_session(
             SessionAvailability::Unavailable { reason }
         }),
     })
+}
+
+/// What a Claude or Codex transcript's records said so far, and where the
+/// read that said it stopped. The read is the label and Memory readers' own
+/// [`ConversationCursor`], so an appended file is read on from its
+/// checkpoint, a file that got shorter or was replaced is read from its start
+/// (the cursor's rule), and a torn last record is read again whole once its
+/// rest is written. A listing that starts with nothing kept reads the same
+/// way from byte zero, so a continued read lists what a cold one lists.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Transcript {
+    checkpoint: ConversationCheckpoint,
+    first_human_request: Option<String>,
+    started_at_unix_ms: Option<u64>,
+    last_event_at_unix_ms: Option<u64>,
+    events: usize,
+    skipped_lines: usize,
+    title: Option<String>,
+    custom_title: Option<String>,
+}
+
+impl Transcript {
+    /// Adds one read's records. Claude Code and Codex write each message as
+    /// one record, so no event of this read continues one of an earlier read.
+    fn add(&mut self, parsed: ParsedSession) {
+        if parsed.rescan_reason.is_some() {
+            *self = Self::default();
+        }
+        debug_assert!(parsed.events.iter().all(|event| event.part().is_none()));
+        if self.first_human_request.is_none() {
+            self.first_human_request = first_human(&parsed.events).map(compact_snippet);
+        }
+        if let Some(first) = parsed.events.first() {
+            self.started_at_unix_ms.get_or_insert(first.at_unix_ms);
+        }
+        if let Some(last) = parsed.events.last() {
+            self.last_event_at_unix_ms = Some(last.at_unix_ms);
+        }
+        self.events += parsed.events.len();
+        self.skipped_lines += parsed.skipped_lines;
+        if parsed.title.is_some() {
+            self.title = parsed.title;
+        }
+        if parsed.custom_title.is_some() {
+            self.custom_title = parsed.custom_title;
+        }
+    }
+
+    /// Reads `path` on from this transcript's checkpoint up to at least
+    /// `length`, the size its stamp saw, one cursor window at a time; bytes
+    /// written after that wait for the next listing, whose stamp moved.
+    fn read_on(mut self, agent: Agent, path: &Path, length: u64) -> Result<Self, SessionError> {
+        let mut cursor = ConversationCursor::restore(std::mem::take(&mut self.checkpoint));
+        loop {
+            let before = cursor.checkpoint().offset();
+            self.add(cursor.read(agent, path)?);
+            let after = cursor.checkpoint().offset();
+            if !cursor.has_more() || after >= length || after == before {
+                break;
+            }
+        }
+        self.checkpoint = cursor.checkpoint();
+        Ok(self)
+    }
+}
+
+/// The listed facts of a Claude or Codex transcript, read on from `kept`,
+/// what its last listing read, and where this read stopped. A file past the
+/// size cap is answered from its size alone, so nothing of it is kept.
+fn list_transcript(
+    agent: Agent,
+    path: &Path,
+    cwd: &Path,
+    kept: Option<Transcript>,
+) -> file_cache::Listed {
+    let metadata = fs::metadata(path).ok();
+    let modified_unix_ms = metadata
+        .as_ref()
+        .and_then(|value| value.modified().ok())
+        .and_then(system_time_ms)
+        .unwrap_or_default();
+    let read = match &metadata {
+        None => Err("session_missing".to_owned()),
+        Some(metadata) if metadata.len() > SESSION_READ_LIMIT_BYTES => {
+            Err("session_too_large".to_owned())
+        }
+        Some(metadata) => kept
+            .unwrap_or_default()
+            .read_on(agent, path, metadata.len())
+            .map_err(|error| format!("session_unreadable:{error}")),
+    };
+    let transcript = read.as_ref().ok();
+    let session = ProjectSession {
+        id: session_id(agent, path),
+        agent,
+        locator: path.to_path_buf(),
+        checkout_path: cwd.to_path_buf(),
+        first_human_request: transcript.and_then(|read| read.first_human_request.clone()),
+        started_at_unix_ms: transcript.and_then(|read| read.started_at_unix_ms),
+        updated_at_unix_ms: transcript
+            .and_then(|read| read.last_event_at_unix_ms)
+            .unwrap_or(modified_unix_ms),
+        title: transcript.and_then(|read| {
+            read.custom_title
+                .as_ref()
+                .filter(|title| !title.trim().is_empty())
+                .or(read.title.as_ref().filter(|title| !title.trim().is_empty()))
+                .cloned()
+        }),
+        event_count: transcript.map_or(0, |read| read.events),
+        availability: match &read {
+            Ok(read) if read.events == 0 && read.skipped_lines > 0 => {
+                SessionAvailability::Unavailable {
+                    reason: "session_malformed".to_owned(),
+                }
+            }
+            Ok(_) => SessionAvailability::Available,
+            Err(reason) => SessionAvailability::Unavailable {
+                reason: reason.clone(),
+            },
+        },
+    };
+    (session, read.ok())
 }
 
 fn first_human(events: &[ConversationEvent]) -> Option<&str> {
@@ -903,5 +1035,269 @@ mod tests {
             Some("alpha request")
         );
         assert_eq!(crate::file_cache::kept(&home), (1, 1));
+    }
+
+    /// A home with one project, whose Claude and Codex transcripts a test
+    /// writes and lists; a cold listing forgets what earlier ones kept.
+    struct Transcripts {
+        _root: tempfile::TempDir,
+        home: PathBuf,
+        cwd: String,
+        project: ProjectIdentity,
+    }
+
+    const ONE_AM: u64 = 1_789_952_400_000;
+    const HOUR: u64 = 3_600_000;
+
+    impl Transcripts {
+        fn new() -> Self {
+            let root = tempdir().unwrap();
+            let home = root.path().join("home");
+            let project_root = root.path().join("project");
+            fs::create_dir_all(home.join(".claude/projects/p")).unwrap();
+            fs::create_dir_all(home.join(".codex/sessions/2026/09/21")).unwrap();
+            fs::create_dir_all(&project_root).unwrap();
+            let project = hide_project::resolve(&project_root, "local").unwrap();
+            Self {
+                cwd: serde_json::to_string(&project_root).unwrap(),
+                _root: root,
+                home,
+                project,
+            }
+        }
+
+        fn claude_file(&self) -> PathBuf {
+            self.home.join(".claude/projects/p/claude-grows.jsonl")
+        }
+
+        fn codex_file(&self) -> PathBuf {
+            self.home
+                .join(".codex/sessions/2026/09/21/rollout-grows.jsonl")
+        }
+
+        /// A Claude Code record of the operator's (`user`) or the agent's,
+        /// written at `hour` o'clock.
+        fn claude(&self, role: &str, hour: u64, text: &str) -> String {
+            format!(
+                "{{\"type\":\"{role}\",\"cwd\":{},\"timestamp\":\"2026-09-21T0{hour}:00:00Z\",\"userType\":\"external\",\"promptId\":\"prompt-{hour}\",\"message\":{{\"role\":\"{role}\",\"content\":{}}}}}\n",
+                self.cwd,
+                serde_json::to_string(text).unwrap()
+            )
+        }
+
+        fn codex_meta(&self) -> String {
+            format!(
+                "{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"codex-grows\",\"cwd\":{}}}}}\n",
+                self.cwd
+            )
+        }
+
+        fn codex(&self, role: &str, hour: u64, text: &str) -> String {
+            let kind = if role == "user" {
+                "input_text"
+            } else {
+                "output_text"
+            };
+            format!(
+                "{{\"type\":\"response_item\",\"timestamp\":\"2026-09-21T0{hour}:00:00Z\",\"payload\":{{\"type\":\"message\",\"role\":\"{role}\",\"content\":[{{\"type\":\"{kind}\",\"text\":{}}}]}}}}\n",
+                serde_json::to_string(text).unwrap()
+            )
+        }
+
+        fn append(path: &Path, text: &str) {
+            let mut file = fs::OpenOptions::new().append(true).open(path).unwrap();
+            std::io::Write::write_all(&mut file, text.as_bytes()).unwrap();
+        }
+
+        fn list(&self) -> Vec<ProjectSession> {
+            SessionCatalog::new(&self.home, "local")
+                .project_sessions(&self.project)
+                .unwrap()
+                .sessions
+        }
+
+        /// The listing a process that never listed this home would make.
+        fn cold(&self) -> Vec<ProjectSession> {
+            file_cache::retain(&self.home, &HashSet::new());
+            assert_eq!(file_cache::kept(&self.home), (0, 0));
+            self.list()
+        }
+
+        /// The listing after a change, checked against a cold one.
+        fn list_as_cold(&self) -> Vec<ProjectSession> {
+            let warm = self.list();
+            assert_eq!(warm, self.cold());
+            warm
+        }
+    }
+
+    /// What the Sessions list shows of each session: its request, how many
+    /// events, its last activity and its title.
+    fn shown(sessions: &[ProjectSession]) -> Vec<(Agent, Option<&str>, usize, u64, Option<&str>)> {
+        sessions
+            .iter()
+            .map(|session| {
+                (
+                    session.agent,
+                    session.first_human_request.as_deref(),
+                    session.event_count,
+                    session.updated_at_unix_ms,
+                    session.title.as_deref(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_appended_transcript_lists_what_a_cold_read_lists() {
+        let home = Transcripts::new();
+        let (claude, codex) = (home.claude_file(), home.codex_file());
+        fs::write(&claude, home.claude("user", 1, "alpha request")).unwrap();
+        fs::write(
+            &codex,
+            home.codex_meta() + &home.codex("user", 2, "beta request"),
+        )
+        .unwrap();
+        assert_eq!(
+            shown(&home.list_as_cold()),
+            vec![
+                (Agent::Codex, Some("beta request"), 1, ONE_AM + HOUR, None),
+                (Agent::Claude, Some("alpha request"), 1, ONE_AM, None),
+            ]
+        );
+
+        Transcripts::append(
+            &claude,
+            &(home.claude("assistant", 3, "done")
+                + "{\"type\":\"ai-title\",\"aiTitle\":\"Alpha work\"}\n"
+                + &home.claude("user", 4, "gamma request")),
+        );
+        Transcripts::append(&codex, &home.codex("assistant", 3, "answered"));
+        assert_eq!(
+            shown(&home.list_as_cold()),
+            vec![
+                (
+                    Agent::Claude,
+                    Some("alpha request"),
+                    3,
+                    ONE_AM + 3 * HOUR,
+                    Some("Alpha work")
+                ),
+                (
+                    Agent::Codex,
+                    Some("beta request"),
+                    2,
+                    ONE_AM + 2 * HOUR,
+                    None
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_shorter_or_replaced_transcript_is_listed_from_its_start() {
+        let home = Transcripts::new();
+        let claude = home.claude_file();
+        fs::write(
+            &claude,
+            home.claude("user", 1, "alpha request") + &home.claude("user", 2, "beta request"),
+        )
+        .unwrap();
+        assert_eq!(shown(&home.list())[0].2, 2);
+
+        // Cut short in place: the same file, fewer bytes than were read.
+        fs::write(&claude, home.claude("user", 3, "gamma")).unwrap();
+        assert_eq!(
+            shown(&home.list_as_cold()),
+            vec![(Agent::Claude, Some("gamma"), 1, ONE_AM + 2 * HOUR, None)]
+        );
+
+        // Replaced by another file at the same path, longer than the first.
+        let next = claude.with_extension("next");
+        fs::write(
+            &next,
+            home.claude("user", 4, "delta request") + &home.claude("assistant", 4, "ok"),
+        )
+        .unwrap();
+        fs::rename(&next, &claude).unwrap();
+        assert_eq!(
+            shown(&home.list_as_cold()),
+            vec![(
+                Agent::Claude,
+                Some("delta request"),
+                2,
+                ONE_AM + 3 * HOUR,
+                None
+            )]
+        );
+    }
+
+    #[test]
+    fn a_record_appended_in_two_writes_is_counted_once_it_is_whole() {
+        let home = Transcripts::new();
+        let codex = home.codex_file();
+        let record = home.codex("user", 2, "second request");
+        let (head, tail) = record.split_at(record.len() / 2);
+        fs::write(
+            &codex,
+            home.codex_meta() + &home.codex("user", 1, "first request") + head,
+        )
+        .unwrap();
+        // The torn record is not a session event yet.
+        assert_eq!(
+            shown(&home.list_as_cold()),
+            vec![(Agent::Codex, Some("first request"), 1, ONE_AM, None)]
+        );
+
+        Transcripts::append(&codex, tail);
+        assert_eq!(
+            shown(&home.list_as_cold()),
+            vec![(Agent::Codex, Some("first request"), 2, ONE_AM + HOUR, None)]
+        );
+    }
+
+    #[test]
+    fn a_transcript_longer_than_one_read_window_is_listed_whole() {
+        let home = Transcripts::new();
+        let claude = home.claude_file();
+        let filler = "x".repeat(1000);
+        let records = (0..1500)
+            .map(|_| home.claude("assistant", 2, &filler))
+            .collect::<String>();
+        assert!(records.len() as u64 > crate::SESSION_INCREMENT_READ_LIMIT_BYTES);
+        fs::write(&claude, home.claude("user", 1, "alpha request") + &records).unwrap();
+        assert_eq!(
+            shown(&home.list_as_cold()),
+            vec![(
+                Agent::Claude,
+                Some("alpha request"),
+                1501,
+                ONE_AM + HOUR,
+                None
+            )]
+        );
+        Transcripts::append(&claude, &records);
+        assert_eq!(shown(&home.list_as_cold())[0].2, 3001);
+    }
+
+    #[test]
+    fn an_appended_transcript_is_read_on_from_where_its_last_read_stopped() {
+        let home = Transcripts::new();
+        let claude = home.claude_file();
+        let first = home.claude("user", 1, "alpha request");
+        fs::write(&claude, &first).unwrap();
+        assert_eq!(shown(&home.list())[0].1, Some("alpha request"));
+
+        // Bytes already read are not read again: overwriting them in place,
+        // which no agent does, changes nothing a continued listing shows,
+        // while the record appended after them is counted.
+        let mut file = fs::OpenOptions::new().write(true).open(&claude).unwrap();
+        std::io::Write::write_all(&mut file, &vec![b'x'; first.len() - 1]).unwrap();
+        drop(file);
+        Transcripts::append(&claude, &home.claude("user", 2, "beta request"));
+        assert_eq!(
+            shown(&home.list()),
+            vec![(Agent::Claude, Some("alpha request"), 2, ONE_AM + HOUR, None)]
+        );
     }
 }

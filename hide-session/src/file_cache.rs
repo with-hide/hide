@@ -3,13 +3,14 @@
 //!
 //! The catalog lists every session on each call, and each project's read
 //! and each memory pass make that call, so an unchanged transcript would be
-//! opened and parsed again every time. A file whose stamp moved, or whose
-//! stamp cannot be read, is read in full as before. Entries whose file left
-//! the listing of their home are dropped, so a home holds no more files than
-//! that listing's own `SESSION_DISCOVERY_LIMIT` cap admits.
+//! opened and parsed again every time. A file whose stamp moved is read on
+//! from where its last read stopped (`catalog::Transcript`); a file whose
+//! stamp cannot be read is read whole and nothing is kept. Entries whose file
+//! left the listing of their home are dropped, so a home holds no more files
+//! than that listing's own `SESSION_DISCOVERY_LIMIT` cap admits.
 
 use crate::Agent;
-use crate::catalog::{ProjectSession, SessionAvailability};
+use crate::catalog::{ProjectSession, SessionAvailability, Transcript};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -17,7 +18,11 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 type Kept<T> = Mutex<HashMap<PathBuf, (String, T)>>;
 
 static HEADERS: OnceLock<Kept<Option<PathBuf>>> = OnceLock::new();
-static SESSIONS: OnceLock<Kept<Option<ProjectSession>>> = OnceLock::new();
+static SESSIONS: OnceLock<Kept<Listed>> = OnceLock::new();
+
+/// A transcript's listed facts and where its read stopped; `None` for a file
+/// the listing answers without reading it (one past the size cap).
+pub(crate) type Listed = (ProjectSession, Option<Transcript>);
 
 /// Whether a session's facts come from its own file alone, so its stamp
 /// says whether they are current. Grok, Pi, omp, Antigravity and Cursor
@@ -35,20 +40,23 @@ pub(crate) fn header_cwd(
     stamp: Option<String>,
     read: impl FnOnce() -> Option<PathBuf>,
 ) -> Option<PathBuf> {
-    fetch(&HEADERS, path, stamp, read, |cwd| cwd.is_some())
+    fetch(&HEADERS, path, stamp, |_| read(), |cwd| cwd.is_some())
 }
 
-/// The listed facts of a session file, kept while `path` holds `stamp`. Only
-/// facts derived from bytes that were read are kept: an `Unavailable` answer
-/// from a failed open, read or metadata call is read again on the next listing.
+/// The listed facts of a session file, kept while `path` holds `stamp`.
+/// When the stamp moved, `read` is handed what the file's last read kept, so
+/// it reads on from there. Only facts derived from bytes that were read are
+/// kept: an `Unavailable` answer from a failed open, read or metadata call is
+/// read again, from the start, on the next listing.
 pub(crate) fn session(
     path: &Path,
     stamp: Option<String>,
-    read: impl FnOnce() -> Option<ProjectSession>,
-) -> Option<ProjectSession> {
-    fetch(&SESSIONS, path, stamp, read, |session| {
-        session.as_ref().is_none_or(settled)
+    read: impl FnOnce(Option<Listed>) -> Listed,
+) -> ProjectSession {
+    fetch(&SESSIONS, path, stamp, read, |(session, _)| {
+        settled(session)
     })
+    .0
 }
 
 /// Whether a session's answer follows from its bytes alone: readable, or a
@@ -75,23 +83,25 @@ pub(crate) fn retain(home: &Path, listed: &HashSet<PathBuf>) {
     }
 }
 
+/// The value kept for `path` while it holds `stamp`; otherwise `read`'s
+/// answer, which is handed the value kept for an earlier stamp.
 fn fetch<T: Clone>(
     kept: &OnceLock<Kept<T>>,
     path: &Path,
     stamp: Option<String>,
-    read: impl FnOnce() -> T,
+    read: impl FnOnce(Option<T>) -> T,
     keep: impl FnOnce(&T) -> bool,
 ) -> T {
     let Some(stamp) = stamp else {
-        return read();
+        return read(None);
     };
     let kept = kept.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some((held, value)) = lock(kept).get(path)
-        && *held == stamp
-    {
-        return value.clone();
-    }
-    let value = read();
+    let earlier = match lock(kept).get(path) {
+        Some((held, value)) if *held == stamp => return value.clone(),
+        Some((_, value)) => Some(value.clone()),
+        None => None,
+    };
+    let value = read(earlier);
     if keep(&value) {
         lock(kept).insert(path.to_path_buf(), (stamp, value.clone()));
     } else {
