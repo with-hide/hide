@@ -797,8 +797,14 @@ it("says a Conductor's waiting decision on its second line, else the nodes at wo
   const running = await mount({ working: true, notice: null, band: null, progress: "Reading the inbox" }, [conductor], { rest: rest(null) });
   try {
     const line = running.container.querySelector<HTMLElement>("[data-pane-own-progress]")!;
-    expect([line.dataset.paneMissionLine, line.textContent]).toEqual(["running", "Running 2 · api title and 1 more"]);
+    expect([line.dataset.paneMissionLine, line.textContent]).toEqual(["running", "api title and 1 more"]);
   } finally { await running.unmount(); }
+  // A Conductor waiting on its workers says the nodes at work once, not also its children's count.
+  const waiting = await mount({ working: false, notice: null, band: null, waiting_on_children: 2 }, [conductor], { rest: rest(null) });
+  try {
+    expect(waiting.container.querySelector("[data-pane-children-wait]")).toBeNull();
+    expect(waiting.container.querySelector("[data-pane-own-progress]")?.textContent).toBe("api title and 1 more");
+  } finally { await waiting.unmount(); }
   const deciding = await mount({ working: true, notice: null, band: null, progress: "Reading the inbox" }, [conductor], { rest: rest("Which base?") });
   try {
     const line = deciding.container.querySelector<HTMLElement>("[data-pane-own-progress]")!;
