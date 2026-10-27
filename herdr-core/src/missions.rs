@@ -27,7 +27,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::delivery::Actor;
 use crate::latest_file::{LatestFile, read_capped};
-use crate::mission_criteria::{CheckInput, Criterion, Rule};
+use crate::mission_criteria::{CheckInput, Criterion};
 
 const SCHEMA_VERSION: u32 = 2;
 /// The schema before node criteria, read and converted (D-19).
@@ -419,10 +419,21 @@ pub struct Mission {
     /// admits any agent.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub candidates: Vec<Candidate>,
-    /// Settings › Conductor's review and verify defaults when the mission
-    /// was created (D-22, B36); none for a mission from before them.
+    /// How strongly the Conductor has the nodes checked: Settings ›
+    /// Conductor's default when the mission was created, then what its plan
+    /// names. None for a mission from before it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub checkers: Option<CheckerDefaults>,
+    pub strength: Option<Strength>,
+    /// Settings › Conductor's choice of a checker from another company when
+    /// the mission was created; none for a mission from before it, whose
+    /// `checkers` say it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub other_vendor: Option<bool>,
+    /// The review and verify defaults a mission created before verification
+    /// strength recorded (PRD mission-map-git-criteria D-22), kept as
+    /// written for its Conductor to read; no mission records them now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkers: Option<serde_json::Value>,
     /// Made before node criteria: no node needs one and nothing is gated
     /// on them (D-19, B23).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -539,10 +550,12 @@ pub struct ConductorSettings {
     pub default_scope: MissionScope,
     #[serde(default)]
     pub candidates: Vec<Candidate>,
-    /// Who reviews and verifies a node by default (PRD
-    /// mission-map-git-criteria D-22, B36).
+    /// How strongly a new mission's nodes are checked.
     #[serde(default)]
-    pub checkers: CheckerDefaults,
+    pub default_strength: Strength,
+    /// Prefer a checker of another company than the node's worker.
+    #[serde(default = "default_other_vendor")]
+    pub other_vendor: bool,
 }
 
 impl Default for ConductorSettings {
@@ -551,77 +564,47 @@ impl Default for ConductorSettings {
             concurrency: DEFAULT_CAP,
             default_scope: MissionScope::Pr,
             candidates: Vec::new(),
-            checkers: CheckerDefaults::default(),
-        }
-    }
-}
-
-/// The review and verify defaults a new mission starts from; a node's plan
-/// may name others, which the plan shows (D-22).
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct CheckerDefaults {
-    #[serde(default)]
-    pub review: CheckDefault,
-    #[serde(default)]
-    pub verify: CheckDefault,
-}
-
-/// How a node is checked by other agents when the plan says nothing else
-/// (B36): the Conductor's judgement, never, always one, or several deciding
-/// by `rule`.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CheckMode {
-    #[default]
-    Conductor,
-    None,
-    One,
-    Many,
-}
-
-/// The most checkers a default names.
-pub const CHECK_COUNT_LIMIT: u8 = crate::mission_criteria::CHECKER_LIMIT as u8;
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct CheckDefault {
-    #[serde(default)]
-    pub mode: CheckMode,
-    #[serde(default)]
-    pub rule: Rule,
-    /// How many check when `mode` is `many`.
-    #[serde(default = "default_check_count")]
-    pub count: u8,
-    /// The agent, model and effort a checker starts with; none leaves each
-    /// to the Conductor.
-    #[serde(default)]
-    pub agent: Option<String>,
-    #[serde(default)]
-    pub model: Option<String>,
-    #[serde(default)]
-    pub effort: Option<String>,
-    /// Prefer a model of another company than the one that made the work.
-    #[serde(default = "default_other_vendor")]
-    pub other_vendor: bool,
-}
-
-impl Default for CheckDefault {
-    fn default() -> Self {
-        Self {
-            mode: CheckMode::Conductor,
-            rule: Rule::All,
-            count: default_check_count(),
-            agent: None,
-            model: None,
-            effort: None,
+            default_strength: Strength::Normal,
             other_vendor: default_other_vendor(),
         }
     }
 }
 
-fn default_check_count() -> u8 {
-    2
+/// How strongly the Conductor has a mission's nodes checked: which nodes
+/// get a review or a run-it check, and how many review rounds. The Conductor
+/// follows it by `hide mission help`; the gate does not read it.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Strength {
+    Fast,
+    #[default]
+    Normal,
+    Thorough,
+}
+
+/// The review and verify defaults Settings › Conductor kept before
+/// verification strength, read only for the operator's choice of another
+/// company; every other field of theirs is left behind.
+#[derive(Deserialize)]
+struct StoredCheckers {
+    #[serde(default)]
+    review: StoredCheck,
+    #[serde(default)]
+    verify: StoredCheck,
+}
+
+#[derive(Deserialize)]
+struct StoredCheck {
+    #[serde(default = "default_other_vendor")]
+    other_vendor: bool,
+}
+
+impl Default for StoredCheck {
+    fn default() -> Self {
+        Self {
+            other_vendor: default_other_vendor(),
+        }
+    }
 }
 
 fn default_other_vendor() -> bool {
@@ -685,19 +668,25 @@ impl ConductorSettings {
                 return Err("conductor_settings.purpose_invalid".into());
             }
         }
-        for check in [&self.checkers.review, &self.checkers.verify] {
-            if !(2..=CHECK_COUNT_LIMIT).contains(&check.count) {
-                return Err("conductor_settings.check_count_out_of_range".into());
-            }
-            if check.agent.is_none() && (check.model.is_some() || check.effort.is_some()) {
-                return Err("conductor_settings.check_agent_missing".into());
-            }
-            if let Some(agent) = &check.agent {
-                check_worker(agent, check.model.as_deref(), check.effort.as_deref())
-                    .map_err(|code| format!("conductor_settings.{code}"))?;
-            }
-        }
         Ok(())
+    }
+
+    /// Reads the value `core-state.json` keeps. One kept before verification
+    /// strength has `checkers` instead: it reads as `normal`, with the
+    /// toggle off when the operator had turned another company off for the
+    /// review or the verify default, the only way either was ever off.
+    pub(crate) fn from_stored(mut value: serde_json::Value) -> Result<Self, String> {
+        let stored = value
+            .as_object_mut()
+            .and_then(|fields| fields.remove("checkers"));
+        let mut settings: Self =
+            serde_json::from_value(value).map_err(|error| error.to_string())?;
+        if let Some(stored) = stored {
+            let checkers: StoredCheckers =
+                serde_json::from_value(stored).map_err(|error| error.to_string())?;
+            settings.other_vendor = checkers.review.other_vendor && checkers.verify.other_vendor;
+        }
+        Ok(settings)
     }
 }
 
@@ -1009,6 +998,12 @@ pub struct PlanInput {
     pub github: Option<String>,
     #[serde(default)]
     pub check: Option<String>,
+    /// The verification strength the Conductor proposes or the operator
+    /// asked for, with why in one line when it changes.
+    #[serde(default)]
+    pub strength: Option<Strength>,
+    #[serde(default)]
+    pub strength_why: Option<String>,
     #[serde(default)]
     pub merge_order: Vec<String>,
     pub nodes: Vec<NodeInput>,
@@ -1189,6 +1184,7 @@ pub(crate) fn apply_plan(
     if !valid_line(&input.title, TITLE_LIMIT)
         || !valid_line(&input.github, TITLE_LIMIT)
         || !valid_line(&input.check, LINE_LIMIT)
+        || !valid_line(&input.strength_why, LINE_LIMIT)
     {
         return Err("mission_text_invalid".into());
     }
@@ -1347,6 +1343,9 @@ pub(crate) fn apply_plan(
     }
     if let Some(cap) = input.cap {
         next.cap = cap;
+    }
+    if input.strength.is_some() {
+        next.strength = input.strength;
     }
     if input.github.is_some() {
         next.github.clone_from(&input.github);
@@ -2000,6 +1999,8 @@ mod tests {
             scope: MissionScope::Pr,
             cap: 4,
             candidates: Vec::new(),
+            strength: None,
+            other_vendor: None,
             checkers: None,
             exempt: false,
             decided: Vec::new(),
@@ -2078,6 +2079,8 @@ mod tests {
             cap: None,
             github: None,
             check: None,
+            strength: None,
+            strength_why: None,
             merge_order: Vec::new(),
             nodes,
         }
@@ -2347,7 +2350,7 @@ mod tests {
         let mut twice = node("a", NodeKind::Change, &[]);
         let review = CheckInput {
             kind: crate::mission_criteria::CheckKind::Review,
-            rule: Rule::All,
+            rule: crate::mission_criteria::Rule::All,
             by: vec![Worker {
                 agent: "codex".into(),
                 model: Some("gpt-6-astra".into()),
@@ -2431,6 +2434,28 @@ mod tests {
         let saved = encode(&Arc::new(book.clone())).unwrap();
         let again = decode(&saved).unwrap();
         assert_eq!((again.from, again.book), (SCHEMA_VERSION, book));
+    }
+
+    /// A mission created before verification strength keeps the checkers
+    /// it recorded, as written, and has no strength until a plan names one.
+    #[test]
+    fn a_mission_from_before_strength_keeps_its_recorded_checkers() {
+        let recorded = serde_json::json!({
+            "review": {"mode": "one", "rule": "all", "count": 2, "agent": "codex",
+                       "model": null, "effort": "high", "other_vendor": false},
+            "verify": {"mode": "none", "rule": "all", "count": 2, "agent": null,
+                       "model": null, "effort": null, "other_vendor": true},
+        });
+        let mut stored = serde_json::to_value(mission()).unwrap();
+        stored["checkers"] = recorded.clone();
+        let read: Mission = serde_json::from_value(stored.clone()).unwrap();
+        assert_eq!((read.strength, read.other_vendor), (None, None));
+        assert_eq!(serde_json::to_value(&read).unwrap(), stored);
+        let mut input = plan(Vec::new());
+        input.strength = Some(Strength::Thorough);
+        let planned = apply_plan(&read, &input, 2).unwrap();
+        assert_eq!(planned.strength, Some(Strength::Thorough));
+        assert_eq!(planned.checkers, Some(recorded));
     }
 
     #[test]

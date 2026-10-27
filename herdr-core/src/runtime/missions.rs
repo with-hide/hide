@@ -56,10 +56,15 @@ pub struct MissionView {
     /// Made before node criteria: its nodes show their sentence only and
     /// nothing is gated (PRD mission-map-git-criteria B23).
     pub exempt: bool,
-    /// Settings › Conductor's review and verify defaults as they were when
-    /// the mission was created, which its plan follows (D-22, B36); none
-    /// for a mission from before them.
-    pub checkers: Option<crate::missions::CheckerDefaults>,
+    /// How strongly the Conductor has the nodes checked, and whether a
+    /// checker comes from another company than the node's worker; none for
+    /// a mission from before verification strength.
+    pub strength: Option<crate::missions::Strength>,
+    pub other_vendor: Option<bool>,
+    /// What a mission from before verification strength recorded instead,
+    /// as it was written; absent for every other.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checkers: Option<serde_json::Value>,
     pub conductor: ConductorView,
     pub nodes: Vec<NodeView>,
     pub merge_order: Vec<String>,
@@ -574,7 +579,9 @@ impl Runtime {
                     scope: scope.unwrap_or(settings.default_scope),
                     cap,
                     candidates: settings.candidates.clone(),
-                    checkers: Some(settings.checkers.clone()),
+                    strength: Some(settings.default_strength),
+                    other_vendor: Some(settings.other_vendor),
+                    checkers: None,
                     exempt: false,
                     decided: Vec::new(),
                     nodes: Vec::new(),
@@ -619,7 +626,12 @@ impl Runtime {
                 // the Conductor pane's own chip (PRD mission-pane-chip D-02).
                 let next = crate::missions::apply_plan(&current, &plan, now)?;
                 let overlaps = crate::missions::overlaps(&self.missions.book, &next);
-                let events = super::mission_events::plan_events(&current, &next, now);
+                let events = super::mission_events::plan_events(
+                    &current,
+                    &next,
+                    plan.strength_why.as_deref(),
+                    now,
+                );
                 *self.missions.book.get_mut(&id).ok_or("mission_unknown")? = next;
                 self.save_missions();
                 self.record_mission_events(&id, events);
@@ -1710,6 +1722,8 @@ impl Runtime {
             scope: mission.scope,
             cap: mission.cap,
             exempt: mission.exempt,
+            strength: mission.strength,
+            other_vendor: mission.other_vendor,
             checkers: mission.checkers.clone(),
             conductor: ConductorView {
                 pane_id: mission.conductor.actor.pane_id.clone(),

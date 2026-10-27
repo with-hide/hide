@@ -1379,6 +1379,7 @@ The panel opens only with a picked node, and until then the map has the slot's w
 The page reads the mission's events only while it is open: the core sends the events of the mission in the 보기 slot and of no other (D-22).
 
 The head is one line: the mission's state (`계획 중`, a blue `진행 중`, `머지 대기` in the decision colour, a grey `✓ 끝남` or a grey `취소`), its time (`n시간째` while it runs, `n시간 걸림` once it ends), a cell per node in the plan drawn as its card is (done green, work in main a fainter green, an outside node empty), and `n / m 끝`.
+It ends with `검증 <강도>` (`검증 보통`), the mission's verification strength, read only: the Conductor changes it in its plan when the operator says so, and a mission from before strength shows none.
 The head carries no PR count, no main count and no cap; the map carries those.
 A finished or cancelled mission's report sits under the head as its first words without their Markdown marks (no `#`, `-` or `[ ]`), and `펼치기` opens all of it drawn as a Markdown document is (B24).
 Every state colour is one token of `design/tokens.json` (`--mission-done`, `-working`, `-review`, `-hold`, `-failed`, `-waiting`, `-cancelled`), and a head cell, a card's mark and border, and an edge use the same one.
@@ -2933,10 +2934,11 @@ Settings › Conductor, in the machine group after Hide AI, keeps what a Conduct
 `동시 실행 상한` is how many agents one mission runs at once, reviewers and verifiers included and the Conductor not counted, from 1 to 16; `기본 범위` is how far a mission goes when the operator does not say, up to ready pull requests or through the merge.
 `작업자 후보` lists the agents a Conductor chooses workers from, at most 16: each row's agent, its model from the start panel's list (disabled with why when that list cannot be read), its effort automatic or fixed, and what it is for; an agent this machine has not installed is dimmed with `설치 안 됨`.
 With no candidates the Conductor chooses among the installed agents; with some, Hide refuses a worker that is none of them (`mission_candidate_refused`, [delivery.md: Missions](delivery.md#missions)).
-`리뷰 기본값` and `검증 기본값 · 실제로 돌려 확인` say who checks a node its plan leaves open (PRD mission-map-git-criteria B36): `누가` is `Conductor가 노드마다 판단`, `없음`, `항상 1명` or `여럿`, and only `여럿` shows `인원` (2 to 5) with `모두 통과` or `과반 통과`.
-Unless it is `없음`, a group shows `에이전트` (`Conductor가 정함` or one agent), that agent's `모델` and `effort` once one is chosen, and `만든 에이전트와 다른 회사 모델 우선`; a node planned otherwise shows its own checkers in the plan, and a change applies from the next mission.
-An edit to either group sends both groups whole, one write at a time: the edits made before the core answers it show at once and go out together as the next write on top of it, so edits in a row never undo each other, even one back to the first value; a refusal or a dropped connection returns the groups to what the core keeps, and choosing another agent drops the old model and effort, which the new agent may not take.
-Every edit sends only the field it changes and the core checks the result; a refusal shows inline, and a mission already created keeps the cap, scope, candidates and check defaults it was created with.
+`검증` holds two controls, and the checkers come from the candidates above.
+`검증 강도` is a new mission's verification strength, `빠르게`, `보통` (the default) or `꼼꼼하게`, one segmented choice with what it has the Conductor do, how often a node is reviewed again and the work it suits under it, as `hide mission help` states the rules; `검사는 만든 에이전트와 다른 회사 모델로` (on by default) has the Conductor prefer a checker of another company than the node's worker.
+It is only the default: the Conductor proposes each mission's strength in its plan and changes it when the operator says so, before or during the mission, and the map's head shows it ([A mission's map](#a-missions-map)).
+A setting kept before strength (the review and verify defaults) reads as `보통`, with the switch off only where the operator had turned another company off.
+Every edit sends only the field it changes and the core checks the result; a refusal shows inline, and a mission already created keeps the cap, scope, candidates, strength and switch it was created with.
 
 ### Hide AI
 

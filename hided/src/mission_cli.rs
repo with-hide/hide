@@ -731,6 +731,24 @@ mod tests {
         );
     }
 
+    /// The plan the mission guide shows is one the core reads, its
+    /// verification strength included, so the guide cannot teach a field
+    /// the plan refuses.
+    #[test]
+    fn the_guides_example_plan_is_read_as_a_mission_plan() {
+        let example = HELP
+            .split("```json\n")
+            .nth(1)
+            .and_then(|rest| rest.split("```").next())
+            .expect("the guide shows a plan");
+        let plan = plan_input(example).unwrap();
+        assert_eq!(
+            plan.strength,
+            Some(herdr_core::missions::Strength::Thorough)
+        );
+        assert!(plan.strength_why.is_some());
+    }
+
     #[test]
     fn decide_needs_a_line_or_clear_and_close_needs_its_end() {
         assert!(parse(words(&["decide"]).iter()).is_err());

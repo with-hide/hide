@@ -637,6 +637,8 @@ export function eventWords(event: MissionEvent, t: TFunction<"translation">): { 
       return { what: t("mission.event.skipped"), line };
     case "reopened":
       return { what: t("mission.event.reopened"), line };
+    case "strength":
+      return { what: t("mission.event.strength", { strength: event.strength ? t(`mission.strength.${event.strength}`) : "" }), line };
   }
 }
 

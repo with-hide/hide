@@ -1263,6 +1263,8 @@ export function sameDetailItem(a: DetailItem | null | undefined, b: DetailItem):
 export type MissionStatus = "planning" | "running" | "merge_wait" | "done" | "cancelled";
 /** How far a mission goes (`mission_scope`): ready pull requests, or through the merge. */
 export type MissionScope = "pr" | "merge";
+/** How strongly the Conductor has a mission's nodes checked (`mission_strength`); guidance for the Conductor, never a gate. */
+export type MissionStrength = "fast" | "normal" | "thorough";
 /** A node's kind (`mission_node_kind`), each done by its own rule (D-15); `external` watches a pull request or branch outside the mission (PRD mission-map-git-criteria D-20). */
 export type MissionNodeKind = "change" | "research" | "verify" | "external";
 /** How a change node's work lands (`mission_delivery`). */
@@ -1331,7 +1333,7 @@ export type MissionAnswer = { key: number; text: string; option: number | null; 
 export type MissionAnswerFailure = "conductor_gone" | "device_disconnected" | "send_failed";
 
 /** What a mission event records (`mission_event_kind`, B31). */
-export type MissionEventKind = "planned" | "replanned" | "node" | "retried" | "pr_opened" | "pr_merged" | "landed" | "asked" | "answered" | "answer_undelivered" | "answer_unconfirmed" | "reported" | "cancelled" | "skipped" | "reopened";
+export type MissionEventKind = "planned" | "replanned" | "node" | "retried" | "pr_opened" | "pr_merged" | "landed" | "asked" | "answered" | "answer_undelivered" | "answer_unconfirmed" | "reported" | "cancelled" | "skipped" | "reopened" | "strength";
 
 /** One event of a mission (`MissionEvent`, D-15): only the fields its kind carries are present. */
 export type MissionEvent = {
@@ -1346,6 +1348,8 @@ export type MissionEvent = {
   source?: "banner" | "conversation";
   /** A skipped line's key, or for `reopened` the node that found the defect. */
   criterion?: string;
+  /** For `strength`, the verification strength the plan changed to. */
+  strength?: MissionStrength;
 };
 
 /** The events of the mission open in the 보기 slot (`MissionEventsSnapshot`, D-22): `dropped` past the 500 kept (B21). */
@@ -1415,8 +1419,10 @@ export type Mission = {
   cap: number;
   /** Made before node criteria: its nodes show their sentence only and nothing is gated (B23). */
   exempt: boolean;
-  /** Settings › Conductor's review and verify defaults when the mission was created (B36); null for one from before them. */
-  checkers: { review: ConductorCheckDefault; verify: ConductorCheckDefault } | null;
+  /** Settings › Conductor's default when the mission was created, then what its plan names; null for one from before verification strength. */
+  strength: MissionStrength | null;
+  /** Whether a checker comes from another company than the node's worker, as Settings › Conductor said when the mission was created; null for one from before. */
+  other_vendor: boolean | null;
   /** `takes_answers`: its agent takes an answer typed from the banner, which the doorbell types only into the agents it rings (B26). */
   conductor: { pane_id: string; name: string; agent_kind: string; session: WorkSession | null; present: boolean; takes_answers: boolean };
   nodes: MissionNode[];
@@ -1484,11 +1490,9 @@ export type PlanView = {
 /** The plans the core keeps for the panes on screen. */
 export type PlansSnapshot = { items: PlanView[] };
 
-/** Settings › Conductor (D-31): the cap, the default scope and the worker candidates. */
+/** Settings › Conductor (D-31): the cap, the default scope, the worker candidates, a new mission's verification strength and whether its checkers come from another company. */
 export type ConductorCandidate = { agent: string; model?: string | null; effort?: string | null; purpose: string };
-/** A review or verify default (B36): the Conductor's judgement, never, always one, or several deciding by `rule`. */
-export type ConductorCheckDefault = { mode: "conductor" | "none" | "one" | "many"; rule: MissionCheckRule; count: number; agent: string | null; model: string | null; effort: string | null; other_vendor: boolean };
-export type ConductorSettings = { concurrency: number; default_scope: MissionScope; candidates: ConductorCandidate[]; checkers?: { review: ConductorCheckDefault; verify: ConductorCheckDefault } };
+export type ConductorSettings = { concurrency: number; default_scope: MissionScope; candidates: ConductorCandidate[]; default_strength: MissionStrength; other_vendor: boolean };
 
 /** The 보기 slot: what it opened, oldest first and the one it shows last, and whether the lane draws it. */
 export type DetailSlot = { items: DetailItem[]; shown: boolean };

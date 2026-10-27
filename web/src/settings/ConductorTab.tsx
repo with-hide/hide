@@ -1,5 +1,5 @@
 import { PlusIcon, XIcon } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import type { Actions } from "../actions";
 import { AgentMark } from "../AgentMark";
 import { agentAdapter } from "../agentAdapters";
@@ -14,63 +14,33 @@ import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group";
 import { Hint } from "../components/ui/tooltip";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
-import { CANDIDATE_LIMIT, CAP_CHOICES, CHECK_COUNT_CHOICES, DEFAULT_CHECKERS, DEFAULT_CONDUCTOR, addCandidate, candidateAgent, effortsOf, replaceCandidate, replaceCheck, sameCheckers, type CheckKind, type CheckerDefaults } from "../conductorSettings";
-import type { BackgroundAi, ConductorCandidate, ConductorCheckDefault, ConductorSettings, MissionCheckRule, MissionScope } from "../snapshot";
+import { CANDIDATE_LIMIT, CAP_CHOICES, DEFAULT_CONDUCTOR, STRENGTHS, addCandidate, candidateAgent, effortsOf, replaceCandidate } from "../conductorSettings";
+import type { BackgroundAi, ConductorCandidate, ConductorSettings, MissionScope, MissionStrength } from "../snapshot";
 import { useShellStore } from "../store";
 import { coreErrorText } from "../coreError";
 import { useErrorSince } from "../errorSince";
 
-// Settings › Conductor (PRD software-factory-conductor D-31, B48, B49; PRD
-// mission-map-git-criteria B36): how many agents a mission runs at once, how
-// far a mission goes when it does not say, the candidates a Conductor chooses
-// its workers from, and who reviews and verifies a node when its plan does
-// not say. Every edit sends the field it changes; the core checks the result
-// and keeps it, and a mission already planned keeps its own.
+// Settings › Conductor (PRD software-factory-conductor D-31, B48, B49): how
+// many agents a mission runs at once, how far a mission goes when it does not
+// say, the candidates a Conductor chooses its workers and checkers from, and
+// how strongly a new mission is checked. Every edit sends the field it
+// changes; the core checks the result and keeps it, and a mission already
+// created keeps its own.
 
 /** Radix items cannot carry an empty value; this stands for the CLI's own default model. */
 const DEFAULT_MODEL = "__cli_default";
-/** And this for a checker agent the Conductor chooses. */
-const ANY_AGENT = "__conductor";
-
-/** The check defaults out to the core, the value they were sent over, and what the operator chose since. */
-type CheckWrite = { sent: CheckerDefaults; over: CheckerDefaults; draft: CheckerDefaults | null };
 
 export function ConductorTab({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const settings = useShellStore((s) => s.rest?.ui_state?.conductor_settings) ?? DEFAULT_CONDUCTOR;
-  const kept = settings.checkers ?? DEFAULT_CHECKERS;
   const [sentAt, setSentAt] = useState<number | null>(null);
   const error = useErrorSince(sentAt, ["conductor_settings."]);
   const live = useShellStore((s) => s.connection === "live");
   // The model menus are the start panel's lists, read while this page shows.
   useEffect(() => (live ? actions.observeCatalog() : undefined), [actions, live]);
-  const send = useCallback((patch: Partial<ConductorSettings>) => {
+  const send = (patch: Partial<ConductorSettings>) => {
     setSentAt(Date.now());
     actions.setConductorSettings(patch);
-  }, [actions]);
-  // The core replaces the check defaults whole and answers with no receipt,
-  // so one write is out at a time: it is answered once the core's value moves
-  // off the one it was sent over, a refusal or a dropped connection gives the
-  // groups back to the core, and edits made meanwhile wait as one draft that
-  // goes out next. Matching the core's value to the one sent would take an
-  // older answer for a newer edit that reads the same (B36).
-  const [write, setWrite] = useState<CheckWrite | null>(null);
-  useEffect(() => {
-    if (!write) return;
-    if (error || !live) return setWrite(null);
-    if (sameCheckers(kept, write.over)) return;
-    if (write.draft && !sameCheckers(write.draft, kept)) {
-      send({ checkers: write.draft });
-      setWrite({ sent: write.draft, over: kept, draft: null });
-    } else setWrite(null);
-  }, [write, kept, error, live, send]);
-  const checkers = write ? (write.draft ?? write.sent) : kept;
-  const sendCheck = (kind: CheckKind, next: ConductorCheckDefault) => {
-    const value = replaceCheck(checkers, kind, next);
-    if (write) return setWrite({ ...write, draft: value });
-    if (sameCheckers(value, kept)) return;
-    setWrite({ sent: value, over: kept, draft: null });
-    send({ checkers: value });
   };
   return (
     <div data-settings-conductor="true">
@@ -124,9 +94,16 @@ export function ConductorTab({ actions }: { actions: Actions }) {
           <CandidateRow key={index} candidate={candidate} onChange={(next) => send({ candidates: replaceCandidate(settings, index, next).candidates })} />
         ))}
       </Group>
-      {(["review", "verify"] as const).map((kind) => (
-        <CheckGroup key={kind} kind={kind} check={checkers[kind]} last={kind === "verify"} onChange={(next) => sendCheck(kind, next)} />
-      ))}
+      <Group title={t("conductor.verification")} note={t("conductor.verification.footer")} data-conductor-verification={settings.default_strength}>
+        <Row label={t("conductor.strength")} detail={<StrengthTerms strength={settings.default_strength} />}>
+          <ToggleGroup type="single" value={settings.default_strength} onValueChange={(value) => value && value !== settings.default_strength && send({ default_strength: value as MissionStrength })} aria-label={t("conductor.strength")} data-conductor-strength={settings.default_strength}>
+            {STRENGTHS.map((strength) => <ToggleGroupItem key={strength} value={strength} data-conductor-strength-option={strength}>{t(`mission.strength.${strength}`)}</ToggleGroupItem>)}
+          </ToggleGroup>
+        </Row>
+        <Row label={t("conductor.otherVendor")}>
+          <Switch checked={settings.other_vendor} aria-label={t("conductor.otherVendor")} onCheckedChange={(other_vendor) => send({ other_vendor })} data-conductor-other-vendor={String(settings.other_vendor)} />
+        </Row>
+      </Group>
     </div>
   );
 }
@@ -196,76 +173,18 @@ function CandidateRow({ candidate, onChange }: { candidate: ConductorCandidate; 
   );
 }
 
-/**
- * Who reviews or verifies a node its plan leaves open (B36): the Conductor's
- * judgement, nobody, always one, or several deciding by a rule; the agent,
- * model and effort they start with or the Conductor's choice; and whether a
- * model of another company than the worker's comes first. Only the rows the
- * chosen mode uses show.
- */
-function CheckGroup({ kind, check, last, onChange }: { kind: CheckKind; check: ConductorCheckDefault; last: boolean; onChange: (next: ConductorCheckDefault) => void }) {
+/** What the chosen strength has the Conductor do, how often a node is reviewed again, and the work it suits, as the mission help states it. */
+function StrengthTerms({ strength }: { strength: MissionStrength }) {
   const { t } = useInterfaceTranslation();
-  const ai = useShellStore((s) => s.rest?.status?.background_ai);
-  const agent = check.agent ? candidateAgent(check.agent) : null;
-  const catalog = modelCatalog(ai, agent, t);
-  const efforts = check.agent ? effortsOf(check.agent) : [];
   return (
-    <Group title={t(`conductor.${kind}`)} note={last ? t("conductor.check.footer") : undefined} data-conductor-check={kind} data-check-mode={check.mode}>
-      <Row label={t("conductor.check.mode")}>
-        <Select value={check.mode} onValueChange={(mode) => onChange({ ...check, mode: mode as ConductorCheckDefault["mode"] })}>
-          <SelectTrigger aria-label={t("conductor.check.mode")} className="w-auto" data-check-field="mode"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            {(["conductor", "none", "one", "many"] as const).map((mode) => <SelectItem key={mode} value={mode}>{t(`conductor.check.mode.${mode}`)}</SelectItem>)}
-          </SelectContent>
-        </Select>
-      </Row>
-      {check.mode === "many" ? (
-        <Row label={t("conductor.check.count")}>
-          <Select value={String(check.count)} onValueChange={(count) => onChange({ ...check, count: Number(count) })}>
-            <SelectTrigger aria-label={t("conductor.check.count")} className="w-auto" data-check-field="count"><SelectValue /></SelectTrigger>
-            <SelectContent>{CHECK_COUNT_CHOICES.map((count) => <SelectItem key={count} value={String(count)}>{count}</SelectItem>)}</SelectContent>
-          </Select>
-          <Select value={check.rule} onValueChange={(rule) => onChange({ ...check, rule: rule as MissionCheckRule })}>
-            <SelectTrigger aria-label={t("conductor.check.rule")} className="w-auto" data-check-field="rule"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {(["all", "majority"] as const).map((rule) => <SelectItem key={rule} value={rule}>{t(`conductor.check.rule.${rule}`)}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        </Row>
-      ) : null}
-      {check.mode === "none" ? null : (
-        <>
-          <Row label={t("conductor.column.agent")}>
-            <Select value={check.agent ?? ANY_AGENT} onValueChange={(value) => onChange({ ...check, agent: value === ANY_AGENT ? null : value })}>
-              <SelectTrigger aria-label={t("conductor.column.agent")} className="w-auto min-w-0" data-check-field="agent">
-                <SelectValue>
-                  {check.agent ? <span className="flex min-w-0 items-center gap-xs"><AgentMark kind={agent ?? check.agent} /><span className="truncate">{agent ? providerLabel(agent) : check.agent}</span></span> : t("conductor.check.agentAny")}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={ANY_AGENT}>{t("conductor.check.agentAny")}</SelectItem>
-                {PROVIDER_KINDS.map((option) => <SelectItem key={option} value={option}><AgentMark kind={option} />{providerLabel(option)}</SelectItem>)}
-              </SelectContent>
-            </Select>
-          </Row>
-          {agent && catalog ? (
-            <Row label={t("conductor.column.model")}>
-              <span className="w-(--size-settings-control-w) min-w-0" data-check-field="model">
-                <ModelMenu kind={agent} value={check.model} {...catalog} onChange={(model) => onChange({ ...check, model })} />
-              </span>
-            </Row>
-          ) : null}
-          {efforts.length > 0 ? (
-            <Row label={t("conductor.column.effort")}>
-              <EffortChoice efforts={efforts} value={check.effort} onChange={(effort) => onChange({ ...check, effort })} data-check-field="effort" />
-            </Row>
-          ) : null}
-          <Row label={t("conductor.check.otherVendor")}>
-            <Switch checked={check.other_vendor} aria-label={t("conductor.check.otherVendor")} onCheckedChange={(other_vendor) => onChange({ ...check, other_vendor })} data-check-field="other_vendor" />
-          </Row>
-        </>
-      )}
-    </Group>
+    <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-md gap-y-xxs text-caption" data-conductor-strength-terms={strength}>
+      {(["does", "rounds", "suits"] as const).map((term) => (
+        <div key={term} className="contents">
+          <dt className="text-muted-foreground">{t(`conductor.strength.${term}`)}</dt>
+          <dd className="break-keep text-subtle-foreground">{t(`conductor.strength.${strength}.${term}`)}</dd>
+        </div>
+      ))}
+    </dl>
   );
 }
 

@@ -178,7 +178,7 @@ function mission(model: MissionModel): Mission | null {
   const now = Date.now();
   return {
     id: MISSION_ID, title: TITLE, workspace_id: PLACE.project, project: PLACE.label, checkout_path: `/work/${PLACE.project}`, device_id: "local",
-    status: "running", scope: "pr", cap: 2, exempt: false, checkers: null,
+    status: "running", scope: "pr", cap: 2, exempt: false, strength: "normal", other_vendor: true,
     // No session: this practice keeps no record to open.
     conductor: { pane_id: CONDUCTOR, name: TITLE, agent_kind: "claude", session: null, present: true, takes_answers: true },
     nodes: nodes(model), merge_order: ["config", "backoff"], check: "pnpm test", github: "practice-bot",

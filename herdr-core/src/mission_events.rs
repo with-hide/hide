@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::latest_file::read_capped;
-use crate::missions::NodeStatus;
+use crate::missions::{NodeStatus, Strength};
 
 /// Events one mission keeps; past this the oldest goes (B21).
 pub const EVENT_LIMIT: usize = 500;
@@ -62,6 +62,9 @@ pub enum EventKind {
     /// A later node's defect opened the node again; `line` is the defect,
     /// `criterion` the node that found it and `count` how often (B21).
     Reopened,
+    /// A plan changed the verification strength to `strength`; `line` is
+    /// why, when the plan said.
+    Strength,
 }
 
 /// Where an answer came from (B31).
@@ -92,6 +95,8 @@ pub struct MissionEvent {
     pub source: Option<AnswerSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub criterion: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strength: Option<Strength>,
 }
 
 impl MissionEvent {
@@ -107,6 +112,7 @@ impl MissionEvent {
             pr: None,
             source: None,
             criterion: None,
+            strength: None,
         }
     }
 

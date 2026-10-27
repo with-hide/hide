@@ -8406,6 +8406,15 @@ mod wire_enum_tests {
             }
             assert_wire(&contract, "mission_scope", &scopes);
             checked.insert("mission_scope");
+            use crate::missions::Strength;
+            let strengths = [Strength::Fast, Strength::Normal, Strength::Thorough];
+            for variant in strengths {
+                match variant {
+                    Strength::Fast | Strength::Normal | Strength::Thorough => {}
+                }
+            }
+            assert_wire(&contract, "mission_strength", &strengths);
+            checked.insert("mission_strength");
             let kinds = [
                 NodeKind::Change,
                 NodeKind::Research,
@@ -8560,6 +8569,7 @@ mod wire_enum_tests {
                 EventKind::Cancelled,
                 EventKind::Skipped,
                 EventKind::Reopened,
+                EventKind::Strength,
             ];
             for variant in kinds {
                 match variant {
@@ -8577,7 +8587,8 @@ mod wire_enum_tests {
                     | EventKind::Reported
                     | EventKind::Cancelled
                     | EventKind::Skipped
-                    | EventKind::Reopened => {}
+                    | EventKind::Reopened
+                    | EventKind::Strength => {}
                 }
             }
             assert_wire(&contract, "mission_event_kind", &kinds);

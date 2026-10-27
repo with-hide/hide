@@ -192,7 +192,7 @@ function scene(shown: string, now: number): { mission: Mission; rest: SnapshotRe
   const mission: Mission = {
     id: "mission-1", title: "이슈 정리", workspace_id: "hide", project: "/projects/herdr-ide", checkout_path: "/projects/herdr-ide", device_id: "local",
     status: state === "plan" ? "planning" : state === "stack" ? "merge_wait" : state === "done" || state === "no-pr" ? "done" : state === "cancelled" ? "cancelled" : "running",
-    scope: "pr", cap: 4, exempt: shown === "exempt", checkers: null,
+    scope: "pr", cap: 4, exempt: shown === "exempt", strength: "normal", other_vendor: true,
     conductor: { pane_id: CONDUCTOR_PANE, name: "이슈 정리 · Conductor", agent_kind: "claude", session: { device_id: "local", agent: "claude", session_id: "scene-conductor" }, present: state !== "no-conductor", takes_answers: true },
     nodes, merge_order: ["api", "fix-1481", "fix-1490", "fix-1487", "screen"], check: "cargo test && pnpm test", github: "octocat",
     decision: state === "decision" ? "화면 PR을 어디에 올릴까요?" : state === "no-conductor" ? `${no(1503)}이 머지되어 ${no(1504)}를 옮겨야 해요` : null,
@@ -229,10 +229,7 @@ function scene(shown: string, now: number): { mission: Mission; rest: SnapshotRe
       { agent: "claude", model: "Sonnet 5.5", effort: "low", purpose: "리뷰, 문서" },
       { agent: "pi", effort: null, purpose: "짧은 조사" },
       { agent: "grok", effort: null, purpose: "" },
-    ], checkers: {
-      review: { mode: "conductor", rule: "all", count: 2, agent: "codex", model: "GPT-6-Astra", effort: "high", other_vendor: true },
-      verify: { mode: "many", rule: "all", count: 2, agent: null, model: null, effort: null, other_vendor: true },
-    } } },
+    ], default_strength: "normal", other_vendor: true } },
   } as unknown as SnapshotRest;
   return { mission, rest };
 }
