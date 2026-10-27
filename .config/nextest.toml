@@ -47,22 +47,6 @@ slow-timeout = { period = "60s", terminate-after = 4 }
 filter = 'binary_id(hided::it) & test(/^remote_core::/)'
 slow-timeout = { period = "60s", terminate-after = 4 }
 
-# The signed-in agy turn (hide-agent-hooks/tests/it/agy_binary.rs) waits on
-# a real model on the CI key's free tier, which took 10 to 68 s in the
-# green runs of 2026-10-16 and more than 120 s on a macOS
-# runner in run 38892775919. It gets 240 s, and its own bounds (agy's print
-# timeout, the capture) end inside that, so a slow turn fails with what agy
-# said instead of being ended with nothing reported.
-# It is not retried: a retry spends the key's daily requests again, and once
-# they are spent a retry reports Not measured and passes, which would turn a
-# real first failure into a flaky pass. A passing turn's output is shown, so
-# its Not measured warning reaches the job log even without --no-capture.
-[[profile.ci.overrides]]
-filter = 'binary_id(hide-agent-hooks::it) & test(=agy_binary::a_signed_in_agy_turn_fires_hide_s_hooks)'
-slow-timeout = { period = "60s", terminate-after = 4 }
-retries = 0
-success-output = "immediate"
-
 # The core-move journeys (hided/tests/it/core_move.rs) run the remote-core
 # shape and wait out the move's own bounds (a 30 s link, a 60 s pending
 # lease), so they get the same guard.

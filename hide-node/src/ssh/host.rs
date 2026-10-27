@@ -15,6 +15,8 @@
 //! by reading the target again rather than by resending it (B14, B33).
 
 use super::*;
+#[path = "device_bundles.rs"]
+mod device_bundles;
 #[path = "inbound.rs"]
 pub mod inbound;
 #[path = "link_streams.rs"]
@@ -137,7 +139,7 @@ const DRAIN_BOUND: Duration = Duration::from_secs(250);
 const CANCEL_TIMEOUT: Duration = Duration::from_secs(5);
 const HELLO_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// The helper builds this daemon carries, one per device platform.
+/// Local helpers, plus a manifest for device bundles fetched on connection.
 #[derive(Clone, Debug, Default)]
 pub struct HelperPackages {
     directory: Option<PathBuf>,
@@ -166,6 +168,22 @@ impl HelperPackages {
     /// the same rule as the helper. A part this build does not carry is left out and named, and
     /// the kit on the device reports it as missing from the build.
     pub(super) fn payload(&self, os: &str, arch: &str) -> Result<Payload, EstablishError> {
+        // Existing native and developer-provided artifacts keep their lookup
+        // rule. Only a missing foreign helper goes to the release cache. This
+        // runs on the connection worker, never under the runtime mutex, and
+        // the bounded synchronous request cannot outlive that worker.
+        if self.find_named(HELPER_NAME, os, arch).is_err()
+            && (os != std::env::consts::OS || arch != std::env::consts::ARCH)
+            && device_bundles::supported(os, arch)
+        {
+            return device_bundles::payload(self.directory.as_deref(), os, arch).map_err(
+                |reason| EstablishError::Download {
+                    os: os.to_owned(),
+                    arch: arch.to_owned(),
+                    reason,
+                },
+            );
+        }
         let helper = self.find(os, arch).map_err(EstablishError::Unsupported)?;
         let helper = read_package(HELPER_NAME, &helper).map_err(EstablishError::Install)?;
         let mut payload = Payload {
@@ -190,16 +208,7 @@ impl HelperPackages {
         // so a new pin is a new build folder.
         if let Ok(path) = self.find_named(HERDR_NAME, os, arch) {
             match read_package(hide_kit::device_herdr::HERDR_PROGRAM, &path) {
-                Ok(herdr) => {
-                    let pin = format!("{}\n", herdr_copy_name(&herdr));
-                    payload.files.push(Package {
-                        relative: hide_kit::device_herdr::HERDR_PIN.to_owned(),
-                        digest: hex_digest(pin.as_bytes()),
-                        bytes: pin.into_bytes(),
-                        executable: false,
-                    });
-                    payload.herdr = Some(herdr);
-                }
+                Ok(herdr) => payload.add_herdr(herdr),
                 Err(reason) => payload.missing.push(reason),
             }
         }
@@ -249,6 +258,18 @@ pub(super) struct Payload {
 }
 
 impl Payload {
+    /// The same pin and copy naming applies to bundled and downloaded kits.
+    fn add_herdr(&mut self, herdr: Package) {
+        let pin = format!("{}\n", herdr_copy_name(&herdr));
+        self.files.push(Package {
+            relative: hide_kit::device_herdr::HERDR_PIN.to_owned(),
+            digest: hex_digest(pin.as_bytes()),
+            bytes: pin.into_bytes(),
+            executable: false,
+        });
+        self.herdr = Some(herdr);
+    }
+
     /// The payload for the machine running the core, which runs its own
     /// app's Herdr: a device's copy and the pin naming it are not its to
     /// carry.
@@ -344,6 +365,12 @@ pub(super) fn platform_of(uname: &str) -> Result<(String, String), String> {
             ));
         }
     };
+    if os == "macos" && arch == "x86_64" {
+        return Err(
+            "Intel Mac devices are not supported; Hide ships for Apple Silicon Macs only"
+                .to_owned(),
+        );
+    }
     Ok((os.to_owned(), arch.to_owned()))
 }
 
@@ -3198,8 +3225,13 @@ mod tests {
             ("macos".to_owned(), "aarch64".to_owned())
         );
         assert_eq!(
-            platform_of("Darwin x86_64\n").unwrap(),
-            ("macos".to_owned(), "x86_64".to_owned())
+            platform_of("Darwin x86_64\n").unwrap_err(),
+            "Intel Mac devices are not supported; Hide ships for Apple Silicon Macs only"
+        );
+        assert!(platform_of("Darwin amd64").is_err());
+        assert_eq!(
+            platform_of("Linux x86_64").unwrap(),
+            ("linux".to_owned(), "x86_64".to_owned())
         );
         assert_eq!(
             platform_of("Linux aarch64").unwrap(),

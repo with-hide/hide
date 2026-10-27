@@ -1,0 +1,126 @@
+# The daily agent canary (docs/VERIFICATION.md, The agent canary): each agent
+# CLI's latest release, read where its own installer reads it
+# (scripts/agent-cli-latest.py), measured by the agent journey on the fake
+# model on every system, with no key. Every other lane measures the pins in
+# contracts/agent-clis.json, so a vendor release that breaks Hide is seen
+# here before an operator who updated meets it, and no pull request is opened
+# for a release that changes nothing.
+#
+# A day on which no version moved since the record's last run starts no
+# journey. The `record` job keeps one issue, "Agent CLI support record", with
+# each agent's latest version checked and the last one that passed, and opens
+# an issue for an agent whose latest release fails, comments on it when a
+# later release still fails, and closes it when one passes
+# (scripts/agent-canary-record.py). A fix moves the pin in its own pull
+# request, whose CI proves it on that version.
+name: agent canary
+
+on:
+  schedule:
+    # After the nightly (19:30 UTC) and Herdr's own poll (06:17 UTC), so the
+    # three do not share the runners' busiest hour.
+    - cron: "41 2 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Measure even when no version moved since the record's last run.
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: agent-canary
+  cancel-in-progress: false
+
+jobs:
+  latest:
+    name: latest releases
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      table: ${{ steps.latest.outputs.table }}
+      versions: ${{ steps.latest.outputs.versions }}
+      changed: ${{ steps.decide.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v7
+        timeout-minutes: 5
+        with:
+          persist-credentials: false
+      - name: Read each agent CLI's latest release
+        id: latest
+        timeout-minutes: 3
+        run: |
+          versions=$(python3 scripts/agent-cli-latest.py "$RUNNER_TEMP/agent-clis.json")
+          echo "::notice title=agent canary::latest releases $versions"
+          echo "versions=$versions" >> "$GITHUB_OUTPUT"
+          {
+            echo 'table<<TABLE_END'
+            cat "$RUNNER_TEMP/agent-clis.json"
+            echo 'TABLE_END'
+          } >> "$GITHUB_OUTPUT"
+      - name: Whether a version moved since the record's last run
+        id: decide
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          FORCE: ${{ inputs.force == true }}
+          VERSIONS: ${{ steps.latest.outputs.versions }}
+        run: |
+          if [[ "$FORCE" == true ]]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          printf '%s\n' "$VERSIONS" > "$RUNNER_TEMP/versions.json"
+          python3 scripts/agent-canary-record.py decide --versions "$RUNNER_TEMP/versions.json" >> "$GITHUB_OUTPUT"
+
+  journey:
+    name: agent journey
+    needs: latest
+    if: ${{ needs.latest.outputs.changed == 'true' }}
+    uses: ./.github/workflows/agent-journey.yml
+    permissions:
+      contents: read
+    with:
+      systems: '["linux","macos","windows"]'
+      fake: true
+      stand-ins: false
+      clis-table: ${{ needs.latest.outputs.table }}
+
+  record:
+    name: support record
+    needs: [latest, journey]
+    # A failed journey is what the record is for; a skipped one measured
+    # nothing, and a cancelled one is no verdict.
+    if: ${{ always() && needs.latest.result == 'success' && (needs.journey.result == 'success' || needs.journey.result == 'failure') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+        timeout-minutes: 5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        timeout-minutes: 3
+        with:
+          pattern: agent-journey-fake-*
+          path: ${{ runner.temp }}/reports
+      - name: Rewrite the support record and each failing agent's issue
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSIONS: ${{ needs.latest.outputs.versions }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          printf '%s\n' "$VERSIONS" > "$RUNNER_TEMP/versions.json"
+          python3 scripts/agent-canary-record.py record --versions "$RUNNER_TEMP/versions.json" \
+            --reports "$RUNNER_TEMP/reports" --run-url "$RUN_URL"

@@ -9,28 +9,8 @@
 # hook commands and the install folder differ; `rust` runs the same tests on
 # Linux, and `nightly.yml` runs the whole contract on all three systems.
 #
-# With `live`, the nightly also runs that check signed in on the CI
-# account's key (the `HIDE_AGY_API_KEY` secret, handed to agy as
-# `GEMINI_API_KEY` with `"modelProvider": "gemini"`), and on Linux and macOS
-# one real agy turn through Hide's hooks. Without the secret the job says
-# "not configured" and passes (docs/INSTALL.md, What each system supports).
-#
-# The key's free tier allows 20 requests a day for `HIDE_AGY_MODEL` across
-# its project, and every run that signs agy in with it spends them. The
-# listing asks the model nothing (it passed in run 38958746826 after the
-# quota was spent). A turn spends one request per model response, which a
-# passing turn prints (`agy turn: <n> model responses`): 2 on Linux and on
-# macOS in run 39045723831, the tool call and the answer to its refusal, so
-# a nightly spends 4, and at most one more for each 503 agy retries. The turn is not retried
-# (.config/nextest.toml), and a hand run of `lane=agy` spends what a nightly
-# does. It still runs on both Unix systems, each with its own agy build: 4
-# fits the 20, and one turn a night would leave a system unproven to save
-# requests the nightly does not need.
-# A turn the provider answers nothing, because the day's requests are spent
-# (`contracts/provider-quota.json`), checks the hooks and the
-# letter, writes a `Not measured` warning for the refusal and passes; a quota
-# of 0, any other quota, a 503 that never recovers and every other error
-# fail (docs/TESTING.md, A real agent on CI).
+# A signed-in agy is not measured on CI (operator decision, 2026-10-27): a
+# login proves the provider's sign-in and quota, not Hide's code.
 name: agy contract
 
 on:
@@ -40,13 +20,6 @@ on:
         description: The systems to run, as a JSON array of `linux`, `macos` and `windows`.
         type: string
         required: true
-      live:
-        description: Also run the signed-in check when the HIDE_AGY_API_KEY secret is set.
-        type: boolean
-        default: false
-    secrets:
-      HIDE_AGY_API_KEY:
-        required: false
 
 # `issues: write` files a flaky test; a caller must grant it.
 permissions:
@@ -111,66 +84,3 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: python3 scripts/ci-flaky-report.py --suite rust --junit target/nextest/ci/junit*.xml
 
-  live:
-    name: agy signed in (${{ matrix.system }})
-    if: ${{ inputs.live }}
-    runs-on: ${{ fromJSON('{"linux":"ubuntu-latest","macos":"macos-15","windows":"windows-latest"}')[matrix.system] }}
-    timeout-minutes: 40
-    strategy:
-      fail-fast: false
-      matrix:
-        system: ${{ fromJSON(inputs.systems) }}
-    # The key reaches only the step that runs agy; every other step,
-    # third-party actions, installers and build scripts included, sees
-    # whether it is set and nothing more.
-    permissions:
-      contents: read
-    defaults:
-      run:
-        shell: bash
-    env:
-      TEST_TARGETS: -p hide-agent-hooks --test it
-      HAS_KEY: ${{ secrets.HIDE_AGY_API_KEY != '' }}
-    steps:
-      - name: Not configured without the CI account's key
-        if: ${{ env.HAS_KEY != 'true' }}
-        run: echo "::notice title=agy signed in::not configured (no HIDE_AGY_API_KEY secret); a real agy turn on CI stays unproven"
-      - name: Keep line endings as committed
-        if: ${{ env.HAS_KEY == 'true' }}
-        run: git config --global core.autocrlf false
-      - uses: actions/checkout@v7
-        if: ${{ env.HAS_KEY == 'true' }}
-      - uses: Swatinem/rust-cache@v2
-        if: ${{ env.HAS_KEY == 'true' }}
-        with:
-          workspaces: ". -> target"
-          save-if: false
-      - name: Install cargo-nextest
-        if: ${{ env.HAS_KEY == 'true' }}
-        run: bash scripts/install-nextest.sh
-      - name: Install agy
-        if: ${{ env.HAS_KEY == 'true' }}
-        id: agy
-        run: |
-          # Its own line, so a failed install fails the step instead of
-          # writing an empty path.
-          bin=$(bash scripts/install-agy.sh | tr -d '\r')
-          echo "bin=$bin" >> "$GITHUB_OUTPUT"
-      - name: Build the test binaries
-        if: ${{ env.HAS_KEY == 'true' }}
-        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS --no-run
-      - name: The real agy, signed in with the CI key, lists Hide's hooks and runs one turn through them
-        # The turn (hooks fired, the letter injected, a direct start refused)
-        # runs on Linux and macOS; its stand-in `hide` is a shell script.
-        if: ${{ env.HAS_KEY == 'true' }}
-        # One attempt of the turn's 240 s guard (it is not retried), with room
-        # for the listing's two.
-        timeout-minutes: 9
-        env:
-          HIDE_AGY_BINARY: ${{ steps.agy.outputs.bin }}
-          HIDE_AGY_API_KEY: ${{ secrets.HIDE_AGY_API_KEY }}
-          # The model the key's free tier serves; agy's API-key default
-          # (`gemini-3.1-pro`) has a quota of 0 there. Change it here when the
-          # vendor renames it.
-          HIDE_AGY_MODEL: gemini-3.8-flash-medium
-        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'test(=agy_binary::the_real_agy_loads_hide_s_hook_block) | test(=agy_binary::a_signed_in_agy_turn_fires_hide_s_hooks)' --run-ignored only --no-capture

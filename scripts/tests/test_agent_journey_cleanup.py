@@ -58,14 +58,6 @@ class ProviderKeys(unittest.TestCase):
             self.assertEqual(clean_env(), {"PATH": "/usr/bin"})
 
 
-class Redaction(unittest.TestCase):
-    def test_each_key_and_the_tail_claude_shows_of_it_are_replaced(self):
-        key = "sk-ant-" + "a1b2c3d4" * 6
-        with mock.patch.dict(os.environ, {"HIDE_CLAUDE_API_KEY": key, "HIDE_CODEX_API_KEY": ""}, clear=False):
-            text = f"key {key} approve ...{key[-20:]}? other".encode()
-            self.assertEqual(ci.redact(text), b"key [redacted] approve ...[redacted]? other")
-
-
 class LocalStarts(unittest.TestCase):
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
@@ -255,13 +247,6 @@ class LeftoversAndReport(unittest.TestCase):
         self.assertEqual(budget_failures([{"id": "omp", "requests": 18, "request_budget": 18, "refused_past_budget": 3}]),
                          ["request_budget_exceeded: omp made 18 model requests, budget 18, "
                           "and the fake model refused 3 past it"])
-
-    def test_an_agent_without_its_secret_is_not_configured_and_a_stand_in_needs_none(self):
-        with mock.patch.dict(os.environ, {"HIDE_CODEX_API_KEY": ""}, clear=False):
-            self.assertEqual(ci.not_configured("codex", None), "HIDE_CODEX_API_KEY")
-            self.assertIsNone(ci.not_configured("codex", self.base))
-        with mock.patch.dict(os.environ, {"HIDE_CODEX_API_KEY": "set"}, clear=False):
-            self.assertIsNone(ci.not_configured("codex", None))
 
     def test_a_fixture_report_says_so_and_lists_what_a_stand_in_cannot_show(self):
         report = {"mode": "ci", "fixture": True, "fixture_limits": ci.FIXTURE_LIMITS, "herdr": {}, "table": {},

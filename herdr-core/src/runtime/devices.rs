@@ -216,6 +216,10 @@ impl Runtime {
         let (transport, arrived, connector) = match started {
             Ok(parts) => parts,
             Err(message) => {
+                if registration.origin.core_redials() {
+                    self.begin_device_connect(&device_id);
+                    self.fail_device_connect_install(&device_id);
+                }
                 crate::diagnostic!(serde_json::json!({
                     "component": "remote_session_sync",
                     "kind": "device.connect_failed",
@@ -229,6 +233,10 @@ impl Runtime {
             }
         };
         let Some(context) = self.worker_context.clone() else {
+            if registration.origin.core_redials() {
+                self.begin_device_connect(&device_id);
+                self.fail_device_connect_install(&device_id);
+            }
             return self.ingest_remote_session(
                 &device_id,
                 Err(live::SessionFetchError::Unreachable(

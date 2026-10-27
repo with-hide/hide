@@ -202,6 +202,16 @@ fn properties(id: &str, event: Event) -> serde_json::Value {
     if let Some(agent) = event.agent() {
         properties["agent"] = agent.into();
     }
+    for (key, value) in [
+        ("outcome", event.outcome()),
+        ("failed_step", event.failed_step()),
+        ("herdr", event.herdr()),
+        ("platform", event.platform()),
+    ] {
+        if let Some(value) = value {
+            properties[key] = value.into();
+        }
+    }
     properties
 }
 
@@ -288,7 +298,7 @@ mod tests {
         let (received, bodies) = mpsc::channel();
         let (release, gate) = mpsc::channel();
         let peer = std::thread::spawn(move || {
-            for _ in 0..3 {
+            for _ in 0..6 {
                 let (mut stream, _) = server.accept().unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(10)))
@@ -327,9 +337,20 @@ mod tests {
         worker.client.set_enabled(true);
         worker.client.capture(Event::AiCalled);
         let first = bodies.recv_timeout(Duration::from_secs(10)).unwrap();
-        worker.client.capture(Event::AiCalled);
+        use herdr_core::product_analytics::{
+            DeviceFailedStep, DeviceHerdr, DeviceOutcome, DevicePlatform,
+        };
+        let ready = Event::DeviceConnected {
+            outcome: DeviceOutcome::Ready(DeviceHerdr::Started),
+            platform: DevicePlatform::LinuxAarch64,
+        };
+        let failed = Event::DeviceConnected {
+            outcome: DeviceOutcome::Failed(DeviceFailedStep::HerdrStart),
+            platform: DevicePlatform::MacosAarch64,
+        };
+        worker.client.capture(ready);
         worker.client.set_enabled(false);
-        worker.client.capture(Event::AiCalled);
+        worker.client.capture(failed);
         worker.client.set_enabled(true);
         worker.client.capture(Event::Connected);
         release.send(()).unwrap();
@@ -339,6 +360,21 @@ mod tests {
             .capture(Event::AgentStarted(hide_session::Agent::OpenCode));
         release.send(()).unwrap();
         let third = bodies.recv_timeout(Duration::from_secs(10)).unwrap();
+        worker.client.capture(ready);
+        release.send(()).unwrap();
+        let fourth = bodies.recv_timeout(Duration::from_secs(10)).unwrap();
+        worker.client.capture(failed);
+        release.send(()).unwrap();
+        let fifth = bodies.recv_timeout(Duration::from_secs(10)).unwrap();
+        worker.client.capture(Event::DeviceConnected {
+            outcome: DeviceOutcome::Ready(DeviceHerdr::Preserved),
+            platform: DevicePlatform::MacosX86_64,
+        });
+        release.send(()).unwrap();
+        let sixth = bodies.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert_eq!(sixth["event"], "hide_device_connected");
+        assert_eq!(fourth["event"], "hide_device_connected");
+        assert_eq!(fifth["event"], "hide_device_connected");
         assert_eq!(first["event"], "hide_ai_called");
         assert_eq!(second["event"], "hide_connected");
         assert_eq!(third["event"], "hide_agent_started");
@@ -354,7 +390,23 @@ mod tests {
         let mut started = common.clone();
         started["agent"] = "opencode".into();
         assert_eq!(third["properties"], started);
-        for body in [first, second, third] {
+        let mut device_ready = common.clone();
+        device_ready["outcome"] = "ready".into();
+        device_ready["herdr"] = "started".into();
+        device_ready["platform"] = "linux-aarch64".into();
+        assert_eq!(fourth["properties"], device_ready);
+        let mut preserved = common.clone();
+        preserved["outcome"] = "ready".into();
+        preserved["herdr"] = "preserved".into();
+        preserved["platform"] = "macos-x86_64".into();
+        assert_eq!(sixth["properties"], preserved);
+        let mut device_failed = common;
+        device_failed["outcome"] = "failed".into();
+        device_failed["failed_step"] = "herdr_start".into();
+        device_failed["platform"] = "macos-aarch64".into();
+        assert_eq!(fifth["properties"], device_failed);
+        for body in [first, second, third, fourth, fifth, sixth] {
+            assert_eq!(body["api_key"], "phc_fixture_public_token");
             let mut keys: Vec<_> = body
                 .as_object()
                 .unwrap()

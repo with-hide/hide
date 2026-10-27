@@ -2743,3 +2743,214 @@ fn revoking_the_helper_ends_the_devices_terminals_and_its_panes_say_why() {
         "allowing it again ends the consent wait"
     );
 }
+
+// Records the public analytics boundary, without a transport or a PostHog project.
+#[derive(Debug, Default)]
+struct DeviceStatistics(Mutex<Vec<crate::product_analytics::Event>>);
+
+impl crate::product_analytics::Sink for DeviceStatistics {
+    fn set_enabled(&self, _enabled: bool) {}
+    fn capture(&self, event: crate::product_analytics::Event) {
+        self.0.lock().unwrap().push(event);
+    }
+}
+
+/// A completed bootstrap is one attempt, even when status reads, snapshots,
+/// or another completion arrive. A reconnect is a new attempt.
+#[test]
+fn device_connect_statistics_count_each_ready_bootstrap_once() {
+    use crate::product_analytics::{DeviceHerdr, DeviceOutcome, DevicePlatform, Event};
+    use hide_kit::device_herdr::HerdrUpdate;
+    let shared = with_consent(None);
+    let statistics = Arc::new(DeviceStatistics::default());
+    for preserved in [false, true] {
+        let helper = KitDevice::answering(Ok(with_herdr(None)));
+        let mut runtime = shared.lock().unwrap();
+        if preserved {
+            runtime
+                .snapshot
+                .ui_state
+                .device_registrations
+                .iter_mut()
+                .find(|registration| registration.id == DEVICE)
+                .unwrap()
+                .herdr_session = Some("saved-profile".to_owned());
+        }
+        runtime.product_analytics = Some(statistics.clone());
+        runtime.close_device_host(DEVICE, "fixture reconnect");
+        runtime.start_device_host(DEVICE);
+        // The fixture supplies an already-established device instead of
+        // dialing SSH. Admit the same attempt the outbound worker owns.
+        runtime.begin_device_connect(DEVICE);
+        let generation = runtime.device_host_generation(DEVICE);
+        for _ in 0..2 {
+            let mut connected = established(helper.clone(), None);
+            connected.kit = Some(Ok(Box::new(with_herdr(if preserved {
+                None
+            } else {
+                Some(HerdrUpdate::Started {
+                    version: "private-device-version".to_owned(),
+                    pid: 42,
+                })
+            }))));
+            runtime.ingest_host_established(
+                DEVICE,
+                generation,
+                Ok(hosts::HostReady::Dialed(connected)),
+            );
+        }
+        runtime.refresh_device_snapshots();
+        runtime.snapshot();
+        runtime.queue_device_kit(DEVICE, KitJob::Status);
+        drop(runtime);
+        settle(&shared);
+        // A link ending after ready is not a second final outcome of that dial.
+        shared.lock().unwrap().ingest_host_closed(
+            DEVICE,
+            generation,
+            "fixture link ended".to_owned(),
+        );
+    }
+    assert_eq!(
+        *statistics.0.lock().unwrap(),
+        [
+            Event::DeviceConnected {
+                outcome: DeviceOutcome::Ready(DeviceHerdr::Started),
+                platform: DevicePlatform::MacosAarch64,
+            },
+            Event::DeviceConnected {
+                outcome: DeviceOutcome::Ready(DeviceHerdr::Preserved),
+                platform: DevicePlatform::MacosAarch64,
+            },
+        ]
+    );
+}
+
+/// A failed start settles once; status reads do not count it again, while
+/// the operator's Retry starts another attempt that can succeed.
+#[test]
+fn device_connect_statistics_settle_failure_and_retry_once() {
+    use crate::product_analytics::{
+        DeviceFailedStep, DeviceHerdr, DeviceOutcome, DevicePlatform, Event,
+    };
+    use hide_kit::device_herdr::HerdrUpdate;
+    let helper = KitDevice::answering(Ok(with_herdr(Some(HerdrUpdate::Failed {
+        stage: "start".to_owned(),
+        reason: "private socket and process detail".to_owned(),
+        version: Some("private-device-version".to_owned()),
+        server_version: None,
+    }))));
+    let shared = with_consent(Some(helper.clone()));
+    let statistics = Arc::new(DeviceStatistics::default());
+    {
+        let mut runtime = shared.lock().unwrap();
+        runtime.product_analytics = Some(statistics.clone());
+        // This fixture starts at the helper boundary of an admitted SSH dial.
+        runtime.begin_device_connect(DEVICE);
+        runtime.device_connect_platform(DEVICE, "macos", "aarch64");
+        runtime.queue_device_kit(DEVICE, KitJob::Apply(hide_kit::Scope::automatic()));
+    }
+    settle(&shared);
+    assert_eq!(
+        *statistics.0.lock().unwrap(),
+        [Event::DeviceConnected {
+            outcome: DeviceOutcome::Failed(DeviceFailedStep::HerdrStart),
+            platform: DevicePlatform::MacosAarch64,
+        }]
+    );
+    *helper.answer.lock().unwrap() = Ok(with_herdr(None));
+    shared
+        .lock()
+        .unwrap()
+        .queue_device_kit(DEVICE, KitJob::Status);
+    settle(&shared);
+    assert_eq!(statistics.0.lock().unwrap().len(), 1);
+    *helper.answer.lock().unwrap() = Ok(with_herdr(Some(HerdrUpdate::Started {
+        version: "private-device-version".to_owned(),
+        pid: 42,
+    })));
+    dispatch(
+        &shared,
+        "kit_reinstall",
+        serde_json::json!({ "device_id": DEVICE }),
+    );
+    settle(&shared);
+    assert_eq!(
+        *statistics.0.lock().unwrap(),
+        [
+            Event::DeviceConnected {
+                outcome: DeviceOutcome::Failed(DeviceFailedStep::HerdrStart),
+                platform: DevicePlatform::MacosAarch64,
+            },
+            Event::DeviceConnected {
+                outcome: DeviceOutcome::Ready(DeviceHerdr::Started),
+                platform: DevicePlatform::MacosAarch64,
+            },
+        ]
+    );
+}
+
+/// A failure before SSH can report a platform still has one bounded outcome.
+#[test]
+fn device_connect_statistics_include_early_install_failure() {
+    use crate::product_analytics::{DeviceFailedStep, DeviceOutcome, DevicePlatform, Event};
+    let mut runtime = runtime();
+    let statistics = Arc::new(DeviceStatistics::default());
+    runtime.product_analytics = Some(statistics.clone());
+    runtime.dispatch_json(
+        &serde_json::to_vec(&serde_json::json!({
+            "schema_version": SCHEMA_VERSION, "kind": "register_device",
+            "payload": { "id": DEVICE, "label": "private label", "ssh_alias": "private-host" },
+        }))
+        .unwrap(),
+    );
+    runtime.refresh_device_snapshots();
+    runtime.snapshot();
+    assert_eq!(
+        *statistics.0.lock().unwrap(),
+        [Event::DeviceConnected {
+            outcome: DeviceOutcome::Failed(DeviceFailedStep::Install),
+            platform: DevicePlatform::Unknown,
+        }]
+    );
+}
+
+/// An inbound node performs no outbound bootstrap, including its kit Retry.
+#[test]
+fn device_connect_statistics_exclude_inbound_retry() {
+    use hide_kit::device_herdr::HerdrUpdate;
+    let helper = KitDevice::answering(Ok(with_herdr(Some(HerdrUpdate::Failed {
+        stage: "start".to_owned(),
+        reason: "private detail".to_owned(),
+        version: None,
+        server_version: None,
+    }))));
+    let shared = with_consent(Some(helper.clone()));
+    let statistics = Arc::new(DeviceStatistics::default());
+    {
+        let mut runtime = shared.lock().unwrap();
+        runtime.product_analytics = Some(statistics.clone());
+        runtime
+            .snapshot
+            .ui_state
+            .device_registrations
+            .iter_mut()
+            .find(|registration| registration.id == DEVICE)
+            .unwrap()
+            .origin = crate::model::LinkOrigin::Inbound;
+        runtime.queue_device_kit(DEVICE, KitJob::Apply(hide_kit::Scope::automatic()));
+    }
+    settle(&shared);
+    assert!(kit(&shared).herdr_start_failed);
+    *helper.answer.lock().unwrap() = Ok(with_herdr(Some(HerdrUpdate::Started {
+        version: "private-device-version".to_owned(),
+        pid: 42,
+    })));
+    dispatch(
+        &shared,
+        "kit_reinstall",
+        serde_json::json!({ "device_id": DEVICE }),
+    );
+    settle(&shared);
+    assert!(statistics.0.lock().unwrap().is_empty());
+}

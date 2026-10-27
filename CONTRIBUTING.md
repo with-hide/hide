@@ -348,15 +348,15 @@ Pushing a tag by hand does not start official publication; the former public `re
 Signing credentials and the maintainer's publication procedure are managed outside this public repository.
 Existing releases and downloads remain available.
 
-The public [unsigned release candidate](docs/BUILD.md#unsigned-release-candidates) prepares Linux and Windows packages and runs the full existing agent journey on an exact verified source.
+The public [unsigned release candidate](docs/BUILD.md#unsigned-release-candidates) prepares Linux and Windows packages and runs the agent journey's CI lanes on an exact verified source.
 It creates no tag or Release, and produces its candidate receipt only after both gates pass.
-The optional `live_agents=false` defers signed-in provider calls while preserving Linux/macOS stand-ins, Windows form checks and fake-model checks on all three systems, and records those provider checks as not measured for release approval.
+It runs the Linux/macOS stand-ins, the Windows form checks and the fake-model checks on all three systems, and signs no agent in: since 2026-10-27, by the operator's decision, a real login is measured only on the Mac, because what only a login proves (the provider's sign-in, quota and billed usage) is the provider's, not Hide's code.
 Public CI keeps the source, installation and update checks; official macOS signing and final publication run privately.
 
 An official release requires:
 
 - The source commit's own `verify` push run on main passed, including its full Rust, web, desktop and package lanes.
-- The [agent journey](docs/VERIFICATION.md#agent-journey) ran on the source with the signed-in agents on the Mac and with the public candidate's stand-in, fake-model and configured signed-in CI lanes.
+- The [agent journey](docs/VERIFICATION.md#agent-journey) ran on the source locally on the Mac, the fake model first and then with the agents signed in there ([A release's run on the Mac](docs/VERIFICATION.md#local-mode-macos)), which is a release's only evidence of a real login, and in the public candidate's stand-in and fake-model CI lanes.
   A failed local journey cell stops the release unless the operator explicitly approves and records that exception for this version; every unmeasured cell and its reason is shown in the version approval.
   The public candidate and the source's main `verify` run must succeed; operator approval cannot bypass either failed CI gate.
   Stand-ins and fake models do not prove a provider or a login.

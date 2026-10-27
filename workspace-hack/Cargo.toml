@@ -72,6 +72,14 @@ linux-raw-sys = { version = "0.12", default-features = false, features = ["auxve
 mio = { version = "1", features = ["net", "os-ext"] }
 rustix = { version = "1", features = ["fs", "process", "termios", "time"] }
 
+[target.aarch64-unknown-linux-gnu.dependencies]
+bitflags = { version = "2", default-features = false, features = ["std"] }
+getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng", "wasm_js"] }
+libc = { version = "0.2", features = ["extra_traits"] }
+linux-raw-sys = { version = "0.12", default-features = false, features = ["auxvec", "elf", "errno", "general", "ioctl", "no_std", "prctl"] }
+mio = { version = "1", features = ["net", "os-ext"] }
+rustix = { version = "1", features = ["fs", "process", "termios", "time"] }
+
 [target.x86_64-pc-windows-msvc.dependencies]
 getrandom-9fbad63c4bcf4a8f = { package = "getrandom", version = "0.4", default-features = false, features = ["std", "sys_rng", "wasm_js"] }
 windows = { version = "0.62", features = ["Win32_Security_Authentication_Identity", "Win32_Security_Cryptography", "Win32_Storage_EnhancedStorage", "Win32_System_Com_StructuredStorage", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_Variant", "Win32_System_WindowsProgramming", "Win32_UI_Shell_PropertiesSystem", "Win32_UI_WindowsAndMessaging"] }
