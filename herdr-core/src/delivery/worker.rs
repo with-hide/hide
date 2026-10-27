@@ -898,7 +898,7 @@ fn run(
 struct Settled {
     ledger: Ledger,
     /// The file's new bytes, once the batch changed the ledger: the batch's
-    /// one check and one encoding, or why the ledger cannot be written.
+    /// one encoding, or why the ledger cannot be written.
     bytes: Option<Result<Vec<u8>, String>>,
     results: Vec<Result<Value, String>>,
     transitions: bool,
@@ -907,9 +907,8 @@ struct Settled {
 }
 
 /// Applies `batch` after the store's upkeep to one copy of `state`. A request
-/// lands as it would alone: one that is refused leaves the copy as it was
-/// before it, and one that would leave a ledger the file cannot hold is
-/// refused with that code.
+/// lands as it would alone: one that is refused, or that would leave a
+/// ledger the file cannot hold, leaves the copy as it was before it.
 fn settle(
     runtime: &Mutex<Runtime>,
     state: &Ledger,
@@ -917,28 +916,7 @@ fn settle(
     batch: &[Request],
     now: u64,
 ) -> Settled {
-    let settled = pass(runtime, state, upkeep, batch, false, now);
-    if !matches!(settled.bytes, Some(Err(_))) {
-        return settled;
-    }
-    // A ledger the file cannot hold is made again with each request checked
-    // as it lands, as each was checked alone: only the requests that made it
-    // so are refused, and every request after one is looked at again, since
-    // a refusal can leave room for it.
-    pass(runtime, state, upkeep, batch, true, now)
-}
-
-/// One pass of `batch`, in order, over one copy of `state` after the store's
-/// upkeep; a request applies to the copy in place. With `checked`, each
-/// request must also leave a ledger the file can hold.
-fn pass(
-    runtime: &Mutex<Runtime>,
-    state: &Ledger,
-    upkeep: &Upkeep,
-    batch: &[Request],
-    checked: bool,
-    now: u64,
-) -> Settled {
+    // The batch's one copy of the ledger; a request applies to it in place.
     let mut candidate = state.clone();
     let (moved, ended) = upkeep.apply(&mut candidate, now);
     let mut results = Vec::with_capacity(batch.len());
@@ -947,42 +925,31 @@ fn pass(
     for (index, request) in batch.iter().enumerate() {
         let result = match current(runtime, request, &candidate, now) {
             Err(code) => Err(code),
-            Ok(()) => {
-                let before = checked.then(|| candidate.clone());
-                let landed = apply(&mut candidate, request, now).and_then(|landed| {
-                    if checked {
-                        candidate.bytes()?;
-                    }
-                    Ok(landed)
-                });
-                match landed {
-                    Ok((value, publish)) => {
-                        transitions |= publish;
-                        accepted[index] = true;
-                        Ok(value)
-                    }
-                    Err(code) => {
-                        // A refusal may come after the request changed the
-                        // copy, so the copy goes back to what it was before.
-                        candidate = match before {
-                            Some(before) => before,
-                            None => {
-                                let rebuilt;
-                                (rebuilt, transitions) = rebuild(
-                                    state,
-                                    upkeep,
-                                    &batch[..index],
-                                    &mut accepted[..index],
-                                    &mut results[..index],
-                                    now,
-                                );
-                                rebuilt
-                            }
-                        };
-                        Err(code)
-                    }
+            // Checked after each request: a later one that drops a letter
+            // can bring the batch's end back under a limit this one broke.
+            Ok(()) => match apply(&mut candidate, request, now).and_then(|landed| {
+                candidate.check()?;
+                Ok(landed)
+            }) {
+                Ok((value, publish)) => {
+                    transitions |= publish;
+                    accepted[index] = true;
+                    Ok(value)
                 }
-            }
+                Err(code) => {
+                    // A refusal may come after the request changed the copy,
+                    // so the copy is made again without it.
+                    (candidate, transitions) = rebuild(
+                        state,
+                        upkeep,
+                        &batch[..index],
+                        &mut accepted[..index],
+                        &mut results[..index],
+                        now,
+                    );
+                    Err(code)
+                }
+            },
         };
         results.push(result);
     }
@@ -2177,7 +2144,7 @@ mod tests {
     fn a_request_the_file_cannot_hold_is_refused_alone_within_its_batch() {
         let root = tempfile::tempdir().unwrap();
         let (runtime, actor, target, _) = fixture(root.path());
-        near_limit(&runtime, &actor, &target, 0);
+        near_limit(&runtime, &actor, &target, 0, 1_100);
         let body_limit = super::super::BODY_LIMIT;
         let state = runtime.lock().unwrap().delivery_state().unwrap();
         let batch = [
@@ -2267,11 +2234,16 @@ mod tests {
         assert_eq!(stored(&settled.ledger, &state), expected);
     }
 
-    /// Publishes a ledger of `open` open letters and finished ones up to
+    /// Publishes a ledger of `open` open letters, then `finished` finished
+    /// ones, the oldest first, whose bodies fill it, the oldest first, up to
     /// 8,000 bytes below the file's limit.
-    fn near_limit(runtime: &Mutex<Runtime>, actor: &Actor, target: &Observation, open: usize) {
-        let (limit, body_limit) = (super::super::FILE_LIMIT, super::super::BODY_LIMIT);
-        let room = 8_000;
+    fn near_limit(
+        runtime: &Mutex<Runtime>,
+        actor: &Actor,
+        target: &Observation,
+        open: usize,
+        finished: usize,
+    ) {
         let mut installed = Ledger::default();
         for index in 0..open {
             mailbox::send(
@@ -2286,61 +2258,76 @@ mod tests {
             )
             .unwrap();
         }
-        let finished = |ledger: &mut Ledger, index: usize, body: &str| {
+        let start = now();
+        for index in 0..finished {
             let letter = mailbox::send(
-                ledger,
+                &mut installed,
                 actor,
                 &target.actor,
                 &format!("fill-{index}"),
-                body,
+                "x",
                 "report",
                 None,
-                now(),
+                start,
             )
             .unwrap();
             mailbox::apply(
-                ledger,
+                &mut installed,
                 &target.actor,
                 None,
                 &Command::Confirm {
                     ids: vec![letter.id],
                 },
-                now(),
+                start + index as u64,
             )
             .unwrap();
-        };
-        let base = installed.bytes().unwrap().len();
-        finished(&mut installed, 0, &"x".repeat(body_limit));
-        // Two letters short, since a longer id costs a few more bytes.
-        let full = (limit - room - base) / (installed.bytes().unwrap().len() - base) - 2;
-        for index in 1..full {
-            finished(&mut installed, index, &"x".repeat(body_limit));
         }
-        let mut index = full;
-        loop {
-            let need = limit - room - installed.bytes().unwrap().len();
-            if need == 0 {
-                break;
-            }
-            let body = &mut installed.letters.last_mut().unwrap().body;
-            let space = body_limit - body.len();
-            // What is left after this body has to fit one more letter.
-            let add = if need <= space {
-                need
-            } else {
-                space.min(need.saturating_sub(2_048))
-            };
-            if add == 0 {
-                finished(&mut installed, index, "x");
-                index += 1;
-                continue;
-            }
-            body.push_str(&"x".repeat(add));
+        // A body's `x` is one byte in the file too.
+        let mut need = super::super::FILE_LIMIT - 8_000 - installed.bytes().unwrap().len();
+        for letter in &mut installed.letters[open..] {
+            let add = need.min(super::super::BODY_LIMIT - letter.body.len());
+            letter.body.push_str(&"x".repeat(add));
+            need -= add;
         }
+        assert_eq!(need, 0);
         runtime
             .lock()
             .unwrap()
             .publish_delivery(Arc::new(installed), false);
+    }
+
+    #[test]
+    fn a_request_over_the_limit_is_refused_though_a_later_one_makes_room() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, actor, target, _) = fixture(root.path());
+        // One short of the total, the oldest finished letter a full body:
+        // the second send would drop it and bring the batch back under the
+        // file's limit the first one broke.
+        near_limit(&runtime, &actor, &target, 0, super::super::LETTER_LIMIT - 1);
+        let state = runtime.lock().unwrap().delivery_state().unwrap();
+        let oldest = state.letters[0].id.clone();
+        assert_eq!(state.letters[0].body.len(), super::super::BODY_LIMIT);
+        let batch = [
+            send(
+                &actor,
+                &target,
+                "too-big",
+                &"y".repeat(super::super::BODY_LIMIT),
+            ),
+            send(&actor, &target, "after", "short"),
+        ];
+        let settled = settle(&runtime, &state, &upkeep(), &batch, now());
+        assert_eq!(settled.results[0], Err("capacity".into()));
+        let expected = vec![("after".to_owned(), format!("letter-{}", state.next_id))];
+        assert_eq!(answered(&settled, &[1]), expected);
+        assert_eq!(stored(&settled.ledger, &state), expected);
+        assert!(
+            settled
+                .ledger
+                .letters
+                .iter()
+                .any(|letter| letter.id == oldest)
+        );
     }
 
     #[test]
@@ -2349,7 +2336,13 @@ mod tests {
         let (runtime, actor, target, _) = fixture(root.path());
         // One open place left: the too-big letter takes it in the batch's
         // first pass, and the file's limit then refuses it.
-        near_limit(&runtime, &actor, &target, super::super::OPEN_LIMIT - 1);
+        near_limit(
+            &runtime,
+            &actor,
+            &target,
+            super::super::OPEN_LIMIT - 1,
+            1_100,
+        );
         let state = runtime.lock().unwrap().delivery_state().unwrap();
         let batch = [
             send(
