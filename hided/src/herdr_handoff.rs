@@ -1396,24 +1396,20 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_copy_hide_runs_replaces_the_file_with_a_new_one() {
-        use std::io::Read;
-        use std::os::unix::fs::PermissionsExt;
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
         let dir = tempfile::tempdir().unwrap();
         let ours = dir.path().join("ours");
         std::fs::write(&ours, b"new herdr").unwrap();
         let theirs = dir.path().join("theirs");
         std::fs::write(&theirs, b"old herdr").unwrap();
-        // Held as a running Herdr holds its program. An inode number cannot
-        // tell: the system may give the freed one to the new file.
-        let mut running = std::fs::File::open(&theirs).unwrap();
+        let before = std::fs::metadata(&theirs).unwrap().ino();
         PathUpdate::of(&ours, &theirs).run().unwrap();
         assert_eq!(std::fs::read(&theirs).unwrap(), b"new herdr");
         let after = std::fs::metadata(&theirs).unwrap();
         assert_eq!(after.permissions().mode() & 0o777, 0o755);
-        let mut held = Vec::new();
-        running.read_to_end(&mut held).unwrap();
-        assert_eq!(
-            held, b"old herdr",
+        assert_ne!(
+            after.ino(),
+            before,
             "a new file, not the running one rewritten"
         );
     }
