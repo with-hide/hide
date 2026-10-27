@@ -28,11 +28,11 @@ const TRACK_INTERVAL_MS: u64 = 60_000;
 /// was cut short (Hide quit between writing the state and the spawn). It
 /// outlasts the spawn's own answer, which takes up to two starts, each held
 /// by Herdr until its deadline and asked again on the next check.
-const START_GRACE_MS: u64 =
+pub(super) const START_GRACE_MS: u64 =
     2 * crate::agent_start::AGENT_START_DEADLINE.as_millis() as u64 + 3 * TRACK_INTERVAL_MS;
 /// How much earlier than the attempt's start a pull request may say it was
 /// made, for a clock that runs a little behind GitHub's.
-const START_SLACK_MS: u64 = 60_000;
+pub(super) const START_SLACK_MS: u64 = 60_000;
 
 /// The branch an attempt works on: its own per attempt, so a pull request an
 /// earlier attempt, or a card of the same number before the Project's data
@@ -53,7 +53,7 @@ fn retry_branch(previous: Option<&Promotion>, number: u64, started: u64) -> Stri
         .unwrap_or_else(|| branch(number, started))
 }
 
-fn base36(mut value: u64) -> String {
+pub(super) fn base36(mut value: u64) -> String {
     let mut digits = Vec::new();
     loop {
         digits.push(char::from_digit((value % 36) as u32, 36).unwrap_or('0'));
@@ -209,7 +209,7 @@ pub(super) struct HomePull {
 }
 
 impl HomePull {
-    fn of(pull: &PullRequestSnapshot) -> Option<Self> {
+    pub(super) fn of(pull: &PullRequestSnapshot) -> Option<Self> {
         matches!(
             pull.badge,
             PullRequestBadge::Open | PullRequestBadge::Review
@@ -360,6 +360,7 @@ impl Runtime {
                 Some(MemoryPromotionAgentSnapshot {
                     name: record.wire_name().to_owned(),
                     pane_id: (!record.ended).then(|| record.pane.clone()),
+                    agent_id: Some(record.id.clone()),
                 })
             }),
             _ => None,
@@ -401,6 +402,7 @@ impl Runtime {
         Some(MemoryPromotionAgentSnapshot {
             name: chip.label.clone(),
             pane_id: Some(chip.pane_id.clone()),
+            agent_id: None,
         })
     }
 
@@ -563,7 +565,11 @@ impl Runtime {
 
     /// The PR catalog of the repository at `root` on `node`: this machine's,
     /// or the one read for a linked device.
-    fn promotion_catalog(&self, node: &NodeId, root: &str) -> Option<&GithubProjectSnapshot> {
+    pub(super) fn promotion_catalog(
+        &self,
+        node: &NodeId,
+        root: &str,
+    ) -> Option<&GithubProjectSnapshot> {
         if *node == self.node {
             self.github.project(root)
         } else {
@@ -573,7 +579,7 @@ impl Runtime {
 
     /// Resolve the confirmed target from existing node-owned Git facts,
     /// without I/O under the runtime lock or a later provider response.
-    fn promotion_repository(&self, node: &NodeId, root: &str) -> Option<String> {
+    pub(super) fn promotion_repository(&self, node: &NodeId, root: &str) -> Option<String> {
         if let Some(crate::project_settings::RepositoryConnection::Repository { repository }) =
             crate::project_settings::get(
                 &self.snapshot.ui_state.project_settings,
@@ -607,7 +613,7 @@ impl Runtime {
 
     /// Asks the PR catalog of `root` on `node` for a fresh read; answers the
     /// generation that read carries.
-    fn ask_promotion_catalog(&mut self, node: &NodeId, root: &str) -> u64 {
+    pub(super) fn ask_promotion_catalog(&mut self, node: &NodeId, root: &str) -> u64 {
         if *node == self.node {
             self.refresh_pull_requests(root);
             self.github_generations.get(root).copied().unwrap_or(0)
@@ -617,7 +623,7 @@ impl Runtime {
     }
 
     /// The generation of the last answered read of `root` on `node`.
-    fn promotion_catalog_read(&self, node: &NodeId, root: &str) -> Option<u64> {
+    pub(super) fn promotion_catalog_read(&self, node: &NodeId, root: &str) -> Option<u64> {
         if *node == self.node {
             self.github_read_generation.get(root).copied()
         } else {
@@ -669,7 +675,7 @@ impl Runtime {
 
     /// Whether the agent with coordination id `id` has ended: `None` while
     /// the ledger cannot be read, so an unread ledger never fails a card.
-    fn promotion_agent_ended(&self, id: &str) -> Option<bool> {
+    pub(super) fn promotion_agent_ended(&self, id: &str) -> Option<bool> {
         let ledger = self.delivery_state().ok()?;
         Some(
             ledger
@@ -773,7 +779,7 @@ fn branch_pull_request<'a>(
 /// What the PR catalog's answer for a repository says of a missing pull
 /// request, once it answers generation `asked` or later.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum CatalogVerdict {
+pub(super) enum CatalogVerdict {
     /// No answer to the ask yet.
     Waiting,
     /// A current read without it, or no GitHub remote: none came.
@@ -783,7 +789,7 @@ enum CatalogVerdict {
     Unconfirmed(Option<GithubFailureCategory>),
 }
 
-fn catalog_verdict(
+pub(super) fn catalog_verdict(
     project: Option<&GithubProjectSnapshot>,
     read: Option<u64>,
     asked: u64,
@@ -1301,7 +1307,7 @@ fn adopt_agent<S>(
 
 /// Whether a spawn's refusal says its agent never started: its shell never
 /// finished starting, or the start it typed never showed an agent.
-fn never_started(reason: &str) -> bool {
+pub(super) fn never_started(reason: &str) -> bool {
     matches!(
         crate::coordination::split_refusal(reason).0,
         crate::agent_start::SHELL_STARTING | "agent_not_started"
@@ -2102,26 +2108,36 @@ pub(super) fn dismiss_promotion(
 /// The spawn's answer when the agent's pane was made and its start typed but
 /// its session was not seen within the spawn's own wait: asking the same
 /// intent again continues it (the Factory reads it the same way).
-const UNSEEN: &str = "native_identity_unavailable";
+pub(super) const UNSEEN: &str = "native_identity_unavailable";
 /// The spawn's answer when another spawn holds this machine's spawn lock:
 /// nothing was started, and asking again soon may get the lock.
 const BUSY: &str = "spawn_busy";
 /// How long a promotion's start waits for the machine's spawn lock.
 const SPAWN_LOCK_WITHIN: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// `spawn_agent`, asked again while another spawn holds the lock, until
-/// [`SPAWN_LOCK_WITHIN`]; a lock still held then fails the start, since
-/// nothing was started.
+/// One agent Hide starts for a home (PRD hide-ai-work-home D-10): the name
+/// it is listed under, the intent that makes a start asked again continue
+/// the same spawn (rule 11), the branch of its worktree, its first prompt
+/// and its task.
+pub(super) struct HideSpawn {
+    pub(super) name: String,
+    pub(super) intent: String,
+    pub(super) branch: String,
+    pub(super) prompt: String,
+    pub(super) task: crate::coordination::SpawnTask,
+}
+
+/// [`spawn_hide_agent`], asked again while another spawn holds the lock,
+/// until [`SPAWN_LOCK_WITHIN`]; a lock still held then fails the start,
+/// since nothing was started.
 #[allow(clippy::disallowed_methods)] // a production wait on the action worker
-fn spawn_when_free(
-    project_id: &str,
-    number: u64,
-    promotion: &Promotion,
+pub(super) fn spawn_hide_agent_when_free(
     start: &PromotionStart,
+    spawn: &HideSpawn,
 ) -> Result<String, String> {
     let deadline = std::time::Instant::now() + SPAWN_LOCK_WITHIN;
     loop {
-        match spawn_agent(project_id, number, promotion, start) {
+        match spawn_hide_agent(start, spawn) {
             Err(reason) if reason == BUSY && std::time::Instant::now() < deadline => {
                 std::thread::sleep(std::time::Duration::from_millis(500));
             }
@@ -2130,28 +2146,72 @@ fn spawn_when_free(
     }
 }
 
-/// The coordination spawn with Hide as origin (a handoff, so the agent is
-/// the operator's root with no watch); answers its coordination id.
+fn spawn_when_free(
+    project_id: &str,
+    number: u64,
+    promotion: &Promotion,
+    start: &PromotionStart,
+) -> Result<String, String> {
+    spawn_hide_agent_when_free(
+        start,
+        &promotion_spawn(project_id, number, promotion, start)?,
+    )
+}
+
 fn spawn_agent(
     project_id: &str,
     number: u64,
     promotion: &Promotion,
     start: &PromotionStart,
 ) -> Result<String, String> {
-    let dialect = hide_agent_adapter::adapter(&start.kind)
-        .and_then(|row| row.start)
-        .ok_or("agent_not_startable")?;
+    spawn_hide_agent(
+        start,
+        &promotion_spawn(project_id, number, promotion, start)?,
+    )
+}
+
+fn promotion_spawn(
+    project_id: &str,
+    number: u64,
+    promotion: &Promotion,
+    start: &PromotionStart,
+) -> Result<HideSpawn, String> {
     let branch = promotion.branch.clone().ok_or("promotion_without_branch")?;
     let started = promotion.started_at_unix_ms;
-    let args = vec![
-        dialect.prompt_flag().to_owned(),
-        crate::live::prompt_argument(&prompt(&start.numbers, &start.evidence, start.language))?,
-    ];
-    crate::coordination::register_code_owned(&start.client, &start.authority, &start.actor)?;
     // Stable per Project, card and attempt start, so a start asked again
     // continues the same spawn (rule 11), and an attempt after the
     // Project's data was deleted and its numbers began again is a new one.
     let prefix = intent_prefix(project_id);
+    Ok(HideSpawn {
+        name: agent_name(number, started),
+        intent: format!(
+            "{prefix}m{number}-a{}-{}",
+            promotion.attempt,
+            base36(started)
+        ),
+        branch,
+        prompt: prompt(&start.numbers, &start.evidence, start.language),
+        task: crate::coordination::SpawnTask {
+            kind: crate::coordination::TaskKind::MemoryPromote,
+            target: Some(format!("m{number}")),
+        },
+    })
+}
+
+/// The coordination spawn with Hide as origin (a handoff, so the agent is
+/// the operator's root with no watch); answers its coordination id.
+pub(super) fn spawn_hide_agent(
+    start: &PromotionStart,
+    spawn: &HideSpawn,
+) -> Result<String, String> {
+    let dialect = hide_agent_adapter::adapter(&start.kind)
+        .and_then(|row| row.start)
+        .ok_or("agent_not_startable")?;
+    let args = vec![
+        dialect.prompt_flag().to_owned(),
+        crate::live::prompt_argument(&spawn.prompt)?,
+    ];
+    crate::coordination::register_code_owned(&start.client, &start.authority, &start.actor)?;
     let view = crate::coordination::run(
         start.client.clone(),
         crate::delivery::worker::Authority {
@@ -2163,23 +2223,16 @@ fn spawn_agent(
             mission: None,
             parent: None,
             machine: start.machine.clone(),
-            name: agent_name(number, started),
-            intent: format!(
-                "{prefix}m{number}-a{}-{}",
-                promotion.attempt,
-                base36(started)
-            ),
+            name: spawn.name.clone(),
+            intent: spawn.intent.clone(),
             kind: start.kind.clone(),
             repo: start.repo.clone(),
-            branch,
+            branch: spawn.branch.clone(),
             path: None,
             args,
             launch: start.launch.clone(),
             brief: None,
-            task: Some(crate::coordination::SpawnTask {
-                kind: crate::coordination::TaskKind::MemoryPromote,
-                target: Some(format!("m{number}")),
-            }),
+            task: Some(spawn.task.clone()),
             beside: false,
         },
     )?;

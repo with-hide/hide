@@ -236,6 +236,7 @@ pub fn router(state: AppState) -> Router {
             "/browser-route",
             post(resolve_browser_route).delete(release_browser_route),
         )
+        .route("/hide-ai-wake", post(hide_ai_wake))
         .route(
             "/browser-control",
             post(register_browser_control)
@@ -315,6 +316,38 @@ async fn resolve_browser_route(
         return StatusCode::UNAUTHORIZED.into_response();
     }
     crate::browser_routes::resolve_answer(&state.browser_routes, request).await
+}
+
+/// The desktop host's word that the app opened, the machine woke or the
+/// screen unlocked (PRD hide-ai-suggestions B6, D-34): one core event, which
+/// asks the day's suggestion runs to start a few minutes later.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HideAiWake {
+    cause: String,
+}
+
+async fn hide_ai_wake(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::Json(request): axum::Json<HideAiWake>,
+) -> Response {
+    if !bearer_matches(&headers, &state.token) {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    if !matches!(request.cause.as_str(), "app_open" | "resume" | "unlock") {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let event = json!({
+        "schema_version": herdr_core::SCHEMA_VERSION,
+        "kind": "hide_ai_wake",
+        "payload": {"cause": request.cause},
+    });
+    let core = Arc::clone(&state.core);
+    match tokio::task::spawn_blocking(move || core.dispatch(event.to_string().into_bytes())).await {
+        Ok(Ok(())) => StatusCode::NO_CONTENT.into_response(),
+        _ => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
 }
 
 async fn release_browser_route(

@@ -897,6 +897,7 @@ fn read_opencode(home: &std::path::Path, request: &ReadRequest, answer: &mut Rea
         checkpoint: request.checkpoint.clone(),
         subagents: Default::default(),
         turns: None,
+        tools: None,
     };
     // A link line is each session as its own row records it, a subagent's
     // child session included; it never joins the root's conversation.

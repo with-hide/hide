@@ -21,14 +21,14 @@ It is read back off the row: a row whose lineage depth is greater than zero is d
 
 ### Work Hide AI does for a home
 
-A Hide-started agent whose task kind has a home (today a Memory card's promotion, `memory_promote`, whose home is the Memory tool's To ask rows) is not the operator's work, so it is a third ownership value, `HideAi`, not a flag on an operator row (PRD hide-ai-work-home D-13).
+A Hide-started agent whose task kind has a home (a Memory card's promotion, `memory_promote`, and a 제안 line's application, `suggestion_apply`, whose home is the Hide AI tool's 제안 tab on the row the task's target names, `m72` for a card and `s12` for a line; PRD hide-ai-suggestions D-02, D-17) is not the operator's work, so it is a third ownership value, `HideAi`, not a flag on an operator row (PRD hide-ai-work-home D-13).
 The coordination ledger's record of the spawn is the only source of the fact (`coordination::started`), and the task kind is a closed enum (`coordination::TaskKind`) whose exhaustive `home()` match makes a new kind fail to compile until it names its home.
 A kind this build does not know, or a record with no task, loads with the rest of the ledger and reads as no home: that one agent stays an operator row with its mark and a `hide_ai.task_kind_unknown` diagnostic (D-19).
 The row stays in the agent data, so ⌘K, tabs, the pane header's owl and `hide agent list` find it as before; what changes is which lists enumerate it.
 `agent_state::listed_for_operator` is the one decision: a `HideAi` row is a member of the sidebar's tree roots, the device's tasks, Overview's requests and graph, the phone's list, the checkout counts and the pet only while it is in Needs You, and no tree draws it even then (the raised Needs You and the 태스크 list do).
 Its group is Needs You or Seen and never Working or Done, so it moves no Working or Done badge, rail count or notification.
 It is in Needs You when the agent itself asks (a question, approval or block, read like any row's) or when the home has a turn for the operator.
-The home's turn is computed by the core from what the Memory promotion module already follows, the attempt's pull request in the machine's PR catalog, and published on the row as `hide_ai.turn`:
+The home's turn is computed by the core from what the home's own tracker already follows (the Memory promotion module for `memory_promote`, `runtime/suggestion_apply.rs` for `suggestion_apply`), the attempt's pull request in the machine's PR catalog, and published on the row as `hide_ai.turn`:
 
 | The attempt's pull request | Turn |
 | --- | --- |
@@ -39,8 +39,8 @@ The home's turn is computed by the core from what the Memory promotion module al
 
 A row has one line; its second line is the agent's ask or its block's cause, then `ci_failed`, then `pr_review`.
 Entering Needs You notifies once, as for an operator row, and a turn changing inside it does not notify again, because the notification state machine follows the group and not the word.
-Only a live agent has a row: an attempt with no agent (a failure with no pull request, an open pull request after the operator closed the pane) shows in the Memory tool alone (D-15).
-The shell words the turn and opens the home from the row (the Memory tool with the attempt's To ask row open); the phone opens the agent's detail.
+Only a live agent has a row: an attempt with no agent (a failure with no pull request, an open pull request after the operator closed the pane) shows in the 제안 tab alone (D-15).
+The shell words the turn and opens the home from the row (the Hide AI tool's 제안 tab with the target's row open); the phone opens the agent's detail.
 Regression owners: `a_hide_started_row_follows_its_attempts_pull_request_into_and_out_of_needs_you` and `a_home_owned_row_is_listed_only_while_the_operator_has_something_to_do` in `herdr-core/src/runtime/tests/`, `the_home_turn_follows_the_pull_request_and_the_agent` in `memory_promotion.rs`, and `a_home_owned_row_notifies_once_on_entering_needs_you_and_not_on_a_turn_change` in `hided/src/mobile/push.rs`.
 
 ### A held Memory card is no status

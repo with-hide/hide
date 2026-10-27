@@ -1617,6 +1617,11 @@ pub(super) enum Event {
     ArchiveOpen(ArchiveOpenPayload),
     MemoryAction(MemoryActionPayload),
     MemoryOpen(MemoryOpenPayload),
+    SuggestionAction(super::suggestions::SuggestionActionPayload),
+    SuggestionSettings(super::suggestions::SuggestionSettingsPayload),
+    HideAiSwitch(super::suggestions::HideAiSwitchPayload),
+    SuggestionsIntroSeen,
+    HideAiWake(super::suggestions::HideAiWakePayload),
     ProjectMemoryNavigate(ProjectMemoryNavigatePayload),
     MemoryExpand(MemoryExpandPayload),
     MemoryEvictionsSeen(MemoryEvictionsSeenPayload),
@@ -1906,6 +1911,17 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "archive_open" => decode!(ArchiveOpenPayload, ArchiveOpen),
         "memory_action" => decode!(MemoryActionPayload, MemoryAction),
         "memory_open" => decode!(MemoryOpenPayload, MemoryOpen),
+        "suggestion_action" => decode!(
+            super::suggestions::SuggestionActionPayload,
+            SuggestionAction
+        ),
+        "suggestion_settings" => decode!(
+            super::suggestions::SuggestionSettingsPayload,
+            SuggestionSettings
+        ),
+        "hide_ai_switch" => decode!(super::suggestions::HideAiSwitchPayload, HideAiSwitch),
+        "suggestions_intro_seen" => Ok(Event::SuggestionsIntroSeen),
+        "hide_ai_wake" => decode!(super::suggestions::HideAiWakePayload, HideAiWake),
         "project_memory_navigate" => decode!(ProjectMemoryNavigatePayload, ProjectMemoryNavigate),
         "memory_expand" => decode!(MemoryExpandPayload, MemoryExpand),
         "memory_evictions_seen" => decode!(MemoryEvictionsSeenPayload, MemoryEvictionsSeen),
@@ -2163,7 +2179,15 @@ impl Runtime {
                 self.open_archive_detail(&payload.kind, &payload.id, payload.preview)
             }
             Event::MemoryAction(payload) => self.apply_memory_action(payload),
-            Event::MemoryOpen(payload) => self.open_project_memory(payload.workspace_id),
+            Event::MemoryOpen(payload) => {
+                let memory = self.open_project_memory(payload.workspace_id.clone());
+                self.open_suggestions(payload.workspace_id) | memory
+            }
+            Event::SuggestionAction(payload) => self.apply_suggestion_action(payload),
+            Event::SuggestionSettings(payload) => self.apply_suggestion_settings(payload),
+            Event::HideAiSwitch(payload) => self.apply_hide_ai_switch(payload),
+            Event::SuggestionsIntroSeen => self.note_suggestions_intro_seen(),
+            Event::HideAiWake(payload) => self.note_hide_ai_wake(payload),
             Event::ProjectMemoryNavigate(payload) => self.navigate_project_memory(payload),
             Event::MemoryExpand(payload) => {
                 self.expand_memory_card(&payload.workspace_id, payload.number)

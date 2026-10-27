@@ -30,11 +30,11 @@ function open(agents: Partial<AgentRow>[]) {
 // PRD hide-ai-work-home B11: a row its home owns opens the home, any other opens its pane.
 it("opens the Memory tab on the attempt's card for a row its home owns, and the pane for every other row", () => {
   const { events, actions } = open([
-    { pane_id: "w1:p1", hide_ai: { task: MEMORY, home: "memory", workspace_id: "ws-1", turn: { kind: "pr_review", pr_number: 924 } } },
+    { pane_id: "w1:p1", hide_ai: { task: MEMORY, home: "suggestions", workspace_id: "ws-1", turn: { kind: "pr_review", pr_number: 924 } } },
     { pane_id: "w1:p2" },
     // A kind this build has no home for, and a home whose Project the core has not named yet.
     { pane_id: "w1:p3", hide_ai: { task: { kind: "future_kind" } } },
-    { pane_id: "w1:p4", hide_ai: { task: MEMORY, home: "memory" } },
+    { pane_id: "w1:p4", hide_ai: { task: MEMORY, home: "suggestions" } },
   ]);
   actions.openListedAgent("w1:p1");
   expect(events.map((event) => [event.kind, event.payload])).toEqual(expect.arrayContaining([

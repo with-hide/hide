@@ -146,6 +146,12 @@ pub struct Snapshot {
     /// given. Its own revisioned section, absent until there is either.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory: Option<MemorySnapshot>,
+    /// The Hide AI tool's 제안 tab for the Project it opened (PRD
+    /// hide-ai-suggestions). Its own revisioned section, absent until the
+    /// tool opens a Project; a new `Arc` whenever it changes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(serialize_with = "serialize_optional_shared")]
+    pub suggestions: Option<Arc<SuggestionsSnapshot>>,
     /// Each project's link counts and session chips (PRD link-graph D-45),
     /// absent until the link worker first answers. Its own revisioned
     /// section, off `rest`, so an agent row's change never resends it.
@@ -3359,6 +3365,10 @@ pub struct MemoryPromotionAgentSnapshot {
     /// The pane the agent runs in now, which the name jumps to; absent once
     /// it left its pane.
     pub pane_id: Option<String>,
+    /// Its coordination id, which the 제안 tab's row names it by; none for
+    /// an agent another branch's worktree shows.
+    #[serde(skip)]
+    pub agent_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -3411,6 +3421,18 @@ pub enum MemoryQuestionSnapshot {
         title: String,
         reason: Option<String>,
     },
+}
+
+impl MemoryQuestionSnapshot {
+    /// Whether the Memory tab asks it: a card against a document is
+    /// Memory's; a card's way into the documents is the 제안 tab's (PRD
+    /// hide-ai-suggestions D-02).
+    pub fn memory_tab_owns(&self) -> bool {
+        match self {
+            Self::DocsDisagree { .. } => true,
+            Self::Promote { .. } | Self::Failed { .. } | Self::Unbuilt { .. } => false,
+        }
+    }
 }
 
 /// Why a failed promotion's agent never started, as its spawn answered.
@@ -6900,6 +6922,7 @@ impl Snapshot {
             external_grants: Vec::new(),
             browser_views_revision: None,
             memory: None,
+            suggestions: None,
             link_summaries: None,
             link_panel: None,
             session_record: None,
@@ -6936,11 +6959,13 @@ pub(crate) mod overview_graph_choices;
 /// Owned copy retained by the runtime to stamp revisions by comparison, so
 /// no mutation site needs dirty-tracking discipline.
 mod rest;
+mod suggestions;
 pub use overview_graph::{GraphDirectInput, GraphParty, GraphSession, OverviewGraphSnapshot};
 pub use overview_graph_choices::{
     OVERVIEW_GRAPH_LIST_LIMIT, OverviewGraphChange, OverviewGraphChoices,
 };
 pub use rest::{RestSections, RestWire};
+pub use suggestions::*;
 
 /// One delta response taken from the runtime, holding everything the wire
 /// needs and nothing that reaches back into the runtime.
@@ -6963,6 +6988,7 @@ pub struct SnapshotDeltaPayload {
     /// shell without View areas.
     pub documents: Option<DocumentsDelta>,
     pub memory: Option<Arc<MemorySnapshot>>,
+    pub suggestions: Option<Arc<SuggestionsSnapshot>>,
     pub link_summaries: Option<Arc<crate::links::LinkSummariesSnapshot>>,
     pub link_panel: Option<Arc<crate::links::LinkPanelSnapshot>>,
     pub session_record: Option<Arc<crate::links::ledger::SessionRecordSnapshot>>,
@@ -7008,6 +7034,9 @@ pub struct SnapshotDeltaWire<'a> {
     /// card.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory: Option<&'a MemorySnapshot>,
+    /// Omitted until the Hide AI tool opens a Project.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggestions: Option<&'a SuggestionsSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link_summaries: Option<&'a crate::links::LinkSummariesSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -7059,6 +7088,7 @@ impl<'a> SnapshotDeltaWire<'a> {
                     .collect(),
             }),
             memory: payload.memory.as_deref(),
+            suggestions: payload.suggestions.as_deref(),
             link_summaries: payload.link_summaries.as_deref(),
             link_panel: payload.link_panel.as_deref(),
             session_record: payload.session_record.as_deref(),
@@ -8649,6 +8679,211 @@ mod wire_enum_tests {
         }
         assert_wire(&contract, "observed_freshness", &freshness);
         checked.insert("observed_freshness");
+
+        {
+            use crate::suggestions::ledger::Signal;
+            use crate::suggestions::notebook::Outcome;
+            use crate::suggestions::policy::Quantity;
+            use crate::suggestions::settings::ApplyMode;
+
+            let signals = Signal::ALL;
+            for variant in signals {
+                match variant {
+                    Signal::FailedTool
+                    | Signal::AgentWait
+                    | Signal::Correction
+                    | Signal::LabelMissed
+                    | Signal::CheckFailed
+                    | Signal::ChangeRequest => {}
+                }
+            }
+            assert_wire(&contract, "suggestion_signal", &signals);
+            checked.insert("suggestion_signal");
+
+            let quantities = Quantity::ALL;
+            for variant in quantities {
+                match variant {
+                    Quantity::Few | Quantity::Normal | Quantity::Many => {}
+                }
+            }
+            assert_wire(&contract, "suggestion_quantity", &quantities);
+            checked.insert("suggestion_quantity");
+
+            let modes = [ApplyMode::Confirm, ApplyMode::AutoPr];
+            for variant in modes {
+                match variant {
+                    ApplyMode::Confirm | ApplyMode::AutoPr => {}
+                }
+            }
+            assert_wire(&contract, "suggestion_apply_mode", &modes);
+            checked.insert("suggestion_apply_mode");
+
+            let outcomes = [Outcome::Pr, Outcome::Issue];
+            for variant in outcomes {
+                match variant {
+                    Outcome::Pr | Outcome::Issue => {}
+                }
+            }
+            assert_wire(&contract, "suggestion_outcome", &outcomes);
+            checked.insert("suggestion_outcome");
+        }
+
+        let unavailable = [
+            SuggestionsUnavailable::Unregistered,
+            SuggestionsUnavailable::Unreadable,
+        ];
+        for variant in unavailable {
+            match variant {
+                SuggestionsUnavailable::Unregistered | SuggestionsUnavailable::Unreadable => {}
+            }
+        }
+        assert_wire(&contract, "suggestions_unavailable", &unavailable);
+        checked.insert("suggestions_unavailable");
+
+        let statuses = [
+            SuggestionsStatus::FirstRunPending,
+            SuggestionsStatus::Investigating,
+            SuggestionsStatus::NoneToday,
+            SuggestionsStatus::NotInvestigated,
+            SuggestionsStatus::Idle,
+            SuggestionsStatus::Off,
+        ];
+        for variant in statuses {
+            match variant {
+                SuggestionsStatus::FirstRunPending
+                | SuggestionsStatus::Investigating
+                | SuggestionsStatus::NoneToday
+                | SuggestionsStatus::NotInvestigated
+                | SuggestionsStatus::Idle
+                | SuggestionsStatus::Off => {}
+            }
+        }
+        assert_wire(&contract, "suggestions_status", &statuses);
+        checked.insert("suggestions_status");
+
+        let ai = [
+            SuggestionsAi::Ready,
+            SuggestionsAi::NotReady,
+            SuggestionsAi::CannotInvestigate,
+        ];
+        for variant in ai {
+            match variant {
+                SuggestionsAi::Ready
+                | SuggestionsAi::NotReady
+                | SuggestionsAi::CannotInvestigate => {}
+            }
+        }
+        assert_wire(&contract, "suggestions_ai", &ai);
+        checked.insert("suggestions_ai");
+
+        let github = [SuggestionsGithub::Connected, SuggestionsGithub::Missing];
+        for variant in github {
+            match variant {
+                SuggestionsGithub::Connected | SuggestionsGithub::Missing => {}
+            }
+        }
+        assert_wire(&contract, "suggestions_github", &github);
+        checked.insert("suggestions_github");
+
+        let signal_unavailable = [SignalUnavailable::NoGithub, SignalUnavailable::MemoryOff];
+        for variant in signal_unavailable {
+            match variant {
+                SignalUnavailable::NoGithub | SignalUnavailable::MemoryOff => {}
+            }
+        }
+        assert_wire(
+            &contract,
+            "suggestion_signal_unavailable",
+            &signal_unavailable,
+        );
+        checked.insert("suggestion_signal_unavailable");
+
+        let groups = [
+            SuggestionGroup::Choose,
+            SuggestionGroup::Applying,
+            SuggestionGroup::Applied,
+        ];
+        for variant in groups {
+            match variant {
+                SuggestionGroup::Choose | SuggestionGroup::Applying | SuggestionGroup::Applied => {}
+            }
+        }
+        assert_wire(&contract, "suggestion_group", &groups);
+        checked.insert("suggestion_group");
+
+        let states = [
+            SuggestionState::New,
+            SuggestionState::MyTurn,
+            SuggestionState::HideAiWorking,
+            SuggestionState::Watching,
+            SuggestionState::Effective,
+            SuggestionState::Applied,
+        ];
+        for variant in states {
+            match variant {
+                SuggestionState::New
+                | SuggestionState::MyTurn
+                | SuggestionState::HideAiWorking
+                | SuggestionState::Watching
+                | SuggestionState::Effective
+                | SuggestionState::Applied => {}
+            }
+        }
+        assert_wire(&contract, "suggestion_state", &states);
+        checked.insert("suggestion_state");
+
+        let sources = [SuggestionSource::Notebook, SuggestionSource::Memory];
+        for variant in sources {
+            match variant {
+                SuggestionSource::Notebook | SuggestionSource::Memory => {}
+            }
+        }
+        assert_wire(&contract, "suggestion_source", &sources);
+        checked.insert("suggestion_source");
+
+        let holds = [
+            SuggestionHold::GithubNeeded,
+            SuggestionHold::AutoPrUnreviewed,
+        ];
+        for variant in holds {
+            match variant {
+                SuggestionHold::GithubNeeded | SuggestionHold::AutoPrUnreviewed => {}
+            }
+        }
+        assert_wire(&contract, "suggestion_hold", &holds);
+        checked.insert("suggestion_hold");
+
+        let evidence = [SuggestionEvidenceKind::Session, SuggestionEvidenceKind::Pr];
+        for variant in evidence {
+            match variant {
+                SuggestionEvidenceKind::Session | SuggestionEvidenceKind::Pr => {}
+            }
+        }
+        assert_wire(&contract, "suggestion_evidence_kind", &evidence);
+        checked.insert("suggestion_evidence_kind");
+
+        let phases = [
+            SuggestionAttemptPhase::Starting,
+            SuggestionAttemptPhase::Working,
+            SuggestionAttemptPhase::PrOpen,
+            SuggestionAttemptPhase::CiFailed,
+            SuggestionAttemptPhase::Failed,
+            SuggestionAttemptPhase::IssueOpen,
+            SuggestionAttemptPhase::Merged,
+        ];
+        for variant in phases {
+            match variant {
+                SuggestionAttemptPhase::Starting
+                | SuggestionAttemptPhase::Working
+                | SuggestionAttemptPhase::PrOpen
+                | SuggestionAttemptPhase::CiFailed
+                | SuggestionAttemptPhase::Failed
+                | SuggestionAttemptPhase::IssueOpen
+                | SuggestionAttemptPhase::Merged => {}
+            }
+        }
+        assert_wire(&contract, "suggestion_attempt_phase", &phases);
+        checked.insert("suggestion_attempt_phase");
 
         let unchecked = contract
             .keys()

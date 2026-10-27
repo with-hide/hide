@@ -12,7 +12,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, net, Notification, screen, session, shell, type IpcMainEvent, type IpcMainInvokeEvent, type NativeImage } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, net, Notification, powerMonitor, screen, session, shell, type IpcMainEvent, type IpcMainInvokeEvent, type NativeImage } from "electron";
 import { DebUpdater, MacUpdater, NsisUpdater, RpmUpdater } from "electron-updater";
 import { CHECK_UPDATES_COMMAND, SETUP_COMMAND, type HerdrRestart } from "../../../web/src/host";
 import type { MenuCommand } from "./menu";
@@ -51,6 +51,7 @@ import { fallbackScreen, fallbackScript, statusPageFile } from "./statusPage";
 import { MIN_SIZE, readWindowState, restoreBounds, windowStatePath, writeWindowState } from "./windowState";
 import { openRoute, probe, probeRequest } from "./localPath";
 import { ExternalFiles, clickedRoute } from "./externalFiles";
+import { WAKE_TIMEOUT_MS, wakeRequest, type WakeCause } from "./hideAiWake";
 import { revealTarget } from "./reveal";
 import { badgeRequest, ClickGate, KeptNotifications, launchedId, notifyRequest, OVERLAY_SIZE, overlayDot, toastXml, withdrawRequest } from "./notify";
 import { Editor } from "./editor";
@@ -237,6 +238,7 @@ export class DesktopHost {
     this.listenWindowChrome();
     this.listenEditor();
     this.listenPractice();
+    this.listenWake();
     // An optional feature: a failure to set it up is the log's, and the window opens regardless.
     try {
       this.startUpdates();
@@ -1051,6 +1053,29 @@ export class DesktopHost {
   private attach(daemon: Attached): void {
     this.setState({ kind: "attached", ...daemon });
     this.startHealthWatch();
+    this.sendWake("app_open");
+  }
+
+  // --- Hide AI's day (PRD hide-ai-suggestions B6) ------------------------------
+
+  private listenWake(): void {
+    powerMonitor.on("resume", () => this.sendWake("resume"));
+    // Fired on macOS and Windows only; Linux starts the day on opening and waking.
+    powerMonitor.on("unlock-screen", () => this.sendWake("unlock"));
+  }
+
+  /** Tells the attached core the operator is back; a failure is the log's, and the next wake asks again. */
+  private sendWake(cause: WakeCause): void {
+    const current = this.state;
+    if (current.kind !== "attached" || this.quitting) return;
+    const request = wakeRequest(current, cause);
+    if (!request) { this.log.event("hide_ai.wake_failed", { cause, reason: "credential" }); return; }
+    void fetch(request.url, { ...request.init, signal: AbortSignal.timeout(WAKE_TIMEOUT_MS) })
+      .then(async (response) => {
+        await response.arrayBuffer();
+        if (!response.ok) this.log.event("hide_ai.wake_failed", { cause, status: response.status });
+      })
+      .catch(() => this.log.event("hide_ai.wake_failed", { cause, reason: "transport" }));
   }
 
   // --- following the daemon (B4) ---------------------------------------------

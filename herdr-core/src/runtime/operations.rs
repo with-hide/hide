@@ -370,6 +370,7 @@ impl Runtime {
         changed |= self.tick_project_memory(now_unix_ms);
         changed |= self.tick_view_feedback(now_unix_ms);
         self.tick_memory_promotions(now_unix_ms);
+        self.tick_suggestion_attempts(now_unix_ms);
         changed |= self.tick_device_hosts(now_unix_ms);
         changed |= self.tick_session_window(now_unix_ms);
         changed |= self.tick_work_clock(now_unix_ms);

@@ -201,6 +201,14 @@ pub fn links_store(state_dir: &Path) -> PathBuf {
     state_dir.join("links.sqlite3")
 }
 
+/// Hide AI's suggestion records, notebooks and their lines' stories, per
+/// Project; its owner is the core's suggestion worker.
+pub fn suggestions_store(state_dir: &Path) -> PathBuf {
+    state_dir.join(SUGGESTIONS_STORE)
+}
+
+pub const SUGGESTIONS_STORE: &str = "suggestions.sqlite3";
+
 /// Usage events and retained daily totals, owned by the core's usage worker.
 pub const USAGE_STORE: &str = "usage.sqlite3";
 

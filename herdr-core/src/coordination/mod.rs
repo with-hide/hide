@@ -174,6 +174,8 @@ pub(crate) fn mission_reservations_end(ledger: &Ledger, now: u64) -> u64 {
 
 /// The serialized value of a Memory card's promotion into the repository.
 pub const MEMORY_PROMOTE_TASK: &str = "memory_promote";
+/// The serialized value of a 제안 line's application.
+pub const SUGGESTION_APPLY_TASK: &str = "suggestion_apply";
 
 /// What Hide started an agent for. Every kind Hide knows names the screen that
 /// owns its progress, its home, in one exhaustive match, so a kind added
@@ -186,6 +188,9 @@ pub const MEMORY_PROMOTE_TASK: &str = "memory_promote";
 pub enum TaskKind {
     /// A Memory card's promotion into the repository.
     MemoryPromote,
+    /// A 제안 line's fix, as a pull request or an issue (PRD
+    /// hide-ai-suggestions B11-B14).
+    SuggestionApply,
     /// A kind this build has no home for, with the value as written.
     Unknown(String),
 }
@@ -195,14 +200,18 @@ pub enum TaskKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskHome {
-    /// The Memory tab's To ask rows.
-    Memory,
+    /// The Hide AI tool's 제안 tab, on the row the task's target names: a
+    /// notebook line (`s12`), or a Memory card on its way into the
+    /// repository's documents (`m72`), which the tab took over from the
+    /// Memory tab (PRD hide-ai-suggestions D-02).
+    Suggestions,
 }
 
 impl TaskKind {
     pub fn from_code(code: &str) -> Self {
         match code {
             MEMORY_PROMOTE_TASK => Self::MemoryPromote,
+            SUGGESTION_APPLY_TASK => Self::SuggestionApply,
             // A code this build does not know is shown and logged, never
             // acted on, so only a short printable form of it is kept.
             other => Self::Unknown(
@@ -218,6 +227,7 @@ impl TaskKind {
     pub fn as_str(&self) -> &str {
         match self {
             Self::MemoryPromote => MEMORY_PROMOTE_TASK,
+            Self::SuggestionApply => SUGGESTION_APPLY_TASK,
             Self::Unknown(code) => code,
         }
     }
@@ -226,7 +236,7 @@ impl TaskKind {
     /// agent is then an operator's row (D-19).
     pub fn home(&self) -> Option<TaskHome> {
         match self {
-            Self::MemoryPromote => Some(TaskHome::Memory),
+            Self::MemoryPromote | Self::SuggestionApply => Some(TaskHome::Suggestions),
             Self::Unknown(_) => None,
         }
     }

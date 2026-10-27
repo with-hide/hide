@@ -1199,6 +1199,23 @@ impl LinkStore {
         self.remove_sessions(&keys)
     }
 
+    /// The sessions of `sessions` the record still holds, whose record a
+    /// press can open; the rest were pruned or never read.
+    pub fn held(&self, sessions: &[SessionIdentity]) -> Result<BTreeSet<SessionIdentity>, String> {
+        let mut held = BTreeSet::new();
+        for session in sessions {
+            let key = SessionKey {
+                device: session.device_id.clone(),
+                agent: session.agent.clone(),
+                id: session.session_id.clone(),
+            };
+            if self.session(&key)?.is_some() {
+                held.insert(session.clone());
+            }
+        }
+        Ok(held)
+    }
+
     /// The archived sessions the record holds no line for whose project's
     /// Copied history has run out since they were archived (D-14, B31): Off
     /// keeps them, an unknown project takes the default 90 days.

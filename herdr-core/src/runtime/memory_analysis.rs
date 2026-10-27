@@ -534,6 +534,7 @@ impl Runtime {
             language,
             cancel,
             failed_reads: work.failed_reads.clone(),
+            suggestions: self.suggestions_work.client.clone(),
         };
         let report_context = context.clone();
         let spawn = thread::Builder::new()
@@ -952,6 +953,10 @@ struct PassInput {
     language: hide_ai::OutputLanguage,
     cancel: CancelToken,
     failed_reads: FailedReads,
+    /// Where the cards a session taught go as the operator's corrections
+    /// (PRD hide-ai-suggestions B4, D-23: only a Project with Memory on has
+    /// them).
+    suggestions: Option<crate::suggestions::worker::SuggestionClient>,
 }
 
 // At most eight maintenance admissions and one four-group extraction quantum
@@ -1212,6 +1217,7 @@ fn run_analysis_turn(
         }
         Ok(())
     };
+    let mut cards = Vec::new();
     let result = analyze_session(
         store,
         link.as_ref(),
@@ -1224,7 +1230,13 @@ fn run_analysis_turn(
         &task.stat,
         &input.cancel,
         &mut admit,
+        &mut cards,
     );
+    if let Some(client) = input.suggestions.as_ref()
+        && !cards.is_empty()
+    {
+        send_corrections(client, project_id, &task.root, &task.session, cards);
+    }
     let mut unusable = false;
     let (learned, error, rotate) = match result {
         Ok(learned) => {
@@ -1979,6 +1991,7 @@ fn analyze_session(
     stat: &hide_node_link::sessions::SessionStat,
     cancel: &CancelToken,
     admit: &mut dyn FnMut(&MemoryStore) -> Result<(), AnalysisFailure>,
+    cards: &mut Vec<u64>,
 ) -> Result<usize, AnalysisFailure> {
     let local = |error: String| AnalysisFailure::Local(error);
     let provider = session.agent.as_str();
@@ -2131,6 +2144,18 @@ fn analyze_session(
         }
         if !written.summary.duplicate_batch {
             learned += written.summary.created + written.summary.superseded;
+            cards.extend(
+                written
+                    .summary
+                    .outcomes
+                    .iter()
+                    .filter_map(|outcome| match outcome {
+                        hide_memory::CandidateOutcome::Created { number }
+                        | hide_memory::CandidateOutcome::Merged { number }
+                        | hide_memory::CandidateOutcome::Superseded { number } => Some(*number),
+                        _ => None,
+                    }),
+            );
         }
         completed = index + 1;
         store
@@ -2195,6 +2220,39 @@ pub(crate) fn log_ended_hold(project_id: &str, ended: &hide_memory::EndedHold, c
         "session_id": ended.session_id,
         "cause": cause,
     }));
+}
+
+/// The cards a session taught or confirmed, as that session's corrections
+/// of the agent: one record per card, named by its number.
+fn send_corrections(
+    client: &crate::suggestions::worker::SuggestionClient,
+    project_id: &str,
+    root: &str,
+    session: &ProjectSession,
+    cards: Vec<u64>,
+) {
+    use crate::suggestions::ledger::{Observation, SessionRef, Signal};
+    let at = now_ms();
+    let facts = cards
+        .into_iter()
+        .map(|number| Observation {
+            signal: Signal::Correction,
+            tag: format!("m{number}"),
+            session: Some(SessionRef {
+                agent: session.agent.as_str().to_owned(),
+                id: session.id.clone(),
+            }),
+            pr: None,
+            checkout: Some(root.to_owned()),
+            at_unix_ms: at,
+            always: false,
+            head: None,
+        })
+        .collect();
+    client.send(crate::suggestions::worker::Command::ObserveProject {
+        project_id: project_id.to_owned(),
+        facts,
+    });
 }
 
 /// Where a batch of new text came from.
@@ -3181,6 +3239,7 @@ mod tests {
                 language: hide_ai::OutputLanguage::English,
                 cancel: CancelToken::new(),
                 failed_reads: self.failed_reads.borrow().clone(),
+                suggestions: None,
             };
             let mut reports = Vec::new();
             let outcome = run_pass(&input, &mut |report| {
@@ -3237,6 +3296,7 @@ mod tests {
                 language: hide_ai::OutputLanguage::English,
                 cancel: CancelToken::new(),
                 failed_reads: Default::default(),
+                suggestions: None,
             };
             let mut store = self.store();
             let root = self.root.to_string_lossy();
@@ -4855,6 +4915,7 @@ mod tests {
             language: hide_ai::OutputLanguage::English,
             cancel: CancelToken::new(),
             failed_reads: Default::default(),
+            suggestions: None,
         };
         let outcome = run_pass(&input, &mut |report| {
             runtime.lock().unwrap().apply_memory_report(report);
@@ -5172,6 +5233,7 @@ mod tests {
             language: hide_ai::OutputLanguage::English,
             cancel: CancelToken::new(),
             failed_reads: Default::default(),
+            suggestions: None,
         };
         let tasks = || {
             [&full, &peer]
@@ -5294,6 +5356,7 @@ mod tests {
                 language: hide_ai::OutputLanguage::English,
                 cancel: CancelToken::new(),
                 failed_reads: Default::default(),
+                suggestions: None,
             };
             let tasks = || {
                 [&full, &peer]
@@ -5436,6 +5499,7 @@ mod tests {
             language: hide_ai::OutputLanguage::English,
             cancel: CancelToken::new(),
             failed_reads: Default::default(),
+            suggestions: None,
         };
         let tasks = || {
             [&full, &peer]
