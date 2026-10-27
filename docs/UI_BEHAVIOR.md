@@ -1392,7 +1392,7 @@ How long a node took and how long a decision held it come only from its events (
 A card a later node's defect reopened carries `↻n` in red, counting the reopenings, and a card the last replan changed carries `✎` with its reason on hover; the attempts are the panel's (B16, B36).
 A node checked by other agents carries a strip under its card, one row per checker with its agent's mark, the model and effort it runs, and its state (`✓ 통과`, `✕ 실패`, `리뷰 중`, `리뷰 대기`), and a rule line when several decide (`3명 중 과반 통과 · 1/3 통과`); edges to later nodes leave from under the strip (B29).
 A defect a later node found is a red dashed edge from that node back to the one it reopened, until the defect's line passes (B21).
-A map wider than the slot is shrunk to the slot's width down to 80 %, below which the map scrolls sideways so a card stays readable.
+A map wider than the slot is shrunk to the slot's width down to 60 %, below which the map scrolls sideways so a card stays readable.
 
 Pressing a card, or Enter or Space on it, picks it: that card and the cards and edges one edge away stay lit, the rest dim, and its panel opens (B30).
 Pressing it again, an empty spot of the map, or Escape lets it go; Escape with nothing picked is the lane's.

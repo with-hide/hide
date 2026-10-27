@@ -135,7 +135,7 @@ function MissionBody({ mission, actions }: { mission: Mission; actions: Actions 
  * The smallest the map is drawn: below it a card's caption stops being
  * readable, so a slot narrower than that scrolls the map sideways instead.
  */
-const MIN_SCALE = 0.8;
+const MIN_SCALE = 0.6;
 
 /**
  * The map shrunk to the width it has, never grown and never below

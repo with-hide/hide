@@ -93,7 +93,7 @@ function plan(state: string, now: number): MissionNode[] {
     return [
       node("cause", `${no(1487)} 원인 조사`, { kind: "research", delivery: null, worker: opus("xhigh"), ...done(300, 40), line: "reopen 때 셀 초기화가 먼저 돎" }),
       node("api", "API 추가", { worker: astra("high"), ...done(300, 120), pr: 1503, pr_state: "merged", stage: 4 }),
-      node("fix-1481", `이슈 ${no(1481)} 수정`, { delivery: "direct", worker: astra("high"), ...done(290, 60), branch: "fix-1481", stage: 4 }),
+      node("fix-1481", `이슈 ${no(1481)} 수정`, { delivery: "direct", worker: astra("high"), ...done(290, 60), branch: "fix-1481", stage: 4, commit: "4f1c9a27be03" }),
       node("fix-1487", `${no(1487)} 수정`, { depends_on: ["cause"], worker: astra("medium"), ...done(250, 90), pr: 1506, pr_state: "merged", stage: 4, attempts: 2 }),
       cancelled
         ? node("screen", "API 쓰는 화면", { depends_on: ["api"], worker: astra("high"), status: "working", started_at_unix_ms: ago(170), pr: 1504, base_pr: 1503, pr_state: "pending", stage: 2 })
