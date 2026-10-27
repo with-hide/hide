@@ -2846,7 +2846,7 @@ fn device_connect_statistics_count_each_ready_bootstrap_once() {
 }
 
 /// A failed start settles once; status reads do not count it again, while
-/// the operator's Retry starts another attempt that can succeed.
+/// the operator's Retry reconnects, and that attempt can succeed.
 #[test]
 fn device_connect_statistics_settle_failure_and_retry_once() {
     use crate::product_analytics::{
@@ -2884,15 +2884,34 @@ fn device_connect_statistics_settle_failure_and_retry_once() {
         .queue_device_kit(DEVICE, KitJob::Status);
     settle(&shared);
     assert_eq!(statistics.0.lock().unwrap().len(), 1);
-    *helper.answer.lock().unwrap() = Ok(with_herdr(Some(HerdrUpdate::Started {
-        version: "private-device-version".to_owned(),
-        pid: 42,
-    })));
     dispatch(
         &shared,
         "kit_reinstall",
         serde_json::json!({ "device_id": DEVICE }),
     );
+    settle(&shared);
+    assert!(
+        helper.closed_reason().is_some(),
+        "retry must reconnect the device"
+    );
+    assert_eq!(statistics.0.lock().unwrap().len(), 1);
+    {
+        let mut runtime = shared.lock().unwrap();
+        // The fixture has no SSH transport, so it supplies the reconnect's
+        // result and admits the attempt its outbound worker would.
+        runtime.begin_device_connect(DEVICE);
+        let generation = runtime.device_host_generation(DEVICE);
+        let mut connected = established_with_terminals();
+        connected.kit = Some(Ok(Box::new(with_herdr(Some(HerdrUpdate::Started {
+            version: "private-device-version".to_owned(),
+            pid: 42,
+        })))));
+        runtime.ingest_host_established(
+            DEVICE,
+            generation,
+            Ok(hosts::HostReady::Dialed(connected)),
+        );
+    }
     settle(&shared);
     assert_eq!(
         *statistics.0.lock().unwrap(),
