@@ -153,5 +153,30 @@ class MalformedReport(unittest.TestCase):
                 self.assertTrue(any(note.startswith("::error ") for note in notes))
 
 
+class NamedAgents(unittest.TestCase):
+    """The agent floor measurement runs one agent, so its lane requires only that one."""
+
+    def one_agent(self, cells=None):
+        row = passing_table()["pi"]
+        table = {"pi": {**row, **(cells or {})}}
+        return {"fake_model": True, "fixture": False, "cleanup": {"confirmed": True}, "failures": [],
+                "table": table, "agents": [{"id": "pi"}]}
+
+    def test_a_run_of_one_named_agent_passes_on_its_row_alone(self):
+        self.assertEqual(lane.judge(self.one_agent(), "fake", agents=["pi"]), (True, []))
+
+    def test_without_the_name_every_registered_agent_is_still_required(self):
+        passed, notes = lane.judge(self.one_agent(), "fake")
+        self.assertFalse(passed)
+        self.assertIn("::error title=agent journey codex::the report has no codex row", notes)
+
+    def test_the_named_agents_failed_cell_still_fails(self):
+        passed, _ = lane.judge(self.one_agent({"reply": {"status": "fail", "reason": "x"}}), "fake", agents=["pi"])
+        self.assertFalse(passed)
+
+    def test_a_name_that_is_no_active_agent_fails(self):
+        passed, _ = lane.judge(self.one_agent(), "fake", agents=["pi", "nobody"])
+        self.assertFalse(passed)
+
 if __name__ == "__main__":
     unittest.main()

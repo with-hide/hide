@@ -891,6 +891,10 @@ The program asked is the one the operator's login shell runs ([Installed means t
 
 A minimum moves only with new proof: a feature that needs a newer CLI raises it in the same change, with the fixture or measurement that shows the older one fails, and a lower one needs the integration proven on that version.
 
+A minimum is measured by the agent floor workflow (`.github/workflows/agent-floor.yml`, [VERIFICATION.md: The agent floor measurement](VERIFICATION.md#the-agent-floor-measurement)): the agent journey on the fake model, for one agent at a list of versions, every version on macOS, Linux and Windows.
+An older CLI could not be measured while the kit refuses it, so that workflow alone builds Hide with the build-time variable `HIDE_AGENT_FLOOR_MEASUREMENT` set to exactly `lift-for-agent-floor-measurement` (`hide_agent_adapter::MINIMUM_REFUSAL_LIFTED`), and that build puts each integration in place whatever version the CLI answers.
+The value is read when the crates compile, never from a running program's environment, so nothing set on an operator's machine changes an installed Hide; any other value, or none, keeps the refusal; it is not a cargo feature, so no build of the workspace differs for it ([BUILD.md](BUILD.md)); and `desktop/scripts/package.mjs` refuses to package while the variable is set, so a measurement build is never an app.
+
 ### Herdr's integration for an agent
 
 Herdr learns an agent's session id, and for some agents its lifecycle, from a hook script or plugin that `herdr integration install <target>` puts into the agent's own configuration.

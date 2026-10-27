@@ -26,8 +26,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
-from agent_journey.cells import CELLS  # noqa: E402
-from agent_journey.contract import active_rows, load_contract  # noqa: E402
+from agent_journey.contract import active_rows, load_contract, misses  # noqa: E402
 
 LABEL = "agent-canary"
 RECORD_TITLE = "Agent CLI support record"
@@ -72,26 +71,7 @@ def verdicts(contract, reports):
         if missing:
             result[agent] = ("unknown", [f"{system}: no report" for system in missing])
             continue
-        failures = []
-        for system in SYSTEMS:
-            report = reports[system]
-            entry = next((item for item in report.get("agents", []) if item.get("id") == agent), {})
-            if entry.get("cli_missing"):
-                failures.append(f"{system}: {entry['cli_missing']} is not installed")
-            pin = entry.get("pin") or {}
-            if pin and not pin.get("matches"):
-                failures.append(f"{system}: answered {entry.get('version')!r}, not {pin.get('version')}")
-            cells = report.get("table", {}).get(agent)
-            if not isinstance(cells, dict):
-                failures.append(f"{system}: no row")
-                continue
-            for name in CELLS:
-                expected = "pass" if row["cells"][name] else "N/A"
-                cell = cells.get(name) or {}
-                if cell.get("status") != expected:
-                    reason = str(cell.get("reason") or "")[:160]
-                    failures.append(f"{system}: {name} is {cell.get('status', 'absent')}"
-                                    + (f" ({reason})" if reason else ""))
+        failures = [f"{system}: {miss}" for system in SYSTEMS for miss in misses(row, reports[system])]
         result[agent] = ("fail" if failures else "pass", failures)
     return result
 

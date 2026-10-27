@@ -15,13 +15,16 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from agent_journey import ci, cli  # noqa: E402
 from agent_journey.contract import active_rows  # noqa: E402
 from agent_live_check.processes import TEARDOWN_SECONDS  # noqa: E402
-WORKFLOWS = (".github/workflows/agent-journey.yml", ".github/workflows/agent-clis.yml")
+WORKFLOWS = (".github/workflows/agent-journey.yml", ".github/workflows/agent-clis.yml", ".github/workflows/agent-floor.yml")
 
 
 class StepCaps(unittest.TestCase):
     def test_every_step_is_capped_within_its_jobs_cap(self):
         for workflow in WORKFLOWS:
             for name, job in yaml.safe_load((ROOT / workflow).read_text())["jobs"].items():
+                if "uses" in job:
+                    # A call of another workflow, whose own jobs are checked there.
+                    continue
                 with self.subTest(workflow=workflow, job=name):
                     steps = job["steps"]
                     self.assertEqual([step.get("name") or step.get("uses") for step in steps
@@ -37,7 +40,8 @@ class JourneyCap(unittest.TestCase):
         self.assertEqual(len(steps), 2)
         for step in steps:
             with self.subTest(step=step["name"]):
-                named = re.search(r"--agents (\S+)", step["run"])
+                # A selection from the caller's input may name every agent, so it is capped as none.
+                named = re.search(r"--agents ([\w,-]+)(?:\s|$)", step["run"])
                 fixture = "--fixture-bin" in step["run"]
                 # With no --agents, a run measures every registered agent, the stand-ins only theirs.
                 agents = (len(named.group(1).split(",")) if named else
@@ -52,7 +56,12 @@ class JourneyCap(unittest.TestCase):
         jobs = yaml.safe_load((ROOT / WORKFLOWS[0]).read_text())["jobs"]
         steps = [step for job in jobs.values() for step in job["steps"]]
         fake = next(step["run"] for step in steps if "--fake-model" in step.get("run", ""))
-        self.assertNotIn("--agents", fake)
+        # Only a caller's `agents` input narrows it (the agent floor measurement), empty by default.
+        self.assertEqual(re.findall(r"\S*--agents\S*", fake), ['${AGENTS:+--agents'])
+        self.assertEqual(jobs["fake"]["env"]["AGENTS"], "${{ inputs.agents }}")
+        inputs = yaml.safe_load((ROOT / WORKFLOWS[0]).read_text())[True]["workflow_call"]["inputs"]
+        self.assertEqual(inputs["agents"]["default"], "")
+        self.assertIs(inputs["lift-minimum"]["default"], False)
         installer = [step["run"] for step in steps if "install-agent-clis.py --all" in step.get("run", "")]
         self.assertEqual(len(installer), 1)
 

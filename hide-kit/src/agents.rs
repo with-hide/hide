@@ -363,8 +363,13 @@ impl Detection {
 /// that version, the program's path and the minimum, so the operator updates
 /// the copy that was judged and not another one elsewhere. A program whose
 /// version Hide cannot read is not judged too old: it may be new enough, and
-/// a piece for an agent that cannot use it does no harm.
+/// a piece for an agent that cannot use it does no harm. A build for the
+/// agent floor measurement judges nothing too old
+/// (`hide_agent_adapter::MINIMUM_REFUSAL_LIFTED`).
 pub(crate) fn too_old(adapter: &AgentAdapter, program: &Program, piece: &str) -> Option<Reason> {
+    if hide_agent_adapter::MINIMUM_REFUSAL_LIFTED {
+        return None;
+    }
     let installed = hide_agent_hooks::program_version(program)?;
     (!hide_agent_hooks::version_at_least(&installed, adapter.minimum)).then(|| {
         Reason::with(

@@ -63,6 +63,22 @@ on:
           of the pins; the daily agent canary passes each CLI's latest release (agent-canary.yml).
         type: string
         default: ''
+      agents:
+        description: >-
+          Comma-separated adapter IDs the fake lane runs and judges instead of every registered agent;
+          the agent floor measurement names its one agent (agent-floor.yml).
+        type: string
+        default: ''
+      lift-minimum:
+        description: >-
+          Build Hide so the kit puts each agent's integration in place below its declared minimum, for the
+          agent floor measurement alone (docs/agent-hooks.md, The oldest version of each agent).
+        type: boolean
+        default: false
+      report-suffix:
+        description: Appended to the fake lane's artifact name, so several calls in one run keep apart.
+        type: string
+        default: ''
 
 permissions:
   contents: read
@@ -204,6 +220,8 @@ jobs:
       RUN_DIR: agents/runs/agent-journey-fake-${{ matrix.system }}
       # The journey needs Python 3.12; Windows names it python.
       PYTHON: ${{ matrix.system == 'windows' && 'python' || 'python3' }}
+      # Empty runs and judges every registered agent.
+      AGENTS: ${{ inputs.agents }}
     steps:
       - name: Keep line endings as committed
         timeout-minutes: 1
@@ -245,6 +263,12 @@ jobs:
       - name: Install the pinned agent CLIs
         timeout-minutes: 10
         run: '"$PYTHON" scripts/install-agent-clis.py --all'
+      - name: Lift the refusal below each agent's minimum for this build
+        # Read when the crates compile (hide_agent_adapter::MINIMUM_REFUSAL_LIFTED),
+        # so only this job's binaries carry it.
+        if: ${{ inputs.lift-minimum }}
+        timeout-minutes: 1
+        run: echo "HIDE_AGENT_FLOOR_MEASUREMENT=lift-for-agent-floor-measurement" >> "$GITHUB_ENV"
       - name: Build hided, hide, the hooks, Hide's conversation reader and the composer judge
         timeout-minutes: 25
         run: |
@@ -281,19 +305,19 @@ jobs:
         timeout-minutes: 85
         run: |
           set +e
-          "$PYTHON" scripts/agent-journey-check.py --mode ci --fake-model \
+          "$PYTHON" scripts/agent-journey-check.py --mode ci --fake-model ${AGENTS:+--agents "$AGENTS"} \
             --controller-provider "${{ steps.controller.outputs.provider }}" \
             --herdr-bin "${{ steps.herdr.outputs.bin }}" --run-dir "$RUN_DIR"
           echo "journey exit $?"
       - name: The lane's verdict
         timeout-minutes: 2
-        run: '"$PYTHON" scripts/agent-journey-lane.py "$RUN_DIR/report.json" --lane fake'
+        run: '"$PYTHON" scripts/agent-journey-lane.py "$RUN_DIR/report.json" --lane fake ${AGENTS:+--agents "$AGENTS"}'
       - name: Keep the report
         timeout-minutes: 5
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
-          name: agent-journey-fake-${{ matrix.system }}
+          name: agent-journey-fake-${{ matrix.system }}${{ inputs.report-suffix }}
           path: |
             ${{ env.RUN_DIR }}/report.*
             ${{ env.RUN_DIR }}/*.json

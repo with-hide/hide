@@ -96,6 +96,12 @@ fs.rmSync(packaged, { recursive: true, force: true });
 fs.rmSync(release, { recursive: true, force: true });
 fs.mkdirSync(out, { recursive: true });
 
+// The agent floor measurement's build puts each agent's integration in place
+// below its minimum (docs/agent-hooks.md, The oldest version of each agent);
+// such a build is never an operator's app.
+if (process.env.HIDE_AGENT_FLOOR_MEASUREMENT !== undefined) {
+  throw new Error("HIDE_AGENT_FLOOR_MEASUREMENT is set: a build for the agent floor measurement is never packaged; unset it");
+}
 // Release hided embeds web/dist, so the web shell is built first; the cargo
 // wrapper reuses the machine's toolchain and keeps output in this worktree.
 pnpm(["--dir", "web", "build"]);

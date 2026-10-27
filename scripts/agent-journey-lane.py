@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A CI lane's outcome from one agent journey report (PRD agent-journey-check B26, B27, B29).
 
-Usage: agent-journey-lane.py <report.json> --lane fixture|fake
+Usage: agent-journey-lane.py <report.json> --lane fixture|fake [--agents <id,...>]
 
 The fixture lane passes only when every cell the stand-ins imitate passed for
 each agent they imitate, and the fake lane (the real CLIs answered by the
@@ -11,7 +11,10 @@ cleanup failure (the journey's exit 2), a request budget overrun, or a report
 with no row for an agent it stands for; the fake lane also fails when an
 agent's CLI is missing, as the job installed it, or answers another version
 than contracts/agent-clis.json pins. Each finding is printed as a GitHub
-annotation; the exit code is the lane's.
+annotation; the exit code is the lane's. `--agents` narrows the agents the
+lane requires to those named, for a run that measured only them (the agent
+floor measurement, `.github/workflows/agent-floor.yml`); without it every
+registered agent is required.
 """
 
 import argparse
@@ -39,7 +42,7 @@ def annotation(level, title, *lines):
     return f"::{level} title={escaped(title).replace(':', '%3A').replace(',', '%2C')}::" + "%0A".join(map(escaped, lines))
 
 
-def judge(report, lane, contract=None):
+def judge(report, lane, contract=None, agents=None):
     """(passed, annotations) for one report."""
     if not isinstance(report, dict) or not isinstance(report.get("table"), dict):
         return False, [annotation("error", "agent journey", "the report has no journey table")]
@@ -76,7 +79,11 @@ def judge(report, lane, contract=None):
     # Use this checkout's independently generated declaration, never a list
     # of successes or selected agents supplied by the report itself.
     contract = load_contract(Path(__file__).resolve().parents[1]) if contract is None else contract
-    required = [row for row in active_rows(contract) if lane != "fixture" or row["id"] in FIXTURE_AGENTS]
+    required = [row for row in active_rows(contract) if (lane != "fixture" or row["id"] in FIXTURE_AGENTS)
+                and (agents is None or row["id"] in agents)]
+    unknown = sorted(set(agents or ()) - {row["id"] for row in active_rows(contract)})
+    if unknown:
+        return False, [annotation("error", "agent journey", f"--agents names no active agent: {', '.join(unknown)}")]
     for row in required:
         agent = row["id"]
         if agent not in table:
@@ -114,10 +121,14 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("report", type=Path)
     parser.add_argument("--lane", choices=tuple(LANES), required=True)
+    parser.add_argument("--agents", help="Comma-separated adapter IDs the run measured; default is every adapter")
     args = parser.parse_args(argv)
+    agents = [agent for agent in args.agents.split(",") if agent] if args.agents else None
+    if agents == []:
+        parser.error("--agents names no agent")
     try:
         report = json.loads(args.report.read_text())
-        passed, notes = judge(report, args.lane)
+        passed, notes = judge(report, args.lane, agents=agents)
     except (OSError, ValueError, ProtectionError) as error:
         print(annotation("error", "agent journey", f"no readable report at {args.report}: {error}"))
         return 1

@@ -1,0 +1,96 @@
+# The agent floor measurement (docs/agent-hooks.md, The oldest version of
+# each agent): one agent's CLI at each version named, measured by the agent
+# journey on the fake model on macOS, Linux and Windows, with no key, so an
+# agent's declared minimum is the oldest version that actually ran.
+#
+# Each version is one call of the fake lane (agent-journey.yml) with a table
+# holding that agent's row alone (scripts/agent-floor.py tables), which runs
+# and judges that agent only, on a Hide built so the kit puts the integration
+# in place below the declared minimum (`lift-minimum`); otherwise an older
+# CLI would be refused before it could be measured. That build is this
+# workflow's alone and is never packaged. The `record` job writes, in the
+# run's summary, pass or fail per version per system, each failed cell with
+# its reason, and the oldest version that passed on every system.
+name: agent floor
+
+on:
+  workflow_dispatch:
+    inputs:
+      agent:
+        description: The adapter ID to measure.
+        type: choice
+        options: [claude-code, codex, grok, opencode, pi, omp]
+      versions:
+        description: Comma-separated x.y.z versions, about six at most, each run on every system.
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  tables:
+    name: version tables
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      versions: ${{ steps.tables.outputs.versions }}
+      tables: ${{ steps.tables.outputs.tables }}
+    steps:
+      - uses: actions/checkout@v7
+        timeout-minutes: 5
+        with:
+          persist-credentials: false
+      - name: Each version's CLI table
+        id: tables
+        timeout-minutes: 3
+        env:
+          AGENT: ${{ inputs.agent }}
+          VERSIONS: ${{ inputs.versions }}
+        run: python3 scripts/agent-floor.py tables --agent "$AGENT" --versions "$VERSIONS" >> "$GITHUB_OUTPUT"
+
+  journey:
+    name: agent journey ${{ matrix.version }}
+    needs: tables
+    strategy:
+      fail-fast: false
+      matrix:
+        version: ${{ fromJSON(needs.tables.outputs.versions) }}
+    uses: ./.github/workflows/agent-journey.yml
+    permissions:
+      contents: read
+    with:
+      systems: '["linux","macos","windows"]'
+      fake: true
+      stand-ins: false
+      clis-table: ${{ fromJSON(needs.tables.outputs.tables)[matrix.version] }}
+      agents: ${{ inputs.agent }}
+      lift-minimum: true
+      report-suffix: -${{ matrix.version }}
+
+  record:
+    name: floor record
+    needs: [tables, journey]
+    # A failed version is what the record is for.
+    if: ${{ always() && needs.tables.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        timeout-minutes: 5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        timeout-minutes: 3
+        with:
+          pattern: agent-journey-fake-*
+          path: ${{ runner.temp }}/reports
+      - name: Pass or fail per version per system
+        timeout-minutes: 2
+        env:
+          AGENT: ${{ inputs.agent }}
+          VERSIONS: ${{ needs.tables.outputs.versions }}
+        run: |
+          python3 scripts/agent-floor.py record --agent "$AGENT" --versions "$VERSIONS" \
+            --reports "$RUNNER_TEMP/reports" >> "$GITHUB_STEP_SUMMARY"
+          cat "$GITHUB_STEP_SUMMARY"

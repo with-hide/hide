@@ -556,6 +556,40 @@ pub struct MinimumVersion {
     pub evidence: &'static str,
 }
 
+/// The value of [`MINIMUM_LIFT_VARIABLE`] that lifts the refusal; any other
+/// value, or none, keeps it.
+pub const MINIMUM_LIFT_VALUE: &str = "lift-for-agent-floor-measurement";
+/// The build-time variable the agent floor measurement sets
+/// (`.github/workflows/agent-floor.yml`), named in docs/agent-hooks.md, The
+/// oldest version of each agent.
+pub const MINIMUM_LIFT_VARIABLE: &str = "HIDE_AGENT_FLOOR_MEASUREMENT";
+
+/// Whether this build puts each agent's integration in place below its
+/// [`MinimumVersion`], so a CLI older than the minimum can be measured at
+/// all. It is read when the crate is compiled, never from a running
+/// program's environment, so no installed Hide can be changed by a variable
+/// set on the operator's machine; only a build whose environment holds
+/// [`MINIMUM_LIFT_VARIABLE`] at exactly [`MINIMUM_LIFT_VALUE`] sets it, and
+/// `desktop/scripts/package.mjs` refuses to package from such an environment.
+pub const MINIMUM_REFUSAL_LIFTED: bool = match option_env!("HIDE_AGENT_FLOOR_MEASUREMENT") {
+    Some(value) => same(value.as_bytes(), MINIMUM_LIFT_VALUE.as_bytes()),
+    None => false,
+};
+
+const fn same(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let mut index = 0;
+    while index < left.len() {
+        if left[index] != right[index] {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
+
 /// Independent gates; adding prompt intake never grants bell or shell denial.
 #[derive(Clone, Copy, Debug)]
 pub struct AgentAdapter {

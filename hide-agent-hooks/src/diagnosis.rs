@@ -352,7 +352,12 @@ pub fn runtime_compatibility(runtime: AgentRuntime, search: &OsStr) -> MemoryCom
 fn program_compatibility(runtime: AgentRuntime, program: &Program) -> MemoryCompatibility {
     let minimum = minimum_memory_version(runtime);
     match program_version(program) {
-        Some(version) if version_at_least(&version, minimum) => {
+        // A build for the agent floor measurement takes any version it reads
+        // (`hide_agent_adapter::MINIMUM_REFUSAL_LIFTED`).
+        Some(version)
+            if hide_agent_adapter::MINIMUM_REFUSAL_LIFTED
+                || version_at_least(&version, minimum) =>
+        {
             MemoryCompatibility::Supported { version }
         }
         installed => MemoryCompatibility::UpdateRequired {

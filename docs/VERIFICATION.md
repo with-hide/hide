@@ -557,6 +557,14 @@ An agent passes only when every system's report has its row and every declared c
 An agent whose latest release fails gets one issue naming each system and cell, a comment when a later release fails differently, and the issue is closed when a release passes; the fix moves the pin in its own pull request, whose CI proves it on that version.
 No pull request is opened for a release that passes: the pins move when a change needs them.
 
+### The agent floor measurement
+
+Each agent's declared minimum ([agent-hooks.md](agent-hooks.md#the-oldest-version-of-each-agent)) is the oldest version that passed this measurement on all three systems.
+`.github/workflows/agent-floor.yml`, started by hand with an agent and a list of versions (`gh workflow run agent-floor.yml -f agent=pi -f versions=0.60.0,0.70.0,1.0.4`), calls the fake model lane once per version on Linux, macOS and Windows with a table that installs that agent's CLI alone at that version (`scripts/agent-floor.py tables`: npm's package at that version, or the package it was published under before, Grok's versioned download, omp's GitHub release), runs and judges that agent only (`agent-journey.yml`'s `agents`, which `agent-journey-lane.py --agents` reads), and builds Hide with the refusal below the minimum lifted (`lift-minimum`).
+agy cannot be measured at an older version: its installer serves only the vendor's current release.
+The `record` job writes pass or fail per version per system in the run's summary, each failed cell with its reason, the oldest version that passed on every system and the newest that failed.
+A cell that fails because the fake model does not speak what an old CLI sends is still that version's failure; a one-off flake is rerun (`gh run rerun <id> --failed`) before it decides a boundary.
+
 The runner and the lane judge load the same generated adapter contract through `scripts/agent_journey/contract.py`, refusing duplicate ids, missing or unknown cells, and non-boolean declarations.
 A skipped cell is never proof of support.
 `scripts/tests/test_agent_journey_contract.py` requires every active adapter's local-isolation, CI home and fake-model routes and a matching CLI pin, so adding an adapter without its journey setup fails the script suite.
