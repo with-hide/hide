@@ -813,4 +813,95 @@ mod tests {
         let grown = catalog.project_sessions(&project).unwrap().sessions;
         assert!(grown[0].event_count > first[0].event_count);
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_transcript_that_could_not_be_read_is_listed_once_it_can_be() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempdir().unwrap();
+        let home = root.path().join("home");
+        let project_root = root.path().join("project");
+        fs::create_dir_all(home.join(".claude/projects/p")).unwrap();
+        fs::create_dir_all(home.join(".codex/sessions/2026/09/21")).unwrap();
+        fs::create_dir_all(&project_root).unwrap();
+        let project = hide_project::resolve(&project_root, "local").unwrap();
+        let cwd = serde_json::to_string(&project_root).unwrap();
+        let claude = home.join(".claude/projects/p/claude-unreadable.jsonl");
+        let codex = home.join(".codex/sessions/2026/09/21/rollout-unreadable.jsonl");
+        fs::write(
+            &claude,
+            format!("{{\"type\":\"user\",\"cwd\":{cwd},\"timestamp\":\"2026-09-21T01:00:00Z\",\"userType\":\"external\",\"promptId\":\"prompt-1\",\"message\":{{\"role\":\"user\",\"content\":\"alpha request\"}}}}\n"),
+        )
+        .unwrap();
+        fs::write(
+            &codex,
+            format!("{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"codex-unreadable\",\"cwd\":{cwd}}}}}\n{{\"type\":\"response_item\",\"timestamp\":\"2026-09-21T02:00:00Z\",\"payload\":{{\"type\":\"message\",\"role\":\"user\",\"content\":[{{\"type\":\"input_text\",\"text\":\"beta request\"}}]}}}}\n"),
+        )
+        .unwrap();
+        let catalog = SessionCatalog::new(&home, "local");
+        let set_mode = |mode: u32| {
+            for path in [&claude, &codex] {
+                fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+            }
+        };
+
+        // Unreadable on this listing: nothing is listed, and nothing is kept.
+        set_mode(0o000);
+        let unreadable = catalog.project_sessions(&project).unwrap().sessions;
+        assert!(unreadable.is_empty());
+        assert_eq!(crate::file_cache::kept(&home), (0, 0));
+
+        // Readable on the next: both transcripts are listed with their requests,
+        // as a cold read answers them.
+        set_mode(0o644);
+        let readable = catalog.project_sessions(&project).unwrap().sessions;
+        let mut requests = readable
+            .iter()
+            .map(|session| session.first_human_request.clone())
+            .collect::<Vec<_>>();
+        requests.sort();
+        assert_eq!(
+            requests,
+            vec![
+                Some("alpha request".to_owned()),
+                Some("beta request".to_owned())
+            ]
+        );
+    }
+
+    #[test]
+    fn a_listing_forgets_the_facts_of_a_file_it_no_longer_finds() {
+        let root = tempdir().unwrap();
+        let home = root.path().join("home");
+        let project_root = root.path().join("project");
+        let folder = home.join(".claude/projects/p");
+        fs::create_dir_all(&folder).unwrap();
+        fs::create_dir_all(&project_root).unwrap();
+        let project = hide_project::resolve(&project_root, "local").unwrap();
+        let record = |content: &str| {
+            format!(
+                "{{\"type\":\"user\",\"cwd\":{},\"timestamp\":\"2026-09-21T01:00:00Z\",\"userType\":\"external\",\"promptId\":\"prompt-1\",\"message\":{{\"role\":\"user\",\"content\":\"{content}\"}}}}\n",
+                serde_json::to_string(&project_root).unwrap()
+            )
+        };
+        let kept_file = folder.join("claude-kept.jsonl");
+        let removed_file = folder.join("claude-removed.jsonl");
+        fs::write(&kept_file, record("alpha request")).unwrap();
+        fs::write(&removed_file, record("beta request")).unwrap();
+        let catalog = SessionCatalog::new(&home, "local");
+        assert_eq!(
+            catalog.project_sessions(&project).unwrap().sessions.len(),
+            2
+        );
+        assert_eq!(crate::file_cache::kept(&home), (2, 2));
+
+        fs::remove_file(&removed_file).unwrap();
+        let listed = catalog.project_sessions(&project).unwrap().sessions;
+        assert_eq!(listed.len(), 1);
+        assert_eq!(
+            listed[0].first_human_request.as_deref(),
+            Some("alpha request")
+        );
+        assert_eq!(crate::file_cache::kept(&home), (1, 1));
+    }
 }

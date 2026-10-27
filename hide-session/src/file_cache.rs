@@ -9,7 +9,7 @@
 //! that listing's own `SESSION_DISCOVERY_LIMIT` cap admits.
 
 use crate::Agent;
-use crate::catalog::ProjectSession;
+use crate::catalog::{ProjectSession, SessionAvailability};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
@@ -27,22 +27,39 @@ pub(crate) fn keeps(agent: Agent) -> bool {
 }
 
 /// The working directory a file's header names, kept while `path` holds
-/// `stamp`. Without a stamp the header is read and kept nowhere.
+/// `stamp`. Only a header that named a directory is kept: `None` cannot tell
+/// a file without one from a file that could not be opened, and the latter
+/// must be read again once it can be.
 pub(crate) fn header_cwd(
     path: &Path,
     stamp: Option<String>,
     read: impl FnOnce() -> Option<PathBuf>,
 ) -> Option<PathBuf> {
-    fetch(&HEADERS, path, stamp, read)
+    fetch(&HEADERS, path, stamp, read, |cwd| cwd.is_some())
 }
 
-/// The listed facts of a session file, kept while `path` holds `stamp`.
+/// The listed facts of a session file, kept while `path` holds `stamp`. Only
+/// facts derived from bytes that were read are kept: an `Unavailable` answer
+/// from a failed open, read or metadata call is read again on the next listing.
 pub(crate) fn session(
     path: &Path,
     stamp: Option<String>,
     read: impl FnOnce() -> Option<ProjectSession>,
 ) -> Option<ProjectSession> {
-    fetch(&SESSIONS, path, stamp, read)
+    fetch(&SESSIONS, path, stamp, read, |session| {
+        session.as_ref().is_none_or(settled)
+    })
+}
+
+/// Whether a session's answer follows from its bytes alone: readable, or a
+/// file whose size or content the reader refused by rule.
+fn settled(session: &ProjectSession) -> bool {
+    match &session.availability {
+        SessionAvailability::Available => true,
+        SessionAvailability::Unavailable { reason } => {
+            reason == "session_too_large" || reason == "session_malformed"
+        }
+    }
 }
 
 /// Drops the kept files under `home` that the listing of `home` no longer
@@ -63,6 +80,7 @@ fn fetch<T: Clone>(
     path: &Path,
     stamp: Option<String>,
     read: impl FnOnce() -> T,
+    keep: impl FnOnce(&T) -> bool,
 ) -> T {
     let Some(stamp) = stamp else {
         return read();
@@ -74,8 +92,29 @@ fn fetch<T: Clone>(
         return value.clone();
     }
     let value = read();
-    lock(kept).insert(path.to_path_buf(), (stamp, value.clone()));
+    if keep(&value) {
+        lock(kept).insert(path.to_path_buf(), (stamp, value.clone()));
+    } else {
+        lock(kept).remove(path);
+    }
     value
+}
+
+/// The kept header and session counts under `home`, for the tests that
+/// check the listing's pruning.
+#[cfg(test)]
+pub(crate) fn kept(home: &Path) -> (usize, usize) {
+    (count_under(&HEADERS, home), count_under(&SESSIONS, home))
+}
+
+#[cfg(test)]
+fn count_under<T>(kept: &OnceLock<Kept<T>>, home: &Path) -> usize {
+    kept.get().map_or(0, |kept| {
+        lock(kept)
+            .keys()
+            .filter(|path| path.starts_with(home))
+            .count()
+    })
 }
 
 /// The map's values are plain data written whole, so a poisoned lock holds
