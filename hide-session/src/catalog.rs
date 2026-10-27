@@ -1,3 +1,4 @@
+use crate::file_cache;
 use crate::{
     Agent, ConversationEvent, EventKind, SESSION_LINE_LIMIT_BYTES, SESSION_READ_LIMIT_BYTES,
     parse_events, read_bounded, read_bounded_line,
@@ -6,6 +7,7 @@ use hide_project::ProjectIdentity;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::fs::{self, File};
@@ -204,18 +206,29 @@ impl SessionCatalog {
             });
             Vec::new()
         });
+        // Every listed file is one this call saw, so a kept fact for any
+        // other file is for a file that left the listing.
+        let listed = files
+            .iter()
+            .map(|(_, path)| path.clone())
+            .collect::<HashSet<_>>();
         for (agent, path) in files {
             if agent.requires_native_file_proof()
                 && crate::native_file::inside_root(&self.home, agent, &path).is_err()
             {
                 continue;
             }
+            // Taken before the bytes are read: a change during the read
+            // leaves a stamp older than the bytes, so the next call reads again.
+            let stamp = file_cache::keeps(agent)
+                .then(|| crate::stamp::stamp_at(&path))
+                .flatten();
             let Some(cwd) = (if agent == Agent::Cursor {
                 crate::cursor::header(&self.home, &path)
                     .ok()
                     .map(|header| header.cwd)
             } else {
-                session_cwd(agent, &path)
+                file_cache::header_cwd(&path, stamp.clone(), || session_cwd(agent, &path))
             }) else {
                 continue;
             };
@@ -225,10 +238,12 @@ impl SessionCatalog {
             if identity.id != project.id {
                 continue;
             }
-            if let Some(session) = read_project_session(&self.home, agent, path, cwd) {
+            let read = || read_project_session(&self.home, agent, path.clone(), cwd.clone());
+            if let Some(session) = file_cache::session(&path, stamp, read) {
                 sessions.push(session);
             }
         }
+        file_cache::retain(&self.home, &listed);
         sessions.sort_by(|left, right| {
             right
                 .updated_at_unix_ms
@@ -749,5 +764,53 @@ mod tests {
         let mut reader = BufReader::new(std::io::Cursor::new(b"123456789\nnext\n"));
         let error = read_bounded_line(&mut reader, 8).unwrap_err();
         assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn a_claude_transcript_keeps_its_facts_until_its_stamp_moves() {
+        let root = tempdir().unwrap();
+        let home = root.path().join("home");
+        let project_root = root.path().join("project");
+        let folder = home.join(".claude/projects/p");
+        fs::create_dir_all(&folder).unwrap();
+        fs::create_dir_all(&project_root).unwrap();
+        let project = hide_project::resolve(&project_root, "local").unwrap();
+        let file = folder.join("claude-cache.jsonl");
+        let record = |content: &str| {
+            format!(
+                "{{\"type\":\"user\",\"cwd\":{},\"timestamp\":\"2026-09-21T01:00:00Z\",\"userType\":\"external\",\"promptId\":\"prompt-1\",\"message\":{{\"role\":\"user\",\"content\":\"{content}\"}}}}\n",
+                serde_json::to_string(&project_root).unwrap()
+            )
+        };
+        fs::write(&file, record("alpha request")).unwrap();
+        let modified = fs::metadata(&file).unwrap().modified().unwrap();
+        let catalog = SessionCatalog::new(&home, "local");
+        let first = catalog.project_sessions(&project).unwrap().sessions;
+        assert_eq!(
+            first[0].first_human_request.as_deref(),
+            Some("alpha request")
+        );
+
+        // The same length and the same modification time keep the stamp, so
+        // the transcript is not read again and its kept facts still answer.
+        fs::write(&file, record("omega request")).unwrap();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&file)
+            .unwrap()
+            .set_modified(modified)
+            .unwrap();
+        let kept = catalog.project_sessions(&project).unwrap().sessions;
+        assert_eq!(
+            kept[0].first_human_request.as_deref(),
+            Some("alpha request")
+        );
+
+        // An appended record moves the length, so the file is read again and
+        // the new record is counted.
+        let mut appended = fs::OpenOptions::new().append(true).open(&file).unwrap();
+        std::io::Write::write_all(&mut appended, record("beta request").as_bytes()).unwrap();
+        let grown = catalog.project_sessions(&project).unwrap().sessions;
+        assert!(grown[0].event_count > first[0].event_count);
     }
 }
