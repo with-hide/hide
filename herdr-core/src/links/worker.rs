@@ -1712,13 +1712,13 @@ fn update_context(client: &LinkClient, store: &LinkStore, session: &SessionIdent
                     if let Some(first) = contexts.used.pop_front() {
                         contexts.values.remove(&first);
                     }
+                    // The cache only shrinks by eviction, so it never falls
+                    // back under the limit: this logs once per process.
                     if contexts.capacity.enter(CONTEXT_CAPACITY_KEY) {
                         crate::diagnostic!(
                             serde_json::json!({"component":"links","kind":"ledger.context_capacity"})
                         );
                     }
-                } else if contexts.values.len() < LEDGER_QUEUE_LIMIT {
-                    contexts.capacity.leave(CONTEXT_CAPACITY_KEY);
                 }
                 contexts.used.retain(|held| held != session);
                 contexts.used.push_back(session.clone());

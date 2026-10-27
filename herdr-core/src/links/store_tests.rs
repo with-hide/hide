@@ -616,10 +616,11 @@ fn the_issue_panel_joins_its_pull_requests_and_names_which_one_a_session_made() 
 }
 
 /// A publish pass reads a project's places, fences and repository names once
-/// and answers from them: each answer equals the one a read of that project
-/// alone gives, for the summary, each pull request's lines and the ledger lists.
+/// and answers from them. The expected answers are written out from the
+/// fixture below, not read back from another path, so a pass that drops or
+/// adds a line fails here.
 #[test]
-fn a_pass_over_a_project_answers_what_each_read_answers_alone() {
+fn a_pass_over_a_project_answers_what_the_fixture_says() {
     let home = tempfile::tempdir().unwrap();
     let state = tempfile::tempdir().unwrap();
     let mut store = open(state.path());
@@ -644,26 +645,46 @@ fn a_pass_over_a_project_answers_what_each_read_answers_alone() {
     );
     ingest(&mut store, home.path(), &maker);
 
-    let row = store.project(PROJECT).unwrap().unwrap();
     let pass = store.pass(PROJECT).unwrap().unwrap();
+
+    let summary = store.summary_in(&pass, &[]).unwrap();
+    assert_eq!(summary.prs.len(), 1);
+    assert_eq!(summary.prs.get(&8), Some(&1));
+    assert_eq!(summary.issues.get("github:acme/app#3"), Some(&1));
     assert_eq!(
-        store.summary_in(&pass, &[]).unwrap(),
-        store.summary(PROJECT, &[]).unwrap()
+        summary.sessions.get("s-maker"),
+        Some(&vec![SessionPrChip {
+            number: 8,
+            created: true
+        }])
     );
-    for number in [7, 8] {
-        let pr = store.pr(PROJECT, number).unwrap().unwrap();
-        assert_eq!(
-            store.pr_lines_in(&pass, &pr, Some(here())).unwrap(),
-            store.pr_lines(&row, &pr, Some(here())).unwrap()
-        );
-    }
+
+    let eight = store.pr(PROJECT, 8).unwrap().unwrap();
+    let lines = store.pr_lines_in(&pass, &eight, Some(here())).unwrap();
     assert_eq!(
-        store.ledger_issue_refs_in(&pass).unwrap(),
-        store.ledger_issue_refs(PROJECT).unwrap()
+        lines
+            .iter()
+            .map(|line| (line.id.as_str(), line.pr, line.role))
+            .collect::<Vec<_>>(),
+        vec![("s-maker", 8, SessionRole::Created)]
     );
+    let seven = store.pr(PROJECT, 7).unwrap().unwrap();
+    assert!(
+        store
+            .pr_lines_in(&pass, &seven, Some(here()))
+            .unwrap()
+            .is_empty()
+    );
+
+    // No ledger session names the issue, so the ledger's issue list is empty;
+    // the one session that made the pull request has one work summary.
+    assert!(store.ledger_issue_refs_in(&pass).unwrap().is_empty());
+    let work = store.ledger_summaries_in(&pass).unwrap();
     assert_eq!(
-        store.ledger_summaries_in(&pass).unwrap(),
-        store.ledger_summaries(PROJECT).unwrap()
+        work.iter()
+            .map(|item| item.session.session_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["s-maker"]
     );
 }
 

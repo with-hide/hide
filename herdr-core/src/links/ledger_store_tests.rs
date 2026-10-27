@@ -3357,3 +3357,67 @@ fn the_record_is_named_after_its_largest_flow_and_the_pane_keeps_the_current_one
         "알림 아이콘 교체"
     );
 }
+
+/// An issue read over its limit logs the crossing once; a read that finds the
+/// count still over stays quiet, and a read after it falls back under logs
+/// nothing, so the next crossing is reported again.
+#[test]
+fn an_issue_read_over_its_limit_is_reported_once_per_crossing() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
+    request(&mut store, 1, "이슈 정리");
+    let project = crate::links::ProjectFacts {
+        key: "project-a".into(),
+        device_id: "device-a".into(),
+        workspace_id: "workspace-a".into(),
+        root: "/repo".into(),
+        repository: Some("owner/repo".into()),
+        repository_id: Some("R_1".into()),
+        connection_epoch: 0,
+        worktrees: Vec::new(),
+        prs: Vec::new(),
+        prs_read: true,
+        outputs: Vec::new(),
+    };
+    store.apply_project(&project, 1).unwrap();
+    let limit = crate::issues::ISSUE_LIMIT as u64;
+    let sight = |store: &LinkStore, number: u64| {
+        store.connection.execute("INSERT INTO ledger_sightings VALUES('device-a','codex','session-a','issue','owner/repo',?1,1000)",params![number]).unwrap();
+    };
+    // Reads the project and returns how many records it logged as over the limit.
+    let read = |store: &LinkStore| -> (usize, Vec<serde_json::Value>) {
+        let (refs, records) =
+            crate::diagnostics::capture(|| store.ledger_issue_refs("project-a").unwrap());
+        assert!(refs.len() <= crate::issues::ISSUE_LIMIT);
+        let over = records
+            .into_iter()
+            .filter(|record| record["kind"] == "ledger.issue_read_capacity")
+            .collect::<Vec<_>>();
+        (refs.len(), over)
+    };
+
+    for number in 1..=limit + 1 {
+        sight(&store, number);
+    }
+    let (count, first) = read(&store);
+    assert_eq!(count, crate::issues::ISSUE_LIMIT);
+    assert_eq!(first.len(), 1, "the first read over the limit reports");
+    assert_eq!(first[0]["omitted"], 1);
+
+    assert!(read(&store).1.is_empty(), "a read still over stays quiet");
+
+    store
+        .connection
+        .execute(
+            "DELETE FROM ledger_sightings WHERE number>?1",
+            params![limit],
+        )
+        .unwrap();
+    let (count, under) = read(&store);
+    assert_eq!(count, crate::issues::ISSUE_LIMIT);
+    assert!(under.is_empty(), "a read back under reports nothing");
+
+    sight(&store, limit + 1);
+    let (_, again) = read(&store);
+    assert_eq!(again.len(), 1, "the next crossing reports again");
+}

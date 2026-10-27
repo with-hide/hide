@@ -1887,14 +1887,39 @@ impl LinkStore {
     }
 
     /// [`LinkStore::ledger_issue_refs`] within a publish pass for one project.
+    /// The over-cap diagnostic is reported once per crossing: it is logged
+    /// when the project's count goes over the limit and not again until a read
+    /// finds it back under, a read fails, or the project has no repository.
     pub(in crate::links) fn ledger_issue_refs_in(
         &self,
         pass: &ProjectPass,
     ) -> Result<Vec<crate::issues::IssueReference>, String> {
-        let project = &pass.project;
-        let Some(repo) = project.repo.as_deref() else {
+        let key = pass.project.key.as_str();
+        let Some(repo) = pass.project.repo.as_deref() else {
+            self.issue_capacity.borrow_mut().leave(key);
             return Ok(Vec::new());
         };
+        let refs = self.issue_refs_of_repo(pass, repo);
+        match &refs {
+            Ok(found) if found.len() > crate::issues::ISSUE_LIMIT => {
+                if self.issue_capacity.borrow_mut().enter(key) {
+                    crate::diagnostic!(
+                        serde_json::json!({"component":"links","kind":"ledger.issue_read_capacity","limit":crate::issues::ISSUE_LIMIT,"omitted":found.len()-crate::issues::ISSUE_LIMIT})
+                    );
+                }
+            }
+            _ => self.issue_capacity.borrow_mut().leave(key),
+        }
+        Ok(refs?.into_iter().take(crate::issues::ISSUE_LIMIT).collect())
+    }
+
+    /// Every issue of the project's repository that one of its sessions
+    /// printed and that sits inside the project's paths, before the limit.
+    fn issue_refs_of_repo(
+        &self,
+        pass: &ProjectPass,
+        repo: &str,
+    ) -> Result<BTreeSet<crate::issues::IssueReference>, String> {
         let paths = &pass.paths;
         let mut statement = self.connection.prepare("SELECT DISTINCT x.device,x.agent,x.id,x.repo,x.number FROM ledger_sightings x LEFT JOIN repo_names r ON r.name=x.repo WHERE x.kind='issue' AND COALESCE(r.repo,x.repo)=?2 ORDER BY x.at DESC LIMIT ?1").map_err(failed)?;
         let rows = statement
@@ -1929,16 +1954,7 @@ impl LinkStore {
                 refs.insert(reference);
             }
         }
-        if refs.len() > crate::issues::ISSUE_LIMIT {
-            if self.issue_capacity.borrow_mut().enter(&pass.project.key) {
-                crate::diagnostic!(
-                    serde_json::json!({"component":"links","kind":"ledger.issue_read_capacity","limit":crate::issues::ISSUE_LIMIT,"omitted":refs.len()-crate::issues::ISSUE_LIMIT})
-                );
-            }
-        } else {
-            self.issue_capacity.borrow_mut().leave(&pass.project.key);
-        }
-        Ok(refs.into_iter().take(crate::issues::ISSUE_LIMIT).collect())
+        Ok(refs)
     }
 
     pub fn ledger_summaries(&self, project: &str) -> Result<Vec<SessionWorkSummary>, String> {

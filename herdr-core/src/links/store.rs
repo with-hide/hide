@@ -1407,7 +1407,10 @@ impl LinkStore {
     pub(super) fn pass(&self, key: &str) -> Result<Option<ProjectPass>, String> {
         match self.project(key)? {
             Some(project) => self.pass_of(&project).map(Some),
-            None => Ok(None),
+            None => {
+                self.issue_capacity.borrow_mut().leave(key);
+                Ok(None)
+            }
         }
     }
 
