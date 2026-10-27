@@ -89,13 +89,14 @@ The router is Memory's (`crate::ai::memory_router`), with the usage limit.
 A turn sends, within the 64 KiB request input (every number is in `herdr-core/src/suggestions/policy.rs`):
 
 - the turn's number, the turns left and its phase;
-- the notebook: each line's number, stage, discomfort, cause, fix and outcome, how many records it has and its newest record numbers, open lines first, at most 20 KiB;
+- the notebook: each line's number, stage, discomfort, cause, fix and outcome, who struck it and why, how many records it has and its newest record numbers, open lines first, at most 20 KiB;
 - the fresh records grouped by signal and tag: their numbers, how many sessions, the pull request numbers and how many days ago, never the words around them, at most 12 KiB;
 - the model's own notes from the turn before (at most 1,000 characters), the outcome of each edit it made, and the results of the reads it asked for, at most 24 KiB together and 8 KiB each.
 
 The model answers one JSON object (`PlainJson`, schema `suggestions_investigation.v1`): at most eight notebook edits, applied in order and each saved before the next is taken, at most four reads for the next turn, its notes, and whether it is done.
 It runs nothing itself.
 A line the grouping by tag made, before anyone looked, is a key and not yet a problem: the prompt asks the model to check it, to split a CI check's records by the cause its log shows, and to pass or strike what is only a check's name or a shell command's head from exploring (`cat`, `rg`, `sed` and the like).
+A struck line still takes the sightings of its problem: Hide, not the model, decides whether a line the operator skipped comes back (D-43), so the prompt tells the model an operator's skip is not a finding.
 A read is a request Hide fulfils with its own fixed tools on the node that holds the Project, on the investigation's worker, off the runtime lock and off the session-sync thread.
 The Project's folder is found the first time a read needs it: of the catalog Projects on this machine and on linked devices, the one whose node names this Project, the folder that is its root asked first (`ProjectReads`).
 A Project no linked node names answers every read `project_unreachable`, and the run goes on with the records alone.

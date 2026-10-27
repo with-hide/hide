@@ -39,7 +39,7 @@ Rules:
 - A tag is the key Hide grouped records by, not a problem. A line with a basis and no cause was grouped by its tag alone before anyone looked: check it before you keep it, split off records that are a different problem, and strike it with the reason when its records share no cause you can name.
 - A CI check's name, such as a lane or a job, says where it failed, not why. Read the log, put each failure on the line of its own cause, and pass failures that are only the pull request's unfinished work.
 - A shell command's head (cat, rg, grep, sed, ls, head, find and the like) is usually a search that found nothing while the agent was exploring, which is normal work. Pass such records unless the session shows the agent was stuck on them, and strike a line that holds only those.
-- Prefer attaching to an existing line over writing a new one. A struck line still takes new sightings of its problem, which keeps it from being raised again.
+- Prefer attaching to an existing line over writing a new one. A struck line still takes new sightings of its problem, and Hide decides from them whether it comes back. A line struck by the operator is one the person skipped for now, not one found to be no problem.
 - Write a cause only when one root cause fits in one sentence and one pull request or one issue would deal with it.
 - Every fresh record should end on a line or in a pass. A record you do not reach is handed to you again tomorrow.
 - Hide counts how much a line hurt from its records; never estimate a count.
@@ -308,7 +308,8 @@ fn stage(line: &Line) -> &'static str {
 
 /// The notebook's lines, open ones first and the most recently changed
 /// first among them; struck and ended lines show what they rest on but not
-/// their cause.
+/// their cause, and a struck line shows who struck it, since the operator's
+/// skip is not a finding (D-43).
 fn notebook(notebook: &Notebook) -> Value {
     let mut lines: Vec<&Line> = notebook.lines.iter().collect();
     lines.sort_by_key(|line| {
@@ -341,7 +342,10 @@ fn notebook(notebook: &Notebook) -> Value {
                 item["basis"] = json!({"signal": signal.as_str(), "tag": tag});
             }
             if let Some(strike) = &line.struck {
-                item["struck"] = json!({"reason": strike.reason});
+                item["struck"] = json!({"by": strike.by});
+                if let Some(reason) = &strike.reason {
+                    item["struck"]["reason"] = json!(reason);
+                }
             }
             if !closed {
                 if let Some(cause) = &line.cause {
@@ -401,7 +405,7 @@ pub(crate) fn input(
 mod tests {
     use super::*;
     use crate::suggestions::ledger::{RecordId, SessionRef, Signal};
-    use crate::suggestions::notebook::NotebookEdit;
+    use crate::suggestions::notebook::{NotebookEdit, Strike, StruckBy};
 
     fn entry(id: u64, tag: &str) -> RecordEntry {
         RecordEntry {
@@ -458,6 +462,53 @@ mod tests {
         let value: Value = serde_json::from_str(&text).unwrap();
         assert!(value["records"]["groups_not_shown"].as_u64().unwrap() > 0);
         assert!(value["notebook"]["lines_not_shown"].as_u64().unwrap() > 0);
+    }
+
+    /// D-43: the operator's skip, which Hide may bring back, reads apart
+    /// from an investigation's strike.
+    #[test]
+    fn a_struck_line_shows_who_struck_it() {
+        let index = RecordIndex {
+            entries: vec![entry(1, "cargo test"), entry(2, "cargo build")],
+        };
+        let mut book = Notebook::default();
+        for id in 1..=2 {
+            book.apply(
+                NotebookEdit::NewLine {
+                    discomfort: Some("테스트가 실패한다".into()),
+                    records: vec![RecordId(id)],
+                    basis: None,
+                    outcome: None,
+                },
+                &index,
+                id,
+            )
+            .unwrap();
+        }
+        let first = book.lines[0].id;
+        book.apply(
+            NotebookEdit::Strike {
+                line: first,
+                reason: Some("already fixed".into()),
+            },
+            &index,
+            3,
+        )
+        .unwrap();
+        book.lines[1].struck = Some(Strike {
+            by: StruckBy::Operator,
+            reason: None,
+            at_unix_ms: 4,
+        });
+        let shown = notebook(&book);
+        let struck: Vec<_> = shown["lines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|line| line["struck"].clone())
+            .collect();
+        assert!(struck.contains(&json!({"by": "analysis", "reason": "already fixed"})));
+        assert!(struck.contains(&json!({"by": "operator"})));
     }
 
     #[test]
