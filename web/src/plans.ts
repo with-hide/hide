@@ -1,5 +1,5 @@
 import type { TFunction } from "i18next";
-import type { LegendTone } from "./missions";
+import type { CellTone } from "./missions";
 import { layerDependencies, orderByDependencies, type LayeredGraph } from "./projectBoard";
 import type { PlanStep, PlanView, RowMark, SnapshotRest, WorkSession } from "./snapshot";
 
@@ -72,9 +72,9 @@ export function planChecklist(plan: PlanView): { step: PlanStep; parallel: boole
  * order, done green, the current step blue or, while the plan waits for its
  * review, in the warning colour; a dropped step has no cell.
  */
-export function planCells(plan: PlanView): LegendTone[] {
+export function planCells(plan: PlanView): CellTone[] {
   const review = planProposed(plan);
-  return planChecklist(plan).flatMap(({ step }): LegendTone[] => {
+  return planChecklist(plan).flatMap(({ step }): CellTone[] => {
     if (step.status === "dropped") return [];
     if (step.status === "done") return ["done"];
     if (step.key === plan.progress.current && !plan.progress.finished) return [review ? "hold" : "working"];

@@ -4,8 +4,9 @@
 // core's record, the first plan opens nothing in the lane and, with the
 // operator looking at the Conductor pane, pins that pane's popover once
 // (PRD mission-pane-chip B11, B12), the map follows each change of the
-// record, and Settings › Conductor keeps the cap the next
-// `hide mission settings` reads.
+// record, a card opens its node's panel and Escape lets it go without
+// closing the lane (PRD mission-map-git-criteria B25, B28, B30, B31), and
+// Settings › Conductor keeps the cap the next `hide mission settings` reads.
 
 import { expect, test } from "@playwright/test";
 import { spawnSync } from "node:child_process";
@@ -105,21 +106,23 @@ test("the Conductor's first plan shows on its pane, the map follows the record, 
     await expect(map.locator("[data-mission-status]")).toHaveAttribute("data-mission-status", "running");
     const node = map.locator('[data-mission-node="api"]');
     await expect(node).toHaveAttribute("data-node-status", "working");
-    await expect(node.locator("[data-node-now]")).toHaveText("엔드포인트 작성 중");
-    // Its worker row names the model the plan chose (the Conductor's own pane runs no Hide launch, so the plan's stands), with the time it has worked.
-    await expect(node.locator("[data-node-worker]")).toHaveAttribute("data-node-worker", "opus");
-    // A research node draws no step cells; the change node draws its four.
-    await expect(map.locator('[data-mission-node="cause"] [data-node-steps]')).toHaveCount(0);
-    await expect(node.locator("[data-node-steps]")).toHaveCount(1);
-    // Its row in the flow table draws its bar from the core's events: a worked stretch from its start with a live end (mission-plan-visibility B18).
-    await expect(map.locator('[data-flow-track="api"][data-flow-drawn="events"] [data-flow-segment="worked"] ~ [data-flow-live]')).toBeVisible();
+    await expect(node.locator("[data-node-line]")).toHaveText("엔드포인트 작성 중");
+    // Its finish lines are counted on the card: the one the plan gave and the mission's check command, none passed yet.
+    await expect(node.locator("[data-node-criteria]")).toHaveAttribute("data-node-criteria", "0/2");
     await mission(conductor, ["mission", "decide", "--line", "화면 PR 방식 선택"]);
-    await expect(map.locator('[data-mission-banner="decision"]')).toContainText("화면 PR 방식 선택");
-    // A card opens its row in the flow table in the app too, where the terminal keeps the keyboard, and a second press closes it (B20).
+    // The decision is the operator's turn, above the map.
+    await expect(map.locator('[data-mission-turn] [data-mission-banner="decision"]')).toContainText("화면 PR 방식 선택");
+    // A card opens its node's panel in the app too: its worker's planned model, since the pane is not one Hide launched with a choice, and the core's events for it (B31).
     await node.click();
-    await expect(map.locator('[data-flow-row="api"] [data-mission-detail="api"]')).toBeVisible();
-    await node.click();
-    await expect(page.locator('[data-mission-detail="api"]')).toHaveCount(0);
+    const panel = map.locator('[data-mission-panel="api"] [data-mission-detail="api"]');
+    await expect(panel).toBeVisible();
+    await expect(panel.locator("[data-panel-meta] [data-run]")).toHaveAttribute("title", "opus (planned)");
+    await panel.locator("[data-panel-events-toggle]").click();
+    await expect(panel.locator('[data-panel-event="node"]').first()).toBeVisible();
+    // Escape lets the pick go and leaves the lane open (B30).
+    await page.keyboard.press("Escape");
+    await expect(map.locator("[data-mission-panel]")).toHaveCount(0);
+    await expect(map).toBeVisible();
     await screenshot(page, "mission-map-running");
 
     // Closed by the operator, a later plan does not open it again.

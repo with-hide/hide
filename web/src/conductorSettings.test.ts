@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { addCandidate, candidateAgent, CANDIDATE_LIMIT, CAP_CHOICES, DEFAULT_CONDUCTOR, effortsOf, replaceCandidate } from "./conductorSettings";
+import { addCandidate, candidateAgent, CANDIDATE_LIMIT, CAP_CHOICES, CHECK_COUNT_CHOICES, DEFAULT_CHECKERS, DEFAULT_CONDUCTOR, effortsOf, replaceCandidate, replaceCheck } from "./conductorSettings";
 
-// Settings › Conductor's value (PRD software-factory-conductor D-31, B48, B49).
+// Settings › Conductor's value (PRD software-factory-conductor D-31, B48, B49;
+// PRD mission-map-git-criteria B36).
 
 describe("Conductor settings", () => {
   it("offers the cap the core accepts, 1 to 16, and no more candidates than it keeps", () => {
@@ -26,5 +27,21 @@ describe("Conductor settings", () => {
     expect(candidateAgent("nobody")).toBeNull();
     expect(effortsOf("codex")).toContain("minimal");
     expect(effortsOf("grok")).toEqual([]);
+  });
+
+  it("starts each check as the Conductor's call, offers two to five checkers, and sends both defaults whole when one changes", () => {
+    expect(DEFAULT_CONDUCTOR.checkers).toEqual({ review: DEFAULT_CHECKERS.review, verify: DEFAULT_CHECKERS.verify });
+    expect(DEFAULT_CHECKERS.review).toEqual({ mode: "conductor", rule: "all", count: 2, agent: null, model: null, effort: null, other_vendor: true });
+    expect(CHECK_COUNT_CHOICES).toEqual([2, 3, 4, 5]);
+    const many = replaceCheck(DEFAULT_CHECKERS, "verify", { ...DEFAULT_CHECKERS.verify, mode: "many", count: 3, rule: "majority" });
+    expect(many).toEqual({ review: DEFAULT_CHECKERS.review, verify: { ...DEFAULT_CHECKERS.verify, mode: "many", count: 3, rule: "majority" } });
+  });
+
+  it("drops a checker's model and effort when its agent changes, which the new agent may not take", () => {
+    const codex = replaceCheck(DEFAULT_CHECKERS, "review", { ...DEFAULT_CHECKERS.review, agent: "codex" });
+    const fixed = replaceCheck(codex, "review", { ...codex.review, model: "gpt-5.5", effort: "high" });
+    expect(fixed.review).toMatchObject({ agent: "codex", model: "gpt-5.5", effort: "high" });
+    expect(replaceCheck(fixed, "review", { ...fixed.review, agent: "claude" }).review).toMatchObject({ agent: "claude", model: null, effort: null });
+    expect(replaceCheck(fixed, "review", { ...fixed.review, agent: null }).review).toMatchObject({ agent: null, model: null, effort: null });
   });
 });

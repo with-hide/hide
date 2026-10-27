@@ -116,6 +116,19 @@ export function downPathAround(from: Box, to: Box, cards: readonly Box[], gap: n
   return squarePath(points, CORNER);
 }
 
+/**
+ * An edge drawn back up a top-down graph, outside its layout (a defect a
+ * later node found in an earlier one): from the right side of `from` to the
+ * right side of `to`, bowed `gap` past the further right of the two, so it
+ * reads as going back rather than as one more dependency.
+ */
+export function backPath(from: Box, to: Box, gap: number): string {
+  const y1 = (from.top + from.bottom) / 2;
+  const y2 = (to.top + to.bottom) / 2;
+  const side = Math.max(from.right, to.right) + gap * 2;
+  return `M ${from.right} ${y1} C ${side} ${y1}, ${side} ${y2}, ${to.right} ${y2}`;
+}
+
 /** Lays the graph out with `elk` and reads back each card's place, its column (or row, down), and each edge's route. */
 /** How a layer's cards are ordered: as the layout finds fewest crossings, or as the caller gave them. */
 export type LayerOrder = "free" | "given";

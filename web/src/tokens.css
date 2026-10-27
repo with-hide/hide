@@ -2,6 +2,7 @@
 @custom-variant agent-tab-count-room (@container tab-title (min-width: 48px));
 @custom-variant overview-narrow (@media (width < 1280px));
 @custom-variant pane-wide (@container pane (min-width: 640px));
+@custom-variant mission-wide (@container mission (min-width: 900px));
 
 @theme static {
   --color-*: initial;
@@ -292,14 +293,14 @@
   --size-mission-node-gap: 24px;
   --size-mission-layer-gap: 40px;
   --size-mission-band: 3px;
-  --size-mission-step: 14px;
   --size-mission-step-h: 4px;
+  --size-mission-side: 320px;
+  --size-mission-wide: 900px;
+  --size-mission-run-min: 32px;
   --size-mission-popover: 320px;
   --size-mission-edge: 1.5px;
   --size-chip-bar: 44px;
   --size-flow-title: 196px;
-  --size-flow-result: 96px;
-  --size-flow-track: 18px;
   --size-flow-bar: 8px;
   --size-pr-number: 38px;
   --size-pr-review: 70px;

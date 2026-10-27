@@ -9,8 +9,9 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
 import type { Mission, MissionAnswerState } from "./snapshot";
 
-// The decision a mission waits on, answered where it is asked (PRD
-// mission-plan-visibility D-13, D-20, D-30, B25-B30, B39): the question, why
+// The decision a mission waits on, answered where it is asked, first in the
+// page's 내 차례 (PRD mission-plan-visibility D-13, D-20, D-30, B25-B30, B39;
+// PRD mission-map-git-criteria B25): the question, why
 // it matters, the node it stopped and how long it waited, the Conductor's
 // choices with its recommendation, a short written answer, and the way to
 // the conversation. The core keeps the answer and types it into the
@@ -24,7 +25,7 @@ export const ANSWER_LIMIT = 500;
 /** How long a pressed answer reads as sent before the core's own answer arrives; past it the banner draws the core's state again. */
 const PRESSED_MS = 5_000;
 
-export function DecisionBanner({ mission, device, actions }: { mission: Mission; device: string | null; actions: Actions }) {
+export function DecisionBanner({ mission, device, actions, onNode }: { mission: Mission; device: string | null; actions: Actions; onNode: (key: string) => void }) {
   const { t } = useInterfaceTranslation();
   const question = mission.question;
   // A decision from before questions is answered under key 0, as the core keeps it.
@@ -36,7 +37,8 @@ export function DecisionBanner({ mission, device, actions }: { mission: Mission;
   const writeButton = useRef<HTMLButtonElement>(null);
   const field = useRef<HTMLInputElement>(null);
   const returnFocus = useRef(false);
-  const waited = useElapsed(question?.asked_at_unix_ms ?? null);
+  // While the mission's device does not answer, the wait is not counted on (B35).
+  const waited = useElapsed(mission.stale ? null : (question?.asked_at_unix_ms ?? null));
   const stopped = question?.node ? (mission.nodes.find((node) => node.key === question.node) ?? null) : null;
   const answer = mission.answer?.key === key ? mission.answer : null;
   // Sending an unconfirmed answer again shows it sending until the core moves it on.
@@ -116,9 +118,10 @@ export function DecisionBanner({ mission, device, actions }: { mission: Mission;
         <StatusMark mark="turn" />
         <span className="min-w-0 flex-1 truncate text-body font-semibold" title={mission.decision ?? undefined} data-mission-question="true">{mission.decision}</span>
         {stopped ? (
-          <span className="max-w-(--size-flow-title) shrink-0 truncate rounded-xs bg-muted px-xs text-caption text-mission-hold" title={t("mission.banner.stopped", { node: stopped.title })} data-mission-banner-node={stopped.key}>
+          // The node chip picks its node on the map below (PRD mission-map-git-criteria B25).
+          <button type="button" onClick={() => onNode(stopped.key)} className="max-w-(--size-flow-title) shrink-0 truncate rounded-xs bg-muted px-xs text-caption text-mission-hold outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring" title={t("mission.banner.stopped", { node: stopped.title })} data-mission-banner-node={stopped.key}>
             {t("mission.banner.stopped", { node: stopped.title })}
-          </span>
+          </button>
         ) : null}
         {waited ? <span className="shrink-0 text-caption text-muted-foreground tabular-nums" data-mission-banner-waited="true">{t("mission.banner.waited", { elapsed: waited })}</span> : null}
         {gone ? (

@@ -1,12 +1,14 @@
-import type { LegendTone, NodeTone } from "../missions";
+import type { CellTone, HeadCell } from "../missions";
 import { cn } from "../lib/utils";
 
-// One colour per node state (PRD mission-plan-visibility D-11, B14, B35):
-// the card's whole border, the legend's swatch, a chip's or the head's cell
-// and the sidebar's mission chip all read the `--mission-*` tokens here.
+// One colour per node state (PRD mission-plan-visibility D-11, B35): a chip's
+// cell and the sidebar's mission chip read the `--mission-*` tokens here. The
+// mission page's head draws its cells as its cards (`HEAD_FILL`, PRD
+// mission-map-git-criteria D-02, B26): colour only for work, review, a
+// decision and a failure, done grey and work in main fainter.
 
 /** A cell's fill: a state with colour, an empty cell for a node still ahead. */
-export const TONE_FILL: Record<LegendTone, string> = {
+export const TONE_FILL: Record<CellTone, string> = {
   done: "bg-mission-done",
   review: "bg-mission-review",
   working: "bg-mission-working",
@@ -16,20 +18,21 @@ export const TONE_FILL: Record<LegendTone, string> = {
   cancelled: "bg-mission-cancelled",
 };
 
-/** A card's whole border (B14): a waiting or cancelled card dashed, a card with a worker at it or a decision lit by a faint glow. */
-export const TONE_BORDER: Record<NodeTone, string> = {
-  done: "border-mission-done/60",
-  review: "border-mission-review ring-2 ring-mission-review/20",
-  working: "border-mission-working ring-2 ring-mission-working/20",
-  hold: "border-mission-hold ring-2 ring-mission-hold/20",
-  failed: "border-mission-failed",
-  waiting: "border-dashed border-mission-waiting bg-transparent",
-  cancelled: "border-dashed border-mission-cancelled bg-transparent",
-  dropped: "border-dashed border-border bg-transparent opacity-(--opacity-dimmed)",
+/** A mission page head cell, as its card looks: an outside node waits as an empty cell. */
+export const HEAD_FILL: Record<HeadCell, string> = {
+  waiting: "bg-muted",
+  external: "bg-muted",
+  working: "bg-mission-working",
+  review: "bg-mission-review",
+  hold: "bg-mission-hold",
+  failed: "bg-mission-failed",
+  done: "bg-muted-foreground/60",
+  landed: "bg-muted-foreground/25",
+  cancelled: "bg-mission-cancelled",
 };
 
-/** A word in a state's colour: a chip, a result or a legend count. */
-export const TONE_TEXT: Record<LegendTone, string> = {
+/** A word in a state's colour: a chip or a result. */
+export const TONE_TEXT: Record<CellTone, string> = {
   done: "text-mission-done",
   review: "text-mission-review",
   working: "text-mission-working",
@@ -38,21 +41,6 @@ export const TONE_TEXT: Record<LegendTone, string> = {
   waiting: "text-muted-foreground",
   cancelled: "text-mission-cancelled",
 };
-
-/** A legend swatch: the card's border in small. */
-const SWATCH: Record<LegendTone, string> = {
-  done: "border-mission-done bg-mission-done/20",
-  review: "border-mission-review",
-  working: "border-mission-working",
-  hold: "border-mission-hold",
-  failed: "border-mission-failed",
-  waiting: "border-dashed border-mission-waiting",
-  cancelled: "border-dashed border-mission-cancelled",
-};
-
-export function ToneSwatch({ tone }: { tone: LegendTone }) {
-  return <span aria-hidden="true" className={cn("inline-block size-(--size-status-mark) shrink-0 rounded-xs border", SWATCH[tone])} />;
-}
 
 /** Past this many, a bar draws each run of one state as one stretch instead of a cell per item. */
 export const CELL_LIMIT = 20;
@@ -63,8 +51,9 @@ export const CELL_LIMIT = 20;
  * keeps its width and its proportions. The words beside it carry the
  * numbers, so the bar itself is hidden from a screen reader.
  */
-export function ProgressCells({ tones, size, className }: { tones: readonly LegendTone[]; size: "chip" | "head"; className?: string }) {
-  const runs: { tone: LegendTone; count: number }[] = [];
+export function ProgressCells<T extends string = CellTone>({ tones, fill, size, className }: { tones: readonly T[]; fill?: Record<T, string>; size: "chip" | "head"; className?: string }) {
+  const fills = fill ?? (TONE_FILL as Record<string, string>);
+  const runs: { tone: T; count: number }[] = [];
   if (tones.length > CELL_LIMIT) {
     for (const tone of tones) {
       const last = runs.at(-1);
@@ -84,7 +73,7 @@ export function ProgressCells({ tones, size, className }: { tones: readonly Lege
       )}
     >
       {cells.map((cell, index) => (
-        <span key={index} className={cn("rounded-full", TONE_FILL[cell.tone])} style={{ flexGrow: cell.count, flexBasis: 0 }} />
+        <span key={index} className={cn("rounded-full", fills[cell.tone])} style={{ flexGrow: cell.count, flexBasis: 0 }} />
       ))}
     </span>
   );

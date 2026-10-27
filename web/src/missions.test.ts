@@ -3,8 +3,8 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { chipWords, conductedBy, firstPlans, flowShows, flowSpan, kindWord, missionCells, missionLegend, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, nodeBar, nodeMarks, nodeResult, nodeTone, paneChipWords, launchModelOf, missionCounts, nodeLine, nodeMark, stackWaiting, stageWord, stepsOf, takeOverPrompt, takeOverProvider, workerWords } from "./missions";
-import type { Mission, MissionEvent, MissionNode, SnapshotRest } from "./snapshot";
+import { cardLine, checkerState, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems } from "./missions";
+import type { AgentRow, Mission, MissionCriterion, MissionEvent, MissionNode, SnapshotRest } from "./snapshot";
 
 // What the map and the Conductor row read from a mission (PRD
 // software-factory-conductor B14-B21, B44, B46): the core decides every value,
@@ -60,12 +60,6 @@ describe("the numbers and words", () => {
     expect(nodeLine(node("n", { blocked: "upstream_failed" }), t)).toBe("Waiting · earlier node failed");
   });
 
-  it("draws the four step cells for a change node only", () => {
-    expect(stepsOf(node("a"))).toBe(4);
-    expect(stepsOf(node("a", { kind: "research", delivery: null }))).toBe(0);
-    expect(stepsOf(node("a", { kind: "verify", delivery: null }))).toBe(0);
-  });
-
   it("wears its worker's mark while it works, and its own state otherwise", () => {
     expect(nodeMark(node("a", { status: "working" }), "waiting")).toBe("waiting");
     expect(nodeMark(node("a", { status: "working" }), null)).toBe("going");
@@ -74,28 +68,32 @@ describe("the numbers and words", () => {
     expect(nodeMark(node("a", { status: "done" }), null)).toBe("done");
   });
 
-  it("names a worker by its model and effort, never its agent, `auto` for an effort the Conductor chooses", () => {
-    expect(workerWords(node("a", { worker: { agent: "codex", model: "gpt-6-astra", effort: "high", effort_auto: true } }), null, "auto")).toBe("gpt-6-astra·high");
-    expect(workerWords(node("a", { worker: { agent: "claude", model: "opus", effort_auto: true } }), null, "auto")).toBe("opus·auto");
-    // An agent that takes no model: the effort alone, or nothing.
-    expect(workerWords(node("a", { worker: { agent: "opencode", effort_auto: true } }), null, "auto")).toBe("auto");
-    expect(workerWords(node("a", { worker: { agent: "opencode" } }), null, "auto")).toBeNull();
+  it("names what runs from the pane's launch alone, and the plan's words marked planned before a launch (B29)", () => {
+    const words = { auto: "auto", defaultModel: "default model" };
+    const plan = { agent: "codex", model: "gpt-6-astra", effort: "high", effort_auto: false };
+    const launch = (launch_model: string | null, launch_effort: string | null) => ({ device_id: "mac", pane_id: "p9", session_digest: "d", launch_model, launch_effort });
+    // Before Hide recorded a launch: the plan's words, marked planned; `auto` for an effort the Conductor chooses; never the agent.
+    expect(runWords(null, plan, words)).toEqual({ words: "gpt-6-astra·high", planned: true });
+    expect(runWords(null, { agent: "claude", model: "opus", effort_auto: true }, words)).toEqual({ words: "opus·auto", planned: true });
+    expect(runWords(null, { agent: "opencode" }, words)).toBeNull();
+    expect(runWords(null, null, words)).toBeNull();
+    // A launch speaks alone: its effort over a different planned one, its model over the plan's.
+    expect(runWords(launch("gpt-6-sol", "low"), plan, words)).toEqual({ words: "gpt-6-sol·low", planned: false });
+    // A launch that set no effort shows none, and one that set no model ran the CLI's default; the plan fills neither.
+    expect(runWords(launch("gpt-6-sol", null), plan, words)).toEqual({ words: "gpt-6-sol", planned: false });
+    expect(runWords(launch(null, "low"), plan, words)).toEqual({ words: "default model·low", planned: false });
+    // A session with neither value carries no proven launch: the plan's words stay marked planned.
+    expect(runWords(launch(null, null), plan, words)).toEqual({ words: "gpt-6-astra·high", planned: true });
   });
 
-  it("shows the model the pane runs while the node works, and the plan's otherwise", () => {
-    const planned = node("a", { worker: { agent: "claude", model: "opus", effort: "high" } });
-    expect(workerWords(planned, "sonnet", "auto")).toBe("opus·high");
-    expect(workerWords({ ...planned, status: "working" }, "sonnet", "auto")).toBe("sonnet·high");
-    expect(workerWords({ ...planned, status: "review" }, "sonnet", "auto")).toBe("sonnet·high");
-    expect(workerWords({ ...planned, status: "working" }, null, "auto")).toBe("opus·high");
+  it("finds a pane's launch on its machine, else on the mission's", () => {
     const m = mission("m", { device_id: "mac" });
-    const rest = { overview_graph: { sessions: [{ device_id: "mac", pane_id: "p9", session_digest: "d", launch_model: "sonnet", launch_effort: null }, { device_id: "mini", pane_id: "p9", session_digest: "e", launch_model: "haiku", launch_effort: null }] } } as unknown as SnapshotRest;
-    expect(launchModelOf(rest, m, node("a", { pane_id: "p9" }))).toBe("sonnet");
-    expect(launchModelOf(rest, m, node("a", { pane_id: "p9", machine: "mini" }))).toBe("haiku");
-    expect(launchModelOf(rest, m, node("a", { pane_id: "p8" }))).toBeNull();
-    expect(launchModelOf(rest, m, node("a"))).toBeNull();
+    const rest = { overview_graph: { sessions: [{ device_id: "mac", pane_id: "p9", session_digest: "d", launch_model: "sonnet", launch_effort: null }, { device_id: "mini", pane_id: "p9", session_digest: "e", launch_model: "haiku", launch_effort: "high" }] } } as unknown as SnapshotRest;
+    expect(launchSession(rest, m, "p9", null)?.launch_model).toBe("sonnet");
+    expect(launchSession(rest, m, "p9", "mini")?.launch_model).toBe("haiku");
+    expect(launchSession(rest, m, "p8", null)).toBeNull();
+    expect(launchSession(rest, m, null, null)).toBeNull();
   });
-
 });
 
 describe("a takeover", () => {
@@ -133,7 +131,7 @@ describe("the Conductor pane's chip (PRD mission-pane-chip B2, B10)", () => {
   });
 });
 
-describe("a node's state colour (PRD mission-plan-visibility D-11, B8, B13, B14, B35)", () => {
+describe("a node's state colour (PRD mission-plan-visibility D-11, B8, B35)", () => {
   it("reads each status as one of the map's states, a blocked node waiting and a cancelled mission's unfinished node cancelled", () => {
     const m = mission("m");
     const tones = (["planned", "working", "waiting", "review", "held", "done", "failed", "dropped"] as const).map((status) => nodeTone(m, node("n", { status })));
@@ -143,10 +141,14 @@ describe("a node's state colour (PRD mission-plan-visibility D-11, B8, B13, B14,
     expect(["done", "failed", "working", "planned"].map((status) => nodeTone(cancelled, node("n", { status: status as MissionNode["status"] })))).toEqual(["done", "failed", "cancelled", "cancelled"]);
   });
 
-  it("counts the states with nodes in them in the legend's order, and draws a cell per node in the plan in the order they wait on each other", () => {
+  it("draws a cell per node in the plan in the order they wait on each other, a dropped node none", () => {
     const m = mission("m", { nodes: [node("ui", { depends_on: ["api"] }), node("api", { status: "working" }), node("old", { status: "dropped" }), node("spec", { status: "done" }), node("ask", { status: "held" })] });
-    expect(missionLegend(m)).toEqual([{ tone: "done", count: 1 }, { tone: "working", count: 1 }, { tone: "hold", count: 1 }, { tone: "waiting", count: 1 }]);
     expect(missionCells(m)).toEqual(["working", "done", "hold", "waiting"]);
+  });
+
+  it("draws the mission page's head cells as its cards: done work grey, work in main fainter, an outside node waiting (PRD mission-map-git-criteria B26)", () => {
+    const m = mission("m", { nodes: [node("spec", { status: "done", kind: "research", delivery: null }), node("api", { status: "done", pr: 3, pr_state: "merged" }), node("ui", { status: "done", pr: 4, pr_state: "mergeable", depends_on: ["api"] }), node("out", { kind: "external", delivery: null, external: { pr: 9 } }), node("old", { status: "dropped" })] });
+    expect(missionHeadCells(m)).toEqual(["done", "landed", "external", "done"]);
   });
 
   it("colours a mission's own chip by its decision, else its state", () => {
@@ -194,29 +196,6 @@ describe("what a node left (PRD mission-plan-visibility B11, B22)", () => {
   });
 });
 
-describe("the flow table's time axis (PRD mission-plan-visibility B17, B19)", () => {
-  it("runs from the mission's start to its close, or to now while it is open", () => {
-    expect(flowSpan(mission("m", { started_at_unix_ms: 100 }), 500)).toEqual({ from: 100, to: 500 });
-    expect(flowSpan(mission("m", { started_at_unix_ms: null, created_at_unix_ms: 50, closed_at_unix_ms: 250 }), 900)).toEqual({ from: 50, to: 250 });
-  });
-
-  it("draws one bar from a node's start to its finish, to the axis end while it runs, and none before it starts", () => {
-    const span = { from: 0, to: 1000 };
-    expect(nodeBar(node("a", { started_at_unix_ms: 250, finished_at_unix_ms: 500 }), span)).toEqual({ left: 25, width: 25 });
-    expect(nodeBar(node("b", { started_at_unix_ms: 800 }), span)).toEqual({ left: 80, width: 20 });
-    expect(nodeBar(node("c"), span)).toBeNull();
-    // A time outside the axis is held to it, never drawn past its ends.
-    expect(nodeBar(node("d", { started_at_unix_ms: -100, finished_at_unix_ms: 2000 }), span)).toEqual({ left: 0, width: 100 });
-  });
-
-  it("filters to the nodes not finished, or the finished ones", () => {
-    const statuses = ["planned", "working", "held", "done", "failed", "dropped"] as const;
-    expect(statuses.filter((status) => flowShows(node("n", { status }), "now"))).toEqual(["planned", "working", "held"]);
-    expect(statuses.filter((status) => flowShows(node("n", { status }), "finished"))).toEqual(["done", "failed", "dropped"]);
-    expect(statuses.every((status) => flowShows(node("n", { status }), "all"))).toBe(true);
-  });
-});
-
 describe("a first plan landing (PRD mission-pane-chip D-06, B12-B14)", () => {
   const before = (items: Mission[]) => rest(items);
   it("is a mission going from no nodes to some, or first appearing with nodes, between two frames", () => {
@@ -236,9 +215,174 @@ describe("a first plan landing (PRD mission-pane-chip D-06, B12-B14)", () => {
   });
 });
 
-it("marks a node's decision and each answer to it on its bar: delivered, not delivered, or not confirmed (B18, B26)", () => {
-  const event = (at: number, kind: MissionEvent["kind"], nodeKey = "screen"): MissionEvent => ({ at_unix_ms: at, kind, node: nodeKey });
-  const events = [event(0, "asked"), event(25, "answer_unconfirmed"), event(50, "answered"), event(75, "answer_undelivered"), event(80, "answered", "other")];
-  const marks = nodeMarks({ key: "screen" } as MissionNode, events, { from: 0, to: 100 });
-  expect(marks.map((mark) => [mark.at, mark.kind])).toEqual([[0, "asked"], [25, "unconfirmed"], [50, "answered"], [75, "undelivered"]]);
+const line = (key: string, kind: MissionCriterion["kind"], extra: Partial<MissionCriterion> = {}): MissionCriterion => ({ key, kind, state: "open", ...extra });
+const checker = (agent: string, state: MissionCriterion["state"] = "open", agent_id?: string) => ({ worker: { agent, model: null, effort: "high" }, state, ...(agent_id ? { agent_id } : {}) });
+
+describe("a card's look (PRD mission-map-git-criteria D-02, B26, B27)", () => {
+  it("draws each status as its shape, finished work grey until it reaches main, and an outside node watching until main", () => {
+    const m = mission("m");
+    const looks = (["planned", "working", "review", "held", "failed", "done", "dropped"] as const).map((status) => nodeLook(m, node("n", { status })));
+    expect(looks).toEqual(["waiting", "working", "review", "hold", "failed", "done", "dropped"]);
+    expect(nodeLook(m, node("n", { status: "done", pr: 3, pr_state: "merged" }))).toBe("landed");
+    expect(nodeLook(m, node("n", { status: "done", delivery: "direct", commit: "c216793eb4a1" }))).toBe("landed");
+    expect(nodeLook(m, node("n", { status: "done", pr: 3, pr_state: "mergeable" }))).toBe("done");
+    const outside = (status: MissionNode["status"]) => node("x", { kind: "external", delivery: null, external: { pr: 1232 }, status });
+    expect([nodeLook(m, outside("waiting")), nodeLook(m, outside("done")), nodeLook(m, outside("failed"))]).toEqual(["external", "landed", "failed"]);
+    expect(nodeLook(mission("m", { status: "cancelled" }), node("n", { status: "working" }))).toBe("cancelled");
+  });
+
+  it("tags finished work not in main as a merge left for a pull request the core read open and a join left for a branch it reads while the mission runs or waits, and nothing it does not know", () => {
+    const m = mission("m");
+    const landing = mission("m", { status: "merge_wait" });
+    expect(landingLeft(m, node("a", { status: "done", pr: 4, pr_state: "mergeable" }))).toBe("merge");
+    expect(landingLeft(m, node("a", { status: "done", pr: 4, pr_state: "draft" }))).toBe("merge");
+    // A pull request whose state the core never read (a mission recorded before it kept one) says nothing.
+    expect(landingLeft(m, node("a", { status: "done", pr: 4, pr_state: null }))).toBeNull();
+    expect(landingLeft(m, node("a", { status: "done", pr: 4, pr_state: "closed" }))).toBeNull();
+    // A done branch is read while the mission runs or waits, not once it closed; one it could not read says nothing.
+    expect(landingLeft(landing, node("b", { status: "done", delivery: "direct", branch: "feat/b" }))).toBe("join");
+    expect(landingLeft(m, node("b", { status: "done", delivery: "direct", branch: "feat/b" }))).toBe("join");
+    expect(landingLeft(mission("m", { status: "done" }), node("b", { status: "done", delivery: "direct", branch: "feat/b" }))).toBeNull();
+    expect(landingLeft(landing, node("b", { status: "done", delivery: "direct", branch: "feat/b", unread: true }))).toBeNull();
+    expect(landingLeft(landing, node("b", { status: "done", delivery: "direct" }))).toBeNull();
+    expect(landingLeft(m, node("c", { status: "done", pr: 5, pr_state: "merged" }))).toBeNull();
+    expect(landingLeft(m, node("d", { status: "done", kind: "research", delivery: null }))).toBeNull();
+    expect(landingLeft(m, node("e", { status: "working", pr: 6, pr_state: "mergeable" }))).toBeNull();
+    expect(landingLeft(mission("m", { status: "cancelled" }), node("f", { status: "done", delivery: "direct", branch: "f" }))).toBeNull();
+  });
+
+  it("draws a branch's commit Hide found in main as → main, before one recorded by hand, and the node is in main with nothing left to join (B17)", () => {
+    const m = mission("m", { status: "merge_wait" });
+    const joined = node("b", { status: "done", delivery: "direct", branch: "feat/b", in_main: "9f3e2a1c0b7d" });
+    expect(nodeResult(joined)).toEqual({ kind: "commit", commit: "9f3e2a1c0b7d" });
+    expect([nodeLook(m, joined), landingLeft(m, joined)]).toEqual(["landed", null]);
+    // The commit found in main wins over one the Conductor recorded; a recorded one stands alone for a direct change.
+    expect(nodeResult(node("c", { status: "done", delivery: "direct", branch: "feat/c", in_main: "aaaaaaa1", commit: "bbbbbbb2" }))).toEqual({ kind: "commit", commit: "aaaaaaa1" });
+    expect(nodeResult(node("d", { status: "done", delivery: "direct", commit: "c216793eb4a1" }))).toEqual({ kind: "commit", commit: "c216793eb4a1" });
+    // While the read does not stand the branch shows, and joining is left.
+    const waiting = node("e", { status: "done", delivery: "direct", branch: "feat/e" });
+    expect([nodeResult(waiting), landingLeft(m, waiting)]).toEqual([{ kind: "branch", branch: "feat/e" }, "join"]);
+  });
+});
+
+describe("a node's finish lines (PRD mission-map-git-criteria B6, B12, B23, B28, B32)", () => {
+  it("counts n as the ✓ lines alone with the skipped beside it, though the core's met count holds the skips, and none for a mission from before criteria or a node without lines", () => {
+    const lines = [line("c1", "own", { state: "pass" }), line("c2", "own", { state: "skipped", skip: { reason: "only 31 sessions" } }), line("check", "check"), line("ci", "ci")];
+    // The core counts a skipped line as met (`criteria_met` = passed + skipped).
+    const n = node("n", { criteria: lines, criteria_met: 2, criteria_skipped: 1 });
+    expect(criteriaTally(mission("m"), n)).toEqual({ passed: 1, total: 4, skipped: 1 });
+    expect(criteriaTally(mission("m", { exempt: true }), n)).toBeNull();
+    expect(criteriaTally(mission("m"), node("x", { kind: "external", delivery: null, external: { branch: "tools/runner" } }))).toBeNull();
+  });
+
+  it("words each line as one list: the node's own words, the check command, the CI, and a review or verification by its checkers' names", () => {
+    expect(criterionName(line("c1", "own", { text: "the lens keeps its filter" }), t)).toBe("the lens keeps its filter");
+    expect(criterionName(line("check", "check"), t)).toBe("Check command passes");
+    expect(criterionName(line("ci", "ci"), t)).toBe("CI passes");
+    expect(criterionName(line("review", "review", { checkers: [checker("codex")] }), t)).toBe("codex review");
+    expect(criterionName(line("verify", "verify", { checkers: [checker("claude"), checker("codex"), checker("claude")] }), t)).toBe("claude · codex verification");
+  });
+
+  it("notes why a line was skipped, the operator's decision, a rerun that passed, several checkers' count and the node that found a defect", () => {
+    const m = mission("m", { nodes: [node("verify-all", { title: "Check together" })] });
+    expect(criterionNote(line("c2", "own", { state: "skipped", skip: { reason: "only 31 sessions" } }), m, t)).toBe("only 31 sessions");
+    expect(criterionNote(line("ci", "ci", { state: "skipped", skip: { reason: "fails on main too", decision: 4 } }), m, t)).toBe("operator decision · fails on main too");
+    expect(criterionNote(line("ci", "ci", { state: "pass", reruns: 1 }), m, t)).toBe("rerun 1 time");
+    expect(criterionNote(line("ci", "ci", { state: "fail", rerunning: true }), m, t)).toBe("rerunning");
+    // Two of three passed under `all`: the line is open and says so (B6).
+    expect(criterionNote(line("verify", "verify", { rule: "all", checkers: [checker("claude", "pass"), checker("codex", "pass"), checker("gemini")] }), m, t)).toBe("2/3 passed");
+    expect(criterionNote(line("verify", "verify", { checkers: [checker("claude")] }), m, t)).toBeNull();
+    expect(criterionNote(line("d1", "defect", { text: "the filter resets", found_by: "verify-all" }), m, t)).toBe("found by Check together");
+  });
+
+  it("says a checker the Conductor bound is at work, and one not bound yet waits", () => {
+    expect([checkerState(checker("codex")), checkerState(checker("codex", "open", "agent-3")), checkerState(checker("codex", "pass", "agent-3")), checkerState(checker("codex", "fail", "agent-3"))]).toEqual(["waiting", "running", "pass", "fail"]);
+  });
+
+});
+
+describe("a node's times from its events (PRD mission-map-git-criteria B28)", () => {
+  const move = (at: number, status: MissionNode["status"], key = "n"): MissionEvent => ({ at_unix_ms: at, kind: "node", node: key, status });
+  it("is from its first work to its end, with the decisions that held it added up, and to the page's end while it runs", () => {
+    const events = [move(0, "planned"), move(10, "working"), move(20, "held"), move(35, "working"), move(40, "held"), move(45, "working"), move(70, "done"), move(5, "working", "other")];
+    expect(nodeTimes(node("n"), events, 999)).toEqual({ took: 60, held: 20, running: false });
+    expect(nodeTimes(node("n"), [move(10, "working"), move(30, "held")], 100)).toEqual({ took: 90, held: 70, running: true });
+  });
+
+  it("draws no number for a node with no event that moved it, or one that never worked", () => {
+    expect(nodeTimes(node("n"), [move(5, "working", "other"), { at_unix_ms: 9, kind: "pr_opened", node: "n", pr: 3 }], 100)).toBeNull();
+    expect(nodeTimes(node("n"), [move(5, "planned")], 100)).toEqual({ took: null, held: 0, running: true });
+  });
+});
+
+describe("picking a card and the edges back (PRD mission-map-git-criteria B21, B30)", () => {
+  it("keeps the card and every card one edge away, either way", () => {
+    const edges = [{ from: "a", to: "b" }, { from: "b", to: "c" }, { from: "a", to: "d" }];
+    expect([...neighbours(edges, "b")].sort()).toEqual(["a", "b", "c"]);
+    expect([...neighbours(edges, "d")].sort()).toEqual(["a", "d"]);
+  });
+
+  it("draws a defect back from the node that found it while its line is open or failing", () => {
+    const defect = (state: MissionCriterion["state"], found_by = "verify") => line("d1", "defect", { text: "the filter resets", found_by, state });
+    const m = (state: MissionCriterion["state"], found_by?: string) => mission("m", { nodes: [node("api", { criteria: [defect(state, found_by)] }), node("verify", { kind: "verify", delivery: null, depends_on: ["api"] })] });
+    expect(defectEdges(m("open"))).toEqual([{ from: "verify", to: "api" }]);
+    expect(defectEdges(m("fail"))).toEqual([{ from: "verify", to: "api" }]);
+    expect(defectEdges(m("pass"))).toEqual([]);
+    expect(defectEdges(m("open", "gone"))).toEqual([]);
+  });
+});
+
+describe("a card's line (PRD mission-map-git-criteria B20, B28)", () => {
+  it("says what a working node has left, what a planned one waits for, and what an outside one watches", () => {
+    const m = mission("m", { nodes: [node("core", { status: "working", pr: 1703 }), node("ui", { depends_on: ["core"] })] });
+    const working = node("w", { status: "working", criteria: [line("c1", "own", { state: "pass" }), line("review", "review"), line("ci", "ci", { state: "fail" })] });
+    expect(cardLine(m, working, null, t)).toEqual({ text: "left: review, CI", attention: false });
+    expect(cardLine(m, { ...working, line: "replay 19/31" }, null, t)?.text).toBe("replay 19/31");
+    expect(cardLine(m, m.nodes[1]!, null, t)).toEqual({ text: "waiting for #1703", attention: false });
+    const outside = node("x", { kind: "external", delivery: null, external: { pr: 1232 }, status: "waiting" });
+    expect(cardLine(m, outside, null, t)?.text).toBe("waiting for main");
+    expect(cardLine(m, { ...outside, unread: true }, null, t)?.text).toBe("Could not check");
+    expect(cardLine(m, { ...outside, status: "failed" }, null, t)).toEqual({ text: "Closed without merge", attention: true });
+    // Finished, it still says where it ended (B19).
+    expect(cardLine(m, { ...outside, status: "done" }, null, t)).toEqual({ text: "In main", attention: false });
+    expect(cardLine(m, node("d", { status: "done", pr: 9, pr_state: "mergeable" }), null, t)).toBeNull();
+  });
+});
+
+describe("the operator's turn (PRD mission-map-git-criteria B18, B20, B25)", () => {
+  const none = () => null;
+  it("puts the decision first, then a worker the core raised, an outside PR closed unmerged and the merge order, and nothing an agent carries", () => {
+    const nodes = [
+      node("api", { status: "working", pane_id: "p2" }),
+      node("ui", { status: "working", pane_id: "p3" }),
+      node("outside", { kind: "external", delivery: null, external: { pr: 1232 }, status: "failed" }),
+    ];
+    const rows: Record<string, Partial<AgentRow>> = {
+      p2: { escalation: { cause: "child_blocked", letter_id: null, since_unix_ms: 1, human_notice: true }, request: { verb: "blocked", verb_since_unix_ms: 1, line: "Login expired", end: "blocked", request: null, later_by: null, pull_requests: [] } },
+      // A blocked label its Conductor can handle stays on the card.
+      p3: { request: { verb: "blocked", verb_since_unix_ms: 1, line: "Needs a token", end: "blocked", request: null, later_by: null, pull_requests: [] } },
+    };
+    const row = (n: MissionNode) => (n.pane_id ? ((rows[n.pane_id] as AgentRow | undefined) ?? null) : null);
+    const items = turnItems(mission("m", { decision: "Rail or slot?", nodes }), row);
+    expect(items.map((item) => item.kind)).toEqual(["decision", "worker_blocked", "outside_closed"]);
+    expect(items[1]).toMatchObject({ node: { key: "api" }, cause: "child_blocked", line: "Login expired" });
+    const raisedOnly = { ...rows.p2!, request: undefined };
+    expect(turnItems(mission("m", { nodes: [nodes[0]!] }), () => raisedOnly as AgentRow)[0]).toMatchObject({ kind: "worker_blocked", line: null });
+  });
+
+  it("lists what waits for main in the Conductor's merge order while the mission waits to merge, a branch-only one as a join", () => {
+    const prs = [node("ui", { status: "done", pr: 1705, pr_state: "mergeable" }), node("core", { status: "done", pr: 1703, pr_state: "mergeable" }), node("done", { status: "done", pr: 1700, pr_state: "merged" })];
+    const merge = turnItems(mission("m", { status: "merge_wait", nodes: prs, merge_order: ["core", "ui"] }), none);
+    expect(merge).toHaveLength(1);
+    expect(merge[0]).toMatchObject({ kind: "landing", git: false });
+    expect(merge[0]!.kind === "landing" && merge[0]!.nodes.map((n) => n.key)).toEqual(["core", "ui"]);
+    const branches = [node("a", { status: "done", delivery: "direct", branch: "a" }), node("b", { status: "done", delivery: "direct", branch: "b" })];
+    expect(turnItems(mission("m", { status: "merge_wait", nodes: branches }), none)[0]).toMatchObject({ kind: "landing", git: true });
+  });
+
+  it("asks for a takeover when no Conductor holds an open mission, and is empty once the mission ended", () => {
+    const gone = { pane_id: "p1", name: "c", agent_kind: "claude", session: null, present: false, takes_answers: true };
+    expect(turnItems(mission("m", { conductor: gone }), none).map((item) => item.kind)).toEqual(["takeover"]);
+    expect(turnItems(mission("m", { status: "done", conductor: gone, decision: "old" }), none)).toEqual([]);
+  });
 });
