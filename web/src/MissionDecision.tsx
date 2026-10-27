@@ -37,7 +37,8 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
   const writeButton = useRef<HTMLButtonElement>(null);
   const field = useRef<HTMLInputElement>(null);
   const returnFocus = useRef(false);
-  const waited = useElapsed(question?.asked_at_unix_ms ?? null);
+  // While the mission's device does not answer, the wait is not counted on (B35).
+  const waited = useElapsed(mission.stale ? null : (question?.asked_at_unix_ms ?? null));
   const stopped = question?.node ? (mission.nodes.find((node) => node.key === question.node) ?? null) : null;
   const answer = mission.answer?.key === key ? mission.answer : null;
   // Sending an unconfirmed answer again shows it sending until the core moves it on.

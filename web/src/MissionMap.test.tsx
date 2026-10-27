@@ -202,6 +202,8 @@ it("turns the choices off with a reason when no Conductor or no device can read 
   try {
     expect([...offline.container.querySelectorAll<HTMLButtonElement>("[data-mission-option]")].every((button) => button.disabled)).toBe(true);
     expect(offline.q("[data-mission-banner-reason]")?.textContent).toBe("mini is not responding · answer once it is back");
+    // The wait is not counted while the device is silent (B35).
+    expect(offline.q("[data-mission-banner-waited]")).toBeNull();
   } finally { await offline.unmount(); }
   // An agent the doorbell does not ring takes its answer in the conversation only.
   const unsupported = await mount({ items: [asked({ conductor: { ...mission().conductor, agent_kind: "opencode", takes_answers: false } })] });
