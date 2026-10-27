@@ -10,11 +10,11 @@ publish = false
 # state, so those tests build in seconds on a runner that has no workspace.
 
 [dependencies]
-interprocess = "=2.4.4"
+interprocess = "=2.4.6"
 trash = { version = "=5.2.9", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
-libc = "=0.2.190"
+libc = "=0.2.191"
 notify = "=8.2.0"
 
 [target.'cfg(windows)'.dependencies]
