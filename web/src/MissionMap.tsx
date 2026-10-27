@@ -132,9 +132,16 @@ function MissionBody({ mission, actions }: { mission: Mission; actions: Actions 
 }
 
 /**
- * The map shrunk to the width it has, never grown: a wide row of nodes stays
- * one row, so what waits on what is read at a glance. The box holds the
- * shrunk size, so the map scrolls only down.
+ * The smallest the map is drawn: below it a card's caption stops being
+ * readable, so a slot narrower than that scrolls the map sideways instead.
+ */
+const MIN_SCALE = 0.8;
+
+/**
+ * The map shrunk to the width it has, never grown and never below
+ * `MIN_SCALE`: a wide row of nodes stays one row, so what waits on what is
+ * read at a glance. The box holds the shrunk size, so the map scrolls down,
+ * and sideways only in a slot too narrow for that floor.
  */
 function FitWidth({ children }: { children: ReactNode }) {
   const room = useRef<HTMLDivElement>(null);
@@ -148,7 +155,7 @@ function FitWidth({ children }: { children: ReactNode }) {
       // Layout sizes, which a transform does not change.
       const width = inner.offsetWidth;
       const height = inner.offsetHeight;
-      const scale = width > outer.clientWidth ? outer.clientWidth / width : 1;
+      const scale = width > outer.clientWidth ? Math.max(MIN_SCALE, outer.clientWidth / width) : 1;
       setDrawn((current) => (current?.scale === scale && current.width === width && current.height === height ? current : { scale, width, height }));
     };
     measure();
@@ -160,7 +167,7 @@ function FitWidth({ children }: { children: ReactNode }) {
   }, []);
   const scale = drawn?.scale ?? 1;
   return (
-    <div ref={room} className="min-w-0" data-mission-scale={scale.toFixed(2)}>
+    <div ref={room} className="min-w-0 overflow-x-auto" data-mission-scale={scale.toFixed(2)}>
       <div className="relative" style={drawn ? { width: drawn.width * scale, height: drawn.height * scale } : undefined}>
         <div ref={content} className={cn("w-max origin-top-left", drawn && "absolute left-0 top-0")} style={scale < 1 ? { transform: `scale(${scale})` } : undefined}>
           {children}

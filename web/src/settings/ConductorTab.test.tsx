@@ -67,7 +67,7 @@ async function mount(settings: ConductorSettings) {
   };
 }
 
-it("shows who checks, the agent and the other-company preference for the Conductor's call, and the count and rule only for several", async () => {
+it("shows who checks, the agent and the other-company preference for the Conductor's call, the count and rule only for several, and a model and effort only for a chosen agent", async () => {
   const tab = await mount(DEFAULT_CONDUCTOR);
   try {
     expect(tab.group("review").querySelector("h3")?.textContent).toBe("Review defaults");
@@ -82,6 +82,10 @@ it("shows who checks, the agent and the other-company preference for the Conduct
     expect(several.fields("verify")).toEqual(["mode", "count", "rule", "agent", "other_vendor"]);
     expect(several.group("verify").querySelector('[data-check-field="count"]')?.textContent).toBe("3");
   } finally { await several.unmount(); }
+  const chosen = await mount({ ...DEFAULT_CONDUCTOR, checkers: { review: { ...DEFAULT_CHECKERS.review, mode: "one", agent: "codex", effort: "high" }, verify: DEFAULT_CHECKERS.verify } });
+  try {
+    expect(chosen.fields("review")).toEqual(["mode", "agent", "model", "effort", "other_vendor"]);
+  } finally { await chosen.unmount(); }
 });
 
 it("sends both defaults whole when one field of one changes", async () => {

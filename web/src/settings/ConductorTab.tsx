@@ -220,9 +220,19 @@ function CheckGroup({ kind, check, last, onChange }: { kind: CheckKind; check: C
                 {PROVIDER_KINDS.map((option) => <SelectItem key={option} value={option}><AgentMark kind={option} />{providerLabel(option)}</SelectItem>)}
               </SelectContent>
             </Select>
-            {agent && catalog ? <ModelMenu kind={agent} value={check.model} {...catalog} onChange={(model) => onChange({ ...check, model })} /> : null}
-            {efforts.length > 0 ? <EffortChoice efforts={efforts} value={check.effort} onChange={(effort) => onChange({ ...check, effort })} data-check-field="effort" /> : null}
           </Row>
+          {agent && catalog ? (
+            <Row label={t("conductor.column.model")}>
+              <span className="w-(--size-settings-control-w) min-w-0" data-check-field="model">
+                <ModelMenu kind={agent} value={check.model} {...catalog} onChange={(model) => onChange({ ...check, model })} />
+              </span>
+            </Row>
+          ) : null}
+          {efforts.length > 0 ? (
+            <Row label={t("conductor.column.effort")}>
+              <EffortChoice efforts={efforts} value={check.effort} onChange={(effort) => onChange({ ...check, effort })} data-check-field="effort" />
+            </Row>
+          ) : null}
           <Row label={t("conductor.check.otherVendor")}>
             <Switch checked={check.other_vendor} aria-label={t("conductor.check.otherVendor")} onCheckedChange={(other_vendor) => onChange({ ...check, other_vendor })} data-check-field="other_vendor" />
           </Row>
