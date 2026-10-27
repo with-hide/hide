@@ -149,6 +149,18 @@ fn write<T>(
         .map_err(|error| format!("could not be replaced: {error}"))
 }
 
+/// Writes `bytes` to `path` unless a file is there already, which is the
+/// earliest copy and is kept: a store's copy of the file a schema conversion
+/// read, which a build from before can be put back on. Whether it wrote.
+pub(crate) fn keep_first_copy(path: &Path, bytes: &[u8]) -> Result<bool, String> {
+    if path.exists() {
+        return Ok(false);
+    }
+    hide_platform::fs::atomic::write_file(path, bytes, hide_platform::fs::Access::Private)
+        .map(|_| true)
+        .map_err(|error| format!("could not be written: {error}"))
+}
+
 /// The file's bytes, or `None` when there is no file; a file past `cap` is
 /// refused rather than read.
 pub(crate) fn read_capped(path: &Path, cap: u64) -> Result<Option<Vec<u8>>, String> {

@@ -1911,16 +1911,7 @@ impl MissionStore {
             return;
         };
         let backup = hide_kit::layout::missions_before_criteria(directory);
-        let outcome = if backup.exists() {
-            Ok(false)
-        } else {
-            hide_platform::fs::atomic::write_file(
-                &backup,
-                bytes,
-                hide_platform::fs::Access::Private,
-            )
-            .map(|_| true)
-        };
+        let outcome = crate::latest_file::keep_first_copy(&backup, bytes);
         crate::diagnostic!(serde_json::json!({
             "component": "missions",
             "kind": "missions.converted",
