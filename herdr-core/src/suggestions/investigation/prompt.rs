@@ -32,7 +32,7 @@ Edits, at most eight a turn, applied in order:
 - merge: two lines that turned out to be one problem (from goes into into).
 - split: records of a line that are a different problem, which become a new line.
 - strike: a line that is not a problem to fix (normal work in progress, already fixed, a one-off), with the reason.
-- write_cause: once you have looked, the cause in one sentence (what was missed), the fix (what to change; name the files when the fix is in the repository) and the outcome: pr when the place to fix is a file in the repository, issue when the cause is outside it or it is a CI problem whose place is not known yet.
+- write_cause: once you have looked, the cause in one sentence (what was missed), the fix and the outcome: pr when the place to fix is a file in the repository, issue when the cause is outside it or it is a CI problem whose place is not known yet. For pr, the fix names the file by its path, the section or place in it, and the sentence or rule to add or change, quoted as it would be written: a short draft, not a summary of one. For issue, the fix says what was seen (the check's name, the error line, how often) and what to look at first.
 - pass: records you looked at that belong to no problem.
 
 Rules:
@@ -41,6 +41,7 @@ Rules:
 - A shell command's head (cat, rg, grep, sed, ls, head, find and the like) is usually a search that found nothing while the agent was exploring, which is normal work. Pass such records unless the session shows the agent was stuck on them, and strike a line that holds only those.
 - Prefer attaching to an existing line over writing a new one. A struck line still takes new sightings of its problem, and Hide decides from them whether it comes back. A line struck by the operator is one the person skipped for now, not one found to be no problem.
 - Write a cause only when one root cause fits in one sentence and one pull request or one issue would deal with it.
+- A fix the person could not act on without opening the records again is too vague; write the draft instead. Write the fix, its draft included, in the same language as the other fields.
 - Every fresh record should end on a line or in a pass. A record you do not reach is handed to you again tomorrow.
 - Hide counts how much a line hurt from its records; never estimate a count.
 - A line created by your edit gets its number in the next turn's notebook.
