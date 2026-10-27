@@ -1402,7 +1402,11 @@ mod tests {
         std::fs::write(&ours, b"new herdr").unwrap();
         let theirs = dir.path().join("theirs");
         std::fs::write(&theirs, b"old herdr").unwrap();
-        let before = std::fs::metadata(&theirs).unwrap().ino();
+        // Held open as a running process holds its program: the old file
+        // keeps its inode, which the file system could otherwise give to the
+        // new one at once and make the two look the same.
+        let mut running = std::fs::File::open(&theirs).unwrap();
+        let before = running.metadata().unwrap().ino();
         PathUpdate::of(&ours, &theirs).run().unwrap();
         assert_eq!(std::fs::read(&theirs).unwrap(), b"new herdr");
         let after = std::fs::metadata(&theirs).unwrap();
@@ -1412,5 +1416,8 @@ mod tests {
             before,
             "a new file, not the running one rewritten"
         );
+        let mut old = Vec::new();
+        std::io::Read::read_to_end(&mut running, &mut old).unwrap();
+        assert_eq!(old, b"old herdr", "the running copy is left as it was");
     }
 }
