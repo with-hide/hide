@@ -104,7 +104,10 @@ jobs:
         run: bash scripts/verify-web.sh desktop electron-install
       - name: Build the web shell
         # The desktop app serves web/dist through the hided it starts.
-        timeout-minutes: 5
+        # A macOS runner takes 4 to 5 minutes here (236 to 298 s in the
+        # 25 verify runs before 2026-10-28), so a 5-minute cap failed
+        # main on a slow runner rather than on a slow build.
+        timeout-minutes: 10
         run: bash scripts/verify-web.sh web build
       - name: Install Playwright Chromium
         # The browser spec opens a page in Chromium beside the Electron app.
