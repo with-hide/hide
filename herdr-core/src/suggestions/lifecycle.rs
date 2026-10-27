@@ -28,6 +28,28 @@ pub struct LineLife {
     /// after that is for good.
     #[serde(default)]
     pub returned_at_unix_ms: Option<u64>,
+    /// What it stood on when the operator last skipped it (D-43), kept here
+    /// because its records move to newer heads and leave the ledger with
+    /// age: a return is measured against this, never against the records
+    /// left.
+    #[serde(default)]
+    pub skipped_with: Option<Evidence>,
+}
+
+/// The sessions and pull requests behind a line: the units its score
+/// counts (D-12).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Evidence {
+    #[serde(default)]
+    pub sessions: BTreeSet<SessionRef>,
+    #[serde(default)]
+    pub prs: BTreeSet<u32>,
+}
+
+impl Evidence {
+    pub(crate) fn units(&self) -> usize {
+        self.sessions.len() + self.prs.len()
+    }
 }
 
 impl LineLife {

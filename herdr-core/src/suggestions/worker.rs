@@ -757,8 +757,16 @@ impl Worker {
             return;
         };
         let mut life = lives.get(&line_id).cloned().unwrap_or_default();
+        let closed = change == AttemptMove::Closed;
         if !applying::moved(&mut line, &mut life, started, change, now) {
             return;
+        }
+        if closed {
+            // Closed unmerged, the line is skipped as `넘어가기` skips it.
+            match store.index(project, &notebook) {
+                Ok(index) => life.skipped_with = Some(scoring::evidence(&line, &index, |_| true)),
+                Err(code) => return log_store("attempt", &code),
+            }
         }
         if let Err(code) = store.save_line(project, &line, &life) {
             return log_store("attempt", &code);
@@ -1071,7 +1079,7 @@ impl Worker {
             }));
             return;
         };
-        let life = lives.get(&line_id).cloned().unwrap_or_default();
+        let mut life = lives.get(&line_id).cloned().unwrap_or_default();
         match action {
             LineAction::Dismiss => {
                 // An attempt still at work keeps its line; a failed one, or
@@ -1088,12 +1096,17 @@ impl Worker {
                     }));
                     return;
                 }
+                let index = match store.index(project, &notebook) {
+                    Ok(index) => index,
+                    Err(code) => return log_store("action", &code),
+                };
                 line.struck = Some(Strike {
                     by: StruckBy::Operator,
                     reason: None,
                     at_unix_ms: now,
                 });
                 line.stage = Stage::Candidate;
+                life.skipped_with = Some(scoring::evidence(&line, &index, |_| true));
             }
             LineAction::Restore => {
                 if !line
@@ -1134,10 +1147,17 @@ impl Worker {
             let index = store.index(project, &notebook)?;
             Ok((state, notebook, lives, index))
         });
-        let (mut state, notebook, lives, index) = match loaded {
+        let (mut state, notebook, mut lives, index) = match loaded {
             Ok(loaded) => loaded,
             Err(code) => return log_store("raise", &code),
         };
+        for id in keep_skip_evidence(&notebook, &mut lives, &index) {
+            if let Some(line) = notebook.line(id)
+                && let Err(code) = store.save_line(project, line, &lives[&id])
+            {
+                return log_store("raise", &code);
+            }
+        }
         if !state.settings.active() || state.uninvestigated {
             return;
         }
@@ -1153,8 +1173,12 @@ impl Worker {
                 line.stage == Stage::Candidate
                     && line.struck.as_ref().is_some_and(|strike| {
                         strike.by == StruckBy::Operator
-                            && lives.get(&line.id).is_none_or(LineLife::skip_may_return)
-                            && scoring::outgrew_skip(line, &index, strike.at_unix_ms)
+                            && lives.get(&line.id).is_some_and(|life| {
+                                life.skip_may_return()
+                                    && life.skipped_with.as_ref().is_some_and(|with| {
+                                        scoring::outgrew_skip(line, &index, strike.at_unix_ms, with)
+                                    })
+                            })
                     })
             })
             .map(|line| Line {
@@ -1523,6 +1547,35 @@ impl Worker {
     }
 }
 
+/// Gives each line skipped before a skip kept its evidence (D-43) that
+/// evidence once, read from its records up to the skip; answers the lines
+/// it gave it to, for the caller to save.
+fn keep_skip_evidence(
+    notebook: &Notebook,
+    lives: &mut BTreeMap<LineId, LineLife>,
+    index: &RecordIndex,
+) -> Vec<LineId> {
+    let mut kept = Vec::new();
+    for line in &notebook.lines {
+        let Some(strike) = line
+            .struck
+            .as_ref()
+            .filter(|strike| strike.by == StruckBy::Operator)
+        else {
+            continue;
+        };
+        let life = lives.entry(line.id).or_default();
+        if life.skipped_with.is_some() || !life.skip_may_return() {
+            continue;
+        }
+        life.skipped_with = Some(scoring::evidence(line, index, |record| {
+            record.at_unix_ms <= strike.at_unix_ms
+        }));
+        kept.push(line.id);
+    }
+    kept
+}
+
 /// What a read's evidence needs beyond the index: each pull request's
 /// address from its record, and which sessions the link record on the
 /// Project's machine still holds (B10).
@@ -1644,7 +1697,7 @@ pub(crate) fn local_day(unix_ms: u64, zone: &jiff::tz::TimeZone) -> String {
 mod tests {
     use super::*;
     use crate::model::{SuggestionGroup, SuggestionState, SuggestionsStatus};
-    use crate::suggestions::ledger::SessionRef;
+    use crate::suggestions::ledger::{RecordEntry, RecordId, SessionRef};
     use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
     const START: u64 = 400 * policy::DAY_MS + 9 * 3_600_000;
@@ -2290,6 +2343,102 @@ mod tests {
             !read.rows[0].returned_after_skip,
             "the operator brought it back"
         );
+    }
+
+    /// D-43: the line keeps what it stood on at the skip, so the records
+    /// leaving the ledger with age do not lower what a return has to reach.
+    #[test]
+    fn a_skip_is_measured_against_its_evidence_after_the_records_are_gone() {
+        let fixture = Fixture::new();
+        fixture.open();
+        fixture.fail_in_sessions("cargo test", &["s1", "s2", "s3", "s4", "s5"]);
+        fixture.wake_and_wait_out_the_delay();
+        fixture.read_until(|read| !chosen(read).is_empty());
+        fixture.send(Command::Action {
+            project: project(),
+            line: LineId(1),
+            action: LineAction::Dismiss,
+        });
+        fixture.read_until(|read| chosen(read).is_empty());
+
+        // The five sessions' records are past the ledger's keeping now.
+        fixture.clock.fetch_add(
+            policy::RECORD_RETENTION_MS + policy::DAY_MS,
+            Ordering::SeqCst,
+        );
+        fixture.fail_in_sessions("cargo test", &["s6", "s7", "s8"]);
+        fixture.wake_and_wait_out_the_delay();
+        let read = fixture.read_until(|read| read.status == SuggestionsStatus::NoneToday);
+        assert!(
+            chosen(&read).is_empty(),
+            "three new sessions of five, though none of the five is left"
+        );
+
+        fixture.clock.fetch_add(policy::DAY_MS, Ordering::SeqCst);
+        fixture.fail_in_sessions("cargo test", &["s9", "s10"]);
+        fixture.wake_and_wait_out_the_delay();
+        let read = fixture.read_until(|read| !chosen(read).is_empty());
+        assert!(read.rows[0].returned_after_skip);
+    }
+
+    /// D-43: a line skipped before a skip kept its evidence takes it once,
+    /// from its records up to the skip.
+    #[test]
+    fn a_line_skipped_without_kept_evidence_takes_it_from_its_records_once() {
+        let entry = |id: u64, session: &str, at: u64| RecordEntry {
+            id: RecordId(id),
+            signal: Signal::FailedTool,
+            tag: "cargo test".into(),
+            session: Some(SessionRef {
+                agent: "claude".into(),
+                id: session.into(),
+            }),
+            pr: None,
+            at_unix_ms: at,
+            always: false,
+            line: None,
+            fresh: true,
+        };
+        let index = RecordIndex {
+            entries: vec![
+                entry(1, "s1", START - 1),
+                entry(2, "s2", START),
+                entry(3, "s3", START + 1),
+            ],
+        };
+        let mut notebook = Notebook::default();
+        let line = notebook
+            .apply(
+                NotebookEdit::NewLine {
+                    discomfort: None,
+                    records: vec![RecordId(1), RecordId(2), RecordId(3)],
+                    basis: Some((Signal::FailedTool, "cargo test".into())),
+                    outcome: Some(Outcome::Pr),
+                },
+                &index,
+                START + 1,
+            )
+            .unwrap()
+            .created
+            .unwrap();
+        notebook.lines[0].struck = Some(Strike {
+            by: StruckBy::Operator,
+            reason: None,
+            at_unix_ms: START,
+        });
+        let mut lives = BTreeMap::new();
+
+        assert_eq!(keep_skip_evidence(&notebook, &mut lives, &index), [line]);
+        let kept = lives[&line].skipped_with.as_ref().unwrap();
+        assert_eq!(
+            kept.sessions
+                .iter()
+                .map(|session| session.id.as_str())
+                .collect::<Vec<_>>(),
+            ["s1", "s2"],
+            "s3 came after the skip"
+        );
+        assert!(keep_skip_evidence(&notebook, &mut lives, &index).is_empty());
     }
 
     #[test]
