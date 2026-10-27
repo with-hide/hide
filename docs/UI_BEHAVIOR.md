@@ -891,15 +891,15 @@ The core derives the counts and the 할 일 only on a publish whose inputs moved
 
 ## Hide AI: the Hide AI tool
 
-Web owners: `web/src/HideAiTool.tsx` (the head, the tabs, the one-time line, the off state), `web/src/SuggestionsTab.tsx` and `web/src/suggestionList.ts` (the 제안 tab), `web/src/HideAiSettings.tsx` (⚙), `web/src/components/hide-ai-icon.tsx` (the icon), `web/src/MemoryTab.tsx` and `web/src/memoryList.ts` (the Memory tab); core owners: `herdr-core/src/model/suggestions.rs` and `herdr-core/src/runtime/suggestions.rs` (the `suggestions` section), `herdr-core/src/runtime/project_memory.rs` and `herdr-core/src/runtime/memory_promotion.rs` (Memory).
+Web owners: `web/src/HideAiTool.tsx` (the head, the tabs, the one-time line, the off state), `web/src/SuggestionsTab.tsx` and `web/src/suggestionList.ts` (the 제안 tab), `web/src/HideAiSettings.tsx` (⚙), `web/src/MemoryTab.tsx` and `web/src/memoryList.ts` (the Memory tab); core owners: `herdr-core/src/model/suggestions.rs` and `herdr-core/src/runtime/suggestions.rs` (the `suggestions` section), `herdr-core/src/runtime/project_memory.rs` and `herdr-core/src/runtime/memory_promotion.rs` (Memory).
 Hide AI is the rail's second tool, under the Project tool, in the place Memory had, and shows the Project of the checkout in front (PRD hide-ai-suggestions D-01, B1).
-Its icon is Hide's owl face drawn as a line with a small sparkle at its top right, one colour like every rail icon (D-25).
+Its icon is the brain the Memory tool used, one colour like every rail icon (D-25).
 Inside it are two tabs, `제안` and `Memory`; each tab carries a warning-coloured number of what the operator has to do in it, none at 0, and the rail icon carries their sum, its hint ending in `제안 3 · Memory 1`.
 The core counts both: 제안's number is its new suggestions and its rows that are the operator's turn, Memory's is its document disagreements, and both are 0 while the head switch is off (B3).
 The lane keeps the tool's id `memory`, so a saved lane, a chord and `Toggle Hide AI tool` (`toggle_lane_memory`) reach it as before; ⇧⌘L, a Memory card number under a conversation and Project Settings' `Open project Memory` open it on the Memory tab, and a Needs You row on 제안.
 The tab shown and the 제안 row open are this window's, not the core's.
 
-Its head reads `Hide AI · <project>` beside the owl, then the Hide AI chip (the agent Hide AI asks now with its logo, the listed agent standing in while Runs on is past the usage limit), the switch for all of Hide AI in this Project, ⚙ and `✕`, which closes the tool column.
+Its head reads `Hide AI · <project>` beside the brain, then the Hide AI chip (the agent Hide AI asks now with its logo, the listed agent standing in while Runs on is past the usage limit), the switch for all of Hide AI in this Project, ⚙ and `✕`, which closes the tool column.
 The switch is on from the start; turned off, neither 제안 nor Memory reads anything, Hide AI makes no call for the Project, the rail and the tabs count nothing, and the tool says `Hide AI가 꺼져 있어요` with one line on what turning it on reads (B3).
 Turning it on gives each of the two back as it was.
 The first time the tool opens with Hide AI on, two lines above the tabs say that investigating uses the operator's own subscription and what is sent; they stay while the tool stays open and are not shown again (B3, D-36).
@@ -909,27 +909,31 @@ While the Project is still being read the tool says so; a Project that is not re
 
 The 제안 tab lists what Hide AI suggests fixing, the fixes under way and the ones applied (D-05 to D-07).
 The core decides every group, mark, hold and count; the screen draws them and every press is one `suggestion_action` (`apply`, `dismiss`, `restore`, `retry`) naming the row by its id (`s12` for a suggestion, `m72` for a memory on its way into the documents).
-The tab has one line for its state and no more (D-44): `다음에 Hide를 열 때 첫 조사` before the first investigation, `오늘은 제안 없음` when today's run left nothing open, and `제안이 꺼져 있어요` with `켜기` when ⚙ turned suggestions off; while a run goes, `조사 중` sits small beside the owl in the head and the rows stay as they were, and after a run that could not investigate `조사 못 함` sits there the same way until a run investigates, nothing new having risen from it (D-35).
+The tab has one line for its state and no more (D-44): `다음에 Hide를 열 때 첫 조사` before the first investigation, `오늘은 제안 없음` when today's run left nothing open, and `제안이 꺼져 있어요` with `켜기` when ⚙ turned suggestions off; while a run goes, `조사 중` sits small in the head and the rows stay as they were, and after a run that could not investigate `조사 못 함` sits there the same way until a run investigates, nothing new having risen from it (D-35).
 A failure the operator cannot act on, such as a run that hit its turn or time limit or the usage limit, goes to the diagnostic log and draws nothing.
 
 The rows fall into `고를 것`, `반영 중` and the folded `반영됨`, each head with its count, and a row's mark says whose move it is (D-37): a green open circle for a new suggestion, a yellow dot for the operator's turn, a blue turning ring with dimmed text while Hide AI works; a row under 반영됨 has no mark.
-A suggestion's title is its discomfort in a person's words, or, for a line the grouping wrote alone, its signal and tag (`같은 명령이 계속 실패해요: cargo test`); under it `놓친 것 · <cause>`, and its buttons (B10).
-Pressing the row opens it in place to `고칠 것` and `근거`, each piece of evidence a line with its agent's logo, `세션` or `PR #n`, the signal and its time; a session opens its record and a pull request its card, and evidence whose session or pull request is gone stays dimmed and opens nothing.
-Its button is `PR 만들기`, or `이슈 만들기` when the fix is outside the repository or not settled yet (B14); with GitHub not connected or not permitted `GitHub 연결 필요` stands in the button's place and the suggestion stays (B18).
-`⋯ › 안 함` takes the suggestion away, and the same problem is not suggested again however much piles up until ⚙ restores it (B16).
+A suggestion's title is its discomfort in a person's words, or, for a line the grouping wrote alone, its signal and tag (`같은 명령이 계속 실패해요: cargo test`); under it `놓친 것 · <cause>`, then `고칠 것`, so what a press does is read before it, and its buttons (B10, D-51).
+Pressing the row opens it in place to `근거`, each piece of evidence a line with its agent's logo, `세션` or `PR #n`, the signal and its time; a session opens its record and a pull request its card, and evidence whose session or pull request is gone stays dimmed and opens nothing.
+Its button is `문서 고치는 PR 열기`, where an agent edits the repository's files and opens a pull request, or, in the secondary style, `이슈로 남기기` when the fix is outside the repository or not settled yet, where Hide opens an issue from CI facts alone (B14); an issue's `고칠 것` is the core's reason, or `문서로는 못 고쳐요. CI 기록을 담아 이슈로 남겨요` when it gives none.
+With GitHub not connected or not permitted `GitHub 연결 필요` stands in the button's place and the suggestion stays (B18).
+Beside every choice's button, and beside `GitHub 연결 필요`, is a quiet `넘어가기` button; there is no `⋯` (D-51).
+`넘어가기` means not now: the row goes away, and new evidence of the same problem gathers on it; when as much piles up again as when it was skipped, it rises once more reading `넘어갔지만 다시 생겼어요` in the warning colour, and skipped again it does not rise (D-43, B16).
 A suggestion that came back after its fix merged reads `문서로는 안 됐어요` with the last pull request, and its fix is one step stronger (B15).
 In a Project whose ⚙ says `자동으로 PR 열기` a new suggestion goes to 반영 중 by itself and wears `자동`; while an automatic pull request waits unreviewed, the next one waits in 고를 것 with `자동 PR 리뷰를 기다려요` and can still be applied by hand (B13).
 Hide never merges.
 
-A row being applied says what its agent does: `PR 만드는 중` (`이슈 만드는 중`) with the time since it started and `에이전트 ↗` while the agent lives, then `PR #n 리뷰` in the warning colour with the pull request once it is open and the operator's turn; `CI 실패` in the destructive colour, or what stopped it in plain words (`PR 없이 끝났어요`, `에이전트가 시작하지 못했어요`, `셸이 시작을 마치지 못했어요`, `아직 만들어지지 않아 문서는 그대로 뒀어요`, with the core's detail, such as the shell's question or the agent's reason, on a quiet line under it), keeps the row there with `다시 시도` and `안 함` (B11, B12); a code this build has no words for reads `PR 없이 끝났어요`.
+A row being applied says what its agent does: `PR 만드는 중` (`이슈 만드는 중`) with the time since it started and `에이전트 ↗` while the agent lives, then `PR #n 리뷰` in the warning colour with the pull request once it is open and the operator's turn; `CI 실패` in the destructive colour, or what stopped it in plain words (`PR 없이 끝났어요`, `에이전트가 시작하지 못했어요`, `셸이 시작을 마치지 못했어요`, `아직 만들어지지 않아 문서는 그대로 뒀어요`, with the core's detail, such as the shell's question or the agent's reason, on a quiet line under it), keeps the row there with `다시 시도` and `넘어가기` (B11, B12); a code this build has no words for reads `PR 없이 끝났어요`.
 An open issue reads `이슈 열림` with the issue.
 A merged row folds under `반영됨 N · 효과 있었음 M`; while the watch runs its line is the quiet `지켜보는 중 · 세션 2/5`, a row whose problem did not come back reads `효과 있었음`, and nothing else is said (B15).
 A row being applied whose agent lives is also one row in the sidebar's and the 태스크 list's Needs You while it is the operator's turn (see Work Hide AI does for a home), and choosing that row opens this tool on 제안 with the row open (B11); a memory on its way into the documents is one of these rows from its first offer, named by its memory with its number (`m72`) before the title, and so is a promotion already under way before this change (D-02, B2).
 
 ⚙ opens a sheet under the head (D-26, B19).
-At its top `조사하는 AI` and the chip of the agent Settings › Hide AI chose, which opens that page; when that agent cannot promise to only read (OpenCode), `이 AI로는 조사할 수 없음` stands under it and no investigation runs.
-The 제안 group has its own switch, `제안 양` (`적게`, `보통`, `많이`, each with what it means and how many a week), `반영 방식` (`확인하고 반영` or `자동으로 PR 열기`), one switch per signal, and `'안 함'으로 둔 제안 N`, which unfolds to each one with `되살리기`.
-A signal that cannot be read here is off with its reason under it: `GitHub 저장소가 아니에요` for CI and review, `Memory가 꺼져 있어요` for the operator's corrections (B5).
+At its top `조사하는 AI` and the chip of the agent Settings › Hide AI chose, which opens that page, and under it one line, `설정 › Hide AI의 순서를 따라요. 한도에 걸리면 다음 AI로` (D-53); when that agent cannot promise to only read (OpenCode), `이 AI로는 조사할 수 없음` stands under it and no investigation runs.
+The 제안 group has its own switch, `제안 양` (`적게`, `보통`, `많이`, each with what it means and how many a week), `반영 방식` (`확인하고 반영`, `버튼을 누르면 PR이나 이슈를 열어요`, or `자동으로 PR 열기`), `읽을 곳`, and `넘어간 제안 N개`, which unfolds to each one with `되살리기` and a quiet line saying whether it can still rise once (`다시 쌓이면 한 번 올라와요`) or not (`다시 올라오지 않아요`); restoring one lets the core judge it again on what piled up.
+`읽을 곳` has two switches (D-52): `세션 기록` (`실패한 명령 · 에이전트 막힘 · 내 정정 · 세션에 남은 문제`) and `GitHub` (`CI 실패 · 리뷰 지적`).
+The core keeps six signals; a switch shows on while any signal of its group that can be read is on, and one press is one `suggestion_settings` with `signal_group`, which turns the whole group (B5).
+`GitHub` is off with `GitHub 저장소가 아니에요` under it when the repository is not on GitHub; with Memory off, `Memory가 꺼져 있어 내 정정은 읽지 않아요` stands under `세션 기록`.
 The Memory group has Memory's own switch and `이 프로젝트의 기억 지우기`, which asks first, naming the Project and the number of memories.
 Last, one line on what is sent.
 With the head switch off every switch in the sheet is dimmed.

@@ -2230,7 +2230,7 @@ export type MemorySection = { project: ProjectMemory | null };
 export type SuggestionSignal = "failed_tool" | "agent_wait" | "correction" | "label_missed" | "check_failed" | "change_request";
 /** `suggestion_quantity`: how many suggestions come up a week (PRD hide-ai-suggestions D-09, D-10). */
 export type SuggestionQuantity = "few" | "normal" | "many";
-/** `suggestion_apply_mode`: whether a new suggestion waits for `PR 만들기` or opens its pull request by itself (D-28). */
+/** `suggestion_apply_mode`: whether a new suggestion waits for `문서 고치는 PR 열기` or opens its pull request by itself (D-28). */
 export type SuggestionApplyMode = "confirm" | "auto_pr";
 /** `suggestion_outcome`: what applying a suggestion makes (D-15, D-50). */
 export type SuggestionOutcome = "pr" | "issue";
@@ -2278,6 +2278,8 @@ export type SuggestionRow = {
   hold: "github_needed" | "auto_pr_unreviewed" | null;
   /** The problem came back after its fix merged (`문서로는 안 됐어요`); level 1 is a script or a check, 2 a hook. */
   escalated: { level: number; previous_pr_url: string | null } | null;
+  /** It rose again after a skip because new evidence piled up as much as before (`넘어갔지만 다시 생겼어요`, D-43). */
+  returned_after_skip: boolean;
   evidence: SuggestionEvidence[];
   attempt: {
     phase: SuggestionAttemptPhase;
@@ -2300,8 +2302,8 @@ export type SuggestionSettings = {
   quantity: SuggestionQuantity;
   apply_mode: SuggestionApplyMode;
   signals: SuggestionSignalSetting[];
-  /** Lines struck with `안 함`, which ⚙ restores (D-43). */
-  dismissed: { id: string; discomfort: string | null; basis: SuggestionBasis | null }[];
+  /** Lines skipped with `넘어가기`, which ⚙ restores (D-43); `may_return` while one rise is still left to it. */
+  dismissed: { id: string; discomfort: string | null; basis: SuggestionBasis | null; may_return: boolean }[];
 };
 
 /** One Project's 제안 tab (`suggestions.project`), opened by the same `memory_open` as its Memory tab. */
@@ -2330,8 +2332,11 @@ export type SuggestionsSection = { project: ProjectSuggestions | null };
 /** What the operator does to one row (`suggestion_action`). */
 export type SuggestionAction = "apply" | "dismiss" | "restore" | "retry";
 
+/** Where ⚙'s 읽을 곳 reads (D-52): the session records' four signals or GitHub's two; one switch turns its group. */
+export type SuggestionSignalGroup = "session" | "github";
+
 /** One ⚙ change (`suggestion_settings`); the fields left out stay as they are. */
-export type SuggestionSettingsPatch = { suggestions_enabled?: boolean; quantity?: SuggestionQuantity; apply_mode?: SuggestionApplyMode; signal?: { signal: SuggestionSignal; enabled: boolean } };
+export type SuggestionSettingsPatch = { suggestions_enabled?: boolean; quantity?: SuggestionQuantity; apply_mode?: SuggestionApplyMode; signal_group?: { group: SuggestionSignalGroup; enabled: boolean } };
 
 /** Where a pull request's issue link comes from: GitHub's closing reference or Hide's branch link. */
 export type LinkIssueSource = "closes" | "hide";

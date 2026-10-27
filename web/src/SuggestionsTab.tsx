@@ -1,10 +1,9 @@
-import { ChevronRightIcon, MoreHorizontalIcon } from "lucide-react";
+import { ChevronRightIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import { AgentLogo } from "./components/agent-logo";
 import { Elapsed } from "./components/elapsed";
 import { Button } from "./components/ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./components/ui/dropdown-menu";
 import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
@@ -124,6 +123,7 @@ function Row({ row, project, actions }: { row: SuggestionRow; project: ProjectSu
           {row.auto ? <span className="mt-xxs shrink-0 rounded-sm bg-secondary px-xs text-micro font-medium text-subtle-foreground" data-suggestion-auto="true">{t("suggestions.auto")}</span> : null}
         </div>
         <Lines row={row} open={open} project={project} actions={actions} />
+        <Fix row={row} open={open} />
         {open ? <Detail row={row} project={project} actions={actions} /> : null}
         <Buttons row={row} project={project} actions={actions} />
       </div>
@@ -131,7 +131,7 @@ function Row({ row, project, actions }: { row: SuggestionRow; project: ProjectSu
   );
 }
 
-/** The row's second line: 놓친 것 for a choice (with `문서로는 안 됐어요` when it came back), the attempt while it is applied, the watch once merged. */
+/** The row's second line: 놓친 것 for a choice (with `문서로는 안 됐어요` when it came back after a merge, `넘어갔지만 다시 생겼어요` after a skip), the attempt while it is applied, the watch once merged. */
 function Lines({ row, open, project, actions }: { row: SuggestionRow; open: boolean; project: ProjectSuggestions; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const working = row.state === "hide_ai_working";
@@ -144,6 +144,7 @@ function Lines({ row, open, project, actions }: { row: SuggestionRow; open: bool
           {row.escalated.previous_pr_url ? <PrLink project={project} actions={actions} url={row.escalated.previous_pr_url} label={previousPrLabel(t, row.escalated.previous_pr_url)} /> : null}
         </span>
       ) : null}
+      {row.returned_after_skip ? <span className="text-warning" data-suggestion-returned="true">{t("suggestions.returnedAfterSkip")}</span> : null}
       {row.group === "choose" && row.cause ? (
         <span className={cn("min-w-0 text-muted-foreground", !open && "truncate")} title={row.cause} data-suggestion-cause="true">
           <span className="font-medium text-subtle-foreground">{t("suggestions.cause")}</span> · {row.cause}
@@ -204,12 +205,30 @@ function AgentLink({ agentId, actions }: { agentId: string | null; actions: Acti
   );
 }
 
-/** A row in full (B10): 고칠 것 and the evidence it rests on; evidence that is gone stays, dimmed, and opens nothing. */
+/**
+ * 고칠 것 above a choice's buttons (D-51, B10, B14), so what a press does is
+ * read before it: the core's fix, or for an issue without one why it becomes
+ * an issue.
+ */
+function Fix({ row, open }: { row: SuggestionRow; open: boolean }) {
+  const { t } = useInterfaceTranslation();
+  if (row.group !== "choose") return null;
+  const text = row.fix ?? (row.outcome === "issue" ? t("suggestions.issueFix") : null);
+  if (!text) return null;
+  return (
+    <div className="col-start-2 flex min-w-0 flex-col gap-xxs" data-suggestion-fix={row.id}>
+      <span className="text-micro text-muted-foreground">{t("suggestions.fix")}</span>
+      <p className={cn("whitespace-pre-wrap break-words break-keep text-caption text-foreground", !open && "line-clamp-2")}>{text}</p>
+    </div>
+  );
+}
+
+/** A row in full (B10): the evidence it rests on, and 고칠 것 once it left the choice; evidence that is gone stays, dimmed, and opens nothing. */
 function Detail({ row, project, actions }: { row: SuggestionRow; project: ProjectSuggestions; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   return (
     <div className="col-start-2 flex min-w-0 flex-col gap-sm pt-xs" data-suggestion-detail={row.id}>
-      {row.fix ? (
+      {row.fix && row.group !== "choose" ? (
         <div className="flex flex-col gap-xxs">
           <span className="text-micro text-muted-foreground">{t("suggestions.fix")}</span>
           <p className="whitespace-pre-wrap break-words break-keep text-caption text-foreground">{row.fix}</p>
@@ -250,7 +269,7 @@ function Evidence({ evidence, project, actions }: { evidence: SuggestionEvidence
   );
 }
 
-/** A choice's `PR 만들기` or `이슈 만들기` and ⋯ › 안 함 (B10, B14, B16), `GitHub 연결 필요` in the button's place (B18); a failed attempt's `다시 시도` and `안 함` (B12). */
+/** A choice's `문서 고치는 PR 열기` or `이슈로 남기기` (B10, B14), `GitHub 연결 필요` in its place (B18), and a failed attempt's `다시 시도` (B12), each with a quiet `넘어가기` beside it (D-51, B16). */
 function Buttons({ row, project, actions }: { row: SuggestionRow; project: ProjectSuggestions; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const id = project.workspace_id;
@@ -262,27 +281,12 @@ function Buttons({ row, project, actions }: { row: SuggestionRow; project: Proje
       {offer === "github_needed" ? (
         <span className="text-caption text-muted-foreground" data-suggestion-github-needed="true">{t("suggestions.githubNeeded")}</span>
       ) : offer ? (
-        <Button className="pointer-events-auto" size="sm" onClick={() => actions.suggestionAction(id, row.id, "apply")} data-suggestion-apply={offer}>
+        <Button className="pointer-events-auto" size="sm" variant={offer === "issue" ? "secondary" : "default"} onClick={() => actions.suggestionAction(id, row.id, "apply")} data-suggestion-apply={offer}>
           {t(offer === "issue" ? "suggestions.makeIssue" : "suggestions.makePr")}
         </Button>
       ) : null}
-      {retry ? (
-        <>
-          <Button className="pointer-events-auto" size="sm" variant="outline" onClick={() => actions.suggestionAction(id, row.id, "retry")} data-suggestion-retry={row.id}>{t("suggestions.retry")}</Button>
-          <Button className="pointer-events-auto" size="sm" variant="ghost" onClick={() => actions.suggestionAction(id, row.id, "dismiss")} data-suggestion-dismiss={row.id}>{t("suggestions.dismiss")}</Button>
-        </>
-      ) : (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button className="pointer-events-auto ml-auto text-muted-foreground" size="icon-sm" variant="ghost" aria-label={t("suggestions.more")} data-suggestion-more={row.id}>
-              <MoreHorizontalIcon aria-hidden="true" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem onSelect={() => actions.suggestionAction(id, row.id, "dismiss")} data-suggestion-dismiss={row.id}>{t("suggestions.dismiss")}</DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      )}
+      {retry ? <Button className="pointer-events-auto" size="sm" variant="outline" onClick={() => actions.suggestionAction(id, row.id, "retry")} data-suggestion-retry={row.id}>{t("suggestions.retry")}</Button> : null}
+      <Button className="pointer-events-auto text-muted-foreground" size="sm" variant="ghost" onClick={() => actions.suggestionAction(id, row.id, "dismiss")} data-suggestion-dismiss={row.id}>{t("suggestions.dismiss")}</Button>
     </div>
   );
 }

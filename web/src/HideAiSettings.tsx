@@ -20,19 +20,23 @@ import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
 import type { MessageKey } from "./i18n/catalogs";
 import { cn } from "./lib/utils";
-import { catalogWorkspaces, type ProjectSuggestions, type SuggestionApplyMode, type SuggestionQuantity } from "./snapshot";
+import { catalogWorkspaces, type ProjectSuggestions, type SuggestionApplyMode, type SuggestionQuantity, type SuggestionSignal, type SuggestionSignalGroup } from "./snapshot";
 import { useShellStore } from "./store";
 import { suggestionTitle } from "./suggestionList";
 
 const QUANTITIES: readonly SuggestionQuantity[] = ["few", "normal", "many"];
 const APPLY_MODES: readonly SuggestionApplyMode[] = ["confirm", "auto_pr"];
-const SIGNALS_ON_GITHUB = new Set(["check_failed", "change_request"]);
+/** Where 읽을 곳 reads (D-52); the core keeps the six signals and one switch turns a group's. */
+const SIGNAL_GROUPS: readonly { group: SuggestionSignalGroup; signals: readonly SuggestionSignal[] }[] = [
+  { group: "session", signals: ["failed_tool", "agent_wait", "correction", "label_missed"] },
+  { group: "github", signals: ["check_failed", "change_request"] },
+];
 
 /**
  * The Hide AI tool's ⚙ (PRD hide-ai-suggestions D-26, D-27, B5, B13, B16,
  * B19): the AI that investigates, which Settings › Hide AI chooses; the
- * 제안 group (its own switch, how many, how fixes are applied, the signals,
- * the lines set to 안 함); the Memory group (its own switch and deleting its
+ * 제안 group (its own switch, how many, how fixes are applied, where it
+ * reads, the skipped lines); the Memory group (its own switch and deleting its
  * memories); and one line on what is sent. With the head switch off every
  * switch here is dimmed: nothing is read either way.
  */
@@ -78,24 +82,7 @@ export function HideAiSettings({ project, actions }: { project: ProjectSuggestio
             onChange={(mode) => actions.suggestionSettings(id, { apply_mode: mode as SuggestionApplyMode })}
             data="apply_mode"
           />
-          <div className="flex flex-col gap-xs" data-hide-ai-signals="true">
-            <span className="text-micro text-muted-foreground">{t("suggestions.settings.signals")}</span>
-            {settings.signals.map((row) => {
-              const switchId = `hide-ai-signal-${id}-${row.signal}`;
-              return (
-                <div key={row.signal} className="flex min-w-0 items-center gap-sm" data-hide-ai-signal={row.signal} data-hide-ai-signal-unavailable={row.unavailable ?? undefined}>
-                  <label htmlFor={switchId} className="flex min-w-0 flex-1 flex-col">
-                    <span className="flex items-center gap-xs text-caption text-foreground">
-                      {t(`suggestions.signal.${row.signal}` as MessageKey)}
-                      {SIGNALS_ON_GITHUB.has(row.signal) ? <span className="rounded-xs border border-border px-xxs text-micro text-muted-foreground">GitHub</span> : null}
-                    </span>
-                    {row.unavailable ? <span className="text-micro text-muted-foreground">{t(`suggestions.signalUnavailable.${row.unavailable}` as MessageKey)}</span> : null}
-                  </label>
-                  <Switch id={switchId} checked={row.enabled && row.unavailable === null} disabled={suggestionsOff || row.unavailable !== null} onCheckedChange={(on) => actions.suggestionSettings(id, { signal: { signal: row.signal, enabled: on } })} />
-                </div>
-              );
-            })}
-          </div>
+          <ReadFrom project={project} actions={actions} disabled={suggestionsOff} />
           <Dismissed project={project} actions={actions} disabled={suggestionsOff} />
         </section>
         <MemoryGroup project={project} actions={actions} />
@@ -105,7 +92,7 @@ export function HideAiSettings({ project, actions }: { project: ProjectSuggestio
   );
 }
 
-/** The AI chip (D-27, B19): the agent Settings › Hide AI asks now; a press opens that page. OpenCode cannot promise to only read, so investigating does not run on it. */
+/** The AI chip (D-27, D-53, B19): the agent Settings › Hide AI asks now, a press opens that page, and a line says its order holds; OpenCode cannot promise to only read, so investigating does not run on it. */
 function Provider({ project, actions, onLeave }: { project: ProjectSuggestions; actions: Actions; onLeave: () => void }) {
   const { t } = useInterfaceTranslation();
   const ai = useShellStore((state) => state.rest?.status?.background_ai ?? null);
@@ -121,6 +108,7 @@ function Provider({ project, actions, onLeave }: { project: ProjectSuggestions; 
           <ChevronRightIcon aria-hidden="true" />
         </Button>
       </div>
+      <span className="self-end break-keep text-right text-micro text-muted-foreground" data-hide-ai-provider-order="true">{t("suggestions.settings.aiOrder")}</span>
       {project.ai === "cannot_investigate" ? <span className="self-end text-caption text-warning" data-hide-ai-cannot-investigate="true">{t("suggestions.settings.cannotInvestigate")}</span> : null}
       {project.ai === "not_ready" ? <span className="self-end text-caption text-muted-foreground">{t("suggestions.settings.aiNotReady")}</span> : null}
     </div>
@@ -136,6 +124,40 @@ function GroupSwitch({ name, note, checked, disabled, onChange, data }: { name: 
         <span className="break-keep text-micro text-muted-foreground">{note}</span>
       </label>
       <Switch id={switchId} checked={checked} disabled={disabled} onCheckedChange={onChange} data-hide-ai-group-switch={data} />
+    </div>
+  );
+}
+
+/**
+ * 읽을 곳 (D-52, B5): `세션 기록` and `GitHub`, each with what it reads. A
+ * switch is on while any signal it can read is, and one press turns the whole
+ * group (`signal_group`). `GitHub` stays off with its reason when the
+ * repository is not on GitHub; with Memory off, corrections are not read.
+ */
+function ReadFrom({ project, actions, disabled }: { project: ProjectSuggestions; actions: Actions; disabled: boolean }) {
+  const { t } = useInterfaceTranslation();
+  const id = project.workspace_id;
+  return (
+    <div className="flex flex-col gap-xs" data-hide-ai-read-from="true">
+      <span className="text-micro text-muted-foreground">{t("suggestions.settings.readFrom")}</span>
+      {SIGNAL_GROUPS.map(({ group, signals }) => {
+        const rows = project.settings.signals.filter((row) => signals.includes(row.signal));
+        const readable = rows.filter((row) => row.unavailable === null);
+        const unavailable = readable.length === 0 ? rows.find((row) => row.unavailable !== null)?.unavailable ?? null : null;
+        const correctionOff = rows.some((row) => row.signal === "correction" && row.unavailable === "memory_off") && readable.length > 0;
+        const switchId = `hide-ai-read-${id}-${group}`;
+        return (
+          <div key={group} className="flex min-w-0 items-center gap-sm" data-hide-ai-signal-group={group} data-hide-ai-signal-group-unavailable={unavailable ?? undefined}>
+            <label htmlFor={switchId} className="flex min-w-0 flex-1 flex-col">
+              <span className="text-caption text-foreground">{t(`suggestions.settings.source.${group}`)}</span>
+              <span className="break-keep text-micro text-muted-foreground">{t(`suggestions.settings.source.${group}.note`)}</span>
+              {unavailable ? <span className="text-micro text-muted-foreground">{t(`suggestions.signalUnavailable.${unavailable}` as MessageKey)}</span> : null}
+              {correctionOff ? <span className="break-keep text-micro text-muted-foreground" data-hide-ai-correction-off="true">{t("suggestions.settings.source.correctionOff")}</span> : null}
+            </label>
+            <Switch id={switchId} checked={readable.some((row) => row.enabled)} disabled={disabled || readable.length === 0} onCheckedChange={(on) => actions.suggestionSettings(id, { signal_group: { group, enabled: on } })} />
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -163,7 +185,7 @@ function Choice({ name, value, options, disabled, onChange, data }: { name: stri
   );
 }
 
-/** `'안 함'으로 둔 제안 N` (D-43, B16): each with `되살리기`, which lets the core judge it again on what has piled up. */
+/** `넘어간 제안 N개` (D-43, B16): each says quietly whether it can still come back once, and `되살리기` lets the core judge it again on what has piled up. */
 function Dismissed({ project, actions, disabled }: { project: ProjectSuggestions; actions: Actions; disabled: boolean }) {
   const { t } = useInterfaceTranslation();
   const [open, setOpen] = useState(false);
@@ -177,7 +199,10 @@ function Dismissed({ project, actions, disabled }: { project: ProjectSuggestions
       </button>
       {open ? dismissed.map((row) => (
         <div key={row.id} className="flex min-w-0 items-center gap-sm pl-md" data-hide-ai-dismissed-row={row.id}>
-          <span className="min-w-0 flex-1 truncate text-caption text-foreground" title={suggestionTitle(t, row)}>{suggestionTitle(t, row)}</span>
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="truncate text-caption text-foreground" title={suggestionTitle(t, row)}>{suggestionTitle(t, row)}</span>
+            <span className="text-micro text-muted-foreground" data-hide-ai-dismissed-may-return={row.may_return ? "true" : "false"}>{t(row.may_return ? "suggestions.settings.mayReturn" : "suggestions.settings.forGood")}</span>
+          </span>
           <Button size="sm" variant="ghost" disabled={disabled} onClick={() => actions.suggestionAction(project.workspace_id, row.id, "restore")} data-hide-ai-restore={row.id}>{t("suggestions.settings.restore")}</Button>
         </div>
       )) : null}

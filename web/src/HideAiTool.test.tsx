@@ -129,14 +129,14 @@ describe("the Hide AI tool", () => {
     expect(q("[data-hide-ai-intro]")).toBeNull();
   });
 
-  it("draws the tab's state in one line, and 조사 중 or 조사 못 함 beside the owl with the rows as they were (B17, D-35)", async () => {
+  it("draws the tab's state in one line, and 조사 중 or 조사 못 함 in the head with the rows as they were (B17, D-35)", async () => {
     await render(suggestionsProject({ status: "first_run_pending" }));
     expect(q("[data-suggestions-status]")?.textContent).toBe("First investigation the next time you open Hide");
     await render(suggestionsProject({ status: "investigating", rows: [suggestionRow("s1")] }));
     expect(q("[data-hide-ai-investigating]")?.textContent).toBe("Investigating");
     expect(q("[data-suggestions-status]")).toBeNull();
     expect(q('[data-suggestion="s1"]')).not.toBeNull();
-    // A run that could not investigate says so quietly beside the owl and keeps the rows (D-35).
+    // A run that could not investigate says so quietly in the head and keeps the rows (D-35).
     await render(suggestionsProject({ status: "not_investigated", rows: [suggestionRow("s1")] }));
     expect(q("[data-hide-ai-not-investigated]")?.textContent).toBe("Couldn't investigate");
     expect(q("[data-hide-ai-investigating]")).toBeNull();
@@ -151,31 +151,42 @@ describe("the Hide AI tool", () => {
     expect(sent("suggestion_settings")).toEqual([{ workspace_id: "p", suggestions_enabled: true }]);
   });
 
-  it("offers a new suggestion's PR or issue and 안 함, and GitHub connection needed in the button's place (B10, B14, B16, B18)", async () => {
+  it("shows 고칠 것 above a new suggestion's PR or issue, with 넘어가기 beside it and beside GitHub connection needed (B10, B14, B16, B18)", async () => {
     await render(suggestionsProject({ rows: [
       suggestionRow("s1"),
       suggestionRow("s2", { outcome: "issue" }),
       suggestionRow("s3", { hold: "github_needed" }),
       suggestionRow("s4", { discomfort: null, basis: { signal: "failed_tool", tag: "cargo test" } }),
+      suggestionRow("s5", { outcome: "issue", fix: null }),
+      suggestionRow("s6", { returned_after_skip: true }),
     ] }));
     expect(q('[data-suggestion="s1"] [data-suggestion-mark]')?.getAttribute("data-suggestion-mark")).toBe("new");
     expect(q('[data-suggestion="s1"]')?.textContent).toContain("Missed · cause s1");
-    expect(q('[data-suggestion="s1"] [data-suggestion-apply]')?.textContent).toBe("Make PR");
-    expect(q('[data-suggestion="s2"] [data-suggestion-apply]')?.textContent).toBe("Make issue");
+    expect(q('[data-suggestion-fix="s1"]')?.textContent).toBe("Fixfix s1");
+    expect(q('[data-suggestion="s1"] [data-suggestion-apply]')?.textContent).toBe("Open a PR that fixes the docs");
+    expect(q('[data-suggestion="s2"] [data-suggestion-apply]')?.textContent).toBe("Leave it as an issue");
+    // An issue says why it becomes one: in the core's words, else in Hide's.
+    expect(q('[data-suggestion-fix="s2"]')?.textContent).toBe("Fixfix s2");
+    expect(q('[data-suggestion-fix="s5"]')?.textContent).toBe("FixThe docs can't fix this. Leaves an issue with the CI record");
     expect(q('[data-suggestion="s3"] [data-suggestion-apply]')).toBeNull();
     expect(q('[data-suggestion="s3"] [data-suggestion-github-needed]')?.textContent).toBe("GitHub connection needed");
+    // 넘어가기 is a button on every choice, ⋯ is gone.
+    expect([...document.body.querySelectorAll("[data-suggestion-dismiss]")].map((button) => button.textContent)).toEqual(Array(6).fill("Skip"));
+    expect(q("[data-suggestion-more]")).toBeNull();
     // A line the grouping wrote alone is named by its signal and tag.
     expect(q('[data-suggestion="s4"]')?.textContent).toContain("The same command keeps failing: cargo test");
+    expect(q('[data-suggestion="s6"] [data-suggestion-returned]')?.textContent).toBe("Skipped, but it came back");
+    expect(q('[data-suggestion="s6"] [data-suggestion-returned]')?.className).toContain("text-warning");
+    expect(q('[data-suggestion="s1"] [data-suggestion-returned]')).toBeNull();
     await click('[data-suggestion="s1"] [data-suggestion-apply]');
-    await press('[data-suggestion-more="s2"]');
-    await click('[data-suggestion-dismiss="s2"]');
+    await click('[data-suggestion-dismiss="s3"]');
     expect(sent("suggestion_action")).toEqual([
       { workspace_id: "p", id: "s1", action: "apply" },
-      { workspace_id: "p", id: "s2", action: "dismiss" },
+      { workspace_id: "p", id: "s3", action: "dismiss" },
     ]);
   });
 
-  it("opens a row in place to its fix and evidence, dimming evidence that is gone (B10)", async () => {
+  it("opens a row in place to its evidence, dimming evidence that is gone, with 고칠 것 once above the buttons (B10)", async () => {
     const at = Date.now();
     await render(suggestionsProject({ rows: [suggestionRow("s1", { evidence: [
       { kind: "session", signal: "correction", agent: "claude", session_id: "abc", pr_number: null, url: null, at_unix_ms: at, gone: false },
@@ -185,7 +196,8 @@ describe("the Hide AI tool", () => {
     expect(q("[data-suggestion-detail]")).toBeNull();
     await click('[data-suggestion-toggle="s1"]');
     expect(useUiStore.getState().openSuggestion).toBe("s1");
-    expect(q('[data-suggestion-detail="s1"]')?.textContent).toContain("fix s1");
+    expect(q('[data-suggestion-detail="s1"]')?.textContent).not.toContain("fix s1");
+    expect(q('[data-suggestion-fix="s1"]')?.textContent).toContain("fix s1");
     const evidence = [...document.body.querySelectorAll<HTMLButtonElement>("[data-suggestion-evidence]")];
     expect(evidence.map((button) => button.disabled)).toEqual([false, false, true]);
     expect(evidence[2]?.className).toContain("opacity-(--opacity-dimmed)");
@@ -198,7 +210,7 @@ describe("the Hide AI tool", () => {
     expect(open).toHaveBeenCalledTimes(1);
   });
 
-  it("marks a row being applied by whose turn it is, and offers 다시 시도 and 안 함 when it failed (B11, B12, B13)", async () => {
+  it("marks a row being applied by whose turn it is, and offers 다시 시도 and 넘어가기 when it failed (B11, B12, B13)", async () => {
     const started = Date.now() - 120_000;
     await render(suggestionsProject({ rows: [
       suggestionRow("s1", { group: "applying", state: "hide_ai_working", auto: true, attempt: { phase: "working", started_at_unix_ms: started, pr_number: null, url: null, agent_id: null, failure: null } }),
@@ -276,27 +288,41 @@ describe("the Hide AI tool", () => {
     expect(q('[data-suggestion="s1"]')?.getAttribute("data-suggestion-open")).toBeNull();
   });
 
-  it("sets how many, how fixes are applied, the signals and what was set to 안 함 in ⚙ (B5, B13, B16, B19)", async () => {
+  it("sets how many, how fixes are applied, where it reads and the skipped lines in ⚙ (B5, B13, B16, B19)", async () => {
     const project = suggestionsProject({ ai: "cannot_investigate" });
-    project.settings.signals = project.settings.signals.map((row) => (row.signal === "check_failed" ? { ...row, enabled: false, unavailable: "no_github" } : row));
-    project.settings.dismissed = [{ id: "s9", discomfort: "Tab names come out wrong", basis: null }];
+    // Not on GitHub, and Memory off: GitHub reads nothing, the session records read all but corrections.
+    project.settings.signals = project.settings.signals.map((row) => (
+      row.signal === "check_failed" || row.signal === "change_request" ? { ...row, enabled: false, unavailable: "no_github" as const }
+        : row.signal === "correction" ? { ...row, enabled: false, unavailable: "memory_off" as const } : row
+    ));
+    project.settings.dismissed = [{ id: "s9", discomfort: "Tab names come out wrong", basis: null, may_return: true }, { id: "s8", discomfort: "Bell too loud", basis: null, may_return: false }];
     await render(project);
     await press("[data-hide-ai-settings-open]");
     const sheet = q("[data-hide-ai-settings]");
     expect(sheet?.querySelector("[data-hide-ai-cannot-investigate]")?.textContent).toBe("This AI can't investigate");
+    expect(sheet?.querySelector("[data-hide-ai-provider-order]")?.textContent).toBe("Follows the order in Settings › Hide AI. At a usage limit, the next AI");
     expect(sheet?.querySelector('[data-hide-ai-choice="quantity"]')?.getAttribute("data-hide-ai-choice-value")).toBe("normal");
+    expect(sheet?.textContent).toContain("Pressing the button opens a PR or an issue");
     await click("#hide-ai-quantity-few");
     await click("#hide-ai-apply_mode-auto_pr");
-    const unavailable = sheet?.querySelector('[data-hide-ai-signal="check_failed"]');
-    expect(unavailable?.textContent).toContain("Not a GitHub repository");
-    expect(unavailable?.querySelector("button")?.hasAttribute("disabled")).toBe(true);
-    await click("#hide-ai-signal-p-correction");
+    expect([...sheet!.querySelectorAll("[data-hide-ai-signal-group]")].map((row) => row.getAttribute("data-hide-ai-signal-group"))).toEqual(["session", "github"]);
+    const session = sheet?.querySelector('[data-hide-ai-signal-group="session"]');
+    expect(session?.textContent).toContain("Failed commands · agents stuck · my corrections · problems left over in sessions");
+    expect(session?.querySelector("[data-hide-ai-correction-off]")?.textContent).toBe("Memory is off, so my corrections aren't read");
+    expect(session?.querySelector("button")?.getAttribute("aria-checked")).toBe("true");
+    const github = sheet?.querySelector('[data-hide-ai-signal-group="github"]');
+    expect(github?.textContent).toContain("Not a GitHub repository");
+    expect(github?.querySelector("button")?.hasAttribute("disabled")).toBe(true);
+    expect(github?.querySelector("button")?.getAttribute("aria-checked")).toBe("false");
+    await click("#hide-ai-read-p-session");
     await click("[data-hide-ai-dismissed] button");
+    expect(sheet?.querySelector("[data-hide-ai-dismissed] > button")?.textContent).toBe("2 skipped suggestions");
+    expect([...sheet!.querySelectorAll("[data-hide-ai-dismissed-may-return]")].map((line) => line.textContent)).toEqual(["Comes back once if it piles up again", "Won't come back"]);
     await click('[data-hide-ai-restore="s9"]');
     expect(sent("suggestion_settings")).toEqual([
       { workspace_id: "p", quantity: "few" },
       { workspace_id: "p", apply_mode: "auto_pr" },
-      { workspace_id: "p", signal: { signal: "correction", enabled: false } },
+      { workspace_id: "p", signal_group: { group: "session", enabled: false } },
     ]);
     expect(sent("suggestion_action")).toEqual([{ workspace_id: "p", id: "s9", action: "restore" }]);
     await click("[data-hide-ai-provider-chip]");

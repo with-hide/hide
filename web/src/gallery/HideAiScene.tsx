@@ -33,7 +33,7 @@ const SIGNALS: SuggestionSignal[] = ["failed_tool", "agent_wait", "correction", 
 
 const row = (id: string, fields: Partial<SuggestionRow>): SuggestionRow => ({
   id, source: "notebook", group: "choose", state: "new", discomfort: null, cause: null, fix: null, outcome: "pr", basis: null,
-  auto: false, hold: null, escalated: null, evidence: [], attempt: null, watch: null, ...fields,
+  auto: false, hold: null, escalated: null, returned_after_skip: false, evidence: [], attempt: null, watch: null, ...fields,
 });
 
 const NEW_ROWS: SuggestionRow[] = [
@@ -48,6 +48,7 @@ const NEW_ROWS: SuggestionRow[] = [
     ],
   }),
   row("s14", { basis: { signal: "failed_tool", tag: "pnpm lint" }, cause: "lint가 무엇을 막는지 문서에 없어요", outcome: "issue" }),
+  row("s16", { discomfort: "리뷰 전에 브랜치가 main보다 뒤처져 있어요", cause: "PR을 열기 전에 main을 합치라는 말이 없어요", fix: "CONTRIBUTING.md에 PR을 열기 전 main을 합치는 줄을 넣어요.", returned_after_skip: true }),
   row("s15", { discomfort: "PR마다 스크린샷이 빠졌다는 리뷰가 달려요", cause: "화면 PR의 스크린샷 규칙이 CONTRIBUTING.md에만 있어요", hold: "github_needed" }),
 ];
 
@@ -78,10 +79,13 @@ export function hideAiSceneProject(state: HideAiSceneState, workspaceId = "herdr
     settings: {
       suggestions_enabled: true, quantity: "normal", apply_mode: "confirm",
       signals: SIGNALS.map((signal) => ({ signal, enabled: true, unavailable: null })),
-      dismissed: [{ id: "s4", discomfort: "탭 이름이 너무 길어요", basis: null }],
+      dismissed: [
+        { id: "s4", discomfort: "탭 이름이 너무 길어요", basis: null, may_return: true },
+        { id: "s5", discomfort: "알림 소리가 커요", basis: null, may_return: false },
+      ],
     },
     rows: [...NEW_ROWS, ...APPLYING_ROWS, ...APPLIED_ROWS],
-    counts: { suggestions: 5, rail: 6 },
+    counts: { suggestions: 6, rail: 7 },
   };
   switch (state) {
     case "new":

@@ -141,6 +141,8 @@ One row is one thing the screen names. A word in the last column is not used for
 | The feature that keeps memories for agents, and the rail tool that holds it with the suggestions | Memory, Hide AI | Memory, Hide AI | Memory, Hide AI | Memory, Hide AI | メモリ |
 | One thing Memory keeps | memory | 기억 | 記憶 | 记忆 | card, 카드, カード, 卡片 (a PR's card and a conversation card keep the word) |
 | What Hide AI suggests fixing | suggestion | 제안 | 提案 | 建议 | 추천 |
+| Put a suggestion aside for now; it can rise once more | skip | 넘어가기 | スキップ | 跳过 | Don't do this, 안 함, しない, 不处理 for a suggestion |
+| Where Hide AI reads its signals, in ⚙ | where to read | 읽을 곳 | 読む場所 | 读取哪里 | one switch per signal |
 | Agent family names | Claude Code, Codex, Grok, OpenCode, Pi, omp, Antigravity | as written | as written | as written | 代理 for an agent in zh |
 | Reasoning level | effort | effort | effort | effort | translated |
 

@@ -36,6 +36,7 @@ export function suggestionRow(id: string, overrides: Partial<SuggestionRow> = {}
     auto: false,
     hold: null,
     escalated: null,
+    returned_after_skip: false,
     evidence: [],
     attempt: null,
     watch: null,

@@ -40,7 +40,7 @@ export function suggestionTitle(t: TFunction<"translation">, row: Pick<Suggestio
   return row.id;
 }
 
-/** How a status line reads: the words, their tone, and whether the operator acts on it (`다시 시도` and `안 함`). */
+/** How a status line reads: the words, their tone, and whether the operator acts on it (`다시 시도` and `넘어가기`). */
 export type AttemptLine = { text: string; tone: "muted" | "warning" | "destructive"; retry: boolean };
 
 /** The line of a row being applied (B11, B12, B14): what the attempt is doing, in words; null before one started. */
