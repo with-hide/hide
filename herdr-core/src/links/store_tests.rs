@@ -688,6 +688,58 @@ fn a_pass_over_a_project_answers_what_the_fixture_says() {
     );
 }
 
+/// A learned place inside another project's root belongs to that project: a
+/// publish pass fences it out of this project's paths, the same as a read of
+/// the project alone does, and the expected paths are written out here.
+#[test]
+fn a_pass_fences_out_a_learned_place_inside_another_projects_root() {
+    let home = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let mut store = open(state.path());
+    store
+        .apply_project(&project(vec![pr(8, "feat/y", T0, None)]), T0)
+        .unwrap();
+    let nested = claude_file(
+        home.path(),
+        "s-nested",
+        "/work/app/sub/tree",
+        "cli",
+        &[Turn {
+            at: T0 + 20 * MIN,
+            branch: "feat/y",
+            text: "두 번째 PR",
+        }],
+        Some((8, T0 + 1_000)),
+    );
+    ingest(&mut store, home.path(), &nested);
+    store
+        .apply_project(
+            &ProjectFacts {
+                key: "project:sub".into(),
+                device_id: DEVICE.into(),
+                workspace_id: "workspace-sub".into(),
+                root: "/work/app/sub".into(),
+                repository: None,
+                repository_id: None,
+                connection_epoch: 0,
+                worktrees: Vec::new(),
+                prs: Vec::new(),
+                prs_read: false,
+                outputs: Vec::new(),
+            },
+            T0,
+        )
+        .unwrap();
+
+    let own = store.pass(PROJECT).unwrap().unwrap();
+    assert_eq!(own.paths, vec![(DEVICE.to_owned(), ROOT.to_owned())]);
+    let sub = store.pass("project:sub").unwrap().unwrap();
+    assert_eq!(
+        sub.paths,
+        vec![(DEVICE.to_owned(), "/work/app/sub".to_owned())]
+    );
+}
+
 /// A checkout's work landed when the pull requests its sessions made or
 /// worked on include a merged one and no open one; a session belongs to the
 /// deepest checkout holding its folder, and a checkout on no branch (one
