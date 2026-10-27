@@ -4,9 +4,10 @@
 //! numbers can be checked and a replay of past records gives the same ones.
 
 use super::ledger::{RecordEntry, RecordIndex, Signal};
+use super::lifecycle::Evidence;
 use super::notebook::{Line, LineId};
 use super::policy::{self, Quantity};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 /// A line's counted pain.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -72,27 +73,43 @@ pub(crate) fn score_records<'a>(records: impl Iterator<Item = &'a RecordEntry>, 
     }
 }
 
-/// Whether a line the operator skipped at `skipped_at` may rise once more
-/// (D-43): the sessions and pull requests first seen after the skip, the
-/// units [`score`] counts, reach [`policy::SKIP_RETURN_SHARE`] of those seen
-/// up to it. A session that goes on past the skip is not new.
-pub(crate) fn outgrew_skip(line: &Line, index: &RecordIndex, skipped_at: u64) -> bool {
-    let mut had = BTreeSet::new();
-    let mut since = BTreeSet::new();
+/// The sessions and pull requests behind `line` among the records `keep`
+/// takes: the units [`score`] counts.
+pub(crate) fn evidence(
+    line: &Line,
+    index: &RecordIndex,
+    keep: impl Fn(&RecordEntry) -> bool,
+) -> Evidence {
+    let mut evidence = Evidence::default();
     for record in line.records.iter().filter_map(|id| index.get(*id)) {
-        let unit = match (&record.session, record.pr) {
-            (Some(session), _) => (Some((session.agent.as_str(), session.id.as_str())), None),
-            (None, Some(pr)) => (None, Some(pr)),
-            (None, None) => continue,
-        };
-        if record.at_unix_ms <= skipped_at {
-            had.insert(unit);
-        } else {
-            since.insert(unit);
+        if !keep(record) {
+            continue;
+        }
+        if let Some(session) = &record.session {
+            evidence.sessions.insert(session.clone());
+        } else if let Some(pr) = record.pr {
+            evidence.prs.insert(pr);
         }
     }
-    let new = since.difference(&had).count();
-    new as f64 >= (had.len() as f64 * policy::SKIP_RETURN_SHARE).max(1.0)
+    evidence
+}
+
+/// Whether a line the operator skipped at `skipped_at`, standing on
+/// `skipped_with`, may rise once more (D-43): the sessions and pull requests
+/// seen after the skip that it did not stand on reach
+/// [`policy::SKIP_RETURN_SHARE`] of those it did. A session that goes on
+/// past the skip, or a pull request failing again on a newer head, is not
+/// new.
+pub(crate) fn outgrew_skip(
+    line: &Line,
+    index: &RecordIndex,
+    skipped_at: u64,
+    skipped_with: &Evidence,
+) -> bool {
+    let since = evidence(line, index, |record| record.at_unix_ms > skipped_at);
+    let new = since.sessions.difference(&skipped_with.sessions).count()
+        + since.prs.difference(&skipped_with.prs).count();
+    new as f64 >= (skipped_with.units() as f64 * policy::SKIP_RETURN_SHARE).max(1.0)
 }
 
 /// D-11's three questions, as the core can answer them: the line names one
@@ -238,6 +255,13 @@ mod tests {
         assert!(!score.always);
     }
 
+    /// The evidence a line stood on at `skipped`, as the skip keeps it.
+    fn skipped_with(index: &RecordIndex, skipped: u64) -> Evidence {
+        evidence(&line_of(index), index, |record| {
+            record.at_unix_ms <= skipped
+        })
+    }
+
     /// D-43: a skip is outgrown by as many new sessions and pull requests
     /// as the line had when it was skipped; one that goes on past the skip
     /// is not new.
@@ -249,32 +273,84 @@ mod tests {
                 entry(1, Signal::FailedTool, Some("a"), None, skipped - 1),
                 entry(2, Signal::FailedTool, Some("b"), None, skipped),
                 entry(3, Signal::CheckFailed, None, Some(7), skipped - 1),
-                entry(4, Signal::FailedTool, Some("a"), None, NOW),
-                entry(5, Signal::CheckFailed, None, Some(7), NOW),
-                entry(6, Signal::FailedTool, Some("c"), None, NOW),
-                entry(7, Signal::CheckFailed, None, Some(9), NOW),
             ],
         };
+        let kept = skipped_with(&index, skipped);
+        assert_eq!(kept.units(), 3);
+        index.entries.extend([
+            entry(4, Signal::FailedTool, Some("a"), None, NOW),
+            entry(5, Signal::CheckFailed, None, Some(7), NOW),
+            entry(6, Signal::FailedTool, Some("c"), None, NOW),
+            entry(7, Signal::CheckFailed, None, Some(9), NOW),
+        ]);
         assert!(
-            !outgrew_skip(&line_of(&index), &index, skipped),
+            !outgrew_skip(&line_of(&index), &index, skipped, &kept),
             "c and #9 are new, a and #7 went on: two of three"
         );
         index
             .entries
             .push(entry(8, Signal::FailedTool, Some("d"), None, NOW));
-        assert!(outgrew_skip(&line_of(&index), &index, skipped));
+        assert!(outgrew_skip(&line_of(&index), &index, skipped, &kept));
+    }
 
-        let gone = RecordIndex {
-            entries: vec![entry(1, Signal::FailedTool, Some("a"), None, NOW)],
+    /// D-43: the ledger moves a pull request's record to its newer head and
+    /// time, so a pull request that fails again after the skip has a record
+    /// past it; it is still one the line stood on.
+    #[test]
+    fn a_pull_request_failing_again_on_a_newer_head_is_not_new() {
+        let skipped = NOW - DAY_MS;
+        let before = RecordIndex {
+            entries: vec![
+                entry(1, Signal::CheckFailed, None, Some(1), skipped - 1),
+                entry(2, Signal::CheckFailed, None, Some(2), skipped - 1),
+                entry(3, Signal::CheckFailed, None, Some(3), skipped - 1),
+            ],
+        };
+        let kept = skipped_with(&before, skipped);
+        let mut moved = RecordIndex {
+            entries: vec![
+                entry(1, Signal::CheckFailed, None, Some(1), NOW),
+                entry(2, Signal::CheckFailed, None, Some(2), NOW),
+                entry(3, Signal::CheckFailed, None, Some(3), skipped - 1),
+            ],
         };
         assert!(
-            !outgrew_skip(&line_of(&gone), &gone, NOW),
-            "nothing came after the skip"
+            !outgrew_skip(&line_of(&moved), &moved, skipped, &kept),
+            "#1 and #2 failed again: no new pull request"
         );
+        moved.entries.extend([
+            entry(4, Signal::CheckFailed, None, Some(4), NOW),
+            entry(5, Signal::CheckFailed, None, Some(5), NOW),
+            entry(6, Signal::CheckFailed, None, Some(6), NOW),
+        ]);
+        assert!(outgrew_skip(&line_of(&moved), &moved, skipped, &kept));
+    }
+
+    /// D-43: records leave the ledger with age, and the evidence kept at
+    /// the skip does not leave with them.
+    #[test]
+    fn a_skips_evidence_holds_after_its_records_are_pruned() {
+        let skipped = NOW - DAY_MS;
+        let before = RecordIndex {
+            entries: vec![
+                entry(1, Signal::FailedTool, Some("a"), None, skipped - 1),
+                entry(2, Signal::FailedTool, Some("b"), None, skipped - 1),
+                entry(3, Signal::FailedTool, Some("c"), None, skipped - 1),
+            ],
+        };
+        let kept = skipped_with(&before, skipped);
+        let mut pruned = RecordIndex {
+            entries: vec![entry(4, Signal::Correction, Some("d"), None, NOW)],
+        };
         assert!(
-            outgrew_skip(&line_of(&gone), &gone, NOW - 1),
-            "with nothing kept from before the skip, one new session is enough"
+            !outgrew_skip(&line_of(&pruned), &pruned, skipped, &kept),
+            "one new session of three, though nothing from before is left"
         );
+        pruned.entries.extend([
+            entry(5, Signal::FailedTool, Some("e"), None, NOW),
+            entry(6, Signal::FailedTool, Some("f"), None, NOW),
+        ]);
+        assert!(outgrew_skip(&line_of(&pruned), &pruned, skipped, &kept));
     }
 
     #[test]
