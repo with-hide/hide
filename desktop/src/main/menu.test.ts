@@ -14,6 +14,8 @@ describe("the app menu (B9)", () => {
     expect(accelerator({ code: "Enter", meta: true, alt: true })).toBe("Alt+Command+Return");
     expect(accelerator({ code: "Digit0", meta: true })).toBe("Command+0");
     expect(accelerator({ code: "Comma", meta: true })).toBe("Command+,");
+    expect(accelerator({ code: "BracketRight", meta: true, shift: true })).toBe("Shift+Command+]");
+    expect(accelerator({ code: "PageDown", ctrl: true })).toBe("Control+PageDown");
     expect(() => accelerator({ code: "IntlRo", meta: true })).toThrow();
   });
 
@@ -98,7 +100,7 @@ describe("the app menu (B9)", () => {
     expect(menuTemplate({ appName: "hide", send: () => undefined, developer: false, system: "pc", t: english, registry: resolved.registry }).flatMap((menu) => (Array.isArray(menu.submenu) ? menu.submenu : [])).find((item) => item.id === "toggle_zoom")?.accelerator).toBe("Alt+Shift+Return");
   });
 
-  it("leaves plain Ctrl keys on Windows and Linux to the edit roles and text size", () => {
+  it("leaves plain Ctrl keys on Windows and Linux to the edit roles, text size and the tab steps", () => {
     // Electron's own role keys on Linux, the stricter of the two (Windows
     // gives quit none), for every role that does not name its accelerator.
     const ROLE_KEYS: Record<string, string> = {
@@ -123,7 +125,7 @@ describe("the app menu (B9)", () => {
       .map((item) => ({ name: item.role ?? item.id, keys: item.accelerator ?? (item.role === "windowMenu" ? "Control+W" : ROLE_KEYS[item.role ?? ""]) }))
       .filter(({ keys }) => keys?.includes("Control") && !keys.includes("Shift"))
       .map(({ name }) => name);
-    expect(plainCtrl.sort()).toEqual(["copy", "cut", "paste", "selectAll", "text_larger", "text_reset", "text_smaller", "undo"]);
+    expect(plainCtrl.sort()).toEqual(["copy", "cut", "next_tab", "paste", "previous_tab", "selectAll", "text_larger", "text_reset", "text_smaller", "undo"]);
   });
 
   it("opens Help with Set up Hide on every system, which sends the host's own command", () => {

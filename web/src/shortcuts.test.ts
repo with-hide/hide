@@ -56,6 +56,18 @@ describe("shortcut registry", () => {
     expect(displayCommand("new_workspace", "electron", REGISTRY, "mac")).toBe("⇧⌘N");
   });
 
+  it("steps to the tab beside on each system's own keys in the desktop app, and has no chord in a browser, where Chrome keeps them", () => {
+    const pc = systemRegistry("pc");
+    expect(matchHost(press("BracketRight", { meta: true, shift: true }), REGISTRY, "electron")?.id).toBe("next_tab");
+    expect(matchHost(press("BracketLeft", { meta: true, shift: true }), REGISTRY, "electron")?.id).toBe("previous_tab");
+    expect(matchHost(press("PageDown", { ctrl: true }), pc, "electron")?.id).toBe("next_tab");
+    expect(matchHost(press("PageUp", { ctrl: true }), pc, "electron")?.id).toBe("previous_tab");
+    for (const [registry, system] of [[REGISTRY, "mac"], [pc, "pc"]] as const) {
+      for (const id of ["next_tab", "previous_tab"] as const) expect(displayCommand(id, "browser", registry, system), `${id} ${system}`).toBe("");
+    }
+    expect(bindingProblem("split_right", { code: "BracketRight", meta: true, shift: true }, REGISTRY, "browser", "mac")?.code).toBe("browser_reserved");
+  });
+
   it("offers Start agent only in the desktop app, where ⌘N is not the browser's", () => {
     expect(displayCommand("start_agent", "browser", REGISTRY, "mac")).toBe("");
     expect(displayCommand("start_agent", "electron", REGISTRY, "mac")).toBe("⌘N");
@@ -72,6 +84,8 @@ describe("shortcut registry", () => {
       recent_panel: "",
       previous_recent_panel: "",
       previous_recent_area_tab: "⌃⇧⇥",
+      next_tab: "⇧⌘]",
+      previous_tab: "⇧⌘[",
       new_workspace: "⇧⌘N",
       start_agent: "⌘N",
       recent_project: "⌥⇥",
@@ -296,7 +310,7 @@ describe("browser pane chord overrides (S5 B9, B10)", () => {
   it("edits the pane commands, the cycle commands, the sidebar switch, the device rail toggle, the three lane tool toggles, the Project's 기억 and the PR list, and the eight area commands", () => {
     expect([...EDITABLE_PANE_COMMANDS].sort()).toEqual(
       [
-        "recent_area_tab", "previous_recent_area_tab", "recent_panel", "previous_recent_panel",
+        "recent_area_tab", "previous_recent_area_tab", "next_tab", "previous_tab", "recent_panel", "previous_recent_panel",
         "close_pane", "split_down", "split_right", "text_larger", "text_reset", "text_smaller", "toggle_device_rail", "overview", "sidebar_projects", "toggle_zoom", "toggle_plan",
         "toggle_sidebar_lens", "toggle_lane_project", "toggle_lane_memory", "toggle_lane_explorer", "toggle_lane_changes", "open_project_memory", "open_sidebar_prs",
         "focus_next_agent_area", "focus_previous_agent_area", "grow_agent_area", "shrink_agent_area",
@@ -420,6 +434,8 @@ describe("Windows and Linux (operator decision 2026-10-03)", () => {
       reopen_closed_tab: "Alt+Shift+T",
       recent_area_tab: "Ctrl+Tab",
       previous_recent_area_tab: "Ctrl+Shift+Tab",
+      next_tab: "Ctrl+PageDown",
+      previous_tab: "Ctrl+PageUp",
       recent_panel: "",
       previous_recent_panel: "",
       new_workspace: "Alt+Shift+N",
@@ -469,7 +485,7 @@ describe("Windows and Linux (operator decision 2026-10-03)", () => {
     expect(Object.fromEntries(pc.map((command) => [command.id, displayCommand(command.id, "electron", pc, "pc")]))).toEqual(pcSet);
   });
 
-  it("leaves every plain Ctrl key to the terminal but text size, Ctrl+Tab and the tree's own clipboard", () => {
+  it("leaves every plain Ctrl key to the terminal but text size, Ctrl+Tab, Ctrl+PageUp and Ctrl+PageDown and the tree's own clipboard", () => {
     for (const host of ["browser", "electron"] as const) {
       // A command with a passthrough is answered by the Explorer alone while it holds the keyboard, so a terminal still gets its Ctrl+C, X and V.
       const plainCtrl = pc
@@ -477,7 +493,7 @@ describe("Windows and Linux (operator decision 2026-10-03)", () => {
         .map((command) => (host === "electron" ? command.electron : command.browser))
         .filter((chord) => chord && chord.ctrl && !chord.shift && !chord.alt && !chord.meta)
         .map((chord) => chord!.code);
-      expect(new Set(plainCtrl), host).toEqual(new Set(host === "electron" ? ["Equal", "Minus", "Digit0", "Tab"] : ["Equal", "Minus", "Digit0"]));
+      expect(new Set(plainCtrl), host).toEqual(new Set(host === "electron" ? ["Equal", "Minus", "Digit0", "Tab", "PageUp", "PageDown"] : ["Equal", "Minus", "Digit0"]));
     }
     expect(pc.some((command) => command.electron?.meta || command.browser?.meta)).toBe(false);
   });

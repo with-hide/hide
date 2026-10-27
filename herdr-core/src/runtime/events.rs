@@ -1710,10 +1710,10 @@ pub(super) enum Event {
 /// The web shell rebinds a handful of pane commands; the bound keeps a
 /// malformed client from growing the persisted state without limit.
 // The desktop host checks a reported set against the same caps
-// (desktop/src/main/menu.ts); change them together. 32 holds every editable
-// pane command (the area focus and resize commands made it 17) with room to
+// (desktop/src/main/menu.ts); change them together. 48 holds every editable
+// pane command (34 once the neighbouring tab steps joined) with room to
 // spare, and the desktop test fails before a new one would not fit.
-const BINDINGS_CAP: usize = 32;
+const BINDINGS_CAP: usize = 48;
 const BINDING_TEXT_CAP: usize = 64;
 
 /// Whether a stored shortcut map is within the caps a host's set may use;

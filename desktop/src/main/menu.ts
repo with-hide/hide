@@ -35,6 +35,8 @@ const KEY_NAMES: Record<string, string> = {
   ArrowDown: "Down",
   ArrowLeft: "Left",
   ArrowRight: "Right",
+  PageUp: "PageUp",
+  PageDown: "PageDown",
 };
 
 /** A registry chord as an Electron accelerator ("Shift+Command+T", "Control+Shift+T"). */
@@ -63,6 +65,7 @@ export const MENU_LAYOUT: Readonly<Record<"app" | "File" | "Edit" | "View" | "Pa
     "open_file",
     null,
     "recent_area_tab", "previous_recent_area_tab",
+    "next_tab", "previous_tab",
     "recent_panel", "previous_recent_panel",
     "recent_project", "previous_recent_project",
     null,
@@ -106,7 +109,7 @@ function commandItem(command: Command, send: (id: CommandId) => void, t: TFuncti
 // (`BINDINGS_CAP` and `BINDING_TEXT_CAP` in herdr-core/src/runtime/events.rs);
 // change them together. The cap holds every editable command with room to
 // spare: `menu.test.ts` fails when a new one would no longer fit.
-export const BINDINGS_CAP = 32;
+export const BINDINGS_CAP = 48;
 const BINDING_TEXT_CAP = 64;
 
 /**
