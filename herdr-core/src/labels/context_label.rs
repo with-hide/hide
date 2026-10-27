@@ -303,8 +303,6 @@ struct EndAnswer {
     line: String,
     end: StoppedEnd,
     work: crate::links::ledger::TurnJudgment,
-    /// Absent from a provider that left it out: the label stands without it.
-    #[serde(default)]
     improvements: Vec<ImprovementAnswer>,
 }
 
@@ -522,6 +520,10 @@ pub(crate) fn parse_text(phase: AnalysisPhase, raw: &str) -> Result<Analysis> {
     if phase == AnalysisPhase::TurnEnd && value.get("work").is_none() {
         value["work"] = json!({"missed":[],"resolved":[],"artifacts":[]});
     }
+    // And the fixtures that predate v23's improvements.
+    if phase == AnalysisPhase::TurnEnd && value.get("improvements").is_none() {
+        value["improvements"] = json!([]);
+    }
     // Likewise the fixtures that predate v20's request summaries and v21's
     // closed flow line.
     if value.get("requests").is_none() {
@@ -543,7 +545,7 @@ mod tests {
     fn end_answer(work: Value, end: &str) -> Value {
         json!({
             "goal": "출시 전 버그 수정 묶음", "goal_update": "replace", "closed_result": "",
-            "requests": [], "line": "네 가지 수정 중", "end": end, "work": work,
+            "requests": [], "line": "네 가지 수정 중", "end": end, "work": work, "improvements": [],
         })
     }
 
@@ -569,6 +571,7 @@ mod tests {
             if phase == AnalysisPhase::TurnEnd {
                 answer["end"] = json!("done");
                 answer["work"] = work(json!([]));
+                answer["improvements"] = json!([]);
             }
             let parsed = parse(phase, OutputLanguage::Korean, answer.clone()).unwrap();
             assert_eq!(parsed.requests[0].id, "r1");
@@ -628,6 +631,7 @@ mod tests {
                 let object = answer.as_object_mut().unwrap();
                 object.remove("end");
                 object.remove("work");
+                object.remove("improvements");
             }
             answer["closed_result"] = json!(format!(" PRD 작성 완료, {}", "결".repeat(200)));
             let parsed = parse(phase, OutputLanguage::Korean, answer.clone()).unwrap();
@@ -784,7 +788,7 @@ mod tests {
                 .get("improvements")
                 .is_none()
         );
-        assert!(!start.system.contains("improvements"));
+        assert!(!start.system.contains("searched_again"));
 
         let label = end_answer(work(json!([])), "done");
         let mut with = label.clone();

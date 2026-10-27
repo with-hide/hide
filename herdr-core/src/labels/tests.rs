@@ -137,9 +137,13 @@ impl AiBackend for Scripted {
             .pop_front()
             .ok_or_else(|| AiError::Transient("no scripted answer".to_owned()))?;
         // An answer that does not script its request summaries summarizes
-        // every request the input owes one, as a provider is asked to.
+        // every request the input owes one, as a provider is asked to, and
+        // a turn end that scripts no improvements names none.
         let mut value = value;
         if let Some(answer) = value.as_object_mut() {
+            if answer.contains_key("end") {
+                answer.entry("improvements").or_insert_with(|| json!([]));
+            }
             let summary = match answer.get("goal").and_then(Value::as_str) {
                 Some(goal) => format!("{goal} 요청"),
                 None => "요청 요약".to_owned(),
@@ -2511,6 +2515,7 @@ fn a_null_goal_is_valid_but_an_absent_or_invalid_goal_is_not() {
         if phase == AnalysisPhase::TurnEnd {
             answer["end"] = json!("done");
             answer["work"] = json!({"missed":[],"resolved":[],"artifacts":[]});
+            answer["improvements"] = json!([]);
         }
         let parsed = parse(phase, hide_ai::OutputLanguage::Korean, answer.clone()).unwrap();
         assert_eq!(parsed.goal, None);
@@ -2713,7 +2718,7 @@ fn a_long_line_is_cut_between_words_and_a_question_stays_a_question() {
             language,
             json!({
                 "goal": null, "goal_update": "keep", "closed_result": "", "requests": [], "line": line, "end": end,
-                "work": {"missed": [], "resolved": [], "artifacts": []},
+                "work": {"missed": [], "resolved": [], "artifacts": []}, "improvements": [],
             }),
         )
         .unwrap()
