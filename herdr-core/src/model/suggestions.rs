@@ -98,7 +98,7 @@ pub struct SuggestionSettingsSnapshot {
     pub apply_mode: ApplyMode,
     /// Every signal in a fixed order, with its switch.
     pub signals: Vec<SuggestionSignalSnapshot>,
-    /// Lines the operator struck with `안 함`, which ⚙ restores (D-43).
+    /// Lines the operator skipped with `넘어가기`, which ⚙ restores (D-43).
     pub dismissed: Vec<SuggestionDismissedSnapshot>,
 }
 
@@ -124,6 +124,10 @@ pub struct SuggestionDismissedSnapshot {
     pub id: String,
     pub discomfort: Option<String>,
     pub basis: Option<SuggestionBasisSnapshot>,
+    /// The skip may still bring the line back once when its evidence
+    /// doubles; false once it came back and was skipped again, which is for
+    /// good (D-43).
+    pub may_return: bool,
 }
 
 /// The signal and tag a line the deterministic grouping wrote rests on; the
@@ -205,6 +209,9 @@ pub struct SuggestionRowSnapshot {
     pub auto: bool,
     /// Why a new suggestion waits instead of being applied.
     pub hold: Option<SuggestionHold>,
+    /// A new suggestion that rose again after the operator skipped it
+    /// (`넘어갔지만 다시 생겼어요`, D-43); skipping it now is for good.
+    pub returned_after_skip: bool,
     /// The problem came back after its fix merged (`문서로는 안 됐어요`).
     pub escalated: Option<SuggestionEscalationSnapshot>,
     pub evidence: Vec<SuggestionEvidenceSnapshot>,
@@ -264,7 +271,7 @@ pub enum SuggestionAttemptPhase {
     PrOpen,
     /// Its checks failed and the agent is not working (B12).
     CiFailed,
-    /// The agent ended with no pull request (B12): `다시 시도` and `안 함`.
+    /// The agent ended with no pull request (B12): `다시 시도` and `넘어가기`.
     Failed,
     /// The issue is open (B14).
     IssueOpen,

@@ -185,7 +185,11 @@ fn basis(line: &Line) -> Option<SuggestionBasisSnapshot> {
         })
 }
 
-fn settings(settings: &Settings, notebook: &Notebook) -> SuggestionSettingsSnapshot {
+fn settings(
+    settings: &Settings,
+    notebook: &Notebook,
+    lives: &BTreeMap<LineId, LineLife>,
+) -> SuggestionSettingsSnapshot {
     let mut dismissed = notebook
         .lines
         .iter()
@@ -214,6 +218,7 @@ fn settings(settings: &Settings, notebook: &Notebook) -> SuggestionSettingsSnaps
                 id: row_id(line.id),
                 discomfort: line.discomfort.clone(),
                 basis: basis(line),
+                may_return: lives.get(&line.id).is_none_or(LineLife::skip_may_return),
             })
             .collect(),
     }
@@ -256,6 +261,7 @@ pub fn project(input: &ReadInput<'_>) -> ProjectSuggestionsSnapshot {
                 auto: life.attempt.as_ref().is_some_and(|attempt| attempt.auto),
                 hold: (state == SuggestionState::New && auto_held)
                     .then_some(SuggestionHold::AutoPrUnreviewed),
+                returned_after_skip: state == SuggestionState::New && life.rose_after_skip(),
                 escalated: life
                     .escalated_from
                     .as_ref()
@@ -323,7 +329,7 @@ pub fn project(input: &ReadInput<'_>) -> ProjectSuggestionsSnapshot {
         enabled: input.state.settings.hide_ai_enabled,
         intro_seen: input.intro_seen,
         status,
-        settings: settings(&input.state.settings, input.notebook),
+        settings: settings(&input.state.settings, input.notebook, input.lives),
         rows,
         ..ProjectSuggestionsSnapshot::default()
     }
