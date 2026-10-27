@@ -46,6 +46,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use hide_platform::programs::Program;
 use serde::{Deserialize, Serialize};
 
 pub use agents::{
@@ -280,8 +281,9 @@ pub struct KitTarget {
     /// The `herdr` CLI, needed only to take out a GitHub install of the
     /// retired labels plugin; `None` when the machine has none Hide can find.
     pub herdr_bin: Option<PathBuf>,
-    /// The machine's `codex`, `None` when Hide finds none.
-    pub codex: Option<PathBuf>,
+    /// The machine's `codex`, found on the agents' search
+    /// (`agents::search_path`) and run with it; `None` when Hide finds none.
+    pub codex: Option<Program>,
     /// The account's login shell, asked for the `PATH` its startup files set
     /// up, so an agent's CLI is found where the operator's terminal finds it
     /// (`agents::Detection`). `None` asks nothing: Windows has no login
@@ -701,7 +703,7 @@ fn turn_codex_daemon_off(target: &KitTarget) -> CodexDaemonOff {
         DaemonSetting, Stopped, SwitchFailure, read_setting, stop, turn_off,
     };
     let failed = |reason, detail: String| CodexDaemonOff::Failed { reason, detail };
-    let Some(codex) = target.codex.as_deref() else {
+    let Some(codex) = target.codex.as_ref() else {
         return failed(
             CodexDaemonOffFailure::CodexMissing,
             "no codex program was found".to_owned(),
@@ -1004,7 +1006,7 @@ fn codex_read_failure(
 
 fn codex_daemon(target: &KitTarget) -> DaemonRead {
     use hide_agent_hooks::codex_daemon::{DaemonSetting, daemon_running, read_setting};
-    let Some(codex) = target.codex.as_deref() else {
+    let Some(codex) = target.codex.as_ref() else {
         return DaemonRead::default();
     };
     let (feature, on, unread) = match read_setting(codex, &target.home, &target.stop) {

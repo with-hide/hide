@@ -1285,7 +1285,9 @@ fn read_raw_stdin_before_deadline(deadline: Instant) -> Option<(Vec<u8>, bool)> 
 
 fn run_doctor(arguments: &[String]) -> Result<String, String> {
     let home = home_directory().ok_or_else(|| "HOME is not set".to_owned())?;
-    let diagnosis = Diagnosis::read(&home);
+    let search = hide_platform::programs::account_path()
+        .ok_or_else(|| "this account's program search could not be read".to_owned())?;
+    let diagnosis = Diagnosis::read(&home, &search);
     if arguments.iter().any(|argument| argument == "--json") {
         serde_json::to_string_pretty(&diagnosis)
             .map_err(|error| format!("diagnosis could not be encoded: {error}"))

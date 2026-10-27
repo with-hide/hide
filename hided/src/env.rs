@@ -298,6 +298,7 @@ impl Env {
                     &NEVER,
                     "herdr",
                 )
+                .map(hide_platform::programs::Program::into_path)
             })
     }
 }

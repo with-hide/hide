@@ -890,7 +890,7 @@ mod tests {
 
         // The build directory goes away, which is the whole incident.
         fs::remove_file(&helper).unwrap();
-        let diagnosed = crate::Diagnosis::read(fixture.home());
+        let diagnosed = crate::Diagnosis::read(fixture.home(), std::ffi::OsStr::new(""));
         let row = diagnosed
             .runtimes
             .iter()

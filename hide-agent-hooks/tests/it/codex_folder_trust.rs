@@ -11,11 +11,12 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 
 use hide_agent_hooks::folder_trust::{self, Agent, Tools};
+use hide_platform::programs::{self, Program};
 use serde_json::{Value, json};
 
 struct Fixture {
     home: tempfile::TempDir,
-    codex: PathBuf,
+    codex: Program,
     stop: AtomicBool,
     main: PathBuf,
     tree: PathBuf,
@@ -25,8 +26,11 @@ impl Fixture {
     fn new() -> Self {
         let home = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(home.path().join(".codex")).unwrap();
-        let codex = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake-codex.py");
-        crate::stand_ins::ready(&codex);
+        let codex = Program::named(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake-codex.py"),
+            programs::cli_path_with(home.path(), None).unwrap(),
+        );
+        crate::stand_ins::ready(codex.path());
         let (main, tree) = linked_worktree(home.path());
         Self {
             home,

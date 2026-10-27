@@ -228,8 +228,8 @@ pub fn account_path() -> Option<OsString> {
 }
 
 /// The program `name` on [`account_path`].
-pub fn find_cli(name: &str) -> Option<PathBuf> {
-    host::find_program(&account_path()?, name)
+pub fn find_cli(name: &str) -> Option<Program> {
+    Program::find(&account_path()?, name)
 }
 
 /// A command that runs `program` the way the account's own terminal would:
@@ -404,8 +404,58 @@ pub fn find_cli_with(
     login_shell: Option<&Path>,
     stop: &AtomicBool,
     name: &str,
-) -> Option<PathBuf> {
-    host::find_program(&search_path(home, login_shell, stop)?, name)
+) -> Option<Program> {
+    Program::find(&search_path(home, login_shell, stop)?, name)
+}
+
+/// A program that was found, and the `PATH` it was found on, which it is run
+/// with. A CLI installed as a script starts its interpreter by name (nvm's
+/// and pnpm's `codex` run `node`), so a program found on the login shell's
+/// folders and run with a daemon's `PATH` dies looking for its interpreter,
+/// and a version asked of it with another `PATH` may be another copy's.
+/// Whatever finds an agent's CLI hands this on, so what is checked, what is
+/// asked and what is run are the one program.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Program {
+    path: PathBuf,
+    search: OsString,
+}
+
+impl Program {
+    /// The program `name` on `search`, the first folder that holds it.
+    pub fn find(search: &OsStr, name: &str) -> Option<Self> {
+        Some(Self {
+            path: host::find_program(search, name)?,
+            search: search.to_owned(),
+        })
+    }
+
+    /// A program the caller names by file, run with `search`.
+    pub fn named(path: PathBuf, search: OsString) -> Self {
+        Self { path, search }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn into_path(self) -> PathBuf {
+        self.path
+    }
+
+    /// The `PATH` the program was found on and is run with.
+    pub fn search(&self) -> &OsStr {
+        &self.search
+    }
+
+    /// A command that runs the program with the `PATH` it was found on. A
+    /// caller that rebuilds the environment sets [`Self::search`] again
+    /// after it.
+    pub fn command(&self) -> Command {
+        let mut command = Command::new(&self.path);
+        command.env("PATH", &self.search);
+        command
+    }
 }
 
 /// The folders installers put a CLI in that a daemon's `PATH` may not reach.

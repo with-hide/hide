@@ -39,6 +39,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 use hide_platform::process::OwnedChild;
+use hide_platform::programs::Program;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -176,7 +177,7 @@ impl TrustFailure {
 /// (empty unless the kit installed it); each is trusted as exactly the entry
 /// the kit saw Herdr write.
 pub fn trust_own_hooks<'a>(
-    codex: &Path,
+    codex: &Program,
     home: &Path,
     helper: impl Into<crate::route::HookTarget<'a>>,
     herdr: &[HookEntry],
@@ -188,7 +189,7 @@ pub fn trust_own_hooks<'a>(
 /// [`trust_own_hooks`] with the bounds named, for a caller (a test) that
 /// needs a Codex that does not answer to be given up on sooner.
 pub fn trust_own_hooks_within<'a>(
-    codex: &Path,
+    codex: &Program,
     home: &Path,
     helper: impl Into<crate::route::HookTarget<'a>>,
     herdr: &[HookEntry],
@@ -523,32 +524,26 @@ impl<'a> Session<'a> {
     /// same answer as one that does not know `hooks/list` (D-07); a Codex that
     /// starts, speaks, and then fails stays a failure.
     fn start(
-        codex: &Path,
+        codex: &Program,
         home: &Path,
         stop: &'a AtomicBool,
         limits: Limits,
     ) -> Result<Started<'a>, TrustFailure> {
-        let path = crate::diagnosis::cli_path(home).ok_or_else(|| {
-            TrustFailure::new(
-                TrustFailureKind::CouldNotStart,
-                format!("a folder under {} cannot be put on a PATH", home.display()),
-            )
-        })?;
-        let mut command = Command::new(codex);
+        let mut command = Command::new(codex.path());
         hide_platform::process::restrict_to_login_environment(&mut command);
         command
             .arg("app-server")
             .current_dir(home)
             .env(hide_platform::host::HOME_VARIABLE, home)
             .env("CODEX_HOME", AgentRuntime::Codex.home_directory(home))
-            .env("PATH", path)
+            .env("PATH", codex.search())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
         let mut child = OwnedChild::spawn(&mut command).map_err(|error| {
             TrustFailure::new(
                 TrustFailureKind::CouldNotStart,
-                format!("{} could not start: {error}", codex.display()),
+                format!("{} could not start: {error}", codex.path().display()),
             )
         })?;
         let stdin = child.take_stdin();
@@ -975,7 +970,7 @@ fn config_failure(home: &Path, failure: TrustFailure) -> crate::install::Install
 /// A session for a folder trust change; a Codex with no app-server cannot
 /// record one.
 fn project_session<'a>(
-    codex: &Path,
+    codex: &Program,
     home: &Path,
     stop: &'a AtomicBool,
 ) -> Result<Session<'a>, crate::install::InstallFailure> {
@@ -1001,7 +996,7 @@ fn project_session<'a>(
 /// same write takes out Hide's trust of each folder in `gone`, whose folder no
 /// longer exists.
 pub(crate) fn add_project_trust(
-    codex: &Path,
+    codex: &Program,
     home: &Path,
     stop: &AtomicBool,
     key: &str,
@@ -1066,7 +1061,7 @@ pub(crate) fn add_project_trust(
 /// whole entry when trust is all it holds, its `trust_level` otherwise.
 /// Answers how many entries changed.
 pub(crate) fn remove_project_trust(
-    codex: &Path,
+    codex: &Program,
     home: &Path,
     stop: &AtomicBool,
     keys: &[String],

@@ -26,11 +26,13 @@ pub fn device_target(
     herdr_socket: &Path,
     stop: Arc<AtomicBool>,
 ) -> KitTarget {
+    let login_shell = crate::agents::login_shell();
     let pinned = crate::device_herdr::pinned_herdr(root);
     let herdr_bin = if pinned.is_file() {
         Some(pinned)
     } else {
-        find_herdr(home)
+        crate::agents::find(home, login_shell.as_deref(), &stop, "herdr")
+            .map(|herdr| herdr.path().to_path_buf())
     };
     let relocated = std::env::var_os("HCOORD_HOME")
         .filter(|value| !value.is_empty())
@@ -44,29 +46,12 @@ pub fn device_target(
         owned_roots: vec![root.to_path_buf(), crate::layout::legacy_helper_root(home)],
         herdr_socket: herdr_socket.to_path_buf(),
         herdr_bin,
-        codex: hide_agent_hooks::codex_daemon::find_codex(home),
-        login_shell: crate::agents::login_shell(),
+        codex: crate::agents::find(home, login_shell.as_deref(), &stop, "codex"),
+        login_shell,
         legacy_coordination_home: relocated,
         user_agents: crate::login_agents(home),
         retirement_projects: Vec::new(),
         legacy: crate::legacy::device(home, root),
         stop,
     }
-}
-
-/// The device's `herdr`: the first on `PATH`, then the usual install
-/// folders. An SSH exec channel runs with a short `PATH`, so the folders a
-/// login shell would add are looked in too.
-fn find_herdr(home: &Path) -> Option<PathBuf> {
-    let mut candidates = Vec::new();
-    if let Some(path) = std::env::var_os("PATH") {
-        candidates.extend(std::env::split_paths(&path).map(|folder| folder.join("herdr")));
-    }
-    candidates.extend([
-        home.join(".local/bin/herdr"),
-        home.join(".cargo/bin/herdr"),
-        PathBuf::from("/opt/homebrew/bin/herdr"),
-        PathBuf::from("/usr/local/bin/herdr"),
-    ]);
-    candidates.into_iter().find(|candidate| candidate.is_file())
 }

@@ -49,7 +49,7 @@ pub(crate) fn ensure(target: &KitTarget, herdr: &[HookEntry]) -> Option<String> 
             return Some(reason.to_owned());
         }
     };
-    let reason = match target.codex.as_deref() {
+    let reason = match target.codex.as_ref() {
         None => None,
         Some(codex) => match trust_own_hooks(codex, &target.home, hook_target, herdr, &target.stop)
         {

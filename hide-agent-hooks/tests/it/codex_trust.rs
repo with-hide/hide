@@ -15,13 +15,14 @@ use hide_agent_hooks::AgentRuntime;
 use hide_agent_hooks::codex_trust::{
     HookEntry, Limits, TrustFailureKind, TrustOutcome, trust_own_hooks, trust_own_hooks_within,
 };
+use hide_platform::programs::{self, Program};
 use serde_json::{Value, json};
 
 const HELPER: &str = "/kit/hide-agent-hooks";
 
 struct Fixture {
     home: tempfile::TempDir,
-    codex: PathBuf,
+    codex: Program,
     stop: AtomicBool,
 }
 
@@ -29,10 +30,13 @@ impl Fixture {
     fn new() -> Self {
         let home = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(home.path().join(".codex")).unwrap();
-        let codex = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake-codex.py");
+        let codex = Program::named(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fake-codex.py"),
+            programs::cli_path_with(home.path(), None).unwrap(),
+        );
         // Its first start in a checkout would wait inside `initialize`'s
         // deadline (issue 824).
-        crate::stand_ins::ready(&codex);
+        crate::stand_ins::ready(codex.path());
         Self {
             home,
             codex,
@@ -371,7 +375,10 @@ fn what_codex_does_not_do_is_a_failure_with_its_cause() {
     }
 
     let missing = trust_own_hooks(
-        &fixture.home.path().join("no-such-codex"),
+        &Program::named(
+            fixture.home.path().join("no-such-codex"),
+            programs::cli_path_with(fixture.home.path(), None).unwrap(),
+        ),
         fixture.home.path(),
         crate::hook_target(Path::new(HELPER)),
         &[],

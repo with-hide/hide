@@ -940,7 +940,7 @@ fn a_native_archive_worker_refuses_retired_control_before_creation_or_start() {
 #[cfg(unix)]
 fn native_archive_current_journey(kind: &'static str, flag: &str) {
     assert_eq!(
-        hide_platform::programs::find_cli(kind),
+        hide_platform::programs::find_cli(kind).map(hide_platform::programs::Program::into_path),
         Some(
             std::path::PathBuf::from(std::env::var_os("HOME").unwrap())
                 .join("bin")

@@ -14,6 +14,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
 use hide_agent_hooks::folder_trust::{self, Agent, Tools};
+use hide_platform::programs::{self, Program};
 use serde_json::{Value, json};
 
 /// One `codex app-server` over stdio, ended when dropped.
@@ -176,8 +177,12 @@ fn the_real_codex_reads_the_worktree_trust_hide_records_until_hide_takes_it_out(
     std::fs::create_dir_all(home.path().join(".codex")).unwrap();
     let (main, task, other) = repository(home.path());
     let stop = AtomicBool::new(false);
+    let program = Program::named(
+        codex.clone(),
+        programs::cli_path_with(home.path(), None).unwrap(),
+    );
     let tools = Tools {
-        codex: Some(&codex),
+        codex: Some(&program),
         stop: &stop,
     };
 

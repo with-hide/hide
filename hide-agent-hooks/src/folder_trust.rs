@@ -49,6 +49,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use hide_agent_adapter::LaunchDialect;
+use hide_platform::programs::Program;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -180,7 +181,7 @@ impl Agent {
 /// nothing.
 #[derive(Clone, Copy)]
 pub struct Tools<'a> {
-    pub codex: Option<&'a Path>,
+    pub codex: Option<&'a Program>,
     pub stop: &'a AtomicBool,
 }
 
@@ -492,7 +493,7 @@ fn main_checkout(worktree: &Path) -> Option<PathBuf> {
     hide_platform::fs::identity::canonical(common.parent()?).ok()
 }
 
-fn codex_program<'a>(home: &Path, tools: Tools<'a>) -> Result<&'a Path, InstallFailure> {
+fn codex_program<'a>(home: &Path, tools: Tools<'a>) -> Result<&'a Program, InstallFailure> {
     tools.codex.ok_or_else(|| InstallFailure::NotWritable {
         path: Agent::Codex.settings_path(home).display().to_string(),
         detail: "no codex program was found to record Codex's trust through".to_owned(),

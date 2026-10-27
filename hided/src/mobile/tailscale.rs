@@ -49,7 +49,8 @@ impl CliSource {
         }
         self.search_path
             .as_deref()
-            .and_then(|path| hide_platform::host::find_program(path.as_ref(), "tailscale"))
+            .and_then(|path| hide_platform::programs::Program::find(path.as_ref(), "tailscale"))
+            .map(hide_platform::programs::Program::into_path)
     }
 }
 

@@ -72,6 +72,7 @@ pub fn local_target(
     let relocated = std::env::var_os("HCOORD_HOME")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from);
+    let login_shell = crate::agents::login_shell();
     KitTarget {
         home: home.to_path_buf(),
         kit_dir: kit_dir.to_path_buf(),
@@ -84,8 +85,8 @@ pub fn local_target(
         ],
         herdr_socket: herdr_socket.to_path_buf(),
         herdr_bin: herdr.is_file().then(|| herdr.clone()),
-        codex: hide_agent_hooks::codex_daemon::find_codex(home),
-        login_shell: crate::agents::login_shell(),
+        codex: crate::agents::find(home, login_shell.as_deref(), &stop, "codex"),
+        login_shell,
         legacy_coordination_home: relocated,
         user_agents: crate::login_agents(home),
         retirement_projects: Vec::new(),
