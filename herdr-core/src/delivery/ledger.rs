@@ -581,6 +581,34 @@ impl Ledger {
         }
         Ok(bytes)
     }
+
+    /// The check [`Self::bytes`] makes, counting the encoding instead of
+    /// keeping it, so it can follow every request of a batch.
+    pub fn check(&self) -> Result<(), String> {
+        self.validate()?;
+        match serde_json::to_writer(&mut Length(0), self) {
+            Ok(()) => Ok(()),
+            Err(error) if error.is_io() => Err("capacity".into()),
+            Err(_) => Err("ledger_unavailable".into()),
+        }
+    }
+}
+
+/// Counts the bytes written to it and refuses those past the file's limit.
+struct Length(usize);
+
+impl std::io::Write for Length {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0 += bytes.len();
+        if self.0 > FILE_LIMIT {
+            return Err(std::io::ErrorKind::FileTooLarge.into());
+        }
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 pub fn load(path: &Path) -> Result<Ledger, String> {
@@ -693,12 +721,18 @@ impl std::error::Error for SaveError {
 }
 
 pub fn save(path: &Path, ledger: &Ledger) -> Result<(), SaveError> {
-    let bytes = ledger.bytes().map_err(SaveError::Validation)?;
+    write(path, &ledger.bytes().map_err(SaveError::Validation)?)
+}
+
+/// Replaces the file with `bytes`, which [`Ledger::bytes`] made, so a store
+/// that already checked and encoded its ledger writes it without encoding it
+/// again.
+pub(crate) fn write(path: &Path, bytes: &[u8]) -> Result<(), SaveError> {
     // The parent and its durable ancestry are established by initialization,
     // never opportunistically created by a transaction after admission.
     hide_platform::fs::atomic::write_file_durable(
         path,
-        &bytes,
+        bytes,
         hide_platform::fs::atomic::DurableAccess::Private,
     )
     .map_err(SaveError::Persistence)?;

@@ -810,135 +810,25 @@ fn run(
                 continue;
             }
         }
-        let mut candidate = (*state).clone();
-        // First, so a deadline and a letter sent in this batch read the
-        // machines' clocks as they are now.
-        candidate.observe_reach(&reach, now);
-        candidate.expire(now);
-        candidate.end_overdue_answer_waits(now);
-        let moved = crate::coordination::rebind(&mut candidate, &rebinds);
-        let ended = crate::coordination::end_gone(&mut candidate, &gone, now);
-        let mut results = Vec::with_capacity(batch.len());
-        let mut transitions = !ended.is_empty() || !moved.is_empty();
-        for request in &batch {
-            let before = candidate.clone();
-            let current = match &request.effect {
-                Effect::Agents {
-                    authority, actor, ..
-                } => runtime
-                    .lock()
-                    .map_err(|_| "delivery_unavailable".to_owned())
-                    .and_then(|guard| {
-                        if actor.code_owned() {
-                            // Only the core's code-owned callers
-                            // hold this authority; neither has a pane to
-                            // re-check.
-                            return guard
-                                .code_owned_authority_current(&authority.caller, actor)
-                                .then_some(())
-                                .ok_or_else(|| "caller_identity_changed".into());
-                        }
-                        let context = guard
-                            .workspace_control_query(
-                                &actor.device_id,
-                                &authority.caller,
-                                Query::Info,
-                            )
-                            .map_err(|_| "caller_context_changed")?
-                            .context;
-                        if context != authority.context || !guard.delivery_identity_current(actor) {
-                            return Err("caller_identity_changed".into());
-                        }
-                        Ok(())
-                    }),
-                Effect::Command {
-                    authority,
-                    actor,
-                    target,
-                    command,
-                } => {
-                    let command: &Command = command;
-                    // The intent lookup uses the owned candidate outside Runtime.
-                    // Replays converge even after the original recipient leaves.
-                    let target_required = matches!(
-                        command,
-                        Command::WatchStart { .. } | Command::WatchAssign { .. }
-                    ) || matches!(command, Command::Send { intent, .. }
-                            if super::mailbox::existing_intent(&candidate, actor, intent, now).is_none());
-                    runtime
-                        .lock()
-                        .map_err(|_| "delivery_unavailable".to_owned())
-                        .and_then(|guard| {
-                            if actor.code_owned() {
-                                if !guard.code_owned_authority_current(&authority.caller, actor) {
-                                    return Err("caller_identity_changed".into());
-                                }
-                            } else {
-                                // The caller is the agent's own pane.
-                                let current = guard
-                                    .workspace_control_query(
-                                        &actor.device_id,
-                                        &authority.caller,
-                                        Query::Info,
-                                    )
-                                    .map_err(|_| "caller_context_changed")?
-                                    .context;
-                                if current != authority.context {
-                                    return Err("caller_context_changed".into());
-                                }
-                                actor.require_native_identity()?;
-                                if !guard.delivery_identity_current(actor) {
-                                    return Err("caller_identity_changed".into());
-                                }
-                            }
-                            if target_required {
-                                let target = target.as_ref().ok_or("target_unavailable")?;
-                                if matches!(
-                                    command,
-                                    Command::Send { .. } | Command::WatchAssign { .. }
-                                ) {
-                                    target.actor.require_native_identity()?;
-                                }
-                                let current = if target.actor.code_owned() {
-                                    false
-                                } else {
-                                    guard.delivery_identity_current(&target.actor)
-                                };
-                                if !current {
-                                    return Err("target_identity_changed".into());
-                                }
-                            }
-                            Ok(())
-                        })
-                }
-                Effect::BellAttempt { id, observed, .. } => runtime
-                    .lock()
-                    .map_err(|_| "delivery_unavailable".to_owned())
-                    .and_then(|guard| {
-                        guard
-                            .delivery_bell_current(id, observed, None)
-                            .map_err(|_| "doorbell_observation_changed".into())
-                    }),
-                _ => Ok(()),
-            };
-            let result = current.and_then(|()| apply(&mut candidate, request, now));
-            let result = result.and_then(|(value, publish)| {
-                candidate.bytes()?;
-                transitions |= publish;
-                Ok(value)
-            });
-            if result.is_err() {
-                candidate = before;
-            }
-            results.push(result);
-        }
-        // A letter this batch sent to a machine without a clock gets one.
-        candidate.observe_reach(&reach, now);
-        let changed = candidate != *state;
-        let mut saved = if changed {
-            ledger::save(&path, &candidate)
-        } else {
-            Ok(())
+        let upkeep = Upkeep {
+            reach,
+            gone,
+            rebinds,
+        };
+        let Settled {
+            ledger: candidate,
+            bytes,
+            results,
+            mut transitions,
+            moved,
+            ended,
+        } = settle(&runtime, &state, &upkeep, &batch, now);
+        transitions |= !ended.is_empty() || !moved.is_empty();
+        let changed = bytes.is_some();
+        let mut saved = match bytes {
+            None => Ok(()),
+            Some(Ok(bytes)) => ledger::write(&path, &bytes),
+            Some(Err(code)) => Err(ledger::SaveError::Validation(code)),
         };
         if let Err(error) = &saved {
             if error.uncertain() {
@@ -1001,6 +891,249 @@ fn run(
     }
     while let Ok(request) = requests.try_recv() {
         let _ = request.reply.send(Err("delivery_unavailable".into()));
+    }
+}
+
+/// What one batch made of the published ledger.
+struct Settled {
+    ledger: Ledger,
+    /// The file's new bytes, once the batch changed the ledger: the batch's
+    /// one encoding, or why the ledger cannot be written.
+    bytes: Option<Result<Vec<u8>, String>>,
+    results: Vec<Result<Value, String>>,
+    transitions: bool,
+    moved: Moved,
+    ended: Ended,
+}
+
+/// Applies `batch` after the store's upkeep to one copy of `state`. A request
+/// lands as it would alone: one that is refused, or that would leave a
+/// ledger the file cannot hold, leaves the copy as it was before it.
+fn settle(
+    runtime: &Mutex<Runtime>,
+    state: &Ledger,
+    upkeep: &Upkeep,
+    batch: &[Request],
+    now: u64,
+) -> Settled {
+    // The batch's one copy of the ledger; a request applies to it in place.
+    let mut candidate = state.clone();
+    let (moved, ended) = upkeep.apply(&mut candidate, now);
+    let mut results = Vec::with_capacity(batch.len());
+    let mut accepted = vec![false; batch.len()];
+    let mut transitions = false;
+    for (index, request) in batch.iter().enumerate() {
+        let result = match current(runtime, request, &candidate, now) {
+            Err(code) => Err(code),
+            // Checked after each request: a later one that drops a letter
+            // can bring the batch's end back under a limit this one broke.
+            Ok(()) => match apply(&mut candidate, request, now).and_then(|landed| {
+                candidate.check()?;
+                Ok(landed)
+            }) {
+                Ok((value, publish)) => {
+                    transitions |= publish;
+                    accepted[index] = true;
+                    Ok(value)
+                }
+                Err(code) => {
+                    // A refusal may come after the request changed the copy,
+                    // so the copy is made again without it.
+                    (candidate, transitions) = rebuild(
+                        state,
+                        upkeep,
+                        &batch[..index],
+                        &mut accepted[..index],
+                        &mut results[..index],
+                        now,
+                    );
+                    Err(code)
+                }
+            },
+        };
+        results.push(result);
+    }
+    // A letter this batch sent to a machine without a clock gets one.
+    candidate.observe_reach(&upkeep.reach, now);
+    let bytes = (candidate != *state).then(|| candidate.bytes());
+    Settled {
+        ledger: candidate,
+        bytes,
+        results,
+        transitions,
+        moved,
+        ended,
+    }
+}
+
+/// Whether the caller and target `request` names are still the ones it was
+/// admitted for, read under the runtime lock just before it applies.
+fn current(
+    runtime: &Mutex<Runtime>,
+    request: &Request,
+    candidate: &Ledger,
+    now: u64,
+) -> Result<(), String> {
+    match &request.effect {
+        Effect::Agents {
+            authority, actor, ..
+        } => runtime
+            .lock()
+            .map_err(|_| "delivery_unavailable".to_owned())
+            .and_then(|guard| {
+                if actor.code_owned() {
+                    // Only the core's code-owned callers
+                    // hold this authority; neither has a pane to
+                    // re-check.
+                    return guard
+                        .code_owned_authority_current(&authority.caller, actor)
+                        .then_some(())
+                        .ok_or_else(|| "caller_identity_changed".into());
+                }
+                let context = guard
+                    .workspace_control_query(&actor.device_id, &authority.caller, Query::Info)
+                    .map_err(|_| "caller_context_changed")?
+                    .context;
+                if context != authority.context || !guard.delivery_identity_current(actor) {
+                    return Err("caller_identity_changed".into());
+                }
+                Ok(())
+            }),
+        Effect::Command {
+            authority,
+            actor,
+            target,
+            command,
+        } => {
+            let command: &Command = command;
+            // The intent lookup uses the owned candidate outside Runtime.
+            // Replays converge even after the original recipient leaves.
+            let target_required = matches!(
+                command,
+                Command::WatchStart { .. } | Command::WatchAssign { .. }
+            ) || matches!(command, Command::Send { intent, .. }
+                    if super::mailbox::existing_intent(candidate, actor, intent, now).is_none());
+            runtime
+                .lock()
+                .map_err(|_| "delivery_unavailable".to_owned())
+                .and_then(|guard| {
+                    if actor.code_owned() {
+                        if !guard.code_owned_authority_current(&authority.caller, actor) {
+                            return Err("caller_identity_changed".into());
+                        }
+                    } else {
+                        // The caller is the agent's own pane.
+                        let current = guard
+                            .workspace_control_query(
+                                &actor.device_id,
+                                &authority.caller,
+                                Query::Info,
+                            )
+                            .map_err(|_| "caller_context_changed")?
+                            .context;
+                        if current != authority.context {
+                            return Err("caller_context_changed".into());
+                        }
+                        actor.require_native_identity()?;
+                        if !guard.delivery_identity_current(actor) {
+                            return Err("caller_identity_changed".into());
+                        }
+                    }
+                    if target_required {
+                        let target = target.as_ref().ok_or("target_unavailable")?;
+                        if matches!(command, Command::Send { .. } | Command::WatchAssign { .. }) {
+                            target.actor.require_native_identity()?;
+                        }
+                        let current = if target.actor.code_owned() {
+                            false
+                        } else {
+                            guard.delivery_identity_current(&target.actor)
+                        };
+                        if !current {
+                            return Err("target_identity_changed".into());
+                        }
+                    }
+                    Ok(())
+                })
+        }
+        Effect::BellAttempt { id, observed, .. } => runtime
+            .lock()
+            .map_err(|_| "delivery_unavailable".to_owned())
+            .and_then(|guard| {
+                guard
+                    .delivery_bell_current(id, observed, None)
+                    .map_err(|_| "doorbell_observation_changed".into())
+            }),
+        _ => Ok(()),
+    }
+}
+
+/// What a batch reads from the runtime for the store's own upkeep before its
+/// requests: which machines are reachable and which registrations ended or
+/// moved.
+struct Upkeep {
+    reach: ledger::Reach,
+    gone: std::collections::BTreeMap<String, crate::coordination::PaneGone>,
+    rebinds: std::collections::BTreeMap<String, crate::coordination::Rebind>,
+}
+
+type Moved = Vec<(String, Actor)>;
+type Ended = Vec<(
+    crate::coordination::AgentRecord,
+    crate::coordination::PaneGone,
+)>;
+
+impl Upkeep {
+    /// Brings `ledger` to `now` as every batch does before its requests.
+    fn apply(&self, ledger: &mut Ledger, now: u64) -> (Moved, Ended) {
+        // First, so a deadline and a letter sent in this batch read the
+        // machines' clocks as they are now.
+        ledger.observe_reach(&self.reach, now);
+        ledger.expire(now);
+        ledger.end_overdue_answer_waits(now);
+        let moved = crate::coordination::rebind(ledger, &self.rebinds);
+        let ended = crate::coordination::end_gone(ledger, &self.gone, now);
+        (moved, ended)
+    }
+}
+
+/// The batch's copy made again from `state`: the same upkeep, then the
+/// requests `accepted` marks, in their order, with whether any of them asks
+/// for a publish. Applying a request changes only the ledger it is given,
+/// so each lands as it did the first time, and its result is the one this
+/// copy gave it; one that does not land is refused and logged, and the copy
+/// is made again without it.
+fn rebuild(
+    state: &Ledger,
+    upkeep: &Upkeep,
+    batch: &[Request],
+    accepted: &mut [bool],
+    results: &mut [Result<Value, String>],
+    now: u64,
+) -> (Ledger, bool) {
+    'again: loop {
+        let mut ledger = state.clone();
+        let mut transitions = false;
+        upkeep.apply(&mut ledger, now);
+        for (index, request) in batch.iter().enumerate() {
+            if !accepted[index] {
+                continue;
+            }
+            match apply(&mut ledger, request, now) {
+                Ok((value, publish)) => {
+                    transitions |= publish;
+                    results[index] = Ok(value);
+                }
+                Err(code) => {
+                    accepted[index] = false;
+                    results[index] = Err(code.clone());
+                    crate::diagnostic!(json!({"component":"delivery",
+                        "kind":"ledger.replay_refused","code":code}));
+                    continue 'again;
+                }
+            }
+        }
+        return (ledger, transitions);
     }
 }
 
@@ -1869,5 +2002,387 @@ mod tests {
         assert_eq!(ended[0].0.id, before.letters[0].id);
         assert_eq!(ended[0].1.as_str(), "party_ended");
         assert!(answer_waits_ended(&after, &after).is_empty());
+    }
+
+    /// A tick's reading of a watch whose target cannot be read, as an
+    /// unresolved target's is every tick.
+    fn failed_read(id: &str) -> watch::Reading {
+        watch::Reading {
+            id: id.into(),
+            status: String::new(),
+            status_available: false,
+            state_change_seq: None,
+            status_changed_at_unix_ms: 0,
+            session_modified_at_unix_ms: None,
+            failure: Some("projection_unavailable".into()),
+            gone: false,
+            inactivity_ms: None,
+            asking: false,
+            blocked: false,
+        }
+    }
+
+    #[test]
+    fn a_watch_read_that_keeps_failing_rewrites_the_ledger_only_until_it_is_reported() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, actor, target, path) = fixture(root.path());
+        let mut installed = Ledger::default();
+        let watch = watch::start(&mut installed, &actor, &target.actor, now()).unwrap();
+        // The count an earlier build kept raising every tick.
+        installed.watches[0].activity_failures = 9622;
+        ledger::save(&path, &installed).unwrap();
+        runtime
+            .lock()
+            .unwrap()
+            .publish_delivery(Arc::new(installed), false);
+        // The test's ticks are the only ones: the timed watch producer would
+        // read the fixture's target on its own clock.
+        let (worker, client) = Worker::store(
+            Arc::downgrade(&runtime),
+            ChangeNotifier::noop(),
+            path.clone(),
+        )
+        .unwrap();
+        let tick = || {
+            client
+                .submit(
+                    Effect::Tick(vec![failed_read(&watch.id)]),
+                    Duration::from_secs(5),
+                )
+                .unwrap()
+        };
+        let reported = json!([[watch.id, watch::READ_FAILURES_REPORTED]]);
+        assert_eq!(tick()["failures"], reported);
+        assert_eq!(
+            ledger::load(&path).unwrap().watches[0].activity_failures,
+            watch::READ_FAILURES_REPORTED
+        );
+        let written = hide_platform::fs::identity::file_id(&path).unwrap();
+        for _ in 0..3 {
+            // Still reported every tick, and nothing is written for it.
+            assert_eq!(tick()["failures"], reported);
+        }
+        assert_eq!(
+            hide_platform::fs::identity::file_id(&path).unwrap(),
+            written
+        );
+        drop(worker);
+    }
+
+    fn send(actor: &Actor, target: &Observation, intent: &str, body: &str) -> Request {
+        Request {
+            effect: Effect::Command {
+                authority: authority(actor),
+                actor: actor.clone(),
+                target: Some(Box::new(target.clone())),
+                command: Box::new(Command::Send {
+                    target: "recipient".into(),
+                    intent: intent.into(),
+                    body: body.into(),
+                    kind: "request".into(),
+                    now: false,
+                }),
+            },
+            reply: mpsc::sync_channel(1).0,
+        }
+    }
+
+    fn upkeep() -> Upkeep {
+        Upkeep {
+            reach: ledger::Reach::new(),
+            gone: Default::default(),
+            rebinds: Default::default(),
+        }
+    }
+
+    #[test]
+    fn a_batch_lands_as_its_requests_would_one_at_a_time() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, actor, target, _) = fixture(root.path());
+        let batch = || {
+            let unknown_ack = Request {
+                effect: Effect::Command {
+                    authority: authority(&target.actor),
+                    actor: target.actor.clone(),
+                    target: None,
+                    command: Box::new(Command::Ack {
+                        id: "letter-999999".into(),
+                    }),
+                },
+                reply: mpsc::sync_channel(1).0,
+            };
+            vec![
+                send(&actor, &target, "first", "one"),
+                unknown_ack,
+                send(&actor, &target, "second", "two"),
+                send(&actor, &target, "blank", " "),
+                // The same intent again answers the letter it made.
+                send(&actor, &target, "first", "one"),
+            ]
+        };
+        let state = runtime.lock().unwrap().delivery_state().unwrap();
+        let now = now();
+        let together = settle(&runtime, &state, &upkeep(), &batch(), now);
+        let mut alone = (*state).clone();
+        let mut results = Vec::new();
+        for request in batch() {
+            let settled = settle(&runtime, &alone, &upkeep(), &[request], now);
+            results.extend(settled.results);
+            alone = settled.ledger;
+        }
+        assert_eq!(together.results, results);
+        assert!(together.results[0].is_ok());
+        assert!(together.results[1].is_err());
+        assert_eq!(together.results[3], Err("body_required".into()));
+        assert_eq!(together.results[4], together.results[0]);
+        assert_eq!(together.ledger, alone);
+        assert_eq!(together.ledger.letters.len(), 2);
+        assert_eq!(together.bytes, Some(Ok(together.ledger.bytes().unwrap())));
+    }
+
+    #[test]
+    fn a_request_the_file_cannot_hold_is_refused_alone_within_its_batch() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, actor, target, _) = fixture(root.path());
+        near_limit(&runtime, &actor, &target, 0, 1_100);
+        let body_limit = super::super::BODY_LIMIT;
+        let state = runtime.lock().unwrap().delivery_state().unwrap();
+        let batch = [
+            send(&actor, &target, "fits", "short"),
+            send(&actor, &target, "too-big", &"y".repeat(body_limit)),
+            send(&actor, &target, "after", "short"),
+        ];
+        let settled = settle(&runtime, &state, &upkeep(), &batch, now());
+        assert_eq!(settled.results[1], Err("capacity".into()));
+        // Each sender is answered the letter the file keeps for it.
+        let next = state.next_id;
+        let expected = vec![
+            ("fits".to_owned(), format!("letter-{next}")),
+            ("after".to_owned(), format!("letter-{}", next + 1)),
+        ];
+        assert_eq!(answered(&settled, &[0, 2]), expected);
+        assert_eq!(stored(&settled.ledger, &state), expected);
+        let bytes = settled.bytes.unwrap().unwrap();
+        assert!(bytes.len() <= super::super::FILE_LIMIT);
+        assert_eq!(bytes, settled.ledger.bytes().unwrap());
+    }
+
+    #[test]
+    fn a_request_refused_after_it_changed_the_copy_leaves_later_replies_naming_their_letters() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, actor, target, _) = fixture(root.path());
+        // One short of the total, the oldest finished letter first: the
+        // batch's first send fills the total, and the reply below then drops
+        // the letter it answers to make room, and is refused for it.
+        let mut installed = Ledger::default();
+        let start = now();
+        for index in 0..super::super::LETTER_LIMIT - 1 {
+            let letter = mailbox::send(
+                &mut installed,
+                &actor,
+                &target.actor,
+                &format!("done-{index}"),
+                "x",
+                "report",
+                None,
+                start,
+            )
+            .unwrap();
+            mailbox::apply(
+                &mut installed,
+                &target.actor,
+                None,
+                &Command::Confirm {
+                    ids: vec![letter.id],
+                },
+                start + index as u64,
+            )
+            .unwrap();
+        }
+        let oldest = installed.letters[0].id.clone();
+        runtime
+            .lock()
+            .unwrap()
+            .publish_delivery(Arc::new(installed), false);
+        let state = runtime.lock().unwrap().delivery_state().unwrap();
+        let reply = Request {
+            effect: Effect::Command {
+                authority: authority(&target.actor),
+                actor: target.actor.clone(),
+                target: None,
+                command: Box::new(Command::Reply {
+                    id: oldest,
+                    intent: "answer".into(),
+                    body: "answer".into(),
+                }),
+            },
+            reply: mpsc::sync_channel(1).0,
+        };
+        let batch = [
+            send(&actor, &target, "before", "short"),
+            reply,
+            send(&actor, &target, "after", "short"),
+        ];
+        let settled = settle(&runtime, &state, &upkeep(), &batch, now());
+        assert_eq!(settled.results[1], Err("letter_unavailable".into()));
+        let next = state.next_id;
+        let expected = vec![
+            ("before".to_owned(), format!("letter-{next}")),
+            ("after".to_owned(), format!("letter-{}", next + 1)),
+        ];
+        assert_eq!(answered(&settled, &[0, 2]), expected);
+        assert_eq!(stored(&settled.ledger, &state), expected);
+    }
+
+    /// Publishes a ledger of `open` open letters, then `finished` finished
+    /// ones, the oldest first, whose bodies fill it, the oldest first, up to
+    /// 8,000 bytes below the file's limit.
+    fn near_limit(
+        runtime: &Mutex<Runtime>,
+        actor: &Actor,
+        target: &Observation,
+        open: usize,
+        finished: usize,
+    ) {
+        let mut installed = Ledger::default();
+        for index in 0..open {
+            mailbox::send(
+                &mut installed,
+                actor,
+                &target.actor,
+                &format!("open-{index}"),
+                "open",
+                "report",
+                None,
+                now(),
+            )
+            .unwrap();
+        }
+        let start = now();
+        for index in 0..finished {
+            let letter = mailbox::send(
+                &mut installed,
+                actor,
+                &target.actor,
+                &format!("fill-{index}"),
+                "x",
+                "report",
+                None,
+                start,
+            )
+            .unwrap();
+            mailbox::apply(
+                &mut installed,
+                &target.actor,
+                None,
+                &Command::Confirm {
+                    ids: vec![letter.id],
+                },
+                start + index as u64,
+            )
+            .unwrap();
+        }
+        // A body's `x` is one byte in the file too.
+        let mut need = super::super::FILE_LIMIT - 8_000 - installed.bytes().unwrap().len();
+        for letter in &mut installed.letters[open..] {
+            let add = need.min(super::super::BODY_LIMIT - letter.body.len());
+            letter.body.push_str(&"x".repeat(add));
+            need -= add;
+        }
+        assert_eq!(need, 0);
+        runtime
+            .lock()
+            .unwrap()
+            .publish_delivery(Arc::new(installed), false);
+    }
+
+    #[test]
+    fn a_request_over_the_limit_is_refused_though_a_later_one_makes_room() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, actor, target, _) = fixture(root.path());
+        // One short of the total, the oldest finished letter a full body:
+        // the second send would drop it and bring the batch back under the
+        // file's limit the first one broke.
+        near_limit(&runtime, &actor, &target, 0, super::super::LETTER_LIMIT - 1);
+        let state = runtime.lock().unwrap().delivery_state().unwrap();
+        let oldest = state.letters[0].id.clone();
+        assert_eq!(state.letters[0].body.len(), super::super::BODY_LIMIT);
+        let batch = [
+            send(
+                &actor,
+                &target,
+                "too-big",
+                &"y".repeat(super::super::BODY_LIMIT),
+            ),
+            send(&actor, &target, "after", "short"),
+        ];
+        let settled = settle(&runtime, &state, &upkeep(), &batch, now());
+        assert_eq!(settled.results[0], Err("capacity".into()));
+        let expected = vec![("after".to_owned(), format!("letter-{}", state.next_id))];
+        assert_eq!(answered(&settled, &[1]), expected);
+        assert_eq!(stored(&settled.ledger, &state), expected);
+        assert!(
+            settled
+                .ledger
+                .letters
+                .iter()
+                .any(|letter| letter.id == oldest)
+        );
+    }
+
+    #[test]
+    fn a_request_after_one_the_file_cannot_hold_is_looked_at_again() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, actor, target, _) = fixture(root.path());
+        // One open place left: the too-big letter takes it in the batch's
+        // first pass, and the file's limit then refuses it.
+        near_limit(
+            &runtime,
+            &actor,
+            &target,
+            super::super::OPEN_LIMIT - 1,
+            1_100,
+        );
+        let state = runtime.lock().unwrap().delivery_state().unwrap();
+        let batch = [
+            send(
+                &actor,
+                &target,
+                "too-big",
+                &"y".repeat(super::super::BODY_LIMIT),
+            ),
+            send(&actor, &target, "after", "short"),
+        ];
+        let settled = settle(&runtime, &state, &upkeep(), &batch, now());
+        assert_eq!(settled.results[0], Err("capacity".into()));
+        let expected = vec![("after".to_owned(), format!("letter-{}", state.next_id))];
+        assert_eq!(answered(&settled, &[1]), expected);
+        assert_eq!(stored(&settled.ledger, &state), expected);
+        let bytes = settled.bytes.unwrap().unwrap();
+        assert!(bytes.len() <= super::super::FILE_LIMIT);
+    }
+
+    /// The intent and letter id each request at `indexes` was answered.
+    fn answered(settled: &Settled, indexes: &[usize]) -> Vec<(String, String)> {
+        indexes
+            .iter()
+            .map(|&index| {
+                let letter = settled.results[index].as_ref().unwrap();
+                (
+                    letter["intent"].as_str().unwrap().to_owned(),
+                    letter["id"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect()
+    }
+
+    /// The intent and id of each letter `ledger` keeps that `state` did not.
+    fn stored(ledger: &Ledger, state: &Ledger) -> Vec<(String, String)> {
+        ledger
+            .letters
+            .iter()
+            .filter(|letter| !state.letters.iter().any(|old| old.id == letter.id))
+            .map(|letter| (letter.intent.clone(), letter.id.clone()))
+            .collect()
     }
 }

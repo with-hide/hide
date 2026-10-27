@@ -405,6 +405,10 @@ It guards against hide's own bell, not against a process of the same account, wh
 
 The mailbox lives at the state directory's `delivery-ledger.json`, named by `hide_kit::layout::delivery_ledger`.
 An admitted mutation is atomically persisted as a private file before the daemon publishes it or returns success.
+The store writes the file only when a batch of up to 32 admitted requests changed what it holds, and an unchanged pass, such as a watch tick that moved nothing, writes nothing.
+A batch keeps one copy of the ledger and applies its requests to it in order; a refused request leaves the copy as it was before it, because the copy is made again from the published ledger with the requests accepted so far, which change nothing but the ledger they are given.
+Each request is checked against the file's limits as it lands, by counting the ledger's encoding without keeping it, because a later request that drops a letter could bring the batch's end back under a limit an earlier one broke; a request that breaks one is refused like any other, so the batch lands as its requests would one at a time, and the bytes written are encoded once, at the batch's end.
+Every reply is the one the published copy gave its request: when a refused request makes the copy be made again, each earlier request is answered from that copy, so a sender is answered the letter id the file keeps.
 Startup establishes the existing trusted ancestor's directory barriers, creates and syncs at most 64 private descendants, validates the actual ledger and reestablishes its file barrier before admitting effects.
 An uncertain replacement disables further delivery effects until a validated restart; corrupt bytes and incomplete directory chains remain available for recovery.
 The ledger refuses a state folder that is a link or that other accounts can read; the daemon makes its own state folder private before the core starts ([ARCHITECTURE.md](ARCHITECTURE.md#hided-and-the-websocket-boundary)), so a folder an earlier build left open, as a device helper's bridge folder did on a machine a core later moved to, still loads its letters.
@@ -470,6 +474,7 @@ Its digest reports `projection_unavailable` and an unavailable current status; t
 Proven original-target absence or a different positive native identity ends the watch.
 There is no cached response or retry during the same tick.
 Three consecutive read failures produce a rate-limited diagnostic.
+The ledger counts failures only up to those three (`watch::READ_FAILURES_REPORTED`): a read that keeps failing is still reported every ten minutes, and changes nothing the file holds, where counting every tick rewrote the whole file every minute while one watched target could not be read.
 
 A target that stopped on a question it asked only in its own pane, or that Herdr holds at a blocked prompt, is told to a pane observer after one tick, 60 seconds of no activity, instead of 20 minutes, so the parent decides within about a minute whether to answer the child or ask the operator.
 The fact is the target's own row while its pane runs the watched session: for a question, activity stopped, a question demand ([status-model.md](status-model.md#where-each-axis-comes-from)) and no blocked prompt; for a prompt, the row's `blocked`, whatever its activity, since Herdr reports no activity for a pane it holds at a menu.
