@@ -80,9 +80,3 @@ Regenerate it after a change to those commands, and review the diff as the chang
 ```sh
 target/debug/hide contract --json | python3 -m json.tool > contracts/hide-cli.json
 ```
-
-# Provider quota
-
-`provider-quota.json` names, for each provider a CI check signs an agent in with, the answer that means the key's requests for the day are spent: the error code and status of the agent's structured error report, and the quota ids that count.
-A check that reads such an answer, with every quota it names among those ids and above 0, reports the step `Not measured` in a warning and passes; any other answer, a quota of 0 or another quota among them, fails ([docs/TESTING.md](../docs/TESTING.md#a-real-agent-on-ci)).
-`hide-agent-hooks/tests/it/agy_binary.rs` reads it for the nightly agy turn; another signed-in check adds its provider's row here rather than a list of its own.

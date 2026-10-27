@@ -19,8 +19,7 @@ from agent_live_check.protection import write_private
 from agent_live_check.system import git, same_path
 
 from . import cells, composer, fork, kit, memory, title, usage
-from .ci import redact
-from .quota import model_requests, refusal_records, spent_quota
+from .requests import model_requests
 
 SPAWN_SECONDS = 150
 TURN_SECONDS = 180
@@ -74,7 +73,7 @@ def prompt(value):
 
 class Journey:
     def __init__(self, runtime, daemon, controller, table, contract_row, repository, record, reader, *,
-                 branch, created, sessions, route, composer_judge, model=None, quota=None):
+                 branch, created, sessions, route, composer_judge, model=None):
         self.runtime, self.daemon, self.controller = runtime, daemon, controller
         self.table, self.row, self.repository = table, contract_row, repository
         self.record, self.reader = record, reader
@@ -82,13 +81,8 @@ class Journey:
         self.composer_judge = composer_judge
         # The HOME the agent writes its sessions under, which Hide's reader searches.
         self.sessions = sessions
-        # The session files Hide's reader read, for the request count and,
-        # where the lane classifies them (CI login, which passes the rows of
-        # contracts/provider-quota.json), a spent daily quota.
-        self.paths, self.quota = [], quota
-        # When this agent's journey began: its provider's own logs older than
-        # that are another run's, and never classify this run's failure.
-        self.since = time.time()
+        # The session files Hide's reader read, for the request count.
+        self.paths = []
         # What the mode adds to the agent: arguments it passes, and the
         # environment it sets, recorded beside the spawn's own arguments.
         self.route = route
@@ -107,7 +101,7 @@ class Journey:
     def evidence(self, name, value):
         path = self.run / f"{self.id}-{name}.json"
         path.unlink(missing_ok=True)
-        write_private(path, redact((json.dumps(value, indent=2, ensure_ascii=False, default=str) + "\n").encode()))
+        write_private(path, (json.dumps(value, indent=2, ensure_ascii=False, default=str) + "\n").encode())
         return path.name
 
     def capture(self, name, pane=None):
@@ -123,26 +117,13 @@ class Journey:
             return None
         path = self.run / f"{self.id}-{name}-pane.txt"
         path.unlink(missing_ok=True)
-        write_private(path, redact(text.encode()))
+        write_private(path, text.encode())
         return path.name
 
     def settle(self, name, verdict, evidence=None, pane=None):
         """`pane` the pane the cell measured when it is not the agent's own,
         as a fork's is."""
         status, reason = verdict
-        if status == cells.FAIL and self.quota is not None:
-            # What the agent itself recorded of the turn, where its provider row reads a refusal.
-            kept = refusal_records(self.id, self.paths, self.quota, self.sessions, self.since)
-            refusal = self.evidence(f"{name}-refusal", kept) if kept is not None else None
-            evidence = ", ".join(value for value in (evidence, refusal) if value) or None
-            spent = spent_quota(self.id, self.paths, self.quota, self.sessions, self.since)
-            if spent:
-                # Not retried: a retry spends the requests again (docs/TESTING.md, A real agent on CI).
-                self.record["quota"] = spent
-                reason = f"provider quota exhausted ({', '.join(spent)})"
-                cells.settle(self.table, self.id, name, cells.NOT_MEASURED, reason, evidence)
-                cells.settle_agent(self.table, self.id, reason)
-                return False
         if status == cells.FAIL:
             screen = self.capture(name, pane)
             evidence = ", ".join(value for value in (evidence, screen) if value) or None

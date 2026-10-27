@@ -5,7 +5,6 @@ import json
 from agent_live_check.protection import write_private
 
 from .cells import CELLS
-from .ci import redact
 
 
 def text(value):
@@ -61,8 +60,6 @@ def markdown(report):
             budget = agent.get("request_budget")
             lines.append(f"- model requests: {agent['requests']}" + (f" (budget {budget})" if budget is not None else "")
                          + (f", {agent['session_requests']} in its session files" if "session_requests" in agent else ""))
-        if agent.get("quota"):
-            lines.append(f"- provider quota exhausted: {text(', '.join(agent['quota']))}")
         for key in ("spawn", "start_untrusted"):
             if agent.get(key):
                 lines.append(f"- {key} argv: `{text(json.dumps(agent[key]['argv']))}`")
@@ -88,5 +85,5 @@ def markdown(report):
 
 
 def save(run, report):
-    write_private(run / "report.json", redact((json.dumps(report, indent=2, ensure_ascii=False, default=str) + "\n").encode()))
-    write_private(run / "report.md", redact(markdown(report).encode()))
+    write_private(run / "report.json", (json.dumps(report, indent=2, ensure_ascii=False, default=str) + "\n").encode())
+    write_private(run / "report.md", markdown(report).encode())

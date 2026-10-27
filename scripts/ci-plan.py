@@ -161,8 +161,6 @@ READERS = (
     ("contracts/agent-adapters.json", {"rust", "checks", "web-e2e", "desktop-e2e"}, {"hide-agent-adapter"}),
     # hided's `cli_contract` test.
     ("contracts/hide-cli.json", {"rust"}, {"hided"}),
-    # hide-agent-hooks' agy_binary test, which the agy contract also runs.
-    ("contracts/provider-quota.json", {"rust"}, {"hide-agent-hooks"}),
     # policy's test_agent_journey_cells shares the hook's prompt identity examples.
     ("hide-agent-hooks/tests/fixtures/bell-prompt-identity.json", {"policy"}, set()),
     # hide-agent-adapter's contract test.

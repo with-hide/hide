@@ -81,10 +81,7 @@ class ReleaseCandidate(unittest.TestCase):
         workflow = yaml.safe_load((WORKFLOWS / "release-candidate.yml").read_text())
         self.assertEqual(set(workflow[True]), {"workflow_dispatch"})
         self.assertEqual(set(workflow[True]["workflow_dispatch"]["inputs"]),
-                         {"public_sha", "tag", "verification_run_id", "build_order", "live_agents"})
-        live = workflow[True]["workflow_dispatch"]["inputs"]["live_agents"]
-        self.assertEqual(live["type"], "boolean")
-        self.assertIs(live["default"], True)
+                         {"public_sha", "tag", "verification_run_id", "build_order"})
         for permissions in [workflow["permissions"], *[
             job["permissions"] for job in workflow["jobs"].values() if "permissions" in job
         ]]:
@@ -106,9 +103,9 @@ class ReleaseCandidate(unittest.TestCase):
         self.assertEqual(jobs["packages"]["with"]["build-order"], "${{ inputs.build_order }}")
         journey = jobs["agent-journey"]["with"]
         self.assertEqual(journey["systems"], '["linux","macos","windows"]')
-        self.assertEqual(journey["live"], "${{ inputs.live_agents }}")
+        self.assertEqual(set(journey), {"source-sha", "systems", "fake"})
         self.assertTrue(journey["fake"])
-        self.assertEqual(journey["agy"], "linux")
+        self.assertNotIn("secrets", jobs["agent-journey"])
         for filename in ["package.yml", "agent-journey.yml"]:
             workflow = yaml.safe_load((WORKFLOWS / filename).read_text())
             for job in workflow["jobs"].values():

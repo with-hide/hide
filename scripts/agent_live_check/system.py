@@ -171,20 +171,17 @@ def remove_pane_files(*paths):
         raise failures[0]
 
 
-def launcher(path, argv, *, environment=(), unset=(), file_variables=()):
+def launcher(path, argv, *, environment=(), unset=()):
     """Writes the program `path` names, which runs `argv` with the caller's
-    arguments after it in `environment`, without the variables `unset`, and
-    with each (variable, file) of `file_variables` set to that file's first
-    line: a `/bin/sh` script on Unix, a `.cmd` file beside it on Windows.
-    Returns the program's path."""
+    arguments after it in `environment` and without the variables `unset`:
+    a `/bin/sh` script on Unix, a `.cmd` file beside it on Windows. Returns
+    the program's path."""
     from .protection import write_private
     environment = dict(environment)
     if not WINDOWS:
         lines = ["#!/bin/sh", *("unset " + name for name in unset)]
         if environment:
             lines.append("export " + " ".join(f"{key}={shlex.quote(value)}" for key, value in environment.items()))
-        for name, file in file_variables:
-            lines.append(f"{name}=$(cat {shlex.quote(str(file))}) && export {name}")
         lines.append("exec " + " ".join(shlex.quote(str(value)) for value in argv) + ' "$@"')
         write_private(path, ("\n".join(lines) + "\n").encode())
         path.chmod(0o700)
@@ -192,7 +189,6 @@ def launcher(path, argv, *, environment=(), unset=(), file_variables=()):
     target = path.with_name(path.name + ".cmd")
     lines = ["@echo off", *(f"set {cmd_quote(name + '=')}" for name in unset),
              *(f"set {cmd_quote(f'{key}={value}')}" for key, value in environment.items()),
-             *(f"set /p {name}=<{cmd_quote(file)}" for name, file in file_variables),
              # The last line: its exit status is the file's, and a program
              # that is itself a .cmd (an npm install's) takes over the run.
              " ".join(cmd_quote(value) for value in argv) + " %*"]

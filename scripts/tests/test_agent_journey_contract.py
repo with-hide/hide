@@ -18,9 +18,9 @@ from agent_live_check.protection import ProtectionError  # noqa: E402
 
 
 class Registration(unittest.TestCase):
-    def test_every_registered_agent_has_its_local_login_and_fake_model_routes(self):
+    def test_every_registered_agent_has_its_local_ci_and_fake_model_routes(self):
         for row in active_rows(load_contract(ROOT)):
-            for name, routes in (("local isolation", local.ROUTES), ("CI login", ci.LOGINS),
+            for name, routes in (("local isolation", local.ROUTES), ("CI home", ci.AGENT_ENV),
                                  ("fake model", fake_lane.PROVIDERS)):
                 with self.subTest(agent=row["id"], route=name):
                     self.assertIn(row["herdr_kind"], routes, f"{row['id']} has no {name} route")
