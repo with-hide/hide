@@ -11,6 +11,9 @@ import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
+import { MarkdownText } from "./MarkdownText";
+import { markdownPlainText } from "./markdownPlain";
+import { MissionMapCanvas } from "./MissionMapCanvas";
 import { MissionNodePanel } from "./MissionNodePanel";
 import { MissionTurn } from "./MissionTurn";
 import { AgentMark } from "./AgentMark";
@@ -59,7 +62,8 @@ export function MissionMap({ missionId, actions }: { missionId: string; actions:
   const failed = useShellStore((s) => s.rest?.missions?.failed ?? null);
   if (failed) return <MapState text={t("mission.unreadable")} tone="text-destructive" state="unreadable" />;
   if (!mission) return <MapState text={t("mission.gone")} state="gone" />;
-  return <MissionBody mission={mission} actions={actions} />;
+  // Another mission is another page: it opens at 맞춤 with nothing picked.
+  return <MissionBody key={mission.id} mission={mission} actions={actions} />;
 }
 
 function MapState({ text, tone, state }: { text: string; tone?: string; state: string }) {
@@ -70,6 +74,9 @@ function MissionBody({ mission, actions }: { mission: Mission; actions: Actions 
   const { t } = useInterfaceTranslation();
   const [picked, setPicked] = useState<string | null>(null);
   const panel = useRef<HTMLDivElement>(null);
+  const [root, rootRef] = useState<HTMLDivElement | null>(null);
+  const [page, pageRef] = useState<HTMLDivElement | null>(null);
+  const wide = useWide(root);
   const device = useShellStore((s) => (mission.stale ? machineName(s.rest?.navigator?.devices, mission.device_id, t) : null));
   const log = useShellStore((s) => missionEventsOf(s.rest, mission.id));
   const open = missionOpen(mission);
@@ -91,8 +98,8 @@ function MissionBody({ mission, actions }: { mission: Mission; actions: Actions 
     setPicked(null);
   };
   return (
-    <div className="@container/mission flex min-h-0 min-w-0 flex-1 flex-col" data-mission={mission.id} data-mission-status={mission.status} data-mission-stale={mission.stale || undefined} onKeyDown={onKeyDown}>
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto mission-wide:overflow-hidden" data-mission-scroll="true">
+    <div ref={rootRef} className="@container/mission flex min-h-0 min-w-0 flex-1 flex-col" data-mission={mission.id} data-mission-status={mission.status} data-mission-stale={mission.stale || undefined} onKeyDown={onKeyDown}>
+      <div ref={pageRef} className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto mission-wide:overflow-hidden" data-mission-scroll="true">
         <Head mission={mission} />
         {mission.report && !open ? <ReportLine mission={mission} /> : null}
         <MissionTurn mission={mission} device={device} actions={actions} onSelect={select} />
@@ -103,16 +110,16 @@ function MissionBody({ mission, actions }: { mission: Mission; actions: Actions 
         ) : (
           <div className={cn("flex min-w-0 flex-col border-t border-border mission-wide:min-h-0 mission-wide:flex-1 mission-wide:flex-row", mission.stale && "opacity-(--opacity-dimmed)")} data-mission-values={mission.stale ? "stale" : "live"}>
             <div
-              className="min-w-0 px-md pb-md pt-sm mission-wide:min-h-0 mission-wide:flex-1 mission-wide:overflow-auto"
+              className="flex min-w-0 flex-col mission-wide:min-h-0 mission-wide:flex-1"
               onClick={(event: MouseEvent<HTMLDivElement>) => {
                 // A press on the map outside every card lets go of the pick (B30).
                 if (!(event.target as Element).closest("[data-mission-node]")) setPicked(null);
               }}
               data-mission-map="true"
             >
-              <FitWidth>
+              <MissionMapCanvas wide={wide} page={page}>
                 <Graph mission={mission} selected={selected} onSelect={(key) => select(selected === key ? null : key)} events={log?.events ?? null} end={end} />
-              </FitWidth>
+              </MissionMapCanvas>
             </div>
             {/* The panel opens with a pick; until then the map has the whole width (B30, B31). */}
             {node ? (
@@ -132,49 +139,23 @@ function MissionBody({ mission, actions }: { mission: Mission; actions: Actions 
 }
 
 /**
- * The smallest the map is drawn: below it a card's caption stops being
- * readable, so a slot narrower than that scrolls the map sideways instead.
+ * Whether the page has its two-column width (`mission-wide`, from
+ * `--size-mission-wide`): the map's box then takes the height left beside
+ * the panel instead of its map's own (B34).
  */
-const MIN_SCALE = 0.6;
-
-/**
- * The map shrunk to the width it has, never grown and never below
- * `MIN_SCALE`: a wide row of nodes stays one row, so what waits on what is
- * read at a glance. The box holds the shrunk size, so the map scrolls down,
- * and sideways only in a slot too narrow for that floor.
- */
-function FitWidth({ children }: { children: ReactNode }) {
-  const room = useRef<HTMLDivElement>(null);
-  const content = useRef<HTMLDivElement>(null);
-  const [drawn, setDrawn] = useState<{ scale: number; width: number; height: number } | null>(null);
+function useWide(root: HTMLElement | null): boolean {
+  const [wide, setWide] = useState(false);
   useLayoutEffect(() => {
-    const outer = room.current;
-    const inner = content.current;
-    if (!outer || !inner) return;
-    const measure = () => {
-      // Layout sizes, which a transform does not change.
-      const width = inner.offsetWidth;
-      const height = inner.offsetHeight;
-      const scale = width > outer.clientWidth ? Math.max(MIN_SCALE, outer.clientWidth / width) : 1;
-      setDrawn((current) => (current?.scale === scale && current.width === width && current.height === height ? current : { scale, width, height }));
-    };
+    if (!root) return undefined;
+    const least = parseFloat(getComputedStyle(root).getPropertyValue("--size-mission-wide"));
+    const measure = () => setWide(Number.isFinite(least) && root.clientWidth >= least);
     measure();
-    if (typeof ResizeObserver === "undefined") return;
+    if (typeof ResizeObserver === "undefined") return undefined;
     const observer = new ResizeObserver(measure);
-    observer.observe(outer);
-    observer.observe(inner);
+    observer.observe(root);
     return () => observer.disconnect();
-  }, []);
-  const scale = drawn?.scale ?? 1;
-  return (
-    <div ref={room} className="min-w-0 overflow-x-auto" data-mission-scale={scale.toFixed(2)}>
-      <div className="relative" style={drawn ? { width: drawn.width * scale, height: drawn.height * scale } : undefined}>
-        <div ref={content} className={cn("w-max origin-top-left", drawn && "absolute left-0 top-0")} style={scale < 1 ? { transform: `scale(${scale})` } : undefined}>
-          {children}
-        </div>
-      </div>
-    </div>
-  );
+  }, [root]);
+  return wide;
 }
 
 /** The pill's words and colour: the operator's merge waits in the decision colour, a finished mission is grey (D-02). */
@@ -218,16 +199,26 @@ function Head({ mission }: { mission: Mission }) {
   );
 }
 
-/** A finished or cancelled mission's report, one line under the head that opens to the whole of it (B24). */
+/**
+ * A finished or cancelled mission's report, one line under the head that
+ * opens to the whole of it (B24). The report is the Conductor's Markdown: the
+ * folded line is its first words without their marks, and the opened report
+ * is drawn as a Markdown document is.
+ */
 function ReportLine({ mission }: { mission: Mission }) {
   const { t } = useInterfaceTranslation();
   const [unfolded, setUnfolded] = useState(false);
   const report = mission.report ?? "";
-  const first = report.split("\n")[0] ?? "";
+  const plain = useMemo(() => markdownPlainText(report), [report]);
+  const first = plain.split("\n")[0] ?? "";
   return (
     <div className="flex min-w-0 items-start gap-xs px-md pb-xs text-body" data-mission-report-text={unfolded ? "open" : "folded"}>
       <span aria-hidden="true" className={cn("mt-xxs h-(--size-icon-sm) w-px shrink-0", mission.status === "done" ? "bg-border" : "bg-mission-cancelled")} />
-      <p className={cn("min-w-0 flex-1", unfolded ? "whitespace-pre-wrap break-words" : "truncate")} title={unfolded ? undefined : report}>{unfolded ? report : first}</p>
+      {unfolded ? (
+        <div className="min-w-0 flex-1 break-words" data-mission-report-body="true"><MarkdownText text={report} /></div>
+      ) : (
+        <p className="min-w-0 flex-1 truncate" title={plain}>{first}</p>
+      )}
       <button type="button" aria-expanded={unfolded} onClick={() => setUnfolded(!unfolded)} className="shrink-0 rounded-xs text-caption text-primary outline-none hover:underline focus-visible:ring-1 focus-visible:ring-ring" data-mission-report-toggle="true">
         {t(unfolded ? "mission.report.collapse" : "mission.report.expand")}
       </button>
@@ -287,14 +278,14 @@ function Graph({ mission, selected, onSelect, events, end }: { mission: Mission;
   );
 }
 
-/** A card's border and surface by its look (B26): colour only for work, review, a decision and a failure; finished work grey, in main with no surface. */
+/** A card's border and surface by its look (B26): finished work a faint green surface inside its plain border, never a green border; in main no surface. */
 const LOOK_CARD: Record<NodeLook, string> = {
   waiting: "border-dashed border-mission-waiting bg-transparent",
   working: "border-mission-working ring-2 ring-mission-working/20",
   review: "border-mission-review ring-2 ring-mission-review/20",
   hold: "border-mission-hold ring-2 ring-mission-hold/20",
   failed: "border-mission-failed",
-  done: "border-border",
+  done: "border-border bg-mission-done/10",
   landed: "border-border bg-transparent",
   external: "border-dotted border-mission-waiting bg-transparent",
   cancelled: "border-dashed border-mission-cancelled bg-transparent",
@@ -351,7 +342,7 @@ function NodeCard({ mission, node, selected, dimmed, onSelect, events, end }: { 
     >
       <span className="flex min-w-0 items-start gap-xs">
         <MissionNodeMark look={look} label={word} className="mt-xxs" />
-        <span className={cn("line-clamp-2 min-w-0 flex-1 break-words text-body font-semibold", (look === "done" || look === "landed" || look === "external" || look === "cancelled" || look === "waiting") && "text-muted-foreground", look === "dropped" && "text-muted-foreground line-through")} title={node.title}>
+        <span className={cn("line-clamp-2 min-w-0 flex-1 break-words text-body font-semibold", (look === "landed" || look === "external" || look === "cancelled" || look === "waiting") && "text-muted-foreground", look === "dropped" && "text-muted-foreground line-through")} title={node.title}>
           {node.title}
         </span>
         <Badges mission={mission} node={node} />
