@@ -740,6 +740,46 @@ fn a_pass_fences_out_a_learned_place_inside_another_projects_root() {
     );
 }
 
+/// A learned place is the only way this session reaches the project: its folder
+/// is outside the project's root and no other project holds it. The pass must
+/// keep that place, so the session's work stays in the project's ledger list.
+#[test]
+fn a_pass_keeps_a_learned_place_that_only_a_pull_request_reaches() {
+    let home = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let mut store = open(state.path());
+    store
+        .apply_project(&project(vec![pr(8, "feat/y", T0, None)]), T0)
+        .unwrap();
+    let far = claude_file(
+        home.path(),
+        "s-far",
+        "/work/far",
+        "cli",
+        &[Turn {
+            at: T0 + 10_000,
+            branch: "feat/y",
+            text: "먼 폴더의 작업",
+        }],
+        Some((8, T0 + 10_000)),
+    );
+    ingest(&mut store, home.path(), &far);
+
+    let pass = store.pass(PROJECT).unwrap().unwrap();
+    assert!(
+        pass.paths
+            .contains(&(DEVICE.to_owned(), "/work/far".to_owned())),
+        "the far folder is a learned place of the project"
+    );
+    let work = store.ledger_summaries_in(&pass).unwrap();
+    assert_eq!(
+        work.iter()
+            .map(|item| item.session.session_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["s-far"]
+    );
+}
+
 /// A checkout's work landed when the pull requests its sessions made or
 /// worked on include a merged one and no open one; a session belongs to the
 /// deepest checkout holding its folder, and a checkout on no branch (one

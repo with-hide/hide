@@ -3421,3 +3421,49 @@ fn an_issue_read_over_its_limit_is_reported_once_per_crossing() {
     let (_, again) = read(&store);
     assert_eq!(again.len(), 1, "the next crossing reports again");
 }
+
+/// A project the runtime stops publishing loses its over-cap state, so when it
+/// comes back over the limit its crossing is reported again.
+#[test]
+fn a_project_dropped_from_publishing_is_reported_again_when_it_returns() {
+    let directory = tempfile::tempdir().unwrap();
+    let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
+    request(&mut store, 1, "이슈 정리");
+    let project = crate::links::ProjectFacts {
+        key: "project-a".into(),
+        device_id: "device-a".into(),
+        workspace_id: "workspace-a".into(),
+        root: "/repo".into(),
+        repository: Some("owner/repo".into()),
+        repository_id: Some("R_1".into()),
+        connection_epoch: 0,
+        worktrees: Vec::new(),
+        prs: Vec::new(),
+        prs_read: true,
+        outputs: Vec::new(),
+    };
+    store.apply_project(&project, 1).unwrap();
+    for number in 1..=crate::issues::ISSUE_LIMIT as u64 + 1 {
+        store.connection.execute("INSERT INTO ledger_sightings VALUES('device-a','codex','session-a','issue','owner/repo',?1,1000)",params![number]).unwrap();
+    }
+    let read = |store: &LinkStore| {
+        crate::diagnostics::capture(|| store.ledger_issue_refs("project-a").unwrap())
+            .1
+            .into_iter()
+            .filter(|record| record["kind"] == "ledger.issue_read_capacity")
+            .count()
+    };
+    assert_eq!(read(&store), 1);
+
+    // The publish set still holds the project: its state stays, so no new line.
+    store.forget_capacity_except(&BTreeSet::from(["project-a"]));
+    assert_eq!(read(&store), 0);
+
+    // The publish set without it: the project's state is forgotten.
+    store.forget_capacity_except(&BTreeSet::new());
+    assert_eq!(
+        read(&store),
+        1,
+        "a returning project reports its crossing again"
+    );
+}

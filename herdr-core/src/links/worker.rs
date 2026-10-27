@@ -1615,6 +1615,8 @@ fn prune(
 }
 
 fn publish_summaries(store: &LinkStore, state: &mut State, sink: &impl Sink) {
+    let current = state.projects.iter().map(|p| p.key.as_str()).collect();
+    store.forget_capacity_except(&current);
     let mut summaries = BTreeMap::new();
     for project in state.projects.iter() {
         // One pass reads the project's places, fences and repository names for
