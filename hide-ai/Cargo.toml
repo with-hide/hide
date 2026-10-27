@@ -19,6 +19,4 @@ workspace-hack = { version = "0.1", path = "../workspace-hack" }
 libc = "=0.2.190"
 
 [dev-dependencies]
-# The supported agents, every one of which is a provider here.
-hide-agent-adapter = { path = "../hide-agent-adapter" }
 tempfile = "=3.27.0"
