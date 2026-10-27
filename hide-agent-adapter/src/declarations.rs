@@ -308,8 +308,10 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         aliases: &[],
         executables: &["opencode"],
         minimum: Some(MinimumVersion {
-            version: "1.18.30",
-            evidence: "hide-agent-hooks/tests/fixtures/opencode/events-1.18.30.json",
+            // Windows loaded the plugin on 1.18.35; 1.18.30's shapes are
+            // proven on macOS and Linux only.
+            version: "1.18.35",
+            evidence: "docs/agent-hooks.md#the-oldest-version-of-each-agent",
         }),
         skill_location: SkillLocation::Shared,
         hook: HookInstall::Plugin(PluginDialect::OpenCode),
@@ -601,7 +603,8 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         aliases: &["agy", "antigravity-cli", "antigravity_cli"],
         executables: &["agy"],
         minimum: Some(MinimumVersion {
-            version: "1.4.0",
+            // The Windows guard was proven on 1.4.2; 1.4.0 on macOS only.
+            version: "1.4.2",
             evidence: "docs/agent-hooks.md#the-oldest-version-of-each-agent",
         }),
         skill_location: SkillLocation::Antigravity,

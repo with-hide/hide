@@ -541,9 +541,12 @@ pub struct PromptHook {
 }
 
 /// The oldest version of an agent's CLI that Hide's integration (its hook,
-/// plugin or extension) was proven on, and where that proof is recorded. The
-/// kit puts the integration in place only for a CLI that answers this version
-/// or a newer one (docs/agent-hooks.md, The oldest version of each agent).
+/// plugin or extension) was proven on, and where that proof is recorded. It is
+/// one version per agent, the oldest proven on every system Hide runs on
+/// (macOS, Linux and Windows), never the oldest proven on any one of them, and
+/// never a minimum per system. The kit puts the integration in place only for
+/// a CLI that answers this version or a newer one (docs/agent-hooks.md, The
+/// oldest version of each agent).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MinimumVersion {
     /// `x.y.z`, compared part by part with what the CLI's `--version` answers.

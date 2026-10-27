@@ -872,6 +872,7 @@ The things it records in an agent's own state are Codex's trust for Hide's own h
 ### The oldest version of each agent
 
 Each supported agent's declaration (`hide-agent-adapter/src/declarations.rs`, `AgentAdapter::minimum`) names the oldest version of its CLI that Hide's hook, plugin or extension was proven on, and where the proof is; nothing else keeps a copy.
+It is one version per agent: the oldest proven on every system Hide runs on, macOS, Linux and Windows, not the oldest proven on any one of them, and there is no minimum per system (operator decision, 2026-10-27).
 The kit puts that piece in place only for a CLI that answers this version or a newer one to `--version`.
 An older CLI is refused on every system with a reason that names the agent, the version it answered, the program's path and the minimum, such as `Pi 1.0.3 at /home/a/.local/bin/pi is older than 1.0.4, which Hide's extension needs; update it`, and the row reads Failed with Settings' "update the agent" wording; nothing of Hide's is written for it.
 A piece already current stays as it is, as Claude Code's and Codex's hook parts always have, and a CLI whose version Hide cannot read within the probe's 750 ms is not judged too old.
@@ -883,10 +884,10 @@ The program asked is the one the operator's login shell runs ([Installed means t
 | Claude Code | 2.1.278 | The hook output shape Memory injection needs (2026-09-21), pinned by `hide-agent-hooks/tests/fixtures/claude-user-prompt-submit.json`; the agent journey passes on 2.1.302 |
 | Codex | 0.155.1 | The oldest Codex Hide installs into: its hook runner and skill folder read from its source at `rust-v0.155.1` ([Support table](#support-table), [Installing](#installing)), and the Memory hook shape of `hide-agent-hooks/tests/fixtures/codex-user-prompt-submit.json` |
 | Grok | 1.0.50 | How Grok runs a hook on Windows (`xai-grok-hooks/src/runner/command.rs`, `xai-grok-config/src/shell.rs`), pinned by `hide-agent-hooks/tests/it/windows_hook_command.rs`, and its skill folder, both read from its source at 1.0.50; the agent journey passes on 1.0.52 |
-| OpenCode | 1.18.30 | The plugin's event and hook shapes captured from 1.18.30 (`hide-agent-hooks/tests/fixtures/opencode/events-1.18.30.json`), which `tests/opencode/plugin.test.mjs` replays; Windows loaded the plugin on 1.18.35 and the journey passes on 2.0.29 |
+| OpenCode | 1.18.35 | Windows: on a `windows-latest` runner on 2026-10-11, OpenCode 1.18.35 loaded Hide's plugin from `%USERPROFILE%\.config\opencode\plugins` and its `spawn` of the helper crossed stdin and stdout ([OpenCode 2](#opencode-2)); macOS and Linux: the plugin's event and hook shapes captured from 1.18.30 (`hide-agent-hooks/tests/fixtures/opencode/events-1.18.30.json`), and the journey passes on 2.0.29 on all three |
 | Pi | 1.0.4 | The extension's event and context shapes captured from 1.0.4 (`hide-agent-hooks/tests/fixtures/pi-extension/pi-1.0.4.json`), loaded on Windows on 1.0.4, and the journey on 1.0.4 |
 | omp | 18.7.0 | The same for omp 18.7.0 (`hide-agent-hooks/tests/fixtures/pi-extension/omp-18.7.0.json`) |
-| Antigravity | 1.4.0 | Hide's `hide` block and skill folder measured live on 1.4.0 on 2026-10-16 and 2026-10-17 ([Antigravity: Hide's hook block](#antigravity-hides-hook-block)); facts first proven on 1.3.6 had to be proven again on 1.4.0, the Windows guard was proven on 1.4.2 and the journey passes on 1.4.2 |
+| Antigravity | 1.4.2 | Windows: agy 1.4.2 starts a hook through `cmd /c` with Go's argument escaping, which broke the earlier guard, and Hide's encoded PowerShell guard was proven on it ([Antigravity: Hide's hook block](#antigravity-hides-hook-block)); the journey passes on 1.4.2 on macOS, Linux and Windows (run 39152230964); the block and skill folder were first measured live on 1.4.0 on macOS |
 
 A minimum moves only with new proof: a feature that needs a newer CLI raises it in the same change, with the fixture or measurement that shows the older one fails, and a lower one needs the integration proven on that version.
 

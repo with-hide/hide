@@ -169,7 +169,7 @@
       },
       "evidence": "https://opencode.ai/v2/docs/config/"
     },
-    "minimum_version": "1.18.30"
+    "minimum_version": "1.18.35"
   },
   {
     "id": "pi",
@@ -303,6 +303,6 @@
       },
       "reason": "The installer cannot select a pinned release."
     },
-    "minimum_version": "1.4.0"
+    "minimum_version": "1.4.2"
   }
 ]
