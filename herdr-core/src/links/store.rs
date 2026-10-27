@@ -2190,13 +2190,13 @@ impl LinkStore {
             .map_err(failed)
     }
 
-    /// A project's counts and chips (D-45), and which of its `checkouts`
-    /// (the ones it has now) hold work that landed.
     /// Forgets the over-cap state of projects the runtime no longer publishes.
     pub(super) fn forget_capacity_except(&self, current: &BTreeSet<&str>) {
         self.issue_capacity.borrow_mut().keep(current);
     }
 
+    /// A project's counts and chips (D-45), and which of its `checkouts`
+    /// (the ones it has now) hold work that landed.
     pub fn summary(
         &self,
         project: &str,
