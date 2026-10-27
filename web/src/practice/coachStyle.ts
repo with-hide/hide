@@ -99,7 +99,8 @@ export const HUB_CSS = `
 .ph-leave{flex:none;font:inherit;font-size:var(--text-subhead);font-weight:600;border:0;border-radius:var(--radius-lg);padding:var(--spacing-sm) var(--spacing-md);background:color-mix(in srgb,var(--foreground) 8%,transparent);color:var(--foreground);cursor:pointer}
 .ph-leave:hover{background:color-mix(in srgb,var(--foreground) 14%,transparent)}
 .ph-col h1{margin:0;font-size:var(--text-display);font-weight:600;letter-spacing:-.01em}
-.ph-lead{margin:var(--spacing-sm) 0 var(--spacing-xl);font-size:var(--text-title);line-height:1.55;color:var(--muted-foreground)}
+.ph-lead{margin:var(--spacing-sm) 0 0;font-size:var(--text-title);line-height:1.55;color:var(--muted-foreground)}
+.ph-again{margin:var(--spacing-xxs) 0 var(--spacing-xl);font-size:var(--text-subhead);color:var(--muted-foreground)}
 .ph-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:var(--spacing-xs)}
 .ph-row{display:flex;align-items:center;gap:var(--spacing-md);padding:var(--spacing-md) var(--spacing-lg);border-radius:var(--radius-xl);transition:background .2s,box-shadow .2s}
 .ph-row.on{background:color-mix(in srgb,var(--practice-accent) 9%,transparent);box-shadow:inset 0 0 0 var(--size-hairline) color-mix(in srgb,var(--practice-accent) 45%,transparent)}

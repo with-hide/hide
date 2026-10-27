@@ -491,7 +491,7 @@ function NotificationsStep({ actions, reopened, primary, onBack, answered, onAns
 
 /**
  * The last step: how to start. Each way is its own button, with no choice to
- * confirm: practice first (recommended), which ends the wizard and opens the
+ * confirm: practice first, which ends the wizard and opens the
  * practice window on chapter 0 over the empty Home; Add a project, the views
  * of Add project as they were, whose Back returns here; or Skip for now. Which
  * of the two is on screen is the project draft's view (`""` here), so a reload
@@ -558,7 +558,6 @@ function StartStep({ actions, reopened, onBack }: { actions: Actions; reopened: 
           icon={<GraduationCapIcon />}
           title={t("firstRun.start.practice")}
           line={t("firstRun.start.practiceNote")}
-          badge={t("firstRun.start.recommended")}
           className="border-(--practice-accent) bg-(--practice-card) text-(--practice-text) hover:border-(--practice-accent-strong)"
           lineClassName="text-(--practice-mute)"
           iconClassName="border-(--practice-line) bg-(--practice-keycap) text-(--practice-ink)"
@@ -586,7 +585,7 @@ function StartStep({ actions, reopened, onBack }: { actions: Actions; reopened: 
 }
 
 /** One way to start: a whole-width button with its mark, its name and one line under it. */
-function StartWay({ icon, title, line, badge, className, lineClassName, iconClassName, ...props }: ComponentProps<"button"> & { icon: ReactNode; title: string; line: string; badge?: string; lineClassName: string; iconClassName: string }) {
+function StartWay({ icon, title, line, className, lineClassName, iconClassName, ...props }: ComponentProps<"button"> & { icon: ReactNode; title: string; line: string; lineClassName: string; iconClassName: string }) {
   return (
     <button
       type="button"
@@ -597,10 +596,7 @@ function StartWay({ icon, title, line, badge, className, lineClassName, iconClas
         {icon}
       </span>
       <span className="flex min-w-0 flex-1 flex-col gap-xxs">
-        <span className="flex flex-wrap items-center gap-sm text-body font-semibold">
-          {title}
-          {badge ? <span className="rounded-full bg-(--practice-accent) px-sm text-caption font-semibold text-(--practice-ink)">{badge}</span> : null}
-        </span>
+        <span className="text-body font-semibold">{title}</span>
         <span className={cn("text-caption", lineClassName)}>{line}</span>
       </span>
       <ChevronRightIcon aria-hidden="true" className={cn("size-(--size-icon) shrink-0", lineClassName)} />

@@ -172,6 +172,7 @@ function PracticeHub({ progress, unsaved, onStart, onLeave }: { progress: Practi
           <button type="button" className="ph-leave" onClick={onLeave} data-practice-leave>{t("practice.leave")}</button>
         </div>
         <p className="ph-lead">{t("practice.hubLead")}</p>
+        <p className="ph-again">{t("practice.hubAgain")}</p>
         <ol className="ph-list">
           {rows.map((row, at) => {
             const total = row.chapter.steps.length;
