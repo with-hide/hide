@@ -157,8 +157,9 @@ pub struct NodeView {
     /// The node's finish lines as they stand now: a check command passed on
     /// an older commit shows open (B7, B32).
     pub criteria: Vec<Criterion>,
-    /// Lines passed or skipped, of `criteria`, and how many were skipped
-    /// (B28 `기준 n/m`, `⤳k`).
+    /// Lines that pass or were skipped, of `criteria`, which is what the
+    /// gate counts, and how many were skipped; B28's `기준 n/m ⤳k` shows
+    /// `criteria_met - criteria_skipped` as `n`.
     pub criteria_met: u32,
     pub criteria_skipped: u32,
     pub external: Option<External>,
@@ -170,6 +171,11 @@ pub struct NodeView {
     pub started_at_unix_ms: Option<u64>,
     pub finished_at_unix_ms: Option<u64>,
     pub commit: Option<String>,
+    /// The commit of the node's branch Hide read in main for a mission
+    /// waiting on its branches, while that read stands (B17 `→ main
+    /// <sha7>`); `commit` is what the Conductor recorded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub in_main: Option<String>,
     pub verdict: Option<Verdict>,
     pub checks: Option<Checks>,
     /// The worker's own plan (PRD hide-plan D-17, D-18): the value its pane's
@@ -272,8 +278,17 @@ fn stack_settled(mission: &Mission) -> bool {
                 .pr_seen
                 .as_ref()
                 .is_some_and(|seen| seen.merged || seen.closed),
-            None => !lands_by_branch(node) || node.in_main.is_some(),
+            None => !lands_by_branch(node) || landed(node).is_some(),
         })
+}
+
+/// The commit Hide read in main for the branch the node names now, while
+/// that read stands (B17 `→ main <sha7>`).
+pub(super) fn landed(node: &crate::missions::MissionNode) -> Option<&str> {
+    node.in_main
+        .as_ref()
+        .filter(|landed| node.branch.as_deref() == Some(landed.branch.as_str()))
+        .map(|landed| landed.commit.as_str())
 }
 
 /// A change that reaches main as its branch, with no pull request.
@@ -377,13 +392,25 @@ impl Runtime {
     /// Closes mission `id`, waiting for its merges, as done once its stack
     /// is in main and every done node's lines still hold (B10, B18, B41);
     /// whether it closed.
+    /// Follows mission `id`'s outside nodes and waiting branches now, for a
+    /// command that changed what is followed.
+    fn follow_mission_outside(&mut self, id: &str) -> bool {
+        let Some(mission) = self.missions.book.get(id) else {
+            return false;
+        };
+        let (device, project) = (mission.device_id.clone(), mission.project.clone());
+        self.follow_outside_stored(&device, &project)
+    }
+
     pub(super) fn close_if_landed(&mut self, id: &str, now: u64) -> bool {
         let Some(mission) = self.missions.book.get(id) else {
             return false;
         };
         if mission.status != MissionStatus::MergeWait
             || !stack_settled(mission)
-            || !self.may_close_itself(mission, self.mission_pulls(mission))
+            || self
+                .close_held(mission, self.mission_pulls(mission))
+                .is_some()
         {
             return false;
         }
@@ -596,6 +623,9 @@ impl Runtime {
                 *self.missions.book.get_mut(&id).ok_or("mission_unknown")? = next;
                 self.save_missions();
                 self.record_mission_events(&id, events);
+                // The plan's outside nodes are read now, not at the next
+                // GitHub read or fetch.
+                self.follow_mission_outside(&id);
                 Ok((
                     json!({"mission": self.mission_view_of(&id), "overlaps": overlaps}),
                     true,
@@ -650,10 +680,16 @@ impl Runtime {
                 let changed = target.nodes[index] != next;
                 let events = super::mission_events::node_events(&target.nodes[index], &next, now);
                 target.nodes[index] = next;
+                let waiting = target.status == MissionStatus::MergeWait;
                 if changed {
                     target.updated_at_unix_ms = now;
                     self.save_missions();
                     self.record_mission_events(&id, events);
+                    // A waiting mission's node named another branch or
+                    // finished again: its branches are read again now.
+                    if waiting {
+                        self.follow_mission_outside(&id);
+                    }
                 }
                 Ok((json!({"mission": self.mission_view_of(&id)}), changed))
             }
@@ -669,6 +705,7 @@ impl Runtime {
                     target.started_at_unix_ms = Some(now);
                     target.updated_at_unix_ms = now;
                     self.save_missions();
+                    self.follow_mission_outside(&id);
                 }
                 Ok((json!({"mission": self.mission_view_of(&id)}), changed))
             }
@@ -937,9 +974,15 @@ impl Runtime {
         {
             return Err("mission_already_conducting".into());
         }
+        // Work reopened can go on the same branches, so what was read in
+        // main, or is being read now, is read again at the next wait (B17).
+        self.missions.outside.reopened(id, &self.missions.book);
         let target = self.missions.book.get_mut(id).ok_or("mission_unknown")?;
         target.status = MissionStatus::Running;
         target.closed_at_unix_ms = None;
+        for node in &mut target.nodes {
+            node.in_main = None;
+        }
         target.updated_at_unix_ms = now;
         Ok(true)
     }
@@ -1255,7 +1298,7 @@ impl Runtime {
             let closes = |runtime: &Self, mission: &Mission| {
                 mission.status == MissionStatus::MergeWait
                     && stack_settled(mission)
-                    && runtime.may_close_itself(mission, Some(project))
+                    && runtime.close_held(mission, Some(project)).is_none()
             };
             if seen_updates.is_empty() && events.is_empty() && !closes(self, mission) {
                 continue;
@@ -1635,6 +1678,7 @@ impl Runtime {
                     started_at_unix_ms: node.started_at_unix_ms,
                     finished_at_unix_ms: node.finished_at_unix_ms,
                     commit: node.commit.clone(),
+                    in_main: landed(node).map(str::to_owned),
                     verdict: node.verdict,
                     checks: node.checks,
                     plan: record.and_then(|record| self.worker_plan(&record.machine, &record.pane)),

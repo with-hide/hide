@@ -310,6 +310,7 @@ fn mission(
             started_at_unix_ms: None,
             finished_at_unix_ms: None,
             commit: None,
+            in_main: None,
             verdict: None,
             checks: None,
             plan: None,

@@ -359,10 +359,11 @@ pub struct MissionNode {
     /// with, whoever works the node then (B7, D-16).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub folder: Option<String>,
-    /// The commit of a direct change's branch that Hide read in main, which
-    /// a mission waiting for its branches waits on (B17, B18).
+    /// The proof that a direct change's branch is in main, which a mission
+    /// waiting for its branches waits on (B17, B18): of that branch only,
+    /// while the node stays done.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub in_main: Option<String>,
+    pub in_main: Option<Landed>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verdict: Option<Verdict>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1507,7 +1508,20 @@ pub(crate) fn apply_patch(
     if let Some(attempts) = patch.attempts {
         next.attempts = attempts;
     }
+    // A branch read in main proves that branch for that finish only: another
+    // branch, or the node at work again, waits for a read of its own (B17).
+    if next.branch != node.branch || next.status != NodeStatus::Done {
+        next.in_main = None;
+    }
     Ok(next)
+}
+
+/// A direct change's branch as Hide last read it in main: the branch, and
+/// its commit then, which is in main.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Landed {
+    pub branch: String,
+    pub commit: String,
 }
 
 /// A commit as Git names one: 7 to 64 hexadecimal digits.
