@@ -636,6 +636,19 @@ fn report_agent(
     let herdr = Some(herdr_piece(
         target, adapter, record, on, detection, herdr, failures,
     ));
+    let refused = [Some(&skill), hook.as_ref(), herdr.as_ref()]
+        .into_iter()
+        .flatten()
+        .any(|piece| {
+            piece
+                .why
+                .as_ref()
+                .is_some_and(|why| why.cause == PartCause::UpdateAgent)
+        });
+    let update = (!on || refused)
+        .then(|| detection.program(adapter))
+        .flatten()
+        .and_then(|program| crate::agent_update::needed(adapter, program, &target.home));
     AgentReport {
         id: adapter.id.to_owned(),
         label: adapter.label.to_owned(),
@@ -645,6 +658,7 @@ fn report_agent(
         skill,
         hook,
         herdr,
+        update,
         doc_url: adapter.doc_url.to_owned(),
     }
 }

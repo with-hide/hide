@@ -422,7 +422,7 @@ export const PaneView = memo(function PaneView({
         {agentKind ? <PaneAskMark paneId={paneId} header={header} actions={actions} /> : null}
         {agentKind && lettersWaiting > 0 ? <PaneLetterButton paneId={paneId} letters={lettersWaiting} onDeliver={actions.deliverLettersNow} /> : null}
         <span data-pane-move-blank="true" className="h-full flex-1" />
-        <PaneConnectionChip pane={pane} actions={actions} local={local} />
+        <PaneConnectionChip pane={pane} agentKind={agentKind} actions={actions} local={local} />
         {agentKind ? <PaneMention paneId={paneId} actions={actions} className={tools} /> : null}
         {zoomed ? (
           <Hint label={zoomChord ? t("panes.unzoomChord", { chord: zoomChord }) : t("panes.unzoom")}>

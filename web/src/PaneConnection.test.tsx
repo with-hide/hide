@@ -28,7 +28,7 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-async function mount(row: PaneRow, next = snapshot()) {
+async function mount(row: PaneRow, next = snapshot(), agentKind: string | null = "claude") {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} unobserve() {} });
   const events: Parameters<DispatchFn>[0][] = [];
@@ -39,7 +39,7 @@ async function mount(row: PaneRow, next = snapshot()) {
   const saved = useShellStore.getState();
   const render = async (nextRow: PaneRow) => {
     await act(async () => {
-      root.render(<TooltipProvider><PaneConnectionChip pane={nextRow} actions={actions} local /></TooltipProvider>);
+      root.render(<TooltipProvider><PaneConnectionChip pane={nextRow} agentKind={agentKind} actions={actions} local /></TooltipProvider>);
     });
   };
   await act(async () => { useShellStore.setState(next as never); });
@@ -228,5 +228,37 @@ it("does not open on an old answer: a finished turn-off nobody asked for in this
   const { unmount } = await mount(pane(not({ reason: "codex_shared_server" })), snapshot({ state: "failed", reason: "timed_out" }));
   await open();
   expect(document.querySelector("[data-codex-shared-server-outcome]")).toBeNull();
+  await unmount();
+});
+
+const OLD = { installed: "2.1.200", minimum: "2.1.278", path: "/Users/me/.local/bin/claude", command: "claude update" };
+
+it("wears an Update needed badge for a copy too old for Hide, and its popover names the versions and the one command, with no Reopen", async () => {
+  const { events, unmount } = await mount(pane(not({ reason: "update_agent", can_reopen: false, update: OLD })));
+  expect(chip()?.getAttribute("data-pane-connection")).toBe("update_agent");
+  expect(chip()?.textContent).toBe("Update needed");
+  await open();
+  expect(popover()?.textContent).toContain("Not connected to Hide");
+  expect(popover()?.textContent).toContain("With Claude Code 2.1.200, status, letters and Memory are off. Update it to 2.1.278 or later.");
+  expect(document.querySelector('[data-agent-update-command="claude-code"]')?.textContent).toContain("claude update");
+  expect(document.querySelector("[data-pane-reopen]")).toBeNull();
+  expect(events).toEqual([]);
+  await unmount();
+});
+
+it("links the agent's install page when Hide cannot tell how the copy was installed", async () => {
+  const { unmount } = await mount(pane(not({ reason: "update_agent", can_reopen: false, update: { ...OLD, command: null } })));
+  await open();
+  expect(document.querySelector("[data-agent-update-command]")).toBeNull();
+  expect(document.querySelector('[data-agent-update-docs="claude-code"]')?.getAttribute("href")).toMatch(/^https:\/\//);
+  await unmount();
+});
+
+it("says to restart a session it cannot reopen once the piece is in, and keeps the icon", async () => {
+  const { unmount } = await mount(pane(not({ reason: "started_before_hide", can_reopen: false })), snapshot(), "omp");
+  expect(chip()?.textContent).toBe("");
+  await open();
+  expect(popover()?.textContent).toContain("Restart the agent to connect it.");
+  expect(document.querySelector("[data-pane-reopen]")).toBeNull();
   await unmount();
 });

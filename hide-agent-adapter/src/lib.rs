@@ -556,6 +556,59 @@ pub struct MinimumVersion {
     pub evidence: &'static str,
 }
 
+/// One way the vendor's documentation installs the agent's CLI, how Hide
+/// tells a copy installed that way from where its program is, and the one
+/// command that updates that copy (docs/agent-hooks.md, Updating an agent
+/// that is too old). A copy no route recognises gets the agent's install
+/// page instead of a guessed command.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct UpdateRoute {
+    pub method: InstallMethod,
+    /// The systems the command is documented for.
+    pub systems: Systems,
+    pub command: &'static str,
+    /// The vendor's page the command is from, and, for a package manager's
+    /// own upgrade of a package the vendor names, that manager's page too.
+    pub source: &'static str,
+}
+
+/// How a copy of a CLI got onto the machine, as its program's path shows it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum InstallMethod {
+    /// npm's global folder, holding this package: nvm's, fnm's and
+    /// Homebrew's Node, any npm prefix, Volta, and `%AppData%\npm`.
+    Npm(&'static str),
+    /// bun's global folder, holding this package.
+    Bun(&'static str),
+    /// A Homebrew formula or cask of this name: the program resolves into
+    /// `Cellar/<name>` or `Caskroom/<name>`.
+    Homebrew(&'static str),
+    /// A WinGet package of this id: the program resolves into
+    /// `WinGet/Packages/<id>_<source>`.
+    WinGet(&'static str),
+    /// The vendor's own installer: the program is, or resolves into, one of
+    /// these paths under the home folder, written with `/`.
+    Installer(&'static [&'static str]),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Systems {
+    Every,
+    MacOsAndLinux,
+    Windows,
+}
+
+impl Systems {
+    /// Whether the system this code was built for is one of them.
+    pub const fn include_this_one(self) -> bool {
+        match self {
+            Self::Every => true,
+            Self::MacOsAndLinux => !cfg!(windows),
+            Self::Windows => cfg!(windows),
+        }
+    }
+}
+
 /// Independent gates; adding prompt intake never grants bell or shell denial.
 #[derive(Clone, Copy, Debug)]
 pub struct AgentAdapter {
@@ -605,6 +658,10 @@ pub struct AgentAdapter {
     pub usage: usage::UsageDeclaration,
     pub doc_url: &'static str,
     pub install_url: &'static str,
+    /// Each documented way of installing the CLI that Hide can tell from
+    /// the program's path, with its update command; empty for a retired
+    /// agent.
+    pub updates: &'static [UpdateRoute],
     pub logo_id: &'static str,
     pub terminal_click: bool,
 }

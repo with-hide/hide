@@ -111,6 +111,7 @@ pub(super) fn kit_rows(runtime: &mut Runtime, codex_daemon_on: Option<bool>) {
                 partial: adapter.partial(),
                 features: Vec::new(),
                 sessions: None,
+                update: None,
                 doc_url: String::new(),
             }
         })
@@ -139,10 +140,10 @@ pub(super) fn connection_of(runtime: &Runtime, pane_id: &str) -> Option<PaneConn
         .flat_map(|tab| tab.panes.iter())
         .find(|pane| pane.id == pane_id)
         .and_then(|pane| pane.children.as_ref())
-        .and_then(|children| children.connection)
+        .and_then(|children| children.connection.clone())
 }
 
-fn feed(runtime: &mut Runtime, panes: &[(&str, &str, bool)]) {
+pub(super) fn feed(runtime: &mut Runtime, panes: &[(&str, &str, bool)]) {
     runtime.ingest_session(Ok(
         crate::sidebar::owned_label_fixture(session(panes)).expect("session payload")
     ));
@@ -246,6 +247,7 @@ fn a_codex_pane_on_the_shared_server_says_so_and_one_started_earlier_says_that()
             can_reopen: true,
             reason: Some(PaneConnectionReason::CodexSharedServer),
             reopen: None,
+            update: None,
         })
     );
 
@@ -370,6 +372,7 @@ fn reopen_runs_once_per_pane_and_a_refusal_leaves_the_pane_as_it_was() {
             can_reopen: false,
             reason: None,
             reopen: None,
+            update: None,
         })
     );
     assert!(
@@ -507,6 +510,7 @@ fn reopen_refuses_what_it_cannot_do_with_a_code_and_never_for_a_missing_hook() {
             can_reopen: false,
             reason: Some(PaneConnectionReason::SetupNeeded),
             reopen: None,
+            update: None,
         })
     );
     reopen(&mut runtime, "w1:p4");

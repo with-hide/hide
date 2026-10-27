@@ -1087,6 +1087,7 @@ fn machine_kit(cli: hide_kit::ComponentState) -> hide_kit::KitReport {
         },
         hook: None,
         herdr: None,
+        update: None,
         doc_url: String::new(),
     }];
     report

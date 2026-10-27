@@ -4,7 +4,7 @@
 // value is the kit snapshot's; nothing here decides what an agent supports.
 
 import { AGENT_ADAPTERS, agentAdapter } from "../agentAdapters";
-import type { Device, KitAgent, KitPiece, RemoteStatus } from "../snapshot";
+import type { AgentUpdate, Device, KitAgent, KitPiece, RemoteStatus } from "../snapshot";
 import { deviceState, kitPartNeedsReinstall } from "../settings";
 import { hostBridge } from "../host";
 
@@ -143,6 +143,20 @@ export function agentProblems(agent: KitAgent): AgentProblem[] {
   if (agent.herdr) pieces.push({ part: "herdr", piece: agent.herdr });
   const broken = pieces.filter(({ piece }) => kitPartNeedsReinstall(piece));
   return [...broken.filter(({ piece }) => piece.state === "failed"), ...broken.filter(({ piece }) => piece.state !== "failed")];
+}
+
+/**
+ * An agent that is on whose copy is older than Hide's minimum: the update the kit says it needs, or, from a helper
+ * that predates `update`, the refused piece whose why names the minimum. Reinstall is never offered for it, since it
+ * would be refused again (docs/agent-hooks.md, Updating an agent that is too old).
+ */
+export type AgentTooOld = { update: AgentUpdate } | { update: null; piece: KitPiece };
+
+export function agentTooOld(agent: KitAgent): AgentTooOld | null {
+  if (!agent.enabled) return null;
+  if (agent.update) return { update: agent.update };
+  const piece = [agent.skill, agent.hook, agent.herdr].find((row): row is KitPiece => row?.why?.cause === "update_agent");
+  return piece ? { update: null, piece } : null;
 }
 
 /**

@@ -99,6 +99,21 @@ pub fn device_hook_status(
     kit_hook_status(kit, dialect)
 }
 
+/// The update a machine's kit says the copy of `agent_kind` needs before
+/// Hide puts its pieces in, for an agent that is on: one switched off is the
+/// operator's choice, and its panes say nothing about updating it.
+pub fn kit_update(
+    kit: &crate::model::KitSnapshot,
+    agent_kind: &str,
+) -> Option<hide_kit::AgentUpdate> {
+    let id = hide_agent_adapter::adapter(agent_kind)?.id;
+    kit.agents
+        .iter()
+        .find(|agent| agent.id == id && agent.enabled)?
+        .update
+        .clone()
+}
+
 /// The hook `dialect` speaks through, as a machine's kit reported it: Claude
 /// Code's and Codex's kit parts, or the hook piece on the agent's own row
 /// (OpenCode's plugin, Pi's and omp's extension, Grok's, Cursor's and
@@ -255,6 +270,7 @@ mod tests {
                 partial: false,
                 features: Vec::new(),
                 sessions: None,
+                update: None,
                 doc_url: String::new(),
             }],
             ..Default::default()

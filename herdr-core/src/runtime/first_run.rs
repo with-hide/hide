@@ -310,7 +310,16 @@ impl Runtime {
                 [Some(&row.skill), row.hook.as_ref(), row.herdr.as_ref()]
                     .into_iter()
                     .flatten()
-                    .any(|piece| piece.state == hide_kit::ComponentState::Failed)
+                    // A piece refused because the agent's copy is too old is
+                    // not a failure Try again fixes: the step shows the
+                    // update and goes on, and the update installs it.
+                    .any(|piece| {
+                        piece.state == hide_kit::ComponentState::Failed
+                            && piece
+                                .why
+                                .as_ref()
+                                .is_none_or(|why| why.cause != hide_kit::PartCause::UpdateAgent)
+                    })
             })
             .map(|row| row.id.clone())
             .collect();

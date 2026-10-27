@@ -6,7 +6,7 @@ import { AGENT_ADAPTERS } from "./agentAdapters";
 import type { ProviderKind } from "./agentPicker";
 import type { NotificationPermission } from "./host";
 import { hookPart, type AgentPart } from "./settings/agentRows";
-import { FIRST_RUN_VERSION, type AiProvider, type FirstRunStep, type HerdrProfiles, type Kit, type KitAgent, type KitPiece, type KitWhy, type SnapshotRest } from "./snapshot";
+import { FIRST_RUN_VERSION, type AgentUpdate, type AiProvider, type FirstRunStep, type HerdrProfiles, type Kit, type KitAgent, type KitPiece, type KitWhy, type SnapshotRest } from "./snapshot";
 
 /** The desktop route includes saved devices; a browser tab has its first step alone. */
 export type WizardStep = Exclude<FirstRunStep, "done">;
@@ -40,11 +40,13 @@ export function firstRunStep(rest: SnapshotRest | null, desktop: boolean): Wizar
 export const SIGN_IN_CHECKED: ReadonlySet<string> = new Set(["claude-code", "codex", "grok", "pi", "antigravity"]);
 
 /** What a tile says under the agent's name (B8, B9, B49). */
-export type TileStatus = "checking" | "ready" | "not_signed_in" | "installed" | "not_installed" | "unsupported";
+export type TileStatus = "checking" | "ready" | "not_signed_in" | "installed" | "not_installed" | "unsupported" | "update_needed";
 
 export function tileStatus(agent: KitAgent, providers: readonly AiProvider[] | undefined): TileStatus {
   if (agent.availability === "unsupported_system") return "unsupported";
   if (agent.availability !== "available") return "not_installed";
+  // Its copy is older than Hide's minimum: the tile stays a switch, on as chosen, and says so; the update installs it.
+  if (agent.update) return "update_needed";
   if (!SIGN_IN_CHECKED.has(agent.id)) return "installed";
   const provider = providers?.find((row) => row.agent === agent.id);
   if (!provider || provider.state === "unread") return "checking";
@@ -52,6 +54,11 @@ export function tileStatus(agent: KitAgent, providers: readonly AiProvider[] | u
   // A usage limit is an account that is signed in.
   if (provider.state === "ready" || provider.state === "usage_limited") return "ready";
   return "installed";
+}
+
+/** The agents a tile marks as needing an update, in the tiles' order, each with what updates it. */
+export function agentsToUpdate(agents: readonly KitAgent[]): (KitAgent & { update: AgentUpdate })[] {
+  return agents.filter((agent): agent is KitAgent & { update: AgentUpdate } => agent.availability === "available" && agent.update != null);
 }
 
 /** The kit listed its agents and none is installed here: the step says so and links the two it names (B9). An empty list is a kit that has not listed them. */
@@ -110,7 +117,8 @@ export type FailedAgent = { id: string; label: string; why: KitWhy | null };
 export function failedAgents(agents: readonly KitAgent[], chosen: readonly string[]): FailedAgent[] {
   return agents.flatMap((agent) => {
     if (!agent.enabled || !chosen.includes(agent.id)) return [];
-    const failed = [agent.hook, agent.skill, agent.herdr ?? null].find((piece) => piece?.state === "failed");
+    // A piece refused because the copy is too old is not a failure Try again fixes; the update installs it.
+    const failed = [agent.hook, agent.skill, agent.herdr ?? null].find((piece) => piece?.state === "failed" && piece.why?.cause !== "update_agent");
     return failed ? [{ id: agent.id, label: agent.label, why: failed.why ?? null }] : [];
   });
 }

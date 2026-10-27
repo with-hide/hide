@@ -21,6 +21,7 @@ pub(super) fn agent(id: &str, enabled: bool, skill: ComponentState) -> AgentRepo
         },
         hook: None,
         herdr: None,
+        update: None,
         doc_url: "https://example.test/skills".to_owned(),
     }
 }
@@ -188,6 +189,35 @@ fn a_failed_agent_keeps_the_first_step_and_continue_again_retries_it() {
     );
     assert_eq!(agent_ids(&scope.agent_on), ["claude-code"]);
     assert!(scope.agent_off.is_empty(), "codex was already off");
+    assert_eq!(step(&runtime), Some(FirstRunStep::Notifications));
+}
+
+/// A chosen agent whose copy is too old is not a failure Try again fixes:
+/// its hook is refused until the operator updates it, and the wizard goes on
+/// with it still chosen (docs/agent-hooks.md, Updating an agent that is too
+/// old).
+#[test]
+fn a_chosen_agent_too_old_does_not_hold_the_first_step() {
+    let mut runtime = runtime();
+    report_here(&mut runtime, &first_run_pass());
+    runtime.dispatch_json(&event(
+        "agent_onboarding_apply",
+        serde_json::json!({"agents": ["claude-code"]}),
+    ));
+    let mut old = agent("claude-code", true, ComponentState::Installed);
+    old.hook = Some(PieceReport {
+        state: ComponentState::Failed,
+        reason: Some("Claude Code 2.1.200 is older than 2.1.278".to_owned()),
+        why: Some(hide_kit::PartWhy {
+            cause: hide_kit::PartCause::UpdateAgent,
+            value: Some("2.1.278".to_owned()),
+        }),
+        location: None,
+    });
+    run_queued_pass(
+        &mut runtime,
+        &pass(false, vec![old, agent("codex", false, ComponentState::Off)]),
+    );
     assert_eq!(step(&runtime), Some(FirstRunStep::Notifications));
 }
 

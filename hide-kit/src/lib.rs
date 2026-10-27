@@ -19,6 +19,7 @@
 //!   kit is not such a record (B20).
 
 mod agent_kit;
+mod agent_update;
 pub mod agents;
 mod cli;
 mod codex_trust;
@@ -49,6 +50,7 @@ use std::time::Duration;
 use hide_platform::programs::Program;
 use serde::{Deserialize, Serialize};
 
+pub use agent_update::AgentUpdate;
 pub use agents::{
     AgentAdapter, AgentReport, Availability, Feature, HookSupport, PieceReport, SkillDir,
 };

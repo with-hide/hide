@@ -244,6 +244,28 @@ impl Runtime {
         changed
     }
 
+    /// Has `machine`'s kit read once more, for a session that newly wears
+    /// the update badge (`sidebar::update_badged_sessions`): an agent started
+    /// again, perhaps after its update, which the read settles. A device
+    /// that is not connected, or has kit work queued or running, answers
+    /// with that work instead.
+    pub(super) fn request_machine_kit_read(&mut self, machine: &str) {
+        if machine == self.node.as_str() {
+            self.local_kit_check_requested = true;
+            return;
+        }
+        let ready = self
+            .device_hosts
+            .get(machine)
+            .is_some_and(|host| matches!(host.phase, HostPhase::Ready { .. }));
+        if ready
+            && !self.device_kit_pending.contains_key(machine)
+            && !self.device_kit_running.contains(machine)
+        {
+            self.queue_device_kit(machine, KitJob::Status);
+        }
+    }
+
     /// A read asked with Check again is on its way: the machine's row shows
     /// it until an answer lands, report or failure (B10). It publishes only
     /// the flip, so a re-read every few seconds adds nothing while Settings
@@ -407,6 +429,7 @@ impl Runtime {
                 .is_some_and(|state| state.herdr_start_failed);
         }
         self.diagnose_kit_reasons(device_id, report);
+        self.install_updated_agents(device_id, &snapshot);
         snapshot.busy = self.kit_install_queued(device_id);
         // A refusal reaches the operator once per change, not on every read
         // while Settings is open: the kit's own words go to the log, and the
@@ -489,6 +512,42 @@ impl Runtime {
             changed |= self.settle_first_run_apply();
         }
         changed
+    }
+
+    /// An agent that is on, whose copy was too old in the machine's last
+    /// report and is new enough in this one, gets the pieces it still lacks
+    /// on the pass this queues, without a press: a read only judges, and
+    /// the next install would otherwise wait for a launch or a Reinstall
+    /// (docs/agent-hooks.md, Updating an agent that is too old). A pass that
+    /// installed them leaves nothing to repair, so it queues nothing more.
+    fn install_updated_agents(&mut self, device_id: &str, snapshot: &KitSnapshot) {
+        let Some(before) = self.kit_states.get(device_id) else {
+            return;
+        };
+        let updated = snapshot
+            .agents
+            .iter()
+            .filter(|agent| {
+                agent.enabled
+                    && agent.update.is_none()
+                    && agent.needs_attention()
+                    && before
+                        .agents
+                        .iter()
+                        .any(|old| old.id == agent.id && old.update.is_some())
+            })
+            .map(|agent| agent.id.clone())
+            .collect::<Vec<_>>();
+        if updated.is_empty() {
+            return;
+        }
+        crate::diagnostic!(serde_json::json!({
+            "component": "kit",
+            "kind": "kit.agent_updated",
+            "device_id": device_id,
+            "agents": updated,
+        }));
+        self.queue_kit_scope(device_id, Scope::automatic());
     }
 
     /// What a machine's kit report says about the first-run agent choice.
@@ -1387,6 +1446,7 @@ impl Runtime {
         self.end_codex_daemon_off_unanswered(device_id);
         self.reopen_first_run_choice(device_id);
         self.clear_kit_busy(device_id);
+        self.update_badges.remove(device_id);
     }
 
     /// The hook parts of this Mac that a Reinstall would repair, for
@@ -1669,15 +1729,29 @@ impl Runtime {
 }
 
 /// What of a machine's kit the judgement of its panes reads: the Codex
-/// shared server and the state of each agent's hook piece.
-fn pane_judgement_inputs(
-    kit: &KitSnapshot,
-) -> (bool, Vec<(String, Option<hide_kit::ComponentState>)>) {
+/// shared server, the state of each agent's hook piece and the update its
+/// copy needs, for an agent that is on.
+type PaneJudgementInputs = (
+    bool,
+    Vec<(
+        String,
+        Option<hide_kit::ComponentState>,
+        Option<hide_kit::AgentUpdate>,
+    )>,
+);
+
+fn pane_judgement_inputs(kit: &KitSnapshot) -> PaneJudgementInputs {
     (
         kit.shares_codex_server(),
         kit.agents
             .iter()
-            .map(|agent| (agent.id.clone(), agent.hook.as_ref().map(|hook| hook.state)))
+            .map(|agent| {
+                (
+                    agent.id.clone(),
+                    agent.hook.as_ref().map(|hook| hook.state),
+                    agent.update.clone().filter(|_| agent.enabled),
+                )
+            })
             .collect(),
     )
 }
@@ -1701,6 +1775,7 @@ mod tests {
             },
             hook: None,
             herdr: None,
+            update: None,
             doc_url: String::new(),
         }
     }

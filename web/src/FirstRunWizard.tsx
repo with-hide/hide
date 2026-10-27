@@ -17,13 +17,14 @@ import { create } from "zustand";
 import type { TFunction } from "i18next";
 import type { Actions } from "./actions";
 import { AddProjectViews } from "./AddProjectDialog";
+import { AgentUpdateCommand } from "./AgentUpdate";
 import { agentLogo, monogram } from "./agentLogos";
 import { selection, tileSwitchable } from "./agentOnboardingRules";
 import { Note, Status } from "./components/settings-rows";
 import { Button } from "./components/ui/button";
 import { Dialog, DialogBody, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./components/ui/dialog";
 import { Kbd } from "./components/ui/kbd";
-import { accountHome, failedAgents, firstRunStep, type FailedAgent, firstStartAgent, noAgentInstalled, SUGGESTED_INSTALLS, tileStatus, whatChanges, wizardSteps, type TileStatus, type WizardStep } from "./firstRun";
+import { accountHome, agentsToUpdate, failedAgents, firstRunStep, type FailedAgent, firstStartAgent, noAgentInstalled, SUGGESTED_INSTALLS, tileStatus, whatChanges, wizardSteps, type TileStatus, type WizardStep } from "./firstRun";
 import { FirstRunDevices } from "./FirstRunDevices";
 import { FirstRunHerdr } from "./HerdrTakeover";
 import { herdrStepShown } from "./herdrTakeoverRules";
@@ -217,6 +218,8 @@ function AgentsStep({ actions, reopened, desktop, primary, chosen, onChoose, onN
   const changes = whatChanges(agents, on, kit, home);
   const applying = pressed || busy;
   const failures = sent && !applying ? failedAgents(agents, sent) : [];
+  // A tile cannot hold a Copy button (it is itself a switch), so each too-old agent's command sits under the grid.
+  const toUpdate = agentsToUpdate(agents);
   // The kit could not run here, whether or not Continue was pressed: the step says why, and Try again
   // only has the core read the agents again; the choice is sent once they are back.
   const unavailable = !applying ? (kit?.unavailable ?? null) : null;
@@ -276,6 +279,16 @@ function AgentsStep({ actions, reopened, desktop, primary, chosen, onChoose, onN
             <AgentTile key={agent.id} agent={agent} on={on.has(agent.id)} status={tileStatus(agent, providers)} disabled={applying} onToggle={() => toggle(agent.id)} />
           ))}
         </div>
+        {toUpdate.length > 0 ? (
+          <ul className="flex flex-col gap-xs" data-first-run-updates="true">
+            {toUpdate.map((agent) => (
+              <li key={agent.id} className="flex min-w-0 flex-wrap items-center gap-x-md gap-y-xs" data-first-run-update={agent.id}>
+                <span className="shrink-0 text-body text-foreground">{t("agents.update.versionsOf", { agent: agent.label, installed: agent.update.installed, minimum: agent.update.minimum })}</span>
+                <AgentUpdateCommand agentId={agent.id} label={agent.label} update={agent.update} actions={actions} />
+              </li>
+            ))}
+          </ul>
+        ) : null}
         <div className="flex flex-col gap-xs">
           <button type="button" aria-expanded={showChanges} onClick={() => setShowChanges((open) => !open)} className="flex items-center gap-xs self-start rounded-xs text-body font-medium text-subtle-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring" data-first-run-what-changes="true">
             <ChevronRightIcon aria-hidden="true" className={cn("size-(--size-icon) text-muted-foreground transition-transform", showChanges && "rotate-90")} />
@@ -351,6 +364,7 @@ const TILE_STATUS: Record<Exclude<TileStatus, "unsupported">, MessageKey> = {
   not_signed_in: "firstRun.tile.notSignedIn",
   installed: "firstRun.tile.installed",
   not_installed: "firstRun.tile.notInstalled",
+  update_needed: "agents.update.needed",
 };
 
 /**
@@ -369,6 +383,8 @@ function AgentTile({ agent, on, status, disabled, onToggle }: { agent: KitAgent;
   const line =
     status === "ready" ? (
       <Status tone="ok">{t(TILE_STATUS.ready)}</Status>
+    ) : status === "update_needed" ? (
+      <Status tone="warn">{t(TILE_STATUS.update_needed)}</Status>
     ) : status === "not_signed_in" ? (
       <Status tone="warn">{t(TILE_STATUS.not_signed_in)}</Status>
     ) : status === "unsupported" ? (

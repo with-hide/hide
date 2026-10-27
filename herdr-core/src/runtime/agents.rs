@@ -1753,6 +1753,31 @@ impl Runtime {
                     .and_then(|(_, status)| status.clone()),
             }
         };
+        let kit_updates: Vec<(&'static str, hide_kit::AgentUpdate)> = local_kit
+            .map(|kit| {
+                hide_agent_adapter::ADAPTERS
+                    .iter()
+                    .filter_map(|row| {
+                        crate::agent_hooks::kit_update(kit, row.id).map(|update| (row.id, update))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let update_of = |kind: &str| {
+            let id = hide_agent_adapter::adapter(kind)?.id;
+            kit_updates
+                .iter()
+                .find(|(known, _)| *known == id)
+                .map(|(_, update)| update.clone())
+        };
+        let previous_badges = self
+            .update_badges
+            .remove(self.node.as_str())
+            .unwrap_or_default();
+        let updates = crate::sidebar::PaneUpdates {
+            update_of: &update_of,
+            badged: &previous_badges,
+        };
         let mut changed = false;
         let mut reopen_scope = ReopenScope::default();
         let mut delegated_tabs_changed = false;
@@ -1798,6 +1823,7 @@ impl Runtime {
                 tokens,
                 &status_of,
                 codex_daemon_on,
+                &updates,
             );
             reopen_scope.panes.insert(pane.id.clone());
             match children
@@ -1831,6 +1857,27 @@ impl Runtime {
                 pane.lineage_path = lineage_path;
                 changed = true;
             }
+        }
+        let (badged, newly) = crate::sidebar::update_badged_sessions(
+            &agents,
+            self.snapshot
+                .navigator
+                .workspaces
+                .iter()
+                .flat_map(|workspace| workspace.checkouts.iter())
+                .flat_map(|checkout| checkout.tabs.iter())
+                .flat_map(|tab| tab.panes.iter())
+                .filter(|pane| !crate::agent_hooks::is_remote_pane(&pane.id))
+                .map(|pane| (pane.id.as_str(), pane.children.as_ref())),
+            &previous_badges,
+        );
+        if !badged.is_empty() {
+            self.update_badges
+                .insert(self.node.as_str().to_owned(), badged);
+        }
+        if newly {
+            let node = self.node.clone();
+            self.request_machine_kit_read(node.as_str());
         }
         self.snapshot.navigator.agents = agents;
         self.pane_reopens.retain(|pane_id, state| {

@@ -8,7 +8,8 @@ import { useInterfaceTranslation } from "../i18n/client";
 import { kitWhyText } from "../kitWhy";
 import { kitPartText } from "../settings";
 import type { Device, KitAgent } from "../snapshot";
-import { agentHookWait, agentLeftover, agentProblems, agentStatus, agentUnsupportedHere, docsUrl, installDocUrl, machineSystem } from "./agentRows";
+import { AgentUpdateGuide } from "../AgentUpdate";
+import { agentHookWait, agentLeftover, agentProblems, agentStatus, agentTooOld, agentUnsupportedHere, docsUrl, installDocUrl, machineSystem } from "./agentRows";
 import { PartialChip } from "./PartialChip";
 
 /** The link an agent row offers, as the row words it: a label and the arrow that says it leaves the app. */
@@ -63,7 +64,8 @@ export function NotInstalledRow({ agent }: { agent: KitAgent }) {
  * chip when Hide does only some things for it, the status of an agent that is
  * on, and the switch. A Docs link shows on hover or keyboard focus only (B12).
  * What needs the operator shows under the row, on this row alone: a part that
- * failed or was removed with its Reinstall (B13, B20).
+ * failed or was removed with its Reinstall (B13, B20), or, for a copy older than
+ * Hide's minimum, the versions and the one command that updates it.
  */
 export function AgentRow({ device, agent, actions, onAct }: { device: Device; agent: KitAgent; actions: Actions; onAct: () => void }) {
   const { t } = useInterfaceTranslation();
@@ -73,6 +75,7 @@ export function AgentRow({ device, agent, actions, onAct }: { device: Device; ag
   const leftover = agentLeftover(agent);
   const leftoverWhy = leftover ? kitWhyText(leftover.why, t) : null;
   const waiting = agentHookWait(agent);
+  const tooOld = agentTooOld(agent);
   const docs = docsUrl(agent.id);
   const worst = problems.some(({ piece }) => piece.state === "failed") ? "error" : "warn";
   return (
@@ -113,6 +116,12 @@ export function AgentRow({ device, agent, actions, onAct }: { device: Device; ag
                 {busy ? t("settings.reinstalling") : t("settings.reinstall")}
               </Button>
             </div>
+          ) : null}
+          {tooOld?.update ? <AgentUpdateGuide agentId={agent.id} label={agent.label} update={tooOld.update} actions={actions} /> : null}
+          {tooOld && !tooOld.update ? (
+            <Note tone="warn" data-agent-update={agent.id}>
+              {kitWhyText(tooOld.piece.why, t)}
+            </Note>
           ) : null}
           {waiting ? (
             <Note data-agent-hook-wait={`${device.id}:${agent.id}`}>

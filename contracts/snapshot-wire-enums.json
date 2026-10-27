@@ -51,7 +51,7 @@
   "link_issue_source": ["closes", "hide"],
   "link_session_role": ["created", "worked"],
   "link_target_kind": ["pr", "issue"],
-  "pane_connection_reason": ["codex_shared_server", "started_before_hide", "setup_needed"],
+  "pane_connection_reason": ["codex_shared_server", "started_before_hide", "setup_needed", "update_agent"],
   "pane_reopen_failure": ["start_refused", "session_gone", "codex_unread", "agent_busy", "end_refused"],
   "input_request_state": ["pending", "ready", "discarded"],
   "pane_find_route": ["agent", "bar"],

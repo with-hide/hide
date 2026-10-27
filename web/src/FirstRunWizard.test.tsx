@@ -235,6 +235,26 @@ it("holds Continue while its pass runs, and names a failed agent with its reason
   await unmount();
 });
 
+it("keeps an agent too old for Hide on, says it needs an update and shows its command under the tiles, and is not held by its refused piece", async () => {
+  const update = { installed: "2.1.200", minimum: "2.1.278", path: "/Users/me/.local/bin/claude", command: "claude update" };
+  const old = AGENTS.map((entry) => (entry.id === "claude-code" ? { ...entry, update } : entry));
+  const { events, unmount } = await mount(state(true, old));
+  expect(tile("claude-code", "on")).not.toBeNull();
+  expect(document.querySelector('[data-onboarding-status="update_needed"]')?.textContent).toContain("Update needed");
+  const line = document.querySelector('[data-first-run-update="claude-code"]')!;
+  expect(line.textContent).toContain("Claude Code 2.1.200 → 2.1.278 or later");
+  expect(line.querySelector('[data-agent-update-command="claude-code"]')?.textContent).toContain("claude update");
+  expect(document.querySelector('[data-first-run-update="codex"]')).toBeNull();
+
+  await act(async () => { continueButton().click(); });
+  const refused = old.map((entry) => (entry.id === "claude-code" ? { ...entry, enabled: true, hook: { state: "failed" as const, why: { cause: "update_agent", value: "2.1.278" }, location: "/x" } } : { ...entry, enabled: entry.availability === "available" }));
+  await act(async () => { useShellStore.setState(state(true, refused, [], { busy: false }, 2) as never); });
+  expect(document.querySelector("[data-first-run-failed]")).toBeNull();
+  expect(continueButton().textContent).not.toBe("Try again");
+  expect(choices(events).filter((event) => event.kind === "agent_onboarding_apply")[0]?.payload).toEqual({ agents: ["claude-code", "codex"], finish: true });
+  await unmount();
+});
+
 it("lists under What changes where Hide writes for each agent left on, and the hide command's link (B11)", async () => {
   const located = AGENTS.map((entry) => ({ ...entry, skill: { state: "off" as const, why: null, location: `/Users/me/.${entry.id}/skills/hide` } }));
   const { unmount } = await mount(state(true, located));

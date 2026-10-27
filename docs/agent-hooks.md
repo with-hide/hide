@@ -651,6 +651,7 @@ Each line says what to add, where, and the check that fails while it is missing;
 11. Skills folder and kit case: a `SkillLocation`, and the agent's expected features in `hide-kit/src/tests/agent_cases.rs`; the compiler and the kit tests, which list every id.
 12. Program: the vendor's program names in `executables`, found only through `hide_platform::programs`, with a vendor install folder outside the usual ones added there; `no_product_code_outside_the_platform_looks_for_a_program_on_its_own` refuses a search of its own, and no check sees a missing folder, so install the CLI the vendor's way on each system and see Settings find it.
 13. Minimum version: `minimum` with its evidence on the row, proven on macOS, Linux and Windows; `every_supported_agent_declares_a_comparable_minimum_version_with_its_proof`, and the journey contract for its row in [The oldest version of each agent](#the-oldest-version-of-each-agent).
+    Its `updates` name each documented way of installing the CLI that Hide can tell from the program's path, with the vendor's update command and the page it is from ([Updating an agent that is too old](#updating-an-agent-that-is-too-old)); the journey contract, for the declaration and for its rows in that section.
 14. Logo and links: its entry in `web/src/assets/agents/manifest.json`, and an `https` `doc_url` and `install_url`; `generated_web_contract_and_logo_document_sources_are_current`.
 15. Generated contracts: `contracts/agent-adapters.json` with the `export_web_contract` example and `contracts/agent-journey.json` with `export_journey_contract` ([contracts/README.md](../contracts/README.md#agent-adapters)); their drift checks in `hide-agent-adapter/tests/it/contract.rs`.
 16. CLI pin: its row in `contracts/agent-clis.json`, at or above the minimum, with an installer `scripts/install-agent-clis.py` runs on Linux, macOS and Windows; the journey contract, `test_the_installed_cli_set_matches_the_registered_agents`, `scripts/tests/test_agent_clis.py`, and the `agent CLIs` lane on all three systems.
@@ -890,7 +891,7 @@ The things it records in an agent's own state are Codex's trust for Hide's own h
 Each supported agent's declaration (`hide-agent-adapter/src/declarations.rs`, `AgentAdapter::minimum`) names the oldest version of its CLI that Hide's hook, plugin or extension was proven on, and where the proof is; nothing else keeps a copy.
 It is one version per agent: the oldest proven on every system Hide runs on, macOS, Linux and Windows, not the oldest proven on any one of them, and there is no minimum per system; proven means run on that version, and a reading of the agent's source sets no minimum (operator decision, 2026-10-27).
 The kit puts that piece in place only for a CLI that answers this version or a newer one to `--version`.
-An older CLI is refused on every system with a reason that names the agent, the version it answered, the program's path and the minimum, such as `Pi 1.0.3 at ~/.local/bin/pi is older than 1.0.4, which Hide's extension needs; update it`, and the row reads Failed with Settings' "update the agent" wording; nothing of Hide's is written for it.
+An older CLI is refused on every system with a reason that names the agent, the version it answered, the program's path and the minimum, such as `Pi 1.0.3 at ~/.local/bin/pi is older than 1.0.4, which Hide's extension needs; update it`, and nothing of Hide's is written for it; the screens say what to update and how ([Updating an agent that is too old](#updating-an-agent-that-is-too-old)).
 A piece already current stays as it is, as Claude Code's and Codex's hook parts always have, and a CLI whose version Hide cannot read within the probe's 750 ms is not judged too old.
 The program asked is the one the operator's login shell runs ([Installed means the program is found](#installed-means-the-program-is-found)), run with the `PATH` it was found on, and it is asked once per version of its file: `hide_agent_hooks::program_version` remembers the answer by the file's path, search, write time and length, at most 32 programs, and asks again after a minute only when no version was read.
 `contracts/agent-journey.json` carries each minimum as `minimum_version` for scripts.
@@ -906,6 +907,45 @@ The program asked is the one the operator's login shell runs ([Installed means t
 | Antigravity | 1.4.2 | Windows: agy 1.4.2 starts a hook through `cmd /c` with Go's argument escaping, which broke the earlier guard, and Hide's encoded PowerShell guard was proven on it ([Antigravity: Hide's hook block](#antigravity-hides-hook-block)); the journey passes on 1.4.2 on macOS, Linux and Windows (run 39152230964); the block and skill folder were first measured live on 1.4.0 on macOS |
 
 A minimum moves only with new proof: a feature that needs a newer CLI raises it in the same change, with the fixture or measurement that shows the older one fails, and a lower one needs the integration proven on that version.
+
+### Updating an agent that is too old
+
+An agent whose copy is refused as too old is shown with the version it answered, the one it needs, and the one command that updates that copy, never a Reinstall, which would be refused again for the same reason.
+`AgentReport::update` (`hide_kit::AgentUpdate`, `KitAgentSnapshot.update`) carries it: present for an agent that is off whose found copy is older than its minimum, since switching it on would put nothing in (the first-run choice shows it), and for one that is on only while one of its pieces is refused as `update_agent`, so an old copy under a piece still current from a newer one says nothing.
+The command is chosen in `hide-kit/src/agent_update.rs` from the path of the program the kit judged, the copy the operator's shell runs, and each agent's ways of installing are declared once, with their command and the vendor page it is from, in `AgentAdapter::updates` (`hide-agent-adapter/src/declarations.rs`).
+A route is recognised by where the program really is, its links followed, in this order: a Homebrew keg (`Cellar/<formula>` or `Caskroom/<cask>`), a WinGet package (`WinGet/Packages/<id>_…`), the vendor installer's own place under the home folder, bun's global folder (`.bun/install/global/node_modules/<package>`), then npm's: the program inside `node_modules/<package>`, or beside a prefix that holds the package (`<prefix>/bin` with `<prefix>/lib/node_modules`, as nvm, fnm, Homebrew's Node and any npm prefix lay it out; `%AppData%\npm` with its `node_modules`; Volta's `bin` with `tools/image/packages`).
+A route documented for one system is not offered on another.
+A copy no route recognises, such as a system package, pnpm's global folder or a build of one's own, gets the agent's install page instead of a command, and the core shows a helper's command only when this build's declaration names it for the agent.
+A command the vendor does not document is not written: where the vendor names a package but documents no update for it, the row reruns the documented install, which installs the newest release, or uses that package manager's own upgrade of it (operator decision, 2026-10-27).
+
+| Agent | Installed by | Where the program is | Systems | Command | Source |
+| --- | --- | --- | --- | --- | --- |
+| Claude Code | its installer | `~/.local/share/claude/versions/`, or `~/.local/bin/claude.exe` | all | `claude update` | [setup](https://code.claude.com/docs/en/setup), [troubleshooting](https://code.claude.com/docs/en/troubleshoot-install) |
+| Claude Code | Homebrew cask `claude-code` or `claude-code@latest` | `Caskroom/claude-code*/` | macOS | `brew upgrade claude-code`, `brew upgrade claude-code@latest` | [setup](https://code.claude.com/docs/en/setup) |
+| Claude Code | WinGet `Anthropic.ClaudeCode` | `WinGet/Packages/Anthropic.ClaudeCode_…` | Windows | `winget upgrade Anthropic.ClaudeCode` | [setup](https://code.claude.com/docs/en/setup) |
+| Claude Code | npm `@anthropic-ai/claude-code` | npm's global folder | all | `npm install -g @anthropic-ai/claude-code@latest` | [setup](https://code.claude.com/docs/en/setup) |
+| Codex | its installer | `~/.codex/packages/standalone/` | macOS, Linux | `curl -fsSL https://chatgpt.com/codex/install.sh \| sh` | [Update Codex](https://learn.chatgpt.com/docs/codex/cli) |
+| Codex | npm `@openai/codex` | npm's global folder | all | `npm install -g @openai/codex` | [README](https://github.com/openai/codex#installing-and-running-codex-cli) |
+| Codex | Homebrew cask `codex` | `Caskroom/codex/` | macOS | `brew upgrade --cask codex` | [README](https://github.com/openai/codex#installing-and-running-codex-cli), [Homebrew](https://docs.brew.sh/Manpage#upgrade-options-installed_formulainstalled_cask-) |
+| Grok | its installer | `~/.grok/downloads/`, or `~/.grok/bin/grok.exe` | all | `grok update` | [CLI reference](https://docs.x.ai/build/cli/reference) |
+| Grok | npm `@xai-official/grok` | npm's global folder | all | `npm install -g @xai-official/grok` | [enterprise](https://docs.x.ai/build/enterprise) |
+| OpenCode | its installer | `~/.opencode/bin/opencode` | macOS, Linux | `opencode upgrade` | [CLI](https://opencode.ai/docs/cli/#upgrade) |
+| OpenCode | npm or bun `opencode-ai`, Homebrew `opencode` | npm's or bun's global folder, `Cellar/opencode/` | all; Homebrew on macOS, Linux | `opencode upgrade` | [CLI](https://opencode.ai/docs/cli/#upgrade) |
+| Pi | its installer | `~/.pi/agent/bin/` | macOS, Linux | `pi update` | [quickstart](https://pi.dev/docs/quickstart) |
+| Pi | npm or bun `@earendil-works/pi-coding-agent` (Windows' installer uses npm) | npm's or bun's global folder | all | `npm install -g --ignore-scripts @earendil-works/pi-coding-agent`, `bun add -g --ignore-scripts @earendil-works/pi-coding-agent` | [README](https://github.com/earendil-works/pi#installation), [pi.dev](https://pi.dev/) |
+| omp | its installer | `~/.local/bin/omp`, or `~/AppData/Local/omp/omp.exe` | all | `omp update` | [CLI](https://omp.sh/docs/cli) |
+| omp | bun `@oh-my-pi/pi-coding-agent` | bun's global folder | all | `bun install -g @oh-my-pi/pi-coding-agent` | [README](https://github.com/can1357/oh-my-pi#installation) |
+| omp | Homebrew `can1357/tap/omp` | `Cellar/omp/` | macOS, Linux | `brew upgrade can1357/tap/omp` | [README](https://github.com/can1357/oh-my-pi#installation), [Homebrew](https://docs.brew.sh/Manpage#upgrade-options-installed_formulainstalled_cask-) |
+| Antigravity | its installer | `~/.local/bin/agy` | macOS, Linux | `curl -fsSL https://antigravity.google/cli/install.sh \| bash` | [getting started](https://antigravity.google/docs/getting-started?tab=cli) |
+| Antigravity | its installer | `~/AppData/Local/agy/bin/agy.exe` | Windows | `irm https://antigravity.google/cli/install.ps1 \| iex` | [getting started](https://antigravity.google/docs/getting-started?tab=cli) |
+
+Claude Code's apt, dnf and apk packages, Codex's Windows installer, which documents no update, Codex under pnpm, and OpenCode's Chocolatey and Scoop packages get the install page; which of these rows were proven on which system is in [INSTALL.md: What each system supports](INSTALL.md#what-each-system-supports).
+`hide-kit/src/agent_update.rs`'s tests lay out each place in a private folder; `every_supported_agent_declares_how_each_documented_install_is_updated` (`adapter_contract`) and the journey contract refuse an agent with no route.
+
+After the operator updates, nothing is pressed.
+The version is asked once per version of the program's file ([The oldest version of each agent](#the-oldest-version-of-each-agent)), so the next kit read asks the new file, and a read that finds an agent which was too old in the machine's last report and is new enough now, with a piece still to put in, queues the automatic pass that puts it in (`Runtime::install_updated_agents`, logged as `kit.agent_updated`).
+A read happens at launch and on each device connection, every 5 seconds while a Settings tab showing the kit is open, and once when a pane newly wears the update badge: an agent started in a pane, perhaps after its update, has the kit of its machine read (`Runtime::request_machine_kit_read`).
+A session that was already running keeps the old process, which Hide's piece never reached, so it reads `started_before_hide` once instead of the badge ([status-model.md](status-model.md#not-connected-and-what-fixes-it)); Hide judges the copy the operator's shell runs, and a pane that runs another copy by its full path is judged by that one only once the shell finds it.
 
 ### Herdr's integration for an agent
 

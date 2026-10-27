@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accountHome, failedAgents, underHome, firstRunStep, firstStartAgent, notificationState, notSignedIn, tileStatus, whatChanges, wizardSteps } from "./firstRun";
+import { accountHome, agentsToUpdate, failedAgents, underHome, firstRunStep, firstStartAgent, notificationState, notSignedIn, tileStatus, whatChanges, wizardSteps } from "./firstRun";
 import type { AiProvider, Kit, KitAgent, SnapshotRest } from "./snapshot";
 
 const agent = (id: string, overrides: Partial<KitAgent> = {}): KitAgent => ({
@@ -41,6 +41,13 @@ describe("a tile's line (B8, B9)", () => {
     // Until the kit has made Hide AI's folder for agy, its provider is dimmed: signed in or not is unknown.
     expect(tileStatus(agent("antigravity"), [provider("antigravity", "unsupported")])).toBe("installed");
     expect(tileStatus(agent("grok", { availability: "not_installed" }), undefined)).toBe("not_installed");
+  });
+
+  it("says an agent too old for Hide needs an update, whatever its sign-in, and lists it with what updates it", () => {
+    const update = { installed: "0.1.0", minimum: "0.2.0", path: "/home/me/.local/bin/omp", command: "omp update" };
+    expect(tileStatus(agent("omp", { update }), undefined)).toBe("update_needed");
+    expect(tileStatus(agent("codex", { update }), [provider("codex", "ready")])).toBe("update_needed");
+    expect(agentsToUpdate([agent("omp", { update }), agent("codex"), agent("pi", { availability: "not_installed", update })]).map(({ id }) => id)).toEqual(["omp"]);
   });
 });
 
@@ -89,6 +96,11 @@ describe("a failed agent (B12)", () => {
   it("is a chosen agent that is on with a failed piece, named with the kit's reason", () => {
     const agents = [agent("claude-code", { enabled: true, hook: { state: "failed", why: { cause: "not_changed" }, location: "/x" } }), agent("codex", { enabled: true, skill: { state: "failed", why: { cause: "not_changed" }, location: "/y" } })];
     expect(failedAgents(agents, ["claude-code"])).toEqual([{ id: "claude-code", label: "claude-code", why: { cause: "not_changed" } }]);
+  });
+
+  it("is not an agent whose piece was refused only because its copy is too old: the update installs it", () => {
+    const old = agent("omp", { enabled: true, hook: { state: "failed", why: { cause: "update_agent", value: "0.2.0" }, location: "/x" } });
+    expect(failedAgents([old], ["omp"])).toEqual([]);
   });
 });
 
