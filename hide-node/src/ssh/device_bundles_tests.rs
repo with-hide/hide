@@ -15,6 +15,13 @@ struct Release {
 }
 impl Release {
     fn serve(status: u16, body: Vec<u8>) -> Self {
+        Self::serve_with(status, body, || {})
+    }
+    fn serve_with(
+        status: u16,
+        body: Vec<u8>,
+        mut on_request: impl FnMut() + Send + 'static,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let hits = Arc::new(AtomicUsize::new(0));
@@ -44,6 +51,7 @@ impl Release {
                         .starts_with("GET /hide-device-linux-aarch64-1.2.3.tar.gz ")
                 );
                 count.fetch_add(1, Ordering::SeqCst);
+                on_request();
                 write!(
                     stream,
                     "HTTP/1.1 {status} Fixture\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
@@ -75,6 +83,49 @@ impl Drop for Release {
             worker.join().unwrap();
         }
     }
+}
+
+#[test]
+fn a_failed_download_preserves_its_reason_and_reports_failed_staging_cleanup() {
+    let home = tempfile::tempdir().unwrap();
+    let root = hide_kit::layout::device_bundle_cache(home.path());
+    let stage = root.join("staging");
+    let blocked = stage.clone();
+    let (manifest, _) = kit();
+    // Change the real filesystem at the HTTP boundary. Cleanup must refuse
+    // this non-directory instead of deleting an unrecognized object.
+    let server = Release::serve_with(404, Vec::new(), move || {
+        fs::remove_dir(&blocked).unwrap();
+        fs::write(&blocked, b"unexpected staging object").unwrap();
+    });
+    let (result, records) = crate::diagnostics::capture(|| {
+        load(&manifest, "linux-aarch64", home.path(), &server.base())
+    });
+    let reason = format!("{:#}", result.err().unwrap());
+    assert!(
+        reason.contains("device asset could not be downloaded"),
+        "{reason}"
+    );
+    assert!(reason.contains("staging cleanup failed"), "{reason}");
+    assert!(reason.contains("not a folder"), "{reason}");
+    assert!(!root.join("linux-aarch64").exists());
+    assert_eq!(fs::read(&stage).unwrap(), b"unexpected staging object");
+    let record = records.iter().find(|r| r["phase"] == "finish").unwrap();
+    assert_eq!(record["kind"], "host.device_bundle_cleanup_failed");
+    assert_eq!(record["platform"], "linux-aarch64");
+    assert_eq!(record["version"], "1.2.3");
+    assert!(
+        record["primary_error"]
+            .as_str()
+            .unwrap()
+            .contains("device asset could not be downloaded")
+    );
+    assert!(
+        record["cleanup_error"]
+            .as_str()
+            .unwrap()
+            .contains("not a folder")
+    );
 }
 
 fn program() -> Vec<u8> {

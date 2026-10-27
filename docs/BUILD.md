@@ -267,6 +267,7 @@ The cache path belongs to `hide_kit::layout::device_bundle_cache`: `~/.hide/cach
 A five-second process lock serializes cache access; each of three platform slots holds one verified kit, and one staging folder holds the current download.
 The maximum is 1280 MiB including the three 256 MiB kits, one 256 MiB staging kit and its 256 MiB compressed archive, plus the fixed lock file.
 A reconnect verifies and reuses its cached bytes offline; an app update replaces mismatched slots, and a failed download leaves no usable partial kit.
+Every exit explicitly cleans staging before releasing the cache lock; if cleanup fails, the device reason retains both failures and a structured diagnostic names the platform and release, while Drop makes a backup attempt.
 Files in the cache are inert private data; upload gives the verified programs executable permission on the device.
 Missing releases, network failures and verification errors reach the existing device failure and Retry path.
 Local/main builds report that no matching device release exists; an existing developer artifact folder still takes precedence.

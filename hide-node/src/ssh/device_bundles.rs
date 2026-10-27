@@ -200,75 +200,122 @@ fn load(manifest: &Manifest, platform: &str, home: &Path, base: &str) -> Result<
             "Device cache contains an unrecognized entry"
         );
     }
-    let stage = Staging(root.join("staging"));
-    stage.clean()?;
-    // Reclaim invalid slots too, keeping the bound across app versions and
-    // interrupted attempts, even when this connection targets another slot.
-    for candidate in PLATFORMS {
-        let folder = root.join(candidate);
-        if folder.exists()
-            && verify_folder(&folder, &manifest.platforms[candidate], candidate).is_err()
-        {
-            remove_slot(&folder)?;
-        }
-    }
-    let folder = root.join(platform);
-    if !folder.exists() {
-        private::create_dir(&stage.0)?;
-        download(
-            &format!("{base}/{}", bundle.asset),
-            bundle,
-            &stage.0.join("archive.tar.gz"),
-        )?;
-        unpack(&stage.0, bundle, platform)?;
-        fs::remove_file(stage.0.join("archive.tar.gz"))?;
-        verify_folder(&stage.0, bundle, platform)?;
-        fs::rename(&stage.0, &folder)?;
-    }
-    // Cache files are inert private data on this machine. Their verified
-    // archive contract supplies executable permission on the device, even
-    // on a downloading system without Unix mode bits.
-    let mut payload = Payload {
-        files: Vec::new(),
-        herdr: None,
-        missing: Vec::new(),
+    let stage = Staging {
+        path: root.join("staging"),
+        platform,
+        version: &manifest.version,
     };
-    for name in PROGRAMS {
-        let expected = &bundle.files[name];
-        let bytes = read_file(&folder.join(format!("{name}-{platform}")), expected.size)?;
-        ensure!(
-            bytes.len() as u64 == expected.size && hex_digest(&bytes) == expected.sha256,
-            "Cached device program changed while reading"
-        );
-        let file = Package {
-            relative: name.to_owned(),
-            bytes,
-            digest: expected.sha256.clone(),
-            executable: true,
-        };
-        if name == "herdr" {
-            payload.add_herdr(file);
-        } else {
-            payload.files.push(file);
+    let result = (|| {
+        stage.clean()?;
+        // Reclaim invalid slots too, keeping the bound across app versions and
+        // interrupted attempts, even when this connection targets another slot.
+        for candidate in PLATFORMS {
+            let folder = root.join(candidate);
+            if folder.exists()
+                && verify_folder(&folder, &manifest.platforms[candidate], candidate).is_err()
+            {
+                remove_slot(&folder)?;
+            }
         }
-    }
-    Ok(payload)
+        let folder = root.join(platform);
+        if !folder.exists() {
+            private::create_dir(&stage.path)?;
+            download(
+                &format!("{base}/{}", bundle.asset),
+                bundle,
+                &stage.path.join("archive.tar.gz"),
+            )?;
+            unpack(&stage.path, bundle, platform)?;
+            fs::remove_file(stage.path.join("archive.tar.gz"))?;
+            verify_folder(&stage.path, bundle, platform)?;
+            fs::rename(&stage.path, &folder)?;
+        }
+        // Cache files are inert private data on this machine. Their verified
+        // archive contract supplies executable permission on the device, even
+        // on a downloading system without Unix mode bits.
+        let mut payload = Payload {
+            files: Vec::new(),
+            herdr: None,
+            missing: Vec::new(),
+        };
+        for name in PROGRAMS {
+            let expected = &bundle.files[name];
+            let bytes = read_file(&folder.join(format!("{name}-{platform}")), expected.size)?;
+            ensure!(
+                bytes.len() as u64 == expected.size && hex_digest(&bytes) == expected.sha256,
+                "Cached device program changed while reading"
+            );
+            let file = Package {
+                relative: name.to_owned(),
+                bytes,
+                digest: expected.sha256.clone(),
+                executable: true,
+            };
+            if name == "herdr" {
+                payload.add_herdr(file);
+            } else {
+                payload.files.push(file);
+            }
+        }
+        Ok(payload)
+    })();
+    stage.finish(result)
 }
 
-struct Staging(PathBuf);
-impl Staging {
+struct Staging<'a> {
+    path: PathBuf,
+    platform: &'a str,
+    version: &'a str,
+}
+impl Staging<'_> {
     fn clean(&self) -> Result<()> {
-        if self.0.try_exists()? {
-            remove_slot(&self.0)?;
+        if self.path.try_exists()? {
+            remove_slot(&self.path)?;
         }
         Ok(())
     }
+
+    // Every ordinary exit explicitly reports cleanup before releasing the
+    // cache lock. Preserve the primary failure in both the error and log.
+    fn finish<T>(&self, result: Result<T>) -> Result<T> {
+        match self.clean() {
+            Ok(()) => result,
+            Err(cleanup) => {
+                self.report_cleanup("finish", result.as_ref().err(), &cleanup);
+                match result {
+                    Err(primary) => {
+                        Err(primary.context(format!("Device staging cleanup failed: {cleanup:#}")))
+                    }
+                    Ok(_) => Err(cleanup.context("Device staging cleanup failed")),
+                }
+            }
+        }
+    }
+
+    fn report_cleanup(
+        &self,
+        phase: &str,
+        primary: Option<&anyhow::Error>,
+        cleanup: &anyhow::Error,
+    ) {
+        crate::diagnostic!(serde_json::json!({
+            "component": "remote_host",
+            "kind": "host.device_bundle_cleanup_failed",
+            "platform": self.platform,
+            "version": self.version,
+            "phase": phase,
+            "primary_error": primary.map(|error| format!("{error:#}")),
+            "cleanup_error": format!("{cleanup:#}"),
+        }));
+    }
 }
-impl Drop for Staging {
+impl Drop for Staging<'_> {
     fn drop(&mut self) {
-        // A failed cleanup is retried under the lock at the next connection;
-        // the one fixed staging name cannot accumulate abandoned folders.
-        let _ = self.clean();
+        // A backup for unwinding, and one more attempt after finish reports
+        // failure. The fixed staging name is also reclaimed next connection.
+        if let Err(cleanup) = self.clean() {
+            self.report_cleanup("drop", None, &cleanup);
+        }
     }
 }
 
