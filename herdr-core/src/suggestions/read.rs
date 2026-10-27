@@ -218,7 +218,7 @@ fn settings(
                 id: row_id(line.id),
                 discomfort: line.discomfort.clone(),
                 basis: basis(line),
-                may_return: lives.get(&line.id).is_none_or(LineLife::skip_may_return),
+                may_return: lives.get(&line.id).is_some_and(LineLife::skip_may_return),
             })
             .collect(),
     }

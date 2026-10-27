@@ -54,9 +54,10 @@ impl Evidence {
 
 impl LineLife {
     /// Whether the operator's skip of the line may bring it back once
-    /// (D-43): only until it has come back once.
+    /// (D-43): only until it has come back once, and only when the skip
+    /// kept what the line stood on; a skip that kept nothing is for good.
     pub(crate) fn skip_may_return(&self) -> bool {
-        self.returned_at_unix_ms.is_none()
+        self.returned_at_unix_ms.is_none() && self.skipped_with.is_some()
     }
 
     /// Whether its last rise was its return after a skip, which the row
