@@ -537,7 +537,7 @@ fn decode(bytes: &[u8]) -> (UiStateSnapshot, PaneTerminalSizes, LoadDisposition)
     };
     let conductor_settings = match stored.conductor_settings {
         None => crate::missions::ConductorSettings::default(),
-        Some(value) => serde_json::from_value::<crate::missions::ConductorSettings>(value)
+        Some(value) => crate::missions::ConductorSettings::from_stored(value)
             .ok()
             .filter(|settings| settings.validate().is_ok())
             .unwrap_or_else(|| {
@@ -1728,6 +1728,46 @@ mod tests {
                 crate::missions::ConductorSettings::default()
             );
             assert_eq!(state.sidebar_lens, SidebarLens::Tasks);
+        }
+    }
+
+    /// Settings › Conductor kept before verification strength reads as
+    /// `normal`, its toggle off only where the operator had turned another
+    /// company off for the review or the verify default.
+    #[test]
+    fn conductor_settings_from_before_verification_strength_read_as_normal() {
+        let check = |other_vendor: bool| {
+            format!(
+                r#"{{"mode":"many","rule":"majority","count":3,"agent":"codex","model":null,"effort":"high","other_vendor":{other_vendor}}}"#
+            )
+        };
+        for (checkers, other_vendor) in [
+            (
+                format!(r#"{{"review":{},"verify":{}}}"#, check(true), check(true)),
+                true,
+            ),
+            (
+                format!(r#"{{"review":{},"verify":{}}}"#, check(true), check(false)),
+                false,
+            ),
+            ("{}".to_owned(), true),
+        ] {
+            let stored = format!(
+                r#"{{"schema_version":1,"expanded_paths":[],"selected_path":null,"selected_pane_id":null,
+                "conductor_settings":{{"concurrency":3,"default_scope":"merge","candidates":[],"checkers":{checkers}}}}}"#
+            );
+            let (state, _sizes, disposition) = decode(stored.as_bytes());
+            assert_eq!(disposition, LoadDisposition::Loaded, "{checkers}");
+            let settings = &state.conductor_settings;
+            assert_eq!(
+                (settings.concurrency, settings.default_scope),
+                (3, crate::missions::MissionScope::Merge)
+            );
+            assert_eq!(
+                (settings.default_strength, settings.other_vendor),
+                (crate::missions::Strength::Normal, other_vendor),
+                "{checkers}"
+            );
         }
     }
 

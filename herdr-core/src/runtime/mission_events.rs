@@ -60,8 +60,26 @@ pub(crate) enum AnswerSendFailure {
 }
 
 /// The events one plan makes of the plan before it: the first plan, or a
-/// replan that changed nodes, with the reason one of them was given (B31).
-pub(crate) fn plan_events(before: &Mission, after: &Mission, now: u64) -> Vec<MissionEvent> {
+/// replan that changed nodes, with the reason one of them was given (B31),
+/// then a change of the verification strength with `why`.
+pub(crate) fn plan_events(
+    before: &Mission,
+    after: &Mission,
+    why: Option<&str>,
+    now: u64,
+) -> Vec<MissionEvent> {
+    let mut out = node_plan_events(before, after, now);
+    if let Some(strength) = after.strength
+        && after.strength != before.strength
+    {
+        let mut event = MissionEvent::new(now, EventKind::Strength).line(why);
+        event.strength = Some(strength);
+        out.push(event);
+    }
+    out
+}
+
+fn node_plan_events(before: &Mission, after: &Mission, now: u64) -> Vec<MissionEvent> {
     if before.nodes.is_empty() {
         if after.nodes.is_empty() {
             return Vec::new();

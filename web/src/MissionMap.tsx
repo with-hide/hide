@@ -187,9 +187,10 @@ const PILL: Record<MissionStatus, { key: MessageKey; tone: string }> = {
 };
 
 /**
- * The head, one line (B24): the mission's state, its time, a cell per node and
- * `n / m`. A device that does not answer stops the running time, so no number
- * moves without the record (B35).
+ * The head, one line (B24): the mission's state, its time, a cell per node,
+ * `n / m` and its verification strength, which only the Conductor changes. A
+ * device that does not answer stops the running time, so no number moves
+ * without the record (B35).
  */
 function Head({ mission }: { mission: Mission }) {
   const { t, i18n } = useInterfaceTranslation();
@@ -213,6 +214,11 @@ function Head({ mission }: { mission: Mission }) {
             {t("mission.doneOf", { done: String(done), total: String(total) })}
           </span>
         </>
+      ) : null}
+      {mission.strength ? (
+        <span className="shrink-0 text-caption text-muted-foreground" data-mission-stat="strength" data-mission-strength={mission.strength}>
+          {t("mission.head.strength", { strength: t(`mission.strength.${mission.strength}`) })}
+        </span>
       ) : null}
     </div>
   );

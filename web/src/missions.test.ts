@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { STRENGTHS } from "./conductorSettings";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
 import { cardLine, checkerState, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems } from "./missions";
@@ -18,17 +19,19 @@ function node(key: string, extra: Partial<MissionNode> = {}): MissionNode {
 }
 
 function mission(id: string, extra: Partial<Mission> = {}): Mission {
-  return { id, title: `Mission ${id}`, workspace_id: "w", project: "/repo", checkout_path: "/repo", device_id: "mac", status: "running", scope: "pr", cap: 4, exempt: false, checkers: null, conductor: { pane_id: "p1", name: "conductor", agent_kind: "claude", session: { device_id: "mac", agent: "claude", session_id: "s-1" }, present: true, takes_answers: true }, nodes: [], merge_order: [], check: null, github: null, decision: null, question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: 1, closed_at_unix_ms: null, running: 0, stale: false, github_stale: false, github_read_at_unix_ms: null, ...extra };
+  return { id, title: `Mission ${id}`, workspace_id: "w", project: "/repo", checkout_path: "/repo", device_id: "mac", status: "running", scope: "pr", cap: 4, exempt: false, strength: null, other_vendor: null, conductor: { pane_id: "p1", name: "conductor", agent_kind: "claude", session: { device_id: "mac", agent: "claude", session_id: "s-1" }, present: true, takes_answers: true }, nodes: [], merge_order: [], check: null, github: null, decision: null, question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: 1, closed_at_unix_ms: null, running: 0, stale: false, github_stale: false, github_read_at_unix_ms: null, ...extra };
 }
 
 const rest = (items: Mission[]) => ({ missions: { items } }) as unknown as SnapshotRest;
 
 describe("the wire values", () => {
-  it("words every node status, kind and block the core sends", () => {
+  it("words every node status, kind, block, scope and verification strength the core sends", () => {
     for (const status of contract.mission_node_status) expect(english).toHaveProperty(`mission.status.${status}`);
     for (const kind of contract.mission_node_kind) expect(english).toHaveProperty(kindWord(kind));
     for (const blocked of contract.mission_blocked) expect(nodeLine(node("n", { blocked }), t)).toMatch(/^Waiting · earlier node/);
     for (const scope of contract.mission_scope) expect(english).toHaveProperty(`mission.scope.${scope}`);
+    expect(STRENGTHS).toEqual(contract.mission_strength);
+    for (const strength of contract.mission_strength) expect(english).toHaveProperty(`mission.strength.${strength}`);
     for (const status of contract.mission_status) expect(chipWords(mission("m", { status })).key).toMatch(/^mission\.chip/);
   });
 });

@@ -31,7 +31,7 @@ function node(key: string, extra: Partial<MissionNode> = {}): MissionNode {
 }
 
 function mission(extra: Partial<Mission> = {}): Mission {
-  return { id: "mission-1", title: "Fix the bug", workspace_id: "w", project: "/repo", checkout_path: "/repo", device_id: "mac", status: "running", scope: "pr", cap: 4, exempt: false, checkers: null, conductor: { pane_id: "p1", name: "conductor", agent_kind: "claude", session: null, present: true, takes_answers: true }, nodes: [], merge_order: [], check: null, github: null, decision: null, question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: Date.now() - 180_000, closed_at_unix_ms: null, running: 2, stale: false, github_stale: false, github_read_at_unix_ms: null, ...extra };
+  return { id: "mission-1", title: "Fix the bug", workspace_id: "w", project: "/repo", checkout_path: "/repo", device_id: "mac", status: "running", scope: "pr", cap: 4, exempt: false, strength: null, other_vendor: null, conductor: { pane_id: "p1", name: "conductor", agent_kind: "claude", session: null, present: true, takes_answers: true }, nodes: [], merge_order: [], check: null, github: null, decision: null, question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: Date.now() - 180_000, closed_at_unix_ms: null, running: 2, stale: false, github_stale: false, github_read_at_unix_ms: null, ...extra };
 }
 
 async function mount(missions: { items: Mission[]; failed?: string }, remote: unknown[] = [], sessions: unknown[] = [], more: Partial<SnapshotRest> = {}, agents: AgentRow[] = []) {
@@ -93,6 +93,19 @@ it("reads top down as the head, 내 차례 only when the operator has something 
     await act(async () => running.q('[data-mission-node="b"]')!.click());
     expect(parts()).toEqual(["missionSummary", "missionTurn", "missionMap", "missionPanel"]);
   } finally { await running.unmount(); }
+});
+
+it("ends the head with the mission's verification strength to read, not to change, and says none for a mission from before it", async () => {
+  const strong = await mount({ items: [mission({ nodes: [node("a")], strength: "thorough", other_vendor: true })] });
+  try {
+    const stat = strong.q('[data-mission-stat="strength"]');
+    expect(stat?.textContent).toBe("Verification Thorough");
+    expect(stat?.closest("[data-mission-summary]")?.querySelectorAll("button, [role=button], select, input")).toHaveLength(0);
+  } finally { await strong.unmount(); }
+  const before = await mount({ items: [mission({ nodes: [node("a")] })] });
+  try {
+    expect(before.q('[data-mission-stat="strength"]')).toBeNull();
+  } finally { await before.unmount(); }
 });
 
 const asked = (extra: Partial<Mission> = {}): Mission => mission({

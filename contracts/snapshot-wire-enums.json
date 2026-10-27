@@ -1,6 +1,7 @@
 {
   "mission_status": ["planning", "running", "merge_wait", "done", "cancelled"],
   "mission_scope": ["pr", "merge"],
+  "mission_strength": ["fast", "normal", "thorough"],
   "mission_node_kind": ["change", "research", "verify", "external"],
   "mission_delivery": ["pr", "direct"],
   "mission_node_status": ["planned", "working", "waiting", "review", "held", "done", "failed", "dropped"],
@@ -11,7 +12,7 @@
   "mission_check_rule": ["all", "majority"],
   "mission_recorded_role": ["worker", "checker", "conductor", "hide"],
   "mission_answer_state": ["sending", "waiting", "delivered", "unconfirmed"],
-  "mission_event_kind": ["planned", "replanned", "node", "retried", "pr_opened", "pr_merged", "landed", "asked", "answered", "answer_undelivered", "answer_unconfirmed", "reported", "cancelled", "skipped", "reopened"],
+  "mission_event_kind": ["planned", "replanned", "node", "retried", "pr_opened", "pr_merged", "landed", "asked", "answered", "answer_undelivered", "answer_unconfirmed", "reported", "cancelled", "skipped", "reopened", "strength"],
   "mission_answer_source": ["banner", "conversation"],
   "mission_answer_failure": ["conductor_gone", "device_disconnected", "send_failed"],
   "plan_step_status": ["planned", "working", "done", "dropped"],
