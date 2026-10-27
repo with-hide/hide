@@ -19,6 +19,7 @@ use rusqlite::{
     Connection, ErrorCode, OpenFlags, OptionalExtension, Transaction, TransactionBehavior, params,
 };
 use serde::Serialize;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -86,6 +87,25 @@ pub enum Opened {
 
 pub struct LinkStore {
     connection: Connection,
+    issue_capacity: RefCell<CapacityCrossings>,
+}
+
+/// The keys whose capacity diagnostic is already reported. A key enters once
+/// when its count crosses the cap and leaves when it falls back under, so a
+/// steady over-cap state logs one line, not one per call.
+#[derive(Default)]
+pub(super) struct CapacityCrossings(BTreeSet<String>);
+
+impl CapacityCrossings {
+    /// True only on the crossing, the first call while `key` is over its cap.
+    pub(super) fn enter(&mut self, key: &str) -> bool {
+        self.0.insert(key.to_owned())
+    }
+
+    /// Clears `key` once its count is back under the cap.
+    pub(super) fn leave(&mut self, key: &str) {
+        self.0.remove(key);
+    }
 }
 
 enum OpenFailure {
@@ -327,7 +347,10 @@ impl LinkStore {
         connection
             .execute("DELETE FROM ledger_project_connections", [])
             .map_err(classify)?;
-        Ok(Self { connection })
+        Ok(Self {
+            connection,
+            issue_capacity: RefCell::default(),
+        })
     }
 
     /// A reader's connection: the panel and `hide links` never write.
@@ -349,7 +372,10 @@ impl LinkStore {
         if version != SCHEMA_VERSION {
             return Err("links_store_unavailable".to_owned());
         }
-        Ok(Self { connection })
+        Ok(Self {
+            connection,
+            issue_capacity: RefCell::default(),
+        })
     }
 
     pub fn meta(&self, key: &str) -> Result<Option<String>, String> {

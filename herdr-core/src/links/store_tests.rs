@@ -1299,7 +1299,10 @@ fn direct_observation_retention_and_count_cap_preserve_exact_session_and_server_
     use crate::model::GraphParty;
     let connection = Connection::open_in_memory().unwrap();
     migrate(&connection).unwrap_or_else(|_| panic!("fixture migration failed"));
-    let mut store = LinkStore { connection };
+    let mut store = LinkStore {
+        connection,
+        issue_capacity: RefCell::default(),
+    };
     let fact = DirectFact {
         source_server: "device-local/server-one/session-named".into(),
         call_key: "call".into(),
@@ -1683,5 +1686,27 @@ fn a_session_is_first_carried_once_and_an_upgrade_marks_every_held_session() {
             .apply_panes(&[pane("held"), pane("new")], T0 + MIN)
             .unwrap()
             .is_empty()
+    );
+}
+
+#[test]
+fn a_capacity_crossing_is_reported_once_until_the_count_falls_back_under() {
+    let mut crossings = CapacityCrossings::default();
+    assert!(
+        crossings.enter(PROJECT),
+        "the first call over the cap reports"
+    );
+    assert!(
+        !crossings.enter(PROJECT),
+        "a call while still over stays quiet"
+    );
+    assert!(
+        crossings.enter("project:other"),
+        "each key crosses on its own"
+    );
+    crossings.leave(PROJECT);
+    assert!(
+        crossings.enter(PROJECT),
+        "a key that fell back under reports again"
     );
 }

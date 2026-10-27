@@ -14,7 +14,9 @@ use super::ledger::{
     SessionIdentity, SessionRecord, SessionSearchOptions, SessionSearchPage, SessionSearchPresence,
 };
 use super::observation::{self, DirectFact};
-use super::store::{ArchivedSession, IssueLinks, LinkStore, LocalFiles, Opened, PrLinks};
+use super::store::{
+    ArchivedSession, CapacityCrossings, IssueLinks, LinkStore, LocalFiles, Opened, PrLinks,
+};
 use super::{
     BACKFILL_MS, PaneFact, ParentFact, ProjectFacts, ProjectLinkSummary, files_present, link_code,
     now_ms,
@@ -156,7 +158,11 @@ pub struct LinkClient(
 struct ContextCache {
     values: BTreeMap<SessionIdentity, LedgerContext>,
     used: VecDeque<SessionIdentity>,
+    capacity: CapacityCrossings,
 }
+
+/// The one key the context cache's capacity diagnostic is reported under.
+const CONTEXT_CAPACITY_KEY: &str = "context";
 
 impl LinkClient {
     fn request_stop(&self, now: Instant) {
@@ -1706,9 +1712,13 @@ fn update_context(client: &LinkClient, store: &LinkStore, session: &SessionIdent
                     if let Some(first) = contexts.used.pop_front() {
                         contexts.values.remove(&first);
                     }
-                    crate::diagnostic!(
-                        serde_json::json!({"component":"links","kind":"ledger.context_capacity"})
-                    );
+                    if contexts.capacity.enter(CONTEXT_CAPACITY_KEY) {
+                        crate::diagnostic!(
+                            serde_json::json!({"component":"links","kind":"ledger.context_capacity"})
+                        );
+                    }
+                } else if contexts.values.len() < LEDGER_QUEUE_LIMIT {
+                    contexts.capacity.leave(CONTEXT_CAPACITY_KEY);
                 }
                 contexts.used.retain(|held| held != session);
                 contexts.used.push_back(session.clone());

@@ -1930,9 +1930,13 @@ impl LinkStore {
             }
         }
         if refs.len() > crate::issues::ISSUE_LIMIT {
-            crate::diagnostic!(
-                serde_json::json!({"component":"links","kind":"ledger.issue_read_capacity","limit":crate::issues::ISSUE_LIMIT,"omitted":refs.len()-crate::issues::ISSUE_LIMIT})
-            );
+            if self.issue_capacity.borrow_mut().enter(&pass.project.key) {
+                crate::diagnostic!(
+                    serde_json::json!({"component":"links","kind":"ledger.issue_read_capacity","limit":crate::issues::ISSUE_LIMIT,"omitted":refs.len()-crate::issues::ISSUE_LIMIT})
+                );
+            }
+        } else {
+            self.issue_capacity.borrow_mut().leave(&pass.project.key);
         }
         Ok(refs.into_iter().take(crate::issues::ISSUE_LIMIT).collect())
     }
