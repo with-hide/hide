@@ -289,6 +289,17 @@ impl Fixture {
                 successful(sign)?;
             }
         }
+        // The target already holds this build, as a device that connected
+        // before does, so its helper is ready within `READY_BOUND`: sending
+        // it took 18 to 29 s of the 30 s on GitHub's Linux runner, writing
+        // and reading back each of `hided` and `hide` (about 140 MB each in a
+        // debug build), against about 1 s for the rest of the connection. The
+        // connection still checks the helper's bytes before it starts it, and
+        // a test's other build is still sent. The device install itself is
+        // `remote_delivery`'s and `device_bootstrap`'s to prove.
+        hide_node::ssh::host::HelperPackages::new(Some(cli.clone()))
+            .install_here(&target_env.home.join("helper"))
+            .map_err(anyhow::Error::msg)?;
         let ssh_dir = source_env.home.join(".ssh");
         fs::create_dir_all(&ssh_dir)?;
         for name in ["host", "client"] {
