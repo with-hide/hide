@@ -19,6 +19,7 @@
 //! | `USERPROFILE` | Windows | no home folder |
 //! | `XDG_STATE_HOME` | Linux | state lives under `~/.local/state` |
 //! | `LOCALAPPDATA` | Windows | no state folder |
+//! | `HERDR_SOCKET_PATH` | all | use Herdr's account default socket |
 //! | `XDG_CONFIG_HOME` | all, as Herdr reads it | Herdr's config folder is the system's own |
 //! | `APPDATA` | Windows | Herdr's config folder is under `USERPROFILE` |
 //! | `PATH` | all | no program is found |
@@ -42,6 +43,7 @@ pub const VARIABLES: &[&str] = &[
     HOME_VARIABLE,
     "XDG_STATE_HOME",
     "LOCALAPPDATA",
+    "HERDR_SOCKET_PATH",
     "XDG_CONFIG_HOME",
     "APPDATA",
     "PATH",
@@ -126,6 +128,27 @@ pub fn herdr_socket_default() -> io::Result<PathBuf> {
 /// [`herdr_socket_default`] from the caller's variables.
 pub fn herdr_socket_default_from(variables: Variables) -> io::Result<PathBuf> {
     Ok(herdr_config_dir_from(variables)?.join("herdr.sock"))
+}
+
+/// The account socket, honoring the environment override before the
+/// system default. An explicitly selected named session is the caller's.
+pub fn herdr_socket_from(variables: Variables) -> io::Result<PathBuf> {
+    if variables("HERDR_SOCKET_PATH").is_some() {
+        let socket = absolute_variable(variables, "HERDR_SOCKET_PATH")?;
+        if socket
+            .as_os_str()
+            .to_string_lossy()
+            .chars()
+            .any(char::is_control)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "HERDR_SOCKET_PATH must be single-line",
+            ));
+        }
+        return Ok(socket);
+    }
+    herdr_socket_default_from(variables)
 }
 
 /// Herdr's config folder, resolved in Herdr's own order (`config::io` of the

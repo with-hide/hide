@@ -773,8 +773,22 @@ impl Runtime {
             self.set_error("kit.unavailable", cause.as_str(), false);
             return true;
         }
-        // A pass that stopped, or could not start Herdr, needs another
-        // automatic pass even when every individual kit part is installed.
+        // A failed bootstrap may have no pane or terminal services. Retry
+        // the complete connection, including upload, services and routes.
+        if state.herdr_start_failed
+            && device_id != self.node.as_str()
+            && self
+                .link_origin(device_id)
+                .is_some_and(crate::model::LinkOrigin::core_redials)
+        {
+            if self.device_host_connecting(device_id) {
+                return false;
+            }
+            self.close_device_host(device_id, "retrying Herdr bootstrap");
+            return self.retry_device_host_now(device_id);
+        }
+        // A refused pass (or this node's start failure) needs another
+        // automatic pass even when each individual kit part is installed.
         if state.refused.is_some() || state.herdr_start_failed {
             return self.queue_kit_scope(device_id, Scope::automatic());
         }
