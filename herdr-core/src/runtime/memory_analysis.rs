@@ -3854,9 +3854,15 @@ mod tests {
             receipt_cursor(&fixture)
         };
         let resting = (false, false, false, false);
-        assert!(walks_again(resting, (false, true, false, false)), "delegated");
+        assert!(
+            walks_again(resting, (false, true, false, false)),
+            "delegated"
+        );
         assert!(walks_again(resting, (false, false, true, false)), "held");
-        assert!(walks_again(resting, (false, false, false, true)), "Hide AI on");
+        assert!(
+            walks_again(resting, (false, false, false, true)),
+            "Hide AI on"
+        );
         // An open pane's session reads no receipts, so its walk is seen when
         // the pane lets it go.
         assert!(walks_again((true, false, false, false), resting), "live");
