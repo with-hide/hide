@@ -918,4 +918,43 @@ mod tests {
         assert_eq!(store.state("p").unwrap(), state);
         assert_eq!(store.projects().unwrap(), ["p"]);
     }
+
+    /// B5, D-52: a store written when ⚙ kept the signals it turned off
+    /// comes back with the place they are read from off, and stays so.
+    #[test]
+    fn signals_turned_off_before_the_places_switch_keep_their_place_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = path(dir.path());
+        let (mut store, _) = SuggestionStore::open(&file).unwrap();
+        let state = ProjectState {
+            last_completed_day: Some("2026-10-27".into()),
+            ..ProjectState::default()
+        };
+        store.save_state("p", &state).unwrap();
+        let mut old = serde_json::to_value(&state).unwrap();
+        let settings = old["settings"].as_object_mut().unwrap();
+        settings.remove("groups_off");
+        settings.insert(
+            "signals_off".into(),
+            serde_json::json!(["failed_tool", "agent_wait", "correction", "label_missed"]),
+        );
+        store
+            .connection
+            .execute(
+                "UPDATE projects SET state=?1 WHERE id='p'",
+                [old.to_string()],
+            )
+            .unwrap();
+        let loaded = store.state("p").unwrap();
+        assert_eq!(
+            loaded.settings.groups_off,
+            std::collections::BTreeSet::from([SignalGroup::Session])
+        );
+        assert!(!loaded.settings.records(Signal::Improvement));
+        assert!(loaded.settings.records(Signal::CheckFailed));
+        store.save_state("p", &loaded).unwrap();
+        drop(store);
+        let (store, _) = SuggestionStore::open(&file).unwrap();
+        assert_eq!(store.state("p").unwrap(), loaded);
+    }
 }
