@@ -23,62 +23,26 @@ def report(table, agents, **extra):
     return {"fixture": False, "cleanup": {"confirmed": True}, "failures": [], "table": complete, "agents": agents, **extra}
 
 
-class Login(unittest.TestCase):
-    def test_missing_rows_and_cells_are_not_a_login_exception(self):
-        for row in lane.active_rows(lane.load_contract(SCRIPT.parents[1])):
-            for defect in ("row", "cell"):
-                with self.subTest(agent=row["id"], defect=defect):
-                    value = report({}, [])
-                    if defect == "row":
-                        del value["table"][row["id"]]
-                    else:
-                        del value["table"][row["id"]]["title"]
-                    self.assertFalse(lane.judge(value, "login")[0])
-
-    def test_a_spent_day_passes_as_not_measured_for_the_nightly_report(self):
-        quota_reason = "provider quota exhausted (RequestsPerDay)"
-        passed, notes = lane.judge(report(
-            {"codex": {"start": {"status": "pass", "reason": ""},
-                       "reply": {"status": "not measured", "reason": quota_reason},
-                       "resume": {"status": "not measured", "reason": quota_reason}}},
-            [{"id": "codex", "quota": ["RequestsPerDay"]}]), "login")
-        self.assertTrue(passed)
-        # The title and first line scripts/ci-flaky-report.py reads to keep the lane from being green.
-        self.assertEqual(notes, ["::warning title=Not measured::agent journey codex%0Aprovider quota exhausted "
-                                 "(RequestsPerDay): reply, resume not reached"])
-
-    def test_a_refusal_the_contract_does_not_name_fails(self):
+class EitherLane(unittest.TestCase):
+    def test_a_failed_cell_fails(self):
         passed, notes = lane.judge(report({"claude-code": {"reply": {"status": "fail", "reason": "rate_limit"}}},
-                                          [{"id": "claude-code"}]), "login")
+                                          [{"id": "claude-code"}], fake_model=True), "fake")
         self.assertFalse(passed)
         self.assertIn("::error title=agent journey claude-code::reply: rate_limit", notes)
 
-    def test_a_refused_login_or_a_missing_cli_with_the_key_set_fails(self):
-        for agent, message in (({"id": "codex", "login": "codex login --with-api-key refused: bad key"},
-                                "::error title=agent journey codex::login refused: codex login --with-api-key refused: bad key"),
-                               ({"id": "codex", "cli_missing": "codex"},
-                                "::error title=agent journey codex::codex is not installed, though the job installs it")):
-            with self.subTest(agent=agent):
-                passed, notes = lane.judge(report({}, [agent]), "login")
-                self.assertFalse(passed)
-                self.assertIn(message, notes)
-
-    def test_an_agent_without_its_key_is_a_notice(self):
-        passed, notes = lane.judge(report({}, [{"id": "codex", "not_configured": "HIDE_CODEX_API_KEY"}]), "login")
-        self.assertTrue(passed)
-        self.assertTrue(notes[0].startswith("::notice "))
-
     def test_an_isolation_exit_fails_either_lane(self):
-        for name in ("login", "fixture"):
+        for name, flag in (("fake", "fake_model"), ("fixture", "fixture")):
             with self.subTest(lane=name):
-                passed, notes = lane.judge(report({}, [], exit_code=2, fixture=name == "fixture"), name)
+                passed, notes = lane.judge(report({}, [], exit_code=2, **{flag: True}), name)
                 self.assertFalse(passed)
                 self.assertIn("::error title=agent journey::the journey exited 2: isolation, setup or cleanup failed", notes)
 
     def test_a_reason_with_a_line_break_cannot_start_a_workflow_command(self):
-        passed, notes = lane.judge(report({}, [{"id": "codex", "login": "refused: 100%\n::stop-commands::x"}]), "login")
+        passed, notes = lane.judge(report({"codex": {"reply": {"status": "fail", "reason": "refused: 100%\n::stop-commands::x"}}},
+                                          [], fake_model=True), "fake")
         self.assertFalse(passed)
-        self.assertEqual(notes, ["::error title=agent journey codex::login refused: refused: 100%25%0A::stop-commands::x"])
+        self.assertIn("::error title=agent journey codex::reply: refused: 100%25%0A::stop-commands::x", notes)
+        self.assertFalse(any("\n" in note for note in notes))
 
 
 class Fixture(unittest.TestCase):
@@ -98,10 +62,8 @@ class Fixture(unittest.TestCase):
 
     def test_each_lane_refuses_the_other_lanes_report(self):
         self.assertFalse(lane.judge(report(self.table(), []), "fixture")[0])
-        self.assertFalse(lane.judge(report(self.table(), [], fixture=True), "login")[0])
-        for name in ("fixture", "login"):
-            with self.subTest(name):
-                self.assertFalse(lane.judge(report(self.table(), [], fake_model=True), name)[0])
+        self.assertFalse(lane.judge(report(self.table(), [], fixture=True), "fake")[0])
+        self.assertFalse(lane.judge(report(self.table(), [], fake_model=True), "fixture")[0])
         self.assertFalse(lane.judge(report(self.table(), []), "fake")[0])
 
 

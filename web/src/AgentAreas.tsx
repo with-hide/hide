@@ -23,6 +23,8 @@ import type { MenuEntry } from "./components/entry-menu";
 import { agentEntries, workspaceViewOf } from "./workspace";
 import { areasOf } from "./areaLayout";
 import { useKeyboardOwner } from "./viewFocus";
+import { numberOf, numberedTabs } from "./numbering";
+import { useUiStore } from "./ui";
 import { useInterfaceTranslation } from "./i18n/client";
 
 const SharedAgentTree = createAreaTree<AgentItem>("agent");
@@ -33,6 +35,8 @@ export function AgentAreas({ checkout, actions, deviceId, remoteBody }: { checko
   const startDrafts = useInlineStarts((state) => state.drafts);
   const saved = useShellStore((s) => workspaceViewOf(s.rest)?.agent_layout);
   const owner = useKeyboardOwner();
+  // A ⌘ hold numbers the tabs ⌘n selects, the Agent area in use only (`numbering.ts`).
+  const numberedHold = useUiStore((s) => s.hint === "tabs");
   const entries = agentEntries(checkout);
   const paneLayouts = useShellStore((s) => s.rest?.pane_layouts);
   const operations = useShellStore(s => s.rest?.status?.async_operations);
@@ -60,6 +64,8 @@ export function AgentAreas({ checkout, actions, deviceId, remoteBody }: { checko
     return checkout.tabs.find(tab => tab.id === tabId)?.panes.map(pane => pane.id) ?? [];
   });
   const workspace = { device_id: device, path: checkout.path };
+  const tabNumbers = numberedHold ? numberedTabs(layout) : null;
+  const tabNumber = (id: string) => tabNumbers ? numberOf(tabNumbers, id) : null;
   const isDraft = (id: string) => layout.drafts?.includes(id) ?? false;
   const groupName = layout.groups?.find((group) => group.id === (layout.group_id ?? null))?.name ?? t("groups.ungrouped");
   const label = (id: string) => isDraft(id) ? t("groups.newTab") : entries.find((entry) => entry.source_id === id)?.label ?? id;
@@ -83,9 +89,9 @@ export function AgentAreas({ checkout, actions, deviceId, remoteBody }: { checko
       return id ? { id } : null;
     },
     tab: (item, interaction) => {
-      if (isDraft(item.id)) return <AgentDraftTab id={item.id} interaction={interaction} actions={actions} />;
+      if (isDraft(item.id)) return <AgentDraftTab id={item.id} interaction={interaction} actions={actions} number={tabNumber(item.id)} />;
       const entry = entries.find((row) => row.source_id === item.id);
-      return entry ? <AgentTab entry={entry} checkout={checkout} renaming={renaming === item.id} onCancelRename={() => setRenaming(null)} interaction={interaction} actions={actions} /> : null;
+      return entry ? <AgentTab entry={entry} checkout={checkout} renaming={renaming === item.id} onCancelRename={() => setRenaming(null)} interaction={interaction} actions={actions} number={tabNumber(item.id)} /> : null;
     },
     body: (item, area) => isDraft(item.id) ? startForm(item.id, area.id) : <div className="relative flex min-h-0 flex-1 flex-col">
       {(() => {

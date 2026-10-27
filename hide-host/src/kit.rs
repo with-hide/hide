@@ -341,9 +341,10 @@ fn run_for_projects(
             if let Err(refusal) = hide_kit::retirement_preflight(&target()) {
                 return to_value(hide_kit::KitReport::refused(refusal));
             }
+            // Resolve the required copy before retiring the last usable build.
+            let pinned = point_herdr(&placement.root, &placement.version)?;
             point_current(&placement.root, &placement.version)?;
             remove_other_builds(&placement.root, &placement.version);
-            let pinned = point_herdr(&placement.root, &placement.version);
             let mut report = hide_kit::apply(&target(), &scope_of(action));
             if let (Some(pinned), Some(update)) = (
                 pinned.as_deref(),
@@ -399,10 +400,10 @@ impl Inputs {
                         std::env::var_os(name)
                     }
                 };
-                hide_platform::host::herdr_socket_default_from(&variables).map_err(|error| {
+                hide_platform::host::herdr_socket_from(&variables).map_err(|error| {
                     HostError::new(
                         ErrorCode::Unsupported,
-                        format!("Herdr's default socket has no location: {error}"),
+                        format!("Herdr's socket has no location: {error}"),
                     )
                 })?
             }
@@ -519,35 +520,48 @@ fn remove_other_builds(root: &Path, keep: &str) {
     }
 }
 
-/// Points `<root>/herdr/current` at the pinned Herdr copy the build at
-/// `version` names, and answers that copy. A build that names none, or whose
-/// copy did not arrive, takes the link away, so Hide's own Herdr calls on the
-/// device go back to the device's own `herdr`.
-fn point_herdr(root: &Path, version: &str) -> Option<PathBuf> {
+/// Points `<root>/herdr/current` at the copy this build requires. A missing
+/// required copy or refused link replacement fails without removing the
+/// last valid link. Only a build that intentionally names no pin removes it.
+fn point_herdr(root: &Path, version: &str) -> HostResult<Option<PathBuf>> {
     let folder = device_herdr::herdr_dir(root);
     let current = folder.join(hide_kit::CURRENT);
-    let pin = build_pin(&root.join(version));
-    let copy = pin
-        .as_deref()
-        .map(|pin| folder.join(pin).join(device_herdr::HERDR_PROGRAM))
-        .filter(|copy| copy.is_file());
-    match (pin, copy) {
-        (Some(pin), Some(copy)) => {
-            if hide_platform::fs::link::is_link_to(&current, Path::new(&pin))
-                || hide_platform::fs::link::replace_link(Path::new(&pin), &current).is_ok()
-            {
-                Some(copy)
-            } else {
-                None
-            }
+    let pin_path = root.join(version).join(device_herdr::HERDR_PIN);
+    let failure = |reason| HostError::new(ErrorCode::Io, reason);
+    let pin = match std::fs::read_to_string(&pin_path) {
+        Ok(pin) if is_build_name(pin.trim()) => pin.trim().to_owned(),
+        Ok(_) => {
+            return Err(failure(
+                "The build's Herdr pin is invalid; reconnect to install it again".to_owned(),
+            ));
         }
-        _ => {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             if std::fs::symlink_metadata(&current).is_ok_and(|meta| meta.file_type().is_symlink()) {
-                let _ = hide_platform::fs::link::remove_link(&current);
+                hide_platform::fs::link::remove_link(&current).map_err(|error| {
+                    failure(format!(
+                        "The previous Herdr link could not be removed: {error}"
+                    ))
+                })?;
             }
-            None
+            return Ok(None);
         }
+        Err(error) => {
+            return Err(failure(format!(
+                "The build's Herdr pin could not be read: {error}"
+            )));
+        }
+    };
+    let copy = folder.join(&pin).join(device_herdr::HERDR_PROGRAM);
+    if !copy.is_file() {
+        return Err(failure(
+            "The required Herdr copy is missing; reconnect to install it again".to_owned(),
+        ));
     }
+    if !hide_platform::fs::link::is_link_to(&current, Path::new(&pin)) {
+        hide_platform::fs::link::replace_link(Path::new(&pin), &current)
+            .map_err(|error| failure(format!("The Herdr copy could not be selected: {error}")))?;
+    }
+    Ok(Some(copy))
 }
 
 /// The pinned Herdr copy the build folder `build` names, if any.
@@ -1061,17 +1075,58 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(point_herdr(&placement.root, &placement.version), Some(copy));
+        assert_eq!(
+            point_herdr(&placement.root, &placement.version).unwrap(),
+            Some(copy)
+        );
         assert!(device_herdr::pinned_herdr(&placement.root).is_file());
 
         let without = placed(dir.path(), "cccccccccccccccc");
-        assert_eq!(point_herdr(&without.root, &without.version), None);
+        assert_eq!(point_herdr(&without.root, &without.version).unwrap(), None);
         assert!(
             std::fs::symlink_metadata(
                 device_herdr::herdr_dir(&without.root).join(hide_kit::CURRENT)
             )
             .is_err()
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn an_incomplete_herdr_delivery_fails_without_changing_either_current_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = placed(dir.path(), "aaaaaaaaaaaaaaaa");
+        let copy = pinned_build(&old.root, &old.version, "1111111111111111");
+        point_current(&old.root, &old.version).unwrap();
+        point_herdr(&old.root, &old.version).unwrap();
+        let next = placed(dir.path(), "bbbbbbbbbbbbbbbb");
+        std::fs::write(
+            next.root.join(&next.version).join(device_herdr::HERDR_PIN),
+            "2222222222222222\n",
+        )
+        .unwrap();
+        let result = run_for_projects(
+            &next,
+            KitAction::Apply,
+            "~/.local/bin",
+            Some("~/private.sock"),
+            &[],
+            Arc::new(AtomicBool::new(true)),
+            HerdrPolicy {
+                preserve_server: false,
+                updater: None,
+            },
+        );
+        assert!(result.is_err(), "a required pinned copy did not arrive");
+        assert!(hide_platform::fs::link::is_link_to(
+            &old.root.join(hide_kit::CURRENT),
+            Path::new(&old.version)
+        ));
+        assert!(hide_platform::fs::link::is_link_to(
+            &device_herdr::herdr_dir(&old.root).join(hide_kit::CURRENT),
+            Path::new("1111111111111111")
+        ));
+        assert!(copy.is_file());
     }
 
     /// A build folder `version` under `root` that names the copy `pin`, and

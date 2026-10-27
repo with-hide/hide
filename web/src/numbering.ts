@@ -1,7 +1,8 @@
 import { deviceScope } from "./agentScope";
-// What ⌥n and ⌘n select, and the number each agent row and device tile
-// carries while a hold reveals it (PRD electron-digit-shortcuts-hints D-02).
-// The number is the screen order at that moment, first to ninth: the rail's
+// What ⌘n, ⌥n and ⌥⌘n select, and the number each tab, agent row and device
+// tile carries while a hold reveals it (PRD electron-digit-shortcuts-hints
+// D-02). The number is the screen order at that moment, first to ninth: the
+// Agent area's tabs left to right, ⌘9 its last whatever their count, the rail's
 // devices top to bottom, the sidebar list's drawn rows top to bottom, the
 // 프로젝트 tree's roots or, while the `프로젝트 | 태스크` switch shows the 태스크
 // list, its task rows (PRD sidebar-task-lens). A tenth item has no number,
@@ -16,6 +17,8 @@ import { checkoutAgentRows } from "./projectBoard";
 import { sidebarNamedGroups, sidebarTabGroups } from "./sidebarTabs";
 import { groupFoldKey, useGroupFolds } from "./groupTabs";
 import { contextWorkspaces, contextAgents } from "./remote";
+import { areasOf, findArea } from "./areaLayout";
+import type { AgentLayout } from "./agentLayout";
 import { DIGITS, type Digit } from "./shortcuts";
 import { catalogWorkspaces, type AgentRow, type Checkout, type Device, type SnapshotRest } from "./snapshot";
 import { drawnTasks, taskList, taskSections } from "./taskList";
@@ -39,6 +42,20 @@ export function numberedPanes(panes: readonly string[]): Map<Digit, string> {
  */
 export function numberedDevices(devices: readonly Device[] | undefined): Map<Digit, string> {
   return numberedPanes(railDeviceIds(devices).filter((id) => id !== ""));
+}
+
+/**
+ * The tab id at each number ⌘n selects: the tabs of the Agent area in use,
+ * left to right, ⌘1 to ⌘8 the first eight and ⌘9 the last, as a browser's
+ * ⌘9 is, so a strip of three answers ⌘3 and ⌘9 with the same tab.
+ */
+export function numberedTabs(layout: AgentLayout): Map<Digit, string> {
+  const area = findArea(layout.root, layout.active_area) ?? areasOf(layout.root)[0];
+  const tabs = area?.displays.map((display) => display.id) ?? [];
+  const numbered = numberedPanes(tabs.slice(0, DIGITS.length - 1));
+  const last = tabs.at(-1);
+  if (last !== undefined) numbered.set(DIGITS[DIGITS.length - 1]!, last);
+  return numbered;
 }
 
 /** The pane id at each number of the Agents list's drawn rows, in number order. */

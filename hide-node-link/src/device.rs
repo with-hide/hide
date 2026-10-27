@@ -14,12 +14,7 @@ pub const HOST_KEY_UNKNOWN: &str = "host key unknown";
 
 /// Herdr's named-session grammar, before a route is stored or dispatched.
 pub fn valid_herdr_session(session: &str) -> bool {
-    !session.is_empty()
-        && session.len() <= 64
-        && !matches!(session, "." | "..")
-        && session
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+    hide_platform::host::valid_herdr_session(session)
 }
 
 /// Whether `alias` is one SSH config token Hide may hand to `ssh`: never
@@ -386,6 +381,12 @@ pub enum EstablishError {
     },
     /// This build cannot serve the device; nothing was installed.
     Unsupported(String),
+    /// Acquiring the release kit for a known foreign platform failed.
+    Download {
+        os: String,
+        arch: String,
+        reason: String,
+    },
     Install(String),
     Helper(String),
 }
@@ -403,6 +404,7 @@ impl fmt::Display for EstablishError {
             Self::Unsupported(reason) | Self::Install(reason) | Self::Helper(reason) => {
                 formatter.write_str(reason)
             }
+            Self::Download { reason, .. } => formatter.write_str(reason),
         }
     }
 }

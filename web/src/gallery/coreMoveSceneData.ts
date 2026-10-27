@@ -7,7 +7,7 @@ import type { Device, DeviceHost, Kit, SnapshotRest } from "../snapshot";
 import { REFERENCE_FOLDS, sidebarScene, type SceneContent } from "./sceneData";
 
 /** The states a frame of `design/review-targets.json` names, in the order the review lists them. */
-export const CORE_MOVE_STATES = ["devices", "devices-menu", "devices-offline", "node-menu", "checks-failed", "confirm", "moving", "failed", "done", "waiting", "give-up", "take-here", "abandoned"] as const;
+export const CORE_MOVE_STATES = ["devices", "device-kit-failed", "device-unsupported", "devices-menu", "devices-offline", "node-menu", "checks-failed", "confirm", "moving", "failed", "done", "waiting", "give-up", "take-here", "abandoned"] as const;
 export const CORE_WINDOW_STATES = ["rail-node", "rail-core", "window-moving", "window-updating", "window-unreachable", "window-disconnected", "window-waiting"] as const;
 export type CoreMoveState = (typeof CORE_MOVE_STATES)[number] | (typeof CORE_WINDOW_STATES)[number];
 

@@ -130,7 +130,7 @@ Closing a document tab closes that view alone, the unsaved-draft protection as i
 ⇧⌘E (`Toggle Explorer tool`) and ⇧⌘G (`Toggle Changes tool`) press that tool's rail icon: the tool column opens on it, swaps to it, or closes when it already shows it (PRD lane-two-columns D-08; sidebar-task-lens D-19, D-29); `Toggle Project tool` and `Toggle Memory tool` do the same for the Project and Memory icons and have no chord until one is bound.
 ⇧⌘L (`Open Project Memory`) opens the Memory tool, and ⇧⌘R (`Open PR list`) turns the sidebar to its PR list, the whole device's, showing the sidebar when it is hidden; neither closes what it opened when pressed again (B25).
 `Toggle documents` presses the documents button and has no chord until one is bound.
-On Windows and Linux these chords are Alt+Shift+E, L, R and G; in a browser tab Chrome keeps ⇧⌘R for reload, so the PR list is ⌥⇧R there, and ⌥⌘1-4 do nothing anywhere.
+On Windows and Linux these chords are Alt+Shift+E, L, R and G; in a browser tab Chrome keeps ⇧⌘R for reload, so the PR list is ⌥⇧R there, and ⌥⌘1-4 select a device tile in the desktop app (⌥⌘1-9, see the device rail) and do nothing in a browser tab.
 A chord the operator had bound to `Toggle Memory tool` or `Toggle PRs tool` runs `Open Project Memory` or `Open PR list` instead, unless that command has a chord of its own (B25).
 A chord the operator had bound to the retired `Toggle Work tool`, `Toggle Files tool` or `Toggle File Tree` is dropped without an error, and the rest of their set stays.
 The desktop app's View menu names the lane commands, and a chord bound to any of them in Settings, Shortcuts keeps doing the same.
@@ -1639,7 +1639,7 @@ A copy's failure, and a drop's, is a wrapping line under the root row, not under
 Cut, Copy, Paste and Duplicate are not undone inside the app, as a rename and a move are not: a copy only adds an item, so its undo is Move to Trash on the new item, which is selected when the paste lands, and the Trash restores it; a cut item pasted is moved back the way a drag moves it back.
 
 Files and folders dragged in from the operator's file manager are copied into the checkout.
-Dropping on a folder row puts them in that folder, on the root row or on the empty room under the rows puts them at the root, and the receiving row is highlighted as a drag inside the tree highlights its folder; a file row accepts nothing.
+They land where a drag inside the tree lands (see the drag below): a folder row takes them into that folder, a file row into the folder that holds it, and the root row or the empty room under the rows at the root, and the receiving folder is tinted the same way.
 Folders come with everything under them, and a name already used in the destination becomes `name copy.ext`, never a replacement.
 The window reads the bytes with the browser's file API and hands them over the connection it already has; a path from outside every registered checkout never reaches the core, and the same route serves a checkout on another device, whose helper writes the files into its own checkout.
 Each file is uploaded to hided's staging, as a terminal attachment is, and one `path_import` event names the staged files; hided is the only maker of the core's `path_import`, and the core reads the staged files itself and has the checkout's host write the items under a hidden working folder, so a drop lands whole or not at all.
@@ -1678,8 +1678,9 @@ A device folder whose re-read is refused keeps those rows under its could-not-be
 The selection moves to the new or moved item because the core sets it explicitly; expanded folders and open file tabs inside a renamed folder follow it.
 
 A drag moves one item inside the tree.
-Dropping on a folder puts the item inside it, on a file puts it beside that file, and on the empty area puts it at the root; the receiving folder row is what highlights.
-The same parent, the item itself, and a folder inside the item show no drop indicator and accept nothing.
+Dropping on a folder puts the item inside it, on a file puts it beside that file, and on the root row or the empty area puts it at the root, so an open folder takes a drop anywhere over its rows.
+The whole receiving folder is tinted, its row and every open row under it, in the accent tint a pane move's target uses so it reads apart from the selection; the root is tinted as the whole tree and its row.
+The item's own folder, the item itself, a folder inside the item, and an item from another checkout show no tint and accept nothing.
 The drag never leaves a copy that a different app (such as Finder) could read as a file.
 
 The filter field is the Explorer's first row.
@@ -2260,7 +2261,8 @@ The counts come from the device's published `agent_scope` values; the browser do
 A device that is not connected dims its glyph and wears a `×` at the bottom-right, with no mark, since its last counts are not current; selected, its sidebar shows only its name, `연결 안 됨` and `다시 연결`, which retries the connection in place, and never the tree it last reported.
 A delayed or failed agent-state query alone leaves the connected device, its tree and terminals available; retained agent activity uses the existing Unknown state until a successful query confirms it, without a disconnected message or a new alert.
 Selecting a device tile sends `focus_device`, and the sidebar becomes that device's single project and session list; no row there names the device.
-In the desktop app ⌘1-9 (Ctrl+Shift+1-9 on Windows and Linux) selects the tile at that number, top to bottom with This Mac first, whether or not the rail shows, and holding ⌘ alone floats each tile's number at its top left (see Keycaps, tooltips, and icon buttons); a number with no tile does nothing.
+In the desktop app ⌥⌘1-9 (Alt+Shift+1-9 on Windows and Linux) selects the tile at that number, top to bottom with This Mac first, whether or not the rail shows, and holding ⌥⌘ alone floats each tile's number at its top left (see Keycaps, tooltips, and icon buttons); a number with no tile does nothing.
+⇧⌘ would have been the shorter chord, but macOS keeps ⇧⌘3, ⇧⌘4 and ⇧⌘5 for screenshots, so three tiles could never be reached; ⌘1-9 belongs to the tabs.
 Every tile is a button reached with Tab and chosen with Enter or Space, named for assistive technology by the device, its connection and each count it marks (`mini, 연결 안 됨`, `This Mac, Needs You 2, Done 1`).
 `기기 추가` opens Settings › Devices with the Add device dialog in front, as the hidden rail's `기기 추가…` and the Add a project dialog's host list do.
 Removing the device in front moves the front to This Mac; that device's agents and its `~/hide` stay on it, and the rail stays.
@@ -2783,7 +2785,9 @@ A healthy kit is on no row.
 The missing-Herdr and older-protocol lines explain that Hide's allowed helper installs, starts or moves the pinned Herdr; they do not ask the operator to install Herdr first.
 If the helper cannot start Herdr, the row says so even while the device session is unavailable and offers Retry, which runs the install pass again; it is disabled while that pass is running.
 An ordinary kit status read keeps this failure visible until an install answers with its next server outcome, and diagnostic process details stay in the log.
-A line grows under a device only when something needs the operator: a refused connection with the step and what to do, a helper that is not running while the connection is fine (Retry helper), a helper not allowed (Allow and install…) even when a missing Herdr or an older protocol prevents the session connection, a part of Hide's kit that failed or was removed, outdated or never installed, as one line naming it with Reinstall, or the result of a test they asked for.
+A line grows under a device only when something needs the operator: a refused connection with the step and what to do, a failed helper with its reason and Retry helper even before the session connects, a helper not allowed (Allow and install…) even when a missing Herdr or an older protocol prevents the session connection, a part of Hide's kit that failed or was removed, outdated or never installed, as one line naming it with Reinstall, or the result of a test they asked for.
+The helper failure includes a device kit download or integrity failure and a build with no matching device release; a missing Herdr or an older protocol must not hide that reason or its retry.
+An unsupported Intel Mac keeps its unsupported helper state and the Apple Silicon support reason visible even before a session connects, without offering a helper retry.
 Reinstall repairs only the parts the line names, reads Reinstalling… while the machine's kit work runs (B8), and the line goes when the parts are whole again; nothing else on the screen reacts, and the detail of every install goes to the diagnostic log (B18).
 A kit pass that stopped before changing anything (a folder another account can change or a link in the way, an earlier Hide's open work or unreadable record, another Hide changing the same account) is one line under the machine with Retry, never a line per part: `Hide stopped before changing anything.`, what stopped it with the folder or file at fault, and what to change; when the folder is the state folder `HIDE_STATE_DIR` or `XDG_STATE_HOME` chose, the line names that variable and both ways back, another folder only the operator can change or unsetting it to return to `~/.hide/state`, and on the machine that runs the app the command that stops Hide's daemon there, which reads the variable only when it starts and outlives the app (INSTALL.md, When a kit pass stops before changing anything).
 More registered projects than a pass checks is its own line, and a cause this build cannot name says only that the pass stopped and to update Hide, with Retry like the rest.
@@ -3014,8 +3018,8 @@ Each exception has a dominant convention on Windows and Linux, or a chord the sy
   The tree answers them only while it holds the keyboard, so a terminal keeps ⌘C for its selection and Ctrl+C for the interrupt, and a text field keeps its own.
 - Inside a text field, a palette, a board or a document, no terminal holds the keyboard, so the system's own command key applies: ⌘↵ is Ctrl+Enter (send a form, open a ⌘P result to the side, open a pull request on GitHub), ⌘-click is Ctrl-click (a link, a pull request, an issue), and Ctrl+S saves the document in front as well as Ctrl+Shift+S.
   A file or diff View's comment chord ⇧⌘. is Ctrl+Shift+. there for the same reason ([View openers and comments](#view-openers-and-comments)).
-- The digits follow the rule: a device is ⌘1-9, so it is Ctrl+Shift+1-9 there, and an agent row stays ⌥1-9, Alt+1-9.
-  A tab has no digit: ⌃1-9 would take the control bytes ⌃2 to ⌃8 send a terminal (NUL, Escape, ^\ to ^_), and ⌃⇥ already steps through the recent tabs.
+- The digits follow the rule: a tab is ⌘1-9, so it is Ctrl+Shift+1-9 there, a device is ⌥⌘1-9, so it is Alt+Shift+1-9, and an agent row stays ⌥1-9, Alt+1-9.
+  No digit is on plain Ctrl: ⌃1-9 would take the control bytes ⌃2 to ⌃8 send a terminal (NUL, Escape, ^\ to ^_).
 
 ### In a terminal
 
@@ -3037,7 +3041,7 @@ Anywhere in the window, an Escape pressed while a field composes is the input me
 
 ### Every command
 
-The hold hint follows the same table: holding Ctrl+Shift alone in the desktop app on Windows and Linux floats the tab numbers, and holding Alt alone the Agents-list numbers.
+The hold hint follows the same table: holding Ctrl+Shift alone in the desktop app on Windows and Linux floats the tab numbers, holding Alt+Shift alone the device numbers, and holding Alt alone the Agents-list numbers.
 A command marked none has no chord until the operator binds one in Settings, Shortcuts, where it can be bound; the browser tab's moved chords are the ones Chrome keeps for itself on that system.
 
 Settings, Shortcuts (PRD settings-cleanup B60-B63, B66) lists the editable pane and navigation commands, each as its name and a chip holding its chord.
@@ -3062,7 +3066,8 @@ The sheet carries no row or explanation for a command the removed native app alo
 | Next recent project (exception) | `⌥⇥` | `` Ctrl+Shift+` `` | `⌥⇥` | `` Ctrl+Shift+` `` |
 | Previous recent project (exception) | `⌥⇧⇥` | `` Ctrl+Alt+Shift+` `` | `⌥⇧⇥` | `` Ctrl+Alt+Shift+` `` |
 | Select agent 1-9 | `⌥1 … ⌥9` | `Alt+1 … Alt+9` | none | none |
-| Select device 1-9 | `⌘1 … ⌘9` | `Ctrl+Shift+1 … Ctrl+Shift+9` | none | none |
+| Select tab 1-9 | `⌘1 … ⌘9` | `Ctrl+Shift+1 … Ctrl+Shift+9` | none | none |
+| Select device 1-9 | `⌥⌘1 … ⌥⌘9` | `Alt+Shift+1 … Alt+Shift+9` | none | none |
 | Search | `⌘K` | `Ctrl+Shift+K` | `⌘K` | `Ctrl+Shift+K` |
 | Open file | `⌘P` | `Ctrl+Shift+P` | `⌘P` | `Ctrl+Shift+P` |
 | Overview | `⇧⌘O` | `Alt+Shift+O` | `⇧⌘O` | `Alt+Shift+O` |
@@ -3114,8 +3119,11 @@ A chorded tooltip reads the label followed by the shortcut chord; a chordless co
 The sidebar Settings tooltip and accessible name append the host's current shortcut in parentheses to the translated label.
 There is no native platform tooltip layered underneath the shared one; the shared tooltip is the only tooltip in the main shell.
 Tooltip hover has a short reveal delay, and an exact modifier hold reveals shortcut hints faster than a hover tooltip does.
-In the desktop app, holding ⌥ alone floats each Agents-list row's number at its top right, and holding ⌘ alone (Ctrl+Shift on Windows and Linux) floats each device tile's number at its top left, the corner a tile's marks leave free: a keycap in the popover colors with a border, a small shadow and one mono digit, positioned over the row or tile rather than in it, so a title, a row's time, its fold slot and a tile's marks never move.
+In the desktop app, holding ⌘ alone (Ctrl+Shift on Windows and Linux) floats each tab's number at its top left in the Agent area in use, holding ⌥ alone floats each Agents-list row's number at its top right, and holding ⌥⌘ alone (Alt+Shift on Windows and Linux) floats each device tile's number at its top left, the corner a tile's marks leave free: a keycap in the popover colors with a border, a small shadow and one mono digit, positioned over the row or tile rather than in it, so a title, a row's time, its fold slot and a tile's marks never move.
 The number is the screen order at that moment, first to ninth, top to bottom for the rows the Agents list draws (a folded parent's descendants are not rows) and for the rail's tiles, and an item past the ninth carries none.
+A tab is the exception, as in a browser: ⌘1-8 select the first eight tabs of the Agent area in use, left to right, and ⌘9 its last, so with ten or more tabs the last one carries 9 and the ninth to the second-to-last carry none, and with fewer the last tab carries its own place and ⌘9 reaches it too.
+Adding ⌥ to a revealed ⌘ hold turns the numbers to the devices at once, and releasing it turns them back.
+A chord an earlier version let the operator bind that a numbered chord now holds (⌥⌘1-9 went to the devices) is dropped from the stored set with a diagnostic, the command keeping its default, and the rest of the set stays.
 While Projects is on screen the same hold shows those Agents-list numbers, since ⌥n still selects by them, each once: on the agent's raised row, else on its row under the checkout that owns its pane.
 The hint appears only after a short hold of the exact modifier; releasing it before then shows nothing, so a ⌘C never flashes numbers.
 Releasing the modifier, adding another, pressing any key during the hold (including the numbered chord itself), losing the window, hiding the page, or opening a sheet, menu, dialog, palette, or cycle clears the numbers at once; the same modifiers still held after that show nothing until they are released and held again.

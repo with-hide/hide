@@ -27,7 +27,7 @@ PACKAGE_INPUTS = (
     "contracts/herdr-bundle.json", "scripts/fetch-herdr-runtime.sh", "scripts/fetch-herdr-runtime.ps1",
     "scripts/verify-cargo.sh", "scripts/verify-web.sh", "scripts/toolchain-env.sh",
     "hided/build.rs", "hided/src/cli.rs", "hide-kit/src/lib.rs", "hide-agent-hooks/src/main.rs",
-    ".github/workflows/package.yml", ".github/workflows/release.yml",
+    ".github/workflows/package.yml", ".github/workflows/device-helpers.yml", ".github/workflows/release.yml",
 )
 
 
@@ -273,6 +273,7 @@ class Selection(unittest.TestCase):
                 self.assertNotIn("package", plan(path)["lanes"])
         self.assertEqual(set(plan("hide-kit/src/lib.rs")["lanes"]) & MACOS_LANES, {"desktop-e2e", "package"})
         self.assertEqual(plan(".github/workflows/package.yml")["lanes"], ["policy", "package"])
+        self.assertEqual(plan(".github/workflows/device-helpers.yml")["lanes"], ["policy", "package"])
 
     def test_the_desktop_lane_follows_what_the_app_runs(self):
         for path in (
@@ -511,7 +512,6 @@ class NamedPaths(unittest.TestCase):
             "contracts/snapshot-wire-enums.json": ({"policy", "rust", "checks"}, ["herdr-core"]),
             "contracts/agent-adapters.json": ({"policy", "rust", "checks", "web-e2e", "desktop-e2e"}, ["hide-agent-adapter"]),
             "contracts/hide-cli.json": ({"policy", "rust"}, ["hided"]),
-            "contracts/provider-quota.json": ({"policy", "rust"}, ["hide-agent-hooks"]),
             "contracts/usage-coverage.json": ({"policy", "rust"}, ["hide-agent-adapter"]),
         }
         sources = code_sources()

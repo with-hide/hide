@@ -595,6 +595,62 @@ fn herdrs_default_socket_is_resolved_in_herdrs_own_order() {
 }
 
 #[test]
+fn the_herdr_socket_override_precedes_the_account_default_and_invalid_paths_fail() {
+    let dir = tempfile::tempdir().unwrap();
+    let chosen = dir.path().join("chosen.sock");
+    let vars = variables(vec![
+        (host::HOME_VARIABLE, dir.path().to_owned()),
+        ("HERDR_SOCKET_PATH", chosen.clone()),
+        ("HERDR_SESSION", PathBuf::from("work")),
+    ]);
+    assert_eq!(host::herdr_socket_from(&vars).unwrap(), chosen);
+    for (invalid, expected) in [
+        ("", ErrorKind::NotFound),
+        ("relative.sock", ErrorKind::InvalidInput),
+        ("/bad\nsocket", ErrorKind::InvalidInput),
+    ] {
+        let vars = variables(vec![
+            (host::HOME_VARIABLE, dir.path().to_owned()),
+            ("HERDR_SOCKET_PATH", PathBuf::from(invalid)),
+        ]);
+        assert_eq!(host::herdr_socket_from(&vars).unwrap_err().kind(), expected);
+    }
+    let vars = variables(vec![(host::HOME_VARIABLE, dir.path().to_owned())]);
+    assert_eq!(
+        host::herdr_socket_from(&vars).unwrap(),
+        host::herdr_socket_default_from(&vars).unwrap()
+    );
+}
+
+#[test]
+fn the_environment_session_selects_its_own_socket_without_a_socket_override() {
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["work", "default"] {
+        let vars = variables(vec![
+            (host::HOME_VARIABLE, dir.path().to_owned()),
+            ("HERDR_SESSION", PathBuf::from(name)),
+        ]);
+        let folder = host::herdr_config_dir_from(&vars).unwrap();
+        let expected = if name == "default" {
+            folder.join("herdr.sock")
+        } else {
+            folder.join("sessions/work/herdr.sock")
+        };
+        assert_eq!(host::herdr_socket_from(&vars).unwrap(), expected);
+    }
+    for invalid in ["", ".", "..", "../other", "a/b", "work room"] {
+        let vars = variables(vec![
+            (host::HOME_VARIABLE, dir.path().to_owned()),
+            ("HERDR_SESSION", PathBuf::from(invalid)),
+        ]);
+        assert_eq!(
+            host::herdr_socket_from(&vars).unwrap_err().kind(),
+            ErrorKind::InvalidInput
+        );
+    }
+}
+
+#[test]
 fn the_network_address_set_leaves_loopback_out() {
     match host::network_addresses() {
         Ok(addresses) => assert!(

@@ -45,6 +45,15 @@ class ReleaseAssetsTest(unittest.TestCase):
             "latest.yml": [f"{base}-windows-x64-setup.exe"],
             "latest-linux.yml": [f"{base}-linux-x64.deb", f"{base}-linux-x64.rpm"],
         }
+        platforms = {}
+        for platform in ["linux-x86_64", "linux-aarch64"]:
+            name = f"hide-device-{platform}-{tag[1:]}.tar.gz"
+            data = f"device archive fixture {platform}".encode()
+            (self.directory / name).write_bytes(data)
+            platforms[platform] = {"asset": name, "size": len(data), "sha256": hashlib.sha256(data).hexdigest(),
+                                   "files": {name: {"size": 64, "sha256": "a" * 64} for name in ["hided", "hide", "hide-agent-hooks", "herdr"]}}
+        (self.directory / "device-bundles.json").write_text(json.dumps({
+            "format": 1, "version": tag[1:], "commit": "1" * 40, "order": "42", "platforms": platforms}))
         for info, files in updates.items():
             self.write_update_info(info, tag[1:], files)
 
@@ -70,6 +79,69 @@ class ReleaseAssetsTest(unittest.TestCase):
 
     def test_complete_same_version_packages_pass(self):
         self.assertEqual(self.check().returncode, 0)
+
+    def test_installers_do_not_require_the_device_files_added_after_packaging(self):
+        # The Mac installer builder runs before package.mjs copies device kits.
+        result = subprocess.run([
+            "node", "--input-type=module", "-e",
+            f"import {{ systemAssetNames, expectedAssetNames }} from {json.dumps(CHECK.as_uri())};"
+            "console.log(JSON.stringify({installers: systemAssetNames('1.2.3', 'macos'),"
+            "release: expectedAssetNames('v1.2.3')}));",
+        ], capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        inventory = json.loads(result.stdout)
+        mac_installers = [
+            "hide-v1.2.3-macos-arm64.dmg", "hide-v1.2.3-macos-arm64.dmg.sha256",
+            "hide-v1.2.3-macos-arm64.zip", "hide-v1.2.3-macos-arm64.zip.sha256",
+            "hide-v1.2.3-macos-arm64.zip.blockmap", "latest-mac.yml",
+        ]
+        mac_devices = ["device-bundles.json", "hide-device-linux-x86_64-1.2.3.tar.gz",
+                       "hide-device-linux-aarch64-1.2.3.tar.gz"]
+        self.assertEqual(inventory["installers"], sorted(mac_installers))
+        self.assertEqual(set(inventory["release"]) - set(mac_installers + mac_devices), {
+            "hide-v1.2.3-windows-x64-setup.exe", "hide-v1.2.3-windows-x64-setup.exe.sha256",
+            "hide-v1.2.3-windows-x64-setup.exe.blockmap", "latest.yml",
+            "hide-v1.2.3-linux-x64.deb", "hide-v1.2.3-linux-x64.deb.sha256",
+            "hide-v1.2.3-linux-x64.rpm", "hide-v1.2.3-linux-x64.rpm.sha256", "latest-linux.yml",
+        })
+        self.assertEqual(inventory["release"], sorted(file.name for file in self.directory.iterdir()))
+        self.assertEqual(self.check().returncode, 0)
+        # All nine Mac release assets are mandatory, even though only six
+        # exist when the installer builder returns to the package builder.
+        for name in mac_installers + mac_devices:
+            with self.subTest(missing=name):
+                file = self.directory / name
+                original = file.read_bytes()
+                file.unlink()
+                try:
+                    result = self.check()
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(name, result.stderr)
+                finally:
+                    file.write_bytes(original)
+
+    def test_device_bundle_manifest_and_archive_must_agree(self):
+        result = self.check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("18 files", result.stdout)
+        bundle = self.directory / "hide-device-linux-aarch64-1.2.3.tar.gz"
+        original = bundle.read_bytes()
+        bundle.write_bytes(original + b"changed")
+        self.assertNotEqual(self.check().returncode, 0)
+        bundle.write_bytes(original)
+        manifest_file = self.directory / "device-bundles.json"
+        manifest = json.loads(manifest_file.read_text())
+        for change in [lambda m: m.update(version="1.2.2"),
+                       lambda m: m["platforms"].pop("linux-x86_64"),
+                       lambda m: m["platforms"]["linux-aarch64"]["files"].pop("herdr"),
+                       lambda m: m["platforms"]["linux-aarch64"].update(sha256="0" * 64)]:
+            value = json.loads(json.dumps(manifest))
+            change(value)
+            manifest_file.write_text(json.dumps(value))
+            self.assertNotEqual(self.check().returncode, 0)
+        manifest_file.write_text(json.dumps(manifest))
+        bundle.unlink()
+        self.assertNotEqual(self.check().returncode, 0)
 
     def test_checksums_cannot_hide_a_missing_target(self):
         name = self.names[2]

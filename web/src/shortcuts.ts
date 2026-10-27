@@ -17,12 +17,13 @@
 // operator's fingers know.
 //
 // The numbered commands (PRD electron-digit-shortcuts-hints D-02) are the
-// desktop app's ⌥1-9 (the nth row the sidebar's Agents list draws) and ⌘1-9
-// (the nth tile of the device rail). Chrome keeps ⌘1-9 for its own tabs
-// and a page cannot claim ⌥-digits reliably either, so the browser column has
-// none: the sheet says so and nothing is intercepted there. The number itself
-// is the screen order at the moment of the press, assigned by the web shell
-// (`numbering.ts`), and the hold hint (`hints.ts`) shows that order.
+// desktop app's ⌘1-9 (the nth tab of the Agent area in use, ⌘9 its last, as
+// in Chrome and VS Code), ⌥1-9 (the nth row the sidebar's Agents list draws)
+// and ⌥⌘1-9 (the nth tile of the device rail). Chrome keeps ⌘1-9 for its own
+// tabs and a page cannot claim ⌥-digits reliably either, so the browser column
+// has none: the sheet says so and nothing is intercepted there. The number
+// itself is the screen order at the moment of the press, assigned by the web
+// shell (`numbering.ts`), and the hold hint (`hints.ts`) shows that order.
 //
 // The table is written in macOS chords, and one rule gives every other
 // system its keys (`modChord`): ⌘ is Ctrl+Shift on Windows and Linux, as in
@@ -193,24 +194,27 @@ const LANE_TOOL_CHORDS: Record<LaneToolCommandId, { browser: Chord | null; elect
 export type Digit = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
 export const DIGITS: readonly Digit[] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 
-/** What a numbered chord selects: a row of the Agents list, or a tile of the device rail. */
-export type NumberedFamily = "agents" | "devices";
-export type NumberedCommandId = `select_agent_${Digit}` | `select_device_${Digit}`;
+/** What a numbered chord selects: a tab of the Agent area in use, a row of the Agents list, or a tile of the device rail. */
+export type NumberedFamily = "tabs" | "agents" | "devices";
+export type NumberedCommandId = `select_tab_${Digit}` | `select_agent_${Digit}` | `select_device_${Digit}`;
 
 type NumberedFamilySpec = {
   family: NumberedFamily;
-  prefix: "select_agent" | "select_device";
+  prefix: "select_tab" | "select_agent" | "select_device";
   title: string;
   group: Command["group"];
   /** The modifiers every chord of the family shares on the desktop host; the hold hint reveals the family on exactly these. */
   modifiers: Omit<Chord, "code">;
 };
 
-// ⌘ is the device's and ⌥ the Agents list's. A tab has no number: ⌃ would
-// take control bytes from the terminal, and ⌃⇥ already steps through tabs.
+// ⌘ is the tab's, as in every browser and editor, ⌥ the Agents list's and ⌥⌘
+// the device's. ⇧⌘ is not the device's: macOS keeps ⇧⌘3, ⇧⌘4 and ⇧⌘5 for
+// screenshots, so three of its numbers would never reach the app. Off macOS
+// the rule makes ⌥⌘ Alt+Shift, the same keys ⇧⌘ would have been.
 export const NUMBERED_FAMILIES: readonly NumberedFamilySpec[] = [
+  { family: "tabs", prefix: "select_tab", title: "Select tab", group: "Navigate", modifiers: { meta: true } },
   { family: "agents", prefix: "select_agent", title: "Select agent", group: "Navigate", modifiers: { alt: true } },
-  { family: "devices", prefix: "select_device", title: "Select device", group: "Navigate", modifiers: { meta: true } },
+  { family: "devices", prefix: "select_device", title: "Select device", group: "Navigate", modifiers: { meta: true, alt: true } },
 ];
 
 function numberedEntries(spec: NumberedFamilySpec): Command[] {
@@ -226,7 +230,7 @@ function numberedEntries(spec: NumberedFamilySpec): Command[] {
 
 /** The family and number a command id names, or null for every other command. */
 export function numberedCommand(id: CommandId): { family: NumberedFamily; number: Digit } | null {
-  const match = /^(select_agent|select_device)_([1-9])$/.exec(id);
+  const match = /^(select_tab|select_agent|select_device)_([1-9])$/.exec(id);
   if (!match) return null;
   const spec = NUMBERED_FAMILIES.find((row) => row.prefix === match[1]);
   return spec ? { family: spec.family, number: Number(match[2]) as Digit } : null;
@@ -264,8 +268,7 @@ export const REGISTRY: readonly Command[] = [
   { id: "previous_recent_panel", title: "Previous panel (all projects)", group: "Navigate", browser: null, electron: null, moved: false },
   { id: "recent_project", title: "Next recent project", group: "Navigate", browser: { code: "Tab", alt: true }, electron: { code: "Tab", alt: true }, moved: false },
   { id: "previous_recent_project", title: "Previous recent project", group: "Navigate", browser: { code: "Tab", alt: true, shift: true }, electron: { code: "Tab", alt: true, shift: true }, moved: false },
-  ...numberedEntries(NUMBERED_FAMILIES[0]!),
-  ...numberedEntries(NUMBERED_FAMILIES[1]!),
+  ...NUMBERED_FAMILIES.flatMap(numberedEntries),
   { id: "search", title: "Search", group: "Navigate", browser: { code: "KeyK", meta: true }, electron: { code: "KeyK", meta: true }, moved: false },
   { id: "open_file", title: "Open file", group: "Navigate", browser: { code: "KeyP", meta: true }, electron: { code: "KeyP", meta: true }, moved: false },
   { id: "toggle_left_sidebar", title: "Toggle left sidebar", group: "Panels", browser: { code: "KeyB", meta: true }, electron: { code: "KeyB", meta: true }, moved: false },
@@ -598,7 +601,7 @@ export function serializeMacosChord(chord: Chord): string | null {
 }
 
 /**
- * Chords macOS or the app keeps on the desktop host. ⌘1-9 are not here: the
+ * Chords macOS or the app keeps on the desktop host. ⌘1-9 and ⌥⌘1-9 are not here: the
  * registry's own numbered commands hold them, so a pane chord bound onto one
  * is refused as that command's, by name.
  */
@@ -725,9 +728,10 @@ export function effectiveRegistry(stored: Record<string, string> | null | undefi
   const which = host === "electron" ? "pane" : "browser";
   const defaults = systemRegistry(system);
   const retired = Object.keys(stored ?? {}).some((key) => RETIRED_KEYS.includes(key));
-  const diagnostic = retired ? "Stored project_home, toggle_sidebar_view, sidebar_agents, toggle_lane_work, toggle_file_tree or toggle_lane_files shortcut is retired and was ignored." : null;
+  const notes = retired ? ["Stored project_home, toggle_sidebar_view, sidebar_agents, toggle_lane_work, toggle_file_tree or toggle_lane_files shortcut is retired and was ignored."] : [];
   const entries = renamedEntries(stored ?? {}, host).filter(([key]) => !RETIRED_KEYS.includes(key) && !(host === "electron" && MACOS_ONLY_KEYS.includes(key)));
-  if (entries.length === 0) return { registry: defaults, diagnostic };
+  const diagnostic = () => (notes.length ? notes.join(" ") : null);
+  if (entries.length === 0) return { registry: defaults, diagnostic: diagnostic() };
   let registry: Command[] = [...defaults];
   const applied: [CommandId, Chord][] = [];
   for (const [key, text] of entries) {
@@ -739,6 +743,17 @@ export function effectiveRegistry(stored: Record<string, string> | null | undefi
     }
     const chord = parseStoredChord(text, host, system);
     if (!chord) return { registry: defaults, diagnostic: `Stored ${which} shortcut for ${key} was not usable (unreadable chord); defaults are in use.` };
+    // A numbered chord is fixed, and a release can give one a chord an older
+    // set bound (⌥⌘n went to the devices): that one binding yields and the
+    // command keeps its default, rather than the whole set falling back.
+    const fixed = defaults.find((command) => {
+      const bound = isNumberedCommand(command.id) ? hostChord(command, host) : null;
+      return bound !== null && chordEquals(bound, chord);
+    });
+    if (fixed) {
+      notes.push(`Stored ${which} shortcut for ${key} sits on fixed ${fixed.id} and was ignored.`);
+      continue;
+    }
     registry = registry.map((command) => (command.id === id ? withChord(command, chord, host) : command));
     applied.push([id, chord]);
   }
@@ -746,7 +761,7 @@ export function effectiveRegistry(stored: Record<string, string> | null | undefi
     const problem = bindingProblem(id, chord, registry, host, system);
     if (problem) return { registry: defaults, diagnostic: `Stored ${which} shortcut for ${storedKey(id, host)} was not usable (${problem.code}${problem.code === "conflict" ? ` ${problem.commandId}` : ""}); defaults are in use.` };
   }
-  return { registry, diagnostic };
+  return { registry, diagnostic: diagnostic() };
 }
 
 const resolved = new Map<string, { stored: Record<string, string> | null | undefined; value: EffectiveRegistry }>();
@@ -870,7 +885,7 @@ export type SheetRow = { id: CommandId; title: string; chord: string | null; mov
 
 /**
  * The sheet's rows for `group` on `host`, in registry order, with each
- * numbered family folded into one row ("Select device 1-9", "⌘1 … ⌘9"), or a
+ * numbered family folded into one row ("Select tab 1-9", "⌘1 … ⌘9"), or a
  * null chord where the host has none (B3, B4). A moved browser row names the
  * desktop chord Chrome keeps.
  */

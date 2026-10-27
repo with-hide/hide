@@ -455,14 +455,18 @@ test("the Explorer takes files dropped from the file manager into a folder, and 
         },
         [selector, files] as const,
       );
+    /** A file from the file manager held over the element at `selector`, not dropped. */
+    const dragOver = (selector: string) =>
+      page.evaluate((target) => {
+        const data = new DataTransfer();
+        data.items.add(new File(["x"], "over.txt"));
+        document.querySelector(target)!.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer: data }));
+      }, selector);
     const folder = `[data-explorer-row="${repo}/src"]`;
+    const readme = `[data-explorer-row="${repo}/README.md"]`;
 
     // The folder under the pointer lights up while a file is over it.
-    await page.evaluate((target) => {
-      const data = new DataTransfer();
-      data.items.add(new File(["x"], "over.txt"));
-      document.querySelector(target)!.dispatchEvent(new DragEvent("dragover", { bubbles: true, cancelable: true, dataTransfer: data }));
-    }, folder);
+    await dragOver(folder);
     await expect(page.locator(folder)).toHaveAttribute("data-drop", "true");
     await screenshot(page, "s3-explorer-drop-over");
 
@@ -478,7 +482,24 @@ test("the Explorer takes files dropped from the file manager into a folder, and 
     await expect(page.locator(`[data-explorer-row="${repo}/src/dropped copy.txt"]`)).toBeVisible();
     expect(fs.readFileSync(`${repo}/src/dropped.txt`, "utf8")).toBe("from the file manager");
 
-    // The empty room under the rows is the root.
+    // Over a file in the open folder the drop lands in that folder, and the whole folder lights up.
+    const inside = `[data-explorer-row="${repo}/src/main.ts"]`;
+    await dragOver(inside);
+    await expect(page.locator(folder)).toHaveAttribute("data-drop", "true");
+    await expect(page.locator(`[data-explorer-row="${repo}/src/dropped.txt"]`)).toHaveAttribute("data-drop", "true");
+    await expect(page.locator(readme)).toHaveAttribute("data-drop", "false");
+    await screenshot(page, "s3-explorer-drop-over-file");
+    await dropFiles(inside, [{ name: "beside.txt", text: "beside" }]);
+    expect(lastSent.get("path_import")).toMatchObject({ destination: `${repo}/src` });
+    await expect(page.locator(`[data-explorer-row="${repo}/src/beside.txt"]`)).toBeVisible();
+
+    // Over a file at the root, and over the empty room under the rows, the drop lands at the root and the tree lights up.
+    await dragOver(readme);
+    await expect(page.locator("[data-explorer-tree]")).toHaveAttribute("data-drop", "true");
+    await expect(page.locator(folder)).toHaveAttribute("data-drop", "false");
+    await screenshot(page, "s3-explorer-drop-over-root");
+    await dropFiles(readme, [{ name: "by-readme.txt", text: "root" }]);
+    await expect(page.locator(`[data-explorer-row="${repo}/by-readme.txt"]`)).toBeVisible();
     await dropFiles("[data-explorer-tail]", [{ name: "at-root.txt", text: "root" }]);
     await expect(page.locator(`[data-explorer-row="${repo}/at-root.txt"]`)).toBeVisible();
 
@@ -487,7 +508,7 @@ test("the Explorer takes files dropped from the file manager into a folder, and 
     await expect(page.locator(`[data-explorer-failure="${repo}/src"]`)).toContainText("20 MiB");
     expect(fs.existsSync(`${repo}/src/ok.txt`)).toBe(false);
     expect(fs.existsSync(`${repo}/src/big.bin`)).toBe(false);
-    expect(sent.get("path_import")).toBe(3);
+    expect(sent.get("path_import")).toBe(5);
     await screenshot(page, "s3-explorer-drop-refused");
   } finally {
     close(fixture);
@@ -1119,9 +1140,14 @@ test("the Explorer creates, renames, moves and trashes entries", { tag: "@platfo
     await folder.press("Enter");
     await expect.poll(() => sent.get("dir_create")).toBe(1);
     await expect(page.locator(`[data-explorer-row="${repo}/dest"]`)).toBeVisible();
-    await dragRow(page, `${repo}/src/renamed.ts`, `${repo}/dest`);
+    // Dropped on a file it lands beside that file, here at the root.
+    await dragRow(page, `${repo}/src/renamed.ts`, `${repo}/README.md`);
     await expect.poll(() => sent.get("path_move")).toBe(1);
-    expect(lastSent.get("path_move")).toMatchObject({ root: repo, path: `${repo}/src/renamed.ts`, destination: `${repo}/dest` });
+    expect(lastSent.get("path_move")).toMatchObject({ root: repo, path: `${repo}/src/renamed.ts`, destination: repo });
+    await expect(page.locator(`[data-explorer-row="${repo}/renamed.ts"]`)).toBeVisible();
+    await dragRow(page, `${repo}/renamed.ts`, `${repo}/dest`);
+    await expect.poll(() => sent.get("path_move")).toBe(2);
+    expect(lastSent.get("path_move")).toMatchObject({ root: repo, path: `${repo}/renamed.ts`, destination: `${repo}/dest` });
 
     // Trash behind the confirmation: nothing goes out until it is confirmed.
     const destInode = fs.statSync(`${repo}/dest`, { bigint: true }).ino.toString();

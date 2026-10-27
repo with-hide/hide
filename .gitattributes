@@ -7,5 +7,3 @@ hide-agent-hooks/tests/fixtures/hook-bytes/opencode-plugin.js text eol=lf
 hide-agent-hooks/src/pi_extension/extension.js text eol=lf
 hide-agent-hooks/tests/fixtures/hook-bytes/pi-extension.ts text eol=lf
 hide-agent-hooks/tests/fixtures/hook-bytes/omp-extension.ts text eol=lf
-# agy's recorded log records, byte for byte: its error message ends a line with a space.
-hide-agent-hooks/tests/fixtures/agy-errors/*.log -whitespace text eol=lf

@@ -20,6 +20,7 @@ mod control_lane;
 pub(crate) mod core_move;
 pub(crate) mod delivery;
 mod detail;
+mod device_analytics;
 mod device_catalog;
 mod devices;
 mod direct_observation;
@@ -1429,6 +1430,7 @@ pub struct Runtime {
     /// worker drains it (`runtime/usage_ledger.rs`).
     ai_usage: Arc<crate::usage_ledger::ai_usage::AiUsageQueue>,
     product_analytics: Option<Arc<dyn crate::product_analytics::Sink>>,
+    device_connect_analytics: device_analytics::Attempts,
     /// Whether the diagnostic log last said the order is paused by the limit.
     usage_pause_announced: bool,
     recent_visible_tabs: Vec<String>,
@@ -2282,6 +2284,7 @@ impl Runtime {
             usage_limits: Arc::new(hide_ai::UsageLimits::new()),
             ai_usage: crate::usage_ledger::ai_usage::AiUsageQueue::new(),
             product_analytics: None,
+            device_connect_analytics: device_analytics::Attempts::default(),
             usage_pause_announced: false,
             recent_visible_tabs: Vec::new(),
             pending_tab_rename: None,

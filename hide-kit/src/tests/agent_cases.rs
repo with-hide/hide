@@ -835,15 +835,17 @@ fn a_program_on_the_login_shells_path_is_installed_and_the_shell_is_asked_again_
 #[test]
 fn the_hook_is_judged_by_the_copy_the_login_shell_runs_not_an_older_one_in_an_install_folder() {
     let mut fixture = Fixture::new();
-    executable(
+    // Started before the pass, so the version probe's bound does not wait on
+    // the system's first-start check of a new file (`stand_ins`).
+    program(
         &fixture.home().join(".local/bin/claude"),
         "#!/bin/sh\necho '2.1.100 (Claude Code)'\n",
     );
-    executable(
+    program(
         &fixture.home().join(".nvm/bin/claude"),
         "#!/bin/sh\nexec hide-fixture-node \"$@\"\n",
     );
-    executable(
+    program(
         &fixture.home().join(".nvm/bin/hide-fixture-node"),
         "#!/bin/sh\necho '2.1.300 (Claude Code)'\n",
     );
@@ -868,6 +870,71 @@ fn the_hook_is_judged_by_the_copy_the_login_shell_runs_not_an_older_one_in_an_in
         agent(&report, "claude-code").hook.as_ref().unwrap().state,
         ComponentState::Installed
     );
+}
+
+/// Every agent whose hook, plugin or extension the kit writes (beside Claude
+/// Code's and Codex's kit parts above) gets it only from a CLI at least as new
+/// as the oldest version it was proven on: an older one is refused with the
+/// agent, the version it answered, the program's path and the minimum, and
+/// nothing of Hide's is written; the same CLI at its minimum gets it.
+#[test]
+fn an_agent_older_than_its_minimum_version_gets_no_hook_plugin_or_extension() {
+    let fixture = Fixture::new();
+    let agents = [
+        ("grok", "grok", ".grok"),
+        ("opencode", "opencode", ".config/opencode"),
+        ("pi", "pi", ".pi/agent"),
+        ("omp", "omp", ".omp/agent"),
+        ("antigravity", "agy", ".gemini/config"),
+    ];
+    for (_, name, folder) in agents {
+        program(
+            &fixture.home().join(".local/bin").join(name),
+            "#!/bin/sh\necho '0.0.1'\n",
+        );
+        set_up(&fixture, folder);
+    }
+
+    let refused = apply(
+        &fixture.target,
+        &Scope::agents(agents.map(|(id, ..)| id), []),
+    );
+    for (id, name, _) in agents {
+        let minimum = crate::agents::adapter(id).unwrap().minimum;
+        let hook = agent(&refused, id).hook.clone().unwrap();
+        assert_eq!(hook.state, ComponentState::Failed, "{id}: {hook:?}");
+        assert_eq!(
+            hook.why,
+            Some(crate::PartWhy {
+                cause: PartCause::UpdateAgent,
+                value: Some(minimum.to_owned()),
+            }),
+            "{id}"
+        );
+        let reason = hook.reason.unwrap();
+        let path = format!(".local/bin/{name}");
+        let label = crate::agents::adapter(id).unwrap().label;
+        for part in [label, "0.0.1", path.as_str(), minimum] {
+            assert!(reason.contains(part), "{id}: {reason}");
+        }
+        assert!(
+            !Path::new(&hook.location.unwrap()).exists(),
+            "{id}: Hide's file was written"
+        );
+    }
+
+    for (id, name, _) in agents {
+        let minimum = crate::agents::adapter(id).unwrap().minimum;
+        program(
+            &fixture.home().join(".local/bin").join(name),
+            &format!("#!/bin/sh\necho '{name} {minimum}'\n"),
+        );
+    }
+    let report = apply(&fixture.target, &Scope::automatic());
+    for (id, ..) in agents {
+        let hook = agent(&report, id).hook.clone().unwrap();
+        assert_eq!(hook.state, ComponentState::Installed, "{id}: {hook:?}");
+    }
 }
 
 #[test]

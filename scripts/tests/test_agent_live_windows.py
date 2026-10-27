@@ -294,17 +294,15 @@ class ShellForms(unittest.TestCase):
 
     def test_a_launcher_sets_its_environment_and_passes_arguments_and_status(self):
         private_directory(self.folder / "bin")
-        key = self.folder / "bin/key"
-        write_private(key, b"fixture-key\n")
         program = launcher(self.folder / "bin/agent", [sys.executable, "-c",
                                                        "import os, sys; print(os.environ['ROUTE'], os.environ.get('UNSET'), "
-                                                       "os.environ['KEY'], sys.argv[1:]); sys.exit(7)"],
-                           environment={"ROUTE": "a b"}, unset=["UNSET"], file_variables=[("KEY", key)])
+                                                       "sys.argv[1:]); sys.exit(7)"],
+                           environment={"ROUTE": "a b"}, unset=["UNSET"])
         self.assertEqual(program.suffix, ".cmd")
         ran = subprocess.run([str(program), "one", "two words"], capture_output=True, timeout=60,
                              env={**os.environ, "UNSET": "operator value"})
         self.assertEqual(ran.returncode, 7, ran.stderr)
-        self.assertEqual(ran.stdout.decode().strip(), "a b None fixture-key " + str(["one", "two words"]))
+        self.assertEqual(ran.stdout.decode().strip(), "a b None " + str(["one", "two words"]))
 
     def test_a_launcher_refuses_what_cmd_would_reinterpret(self):
         private_directory(self.folder / "bin")

@@ -24,7 +24,7 @@
       "lines": 126,
       "expect": 35
     },
-    "digit-shortcuts.spec.ts::⌘n selects a device, ⌥n an agent, ⌃n nothing, and holding ⌘ or ⌥ shows the numbers without moving anything": {
+    "digit-shortcuts.spec.ts::⌥⌘n selects a device, ⌥n an agent, ⌃n nothing, and holding ⌥⌘ or ⌥ shows the numbers without moving anything": {
       "lines": 173,
       "expect": 39
     },

@@ -2261,6 +2261,14 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
     runAgentCommand,
 
+    /** A tab of the drawn Agent areas, chosen as a click on it chooses it (⌘n). */
+    selectAgentTab(tabId: string) {
+      const frame = areaFrame("agent");
+      if (!frame) return diagnostic("select_tab: no Agent areas are drawn");
+      if (frame.remote) return this.focusTab(tabId);
+      agentLayout({ action: "focus", tab_id: tabId });
+    },
+
     focusTab(tabId: string) {
       const frame = areaFrame("agent");
       if (frame?.layout.drafts?.includes(tabId)) return agentLayout({ action: "focus", tab_id: tabId });
