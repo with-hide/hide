@@ -1390,7 +1390,7 @@ Done work not yet in main carries `머지 남음` (a pull request) or `합치기
 How long a node took and how long a decision held it come only from its events (`24분`, `판단 7분`), and a node with no event that moved it shows no time (B28).
 `기준 n/m` counts the ✓ lines alone, with `⤳k` beside it for the skipped ones, though the core's `criteria_met` holds both; a mission from before finish lines shows its old one-sentence criterion instead and no count (B23).
 A card a later node's defect reopened carries `↻n` in red, counting the reopenings, and a card the last replan changed carries `✎` with its reason on hover; the attempts are the panel's (B16, B36).
-A node checked by other agents carries a strip under its card, one row per checker with its agent's mark, the model and effort it runs, and its state (`✓ 통과`, `✕ 실패`, `리뷰 중`, `리뷰 대기`), and a rule line when several decide (`3명 중 과반 통과 · 1/3 통과`); edges to later nodes leave from under the strip (B29).
+A node checked by other agents carries a strip under its card, one row per checker with its agent's mark, the model and effort its own pane was started with (the launch Hide recorded for the checker's `pane_id` and `machine` once the core bound it, the plan's until then), and its state (`✓ 통과`, `✕ 실패`, `리뷰 중`, `리뷰 대기`), and a rule line when several decide (`3명 중 과반 통과 · 1/3 통과`); edges to later nodes leave from under the strip (B29).
 A defect a later node found is a red dashed edge from that node back to the one it reopened, until the defect's line passes (B21).
 A map wider than the slot is shrunk to the slot's width down to 60 %, below which the map scrolls sideways so a card stays readable.
 

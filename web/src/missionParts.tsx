@@ -6,7 +6,7 @@ import { PrMark } from "./components/pr-mark";
 import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
-import { checkerState, nodeTimes, shortCommit, type NodeLook, type NodeResult } from "./missions";
+import { checkerState, checkerWords, nodeTimes, shortCommit, type NodeLook, type NodeResult } from "./missions";
 import { allAgents, agentsByPane } from "./paneAgents";
 import type { Mission, MissionChecker, MissionEvent, MissionNode } from "./snapshot";
 import { useShellStore } from "./store";
@@ -82,10 +82,10 @@ export function useNodeTimes(mission: Mission, node: MissionNode, events: Missio
 const CHECKER_TONE = { pass: "text-muted-foreground", fail: "text-mission-failed", running: "text-mission-working", waiting: "text-muted-foreground" } as const;
 
 /** One checker: its agent's face, the model and effort it runs, and where its check is. */
-export function CheckerRow({ kind, checker }: { kind: "review" | "verify"; checker: MissionChecker }) {
+export function CheckerRow({ mission, kind, checker }: { mission: Mission; kind: "review" | "verify"; checker: MissionChecker }) {
   const { t } = useInterfaceTranslation();
   const state = checkerState(checker);
-  const words = checkerWords(checker);
+  const words = useShellStore((s) => checkerWords(s.rest, mission, checker));
   const status = state === "pass" || state === "fail" ? t(`mission.checker.${state}`) : t(`mission.checker.${state}.${kind}`);
   return (
     <span className="flex min-w-0 items-center gap-xs" data-node-checker={checker.worker.agent} data-checker-state={state}>
@@ -97,11 +97,5 @@ export function CheckerRow({ kind, checker }: { kind: "review" | "verify"; check
       </span>
     </span>
   );
-}
-
-/** A checker's model and effort as the plan named them, else its agent with its effort (`codex·high`). */
-function checkerWords(checker: MissionChecker): string {
-  const { agent, model, effort } = checker.worker;
-  return [model ?? agent, effort].filter(Boolean).join("·");
 }
 

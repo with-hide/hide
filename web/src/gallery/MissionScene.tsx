@@ -47,6 +47,8 @@ const astra = (effort: string | null) => ({ agent: "codex", model: "Astra", effo
 const sonnet = { agent: "claude", model: "Sonnet", effort: "low", effort_auto: false };
 /** The screen node's pane, whose recorded launch runs another model than the plan named (the card shows the pane's). */
 const SCREEN_PANE = "w1:p7";
+/** The pane of the reviewer the core bound in the running state, whose recorded launch the strip shows. */
+const REVIEW_PANE = "w1:p8";
 /** The pane of the worker the core raised in the decision state. */
 const FIX_PANE = "w1:p5";
 
@@ -121,7 +123,7 @@ function plan(state: string, now: number): MissionNode[] {
     node("fix-1490", `이슈 ${no(1490)} 수정`, {
       worker: astra("medium"), pr: 1505, stage: 3, change: `${no(1483)}은 ${no(1490)}과 같은 원인이라 합침`,
       ...(stack ? { ...done(40, 9), pr_state: "mergeable" as const } : decision ? { status: "failed" as const, started_at_unix_ms: ago(30), pr_state: "failed" as const, attempts: 2, line: "CI 실패 · 시도 2/2" } : { ...review(30), pr_state: "pending" as const }),
-      ...finish(own(1, "검색어를 지우면 처음 목록으로 돌아간다"), line("check", "check", "pass"), line("review", "review", stack ? "pass" : "open", { rule: "all", checkers: [checker(opus("high"), "pass", "agent-21"), checker(sonnet, stack ? "pass" : "open", stack || decision ? undefined : "agent-22")] }), ci(decision ? "fail" : "pass")),
+      ...finish(own(1, "검색어를 지우면 처음 목록으로 돌아간다"), line("check", "check", "pass"), line("review", "review", stack ? "pass" : "open", { rule: "all", checkers: [checker(opus("high"), "pass", "agent-21"), { ...checker(sonnet, stack ? "pass" : "open", stack || decision ? undefined : "agent-22"), ...(stack || decision ? {} : { pane_id: REVIEW_PANE }) }] }), ci(decision ? "fail" : "pass")),
     }),
     node("api", "API 추가", { worker: astra("high"), ...done(40, 17), pr: 1503, pr_state: state === "no-conductor" ? "merged" : stack ? "mergeable" : "merged", stage: 4, ...finish(own(1, "목록 API가 페이지를 나눠 준다"), ci("pass")) }),
     node("fix-1487", `${no(1487)} 수정`, {
@@ -211,7 +213,7 @@ function scene(shown: string, now: number): { mission: Mission; rest: SnapshotRe
       { id: "pi", label: "Pi", availability: "available", enabled: true },
       { id: "grok", label: "Grok", availability: "not_installed", enabled: false },
     ] } }], workspaces: [] },
-    overview_graph: { available: true, limit: 2000, retained_count: 0, truncated: false, retention_ms: 86400000, letters: [], sessions: [{ device_id: "local", pane_id: SCREEN_PANE, session_digest: "scene-screen", launch_model: "Sol", launch_effort: null }] },
+    overview_graph: { available: true, limit: 2000, retained_count: 0, truncated: false, retention_ms: 86400000, letters: [], sessions: [{ device_id: "local", pane_id: SCREEN_PANE, session_digest: "scene-screen", launch_model: "Sol", launch_effort: null }, { device_id: "local", pane_id: REVIEW_PANE, session_digest: "scene-review", launch_model: "Sonnet 5.5", launch_effort: "medium" }] },
     status: { remote: [], background_ai: { enabled: true, providers: [
       { agent: "claude-code", state: "ready", models: ["Opus 5.5", "Sonnet 5.5", "Haiku 5.5"] },
       { agent: "codex", state: "ready", models: ["GPT-6-Astra", "GPT-5.6-Sol"] },

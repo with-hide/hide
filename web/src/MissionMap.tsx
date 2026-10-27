@@ -369,7 +369,7 @@ function NodeCard({ mission, node, selected, dimmed, onSelect, events, end }: { 
           ) : null}
         </span>
       ) : null}
-      {checks.length > 0 ? <CheckerStrip lines={checks} /> : null}
+      {checks.length > 0 ? <CheckerStrip mission={mission} lines={checks} /> : null}
     </button>
   );
 }
@@ -447,13 +447,13 @@ function Badges({ mission, node }: { mission: Mission; node: MissionNode }) {
  * face, its model and effort, and where its check is, and the rule when
  * several decide. A node's own checks are not here; they are not lines.
  */
-function CheckerStrip({ lines }: { lines: MissionCriterion[] }) {
+function CheckerStrip({ mission, lines }: { mission: Mission; lines: MissionCriterion[] }) {
   const { t } = useInterfaceTranslation();
   return (
     <span role="group" aria-label={t("mission.checkers")} className="-mx-sm mt-xxs flex min-w-0 flex-col gap-xxs rounded-b-md border-t border-border bg-muted/40 px-sm py-xxs text-caption" data-node-checkers={lines.map((line) => line.kind).join(" ")}>
       {lines.map((line) => (
         <span key={line.key} className="flex min-w-0 flex-col gap-xxs" data-node-check={line.kind}>
-          {(line.checkers ?? []).map((checker, index) => <CheckerRow key={index} kind={line.kind as "review" | "verify"} checker={checker} />)}
+          {(line.checkers ?? []).map((checker, index) => <CheckerRow key={index} mission={mission} kind={line.kind as "review" | "verify"} checker={checker} />)}
           {(line.checkers?.length ?? 0) > 1 ? (
             <span className="pl-lg text-muted-foreground" data-node-check-rule={line.rule ?? "all"}>
               {t(line.rule === "majority" ? "mission.rule.majority" : "mission.rule.all", { count: line.checkers!.length })}

@@ -94,9 +94,26 @@ export function nodeLine(node: MissionNode, t: TFunction<"translation">): string
  * no pane, the pane was not started by Hide or the launch named no model.
  */
 export function launchModelOf(rest: SnapshotRest | null | undefined, mission: Mission, node: MissionNode): string | null {
-  if (!node.pane_id) return null;
-  const device = node.machine ?? mission.device_id;
-  return rest?.overview_graph?.sessions.find((session) => session.device_id === device && session.pane_id === node.pane_id)?.launch_model ?? null;
+  return launchOf(rest, mission, node.pane_id, node.machine)?.model ?? null;
+}
+
+/** The model and effort Hide recorded launching in a pane (`overview_graph.sessions`), on its machine or the mission's. */
+function launchOf(rest: SnapshotRest | null | undefined, mission: Mission, paneId: string | null | undefined, machine: string | null | undefined): { model: string | null; effort: string | null } | null {
+  if (!paneId) return null;
+  const device = machine ?? mission.device_id;
+  const session = rest?.overview_graph?.sessions.find((one) => one.device_id === device && one.pane_id === paneId);
+  return session ? { model: session.launch_model ?? null, effort: session.launch_effort ?? null } : null;
+}
+
+/**
+ * A checker as its strip row names it (B29): the model and effort its pane
+ * was started with, read from the checker's own pane once the core bound it,
+ * else what the plan asked; the agent's name only when neither names a model.
+ */
+export function checkerWords(rest: SnapshotRest | null | undefined, mission: Mission, checker: MissionChecker): string {
+  const launch = launchOf(rest, mission, checker.pane_id, checker.machine);
+  const { agent, model, effort } = checker.worker;
+  return [launch?.model ?? model ?? agent, launch?.effort ?? effort].filter(Boolean).join("·");
 }
 
 /**

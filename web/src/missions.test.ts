@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { cardLine, checkerState, chipWords, conductedBy, criteriaTally, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, launchModelOf, missionCounts, nodeLine, nodeMark, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, workerWords } from "./missions";
+import { cardLine, checkerState, chipWords, conductedBy, checkerWords, criteriaTally, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, launchModelOf, missionCounts, nodeLine, nodeMark, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, workerWords } from "./missions";
 import type { AgentRow, Mission, MissionCriterion, MissionEvent, MissionNode, SnapshotRest } from "./snapshot";
 
 // What the map and the Conductor row read from a mission (PRD
@@ -270,6 +270,21 @@ describe("a node's finish lines (PRD mission-map-git-criteria B6, B12, B23, B28,
 
   it("says a checker the Conductor bound is at work, and one not bound yet waits", () => {
     expect([checkerState(checker("codex")), checkerState(checker("codex", "open", "agent-3")), checkerState(checker("codex", "pass", "agent-3")), checkerState(checker("codex", "fail", "agent-3"))]).toEqual(["waiting", "running", "pass", "fail"]);
+  });
+
+  it("names a checker by the model and effort its own pane was started with once the core bound it, else by what the plan asked (B29)", () => {
+    const m = mission("m", { device_id: "mac" });
+    const rest = { overview_graph: { sessions: [
+      { device_id: "mac", pane_id: "w1:p4", session_digest: "a", launch_model: "gpt-6", launch_effort: "xhigh" },
+      { device_id: "mini", pane_id: "w2:p1", session_digest: "b", launch_model: "opus-5", launch_effort: null },
+    ] } } as unknown as SnapshotRest;
+    const planned = { worker: { agent: "codex", model: null, effort: "high" }, state: "open" as const };
+    expect(checkerWords(rest, m, planned)).toBe("codex·high");
+    expect(checkerWords(rest, m, { ...planned, agent_id: "agent-3", pane_id: "w1:p4" })).toBe("gpt-6·xhigh");
+    // On another machine its pane is read there; a launch with no effort keeps the plan's.
+    expect(checkerWords(rest, m, { ...planned, agent_id: "agent-4", pane_id: "w2:p1", machine: "mini" })).toBe("opus-5·high");
+    // A pane Hide recorded no launch for keeps the plan's words.
+    expect(checkerWords(rest, m, { ...planned, agent_id: "agent-5", pane_id: "w1:p9" })).toBe("codex·high");
   });
 });
 

@@ -137,7 +137,7 @@ function Now({ mission, node }: { mission: Mission; node: MissionNode }) {
       {line ? <p className={cn("min-w-0 break-words", line.attention && "text-mission-failed")}>{line.text}</p> : null}
       {checks.map((check) => (
         <div key={check.key} className="flex min-w-0 flex-col gap-xxs text-caption" data-panel-checkers={check.kind}>
-          {(check.checkers ?? []).map((checker, index) => <CheckerRow key={index} kind={check.kind as "review" | "verify"} checker={checker} />)}
+          {(check.checkers ?? []).map((checker, index) => <CheckerRow key={index} mission={mission} kind={check.kind as "review" | "verify"} checker={checker} />)}
         </div>
       ))}
     </Part>
