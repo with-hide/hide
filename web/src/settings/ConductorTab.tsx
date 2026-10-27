@@ -14,7 +14,7 @@ import { ToggleGroup, ToggleGroupItem } from "../components/ui/toggle-group";
 import { Hint } from "../components/ui/tooltip";
 import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
-import { CANDIDATE_LIMIT, CAP_CHOICES, CHECK_COUNT_CHOICES, DEFAULT_CHECKERS, DEFAULT_CONDUCTOR, addCandidate, candidateAgent, effortsOf, replaceCandidate, replaceCheck, type CheckKind } from "../conductorSettings";
+import { CANDIDATE_LIMIT, CAP_CHOICES, CHECK_COUNT_CHOICES, DEFAULT_CHECKERS, DEFAULT_CONDUCTOR, addCandidate, candidateAgent, effortsOf, replaceCandidate, replaceCheck, sameCheckers, type CheckKind, type CheckerDefaults } from "../conductorSettings";
 import type { BackgroundAi, ConductorCandidate, ConductorCheckDefault, ConductorSettings, MissionCheckRule, MissionScope } from "../snapshot";
 import { useShellStore } from "../store";
 import { coreErrorText } from "../coreError";
@@ -35,7 +35,7 @@ const ANY_AGENT = "__conductor";
 export function ConductorTab({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const settings = useShellStore((s) => s.rest?.ui_state?.conductor_settings) ?? DEFAULT_CONDUCTOR;
-  const checkers = settings.checkers ?? DEFAULT_CHECKERS;
+  const kept = settings.checkers ?? DEFAULT_CHECKERS;
   const [sentAt, setSentAt] = useState<number | null>(null);
   const error = useErrorSince(sentAt, ["conductor_settings."]);
   const live = useShellStore((s) => s.connection === "live");
@@ -44,6 +44,20 @@ export function ConductorTab({ actions }: { actions: Actions }) {
   const send = (patch: Partial<ConductorSettings>) => {
     setSentAt(Date.now());
     actions.setConductorSettings(patch);
+  };
+  // The core replaces the check defaults whole, so an edit made before the
+  // last one came back builds on that one, not on the snapshot: the value
+  // sent waits here until the snapshot carries it, the core refuses it, or
+  // the connection drops (B36).
+  const [pending, setPending] = useState<CheckerDefaults | null>(null);
+  useEffect(() => {
+    if (pending && (sameCheckers(pending, kept) || error || !live)) setPending(null);
+  }, [pending, kept, error, live]);
+  const checkers = pending ?? kept;
+  const sendCheck = (kind: CheckKind, next: ConductorCheckDefault) => {
+    const value = replaceCheck(checkers, kind, next);
+    setPending(value);
+    send({ checkers: value });
   };
   return (
     <div data-settings-conductor="true">
@@ -98,7 +112,7 @@ export function ConductorTab({ actions }: { actions: Actions }) {
         ))}
       </Group>
       {(["review", "verify"] as const).map((kind) => (
-        <CheckGroup key={kind} kind={kind} check={checkers[kind]} last={kind === "verify"} onChange={(next) => send({ checkers: replaceCheck(checkers, kind, next) })} />
+        <CheckGroup key={kind} kind={kind} check={checkers[kind]} last={kind === "verify"} onChange={(next) => sendCheck(kind, next)} />
       ))}
     </div>
   );

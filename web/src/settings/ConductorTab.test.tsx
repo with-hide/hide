@@ -42,12 +42,17 @@ async function mount(settings: ConductorSettings) {
   const language = clientI18n.language;
   await act(async () => {
     await clientI18n.changeLanguage("en");
-    useShellStore.setState({ connection: "offline", rest: { ui_state: { conductor_settings: settings } } } as never);
+    useShellStore.setState({ connection: "live", rest: { ui_state: { conductor_settings: settings } } } as never);
     root.render(<TooltipProvider><ConductorTab actions={actions} /></TooltipProvider>);
   });
   const group = (kind: string) => container.querySelector<HTMLElement>(`[data-conductor-check="${kind}"]`)!;
   return {
-    events,
+    // Only the settings it sends; the page also asks for the start panel's model lists while it shows.
+    get sent() { return events.filter((event) => event.kind === "conductor_settings_set").map((event) => event.payload); },
+    /** The core's answer arriving: the value it kept, or a refusal. */
+    async answer(rest: { checkers?: ConductorSettings["checkers"]; error?: string }) {
+      await act(async () => useShellStore.setState((shell) => ({ rest: { ...shell.rest, ui_state: { conductor_settings: { ...settings, ...(rest.checkers ? { checkers: rest.checkers } : {}) } }, status: rest.error ? { last_error: { kind: rest.error, message: "", retryable: false, occurred_at: Date.now() + 1 } } : shell.rest?.status } }) as never));
+    },
     group,
     fields: (kind: string) => [...group(kind).querySelectorAll<HTMLElement>("[data-check-field]")].map((field) => field.dataset.checkField),
     async pick(kind: string, field: string, option: string) {
@@ -88,17 +93,40 @@ it("shows who checks, the agent and the other-company preference for the Conduct
   } finally { await chosen.unmount(); }
 });
 
-it("sends both defaults whole when one field of one changes", async () => {
+it("sends both defaults whole, each edit built on the ones the core has not answered yet, so none is lost (B36)", async () => {
   const tab = await mount(DEFAULT_CONDUCTOR);
+  const several = { ...DEFAULT_CHECKERS.verify, mode: "many" as const };
+  const first = { review: DEFAULT_CHECKERS.review, verify: several };
+  const second = { review: { ...DEFAULT_CHECKERS.review, agent: "codex" }, verify: several };
+  const third = { review: { ...DEFAULT_CHECKERS.review, agent: "codex", other_vendor: false }, verify: several };
   try {
+    // Three edits before any snapshot comes back.
     await tab.pick("verify", "mode", "Several");
     await tab.pick("review", "agent", "Codex");
     await act(async () => tab.group("review").querySelector<HTMLElement>('[data-check-field="other_vendor"]')!.click());
-    expect(tab.events.map((event) => event.payload)).toEqual([
-      { checkers: { review: DEFAULT_CHECKERS.review, verify: { ...DEFAULT_CHECKERS.verify, mode: "many" } } },
-      { checkers: { review: { ...DEFAULT_CHECKERS.review, agent: "codex" }, verify: DEFAULT_CHECKERS.verify } },
-      { checkers: { review: { ...DEFAULT_CHECKERS.review, other_vendor: false }, verify: DEFAULT_CHECKERS.verify } },
-    ]);
-    expect(tab.events.every((event) => event.kind === "conductor_settings_set")).toBe(true);
+    expect(tab.sent).toEqual([{ checkers: first }, { checkers: second }, { checkers: third }]);
+    // The first answer arriving late does not take back the later edits.
+    await tab.answer({ checkers: first });
+    expect(tab.group("review").querySelector('[data-check-field="agent"]')?.textContent).toBe("Codex");
+    expect(tab.group("review").querySelector('[data-check-field="other_vendor"]')?.getAttribute("aria-checked")).toBe("false");
+    expect(tab.group("verify").getAttribute("data-check-mode")).toBe("many");
+    // A fourth edit still builds on all three.
+    await tab.pick("verify", "count", "3");
+    expect(tab.sent.at(-1)).toEqual({ checkers: { ...third, verify: { ...several, count: 3 } } });
+    await tab.answer({ checkers: { ...third, verify: { ...several, count: 3 } } });
+    expect(tab.group("verify").querySelector('[data-check-field="count"]')?.textContent).toBe("3");
+  } finally { await tab.unmount(); }
+});
+
+it("goes back to what the core keeps when it refuses an edit", async () => {
+  const tab = await mount(DEFAULT_CONDUCTOR);
+  try {
+    await tab.pick("review", "mode", "None");
+    expect(tab.group("review").getAttribute("data-check-mode")).toBe("none");
+    await tab.answer({ error: "conductor_settings.check_count_out_of_range" });
+    expect(tab.group("review").getAttribute("data-check-mode")).toBe("conductor");
+    // The next edit builds on what the core keeps.
+    await tab.pick("verify", "mode", "Always one");
+    expect(tab.sent.at(-1)).toEqual({ checkers: { review: DEFAULT_CHECKERS.review, verify: { ...DEFAULT_CHECKERS.verify, mode: "one" } } });
   } finally { await tab.unmount(); }
 });

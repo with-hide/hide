@@ -63,3 +63,10 @@ export function replaceCheck(checkers: CheckerDefaults, kind: CheckKind, next: C
   const fresh = next.agent !== before.agent ? { ...next, model: null, effort: null } : next;
   return { ...checkers, [kind]: fresh };
 }
+
+/** Whether two check defaults say the same, an absent model or effort reading as none, as the core keeps them. */
+export function sameCheckers(a: CheckerDefaults, b: CheckerDefaults): boolean {
+  const same = (x: ConductorCheckDefault, y: ConductorCheckDefault) =>
+    x.mode === y.mode && x.rule === y.rule && x.count === y.count && (x.agent ?? null) === (y.agent ?? null) && (x.model ?? null) === (y.model ?? null) && (x.effort ?? null) === (y.effort ?? null) && x.other_vendor === y.other_vendor;
+  return same(a.review, b.review) && same(a.verify, b.verify);
+}
