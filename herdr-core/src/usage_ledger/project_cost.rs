@@ -3,7 +3,7 @@
 //! whose session ran inside one of the project's checkouts, priced the way a
 //! day is (`prices::cost`). The daily totals and the Overview's Usage are
 //! untouched; a call outside every checkout counts for no project.
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use hide_session::usage::Event;
 use jiff::{ToSpan, civil::Date};
@@ -92,19 +92,18 @@ pub struct AgentCost {
     pub micro_usd: u64,
 }
 
-/// One recorded call as the store hands it back: its agent, its assigned
-/// day and the call.
-pub struct Call {
-    pub agent: String,
-    pub day: String,
-    pub event: Event,
-}
-
 /// The first day of the seven that end on `today`.
 pub fn first_day(today: Date) -> Result<Date, &'static str> {
     today
         .checked_sub((DAYS - 1).days())
         .map_err(|_| "usage_date_invalid")
+}
+
+/// The oldest call time a preparation at `now` reads. A day past the seven
+/// reaches back eight, so a time zone change cannot drop the first day's
+/// earliest calls; a call older than this is in no project's cost.
+pub fn since(now: u64) -> u64 {
+    now.saturating_sub((DAYS as u64 + 1) * super::DAY_MS)
 }
 
 #[derive(Default)]
@@ -115,41 +114,58 @@ struct Groups {
     sessions: BTreeMap<(String, String, String), Totals>,
 }
 
-/// Every project's cost over the seven days ending `today`. `limited` says
-/// the store held more calls than were read.
-pub fn prepare(
-    calls: &[Call],
-    limited: bool,
-    projects: &[ProjectRoots],
-    table: Option<&Table>,
-    today: Date,
-    now: u64,
-) -> Result<Vec<ProjectCost>, &'static str> {
-    let first = first_day(today)?;
-    let first_text = first.to_string();
-    let mut groups: BTreeMap<&str, Groups> = BTreeMap::new();
-    for call in calls {
-        if call.day < first_text {
-            continue;
+/// Every project's cost over the seven days ending `today`, prepared from
+/// calls as the store reads them: each call goes into its project's group
+/// totals and is dropped, so what is held grows with the (agent, day,
+/// model) and (agent, session, model) groups, not with the calls.
+pub struct Preparation<'a> {
+    projects: &'a [ProjectRoots],
+    first: Date,
+    first_text: String,
+    groups: BTreeMap<&'a str, Groups>,
+    /// Each session folder's project, decided once: a session's calls
+    /// share its folder, so this grows with the sessions as `groups` does.
+    owners: HashMap<String, Option<&'a str>>,
+}
+
+impl<'a> Preparation<'a> {
+    pub fn new(projects: &'a [ProjectRoots], today: Date) -> Result<Self, &'static str> {
+        let first = first_day(today)?;
+        Ok(Self {
+            projects,
+            first,
+            first_text: first.to_string(),
+            groups: BTreeMap::new(),
+            owners: HashMap::new(),
+        })
+    }
+
+    /// One call of `agent` the store assigned to `day`.
+    pub fn add(&mut self, agent: &str, day: &str, event: &Event) -> Result<(), &'static str> {
+        if day < self.first_text.as_str() {
+            return Ok(());
         }
-        let Some(cwd) = call.event.cwd.as_deref() else {
-            continue;
+        let Some(cwd) = event.cwd.as_deref() else {
+            return Ok(());
         };
-        let Some(project) = owner(projects, cwd) else {
-            continue;
+        let project = match self.owners.get(cwd) {
+            Some(project) => *project,
+            None => {
+                let project = owner(self.projects, cwd);
+                self.owners.insert(cwd.to_owned(), project);
+                project
+            }
         };
-        let event = &call.event;
-        let into = groups.entry(project).or_default();
+        let Some(project) = project else {
+            return Ok(());
+        };
+        let into = self.groups.entry(project).or_default();
         for totals in [
             into.days
-                .entry((call.agent.clone(), call.day.clone(), event.model.clone()))
+                .entry((agent.to_owned(), day.to_owned(), event.model.clone()))
                 .or_default(),
             into.sessions
-                .entry((
-                    call.agent.clone(),
-                    event.session.clone(),
-                    event.model.clone(),
-                ))
+                .entry((agent.to_owned(), event.session.clone(), event.model.clone()))
                 .or_default(),
         ] {
             totals.add_call(
@@ -159,88 +175,107 @@ pub fn prepare(
                 event.provider.as_deref(),
             )?;
         }
+        Ok(())
     }
-    projects
-        .iter()
-        .filter_map(|project| {
-            groups
-                .get(project.workspace_id.as_str())
-                .map(|groups| (project, groups))
-        })
-        .map(|(project, groups)| {
-            let mut cost = ProjectCost {
-                workspace_id: project.workspace_id.clone(),
-                limited,
-                ..ProjectCost::default()
-            };
-            let mut days: BTreeMap<String, u64> = (0..DAYS)
-                .map(|offset| {
-                    first
-                        .checked_add(offset.days())
-                        .map(|date| (date.to_string(), 0))
-                        .map_err(|_| "usage_date_invalid")
-                })
-                .collect::<Result<_, _>>()?;
-            let mut models: BTreeMap<(String, String), u64> = BTreeMap::new();
-            let mut agents: BTreeMap<String, u64> = BTreeMap::new();
-            let mut unpriced: BTreeSet<String> = BTreeSet::new();
-            for ((agent, day, model), totals) in &groups.days {
-                let priced = price(agent, day, model, totals, table, now)?;
-                cost.partial |= priced.unpriced && priced.micro_usd > 0;
-                cost.waiting |= priced.waiting;
-                cost.stale |= priced.stale;
-                if priced.unpriced {
-                    unpriced.insert(agent.clone());
+
+    /// The projects' costs from the calls added. `limited` says the store
+    /// held more calls than were read.
+    pub fn finish(
+        self,
+        limited: bool,
+        table: Option<&Table>,
+        now: u64,
+    ) -> Result<Vec<ProjectCost>, &'static str> {
+        let Self {
+            projects,
+            first,
+            first_text,
+            groups,
+            ..
+        } = self;
+        projects
+            .iter()
+            .filter_map(|project| {
+                groups
+                    .get(project.workspace_id.as_str())
+                    .map(|groups| (project, groups))
+            })
+            .map(|(project, groups)| {
+                let mut cost = ProjectCost {
+                    workspace_id: project.workspace_id.clone(),
+                    limited,
+                    ..ProjectCost::default()
+                };
+                let mut days: BTreeMap<String, u64> = (0..DAYS)
+                    .map(|offset| {
+                        first
+                            .checked_add(offset.days())
+                            .map(|date| (date.to_string(), 0))
+                            .map_err(|_| "usage_date_invalid")
+                    })
+                    .collect::<Result<_, _>>()?;
+                let mut models: BTreeMap<(String, String), u64> = BTreeMap::new();
+                let mut agents: BTreeMap<String, u64> = BTreeMap::new();
+                let mut unpriced: BTreeSet<String> = BTreeSet::new();
+                for ((agent, day, model), totals) in &groups.days {
+                    let priced = price(agent, day, model, totals, table, now)?;
+                    cost.partial |= priced.unpriced && priced.micro_usd > 0;
+                    cost.waiting |= priced.waiting;
+                    cost.stale |= priced.stale;
+                    if priced.unpriced {
+                        unpriced.insert(agent.clone());
+                    }
+                    if priced.micro_usd == 0 {
+                        continue;
+                    }
+                    add(&mut cost.micro_usd, priced.micro_usd)?;
+                    add(days.entry(day.clone()).or_default(), priced.micro_usd)?;
+                    add(
+                        models.entry((agent.clone(), model.clone())).or_default(),
+                        priced.micro_usd,
+                    )?;
+                    add(agents.entry(agent.clone()).or_default(), priced.micro_usd)?;
                 }
-                if priced.micro_usd == 0 {
-                    continue;
+                let mut sessions: BTreeMap<(String, String), u64> = BTreeMap::new();
+                for ((agent, session, model), totals) in &groups.sessions {
+                    let priced = price(agent, &first_text, model, totals, table, now)?;
+                    add(
+                        sessions
+                            .entry((agent.clone(), session.clone()))
+                            .or_default(),
+                        priced.micro_usd,
+                    )?;
                 }
-                add(&mut cost.micro_usd, priced.micro_usd)?;
-                add(days.entry(day.clone()).or_default(), priced.micro_usd)?;
-                add(
-                    models.entry((agent.clone(), model.clone())).or_default(),
-                    priced.micro_usd,
-                )?;
-                add(agents.entry(agent.clone()).or_default(), priced.micro_usd)?;
-            }
-            let mut sessions: BTreeMap<(String, String), u64> = BTreeMap::new();
-            for ((agent, session, model), totals) in &groups.sessions {
-                let priced = price(agent, &first_text, model, totals, table, now)?;
-                add(
-                    sessions
-                        .entry((agent.clone(), session.clone()))
-                        .or_default(),
-                    priced.micro_usd,
-                )?;
-            }
-            cost.days = days
-                .into_iter()
-                .map(|(date, micro_usd)| DayCost { date, micro_usd })
-                .collect();
-            cost.models = largest(models, MODEL_LIMIT, |(agent, model), micro_usd| ModelCost {
-                agent,
-                model: (model != hide_session::usage::UNNAMED_MODEL).then_some(model),
-                micro_usd,
-            });
-            cost.sessions = largest(sessions, SESSION_LIMIT, |(agent, session_id), micro_usd| {
-                SessionCost {
+                cost.days = days
+                    .into_iter()
+                    .map(|(date, micro_usd)| DayCost { date, micro_usd })
+                    .collect();
+                cost.models = largest(models, MODEL_LIMIT, |(agent, model), micro_usd| ModelCost {
                     agent,
-                    session_id,
+                    model: (model != hide_session::usage::UNNAMED_MODEL).then_some(model),
                     micro_usd,
-                }
-            });
-            let agents_priced: BTreeSet<String> = agents.keys().cloned().collect();
-            cost.agents = largest(agents, usize::MAX, |agent, micro_usd| AgentCost {
-                agent,
-                micro_usd,
-            });
-            // An agent with a priced amount and an unpriced call leaves the
-            // total short, as a partly priced call does.
-            cost.partial |= unpriced.iter().any(|agent| agents_priced.contains(agent));
-            cost.unpriced_agents = unpriced.into_iter().collect();
-            Ok(cost)
-        })
-        .collect()
+                });
+                cost.sessions =
+                    largest(sessions, SESSION_LIMIT, |(agent, session_id), micro_usd| {
+                        SessionCost {
+                            agent,
+                            session_id,
+                            micro_usd,
+                        }
+                    });
+                let agents_priced: BTreeSet<String> = agents.keys().cloned().collect();
+                cost.agents = largest(agents, usize::MAX, |agent, micro_usd| AgentCost {
+                    agent,
+                    micro_usd,
+                });
+                // An agent with a priced amount and an unpriced call leaves the
+                // total short, as a partly priced call does.
+                cost.partial |= unpriced.iter().any(|agent| agents_priced.contains(agent));
+                cost.unpriced_agents = unpriced.into_iter().collect();
+                Ok(cost)
+            })
+            .collect()
+    }
 }
 
 /// The project whose deepest checkout holds `cwd`.

@@ -1,6 +1,27 @@
 use super::*;
 use hide_session::usage::Tokens;
 
+struct Call {
+    agent: String,
+    day: String,
+    event: Event,
+}
+
+fn prepare(
+    calls: &[Call],
+    limited: bool,
+    projects: &[ProjectRoots],
+    table: Option<&Table>,
+    today: Date,
+    now: u64,
+) -> Result<Vec<ProjectCost>, &'static str> {
+    let mut preparation = Preparation::new(projects, today)?;
+    for call in calls {
+        preparation.add(&call.agent, &call.day, &call.event)?;
+    }
+    preparation.finish(limited, table, now)
+}
+
 fn call(
     agent: &str,
     day: &str,

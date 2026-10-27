@@ -22,13 +22,23 @@ fn subtract(target: &mut Tokens, old: &Tokens) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// What a later view of a stored call did to it.
+pub(super) enum Merged {
+    /// It held no new maximum: nothing was written.
+    Same,
+    /// The call and its day's totals now hold the new maxima.
+    Rewrote,
+}
+
+/// `None` when `next` is not a later view of `old` but another call under
+/// the same key.
 pub(super) fn merge(
     tx: &rusqlite::Transaction<'_>,
     device: &str,
     old: &Event,
     next: &Event,
     frozen_at: u64,
-) -> Result<bool, &'static str> {
+) -> Result<Option<Merged>, &'static str> {
     if old.at_ms < frozen_at
         || old.model != next.model
         || old.recorded_cost_micro_usd.is_some()
@@ -36,7 +46,7 @@ pub(super) fn merge(
         || old.incomplete
         || next.incomplete
     {
-        return Ok(false);
+        return Ok(None);
     }
     let mut merged = old.clone();
     for (value, next) in [
@@ -54,7 +64,7 @@ pub(super) fn merge(
     merged.tokens.reasoning = merged.tokens.reasoning.max(next.tokens.reasoning);
     validate(&merged)?;
     if merged == *old {
-        return Ok(true);
+        return Ok(Some(Merged::Same));
     }
     // Read the persisted original day: changing the machine's timezone must
     // not move an already accounted call into another rollup.
@@ -103,5 +113,5 @@ pub(super) fn merge(
         params![device, old.key, encode(&merged)?, fingerprint(&merged)?],
     )
     .map_err(failed)?;
-    Ok(true)
+    Ok(Some(Merged::Rewrote))
 }

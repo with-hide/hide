@@ -43,10 +43,14 @@ impl NodeLink for OwnNode {
 }
 
 fn fixture(home: &std::path::Path, id: &str) -> PathBuf {
+    fixture_at(home, id, jiff::Timestamp::now())
+}
+
+fn fixture_at(home: &std::path::Path, id: &str, at: jiff::Timestamp) -> PathBuf {
     let folder = home.join(hide_session::CLAUDE_SESSIONS);
     std::fs::create_dir_all(&folder).unwrap();
     let path = folder.join(format!("{id}.jsonl"));
-    let line = serde_json::json!({"type":"assistant", "sessionId":"fixture", "requestId":id, "timestamp":jiff::Timestamp::now().to_string(), "message":{"id":id,"model":"fixture-model","content":[{"text":"PRIVATE_BODY_SENTINEL"}],"usage":{"input_tokens":10,"output_tokens":20,"cache_read_input_tokens":900,"cache_creation_input_tokens":30}}});
+    let line = serde_json::json!({"type":"assistant", "sessionId":"fixture", "requestId":id, "timestamp":at.to_string(), "message":{"id":id,"model":"fixture-model","content":[{"text":"PRIVATE_BODY_SENTINEL"}],"usage":{"input_tokens":10,"output_tokens":20,"cache_read_input_tokens":900,"cache_creation_input_tokens":30}}});
     std::fs::write(&path, format!("{line}\n")).unwrap();
     path
 }
@@ -457,6 +461,52 @@ fn the_report_carries_the_named_projects_costs() {
         Arc::ptr_eq(&built, again.projects.built.as_ref().unwrap()),
         "nothing moved, nothing built"
     );
+}
+
+/// Older history read in leaves the projects' costs as built, since no
+/// call they read moved; a call of the last days makes them due again.
+#[test]
+fn only_a_call_the_costs_read_makes_them_due_again() {
+    let home = tempfile::tempdir().unwrap();
+    let node = OwnNode::new(home.path());
+    let mut engine = Engine::open(
+        &home.path().join("ledger.sqlite3"),
+        "physical-device".into(),
+        AiUsageQueue::new(),
+    )
+    .unwrap();
+    finish(&mut engine, &node);
+    let projects = Arc::new(vec![ProjectRoots {
+        workspace_id: "hide".into(),
+        roots: vec!["/work/hide".into()],
+    }]);
+    engine.report(true, &projects);
+    assert!(!engine.costs.dirty);
+    let read_new = |engine: &mut Engine| {
+        let days = engine.store.daily().unwrap().len();
+        for work in &mut engine.agents {
+            work.listed = None;
+        }
+        for _ in 0..60 {
+            engine.step(
+                &node,
+                Activity {
+                    visible: true,
+                    open: true,
+                },
+            );
+        }
+        assert_eq!(engine.store.daily().unwrap().len(), days + 1, "read in");
+    };
+
+    let old = jiff::Timestamp::now() - jiff::SignedDuration::from_hours(20 * 24);
+    fixture_at(home.path(), "old", old);
+    read_new(&mut engine);
+    assert!(!engine.costs.dirty, "a call older than the eight days");
+
+    fixture(home.path(), "new");
+    read_new(&mut engine);
+    assert!(engine.costs.dirty);
 }
 
 /// PRD lane-two-columns B31, B33: a build that fails keeps the last costs,
