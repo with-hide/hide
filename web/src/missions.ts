@@ -327,11 +327,22 @@ export type NodeResult =
 
 export function nodeResult(node: MissionNode): NodeResult | null {
   if (node.pr != null) return { kind: "pr", number: node.pr, state: node.pr_state };
-  if (node.kind === "change") return node.commit ? { kind: "commit", commit: node.commit } : node.branch ? { kind: "branch", branch: node.branch } : null;
+  if (node.kind === "change") {
+    const commit = mainCommit(node);
+    return commit ? { kind: "commit", commit } : node.branch ? { kind: "branch", branch: node.branch } : null;
+  }
   if (node.kind === "verify" && node.verdict) return { kind: "verdict", verdict: node.verdict, checks: node.checks };
   if (!node.line) return null;
   if (node.kind === "research") return node.status === "done" ? { kind: "conclusion", line: node.line } : null;
   return node.status === "done" || node.status === "failed" ? { kind: "verify", line: node.line } : null;
+}
+
+/**
+ * The commit a change has in main (B17): the one Hide read there for the
+ * node's branch, else one the Conductor recorded for a direct change by hand.
+ */
+export function mainCommit(node: MissionNode): string | null {
+  return node.in_main ?? node.commit;
 }
 
 /** A commit as the results show it: its first seven digits. */
@@ -368,10 +379,10 @@ export function nodeLook(mission: Mission, node: MissionNode): NodeLook {
   return tone;
 }
 
-/** A finished change is in main: its pull request merged or its commit recorded there; an outside node is done only once it reached main (B17, B19). */
+/** A finished change is in main: its pull request merged or its commit found or recorded there; an outside node is done only once it reached main (B17, B19). */
 export function nodeLanded(node: MissionNode): boolean {
   if (node.status !== "done") return false;
-  return node.kind === "external" || node.pr_state === "merged" || node.commit != null;
+  return node.kind === "external" || node.pr_state === "merged" || mainCommit(node) != null;
 }
 
 /**

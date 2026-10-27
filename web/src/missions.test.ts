@@ -236,6 +236,19 @@ describe("a card's look (PRD mission-map-git-criteria D-02, B26, B27)", () => {
     expect(landingLeft(m, node("e", { status: "working", pr: 6, pr_state: "mergeable" }))).toBeNull();
     expect(landingLeft(mission("m", { status: "cancelled" }), node("f", { status: "done", delivery: "direct", branch: "f" }))).toBeNull();
   });
+
+  it("draws a branch's commit Hide found in main as → main, before one recorded by hand, and the node is in main with nothing left to join (B17)", () => {
+    const m = mission("m");
+    const joined = node("b", { status: "done", delivery: "direct", branch: "feat/b", in_main: "9f3e2a1c0b7d" });
+    expect(nodeResult(joined)).toEqual({ kind: "commit", commit: "9f3e2a1c0b7d" });
+    expect([nodeLook(m, joined), landingLeft(m, joined)]).toEqual(["landed", null]);
+    // The commit found in main wins over one the Conductor recorded; a recorded one stands alone for a direct change.
+    expect(nodeResult(node("c", { status: "done", delivery: "direct", branch: "feat/c", in_main: "aaaaaaa1", commit: "bbbbbbb2" }))).toEqual({ kind: "commit", commit: "aaaaaaa1" });
+    expect(nodeResult(node("d", { status: "done", delivery: "direct", commit: "c216793eb4a1" }))).toEqual({ kind: "commit", commit: "c216793eb4a1" });
+    // While the read does not stand the branch shows, and joining is left.
+    const waiting = node("e", { status: "done", delivery: "direct", branch: "feat/e" });
+    expect([nodeResult(waiting), landingLeft(m, waiting)]).toEqual([{ kind: "branch", branch: "feat/e" }, "join"]);
+  });
 });
 
 describe("a node's finish lines (PRD mission-map-git-criteria B6, B12, B23, B28, B32)", () => {

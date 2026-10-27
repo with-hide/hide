@@ -20,6 +20,7 @@ import {
   heldQuestion,
   kindWord,
   launchModelOf,
+  mainCommit,
   nodeLook,
   ownCriteria,
   shortCommit,
@@ -174,7 +175,8 @@ function Made({ mission, node }: { mission: Mission; node: MissionNode }) {
       </span>,
     ]);
   }
-  if (node.commit) rows.push(["main", <span key="commit" className="font-mono text-caption" title={node.commit} data-panel-commit={node.commit}>{t("mission.result.main", { commit: shortCommit(node.commit) })}</span>]);
+  const commit = mainCommit(node);
+  if (commit) rows.push(["main", <span key="commit" className="font-mono text-caption" title={commit} data-panel-commit={commit}>{t("mission.result.main", { commit: shortCommit(commit) })}</span>]);
   if (node.kind === "research" && node.status === "done" && node.line) rows.push([t("mission.result.conclusion"), <span key="c" className="break-words" data-panel-conclusion="true">{node.line}</span>]);
   if (node.kind === "verify" && node.verdict) {
     rows.push([
