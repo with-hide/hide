@@ -99,11 +99,24 @@ fn closed_rule(limits: LabelLimits) -> String {
 /// D-54, D-55, D-56): read from the same events in the same call, so finding
 /// them costs no call of its own.
 const IMPROVEMENTS: &str = concat!(
-    "<tool-use>, when present, is Hide's own count of this turn's tool calls, not the agent's words: the files it read, the searches it ran more than once and the calls that failed. A long <latest-exchange> keeps the turn's head and its end, the middle cut where a line says so. ",
+    "<tool-use>, when present, is Hide's own count of this turn's tool calls, not the agent's words: the files it read (n+ is at least n), how many times each search it ran more than once ran, and the calls that failed. A long <latest-exchange> keeps the turn's head and its end, the middle cut where a line says so. ",
     "improvements: at most {count} points where this turn lost time although nothing stayed failed, each {kind,text}. kind is no_doc when a rule or procedure the agent needed was written nowhere it could find, searched_again when it looked up again what it had already found or been told, wrong_guess when it went ahead on a guess and had to undo it, tool_friction when a tool or a setting made it go the long way round. ",
     "text: at most {max} characters naming what was missing and what it cost, such as which rule it had to work out from which files. ",
     "A point is only something a document, a rule or a setting change would have prevented; reading unfamiliar code for the assignment, the assignment's own work and a failure the turn fixed are normal work, not points. An empty list when nothing slowed the agent; never invent a point to fill the list. ",
 );
+
+/// The shape of `improvements` as the schema names it to the provider.
+fn improvements_shape() -> String {
+    let kinds = ImprovementKind::ALL
+        .iter()
+        .map(|kind| serde_json::to_value(kind).expect("a kind is a string"))
+        .filter_map(|kind| kind.as_str().map(str::to_owned))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "an array of 0 to {IMPROVEMENTS_PER_TURN} objects {{\"kind\": one of {kinds}, \"text\": one line of at most {IMPROVEMENT_CHARS} characters}}; [] when nothing slowed the turn"
+    )
+}
 
 fn improvements_rule() -> String {
     IMPROVEMENTS
@@ -213,7 +226,7 @@ fn end_schema(limits: LabelLimits) -> Value {
     json!({
         "type": "object",
         "additionalProperties": false,
-        "required": ["goal", "goal_update", "closed_result", "requests", "line", "end", "work", "improvements"],
+        "required": ["goal", "goal_update", "closed_result", "requests", "line", "end", "work"],
         "properties": {
             "goal": {"type": ["string", "null"], "minLength": MIN_GOAL_CHARS, "maxLength": limits.goal},
             "goal_update": {"type": "string", "enum": ["keep", "refine", "replace"]},
@@ -229,10 +242,11 @@ fn end_schema(limits: LabelLimits) -> Value {
                     "artifacts":{"type":"array","maxItems":ARTIFACTS_PER_TURN,"items":{"type":"string","minLength":1,"maxLength":ARTIFACT_CHARS}}
                 }
             },
-            "improvements":{"type":"array","maxItems":IMPROVEMENTS_PER_TURN,"items":{"type":"object","additionalProperties":false,"required":["kind","text"],"properties":{
-                "kind":{"type":"string","enum":ImprovementKind::ALL},
-                "text":{"type":"string","minLength":1,"maxLength":IMPROVEMENT_CHARS}
-            }}}
+            // Named for the provider and never checked: the router holds
+            // every answer to this schema, and an improvement it would refuse
+            // must not cost the turn its label (B26); `improvements_kept`
+            // reads each item alone.
+            "improvements":{"description":improvements_shape()}
         }
     })
 }
@@ -303,7 +317,10 @@ struct EndAnswer {
     line: String,
     end: StoppedEnd,
     work: crate::links::ledger::TurnJudgment,
-    improvements: Vec<ImprovementAnswer>,
+    /// Read item by item: a provider asked in plain JSON may leave it out or
+    /// get an item wrong, and the label never depends on it (B26).
+    #[serde(default)]
+    improvements: Value,
 }
 
 #[derive(Debug, Deserialize)]
@@ -368,7 +385,7 @@ pub(crate) fn parse(
                 answer.line,
                 LabelEnd::Working,
                 None,
-                Vec::new(),
+                Value::Null,
             )
         }
         AnalysisPhase::TurnEnd => {
@@ -456,6 +473,7 @@ pub(crate) fn parse(
         LabelEnd::Blocked if line.trim().is_empty() => LabelEnd::Unfinished,
         end => end,
     };
+    let (improvements, improvements_dropped) = improvements_kept(improvements);
     Ok(Analysis {
         goal,
         goal_update,
@@ -464,31 +482,51 @@ pub(crate) fn parse(
         end,
         work,
         closed_result,
-        improvements: improvements_kept(improvements),
+        improvements_dropped,
+        improvements,
     })
 }
 
 /// A turn's improvements as the record keeps them: one line each, cut to
-/// [`IMPROVEMENT_CHARS`], none repeated, at most [`IMPROVEMENTS_PER_TURN`].
-/// One the line's rules refuse is dropped alone: the label never depends on
-/// them (B26).
-fn improvements_kept(answers: Vec<ImprovementAnswer>) -> Vec<Improvement> {
+/// [`IMPROVEMENT_CHARS`], none repeated, at most [`IMPROVEMENTS_PER_TURN`],
+/// with the count of those dropped. An item that is not one, or one past
+/// the bound, is dropped alone: the label never depends on them (B26).
+fn improvements_kept(answer: Value) -> (Vec<Improvement>, usize) {
+    let items = match answer {
+        Value::Null => Vec::new(),
+        Value::Array(items) => items,
+        _ => return (Vec::new(), 1),
+    };
     let mut kept: Vec<Improvement> = Vec::new();
-    for answer in answers {
-        let Some(text) = normalize_text_field(&answer.text, false)
-            .map(|text| truncate_phrase(&text, IMPROVEMENT_CHARS))
-            .filter(|text| !text.is_empty())
-        else {
-            continue;
-        };
-        if kept.len() < IMPROVEMENTS_PER_TURN && !kept.iter().any(|seen| seen.text == text) {
-            kept.push(Improvement {
-                kind: answer.kind,
-                text,
+    let mut dropped = 0;
+    for item in items {
+        let point = serde_json::from_value::<ImprovementAnswer>(item)
+            .ok()
+            .and_then(|answer| {
+                normalize_text_field(&answer.text, false)
+                    .map(|text| stored_text(&text))
+                    .map(|text| truncate_phrase(&text, IMPROVEMENT_CHARS))
+                    .filter(|text| !text.is_empty())
+                    .map(|text| Improvement {
+                        kind: answer.kind,
+                        text,
+                    })
             });
+        match point {
+            Some(point) if kept.iter().any(|seen| seen.text == point.text) => {}
+            Some(point) if kept.len() < IMPROVEMENTS_PER_TURN => kept.push(point),
+            _ => dropped += 1,
         }
     }
-    kept
+    (kept, dropped)
+}
+
+/// An improvement as the suggestions may keep it: secrets, email addresses
+/// and home accounts masked as the label context masks them, then the
+/// credentials Memory refuses to store (the same as an investigation's
+/// egress).
+fn stored_text(text: &str) -> String {
+    hide_memory::redact(&super::analysis::redact(text)).text
 }
 
 /// A turn's artifacts as the ledger stores them: at most
@@ -520,10 +558,6 @@ pub(crate) fn parse_text(phase: AnalysisPhase, raw: &str) -> Result<Analysis> {
     if phase == AnalysisPhase::TurnEnd && value.get("work").is_none() {
         value["work"] = json!({"missed":[],"resolved":[],"artifacts":[]});
     }
-    // And the fixtures that predate v23's improvements.
-    if phase == AnalysisPhase::TurnEnd && value.get("improvements").is_none() {
-        value["improvements"] = json!([]);
-    }
     // Likewise the fixtures that predate v20's request summaries and v21's
     // closed flow line.
     if value.get("requests").is_none() {
@@ -545,7 +579,7 @@ mod tests {
     fn end_answer(work: Value, end: &str) -> Value {
         json!({
             "goal": "출시 전 버그 수정 묶음", "goal_update": "replace", "closed_result": "",
-            "requests": [], "line": "네 가지 수정 중", "end": end, "work": work, "improvements": [],
+            "requests": [], "line": "네 가지 수정 중", "end": end, "work": work,
         })
     }
 
@@ -571,7 +605,6 @@ mod tests {
             if phase == AnalysisPhase::TurnEnd {
                 answer["end"] = json!("done");
                 answer["work"] = work(json!([]));
-                answer["improvements"] = json!([]);
             }
             let parsed = parse(phase, OutputLanguage::Korean, answer.clone()).unwrap();
             assert_eq!(parsed.requests[0].id, "r1");
@@ -631,7 +664,6 @@ mod tests {
                 let object = answer.as_object_mut().unwrap();
                 object.remove("end");
                 object.remove("work");
-                object.remove("improvements");
             }
             answer["closed_result"] = json!(format!(" PRD 작성 완료, {}", "결".repeat(200)));
             let parsed = parse(phase, OutputLanguage::Korean, answer.clone()).unwrap();
@@ -766,16 +798,27 @@ mod tests {
         )
         .output_schema;
         assert!(
-            schema["required"]
+            !schema["required"]
                 .as_array()
                 .unwrap()
-                .contains(&json!("improvements"))
+                .contains(&json!("improvements")),
+            "the router accepts an answer without them"
         );
-        assert_eq!(schema["properties"]["improvements"]["maxItems"], 3);
         assert_eq!(
-            schema["properties"]["improvements"]["items"]["properties"]["kind"]["enum"],
-            json!(["no_doc", "searched_again", "wrong_guess", "tool_friction"])
+            schema["properties"]["improvements"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .collect::<Vec<_>>(),
+            ["description"],
+            "named for the provider, never checked"
         );
+        let shape = schema["properties"]["improvements"]["description"]
+            .as_str()
+            .unwrap();
+        for kind in ["no_doc", "searched_again", "wrong_guess", "tool_friction"] {
+            assert!(shape.contains(kind), "{shape}");
+        }
         let start = request(
             AnalysisPhase::TurnStart,
             OutputLanguage::Korean,
@@ -817,10 +860,93 @@ mod tests {
         assert_eq!(
             Analysis {
                 improvements: Vec::new(),
+                improvements_dropped: 0,
                 ..named
             },
             empty
         );
         assert_eq!(omitted, empty);
+    }
+
+    /// B26: an answer whose improvements are left out, not a list, of an
+    /// unknown kind, not text or one too many keeps its label, its end and
+    /// its judgment whole; each bad item is dropped alone and counted.
+    #[test]
+    fn a_wrong_improvement_never_costs_the_turn_its_label() {
+        let label = end_answer(work(json!(["docs/PORTS.md"])), "question");
+        let parsed = |improvements: Option<Value>| {
+            let mut answer = label.clone();
+            match improvements {
+                Some(improvements) => answer["improvements"] = improvements,
+                None => {
+                    answer.as_object_mut().unwrap().remove("improvements");
+                }
+            }
+            parse(AnalysisPhase::TurnEnd, OutputLanguage::Korean, answer).unwrap()
+        };
+        let clean = parsed(Some(json!([])));
+        let point = |text: &str| json!({"kind": "no_doc", "text": text});
+        for (improvements, kept, dropped) in [
+            (None, 0, 0),
+            (Some(json!("문서 없음")), 0, 1),
+            (
+                Some(
+                    json!([{"kind": "slow_disk", "text": "디스크가 느림"}, point("포트 규칙 없음")]),
+                ),
+                1,
+                1,
+            ),
+            (
+                Some(
+                    json!([{"kind": "no_doc", "text": 42}, {"kind": "no_doc"}, point("포트 규칙 없음")]),
+                ),
+                1,
+                2,
+            ),
+            (
+                Some(json!([
+                    point("하나"),
+                    point("둘"),
+                    point("셋"),
+                    point("넷")
+                ])),
+                3,
+                1,
+            ),
+        ] {
+            let analysis = parsed(improvements.clone());
+            assert_eq!(
+                (analysis.improvements.len(), analysis.improvements_dropped),
+                (kept, dropped),
+                "{improvements:?}"
+            );
+            assert_eq!(
+                Analysis {
+                    improvements: Vec::new(),
+                    improvements_dropped: 0,
+                    ..analysis
+                },
+                clean,
+                "{improvements:?}"
+            );
+        }
+    }
+
+    /// An improvement's text is kept with an email, a home account and a
+    /// token masked, as every text the suggestions keep.
+    #[test]
+    fn an_improvement_keeps_no_email_home_account_or_token() {
+        let mut answer = end_answer(work(json!([])), "done");
+        answer["improvements"] = json!([{"kind": "tool_friction",
+            "text": "dev@example.com 계정과 /Users/hoyeon/app/.env 의 api_key=abcd1234efgh5678 를 다시 찾음"}]);
+        let text = parse(AnalysisPhase::TurnEnd, OutputLanguage::Korean, answer)
+            .unwrap()
+            .improvements
+            .remove(0)
+            .text;
+        for private in ["dev@example.com", "hoyeon", "abcd1234efgh5678"] {
+            assert!(!text.contains(private), "{text}");
+        }
+        assert!(text.contains("app/.env"), "{text}");
     }
 }

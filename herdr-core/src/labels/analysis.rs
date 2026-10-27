@@ -89,6 +89,9 @@ pub(crate) struct Analysis {
     /// nothing stayed failed (PRD hide-ai-suggestions D-54, D-55); none at
     /// its start.
     pub(crate) improvements: Vec<Improvement>,
+    /// The items of the answer's improvements that were not one or came
+    /// past the bound, for the diagnostic log.
+    pub(crate) improvements_dropped: usize,
 }
 
 /// A point a turn's end says a document, rule or setting would have spared
@@ -810,8 +813,9 @@ pub(crate) fn work_context(ledger: &crate::links::ledger::LedgerContext) -> Stri
 }
 
 /// Hide's count of the turn's tool calls as the turn-end context's one line
-/// (PRD hide-ai-suggestions D-56), masked like the rest; empty without one,
-/// as for an agent whose records name no tool calls.
+/// (PRD hide-ai-suggestions D-56); empty without one, as for an agent whose
+/// records name no tool calls. It carries counts only: what was searched is
+/// in the masked exchange, never in the count.
 pub(crate) fn tool_use_context(summary: Option<&hide_session::tools::ToolSummary>) -> String {
     let Some(summary) = summary else {
         return String::new();
@@ -819,19 +823,20 @@ pub(crate) fn tool_use_context(summary: Option<&hide_session::tools::ToolSummary
     let searches = summary
         .repeated_searches
         .iter()
-        .map(|(text, times)| format!("\"{text}\" x{times}"))
+        .map(|times| format!("x{times}"))
         .collect::<Vec<_>>();
-    mask(&format!(
-        "\n<tool-use>calls: {}; files read: {}; same search repeated: {}; failed calls: {}</tool-use>",
+    format!(
+        "\n<tool-use>calls: {}; files read: {}{}; same search repeated: {}; failed calls: {}</tool-use>",
         summary.calls,
         summary.files_read,
+        if summary.files_more { "+" } else { "" },
         if searches.is_empty() {
             "none".to_owned()
         } else {
             searches.join(", ")
         },
         summary.failed,
-    ))
+    )
 }
 
 /// [`mask`], then its tail of the last [`MAX_ANALYSIS_CONTEXT_CHARS`] + 1

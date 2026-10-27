@@ -137,13 +137,9 @@ impl AiBackend for Scripted {
             .pop_front()
             .ok_or_else(|| AiError::Transient("no scripted answer".to_owned()))?;
         // An answer that does not script its request summaries summarizes
-        // every request the input owes one, as a provider is asked to, and
-        // a turn end that scripts no improvements names none.
+        // every request the input owes one, as a provider is asked to.
         let mut value = value;
         if let Some(answer) = value.as_object_mut() {
-            if answer.contains_key("end") {
-                answer.entry("improvements").or_insert_with(|| json!([]));
-            }
             let summary = match answer.get("goal").and_then(Value::as_str) {
                 Some(goal) => format!("{goal} 요청"),
                 None => "요청 요약".to_owned(),
@@ -2515,7 +2511,6 @@ fn a_null_goal_is_valid_but_an_absent_or_invalid_goal_is_not() {
         if phase == AnalysisPhase::TurnEnd {
             answer["end"] = json!("done");
             answer["work"] = json!({"missed":[],"resolved":[],"artifacts":[]});
-            answer["improvements"] = json!([]);
         }
         let parsed = parse(phase, hide_ai::OutputLanguage::Korean, answer.clone()).unwrap();
         assert_eq!(parsed.goal, None);
@@ -2718,7 +2713,7 @@ fn a_long_line_is_cut_between_words_and_a_question_stays_a_question() {
             language,
             json!({
                 "goal": null, "goal_update": "keep", "closed_result": "", "requests": [], "line": line, "end": end,
-                "work": {"missed": [], "resolved": [], "artifacts": []}, "improvements": [],
+                "work": {"missed": [], "resolved": [], "artifacts": []},
             }),
         )
         .unwrap()
@@ -6102,7 +6097,7 @@ fn a_turn_end_reads_its_tool_count_and_hands_its_improvements_to_the_suggestions
     let input = harness.backend.inputs.lock().unwrap()[0].clone();
     assert!(
         input.contains(
-            "<tool-use>calls: 4; files read: 2; same search repeated: \"5173\" x2; failed calls: 0</tool-use>"
+            "<tool-use>calls: 4; files read: 2; same search repeated: x2; failed calls: 0</tool-use>"
         ),
         "{input}"
     );
@@ -6145,5 +6140,40 @@ fn a_turn_end_reads_its_tool_count_and_hands_its_improvements_to_the_suggestions
     assert!(
         improvements(&commands).is_empty(),
         "a turn with nothing to improve records nothing"
+    );
+
+    // Through the router: an answer whose improvements hold an unknown kind
+    // and a text that is no text keeps its label, and its one good point.
+    records.extend([
+        json!({"type":"user","sessionId":"ports","timestamp":at(12),
+            "origin":{"kind":"human"},"message":{"role":"user","content":"CHANGELOG 정리해 줘"}}),
+        json!({"type":"assistant","sessionId":"ports","timestamp":at(13),
+            "message":{"role":"assistant","content":[{"type":"text","text":"정리했습니다"}]}}),
+    ]);
+    write(&records);
+    harness.backend.answers.lock().unwrap().push_back(json!({
+        "goal": "로그인 e2e 포트 맞춤", "goal_update": "keep", "line": "변경 기록 정리", "end": "done",
+        "work": {"missed": [], "resolved": [], "artifacts": []},
+        "improvements": [
+            {"kind": "slow_disk", "text": "디스크가 느림"},
+            {"kind": "no_doc", "text": 42},
+            {"kind": "searched_again", "text": "변경 기록 형식을 다시 찾음"},
+        ],
+    }));
+    observed.state_change_seq = 3;
+    observe(&mut worker, &observed);
+    settle(&mut worker, &woken);
+    assert_eq!(harness.backend.calls(), 3, "the answer was accepted once");
+    assert_eq!(
+        shown(&worker, &observed).and_then(|label| label.progress),
+        Some("변경 기록 정리".to_owned())
+    );
+    assert_eq!(
+        improvements(&commands),
+        [(
+            Signal::Improvement,
+            "변경 기록 형식을 다시 찾음".to_owned(),
+            Some(ImprovementKind::SearchedAgain)
+        )]
     );
 }

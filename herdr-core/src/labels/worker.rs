@@ -2619,6 +2619,15 @@ impl LabelWorker {
                         );
                     }
                 }
+                if analysis.improvements_dropped > 0 {
+                    crate::diagnostic!(json!({
+                        "component": "labels",
+                        "kind": "analysis.improvements_dropped",
+                        "target": self.target,
+                        "pane_id": pane_id,
+                        "dropped": analysis.improvements_dropped,
+                    }));
+                }
                 // A problem the turn's judgment says was left over is a
                 // suggestion record of the session, weighed low (PRD
                 // hide-ai-suggestions D-30), and so is each improvement.

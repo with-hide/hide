@@ -13,8 +13,8 @@
 //! hide-ai-suggestions D-56): its calls, the distinct files it read, the
 //! searches it ran more than once and the calls that failed, which the
 //! turn-end analysis is handed as one line ([`ToolSummary`]). A read is kept
-//! only as a hash of its path, and a search as its pattern cut to
-//! [`SEARCH_TEXT_LIMIT`].
+//! only as a hash of its path and a search as a hash of its pattern, so
+//! neither a path nor a pattern (which may hold a token) leaves the reader.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -27,12 +27,11 @@ pub const TOOL_FAILURE_LIMIT: usize = 32;
 /// The longest kind kept, in bytes.
 pub const HEAD_LIMIT: usize = 120;
 /// The most distinct files and searches one turn's count remembers; past
-/// either a new one is counted as more, not remembered.
+/// the files the count says "at least", and a search past the searches is
+/// not counted.
 pub const FILE_LIMIT: usize = 128;
 pub const SEARCH_LIMIT: usize = 16;
-/// The longest search pattern kept, in characters.
-pub const SEARCH_TEXT_LIMIT: usize = 48;
-/// The most repeated searches a summary names.
+/// The most repeated searches a summary counts.
 pub const SUMMARY_SEARCHES: usize = 3;
 
 /// One record's word about a tool call.
@@ -59,8 +58,8 @@ pub enum ToolStep {
 pub enum ToolUse {
     /// A file read, by a hash of its path.
     Read(u32),
-    /// A search, by its pattern.
-    Search(String),
+    /// A search, by a hash of its pattern.
+    Search(u32),
 }
 
 pub(crate) type Parser = fn(&Value) -> Vec<ToolStep>;
@@ -108,17 +107,17 @@ struct TurnUse {
     /// The distinct files read, by path hash.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     files: Vec<u32>,
-    /// Reads of a file not remembered once [`FILE_LIMIT`] were, each
-    /// counted as a new one.
+    /// A file not remembered was read once [`FILE_LIMIT`] were, so the
+    /// count is a floor.
     #[serde(default)]
-    files_more: u32,
+    files_more: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     searches: Vec<SearchSeen>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct SearchSeen {
-    text: String,
+    hash: u32,
     times: u32,
 }
 
@@ -138,14 +137,14 @@ impl TurnUse {
                     if self.files.len() < FILE_LIMIT {
                         self.files.push(path);
                     } else {
-                        self.files_more = self.files_more.saturating_add(1);
+                        self.files_more = true;
                     }
                 }
-                ToolUse::Search(text) => {
-                    if let Some(seen) = self.searches.iter_mut().find(|seen| seen.text == text) {
+                ToolUse::Search(hash) => {
+                    if let Some(seen) = self.searches.iter_mut().find(|seen| seen.hash == hash) {
                         seen.times = seen.times.saturating_add(1);
                     } else if self.searches.len() < SEARCH_LIMIT {
-                        self.searches.push(SearchSeen { text, times: 1 });
+                        self.searches.push(SearchSeen { hash, times: 1 });
                     }
                 }
             }
@@ -158,9 +157,11 @@ impl TurnUse {
 pub struct ToolSummary {
     pub calls: u32,
     pub files_read: u32,
+    /// More files were read than [`FILE_LIMIT`]: `files_read` is a floor.
+    pub files_more: bool,
     pub failed: u32,
-    /// Searches run more than once, with how many times, the most first.
-    pub repeated_searches: Vec<(String, u32)>,
+    /// How many times each search run more than once ran, the most first.
+    pub repeated_searches: Vec<u32>,
 }
 
 impl ToolTracker {
@@ -236,13 +237,14 @@ impl ToolTracker {
             .searches
             .iter()
             .filter(|seen| seen.times > 1)
-            .map(|seen| (seen.text.clone(), seen.times))
+            .map(|seen| seen.times)
             .collect::<Vec<_>>();
-        repeated.sort_by_key(|search| std::cmp::Reverse(search.1));
+        repeated.sort_by_key(|times| std::cmp::Reverse(*times));
         repeated.truncate(SUMMARY_SEARCHES);
         Some(ToolSummary {
             calls: used.calls,
-            files_read: (used.files.len() as u32).saturating_add(used.files_more),
+            files_read: used.files.len() as u32,
+            files_more: used.files_more,
             failed: used.failed,
             repeated_searches: repeated,
         })
@@ -341,14 +343,19 @@ fn shell_uses(line: &str) -> Vec<ToolUse> {
         let args = words.collect::<Vec<_>>();
         let program = program.rsplit(['/', '\\']).next().unwrap_or(&program);
         match program {
-            "cat" | "head" | "tail" | "less" | "more" | "bat" | "nl" => {
-                uses.extend(operands(&args, &["-n", "-c"]).map(read));
-            }
+            "head" | "tail" => uses.extend(operands(&args, &["-n", "-c"]).map(read)),
+            "cat" | "less" | "more" | "bat" | "nl" => uses.extend(operands(&args, &[]).map(read)),
             "sed"
                 if args.iter().any(|arg| arg == "-n")
                     && !args.iter().any(|arg| arg.starts_with("-i")) =>
             {
-                uses.extend(operands(&args, &["-e", "-f"]).skip(1).map(read));
+                // The script is the first operand unless `-e` or `-f` gave it.
+                let given = args.iter().any(|arg| arg == "-e" || arg == "-f");
+                uses.extend(
+                    operands(&args, &["-e", "-f"])
+                        .skip(usize::from(!given))
+                        .map(read),
+                );
             }
             "rg" | "grep" | "egrep" | "fgrep" | "ag" | "ack" => {
                 uses.extend(pattern(&args).and_then(search));
@@ -445,7 +452,7 @@ fn read(path: &str) -> ToolUse {
 
 fn search(text: &str) -> Option<ToolUse> {
     let text = text.trim();
-    (!text.is_empty()).then(|| ToolUse::Search(text.chars().take(SEARCH_TEXT_LIMIT).collect()))
+    (!text.is_empty()).then(|| ToolUse::Search(fnv1a(text)))
 }
 
 /// A path's hash that stays the same across builds and machines, so a
@@ -539,14 +546,15 @@ pub(crate) fn codex(item: &Value) -> Vec<ToolStep> {
         })(),
         Some("custom_tool_call") => (|| {
             let name = payload.get("name").and_then(Value::as_str)?;
-            let command = payload
-                .get("input")
-                .and_then(Value::as_str)
-                .and_then(script_command);
+            let script = payload.get("input").and_then(Value::as_str);
             Some(ToolStep::Call {
                 call: call()?,
-                head: head(name, command.as_deref()),
-                uses: command.as_deref().map(shell_uses).unwrap_or_default(),
+                head: head(name, script.and_then(script_command).as_deref()),
+                uses: script
+                    .into_iter()
+                    .flat_map(script_commands)
+                    .flat_map(|command| shell_uses(&command))
+                    .collect(),
             })
         })(),
         Some("function_call_output" | "custom_tool_call_output") => {
@@ -563,8 +571,19 @@ pub(crate) fn codex(item: &Value) -> Vec<ToolStep> {
 /// The first command a Codex script runs: the string after its first
 /// `cmd:`, read as the script's string literal.
 fn script_command(script: &str) -> Option<String> {
-    let start = script.find("cmd:")? + "cmd:".len();
-    let rest = script[start..].trim_start();
+    script_commands(script).next()
+}
+
+/// Every command a Codex script runs, in order: the string after each
+/// `cmd:`, read as the script's string literal.
+fn script_commands(script: &str) -> impl Iterator<Item = String> + '_ {
+    script
+        .match_indices("cmd:")
+        .filter_map(|(start, cmd)| literal(script[start + cmd.len()..].trim_start()))
+}
+
+/// The string literal `rest` begins with, unescaped.
+fn literal(rest: &str) -> Option<String> {
     let quote = rest
         .chars()
         .next()
@@ -897,8 +916,9 @@ mod tests {
             Some(ToolSummary {
                 calls: 7,
                 files_read: 3,
+                files_more: false,
                 failed: 1,
-                repeated_searches: vec![("5173".into(), 2)],
+                repeated_searches: vec![2],
             }),
             "a file read twice is one file, and the count outlives the agent's stop"
         );
@@ -909,6 +929,28 @@ mod tests {
         );
         tracker.human(20, &mut ended);
         assert_eq!(tracker.summary(20), Some(ToolSummary::default()));
+    }
+
+    #[test]
+    fn past_its_file_limit_a_turn_reads_at_least_that_many_and_keeps_no_pattern() {
+        let mut tracker = ToolTracker::default();
+        tracker.human(1, &mut Vec::new());
+        let token = "access_token=ghp_abcdefghijklmnopqrstuvwxyz0123";
+        for offset in 2..FILE_LIMIT as u64 + 12 {
+            let mut uses = vec![read(&format!("src/{offset}.rs"))];
+            uses.extend(shell_uses(&format!("rg '{token}'")));
+            tracker.fold(offset, 0, vec![calling(&format!("r{offset}"), uses)]);
+        }
+        let summary = tracker.summary(1).unwrap();
+        assert_eq!(
+            (summary.files_read, summary.files_more),
+            (FILE_LIMIT as u32, true),
+            "reads past the limit say at least, not more files"
+        );
+        assert_eq!(summary.repeated_searches, [FILE_LIMIT as u32 + 10]);
+        let kept = serde_json::to_string(&tracker).unwrap();
+        assert!(!kept.contains("ghp_"), "{kept}");
+        assert!(!kept.contains("access_token"), "{kept}");
     }
 
     #[test]
@@ -928,19 +970,19 @@ mod tests {
         assert_eq!(shell_uses("cat a.rs b.rs"), [hash("a.rs"), hash("b.rs")]);
         assert_eq!(
             shell_uses("rg -g '*.rs' -n PORT"),
-            [ToolUse::Search("PORT".into())]
+            [ToolUse::Search(fnv1a("PORT"))]
         );
         assert_eq!(
             shell_uses("grep -e 'x y' -r ."),
-            [ToolUse::Search("x y".into())]
+            [ToolUse::Search(fnv1a("x y"))]
         );
         assert_eq!(
             shell_uses("git grep -n TODO"),
-            [ToolUse::Search("TODO".into())]
+            [ToolUse::Search(fnv1a("TODO"))]
         );
         assert_eq!(
             shell_uses("find . -name '*.md'"),
-            [ToolUse::Search("*.md".into())]
+            [ToolUse::Search(fnv1a("*.md"))]
         );
         assert!(
             shell_uses("rg --files web").is_empty(),
@@ -960,14 +1002,24 @@ mod tests {
             matches!(&steps[0], ToolStep::Call { uses, .. } if *uses == [hash("/r/AGENTS.md")])
         );
         assert!(
-            matches!(&steps[1], ToolStep::Call { uses, .. } if *uses == [ToolUse::Search("5173".into())])
+            matches!(&steps[1], ToolStep::Call { uses, .. } if *uses == [ToolUse::Search(fnv1a("5173"))])
         );
 
         let codex_script = json!({"type":"response_item","payload":{"type":"custom_tool_call",
             "name":"exec","call_id":"c2","input":"text(await tools.exec_command({cmd:\"rg -n PORT web\"}))"}});
         assert!(
-            matches!(&codex(&codex_script)[0], ToolStep::Call { uses, .. } if *uses == [ToolUse::Search("PORT".into())])
+            matches!(&codex(&codex_script)[0], ToolStep::Call { uses, .. } if *uses == [ToolUse::Search(fnv1a("PORT"))])
         );
+        let batched = json!({"type":"response_item","payload":{"type":"custom_tool_call",
+            "name":"exec","call_id":"c3","input":"const a = await tools.exec_command({cmd:\"cat a.ts\"});\nconst b = await tools.exec_command({cmd:\"rg PORT web\"});\nconst c = await tools.exec_command({cmd:'rg PORT desktop'});"}});
+        assert!(
+            matches!(&codex(&batched)[0], ToolStep::Call { head, uses, .. }
+                if head == "cat" && *uses == [hash("a.ts"), ToolUse::Search(fnv1a("PORT")), ToolUse::Search(fnv1a("PORT"))]),
+            "every command a script runs is counted, its first names the call"
+        );
+        assert_eq!(shell_uses("cat -n a.ts"), [hash("a.ts")]);
+        assert_eq!(shell_uses("tail -n 20 a.ts"), [hash("a.ts")]);
+        assert_eq!(shell_uses("sed -n -e '1,40p' a.ts"), [hash("a.ts")]);
 
         let pi_read = json!({"type":"message","message":{"role":"assistant","content":[
             {"type":"toolCall","id":"p1","name":"read","arguments":{"path":"README.md"}}]}});
