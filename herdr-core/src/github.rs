@@ -1780,6 +1780,18 @@ fn parse_pr_feedback(output: &str) -> Result<PrFeedback, String> {
     })
 }
 
+/// The log of CI job `job`'s failed steps, which the node answers cut to its
+/// end (`hide_node_link::gh::JOB_LOG_TAIL_BYTES`), for a Hide AI suggestion
+/// investigation's CI read (PRD hide-ai-suggestions B7).
+pub(crate) fn failed_job_log(
+    node: &dyn NodeLink,
+    place: &Where,
+    job: u64,
+) -> Result<String, GhFailure> {
+    let job = job.to_string();
+    gh_at(node, place, &["run", "view", "--job", &job, "--log-failed"])
+}
+
 /// Writes `Closes #issue` at the end of pull request `number`'s body so
 /// GitHub closes the issue when it merges (PRD overview-lenses-prs D-13,
 /// D-47): the body is read first, and a body that already closes the issue

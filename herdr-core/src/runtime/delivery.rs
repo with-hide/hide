@@ -1586,7 +1586,11 @@ impl Runtime {
                     && !self.delivery_overflow.contains(&watch.target.device_id)
                     && !self.dormant_holds_actor(&watch.target)
                     && !self.archive_holds_actor(&watch.target)
-                    && !self.tree_holds_actor(&watch.target);
+                    && !self.tree_holds_actor(&watch.target)
+                    && !ledger.agents.iter().any(|agent| {
+                        agent.actor.same_identity(&watch.target)
+                            && self.registration_rebinds.contains_key(&agent.id)
+                    });
                 let source = crate::delivery::worker::ActivitySource {
                     link: if self.node == watch.target.device_id {
                         Some(Arc::clone(&self.own_node))
@@ -3626,6 +3630,9 @@ pub(crate) mod tests {
             // This is the Remote coordinator's actual calling convention.
             guard.observe_delivery("device", &payload, None, None);
             assert!(!guard.delivery_registrations_gone().contains_key("agent-2"));
+            // Until the store moves the registration, the watch on it still
+            // names the old pane, which a watch tick must not read as gone.
+            assert!(guard.delivery_watch_work().iter().all(|work| !work.gone));
         }
         client
             .submit(

@@ -66,7 +66,9 @@ pub fn run(cwd: Option<&Path>, repository: Option<&str>, arguments: &[&str]) -> 
     // has the system's folders alone on its `PATH`.
     let gh = hide_platform::programs::command("gh");
     match run_gh_for(gh, cwd, repository, arguments, COMMAND_TIMEOUT) {
-        Ok(stdout) => GhAnswer::Output { stdout },
+        Ok(stdout) => GhAnswer::Output {
+            stdout: hide_node_link::gh::answered_output(arguments, stdout),
+        },
         Err(failure) => GhAnswer::Failed {
             category: failure.category,
             reason: failure.reason,

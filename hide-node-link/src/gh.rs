@@ -450,6 +450,32 @@ pub fn is_number(argument: &str) -> bool {
     !argument.is_empty() && argument.bytes().all(|byte| byte.is_ascii_digit())
 }
 
+/// `gh run view --job <id> --log-failed`: the log of one CI job's failed
+/// steps, which a Hide AI suggestion investigation reads the end of (PRD
+/// hide-ai-suggestions B7). The node answers only its last
+/// [`JOB_LOG_TAIL_BYTES`].
+pub fn is_job_log_read(arguments: &[&str]) -> bool {
+    matches!(arguments, ["run", "view", "--job", job, "--log-failed"] if is_number(job))
+}
+
+/// How much of a job log's end a node answers, so a log of any length
+/// crosses the link at a bounded size.
+pub const JOB_LOG_TAIL_BYTES: usize = 256 * 1024;
+
+/// What a node keeps of an allowed command's output: the end of a job
+/// log, and everything of any other.
+pub fn answered_output(arguments: &[&str], mut stdout: String) -> String {
+    if !is_job_log_read(arguments) || stdout.len() <= JOB_LOG_TAIL_BYTES {
+        return stdout;
+    }
+    let mut start = stdout.len() - JOB_LOG_TAIL_BYTES;
+    while !stdout.is_char_boundary(start) {
+        start += 1;
+    }
+    stdout.drain(..start);
+    stdout
+}
+
 /// Whether `arguments` is one of the `gh` command lines Hide runs: reads,
 /// and the writes (docs/ARCHITECTURE.md), a new issue with a title and a
 /// body, a pull request's body, and the Work tab's two, a merge and a branch
@@ -460,6 +486,7 @@ pub const REPOSITORY_FIELDS: &str = "nameWithOwner,id,visibility,defaultBranchRe
 
 pub fn allowed(arguments: &[&str]) -> bool {
     arguments == ["auth", "status"]
+        || is_job_log_read(arguments)
         || is_conditional_read(arguments)
         || is_pull_digest_read(arguments)
         || is_checks_verdict_read(arguments)
@@ -1519,5 +1546,21 @@ mod tests {
             CHECK_RUNS_VERDICT_JQ,
             "repos/acme/app/commits/main/check-runs?per_page=100"
         ]));
+    }
+
+    #[test]
+    fn a_job_log_read_names_one_job_and_its_answer_keeps_only_the_end() {
+        assert!(allowed(&["run", "view", "--job", "123", "--log-failed"]));
+        for refused in [
+            &["run", "view", "--job", "1;2", "--log-failed"][..],
+            &["run", "view", "--job", "123", "--log"],
+            &["run", "view", "--job", "--web", "--log-failed"],
+        ] {
+            assert!(!allowed(refused), "{refused:?}");
+        }
+        let log = format!("{}가end", "x".repeat(JOB_LOG_TAIL_BYTES));
+        let kept = answered_output(&["run", "view", "--job", "1", "--log-failed"], log.clone());
+        assert!(kept.len() <= JOB_LOG_TAIL_BYTES && kept.ends_with("가end"));
+        assert_eq!(answered_output(&["auth", "status"], log.clone()), log);
     }
 }

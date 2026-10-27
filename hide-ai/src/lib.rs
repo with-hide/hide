@@ -21,6 +21,7 @@ mod runner;
 mod schema;
 pub mod settings;
 mod text_cli;
+mod turns;
 mod unproven;
 mod usage_limit;
 
@@ -40,6 +41,9 @@ pub use registry::{CLI_DEFAULT_MODEL, PROVIDERS, ProviderDescriptor, ProviderId,
 pub use router::{AiRouter, Degraded, ProviderState, ProviderStatus, RouterConfig};
 pub use settings::{AiSettings, FallbackEntry, FallbackRefusal};
 pub use text_cli::TextCliConfig;
+pub use turns::{
+    FinalCause, Phase, Step, Turn, TurnBudget, TurnHost, TurnsEnd, TurnsRun, run_turns,
+};
 pub use unproven::UnprovenReadOnlyBackend;
 pub use usage_limit::{DEFAULT_LIMIT_PERCENT, PastLimit, UsageLimit, UsageLimits, UsageReading};
 
