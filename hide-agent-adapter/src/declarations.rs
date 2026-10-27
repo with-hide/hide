@@ -204,7 +204,9 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         aliases: &[],
         executables: &["grok"],
         minimum: Some(MinimumVersion {
-            version: "1.0.50",
+            // The journey ran on 1.0.52 on all three systems; 1.0.50 is a
+            // reading of Grok's source, not a run.
+            version: "1.0.52",
             evidence: "docs/agent-hooks.md#the-oldest-version-of-each-agent",
         }),
         skill_location: SkillLocation::Shared,

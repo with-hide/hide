@@ -127,7 +127,7 @@
       },
       "evidence": "https://docs.x.ai/build/settings/reference.md"
     },
-    "minimum_version": "1.0.50"
+    "minimum_version": "1.0.52"
   },
   {
     "id": "opencode",

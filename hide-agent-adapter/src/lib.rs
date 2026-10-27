@@ -544,7 +544,8 @@ pub struct PromptHook {
 /// plugin or extension) was proven on, and where that proof is recorded. It is
 /// one version per agent, the oldest proven on every system Hide runs on
 /// (macOS, Linux and Windows), never the oldest proven on any one of them, and
-/// never a minimum per system. The kit puts the integration in place only for
+/// never a minimum per system. Proven means run: a reading of the agent's
+/// source is not a run and sets no minimum. The kit puts the integration in place only for
 /// a CLI that answers this version or a newer one (docs/agent-hooks.md, The
 /// oldest version of each agent).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
