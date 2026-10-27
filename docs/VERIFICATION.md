@@ -559,7 +559,7 @@ No pull request is opened for a release that passes: the pins move when a change
 
 ### The agent floor measurement
 
-Each agent's declared minimum ([agent-hooks.md](agent-hooks.md#the-oldest-version-of-each-agent)) is the oldest version that passed this measurement on all three systems.
+This measurement says whether an agent's CLI at a given version passes the journey on all three systems: it checks a version an operator reports, and it is the run a change that moves an agent's declared minimum ([agent-hooks.md](agent-hooks.md#the-oldest-version-of-each-agent)) cites.
 `.github/workflows/agent-floor.yml`, started by hand with an agent and a list of versions (`gh workflow run agent-floor.yml -f agent=pi -f versions=0.60.0,0.70.0,1.0.4`), calls the fake model lane once per version on Linux, macOS and Windows with a table that installs that agent's CLI alone at that version (`scripts/agent-floor.py tables`: npm's package at that version, or the package it was published under before, Grok's versioned download, omp's GitHub release), runs and judges that agent only (`agent-journey.yml`'s `agents`, which `agent-journey-lane.py --agents` reads), and builds Hide with the refusal below the minimum lifted (`lift-minimum`).
 agy cannot be measured at an older version: its installer serves only the vendor's current release.
 The `record` job writes pass or fail per version per system in the run's summary, each failed cell with its reason, the oldest version that passed on every system and the newest that failed.
