@@ -3156,6 +3156,8 @@ mod tests {
         /// What the last pass's walks left nothing to do in, as the runtime
         /// keeps it.
         walks: std::cell::RefCell<HashMap<String, WalkMemo>>,
+        /// The Projects whose analysis waits for the operator's Retry.
+        held: std::cell::RefCell<HashSet<String>>,
         check_states: std::cell::RefCell<Vec<(MemoryAnalysisState, Option<u64>)>>,
     }
 
@@ -3253,6 +3255,7 @@ mod tests {
                 node,
                 failed_reads: Default::default(),
                 walks: Default::default(),
+                held: Default::default(),
                 check_states: Default::default(),
             };
             fixture.write(&fixture.lines);
@@ -3360,7 +3363,7 @@ mod tests {
                 }),
                 live: live.then(|| key.clone()).into_iter().collect(),
                 closed: closed.then_some(key).into_iter().collect(),
-                held: HashSet::new(),
+                held: self.held.borrow().clone(),
                 home: Some((crate::node::test_node(), self.home.clone())),
                 delegated: delegated.iter().map(|id| (*id).to_owned()).collect(),
                 language: hide_ai::OutputLanguage::English,
@@ -3824,6 +3827,39 @@ mod tests {
         fixture.answer(&[]);
         assert_eq!(fixture.pass(false, true), ["analyzing", "learned one"]);
         assert_eq!(fixture.calls(), 1);
+    }
+
+    #[test]
+    fn a_skipped_walk_is_made_again_when_its_sessions_part_in_the_pass_moves() {
+        let fixture = Fixture::new();
+        // One pass under `inputs`: whether the session's pane is open, another
+        // agent started it, the Project waits for Retry, and Hide AI is on.
+        let pass = |(live, delegated, held, ai): (bool, bool, bool, bool)| {
+            *fixture.held.borrow_mut() = held
+                .then(|| fixture.project_id.clone())
+                .into_iter()
+                .collect();
+            let delegated: &[&str] = if delegated { &[SESSION] } else { &[] };
+            fixture.run(("claude", SESSION.to_owned()), live, false, delegated, ai);
+        };
+        // Settles a walk under `from`, then answers whether a pass under `to`
+        // walked again: only a made walk reads the receipts it lost.
+        let walks_again = |from, to| {
+            pass(from);
+            pass(from);
+            forget_receipt_cursor(&fixture);
+            pass(from);
+            assert!(!receipt_cursor(&fixture), "{from:?} was walked again");
+            pass(to);
+            receipt_cursor(&fixture)
+        };
+        let resting = (false, false, false, false);
+        assert!(walks_again(resting, (false, true, false, false)), "delegated");
+        assert!(walks_again(resting, (false, false, true, false)), "held");
+        assert!(walks_again(resting, (false, false, false, true)), "Hide AI on");
+        // An open pane's session reads no receipts, so its walk is seen when
+        // the pane lets it go.
+        assert!(walks_again((true, false, false, false), resting), "live");
     }
 
     #[test]
