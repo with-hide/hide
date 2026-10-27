@@ -80,6 +80,23 @@ class ReleaseAssetsTest(unittest.TestCase):
     def test_complete_same_version_packages_pass(self):
         self.assertEqual(self.check().returncode, 0)
 
+    def test_installers_do_not_require_the_device_files_added_after_packaging(self):
+        # The Mac installer builder runs before package.mjs copies device kits.
+        result = subprocess.run([
+            "node", "--input-type=module", "-e",
+            f"import {{ systemAssetNames, expectedAssetNames }} from {json.dumps(CHECK.as_uri())};"
+            "console.log(JSON.stringify({installers: systemAssetNames('1.2.3', 'macos'),"
+            "release: expectedAssetNames('v1.2.3')}));",
+        ], capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        inventory = json.loads(result.stdout)
+        self.assertEqual(inventory["installers"], sorted([
+            "hide-v1.2.3-macos-arm64.dmg", "hide-v1.2.3-macos-arm64.dmg.sha256",
+            "hide-v1.2.3-macos-arm64.zip", "hide-v1.2.3-macos-arm64.zip.sha256",
+            "hide-v1.2.3-macos-arm64.zip.blockmap", "latest-mac.yml",
+        ]))
+        self.assertEqual(inventory["release"], sorted(file.name for file in self.directory.iterdir()))
+
     def test_device_bundle_manifest_and_archive_must_agree(self):
         result = self.check()
         self.assertEqual(result.returncode, 0, result.stderr)

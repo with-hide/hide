@@ -42,18 +42,20 @@ export function systemFiles(version, system) {
   }
 }
 
-/** Every file one system's package build leaves for a release, sorted. */
+/** The install/update files buildInstallers writes before device kits are added, sorted. */
 export function systemAssetNames(version, system) {
   const files = systemFiles(version, system);
-  const devices = system === "macos"
-    ? [DEVICE_BUNDLE_MANIFEST, ...Object.keys(DEVICE_PLATFORMS).map((platform) => `hide-device-${platform}-${version}.tar.gz`)]
-    : [];
-  return [...files.installers.flatMap((name) => [name, `${name}.sha256`]), files.updateInfo, ...files.blockmaps, ...devices].sort();
+  return [...files.installers.flatMap((name) => [name, `${name}.sha256`]), files.updateInfo, ...files.blockmaps].sort();
 }
 
 export function expectedAssetNames(tag) {
   releaseKind(tag);
-  return SYSTEMS.flatMap((system) => systemAssetNames(tag.slice(1), system)).sort();
+  const version = tag.slice(1);
+  return [
+    ...SYSTEMS.flatMap((system) => systemAssetNames(version, system)),
+    DEVICE_BUNDLE_MANIFEST,
+    ...Object.keys(DEVICE_PLATFORMS).map((platform) => `hide-device-${platform}-${version}.tar.gz`),
+  ].sort();
 }
 
 const UPDATE_INFO_LIMIT = 64 * 1024;
