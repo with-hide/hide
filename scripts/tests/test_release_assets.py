@@ -90,12 +90,35 @@ class ReleaseAssetsTest(unittest.TestCase):
         ], capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
         inventory = json.loads(result.stdout)
-        self.assertEqual(inventory["installers"], sorted([
+        mac_installers = [
             "hide-v1.2.3-macos-arm64.dmg", "hide-v1.2.3-macos-arm64.dmg.sha256",
             "hide-v1.2.3-macos-arm64.zip", "hide-v1.2.3-macos-arm64.zip.sha256",
             "hide-v1.2.3-macos-arm64.zip.blockmap", "latest-mac.yml",
-        ]))
+        ]
+        mac_devices = ["device-bundles.json", "hide-device-linux-x86_64-1.2.3.tar.gz",
+                       "hide-device-linux-aarch64-1.2.3.tar.gz"]
+        self.assertEqual(inventory["installers"], sorted(mac_installers))
+        self.assertEqual(set(inventory["release"]) - set(mac_installers + mac_devices), {
+            "hide-v1.2.3-windows-x64-setup.exe", "hide-v1.2.3-windows-x64-setup.exe.sha256",
+            "hide-v1.2.3-windows-x64-setup.exe.blockmap", "latest.yml",
+            "hide-v1.2.3-linux-x64.deb", "hide-v1.2.3-linux-x64.deb.sha256",
+            "hide-v1.2.3-linux-x64.rpm", "hide-v1.2.3-linux-x64.rpm.sha256", "latest-linux.yml",
+        })
         self.assertEqual(inventory["release"], sorted(file.name for file in self.directory.iterdir()))
+        self.assertEqual(self.check().returncode, 0)
+        # All nine Mac release assets are mandatory, even though only six
+        # exist when the installer builder returns to the package builder.
+        for name in mac_installers + mac_devices:
+            with self.subTest(missing=name):
+                file = self.directory / name
+                original = file.read_bytes()
+                file.unlink()
+                try:
+                    result = self.check()
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(name, result.stderr)
+                finally:
+                    file.write_bytes(original)
 
     def test_device_bundle_manifest_and_archive_must_agree(self):
         result = self.check()

@@ -36,7 +36,7 @@ pub fn journey_cli_cache(home: &Path) -> PathBuf {
     hide_home(home).join("cache/journey-clis")
 }
 
-/// Release-matched foreign device kits. Three platform slots, one staging
+/// Release-matched foreign device kits. Two platform slots, one staging
 /// folder, and one download at a time; see `hide_node::ssh::host`.
 pub fn device_bundle_cache(home: &Path) -> PathBuf {
     hide_home(home).join("cache/device-bundles")
