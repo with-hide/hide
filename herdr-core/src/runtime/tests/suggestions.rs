@@ -97,6 +97,7 @@ fn the_tab_shows_the_workers_read_with_hide_ai_and_github_laid_on_it() {
         basis: None,
         auto: false,
         hold: None,
+        returned_after_skip: false,
         escalated: None,
         evidence: Vec::new(),
         attempt: None,
@@ -188,6 +189,7 @@ fn the_tab_shows_the_workers_read_with_hide_ai_and_github_laid_on_it() {
 /// event naming two settings is refused whole.
 #[test]
 fn each_suggestion_event_hands_the_worker_one_command() {
+    use crate::suggestions::ledger::SignalGroup;
     use crate::suggestions::notebook::LineId;
     use crate::suggestions::policy::Quantity;
     use crate::suggestions::worker::{Command, LineAction, SettingsChange, SuggestionClient};
@@ -249,6 +251,25 @@ fn each_suggestion_event_hands_the_worker_one_command() {
         serde_json::json!({"workspace_id": workspace, "quantity": "few", "suggestions_enabled": false}),
     ));
     assert!(commands.try_recv().is_err(), "two settings in one event");
+    runtime.dispatch_json(&event(
+        "suggestion_settings",
+        serde_json::json!({"workspace_id": workspace, "signal_group": {"group": "github", "enabled": false}}),
+    ));
+    assert!(matches!(
+        commands.try_recv(),
+        Ok(Command::Settings {
+            change: SettingsChange::SignalGroup(SignalGroup::Github, false),
+            ..
+        })
+    ));
+    runtime.dispatch_json(&event(
+        "suggestion_settings",
+        serde_json::json!({"workspace_id": workspace, "signal": {"signal": "agent_wait", "enabled": false}}),
+    ));
+    assert!(
+        commands.try_recv().is_err(),
+        "one signal alone is not a setting; its place is"
+    );
 
     runtime.dispatch_json(&event(
         "hide_ai_switch",

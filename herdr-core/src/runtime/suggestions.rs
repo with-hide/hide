@@ -86,7 +86,8 @@ enum SuggestionActionKind {
     Retry,
 }
 
-/// `suggestion_settings`: exactly one of ⚙'s settings.
+/// `suggestion_settings`: exactly one of ⚙'s settings; a 읽을 곳 switch is
+/// one setting, every signal of its place at once (D-52).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct SuggestionSettingsPayload {
@@ -98,13 +99,13 @@ pub(super) struct SuggestionSettingsPayload {
     #[serde(default)]
     apply_mode: Option<ApplyMode>,
     #[serde(default)]
-    signal: Option<SignalSwitch>,
+    signal_group: Option<SignalGroupSwitch>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct SignalSwitch {
-    signal: Signal,
+struct SignalGroupSwitch {
+    group: crate::suggestions::ledger::SignalGroup,
     enabled: bool,
 }
 
@@ -253,13 +254,13 @@ impl Runtime {
             suggestions_enabled,
             quantity,
             apply_mode,
-            signal,
+            signal_group,
         } = payload;
         let changes = [
             suggestions_enabled.map(SettingsChange::Suggestions),
             quantity.map(SettingsChange::Quantity),
             apply_mode.map(SettingsChange::ApplyMode),
-            signal.map(|switch| SettingsChange::Signal(switch.signal, switch.enabled)),
+            signal_group.map(|switch| SettingsChange::SignalGroup(switch.group, switch.enabled)),
         ];
         let mut named = changes.into_iter().flatten();
         let (Some(change), None) = (named.next(), named.next()) else {

@@ -61,8 +61,9 @@ impl Stage {
     }
 }
 
-/// Who struck a line: the operator's `안 함` is restored from ⚙ (D-43); an
-/// investigation's discard is not offered back.
+/// Who struck a line: the operator's `넘어가기`, which may bring it back
+/// once and which ⚙ restores (D-43); an investigation's discard is not
+/// offered back.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StruckBy {

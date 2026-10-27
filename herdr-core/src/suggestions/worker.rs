@@ -14,8 +14,8 @@ use super::analysis::{
     StopFlag, TagGrouping, Written,
 };
 use super::apply::{self as applying, ApplyOrder, FollowedAttempt};
-use super::ledger::{Observation, RecordIndex, SessionRef, Signal};
-use super::lifecycle::{AttemptMove, AttemptPhase};
+use super::ledger::{Observation, RecordIndex, SessionRef, Signal, SignalGroup};
+use super::lifecycle::{AttemptMove, AttemptPhase, LineLife};
 use super::notebook::{Line, LineId, Notebook, NotebookEdit, Outcome, Stage, Strike, StruckBy};
 use super::policy::{self, Quantity};
 use super::read::{self, ReadInput};
@@ -97,13 +97,16 @@ pub(crate) enum SettingsChange {
     Suggestions(bool),
     Quantity(Quantity),
     ApplyMode(ApplyMode),
-    Signal(Signal, bool),
+    /// One place ⚙ reads from, every signal of it at once (B5, D-52).
+    SignalGroup(SignalGroup, bool),
 }
 
 /// An operator's action on a line (B16).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LineAction {
-    /// `안 함`: the line is struck and its new records never raise it.
+    /// `넘어가기`: the line is struck, and its new records raise it once
+    /// more only when they double its evidence; a second skip is for good
+    /// (D-43).
     Dismiss,
     /// ⚙'s `되살리기`: the strike goes and the line is judged again.
     Restore,
@@ -1037,11 +1040,13 @@ impl Worker {
             SettingsChange::Suggestions(on) => settings.suggestions_enabled = on,
             SettingsChange::Quantity(quantity) => settings.quantity = quantity,
             SettingsChange::ApplyMode(mode) => settings.apply_mode = mode,
-            SettingsChange::Signal(signal, on) => {
-                if on {
-                    settings.signals_off.remove(&signal);
-                } else {
-                    settings.signals_off.insert(signal);
+            SettingsChange::SignalGroup(group, on) => {
+                for signal in Signal::ALL.into_iter().filter(|s| s.group() == group) {
+                    if on {
+                        settings.signals_off.remove(&signal);
+                    } else {
+                        settings.signals_off.insert(signal);
+                    }
                 }
             }
         }
@@ -1124,7 +1129,9 @@ impl Worker {
 
     /// Raises what the scores and caps let rise (D-12, D-42), unless the
     /// Project's last run failed: until a run investigates, nothing rises
-    /// from the scores alone, whatever asks (D-35).
+    /// from the scores alone, whatever asks (D-35). A line the operator
+    /// skipped competes again once its new evidence outgrew the skip, and
+    /// only the first time (D-43).
     fn raise(&mut self, project: &str) {
         let now = self.now();
         let Ok(store) = self.store.as_mut() else {
@@ -1147,10 +1154,27 @@ impl Worker {
             .iter()
             .filter(|line| line.stage == Stage::Suggested && line.struck.is_none())
             .count();
+        let returning = notebook
+            .lines
+            .iter()
+            .filter(|line| {
+                line.stage == Stage::Candidate
+                    && line.struck.as_ref().is_some_and(|strike| {
+                        strike.by == StruckBy::Operator
+                            && lives.get(&line.id).is_none_or(LineLife::skip_may_return)
+                            && scoring::outgrew_skip(line, &index, strike.at_unix_ms)
+                    })
+            })
+            .map(|line| Line {
+                struck: None,
+                ..line.clone()
+            })
+            .collect::<Vec<_>>();
         let scored = notebook
             .lines
             .iter()
             .filter(|line| line.stage == Stage::Candidate && line.struck.is_none())
+            .chain(&returning)
             .map(|line| (line, scoring::score(line, &index, now)))
             .collect::<Vec<_>>();
         state
@@ -1180,10 +1204,14 @@ impl Worker {
                 .iter()
                 .find(|(candidate, _)| candidate.id == *id)
                 .map_or(0.0, |(_, score)| score.points);
+            let returned = line.struck.take().is_some();
             line.stage = Stage::Suggested;
             line.updated_at_unix_ms = now;
             let mut life = lives.get(id).cloned().unwrap_or_default();
             life.raised_at_unix_ms = Some(now);
+            if returned {
+                life.returned_at_unix_ms = Some(now);
+            }
             if let Err(code) = store.save_line(project, &line, &life) {
                 return log_store("raise", &code);
             }
@@ -1192,7 +1220,7 @@ impl Worker {
             crate::diagnostic!(json!({
                 "component": "suggestions", "kind": "line.raised",
                 "project_id": project, "line": id.0, "points": (points * 100.0).round() / 100.0,
-                "records": line.records.len(),
+                "records": line.records.len(), "returned": returned,
             }));
         }
         if let Err(code) = store.save_state(project, &state) {
@@ -2209,25 +2237,62 @@ mod tests {
         assert!(read.rows[0].watch.is_none());
     }
 
+    /// B16, D-43: a skipped line comes back once, flagged, when its new
+    /// sessions double its evidence; skipped again it stays away however
+    /// much more piles up, until ⚙ restores it.
     #[test]
-    fn a_dismissed_line_leaves_the_tab_and_comes_back_when_restored() {
+    fn a_skipped_line_comes_back_once_when_its_evidence_doubles() {
         let fixture = Fixture::new();
         fixture.open();
         fixture.fail_in_sessions("cargo test", &["s1", "s2", "s3"]);
         fixture.wake_and_wait_out_the_delay();
-        fixture.read_until(|read| !chosen(read).is_empty());
+        let read = fixture.read_until(|read| !chosen(read).is_empty());
+        assert!(!read.rows[0].returned_after_skip);
+        let skip = || {
+            fixture.send(Command::Action {
+                project: project(),
+                line: LineId(1),
+                action: LineAction::Dismiss,
+            });
+            fixture.read_until(|read| chosen(read).is_empty())
+        };
+        let next_day = |sessions: &[&str]| {
+            fixture.clock.fetch_add(policy::DAY_MS, Ordering::SeqCst);
+            fixture.fail_in_sessions("cargo test", sessions);
+            fixture.wake_and_wait_out_the_delay();
+        };
+        let dismissed = |read: &ProjectSuggestionsSnapshot| {
+            read.settings
+                .dismissed
+                .iter()
+                .map(|line| (line.id.clone(), line.may_return))
+                .collect::<Vec<_>>()
+        };
 
-        fixture.send(Command::Action {
-            project: project(),
-            line: LineId(1),
-            action: LineAction::Dismiss,
-        });
-        let read = fixture.read_until(|read| chosen(read).is_empty());
-        assert_eq!(read.settings.dismissed.len(), 1);
-        assert_eq!(read.settings.dismissed[0].id, "s1");
+        let read = skip();
+        assert_eq!(dismissed(&read), [("s1".to_owned(), true)]);
 
-        // Its records keep coming and never raise it while it is struck.
-        fixture.fail_in_sessions("cargo test", &["s4", "s5", "s6"]);
+        // s1 goes on past the skip and is not new: two of three.
+        next_day(&["s1", "s4", "s5"]);
+        let read = fixture.read_until(|read| read.status == SuggestionsStatus::NoneToday);
+        assert!(chosen(&read).is_empty(), "not yet doubled");
+
+        next_day(&["s6"]);
+        let read = fixture.read_until(|read| !chosen(read).is_empty());
+        assert_eq!(chosen(&read), ["s1"]);
+        assert!(read.rows[0].returned_after_skip, "it says it came back");
+        assert!(read.settings.dismissed.is_empty());
+
+        let read = skip();
+        assert_eq!(
+            dismissed(&read),
+            [("s1".to_owned(), false)],
+            "a second skip is for good"
+        );
+        next_day(&["s7", "s8", "s9", "s10", "s11", "s12", "s13"]);
+        let read = fixture.read_until(|read| read.status == SuggestionsStatus::NoneToday);
+        assert!(chosen(&read).is_empty(), "never again on its own");
+
         fixture.send(Command::Action {
             project: project(),
             line: LineId(1),
@@ -2235,6 +2300,10 @@ mod tests {
         });
         let read = fixture.read_until(|read| read.settings.dismissed.is_empty());
         assert_eq!(chosen(&read), ["s1"], "restored and judged again");
+        assert!(
+            !read.rows[0].returned_after_skip,
+            "the operator brought it back"
+        );
     }
 
     #[test]
@@ -2275,7 +2344,20 @@ mod tests {
         fixture.open();
         fixture.settings(SettingsChange::Quantity(Quantity::Many));
         fixture.settings(SettingsChange::ApplyMode(ApplyMode::AutoPr));
-        fixture.settings(SettingsChange::Signal(Signal::AgentWait, false));
+        let read = fixture.settings(SettingsChange::SignalGroup(SignalGroup::Github, false));
+        let off = |read: &ProjectSuggestionsSnapshot| {
+            read.settings
+                .signals
+                .iter()
+                .filter(|signal| !signal.enabled)
+                .map(|signal| signal.signal)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            off(&read),
+            [Signal::CheckFailed, Signal::ChangeRequest],
+            "one press turns GitHub's every signal off"
+        );
         fixture.fail_in_sessions("cargo test", &["s1", "s2"]);
         fixture.wake_and_wait_out_the_delay();
         // The automatic mode applies the line it raised at once.
@@ -2285,13 +2367,7 @@ mod tests {
         let after = fixture.open();
         assert_eq!(after.settings.quantity, Quantity::Many);
         assert_eq!(after.settings.apply_mode, ApplyMode::AutoPr);
-        assert!(
-            after
-                .settings
-                .signals
-                .iter()
-                .any(|signal| signal.signal == Signal::AgentWait && !signal.enabled)
-        );
+        assert_eq!(off(&after), [Signal::CheckFailed, Signal::ChangeRequest]);
         assert_eq!(shown(&after), shown(&before));
         assert_eq!(after.intro_seen, before.intro_seen);
 

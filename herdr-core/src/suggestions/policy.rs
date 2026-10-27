@@ -77,6 +77,10 @@ pub(crate) const WEEK_MS: u64 = 7 * DAY_MS;
 pub(crate) const QUIET_SPAN_MS: u64 = 14 * DAY_MS;
 /// The most new suggestions kept, whatever the quantity (D-42).
 pub(crate) const STORED_NEW_CAP: usize = 5;
+/// A line the operator skipped (`넘어가기`, D-43) may rise once more when
+/// the sessions and pull requests first seen after the skip reach this
+/// share of those seen up to it: as many again, so its evidence doubles.
+pub(crate) const SKIP_RETURN_SHARE: f64 = 1.0;
 
 /// How long a record is kept, and how many lines a notebook holds (D-46).
 pub(crate) const RECORD_RETENTION_MS: u64 = 90 * DAY_MS;

@@ -24,6 +24,25 @@ pub struct LineLife {
     /// fix (D-13): the pull request that did not hold.
     #[serde(default)]
     pub escalated_from: Option<PrRef>,
+    /// When it rose again after the operator skipped it (D-43); a skip
+    /// after that is for good.
+    #[serde(default)]
+    pub returned_at_unix_ms: Option<u64>,
+}
+
+impl LineLife {
+    /// Whether the operator's skip of the line may bring it back once
+    /// (D-43): only until it has come back once.
+    pub(crate) fn skip_may_return(&self) -> bool {
+        self.returned_at_unix_ms.is_none()
+    }
+
+    /// Whether its last rise was its return after a skip, which the row
+    /// says (`넘어갔지만 다시 생겼어요`).
+    pub(crate) fn rose_after_skip(&self) -> bool {
+        self.returned_at_unix_ms
+            .is_some_and(|at| self.raised_at_unix_ms == Some(at))
+    }
 }
 
 /// Where an attempt stands (B11-B14).
@@ -131,7 +150,7 @@ pub(crate) enum AttemptMove {
         /// The branch it merged into.
         base: Option<String>,
     },
-    /// Its pull request closed unmerged: the operator's `안 함`.
+    /// Its pull request closed unmerged: the operator's `넘어가기`.
     Closed,
     IssueOpen {
         url: String,

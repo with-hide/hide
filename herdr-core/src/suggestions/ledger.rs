@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 #[serde(transparent)]
 pub struct RecordId(pub u64);
 
-/// Where a record came from (D-04, D-19, D-23, D-30, D-45). Each has its
-/// own switch (B5).
+/// Where a record came from (D-04, D-19, D-23, D-30, D-45). Each is read
+/// from one of the two places ⚙ switches (B5, D-52).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Signal {
@@ -62,6 +62,25 @@ impl Signal {
     pub(crate) fn per_session(self) -> bool {
         !self.needs_github()
     }
+
+    /// The place ⚙ switches it with (D-52).
+    pub(crate) fn group(self) -> SignalGroup {
+        if self.needs_github() {
+            SignalGroup::Github
+        } else {
+            SignalGroup::Session
+        }
+    }
+}
+
+/// Where ⚙ reads from (D-52): `세션 기록`, the agents' sessions, and
+/// `GitHub`, the pull requests; one switch turns every signal of one on or
+/// off.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SignalGroup {
+    Session,
+    Github,
 }
 
 /// The agent session a record happened in, by the native ids the session
