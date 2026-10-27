@@ -18,15 +18,24 @@ from agent_live_check.protection import ProtectionError  # noqa: E402
 
 
 class Registration(unittest.TestCase):
-    def test_every_registered_agent_has_its_local_login_and_fake_model_routes(self):
+    def test_every_registered_agent_has_its_local_ci_and_fake_model_routes(self):
         for row in active_rows(load_contract(ROOT)):
-            for name, routes in (("local isolation", local.ROUTES), ("CI login", ci.LOGINS),
+            for name, routes in (("local isolation", local.ROUTES), ("CI home", ci.AGENT_ENV),
                                  ("fake model", fake_lane.PROVIDERS)):
                 with self.subTest(agent=row["id"], route=name):
                     self.assertIn(row["herdr_kind"], routes, f"{row['id']} has no {name} route")
 
     def test_the_installed_cli_set_matches_the_registered_agents(self):
         self.assertEqual(set(clis.table()), {row["herdr_kind"] for row in active_rows(load_contract(ROOT))})
+
+    def test_every_pinned_cli_is_at_least_its_agents_minimum_version(self):
+        """CI must measure a CLI the kit integrates, never one it refuses as too old."""
+        table = clis.table()
+        for row in active_rows(load_contract(ROOT)):
+            with self.subTest(agent=row["id"]):
+                minimum = tuple(int(part) for part in row["minimum_version"].split("."))
+                pinned = tuple(int(part) for part in table[row["herdr_kind"]]["version"].split("."))
+                self.assertGreaterEqual(pinned, minimum)
 
 
 class GeneratedContract(unittest.TestCase):

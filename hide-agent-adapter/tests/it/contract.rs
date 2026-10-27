@@ -106,8 +106,13 @@ fn absence(value: hide_agent_adapter::CapabilityAbsence) {
         !value.would_change.trim().is_empty(),
         "missing closure condition"
     );
-    let path = value.evidence.split('#').next().unwrap();
-    assert!(!path.trim().is_empty(), "missing absence evidence");
+    evidence(value.evidence);
+}
+
+/// A repository file, and for a guide a heading of it, that holds the proof.
+fn evidence(evidence: &str) {
+    let (path, anchor) = evidence.split_once('#').unwrap_or((evidence, ""));
+    assert!(!path.trim().is_empty(), "missing evidence");
     assert!(
         Path::new(path)
             .components()
@@ -115,6 +120,54 @@ fn absence(value: hide_agent_adapter::CapabilityAbsence) {
         "evidence must stay inside the repository: {path}"
     );
     assert!(root().join(path).is_file(), "missing evidence: {path}");
+    if !anchor.is_empty() {
+        let text = std::fs::read_to_string(root().join(path)).unwrap();
+        let slugs: Vec<String> = text
+            .lines()
+            .filter_map(|line| line.strip_prefix('#'))
+            .map(|heading| {
+                heading
+                    .trim_start_matches('#')
+                    .trim()
+                    .to_lowercase()
+                    .chars()
+                    .filter_map(|character| match character {
+                        ' ' => Some('-'),
+                        '-' | '_' => Some(character),
+                        _ if character.is_alphanumeric() => Some(character),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .collect();
+        assert!(
+            slugs.iter().any(|slug| slug == anchor),
+            "{path} has no heading #{anchor}"
+        );
+    }
+}
+
+/// The kit refuses an agent's integration below this version, so a row
+/// without one, or with one it cannot compare, would let a too-old CLI get
+/// Hide's hook and fail without saying why.
+#[test]
+fn every_supported_agent_declares_a_comparable_minimum_version_with_its_proof() {
+    for row in ADAPTERS {
+        let minimum = row
+            .minimum
+            .unwrap_or_else(|| panic!("{} declares no minimum version", row.id));
+        let parts: Vec<&str> = minimum.version.split('.').collect();
+        assert!(
+            parts.len() == 3
+                && parts
+                    .iter()
+                    .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit())),
+            "{}: {:?} is not x.y.z",
+            row.id,
+            minimum.version
+        );
+        evidence(minimum.evidence);
+    }
 }
 
 #[test]

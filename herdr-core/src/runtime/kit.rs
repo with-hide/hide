@@ -85,6 +85,7 @@ pub(crate) struct DeviceKitCall {
     pub(crate) retirement_projects: Vec<String>,
     /// The run of the shared-server turn-off this call carries, if any.
     pub(crate) daemon_off_run: Option<u64>,
+    pub(crate) connect_attempt: Option<u64>,
 }
 
 /// What a device's kit call answered.
@@ -773,9 +774,38 @@ impl Runtime {
             self.set_error("kit.unavailable", cause.as_str(), false);
             return true;
         }
-        // A pass that stopped, or could not start Herdr, needs another
-        // automatic pass even when every individual kit part is installed.
+        // A failed bootstrap may have no pane or terminal services. Retry
+        // the complete connection, including upload, services and routes.
+        if state.herdr_start_failed
+            && device_id != self.node.as_str()
+            && self
+                .link_origin(device_id)
+                .is_some_and(crate::model::LinkOrigin::core_redials)
+        {
+            if self.device_host_connecting(device_id) {
+                return false;
+            }
+            self.close_device_host(device_id, "retrying Herdr bootstrap");
+            return self.retry_device_host_now(device_id);
+        }
+        // A refused pass (or this node's start failure) needs another
+        // automatic pass even when each individual kit part is installed.
         if state.refused.is_some() || state.herdr_start_failed {
+            if !state.busy
+                && self
+                    .link_origin(device_id)
+                    .is_some_and(crate::model::LinkOrigin::core_redials)
+            {
+                self.begin_device_connect(device_id);
+                if let Some(HostPhase::Ready { platform, .. }) =
+                    self.device_hosts.get(device_id).map(|host| &host.phase)
+                {
+                    let platform = platform.clone();
+                    if let Some((os, arch)) = platform.split_once(' ') {
+                        self.device_connect_platform(device_id, os, arch);
+                    }
+                }
+            }
             return self.queue_kit_scope(device_id, Scope::automatic());
         }
         // Naming parts or agents narrows the repair to what is named.
@@ -1023,6 +1053,7 @@ impl Runtime {
             return;
         }
         if !self.spawn_device_kit_worker(device_id) {
+            self.fail_device_connect_install(device_id);
             self.clear_kit_busy(device_id);
         }
     }
@@ -1111,6 +1142,7 @@ impl Runtime {
                 preserve_herdr_server: registration.herdr_session.is_some(),
                 retirement_projects: Vec::new(),
                 daemon_off_run: None,
+                connect_attempt: None,
             },
         );
         self.device_kit_removing.insert(device_id.to_owned());
@@ -1176,6 +1208,9 @@ impl Runtime {
                 self.codex_daemon_off_runs
             });
         Some(DeviceKitCall {
+            connect_attempt: matches!(&job, KitJob::Apply(_))
+                .then(|| self.claim_device_connect_kit(device_id))
+                .flatten(),
             work: DeviceKitWork::Job(job),
             channel,
             cli_dir,
@@ -1346,6 +1381,7 @@ impl Runtime {
     /// The device's consent was withdrawn or the device is going away:
     /// nothing queued for it runs.
     pub(super) fn forget_device_kit_work(&mut self, device_id: &str) {
+        self.forget_device_connect(device_id);
         self.device_kit_pending.remove(device_id);
         self.codex_daemon_off_running.remove(device_id);
         self.end_codex_daemon_off_unanswered(device_id);

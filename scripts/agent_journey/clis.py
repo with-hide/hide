@@ -1,12 +1,19 @@
 """The agent CLI versions CI installs (contracts/agent-clis.json), read by
 scripts/install-agent-clis.py to install them and by the journey to say in
-its report whether the CLI it measured answered the pinned version."""
+its report whether the CLI it measured answered the pinned version.
+
+`HIDE_AGENT_CLIS_TABLE` names another table of the same shape, which the
+daily agent canary (`.github/workflows/agent-canary.yml`) writes with each
+vendor's latest release (scripts/agent-cli-latest.py), so the install, the
+report and the lane's verdict all measure those versions instead."""
 
 import json
+import os
 from pathlib import Path
 import re
 
-TABLE = Path(__file__).resolve().parents[2] / "contracts/agent-clis.json"
+PINNED = Path(__file__).resolve().parents[2] / "contracts/agent-clis.json"
+TABLE = Path(os.environ.get("HIDE_AGENT_CLIS_TABLE") or PINNED)
 
 
 def table():

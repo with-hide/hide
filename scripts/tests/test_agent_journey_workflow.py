@@ -34,7 +34,7 @@ class JourneyCap(unittest.TestCase):
         jobs = yaml.safe_load((ROOT / WORKFLOWS[0]).read_text())["jobs"]
         steps = [step for job in jobs.values() for step in job["steps"]
                  if "agent-journey-check.py" in step.get("run", "")]
-        self.assertEqual(len(steps), 3)
+        self.assertEqual(len(steps), 2)
         for step in steps:
             with self.subTest(step=step["name"]):
                 named = re.search(r"--agents (\S+)", step["run"])
@@ -42,9 +42,10 @@ class JourneyCap(unittest.TestCase):
                 # With no --agents, a run measures every registered agent, the stand-ins only theirs.
                 agents = (len(named.group(1).split(",")) if named else
                           len(ci.FIXTURE_AGENTS) if fixture else len(active_rows(cli.load_contract(ROOT))))
-                keyless = fixture or "--fake-model" in step["run"]
+                # CI runs no provider (operator decision, 2026-10-27): every lane is keyless.
+                self.assertTrue(fixture or "--fake-model" in step["run"])
                 # The OpenCode stop's teardown window, then the runtime close's.
-                needed = cli.run_seconds(keyless, agents) + 2 * TEARDOWN_SECONDS
+                needed = cli.run_seconds(True, agents) + 2 * TEARDOWN_SECONDS
                 self.assertLessEqual(needed, step["timeout-minutes"] * 60)
 
     def test_the_full_fake_journey_has_no_hand_written_agent_selection(self):

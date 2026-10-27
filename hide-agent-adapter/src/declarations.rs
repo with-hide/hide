@@ -36,6 +36,10 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         terminal_click: true,
         aliases: &["claude", "claude_code"],
         executables: &["claude"],
+        minimum: Some(MinimumVersion {
+            version: "2.1.278",
+            evidence: "docs/agent-hooks.md#the-oldest-version-of-each-agent",
+        }),
         skill_location: SkillLocation::Claude,
         hook: HookInstall::Runtime(HookDialect::ClaudeCode),
         guidance: Support::Supported(ContextRoute::NativeHook(HookDialect::ClaudeCode)),
@@ -117,6 +121,10 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         terminal_click: false,
         aliases: &[],
         executables: &["codex"],
+        minimum: Some(MinimumVersion {
+            version: "0.155.1",
+            evidence: "docs/agent-hooks.md#the-oldest-version-of-each-agent",
+        }),
         skill_location: SkillLocation::Shared,
         hook: HookInstall::Runtime(HookDialect::Codex),
         guidance: Support::Supported(ContextRoute::NativeHook(HookDialect::Codex)),
@@ -195,6 +203,12 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         terminal_click: false,
         aliases: &[],
         executables: &["grok"],
+        minimum: Some(MinimumVersion {
+            // The journey ran on 1.0.52 on all three systems; 1.0.50 is a
+            // reading of Grok's source, not a run.
+            version: "1.0.52",
+            evidence: "docs/agent-hooks.md#the-oldest-version-of-each-agent",
+        }),
         skill_location: SkillLocation::Shared,
         hook: HookInstall::Guidance(GuidanceDialect::Grok),
         guidance: Support::Unsupported(GROK_CONTEXT_ABSENCE),
@@ -295,6 +309,12 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         terminal_click: false,
         aliases: &[],
         executables: &["opencode"],
+        minimum: Some(MinimumVersion {
+            // Windows loaded the plugin on 1.18.35; 1.18.30's shapes are
+            // proven on macOS and Linux only.
+            version: "1.18.35",
+            evidence: "docs/agent-hooks.md#the-oldest-version-of-each-agent",
+        }),
         skill_location: SkillLocation::Shared,
         hook: HookInstall::Plugin(PluginDialect::OpenCode),
         guidance: Support::Supported(ContextRoute::PluginPrompt(PluginDialect::OpenCode)),
@@ -391,6 +411,10 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         terminal_click: false,
         aliases: &[],
         executables: &["pi"],
+        minimum: Some(MinimumVersion {
+            version: "1.0.4",
+            evidence: "hide-agent-hooks/tests/fixtures/pi-extension/pi-1.0.4.json",
+        }),
         skill_location: SkillLocation::Shared,
         hook: HookInstall::Plugin(PluginDialect::Pi),
         guidance: Support::Supported(ContextRoute::PluginPrompt(PluginDialect::Pi)),
@@ -484,6 +508,10 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         terminal_click: false,
         aliases: &[],
         executables: &["omp"],
+        minimum: Some(MinimumVersion {
+            version: "18.7.0",
+            evidence: "hide-agent-hooks/tests/fixtures/pi-extension/omp-18.7.0.json",
+        }),
         skill_location: SkillLocation::Shared,
         hook: HookInstall::Plugin(PluginDialect::Omp),
         guidance: Support::Supported(ContextRoute::PluginPrompt(PluginDialect::Omp)),
@@ -576,6 +604,11 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         terminal_click: false,
         aliases: &["agy", "antigravity-cli", "antigravity_cli"],
         executables: &["agy"],
+        minimum: Some(MinimumVersion {
+            // The Windows guard was proven on 1.4.2; 1.4.0 on macOS only.
+            version: "1.4.2",
+            evidence: "docs/agent-hooks.md#the-oldest-version-of-each-agent",
+        }),
         skill_location: SkillLocation::Antigravity,
         hook: HookInstall::Guidance(GuidanceDialect::Antigravity),
         guidance: Support::Supported(ContextRoute::GuidanceHook(GuidanceDialect::Antigravity)),
@@ -672,6 +705,7 @@ pub(super) const RETIRED_CURSOR: AgentAdapter = AgentAdapter {
     terminal_click: false,
     aliases: &[],
     executables: &["cursor-agent"],
+    minimum: None,
     skill_location: SkillLocation::Shared,
     hook: HookInstall::None,
     guidance: Support::Unsupported(RETIRED_CONTEXT_ABSENCE),

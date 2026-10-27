@@ -177,9 +177,10 @@ it("shows helper failures on a connected device and consent before Herdr can con
   expect(notAllowed.q('[data-device-host-allow-inline="studio"]')).not.toBeNull();
   await notAllowed.unmount();
 
-  // A device that is not connected says so on its row and nothing about its helper.
+  // A failed helper can prevent the device session from connecting.
   const down = await mount(state([remote("mini", { state: "unavailable", host: { ...host, state: "unavailable" } })]));
-  expect(down.q('[data-device-host="mini:unavailable"]')).toBeNull();
+  expect(down.q('[data-device-host="mini:unavailable"]')?.textContent).toContain("helper unavailable");
+  expect(down.q('[data-device-host-retry="mini"]')).not.toBeNull();
   await down.unmount();
 
   for (const problem of ["device_unavailable", "device_protocol_behind"]) {
@@ -197,6 +198,41 @@ it("shows helper failures on a connected device and consent before Herdr can con
     } finally {
       await blocked.unmount();
     }
+  }
+});
+
+it("shows why an Intel Mac is unsupported before a session connects, without a helper retry", async () => {
+  const message = "Intel Mac devices are not supported; Hide ships for Apple Silicon Macs only";
+  const view = await mount(state([remote("mini", {
+    state: "unavailable", problem: "device_unavailable",
+    host: { ...host, platform: "macos-x86_64", consent: "granted", state: "unsupported", message },
+  })]));
+  try {
+    expect(view.q('[data-device-host="mini:unsupported"]')?.textContent).toContain(message);
+    expect(view.q('[data-device-host-retry="mini"]')).toBeNull();
+  } finally {
+    await view.unmount();
+  }
+});
+
+it.each([
+  "The matching release's device asset could not be downloaded",
+  "Device archive size or SHA-256 does not match this app",
+  "This local/main Hide build has no matching device release",
+])("shows the kit failure and retries before a device session connects: %s", async (reason) => {
+  const message = `Device kit download failed: ${reason}. Retry the device connection`;
+  const view = await mount(state([remote("mini", {
+    state: "unavailable", problem: "device_protocol_behind", message: "Herdr uses an older protocol",
+    host: { ...host, consent: "granted", state: "unavailable", message },
+  })]));
+  try {
+    expect(view.q('[data-device-host="mini:unavailable"]')?.textContent).toContain(message);
+    const retry = view.q('[data-device-host-retry="mini"]');
+    expect(retry).not.toBeNull();
+    await act(async () => { retry!.click(); });
+    expect(sent(view.events, "device_host_retry")).toEqual([{ schema_version: 2, kind: "device_host_retry", payload: { device_id: "mini" } }]);
+  } finally {
+    await view.unmount();
   }
 });
 

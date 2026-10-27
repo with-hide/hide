@@ -6,8 +6,7 @@
 # reaches) is found within a day. The Rust toolchain is not one of those: its version is
 # the one `rust-toolchain.toml` names, so a new image cannot change it.
 # A test fails this run only when it fails its retry too (CI retries a failed
-# test once, all but the signed-in agy turn, which spends a provider's daily
-# requests; .config/nextest.toml); a test that passes the retry is flaky, and
+# test once; .config/nextest.toml); a test that passes the retry is flaky, and
 # scripts/ci-flaky-report.py files it as an issue, as in pr.yml. A test that
 # fails its retry too is written as a `Failed test` annotation on its job.
 # Runner windows and Linux Xvfb exercise automation, not physical IME/device QA.
@@ -19,8 +18,7 @@
 # expiry; it comments once per run attempt on an issue already open for the
 # same failure, opens at most 10 per run and lists the rest in one, and
 # closes a lane's issues when a scheduled run (or a hand run of `all`) passes
-# it; a lane whose job passed with a `Not measured` warning has not passed,
-# and the report lists it. A run of any other branch writes no issue.
+# it. A run of any other branch writes no issue.
 # docs/TESTING.md, "Nightly failures", owns the policy.
 # Run it by hand from the Actions tab (workflow_dispatch); actual queue load
 # and completed jobs must be measured separately from this configured matrix.
@@ -28,8 +26,8 @@
 # checking Windows does not occupy the macOS runners (one full dispatch used 7
 # macOS jobs for 65 minutes); `macos` also runs the performance lane. `verify`
 # and `package` run for `all` only. `agy` runs only the agent contracts on all
-# three systems, agy's (signed in when the key is set) and the folder trust
-# contract of Claude Code and Codex, so a branch can check them by hand
+# three systems, agy's and the folder trust contract of Claude Code and
+# Codex, so a branch can check them by hand
 # (`gh workflow run nightly.yml --ref <branch> -f lane=agy`).
 # The schedule runs everything. A lane left out is skipped, and the failure
 # report ignores a skipped job.
@@ -113,8 +111,7 @@ jobs:
       herdr-platform: macos-aarch64
 
   # The agy contract on all three systems (one system's on that system's hand
-  # run), and the signed-in check when the CI account's key is set; a pull
-  # request runs only its Windows leg.
+  # run); a pull request runs only its Windows leg.
   agy-contract-all:
     name: agy contract
     uses: ./.github/workflows/agy-contract.yml
@@ -123,15 +120,10 @@ jobs:
       issues: write
     with:
       systems: ${{ inputs.lane == 'linux' && '["linux"]' || inputs.lane == 'macos' && '["macos"]' || inputs.lane == 'windows' && '["windows"]' || '["linux","macos","windows"]' }}
-      live: true
-    secrets:
-      HIDE_AGY_API_KEY: ${{ secrets.HIDE_AGY_API_KEY }}
 
-  # The agent journey: the stand-ins on Linux and macOS, the Windows forms,
-  # the pinned CLIs against the fake model and each agent whose CI key is set
-  # signed in on all three systems, agy on the night's system of its quota
-  # rotation (one system's on that system's hand run); docs/VERIFICATION.md,
-  # Agent journey.
+  # The agent journey: the stand-ins on Linux and macOS, the Windows forms
+  # and the pinned CLIs against the fake model on all three systems (one
+  # system's on that system's hand run); docs/VERIFICATION.md, Agent journey.
   agent-journey:
     name: agent journey
     if: ${{ inputs.lane != 'agy' }}
@@ -140,17 +132,7 @@ jobs:
       contents: read
     with:
       systems: ${{ inputs.lane == 'linux' && '["linux"]' || inputs.lane == 'macos' && '["macos"]' || inputs.lane == 'windows' && '["windows"]' || '["linux","macos","windows"]' }}
-      live: true
       fake: true
-      agy: rotation
-    secrets:
-      HIDE_CLAUDE_API_KEY: ${{ secrets.HIDE_CLAUDE_API_KEY }}
-      HIDE_CODEX_API_KEY: ${{ secrets.HIDE_CODEX_API_KEY }}
-      HIDE_AGY_API_KEY: ${{ secrets.HIDE_AGY_API_KEY }}
-      HIDE_GROK_API_KEY: ${{ secrets.HIDE_GROK_API_KEY }}
-      HIDE_OPENCODE_API_KEY: ${{ secrets.HIDE_OPENCODE_API_KEY }}
-      HIDE_PI_API_KEY: ${{ secrets.HIDE_PI_API_KEY }}
-      HIDE_OMP_API_KEY: ${{ secrets.HIDE_OMP_API_KEY }}
 
   # The real Claude Code and Codex read the folder trust Hide records for a
   # worktree it made, on all three systems (one system's on that system's

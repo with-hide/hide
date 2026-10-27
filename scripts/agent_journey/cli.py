@@ -33,7 +33,7 @@ from agent_live_check.system import STOP_SIGNALS, WINDOWS, exe, git as git_progr
 if WINDOWS:
     from agent_live_check.windows import UserPath
 
-from . import ci, clis, cells, fake_lane, fake_model, fake_private, cli_cache, memory, opencode_service, quota
+from . import ci, clis, cells, fake_lane, fake_model, fake_private, cli_cache, memory, opencode_service
 from .controller import Controller
 from .contract import load_contract
 from .daemon import Daemon
@@ -49,10 +49,10 @@ KIT_SECONDS = 90
 # whose failing cells wait out their windows (seven took 60 minutes in run
 # 39099935719 and ran past 61 in 39104633599), so seven get 75 minutes,
 # inside the CI step's 85. A real provider's turns are slower and
-# the journey waits up to 120 s for a title, so a signed-in or local run gives
-# each agent 15 minutes: seven make 110 minutes, inside the signed-in CI
-# step's 115. Either way the journey ends itself, writes its report and cleans
-# up before its step would (scripts/tests/test_agent_journey_workflow.py).
+# the journey waits up to 120 s for a title, so a local run on the operator's
+# logins gives each agent 15 minutes: seven make 110 minutes. In CI the
+# journey ends itself, writes its report and cleans up before its step would
+# (scripts/tests/test_agent_journey_workflow.py).
 SETUP_SECONDS = 5 * 60
 AGENT_SECONDS = {"keyless": 10 * 60, "provider": 15 * 60}
 SYSTEM_NAMES = {"darwin": "macOS", "linux": "Linux", "win32": "Windows"}
@@ -85,8 +85,6 @@ def parser():
     value.add_argument("--controller-provider", type=Path,
                        help="The controller's spawn provider (web/e2e/shims/spawn-provider.c) already built; "
                             "by default the run builds it")
-    value.add_argument("--unmeasured", action="append", default=[], metavar="ID=REASON",
-                       help="Leaves a selected agent unstarted, its cells not measured for REASON (a lane's quota rotation)")
     value.add_argument("--fake-model", action="store_true",
                        help="The real CLIs answered by the journey's fake model (fake_model.py), with no key or login")
     return value
@@ -441,19 +439,14 @@ def prepare_fake_local(runtime, report, table, rows, measured, operator, root, u
 
 
 def prepare_ci(runtime, report, table, rows, measured, fixture_bin, root, fake, services, diagnostics=None):
-    """CI mode's agents in the disposable HOME, signed in with the lane's keys,
-    pointed at the fake model (`fake`, each agent's URL) or replaced by the
-    fixture stand-ins; the agents ready to measure."""
+    """CI mode's agents in the disposable HOME, pointed at the fake model
+    (`fake`, each agent's URL) or replaced by the fixture stand-ins; the
+    agents ready to measure."""
     ready = []
     for key in measured:
         kind = rows[key]["herdr_kind"]
         agent = {"id": key}
         report["agents"].append(agent)
-        secret = ci.not_configured(kind, fixture_bin, bool(fake))
-        if secret:
-            agent["not_configured"] = secret
-            cells.settle_agent(table, key, f"not configured ({secret})")
-            continue
         program = ci.executable(fixture_bin, kind)
         if not program:
             agent["cli_missing"] = kind
@@ -480,12 +473,6 @@ def prepare_ci(runtime, report, table, rows, measured, fixture_bin, root, fake, 
         _, version, _ = runtime.owner.run([str(launch), "--version"], env=environment, check=False)
         agent["version"] = version.strip()[:120]
         agent["pin"] = None if fixture_bin else clis.pin(kind, agent["version"])
-        if not fixture_bin and not fake:
-            refusal = ci.login(runtime, kind, launch, root)
-            if refusal:
-                agent["login"] = refusal
-                cells.settle_agent(table, key, refusal)
-                continue
         ready.append(key)
     return ready
 
@@ -507,7 +494,7 @@ def hide_ai_requests(log):
 
 
 def budget_failures(agents):
-    """A signed-in run's agents over their request budget, by name (PRD B29)."""
+    """A fake model run's agents over their request budget, by name (PRD B29)."""
     return [f"request_budget_exceeded: {agent['id']} made {agent['requests']} model requests, "
             f"budget {agent['request_budget']}"
             + (f", and the fake model refused {agent['refused_past_budget']} past it"
@@ -527,20 +514,16 @@ def main(argv=None):
     if args.fake_model and args.fixture_bin:
         refuse("fake_model_or_fixture_bin: the stand-ins answer for themselves")
     fake = args.fake_model
+    if not local and not fake and not args.fixture_bin:
+        # CI signs no agent in (operator decision, 2026-10-27); local mode
+        # measures the operator's logins on the Mac.
+        refuse("ci_mode_needs_fixture_bin_or_fake_model: CI signs no agent in; run the signed-in journey with --mode local")
     if local and sys.platform != "darwin":
         refuse("local_mode_runs_on_macos_only: it needs sandbox-exec and the keychain logins; the CI layer measures other systems")
     fixture_bin = args.fixture_bin.resolve() if args.fixture_bin else None
     if args.controller_provider and not args.controller_provider.is_file():
         refuse(f"controller_provider_missing: {args.controller_provider}")
     contract = load_contract(checkout)
-    # A signed-in CI run reads which refusals leave a turn unmeasured before
-    # it spends a request; a missing or misshapen contract stops it here.
-    quota_rows = None
-    if not local and not fixture_bin and not fake:
-        try:
-            quota_rows = quota.contract()
-        except ValueError as error:
-            refuse(str(error))
     known_ids = [row["id"] for row in contract]
     selected = args.agents.split(",") if args.agents else [key for key in known_ids if key not in cells.EXCLUDED_AGENTS]
     if not selected or len(set(selected)) != len(selected) or set(selected) - set(known_ids):
@@ -556,15 +539,10 @@ def main(argv=None):
             refuse("invalid_model_override")
         models[key] = model
     unmeasured = {}
-    for entry in args.unmeasured:
-        key, separator, reason = entry.partition("=")
-        if not separator or key not in selected or not reason.strip() or key in unmeasured:
-            refuse("invalid_unmeasured")
-        unmeasured[key] = reason.strip()
     if fixture_bin:
         # The stand-ins imitate Claude Code and Codex only (web/e2e/shims/live-check.h).
         for key in selected:
-            if key not in ci.FIXTURE_AGENTS and key not in unmeasured:
+            if key not in ci.FIXTURE_AGENTS:
                 if args.agents:
                     refuse(f"fixture_bin_imitates_claude_code_and_codex_only: {key}")
                 unmeasured[key] = ci.FIXTURE_ONLY
@@ -701,8 +679,7 @@ def main(argv=None):
                                          else {"args": [], "env": ci.route_names(rows[key]["herdr_kind"], fixture_bin,
                                                                                  agent.get("fake_env"))}),
                                   composer_judge=composer_judge,
-                                  model=rows[key]["model_flag"] and models.get(key),
-                                  quota=quota_rows)
+                                  model=rows[key]["model_flag"] and models.get(key))
                 for step in STEPS:
                     journey.step(step, *((card,) if step == memory.CELL else ()))
                     if watch and agent.get("private_home", {}).get("enabled") and step == "start":
@@ -782,14 +759,14 @@ def main(argv=None):
             log = runtime.home / "config/herdr/herdr-server.log"
             if log.is_file() and not log.is_symlink():
                 with open(log, "rb") as stream:
-                    write_private(run / "herdr-server.log", ci.redact(stream.read(1024 * 1024)))
+                    write_private(run / "herdr-server.log", stream.read(1024 * 1024))
             # Why a hook or plugin handed a prompt no letter or Memory: each cause the
             # helper met (`cli`, `deadline`, ...) and when it last did. HOME is the
             # private home only in CI mode; locally it stays the operator's.
             causes = runtime.home / ".hide/agent-hooks/delivery-diagnostics.json"
             if (not local or fake) and causes.is_file() and not causes.is_symlink():
                 with open(causes, "rb") as stream:
-                    write_private(run / "delivery-diagnostics.json", ci.redact(stream.read(64 * 1024)))
+                    write_private(run / "delivery-diagnostics.json", stream.read(64 * 1024))
         if local and not fake:
             # Before the cleanup, which removes the trust the candidate recorded with its worktrees.
             check_operator_trust(report, operator, run, "during")
@@ -878,7 +855,7 @@ def main(argv=None):
                         or not report["cleanup"].get("confirmed"))
     # An interrupted run says so with 3 whatever it measured, or 2 when its cleanup is unconfirmed.
     code = (2 if setup_failed else 3) if interrupted else cells.exit_code(table, selected, setup_failed=setup_failed)
-    report["budget_failures"] = budget_failures(report["agents"]) if fake or (not local and not fixture_bin) else []
+    report["budget_failures"] = budget_failures(report["agents"]) if fake else []
     if report["budget_failures"] and code in (0, 3):
         code = 1
     report["exit_code"] = code

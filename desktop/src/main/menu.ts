@@ -50,7 +50,7 @@ export function accelerator(chord: Chord): string {
 
 /**
  * Which commands each menu carries, in order; null is a separator. The
- * numbered ⌥1-9 / ⌘1-9 selections and Move to Trash stay keyboard-only.
+ * numbered ⌘1-9 / ⌥1-9 / ⌥⌘1-9 selections and Move to Trash stay keyboard-only.
  * Cycles have an immediate click form, with input owned by the renderer or
  * native page rather than an app-menu accelerator.
  */

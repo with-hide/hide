@@ -6,10 +6,11 @@
 //! that matches is the one shown; nothing falls through to an empty value or
 //! an invented cause (PRD B21, B32, D-64).
 
-use std::ffi::OsStr;
-use std::path::Path;
+use std::ffi::{OsStr, OsString};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
-use std::time::Duration;
+use std::sync::{Mutex, PoisonError};
+use std::time::{Duration, Instant, SystemTime};
 
 use hide_platform::process::run_to_end;
 use hide_platform::programs::Program;
@@ -347,13 +348,10 @@ pub fn runtime_compatibility(runtime: AgentRuntime, search: &OsStr) -> MemoryCom
     }
 }
 
-/// [`runtime_compatibility`] of a program already found, so a caller that
-/// names the program in what it says checks that same one.
-pub fn program_compatibility(runtime: AgentRuntime, program: &Program) -> MemoryCompatibility {
+/// [`runtime_compatibility`] of a program already found.
+fn program_compatibility(runtime: AgentRuntime, program: &Program) -> MemoryCompatibility {
     let minimum = minimum_memory_version(runtime);
-    let installed = version_output(program, RUNTIME_VERSION_PROBE_TIMEOUT)
-        .and_then(|output| parse_version(&output));
-    match installed {
+    match program_version(program) {
         Some(version) if version_at_least(&version, minimum) => {
             MemoryCompatibility::Supported { version }
         }
@@ -364,10 +362,21 @@ pub fn program_compatibility(runtime: AgentRuntime, program: &Program) -> Memory
     }
 }
 
+/// The oldest version the agent's declaration says Hide's hook was proven on
+/// (`hide_agent_adapter::AgentAdapter::minimum`); each is read when this
+/// crate is built, so a runtime whose agent declares none fails the build.
 fn minimum_memory_version(runtime: AgentRuntime) -> &'static str {
+    const fn declared(dialect: hide_agent_adapter::HookDialect) -> &'static str {
+        match dialect.adapter().minimum {
+            Some(minimum) => minimum.version,
+            None => panic!("every hook runtime's agent declares its minimum version"),
+        }
+    }
+    const CLAUDE_CODE: &str = declared(AgentRuntime::ClaudeCode.dialect());
+    const CODEX: &str = declared(AgentRuntime::Codex.dialect());
     match runtime {
-        AgentRuntime::ClaudeCode => "2.1.278",
-        AgentRuntime::Codex => "0.155.1",
+        AgentRuntime::ClaudeCode => CLAUDE_CODE,
+        AgentRuntime::Codex => CODEX,
     }
 }
 
@@ -378,6 +387,57 @@ pub fn runtime_program(runtime: AgentRuntime, search: &OsStr) -> Option<Program>
         AgentRuntime::Codex => "codex",
     };
     Program::find(search, name)
+}
+
+/// How long a version that could not be read is not asked for again; one
+/// that was read stays until the program's file changes.
+const UNREAD_RETRY: Duration = Duration::from_secs(60);
+
+/// How many programs' answers are remembered: one per agent is the working
+/// set, and the rest is room for copies found on other searches; the oldest
+/// goes first past it (resident process rule: cap what grows).
+const REMEMBERED_VERSIONS: usize = 32;
+
+/// A program's file as it is now, and the search it runs with, which finds
+/// the interpreter a script names.
+type VersionKey = (PathBuf, OsString, Option<SystemTime>, u64);
+
+/// The `x.y.z` version `program --version` answers, run with the search it
+/// was found on, asked at most once per version of its file: the kit is
+/// re-read every few seconds while Settings is open, and a subprocess per
+/// read would keep a slow or hanging CLI on the kit's worker for as long. A
+/// program that answers nothing readable within [`RUNTIME_VERSION_PROBE_TIMEOUT`]
+/// is `None` and is asked again after [`UNREAD_RETRY`].
+pub fn program_version(program: &Program) -> Option<String> {
+    static ANSWERS: Mutex<Vec<(VersionKey, Option<String>, Instant)>> = Mutex::new(Vec::new());
+    let key = std::fs::metadata(program.path()).ok().map(|meta| {
+        (
+            program.path().to_owned(),
+            program.search().to_owned(),
+            meta.modified().ok(),
+            meta.len(),
+        )
+    });
+    if let Some(key) = &key {
+        let answers = ANSWERS.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some((_, version, asked)) = answers.iter().find(|(known, ..)| known == key)
+            && (version.is_some() || asked.elapsed() < UNREAD_RETRY)
+        {
+            return version.clone();
+        }
+    }
+    let version = version_output(program, RUNTIME_VERSION_PROBE_TIMEOUT)
+        .and_then(|output| parse_version(&output));
+    if let Some(key) = key {
+        let mut answers = ANSWERS.lock().unwrap_or_else(PoisonError::into_inner);
+        // A newer file at the same path and search replaces the older answer.
+        answers.retain(|(known, ..)| (&known.0, &known.1) != (&key.0, &key.1));
+        if answers.len() >= REMEMBERED_VERSIONS {
+            answers.remove(0);
+        }
+        answers.push((key, version.clone(), Instant::now()));
+    }
+    version
 }
 
 fn version_output(program: &Program, timeout: Duration) -> Option<String> {

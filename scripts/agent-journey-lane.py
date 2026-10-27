@@ -1,20 +1,17 @@
 #!/usr/bin/env python3
 """A CI lane's outcome from one agent journey report (PRD agent-journey-check B26, B27, B29).
 
-Usage: agent-journey-lane.py <report.json> --lane fixture|login|fake
+Usage: agent-journey-lane.py <report.json> --lane fixture|fake
 
 The fixture lane passes only when every cell the stand-ins imitate passed for
 each agent they imitate, and the fake lane (the real CLIs answered by the
 journey's fake model) only when every declared cell passed for every registered agent, so
 it can take the stand-ins' place. Each lane fails on a failed cell, an isolation, setup or
-cleanup failure (the journey's exit 2), or a request budget overrun; the login
-and fake lanes also fail when an agent is refused its login, its CLI
-is missing, as the job installed it, or its CLI answers another version than
-contracts/agent-clis.json pins; the fixture and fake lanes fail when the
-report has no row for an agent they stand for. An agent with no key is a notice, and a turn the provider answered nothing because the key's day was
-spent is a `Not measured` warning, which keeps the lane from being green in
-the nightly report (scripts/ci-flaky-report.py), and neither fails it. Each
-finding is printed as a GitHub annotation; the exit code is the lane's.
+cleanup failure (the journey's exit 2), a request budget overrun, or a report
+with no row for an agent it stands for; the fake lane also fails when an
+agent's CLI is missing, as the job installed it, or answers another version
+than contracts/agent-clis.json pins. Each finding is printed as a GitHub
+annotation; the exit code is the lane's.
 """
 
 import argparse
@@ -91,47 +88,32 @@ def judge(report, lane, contract=None):
             cell = cells.get(name, {"status": "absent", "reason": ""})
             expected = "pass" if row["cells"][name] else "N/A"
             status = cell.get("status")
-            allowed_unmeasured = lane == "login" and expected == "pass" and status == "not measured" and cell.get("reason")
-            if status != expected and not allowed_unmeasured:
+            if status != expected:
                 passed = False
                 notes.append(annotation("error", f"agent journey {agent}", f"{name} is {cell['status']}, "
                                         + ("a stand-in passes it" if lane == "fixture" else
                                            f"the {lane} lane requires {expected} from the adapter declaration")
                                         + f": {cell['reason']}"))
     for agent in report.get("agents", []):
-        if lane in ("login", "fake") and agent.get("login"):
-            passed = False
-            notes.append(annotation("error", f"agent journey {agent['id']}", f"login refused: {agent['login']}"))
-        if lane in ("login", "fake") and agent.get("cli_missing"):
+        if lane == "fake" and agent.get("cli_missing"):
             passed = False
             notes.append(annotation("error", f"agent journey {agent['id']}",
                                     f"{agent['cli_missing']} is not installed, though the job installs it"))
         pin = agent.get("pin") or {}
-        if lane in ("login", "fake") and pin and not pin["matches"]:
+        if lane == "fake" and pin and not pin["matches"]:
             # A night measures what the table pins; a CLI that answers another
             # version is the one that changed (contracts/agent-clis.json).
             passed = False
             notes.append(annotation("error", f"agent journey {agent['id']}",
                                     f"answered {agent.get('version')!r}, contracts/agent-clis.json pins {pin['version']}"
                                     + (f" ({pin['pinned']})" if pin.get("pinned") else "")))
-        if agent.get("not_configured"):
-            notes.append(annotation("notice", f"agent journey {agent['id']}",
-                                    f"not configured (no {agent['not_configured']} secret); its signed-in journey stays unproven"))
-        if agent.get("quota"):
-            # The check on the first line and the reason after, as the nightly
-            # report reads a `Not measured` annotation (docs/TESTING.md, A real agent on CI).
-            unmeasured = [name for name, cell in table.get(agent["id"], {}).items()
-                          if cell["status"] == "not measured" and cell["reason"].startswith("provider quota exhausted")]
-            notes.append(annotation("warning", "Not measured", f"agent journey {agent['id']}",
-                                    f"provider quota exhausted ({', '.join(agent['quota'])}): "
-                                    f"{', '.join(unmeasured)} not reached"))
     return passed, notes
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("report", type=Path)
-    parser.add_argument("--lane", choices=("fixture", "login", "fake"), required=True)
+    parser.add_argument("--lane", choices=tuple(LANES), required=True)
     args = parser.parse_args(argv)
     try:
         report = json.loads(args.report.read_text())

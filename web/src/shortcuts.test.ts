@@ -115,9 +115,10 @@ describe("shortcut registry", () => {
       shortcuts: "⌘/",
       // The area commands have no chord until the operator binds one (PRD cmdk-navigation D-05).
       ...Object.fromEntries(AREA_COMMANDS.map((id) => [id, ""])),
-      // ⌥n selects the nth Agents row and ⌘n the nth device (electron-digit-shortcuts-hints D-02).
+      // ⌘n selects the nth tab, ⌥n the nth Agents row and ⌥⌘n the nth device (electron-digit-shortcuts-hints D-02).
+      ...Object.fromEntries(DIGITS.map((digit) => [`select_tab_${digit}`, `⌘${digit}`])),
       ...Object.fromEntries(DIGITS.map((digit) => [`select_agent_${digit}`, `⌥${digit}`])),
-      ...Object.fromEntries(DIGITS.map((digit) => [`select_device_${digit}`, `⌘${digit}`])),
+      ...Object.fromEntries(DIGITS.map((digit) => [`select_device_${digit}`, `⌥⌘${digit}`])),
     };
     expect(Object.fromEntries(REGISTRY.map((command) => [command.id, displayCommand(command.id, "electron", REGISTRY, "mac")]))).toEqual(macosSet);
   });
@@ -125,8 +126,9 @@ describe("shortcut registry", () => {
   describe("numbered commands (electron-digit-shortcuts-hints D-02, B3, B4)", () => {
     it("holds nine of each family, on the desktop host only", () => {
       const numbered = REGISTRY.filter((command) => numberedCommand(command.id));
-      expect(numbered).toHaveLength(18);
+      expect(numbered).toHaveLength(27);
       for (const command of numbered) expect(command.browser, command.id).toBeNull();
+      expect(numberedCommand("select_tab_3")).toEqual({ family: "tabs", number: 3 });
       expect(numberedCommand("select_agent_9")).toEqual({ family: "agents", number: 9 });
       expect(numberedCommand("select_device_1")).toEqual({ family: "devices", number: 1 });
       expect(numberedCommand("new_tab")).toBeNull();
@@ -134,10 +136,12 @@ describe("shortcut registry", () => {
       expect(isNumberedCommand("text_reset")).toBe(false);
     });
 
-    it("answers ⌥n and ⌘n in the desktop app, leaves ⌃n to the terminal, and answers nothing in a browser", () => {
+    it("answers ⌘n, ⌥n and ⌥⌘n in the desktop app, leaves ⌃n to the terminal, and answers nothing in a browser", () => {
       expect(matchHost(press("Digit2", { ctrl: true }), REGISTRY, "electron")).toBeNull();
       expect(matchHost(press("Digit7", { alt: true }), REGISTRY, "electron")?.id).toBe("select_agent_7");
-      expect(matchHost(press("Digit2", { meta: true }), REGISTRY, "electron")?.id).toBe("select_device_2");
+      expect(matchHost(press("Digit2", { meta: true }), REGISTRY, "electron")?.id).toBe("select_tab_2");
+      expect(matchHost(press("Digit2", { meta: true, alt: true }), REGISTRY, "electron")?.id).toBe("select_device_2");
+      // macOS keeps ⇧⌘3, ⇧⌘4 and ⇧⌘5 for screenshots, so no family is on ⇧⌘.
       expect(matchHost(press("Digit2", { meta: true, shift: true }), REGISTRY, "electron")).toBeNull();
       expect(matchHost(press("Digit2", { meta: true }), REGISTRY, "browser")).toBeNull();
       expect(matchHost(press("Digit2", { ctrl: true }), REGISTRY, "browser")).toBeNull();
@@ -146,7 +150,9 @@ describe("shortcut registry", () => {
 
     it("names each family's shared modifiers per host, for the hold hint", () => {
       expect(familyModifiers("agents", REGISTRY, "electron")).toEqual({ meta: false, alt: true, shift: false, ctrl: false });
-      expect(familyModifiers("devices", REGISTRY, "electron")).toEqual({ meta: true, alt: false, shift: false, ctrl: false });
+      expect(familyModifiers("tabs", REGISTRY, "electron")).toEqual({ meta: true, alt: false, shift: false, ctrl: false });
+      expect(familyModifiers("devices", REGISTRY, "electron")).toEqual({ meta: true, alt: true, shift: false, ctrl: false });
+      expect(familyModifiers("tabs", REGISTRY, "browser")).toBeNull();
       expect(familyModifiers("devices", REGISTRY, "browser")).toBeNull();
       expect(familyModifiers("agents", REGISTRY, "browser")).toBeNull();
     });
@@ -154,24 +160,25 @@ describe("shortcut registry", () => {
     it("writes the held modifiers as each system presses them", () => {
       const agents = familyModifiers("agents", REGISTRY, "electron")!;
       expect(modifierLabel(agents, "mac")).toBe("⌥");
-      expect(modifierLabel(familyModifiers("devices", REGISTRY, "electron")!, "mac")).toBe("⌘");
+      expect(modifierLabel(familyModifiers("tabs", REGISTRY, "electron")!, "mac")).toBe("⌘");
+      expect(modifierLabel(familyModifiers("devices", REGISTRY, "electron")!, "mac")).toBe("⌥⌘");
       const pcRegistry = systemRegistry("pc");
-      expect(modifierLabel(familyModifiers("devices", pcRegistry, "electron")!, "pc")).toBe("Ctrl+Shift");
+      expect(modifierLabel(familyModifiers("tabs", pcRegistry, "electron")!, "pc")).toBe("Ctrl+Shift");
+      expect(modifierLabel(familyModifiers("devices", pcRegistry, "electron")!, "pc")).toBe("Alt+Shift");
       expect(modifierLabel(familyModifiers("agents", pcRegistry, "electron")!, "pc")).toBe("Alt");
     });
 
     it("refuses a pane chord bound onto a numbered one by that command's name", () => {
-      expect(bindingProblem("split_right", { code: "Digit3", meta: true }, REGISTRY, "electron", "mac")).toEqual({ code: "conflict", chord: "⌘3", commandId: "select_device_3" });
-      expect(bindingProblem("split_right", { code: "Digit5", alt: true, meta: true }, REGISTRY, "electron", "mac")).toBeNull();
-      // ⌥⌘1-4 are free since the lane tools took letters (PRD sidebar-task-lens B24).
-      expect(bindingProblem("split_right", { code: "Digit3", alt: true, meta: true }, REGISTRY, "electron", "mac")).toBeNull();
-      expect(effectiveRegistry({ split_right: "command+3" }, "electron", "mac").diagnostic).toContain("conflict select_device_3");
+      expect(bindingProblem("split_right", { code: "Digit3", meta: true }, REGISTRY, "electron", "mac")).toEqual({ code: "conflict", chord: "⌘3", commandId: "select_tab_3" });
+      expect(bindingProblem("split_right", { code: "Digit5", alt: true, meta: true }, REGISTRY, "electron", "mac")).toEqual({ code: "conflict", chord: "⌥⌘5", commandId: "select_device_5" });
+      expect(effectiveRegistry({ split_right: "command+3" }, "electron", "mac").diagnostic).toContain("split_right sits on fixed select_tab_3");
     });
 
     it("folds each family into one sheet row with its range, absent in a browser", () => {
       expect(sheetRows("Tabs", REGISTRY, "electron", "mac").map((row) => row.id)).toEqual(["new_tab", "close_tab", "reopen_closed_tab"]);
       expect(sheetRows("Navigate", REGISTRY, "electron", "mac").find((row) => row.id === "select_agent_1")).toMatchObject({ title: "Select agent 1-9", chord: "⌥1 … ⌥9" });
-      expect(sheetRows("Navigate", REGISTRY, "electron", "mac").find((row) => row.id === "select_device_1")).toMatchObject({ title: "Select device 1-9", chord: "⌘1 … ⌘9" });
+      expect(sheetRows("Navigate", REGISTRY, "electron", "mac").find((row) => row.id === "select_tab_1")).toMatchObject({ title: "Select tab 1-9", chord: "⌘1 … ⌘9" });
+      expect(sheetRows("Navigate", REGISTRY, "electron", "mac").find((row) => row.id === "select_device_1")).toMatchObject({ title: "Select device 1-9", chord: "⌥⌘1 … ⌥⌘9" });
       expect(sheetRows("Navigate", REGISTRY, "browser", "mac").find((row) => row.id === "select_device_1")).toMatchObject({ chord: null });
       expect(sheetRows("Panes", REGISTRY, "browser", "mac").find((row) => row.id === "close_pane")).toMatchObject({ chord: "⌥⇧W", moved: true, movedFrom: "⇧⌘W" });
     });
@@ -455,8 +462,9 @@ describe("Windows and Linux (operator decision 2026-10-03)", () => {
       settings: "Ctrl+Shift+,",
       shortcuts: "Ctrl+Shift+/",
       ...Object.fromEntries(AREA_COMMANDS.map((id) => [id, ""])),
+      ...Object.fromEntries(DIGITS.map((digit) => [`select_tab_${digit}`, `Ctrl+Shift+${digit}`])),
       ...Object.fromEntries(DIGITS.map((digit) => [`select_agent_${digit}`, `Alt+${digit}`])),
-      ...Object.fromEntries(DIGITS.map((digit) => [`select_device_${digit}`, `Ctrl+Shift+${digit}`])),
+      ...Object.fromEntries(DIGITS.map((digit) => [`select_device_${digit}`, `Alt+Shift+${digit}`])),
     };
     expect(Object.fromEntries(pc.map((command) => [command.id, displayCommand(command.id, "electron", pc, "pc")]))).toEqual(pcSet);
   });
@@ -507,7 +515,8 @@ describe("Windows and Linux (operator decision 2026-10-03)", () => {
     // Every other browser chord is the desktop chord.
     const differs = pc.filter((command) => command.browser && command.electron && !command.moved && displayChord(command.browser, "pc") !== displayChord(command.electron, "pc"));
     expect(differs.map((command) => command.id)).toEqual([]);
-    expect(sheetRows("Navigate", pc, "electron", "pc").find((row) => row.id === "select_device_1")).toMatchObject({ chord: "Ctrl+Shift+1 … Ctrl+Shift+9" });
+    expect(sheetRows("Navigate", pc, "electron", "pc").find((row) => row.id === "select_tab_1")).toMatchObject({ chord: "Ctrl+Shift+1 … Ctrl+Shift+9" });
+    expect(sheetRows("Navigate", pc, "electron", "pc").find((row) => row.id === "select_device_1")).toMatchObject({ chord: "Alt+Shift+1 … Alt+Shift+9" });
   });
 
   it("answers the Ctrl+Shift chords and lets Ctrl, the Windows key and AltGr-free chords through", () => {
@@ -516,7 +525,8 @@ describe("Windows and Linux (operator decision 2026-10-03)", () => {
     expect(matchHost(pcPress("KeyT", { ctrl: true, shift: true, alt: true }), pc, "electron")).toBeNull();
     expect(matchHost(pcPress("KeyT", { ctrl: true, shift: true, alt: true }), pc, "browser")?.id).toBe("reopen_closed_tab");
     expect(matchHost(pcPress("Backquote", { ctrl: true, shift: true, alt: true }), pc, "electron")?.id).toBe("previous_recent_project");
-    expect(matchHost(pcPress("Digit3", { ctrl: true, shift: true }), pc, "electron")?.id).toBe("select_device_3");
+    expect(matchHost(pcPress("Digit3", { ctrl: true, shift: true }), pc, "electron")?.id).toBe("select_tab_3");
+    expect(matchHost(pcPress("Digit3", { alt: true, shift: true }), pc, "electron")?.id).toBe("select_device_3");
     expect(matchHost(pcPress("Digit3", { ctrl: true }), pc, "electron")).toBeNull();
     expect(matchHost(pcPress("Backquote", { ctrl: true, shift: true }), pc, "electron")?.id).toBe("recent_project");
     expect(matchHost(pcPress("KeyK", { ctrl: true, shift: true }), pc, "browser")?.id).toBe("search");
@@ -525,7 +535,7 @@ describe("Windows and Linux (operator decision 2026-10-03)", () => {
     expect(matchHost(pcPress("Delete"), pc, "electron")).toBeNull();
   });
 
-  it("opens the Project's 기억, the PR list and Changes with ⇧⌘L/R/G and turns the sidebar lens with ⇧⌘B on a Mac, Alt+Shift elsewhere, ⌥⇧R and ⌥⇧B in a Mac browser tab, and leaves ⌥⌘1-4 unbound (PRD sidebar-task-lens B24; lane-two-columns B25)", () => {
+  it("opens the Project's 기억, the PR list and Changes with ⇧⌘L/R/G and turns the sidebar lens with ⇧⌘B on a Mac, Alt+Shift elsewhere, ⌥⇧R and ⌥⇧B in a Mac browser tab, and gives ⌥⌘1-4 to the devices in the desktop app alone (PRD sidebar-task-lens B24; lane-two-columns B25)", () => {
     const letters = { open_project_memory: "KeyL", open_sidebar_prs: "KeyR", toggle_lane_changes: "KeyG", toggle_sidebar_lens: "KeyB" } as const;
     for (const [id, code] of Object.entries(letters)) {
       expect(matchHost({ code, metaKey: true, altKey: false, shiftKey: true, ctrlKey: false }, REGISTRY, "electron")?.id, `electron mac ${id}`).toBe(id);
@@ -538,32 +548,45 @@ describe("Windows and Linux (operator decision 2026-10-03)", () => {
     expect(matchHost({ code: "KeyR", metaKey: false, altKey: true, shiftKey: true, ctrlKey: false }, REGISTRY, "browser")?.id).toBe("open_sidebar_prs");
     expect(matchHost({ code: "KeyB", metaKey: false, altKey: true, shiftKey: true, ctrlKey: false }, REGISTRY, "browser")?.id).toBe("toggle_sidebar_lens");
     for (const command of pc.filter((row) => row.id in letters)) expect(command.browser && isChromeReserved(command.browser, "pc"), command.id).toBeFalsy();
-    for (const host of ["electron", "browser"] as const) {
-      for (const index of [1, 2, 3, 4]) expect(matchHost({ code: `Digit${index}`, metaKey: true, altKey: true, shiftKey: false, ctrlKey: false }, REGISTRY, host), `${host} ⌥⌘${index}`).toBeNull();
+    for (const index of [1, 2, 3, 4]) {
+      expect(matchHost({ code: `Digit${index}`, metaKey: true, altKey: true, shiftKey: false, ctrlKey: false }, REGISTRY, "electron")?.id, `electron ⌥⌘${index}`).toBe(`select_device_${index}`);
+      expect(matchHost({ code: `Digit${index}`, metaKey: true, altKey: true, shiftKey: false, ctrlKey: false }, REGISTRY, "browser"), `browser ⌥⌘${index}`).toBeNull();
     }
-    // Alt+n still selects the nth agent, and Ctrl+Shift+n the nth device.
+    // Alt+n still selects the nth agent, Ctrl+Shift+n the nth tab and Alt+Shift+n the nth device.
     expect(matchHost(pcPress("Digit1", { alt: true }), pc, "electron")?.id).toBe("select_agent_1");
-    expect(matchHost(pcPress("Digit1", { ctrl: true, shift: true }), pc, "electron")?.id).toBe("select_device_1");
+    expect(matchHost(pcPress("Digit1", { ctrl: true, shift: true }), pc, "electron")?.id).toBe("select_tab_1");
+    expect(matchHost(pcPress("Digit1", { alt: true, shift: true }), pc, "electron")?.id).toBe("select_device_1");
   });
 
   it("reads a stored lane tool chord on both systems, drops a stored Work tool chord without refusing the set, and refuses a chord a lane command holds", () => {
-    const stored = { toggle_lane_project: "command+option+9" };
-    expect(displayCommand("toggle_lane_project", "electron", effectiveRegistry(stored, "electron", "mac").registry, "mac")).toBe("⌥⌘9");
-    expect(displayCommand("toggle_lane_project", "electron", effectiveRegistry(stored, "electron", "pc").registry, "pc")).toBe("Alt+Shift+9");
-    const retired = effectiveRegistry({ toggle_lane_work: "command+option+1", split_right: "command+option+1" }, "electron", "mac");
-    expect(retired.registry.find((command) => command.id === "split_right")?.electron).toEqual({ code: "Digit1", meta: true, alt: true });
+    const stored = { toggle_lane_project: "command+option+j" };
+    expect(displayCommand("toggle_lane_project", "electron", effectiveRegistry(stored, "electron", "mac").registry, "mac")).toBe("⌥⌘J");
+    expect(displayCommand("toggle_lane_project", "electron", effectiveRegistry(stored, "electron", "pc").registry, "pc")).toBe("Alt+Shift+J");
+    const retired = effectiveRegistry({ toggle_lane_work: "command+option+j", split_right: "command+option+j" }, "electron", "mac");
+    expect(retired.registry.find((command) => command.id === "split_right")?.electron).toEqual({ code: "KeyJ", meta: true, alt: true });
     expect(effectiveRegistry({ split_right: "command+shift+l" }, "electron", "mac").diagnostic).toContain("conflict open_project_memory");
   });
 
   it("runs a chord bound to the removed PRs tool as the sidebar's PR list, the new name winning, and keeps a Memory tool chord on the Memory tool (PRD lane-two-columns B25)", () => {
-    const electron = effectiveRegistry({ toggle_lane_memory: "command+option+9", toggle_lane_prs: "command+option+8" }, "electron", "mac");
+    const electron = effectiveRegistry({ toggle_lane_memory: "command+option+j", toggle_lane_prs: "command+option+u" }, "electron", "mac");
     expect(electron.diagnostic).toBeNull();
-    expect(displayCommand("toggle_lane_memory", "electron", electron.registry, "mac")).toBe("⌥⌘9");
-    expect(displayCommand("open_sidebar_prs", "electron", electron.registry, "mac")).toBe("⌥⌘8");
+    expect(displayCommand("toggle_lane_memory", "electron", electron.registry, "mac")).toBe("⌥⌘J");
+    expect(displayCommand("open_sidebar_prs", "electron", electron.registry, "mac")).toBe("⌥⌘U");
     const browser = effectiveRegistry({ toggle_lane_prs: "alt+shift+Digit7" }, "browser", "mac");
     expect(browser.registry.find((command) => command.id === "open_sidebar_prs")?.browser).toEqual({ code: "Digit7", alt: true, shift: true });
-    const both = effectiveRegistry({ toggle_lane_prs: "command+option+9", open_sidebar_prs: "command+option+7" }, "electron", "mac");
-    expect(displayCommand("open_sidebar_prs", "electron", both.registry, "mac")).toBe("⌥⌘7");
+    const both = effectiveRegistry({ toggle_lane_prs: "command+option+j", open_sidebar_prs: "command+option+u" }, "electron", "mac");
+    expect(displayCommand("open_sidebar_prs", "electron", both.registry, "mac")).toBe("⌥⌘U");
+  });
+
+  it("drops only a stored chord that a fixed number now holds, keeping the rest of the set (⌥⌘n went to the devices)", () => {
+    const stored = { toggle_lane_memory: "command+option+9", split_right: "command+option+j" };
+    for (const system of ["mac", "pc"] as const) {
+      const result = effectiveRegistry(stored, "electron", system);
+      expect(result.diagnostic, system).toContain("toggle_lane_memory sits on fixed select_device_9");
+      expect(result.registry.find((command) => command.id === "toggle_lane_memory")?.electron, system).toBeNull();
+      expect(displayCommand("split_right", "electron", result.registry, system), system).toBe(system === "mac" ? "⌥⌘J" : "Alt+Shift+J");
+      expect(displayCommand("select_device_9", "electron", result.registry, system), system).toBe(system === "mac" ? "⌥⌘9" : "Alt+Shift+9");
+    }
   });
 
   it("stores a chord as the macOS chord it stands for, so one set reads the same on both systems", () => {

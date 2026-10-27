@@ -22,11 +22,6 @@ on:
         description: Positive safe integer used by every package of this candidate.
         required: true
         type: string
-      live_agents:
-        description: Call signed-in providers; false records them as not measured and keeps fixture/fake checks.
-        required: false
-        type: boolean
-        default: true
 
 permissions:
   contents: read
@@ -94,19 +89,7 @@ jobs:
     with:
       source-sha: ${{ inputs.public_sha }}
       systems: '["linux","macos","windows"]'
-      live: ${{ inputs.live_agents }}
       fake: true
-      agy: linux
-    # These are the existing public journey's provider keys, never signing
-    # keys or credentials for a private repository.
-    secrets:
-      HIDE_CLAUDE_API_KEY: ${{ secrets.HIDE_CLAUDE_API_KEY }}
-      HIDE_CODEX_API_KEY: ${{ secrets.HIDE_CODEX_API_KEY }}
-      HIDE_AGY_API_KEY: ${{ secrets.HIDE_AGY_API_KEY }}
-      HIDE_GROK_API_KEY: ${{ secrets.HIDE_GROK_API_KEY }}
-      HIDE_OPENCODE_API_KEY: ${{ secrets.HIDE_OPENCODE_API_KEY }}
-      HIDE_PI_API_KEY: ${{ secrets.HIDE_PI_API_KEY }}
-      HIDE_OMP_API_KEY: ${{ secrets.HIDE_OMP_API_KEY }}
 
   receipt:
     needs: [validate, packages, agent-journey]
@@ -125,9 +108,8 @@ jobs:
           import fs from 'node:fs';
           const receipt = JSON.parse(process.env.RECEIPT);
           fs.writeFileSync('agents/runs/release-candidate/candidate.json', JSON.stringify(receipt) + '\n');
-          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, receipt.live_agents
-            ? 'Live provider checks requested. Read the journey report for missing-key or quota cells.\n'
-            : 'Live provider checks: not measured (live_agents=false). Fixture and fake-model checks passed.\n');
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+            'Signed-in providers: not measured on CI; the release measures them on the Mac. Fixture and fake-model checks passed.\n');
           NODE
       - uses: actions/upload-artifact@v7
         with:
