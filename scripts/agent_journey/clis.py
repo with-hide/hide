@@ -13,6 +13,10 @@ from pathlib import Path
 import re
 
 PINNED = Path(__file__).resolve().parents[2] / "contracts/agent-clis.json"
+# The systems CI installs agy on, as `<system>-<arch>`: its row names the
+# file and sha512 of the pinned release for each, because agy's installer
+# serves only the latest release.
+AGY_SYSTEMS = ("darwin-arm64", "linux-x64", "windows-x64")
 TABLE = Path(os.environ.get("HIDE_AGENT_CLIS_TABLE") or PINNED)
 
 
@@ -31,5 +35,4 @@ def pin(kind, answer):
     row = table().get(kind)
     if not row:
         return None
-    return {"version": row["version"], "matches": matches(row["version"], answer),
-            **({"pinned": row["pinned"]} if row.get("pinned") else {})}
+    return {"version": row["version"], "matches": matches(row["version"], answer)}

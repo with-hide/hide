@@ -333,7 +333,7 @@
         "name": "AGY_CLI_DISABLE_AUTO_UPDATE",
         "value": "1"
       },
-      "reason": "The installer cannot select a pinned release."
+      "reason": "The API-key environment has not been proven."
     },
     "minimum_version": "1.4.2",
     "update_commands": [

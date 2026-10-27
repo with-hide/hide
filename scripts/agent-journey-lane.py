@@ -105,8 +105,7 @@ def judge(report, lane, contract=None):
             # version is the one that changed (contracts/agent-clis.json).
             passed = False
             notes.append(annotation("error", f"agent journey {agent['id']}",
-                                    f"answered {agent.get('version')!r}, contracts/agent-clis.json pins {pin['version']}"
-                                    + (f" ({pin['pinned']})" if pin.get("pinned") else "")))
+                                    f"answered {agent.get('version')!r}, contracts/agent-clis.json pins {pin['version']}"))
     return passed, notes
 
 

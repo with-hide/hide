@@ -113,8 +113,8 @@ def exception(row, pin):
     declaration = row.get("fake_home") or {}
     if declaration.get("status") != "proven":
         return declaration.get("reason", "The adapter declares no private HOME proof.")
-    if not pin or pin.get("pinned") or pin.get("installer") not in ("npm", "grok", "omp"):
-        return "The installer cannot select a pinned release."
+    if not pin or pin.get("installer") not in ("npm", "grok", "omp", "agy"):
+        return "contracts/agent-clis.json names no installer for the pinned release."
     if not declaration.get("key_env") or not declaration.get("evidence"):
         return "The adapter declares no API-key environment proof."
     update = declaration.get("auto_update") or {}

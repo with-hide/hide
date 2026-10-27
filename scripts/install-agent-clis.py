@@ -4,32 +4,34 @@
 Usage: install-agent-clis.py <kind>... | --all [--prefix DIR]
 
 CI (CI=true), or the guarded local fake journey's private cache installer.
-The latter requires --private-fake, a HOME inside the pin entry, and an installer
-that selects a version; its caller owns the sandbox, lease and byte cap. Each CLI goes under DIR (default
+The latter requires --private-fake and a HOME inside the pin entry; its caller
+owns the sandbox, lease and byte cap. Each CLI goes under DIR (default
 $RUNNER_TEMP/agent-clis), and the script prints one `<kind>=<program>` line
 per CLI; with GITHUB_PATH set it puts each program's folder on the PATH of
 the later steps, and with GITHUB_OUTPUT set it writes the same lines as the
 step's outputs. npm installs run no package's install scripts but those of
-a row that names why it needs them (`install_scripts`). A CLI whose installer
-takes no version is installed at the vendor's current release, and a CLI that
-answers another version than the table's fails the install, so a vendor
-release moves the pin in a pull request before a lane measures it.
+a row that names why it needs them (`install_scripts`). A CLI that answers
+another version than the table's fails the install, so a vendor release moves
+the pin in a pull request before a lane measures it.
 """
 
 import argparse
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import urllib.request
 
 CHECKOUT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CHECKOUT / "scripts"))
-from agent_journey.clis import TABLE, matches, table as pins  # noqa: E402
+from agent_journey.clis import AGY_SYSTEMS, TABLE, matches, table as pins  # noqa: E402
 
 WINDOWS = os.name == "nt"
 # Where each pinned release comes from: the vendor's installer, or its release files.
@@ -42,6 +44,13 @@ def table():
     for kind, row in rows.items():
         if not row.get("version") or row.get("installer") not in INSTALLERS:
             raise SystemExit(f"{TABLE}: {kind} needs a version and one of the installers {sorted(INSTALLERS)}")
+        if row["installer"] == "agy":
+            files = row.get("files") or {}
+            missing = [system for system in AGY_SYSTEMS
+                       if not str((files.get(system) or {}).get("url", "")).startswith("https://")
+                       or not re.fullmatch(r"[0-9a-f]{128}", str((files.get(system) or {}).get("sha512", "")))]
+            if missing:
+                raise SystemExit(f"{TABLE}: {kind} needs a url and sha512 for {', '.join(missing)}")
     return rows
 
 
@@ -96,10 +105,7 @@ def omp(row, prefix):
     the release's SHA256SUMS.txt. The installer at omp.sh resolves a release
     through a build server that answered `no_build` for every version on
     2026-10-18, while each release carries its binaries."""
-    machine = platform.machine().lower()
-    arch = "arm64" if machine in ("arm64", "aarch64") else "x64"
-    system = "windows" if WINDOWS else "darwin" if sys.platform == "darwin" else "linux"
-    asset = f"omp-{system}-{arch}" + (".exe" if WINDOWS else "")
+    asset = f"omp-{target()}" + (".exe" if WINDOWS else "")
     base = f"{OMP_RELEASES}/v{row['version']}"
     sums = fetch(f"{base}/SHA256SUMS.txt").decode()
     expected = next((line.split()[0] for line in sums.splitlines() if line.split()[1:] == [asset]), None)
@@ -116,20 +122,44 @@ def omp(row, prefix):
     return program
 
 
+def target():
+    """This runner as `<system>-<arch>`, the form omp's assets and agy's row name."""
+    machine = platform.machine().lower()
+    arch = "arm64" if machine in ("arm64", "aarch64") else "x64"
+    system = "windows" if WINDOWS else "darwin" if sys.platform == "darwin" else "linux"
+    return f"{system}-{arch}"
+
+
 def fetch(url):
     with urllib.request.urlopen(url, timeout=300) as answer:
         return answer.read()
 
 
 def agy(row, prefix):
-    """agy's installer takes no version (scripts/install-agy.sh)."""
-    del row, prefix
-    found = subprocess.run([bash(), str(CHECKOUT / "scripts/install-agy.sh")], capture_output=True, text=True,
-                           timeout=600)
-    sys.stderr.write(found.stderr)
-    if found.returncode:
-        raise SystemExit(f"install-agy.sh exited {found.returncode}")
-    return Path(found.stdout.strip())
+    """agy's file for this system at the url the row records, checked against
+    the row's sha512: the vendor's installer serves only its latest release,
+    while each release's file stays at its own address. The archive's
+    `antigravity` is the program; the installer's last step, `agy install`,
+    only edits the shell's PATH and aliases, which the runner does not need."""
+    system = target()
+    if system not in row["files"]:
+        raise SystemExit(f"agy: {TABLE.name} names no file for {system}")
+    url, sha512 = row["files"][system]["url"], row["files"][system]["sha512"]
+    payload = fetch(url)
+    if hashlib.sha512(payload).hexdigest() != sha512:
+        raise SystemExit(f"agy: {url} does not match the sha512 {TABLE.name} records")
+    if url.endswith(".tar.gz"):
+        with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as archive:
+            member = archive.extractfile("antigravity")
+            payload = member.read() if member else b""
+        if not payload:
+            raise SystemExit(f"agy: {url} holds no antigravity program")
+    folder = prefix / "agy"
+    folder.mkdir(parents=True, exist_ok=True)
+    program = folder / ("agy.exe" if WINDOWS else "agy")
+    program.write_bytes(payload)
+    program.chmod(0o755)
+    return program
 
 
 INSTALLERS = {"npm": None, "grok": grok, "omp": omp, "agy": agy}
@@ -152,9 +182,8 @@ def main(argv=None):
     if bool(args.kinds) == args.all:
         parser.error("name the CLIs or pass --all, not both")
     if args.private_fake:
-        if (not args.prefix or Path.home().resolve() != (args.prefix / "home").resolve()
-                or args.all or "agy" in args.kinds):
-            parser.error("private fake installation needs a pin-local HOME and version-selecting installers")
+        if not args.prefix or Path.home().resolve() != (args.prefix / "home").resolve():
+            parser.error("private fake installation needs a pin-local HOME")
     elif os.environ.get("CI") != "true":
         print("install-agent-clis.py installs CLIs on a CI runner only", file=sys.stderr)
         return 2
@@ -185,9 +214,7 @@ def main(argv=None):
         version = answered(program)
         notes.append(f"{kind} {version}")
         if not matches(rows[kind]["version"], version):
-            pinned = rows[kind].get("pinned")
-            mismatches.append(f"{kind} answered {version!r}, {TABLE.name} pins {rows[kind]['version']}"
-                              + (f" ({pinned})" if pinned else ""))
+            mismatches.append(f"{kind} answered {version!r}, {TABLE.name} pins {rows[kind]['version']}")
         lines.append(f"{kind}={program}")
     print(f"::notice title=agent CLIs::{', '.join(notes)}")
     if mismatches:

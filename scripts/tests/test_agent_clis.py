@@ -2,10 +2,14 @@
 install fails here, not on a runner."""
 
 from pathlib import Path
+import hashlib
 import importlib.util
+import io
+import json
 import os
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from unittest import mock
@@ -28,8 +32,22 @@ class Table(unittest.TestCase):
                 if row["installer"] == "npm":
                     self.assertTrue(row.get("package"))
 
+    def test_an_agy_row_without_a_url_and_sha512_for_each_system_is_refused(self):
+        pinned = json.loads(clis.PINNED.read_text())
+        row = pinned["clis"]["agy"]
+        for system in clis.AGY_SYSTEMS:
+            for field in ("url", "sha512"):
+                with self.subTest(system=system, field=field):
+                    files = {**row["files"], system: {key: value for key, value in row["files"][system].items()
+                                                      if key != field}}
+                    with mock.patch.object(install, "pins", return_value={"agy": {**row, "files": files}}), \
+                            self.assertRaisesRegex(SystemExit, f"agy needs a url and sha512 for {system}"):
+                        install.table()
+        with mock.patch.object(install, "pins", return_value={"agy": {**row, "files": {}}}), \
+                self.assertRaises(SystemExit):
+            install.table()
+
     def test_every_journey_agent_has_a_pin(self):
-        import json
         contract = json.loads((SCRIPTS.parent / "contracts/agent-journey.json").read_text())
         kinds = {row["herdr_kind"] for row in contract if row["id"] != "cursor"}
         self.assertEqual(kinds - set(clis.table()), set())
@@ -87,6 +105,31 @@ class Install(unittest.TestCase):
         with self.assertRaises(SystemExit) as stopped:
             self.install("9.9.9")
         self.assertIn("pi answered '9.9.9', agent-clis.json pins", str(stopped.exception))
+
+    def install_agy(self, url, payload, sha512):
+        """agy() on this runner, the row naming `url` and `sha512` and the download answering `payload`."""
+        row = {"version": "1.4.8", "installer": "agy", "files": {install.target(): {"url": url, "sha512": sha512}}}
+        with tempfile.TemporaryDirectory() as temporary, \
+                mock.patch.object(install, "fetch", return_value=payload):
+            program = install.agy(row, Path(temporary))
+            return program.name, program.read_bytes()
+
+    def test_agy_installs_the_program_of_the_recorded_archive_only_when_its_sha512_matches(self):
+        archive = io.BytesIO()
+        with tarfile.open(fileobj=archive, mode="w:gz") as writer:
+            member = tarfile.TarInfo("antigravity")
+            member.size = len(b"agy program")
+            writer.addfile(member, io.BytesIO(b"agy program"))
+        payload = archive.getvalue()
+        url = "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.4.8-1/x/cli.tar.gz"
+        name, content = self.install_agy(url, payload, hashlib.sha512(payload).hexdigest())
+        self.assertEqual((name, content), ("agy.exe" if os.name == "nt" else "agy", b"agy program"))
+        with self.assertRaisesRegex(SystemExit, "does not match the sha512"):
+            self.install_agy(url, payload, hashlib.sha512(b"another release").hexdigest())
+
+    def test_agy_installs_a_recorded_program_as_it_is(self):
+        url = "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.4.8-1/windows-x64/cli.exe"
+        self.assertEqual(self.install_agy(url, b"exe", hashlib.sha512(b"exe").hexdigest())[1], b"exe")
 
     def test_npm_runs_the_install_scripts_of_only_the_rows_that_name_them(self):
         rows = install.table()
