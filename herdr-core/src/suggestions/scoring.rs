@@ -21,7 +21,8 @@ pub struct Score {
 
 /// Counts `line` over its records at `now` (D-12): a distinct session one
 /// point, three when the operator corrected an agent in it, a half when the
-/// session's only records here are a label's remaining problems; a distinct
+/// session's only records here are a label's remaining problems,
+/// [`policy::IMPROVEMENT_SESSION_POINTS`] when they are only improvements; a distinct
 /// pull request one point while within [`policy::PR_WINDOW_MS`]; each unit
 /// weighed by the age of its newest record.
 pub fn score(line: &Line, index: &RecordIndex, now: u64) -> Score {
@@ -52,6 +53,8 @@ pub(crate) fn score_records<'a>(records: impl Iterator<Item = &'a RecordEntry>, 
             policy::CORRECTION_SESSION_POINTS
         } else if records.iter().all(|r| r.signal == Signal::LabelMissed) {
             policy::LABEL_ONLY_SESSION_POINTS
+        } else if records.iter().all(|r| r.signal == Signal::Improvement) {
+            policy::IMPROVEMENT_SESSION_POINTS
         } else {
             policy::SESSION_POINTS
         };
@@ -205,6 +208,7 @@ mod tests {
             pr,
             at_unix_ms: at,
             always: false,
+            improvement: None,
             line: None,
             fresh: true,
         }
@@ -225,6 +229,27 @@ mod tests {
             )
             .unwrap();
         notebook.line(applied.created.unwrap()).unwrap().clone()
+    }
+
+    /// B25: improvements alone take as many sessions as any other session
+    /// signal: two do not cross Normal's threshold, three do.
+    #[test]
+    fn improvements_rise_only_once_three_sessions_hold_them() {
+        let points = |sessions: &[&str]| {
+            let index = RecordIndex {
+                entries: sessions
+                    .iter()
+                    .enumerate()
+                    .map(|(n, session)| {
+                        entry(n as u64 + 1, Signal::Improvement, Some(session), None, NOW)
+                    })
+                    .collect(),
+            };
+            score(&line_of(&index), &index, NOW).points
+        };
+        let normal = Quantity::Normal.threshold();
+        assert!(points(&["a", "a", "b"]) < normal, "one session counts once");
+        assert!(points(&["a", "b", "c"]) >= normal);
     }
 
     #[test]

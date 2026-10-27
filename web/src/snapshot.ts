@@ -2296,7 +2296,9 @@ export type ProjectMemory = {
 export type MemorySection = { project: ProjectMemory | null };
 
 /** What a suggestion rests on (`contracts/snapshot-wire-enums.json`: `suggestion_signal`). */
-export type SuggestionSignal = "failed_tool" | "agent_wait" | "correction" | "label_missed" | "check_failed" | "change_request";
+export type SuggestionSignal = "failed_tool" | "agent_wait" | "correction" | "label_missed" | "improvement" | "check_failed" | "change_request";
+/** `suggestion_improvement_kind`: how a turn lost time at an improvement point (D-55). */
+export type SuggestionImprovementKind = "no_doc" | "searched_again" | "wrong_guess" | "tool_friction";
 /** `suggestion_quantity`: how many suggestions come up a week (PRD hide-ai-suggestions D-09, D-10). */
 export type SuggestionQuantity = "few" | "normal" | "many";
 /** `suggestion_apply_mode`: whether a new suggestion waits for `문서 고치는 PR 열기` or opens its pull request by itself (D-28). */
@@ -2318,6 +2320,8 @@ export type SuggestionBasis = { signal: SuggestionSignal; tag: string };
 export type SuggestionEvidence = {
   kind: "session" | "pr";
   signal: SuggestionSignal;
+  /** An improvement's kind, drawn as a chip (B25). */
+  improvement: SuggestionImprovementKind | null;
   agent: string | null;
   session_id: string | null;
   pr_number: number | null;
@@ -2363,7 +2367,7 @@ export type SuggestionRow = {
   watch: { sessions_seen: number; sessions_needed: number } | null;
 };
 
-export type SuggestionSignalSetting = { signal: SuggestionSignal; enabled: boolean; unavailable: "no_github" | "memory_off" | null };
+export type SuggestionSignalSetting = { signal: SuggestionSignal; enabled: boolean; unavailable: "no_github" | "memory_off" | "analysis_off" | null };
 
 /** The ⚙ sheet's 제안 group (D-26). */
 export type SuggestionSettings = {

@@ -2247,6 +2247,7 @@ fn send_corrections(
             at_unix_ms: at,
             always: false,
             head: None,
+            improvement: None,
         })
         .collect();
     client.send(crate::suggestions::worker::Command::ObserveProject {

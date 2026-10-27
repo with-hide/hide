@@ -66,6 +66,9 @@ pub(super) struct OpenedProject {
 struct LockFacts {
     ai: SuggestionsAi,
     github: SuggestionsGithub,
+    /// Hide AI and its turn-end analysis are on, so improvements are found
+    /// (D-57).
+    analysis: bool,
 }
 
 /// `suggestion_action`: one press on a row (B11, B16).
@@ -369,6 +372,7 @@ impl Runtime {
                         at_unix_ms: at,
                         always: false,
                         head: pr.head_oid.clone(),
+                        improvement: None,
                     };
                     let open = pr.merged_at_unix_ms.is_none() && pr.closed_at_unix_ms.is_none();
                     if open {
@@ -494,6 +498,11 @@ impl Runtime {
         Some(LockFacts {
             ai: self.suggestions_ai(),
             github: self.suggestions_github(&opened.node, &opened.root),
+            analysis: self.ai_active()
+                && self
+                    .ai_settings
+                    .as_ref()
+                    .is_some_and(|settings| settings.agent_summary),
         })
     }
 
@@ -597,7 +606,8 @@ impl Runtime {
 }
 
 /// The lock's facts on a read: the AI chip, GitHub's answer, the switches
-/// that cannot record here and the `GitHub 연결 필요` hold (B5, B18, B19).
+/// that cannot record here and the `GitHub 연결 필요` hold (B5, B18, B19,
+/// B27).
 fn lay_facts(project: &mut ProjectSuggestionsSnapshot, facts: LockFacts, memory_on: bool) {
     project.ai = facts.ai;
     project.github = facts.github;
@@ -607,6 +617,8 @@ fn lay_facts(project: &mut ProjectSuggestionsSnapshot, facts: LockFacts, memory_
             Some(SignalUnavailable::NoGithub)
         } else if signal.signal == Signal::Correction && !memory_on {
             Some(SignalUnavailable::MemoryOff)
+        } else if signal.signal == Signal::Improvement && !facts.analysis {
+            Some(SignalUnavailable::AnalysisOff)
         } else {
             None
         };

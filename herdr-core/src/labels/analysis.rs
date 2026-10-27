@@ -24,6 +24,11 @@ pub(crate) const MAX_ANALYSIS_CONTEXT_CHARS: usize = 4_000;
 /// The assigned work's evidence survives terse follow-ups, without growing
 /// the request or persisting an unbounded conversation.
 pub(crate) const MAX_GOAL_EVIDENCE_CHARS: usize = 800;
+/// How much of a long turn's head the turn-end context keeps beside the
+/// tail it always keeps (PRD hide-ai-suggestions D-56): the request and the
+/// work that began it, so a turn longer than the bound is read at both ends
+/// and the tail the end is judged from stays what it was.
+pub(crate) const TURN_HEAD_CHARS: usize = 1_000;
 /// The shortest goal that names a result rather than a word.
 pub(crate) const MIN_GOAL_CHARS: usize = 8;
 
@@ -80,6 +85,21 @@ pub(crate) struct Analysis {
     /// (PRD session-record-fact-status D-02): the record shows it in place
     /// of that flow's last stopped turn.
     pub(crate) closed_result: Option<String>,
+    /// At a turn's end, the points where the agent lost time although
+    /// nothing stayed failed (PRD hide-ai-suggestions D-54, D-55); none at
+    /// its start.
+    pub(crate) improvements: Vec<Improvement>,
+    /// The items of the answer's improvements that were not one or came
+    /// past the bound, for the diagnostic log.
+    pub(crate) improvements_dropped: usize,
+}
+
+/// A point a turn's end says a document, rule or setting would have spared
+/// the agent, in the operator's language.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Improvement {
+    pub(crate) kind: crate::suggestions::ledger::ImprovementKind,
+    pub(crate) text: String,
 }
 
 /// One request's summary as a provider gave it, keyed by the id the
@@ -291,10 +311,20 @@ fn render(events: &[&LabelEvent]) -> String {
         .join("\n")
 }
 
-fn latest_exchange(events: &[LabelEvent]) -> String {
+/// The exchange a context ends with: its text, and the part of it from the
+/// turn's own request on, whose head a long turn keeps (D-56).
+struct Exchange {
+    text: String,
+    turn: String,
+}
+
+fn latest_exchange(events: &[LabelEvent]) -> Exchange {
     let conversation = conversation(events);
     if conversation.is_empty() {
-        return String::new();
+        return Exchange {
+            text: String::new(),
+            turn: String::new(),
+        };
     }
     let last = conversation
         .iter()
@@ -304,24 +334,33 @@ fn latest_exchange(events: &[LabelEvent]) -> String {
         .iter()
         .rposition(|event| event.kind == LabelEventKind::Human)
         .unwrap_or(last);
-    render(&conversation[start..])
+    Exchange {
+        text: render(&conversation[start..]),
+        turn: render(&conversation[last..]),
+    }
 }
 
 /// The turn from its human message on, after the agent message that
 /// message replied to (D-07): a short answer means nothing without it.
-fn latest_turn_exchange(events: &[LabelEvent]) -> String {
+fn latest_turn_exchange(events: &[LabelEvent]) -> Exchange {
     let conversation = conversation(events);
-    let Some(start) = conversation
+    let Some(last) = conversation
         .iter()
         .rposition(|event| event.kind == LabelEventKind::Human)
     else {
-        return String::new();
+        return Exchange {
+            text: String::new(),
+            turn: String::new(),
+        };
     };
-    let start = match start.checked_sub(1) {
+    let start = match last.checked_sub(1) {
         Some(before) if conversation[before].kind == LabelEventKind::Assistant => before,
-        _ => start,
+        _ => last,
     };
-    render(&conversation[start..])
+    Exchange {
+        text: render(&conversation[start..]),
+        turn: render(&conversation[last..]),
+    }
 }
 
 /// The longest end of the agent message before an owed request that the
@@ -410,11 +449,13 @@ fn initial_operator_requests(
 
 /// The initial text handed to the provider: the first three and last eight
 /// of the operator's requests (`operator` says which person's messages are)
-/// with an explicit omission marker, and the latest exchange.
+/// with an explicit omission marker, and the latest exchange, of which a
+/// long turn also keeps its first `turn_head` characters.
 pub(crate) fn analysis_context(
     events: &[LabelEvent],
     operator: &dyn Fn(&LabelEvent) -> bool,
     owed: &[OwedLine],
+    turn_head: usize,
 ) -> String {
     let Some(requests) = initial_operator_requests(events, operator) else {
         return String::new();
@@ -432,16 +473,19 @@ pub(crate) fn analysis_context(
         ),
         "\n</unsummarized-requests>",
         &latest_exchange(events),
+        turn_head,
     )
 }
 
 /// The rolling text for a goal that already exists: the requests still
-/// owed a summary, and the latest exchange for the line and the end.
+/// owed a summary, and the latest exchange for the line and the end, of
+/// which a long turn also keeps its first `turn_head` characters.
 pub(crate) fn rolling_analysis_context(
     previous_goal: &str,
     goal_evidence: &str,
     owed: &[OwedLine],
     events: &[LabelEvent],
+    turn_head: usize,
 ) -> String {
     let open = format!(
         "<previous-goal>{}</previous-goal>\n<goal-evidence>{}</goal-evidence>\n<unsummarized-requests>\n",
@@ -462,6 +506,7 @@ pub(crate) fn rolling_analysis_context(
         ),
         CLOSE,
         &latest_turn_exchange(events),
+        turn_head,
     )
 }
 
@@ -516,8 +561,16 @@ const CUT_MARK: char = '…';
 /// [`MAX_REQUEST_SECTION_CHARS`], so the first request always stays, and the
 /// exchange keeps its tail in whatever the whole bound leaves. Cutting the
 /// joined text instead dropped the requests whenever the exchange was long,
-/// as Codex's 6,400-character goal reminder made it.
-fn bounded_context(open: &str, requests: &str, close: &str, exchange: &str) -> String {
+/// as Codex's 6,400-character goal reminder made it. A turn the tail does not
+/// hold from its request on also keeps its head ([`turn_head`]), on top of
+/// the bound, so the tail is the same whether or not it is asked.
+fn bounded_context(
+    open: &str,
+    requests: &str,
+    close: &str,
+    exchange: &Exchange,
+    turn_head_room: usize,
+) -> String {
     let requests = format!(
         "{open}{}{close}",
         head(
@@ -530,9 +583,30 @@ fn bounded_context(open: &str, requests: &str, close: &str, exchange: &str) -> S
     let room = MAX_ANALYSIS_CONTEXT_CHARS
         .saturating_sub(chars(&requests) + chars(EXCHANGE_OPEN) + chars(EXCHANGE_CLOSE));
     format!(
-        "{requests}{EXCHANGE_OPEN}{}{EXCHANGE_CLOSE}",
-        tail(&mask(&strip_code_fences(exchange)), room)
+        "{requests}{EXCHANGE_OPEN}{}{}{EXCHANGE_CLOSE}",
+        turn_head(&exchange.turn, room, turn_head_room),
+        tail(&mask(&strip_code_fences(&exchange.text)), room)
     )
+}
+
+/// The head of a turn longer than the exchange's tail room, at most `room`
+/// characters, and a line saying how many characters between it and the
+/// tail were cut; empty when the tail holds the turn whole.
+fn turn_head(turn: &str, tail_room: usize, room: usize) -> String {
+    if room == 0 {
+        return String::new();
+    }
+    let turn = mask(&strip_code_fences(turn));
+    let left_out = chars(&turn).saturating_sub(tail_room);
+    if left_out == 0 {
+        return String::new();
+    }
+    let kept = turn.chars().take(room.min(left_out)).collect::<String>();
+    let cut = left_out - chars(&kept);
+    if cut == 0 {
+        return format!("{kept}\n");
+    }
+    format!("{kept}\n[… {cut} characters cut …]\n")
 }
 
 fn chars(text: &str) -> usize {
@@ -738,6 +812,33 @@ pub(crate) fn work_context(ledger: &crate::links::ledger::LedgerContext) -> Stri
     ))
 }
 
+/// Hide's count of the turn's tool calls as the turn-end context's one line
+/// (PRD hide-ai-suggestions D-56); empty without one, as for an agent whose
+/// records name no tool calls. It carries counts only: what was searched is
+/// in the masked exchange, never in the count.
+pub(crate) fn tool_use_context(summary: Option<&hide_session::tools::ToolSummary>) -> String {
+    let Some(summary) = summary else {
+        return String::new();
+    };
+    let searches = summary
+        .repeated_searches
+        .iter()
+        .map(|times| format!("x{times}"))
+        .collect::<Vec<_>>();
+    format!(
+        "\n<tool-use>calls: {}; files read: {}{}; same search repeated: {}; failed calls: {}</tool-use>",
+        summary.calls,
+        summary.files_read,
+        if summary.files_more { "+" } else { "" },
+        if searches.is_empty() {
+            "none".to_owned()
+        } else {
+            searches.join(", ")
+        },
+        summary.failed,
+    )
+}
+
 /// [`mask`], then its tail of the last [`MAX_ANALYSIS_CONTEXT_CHARS`] + 1
 /// characters, for a caller that sends one text whole (a pull
 /// request summary, the ledger's side of a request); the label context cuts
@@ -929,7 +1030,7 @@ mod tests {
         let events = (0..15)
             .map(|index| human(&format!("turn {index}"), index))
             .collect::<Vec<_>>();
-        let context = analysis_context(&events, &|_| true, &[]);
+        let context = analysis_context(&events, &|_| true, &[], 0);
         for kept in [0, 1, 2, 7, 14] {
             assert!(
                 context.contains(&format!("user: turn {kept}\n"))
@@ -948,7 +1049,7 @@ mod tests {
             human("테스트 결과 알려줘", 3),
             assistant("결과", 4),
         ];
-        let context = analysis_context(&events, &|event| event.offset != 3, &[]);
+        let context = analysis_context(&events, &|event| event.offset != 3, &[], 0);
         let (requests, exchange) = context
             .split_once("<latest-exchange>")
             .expect("the context has both sections");
@@ -967,7 +1068,7 @@ mod tests {
         ];
         let cursor = task_input_cursor(&events[..1]);
         let delta = new_human_turns(&events, cursor);
-        let context = rolling_analysis_context("이전 작업 제목", "", &owed(&delta), &events);
+        let context = rolling_analysis_context("이전 작업 제목", "", &owed(&delta), &events, 0);
         assert!(context.contains("<previous-goal>이전 작업 제목</previous-goal>"));
         assert!(context.contains("user: new request"));
         assert!(!context.contains("user: old request"));
@@ -1005,6 +1106,7 @@ mod tests {
             &evidence,
             &owed(&events[2..3]),
             &events,
+            0,
         );
         assert!(context.contains("에이전트 그래프의 필터와 프로젝트 접기를 개선해줘"));
         assert!(context.contains("그 방향으로 진행해"));
@@ -1044,8 +1146,9 @@ mod tests {
             human("두 번째 요청", 3),
             assistant(&reminder, 4),
         ];
-        let initial = analysis_context(&events, &|_| true, &[]);
-        let rolling = rolling_analysis_context("이전 작업 제목", "", &owed(&events[2..3]), &events);
+        let initial = analysis_context(&events, &|_| true, &[], 0);
+        let rolling =
+            rolling_analysis_context("이전 작업 제목", "", &owed(&events[2..3]), &events, 0);
         for (context, kept) in [
             (&initial, "user: 첫 요청 문장"),
             (&rolling, "<previous-goal>이전 작업 제목</previous-goal>"),
@@ -1071,8 +1174,8 @@ mod tests {
             assistant("마지막 답", 4),
         ];
         for context in [
-            analysis_context(&events, &|_| true, &[]),
-            rolling_analysis_context("이전 작업 제목", "", &owed(&events), &events),
+            analysis_context(&events, &|_| true, &[], 0),
+            rolling_analysis_context("이전 작업 제목", "", &owed(&events), &events, 0),
         ] {
             let (requests, exchange) = sections(&context);
             assert!(requests.chars().count() <= MAX_REQUEST_SECTION_CHARS);
@@ -1090,7 +1193,7 @@ mod tests {
         let goal = "이전 빌드가 남긴 긴 목표 ".repeat(400);
         let answer = "긴 답 ".repeat(2_000);
         let events = vec![human("새 요청", 1), assistant(&answer, 2)];
-        let context = rolling_analysis_context(&goal, "", &owed(&events[..1]), &events);
+        let context = rolling_analysis_context(&goal, "", &owed(&events[..1]), &events, 0);
         assert!(context.chars().count() <= MAX_ANALYSIS_CONTEXT_CHARS);
         assert!(sections(&context).0.contains("user: 새 요청"));
     }
@@ -1099,7 +1202,7 @@ mod tests {
     fn short_requests_leave_the_rest_of_the_bound_to_the_exchange() {
         let answer = "긴 답 ".repeat(2_000);
         let events = vec![human("짧은 요청", 1), assistant(&answer, 2)];
-        let context = analysis_context(&events, &|_| true, &[]);
+        let context = analysis_context(&events, &|_| true, &[], 0);
         let (requests, exchange) = sections(&context);
         assert!(requests.chars().count() < 200);
         assert_eq!(context.chars().count(), MAX_ANALYSIS_CONTEXT_CHARS);
@@ -1147,6 +1250,7 @@ mod tests {
             )],
             &|_| true,
             &[],
+            0,
         );
         assert!(context.contains("[redacted-secret]"));
         assert!(context.contains("[redacted-personal]"));
@@ -1264,8 +1368,8 @@ mod tests {
         ]) {
             let events = [human(&request, 1)];
             for context in [
-                analysis_context(&events, &|_| true, &[]),
-                rolling_analysis_context("기존 작업 결과물", "", &owed(&events), &events),
+                analysis_context(&events, &|_| true, &[], 0),
+                rolling_analysis_context("기존 작업 결과물", "", &owed(&events), &events, 0),
             ] {
                 if !context.contains(&expected_request) || context.contains(&request) {
                     failures.push(format!(
@@ -1288,8 +1392,8 @@ mod tests {
         );
         let events = [human(request, 1)];
         for context in [
-            analysis_context(&events, &|_| true, &[]),
-            rolling_analysis_context("기존 작업 결과물", "", &owed(&events), &events),
+            analysis_context(&events, &|_| true, &[], 0),
+            rolling_analysis_context("기존 작업 결과물", "", &owed(&events), &events, 0),
         ] {
             assert!(context.contains(request), "{context}");
         }
@@ -1320,6 +1424,43 @@ mod tests {
             AnalysisFailure::Provider(AiError::Disabled).retry_after(),
             Some(PROVIDER_RECOVERY_INTERVAL),
             "a turn is asked again once Hide AI is on; it is not given up on (B33)"
+        );
+    }
+
+    #[test]
+    fn a_long_turn_keeps_its_head_at_the_end_and_the_same_tail() {
+        let events = vec![
+            human("포트 규칙 정리해줘", 1),
+            assistant("이전 답", 2),
+            human("로그인 화면 e2e 고쳐 줘", 3),
+            assistant(&"설정 파일을 하나씩 확인 ".repeat(800), 4),
+            assistant("pnpm e2e login 통과", 5),
+        ];
+        let start = rolling_analysis_context("로그인 e2e", "", &[], &events, 0);
+        let end = rolling_analysis_context("로그인 e2e", "", &[], &events, TURN_HEAD_CHARS);
+        let (start_requests, start_exchange) = sections(&start);
+        let (end_requests, end_exchange) = sections(&end);
+        assert!(
+            !start_exchange.contains("로그인 화면 e2e"),
+            "the tail alone loses the request"
+        );
+        assert!(end_exchange.starts_with("user: 로그인 화면 e2e 고쳐 줘\nassistant: 설정 파일"));
+        assert!(
+            end_exchange.contains(" characters cut …]\n"),
+            "{end_exchange}"
+        );
+        assert_eq!(end_requests, start_requests);
+        assert!(
+            end_exchange.ends_with(start_exchange),
+            "the tail the end is judged from does not move"
+        );
+        assert!(end.chars().count() <= MAX_ANALYSIS_CONTEXT_CHARS + TURN_HEAD_CHARS + 40);
+
+        let short = vec![human("README 오타 고쳐줘", 1), assistant("고쳤어요", 2)];
+        assert_eq!(
+            rolling_analysis_context("README", "", &[], &short, TURN_HEAD_CHARS),
+            rolling_analysis_context("README", "", &[], &short, 0),
+            "a turn the bound holds is read as before"
         );
     }
 }

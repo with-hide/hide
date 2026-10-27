@@ -179,10 +179,37 @@ fn the_tab_shows_the_workers_read_with_hide_ai_and_github_laid_on_it() {
             (Signal::AgentWait, None),
             (Signal::Correction, Some(SignalUnavailable::MemoryOff)),
             (Signal::LabelMissed, None),
+            (Signal::Improvement, None),
             (Signal::CheckFailed, Some(SignalUnavailable::NoGithub)),
             (Signal::ChangeRequest, Some(SignalUnavailable::NoGithub)),
         ]
     );
+
+    // B27: with the turn-end analysis off, 개선할 점 says why it records
+    // nothing, and so it does with Hide AI off.
+    let changes: [fn(&mut hide_ai::AiSettings); 2] = [
+        |settings| settings.agent_summary = false,
+        |settings| {
+            settings.agent_summary = true;
+            settings.enabled = false;
+        },
+    ];
+    for change in changes {
+        let mut settings = runtime.ai_settings.clone().unwrap();
+        change(&mut settings);
+        runtime.ai_settings = Some(settings);
+        let read = tab(&mut runtime);
+        let improvement = read
+            .settings
+            .signals
+            .iter()
+            .find(|signal| signal.signal == Signal::Improvement)
+            .unwrap();
+        assert_eq!(
+            improvement.unavailable,
+            Some(SignalUnavailable::AnalysisOff)
+        );
+    }
 }
 
 /// Each screen event becomes one command to the worker, and a settings

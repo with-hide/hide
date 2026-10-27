@@ -13,9 +13,9 @@ use super::super::notebook::{Line, Notebook, Stage};
 use super::super::policy;
 
 pub(crate) const FEATURE: &str = "suggestions_investigation";
-pub(crate) const SCHEMA_VERSION: &str = "suggestions_investigation.v1";
+pub(crate) const SCHEMA_VERSION: &str = "suggestions_investigation.v2";
 
-const SYSTEM: &str = r#"You keep a notebook of recurring problems in one software project, for the person who runs its coding agents. Each line of the notebook is one problem. Each day you are handed the notebook as it stands and the fresh records: facts Hide counted without reading anything, each with a number, its signal and a tag (a command that still failed when its turn ended, an agent stopped to wait on the person, a correction the person made, a problem a turn left over, a failed CI check, a review change request merged after). Edit the notebook so that each line is one problem with one root cause, the kind the person reads and says: I missed that, fix it.
+const SYSTEM: &str = r#"You keep a notebook of recurring problems in one software project, for the person who runs its coding agents. Each line of the notebook is one problem. Each day you are handed the notebook as it stands and the fresh records: facts Hide counted without reading anything, each with a number, its signal and a tag (a command that still failed when its turn ended, an agent stopped to wait on the person, a correction the person made, a problem a turn left over, a point where a turn lost time though nothing failed, a failed CI check, a review change request merged after). Edit the notebook so that each line is one problem with one root cause, the kind the person reads and says: I missed that, fix it.
 
 You open nothing yourself. Each turn you answer one JSON object. Hide runs the reads you ask for with its own read-only tools and shows you their results in the next turn, and it saves every edit you make at once. Nothing you write runs a command or changes a file.
 
@@ -38,6 +38,7 @@ Edits, at most eight a turn, applied in order:
 Rules:
 - A tag is the key Hide grouped records by, not a problem. A line with a basis and no cause was grouped by its tag alone before anyone looked: check it before you keep it, split off records that are a different problem, and strike it with the reason when its records share no cause you can name.
 - A CI check's name, such as a lane or a job, says where it failed, not why. Read the log, put each failure on the line of its own cause, and pass failures that are only the pull request's unfinished work.
+- An improvement record's tag is how the analysis at that turn's end described where the agent lost time though nothing failed, and its kind says how: no_doc, searched_again, wrong_guess or tool_friction. Records in different words can share one cause, so read their sessions before you join them.
 - A shell command's head (cat, rg, grep, sed, ls, head, find and the like) is usually a search that found nothing while the agent was exploring, which is normal work. Pass such records unless the session shows the agent was stuck on them, and strike a line that holds only those.
 - Prefer attaching to an existing line over writing a new one. A struck line still takes new sightings of its problem, and Hide decides from them whether it comes back. A line struck by the operator is one the person skipped for now, not one found to be no problem.
 - Write a cause only when one root cause fits in one sentence and one pull request or one issue would deal with it.
@@ -284,6 +285,9 @@ fn records(index: &RecordIndex, now_unix_ms: u64) -> Value {
             if entries.iter().any(|e| e.always) {
                 group["said_always"] = json!(true);
             }
+            if let Some(kind) = entries.iter().find_map(|e| e.improvement) {
+                group["kind"] = json!(kind);
+            }
             if let Some(line) = entries[0].line
                 && entries.iter().all(|e| e.line == Some(line))
             {
@@ -405,7 +409,7 @@ pub(crate) fn input(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::suggestions::ledger::{RecordId, SessionRef, Signal};
+    use crate::suggestions::ledger::{ImprovementKind, RecordId, SessionRef, Signal};
     use crate::suggestions::notebook::{NotebookEdit, Strike, StruckBy};
 
     fn entry(id: u64, tag: &str) -> RecordEntry {
@@ -420,6 +424,7 @@ mod tests {
             pr: None,
             at_unix_ms: 0,
             always: false,
+            improvement: None,
             line: None,
             fresh: true,
         }
@@ -518,5 +523,23 @@ mod tests {
         assert!(final_schema["properties"].get("reads").is_none());
         assert_eq!(final_schema["additionalProperties"], false);
         assert!(schema(Phase::WrapUp)["properties"].get("reads").is_some());
+    }
+
+    /// B25: the run is handed an improvement's kind beside its words.
+    #[test]
+    fn an_improvement_group_carries_its_kind() {
+        let mut point = entry(1, "포트 규칙이 문서에 없어 설정 파일 6개를 뒤짐");
+        point.signal = Signal::Improvement;
+        point.improvement = Some(ImprovementKind::NoDoc);
+        let value = records(
+            &RecordIndex {
+                entries: vec![point, entry(2, "cargo test")],
+            },
+            0,
+        );
+        let groups = value["groups"].as_array().unwrap();
+        let group = |signal: &str| groups.iter().find(|g| g["signal"] == signal).unwrap();
+        assert_eq!(group("improvement")["kind"], "no_doc");
+        assert!(group("failed_tool").get("kind").is_none());
     }
 }

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import { AgentLogo } from "./components/agent-logo";
 import { Elapsed } from "./components/elapsed";
+import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage } from "./i18n/locale";
@@ -263,7 +264,14 @@ function Evidence({ evidence, project, actions }: { evidence: SuggestionEvidence
       data-suggestion-evidence-gone={evidence.gone ? "true" : undefined}
     >
       {evidence.agent ? <AgentLogo agent={evidence.agent} label={evidence.agent} /> : <span aria-hidden="true" className="size-(--size-icon-lg)" />}
-      <span className="min-w-0 truncate text-subtle-foreground">{name} · {signal}{evidence.gone ? ` · ${t("suggestions.evidence.gone")}` : ""}</span>
+      {evidence.improvement ? (
+        <span className="flex min-w-0 items-center gap-xs">
+          <Badge data-suggestion-evidence-improvement={evidence.improvement}>{t(`suggestions.improvement.${evidence.improvement}`)}</Badge>
+          <span className="min-w-0 truncate text-subtle-foreground">{name}{evidence.gone ? ` · ${t("suggestions.evidence.gone")}` : ""}</span>
+        </span>
+      ) : (
+        <span className="min-w-0 truncate text-subtle-foreground">{name} · {signal}{evidence.gone ? ` · ${t("suggestions.evidence.gone")}` : ""}</span>
+      )}
       <span className="shrink-0 font-mono text-muted-foreground">{sourceTime(evidence.at_unix_ms, language)}</span>
     </button>
   );

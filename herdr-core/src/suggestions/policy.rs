@@ -15,6 +15,18 @@ pub(crate) const CORRECTION_SESSION_POINTS: f64 = 3.0;
 /// A session whose only record on the line is a label's remaining problem
 /// counts half (D-30): such a line rarely rises on its own.
 pub(crate) const LABEL_ONLY_SESSION_POINTS: f64 = 0.5;
+/// A session whose only records on a line are improvements counts whole
+/// (D-54): three sessions that lost time the same way raise a line under
+/// Normal, as three sessions of any other session signal do, and one
+/// session alone never does.
+pub(crate) const IMPROVEMENT_SESSION_POINTS: f64 = 1.0;
+/// The most improvement records one session keeps; one past it is dropped
+/// and logged, so a long session cannot fill a day's fresh records alone.
+pub(crate) const IMPROVEMENTS_PER_SESSION: usize = 6;
+/// What one turn's end may name (D-55): at most this many improvements,
+/// each at most this many characters.
+pub(crate) const IMPROVEMENTS_PER_TURN: usize = 3;
+pub(crate) const IMPROVEMENT_CHARS: usize = 200;
 /// A distinct pull request counts one point while it is this recent.
 pub(crate) const PR_POINTS: f64 = 1.0;
 pub(crate) const PR_WINDOW_MS: u64 = 14 * DAY_MS;
@@ -94,8 +106,9 @@ pub(crate) const DISCOMFORT_CHARS: usize = 200;
 pub(crate) const CAUSE_CHARS: usize = 300;
 pub(crate) const FIX_CHARS: usize = 500;
 pub(crate) const REASON_CHARS: usize = 200;
-/// A record's tag, the key the deterministic grouping joins on.
-pub(crate) const TAG_CHARS: usize = 120;
+/// A record's tag, the key the deterministic grouping joins on; the
+/// longest is an improvement's text.
+pub(crate) const TAG_CHARS: usize = IMPROVEMENT_CHARS;
 /// The most records one edit names.
 pub(crate) const EDIT_RECORDS: usize = 500;
 

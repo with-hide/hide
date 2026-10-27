@@ -316,6 +316,7 @@ mod tests {
                 at_unix_ms: at,
                 always: false,
                 head: None,
+                improvement: None,
             },
         }
     }
@@ -336,6 +337,7 @@ mod tests {
                 at_unix_ms: at,
                 always: false,
                 head: Some(head.into()),
+                improvement: None,
             },
         }
     }

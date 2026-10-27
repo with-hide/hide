@@ -915,6 +915,7 @@ A failure the operator cannot act on, such as a run that hit its turn or time li
 The rows fall into `고를 것`, `반영 중` and the folded `반영됨`, each head with its count, and a row's mark says whose move it is (D-37): a green open circle for a new suggestion, a yellow dot for the operator's turn, a blue turning ring with dimmed text while Hide AI works; a row under 반영됨 has no mark.
 A suggestion's title is its discomfort in a person's words, or, for a line the grouping wrote alone, its signal and tag (`같은 명령이 계속 실패해요: cargo test`); under it `놓친 것 · <cause>`, then `고칠 것`, so what a press does is read before it, and its buttons (B10, D-51).
 Pressing the row opens it in place to `근거`, each piece of evidence a line with its agent's logo, `세션` or `PR #n`, the signal and its time; a session opens its record and a pull request its card, and evidence whose session or pull request is gone stays dimmed and opens nothing.
+An improvement's evidence shows its kind as a small chip before `세션` in place of the signal (`문서 없음`, `다시 찾음`, `잘못 짐작`, `도구·설정 불편`; B25), and a line the grouping wrote alone from improvements reads `같은 곳에서 계속 헤매요: <what the turn's end said>`.
 Its button is `문서 고치는 PR 열기`, where an agent edits the repository's files and opens a pull request, or, in the secondary style, `이슈로 남기기` when the fix is outside the repository or not settled yet, where Hide opens an issue from CI facts alone (B14); an issue's `고칠 것` is the core's reason, or `문서로는 못 고쳐요. CI 기록을 담아 이슈로 남겨요` when it gives none.
 With GitHub not connected or not permitted `GitHub 연결 필요` stands in the button's place and the suggestion stays (B18).
 Beside every choice's button, and beside `GitHub 연결 필요`, is a quiet `넘어가기` button; there is no `⋯` (D-51).
@@ -931,9 +932,9 @@ A row being applied whose agent lives is also one row in the sidebar's and the �
 ⚙ opens a sheet under the head (D-26, B19).
 At its top `조사하는 AI` and the chip of the agent Settings › Hide AI chose, which opens that page, and under it one line, `설정 › Hide AI의 순서를 따라요. 한도에 걸리면 다음 AI로` (D-53); when that agent cannot promise to only read (OpenCode), `이 AI로는 조사할 수 없음` stands under it and no investigation runs.
 The 제안 group has its own switch, `제안 양` (`적게`, `보통`, `많이`, each with what it means and how many a week), `반영 방식` (`확인하고 반영`, `버튼을 누르면 PR이나 이슈를 열어요`, or `자동으로 PR 열기`), `읽을 곳`, and `넘어간 제안 N개`, which unfolds to each one with `되살리기` and a quiet line saying whether it can still rise once (`다시 쌓이면 한 번 올라와요`) or not (`다시 올라오지 않아요`); restoring one lets the core judge it again on what piled up.
-`읽을 곳` has two switches (D-52): `세션 기록` (`실패한 명령 · 에이전트 막힘 · 내 정정 · 세션에 남은 문제`) and `GitHub` (`CI 실패 · 리뷰 지적`).
-The core keeps six signals; a switch shows on while any signal of its group that can be read is on, and one press is one `suggestion_settings` with `signal_group`, which turns the whole group (B5).
-`GitHub` is off with `GitHub 저장소가 아니에요` under it when the repository is not on GitHub; with Memory off, `Memory가 꺼져 있어 내 정정은 읽지 않아요` stands under `세션 기록`.
+`읽을 곳` has two switches (D-52): `세션 기록` (`실패한 명령 · 에이전트 막힘 · 내 정정 · 세션에 남은 문제 · 개선할 점`) and `GitHub` (`CI 실패 · 리뷰 지적`).
+The core keeps seven signals; a switch shows on while any signal of its group that can be read is on, and one press is one `suggestion_settings` with `signal_group`, which turns the whole group (B5).
+`GitHub` is off with `GitHub 저장소가 아니에요` under it when the repository is not on GitHub; with Memory off, `Memory가 꺼져 있어 내 정정은 읽지 않아요` stands under `세션 기록`, and with Hide AI or the turn-end analysis (Settings › Hide AI's agent summaries) off, `개선할 점은 턴 끝 분석이 켜져야 기록돼요` stands there the same way (B27, D-57).
 The Memory group has Memory's own switch and `이 프로젝트의 기억 지우기`, which asks first, naming the Project and the number of memories.
 Last, one line on what is sent.
 With the head switch off every switch in the sheet is dimmed.

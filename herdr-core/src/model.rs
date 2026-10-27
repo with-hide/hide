@@ -8705,7 +8705,7 @@ mod wire_enum_tests {
         checked.insert("observed_freshness");
 
         {
-            use crate::suggestions::ledger::Signal;
+            use crate::suggestions::ledger::{ImprovementKind, Signal};
             use crate::suggestions::notebook::Outcome;
             use crate::suggestions::policy::Quantity;
             use crate::suggestions::settings::ApplyMode;
@@ -8717,12 +8717,25 @@ mod wire_enum_tests {
                     | Signal::AgentWait
                     | Signal::Correction
                     | Signal::LabelMissed
+                    | Signal::Improvement
                     | Signal::CheckFailed
                     | Signal::ChangeRequest => {}
                 }
             }
             assert_wire(&contract, "suggestion_signal", &signals);
             checked.insert("suggestion_signal");
+
+            let kinds = ImprovementKind::ALL;
+            for variant in kinds {
+                match variant {
+                    ImprovementKind::NoDoc
+                    | ImprovementKind::SearchedAgain
+                    | ImprovementKind::WrongGuess
+                    | ImprovementKind::ToolFriction => {}
+                }
+            }
+            assert_wire(&contract, "suggestion_improvement_kind", &kinds);
+            checked.insert("suggestion_improvement_kind");
 
             let quantities = Quantity::ALL;
             for variant in quantities {
@@ -8809,10 +8822,16 @@ mod wire_enum_tests {
         assert_wire(&contract, "suggestions_github", &github);
         checked.insert("suggestions_github");
 
-        let signal_unavailable = [SignalUnavailable::NoGithub, SignalUnavailable::MemoryOff];
+        let signal_unavailable = [
+            SignalUnavailable::NoGithub,
+            SignalUnavailable::MemoryOff,
+            SignalUnavailable::AnalysisOff,
+        ];
         for variant in signal_unavailable {
             match variant {
-                SignalUnavailable::NoGithub | SignalUnavailable::MemoryOff => {}
+                SignalUnavailable::NoGithub
+                | SignalUnavailable::MemoryOff
+                | SignalUnavailable::AnalysisOff => {}
             }
         }
         assert_wire(

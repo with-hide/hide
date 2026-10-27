@@ -13,7 +13,7 @@ import { useUiStore } from "../ui";
 import type { LaneFrame, LaneSizes, WorkspaceView } from "../workspace";
 import { memorySceneProject } from "./MemoryScene";
 
-export const HIDE_AI_SCENE_STATES = ["new", "applying", "applied", "settings", "settings_unread", "off", "first_run", "not_investigated", "memory"] as const;
+export const HIDE_AI_SCENE_STATES = ["new", "improvement", "applying", "applied", "settings", "settings_unread", "off", "first_run", "not_investigated", "memory"] as const;
 export type HideAiSceneState = (typeof HIDE_AI_SCENE_STATES)[number];
 export type HideAiSceneLanguage = "en" | "ko" | "zh-CN" | "ja";
 export type HideAiSceneParams = { theme: "light" | "dark"; state: HideAiSceneState; width: number; language: HideAiSceneLanguage };
@@ -29,7 +29,7 @@ export function hideAiSceneParams(params: URLSearchParams): HideAiSceneParams {
 }
 
 const MINUTE = 60_000;
-const SIGNALS: SuggestionSignal[] = ["failed_tool", "agent_wait", "correction", "label_missed", "check_failed", "change_request"];
+const SIGNALS: SuggestionSignal[] = ["failed_tool", "agent_wait", "correction", "label_missed", "improvement", "check_failed", "change_request"];
 
 const row = (id: string, fields: Partial<SuggestionRow>): SuggestionRow => ({
   id, source: "notebook", group: "choose", state: "new", discomfort: null, cause: null, fix: null, outcome: "pr", basis: null,
@@ -42,15 +42,27 @@ const NEW_ROWS: SuggestionRow[] = [
     cause: "cargo test 대신 scripts/verify-cargo.sh를 써야 한다는 말이 AGENTS.md에 없어요",
     fix: "AGENTS.md의 Build Output 절에 Rust 검증은 scripts/verify-cargo.sh로만 돌린다는 줄을 넣어요.",
     evidence: [
-      { kind: "session", signal: "failed_tool", agent: "claude", session_id: "c1", pr_number: null, url: null, at_unix_ms: Date.now() - 40 * MINUTE, gone: false },
-      { kind: "session", signal: "correction", agent: "codex", session_id: "c2", pr_number: null, url: null, at_unix_ms: Date.now() - 1440 * MINUTE, gone: false },
-      { kind: "pr", signal: "change_request", agent: null, session_id: null, pr_number: 1688, url: "https://github.com/hide/hide/pull/1688", at_unix_ms: Date.now() - 3 * 1440 * MINUTE, gone: true },
+      { kind: "session", signal: "failed_tool", improvement: null, agent: "claude", session_id: "c1", pr_number: null, url: null, at_unix_ms: Date.now() - 40 * MINUTE, gone: false },
+      { kind: "session", signal: "correction", improvement: null, agent: "codex", session_id: "c2", pr_number: null, url: null, at_unix_ms: Date.now() - 1440 * MINUTE, gone: false },
+      { kind: "pr", signal: "change_request", improvement: null, agent: null, session_id: null, pr_number: 1688, url: "https://github.com/hide/hide/pull/1688", at_unix_ms: Date.now() - 3 * 1440 * MINUTE, gone: true },
     ],
   }),
   row("s14", { basis: { signal: "failed_tool", tag: "pnpm lint" }, cause: "lint가 무엇을 막는지 문서에 없어요", outcome: "issue" }),
   row("s16", { discomfort: "리뷰 전에 브랜치가 main보다 뒤처져 있어요", cause: "PR을 열기 전에 main을 합치라는 말이 없어요", fix: "CONTRIBUTING.md에 PR을 열기 전 main을 합치는 줄을 넣어요.", returned_after_skip: true }),
   row("s15", { discomfort: "PR마다 스크린샷이 빠졌다는 리뷰가 달려요", cause: "화면 PR의 스크린샷 규칙이 CONTRIBUTING.md에만 있어요", hold: "github_needed" }),
 ];
+
+/** A line that rose from improvements alone, each session's evidence naming how it lost time (B25). */
+const IMPROVEMENT_ROW: SuggestionRow = row("s18", {
+  discomfort: "포트 규칙을 몰라서 매번 찾아요",
+  cause: "dev 서버는 5173, e2e는 5174라는 규칙이 어디에도 없어요",
+  fix: "AGENTS.md의 Repository Layout 아래에 한 줄을 넣어요: \"web dev 서버는 5173, Playwright e2e는 5174를 쓴다. 바꾸려면 web/playwright.config.ts의 PORT 하나만 고친다.\"",
+  evidence: [
+    { kind: "session", signal: "improvement", improvement: "no_doc", agent: "claude", session_id: "i1", pr_number: null, url: null, at_unix_ms: Date.now() - 2 * 1440 * MINUTE, gone: false },
+    { kind: "session", signal: "improvement", improvement: "searched_again", agent: "codex", session_id: "i2", pr_number: null, url: null, at_unix_ms: Date.now() - 1440 * MINUTE, gone: false },
+    { kind: "session", signal: "improvement", improvement: "wrong_guess", agent: "claude", session_id: "i3", pr_number: null, url: null, at_unix_ms: Date.now() - 90 * MINUTE, gone: false },
+  ],
+});
 
 const APPLYING_ROWS: SuggestionRow[] = [
   row("s9", {
@@ -91,14 +103,16 @@ export function hideAiSceneProject(state: HideAiSceneState, workspaceId = "herdr
     case "new":
     case "settings":
     case "memory": return base;
-    // Not on GitHub and with Memory off: GitHub reads nothing, the session records read all but corrections (D-52).
+    case "improvement": return { ...base, rows: [IMPROVEMENT_ROW, ...NEW_ROWS, ...APPLYING_ROWS, ...APPLIED_ROWS], counts: { suggestions: 7, rail: 8 } };
+    // Not on GitHub, with Memory and the turn-end analysis off: GitHub reads nothing, the session records read all but corrections and improvements (D-52, D-57).
     case "settings_unread": return {
       ...base,
       settings: {
         ...base.settings,
         signals: base.settings.signals.map((row) => (
           row.signal === "check_failed" || row.signal === "change_request" ? { ...row, enabled: false, unavailable: "no_github" as const }
-            : row.signal === "correction" ? { ...row, enabled: false, unavailable: "memory_off" as const } : row
+            : row.signal === "correction" ? { ...row, enabled: false, unavailable: "memory_off" as const }
+            : row.signal === "improvement" ? { ...row, enabled: false, unavailable: "analysis_off" as const } : row
         )),
       },
     };
@@ -129,7 +143,7 @@ export function HideAiScene({ theme, state, width, language }: HideAiSceneParams
   useLayoutEffect(() => {
     const memory = { ...memorySceneProject(state === "off" || state === "settings_unread" ? "off" : "correction"), workspace_id: "herdr-ide" };
     useShellStore.setState({ rest, memory: { project: memory }, suggestions: { project: hideAiSceneProject(state) }, connection: "gone" });
-    useUiStore.setState({ hideAiTab: state === "memory" ? "memory" : "suggestions", openSuggestion: state === "new" ? "s12" : null });
+    useUiStore.setState({ hideAiTab: state === "memory" ? "memory" : "suggestions", openSuggestion: state === "new" ? "s12" : state === "improvement" ? "s18" : null });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
   }, [rest, state, theme]);

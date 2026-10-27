@@ -87,6 +87,7 @@ fn session_facts(
             at_unix_ms: at,
             always: false,
             head: None,
+            improvement: None,
         };
         let mut failed = Vec::new();
         let mut waited = None;
@@ -205,6 +206,7 @@ fn replay(mut facts: Vec<Observation>, since: u64, now: u64) -> ProjectReplay {
             pr: fact.pr.as_ref().map(|pr| pr.number),
             at_unix_ms: fact.at_unix_ms,
             always: fact.always,
+            improvement: None,
             line: None,
             fresh: false,
         })

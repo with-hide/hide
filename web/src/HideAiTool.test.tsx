@@ -189,9 +189,9 @@ describe("the Hide AI tool", () => {
   it("opens a row in place to its evidence, dimming evidence that is gone, with 고칠 것 once above the buttons (B10)", async () => {
     const at = Date.now();
     await render(suggestionsProject({ rows: [suggestionRow("s1", { evidence: [
-      { kind: "session", signal: "correction", agent: "claude", session_id: "abc", pr_number: null, url: null, at_unix_ms: at, gone: false },
-      { kind: "pr", signal: "check_failed", agent: null, session_id: null, pr_number: 924, url: "https://github.com/acme/one/pull/924", at_unix_ms: at, gone: false },
-      { kind: "session", signal: "failed_tool", agent: "codex", session_id: "old", pr_number: null, url: null, at_unix_ms: at, gone: true },
+      { kind: "session", signal: "correction", improvement: null, agent: "claude", session_id: "abc", pr_number: null, url: null, at_unix_ms: at, gone: false },
+      { kind: "pr", signal: "check_failed", improvement: null, agent: null, session_id: null, pr_number: 924, url: "https://github.com/acme/one/pull/924", at_unix_ms: at, gone: false },
+      { kind: "session", signal: "failed_tool", improvement: null, agent: "codex", session_id: "old", pr_number: null, url: null, at_unix_ms: at, gone: true },
     ] })] }));
     expect(q("[data-suggestion-detail]")).toBeNull();
     await click('[data-suggestion-toggle="s1"]');
@@ -208,6 +208,21 @@ describe("the Hide AI tool", () => {
     expect(open).toHaveBeenCalledWith("https://github.com/acme/one/pull/924", "_blank", "noopener,noreferrer");
     await act(async () => evidence[2]!.click());
     expect(open).toHaveBeenCalledTimes(1);
+  });
+
+  it("names each improvement's kind on its evidence row in place of the signal (B25)", async () => {
+    const at = Date.now();
+    await render(suggestionsProject({ rows: [suggestionRow("s1", { basis: { signal: "improvement", tag: "the port rule is written nowhere" }, discomfort: null, evidence: [
+      { kind: "session", signal: "improvement", improvement: "no_doc", agent: "claude", session_id: "a", pr_number: null, url: null, at_unix_ms: at, gone: false },
+      { kind: "session", signal: "improvement", improvement: "searched_again", agent: "codex", session_id: "b", pr_number: null, url: null, at_unix_ms: at, gone: false },
+      { kind: "session", signal: "failed_tool", improvement: null, agent: "codex", session_id: "c", pr_number: null, url: null, at_unix_ms: at, gone: false },
+    ] })] }));
+    expect(q('[data-suggestion="s1"]')?.textContent).toContain("Agents keep losing time the same way: the port rule is written nowhere");
+    await click('[data-suggestion-toggle="s1"]');
+    const evidence = [...document.body.querySelectorAll<HTMLButtonElement>("[data-suggestion-evidence]")];
+    expect(evidence.map((button) => button.querySelector("[data-suggestion-evidence-improvement]")?.textContent ?? null)).toEqual(["No doc", "Searched again", null]);
+    expect(evidence[0]?.textContent).not.toContain("Things to improve");
+    expect(evidence[2]?.textContent).toContain("Session · Failed commands and tools");
   });
 
   it("marks a row being applied by whose turn it is, and offers 다시 시도 and 넘어가기 when it failed (B11, B12, B13)", async () => {
@@ -290,10 +305,11 @@ describe("the Hide AI tool", () => {
 
   it("sets how many, how fixes are applied, where it reads and the skipped lines in ⚙ (B5, B13, B16, B19)", async () => {
     const project = suggestionsProject({ ai: "cannot_investigate" });
-    // Not on GitHub, and Memory off: GitHub reads nothing, the session records read all but corrections.
+    // Not on GitHub, with Memory and the turn-end analysis off: GitHub reads nothing, the session records read all but corrections and improvements.
     project.settings.signals = project.settings.signals.map((row) => (
       row.signal === "check_failed" || row.signal === "change_request" ? { ...row, enabled: false, unavailable: "no_github" as const }
-        : row.signal === "correction" ? { ...row, enabled: false, unavailable: "memory_off" as const } : row
+        : row.signal === "correction" ? { ...row, enabled: false, unavailable: "memory_off" as const }
+        : row.signal === "improvement" ? { ...row, enabled: false, unavailable: "analysis_off" as const } : row
     ));
     project.settings.dismissed = [{ id: "s9", discomfort: "Tab names come out wrong", basis: null, may_return: true }, { id: "s8", discomfort: "Bell too loud", basis: null, may_return: false }];
     await render(project);
@@ -307,8 +323,9 @@ describe("the Hide AI tool", () => {
     await click("#hide-ai-apply_mode-auto_pr");
     expect([...sheet!.querySelectorAll("[data-hide-ai-signal-group]")].map((row) => row.getAttribute("data-hide-ai-signal-group"))).toEqual(["session", "github"]);
     const session = sheet?.querySelector('[data-hide-ai-signal-group="session"]');
-    expect(session?.textContent).toContain("Failed commands · agents stuck · my corrections · problems left over in sessions");
+    expect(session?.textContent).toContain("Failed commands · agents stuck · my corrections · problems left over in sessions · things to improve");
     expect(session?.querySelector("[data-hide-ai-correction-off]")?.textContent).toBe("Memory is off, so my corrections aren't read");
+    expect(session?.querySelector("[data-hide-ai-analysis-off]")?.textContent).toBe("Things to improve are recorded only while the turn-end analysis is on");
     expect(session?.querySelector("button")?.getAttribute("aria-checked")).toBe("true");
     const github = sheet?.querySelector('[data-hide-ai-signal-group="github"]');
     expect(github?.textContent).toContain("Not a GitHub repository");

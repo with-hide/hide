@@ -32,9 +32,9 @@ use serde_json::json;
 
 use super::analysis::{AnalysisFailure, LabelEnd};
 use super::analysis::{
-    AnalysisPhase, GoalUpdate, OwedLine, analysis_context, analysis_phase, context_fingerprint,
-    goal_evidence, interrupted, message_before, newest_user_is_last, retain_bounded,
-    rolling_analysis_context, task_input_cursor, turn_key,
+    AnalysisPhase, GoalUpdate, OwedLine, TURN_HEAD_CHARS, analysis_context, analysis_phase,
+    context_fingerprint, goal_evidence, interrupted, message_before, newest_user_is_last,
+    retain_bounded, rolling_analysis_context, task_input_cursor, turn_key,
 };
 use super::analyzer::{AnalysisJob, AnalysisResult, LabelAnalyzer};
 use super::context_label;
@@ -50,7 +50,7 @@ use crate::links::ledger::{
     without_attachments,
 };
 use crate::links::worker::LinkClient;
-use crate::suggestions::ledger::Signal;
+use crate::suggestions::ledger::{ImprovementKind, Signal};
 
 /// The minimum interval between native-file current-metadata reads, also
 /// used for the single follow-up when a starting turn has no prompt yet.
@@ -219,7 +219,7 @@ fn send_suggestion_records(
     agent: Agent,
     session: Option<&str>,
     cwd: Option<&str>,
-    facts: Vec<(Signal, String, u64)>,
+    facts: Vec<(Signal, String, u64, Option<ImprovementKind>)>,
 ) {
     use crate::suggestions::ledger::{Observation, SessionRef};
     use crate::suggestions::worker::{Command, ProjectRef};
@@ -236,7 +236,7 @@ fn send_suggestion_records(
     let now = crate::runtime::unix_milliseconds();
     let facts = facts
         .into_iter()
-        .map(|(signal, tag, at)| Observation {
+        .map(|(signal, tag, at, improvement)| Observation {
             signal,
             tag,
             session: Some(SessionRef {
@@ -248,6 +248,7 @@ fn send_suggestion_records(
             at_unix_ms: if at == 0 { now } else { at },
             always: false,
             head: None,
+            improvement,
         })
         .collect();
     client.send(Command::Observe {
@@ -1687,7 +1688,7 @@ impl LabelWorker {
         let session = record.native_session_id.as_deref();
         let mut facts = failed_tools
             .into_iter()
-            .map(|failure| (Signal::FailedTool, failure.head, failure.at_unix_ms))
+            .map(|failure| (Signal::FailedTool, failure.head, failure.at_unix_ms, None))
             .collect::<Vec<_>>();
         // The agent stopped for the operator: a native question, or Herdr's
         // `blocked` (a permission or input prompt). A plan waiting for
@@ -1722,7 +1723,7 @@ impl LabelWorker {
             for wait in waits.into_iter().flatten() {
                 if !sent.contains(&wait) {
                     sent.push(wait);
-                    facts.push((Signal::AgentWait, wait.to_owned(), 0));
+                    facts.push((Signal::AgentWait, wait.to_owned(), 0, None));
                 }
             }
         }
@@ -2213,8 +2214,14 @@ impl LabelWorker {
         )
         .into_iter()
         .unzip();
+        // A turn's end reads a long turn at both ends (PRD
+        // hide-ai-suggestions D-56); its start reads it as before.
+        let turn_head = match phase {
+            AnalysisPhase::TurnStart => 0,
+            AnalysisPhase::TurnEnd => TURN_HEAD_CHARS,
+        };
         let mut context = if initial_context && record.goal.is_none() {
-            analysis_context(events, &operator, &owed)
+            analysis_context(events, &operator, &owed, turn_head)
         } else {
             rolling_analysis_context(
                 record.goal.as_deref().unwrap_or_default(),
@@ -2224,6 +2231,7 @@ impl LabelWorker {
                     .unwrap_or_default(),
                 &owed,
                 events,
+                turn_head,
             )
         };
         if context.is_empty() {
@@ -2341,6 +2349,12 @@ impl LabelWorker {
             });
         if phase == AnalysisPhase::TurnEnd {
             context.push_str(&super::analysis::work_context(&ledger));
+            let summary = events
+                .iter()
+                .rfind(|event| event.kind == LabelEventKind::Human)
+                .zip(pane.tools.as_ref())
+                .and_then(|(request, tools)| tools.summary(request.offset));
+            context.push_str(&super::analysis::tool_use_context(summary.as_ref()));
         }
         let generation = pane.generation;
         let retry = if phase == AnalysisPhase::TurnEnd && pane.end_retried == Some(turn) {
@@ -2605,20 +2619,44 @@ impl LabelWorker {
                         );
                     }
                 }
+                if analysis.improvements_dropped > 0 {
+                    crate::diagnostic!(json!({
+                        "component": "labels",
+                        "kind": "analysis.improvements_dropped",
+                        "target": self.target,
+                        "pane_id": pane_id,
+                        "dropped": analysis.improvements_dropped,
+                    }));
+                }
                 // A problem the turn's judgment says was left over is a
                 // suggestion record of the session, weighed low (PRD
-                // hide-ai-suggestions D-30).
+                // hide-ai-suggestions D-30), and so is each improvement.
                 if outcome.phase == AnalysisPhase::TurnEnd
                     && let Some(judgment) = analysis.work.as_ref()
                     && let Some(pane) = self.panes.get(pane_id)
                 {
+                    // Each point where the turn lost time is a record of
+                    // its own, with its kind (D-54, D-55).
                     let problems = judgment
                         .missed
                         .iter()
                         .filter(|missed| missed.kind == crate::links::ledger::MissedKind::Problem)
                         .map(|missed| {
-                            (Signal::LabelMissed, missed.text.clone(), outcome.at_unix_ms)
+                            (
+                                Signal::LabelMissed,
+                                missed.text.clone(),
+                                outcome.at_unix_ms,
+                                None,
+                            )
                         })
+                        .chain(analysis.improvements.iter().map(|point| {
+                            (
+                                Signal::Improvement,
+                                point.text.clone(),
+                                outcome.at_unix_ms,
+                                Some(point.kind),
+                            )
+                        }))
                         .collect::<Vec<_>>();
                     if !problems.is_empty() {
                         send_suggestion_records(

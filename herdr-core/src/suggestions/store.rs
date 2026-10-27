@@ -5,7 +5,7 @@
 //! answered (D-35). Records older than [`policy::RECORD_RETENTION_MS`] and
 //! past [`policy::RECORD_CAP`] are pruned as new ones arrive.
 
-use super::ledger::{Observation, Record, RecordEntry, RecordId, RecordIndex};
+use super::ledger::{Observation, Record, RecordEntry, RecordId, RecordIndex, Signal};
 use super::lifecycle::LineLife;
 use super::notebook::{Applied, Line, LineId, Notebook};
 use super::policy;
@@ -262,6 +262,29 @@ impl SuggestionStore {
             .map_err(failed)
     }
 
+    /// How many improvement records the session `fact` names already keeps.
+    fn session_improvements(
+        tx: &Transaction<'_>,
+        project: &str,
+        fact: &Observation,
+    ) -> Result<usize, String> {
+        let Some(unit) = fact.unit() else {
+            return Ok(0);
+        };
+        let escaped = unit
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let pattern = format!("{}\u{1f}%\u{1f}{escaped}", Signal::Improvement.as_str());
+        tx.query_row(
+            "SELECT COUNT(*) FROM records WHERE project=?1 AND key LIKE ?2 ESCAPE '\\'",
+            params![project, pattern],
+            |row| row.get::<_, i64>(0),
+        )
+        .map(|count| count as usize)
+        .map_err(failed)
+    }
+
     fn ensure(tx: &Transaction<'_>, project: &str) -> Result<(), String> {
         tx.execute(
             "INSERT INTO projects VALUES(?1,?2,1,1) ON CONFLICT(id) DO NOTHING",
@@ -304,6 +327,7 @@ impl SuggestionStore {
             .map_err(failed)? as u64;
         let mut written = Vec::new();
         let mut moved = Vec::new();
+        let mut over_cap = 0;
         for fact in facts {
             let Some(fact) = fact.normalized() else {
                 continue;
@@ -311,6 +335,13 @@ impl SuggestionStore {
             let Some(key) = fact.key() else {
                 continue;
             };
+            if fact.signal == Signal::Improvement
+                && Self::session_improvements(&tx, project, &fact)?
+                    >= policy::IMPROVEMENTS_PER_SESSION
+            {
+                over_cap += 1;
+                continue;
+            }
             let inserted = tx
                 .execute(
                     "INSERT INTO records VALUES(?1,?2,?3,?4,1,?5) ON CONFLICT(project,key) DO NOTHING",
@@ -337,6 +368,13 @@ impl SuggestionStore {
                     moved.push(RecordId(id as u64));
                 }
             }
+        }
+        if over_cap > 0 {
+            crate::diagnostic!(serde_json::json!({
+                "component": "suggestions", "kind": "record.session_cap",
+                "signal": Signal::Improvement.as_str(), "dropped": over_cap,
+                "limit": policy::IMPROVEMENTS_PER_SESSION,
+            }));
         }
         tx.execute(
             "UPDATE projects SET next_record=?2 WHERE id=?1",
@@ -529,6 +567,7 @@ impl SuggestionStore {
                     pr: record.fact.pr.map(|pr| pr.number),
                     at_unix_ms: record.fact.at_unix_ms,
                     always: record.fact.always,
+                    improvement: record.fact.improvement,
                     line: on_line.get(&record.id).copied(),
                     fresh,
                 })
@@ -600,7 +639,7 @@ impl SuggestionStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::suggestions::ledger::{PrRef, SessionRef, Signal};
+    use crate::suggestions::ledger::{ImprovementKind, PrRef, SessionRef, Signal, SignalGroup};
     use crate::suggestions::notebook::{NotebookEdit, Stage};
     use crate::suggestions::policy::DAY_MS;
 
@@ -619,7 +658,36 @@ mod tests {
             at_unix_ms: at,
             always: false,
             head: None,
+            improvement: None,
         }
+    }
+
+    #[test]
+    fn a_session_keeps_its_improvements_up_to_the_cap_and_its_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut store, _) = SuggestionStore::open(&path(dir.path())).unwrap();
+        let improvement = |text: String, session: &str| Observation {
+            signal: Signal::Improvement,
+            improvement: Some(ImprovementKind::NoDoc),
+            ..failed_tool(&text, session, NOW)
+        };
+        let facts = (0..policy::IMPROVEMENTS_PER_SESSION + 2)
+            .map(|n| improvement(format!("포트 규칙 {n}"), "a"))
+            .chain([improvement("포트 규칙 0".into(), "b")])
+            .collect();
+        let written = store.record("p", facts, NOW).unwrap().written;
+        assert_eq!(
+            written.len(),
+            policy::IMPROVEMENTS_PER_SESSION + 1,
+            "the cap is one session's; another session keeps its own"
+        );
+        let index = store.index("p", &Notebook::default()).unwrap();
+        assert!(
+            index
+                .entries
+                .iter()
+                .all(|entry| entry.improvement == Some(ImprovementKind::NoDoc))
+        );
     }
 
     #[test]
@@ -682,6 +750,7 @@ mod tests {
             at_unix_ms: at,
             always: false,
             head: Some(head.into()),
+            improvement: None,
         };
         let first = store.record("p", vec![check("a", NOW)], NOW).unwrap();
         assert_eq!(first.written, [RecordId(1)]);
@@ -841,12 +910,51 @@ mod tests {
         assert_eq!(store.state("p").unwrap(), ProjectState::default());
         let mut state = ProjectState::default();
         state.settings.suggestions_enabled = false;
-        state.settings.signals_off.insert(Signal::LabelMissed);
+        state.settings.groups_off.insert(SignalGroup::Github);
         state.last_completed_day = Some("2026-10-27".into());
         store.save_state("p", &state).unwrap();
         drop(store);
         let (store, _) = SuggestionStore::open(&file).unwrap();
         assert_eq!(store.state("p").unwrap(), state);
         assert_eq!(store.projects().unwrap(), ["p"]);
+    }
+
+    /// B5, D-52: a store written when ⚙ kept the signals it turned off
+    /// comes back with the place they are read from off, and stays so.
+    #[test]
+    fn signals_turned_off_before_the_places_switch_keep_their_place_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = path(dir.path());
+        let (mut store, _) = SuggestionStore::open(&file).unwrap();
+        let state = ProjectState {
+            last_completed_day: Some("2026-10-27".into()),
+            ..ProjectState::default()
+        };
+        store.save_state("p", &state).unwrap();
+        let mut old = serde_json::to_value(&state).unwrap();
+        let settings = old["settings"].as_object_mut().unwrap();
+        settings.remove("groups_off");
+        settings.insert(
+            "signals_off".into(),
+            serde_json::json!(["failed_tool", "agent_wait", "correction", "label_missed"]),
+        );
+        store
+            .connection
+            .execute(
+                "UPDATE projects SET state=?1 WHERE id='p'",
+                [old.to_string()],
+            )
+            .unwrap();
+        let loaded = store.state("p").unwrap();
+        assert_eq!(
+            loaded.settings.groups_off,
+            std::collections::BTreeSet::from([SignalGroup::Session])
+        );
+        assert!(!loaded.settings.records(Signal::Improvement));
+        assert!(loaded.settings.records(Signal::CheckFailed));
+        store.save_state("p", &loaded).unwrap();
+        drop(store);
+        let (store, _) = SuggestionStore::open(&file).unwrap();
+        assert_eq!(store.state("p").unwrap(), loaded);
     }
 }
