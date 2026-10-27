@@ -471,12 +471,21 @@ fn a_failed_pinned_upload_preserves_current_and_reconnect_sends_it_again() -> Re
 #[test]
 #[ignore = "real candidate helper and pinned Herdr over loopback SSH; set HIDE_E2E_HERDR_BIN"]
 fn reconnect_after_a_failed_start_restores_a_usable_terminal() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
     let mut device = Device::fresh()?;
-    let config = device.root.path().join("r/herdr.toml");
-    let valid_config = std::fs::read(&config)?;
-    // --version still answers, but a real server refuses malformed config.
-    std::fs::write(&config, "[update\n")?;
-    let failed = device.connect()?;
+    // Reading a missing socket succeeds as a probe, while the account
+    // cannot bind a new socket until its folder is writable again.
+    let folder = device.root.path().join("locked");
+    std::fs::create_dir(&folder)?;
+    device.socket = folder.join("herdr.sock");
+    device
+        .environment
+        .set("HERDR_SOCKET_PATH", device.socket.as_os_str());
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o500))?;
+    let first = device.connect();
+    std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700))?;
+    let failed = first?;
     let report = failed
         .kit
         .as_ref()
@@ -491,7 +500,6 @@ fn reconnect_after_a_failed_start_restores_a_usable_terminal() -> Result<()> {
     failed.node.host.close("retry bootstrap");
     drop(failed);
     device.link.take();
-    std::fs::write(&config, valid_config)?;
     let connected = device.connect()?;
     let report = connected
         .kit
