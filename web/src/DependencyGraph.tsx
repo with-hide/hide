@@ -1,24 +1,30 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from "react";
-import { downPathAround, LAYOUT_TIMEOUT_MS, placeWithin, workerElk, type Box, type Flow, type GraphEdge, type LayerOrder, type NodeBox, type Placement } from "./dependencyLayout";
+import { backPath, downPathAround, LAYOUT_TIMEOUT_MS, placeWithin, workerElk, type Box, type Flow, type GraphEdge, type LayerOrder, type NodeBox, type Placement } from "./dependencyLayout";
 import { cn } from "./lib/utils";
 import { useMeasuredPaths } from "./measuredPaths";
 import type { LayeredGraph } from "./projectBoard";
 import { useShellStore } from "./store";
 
-/** How an edge is drawn: its colour class, and dashed for a stack's edge. */
-export type EdgeLook = { tone: string; dashed?: boolean };
+/** How an edge is drawn: its colour class, dashed for a stack's edge, and dimmed while a selection leaves it out. */
+export type EdgeLook = { tone: string; dashed?: boolean; dimmed?: boolean };
+
+/** An edge drawn over the graph and kept out of its layout (a defect found later, drawn back up), with its own look. */
+export type OverlayEdge = GraphEdge & { look: EdgeLook };
 
 /** The gaps a graph keeps, as the token names that hold them: between layers, and between cards in a layer. */
 export type GraphGaps = { layers: string; nodes: string };
 
 const ACROSS_GAPS: GraphGaps = { layers: "--home-dependency-gap", nodes: "--spacing-xl" };
 
+const NO_OVERLAY: readonly OverlayEdge[] = [];
+
 /**
  * Nodes that wait on one another, drawn by what they wait on, left to right
  * or (`flow` down) top down: placed by the layout worker once every node is
  * measured, in plain layers until then or when the layout refuses the graph.
+ * `overlay` edges are drawn from where the cards stand and never move them.
  */
-export function DependencyGraphView<T>({ graph, draw, idOf, flow = "across", gaps = ACROSS_GAPS, edgeLook, order = "free" }: { graph: LayeredGraph<T>; draw: (value: T) => ReactNode; idOf: (value: T) => string; flow?: Flow; gaps?: GraphGaps; edgeLook?: (edge: GraphEdge) => EdgeLook; order?: LayerOrder }) {
+export function DependencyGraphView<T>({ graph, draw, idOf, flow = "across", gaps = ACROSS_GAPS, edgeLook, overlay = NO_OVERLAY, order = "free" }: { graph: LayeredGraph<T>; draw: (value: T) => ReactNode; idOf: (value: T) => string; flow?: Flow; gaps?: GraphGaps; edgeLook?: (edge: GraphEdge) => EdgeLook; overlay?: readonly OverlayEdge[]; order?: LayerOrder }) {
   const box = useRef<HTMLDivElement>(null);
   const marker = `dependency-arrow-${useId()}`;
   const values = graph.layers.flat();
@@ -56,8 +62,23 @@ export function DependencyGraphView<T>({ graph, draw, idOf, flow = "across", gap
           }),
     [structure, placed, down],
   );
-  const lines = placed ? placement.edges : arrows;
-  const looks = new Map(graph.edges.map((edge) => [`${edge.from}>${edge.to}`, edgeLook?.(edge)]));
+  const overlayKey = JSON.stringify(overlay.map((edge) => [edge.from, edge.to]));
+  const back = useMeasuredPaths(
+    box,
+    "[data-dependency-node]",
+    (origin, at) =>
+      overlay.flatMap((edge) => {
+        const from = at("data-dependency-node", edge.from);
+        const to = at("data-dependency-node", edge.to);
+        if (!from || !to) return [];
+        const local = (rect: DOMRect): Box => ({ left: rect.left - origin.left, right: rect.right - origin.left, top: rect.top - origin.top, bottom: rect.bottom - origin.top });
+        const gap = parseFloat(getComputedStyle(box.current!).getPropertyValue(gaps.nodes)) / 2 || 0;
+        return [{ id: `${edge.from}~${edge.to}`, d: backPath(local(from), local(to), gap) }];
+      }),
+    [overlayKey, structure, placement],
+  );
+  const lines = [...(placed ? placement.edges : arrows), ...back];
+  const looks = new Map<string, EdgeLook | undefined>([...graph.edges.map((edge) => [`${edge.from}>${edge.to}`, edgeLook?.(edge)] as const), ...overlay.map((edge) => [`${edge.from}~${edge.to}`, edge.look] as const)]);
   const tones = [...new Set(["", ...[...looks.values()].map((look) => look?.tone ?? "")])];
   const svg = (
     <svg aria-hidden="true" className={cn("pointer-events-none absolute inset-0 size-full overflow-visible", !edgeLook && "text-warning")}>
@@ -72,7 +93,7 @@ export function DependencyGraphView<T>({ graph, draw, idOf, flow = "across", gap
       {lines.map((arrow) => {
         const look = looks.get(arrow.id);
         return (
-          <path key={arrow.id} d={arrow.d} fill="none" stroke="currentColor" strokeWidth={1.5} strokeDasharray={look?.dashed ? "4 3" : undefined} className={look?.tone} markerEnd={`url(#${marker}-${tones.indexOf(look?.tone ?? "")})`} data-dependency-edge={arrow.id} data-edge-dashed={look?.dashed || undefined} />
+          <path key={arrow.id} d={arrow.d} fill="none" stroke="currentColor" strokeWidth={1.5} strokeDasharray={look?.dashed ? "4 3" : undefined} className={cn(look?.tone, look?.dimmed && "opacity-(--opacity-dimmed)")} markerEnd={`url(#${marker}-${tones.indexOf(look?.tone ?? "")})`} data-dependency-edge={arrow.id} data-edge-dashed={look?.dashed || undefined} data-edge-dimmed={look?.dimmed || undefined} />
         );
       })}
     </svg>
