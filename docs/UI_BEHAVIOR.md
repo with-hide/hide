@@ -2235,6 +2235,12 @@ Every device chip on an agent, a child or a descendant names its machine as the 
 A panel row whose tab holds exactly one agent pane is titled by that agent's identity with its status mark; a tab with no agent or several keeps the Herdr tab label.
 Recent Panels and Recent Projects history is session-local and retains only existing projects and surfaces; a deleted highlight moves to the next surviving entry without reordering the held cycle, and if none survives, the cycle cancels and keeps the current selection.
 
+Next tab and Previous tab (⇧⌘] and ⇧⌘[ in the desktop app on macOS, Ctrl+PageDown and Ctrl+PageUp on Windows and Linux) choose the tab beside the one in use, in the order its tab strip draws, wrapping from the last tab to the first and back, as every browser, terminal and editor does.
+They step through the View area that holds the keyboard, and otherwise through the Agent area in use, the strip ⌘1-9 numbers; the choice is the one a click on that tab makes, and the keyboard follows it.
+A strip with one tab stays as it is.
+There is no overlay and nothing to hold: ⌃Tab stays the recent-use cycle.
+A browser tab has no default chord for either, because Chrome keeps both pairs for its own tabs; Settings, Shortcuts can bind them there.
+
 ## Device rail
 
 Web owner: `web/src/components/device-rail.tsx`, `web/src/devices.ts`, the rail branch of `web/src/sidebar.tsx`.
@@ -2997,6 +3003,7 @@ A stored chord set keeps macOS chords, so a set a Mac saved means the same keys 
 Each exception has a dominant convention on Windows and Linux, or a chord the system keeps, behind it.
 
 - Text size is Ctrl and =, - or 0, as in Windows Terminal, GNOME Terminal, WezTerm, VS Code and every browser.
+- The tab beside is Ctrl+PageDown (previous Ctrl+PageUp), as in Chrome, Firefox, VS Code and GNOME Terminal; the rule's Ctrl+Shift+] would be a chord no one there knows.
 - The recent project cycle is Ctrl+Shift+` (previous Ctrl+Alt+Shift+`): Alt+Tab is the system's window switcher on Windows and Linux and never reaches an app, so the cycle moves to ` under the rule, the key macOS keeps for its own window cycle.
   Going back adds Alt to the Ctrl+Shift the cycle already holds, the one four-key desktop chord: a held cycle commits when its Ctrl is released, so the rule's Alt+Shift+` could not step back inside it, and GNOME keeps Alt+Shift+` for switching between an app's windows.
 - In a browser tab, Reopen closed tab is Ctrl+Alt+Shift+T: Chrome keeps Alt+Shift+T to focus its toolbar, which keyboard users rely on, and the macOS browser chord ⌥⇧T is those same keys there.
@@ -3023,7 +3030,7 @@ Each exception has a dominant convention on Windows and Linux, or a chord the sy
 | A newline the agent keeps in its prompt | `⇧↩` | `Shift+Enter` |
 
 Ctrl+C copies only while text is selected and clears the selection as it copies, as Windows Terminal does, so the next Ctrl+C interrupts; with nothing selected it reaches the program.
-Every other plain Ctrl key reaches the program, apart from text size (Ctrl+=, Ctrl+- and Ctrl+0).
+Every other plain Ctrl key reaches the program, apart from text size (Ctrl+=, Ctrl+- and Ctrl+0) and the tab beside (Ctrl+PageDown and Ctrl+PageUp).
 Settings, Shortcuts refuses a binding on the terminal's copy or paste chord.
 
 While an input method composes (Hangul, kana, pinyin), the keys in this table are the input method's and none is sent; a ⇧↩ that ends a syllable reaches the program after that syllable, never before it (`web/src/terminals.ts`).
@@ -3052,6 +3059,8 @@ The sheet carries no row or explanation for a command the removed native app alo
 | Start agent | `⌘N` | `Ctrl+Shift+N` | none | none |
 | Next recent tab | `⌃⇥` | `Ctrl+Tab` | `` ⌥` `` | `` Alt+` `` |
 | Previous recent tab | `⌃⇧⇥` | `Ctrl+Shift+Tab` | `` ⌥⇧` `` | `` Alt+Shift+` `` |
+| Next tab (exception) | `⇧⌘]` | `Ctrl+PageDown` | none | none |
+| Previous tab (exception) | `⇧⌘[` | `Ctrl+PageUp` | none | none |
 | Next panel (all projects) | none | none | none | none |
 | Previous panel (all projects) | none | none | none | none |
 | Next recent project (exception) | `⌥⇥` | `` Ctrl+Shift+` `` | `⌥⇥` | `` Ctrl+Shift+` `` |

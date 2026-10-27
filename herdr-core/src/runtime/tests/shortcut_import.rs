@@ -181,7 +181,7 @@ fn a_ui_state_update_keeps_the_import_marker_and_refuses_an_oversized_set() {
     );
     assert!(runtime.snapshot().ui_state.shortcut_bindings_imported);
 
-    let oversized: serde_json::Map<String, serde_json::Value> = (0..40)
+    let oversized: serde_json::Map<String, serde_json::Value> = (0..49)
         .map(|index| (format!("command_{index}"), serde_json::json!("command+x")))
         .collect();
     set_bindings(&mut runtime, serde_json::Value::Object(oversized));

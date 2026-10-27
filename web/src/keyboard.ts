@@ -26,6 +26,7 @@ import { herdrGate } from "./herdrTakeoverRules";
 import { useSetupWalk } from "./FirstRunWizard";
 import { numberedDevices, numberedTabs, sidebarNumbers } from "./numbering";
 import { areaFrame } from "./areaFrames";
+import { adjacentDisplay } from "./areaLayout";
 import { availableEntries, currentEntry, expectPane, expectSurface, observeEntries, observePane, observeProject, paneItem, panelItem, projectItem, reconcileCycle, recentEntries, recentProjectOrder, type CycleItem } from "./recent";
 import { projectsOf, remoteContext } from "./remote";
 import { hostChord, hostRegistry, isNumberedCommand, releaseModifier, matchHost, numberedCommand, REGISTRY, storedBindings, type CommandId, type Digit, type NumberedFamily } from "./shortcuts";
@@ -263,6 +264,23 @@ export function installKeyboard(actions: Actions): () => void {
         if (!release) return;
         if (!current) cycleRelease = release;
         ui().setCycle(next);
+        return;
+      }
+      case "next_tab":
+      case "previous_tab": {
+        // The tab beside the one in use: a View area's while it holds the
+        // keyboard, else the Agent area in use's, the strip ⌘1-9 numbers.
+        const step = id === "next_tab" ? 1 : -1;
+        const scope = focusedCycleScope(useShellStore.getState().rest, keyboardCommandOwner());
+        const view = scope?.kind === "view" ? areaFrame("view") : null;
+        if (view && scope) {
+          const display = adjacentDisplay(view.layout.root, scope.areaId, step);
+          if (display) actions.focusView(display.id, true);
+          return;
+        }
+        const agent = areaFrame("agent");
+        const tab = agent && adjacentDisplay(agent.layout.root, agent.layout.active_area, step);
+        if (tab) actions.selectAgentTab(tab.id);
         return;
       }
       case "search":

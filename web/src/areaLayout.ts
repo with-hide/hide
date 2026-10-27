@@ -124,6 +124,14 @@ export function adjacentInOrder<I extends AreaItem>(root: AreaNode<I>, areaId: s
   return areas[(index + step + areas.length) % areas.length] ?? null;
 }
 
+/** The tab after or before the one `areaId` shows, in its strip's order, wrapping; null when there is no other. */
+export function adjacentDisplay<I extends AreaItem>(root: AreaNode<I>, areaId: string, step: 1 | -1): I | null {
+  const area = findArea(root, areaId);
+  const index = area ? area.displays.findIndex((display) => display.id === area.active) : -1;
+  if (!area || index === -1 || area.displays.length < 2) return null;
+  return area.displays[(index + step + area.displays.length) % area.displays.length] ?? null;
+}
+
 // --- geometry ----------------------------------------------------------------
 
 /** The smallest a subtree may be drawn: each area at its minimum, a divider between siblings. */

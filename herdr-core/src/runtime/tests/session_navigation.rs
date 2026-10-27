@@ -4470,7 +4470,7 @@ fn browser_shortcut_bindings_survive_a_ui_state_update_that_omits_them() {
         Some("alt+KeyR")
     );
 
-    let oversized: serde_json::Map<String, serde_json::Value> = (0..40)
+    let oversized: serde_json::Map<String, serde_json::Value> = (0..49)
         .map(|index| (format!("command_{index}"), serde_json::json!("alt+KeyR")))
         .collect();
     let flood = serde_json::to_vec(&serde_json::json!({

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { tabStripFit, type TabStripSizes } from "./areaLayout";
+import { adjacentDisplay, tabStripFit, type AreaNode, type TabStripSizes } from "./areaLayout";
 
 // The tokens' values: preferred 180, title minimum 104, icon identity 40, control 24.
 const SIZES: TabStripSizes = { preferred: 180, titleMin: 104, icon: 40, control: 24 };
@@ -67,5 +67,23 @@ describe("tabStripFit", () => {
   it("shares the room alike when no tab of the strip is selected", () => {
     expect(fit(485, 6, false)).toEqual({ selected: { width: 485 / 6, fit: "compact" }, others: { width: 485 / 6, fit: "compact" } });
     expect(fit(200, 6, false).others).toEqual({ width: 40, fit: "marks" });
+  });
+});
+
+describe("adjacentDisplay", () => {
+  const strip = (active: string, ids: string[]): AreaNode<{ id: string }> => ({ area: { id: "a1", active, displays: ids.map((id) => ({ id })) } });
+  const root: AreaNode<{ id: string }> = { split: { id: "s1", axis: "row", ratio: 0.5, first: strip("b", ["a", "b", "c"]), second: { area: { id: "a2", active: "x", displays: [{ id: "x" }] } } } };
+
+  it("steps along the strip of the area it names, wrapping at either end", () => {
+    expect(adjacentDisplay(root, "a1", 1)?.id).toBe("c");
+    expect(adjacentDisplay(root, "a1", -1)?.id).toBe("a");
+    expect(adjacentDisplay(strip("c", ["a", "b", "c"]), "a1", 1)?.id).toBe("a");
+    expect(adjacentDisplay(strip("a", ["a", "b", "c"]), "a1", -1)?.id).toBe("c");
+  });
+
+  it("has nowhere to go with one tab, an unknown area or no tab in front", () => {
+    expect(adjacentDisplay(root, "a2", 1)).toBeNull();
+    expect(adjacentDisplay(root, "a9", 1)).toBeNull();
+    expect(adjacentDisplay(strip("gone", ["a", "b"]), "a1", 1)).toBeNull();
   });
 });

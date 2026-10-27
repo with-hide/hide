@@ -111,6 +111,8 @@ export type CommandId =
   | "start_agent"
   | "recent_area_tab"
   | "previous_recent_area_tab"
+  | "next_tab"
+  | "previous_tab"
   | "recent_panel"
   | "previous_recent_panel"
   | "recent_project"
@@ -264,6 +266,11 @@ export const REGISTRY: readonly Command[] = [
   { id: "start_agent", title: "Start agent", group: "Navigate", browser: null, electron: { code: "KeyN", meta: true }, moved: false },
   { id: "recent_area_tab", title: "Next recent tab", group: "Navigate", browser: { code: "Backquote", alt: true }, electron: { code: "Tab", ctrl: true }, moved: true },
   { id: "previous_recent_area_tab", title: "Previous recent tab", group: "Navigate", browser: { code: "Backquote", alt: true, shift: true }, electron: { code: "Tab", ctrl: true, shift: true }, moved: true },
+  // The tab beside the one in use in the area that holds the keyboard, in the
+  // order its tab strip draws: every macOS browser, terminal and editor's
+  // ⇧⌘] and ⇧⌘[. Chrome keeps both in a browser tab, so it has none there.
+  { id: "next_tab", title: "Next tab", group: "Navigate", browser: null, electron: { code: "BracketRight", meta: true, shift: true }, moved: false },
+  { id: "previous_tab", title: "Previous tab", group: "Navigate", browser: null, electron: { code: "BracketLeft", meta: true, shift: true }, moved: false },
   { id: "recent_panel", title: "Next panel (all projects)", group: "Navigate", browser: null, electron: null, moved: false },
   { id: "previous_recent_panel", title: "Previous panel (all projects)", group: "Navigate", browser: null, electron: null, moved: false },
   { id: "recent_project", title: "Next recent project", group: "Navigate", browser: { code: "Tab", alt: true }, electron: { code: "Tab", alt: true }, moved: false },
@@ -336,6 +343,10 @@ export const PC_KEYS: Readonly<Partial<Record<CommandId, { chord?: Chord; browse
   // Alt+Shift+` (switch-group-backward) for itself.
   recent_project: { chord: { code: "Backquote", ctrl: true, shift: true } },
   previous_recent_project: { chord: { code: "Backquote", ctrl: true, alt: true, shift: true } },
+  // Chrome, Firefox, VS Code and GNOME Terminal step through tabs with
+  // Ctrl+PageDown and Ctrl+PageUp.
+  next_tab: { chord: { code: "PageDown", ctrl: true } },
+  previous_tab: { chord: { code: "PageUp", ctrl: true } },
   // Chrome keeps Alt+Shift+T (focus the toolbar) on Windows and Linux, and the
   // macOS browser chord ⌥⇧T is those same keys there, so a browser tab
   // reopens with the one free chord on that key.
@@ -384,6 +395,9 @@ const CHROME_RESERVED: Readonly<Record<KeySystem, readonly Chord[]>> = {
     // Hard reload and the bookmarks bar.
     { code: "KeyR", meta: true, shift: true },
     { code: "KeyB", meta: true, shift: true },
+    // The tab beside this one.
+    { code: "BracketLeft", meta: true, shift: true },
+    { code: "BracketRight", meta: true, shift: true },
   ],
   // Chrome's reserved commands on Windows and Linux (new and closed tabs and
   // windows, tab switching, quit), its Alt+Shift keys (focus the toolbar,
@@ -481,7 +495,7 @@ export function matchHost(event: KeyEventLike, registry: readonly Command[], hos
 // format and command names (user decision 2026-09-26: the desktop app
 // honours the operator's existing shortcut settings).
 export const EDITABLE_PANE_COMMANDS: readonly CommandId[] = [
-  "recent_area_tab", "previous_recent_area_tab", "recent_panel", "previous_recent_panel",
+  "recent_area_tab", "previous_recent_area_tab", "next_tab", "previous_tab", "recent_panel", "previous_recent_panel",
   "overview", "sidebar_projects",
   "toggle_device_rail",
   "toggle_sidebar_lens",
@@ -811,6 +825,8 @@ const MAC_GLYPHS: Record<string, string> = {
   Slash: "/",
   Backspace: "⌫",
   Delete: "⌦",
+  PageUp: "⇞",
+  PageDown: "⇟",
 };
 
 // Windows and Linux name keys in words and join a chord with "+", modifiers
@@ -826,6 +842,8 @@ const PC_NAMES: Record<string, string> = {
   Enter: "Enter",
   Backspace: "Backspace",
   Delete: "Delete",
+  PageUp: "PageUp",
+  PageDown: "PageDown",
 };
 
 function keyName(code: string, names: Record<string, string>): string {

@@ -1,7 +1,8 @@
 // The desktop app's numbered chords and hold hints end to end (PRD
 // electron-digit-shortcuts-hints D-09): ⌃2 moves no tab; holding ⌘ alone
 // shows each tab's digit after the delay and moves nothing, adding ⌥ turns
-// them to the device tiles' digits, ⌘2 and ⌘9 choose a tab; holding ⌥⌘
+// them to the device tiles' digits, ⌘2 and ⌘9 choose a tab, ⇧⌘] and ⇧⌘[
+// the one beside; holding ⌥⌘
 // shows the device tiles' digits, releasing hides them, a release before
 // the delay shows nothing, a number with no device does nothing, and a key
 // pressed during the hold,
@@ -19,6 +20,7 @@ import "../../web/src/host";
 import { countSent, enterWorkspace } from "../../web/e2e/wire";
 import { hostLog, isolate, launchShell, test, type Isolated } from "./fixture";
 import { animationsFinished, quietFor } from "../../web/e2e/wait";
+import { chord } from "../../web/e2e/chords";
 
 let herdr: HerdrFixture;
 let run: Isolated;
@@ -166,6 +168,25 @@ test("⌘n selects a tab, ⌘9 the last, and a ⌘ hold numbers the tabs until a
     await expect(canvas).toHaveAttribute("data-canvas", tabs[0]!);
     await page.keyboard.press("Meta+Digit9");
     await expect(canvas).toHaveAttribute("data-canvas", tabs[1]!);
+  } finally {
+    herdr.run(["tab", "close", tabs[1]!]);
+  }
+});
+
+test("⇧⌘] and ⇧⌘[ (Ctrl+PageDown and Ctrl+PageUp off macOS) step to the tab beside, wrapping, and the keyboard follows", async () => {
+  const { page, tabs, canvas } = await openTwoTabs();
+  try {
+    const typing = (id: string) => page.locator(`[data-canvas="${id}"] [data-pane-view][data-focused="true"] .xterm-helper-textarea`);
+    await page.keyboard.press(chord("next_tab", "electron"));
+    await expect(canvas).toHaveAttribute("data-canvas", tabs[1]!);
+    await expect(typing(tabs[1]!)).toBeFocused();
+    await page.keyboard.press(chord("next_tab", "electron"));
+    await expect(canvas).toHaveAttribute("data-canvas", tabs[0]!);
+    await page.keyboard.press(chord("previous_tab", "electron"));
+    await expect(canvas).toHaveAttribute("data-canvas", tabs[1]!);
+    await page.keyboard.press(chord("previous_tab", "electron"));
+    await expect(canvas).toHaveAttribute("data-canvas", tabs[0]!);
+    await expect(typing(tabs[0]!)).toBeFocused();
   } finally {
     herdr.run(["tab", "close", tabs[1]!]);
   }

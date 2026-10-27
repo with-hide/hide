@@ -621,8 +621,8 @@ test("the shortcut sheet marks the moved chords and ⌘F reaches the agent's own
     // they never carry a Chrome move note (electron-digit-shortcuts-hints B3).
     // The two Explorer path copies and its Cut, Copy and Paste are rows too,
     // and so is the sidebar's Projects | Tasks switch (sidebar-task-lens D-19, D-32),
-    // the pane's Show plan (hide-plan B7), and the Memory tool's toggle.
-    await expect(page.locator("[data-shortcut]")).toHaveCount(57);
+    // the pane's Show plan (hide-plan B7), the Memory tool's toggle, and Next and Previous tab.
+    await expect(page.locator("[data-shortcut]")).toHaveCount(59);
     for (const title of ["Overview", "Focus sidebar", "Add to backlog"]) await expect(page.locator("[data-shortcut-sheet]")).toContainText(title);
     // Add to backlog moves in a macOS browser, where Chrome keeps ⌘⇧M for its profiles; Alt+Shift+M is free on Windows and Linux.
     // Assert the exact moved commands, including the unchanged platform exceptions.
