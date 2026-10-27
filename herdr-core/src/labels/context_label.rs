@@ -938,13 +938,13 @@ mod tests {
     fn an_improvement_keeps_no_email_home_account_or_token() {
         let mut answer = end_answer(work(json!([])), "done");
         answer["improvements"] = json!([{"kind": "tool_friction",
-            "text": "dev@example.com 계정과 /Users/hoyeon/app/.env 의 api_key=abcd1234efgh5678 를 다시 찾음"}]);
+            "text": "dev@example.com 계정과 /Users/example/app/.env 의 api_key=abcd1234efgh5678 를 다시 찾음"}]);
         let text = parse(AnalysisPhase::TurnEnd, OutputLanguage::Korean, answer)
             .unwrap()
             .improvements
             .remove(0)
             .text;
-        for private in ["dev@example.com", "hoyeon", "abcd1234efgh5678"] {
+        for private in ["dev@example.com", "/Users/example", "abcd1234efgh5678"] {
             assert!(!text.contains(private), "{text}");
         }
         assert!(text.contains("app/.env"), "{text}");
