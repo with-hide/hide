@@ -130,8 +130,9 @@ class Record(unittest.TestCase):
 
     def test_the_body_carries_the_table_and_the_state_the_next_run_reads(self):
         after, _ = self.run_once({"agents": {}}, {system: report() for system in record.SYSTEMS})
-        body = record.render(after, {"codex": "0.163.0"}, "0.9.5", "https://run")
-        self.assertIn("| codex | 2.0.0 (2026-10-27) | ✅ | 2.0.0 (2026-10-27) | 0.163.0 |  |", body)
+        body = record.render(after, {"codex": "0.163.0"}, {"codex": "0.155.1"}, "0.9.5", "https://run")
+        self.assertIn("| Agent | Latest checked | Status | Minimum | Last passed | Pinned | Issue |", body)
+        self.assertIn("| codex | 2.0.0 (2026-10-27) | ✅ | 0.155.1 | 2.0.0 (2026-10-27) | 0.163.0 |  |", body)
         self.assertEqual(record.read_state(body), after)
         self.assertFalse(record.changed(self.versions, record.read_state(body)))
         self.assertTrue(record.changed({**self.versions, "claude": "2.0.1"}, record.read_state(body)))

@@ -119,21 +119,23 @@ def updated_state(state, contract, versions, results, today):
     return {"agents": agents, "herdr": {"checked": versions.get("herdr"), "date": today}}
 
 
-def render(state, pins, herdr_pin, run_url):
+def render(state, pins, minimums, herdr_pin, run_url):
     """The record issue's body: the table, then the state for the next run."""
     lines = [
         "Each agent CLI's latest release, measured daily by the agent journey on the fake model on "
         "Linux, macOS and Windows (`.github/workflows/agent-canary.yml`). "
+        "`Minimum` is the oldest version Hide puts its hook, plugin or extension in place for "
+        "(`minimum_version` in `contracts/agent-journey.json`); "
         "`Pinned` is what every other CI lane installs (`contracts/agent-clis.json`).",
         "",
-        "| Agent | Latest checked | Status | Last passed | Pinned | Issue |",
-        "|---|---|---|---|---|---|",
+        "| Agent | Latest checked | Status | Minimum | Last passed | Pinned | Issue |",
+        "|---|---|---|---|---|---|---|",
     ]
     for agent, row in sorted(state["agents"].items()):
         last = f"{row['last_pass']} ({row['last_pass_date']})" if row.get("last_pass") else "—"
         issue = f"#{row['issue']}" if row.get("issue") else ""
-        lines.append(f"| {agent} | {row['checked']} ({row['date']}) | {MARK[row['status']]} | {last} | "
-                     f"{pins.get(row['kind'], '—')} | {issue} |")
+        lines.append(f"| {agent} | {row['checked']} ({row['date']}) | {MARK[row['status']]} | "
+                     f"{minimums.get(agent, '—')} | {last} | {pins.get(row['kind'], '—')} | {issue} |")
     herdr = state.get("herdr", {})
     lines += ["", f"Herdr: latest release {herdr.get('checked')}, bundled {herdr_pin} "
               "(moved by `.github/workflows/herdr-update.yml`).", "", f"Last run: {run_url}", "",
@@ -217,8 +219,9 @@ def main(argv=None):
     apply(after, state, args.run_url)
     pins = {kind: row["version"] for kind, row in
             json.loads((ROOT / "contracts/agent-clis.json").read_text())["clis"].items()}
+    minimums = {row["id"]: row["minimum_version"] for row in active_rows(contract)}
     herdr_pin = json.loads((ROOT / "contracts/herdr-bundle.json").read_text())["version"]
-    text = render(after, pins, herdr_pin, args.run_url)
+    text = render(after, pins, minimums, herdr_pin, args.run_url)
     if number:
         gh("issue", "edit", str(number), "--body", text)
     else:

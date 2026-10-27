@@ -27,7 +27,7 @@ use hide_agent_hooks::{HookStatus, InstallFailure};
 use crate::agents::{
     ADAPTERS, AgentAdapter, AgentReport, Detection, HookSupport, PieceReport, SkillDir,
     SkillObserved, adapter_of_part, availability, install_skill, observe_skill, remove_skill,
-    skill_location,
+    skill_location, too_old,
 };
 use crate::herdr_integration::{self, Integration, Statuses};
 use crate::record::Record;
@@ -146,7 +146,12 @@ fn helper(target: &KitTarget) -> std::path::PathBuf {
     target.kit_dir.join(hide_agent_hooks::HELPER_BINARY_NAME)
 }
 
-fn observe_guidance(target: &KitTarget, adapter: &AgentAdapter, agent: GuidanceAgent) -> Observed {
+fn observe_guidance(
+    target: &KitTarget,
+    adapter: &AgentAdapter,
+    agent: GuidanceAgent,
+    detection: &Detection,
+) -> Observed {
     use hide_agent_hooks::guidance;
     if let Err(why) = agent.supported_here() {
         return Observed::Unsupported(Reason::new(
@@ -242,6 +247,12 @@ fn observe_guidance(target: &KitTarget, adapter: &AgentAdapter, agent: GuidanceA
     if !helper(target).is_file() {
         return Observed::Blocked(no_helper(&helper(target)));
     }
+    if let Some(reason) = detection
+        .program(adapter)
+        .and_then(|program| too_old(adapter, program, "hook"))
+    {
+        return Observed::Blocked(reason);
+    }
     observed
 }
 
@@ -289,6 +300,7 @@ fn plugin_state(
     adapter: &AgentAdapter,
     dialect: PluginDialect,
     recorded: bool,
+    detection: &Detection,
 ) -> (ComponentState, Option<Reason>) {
     let file = plugin::of(dialect);
     let noun = file.noun();
@@ -305,6 +317,17 @@ fn plugin_state(
     ) && !helper.is_file()
     {
         return (ComponentState::Failed, Some(no_helper(&helper)));
+    }
+    // A file of Hide's that is already current stays as it is; anything a
+    // pass would write is refused for a CLI older than the agent's minimum.
+    if !matches!(
+        observed,
+        PluginObserved::Current | PluginObserved::ConfigAbsent | PluginObserved::Foreign(_)
+    ) && let Some(reason) = detection
+        .program(adapter)
+        .and_then(|program| too_old(adapter, program, noun))
+    {
+        return (ComponentState::Failed, Some(reason));
     }
     match observed {
         PluginObserved::Current => (ComponentState::Installed, None),
@@ -406,6 +429,7 @@ fn plugin_piece(
             adapter,
             dialect,
             record.contains_piece(&hook_code(adapter)),
+            detection,
         )
     };
     piece_report(state, reason, location)
@@ -798,7 +822,7 @@ fn guidance_piece(
             ComponentState::Failed,
             Some(Reason::not_changed(reason.clone())),
         ),
-        None => match observe_guidance(target, adapter, agent) {
+        None => match observe_guidance(target, adapter, agent, detection) {
             Observed::Current => (ComponentState::Installed, None),
             Observed::Stale(reason) | Observed::Edited(reason) => {
                 (ComponentState::Outdated, Some(reason))
@@ -900,7 +924,7 @@ pub(crate) fn apply(target: &KitTarget, scope: &Scope, record: &mut Record) -> A
         if !detection.installed(adapter) {
             continue;
         }
-        let observed = observe_guidance(target, adapter, agent);
+        let observed = observe_guidance(target, adapter, agent, &detection);
         let recorded = record.contains_piece(&code);
         let restore = scope.agent_on.contains(adapter.id);
         let install_now = match &observed {
@@ -915,7 +939,7 @@ pub(crate) fn apply(target: &KitTarget, scope: &Scope, record: &mut Record) -> A
             continue;
         }
         let after = if install_now {
-            observe_guidance(target, adapter, agent)
+            observe_guidance(target, adapter, agent, &detection)
         } else {
             observed
         };
@@ -967,7 +991,11 @@ pub(crate) fn apply(target: &KitTarget, scope: &Scope, record: &mut Record) -> A
                 PluginObserved::Edited => restore,
                 PluginObserved::Missing => restore || !recorded,
                 _ => false,
-            };
+            }
+            && detection
+                .program(adapter)
+                .and_then(|program| too_old(adapter, program, file.noun()))
+                .is_none();
         if install_now && let Err(reason) = file.install(&target.home, hook_target) {
             failures.hook.insert(adapter.id, reason);
             continue;
