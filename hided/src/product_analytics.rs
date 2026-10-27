@@ -298,7 +298,7 @@ mod tests {
         let (received, bodies) = mpsc::channel();
         let (release, gate) = mpsc::channel();
         let peer = std::thread::spawn(move || {
-            for _ in 0..5 {
+            for _ in 0..6 {
                 let (mut stream, _) = server.accept().unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(10)))
@@ -366,6 +366,13 @@ mod tests {
         worker.client.capture(failed);
         release.send(()).unwrap();
         let fifth = bodies.recv_timeout(Duration::from_secs(10)).unwrap();
+        worker.client.capture(Event::DeviceConnected {
+            outcome: DeviceOutcome::Ready(DeviceHerdr::Preserved),
+            platform: DevicePlatform::MacosX86_64,
+        });
+        release.send(()).unwrap();
+        let sixth = bodies.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert_eq!(sixth["event"], "hide_device_connected");
         assert_eq!(fourth["event"], "hide_device_connected");
         assert_eq!(fifth["event"], "hide_device_connected");
         assert_eq!(first["event"], "hide_ai_called");
@@ -388,12 +395,18 @@ mod tests {
         device_ready["herdr"] = "started".into();
         device_ready["platform"] = "linux-aarch64".into();
         assert_eq!(fourth["properties"], device_ready);
+        let mut preserved = common.clone();
+        preserved["outcome"] = "ready".into();
+        preserved["herdr"] = "preserved".into();
+        preserved["platform"] = "macos-x86_64".into();
+        assert_eq!(sixth["properties"], preserved);
         let mut device_failed = common;
         device_failed["outcome"] = "failed".into();
         device_failed["failed_step"] = "herdr_start".into();
         device_failed["platform"] = "macos-aarch64".into();
         assert_eq!(fifth["properties"], device_failed);
-        for body in [first, second, third, fourth, fifth] {
+        for body in [first, second, third, fourth, fifth, sixth] {
+            assert_eq!(body["api_key"], "phc_fixture_public_token");
             let mut keys: Vec<_> = body
                 .as_object()
                 .unwrap()

@@ -777,7 +777,11 @@ impl Runtime {
         // A pass that stopped, or could not start Herdr, needs another
         // automatic pass even when every individual kit part is installed.
         if state.refused.is_some() || state.herdr_start_failed {
-            if device_id != self.node.as_str() && !state.busy {
+            if !state.busy
+                && self
+                    .link_origin(device_id)
+                    .is_some_and(LinkOrigin::core_redials)
+            {
                 self.begin_device_connect(device_id);
                 if let Some(HostPhase::Ready { platform, .. }) =
                     self.device_hosts.get(device_id).map(|host| &host.phase)

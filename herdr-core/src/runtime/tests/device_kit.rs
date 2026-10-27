@@ -2804,6 +2804,12 @@ fn device_connect_statistics_count_each_ready_bootstrap_once() {
         runtime.queue_device_kit(DEVICE, KitJob::Status);
         drop(runtime);
         settle(&shared);
+        // A link ending after ready is not a second final outcome of that dial.
+        shared.lock().unwrap().ingest_host_closed(
+            DEVICE,
+            generation,
+            "fixture link ended".to_owned(),
+        );
     }
     assert_eq!(
         *statistics.0.lock().unwrap(),
@@ -2907,4 +2913,44 @@ fn device_connect_statistics_include_early_install_failure() {
             platform: DevicePlatform::Unknown,
         }]
     );
+}
+
+/// An inbound node performs no outbound bootstrap, including its kit Retry.
+#[test]
+fn device_connect_statistics_exclude_inbound_retry() {
+    use hide_kit::device_herdr::HerdrUpdate;
+    let helper = KitDevice::answering(Ok(with_herdr(Some(HerdrUpdate::Failed {
+        stage: "start".to_owned(),
+        reason: "private detail".to_owned(),
+        version: None,
+        server_version: None,
+    }))));
+    let shared = with_consent(Some(helper.clone()));
+    let statistics = Arc::new(DeviceStatistics::default());
+    {
+        let mut runtime = shared.lock().unwrap();
+        runtime.product_analytics = Some(statistics.clone());
+        runtime
+            .snapshot
+            .ui_state
+            .device_registrations
+            .iter_mut()
+            .find(|registration| registration.id == DEVICE)
+            .unwrap()
+            .origin = crate::model::LinkOrigin::Inbound;
+        runtime.queue_device_kit(DEVICE, KitJob::Apply(hide_kit::Scope::automatic()));
+    }
+    settle(&shared);
+    assert!(kit(&shared).herdr_start_failed);
+    *helper.answer.lock().unwrap() = Ok(with_herdr(Some(HerdrUpdate::Started {
+        version: "private-device-version".to_owned(),
+        pid: 42,
+    })));
+    dispatch(
+        &shared,
+        "kit_reinstall",
+        serde_json::json!({ "device_id": DEVICE }),
+    );
+    settle(&shared);
+    assert!(statistics.0.lock().unwrap().is_empty());
 }

@@ -23,7 +23,8 @@ Every event's properties are exactly `distinct_id`, `$process_person_profile: fa
 `hide_device_connected` adds only `outcome` (`ready` or `failed`) and `platform` (`linux-x86_64`, `linux-aarch64`, `macos-x86_64`, `macos-aarch64` or `unknown` when establishment has not reported an allowlisted system).
 A ready event adds `herdr` (`started`, `handed_off`, `current` or `kept`) from the corresponding `HerdrUpdate`; a saved named session whose server Hide deliberately leaves unchanged uses the additional `preserved` value when no update is performed; a failed event instead adds `failed_step` (`install`, `download`, `herdr_start` or `herdr_handoff`).
 Release-kit acquisition errors are typed as `download`; SSH/configuration, trust, unsupported systems, helper installation or loss, kit refusal and kit-call errors map to `install`.
-Herdr preparation, version/program/ping/start failures and legacy `NoServer` map to `herdr_start`; `Behind` and record/handoff/confirmation failures map to `herdr_handoff`.
+Herdr preparation, version/program/ping/start failures, a missing update outside a preserved named session and legacy `NoServer` map to `herdr_start`; `Behind` and record/handoff/confirmation failures map to `herdr_handoff`.
+Inbound nodes that dial this core perform no outbound bootstrap and are outside this event.
 The runtime admits one token per outbound helper establish or bootstrap Retry, associates it with the host generation, and consumes it before capture at the final bootstrap or Apply result.
 Only the first Apply claims a token; status polls, snapshots, duplicate completions and superseded generations cannot recapture it, while reconnects and Retry admit a fresh token.
 Cancellation, consent withdrawal and removal discard pending tokens; at most 128 attempts are retained, with a content-free diagnostic at the cap.
