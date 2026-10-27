@@ -774,13 +774,39 @@ A spawn by a pane that conducts an open mission is that mission's worker:
 
 Pull request changes wake the Conductor: when a node's pull request gets a new head commit, a review asking for changes, or is merged, the core records a wake on the mission and `hide:conductor` sends the Conductor one progress letter, which waits for no answer, naming the change and `hide mission show`.
 A wake stays in the record until its letter is in the Conductor's inbox: a failed send, a restart and a mission whose Conductor is gone keep it, and the next GitHub read or `hide mission take` sends it.
-Its intent is `mission:<id>:<node>:<number>:<event>:<head>:<n>:<conductor>`, where `n` counts the mission's wakes and `conductor` is the Conductor's registration (its pane when it has none), so a wake sent again after a restart is the same letter, the same change asked for twice is two, and a Conductor that took the mission over gets its own; a cancelled mission wakes no one.
+Its intent is `mission:<id>:<node>:<number>:<event>:<head>:<n>:<conductor>`, with `-` for the number of an outside branch, where `n` counts the mission's wakes and `conductor` is the Conductor's registration (its pane when it has none), so a wake sent again after a restart is the same letter, the same change asked for twice is two, and a Conductor that took the mission over gets its own; a cancelled mission wakes no one.
 On a mission closed as `done`, a new head or a review asking for changes reopens it, unless its Conductor conducts another open mission then, which gets the letter and leaves the mission done; its merge is the end it waited for and wakes no one.
 A `merge_wait` mission closes as `done` on the GitHub read that finds every pull request of its stack merged or closed, whether or not its Conductor is there, and a close `--as merge_wait` of a stack that is already so, or of a mission with no pull request, is `done` at once; a node that failed or was dropped is out of the stack.
 The intent carries the first 12 characters of the head, which `n` already makes unique, so it stays under the 256-byte intent limit.
 A mission keeps at most 32 unsent wakes, dropping the oldest as `mission.wake_dropped`; one thread sends them, at most 256 at once, so the lock never waits on a delivery.
 A change that would make the saved record larger than a start reads back is refused `mission_full`, as a full book is.
 Deleting a Conductor's session from the archive deletes its missions with it.
+
+### Finish lines
+
+A node is done only when its finish lines are (PRD mission-map-git-criteria D-09 to D-16, D-23, B1-B15); the core is the one place that holds this, and no hook refuses a call or ends a turn over it (D-12).
+
+- A plan is admitted only when every node other than an outside one has one to three lines of its own in `criteria` (`mission_criteria_missing`, `mission_criteria_too_many`, each naming the node).
+  A plan's `criteria` written as one string is read as one line: that is the transition for a plan written from the guide before node criteria, and it goes once no open mission predates them.
+- On admission the core adds the lines it judges: `check` on every change node of a plan with a `check` command, and `review` or `verify` for each kind the node's `checks` names (one to five agents, `all` or `majority`, `mission_checkers_invalid` otherwise).
+  `ci` is added on the GitHub read that first finds checks on the node's pull request; a pull request GitHub reports no checks for has none.
+  A replan keeps a line's record while its text and kind stay the same.
+- `hide mission record <node> <line> --pass|--fail [--evidence <text>] [--commit <sha>] [--rerun]` is the line's owner's: the node's worker for its own lines and `check`, the checker bound with `hide mission node <key> --reviewer|--verifier <agent-id>` for its line, and the Conductor only for a node that never had a worker registration, recorded as the Conductor's (D-23).
+  Any other caller is refused `mission_criterion_not_yours`, a checker that is the node's own worker `mission_checker_is_worker`, an agent id the ledger does not know `mission_checker_unknown`, and a line the node does not have `mission_criterion_unknown`.
+  Each record keeps who made it (role, name, registration) and when.
+- `check` needs the commit it ran on (`mission_commit_required`) and reads open again once the node's worktree is at another commit (B7); the same result on the same commit changes nothing.
+  After a failure on one commit, one more record there is its rerun: a pass shows `rerun 1`, and a second failure sends a node in review or waiting back to working; another record after that is `mission_rerun_spent`, and a new commit gives the rerun again (D-14, B13).
+  `ci` is GitHub's answer for the pull request's head as it is now: a new head opens it again, a pass after a failure on the same head counts its rerun, and a second failure there sends the node back to working (D-15); Hide adds no GitHub write.
+- A review or verify line passes by its rule over the checkers bound to it, so `2/3` shows until the rule is met (B6).
+- `hide mission skip <node> <line> --reason <text> [--decision <key>]` is the Conductor's: an empty reason is `mission_skip_reason_missing`, and `check` and `ci` are `mission_criteria_protected` unless `--decision` names a question about that node which the operator answered from the banner or whose clear recorded an answer (B11, B12); the line keeps its reason and, for those, the decision.
+- `hide mission defect <node> --found-by <node> --line <text>` adds the defect as a line of the node it names (at most 16, `mission_defects_too_many`), opens that node again (`reopened`, a `reopened` event, back to working), and the same defect again changes nothing (D-21, B21).
+- `--status done` on a node with a line open or failed is refused `mission_criteria_unmet` with the lines, and a close as `done` or `merge_wait` with a node neither done nor dropped `mission_nodes_unfinished`, so a failed node holds the close until it is dropped (B9, B10); a cancel is never held.
+- The view gives each node its lines as they stand now (`criteria`), how many are met and skipped (`criteria_met`, `criteria_skipped`) and how often it was reopened; a skip records a `skipped` event.
+- A mission made before node criteria is read `exempt`: its nodes and close are not held, and it shows as it was (D-19).
+
+An outside node (`kind: external`, `external: {"pr": <n>}` or `{"branch": <name>}`, no worker, delivery, criteria or checks, `mission_external_invalid` otherwise) is followed to main by the core and never by its Conductor, which cannot set it done (D-20, B19, B20).
+A pull request the project's list holds is settled on each GitHub read; any other is read with one `gh pr view <n> --json state`, and a branch by its commit against the default branch, locally or as last fetched, or the head of a pull request GitHub merged, after the GitHub read, the background fetch and a change in the local worktrees, off the lock, one read per project at a time and 32 nodes per read.
+Merged or in main is done, closed without a merge is failed, which blocks the nodes after it, and either wakes the Conductor (`outside_done`, `outside_failed`); open waits, and one Hide could not read waits too, marked `unread` in the view while the reason goes to the log (`mission.outside_unread`).
 
 ## Plans
 

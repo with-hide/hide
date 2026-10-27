@@ -473,11 +473,14 @@ The prompt hook and the pre-tool hook know a pane's plan and mission work from o
 `plan_context` is the summary the core sends ([delivery.md: Plans](delivery.md#plans)), fixed in `contracts/delivery-envelope.json`; the prompt hook writes it from its letter pull's answer, which already asks the core, and every `hide plan` command writes it from its own answer, so an approval lets the next write through in the same turn.
 A pane with no record, and a record of another session than the call's, gives neither a line nor a refusal, so a new session in a reused pane starts clean.
 
-The prompt hook adds the record's lines to the session context, at most three:
+The prompt hook adds the record's lines to the session context:
 
 - the plan's, `Plan: now <step> (n/m) · next <step> · updated <N> min ago`, with the review's rule after it while the plan waits for review, or, when it was not updated for 30 minutes, the `hide plan node <key> --status done` command; a finished plan has none;
-- a mission worker's, `Mission <id> · node <key> · range <criteria or title> · no merging · no starting agents`, without `no merging` for a mission that goes through the merge;
-- a Conductor's, `Mission <done>/<nodes> · working <n> · letters <n> · decision waiting: <yes/no>`.
+- a mission worker's, `Mission <id> · node <key> · range <its own lines or title> · criteria <met>/<total> · left: <keys> · no merging · no starting agents`, without `no merging` for a mission that goes through the merge, and without the criteria for a mission made before node criteria (PRD mission-map-git-criteria D-19, B22); while a line is left, a second line names `hide mission record <node> <line> --pass|--fail --evidence <one line>`, the check line with `--commit <sha>`;
+- a checker's, `Mission <id> · checking node <key> (<review or verify>) · range <its own lines or title> · criteria …`, followed by the one `hide mission record` command for its own line;
+- a Conductor's, `Mission <done>/<nodes> · working <n> · letters <n> · decision waiting: <yes/no>`, with ` · reported with lines left: <nodes>` when a worker sent its report while its node still has a line open.
+
+The lines only tell: no hook refuses a call or ends a turn because a line is open, and the core alone refuses a node's `done` (D-12).
 
 The pre-tool hook reads only the record, after the project guardrails and before the spawn guard, and never asks the daemon; a tool call refused here is logged in the spawn guard's log as `plan.refused` with the rule, the runtime and the pane, never the command.
 It refuses three things and lets everything else run, reading and searching included:
