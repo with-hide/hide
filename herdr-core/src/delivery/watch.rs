@@ -192,6 +192,11 @@ pub struct Reading {
     pub blocked: bool,
 }
 
+/// A target whose activity read failed this many ticks in a row is reported.
+/// The stored count stops here: past it a read that keeps failing changes
+/// nothing the ledger holds, so the store does not rewrite the file for it.
+pub const READ_FAILURES_REPORTED: u32 = 3;
+
 #[derive(Default)]
 pub struct Tick {
     pub transitions: bool,
@@ -205,16 +210,20 @@ pub struct Tick {
 /// cannot undo another target's exit or activity reset.
 pub fn tick(ledger: &mut Ledger, readings: &[Reading], now: u64) -> Result<Tick, String> {
     let mut result = Tick::default();
-    // One full encoding per tick. Subsequent bounded row encodings account for
-    // exact JSON growth without cloning/serializing the ledger per target.
-    let mut size = ledger.bytes()?.len();
+    // The file's size is encoded in full once, when a row first changes, and
+    // followed from there by bounded row encodings; a tick that changes
+    // nothing encodes nothing.
+    let mut size = None::<usize>;
     for reading in readings.iter().filter(|reading| reading.gone) {
         if let Some(index) = ledger
             .watches
             .iter()
             .position(|watch| watch.id == reading.id)
         {
-            size -= encoded_len(&ledger.watches[index])? + usize::from(ledger.watches.len() > 1);
+            if let Some(size) = &mut size {
+                *size -=
+                    encoded_len(&ledger.watches[index])? + usize::from(ledger.watches.len() > 1);
+            }
             ledger.watches.remove(index);
             result.transitions = true;
         }
@@ -248,7 +257,10 @@ pub fn tick(ledger: &mut Ledger, readings: &[Reading], now: u64) -> Result<Tick,
             watch.last_activity_at_unix_ms
         };
         watch.activity_failures = if reading.failure.is_some() {
-            watch.activity_failures.saturating_add(1)
+            watch
+                .activity_failures
+                .saturating_add(1)
+                .min(READ_FAILURES_REPORTED)
         } else {
             0
         };
@@ -257,10 +269,20 @@ pub fn tick(ledger: &mut Ledger, readings: &[Reading], now: u64) -> Result<Tick,
             watch.first_warning_at_unix_ms = None;
             watch.warning_count = 0;
         }
-        let updated_size = if watch.valid() {
-            resized(size, encoded_len(&before)?, encoded_len(watch)?)
-        } else {
+        let (valid, changed) = (watch.valid(), *watch != before);
+        let updated_size = if !valid {
             Err("ledger_unavailable".into())
+        } else if !changed {
+            Ok(size)
+        } else if let Some(size) = size {
+            resized(
+                size,
+                encoded_len(&before)?,
+                encoded_len(&ledger.watches[index])?,
+            )
+            .map(Some)
+        } else {
+            full_size(ledger).map(Some)
         };
         match updated_size {
             Ok(updated_size) => size = updated_size,
@@ -271,7 +293,7 @@ pub fn tick(ledger: &mut Ledger, readings: &[Reading], now: u64) -> Result<Tick,
             }
         }
         let watch = &ledger.watches[index];
-        if watch.activity_failures >= 3 {
+        if watch.activity_failures >= READ_FAILURES_REPORTED {
             result
                 .failures
                 .push((watch.id.clone(), watch.activity_failures));
@@ -393,9 +415,9 @@ pub fn tick(ledger: &mut Ledger, readings: &[Reading], now: u64) -> Result<Tick,
             let watch = &mut ledger.watches[index];
             watch.first_warning_at_unix_ms.get_or_insert(now);
             watch.warning_count = count;
-            if full_before.is_some() {
-                return ledger.bytes().map(|bytes| bytes.len());
-            }
+            let Some(size) = size.filter(|_| full_before.is_none()) else {
+                return full_size(ledger);
+            };
             let letter_growth = if ledger.letters.len() > letters_before {
                 encoded_len(ledger.letters.last().ok_or("ledger_unavailable")?)?
                     + usize::from(letters_before > 0)
@@ -415,7 +437,7 @@ pub fn tick(ledger: &mut Ledger, readings: &[Reading], now: u64) -> Result<Tick,
         })();
         match outcome {
             Ok(updated_size) => {
-                size = updated_size;
+                size = Some(updated_size);
                 result.transitions = true;
             }
             Err(code) => {
@@ -466,6 +488,11 @@ fn encoded_len(value: &impl Serialize) -> Result<usize, String> {
     serde_json::to_vec(value)
         .map(|bytes| bytes.len())
         .map_err(|_| "ledger_unavailable".into())
+}
+
+/// The size of the whole file `ledger` would be, within its limit.
+fn full_size(ledger: &Ledger) -> Result<usize, String> {
+    ledger.bytes().map(|bytes| bytes.len())
 }
 
 fn resized(size: usize, removed: usize, added: usize) -> Result<usize, String> {

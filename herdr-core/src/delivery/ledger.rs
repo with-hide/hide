@@ -693,12 +693,18 @@ impl std::error::Error for SaveError {
 }
 
 pub fn save(path: &Path, ledger: &Ledger) -> Result<(), SaveError> {
-    let bytes = ledger.bytes().map_err(SaveError::Validation)?;
+    write(path, &ledger.bytes().map_err(SaveError::Validation)?)
+}
+
+/// Replaces the file with `bytes`, which [`Ledger::bytes`] made, so a store
+/// that already checked and encoded its ledger writes it without encoding it
+/// again.
+pub(crate) fn write(path: &Path, bytes: &[u8]) -> Result<(), SaveError> {
     // The parent and its durable ancestry are established by initialization,
     // never opportunistically created by a transaction after admission.
     hide_platform::fs::atomic::write_file_durable(
         path,
-        &bytes,
+        bytes,
         hide_platform::fs::atomic::DurableAccess::Private,
     )
     .map_err(SaveError::Persistence)?;
