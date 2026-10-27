@@ -1140,9 +1140,11 @@ mod tests {
         }
     }
 
-    /// What the Sessions list shows of each session: its request, how many
+    /// What the Sessions list shows of one session: its request, how many
     /// events, its last activity and its title.
-    fn shown(sessions: &[ProjectSession]) -> Vec<(Agent, Option<&str>, usize, u64, Option<&str>)> {
+    type Shown<'a> = (Agent, Option<&'a str>, usize, u64, Option<&'a str>);
+
+    fn shown(sessions: &[ProjectSession]) -> Vec<Shown<'_>> {
         sessions
             .iter()
             .map(|session| {
