@@ -432,6 +432,10 @@ it("opens the picked node's panel: its head, where it is, what it made, its fini
     // One list of ✓ ○ ⤳ ✕, a skipped line with its reason, the review by its checker's name.
     const lines = [...panel.querySelectorAll<HTMLElement>("[data-panel-line]")].map((row) => row.textContent);
     expect(lines).toEqual(["✓명령 읽기가 cat/rg 잡음을 걸러낸다", "⤳실제 세션 50개 replay세션이 31개뿐", "✕Check command passes", "✓CI passesrerun 1 time", "○codex review"]);
+    // The CI result and every line name their state with one mark's word.
+    const named = (scope: string) => [...panel.querySelectorAll(`${scope} [data-criterion-mark]`)].map((mark) => mark.getAttribute("aria-label"));
+    expect(named('[data-panel-part="result"]')).toEqual(["passed"]);
+    expect(named("[data-panel-line]")).toEqual(["passed", "skipped", "failed", "passed", "not yet"]);
     expect(panel.querySelector('[data-panel-part="criteria"] h4')?.textContent).toBe("Done when · 2/5");
     expect(panel.querySelector('[data-panel-links="before"]')?.textContent).toBe(`Waits onCore${"#"}1703`);
     // A connection picks its node.

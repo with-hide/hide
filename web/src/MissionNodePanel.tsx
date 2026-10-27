@@ -2,6 +2,7 @@ import { ChevronRightIcon, GitBranchIcon, XIcon } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentMark } from "./AgentMark";
+import { CriterionMark } from "./components/criterion-mark";
 import { MissionNodeMark } from "./components/mission-node-mark";
 import { PrMark } from "./components/pr-mark";
 import { Button } from "./components/ui/button";
@@ -202,21 +203,13 @@ function Made({ mission, node }: { mission: Mission; node: MissionNode }) {
   );
 }
 
-const LINE_MARK: Record<MissionCriterionState, { glyph: string; tone: string }> = {
-  pass: { glyph: "✓", tone: "text-muted-foreground" },
-  open: { glyph: "○", tone: "text-muted-foreground" },
-  skipped: { glyph: "⤳", tone: "text-mission-hold" },
-  fail: { glyph: "✕", tone: "text-mission-failed" },
-};
-
 /** A line's mark and its note, as the criteria list and the CI row show it. */
 function LineState({ mission, line }: { mission: Mission; line: MissionCriterion }) {
   const { t } = useInterfaceTranslation();
-  const mark = LINE_MARK[line.state];
   const note = criterionNote(line, mission, t);
   return (
     <span className="flex min-w-0 items-baseline gap-xs">
-      <span className={cn("shrink-0 font-semibold", mark.tone)}>{mark.glyph}</span>
+      <CriterionMark state={line.state} />
       {note ? <span className={cn("min-w-0 break-words", line.state === "skipped" ? "text-mission-hold" : "text-muted-foreground")}>{note}</span> : null}
     </span>
   );
@@ -243,11 +236,10 @@ function Criteria({ mission, node }: { mission: Mission; node: MissionNode }) {
     <Part title={`${t("mission.field.criteria")} · ${tally.passed}/${tally.total}`} part="criteria">
       <ul className="flex min-w-0 flex-col gap-xxs" data-panel-criteria={node.criteria.map((line) => `${line.key}:${line.state}`).join(" ")}>
         {node.criteria.map((line) => {
-          const mark = LINE_MARK[line.state];
           const note = criterionNote(line, mission, t);
           return (
             <li key={line.key} className="grid min-w-0 grid-cols-[var(--size-agent-mark)_minmax(0,1fr)] gap-xs" title={line.evidence} data-panel-line={line.key} data-line-state={line.state}>
-              <span className={cn("font-semibold", mark.tone)} aria-label={t(`mission.lineState.${line.state}`)}>{mark.glyph}</span>
+              <CriterionMark state={line.state} />
               <span className="min-w-0 break-words">
                 {criterionName(line, t)}
                 {note ? <span className={cn("ml-xs text-caption", line.state === "skipped" ? "text-mission-hold" : "text-muted-foreground")} data-line-note="true">{note}</span> : null}
