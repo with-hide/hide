@@ -94,7 +94,7 @@ describe("the Hide AI tool", () => {
     expect(q('[data-hide-ai-tool-tab="suggestions"] [data-hide-ai-tool-tab-count]')?.textContent).toBe("2");
     expect(q('[data-hide-ai-tool-tab="memory"] [data-hide-ai-tool-tab-count]')?.textContent).toBe("1");
     expect(q('[data-lane-tool="memory"] [data-lane-todo-count]')?.textContent).toBe("3");
-    expect(q('[data-lane-tool="memory"] [data-hide-ai-icon]')).not.toBeNull();
+    expect(q('[data-lane-tool="memory"] svg.lucide-brain')).not.toBeNull();
     expect(q('[data-lane-tool="memory"]')?.getAttribute("aria-label")).toBe("Hide AI");
     await render(suggestionsProject({ counts: { suggestions: 0, rail: 0 } }));
     expect(q("[data-hide-ai-tool-tab-count]")).toBeNull();

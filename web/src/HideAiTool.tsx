@@ -1,8 +1,7 @@
-import { SettingsIcon, XIcon } from "lucide-react";
+import { BrainIcon, SettingsIcon, XIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { Actions } from "./actions";
 import { AgentLogo } from "./components/agent-logo";
-import { HideAiIcon } from "./components/hide-ai-icon";
 import { Button } from "./components/ui/button";
 import { Switch } from "./components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/tabs";
@@ -50,7 +49,7 @@ export function HideAiTool({ actions }: { actions: Actions }) {
   );
 }
 
-/** The head (B3, B17, B19): the owl, `Hide AI · <project>`, `조사 중` while a run goes or `조사 못 함` after one could not investigate, the AI chip, the switch, ⚙ and ×. */
+/** The head (B3, B17, B19): the brain icon, `Hide AI · <project>`, `조사 중` while a run goes or `조사 못 함` after one could not investigate, the AI chip, the switch, ⚙ and ×. */
 function Head({ projectId, project, actions }: { projectId: string; project: ProjectSuggestions | null; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const label = useShellStore((state) => catalogWorkspaces(state.rest).find((row) => row.id === projectId)?.label ?? projectId);
@@ -64,7 +63,7 @@ function Head({ projectId, project, actions }: { projectId: string; project: Pro
   return (
     <div className="flex h-(--size-tab-strip) shrink-0 items-center gap-xs border-b border-border pl-md pr-xs text-caption" data-lane-header="true">
       <span className="flex min-w-0 flex-1 items-center gap-xs" data-lane-scope={label} data-lane-scope-kind="project">
-        <HideAiIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-foreground" />
+        <BrainIcon aria-hidden="true" className="size-(--size-icon) shrink-0 text-foreground" />
         <span className="shrink-0 font-semibold text-foreground">{t("hideAiTool.title")}</span>
         <span className="min-w-0 truncate text-subtle-foreground"><span aria-hidden="true">· </span>{label}</span>
         {ready && project.enabled && project.status === "investigating" ? (

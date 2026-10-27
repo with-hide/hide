@@ -1,5 +1,5 @@
-import { BriefcaseIcon, EllipsisIcon, FileDiffIcon, FilesIcon, FolderIcon, FolderOpenIcon, GitBranchIcon, PinIcon, XIcon, type LucideIcon } from "lucide-react";
-import { Fragment, useState, type ComponentType, type SVGProps } from "react";
+import { BrainIcon, BriefcaseIcon, EllipsisIcon, FileDiffIcon, FilesIcon, FolderIcon, FolderOpenIcon, GitBranchIcon, PinIcon, XIcon, type LucideIcon } from "lucide-react";
+import { Fragment, useState } from "react";
 import type { Actions } from "./actions";
 import { Button } from "./components/ui/button";
 import { cn } from "./lib/utils";
@@ -7,7 +7,6 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuShortc
 import { Hint } from "./components/ui/tooltip";
 import { ExplorerTree } from "./ExplorerTree";
 import { HistoryList } from "./HistoryList";
-import { HideAiIcon } from "./components/hide-ai-icon";
 import { HideAiTool } from "./HideAiTool";
 import { useMemoryProject } from "./MemoryTab";
 import { ProjectTool } from "./ProjectTool";
@@ -39,7 +38,7 @@ import type { MessageKey } from "./i18n/catalogs";
 // are this page's (`ui.ts`).
 
 const TOOL_NAMES = { explorer: "panes.lane.explorer", changes: "panes.lane.changes", project: "projectTool.title", memory: "panes.lane.memory" } as const satisfies Record<Tool, MessageKey>;
-const TOOL_ICONS: Record<Tool, LucideIcon | ComponentType<SVGProps<SVGSVGElement>>> = { explorer: FolderOpenIcon, changes: FileDiffIcon, project: BriefcaseIcon, memory: HideAiIcon };
+const TOOL_ICONS: Record<Tool, LucideIcon> = { explorer: FolderOpenIcon, changes: FileDiffIcon, project: BriefcaseIcon, memory: BrainIcon };
 /** The command whose chord the rail icon's hint shows (D-08). */
 const LANE_TOOL_COMMAND = { project: "toggle_lane_project", memory: "toggle_lane_memory", explorer: "toggle_lane_explorer", changes: "toggle_lane_changes" } as const satisfies Record<Tool, CommandId>;
 

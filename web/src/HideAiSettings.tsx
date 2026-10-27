@@ -1,8 +1,7 @@
-import { ChevronRightIcon, SettingsIcon } from "lucide-react";
+import { BrainIcon, ChevronRightIcon, SettingsIcon } from "lucide-react";
 import { useState } from "react";
 import type { Actions } from "./actions";
 import { AgentLogo } from "./components/agent-logo";
-import { HideAiIcon } from "./components/hide-ai-icon";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -56,7 +55,7 @@ export function HideAiSettings({ project, actions }: { project: ProjectSuggestio
       </Hint>
       <PopoverContent align="end" className="flex max-h-(--radix-popover-content-available-height) flex-col gap-md overflow-auto p-md" aria-label={t("hideAiTool.settings")} data-hide-ai-settings={id}>
         <h4 className="flex min-w-0 items-center gap-xs text-body font-semibold">
-          <HideAiIcon aria-hidden="true" className="size-(--size-icon) shrink-0" />
+          <BrainIcon aria-hidden="true" className="size-(--size-icon) shrink-0" />
           <span className="shrink-0">{t("hideAiTool.title")}</span>
           <span className="min-w-0 truncate font-normal text-subtle-foreground">· {label}</span>
         </h4>
