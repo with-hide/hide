@@ -29,7 +29,7 @@ use hide_agent_hooks::guidance::GuidanceAgent;
 use hide_platform::programs::Program;
 use serde::{Deserialize, Serialize};
 
-use crate::{ComponentId, ComponentState, KitTarget};
+use crate::{ComponentId, ComponentState, KitTarget, PartCause, Reason};
 
 pub use hide_agent_adapter::{Feature, HerdrIntegration};
 
@@ -121,6 +121,10 @@ pub struct AgentAdapter {
     /// ([`Detection`]). A folder the agent creates does not count: a CLI that
     /// was removed leaves its folder behind.
     pub executables: &'static [&'static str],
+    /// The oldest version of the agent's CLI its hook, plugin or extension
+    /// was proven on (`hide_agent_adapter::AgentAdapter::minimum`): a CLI
+    /// that answers an older one does not get it ([`too_old`]).
+    pub minimum: &'static str,
     /// The folder the agent reads skills from.
     pub skill_dir: SkillDir,
     pub hook: HookSupport,
@@ -143,6 +147,12 @@ const fn project(declaration: &'static hide_agent_adapter::AgentAdapter) -> Agen
         id: declaration.id,
         label: declaration.label,
         executables: declaration.executables,
+        // Every row is a supported agent, and the table is a constant, so a
+        // declaration without a minimum fails the build.
+        minimum: match declaration.minimum {
+            Some(minimum) => minimum.version,
+            None => panic!("a supported agent declares the oldest version Hide installs into"),
+        },
         skill_dir: match declaration.skill_location {
             SkillLocation::Shared => SkillDir::Shared,
             SkillLocation::Claude => SkillDir::Claude,
@@ -313,7 +323,7 @@ impl AgentAdapter {
 /// program, looked for once on one search. Every decision of the pass reads
 /// this instead of searching again.
 pub(crate) struct Detection {
-    rows: Vec<(&'static str, Option<PathBuf>)>,
+    rows: Vec<(&'static str, Option<Program>)>,
 }
 
 impl Detection {
@@ -325,7 +335,7 @@ impl Detection {
                 let program = adapter
                     .executables
                     .iter()
-                    .find_map(|name| Program::find(&path, name).map(Program::into_path));
+                    .find_map(|name| Program::find(&path, name));
                 (adapter.id, program)
             })
             .collect();
@@ -334,15 +344,40 @@ impl Detection {
 
     /// Whether the agent is installed here: one of its programs is found.
     pub(crate) fn installed(&self, adapter: &AgentAdapter) -> bool {
-        self.executable(adapter).is_some()
+        self.program(adapter).is_some()
     }
 
-    pub(crate) fn executable(&self, adapter: &AgentAdapter) -> Option<&Path> {
+    /// The agent's program as the pass found it, run with the search it was
+    /// found on.
+    pub(crate) fn program(&self, adapter: &AgentAdapter) -> Option<&Program> {
         self.rows
             .iter()
             .find(|(id, _)| *id == adapter.id)
-            .and_then(|(_, program)| program.as_deref())
+            .and_then(|(_, program)| program.as_ref())
     }
+}
+
+/// Why the agent's hook, plugin or extension (`piece`) is not put in place:
+/// `program`, the copy the operator's shell runs, answers a version older
+/// than the agent's [`AgentAdapter::minimum`]. The reason names the agent,
+/// that version, the program's path and the minimum, so the operator updates
+/// the copy that was judged and not another one elsewhere. A program whose
+/// version Hide cannot read is not judged too old: it may be new enough, and
+/// a piece for an agent that cannot use it does no harm.
+pub(crate) fn too_old(adapter: &AgentAdapter, program: &Program, piece: &str) -> Option<Reason> {
+    let installed = hide_agent_hooks::program_version(program)?;
+    (!hide_agent_hooks::version_at_least(&installed, adapter.minimum)).then(|| {
+        Reason::with(
+            PartCause::UpdateAgent,
+            adapter.minimum.to_owned(),
+            format!(
+                "{} {installed} at {} is older than {}, which Hide's {piece} needs; update it",
+                adapter.label,
+                program.path().display(),
+                adapter.minimum
+            ),
+        )
+    })
 }
 
 /// Where the agents' programs are looked for: the folders the account's

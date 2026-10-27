@@ -10,7 +10,7 @@
 use std::path::{Path, PathBuf};
 
 use hide_agent_hooks::route::HookTarget;
-use hide_agent_hooks::{AgentRuntime, HookStatus, InstallFailure, MemoryCompatibility};
+use hide_agent_hooks::{AgentRuntime, HookStatus, InstallFailure};
 
 use crate::{KitTarget, Observed, PartCause, Reason, RemoveOutcome};
 
@@ -108,25 +108,13 @@ pub(crate) fn observe(target: &KitTarget, runtime: AgentRuntime) -> Observed {
     // Only a CLI that answers with a version older than the hook needs is a
     // reason not to install; one Hide cannot find does not run in a pane
     // either, and a hook for it does no harm. The program asked is the one
-    // the operator's shell runs (`agents::search_path`), and the reason names
-    // it, so an older copy elsewhere is neither what is judged nor what the
-    // operator is sent to update.
-    if let Some(program) =
-        hide_agent_hooks::runtime_program(runtime, &crate::agents::search_path(target))
-        && let MemoryCompatibility::UpdateRequired {
-            installed_version: Some(installed),
-            minimum_version,
-        } = hide_agent_hooks::program_compatibility(runtime, &program)
+    // the operator's shell runs (`agents::search_path`).
+    if let Some(adapter) = crate::agents::adapter(runtime.id())
+        && let Some(program) =
+            hide_agent_hooks::runtime_program(runtime, &crate::agents::search_path(target))
+        && let Some(reason) = crate::agents::too_old(adapter, &program, "hook")
     {
-        return Observed::Blocked(Reason::with(
-            PartCause::UpdateAgent,
-            minimum_version.to_string(),
-            format!(
-                "{} {installed} at {} is older than {minimum_version}, which Hide's hook needs; update it",
-                runtime.label(),
-                program.path().display()
-            ),
-        ));
+        return Observed::Blocked(reason);
     }
     observed
 }

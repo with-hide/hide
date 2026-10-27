@@ -175,7 +175,7 @@ A panic on the thread that asks is recorded the same way as `memory.panicked`.
 Stdin is read through a nonblocking descriptor until EOF, the size cap, or the 500 ms payload wait.
 Windows has no nonblocking read of a pipe, so there a reader thread collects stdin and the helper stops waiting for it at the same point.
 Current Claude Code and Codex `UserPromptSubmit` input and output shapes are fixed by sanitized fixtures in `hide-agent-hooks/tests/fixtures/`.
-The app probes the installed runtime binaries with a 750 ms bounded version check and currently requires Claude Code 2.1.278 or Codex 0.155.1 for Memory injection.
+The app probes the installed runtime binaries with a 750 ms bounded version check and requires each agent's declared minimum for Memory injection, Claude Code 2.1.278 and Codex 0.155.1 ([The oldest version of each agent](#the-oldest-version-of-each-agent)).
 A runtime below that capability is diagnosed as `Update required` without disabling a supported installed runtime or Sessions browsing.
 
 The helper is stateless, as a hook script must be.
@@ -869,6 +869,27 @@ The other fifteen agents earlier builds supported are no longer rows (see Retire
 Hide does not write an agent's `AGENTS.md` or `CLAUDE.md`, its MCP configuration or its model settings, and it runs no installer for an agent.
 The things it records in an agent's own state are Codex's trust for Hide's own hooks, below, and Claude Code's, Codex's, agy's and Grok's folder trust for the worktrees Hide makes ([Folder trust for the worktrees Hide makes](#folder-trust-for-the-worktrees-hide-makes)).
 
+### The oldest version of each agent
+
+Each supported agent's declaration (`hide-agent-adapter/src/declarations.rs`, `AgentAdapter::minimum`) names the oldest version of its CLI that Hide's hook, plugin or extension was proven on, and where the proof is; nothing else keeps a copy.
+The kit puts that piece in place only for a CLI that answers this version or a newer one to `--version`.
+An older CLI is refused on every system with a reason that names the agent, the version it answered, the program's path and the minimum, such as `Pi 1.0.3 at /home/a/.local/bin/pi is older than 1.0.4, which Hide's extension needs; update it`, and the row reads Failed with Settings' "update the agent" wording; nothing of Hide's is written for it.
+A piece already current stays as it is, as Claude Code's and Codex's hook parts always have, and a CLI whose version Hide cannot read within the probe's 750 ms is not judged too old.
+The program asked is the one the operator's login shell runs ([Installed means the program is found](#installed-means-the-program-is-found)), run with the `PATH` it was found on, and it is asked once per version of its file: `hide_agent_hooks::program_version` remembers the answer by the file's path, search, write time and length, at most 32 programs, and asks again after a minute only when no version was read.
+`contracts/agent-journey.json` carries each minimum as `minimum_version` for scripts.
+
+| Agent | Minimum | The proof |
+| --- | --- | --- |
+| Claude Code | 2.1.278 | The hook output shape Memory injection needs (2026-09-21), pinned by `hide-agent-hooks/tests/fixtures/claude-user-prompt-submit.json`; the agent journey passes on 2.1.302 |
+| Codex | 0.155.1 | The oldest Codex Hide installs into: its hook runner and skill folder read from its source at `rust-v0.155.1` ([Support table](#support-table), [Installing](#installing)), and the Memory hook shape of `hide-agent-hooks/tests/fixtures/codex-user-prompt-submit.json` |
+| Grok | 1.0.50 | How Grok runs a hook on Windows (`xai-grok-hooks/src/runner/command.rs`, `xai-grok-config/src/shell.rs`), pinned by `hide-agent-hooks/tests/it/windows_hook_command.rs`, and its skill folder, both read from its source at 1.0.50; the agent journey passes on 1.0.52 |
+| OpenCode | 1.18.30 | The plugin's event and hook shapes captured from 1.18.30 (`hide-agent-hooks/tests/fixtures/opencode/events-1.18.30.json`), which `tests/opencode/plugin.test.mjs` replays; Windows loaded the plugin on 1.18.35 and the journey passes on 2.0.29 |
+| Pi | 1.0.4 | The extension's event and context shapes captured from 1.0.4 (`hide-agent-hooks/tests/fixtures/pi-extension/pi-1.0.4.json`), loaded on Windows on 1.0.4, and the journey on 1.0.4 |
+| omp | 18.7.0 | The same for omp 18.7.0 (`hide-agent-hooks/tests/fixtures/pi-extension/omp-18.7.0.json`) |
+| Antigravity | 1.4.0 | Hide's `hide` block and skill folder measured live on 1.4.0 on 2026-10-16 and 2026-10-17 ([Antigravity: Hide's hook block](#antigravity-hides-hook-block)); facts first proven on 1.3.6 had to be proven again on 1.4.0, the Windows guard was proven on 1.4.2 and the journey passes on 1.4.2 |
+
+A minimum moves only with new proof: a feature that needs a newer CLI raises it in the same change, with the fixture or measurement that shows the older one fails, and a lower one needs the integration proven on that version.
+
 ### Herdr's integration for an agent
 
 Herdr learns an agent's session id, and for some agents its lifecycle, from a hook script or plugin that `herdr integration install <target>` puts into the agent's own configuration.
@@ -1013,7 +1034,7 @@ The kit records what it installed in `~/.hide/kit/installed.json`.
 A hook it installed that the operator then removed is not put back by the next launch or connection: its part reads Removed and comes back only through Reinstall (D-26).
 The `~/.hide/agent-hooks/installed-once` marker from before the kit is not such a record, so a machine that has it and no Hide hook gets one (B20).
 A configuration file that could not be read is not written to on a guess: its part reads Failed with the reason, and the kit's other parts are installed anyway (B6).
-A runtime whose CLI answers with a version older than the hook needs is not installed into and its part says to update the CLI; a runtime whose home folder does not exist reads Not on this machine.
+A runtime whose CLI answers with a version older than its declared minimum is not installed into and its part says to update the CLI ([The oldest version of each agent](#the-oldest-version-of-each-agent)); a runtime whose home folder does not exist reads Not on this machine.
 The write itself runs off `Mutex<Runtime>` (on the core's own node for this Mac, on the helper for a device), and the diagnosis is read back from the file afterwards so the screen shows what the file now says rather than what was asked for.
 
 Settings shows each machine's hook parts under Agents and its whole kit under Devices, This Mac first and then each device.

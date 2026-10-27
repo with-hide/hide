@@ -39,6 +39,10 @@ pub struct JourneyAdapter {
     /// Hide cannot start.
     pub request_budget: Option<u32>,
     pub fake_home: FakeHome,
+    /// The oldest CLI version Hide puts its integration in place for
+    /// (`AgentAdapter::minimum`), which the daily agent canary's record shows
+    /// beside the latest release it measured.
+    pub minimum_version: Option<&'static str>,
 }
 
 /// A private HOME is admitted only with a declared key route and update policy.
@@ -243,6 +247,7 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
             untitled: row.sidebar_label.unwrap_or(row.herdr.name),
             cells,
             request_budget: row.start.map(|start| turns * requests_per_turn(start)),
+            minimum_version: row.minimum.map(|minimum| minimum.version),
             letter,
             wake,
             title,

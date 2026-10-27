@@ -540,6 +540,18 @@ pub struct PromptHook {
     pub context: bool,
 }
 
+/// The oldest version of an agent's CLI that Hide's integration (its hook,
+/// plugin or extension) was proven on, and where that proof is recorded. The
+/// kit puts the integration in place only for a CLI that answers this version
+/// or a newer one (docs/agent-hooks.md, The oldest version of each agent).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MinimumVersion {
+    /// `x.y.z`, compared part by part with what the CLI's `--version` answers.
+    pub version: &'static str,
+    /// Repository-relative guide section or captured fixture holding the proof.
+    pub evidence: &'static str,
+}
+
 /// Independent gates; adding prompt intake never grants bell or shell denial.
 #[derive(Clone, Copy, Debug)]
 pub struct AgentAdapter {
@@ -550,6 +562,9 @@ pub struct AgentAdapter {
     pub sidebar_label: Option<&'static str>,
     pub aliases: &'static [&'static str],
     pub executables: &'static [&'static str],
+    /// Every supported agent declares one; only a retired agent, for which
+    /// Hide installs nothing, has none.
+    pub minimum: Option<MinimumVersion>,
     pub skill_location: SkillLocation,
     pub hook: HookInstall,
     pub observation: ObservationSupport,

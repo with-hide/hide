@@ -39,7 +39,8 @@
         "value": "1"
       },
       "evidence": "https://code.claude.com/docs/en/settings-reference"
-    }
+    },
+    "minimum_version": "2.1.278"
   },
   {
     "id": "codex",
@@ -82,7 +83,8 @@
         "value": "false"
       },
       "evidence": "https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/core/config.schema.json"
-    }
+    },
+    "minimum_version": "0.155.1"
   },
   {
     "id": "grok",
@@ -124,7 +126,8 @@
         "value": "1"
       },
       "evidence": "https://docs.x.ai/build/settings/reference.md"
-    }
+    },
+    "minimum_version": "1.0.50"
   },
   {
     "id": "opencode",
@@ -165,7 +168,8 @@
         "value": "\"disable\""
       },
       "evidence": "https://opencode.ai/v2/docs/config/"
-    }
+    },
+    "minimum_version": "1.18.30"
   },
   {
     "id": "pi",
@@ -210,7 +214,8 @@
         "value": "1"
       },
       "evidence": "https://unpkg.com/@earendil-works/pi-coding-agent@1.0.4/docs/models.md"
-    }
+    },
+    "minimum_version": "1.0.4"
   },
   {
     "id": "omp",
@@ -254,7 +259,8 @@
         "value": "{\"checkUpdate\":false}"
       },
       "evidence": "https://github.com/can1357/oh-my-pi/blob/v18.7.0/packages/coding-agent/src/main.ts"
-    }
+    },
+    "minimum_version": "18.7.0"
   },
   {
     "id": "antigravity",
@@ -296,6 +302,7 @@
         "value": "1"
       },
       "reason": "The installer cannot select a pinned release."
-    }
+    },
+    "minimum_version": "1.4.0"
   }
 ]
