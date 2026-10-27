@@ -347,7 +347,7 @@ impl ConversationCursor {
         let mut found = crate::links::LinkAccumulator::default();
         let mut consumed = 0;
         let window_start = start_offset.saturating_sub(self.cursor.pending.len() as u64);
-        for fragment in appended.split_inclusive(|byte| *byte == b'\n') {
+        for fragment in records(&appended) {
             consumed += fragment.len();
             let line_start = offset.saturating_sub(pending.len() as u64 + discarded_bytes);
             offset += fragment.len() as u64;
@@ -476,6 +476,22 @@ impl ConversationCursor {
         self.has_more = has_more;
         Ok(parsed)
     }
+}
+
+/// `bytes` cut after each newline, as `split_inclusive` cuts them, with the
+/// newlines found by `memchr`: a transcript is read a line at a time, and a
+/// byte-at-a-time search was most of what reading a long one cost.
+fn records(bytes: &[u8]) -> impl Iterator<Item = &[u8]> {
+    let mut rest = bytes;
+    std::iter::from_fn(move || {
+        if rest.is_empty() {
+            return None;
+        }
+        let end = memchr::memchr(b'\n', rest).map_or(rest.len(), |at| at + 1);
+        let (record, after) = rest.split_at(end);
+        rest = after;
+        Some(record)
+    })
 }
 
 /// Grok's current title and plan wait live beside its conversation, each
