@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 /// at: how a Conductor works with the operator and what Hide holds it to.
 pub const HELP: &str = include_str!("../assets/mission/help.md");
 
-pub const USAGE: &str = "hide mission help\nhide mission create --title <title> [--scope pr|merge] [--cap <n>] [--github <account>]\nhide mission plan [--mission <id>] (--file <plan.json> | --json <plan>)\nhide mission node <key> [--mission <id>] [--status <status>] [--agent-id <id> | --no-agent-id] [--pr <n> | --no-pr] [--base-pr <n> | --no-base-pr] [--branch <name> | --no-branch] [--attempts <n>] [--line <text> | --no-line] [--change <text> | --no-change] [--review <text> | --no-review] [--commit <sha> | --no-commit] [--verdict pass|fail | --no-verdict] [--checks <passed>/<total> | --no-checks]\nhide mission node <key> [--mission <id>] [--reviewer <agent-id>] [--verifier <agent-id>]\nhide mission record <node> <line> [--mission <id>] (--pass | --fail) [--evidence <text>] [--commit <sha>] [--rerun]\nhide mission skip <node> <line> [--mission <id>] --reason <text> [--decision <key>]\nhide mission defect <node> [--mission <id>] --found-by <node> --line <text>\nhide mission start [--mission <id>]\nhide mission decide [--mission <id>] (--line <text> [--why <text>] [--option <text>]... [--recommend <n>] [--node <key>] | --clear)\nhide mission delay [--mission <id>] (--line <text> | --clear)\nhide mission close [--mission <id>] --as done|merge_wait|cancelled [--report <text> | --report-file <path>]\nhide mission reopen [--mission <id>]\nhide mission take <id>\nhide mission show [--mission <id>]\nhide mission list\nhide mission settings";
+pub const USAGE: &str = "hide mission help\nhide mission create --title <title> [--scope pr|merge] [--cap <n>] [--github <account>]\nhide mission plan [--mission <id>] (--file <plan.json> | --json <plan>)\nhide mission node <key> [--mission <id>] [--status <status>] [--agent-id <id> | --no-agent-id] [--pr <n> | --no-pr] [--base-pr <n> | --no-base-pr] [--branch <name> | --no-branch] [--attempts <n>] [--line <text> | --no-line] [--change <text> | --no-change] [--review <text> | --no-review] [--commit <sha> | --no-commit] [--verdict pass|fail | --no-verdict] [--checks <passed>/<total> | --no-checks]\nhide mission node <key> [--mission <id>] [--reviewer <agent-id>] [--verifier <agent-id>]\nhide mission record <node> <line> [--mission <id>] (--pass | --fail) --evidence <text> [--commit <sha>] [--rerun]\nhide mission skip <node> <line> [--mission <id>] --reason <text> [--decision <key>]\nhide mission defect <node> [--mission <id>] --found-by <node> --line <text>\nhide mission start [--mission <id>]\nhide mission decide [--mission <id>] (--line <text> [--why <text>] [--option <text>]... [--recommend <n>] [--node <key>] | --clear)\nhide mission delay [--mission <id>] (--line <text> | --clear)\nhide mission close [--mission <id>] --as done|merge_wait|cancelled [--report <text> | --report-file <path>]\nhide mission reopen [--mission <id>]\nhide mission take <id>\nhide mission show [--mission <id>]\nhide mission list\nhide mission settings";
 
 /// The largest plan or report file read from disk; the daemon refuses a
 /// frame past its own limit anyway.
@@ -44,10 +44,91 @@ pub enum MissionCli {
     },
 }
 
+/// Each verb's flags, those that take a value and then the switches: the
+/// only ones its parser reads, and the ones the CLI contract names for it,
+/// which `cli_contract`'s tests hold to this table (`--option`, read first,
+/// is the one given more than once).
+pub const FLAGS: &[(&str, &[&str], &[&str])] = &[
+    ("create", &["--title", "--scope", "--cap", "--github"], &[]),
+    ("plan", &["--mission", "--file", "--json"], &[]),
+    (
+        "node",
+        &[
+            "--mission",
+            "--status",
+            "--agent-id",
+            "--pr",
+            "--base-pr",
+            "--branch",
+            "--attempts",
+            "--line",
+            "--change",
+            "--review",
+            "--commit",
+            "--verdict",
+            "--checks",
+            "--reviewer",
+            "--verifier",
+        ],
+        &[
+            "--no-agent-id",
+            "--no-pr",
+            "--no-base-pr",
+            "--no-branch",
+            "--no-line",
+            "--no-change",
+            "--no-review",
+            "--no-commit",
+            "--no-verdict",
+            "--no-checks",
+        ],
+    ),
+    (
+        "record",
+        &["--mission", "--evidence", "--commit"],
+        &["--pass", "--fail", "--rerun"],
+    ),
+    ("skip", &["--mission", "--reason", "--decision"], &[]),
+    ("defect", &["--mission", "--found-by", "--line"], &[]),
+    (
+        "decide",
+        &[
+            "--mission",
+            "--line",
+            "--why",
+            "--option",
+            "--recommend",
+            "--node",
+        ],
+        &["--clear"],
+    ),
+    ("delay", &["--mission", "--line"], &["--clear"]),
+    (
+        "close",
+        &["--mission", "--as", "--report", "--report-file"],
+        &[],
+    ),
+    ("start", &["--mission"], &[]),
+    ("reopen", &["--mission"], &[]),
+    ("show", &["--mission"], &[]),
+    ("take", &[], &[]),
+    ("list", &[], &[]),
+    ("settings", &[], &[]),
+];
+
 /// A command line's positionals, its valued options and its switches set.
 type Flags = (Vec<String>, BTreeMap<String, String>, Vec<String>);
 
-fn flags<'a>(
+/// `verb`'s command line read by its row of `FLAGS`.
+fn flags<'a>(args: impl Iterator<Item = &'a String>, verb: &str) -> Result<Flags, String> {
+    let (_, valued, switches) = FLAGS
+        .iter()
+        .find(|(name, ..)| *name == verb)
+        .ok_or_else(|| USAGE.to_owned())?;
+    read_flags(args, valued, switches)
+}
+
+fn read_flags<'a>(
     args: impl Iterator<Item = &'a String>,
     valued: &[&str],
     switches: &[&str],
@@ -129,6 +210,14 @@ fn checks(value: &str) -> Result<Checks, String> {
         .ok_or_else(|| "--checks takes <passed>/<total>, such as 6/6".to_owned())
 }
 
+fn commit(flag: &str, value: &str) -> Result<String, String> {
+    if herdr_core::missions::valid_commit(value) {
+        Ok(value.to_owned())
+    } else {
+        Err(format!("{flag} takes a commit: 7 to 64 hexadecimal digits"))
+    }
+}
+
 fn mission_of(values: &BTreeMap<String, String>) -> Result<Option<String>, String> {
     values.get("--mission").map(|id| key(id)).transpose()
 }
@@ -144,8 +233,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
             return Ok(MissionCli::Help);
         }
         "create" => {
-            let (positional, values, _) =
-                flags(args, &["--title", "--scope", "--cap", "--github"], &[])?;
+            let (positional, values, _) = flags(args, "create")?;
             if !positional.is_empty() {
                 return Err(USAGE.to_owned());
             }
@@ -173,7 +261,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
             }
         }
         "plan" => {
-            let (positional, values, _) = flags(args, &["--mission", "--file", "--json"], &[])?;
+            let (positional, values, _) = flags(args, "plan")?;
             if !positional.is_empty() {
                 return Err(USAGE.to_owned());
             }
@@ -193,38 +281,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
             }
         }
         "node" => {
-            let (positional, values, set) = flags(
-                args,
-                &[
-                    "--mission",
-                    "--status",
-                    "--agent-id",
-                    "--pr",
-                    "--base-pr",
-                    "--branch",
-                    "--attempts",
-                    "--line",
-                    "--change",
-                    "--review",
-                    "--commit",
-                    "--verdict",
-                    "--checks",
-                    "--reviewer",
-                    "--verifier",
-                ],
-                &[
-                    "--no-agent-id",
-                    "--no-pr",
-                    "--no-base-pr",
-                    "--no-branch",
-                    "--no-line",
-                    "--no-change",
-                    "--no-review",
-                    "--no-commit",
-                    "--no-verdict",
-                    "--no-checks",
-                ],
-            )?;
+            let (positional, values, set) = flags(args, "node")?;
             let [node] = positional.as_slice() else {
                 return Err(USAGE.to_owned());
             };
@@ -269,7 +326,9 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
                 change: text("--change", "--no-change")?,
                 review: text("--review", "--no-review")?,
                 worker: None,
-                commit: text("--commit", "--no-commit")?,
+                commit: one(&values, &set, "--commit", "--no-commit")?
+                    .map(|value| value.map(|value| commit("--commit", value)).transpose())
+                    .transpose()?,
                 verdict: one(&values, &set, "--verdict", "--no-verdict")?
                     .map(|value| {
                         value
@@ -294,11 +353,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
             }
         }
         "record" => {
-            let (positional, values, set) = flags(
-                args,
-                &["--mission", "--evidence", "--commit"],
-                &["--pass", "--fail", "--rerun"],
-            )?;
+            let (positional, values, set) = flags(args, "record")?;
             let [node, line] = positional.as_slice() else {
                 return Err(USAGE.to_owned());
             };
@@ -315,14 +370,22 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
                 node: key(node)?,
                 line: key(line)?,
                 pass,
-                evidence: values.get("--evidence").cloned(),
-                commit: values.get("--commit").cloned(),
+                evidence: values
+                    .get("--evidence")
+                    .filter(|evidence| !evidence.trim().is_empty())
+                    .cloned()
+                    .ok_or_else(|| {
+                        "give --evidence with the one line the result rests on".to_owned()
+                    })?,
+                commit: values
+                    .get("--commit")
+                    .map(|value| commit("--commit", value))
+                    .transpose()?,
                 rerun: set.iter().any(|flag| flag == "--rerun"),
             }
         }
         "skip" => {
-            let (positional, values, _) =
-                flags(args, &["--mission", "--reason", "--decision"], &[])?;
+            let (positional, values, _) = flags(args, "skip")?;
             let [node, line] = positional.as_slice() else {
                 return Err(USAGE.to_owned());
             };
@@ -347,7 +410,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
             }
         }
         "defect" => {
-            let (positional, values, _) = flags(args, &["--mission", "--found-by", "--line"], &[])?;
+            let (positional, values, _) = flags(args, "defect")?;
             let [node] = positional.as_slice() else {
                 return Err(USAGE.to_owned());
             };
@@ -375,11 +438,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
                     rest.push(arg);
                 }
             }
-            let (positional, values, set) = flags(
-                rest.into_iter(),
-                &["--mission", "--line", "--why", "--recommend", "--node"],
-                &["--clear"],
-            )?;
+            let (positional, values, set) = flags(rest.into_iter(), "decide")?;
             if !positional.is_empty() {
                 return Err(USAGE.to_owned());
             }
@@ -406,7 +465,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
             }
         }
         "delay" => {
-            let (positional, values, set) = flags(args, &["--mission", "--line"], &["--clear"])?;
+            let (positional, values, set) = flags(args, "delay")?;
             if !positional.is_empty() {
                 return Err(USAGE.to_owned());
             }
@@ -419,11 +478,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
             }
         }
         "close" => {
-            let (positional, values, _) = flags(
-                args,
-                &["--mission", "--as", "--report", "--report-file"],
-                &[],
-            )?;
+            let (positional, values, _) = flags(args, "close")?;
             if !positional.is_empty() {
                 return Err(USAGE.to_owned());
             }
@@ -453,7 +508,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
             }
         }
         verb @ ("start" | "reopen" | "show") => {
-            let (positional, values, _) = flags(args, &["--mission"], &[])?;
+            let (positional, values, _) = flags(args, verb)?;
             if !positional.is_empty() {
                 return Err(USAGE.to_owned());
             }
@@ -465,7 +520,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
             }
         }
         "take" => {
-            let (positional, _, _) = flags(args, &[], &[])?;
+            let (positional, _, _) = flags(args, "take")?;
             let [mission] = positional.as_slice() else {
                 return Err(USAGE.to_owned());
             };
@@ -474,7 +529,7 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<MissionCl
             }
         }
         verb @ ("list" | "settings") => {
-            let (positional, _, _) = flags(args, &[], &[])?;
+            let (positional, _, _) = flags(args, verb)?;
             if !positional.is_empty() {
                 return Err(USAGE.to_owned());
             }
@@ -739,7 +794,15 @@ mod tests {
             ..
         })) = parse(
             words(&[
-                "record", "core", "check", "--pass", "--commit", "abc1234", "--rerun",
+                "record",
+                "core",
+                "check",
+                "--pass",
+                "--evidence",
+                "cargo test: 12 passed",
+                "--commit",
+                "abc1234",
+                "--rerun",
             ])
             .iter(),
         )
@@ -751,9 +814,48 @@ mod tests {
             ("core", "check", true, Some("abc1234"), true)
         );
         assert!(parse(words(&["record", "core", "c1"]).iter()).is_err());
-        assert!(parse(words(&["record", "core", "c1", "--pass", "--fail"]).iter()).is_err());
+        // A worker's line and a checker's alike carry the line they rest on.
+        for line in ["c1", "review"] {
+            let refused = |evidence: &[&str]| {
+                let mut argv = vec!["record", "core", line, "--fail"];
+                argv.extend_from_slice(evidence);
+                parse(words(&argv).iter()).unwrap_err()
+            };
+            assert!(refused(&[]).contains("--evidence"));
+            assert!(refused(&["--evidence", "   "]).contains("--evidence"));
+            assert!(refused(&["--evidence"]).contains("--evidence"));
+        }
         assert!(
-            parse(words(&["record", "core", "c1", "--pass", "--commit", "xyz"]).iter()).is_err()
+            parse(
+                words(&[
+                    "record",
+                    "core",
+                    "c1",
+                    "--pass",
+                    "--fail",
+                    "--evidence",
+                    "e"
+                ])
+                .iter()
+            )
+            .is_err()
+        );
+        assert!(
+            parse(
+                words(&[
+                    "record",
+                    "core",
+                    "c1",
+                    "--pass",
+                    "--evidence",
+                    "e",
+                    "--commit",
+                    "xyz"
+                ])
+                .iter()
+            )
+            .unwrap_err()
+            .contains("--commit takes a commit")
         );
         assert!(parse(words(&["skip", "core", "c1"]).iter()).is_err());
         assert!(matches!(

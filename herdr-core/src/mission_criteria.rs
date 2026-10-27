@@ -123,6 +123,12 @@ pub struct Checker {
     pub evidence: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at_unix_ms: Option<u64>,
+    /// The bound checker's pane and its machine, as the ledger names them
+    /// now (B29): the view fills them, the book never keeps them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
 }
 
 /// A review or verification the plan asks of other agents (D-07, B3).
@@ -220,15 +226,19 @@ impl Criterion {
     }
 
     /// The state the line shows when the node's work folder is at `head`: a
-    /// check command that passed on an older commit is open again (B7).
+    /// check command passes only for the commit that folder is at now, so
+    /// one that passed on an older commit, or with no folder Hide can read,
+    /// is open again (B7, D-16).
     pub fn shown(&self, head: Option<&str>) -> CriterionState {
-        match (self.kind, self.state, head, self.commit.as_deref()) {
-            (CriterionKind::Check, CriterionState::Pass, Some(head), Some(commit))
-                if !same_commit(commit, head) =>
+        match (self.kind, self.state) {
+            (CriterionKind::Check, CriterionState::Pass)
+                if !head
+                    .zip(self.commit.as_deref())
+                    .is_some_and(|(head, commit)| same_commit(commit, head)) =>
             {
                 CriterionState::Open
             }
-            (_, state, ..) => state,
+            (_, state) => state,
         }
     }
 
@@ -387,9 +397,18 @@ impl Criterion {
         true
     }
 
-    /// The CI GitHub reports for the pull request's head (B8, B13, D-15):
-    /// a fail then a pass on one head counts its rerun, and a fail again
-    /// after a rerun ran sends the node back to work.
+    /// Whether the line failed again after its one rerun on this commit:
+    /// it stays failed, whatever a later run on the same commit says, until
+    /// a new commit or the operator's skip (D-14, B13).
+    fn spent(&self) -> bool {
+        self.state == CriterionState::Fail && self.reruns >= RERUN_LIMIT
+    }
+
+    /// The CI GitHub reports for the pull request's head (B8, B13, D-15).
+    /// On one head the first failure gets one rerun: the next answer after
+    /// it is that rerun, a pass counting it and a failure spending it, which
+    /// sends the node back to work; a failure after the rerun passed spends
+    /// it too. A spent line stays failed until a new head.
     pub(crate) fn read_ci(
         &mut self,
         head: &str,
@@ -413,7 +432,7 @@ impl Criterion {
             }
         }
         let mut spent = false;
-        if self.skip.is_none() {
+        if self.skip.is_none() && !self.spent() {
             match checks {
                 Checks::Passing => {
                     if self.state == CriterionState::Fail {
@@ -425,8 +444,10 @@ impl Criterion {
                 Checks::Pending if self.state == CriterionState::Fail => self.rerunning = true,
                 Checks::Pending => self.state = CriterionState::Open,
                 Checks::Failed => {
-                    if self.state == CriterionState::Fail && self.rerunning {
-                        self.reruns = self.reruns.saturating_add(1);
+                    let rerun_failed = self.state == CriterionState::Fail && self.rerunning;
+                    let after_rerun = self.state != CriterionState::Fail && self.reruns > 0;
+                    if rerun_failed || after_rerun {
+                        self.reruns = self.reruns.max(RERUN_LIMIT);
                         spent = true;
                     }
                     self.rerunning = false;
@@ -451,12 +472,15 @@ impl Criterion {
 /// The lines a plan makes of a node (B1-B3): its own criteria in order,
 /// the check command where the plan has one, the CI GitHub reported, the
 /// reviews and verifications it asks for, and the defects already found. A
-/// line the plan keeps the same keeps what was recorded on it.
+/// line the plan keeps the same keeps what was recorded on it; the check
+/// command's line keeps it only while the command is the same one
+/// (`same_check`), since a pass of one command is no pass of another.
 pub(crate) fn plan_lines(
     existing: &[Criterion],
     own: &[String],
     checks: &[CheckInput],
     with_check: bool,
+    same_check: bool,
 ) -> Vec<Criterion> {
     let mut out = Vec::new();
     for (at, text) in own.iter().enumerate() {
@@ -474,6 +498,7 @@ pub(crate) fn plan_lines(
     if with_check {
         out.push(
             of(CriterionKind::Check)
+                .filter(|_| same_check)
                 .cloned()
                 .unwrap_or_else(|| Criterion::new("check", CriterionKind::Check)),
         );
@@ -505,6 +530,8 @@ pub(crate) fn plan_lines(
                         state: CriterionState::Open,
                         evidence: None,
                         at_unix_ms: None,
+                        pane_id: None,
+                        machine: None,
                     })
             })
             .collect();
@@ -598,6 +625,8 @@ mod tests {
         assert!(line.met(Some(A)));
         assert_eq!(line.shown(Some(B)), CriterionState::Open);
         assert!(!line.met(Some(B)));
+        // A work folder Hide cannot read proves nothing (D-16).
+        assert_eq!(line.shown(None), CriterionState::Open);
     }
 
     #[test]
@@ -638,7 +667,13 @@ mod tests {
             rule: Rule::Majority,
             by: vec![worker("codex"), worker("claude"), worker("opencode")],
         };
-        let lines = plan_lines(&[], &["works".into()], std::slice::from_ref(&input), true);
+        let lines = plan_lines(
+            &[],
+            &["works".into()],
+            std::slice::from_ref(&input),
+            true,
+            true,
+        );
         let keys: Vec<&str> = lines.iter().map(|line| line.key.as_str()).collect();
         assert_eq!(keys, ["c1", "check", "review"]);
         let mut review = lines[2].clone();
@@ -657,7 +692,7 @@ mod tests {
         all.settle();
         assert_eq!(all.state, CriterionState::Fail);
         // A replan that keeps a checker keeps its answer.
-        let again = plan_lines(&[review], &["works".into()], &[input], false);
+        let again = plan_lines(&[review], &["works".into()], &[input], false, true);
         assert_eq!(again[1].checkers[0].state, CriterionState::Pass);
         assert_eq!(again[1].state, CriterionState::Pass);
     }
@@ -677,6 +712,44 @@ mod tests {
         assert!(again.read_ci(A, PullRequestChecks::Failed, 3).spent);
         again.read_ci(B, PullRequestChecks::Pending, 4);
         assert_eq!((again.state, again.reruns), (CriterionState::Open, 0));
+    }
+
+    /// B13, D-14: one rerun per head however often GitHub's runs go round;
+    /// a spent line stays failed on that head until a new one.
+    #[test]
+    fn a_ci_gets_one_rerun_per_head_through_any_number_of_runs() {
+        let mut line = Criterion::new("ci", CriterionKind::Ci);
+        line.read_ci(A, PullRequestChecks::Failed, 1);
+        line.read_ci(A, PullRequestChecks::Pending, 2);
+        assert!(line.read_ci(A, PullRequestChecks::Failed, 3).spent);
+        line.read_ci(A, PullRequestChecks::Pending, 4);
+        assert!(!line.read_ci(A, PullRequestChecks::Passing, 5).changed);
+        assert_eq!((line.state, line.reruns), (CriterionState::Fail, 1));
+        // A pass on its rerun, then another failure on the same head,
+        // spends it as well.
+        let mut passed = Criterion::new("ci", CriterionKind::Ci);
+        passed.read_ci(A, PullRequestChecks::Failed, 1);
+        passed.read_ci(A, PullRequestChecks::Passing, 2);
+        passed.read_ci(A, PullRequestChecks::Pending, 3);
+        assert!(passed.read_ci(A, PullRequestChecks::Failed, 4).spent);
+        passed.read_ci(A, PullRequestChecks::Passing, 5);
+        assert_eq!(passed.state, CriterionState::Fail);
+        passed.read_ci(B, PullRequestChecks::Passing, 6);
+        assert_eq!((passed.state, passed.reruns), (CriterionState::Pass, 0));
+    }
+
+    /// B2, B7: a replan with another check command opens its line, though
+    /// the commit is the same.
+    #[test]
+    fn a_changed_check_command_opens_its_line_again() {
+        let mut lines = plan_lines(&[], &["works".into()], &[], true, true);
+        lines[1]
+            .record(true, None, Some(A.into()), false, by(Role::Worker))
+            .unwrap();
+        assert!(plan_lines(&lines, &["works".into()], &[], true, true)[1].met(Some(A)));
+        let changed = plan_lines(&lines, &["works".into()], &[], true, false);
+        assert_eq!(changed[1].state, CriterionState::Open);
+        assert_eq!(changed[1].commit, None);
     }
 
     #[test]

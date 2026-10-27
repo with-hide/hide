@@ -14,7 +14,7 @@ hide mission node <key> [--status <status>] [--agent-id <id>] [--pr <n>] [--base
                         [--commit <sha>] [--verdict pass|fail] [--checks <passed>/<total>]
                         [--no-agent-id] [--no-pr] [--no-base-pr] [--no-branch] [--no-line] [--no-change] [--no-review]
                         [--no-commit] [--no-verdict] [--no-checks] [--reviewer <agent-id>] [--verifier <agent-id>]
-hide mission record <node> <line> (--pass | --fail) [--evidence <text>] [--commit <sha>] [--rerun]
+hide mission record <node> <line> (--pass | --fail) --evidence <text> [--commit <sha>] [--rerun]
 hide mission skip <node> <line> --reason <text> [--decision <key>]
 hide mission defect <node> --found-by <node> --line <text>
 hide mission start
@@ -168,14 +168,15 @@ Every worker's brief, change or verify, says in its first line what the node is,
 
 - `hide mission show` lists each node's `criteria`: its key, state (`open`, `pass`, `fail`, `skipped`), who recorded it and the evidence.
   Workers record their own lines and the `check` line, checkers record theirs; you record a line only for a node that never had a worker, and it shows as yours.
-  A `check` line passes only for the commit the node's worktree is at now: a new commit opens it again.
-- Hide refuses `--status done` while a line is open or failed (`mission_criteria_unmet`, which names the lines), and a close as done while a node is unfinished (`mission_nodes_unfinished`).
+  A `check` line passes only for the commit the checkout it was recorded from is at now, whoever works there: a new commit, a replan that changes the check command, or a checkout Hide no longer reads opens it again; once the node's pull request is merged, its merged head is that commit.
+- Hide refuses `--status done` while a line is open or failed (`mission_criteria_unmet`, which names the lines), judging the node as the command would leave it: a pull request named in the same command brings its CI, and another worker runs the check again.
+  A close as done or merge_wait is refused while a node is unfinished (`mission_nodes_unfinished`) or a done node's line no longer holds (`mission_criteria_unmet`, `<node>: <lines>`), and a waiting mission closes itself only while every done node's lines hold.
   Then finish the check, skip the line with its reason, or ask the operator.
 - `hide mission skip <node> <line> --reason <why>` leaves a node's own line or a checker's line skipped (⤳) with the reason, and the node goes on.
   The `check` and `ci` lines are the operator's to skip (`mission_criteria_protected`): ask with `hide mission decide --line <question> --node <key>`, and once they answered, skip with `--decision <key>`, the question's `key` in `hide mission show`; the line then reads `⤳ operator 결정`.
   A line that would change the goal or the scope is asked the same way, never skipped on your own.
 - A failed `ci` or `check` line is rerun once, by the worker, on the same commit and only for what failed (`gh run rerun <run-id> --failed` for CI, the failed part of the check command with `--rerun`).
-  A pass then reads `✓ 재실행 1회`; a second failure on the same commit sends the node back to working, and a new commit gives one rerun again.
+  A pass then reads `✓ 재실행 1회`; a failure after the rerun, however many runs follow, sends the node back to working, Hide reads no more runs on that commit, and a new commit gives one rerun again.
   When the worker shows the failure is not its change (the same failure on main), raise a decision naming the node; if the operator says to skip, skip it with `--decision`.
 - When a later node finds a defect in an earlier one, `hide mission defect <earlier> --found-by <later> --line <the defect>` opens the earlier node again (↻) with the defect as a line of its own; brief its worker, or a new one, to fix it.
 
@@ -213,7 +214,8 @@ Write it so a reader who saw none of the mission can act, in four parts:
 
 For each node, the evidence of its lines goes with its pull request or branch.
 
-A `pr`-scope mission that leaves a stack waiting for the operator's merge closes `--as merge_wait` after the report and stays open quietly; when the operator merges the lower pull request, move the one above and check it; once every pull request of the stack is merged Hide closes the mission as done itself, with or without you there.
+A `pr`-scope mission that leaves a stack waiting for the operator's merge closes `--as merge_wait` after the report and stays open quietly; when the operator merges the lower pull request, move the one above and check it; once every pull request of the stack is merged, and every `direct` change's `--branch` is in main, Hide closes the mission as done itself, with or without you there.
+Hide reads a branch in main from git, with no GitHub needed; in a repository with no remote, main is the branch its main worktree has out. A `direct` change that names no branch keeps the mission waiting and shows unread, so name each one's branch before the close.
 A further instruction to a done mission opens it again (`hide mission reopen`), and so does a new commit or a review asking for changes on one of its pull requests; its merge does not.
 You conduct one open mission at a time: while another is open, a done one stays done, `reopen` is refused `mission_already_conducting`, and a letter about it is news to take up after the open one.
 
@@ -229,7 +231,8 @@ Hide refuses a second session while the mission's Conductor is still present (`m
 A worker or checker of a mission records its own lines from its own pane; the Conductor briefs it with them.
 
 - A worker records its node's own lines and its `check` line: `hide mission record <node> <line> --pass|--fail --evidence <one line>`.
-  The `check` line names the commit it ran on with `--commit <sha>`, and a rerun of a failed check on the same commit adds `--rerun`.
+  Every record carries the one line its result rests on (`mission_evidence_missing` without it).
+  The `check` line names the commit it ran on with `--commit <sha>`, is recorded from a pane in the checkout it ran in (`mission_checkout_unknown` otherwise), and a rerun of a failed check on the same commit adds `--rerun`.
 - A checker records only its `review` or `verify` line, the same way; it is refused on any other line (`mission_criterion_not_yours`).
 - Recording the same result on the same commit again changes nothing.
 - The node's status, a skip and a defect are the Conductor's: report a line you cannot pass, and why, in your letter.

@@ -354,6 +354,15 @@ pub struct MissionNode {
     /// A direct change's commit on main (B22, B33).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub commit: Option<String>,
+    /// The checkout the node's check command last passed or failed in, on
+    /// the mission's machine: its head now is what the line is compared
+    /// with, whoever works the node then (B7, D-16).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+    /// The commit of a direct change's branch that Hide read in main, which
+    /// a mission waiting for its branches waits on (B17, B18).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub in_main: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verdict: Option<Verdict>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -841,8 +850,11 @@ pub enum MissionCommand {
         node: String,
         line: String,
         pass: bool,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        evidence: Option<String>,
+        /// The one line the result rests on, which every record carries
+        /// (B5); a frame without one is the core's own refusal, with its
+        /// way on, rather than one it cannot read.
+        #[serde(default)]
+        evidence: String,
         /// The commit a check command ran on.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         commit: Option<String>,
@@ -908,10 +920,11 @@ impl MissionCommand {
                 commit,
                 ..
             } => {
+                // A blank line is the core's own refusal, with its way on.
                 id_ok(mission)
                     && valid_key(node)
                     && valid_key(line)
-                    && valid_line(evidence, LINE_LIMIT)
+                    && (evidence.trim().is_empty() || valid_text(evidence, LINE_LIMIT))
                     && commit.as_deref().is_none_or(valid_commit)
             }
             Self::Skip {
@@ -1268,6 +1281,7 @@ pub(crate) fn apply_plan(
         next.check.clone_from(&input.check);
     }
     let with_check = next.check.is_some() && !mission.exempt;
+    let same_check = next.check == mission.check;
     next.nodes = input
         .nodes
         .iter()
@@ -1297,6 +1311,8 @@ pub(crate) fn apply_plan(
                 finished_at_unix_ms: None,
                 pr_seen: None,
                 commit: None,
+                folder: None,
+                in_main: None,
                 verdict: None,
                 checks: None,
             });
@@ -1310,6 +1326,7 @@ pub(crate) fn apply_plan(
                 &input.criteria,
                 &input.checks,
                 with_check && input.kind == NodeKind::Change,
+                same_check,
             );
             node.external.clone_from(&input.external);
             node.issues.clone_from(&input.issues);
@@ -1494,7 +1511,7 @@ pub(crate) fn apply_patch(
 }
 
 /// A commit as Git names one: 7 to 64 hexadecimal digits.
-fn valid_commit(value: &str) -> bool {
+pub fn valid_commit(value: &str) -> bool {
     (7..=64).contains(&value.len()) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
@@ -1687,6 +1704,12 @@ pub fn next_action(code: &str) -> &'static str {
         }
         "mission_rerun_spent" => {
             "This commit already had its one rerun: fix the failure, commit, and run the check again on the new commit"
+        }
+        "mission_evidence_missing" => {
+            "Give --evidence with the one line the result rests on: the command and what it printed, or what the review read"
+        }
+        "mission_checkout_unknown" => {
+            "Record the check command from a pane in the checkout it ran in, on the mission's machine: Hide holds the line against that checkout's later commits"
         }
         "mission_skip_reason_missing" => "Give the reason with --reason <text>",
         "mission_criteria_protected" => {
