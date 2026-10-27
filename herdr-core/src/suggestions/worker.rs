@@ -15,7 +15,7 @@ use super::analysis::{
 };
 use super::apply::{self as applying, ApplyOrder, FollowedAttempt};
 use super::ledger::{Observation, RecordIndex, SessionRef, Signal, SignalGroup};
-use super::lifecycle::{AttemptMove, AttemptPhase, LineLife};
+use super::lifecycle::{AttemptMove, AttemptPhase};
 use super::notebook::{Line, LineId, Notebook, NotebookEdit, Outcome, Stage, Strike, StruckBy};
 use super::policy::{self, Quantity};
 use super::read::{self, ReadInput};
@@ -757,8 +757,16 @@ impl Worker {
             return;
         };
         let mut life = lives.get(&line_id).cloned().unwrap_or_default();
+        let closed = change == AttemptMove::Closed;
         if !applying::moved(&mut line, &mut life, started, change, now) {
             return;
+        }
+        if closed {
+            // Closed unmerged, the line is skipped as `넘어가기` skips it.
+            match store.index(project, &notebook) {
+                Ok(index) => life.skipped_with = Some(scoring::evidence(&line, &index, |_| true)),
+                Err(code) => return log_store("attempt", &code),
+            }
         }
         if let Err(code) = store.save_line(project, &line, &life) {
             return log_store("attempt", &code);
@@ -1071,7 +1079,7 @@ impl Worker {
             }));
             return;
         };
-        let life = lives.get(&line_id).cloned().unwrap_or_default();
+        let mut life = lives.get(&line_id).cloned().unwrap_or_default();
         match action {
             LineAction::Dismiss => {
                 // An attempt still at work keeps its line; a failed one, or
@@ -1088,12 +1096,17 @@ impl Worker {
                     }));
                     return;
                 }
+                let index = match store.index(project, &notebook) {
+                    Ok(index) => index,
+                    Err(code) => return log_store("action", &code),
+                };
                 line.struck = Some(Strike {
                     by: StruckBy::Operator,
                     reason: None,
                     at_unix_ms: now,
                 });
                 line.stage = Stage::Candidate;
+                life.skipped_with = Some(scoring::evidence(&line, &index, |_| true));
             }
             LineAction::Restore => {
                 if !line
@@ -1153,8 +1166,12 @@ impl Worker {
                 line.stage == Stage::Candidate
                     && line.struck.as_ref().is_some_and(|strike| {
                         strike.by == StruckBy::Operator
-                            && lives.get(&line.id).is_none_or(LineLife::skip_may_return)
-                            && scoring::outgrew_skip(line, &index, strike.at_unix_ms)
+                            && lives.get(&line.id).is_some_and(|life| {
+                                life.skip_may_return()
+                                    && life.skipped_with.as_ref().is_some_and(|with| {
+                                        scoring::outgrew_skip(line, &index, strike.at_unix_ms, with)
+                                    })
+                            })
                     })
             })
             .map(|line| Line {
@@ -1645,6 +1662,7 @@ mod tests {
     use super::*;
     use crate::model::{SuggestionGroup, SuggestionState, SuggestionsStatus};
     use crate::suggestions::ledger::SessionRef;
+    use crate::suggestions::lifecycle::LineLife;
     use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 
     const START: u64 = 400 * policy::DAY_MS + 9 * 3_600_000;
@@ -2290,6 +2308,100 @@ mod tests {
             !read.rows[0].returned_after_skip,
             "the operator brought it back"
         );
+    }
+
+    /// D-43: the line keeps what it stood on at the skip, so the records
+    /// leaving the ledger with age do not lower what a return has to reach.
+    #[test]
+    fn a_skip_is_measured_against_its_evidence_after_the_records_are_gone() {
+        let fixture = Fixture::new();
+        fixture.open();
+        fixture.fail_in_sessions("cargo test", &["s1", "s2", "s3", "s4", "s5"]);
+        fixture.wake_and_wait_out_the_delay();
+        fixture.read_until(|read| !chosen(read).is_empty());
+        fixture.send(Command::Action {
+            project: project(),
+            line: LineId(1),
+            action: LineAction::Dismiss,
+        });
+        fixture.read_until(|read| chosen(read).is_empty());
+
+        // The five sessions' records are past the ledger's keeping now.
+        fixture.clock.fetch_add(
+            policy::RECORD_RETENTION_MS + policy::DAY_MS,
+            Ordering::SeqCst,
+        );
+        fixture.fail_in_sessions("cargo test", &["s6", "s7", "s8"]);
+        fixture.wake_and_wait_out_the_delay();
+        let read = fixture.read_until(|read| read.status == SuggestionsStatus::NoneToday);
+        assert!(
+            chosen(&read).is_empty(),
+            "three new sessions of five, though none of the five is left"
+        );
+
+        fixture.clock.fetch_add(policy::DAY_MS, Ordering::SeqCst);
+        fixture.fail_in_sessions("cargo test", &["s9", "s10"]);
+        fixture.wake_and_wait_out_the_delay();
+        let read = fixture.read_until(|read| !chosen(read).is_empty());
+        assert!(read.rows[0].returned_after_skip);
+    }
+
+    /// D-43: a skip that kept nothing of what the line stood on is for
+    /// good, however much piles up after it; ⚙ still restores it.
+    #[test]
+    fn a_skip_without_kept_evidence_stays_skipped() {
+        let mut fixture = Fixture::new();
+        fixture.open();
+        fixture.fail_in_sessions("cargo test", &["s1", "s2", "s3"]);
+        fixture.wake_and_wait_out_the_delay();
+        fixture.read_until(|read| !chosen(read).is_empty());
+        fixture.send(Command::Action {
+            project: project(),
+            line: LineId(1),
+            action: LineAction::Dismiss,
+        });
+        fixture.read_until(|read| chosen(read).is_empty());
+
+        // The store as a skip that kept nothing leaves it.
+        fixture.worker.take();
+        let (mut store, _) = SuggestionStore::open(&fixture.store).unwrap();
+        let id = store.projects().unwrap().remove(0);
+        let (notebook, lives) = store.notebook(&id).unwrap();
+        let life = LineLife {
+            skipped_with: None,
+            ..lives[&LineId(1)].clone()
+        };
+        store
+            .save_line(&id, notebook.line(LineId(1)).unwrap(), &life)
+            .unwrap();
+        drop(store);
+        fixture.restart();
+        let read = fixture.open();
+        assert_eq!(
+            read.settings
+                .dismissed
+                .iter()
+                .map(|line| (line.id.as_str(), line.may_return))
+                .collect::<Vec<_>>(),
+            [("s1", false)]
+        );
+
+        fixture.clock.fetch_add(policy::DAY_MS, Ordering::SeqCst);
+        fixture.fail_in_sessions(
+            "cargo test",
+            &["s4", "s5", "s6", "s7", "s8", "s9", "s10", "s11", "s12"],
+        );
+        fixture.wake_and_wait_out_the_delay();
+        let read = fixture.read_until(|read| read.status == SuggestionsStatus::NoneToday);
+        assert!(chosen(&read).is_empty(), "nine new sessions of three");
+
+        fixture.send(Command::Action {
+            project: project(),
+            line: LineId(1),
+            action: LineAction::Restore,
+        });
+        let read = fixture.read_until(|read| read.settings.dismissed.is_empty());
+        assert_eq!(chosen(&read), ["s1"], "restored and judged again");
     }
 
     #[test]
