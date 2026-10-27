@@ -3,7 +3,7 @@ import { ChevronRightIcon, ChevronsDownUpIcon, FilePlusIcon, FolderPlusIcon, Loa
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import { isHtmlFile } from "./browserViews";
-import { beginExplorerDrag, explorerDrag } from "./explorerDrag";
+import { beginExplorerDrag, explorerDrag, type ExplorerDrag } from "./explorerDrag";
 import { EntryPointMenu } from "./components/entry-menu";
 import { FileMark } from "./components/file-mark";
 import { Badge } from "./components/ui/badge";
@@ -59,6 +59,8 @@ const EMPTY_ROWS: ExplorerRow[] = [];
 
 /** The root row's creation and fold buttons show on hover and focus, and always where there is no hover; they keep their place in the layout either way, so the name never moves when they appear. */
 const ROOT_CONTROL = "opacity-0 group-hover/root:opacity-100 group-focus-within/root:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100";
+/** The folder a drag would land in, tinted as a pane move's target is, so it reads apart from the selection. */
+const DROP_TARGET = "bg-primary/10";
 
 /** One drawn row: an entry, or the inline name field the operator is editing. */
 type DisplayRow =
@@ -147,8 +149,8 @@ export function ExplorerTree({ actions, hint, footer }: { actions: Actions; hint
   const setClipboard = useUiStore((s) => s.setExplorerClipboard);
   const notice = useUiStore((s) => s.explorerNotice);
   const setNotice = useUiStore((s) => s.setExplorerNotice);
-  // The folder a drag from the file manager would land in, drawn like the folder an in-tree drag is over.
-  const [osTarget, setOsTarget] = useState<string | null>(null);
+  // The folder a drag, from the tree or the file manager, would land in.
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   // The filter narrows the rows to the files hided's index (the ⌘P source)
   // matched; it is page-local and leaves the core's expansion untouched.
@@ -497,28 +499,44 @@ export function ExplorerTree({ actions, hint, footer }: { actions: Actions; hint
     }
   };
 
-  // Files dragged in from the file manager land in the folder under the
-  // pointer, the root row, or the empty space (the root); a drag inside the
-  // tree is `moveEntry`'s and never reaches these.
-  const osDrag = (folder: string | null) => ({
+  // A drag lands in `folder`: a folder row's own, a file row's parent, the
+  // root for the root row and the empty room under the rows. A tree item
+  // moves there with `moveEntry`; files from the file manager are copied in.
+  // A tree item from another checkout, or one that would move into its own
+  // folder, into itself or below itself, is refused and lights nothing.
+  const takesMove = (held: ExplorerDrag, folder: string) =>
+    held.root === rootPath && held.device === device && parentPath(held.path) !== folder && folder !== held.path && !folder.startsWith(`${held.path}/`);
+  const dropInto = (folder: string) => ({
     onDragOver: (event: React.DragEvent<HTMLElement>) => {
-      if (explorerDrag.current || !carriesOsFiles(event.dataTransfer)) return;
-      event.preventDefault();
+      const held = explorerDrag.current;
+      if (!held && !carriesOsFiles(event.dataTransfer)) return;
       event.stopPropagation();
-      event.dataTransfer.dropEffect = folder === null ? "none" : "copy";
-      setOsTarget(folder);
+      if (held && !takesMove(held, folder)) {
+        event.dataTransfer.dropEffect = "none";
+        setDropTarget(null);
+        return;
+      }
+      event.preventDefault();
+      event.dataTransfer.dropEffect = held ? "move" : "copy";
+      setDropTarget(folder);
     },
     onDrop: (event: React.DragEvent<HTMLElement>) => {
-      if (explorerDrag.current || !carriesOsFiles(event.dataTransfer)) return;
+      const held = explorerDrag.current;
+      if (!held && !carriesOsFiles(event.dataTransfer)) return;
       event.preventDefault();
       event.stopPropagation();
-      setOsTarget(null);
-      if (folder !== null) actions.importDropped(folder, captureDrop(event.dataTransfer));
+      setDropTarget(null);
+      if (!held) return actions.importDropped(folder, captureDrop(event.dataTransfer));
+      explorerDrag.current = null;
+      if (takesMove(held, folder)) actions.moveEntry(held.path, folder);
     },
   });
   const leaveTree = (event: React.DragEvent<HTMLElement>) => {
-    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOsTarget(null);
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTarget(null);
   };
+  // The whole folder a drop would land in is drawn: its row and every open row
+  // under it, or for the root the whole tree, which draws it once behind the rows.
+  const inDropTarget = (path: string) => dropTarget !== null && dropTarget !== rootPath && (path === dropTarget || path.startsWith(`${dropTarget}/`));
 
   const refused = pathRefusal?.kind === "file_list" && pathRefusal.path === rootPath ? pathRefusal.reason : null;
   const rootListing = listings[rootPath];
@@ -572,10 +590,10 @@ export function ExplorerTree({ actions, hint, footer }: { actions: Actions; hint
         </p>
       ) : null}
       <div
-        className={`group/root flex shrink-0 items-center gap-xs border-b border-border px-md py-xs text-caption text-subtle-foreground ${osTarget === rootPath ? "bg-secondary" : ""}`}
+        className={`group/root flex shrink-0 items-center gap-xs border-b border-border px-md py-xs text-caption text-subtle-foreground ${dropTarget === rootPath ? DROP_TARGET : ""}`}
         data-explorer-root-row="true"
-        data-drop={osTarget === rootPath ? "true" : "false"}
-        {...osDrag(rootPath)}
+        data-drop={dropTarget === rootPath ? "true" : "false"}
+        {...dropInto(rootPath)}
         onDragLeave={leaveTree}
         onContextMenu={(event) => {
           event.preventDefault();
@@ -694,15 +712,17 @@ export function ExplorerTree({ actions, hint, footer }: { actions: Actions; hint
           role="tree"
           tabIndex={0}
           aria-label={t("explorer.aria")}
-          className="min-h-0 flex-1 overflow-auto outline-none"
+          className={`min-h-0 flex-1 overflow-auto outline-none ${dropTarget === rootPath ? DROP_TARGET : ""}`}
           data-explorer-tree="true"
+          data-drop={dropTarget === rootPath ? "true" : "false"}
           onPointerDown={(event) => event.currentTarget.focus()}
           onKeyDown={onKeyDown}
           onCopy={onClipboardEvent("copy")}
           onCut={onClipboardEvent("cut")}
           onPaste={onClipboardEvent("paste")}
-          {...osDrag(rootPath)}
+          {...dropInto(rootPath)}
           onDragLeave={leaveTree}
+          onDragEnd={() => setDropTarget(null)}
           onContextMenu={(event) => {
             if (event.target !== event.currentTarget && (event.target as HTMLElement).closest("[data-explorer-row]")) return;
             event.preventDefault();
@@ -751,12 +771,9 @@ export function ExplorerTree({ actions, hint, footer }: { actions: Actions; hint
                     setMenu({ path: row.path, isDirectory: row.isDirectory, x: event.clientX, y: event.clientY });
                   }}
                   cut={clipboard?.mode === "cut" && clipboard.root === rootPath && clipboard.path === row.path}
-                  osOver={osTarget === row.path}
-                  osDrag={osDrag(row.isDirectory ? row.path : null)}
+                  dropOver={inDropTarget(row.path)}
+                  drop={dropInto(row.isDirectory ? row.path : parentPath(row.path))}
                   onDragStart={(source) => beginExplorerDrag({ path: row.path, directory: row.isDirectory, device, root: rootPath! }, source)}
-                  onDrop={(from) => {
-                    if (from && from !== row.path && !row.path.startsWith(`${from}/`)) actions.moveEntry(from, row.path);
-                  }}
                 />
               );
             })}
@@ -966,10 +983,9 @@ function ExplorerRowView({
   onRefresh,
   onContextMenu,
   cut,
-  osOver,
-  osDrag,
+  dropOver,
+  drop,
   onDragStart,
-  onDrop,
 }: {
   row: ExplorerRow;
   rootPath: string;
@@ -981,15 +997,13 @@ function ExplorerRowView({
   onContextMenu: (event: React.MouseEvent) => void;
   /** The row's item is on the clipboard as a cut: drawn faded until it is pasted. */
   cut: boolean;
-  /** Files from the file manager are over this folder. */
-  osOver: boolean;
-  /** What a drag from the file manager does here: a folder takes it, a file refuses it. */
-  osDrag: { onDragOver: (event: React.DragEvent<HTMLElement>) => void; onDrop: (event: React.DragEvent<HTMLElement>) => void };
+  /** The row is inside the folder a drag over the tree would land in. */
+  dropOver: boolean;
+  /** Where a drag over this row lands: a folder in itself, a file in its folder. */
+  drop: { onDragOver: (event: React.DragEvent<HTMLElement>) => void; onDrop: (event: React.DragEvent<HTMLElement>) => void };
   onDragStart: (source: HTMLElement) => void;
-  onDrop: (from: string | null) => void;
 }) {
   const { t } = useInterfaceTranslation();
-  const [over, setOver] = useState(false);
   return (
     <Hint label={rowTitle(row, rootPath, t)} reveals>
     <div
@@ -1002,11 +1016,11 @@ function ExplorerRowView({
       data-explorer-row={row.path}
       data-selected={selected ? "true" : "false"}
       data-decoration={row.decoration?.status ?? ""}
-      data-drop={over || osOver ? "true" : "false"}
+      data-drop={dropOver ? "true" : "false"}
       data-cut={cut ? "true" : "false"}
       className={`absolute inset-x-0 flex cursor-default items-center gap-xs pr-md text-subhead text-foreground ${
-        selected ? "bg-secondary" : "hover:bg-accent"
-      } ${over || osOver ? "bg-secondary" : ""} ${cut ? "opacity-50" : ""}`}
+        dropOver ? DROP_TARGET : selected ? "bg-secondary" : "hover:bg-accent"
+      } ${cut ? "opacity-50" : ""}`}
       style={{
         top: 0,
         height: "var(--size-pane-child-row)",
@@ -1026,29 +1040,8 @@ function ExplorerRowView({
         event.dataTransfer.setData("text/plain", row.path);
         onDragStart(event.currentTarget);
       }}
-      onDragOver={(event) => {
-        if (!explorerDrag.current) {
-          osDrag.onDragOver(event);
-          return;
-        }
-        if (!row.isDirectory) return;
-        event.preventDefault();
-        event.dataTransfer.dropEffect = "move";
-        setOver(true);
-      }}
-      onDragLeave={() => setOver(false)}
-      onDrop={(event) => {
-        if (!explorerDrag.current && carriesOsFiles(event.dataTransfer)) {
-          osDrag.onDrop(event);
-          return;
-        }
-        event.preventDefault();
-        setOver(false);
-        const from = explorerDrag.current?.path ?? event.dataTransfer.getData("text/plain");
-        explorerDrag.current = null;
-        onDrop(from || null);
-      }}
-      onDragEnd={() => setOver(false)}
+      onDragOver={drop.onDragOver}
+      onDrop={drop.onDrop}
     >
       <IndentGuides depth={row.depth} />
       <span className="flex size-(--size-tree-mark) shrink-0 items-center justify-center text-muted-foreground" aria-hidden="true">
