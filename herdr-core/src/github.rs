@@ -27,8 +27,8 @@ use crate::model::{
 use crate::node_access::NodeLink;
 use crate::reader::BackgroundRead;
 use hide_node_link::gh::{
-    GhAnswer, PR_FEEDBACK_FIELDS, REVIEW_ASKED_FIELDS, REVIEW_ASKED_SEARCH, SEARCH_ISSUE_FIELDS,
-    SEARCH_LIMIT, SEARCH_PR_FIELDS, VIEWER_LOGIN, is_number,
+    GhAnswer, OUTSIDE_PR_FIELDS, PR_FEEDBACK_FIELDS, REVIEW_ASKED_FIELDS, REVIEW_ASKED_SEARCH,
+    SEARCH_ISSUE_FIELDS, SEARCH_LIMIT, SEARCH_PR_FIELDS, VIEWER_LOGIN, is_number,
 };
 pub(crate) use hide_node_link::gh::{SEARCH_QUERY_LIMIT, SEARCH_REPOSITORY_LIMIT};
 use hide_node_link::git::GitCommand;
@@ -1635,6 +1635,42 @@ pub(crate) fn pr_feedback(
     )
     .map_err(|error| error.reason)?;
     parse_pr_feedback(&output)
+}
+
+/// Where a pull request outside a mission stands (PRD
+/// mission-map-git-criteria B19, B20), in one `gh pr view` at `place` on the
+/// caller's worker.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PrStanding {
+    Open,
+    Closed,
+    Merged,
+}
+
+pub(crate) fn pr_standing(
+    node: &dyn NodeLink,
+    place: &Where,
+    number: u32,
+) -> Result<PrStanding, String> {
+    #[derive(serde::Deserialize)]
+    struct Viewed {
+        state: String,
+    }
+    let number = number.to_string();
+    let output = gh_at(
+        node,
+        place,
+        &["pr", "view", &number, "--json", OUTSIDE_PR_FIELDS],
+    )
+    .map_err(|error| error.reason)?;
+    let viewed = serde_json::from_str::<Viewed>(&output)
+        .map_err(|error| format!("gh pr view returned output Hide could not read: {error}"))?;
+    match viewed.state.as_str() {
+        "OPEN" => Ok(PrStanding::Open),
+        "CLOSED" => Ok(PrStanding::Closed),
+        "MERGED" => Ok(PrStanding::Merged),
+        other => Err(format!("gh pr view answered the unknown state {other:?}")),
+    }
 }
 
 fn parse_pr_feedback(output: &str) -> Result<PrFeedback, String> {

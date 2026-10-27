@@ -270,11 +270,16 @@ impl Runtime {
                 repository.failure = Some(failure);
             }
         }
-        before
+        let moved = before
             != (
                 repository.fetched_at_unix_ms,
                 repository.failures > 0 || repository.paused,
-            )
+            );
+        // A fetch can bring a mission's outside branch into main (B19).
+        let (device, project) = &job.key;
+        let followed = self.outside_projects(device).contains(project)
+            && self.follow_outside_stored(device, project);
+        moved || followed
     }
 
     /// The operator's window came forward: a fetch that stopped on a

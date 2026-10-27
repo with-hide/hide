@@ -48,6 +48,7 @@ pub(crate) mod memory_promotion;
 mod memory_verify;
 pub(crate) mod mission_criteria;
 pub(crate) mod mission_events;
+mod mission_outside;
 pub(crate) mod missions;
 mod op_timing;
 mod operations;

@@ -158,6 +158,9 @@ pub struct NodeView {
     pub criteria_met: u32,
     pub criteria_skipped: u32,
     pub external: Option<External>,
+    /// An outside node Hide could not read: it stays waiting, and the
+    /// reason is in the diagnostic log (B20 `확인 못 함`).
+    pub unread: bool,
     /// How often a later node's defect opened it again (B21 `↻n`).
     pub reopened: u8,
     pub started_at_unix_ms: Option<u64>,
@@ -227,6 +230,8 @@ pub(crate) struct MissionRuntime {
     pub(crate) answer_absent_since: HashMap<String, u64>,
     /// The mission and events edit the published events were made from.
     pub(crate) events_made: (Option<String>, u64),
+    /// The outside nodes' reads (B19, B20).
+    pub(super) outside: super::mission_outside::Outside,
 }
 
 #[derive(Default)]
@@ -273,6 +278,40 @@ fn seen_of(pull: &crate::model::PullRequestSnapshot) -> PrSeen {
     }
 }
 
+/// What a Conductor woken about a pull request of its own does.
+const PR_ACT: &str =
+    "move a stacked PR above it onto the change, answer the review, or check the new commit";
+
+/// Records one wake for `mission`'s Conductor and returns its letter's
+/// intent; past `PENDING_WAKE_LIMIT` the oldest are dropped, and logged.
+pub(super) fn record_wake(
+    mission: &mut Mission,
+    node: String,
+    pr: Option<u32>,
+    event: WakeEvent,
+    head: Option<String>,
+) -> String {
+    mission.wake_seq += 1;
+    let wake = PendingWake {
+        seq: mission.wake_seq,
+        node,
+        pr,
+        event,
+        head,
+    };
+    let intent = wake_intent(mission, &wake);
+    mission.wakes.push(wake);
+    if mission.wakes.len() > PENDING_WAKE_LIMIT {
+        let dropped = mission.wakes.len() - PENDING_WAKE_LIMIT;
+        mission.wakes.drain(..dropped);
+        crate::diagnostic!(json!({
+            "component": "missions", "kind": "mission.wake_dropped",
+            "mission": mission.id, "count": dropped, "cap": PENDING_WAKE_LIMIT,
+        }));
+    }
+    intent
+}
+
 /// The letter intent of one recorded wake to the mission's Conductor now:
 /// the same wake re-sent after a restart is the same letter (engineering
 /// #11), two wakes are two, and a Conductor that took the mission over gets
@@ -284,7 +323,8 @@ fn wake_intent(mission: &Mission, wake: &PendingWake) -> String {
         "mission:{}:{}:{}:{}:{}:{}:{}",
         mission.id,
         wake.node,
-        wake.pr,
+        wake.pr
+            .map_or_else(|| "-".to_owned(), |number| number.to_string()),
         wake.event.as_str(),
         // `seq` makes the intent unique; a short head keeps it readable
         // and under the intent's length limit.
@@ -1212,24 +1252,7 @@ impl Runtime {
                 reopened.push(mission.id.clone());
             }
             for (node, pr, event, head) in events {
-                mission.wake_seq += 1;
-                let wake = PendingWake {
-                    seq: mission.wake_seq,
-                    node,
-                    pr,
-                    event,
-                    head,
-                };
-                recorded.push(wake_intent(mission, &wake));
-                mission.wakes.push(wake);
-            }
-            if mission.wakes.len() > PENDING_WAKE_LIMIT {
-                let dropped = mission.wakes.len() - PENDING_WAKE_LIMIT;
-                mission.wakes.drain(..dropped);
-                crate::diagnostic!(json!({
-                    "component": "missions", "kind": "mission.wake_dropped",
-                    "mission": mission.id, "count": dropped, "cap": PENDING_WAKE_LIMIT,
-                }));
+                recorded.push(record_wake(mission, node, Some(pr), event, head));
             }
         }
         for (id, events) in ended {
@@ -1247,6 +1270,10 @@ impl Runtime {
         }
         if changed {
             self.save_missions();
+        }
+        // The outside nodes follow the same answer (B19, B20).
+        for project in self.outside_projects(device) {
+            self.follow_outside_listed(device, &project, github.project(&project));
         }
         self.flush_mission_wakes();
         recorded
@@ -1278,13 +1305,32 @@ impl Runtime {
                 if out.len() >= WAKE_QUEUE_LIMIT {
                     return out;
                 }
-                let number = wake.pr;
-                let what = match wake.event {
-                    WakeEvent::Merged => format!("PR #{number} was merged"),
+                let pr = wake
+                    .pr
+                    .map_or_else(|| "The PR".to_owned(), |number| format!("PR #{number}"));
+                let outside = || match mission
+                    .nodes
+                    .iter()
+                    .find(|node| node.key == wake.node)
+                    .and_then(|node| node.external.as_ref())
+                {
+                    Some(External::Branch(branch)) => format!("Branch {branch}"),
+                    _ => pr.clone(),
+                };
+                let (what, act) = match wake.event {
+                    WakeEvent::Merged => (format!("{pr} was merged"), PR_ACT),
                     WakeEvent::ChangesRequested => {
-                        format!("PR #{number} received a review asking for changes")
+                        (format!("{pr} received a review asking for changes"), PR_ACT)
                     }
-                    WakeEvent::NewHead => format!("PR #{number} has a new commit"),
+                    WakeEvent::NewHead => (format!("{pr} has a new commit"), PR_ACT),
+                    WakeEvent::OutsideDone => (
+                        format!("{} is in main", outside()),
+                        "start the nodes that waited on it",
+                    ),
+                    WakeEvent::OutsideFailed => (
+                        format!("{} was closed without a merge", outside()),
+                        "replan the nodes it blocks, or ask the operator",
+                    ),
                 };
                 out.push(Wake {
                     mission: mission.id.clone(),
@@ -1292,7 +1338,7 @@ impl Runtime {
                     target: target.clone(),
                     intent,
                     body: format!(
-                        "{what} (mission {} \"{}\", node {}).\nRead the mission with `hide mission show {}` and act on it: move a stacked PR above it onto the change, answer the review, or check the new commit.",
+                        "{what} (mission {} \"{}\", node {}).\nRead the mission with `hide mission show {}` and act on it: {act}.",
                         mission.id, mission.title, wake.node, mission.id
                     ),
                 });
@@ -1528,6 +1574,7 @@ impl Runtime {
                     criteria_met,
                     criteria_skipped,
                     external: node.external.clone(),
+                    unread: self.missions.outside.unread(&mission.id, &node.key),
                     reopened: node.reopened,
                     started_at_unix_ms: node.started_at_unix_ms,
                     finished_at_unix_ms: node.finished_at_unix_ms,

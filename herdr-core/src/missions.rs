@@ -197,7 +197,8 @@ pub struct PendingWake {
     /// asked for again on one head) is two letters, not one.
     pub seq: u64,
     pub node: String,
-    pub pr: u32,
+    /// The pull request the news is about; none for an outside branch.
+    pub pr: Option<u32>,
     pub event: WakeEvent,
     #[serde(default)]
     pub head: Option<String>,
@@ -209,6 +210,11 @@ pub enum WakeEvent {
     Merged,
     ChangesRequested,
     NewHead,
+    /// An outside node's pull request merged or its branch reached main, so
+    /// the nodes waiting on it can start (B19).
+    OutsideDone,
+    /// An outside pull request closed without a merge (B20).
+    OutsideFailed,
 }
 
 impl WakeEvent {
@@ -217,6 +223,8 @@ impl WakeEvent {
             Self::Merged => "merged",
             Self::ChangesRequested => "changes_requested",
             Self::NewHead => "new_head",
+            Self::OutsideDone => "outside_done",
+            Self::OutsideFailed => "outside_failed",
         }
     }
 }

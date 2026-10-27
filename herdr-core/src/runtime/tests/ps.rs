@@ -304,6 +304,7 @@ fn mission(
             criteria_met: 0,
             criteria_skipped: 0,
             external: None,
+            unread: false,
             reopened: 0,
             started_at_unix_ms: None,
             finished_at_unix_ms: None,

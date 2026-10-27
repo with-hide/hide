@@ -2323,3 +2323,145 @@ fn a_mission_made_before_criteria_is_not_gated() {
     .unwrap();
     assert!(runtime.mission_view_of("mission-1").unwrap().exempt);
 }
+
+fn outside_plan() -> Value {
+    json!({"op": "plan", "plan": {"nodes": [
+        {"key": "parser", "title": "The parser PR", "kind": "external", "external": {"pr": 1232}},
+        {"key": "lib", "title": "The library branch", "kind": "external", "external": {"branch": "feat/lib"}},
+        {"key": "fix", "title": "Fix it", "kind": "change", "delivery": "pr",
+         "criteria": ["it works"], "depends_on": ["parser", "lib"]},
+    ]}})
+}
+
+fn node_view(runtime: &Runtime, key: &str) -> crate::runtime::missions::NodeView {
+    runtime
+        .mission_view_of("mission-1")
+        .unwrap()
+        .nodes
+        .into_iter()
+        .find(|node| node.key == key)
+        .unwrap()
+}
+
+/// PRD mission-map-git-criteria B19, B20: an outside pull request is
+/// followed to main from the project's list, an outside branch from its
+/// read, and one Hide cannot read waits and says so; the Conductor cannot
+/// finish either, and their arrival in main wakes it.
+#[test]
+fn an_outside_node_is_done_once_its_pull_request_or_branch_is_in_main() {
+    use crate::missions::{External, WakeEvent};
+    use crate::runtime::mission_outside::{Ask, Found};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", outside_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    let node = crate::node::TEST_NODE;
+
+    runtime.note_mission_pulls(
+        node,
+        &github(vec![pull(1232, "a1", PullRequestBadge::Open, None)], false),
+    );
+    assert_eq!(node_view(&runtime, "parser").status, NodeStatus::Waiting);
+    let refused = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "parser", "patch": {"status": "done"}}),
+    )
+    .unwrap_err();
+    assert!(refused.contains("mission_external_invalid"), "{refused}");
+
+    runtime.note_mission_pulls(
+        node,
+        &github(
+            vec![pull(1232, "a1", PullRequestBadge::Merged, None)],
+            false,
+        ),
+    );
+    assert_eq!(node_view(&runtime, "parser").status, NodeStatus::Done);
+    let last = runtime.missions.book.missions[0]
+        .wakes
+        .last()
+        .cloned()
+        .unwrap();
+    assert_eq!(
+        (last.node.as_str(), last.pr, last.event),
+        ("parser", Some(1232), WakeEvent::OutsideDone)
+    );
+
+    let place = (node.to_owned(), PROJECT.to_owned());
+    let lib = || Ask {
+        mission: "mission-1".into(),
+        node: "lib".into(),
+        external: External::Branch("feat/lib".into()),
+    };
+    runtime.ingest_outside(
+        &place,
+        vec![(
+            lib(),
+            Found::Unread("The branch feat/lib is not in this repository".into()),
+        )],
+    );
+    let read = node_view(&runtime, "lib");
+    assert_eq!((read.status, read.unread), (NodeStatus::Waiting, true));
+    runtime.ingest_outside(&place, vec![(lib(), Found::InMain)]);
+    let read = node_view(&runtime, "lib");
+    assert_eq!((read.status, read.unread), (NodeStatus::Done, false));
+    let last = runtime.missions.book.missions[0]
+        .wakes
+        .last()
+        .cloned()
+        .unwrap();
+    assert_eq!(
+        (last.node.as_str(), last.pr, last.event),
+        ("lib", None, WakeEvent::OutsideDone)
+    );
+}
+
+/// PRD mission-map-git-criteria B20: an outside pull request closed
+/// without a merge fails, the node waiting on it reads blocked, and the
+/// mission cannot close as done until the node is dropped.
+#[test]
+fn an_outside_pull_request_closed_without_a_merge_blocks_the_nodes_after_it() {
+    use crate::missions::WakeEvent;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", outside_plan()).unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    runtime.note_mission_pulls(
+        crate::node::TEST_NODE,
+        &github(
+            vec![pull(1232, "a1", PullRequestBadge::Closed, None)],
+            false,
+        ),
+    );
+    assert_eq!(node_view(&runtime, "parser").status, NodeStatus::Failed);
+    assert_eq!(
+        node_view(&runtime, "fix").blocked,
+        Some(crate::missions::Blocked::UpstreamFailed)
+    );
+    let last = runtime.missions.book.missions[0]
+        .wakes
+        .last()
+        .cloned()
+        .unwrap();
+    assert_eq!(last.event, WakeEvent::OutsideFailed);
+    let refused = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "done"}),
+    )
+    .unwrap_err();
+    assert!(refused.contains("mission_nodes_unfinished"), "{refused}");
+}

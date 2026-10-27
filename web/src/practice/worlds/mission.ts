@@ -139,7 +139,7 @@ const PR_URL = (number: number) => `https://example.com/${PLACE.project}/pull/${
 const NODE: Omit<MissionNode, "key" | "title" | "status" | "worker"> = {
   kind: "change", depends_on: [], blocked: null, delivery: "pr", agent_id: null, pane_id: null, machine: null,
   pr: null, base_pr: null, branch: null, pr_state: null, pr_url: null, stage: null, attempts: 1,
-  line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, external: null, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, verdict: null, checks: null, plan: null,
+  line: null, change: null, review: null, criteria: [], criteria_met: 0, criteria_skipped: 0, external: null, unread: false, reopened: 0, started_at_unix_ms: null, finished_at_unix_ms: null, commit: null, verdict: null, checks: null, plan: null,
 };
 
 /** The plan's three nodes, as the record holds them at `stage`. */

@@ -1370,6 +1370,8 @@ export type MissionNode = {
   criteria_met: number;
   criteria_skipped: number;
   external: MissionExternal | null;
+  /** An outside node Hide could not read: it stays waiting, the reason is in the diagnostic log (`확인 못 함`, B20). */
+  unread: boolean;
   /** How often a later node's defect opened it again (`↻n`, B21). */
   reopened: number;
   started_at_unix_ms: number | null;
