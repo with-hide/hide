@@ -1367,7 +1367,7 @@ export type MissionNode = {
   review: string | null;
   /** The node's finish lines as they stand now (PRD mission-map-git-criteria B32). */
   criteria: MissionCriterion[];
-  /** Lines passed or skipped of `criteria`, and how many of them were skipped (`기준 n/m`, `⤳k`, B28). */
+  /** Lines that pass or were skipped of `criteria` (what the gate counts), and how many were skipped; B28's `기준 n/m ⤳k` shows `criteria_met - criteria_skipped` as `n`. */
   criteria_met: number;
   criteria_skipped: number;
   external: MissionExternal | null;

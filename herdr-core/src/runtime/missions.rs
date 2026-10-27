@@ -157,8 +157,9 @@ pub struct NodeView {
     /// The node's finish lines as they stand now: a check command passed on
     /// an older commit shows open (B7, B32).
     pub criteria: Vec<Criterion>,
-    /// Lines passed or skipped, of `criteria`, and how many were skipped
-    /// (B28 `기준 n/m`, `⤳k`).
+    /// Lines that pass or were skipped, of `criteria`, which is what the
+    /// gate counts, and how many were skipped; B28's `기준 n/m ⤳k` shows
+    /// `criteria_met - criteria_skipped` as `n`.
     pub criteria_met: u32,
     pub criteria_skipped: u32,
     pub external: Option<External>,
@@ -391,6 +392,16 @@ impl Runtime {
     /// Closes mission `id`, waiting for its merges, as done once its stack
     /// is in main and every done node's lines still hold (B10, B18, B41);
     /// whether it closed.
+    /// Follows mission `id`'s outside nodes and waiting branches now, for a
+    /// command that changed what is followed.
+    fn follow_mission_outside(&mut self, id: &str) -> bool {
+        let Some(mission) = self.missions.book.get(id) else {
+            return false;
+        };
+        let (device, project) = (mission.device_id.clone(), mission.project.clone());
+        self.follow_outside_stored(&device, &project)
+    }
+
     pub(super) fn close_if_landed(&mut self, id: &str, now: u64) -> bool {
         let Some(mission) = self.missions.book.get(id) else {
             return false;
@@ -612,6 +623,9 @@ impl Runtime {
                 *self.missions.book.get_mut(&id).ok_or("mission_unknown")? = next;
                 self.save_missions();
                 self.record_mission_events(&id, events);
+                // The plan's outside nodes are read now, not at the next
+                // GitHub read or fetch.
+                self.follow_mission_outside(&id);
                 Ok((
                     json!({"mission": self.mission_view_of(&id), "overlaps": overlaps}),
                     true,
@@ -666,10 +680,16 @@ impl Runtime {
                 let changed = target.nodes[index] != next;
                 let events = super::mission_events::node_events(&target.nodes[index], &next, now);
                 target.nodes[index] = next;
+                let waiting = target.status == MissionStatus::MergeWait;
                 if changed {
                     target.updated_at_unix_ms = now;
                     self.save_missions();
                     self.record_mission_events(&id, events);
+                    // A waiting mission's node named another branch or
+                    // finished again: its branches are read again now.
+                    if waiting {
+                        self.follow_mission_outside(&id);
+                    }
                 }
                 Ok((json!({"mission": self.mission_view_of(&id)}), changed))
             }
@@ -685,6 +705,7 @@ impl Runtime {
                     target.started_at_unix_ms = Some(now);
                     target.updated_at_unix_ms = now;
                     self.save_missions();
+                    self.follow_mission_outside(&id);
                 }
                 Ok((json!({"mission": self.mission_view_of(&id)}), changed))
             }

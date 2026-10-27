@@ -3157,3 +3157,103 @@ fn a_git_mission_in_a_repository_with_no_remote_follows_its_branches_into_main()
         .unwrap();
     assert_eq!(published["nodes"][1]["in_main"], json!(landed));
 }
+
+/// Review finding 7 on the live path, as verify-core ran it: a plan of 32
+/// branches Hide cannot find and one in main is read when the plan is
+/// admitted, through the read worker and this machine's node, and the pass
+/// goes on at once past the first 32 read, so the 33rd is done with no
+/// GitHub read, fetch or catalog change to start it.
+#[test]
+fn a_plan_of_more_outside_branches_than_one_read_takes_is_read_whole_when_admitted() {
+    use std::sync::mpsc;
+    use std::time::Instant;
+    let folder = tempfile::tempdir().unwrap();
+    let repo = std::fs::canonicalize(folder.path()).unwrap();
+    for args in [
+        &["init", "-q", "-b", "trunk"][..],
+        &["config", "user.name", "Fixture"],
+        &["config", "user.email", "fixture@example.invalid"],
+        &["config", "commit.gpgsign", "false"],
+        &["commit", "-q", "--allow-empty", "-m", "seed"],
+    ] {
+        git_in(&repo, args);
+    }
+    let listed = hide_host::worktrees::read(
+        &repo,
+        &Default::default(),
+        None,
+        None,
+        &hide_host::worktrees::Measured::default(),
+        false,
+    )
+    .unwrap();
+    let root = hide_platform::path::to_wire(&repo).unwrap();
+
+    let fixture = conducting();
+    let (changed, changes) = mpsc::channel();
+    {
+        let mut runtime = fixture.runtime.lock().unwrap();
+        runtime.install_worker_context(
+            Arc::downgrade(&fixture.runtime),
+            ChangeNotifier::announcing(move || {
+                let _ = changed.send(());
+            }),
+        );
+        runtime.own_node = Arc::new(hide_node::Local::new(Some(repo.clone())));
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "create", "title": "Many outside branches"}),
+        )
+        .unwrap();
+        runtime.missions.book.missions[0].project = root.clone();
+        runtime
+            .worktree_catalog
+            .projects
+            .push(crate::model::ProjectWorktreesSnapshot {
+                root_path: root.clone(),
+                base_branch: listed.base_branch.clone(),
+                ..Default::default()
+            });
+        let mut nodes: Vec<Value> = (0..32)
+            .map(|index| {
+                json!({"key": format!("e{index}"), "title": format!("outside {index}"),
+                       "kind": "external", "external": {"branch": format!("absent-{index}")}})
+            })
+            .collect();
+        nodes.push(
+            json!({"key": "last", "title": "In main", "kind": "external",
+                          "external": {"branch": "trunk"}}),
+        );
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "plan", "plan": {"nodes": nodes}}),
+        )
+        .unwrap();
+    }
+    // Each answer the worker brings back announces itself; the deadline is
+    // only how long a broken read is waited for.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        {
+            let runtime = fixture.runtime.lock().unwrap();
+            if node_view(&runtime, "last").status == NodeStatus::Done {
+                for index in 0..32 {
+                    let node = node_view(&runtime, &format!("e{index}"));
+                    assert_eq!((node.status, node.unread), (NodeStatus::Waiting, true));
+                }
+                assert!(
+                    runtime
+                        .missions
+                        .outside
+                        .idle_for_test(crate::node::TEST_NODE, &root)
+                );
+                break;
+            }
+        }
+        changes
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .expect("the outside reads answered before the deadline");
+    }
+}

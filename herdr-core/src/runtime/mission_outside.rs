@@ -14,8 +14,13 @@
 //! for the pull request, and for the branch its commit against the default
 //! branch as this checkout and its last fetch have it, or the head of a pull
 //! request GitHub merged. Each project has at most one read out, of at most
-//! `READ_LIMIT` nodes, and the next read goes on where it stopped, so every
-//! node is read however many stay open.
+//! `READ_LIMIT` nodes. A read starts on a plan, a start, a close or node
+//! change of a waiting mission, a GitHub read, a fetch answer or a change in
+//! the local worktrees, and goes on at once with the nodes it left out
+//! until every node followed then was read once (a pass): `n` followed
+//! nodes take `ceil(n / READ_LIMIT)` reads back to back, each node one `gh
+//! pr view` or at most four git calls, every call bounded by
+//! `NODE_TIMEOUT`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
@@ -31,8 +36,8 @@ use crate::node_access::NodeLink;
 
 const NODE_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// The nodes one project's read asks about; the next read goes on from the
-/// first one this one left out.
+/// The nodes one project's read asks about; the pass goes on with those it
+/// left out.
 const READ_LIMIT: usize = 32;
 
 /// One project on one machine.
@@ -44,7 +49,7 @@ pub(crate) struct Outside {
     reading: BTreeSet<Place>,
     /// Where each project's next read starts in its list of asks, for a
     /// project with more than one read's worth; one entry per project.
-    cursor: BTreeMap<Place, usize>,
+    pass: BTreeMap<Place, BTreeSet<(String, String)>>,
     /// The outside nodes the last read could not answer, by mission and
     /// node, with why. Memory only: a restart reads them again.
     unread: BTreeMap<(String, String), String>,
@@ -61,6 +66,13 @@ impl Outside {
         self.reopens
             .retain(|id, _| book.missions.iter().any(|kept| kept.id == *id));
         *self.reopens.entry(mission.to_owned()).or_default() += 1;
+    }
+
+    /// Whether `project` on `device` has no read out and no pass left.
+    #[cfg(test)]
+    pub(crate) fn idle_for_test(&self, device: &str, project: &str) -> bool {
+        let place = (device.to_owned(), project.to_owned());
+        !self.reading.contains(&place) && !self.pass.contains_key(&place)
     }
 
     pub(super) fn reopens_of(&self, mission: &str) -> u64 {
@@ -106,18 +118,17 @@ pub(crate) struct Ask {
     pub(crate) watch: Watch,
 }
 
-/// At most `READ_LIMIT` of `asks`, from `cursor` round to the start, with
-/// where the next read starts: each ask is read within one read in
-/// `asks.len() / READ_LIMIT + 1`, however many stay open (engineering 15).
-pub(crate) fn batch(mut asks: Vec<Ask>, cursor: usize) -> (Vec<Ask>, usize) {
-    let len = asks.len();
-    if len <= READ_LIMIT {
-        return (asks, 0);
-    }
-    let start = cursor % len;
-    asks.rotate_left(start);
-    asks.truncate(READ_LIMIT);
-    (asks, (start + READ_LIMIT) % len)
+/// At most `READ_LIMIT` of `asks` that the pass has not read yet (`read`, by
+/// mission and node), in order, and whether any are left after them for
+/// the pass's next read (engineering 15).
+pub(crate) fn batch(asks: Vec<Ask>, read: &BTreeSet<(String, String)>) -> (Vec<Ask>, bool) {
+    let mut left: Vec<Ask> = asks
+        .into_iter()
+        .filter(|ask| !read.contains(&(ask.mission.clone(), ask.node.clone())))
+        .collect();
+    let more = left.len() > READ_LIMIT;
+    left.truncate(READ_LIMIT);
+    (left, more)
 }
 
 /// What a branch is judged against, copied under the lock.
@@ -298,7 +309,13 @@ impl Runtime {
         asks: Vec<Ask>,
     ) -> bool {
         let mut changed = self.settle_outside(found);
-        if !asks.is_empty() {
+        if asks.is_empty() {
+            // Nothing left to read ends the pass.
+            self.missions
+                .outside
+                .pass
+                .remove(&(device.to_owned(), project.to_owned()));
+        } else {
             changed |= self.read_outside(device, project, asks);
         }
         changed
@@ -365,16 +382,33 @@ impl Runtime {
             return false;
         }
         let count = asks.len();
-        let cursor = self.missions.outside.cursor.remove(&place).unwrap_or(0);
-        let (asks, next) = batch(asks, cursor);
-        if next != 0 {
-            if cursor == 0 {
+        let read = self
+            .missions
+            .outside
+            .pass
+            .remove(&place)
+            .unwrap_or_default();
+        let (asks, more, mut read) = match batch(asks.clone(), &read) {
+            // Every node of a pass that ended unseen was read: a new one.
+            (left, _) if left.is_empty() => {
+                let fresh = BTreeSet::new();
+                let (left, more) = batch(asks, &fresh);
+                (left, more, fresh)
+            }
+            (left, more) => (left, more, read),
+        };
+        if more {
+            if read.is_empty() {
                 crate::diagnostic!(json!({
                     "component": "missions", "kind": "mission.outside_batched",
                     "device": device, "project": project, "count": count, "per_read": READ_LIMIT,
                 }));
             }
-            self.missions.outside.cursor.insert(place.clone(), next);
+            read.extend(
+                asks.iter()
+                    .map(|ask| (ask.mission.clone(), ask.node.clone())),
+            );
+            self.missions.outside.pass.insert(place.clone(), read);
         }
         let (github, base) = self.outside_places(device, project);
         let link = match self.node_link(device) {
@@ -415,7 +449,11 @@ impl Runtime {
     /// The answer of one project's read.
     pub(crate) fn ingest_outside(&mut self, place: &Place, answers: Vec<(Ask, Found)>) -> bool {
         self.missions.outside.reading.remove(place);
-        let changed = self.settle_outside(answers);
+        let mut changed = self.settle_outside(answers);
+        // A pass with nodes left reads them now, not at the next trigger.
+        if self.missions.outside.pass.contains_key(place) {
+            changed |= self.follow_outside_stored(&place.0, &place.1);
+        }
         if changed {
             self.flush_mission_wakes();
         }
@@ -643,11 +681,11 @@ fn branch_in_main(
 mod tests {
     use super::*;
 
-    /// Review finding 7: with more open asks than one read takes, the reads
-    /// go round the list, so every node is read within two reads of 33 and
-    /// the 33rd is not left out while the first 32 stay open.
+    /// Review finding 7: with more open asks than one read takes, the pass's
+    /// next read takes those left out, so 33 are read in two reads and the
+    /// 33rd is not left out while the first 32 stay open.
     #[test]
-    fn a_read_batch_goes_round_so_every_node_is_read() {
+    fn a_read_pass_takes_the_nodes_left_out_next() {
         let asks: Vec<Ask> = (0..33)
             .map(|index| Ask {
                 mission: "mission-1".into(),
@@ -657,17 +695,16 @@ mod tests {
             .collect();
         let keys =
             |asks: &[Ask]| -> Vec<String> { asks.iter().map(|ask| ask.node.clone()).collect() };
-        let (first, cursor) = batch(asks.clone(), 0);
-        assert_eq!(first.len(), READ_LIMIT);
+        let (first, more) = batch(asks.clone(), &BTreeSet::new());
+        assert_eq!((first.len(), more), (READ_LIMIT, true));
         assert!(!keys(&first).contains(&"n32".to_owned()));
-        let (second, next) = batch(asks.clone(), cursor);
-        assert_eq!(second.len(), READ_LIMIT);
-        assert_eq!(second[0].node, "n32");
-        let mut read: BTreeSet<String> = keys(&first).into_iter().collect();
-        read.extend(keys(&second));
-        assert_eq!(read.len(), 33);
-        assert_eq!(next, 31);
-        // A list one read takes whole has no cursor.
-        assert_eq!(batch(asks[..32].to_vec(), 5).1, 0);
+        let read: BTreeSet<(String, String)> = first
+            .iter()
+            .map(|ask| (ask.mission.clone(), ask.node.clone()))
+            .collect();
+        let (second, more) = batch(asks.clone(), &read);
+        assert_eq!((keys(&second), more), (vec!["n32".to_owned()], false));
+        // A list one read takes whole leaves nothing for another.
+        assert!(!batch(asks[..32].to_vec(), &BTreeSet::new()).1);
     }
 }
