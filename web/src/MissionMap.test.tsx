@@ -499,6 +499,14 @@ it("lists only what the operator can do in 내 차례: the decision whose node c
     expect(waiting.q('[data-dependency-edge="core>ui"]')?.getAttribute("class")).toContain("text-mission-review");
     expect(waiting.q('[data-dependency-edge="core>ui"]')?.hasAttribute("data-edge-dashed")).toBe(true);
   } finally { await waiting.unmount(); }
+  // Waiting on its branches, a git mission tags the branch the core reads and has not found in main; a branch it cannot read says nothing.
+  const branches = [node("notes", { title: "Notes", status: "done", delivery: "direct", branch: "release/notes" }), node("bump", { title: "Bump", status: "done", delivery: "direct", branch: "release/bump", unread: true })];
+  const git = await mount({ items: [mission({ status: "merge_wait", nodes: branches })] });
+  try {
+    expect(card(git, "notes").querySelector("[data-node-landing]")?.textContent).toBe("Join left");
+    expect(card(git, "bump").querySelector("[data-node-landing]")).toBeNull();
+    expect(git.q("[data-mission-landing-order]")?.getAttribute("data-mission-landing-order")).toBe("notes");
+  } finally { await git.unmount(); }
 });
 
 it("draws a defect a later node found as a red dashed edge back to the node it opened, until its line passes (B21)", async () => {

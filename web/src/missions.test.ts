@@ -231,10 +231,19 @@ describe("a card's look (PRD mission-map-git-criteria D-02, B26, B27)", () => {
     expect(nodeLook(mission("m", { status: "cancelled" }), node("n", { status: "working" }))).toBe("cancelled");
   });
 
-  it("tags finished work not in main as a merge left for a pull request and a join left for a branch, and nothing else", () => {
+  it("tags finished work not in main as a merge left for a pull request the core read open and a join left for a branch it reads while the mission waits on its branches, and nothing it does not know", () => {
     const m = mission("m");
+    const landing = mission("m", { status: "merge_wait" });
     expect(landingLeft(m, node("a", { status: "done", pr: 4, pr_state: "mergeable" }))).toBe("merge");
-    expect(landingLeft(m, node("b", { status: "done", delivery: "direct", branch: "feat/b" }))).toBe("join");
+    expect(landingLeft(m, node("a", { status: "done", pr: 4, pr_state: "draft" }))).toBe("merge");
+    // A pull request whose state the core never read (a mission recorded before it kept one) says nothing.
+    expect(landingLeft(m, node("a", { status: "done", pr: 4, pr_state: null }))).toBeNull();
+    expect(landingLeft(m, node("a", { status: "done", pr: 4, pr_state: "closed" }))).toBeNull();
+    // A branch is read only while the mission waits on its branches, and one it could not read says nothing.
+    expect(landingLeft(landing, node("b", { status: "done", delivery: "direct", branch: "feat/b" }))).toBe("join");
+    expect(landingLeft(m, node("b", { status: "done", delivery: "direct", branch: "feat/b" }))).toBeNull();
+    expect(landingLeft(landing, node("b", { status: "done", delivery: "direct", branch: "feat/b", unread: true }))).toBeNull();
+    expect(landingLeft(landing, node("b", { status: "done", delivery: "direct" }))).toBeNull();
     expect(landingLeft(m, node("c", { status: "done", pr: 5, pr_state: "merged" }))).toBeNull();
     expect(landingLeft(m, node("d", { status: "done", kind: "research", delivery: null }))).toBeNull();
     expect(landingLeft(m, node("e", { status: "working", pr: 6, pr_state: "mergeable" }))).toBeNull();
@@ -242,7 +251,7 @@ describe("a card's look (PRD mission-map-git-criteria D-02, B26, B27)", () => {
   });
 
   it("draws a branch's commit Hide found in main as → main, before one recorded by hand, and the node is in main with nothing left to join (B17)", () => {
-    const m = mission("m");
+    const m = mission("m", { status: "merge_wait" });
     const joined = node("b", { status: "done", delivery: "direct", branch: "feat/b", in_main: "9f3e2a1c0b7d" });
     expect(nodeResult(joined)).toEqual({ kind: "commit", commit: "9f3e2a1c0b7d" });
     expect([nodeLook(m, joined), landingLeft(m, joined)]).toEqual(["landed", null]);
