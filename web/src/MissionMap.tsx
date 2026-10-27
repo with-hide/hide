@@ -14,7 +14,7 @@ import { cn } from "./lib/utils";
 import { MissionNodePanel } from "./MissionNodePanel";
 import { MissionTurn } from "./MissionTurn";
 import { AgentMark } from "./AgentMark";
-import { CheckerRow, lookWord, useNodeTimes, useRunWords } from "./missionParts";
+import { CheckerRow, lookWord, RunText, useNodeTimes, useRunWords } from "./missionParts";
 import {
   cardLine,
   checkerTally,
@@ -364,25 +364,28 @@ function NodeCard({ mission, node, selected, dimmed, onSelect, events, end }: { 
       ) : null}
       {worker || landing || time || tally || before ? (
         <span className="flex min-w-0 items-center gap-xs text-caption text-muted-foreground">
-          {worker ? (
-            // The model and effort give way first when the row runs short, before the time and the count.
-            <span className="flex min-w-0 shrink items-center gap-xxs" data-node-worker={worker}>
-              <AgentMark kind={worker} />
-              {run ? <span className="truncate" title={run.text} data-run={run.from}>{run.text}</span> : null}
-              {landing || time ? <span aria-hidden="true" className="shrink-0">·</span> : null}
-            </span>
-          ) : null}
-          {landing ? <span className="shrink-0 rounded-xs bg-mission-hold/15 px-xs text-micro font-semibold text-mission-hold" data-node-landing={landing}>{t(landing === "merge" ? "mission.landing.merge" : "mission.landing.join")}</span> : null}
-          {time ? <span className="shrink-0 tabular-nums" data-node-time={look === "hold" ? "held" : "took"}>{time}</span> : null}
-          <span className="flex-1" />
-          {tally ? (
-            <span className="shrink-0 tabular-nums" data-node-criteria={`${tally.passed}/${tally.total}`}>
-              {t("mission.criteria.count", { passed: String(tally.passed), total: String(tally.total) })}
-              {tally.skipped > 0 ? <span className="ml-xxs text-mission-hold" data-node-skipped={tally.skipped}>⤳{tally.skipped}</span> : null}
-            </span>
-          ) : before ? (
-            <span className="min-w-0 truncate" title={before} data-node-old-criteria="true">{before}</span>
-          ) : null}
+          {worker ? <span className="flex shrink-0" title={run?.text} data-node-worker={worker}><AgentMark kind={worker} /></span> : null}
+          {/* One line laid out from the right that wraps out of sight: the count or the old sentence, the time and the
+              landing tag keep their place, and the worker's model and effort, last in line, truncate first, their
+              planned mark never, and leave the line once they cannot keep a readable width, the face then alone with
+              its hover and the card's name keeping them. The free space goes before the count. */}
+          <span className="flex h-lh min-w-0 flex-1 flex-row-reverse flex-wrap items-center gap-x-xs overflow-hidden" data-node-row="true">
+            {tally ? (
+              <span className="ml-auto shrink-0 tabular-nums" data-node-criteria={`${tally.passed}/${tally.total}`}>
+                {t("mission.criteria.count", { passed: String(tally.passed), total: String(tally.total) })}
+                {tally.skipped > 0 ? <span className="ml-xxs text-mission-hold" data-node-skipped={tally.skipped}>⤳{tally.skipped}</span> : null}
+              </span>
+            ) : before ? (
+              <span className="min-w-0 flex-1 truncate" title={before} data-node-old-criteria="true">{before}</span>
+            ) : null}
+            {time ? <span className="shrink-0 tabular-nums" data-node-time={look === "hold" ? "held" : "took"}>{time}</span> : null}
+            {landing ? <span className="shrink-0 rounded-xs bg-mission-hold/15 px-xs text-micro font-semibold text-mission-hold" data-node-landing={landing}>{t(landing === "merge" ? "mission.landing.merge" : "mission.landing.join")}</span> : null}
+            {run ? (
+              <RunText run={run} className="min-w-auto max-w-max flex-1" wordsClassName="min-w-(--size-mission-run-min)">
+                {landing || time ? <span aria-hidden="true" className="shrink-0">·</span> : null}
+              </RunText>
+            ) : null}
+          </span>
         </span>
       ) : null}
       {checks.length > 0 ? <CheckerStrip mission={mission} lines={checks} /> : null}

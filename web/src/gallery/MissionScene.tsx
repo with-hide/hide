@@ -7,7 +7,9 @@
 // for the Conductor's turn), decision-unconfirmed (its answer typed without
 // Herdr confirming it), stack (the merge order), no-conductor, stale, failed
 // (the record unreadable), wide (a row wider than the slot, shrunk to fit),
-// done, cancelled, no-pr (a finished mission with no pull request), settings.
+// done, cancelled, no-pr (a finished mission with no pull request), exempt
+// (a finished mission from before finish lines, its old sentence on each
+// card beside the worker), settings.
 // `pick=<node>` opens that node's panel and `width` narrows the slot. The
 // Conductor pane's head with its mission chip and pinned popover (PRD
 // mission-pane-chip, mission-plan-visibility) is `pane-running`,
@@ -180,14 +182,17 @@ function history(mission: Mission, now: number): MissionEvent[] {
   return events.sort((a, b) => a.at_unix_ms - b.at_unix_ms);
 }
 
+const OLD_CRITERION = "목록 화면이 새 API로 페이지를 넘기고, 필터를 바꿔도 처음 쪽으로 돌아가며, 빈 목록에서도 안내가 남는다";
+
 function scene(shown: string, now: number): { mission: Mission; rest: SnapshotRest } {
   // An answer sent from the banner draws the decision with that answer on it.
-  const state = shown === "decision-sent" || shown === "decision-unconfirmed" ? "decision" : shown;
-  const nodes = plan(state, now);
+  const state = shown === "decision-sent" || shown === "decision-unconfirmed" ? "decision" : shown === "exempt" ? "done" : shown;
+  // A mission from before finish lines keeps each node's one old sentence (B23).
+  const nodes = shown === "exempt" ? plan(state, now).map((one) => ({ ...one, ...finish(own(1, OLD_CRITERION, "pass")) })) : plan(state, now);
   const mission: Mission = {
     id: "mission-1", title: "이슈 정리", workspace_id: "hide", project: "/projects/herdr-ide", checkout_path: "/projects/herdr-ide", device_id: "local",
     status: state === "plan" ? "planning" : state === "stack" ? "merge_wait" : state === "done" || state === "no-pr" ? "done" : state === "cancelled" ? "cancelled" : "running",
-    scope: "pr", cap: 4, exempt: false, checkers: null,
+    scope: "pr", cap: 4, exempt: shown === "exempt", checkers: null,
     conductor: { pane_id: CONDUCTOR_PANE, name: "이슈 정리 · Conductor", agent_kind: "claude", session: { device_id: "local", agent: "claude", session_id: "scene-conductor" }, present: state !== "no-conductor", takes_answers: true },
     nodes, merge_order: ["api", "fix-1481", "fix-1490", "fix-1487", "screen"], check: "cargo test && pnpm test", github: "octocat",
     decision: state === "decision" ? "화면 PR을 어디에 올릴까요?" : state === "no-conductor" ? `${no(1503)}이 머지되어 ${no(1504)}를 옮겨야 해요` : null,

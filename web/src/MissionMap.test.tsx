@@ -330,13 +330,23 @@ it("draws each card's state as its mark and border, colour only for what wants a
     expect(card(map, "unread").querySelector("[data-node-line]")?.textContent).toBe("Could not check");
     // Who works a card leads its bottom row, as a checker's row names it: the launch, else the plan marked planned; an outside node has none.
     const who = (key: string) => {
-      const row = card(map, key).querySelector<HTMLElement>("[data-node-worker]");
-      return row ? [row.dataset.nodeWorker, row.querySelector("[data-run]")?.getAttribute("data-run"), row.querySelector("[data-run]")?.textContent, row.parentElement?.firstElementChild === row] : null;
+      const face = card(map, key).querySelector<HTMLElement>("[data-node-worker]");
+      const run = card(map, key).querySelector<HTMLElement>("[data-node-row] [data-run]");
+      return face ? [face.dataset.nodeWorker, run?.dataset.run, run?.querySelector("[data-run-words]")?.textContent, run?.querySelector("[data-run-planned]")?.textContent ?? null, face.title, face.parentElement?.firstElementChild === face] : null;
     };
-    expect([who("engine"), who("api"), who("outside")]).toEqual([["claude", "launch", "opus·high", true], ["codex", "plan", "gpt-6·high (planned)", true], null]);
+    expect([who("engine"), who("api"), who("outside")]).toEqual([["claude", "launch", "opus·high", null, "opus·high", true], ["codex", "plan", "gpt-6·high", "(planned)", "gpt-6·high (planned)", true], null]);
     expect(card(map, "engine").getAttribute("aria-label")).toContain("Working · opus·high");
-    // Its words give way first when the row runs short; the count keeps its width.
-    expect(card(map, "engine").querySelector("[data-node-worker] [data-run]")?.className).toContain("truncate");
+    expect(card(map, "api").getAttribute("aria-label")).toContain("Work done · gpt-6·high (planned)");
+    // The words truncate before anything else and their planned mark never does, so a planned model never reads as launched;
+    // the row is one line laid out from the right that wraps out of sight, the words last in it, so once they cannot keep a
+    // readable width they leave the line and the face stays alone, its hover and the card's name keeping them.
+    const row = (key: string) => card(map, key).querySelector<HTMLElement>("[data-node-row]")!;
+    expect(row("api").className.split(" ")).toEqual(expect.arrayContaining(["flex-row-reverse", "flex-wrap", "h-lh", "overflow-hidden"]));
+    expect(row("api").lastElementChild?.hasAttribute("data-run")).toBe(true);
+    expect(row("api").querySelector("[data-run-words]")?.className).toContain("min-w-(--size-mission-run-min)");
+    expect(row("api").querySelector("[data-run-words] > span")?.className).toContain("truncate");
+    expect(row("api").querySelector("[data-run-planned]")?.className).toContain("shrink-0");
+    expect(row("api").querySelector("[data-run-planned]")?.className).not.toContain("truncate");
     expect(card(map, "engine").querySelector("[data-node-criteria]")?.className).toContain("shrink-0");
     // Outside is the node's kind: a dotted border and ↗ in every state, its state shown on them (B19).
     const outside = (key: string) => [card(map, key).className.includes("border-dotted"), card(map, key).querySelector("[data-node-outside]")?.textContent, card(map, key).querySelector("[data-node-line]")?.textContent];
