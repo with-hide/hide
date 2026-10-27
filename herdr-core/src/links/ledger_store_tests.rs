@@ -3422,10 +3422,25 @@ fn an_issue_read_over_its_limit_is_reported_once_per_crossing() {
     assert_eq!(again.len(), 1, "the next crossing reports again");
 }
 
-/// A project the runtime stops publishing loses its over-cap state, so when it
-/// comes back over the limit its crossing is reported again.
+/// A publish that carries a project over the issue-read limit logs the
+/// crossing once and stays quiet while the project remains over. A publish
+/// that leaves the project out forgets its state, so when the project comes
+/// back over the limit the crossing is logged again.
 #[test]
-fn a_project_dropped_from_publishing_is_reported_again_when_it_returns() {
+fn a_project_left_out_of_a_publish_reports_its_crossing_again_when_it_returns() {
+    struct NoSink;
+    impl crate::links::worker::Sink for NoSink {
+        fn summaries(
+            &self,
+            _: std::collections::BTreeMap<String, crate::links::ProjectLinkSummary>,
+        ) {
+        }
+        fn panel(&self, _: u64, _: Result<crate::links::worker::PanelAnswer, String>) {}
+        fn filling(&self, _: bool) {}
+        fn devices(&self) -> Vec<(String, std::sync::Arc<dyn crate::node_access::NodeLink>)> {
+            Vec::new()
+        }
+    }
     let directory = tempfile::tempdir().unwrap();
     let (mut store, _) = LinkStore::open(&directory.path().join("links.sqlite3")).unwrap();
     request(&mut store, 1, "이슈 정리");
@@ -3446,24 +3461,38 @@ fn a_project_dropped_from_publishing_is_reported_again_when_it_returns() {
     for number in 1..=crate::issues::ISSUE_LIMIT as u64 + 1 {
         store.connection.execute("INSERT INTO ledger_sightings VALUES('device-a','codex','session-a','issue','owner/repo',?1,1000)",params![number]).unwrap();
     }
-    let read = |store: &LinkStore| {
-        crate::diagnostics::capture(|| store.ledger_issue_refs("project-a").unwrap())
-            .1
-            .into_iter()
-            .filter(|record| record["kind"] == "ledger.issue_read_capacity")
-            .count()
+    let mut state = crate::links::worker::State::new();
+    let publish = |state: &mut crate::links::worker::State| -> Vec<serde_json::Value> {
+        crate::diagnostics::capture(|| {
+            crate::links::worker::publish_summaries(&store, state, &NoSink)
+        })
+        .1
+        .into_iter()
+        .filter(|record| record["kind"] == "ledger.issue_read_capacity")
+        .collect()
     };
-    assert_eq!(read(&store), 1);
 
-    // The publish set still holds the project: its state stays, so no new line.
-    store.forget_capacity_except(&BTreeSet::from(["project-a"]));
-    assert_eq!(read(&store), 0);
-
-    // The publish set without it: the project's state is forgotten.
-    store.forget_capacity_except(&BTreeSet::new());
-    assert_eq!(
-        read(&store),
-        1,
-        "a returning project reports its crossing again"
+    state.projects = std::sync::Arc::new(vec![project.clone()]);
+    let first = publish(&mut state);
+    assert_eq!(first.len(), 1, "the first publish over the limit logs once");
+    assert_eq!(first[0]["omitted"], 1);
+    assert!(
+        publish(&mut state).is_empty(),
+        "a publish still over stays quiet"
     );
+
+    state.projects = std::sync::Arc::new(Vec::new());
+    assert!(
+        publish(&mut state).is_empty(),
+        "a publish without the project logs nothing"
+    );
+
+    state.projects = std::sync::Arc::new(vec![project]);
+    let returned = publish(&mut state);
+    assert_eq!(
+        returned.len(),
+        1,
+        "the project returns over the limit and logs again"
+    );
+    assert_eq!(returned[0]["omitted"], 1);
 }
