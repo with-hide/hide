@@ -5,18 +5,20 @@
 //! failed, which blocks the nodes after it. One Hide cannot read stays
 //! waiting, shown as unread, with the reason in the diagnostic log.
 //!
-//! The same read follows a direct change's branch while its mission waits
-//! for its branches to reach main (B18): once every one is there, and every
-//! done node's lines still hold, the mission is done.
+//! The same read follows each done direct change's branch to main while its
+//! mission runs or waits (B17, B18): the view shows it there as soon as it
+//! is, and once every one is there, and every done node's lines still hold,
+//! a waiting mission is done.
 //!
 //! A pull request the project's list holds is settled from it under the
 //! lock. Any other, and every branch, is read off the lock: one `gh pr view`
 //! for the pull request, and for the branch its commit against the default
 //! branch as this checkout and its last fetch have it, or the head of a pull
 //! request GitHub merged. Each project has at most one read out, of at most
-//! `READ_LIMIT` nodes. A read starts on a plan, a start, a close or node
-//! change of a waiting mission, a GitHub read, a fetch answer or a change in
-//! the local worktrees, and goes on at once with the nodes it left out
+//! `READ_LIMIT` nodes. A read starts on a plan, a start, a reopen, a close
+//! or node change of a waiting mission, a direct change finishing while its
+//! mission runs, a GitHub read, a fetch answer or a change in the local
+//! worktrees, and goes on at once with the nodes it left out
 //! until every node followed then was read once (a pass): `n` followed
 //! nodes take `ceil(n / READ_LIMIT)` reads back to back, each node one `gh
 //! pr view` or at most four git calls, every call bounded by
@@ -164,15 +166,17 @@ fn found_of(badge: PullRequestBadge) -> Found {
     }
 }
 
-/// The direct changes of a mission waiting for its branches: each done one,
-/// read again on every read while the mission waits, since its branch can
-/// move on after it was seen in main (B17, B18).
+/// The direct changes a mission follows to main: each done one, while the
+/// mission runs or waits for its merges, read again on every read since its
+/// branch can move on after it was seen in main (B17, B18).
 fn landing(
     mission: &crate::missions::Mission,
 ) -> impl Iterator<Item = &crate::missions::MissionNode> {
     mission.nodes.iter().filter(move |node| {
-        mission.status == MissionStatus::MergeWait
-            && super::missions::lands_by_branch(node)
+        matches!(
+            mission.status,
+            MissionStatus::Running | MissionStatus::MergeWait
+        ) && super::missions::lands_by_branch(node)
             && node.status == NodeStatus::Done
     })
 }
