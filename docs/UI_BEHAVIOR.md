@@ -2886,7 +2886,7 @@ Settings › Conductor, in the machine group after Hide AI, keeps what a Conduct
 With no candidates the Conductor chooses among the installed agents; with some, Hide refuses a worker that is none of them (`mission_candidate_refused`, [delivery.md: Missions](delivery.md#missions)).
 `리뷰 기본값` and `검증 기본값 · 실제로 돌려 확인` say who checks a node its plan leaves open (PRD mission-map-git-criteria B36): `누가` is `Conductor가 노드마다 판단`, `없음`, `항상 1명` or `여럿`, and only `여럿` shows `인원` (2 to 5) with `모두 통과` or `과반 통과`.
 Unless it is `없음`, a group shows `에이전트` (`Conductor가 정함` or one agent), that agent's `모델` and `effort` once one is chosen, and `만든 에이전트와 다른 회사 모델 우선`; a node planned otherwise shows its own checkers in the plan, and a change applies from the next mission.
-An edit to either group sends both groups whole, built on the edits the core has not answered yet, so edits in a row never undo each other; a refusal returns the groups to what the core keeps, and choosing another agent drops the old model and effort, which the new agent may not take.
+An edit to either group sends both groups whole, one write at a time: the edits made before the core answers it show at once and go out together as the next write on top of it, so edits in a row never undo each other, even one back to the first value; a refusal or a dropped connection returns the groups to what the core keeps, and choosing another agent drops the old model and effort, which the new agent may not take.
 Every edit sends only the field it changes and the core checks the result; a refusal shows inline, and a mission already created keeps the cap, scope, candidates and check defaults it was created with.
 
 ### Hide AI

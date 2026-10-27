@@ -1,5 +1,5 @@
 import { PlusIcon, XIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { Actions } from "../actions";
 import { AgentMark } from "../AgentMark";
 import { agentAdapter } from "../agentAdapters";
@@ -32,6 +32,9 @@ const DEFAULT_MODEL = "__cli_default";
 /** And this for a checker agent the Conductor chooses. */
 const ANY_AGENT = "__conductor";
 
+/** The check defaults out to the core, the value they were sent over, and what the operator chose since. */
+type CheckWrite = { sent: CheckerDefaults; over: CheckerDefaults; draft: CheckerDefaults | null };
+
 export function ConductorTab({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const settings = useShellStore((s) => s.rest?.ui_state?.conductor_settings) ?? DEFAULT_CONDUCTOR;
@@ -41,22 +44,32 @@ export function ConductorTab({ actions }: { actions: Actions }) {
   const live = useShellStore((s) => s.connection === "live");
   // The model menus are the start panel's lists, read while this page shows.
   useEffect(() => (live ? actions.observeCatalog() : undefined), [actions, live]);
-  const send = (patch: Partial<ConductorSettings>) => {
+  const send = useCallback((patch: Partial<ConductorSettings>) => {
     setSentAt(Date.now());
     actions.setConductorSettings(patch);
-  };
-  // The core replaces the check defaults whole, so an edit made before the
-  // last one came back builds on that one, not on the snapshot: the value
-  // sent waits here until the snapshot carries it, the core refuses it, or
-  // the connection drops (B36).
-  const [pending, setPending] = useState<CheckerDefaults | null>(null);
+  }, [actions]);
+  // The core replaces the check defaults whole and answers with no receipt,
+  // so one write is out at a time: it is answered once the core's value moves
+  // off the one it was sent over, a refusal or a dropped connection gives the
+  // groups back to the core, and edits made meanwhile wait as one draft that
+  // goes out next. Matching the core's value to the one sent would take an
+  // older answer for a newer edit that reads the same (B36).
+  const [write, setWrite] = useState<CheckWrite | null>(null);
   useEffect(() => {
-    if (pending && (sameCheckers(pending, kept) || error || !live)) setPending(null);
-  }, [pending, kept, error, live]);
-  const checkers = pending ?? kept;
+    if (!write) return;
+    if (error || !live) return setWrite(null);
+    if (sameCheckers(kept, write.over)) return;
+    if (write.draft && !sameCheckers(write.draft, kept)) {
+      send({ checkers: write.draft });
+      setWrite({ sent: write.draft, over: kept, draft: null });
+    } else setWrite(null);
+  }, [write, kept, error, live, send]);
+  const checkers = write ? (write.draft ?? write.sent) : kept;
   const sendCheck = (kind: CheckKind, next: ConductorCheckDefault) => {
     const value = replaceCheck(checkers, kind, next);
-    setPending(value);
+    if (write) return setWrite({ ...write, draft: value });
+    if (sameCheckers(value, kept)) return;
+    setWrite({ sent: value, over: kept, draft: null });
     send({ checkers: value });
   };
   return (
