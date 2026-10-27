@@ -13,7 +13,7 @@ use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use hide_platform::{host, programs};
+use hide_platform::programs;
 
 /// A CLI that was found, and the `PATH` it was found on.
 #[derive(Clone, Debug)]
@@ -42,7 +42,7 @@ impl Program {
         let path = if explicit {
             binary.is_file().then(|| binary.to_path_buf())?
         } else {
-            host::find_program(search.as_deref()?, binary.to_str()?)?
+            programs::Program::find(search.as_deref()?, binary.to_str()?)?.into_path()
         };
         Some(Self { path, search })
     }

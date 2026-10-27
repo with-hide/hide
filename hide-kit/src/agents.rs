@@ -325,7 +325,7 @@ impl Detection {
                 let program = adapter
                     .executables
                     .iter()
-                    .find_map(|name| hide_platform::host::find_program(&path, name));
+                    .find_map(|name| Program::find(&path, name).map(Program::into_path));
                 (adapter.id, program)
             })
             .collect();

@@ -94,6 +94,56 @@ fn the_copy_the_login_shell_finds_wins_over_an_older_one_in_an_install_folder() 
     assert_eq!(String::from_utf8_lossy(&output.stdout), "new\n");
 }
 
+/// Every crate looks for a program through this module, so no product code
+/// builds a search of its own: a search that skipped the login shell once
+/// found an older Codex in `~/.local/bin` before the nvm Codex the operator's
+/// terminal ran (2026-10-27). A lookup outside `hide-platform` goes through
+/// [`programs::Program::find`] on a search this module made, or the
+/// account's own (`find_cli`, `find_cli_with`, `command`); the primitive and
+/// the search without the shell stay here and in tests.
+#[test]
+fn no_product_code_outside_the_platform_looks_for_a_program_on_its_own() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let mut stray = Vec::new();
+    for member in fs::read_dir(workspace).unwrap() {
+        let member = member.unwrap().path();
+        if !member.join("Cargo.toml").is_file() || member.ends_with("hide-platform") {
+            continue;
+        }
+        let mut folders = vec![member.join("src")];
+        while let Some(folder) = folders.pop() {
+            let Ok(entries) = fs::read_dir(&folder) else {
+                continue;
+            };
+            for entry in entries {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    folders.push(path);
+                    continue;
+                }
+                if path.extension().is_none_or(|extension| extension != "rs")
+                    || path.file_stem().is_some_and(|stem| {
+                        stem == "tests" || stem.to_string_lossy().ends_with("_tests")
+                    })
+                {
+                    continue;
+                }
+                let text = fs::read_to_string(&path).unwrap();
+                let product = text.split("#[cfg(test)]").next().unwrap_or_default();
+                for spelling in ["find_program(", "cli_path_with(", "Program::named("] {
+                    if product.contains(spelling) {
+                        stray.push(format!("{}: {spelling}", path.display()));
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        stray.is_empty(),
+        "a program looked for outside hide_platform::programs: {stray:?}"
+    );
+}
+
 #[test]
 fn a_program_in_an_install_folder_the_daemons_path_misses_is_found() {
     let root = tempfile::tempdir().unwrap();
