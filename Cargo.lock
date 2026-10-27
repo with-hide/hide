@@ -1436,6 +1436,7 @@ dependencies = [
  "hide-shell",
  "libc",
  "md5",
+ "memchr",
  "percent-encoding",
  "prost",
  "rusqlite",

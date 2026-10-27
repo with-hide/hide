@@ -500,6 +500,7 @@ fn catalog_connection(
             title: None,
             event_count: 0,
             availability: crate::SessionAvailability::Available,
+            stamp: None,
             id,
         };
         match read {
