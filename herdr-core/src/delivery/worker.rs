@@ -935,7 +935,7 @@ fn settle(
                 Err(code) => {
                     // A refusal may come after the request changed the copy,
                     // so the copy is made again without it.
-                    candidate = rebuild(
+                    (candidate, transitions) = rebuild(
                         state,
                         upkeep,
                         &batch[..index],
@@ -956,7 +956,8 @@ fn settle(
     // as each was checked alone, to refuse only the ones that made it so.
     let mut bytes = (candidate != *state).then(|| candidate.bytes());
     if matches!(bytes, Some(Err(_))) {
-        candidate = rebuild(state, upkeep, batch, &mut accepted, &mut results, true, now);
+        (candidate, transitions) =
+            rebuild(state, upkeep, batch, &mut accepted, &mut results, true, now);
         candidate.observe_reach(&upkeep.reach, now);
         bytes = (candidate != *state).then(|| candidate.bytes());
     }
@@ -1102,11 +1103,13 @@ impl Upkeep {
 }
 
 /// The batch's copy made again from `state`: the same upkeep, then the
-/// requests `accepted` marks, in their order. Applying a request changes
-/// only the ledger it is given, so each lands as it did the first time; one
-/// that does not is refused and logged, and the copy is made again without
-/// it. With `checked`, each request must also leave a ledger the file can
-/// hold, and one that does not is refused with that code.
+/// requests `accepted` marks, in their order, with whether any of them asks
+/// for a publish. Each accepted request's result is the one this copy gave
+/// it, so a reply names what the copy keeps even after a request before it
+/// was dropped. One that a replay refuses is refused and logged, and the
+/// copy is made again without it. With `checked`, each request must also
+/// leave a ledger the file can hold, and one that does not is refused with
+/// that code.
 fn rebuild(
     state: &Ledger,
     upkeep: &Upkeep,
@@ -1115,24 +1118,29 @@ fn rebuild(
     results: &mut [Result<Value, String>],
     checked: bool,
     now: u64,
-) -> Ledger {
+) -> (Ledger, bool) {
     'again: loop {
         let mut ledger = state.clone();
+        let mut transitions = false;
         upkeep.apply(&mut ledger, now);
         for (index, request) in batch.iter().enumerate() {
             if !accepted[index] {
                 continue;
             }
             let before = checked.then(|| ledger.clone());
-            let outcome = apply(&mut ledger, request, now).and_then(|_| {
+            let outcome = apply(&mut ledger, request, now).and_then(|landed| {
                 if checked {
-                    ledger.bytes().map(drop)
-                } else {
-                    Ok(())
+                    ledger.bytes()?;
                 }
+                Ok(landed)
             });
-            let Err(code) = outcome else {
-                continue;
+            let code = match outcome {
+                Ok((value, publish)) => {
+                    transitions |= publish;
+                    results[index] = Ok(value);
+                    continue;
+                }
+                Err(code) => code,
             };
             accepted[index] = false;
             results[index] = Err(code.clone());
@@ -1145,7 +1153,7 @@ fn rebuild(
                 }
             }
         }
-        return ledger;
+        return (ledger, transitions);
     }
 }
 
@@ -2220,16 +2228,108 @@ mod tests {
             send(&actor, &target, "after", "short"),
         ];
         let settled = settle(&runtime, &state, &upkeep(), &batch, now());
-        assert!(settled.results[0].is_ok());
         assert_eq!(settled.results[1], Err("capacity".into()));
-        assert!(settled.results[2].is_ok());
-        let intents: Vec<_> = settled.ledger.letters[state.letters.len()..]
-            .iter()
-            .map(|letter| letter.intent.as_str())
-            .collect();
-        assert_eq!(intents, ["fits", "after"]);
+        // Each sender is answered the letter the file keeps for it.
+        let next = state.next_id;
+        let expected = vec![
+            ("fits".to_owned(), format!("letter-{next}")),
+            ("after".to_owned(), format!("letter-{}", next + 1)),
+        ];
+        assert_eq!(answered(&settled, &[0, 2]), expected);
+        assert_eq!(stored(&settled.ledger, &state), expected);
         let bytes = settled.bytes.unwrap().unwrap();
         assert!(bytes.len() <= limit);
         assert_eq!(bytes, settled.ledger.bytes().unwrap());
+    }
+
+    #[test]
+    fn a_request_refused_after_it_changed_the_copy_leaves_later_replies_naming_their_letters() {
+        let root = tempfile::tempdir().unwrap();
+        let (runtime, actor, target, _) = fixture(root.path());
+        // One short of the total, the oldest finished letter first: the
+        // batch's first send fills the total, and the reply below then drops
+        // the letter it answers to make room, and is refused for it.
+        let mut installed = Ledger::default();
+        let start = now();
+        for index in 0..super::super::LETTER_LIMIT - 1 {
+            let letter = mailbox::send(
+                &mut installed,
+                &actor,
+                &target.actor,
+                &format!("done-{index}"),
+                "x",
+                "report",
+                None,
+                start,
+            )
+            .unwrap();
+            mailbox::apply(
+                &mut installed,
+                &target.actor,
+                None,
+                &Command::Confirm {
+                    ids: vec![letter.id],
+                },
+                start + index as u64,
+            )
+            .unwrap();
+        }
+        let oldest = installed.letters[0].id.clone();
+        runtime
+            .lock()
+            .unwrap()
+            .publish_delivery(Arc::new(installed), false);
+        let state = runtime.lock().unwrap().delivery_state().unwrap();
+        let reply = Request {
+            effect: Effect::Command {
+                authority: authority(&target.actor),
+                actor: target.actor.clone(),
+                target: None,
+                command: Box::new(Command::Reply {
+                    id: oldest,
+                    intent: "answer".into(),
+                    body: "answer".into(),
+                }),
+            },
+            reply: mpsc::sync_channel(1).0,
+        };
+        let batch = [
+            send(&actor, &target, "before", "short"),
+            reply,
+            send(&actor, &target, "after", "short"),
+        ];
+        let settled = settle(&runtime, &state, &upkeep(), &batch, now());
+        assert_eq!(settled.results[1], Err("letter_unavailable".into()));
+        let next = state.next_id;
+        let expected = vec![
+            ("before".to_owned(), format!("letter-{next}")),
+            ("after".to_owned(), format!("letter-{}", next + 1)),
+        ];
+        assert_eq!(answered(&settled, &[0, 2]), expected);
+        assert_eq!(stored(&settled.ledger, &state), expected);
+    }
+
+    /// The intent and letter id each request at `indexes` was answered.
+    fn answered(settled: &Settled, indexes: &[usize]) -> Vec<(String, String)> {
+        indexes
+            .iter()
+            .map(|&index| {
+                let letter = settled.results[index].as_ref().unwrap();
+                (
+                    letter["intent"].as_str().unwrap().to_owned(),
+                    letter["id"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect()
+    }
+
+    /// The intent and id of each letter `ledger` keeps that `state` did not.
+    fn stored(ledger: &Ledger, state: &Ledger) -> Vec<(String, String)> {
+        ledger
+            .letters
+            .iter()
+            .filter(|letter| !state.letters.iter().any(|old| old.id == letter.id))
+            .map(|letter| (letter.intent.clone(), letter.id.clone()))
+            .collect()
     }
 }
