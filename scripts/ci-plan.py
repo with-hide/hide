@@ -93,9 +93,12 @@ OS_LANES = ("os-contract", "windows-check", "windows-e2e", "windows-desktop")
 MAILBOX_CRATES = {"herdr-core", "hided", "hide-agent-hooks", "hide-host"}
 
 # The desktop suite drives the web shell and the daemon inside the app, so
-# every web shell file and every crate `hided` links plans `desktop-e2e`
-# beside `web-e2e`: a desktop spec that asserts what the shell or the core
-# shows breaks on main's full run otherwise (#1106 and #1147 did, issue #1288).
+# every web shell file plans `desktop-e2e` beside `web-e2e`: a desktop spec
+# that asserts what the shell shows breaks on main's full run otherwise (#1106
+# did, issue #1288). A crate change plans `web-e2e` alone: the macOS queue it
+# would wait in cost a crate-only pull request half its run, and main's full
+# run is the net for a desktop spec that asserts what the core shows (#1147,
+# the accepted risk).
 #
 # Web files the desktop host imports or drives through native input: the host
 # bridge, the shortcut registry the menu is built from, the store and
@@ -406,10 +409,10 @@ def classify(path, status, crates, root):
         packages = reverse_closure(crates, crate["name"])
         # Every crate compiles into the Windows workspace `windows check` builds.
         lanes = {"rust", "windows-check"}
-        # Every end-to-end lane drives hided, so a crate it links reaches the
-        # web suite on Linux and the desktop suite on macOS.
+        # The web suite drives hided, so a crate it links reaches it; the
+        # desktop suite drives it too, and main's full run runs that one.
         if "hided" in packages:
-            lanes.update(("web-e2e", "desktop-e2e"))
+            lanes.add("web-e2e")
         if packages & MAILBOX_CRATES:
             lanes.add("remote-mailbox")
         if crate["name"] in OS_CRATES:
