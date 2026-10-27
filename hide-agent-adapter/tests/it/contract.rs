@@ -170,6 +170,57 @@ fn every_supported_agent_declares_a_comparable_minimum_version_with_its_proof() 
     }
 }
 
+/// An operator whose copy is too old is shown how to update it: every
+/// supported agent names at least one documented way of installing it, each
+/// with a command, the vendor's `https` page it is from, and a place Hide
+/// recognises; a retired agent, for which Hide installs nothing, names none.
+#[test]
+fn every_supported_agent_declares_how_each_documented_install_is_updated() {
+    use hide_agent_adapter::InstallMethod;
+    for row in ADAPTERS {
+        assert!(
+            !row.updates.is_empty(),
+            "{} declares no update route",
+            row.id
+        );
+        for route in row.updates {
+            assert!(
+                !route.command.trim().is_empty(),
+                "{}: an empty command",
+                row.id
+            );
+            assert!(
+                route
+                    .source
+                    .split_whitespace()
+                    .all(|page| page.starts_with("https://")),
+                "{}: {:?} cites a page that is not https",
+                row.id,
+                route.source
+            );
+            let named = match route.method {
+                InstallMethod::Npm(name)
+                | InstallMethod::Bun(name)
+                | InstallMethod::Homebrew(name)
+                | InstallMethod::WinGet(name) => !name.is_empty(),
+                InstallMethod::Installer(paths) => {
+                    !paths.is_empty()
+                        && paths.iter().all(|path| {
+                            !path.is_empty() && !path.starts_with('/') && !path.contains('\\')
+                        })
+                }
+            };
+            assert!(named, "{}: {:?} names no place", row.id, route.method);
+        }
+    }
+    assert!(
+        hide_agent_adapter::AgentId::Cursor
+            .adapter()
+            .updates
+            .is_empty()
+    );
+}
+
 #[test]
 fn absence_evidence_rejects_absolute_and_parent_paths_even_when_the_file_exists() {
     for evidence in [

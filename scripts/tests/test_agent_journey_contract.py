@@ -59,6 +59,8 @@ class Guides:
         self.features = {label.strip() for cell in features[0][2:] for label in cell.split(",")}
         minimums = tables(section("docs/agent-hooks.md", "### The oldest version of each agent"))[0]
         self.minimums = {row[0]: row[1] for row in minimums[1:]}
+        updates = tables(section("docs/agent-hooks.md", "### Updating an agent that is too old"))[0]
+        self.updates = {row[0] for row in updates[1:]}
         systems = [row[0] for table in tables(section("docs/INSTALL.md", "### What each system supports"))
                    for row in table[1:]]
         listed = [cell for cell in systems if "each with its hook, plugin or extension and skill" in cell]
@@ -106,6 +108,11 @@ class Registration(unittest.TestCase):
                 (label in guides.features, f"a column for {label} in docs/agent-hooks.md, Support table's features"),
                 (guides.minimums.get(label) == minimum,
                  f"a row for {label} at {minimum} in docs/agent-hooks.md, The oldest version of each agent"),
+                (bool(row.get("update_commands")),
+                 "an update route for each documented way of installing it, with its source, in "
+                 "hide-agent-adapter/src/declarations.rs (updates)"),
+                (label in guides.updates,
+                 f"rows for {label} in docs/agent-hooks.md, Updating an agent that is too old"),
                 (re.search(r"(?<!\w)" + re.escape(label) + r"(?!\w)", guides.agents_row) is not None,
                  f"{label} in the agents row of docs/INSTALL.md, What each system supports"),
                 (label in guides.letters,

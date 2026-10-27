@@ -564,6 +564,7 @@ fn switch_on(runtime: &mut Runtime, ids: &[&str]) {
                 partial: false,
                 features: Vec::new(),
                 sessions: None,
+                update: None,
                 doc_url: String::new(),
             }
         })

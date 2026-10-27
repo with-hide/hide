@@ -1078,6 +1078,10 @@ pub struct KitAgentSnapshot {
     /// counted. `None` for an agent whose sessions Hide does not read (B19)
     /// and for a machine whose sessions are not read yet.
     pub sessions: Option<u32>,
+    /// The found copy of the agent's CLI is older than its minimum, and what
+    /// updates it (`hide_kit::AgentReport::update`); its command is only ever
+    /// one this build's declaration names for the agent.
+    pub update: Option<hide_kit::AgentUpdate>,
     /// The official page the adapter's answers come from.
     pub doc_url: String,
 }
@@ -1159,6 +1163,16 @@ impl KitSnapshot {
                         })
                         .collect(),
                     sessions: None,
+                    update: agent.update.clone().map(|mut update| {
+                        // A report is a helper's answer: a command this
+                        // build's declaration does not name is not shown.
+                        if update.command.as_deref().is_some_and(|command| {
+                            !row.updates.iter().any(|route| route.command == command)
+                        }) {
+                            update.command = None;
+                        }
+                        update
+                    }),
                     doc_url: agent.doc_url.clone(),
                 })
             })
@@ -1173,7 +1187,7 @@ impl KitSnapshot {
             // Reinstall repairs what is on: a hook part of an agent that is
             // switched off is not a repair, and the pass would refuse it.
             offers_reinstall: components.iter().any(|part| {
-                part.state.needs_attention()
+                hide_kit::agents::repairable(part.state, part.why.as_ref())
                     && hide_kit::agents::agent_of_part(part.id).is_none_or(|agent| {
                         report
                             .agents
@@ -1184,7 +1198,7 @@ impl KitSnapshot {
             }) || report
                 .agents
                 .iter()
-                .any(hide_kit::AgentReport::needs_attention),
+                .any(hide_kit::AgentReport::reinstall_repairs),
             components,
             agents,
             shares_account_with: None,
@@ -2475,6 +2489,10 @@ pub enum PaneConnectionReason {
     /// Hide's hook is missing, unreadable or outdated on the machine: the
     /// fix is the agent's row in Settings, not Reopen.
     SetupNeeded,
+    /// The machine's copy of this agent is older than Hide's minimum, so
+    /// Hide put none of its pieces in: the fix is updating the agent, with
+    /// the command in `PaneConnectionSnapshot::update`.
+    UpdateAgent,
 }
 
 /// What a Reopen of a not connected pane is doing.
@@ -2507,7 +2525,7 @@ pub enum PaneReopenFailure {
     EndRefused,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct PaneConnectionSnapshot {
     pub connected: bool,
     /// Whether the popover offers Reopen: false for a session that Reopen
@@ -2517,6 +2535,10 @@ pub struct PaneConnectionSnapshot {
     pub reason: Option<PaneConnectionReason>,
     /// Absent while no Reopen was asked or the last one ended well.
     pub reopen: Option<PaneReopenSnapshot>,
+    /// What updates the agent, present exactly when `reason` is
+    /// `update_agent`: the machine's kit row's `update`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub update: Option<hide_kit::AgentUpdate>,
 }
 
 /// What a pane header says about the work its agent delegated.
@@ -7983,12 +8005,14 @@ mod wire_enum_tests {
             PaneConnectionReason::CodexSharedServer,
             PaneConnectionReason::StartedBeforeHide,
             PaneConnectionReason::SetupNeeded,
+            PaneConnectionReason::UpdateAgent,
         ];
         for variant in reasons {
             match variant {
                 PaneConnectionReason::CodexSharedServer
                 | PaneConnectionReason::StartedBeforeHide
-                | PaneConnectionReason::SetupNeeded => {}
+                | PaneConnectionReason::SetupNeeded
+                | PaneConnectionReason::UpdateAgent => {}
             }
         }
         assert_wire(&contract, "pane_connection_reason", &reasons);

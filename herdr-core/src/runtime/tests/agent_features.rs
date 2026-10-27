@@ -152,6 +152,7 @@ fn the_snapshot_row_carries_the_chip_and_the_table_in_order() {
         skill: piece.clone(),
         hook: None,
         herdr: None,
+        update: None,
         doc_url: String::new(),
     };
     let report = hide_kit::KitReport {

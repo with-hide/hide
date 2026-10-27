@@ -317,6 +317,12 @@ impl AgentAdapter {
     pub fn partial(&self) -> bool {
         self.declaration.basic()
     }
+
+    /// The documented ways of installing the CLI Hide can tell apart, each
+    /// with its update command.
+    pub(crate) fn updates(&self) -> &'static [hide_agent_adapter::UpdateRoute] {
+        self.declaration.updates
+    }
 }
 
 /// What one pass found out about the agents on a machine: each adapter's
@@ -751,10 +757,36 @@ pub struct AgentReport {
     /// predates the field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub herdr: Option<PieceReport>,
+    /// The found copy is older than the agent's minimum and Hide puts in, or
+    /// would put in were the agent on, none of its hook, plugin or
+    /// extension until it is updated: present for an agent that is off, and
+    /// for one that is on only while a piece is refused for it
+    /// (`PartCause::UpdateAgent`), so a piece still current from a newer
+    /// copy says nothing. Absent in a report from a build that predates it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update: Option<crate::AgentUpdate>,
     pub doc_url: String,
 }
 
+/// Whether Reinstall could repair a piece in this state: one refused because
+/// the agent's copy is too old would be refused again for the same reason,
+/// and updating the agent is what installs it.
+pub fn repairable(state: ComponentState, why: Option<&crate::PartWhy>) -> bool {
+    state.needs_attention() && why.is_none_or(|why| why.cause != crate::PartCause::UpdateAgent)
+}
+
 impl AgentReport {
+    /// Whether Reinstall would repair something for this agent: only an
+    /// agent that is on has pieces to repair, and a piece refused because its
+    /// copy is too old is not one ([`repairable`]).
+    pub fn reinstall_repairs(&self) -> bool {
+        self.enabled
+            && [Some(&self.skill), self.hook.as_ref(), self.herdr.as_ref()]
+                .into_iter()
+                .flatten()
+                .any(|piece| repairable(piece.state, piece.why.as_ref()))
+    }
+
     /// Whether Reinstall would change something for this agent: only an
     /// agent that is on has pieces to repair.
     pub fn needs_attention(&self) -> bool {

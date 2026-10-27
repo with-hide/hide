@@ -1778,6 +1778,10 @@ pub struct Runtime {
     /// leaves, or stops showing a connection chip (B29). One entry per pane,
     /// so a second press while one runs starts nothing.
     pane_reopens: HashMap<String, crate::model::PaneReopenSnapshot>,
+    /// Each machine's sessions that wear, or wore, the update badge, until
+    /// they connect or end (`sidebar::update_badged_sessions`): one entry per
+    /// open pane at most.
+    update_badges: HashMap<String, std::collections::BTreeSet<String>>,
     fork_sequence: u64,
     /// The machine's TCP listeners, refreshed on their own window by the
     /// session-sync coordinator. Held here rather than in the snapshot because
@@ -2425,6 +2429,7 @@ impl Runtime {
             agent_sleep_backoff: HashMap::new(),
             agent_wake_started: HashMap::new(),
             pane_reopens: HashMap::new(),
+            update_badges: HashMap::new(),
             fork_sequence: 0,
             listening_ports: crate::model::ListeningPortsSnapshot::default(),
             worktree_catalog: crate::model::WorktreeCatalogSnapshot::default(),

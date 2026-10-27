@@ -13,6 +13,8 @@ mod agent_features;
 mod agent_scopes;
 #[path = "tests/agent_sleep.rs"]
 mod agent_sleep;
+#[path = "tests/agent_update.rs"]
+mod agent_update;
 #[path = "tests/agents_settings_remote.rs"]
 mod agents_settings_remote;
 #[path = "tests/appearance.rs"]

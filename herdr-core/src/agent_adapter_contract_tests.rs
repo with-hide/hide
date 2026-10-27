@@ -116,6 +116,7 @@ fn a_newer_helpers_unknown_row_is_omitted_while_known_rows_keep_their_features()
         },
         hook: None,
         herdr: None,
+        update: None,
         doc_url: String::new(),
     };
     let report = hide_kit::KitReport {

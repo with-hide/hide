@@ -17,6 +17,204 @@ use usage::{
     Support, TokenSource, UsageDeclaration, absent, not_built,
 };
 
+// Each agent's update routes, read from its vendor's documentation
+// (docs/agent-hooks.md, Updating an agent that is too old). A command the
+// vendor does not document is never written here: a package the vendor
+// names for a package manager is updated with that manager's own command for
+// it, and a way of installing no route covers gets the install page.
+
+const CLAUDE_UPDATES: &[UpdateRoute] = &[
+    // "the native installer manages the launcher at `~/.local/bin/claude` as
+    // a symlink into `~/.local/share/claude/versions/`"; on Windows it
+    // "places `claude` at `%USERPROFILE%\.local\bin\claude.exe`".
+    UpdateRoute {
+        method: InstallMethod::Installer(&[
+            ".local/share/claude/versions",
+            ".local/bin/claude.exe",
+        ]),
+        systems: Systems::Every,
+        command: "claude update",
+        source: "https://code.claude.com/docs/en/setup https://code.claude.com/docs/en/troubleshoot-install",
+    },
+    // "Run `brew upgrade claude-code` or `brew upgrade claude-code@latest`,
+    // depending on which cask you installed".
+    UpdateRoute {
+        method: InstallMethod::Homebrew("claude-code"),
+        systems: Systems::MacOsAndLinux,
+        command: "brew upgrade claude-code",
+        source: "https://code.claude.com/docs/en/setup",
+    },
+    UpdateRoute {
+        method: InstallMethod::Homebrew("claude-code@latest"),
+        systems: Systems::MacOsAndLinux,
+        command: "brew upgrade claude-code@latest",
+        source: "https://code.claude.com/docs/en/setup",
+    },
+    // "Run `winget upgrade Anthropic.ClaudeCode` periodically".
+    UpdateRoute {
+        method: InstallMethod::WinGet("Anthropic.ClaudeCode"),
+        systems: Systems::Windows,
+        command: "winget upgrade Anthropic.ClaudeCode",
+        source: "https://code.claude.com/docs/en/setup",
+    },
+    // "To upgrade an npm installation, run `npm install -g
+    // @anthropic-ai/claude-code@latest`. Avoid `npm update -g`".
+    UpdateRoute {
+        method: InstallMethod::Npm("@anthropic-ai/claude-code"),
+        systems: Systems::Every,
+        command: "npm install -g @anthropic-ai/claude-code@latest",
+        source: "https://code.claude.com/docs/en/setup",
+    },
+];
+
+const CODEX_UPDATES: &[UpdateRoute] = &[
+    // "Update Codex" gives the standalone installer again; it links
+    // `~/.local/bin/codex` into `~/.codex/packages/standalone/current`.
+    // Windows has no documented update, so its standalone copy gets the page.
+    UpdateRoute {
+        method: InstallMethod::Installer(&[".codex/packages/standalone"]),
+        systems: Systems::MacOsAndLinux,
+        command: "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
+        source: "https://learn.chatgpt.com/docs/codex/cli https://chatgpt.com/codex/install.sh",
+    },
+    // The README's install line, which installs the newest release.
+    UpdateRoute {
+        method: InstallMethod::Npm("@openai/codex"),
+        systems: Systems::Every,
+        command: "npm install -g @openai/codex",
+        source: "https://github.com/openai/codex#installing-and-running-codex-cli",
+    },
+    // The README installs the `codex` cask; Homebrew upgrades a cask so.
+    UpdateRoute {
+        method: InstallMethod::Homebrew("codex"),
+        systems: Systems::MacOsAndLinux,
+        command: "brew upgrade --cask codex",
+        source: "https://github.com/openai/codex#installing-and-running-codex-cli https://docs.brew.sh/Manpage#upgrade-options-installed_formulainstalled_cask-",
+    },
+];
+
+const GROK_UPDATES: &[UpdateRoute] = &[
+    // The install script links `~/.grok/bin/grok` into `~/.grok/downloads`
+    // on macOS and Linux and writes `%USERPROFILE%\.grok\bin\grok.exe` on
+    // Windows; "`grok update` | Check for updates or install a specific
+    // version".
+    UpdateRoute {
+        method: InstallMethod::Installer(&[".grok/downloads", ".grok/bin/grok.exe"]),
+        systems: Systems::Every,
+        command: "grok update",
+        source: "https://docs.x.ai/build/cli/reference https://x.ai/cli/install.sh https://x.ai/cli/install.ps1",
+    },
+    // "Use `npm install -g @xai-official/grok` as an alternative".
+    UpdateRoute {
+        method: InstallMethod::Npm("@xai-official/grok"),
+        systems: Systems::Every,
+        command: "npm install -g @xai-official/grok",
+        source: "https://docs.x.ai/build/enterprise",
+    },
+];
+
+// "`opencode upgrade [target]` ... `--method`: curl, npm, pnpm, bun, brew":
+// OpenCode updates itself for every way it is installed that it knows.
+const OPENCODE_UPGRADE: &str = "https://opencode.ai/docs/cli/#upgrade";
+const OPENCODE_UPDATES: &[UpdateRoute] = &[
+    // "The install script installs OpenCode to `$HOME/.opencode/bin`."
+    UpdateRoute {
+        method: InstallMethod::Installer(&[".opencode/bin/opencode"]),
+        systems: Systems::MacOsAndLinux,
+        command: "opencode upgrade",
+        source: OPENCODE_UPGRADE,
+    },
+    UpdateRoute {
+        method: InstallMethod::Npm("opencode-ai"),
+        systems: Systems::Every,
+        command: "opencode upgrade",
+        source: OPENCODE_UPGRADE,
+    },
+    UpdateRoute {
+        method: InstallMethod::Bun("opencode-ai"),
+        systems: Systems::Every,
+        command: "opencode upgrade",
+        source: OPENCODE_UPGRADE,
+    },
+    UpdateRoute {
+        method: InstallMethod::Homebrew("opencode"),
+        systems: Systems::MacOsAndLinux,
+        command: "opencode upgrade",
+        source: OPENCODE_UPGRADE,
+    },
+];
+
+const PI_UPDATES: &[UpdateRoute] = &[
+    // The installer writes its launcher to `~/.pi/agent/bin/pi` and links
+    // it from a folder on `PATH`; "The installer pins all dependencies and
+    // updates Pi with `pi update`."
+    UpdateRoute {
+        method: InstallMethod::Installer(&[".pi/agent/bin"]),
+        systems: Systems::MacOsAndLinux,
+        command: "pi update",
+        source: "https://pi.dev/docs/quickstart https://pi.dev/install.sh",
+    },
+    // The README's npm line (Windows' installer installs with npm too).
+    UpdateRoute {
+        method: InstallMethod::Npm("@earendil-works/pi-coding-agent"),
+        systems: Systems::Every,
+        command: "npm install -g --ignore-scripts @earendil-works/pi-coding-agent",
+        source: "https://github.com/earendil-works/pi#installation",
+    },
+    UpdateRoute {
+        method: InstallMethod::Bun("@earendil-works/pi-coding-agent"),
+        systems: Systems::Every,
+        command: "bun add -g --ignore-scripts @earendil-works/pi-coding-agent",
+        source: "https://pi.dev/",
+    },
+];
+
+const OMP_UPDATES: &[UpdateRoute] = &[
+    // The install script writes `~/.local/bin/omp`, and on Windows
+    // `%LOCALAPPDATA%\omp\omp.exe`; "`omp update [flags]` Installs the
+    // current channel's update."
+    UpdateRoute {
+        method: InstallMethod::Installer(&[".local/bin/omp", "AppData/Local/omp/omp.exe"]),
+        systems: Systems::Every,
+        command: "omp update",
+        source: "https://omp.sh/docs/cli https://omp.sh/install https://omp.sh/install.ps1",
+    },
+    // The README's "Bun (recommended)" line.
+    UpdateRoute {
+        method: InstallMethod::Bun("@oh-my-pi/pi-coding-agent"),
+        systems: Systems::Every,
+        command: "bun install -g @oh-my-pi/pi-coding-agent",
+        source: "https://github.com/can1357/oh-my-pi#installation",
+    },
+    // The README installs `can1357/tap/omp`; Homebrew upgrades it so.
+    UpdateRoute {
+        method: InstallMethod::Homebrew("omp"),
+        systems: Systems::MacOsAndLinux,
+        command: "brew upgrade can1357/tap/omp",
+        source: "https://github.com/can1357/oh-my-pi#installation https://docs.brew.sh/Manpage#upgrade-options-installed_formulainstalled_cask-",
+    },
+];
+
+// "Default binary location: `~/.local/bin/agy`" and
+// "`C:\Users\<username>\AppData\Local\agy\bin`": the documented page has
+// no update command, so the update is its install command, which installs
+// the newest release.
+const ANTIGRAVITY_INSTALL: &str = "https://antigravity.google/docs/getting-started?tab=cli";
+const ANTIGRAVITY_UPDATES: &[UpdateRoute] = &[
+    UpdateRoute {
+        method: InstallMethod::Installer(&[".local/bin/agy"]),
+        systems: Systems::MacOsAndLinux,
+        command: "curl -fsSL https://antigravity.google/cli/install.sh | bash",
+        source: ANTIGRAVITY_INSTALL,
+    },
+    UpdateRoute {
+        method: InstallMethod::Installer(&["AppData/Local/agy/bin/agy.exe"]),
+        systems: Systems::Windows,
+        command: "irm https://antigravity.google/cli/install.ps1 | iex",
+        source: ANTIGRAVITY_INSTALL,
+    },
+];
+
 /// The supported order is also the stable Settings order.
 pub const ADAPTERS: &[AgentAdapter] = &[
     AgentAdapter {
@@ -101,6 +299,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         },
         doc_url: "https://code.claude.com/docs/en/skills",
         install_url: "https://code.claude.com/docs/en/setup",
+        updates: CLAUDE_UPDATES,
         logo_id: "claude-code",
     },
     AgentAdapter {
@@ -184,6 +383,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         },
         doc_url: "https://learn.chatgpt.com/docs/build-skills",
         install_url: "https://learn.chatgpt.com/docs/codex/cli",
+        updates: CODEX_UPDATES,
         logo_id: "codex",
     },
     AgentAdapter {
@@ -289,6 +489,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         },
         doc_url: "https://docs.x.ai/build/features/skills-plugins-marketplaces",
         install_url: "https://github.com/xai-org/grok-build",
+        updates: GROK_UPDATES,
         logo_id: "grok",
     },
     AgentAdapter {
@@ -392,6 +593,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         },
         doc_url: "https://opencode.ai/docs/skills/",
         install_url: "https://opencode.ai/docs/",
+        updates: OPENCODE_UPDATES,
         logo_id: "opencode",
     },
     AgentAdapter {
@@ -488,6 +690,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         },
         doc_url: "https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/skills.md",
         install_url: "https://pi.dev/",
+        updates: PI_UPDATES,
         logo_id: "pi",
     },
     AgentAdapter {
@@ -586,6 +789,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         },
         doc_url: "https://omp.sh/docs/skills",
         install_url: "https://omp.sh/docs/quickstart",
+        updates: OMP_UPDATES,
         logo_id: "omp",
     },
     AgentAdapter {
@@ -686,6 +890,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
         },
         doc_url: "https://antigravity.google/docs/skills/",
         install_url: "https://antigravity.google/docs/install?tab=cli",
+        updates: ANTIGRAVITY_UPDATES,
         logo_id: "antigravity",
     },
 ];
@@ -788,5 +993,6 @@ pub(super) const RETIRED_CURSOR: AgentAdapter = AgentAdapter {
     },
     doc_url: "https://cursor.com/docs/context/skills",
     install_url: "https://cursor.com/docs/cli/installation",
+    updates: &[],
     logo_id: "cursor",
 };

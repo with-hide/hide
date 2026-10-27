@@ -40,7 +40,14 @@
       },
       "evidence": "https://code.claude.com/docs/en/settings-reference"
     },
-    "minimum_version": "2.1.278"
+    "minimum_version": "2.1.278",
+    "update_commands": [
+      "claude update",
+      "brew upgrade claude-code",
+      "brew upgrade claude-code@latest",
+      "winget upgrade Anthropic.ClaudeCode",
+      "npm install -g @anthropic-ai/claude-code@latest"
+    ]
   },
   {
     "id": "codex",
@@ -84,7 +91,12 @@
       },
       "evidence": "https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/core/config.schema.json"
     },
-    "minimum_version": "0.155.1"
+    "minimum_version": "0.155.1",
+    "update_commands": [
+      "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
+      "npm install -g @openai/codex",
+      "brew upgrade --cask codex"
+    ]
   },
   {
     "id": "grok",
@@ -127,7 +139,11 @@
       },
       "evidence": "https://docs.x.ai/build/settings/reference.md"
     },
-    "minimum_version": "1.0.52"
+    "minimum_version": "1.0.52",
+    "update_commands": [
+      "grok update",
+      "npm install -g @xai-official/grok"
+    ]
   },
   {
     "id": "opencode",
@@ -169,7 +185,13 @@
       },
       "evidence": "https://opencode.ai/v2/docs/config/"
     },
-    "minimum_version": "1.18.35"
+    "minimum_version": "1.18.35",
+    "update_commands": [
+      "opencode upgrade",
+      "opencode upgrade",
+      "opencode upgrade",
+      "opencode upgrade"
+    ]
   },
   {
     "id": "pi",
@@ -215,7 +237,12 @@
       },
       "evidence": "https://unpkg.com/@earendil-works/pi-coding-agent@1.0.4/docs/models.md"
     },
-    "minimum_version": "1.0.4"
+    "minimum_version": "1.0.4",
+    "update_commands": [
+      "pi update",
+      "npm install -g --ignore-scripts @earendil-works/pi-coding-agent",
+      "bun add -g --ignore-scripts @earendil-works/pi-coding-agent"
+    ]
   },
   {
     "id": "omp",
@@ -260,7 +287,12 @@
       },
       "evidence": "https://github.com/can1357/oh-my-pi/blob/v18.7.0/packages/coding-agent/src/main.ts"
     },
-    "minimum_version": "18.7.0"
+    "minimum_version": "18.7.0",
+    "update_commands": [
+      "omp update",
+      "bun install -g @oh-my-pi/pi-coding-agent",
+      "brew upgrade can1357/tap/omp"
+    ]
   },
   {
     "id": "antigravity",
@@ -303,6 +335,10 @@
       },
       "reason": "The installer cannot select a pinned release."
     },
-    "minimum_version": "1.4.2"
+    "minimum_version": "1.4.2",
+    "update_commands": [
+      "curl -fsSL https://antigravity.google/cli/install.sh | bash",
+      "irm https://antigravity.google/cli/install.ps1 | iex"
+    ]
   }
 ]

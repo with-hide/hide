@@ -483,6 +483,15 @@ pub fn project_pane_children(
     })
 }
 
+/// What a machine's kit says about updating its agents, for the judgement of
+/// its panes: the update each agent kind's copy needs, and the sessions that
+/// already wore the update badge (`Runtime::update_badges`), which read
+/// `started_before_hide` once their agent is updated and Hide's piece is in.
+pub struct PaneUpdates<'a> {
+    pub update_of: &'a dyn Fn(&str) -> Option<hide_kit::AgentUpdate>,
+    pub badged: &'a std::collections::BTreeSet<String>,
+}
+
 /// [`project_pane_children`] with the pane's connection judged on top of it.
 ///
 /// The connection is read from the observation the children were just
@@ -496,29 +505,92 @@ pub fn project_pane_children_connected(
     tokens: crate::agent_hooks::PaneHookTokens,
     status_of: &dyn Fn(hide_agent_adapter::HookDialect) -> Option<hide_agent_hooks::HookStatus>,
     codex_daemon_on: bool,
+    updates: &PaneUpdates<'_>,
 ) -> Option<crate::model::PaneChildrenSnapshot> {
     let mut children = project_pane_children(agents, pane_id, tokens, status_of)?;
-    let runtime = agents
+    let agent = agents
         .iter()
         // Process detection can precede the native session. No session yet
         // is not proof of a failed hook.
         .find(|agent| {
             agent.pane_id == pane_id && agent.sleep.is_none() && agent.close_session.is_some()
-        })
-        .and_then(|agent| crate::agent_hooks::runtime_of(&agent.agent_kind));
-    children.connection = pane_connection(runtime, pane_id, &children, codex_daemon_on);
+        });
+    children.connection = agent.and_then(|agent| {
+        let judged = PaneAgent {
+            runtime: crate::agent_hooks::runtime_of(&agent.agent_kind),
+            update: (updates.update_of)(&agent.agent_kind),
+            badged: agent
+                .close_session
+                .as_ref()
+                .is_some_and(|session| updates.badged.contains(&session.value)),
+        };
+        pane_connection(judged, pane_id, &children, codex_daemon_on)
+    });
     Some(children)
+}
+
+/// The session in a pane whose connection is judged.
+struct PaneAgent {
+    runtime: Option<hide_agent_hooks::AgentRuntime>,
+    /// The machine's copy of this agent needs this update first.
+    update: Option<hide_kit::AgentUpdate>,
+    /// This session wore the update badge.
+    badged: bool,
+}
+
+/// The sessions of one machine that wear, or wore, the update badge, from
+/// its panes just judged and the set `previous` judgement kept: a session
+/// whose pane says `update_agent` now, and one kept from before while its
+/// pane is still not connected, so it reads `started_before_hide` once its
+/// agent is updated. A session that connects or ends is forgotten, so the
+/// set holds at most one entry per open pane. The flag is true when a
+/// session wears the badge that did not before: an agent started again,
+/// perhaps after its update, which a kit read of the machine settles.
+pub fn update_badged_sessions<'a>(
+    agents: &'a [SidebarAgentSnapshot],
+    panes: impl IntoIterator<Item = (&'a str, Option<&'a crate::model::PaneChildrenSnapshot>)>,
+    previous: &std::collections::BTreeSet<String>,
+) -> (std::collections::BTreeSet<String>, bool) {
+    let mut badged = std::collections::BTreeSet::new();
+    let mut newly = false;
+    for (pane_id, children) in panes {
+        let Some(session) = agents
+            .iter()
+            .find(|agent| agent.pane_id == pane_id)
+            .and_then(|agent| agent.close_session.as_ref())
+        else {
+            continue;
+        };
+        let connection = children.and_then(|children| children.connection.as_ref());
+        let wears = connection.is_some_and(|connection| {
+            connection.reason == Some(crate::model::PaneConnectionReason::UpdateAgent)
+        });
+        let kept = previous.contains(&session.value)
+            && !connection.is_some_and(|connection| connection.connected);
+        if wears && !previous.contains(&session.value) {
+            newly = true;
+        }
+        if wears || kept {
+            badged.insert(session.value.clone());
+        }
+    }
+    (badged, newly)
 }
 
 /// Whether Hide hears one pane's session, and why not.
 ///
-/// Only Claude Code's and Codex's sessions can be reopened to connect them, so
-/// no other agent has a connection to judge (B19); an OpenCode session started
-/// before Hide's plugin keeps its children mark and reason instead. An agent switched off has no status, and
-/// a machine whose hooks Hide has not read leaves the cause unknown rather
-/// than naming one (B16).
+/// An agent whose copy is older than its minimum got none of Hide's pieces,
+/// so its pane says to update it, whatever agent it is (docs/status-model.md,
+/// Not connected, and what fixes it); once it is updated and the piece is
+/// in, the session that wore that badge reads `started_before_hide` until it
+/// is restarted. Otherwise only Claude Code's and Codex's sessions can be
+/// reopened to connect them, so no other agent has a connection to judge
+/// (B19); an OpenCode session started before Hide's plugin keeps its
+/// children mark and reason instead. An agent switched off has no status,
+/// and a machine whose hooks Hide has not read leaves the cause unknown
+/// rather than naming one (B16).
 fn pane_connection(
-    runtime: Option<hide_agent_hooks::AgentRuntime>,
+    agent: PaneAgent,
     pane_id: &str,
     children: &crate::model::PaneChildrenSnapshot,
     codex_daemon_on: bool,
@@ -526,17 +598,20 @@ fn pane_connection(
     use crate::model::{PaneConnectionReason, PaneConnectionSnapshot};
     use hide_agent_hooks::AgentRuntime;
     use hide_agent_hooks::diagnosis::UninstrumentedReason as Reason;
-    let runtime = runtime?;
-    let not_connected = |reason| {
-        Some(PaneConnectionSnapshot {
-            connected: false,
-            // Reopen restarts the session on this Mac's Herdr, so a pane on
-            // another device and a missing hook are not its to fix.
-            can_reopen: reason != PaneConnectionReason::SetupNeeded
-                && !crate::agent_hooks::is_remote_pane(pane_id),
-            reason: Some(reason),
-            reopen: None,
-        })
+    // Reopen restarts a Claude Code or Codex session on this Mac's Herdr, so
+    // another agent, a pane on another device, a missing hook and an agent
+    // too old are not its to fix.
+    let reopens = agent.runtime.is_some() && !crate::agent_hooks::is_remote_pane(pane_id);
+    let not_connected = |reason| PaneConnectionSnapshot {
+        connected: false,
+        can_reopen: reopens
+            && !matches!(
+                reason,
+                PaneConnectionReason::SetupNeeded | PaneConnectionReason::UpdateAgent
+            ),
+        reason: Some(reason),
+        reopen: None,
+        update: None,
     };
     if children.instrumented {
         return Some(PaneConnectionSnapshot {
@@ -544,23 +619,34 @@ fn pane_connection(
             can_reopen: false,
             reason: None,
             reopen: None,
+            update: None,
         });
     }
-    match children
+    if let Some(update) = agent.update {
+        return Some(PaneConnectionSnapshot {
+            update: Some(update),
+            ..not_connected(PaneConnectionReason::UpdateAgent)
+        });
+    }
+    let reason = children
         .uninstrumented_code
         .as_deref()
-        .and_then(Reason::from_code)?
-    {
+        .and_then(Reason::from_code)?;
+    if agent.badged && reason == Reason::SessionPredatesInstall {
+        return Some(not_connected(PaneConnectionReason::StartedBeforeHide));
+    }
+    let runtime = agent.runtime?;
+    match reason {
         Reason::HooksSwitchedOff | Reason::Unknown => None,
-        Reason::SessionPredatesInstall => {
-            not_connected(if runtime == AgentRuntime::Codex && codex_daemon_on {
+        Reason::SessionPredatesInstall => Some(not_connected(
+            if runtime == AgentRuntime::Codex && codex_daemon_on {
                 PaneConnectionReason::CodexSharedServer
             } else {
                 PaneConnectionReason::StartedBeforeHide
-            })
-        }
+            },
+        )),
         Reason::HooksNotInstalled | Reason::ConfigUnreadable | Reason::HookOutdated => {
-            not_connected(PaneConnectionReason::SetupNeeded)
+            Some(not_connected(PaneConnectionReason::SetupNeeded))
         }
     }
 }

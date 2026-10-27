@@ -921,6 +921,30 @@ fn an_agent_older_than_its_minimum_version_gets_no_hook_plugin_or_extension() {
             !Path::new(&hook.location.unwrap()).exists(),
             "{id}: Hide's file was written"
         );
+        // The row says what to update and how: omp's and agy's installers
+        // leave their program in `~/.local/bin`, while a Grok, OpenCode or Pi
+        // there came from no way their vendors document, so it gets no
+        // command.
+        let command = match id {
+            "omp" => Some("omp update"),
+            "antigravity" => Some("curl -fsSL https://antigravity.google/cli/install.sh | bash"),
+            _ => None,
+        };
+        assert_eq!(
+            agent(&refused, id).update,
+            Some(crate::AgentUpdate {
+                installed: "0.0.1".to_owned(),
+                minimum: minimum.to_owned(),
+                path: fixture
+                    .home()
+                    .join(".local/bin")
+                    .join(name)
+                    .display()
+                    .to_string(),
+                command: command.map(str::to_owned),
+            }),
+            "{id}"
+        );
     }
 
     for (id, name, _) in agents {
@@ -930,11 +954,58 @@ fn an_agent_older_than_its_minimum_version_gets_no_hook_plugin_or_extension() {
             &format!("#!/bin/sh\necho '{name} {minimum}'\n"),
         );
     }
+    // A read after the update judges the new copy, which the core turns
+    // into the next automatic pass (`Runtime::install_updated_agents`); that
+    // pass installs with nothing pressed.
+    let read = status(&fixture.target);
+    for (id, ..) in agents {
+        let row = agent(&read, id);
+        assert_eq!(row.update, None, "{id}");
+        assert!(row.needs_attention(), "{id}: {row:?}");
+    }
     let report = apply(&fixture.target, &Scope::automatic());
     for (id, ..) in agents {
         let hook = agent(&report, id).hook.clone().unwrap();
         assert_eq!(hook.state, ComponentState::Installed, "{id}: {hook:?}");
+        assert_eq!(agent(&report, id).update, None, "{id}");
     }
+}
+
+/// An agent that is off still says its copy is too old, since switching it
+/// on would install nothing (the first-run choice shows it), and one that is
+/// on and current says nothing even with an old copy, since nothing of
+/// Hide's is refused for it.
+#[test]
+fn an_agent_too_old_reports_its_update_while_off_and_only_while_refused_when_on() {
+    let fixture = Fixture::new();
+    program(
+        &fixture.home().join(".local/bin/omp"),
+        "#!/bin/sh\necho 'omp 18.7.0'\n",
+    );
+    set_up(&fixture, ".omp/agent");
+    let report = apply(&fixture.target, &Scope::agents(["omp"], []));
+    assert_eq!(
+        agent(&report, "omp").hook.as_ref().unwrap().state,
+        ComponentState::Installed
+    );
+
+    program(
+        &fixture.home().join(".local/bin/omp"),
+        "#!/bin/sh\necho 'omp 18.6.0 (old)'\n",
+    );
+    let current = status(&fixture.target);
+    assert_eq!(agent(&current, "omp").update, None);
+
+    let off = apply(&fixture.target, &Scope::agents([], ["omp"]));
+    let update = agent(&off, "omp").update.clone().unwrap();
+    assert_eq!(
+        (
+            update.installed.as_str(),
+            update.minimum.as_str(),
+            update.command.as_deref()
+        ),
+        ("18.6.0", "18.7.0", Some("omp update"))
+    );
 }
 
 #[test]

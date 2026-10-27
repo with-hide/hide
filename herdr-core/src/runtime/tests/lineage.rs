@@ -1864,7 +1864,7 @@ fn the_settings_diagnosis_reports_each_runtime_and_the_sessions_that_predate_the
             .flat_map(|tab| tab.panes.iter())
             .find(|pane| pane.id == pane_id)
             .and_then(|pane| pane.children.as_ref())
-            .and_then(|children| children.connection)
+            .and_then(|children| children.connection.clone())
     };
     assert_eq!(connection(&runtime, "w1:p2"), None);
 
@@ -1908,6 +1908,7 @@ fn the_settings_diagnosis_reports_each_runtime_and_the_sessions_that_predate_the
             can_reopen: false,
             reason: None,
             reopen: None,
+            update: None,
         })
     );
     assert_eq!(
@@ -1917,6 +1918,7 @@ fn the_settings_diagnosis_reports_each_runtime_and_the_sessions_that_predate_the
             can_reopen: true,
             reason: Some(crate::model::PaneConnectionReason::StartedBeforeHide),
             reopen: None,
+            update: None,
         })
     );
     assert_eq!(

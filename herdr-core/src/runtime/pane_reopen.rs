@@ -28,7 +28,7 @@ impl Runtime {
             .flat_map(|tab| tab.panes.iter())
             .find(|pane| pane.id == pane_id)
             .and_then(|pane| pane.children.as_ref())
-            .and_then(|children| children.connection)
+            .and_then(|children| children.connection.clone())
         else {
             self.pane_reopen_ignored(pane_id, "no_such_pane");
             return false;

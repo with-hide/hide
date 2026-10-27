@@ -170,6 +170,12 @@ impl Runtime {
         let status_of = |dialect: hide_agent_adapter::HookDialect| {
             crate::agent_hooks::device_hook_status(declined, &kit, dialect)
         };
+        let update_of = |kind: &str| crate::agent_hooks::kit_update(&kit, kind);
+        let none = std::collections::BTreeSet::new();
+        let updates = crate::sidebar::PaneUpdates {
+            update_of: &update_of,
+            badged: self.update_badges.get(target).unwrap_or(&none),
+        };
         let agents = &session.agents;
         let tokens = &session.pane_hook_tokens;
         for pane in session
@@ -185,6 +191,7 @@ impl Runtime {
                 tokens.get(&pane.id).copied().unwrap_or_default(),
                 &status_of,
                 kit.shares_codex_server(),
+                &updates,
             );
         }
     }
@@ -196,9 +203,27 @@ impl Runtime {
             return false;
         };
         let mut session = self.derive_device_session(target, raw);
+        let previous = self.update_badges.remove(target).unwrap_or_default();
+        let (badged, newly) = crate::sidebar::update_badged_sessions(
+            &session.agents,
+            session
+                .workspaces
+                .iter()
+                .flat_map(|project| project.checkouts.iter())
+                .flat_map(|checkout| checkout.tabs.iter())
+                .flat_map(|tab| tab.panes.iter())
+                .map(|pane| (pane.id.as_str(), pane.children.as_ref())),
+            &previous,
+        );
+        if !badged.is_empty() {
+            self.update_badges.insert(target.to_owned(), badged);
+        }
         let empty = DeviceFacts::default();
         let catalog =
             device_catalog::catalog_state(raw, self.device_facts.get(target).unwrap_or(&empty));
+        if newly {
+            self.request_machine_kit_read(target);
+        }
         self.bring_recent_device_tabs(target, &mut session);
         self.rename_saved_device_checkouts(target, &session);
         let mut dropped_moves = Vec::new();

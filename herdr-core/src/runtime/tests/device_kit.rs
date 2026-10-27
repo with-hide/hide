@@ -444,6 +444,7 @@ fn agent_report(
         skill: piece(skill),
         hook: None,
         herdr: None,
+        update: None,
         doc_url: "https://example.test/skills".to_owned(),
     }
 }

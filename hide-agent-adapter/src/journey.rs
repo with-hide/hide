@@ -43,6 +43,10 @@ pub struct JourneyAdapter {
     /// (`AgentAdapter::minimum`), which the daily agent canary's record shows
     /// beside the latest release it measured.
     pub minimum_version: Option<&'static str>,
+    /// The update command of each documented way of installing the CLI
+    /// that Hide can tell apart (`AgentAdapter::updates`), which a screen
+    /// shows an operator whose copy is older than `minimum_version`.
+    pub update_commands: Vec<&'static str>,
 }
 
 /// A private HOME is admitted only with a declared key route and update policy.
@@ -248,6 +252,7 @@ pub fn journey_contract() -> impl Iterator<Item = JourneyAdapter> {
             cells,
             request_budget: row.start.map(|start| turns * requests_per_turn(start)),
             minimum_version: row.minimum.map(|minimum| minimum.version),
+            update_commands: row.updates.iter().map(|route| route.command).collect(),
             letter,
             wake,
             title,
