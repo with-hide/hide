@@ -17,10 +17,14 @@ EVERY_PACKAGE = sorted(crate["name"] for crate in CRATES.values())
 # The lanes that take a macOS runner; every other check on macOS is a job of
 # `nightly.yml`.
 MACOS_LANES = {"os-contract-macos", "desktop-e2e", "package", "omp-contract"}
-# Every lane but `package`: what a push, the nightly and an unclassified path plan.
-FULL = [lane for lane in ci.LANES if lane not in ("package", "agent-clis")]
-# A full plan with a package input: `agent-clis` is planned by its own paths only.
-PACKAGED = [lane for lane in ci.LANES if lane != "agent-clis"]
+# What a push, the nightly and an unclassified path plan: every lane but
+# `package` and `agent-clis`, which are planned by their own paths only.
+FULL = [
+    "policy", "rust", "checks", "os-contract", "os-contract-macos", "agy-contract", "omp-contract", "agent-journey",
+    "windows-check", "windows-e2e", "windows-desktop", "web-e2e", "remote-mailbox", "desktop-e2e",
+]
+# A full plan with a package input.
+PACKAGED = FULL + ["package"]
 # The paths a pull request changed when `package.yml` had its own trigger.
 PACKAGE_INPUTS = (
     "desktop/scripts/package.mjs", "desktop/scripts/build.mjs", "desktop/package.json", "desktop/resources/entitlements.plist",
@@ -296,6 +300,28 @@ class Selection(unittest.TestCase):
         ):
             with self.subTest(path=path):
                 self.assertNotIn("desktop-e2e", plan(path)["lanes"])
+
+    def test_the_whole_plan_of_each_kind_of_change(self):
+        # The desktop suite waits in the macOS queue, so a crate-only pull
+        # request leaves it to main's full run; anything under desktop/ or the
+        # web shell still plans it, and every full plan keeps it.
+        crate_only = ["policy", "rust", "os-contract", "windows-check", "windows-e2e", "windows-desktop", "web-e2e",
+                      "remote-mailbox"]
+        for paths, lanes in (
+            (("herdr-core/src/lib.rs",), crate_only),
+            (("herdr-core/src/lib.rs", "desktop/src/main/index.ts"),
+             ["policy", "rust", "checks", "os-contract", "windows-check", "windows-e2e", "windows-desktop", "web-e2e",
+              "remote-mailbox", "desktop-e2e"]),
+            (("web/src/Overview.tsx",), ["policy", "rust", "checks", "web-e2e", "desktop-e2e"]),
+            (("docs/TESTING.md",), ["policy"]),
+            (("mystery/file.txt",), FULL),
+            (("desktop/scripts/package.mjs", "mystery/file.txt"), PACKAGED),
+        ):
+            with self.subTest(paths=paths):
+                self.assertEqual(plan(*paths)["lanes"], lanes)
+        for event in ("push", "schedule", "workflow_dispatch", "workflow_call"):
+            with self.subTest(event=event):
+                self.assertEqual(ci.plan(event, None, None, ROOT)["lanes"], FULL)
 
     def test_shared_unknown_and_unsafe_changes_run_everything(self):
         for entries in (
