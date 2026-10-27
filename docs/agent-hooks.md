@@ -414,7 +414,7 @@ The pull request runs no registry install, so a failure that is not Hide's never
 The pre-tool hook also refuses what a project's protections name, the four switches of Project Settings > Working style ([UI_BEHAVIOR.md](UI_BEHAVIOR.md#project-settings), PRD agent-guardrails).
 They are protections, not a security boundary: they stop the ordinary tool calls and shell words below, and a write a script, `sed -i`, `bash -c`, `$(...)`, an alias or an MCP server makes is not seen (D-18).
 
-The core publishes one policy file per machine, `~/.hide/agent-hooks/guardrails.json` (`hide_agent_hooks::guardrails::policy_path`), naming each project of that machine with a protection on: its main worktree root, the base branch the operator chose (none for Auto, which reads `origin/HEAD`), its four switches, the merge option and its protected paths.
+The core publishes one policy file per machine, `~/.hide/agent-hooks/guardrails.json` (`hide_agent_hooks::guardrails::policy_path`), naming each project of that machine with a protection on: its main worktree root, the base branch the operator chose (none for Auto, which reads `origin/HEAD`, or in a repository with no remote the branch its main worktree has out, as the worktree reader names the default branch), its four switches, the merge option and its protected paths.
 This Mac's file is written by its own node and a connected device's by that device's node, through `Call::GuardrailPolicy` ([ARCHITECTURE.md](ARCHITECTURE.md#project-guardrails)); a saved switch shows Saved only after that machine has the new file, and every daemon start and device connection writes the file again from the current settings, empty when nothing is on.
 The hook reads that file and the repository's own Git files on the machine the agent runs on and asks the daemon nothing, so a saved change applies from the agent's next tool call without a restart.
 A project removed from Hide loses its protections, and a project turns them on again only from Project Settings.
@@ -443,7 +443,7 @@ Each refusal appends one `guard.refused` line (rule, whether a fact was unread, 
 
 How it fails (D-27):
 
-- A fact a protection that is on needs cannot be read (the checkout's repository, its branch, the base branch, whether it has changes): the call is refused and the reason says which fact; with no base branch to read (Auto, and no `origin/HEAD`), the reason asks the operator to choose one in Project Settings.
+- A fact a protection that is on needs cannot be read (the checkout's repository, its branch, the base branch, whether it has changes): the call is refused and the reason says which fact; with no base branch to read (Auto, no `origin/HEAD`, and a remote, so the main worktree's branch does not count), the reason asks the operator to choose one in Project Settings.
 - The policy file is missing, unreadable, corrupt or of another version: the call runs, and one `policy.unreadable` line with its cause is appended to the same log, throttled to one per ten minutes through the delivery diagnostics' store (cause `guardrails`).
 - The hook panics, or the payload does not arrive within 0.5 seconds, while some project has a protection on: the call runs, and one `guard.failed` line with its cause (`panic`, `payload_deadline`) is appended, throttled the same way (cause `guardrails_failed`).
   A hook the runtime kills at its own timeout leaves no line, since the process is gone, and the call takes that runtime's default.

@@ -253,19 +253,26 @@ impl<'a> Facts<'a> {
     }
 
     /// The branch the base branch protection guards in `checkout`'s
-    /// repository: the operator's choice, else what `origin/HEAD` names.
+    /// repository: the operator's choice, else what `origin/HEAD` names,
+    /// else, in a repository with no remote, the branch its main worktree
+    /// has out, as the worktree reader names the default branch.
     pub fn base(&self, project: &ProjectPolicy, checkout: &Checkout) -> Option<String> {
         if let Some(base) = &project.base {
             return Some(base.clone());
         }
         let common = checkout.common_dir.as_ref()?;
-        let text = std::fs::read_to_string(common.join("refs/remotes/origin/HEAD")).ok()?;
-        let branch = text
-            .trim()
-            .strip_prefix("ref:")?
-            .trim()
-            .strip_prefix("refs/remotes/origin/")?;
-        (!branch.is_empty()).then(|| branch.to_owned())
+        let origin = std::fs::read_to_string(common.join("refs/remotes/origin/HEAD"))
+            .ok()
+            .and_then(|text| {
+                let branch = text
+                    .trim()
+                    .strip_prefix("ref:")?
+                    .trim()
+                    .strip_prefix("refs/remotes/origin/")?
+                    .to_owned();
+                (!branch.is_empty()).then_some(branch)
+            });
+        origin.or_else(|| hide_project::git::discover(&checkout.main_root)?.own_default_branch())
     }
 }
 
