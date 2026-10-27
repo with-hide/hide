@@ -831,9 +831,53 @@ fn a_project_cost_read_from_the_store_sums_its_recorded_calls() {
     );
 }
 
+/// Past the read limit the projects' costs keep the newest calls, and
+/// calls of one time by agent and then key, whatever order they were
+/// written in and whichever plan SQLite reads them by; before, the plan
+/// picked which of two calls of one time a limit of one kept.
+#[test]
+fn calls_of_one_time_across_the_read_limit_are_kept_by_agent_and_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(&hide_kit::layout::usage_store(dir.path())).unwrap();
+    let zone = jiff::tz::TimeZone::UTC;
+    let now = instant("2026-10-23");
+    let tied = now - 60_000;
+    let priced = |key: u8, at_ms: u64, micro_usd: u64| {
+        let mut event = call(key, "2026-10-23");
+        event.at_ms = at_ms;
+        event.cwd = Some("/work/hide".into());
+        event.recorded_cost_micro_usd = Some(micro_usd);
+        event
+    };
+    // Written in the order they are read in, which a read walking the time
+    // index backwards would reverse.
+    for (agent, event) in [
+        (Agent::Claude, priced(2, tied, 1)),
+        (Agent::Claude, priced(3, tied, 10)),
+        (Agent::Codex, priced(1, tied, 100)),
+        (Agent::Claude, priced(9, now, 1000)),
+    ] {
+        store
+            .ingest("node-a", agent, &source(), &step(vec![event]), now, &zone)
+            .unwrap();
+    }
+    let read = |store: &Store| {
+        [1, 2, 3, 4]
+            .map(|limit| project_costs(store, limit, now))
+            .map(|costs| (costs[0].micro_usd, costs[0].limited))
+    };
+    // The newest call, then claude key 2, claude key 3, codex key 1.
+    let expected = [(1000, true), (1001, true), (1011, true), (1111, false)];
+    assert_eq!(read(&store), expected);
+
+    store.execute_for_test("DROP INDEX events_device_at");
+    assert_eq!(read(&store), expected, "read without the index");
+}
+
 /// The projects' costs read one device's newest calls by its index rather
-/// than sorting the window; a store from before the index gains it when it
-/// opens, its version unchanged so an older build still opens it.
+/// than sorting the window, sorting only calls of one time; a store from
+/// before the index gains it when it opens, its version unchanged so an
+/// older build still opens it.
 #[test]
 fn a_store_from_before_the_cost_index_gains_it_without_a_version_change() {
     let dir = tempfile::tempdir().unwrap();
@@ -845,7 +889,7 @@ fn a_store_from_before_the_cost_index_gains_it_without_a_version_change() {
     assert_eq!(user_version(&path), 3);
     let mut query = store
         .connection
-        .prepare("EXPLAIN QUERY PLAN SELECT agent,day,event FROM events WHERE device=?1 AND at>=?2 ORDER BY at DESC LIMIT ?3")
+        .prepare(&format!("EXPLAIN QUERY PLAN {RECENT_CALLS}"))
         .unwrap();
     let plan = query
         .query_map(params!["node-a", 0, 1], |row| row.get::<_, String>(3))
@@ -854,7 +898,8 @@ fn a_store_from_before_the_cost_index_gains_it_without_a_version_change() {
         .unwrap();
     assert!(
         plan.iter().any(|step| step.contains("events_device_at"))
-            && !plan.iter().any(|step| step.contains("TEMP B-TREE")),
+            // Sorting the calls of one time is "FOR LAST 2 TERMS OF ORDER BY".
+            && !plan.iter().any(|step| step == "USE TEMP B-TREE FOR ORDER BY"),
         "{plan:?}"
     );
 }

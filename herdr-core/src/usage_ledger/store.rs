@@ -58,6 +58,12 @@ CREATE TABLE IF NOT EXISTS ai_state(slot INTEGER PRIMARY KEY CHECK(slot=1), limi
 /// tree. Added without a version bump, as `AI_SCHEMA` is, so an older build
 /// opens the same file and keeps the index current.
 const COST_INDEX: &str = "CREATE INDEX IF NOT EXISTS events_device_at ON events(device,at);";
+/// The own node's calls of a window, newest first. `(device, agent, key)` is
+/// the primary key, so the order is total: past the limit the same calls are
+/// read whichever plan SQLite chooses. By `events_device_at` SQLite sorts
+/// only the calls of one time, a few at most, where an index holding agent
+/// and key too would be more than twice its size.
+const RECENT_CALLS: &str = "SELECT agent,day,event FROM events WHERE device=?1 AND at>=?2 ORDER BY at DESC,agent,key LIMIT ?3";
 /// Building `events_device_at` on an existing store reads every call once:
 /// about a second for 486,000 calls on a loaded machine, against a step's
 /// 250 ms.
@@ -592,10 +598,10 @@ impl Store {
         self.connection.execute_batch(sql).unwrap();
     }
 
-    /// Hands `each` the own node's calls made at `since_ms` or later, newest
-    /// first, with their agent and assigned day, for the projects' costs
-    /// (PRD lane-two-columns B31), and says whether more than `limit` were
-    /// there. Each call is decoded, handed on and dropped, so nothing here
+    /// Hands `each` the own node's calls made at `since_ms` or later in
+    /// `RECENT_CALLS` order, with their agent and assigned day, for the
+    /// projects' costs (PRD lane-two-columns B31), and says whether more than
+    /// `limit` were there. Each call is decoded, handed on and dropped, so nothing here
     /// grows with the calls read. It reads the 45-day `events` table by
     /// `events_device_at`, with a longer budget than a step's because it
     /// decodes every call, `each` included; the caller keeps the days it
@@ -608,10 +614,7 @@ impl Store {
         mut each: impl FnMut(&str, &str, Event) -> Result<(), &'static str>,
     ) -> Result<bool, &'static str> {
         self.budget_of(Duration::from_secs(2));
-        let mut query = self
-            .connection
-            .prepare("SELECT agent,day,event FROM events WHERE device=?1 AND at>=?2 ORDER BY at DESC LIMIT ?3")
-            .map_err(failed)?;
+        let mut query = self.connection.prepare(RECENT_CALLS).map_err(failed)?;
         let since = i64::try_from(since_ms).map_err(|_| "usage_timestamp_invalid")?;
         let mut rows = query
             .query(params![device, since, limit + 1])
