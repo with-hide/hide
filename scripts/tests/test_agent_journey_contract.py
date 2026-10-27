@@ -1,41 +1,125 @@
-"""A new adapter needs every journey route and a valid generated declaration.
+"""A new adapter needs every journey route, every place a script or a guide
+names each agent, and a valid generated declaration.
 
-These checks read declarations and route data only; no CLI, login or model runs.
+These checks read declarations, route data and guides only; no CLI, login or
+model runs. docs/agent-hooks.md, Adding an agent, is the checklist they hold.
 """
 
 import copy
 import json
 from pathlib import Path
+import re
 import sys
 import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
-from agent_journey import ci, clis, fake_lane, local  # noqa: E402
+from agent_journey import ci, clis, fake_lane, fake_private, local  # noqa: E402
 from agent_journey.contract import active_rows, load_contract  # noqa: E402
 from agent_live_check.protection import ProtectionError  # noqa: E402
 
+CELL = re.compile(r"(?<!\\)\|")
+
+
+def section(path, heading):
+    """The text under `heading` in a guide, up to the next heading of the same or a higher level."""
+    lines = (ROOT / path).read_text().splitlines()
+    level = len(heading) - len(heading.lstrip("#"))
+    start = lines.index(heading) + 1
+    end = next((index for index in range(start, len(lines))
+                if re.match(r"#{1,%d} " % level, lines[index])), len(lines))
+    return lines[start:end]
+
+
+def tables(lines):
+    """Each Markdown table in `lines` as its rows of cells, the header row first and no separator row."""
+    found, rows = [], []
+    for line in [*lines, ""]:
+        if line.startswith("|"):
+            cells = [cell.strip() for cell in CELL.split(line.strip())[1:-1]]
+            if not all(re.fullmatch(r":?-+:?", cell) for cell in cells):
+                rows.append(cells)
+        elif rows:
+            found.append(rows)
+            rows = []
+    return found
+
+
+def version(text):
+    return tuple(int(part) for part in text.split("."))
+
+
+class Guides:
+    """The per-agent rows of docs/agent-hooks.md and docs/INSTALL.md."""
+
+    def __init__(self):
+        support, features = tables(section("docs/agent-hooks.md", "### Support table"))[:2]
+        self.support = {row[0] for row in support[1:]}
+        self.features = {label.strip() for cell in features[0][2:] for label in cell.split(",")}
+        minimums = tables(section("docs/agent-hooks.md", "### The oldest version of each agent"))[0]
+        self.minimums = {row[0]: row[1] for row in minimums[1:]}
+        systems = [row[0] for table in tables(section("docs/INSTALL.md", "### What each system supports"))
+                   for row in table[1:]]
+        listed = [cell for cell in systems if "each with its hook, plugin or extension and skill" in cell]
+        self.agents_row = listed[0] if len(listed) == 1 else ""
+        self.letters = {cell.rsplit("one row per agent: ", 1)[-1] for cell in systems
+                        if cell.startswith("Letters to an agent while it works")} | set(systems)
+
+
+def integration_targets():
+    """The agents the pinned Herdr ships an integration for (`herdr integration install <target>`)."""
+    schema = json.loads((ROOT / "contracts/herdr-api.schema.json").read_text())
+    return set(schema["schemas"]["request"]["$defs"]["IntegrationTarget"]["enum"])
+
+
+def watched(home):
+    """Whether the local keyless journey's operator watch sees the agent's folder in the operator's HOME."""
+    folder = "/".join(home)
+    return (any(folder == name or folder.startswith(name + "/") for name in fake_private.WATCH)
+            or any(name.startswith(folder + "/") for name in fake_private.CONFIGURATION))
+
 
 class Registration(unittest.TestCase):
-    def test_every_registered_agent_has_its_local_ci_and_fake_model_routes(self):
+    def test_every_registered_agent_has_every_piece_outside_its_declaration(self):
+        """One verdict per agent that names every piece it still lacks, each
+        with the line of docs/agent-hooks.md, Adding an agent, that adds it."""
+        labels = {row["id"]: row["label"] for row in json.loads((ROOT / "contracts/agent-adapters.json").read_text())}
+        guides, pins, targets = Guides(), clis.table(), integration_targets()
+        missing = {}
         for row in active_rows(load_contract(ROOT)):
-            for name, routes in (("local isolation", local.ROUTES), ("CI home", ci.AGENT_ENV),
-                                 ("fake model", fake_lane.PROVIDERS)):
-                with self.subTest(agent=row["id"], route=name):
-                    self.assertIn(row["herdr_kind"], routes, f"{row['id']} has no {name} route")
+            kind, label, minimum = row["herdr_kind"], labels[row["id"]], row["minimum_version"]
+            pin = pins.get(kind)
+            checks = [
+                (kind in local.ROUTES, "a local isolation route in scripts/agent_journey/local.py (ROUTES)"),
+                (kind in ci.AGENT_ENV, "a disposable CI home in scripts/agent_journey/ci.py (AGENT_ENV)"),
+                (kind in fake_lane.PROVIDERS, "a fake model route in scripts/agent_journey/fake_lane.py (PROVIDERS)"),
+                (pin is not None, "a CLI pin in contracts/agent-clis.json"),
+                (pin is None or version(pin["version"]) >= version(minimum),
+                 f"a CLI pin at or above its minimum {minimum} in contracts/agent-clis.json"),
+                (row["herdr_source"].removeprefix("herdr:") in targets,
+                 "a Herdr integration target the pinned Herdr lists (contracts/herdr-api.schema.json)"),
+                (watched(row["home_folder"]),
+                 f"its folder {'/'.join(row['home_folder'])} in the operator watch of "
+                 "scripts/agent_journey/fake_private.py (WATCH or CONFIGURATION)"),
+                (label in guides.support, f"a row for {label} in docs/agent-hooks.md, Support table"),
+                (label in guides.features, f"a column for {label} in docs/agent-hooks.md, Support table's features"),
+                (guides.minimums.get(label) == minimum,
+                 f"a row for {label} at {minimum} in docs/agent-hooks.md, The oldest version of each agent"),
+                (re.search(r"(?<!\w)" + re.escape(label) + r"(?!\w)", guides.agents_row) is not None,
+                 f"{label} in the agents row of docs/INSTALL.md, What each system supports"),
+                (label in guides.letters,
+                 f"a row for {label} under Letters to an agent while it works in docs/INSTALL.md, "
+                 "What each system supports"),
+            ]
+            lacking = [piece for present, piece in checks if not present]
+            if lacking:
+                missing[row["id"]] = lacking
+        self.assertFalse(missing, "\n" + "\n".join(f"{agent} lacks:\n  - " + "\n  - ".join(pieces)
+                                                       for agent, pieces in missing.items()))
 
     def test_the_installed_cli_set_matches_the_registered_agents(self):
         self.assertEqual(set(clis.table()), {row["herdr_kind"] for row in active_rows(load_contract(ROOT))})
-
-    def test_every_pinned_cli_is_at_least_its_agents_minimum_version(self):
-        """CI must measure a CLI the kit integrates, never one it refuses as too old."""
-        table = clis.table()
-        for row in active_rows(load_contract(ROOT)):
-            with self.subTest(agent=row["id"]):
-                minimum = tuple(int(part) for part in row["minimum_version"].split("."))
-                pinned = tuple(int(part) for part in table[row["herdr_kind"]]["version"].split("."))
-                self.assertGreaterEqual(pinned, minimum)
 
 
 class GeneratedContract(unittest.TestCase):

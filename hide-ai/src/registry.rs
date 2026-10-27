@@ -264,6 +264,24 @@ mod tests {
         );
     }
 
+    /// Every agent Hide supports runs Hide AI too, offered in the order
+    /// Settings lists the agents, so an agent cannot ship without its backend.
+    #[test]
+    fn every_supported_agent_is_a_provider_in_the_adapter_order() {
+        let agents: Vec<_> = PROVIDERS
+            .iter()
+            .map(|provider| provider.descriptor().agent)
+            .collect();
+        let adapters: Vec<_> = hide_agent_adapter::ADAPTERS
+            .iter()
+            .map(|row| row.id)
+            .collect();
+        assert_eq!(
+            agents, adapters,
+            "each supported agent needs its row in PROVIDERS and DESCRIPTORS and its arm in build_backend, in the adapter order"
+        );
+    }
+
     #[test]
     fn every_provider_has_a_descriptor_whose_id_matches() {
         for provider in PROVIDERS {
