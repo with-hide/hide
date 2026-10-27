@@ -553,14 +553,14 @@ function StartStep({ actions, reopened, onBack }: { actions: Actions; reopened: 
         <DialogDescription>{t("firstRun.start.description")}</DialogDescription>
       </DialogHeader>
       <DialogBody className="flex flex-col gap-sm" data-first-run-start="true">
-        {/* The practice coach's own card, so it reads as practice and stays legible in Light and Dark. */}
+        {/* The two ways weigh the same; only the cap keeps the practice's amber, as the sidebar's invitation does. */}
         <StartWay
           icon={<GraduationCapIcon />}
           title={t("firstRun.start.practice")}
           line={t("firstRun.start.practiceNote")}
-          className="border-(--practice-accent) bg-(--practice-card) text-(--practice-text) hover:border-(--practice-accent-strong)"
-          lineClassName="text-(--practice-mute)"
-          iconClassName="border-(--practice-line) bg-(--practice-keycap) text-(--practice-ink)"
+          className="border-border bg-secondary text-foreground hover:bg-accent"
+          lineClassName="text-muted-foreground"
+          iconClassName="border-border bg-background text-(--practice-accent-strong)"
           onClick={practice}
           data-first-run-way="practice"
         />
