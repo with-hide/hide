@@ -53,6 +53,21 @@ CREATE TABLE IF NOT EXISTS ai_daily(day TEXT NOT NULL, provider TEXT NOT NULL,
 CREATE INDEX IF NOT EXISTS ai_daily_day ON ai_daily(day);
 CREATE TABLE IF NOT EXISTS ai_state(slot INTEGER PRIMARY KEY CHECK(slot=1), limited_day TEXT);
 ";
+/// The projects' costs read one device's newest calls (`recent_calls`); with
+/// only `events_at` SQLite sorted every call of the window in a temporary
+/// tree. Added without a version bump, as `AI_SCHEMA` is, so an older build
+/// opens the same file and keeps the index current.
+const COST_INDEX: &str = "CREATE INDEX IF NOT EXISTS events_device_at ON events(device,at);";
+/// The own node's calls of a window, newest first. `(device, agent, key)` is
+/// the primary key, so the order is total: past the limit the same calls are
+/// read whichever plan SQLite chooses. By `events_device_at` SQLite sorts
+/// only the calls of one time, a few at most, where an index holding agent
+/// and key too would be more than twice its size.
+const RECENT_CALLS: &str = "SELECT agent,day,event FROM events WHERE device=?1 AND at>=?2 ORDER BY at DESC,agent,key LIMIT ?3";
+/// Building `events_device_at` on an existing store reads every call once:
+/// about a second for 486,000 calls on a loaded machine, against a step's
+/// 250 ms.
+const INDEX_BUDGET: Duration = Duration::from_secs(30);
 /// Distinct (day, provider, model, feature) rows kept for Hide AI. About 400
 /// days of four features, two providers and a few models each.
 pub const AI_ROW_LIMIT: usize = 40_000;
@@ -176,6 +191,9 @@ pub struct Ingested {
     pub invalid: usize,
     pub expired: usize,
     pub limited: usize,
+    /// The newest call this ingest added or rewrote, so a reader of recent
+    /// calls only can tell whether it moved.
+    pub newest_ms: Option<u64>,
 }
 
 pub struct Store {
@@ -229,15 +247,19 @@ impl Store {
             store.connection.execute_batch("BEGIN; ALTER TABLE backfills ADD COLUMN limited INTEGER NOT NULL DEFAULT 0; PRAGMA user_version=3; COMMIT;").map_err(failed)?;
         }
         store.connection.execute_batch(AI_SCHEMA).map_err(failed)?;
+        store.budget_of(INDEX_BUDGET);
+        store.connection.execute_batch(COST_INDEX).map_err(failed)?;
         Ok(store)
     }
 
     fn budget(&self) {
+        self.budget_of(Duration::from_millis(250));
+    }
+
+    fn budget_of(&self, limit: Duration) {
         let start = Instant::now();
-        self.connection.progress_handler(
-            1000,
-            Some(move || start.elapsed() >= Duration::from_millis(250)),
-        );
+        self.connection
+            .progress_handler(1000, Some(move || start.elapsed() >= limit));
     }
 
     pub fn prices(&self) -> Result<super::prices::Cache, &'static str> {
@@ -459,12 +481,23 @@ impl Store {
             if let Some((previous, original)) = previous {
                 if previous == fingerprint {
                     outcome.repeated += 1;
-                } else if agent == Agent::Claude
-                    && stream::merge(&tx, device, &decode(&original)?, event, frozen_at)?
-                {
-                    outcome.updated += 1;
+                    continue;
+                }
+                let original: Event = decode(&original)?;
+                let merged = if agent == Agent::Claude {
+                    stream::merge(&tx, device, &original, event, frozen_at)?
                 } else {
-                    outcome.changed += 1;
+                    None
+                };
+                match merged {
+                    // The stored call keeps its own time.
+                    Some(stream::Merged::Rewrote) => {
+                        outcome.updated += 1;
+                        outcome.newest_ms = outcome.newest_ms.max(Some(original.at_ms));
+                    }
+                    // A later view holding no new maximum changes nothing.
+                    Some(stream::Merged::Same) => outcome.repeated += 1,
+                    None => outcome.changed += 1,
                 }
                 continue;
             }
@@ -513,6 +546,7 @@ impl Store {
             .map_err(failed)?;
             calls += 1;
             outcome.added += 1;
+            outcome.newest_ms = outcome.newest_ms.max(Some(event.at_ms));
         }
         tx.execute(
             "UPDATE devices SET calls=?2 WHERE device=?1",
@@ -564,43 +598,42 @@ impl Store {
         self.connection.execute_batch(sql).unwrap();
     }
 
-    /// The own node's calls made at `since_ms` or later, newest first, for
-    /// the projects' costs (PRD lane-two-columns B31), and whether more than
-    /// `limit` were there. It reads only the 45-day `events` table by its
-    /// time index, with a longer budget than a step's because it decodes
-    /// every call; the caller keeps the days it wants.
+    /// Hands `each` the own node's calls made at `since_ms` or later in
+    /// `RECENT_CALLS` order, with their agent and assigned day, for the
+    /// projects' costs (PRD lane-two-columns B31), and says whether more than
+    /// `limit` were there. Each call is decoded, handed on and dropped, so nothing here
+    /// grows with the calls read. It reads the 45-day `events` table by
+    /// `events_device_at`, with a longer budget than a step's because it
+    /// decodes every call, `each` included; the caller keeps the days it
+    /// wants.
     pub fn recent_calls(
         &self,
         device: &str,
         since_ms: u64,
         limit: usize,
-    ) -> Result<(Vec<super::project_cost::Call>, bool), &'static str> {
-        let start = Instant::now();
-        self.connection.progress_handler(
-            1000,
-            Some(move || start.elapsed() >= Duration::from_secs(2)),
-        );
-        let mut query = self
-            .connection
-            .prepare("SELECT agent,day,event FROM events WHERE device=?1 AND at>=?2 ORDER BY at DESC LIMIT ?3")
-            .map_err(failed)?;
+        mut each: impl FnMut(&str, &str, Event) -> Result<(), &'static str>,
+    ) -> Result<bool, &'static str> {
+        self.budget_of(Duration::from_secs(2));
+        let mut query = self.connection.prepare(RECENT_CALLS).map_err(failed)?;
         let since = i64::try_from(since_ms).map_err(|_| "usage_timestamp_invalid")?;
         let mut rows = query
             .query(params![device, since, limit + 1])
             .map_err(failed)?;
-        let mut out = Vec::new();
+        let mut read = 0;
         while let Some(row) = rows.next().map_err(failed)? {
-            if out.len() == limit {
-                return Ok((out, true));
+            if read == limit {
+                return Ok(true);
             }
-            let text: String = row.get(2).map_err(failed)?;
-            out.push(super::project_cost::Call {
-                agent: row.get(0).map_err(failed)?,
-                day: row.get(1).map_err(failed)?,
-                event: decode(&text)?,
-            });
+            let text = |index| {
+                row.get_ref(index)
+                    .map_err(failed)?
+                    .as_str()
+                    .map_err(|_| "usage_store_decode")
+            };
+            each(text(0)?, text(1)?, decode(text(2)?)?)?;
+            read += 1;
         }
-        Ok((out, false))
+        Ok(false)
     }
 
     /// Completion is durable even when no events were found. Once completed,

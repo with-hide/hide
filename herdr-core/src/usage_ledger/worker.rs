@@ -255,7 +255,7 @@ struct Costs {
     projects: Arc<Vec<ProjectRoots>>,
     today: String,
     built: Option<Instant>,
-    /// New calls, a prune or a new price table since the last build.
+    /// New calls the build reads, or a new price table, since the last one.
     dirty: bool,
     /// The latest build's failure; the last built value stays.
     failure: Option<&'static str>,
@@ -404,8 +404,9 @@ impl Engine {
                 Ok(more) => {
                     self.pruning = more;
                     self.pruned = Instant::now();
+                    // Pruning removes calls past the 45-day horizon only,
+                    // none a project's cost reads.
                     self.dirty = true;
-                    self.costs.dirty = true;
                     // Pruning also ages Hide AI rows out.
                     self.ai_dirty = true;
                     self.prune_retry = None;
@@ -530,7 +531,10 @@ impl Engine {
             {
                 Ok(ingested) => {
                     self.dirty |= ingested.added > 0 || ingested.updated > 0;
-                    self.costs.dirty |= ingested.added > 0 || ingested.updated > 0;
+                    // A backfill of older history leaves the costs as they are.
+                    self.costs.dirty |= ingested
+                        .newest_ms
+                        .is_some_and(|at| at >= project_cost::since(now));
                     work.progress.limited |= ingested.limited > 0;
                     let skipped = step
                         .skipped
@@ -679,20 +683,14 @@ impl Engine {
             .parse::<jiff::civil::Date>()
             .map_err(|_| "usage_date_invalid")
             .and_then(|date| {
-                // A day past the seven reaches back eight, so a time zone
-                // change cannot drop the first day's earliest calls.
-                let since = now.saturating_sub((project_cost::DAYS as u64 + 1) * super::DAY_MS);
-                let (calls, limited) =
-                    self.store
-                        .recent_calls(&self.device, since, project_cost::EVENT_LIMIT)?;
-                project_cost::prepare(
-                    &calls,
-                    limited,
-                    projects,
-                    self.prices.table.as_ref(),
-                    date,
-                    now,
-                )
+                let mut preparation = project_cost::Preparation::new(projects, date)?;
+                let limited = self.store.recent_calls(
+                    &self.device,
+                    project_cost::since(now),
+                    project_cost::EVENT_LIMIT,
+                    |agent, day, event| preparation.add(agent, day, &event),
+                )?;
+                preparation.finish(limited, self.prices.table.as_ref(), now)
             });
         match built {
             Ok(value) => {

@@ -43,10 +43,14 @@ impl NodeLink for OwnNode {
 }
 
 fn fixture(home: &std::path::Path, id: &str) -> PathBuf {
+    fixture_at(home, id, jiff::Timestamp::now())
+}
+
+fn fixture_at(home: &std::path::Path, id: &str, at: jiff::Timestamp) -> PathBuf {
     let folder = home.join(hide_session::CLAUDE_SESSIONS);
     std::fs::create_dir_all(&folder).unwrap();
     let path = folder.join(format!("{id}.jsonl"));
-    let line = serde_json::json!({"type":"assistant", "sessionId":"fixture", "requestId":id, "timestamp":jiff::Timestamp::now().to_string(), "message":{"id":id,"model":"fixture-model","content":[{"text":"PRIVATE_BODY_SENTINEL"}],"usage":{"input_tokens":10,"output_tokens":20,"cache_read_input_tokens":900,"cache_creation_input_tokens":30}}});
+    let line = serde_json::json!({"type":"assistant", "sessionId":"fixture", "requestId":id, "timestamp":at.to_string(), "message":{"id":id,"model":"fixture-model","content":[{"text":"PRIVATE_BODY_SENTINEL"}],"usage":{"input_tokens":10,"output_tokens":20,"cache_read_input_tokens":900,"cache_creation_input_tokens":30}}});
     std::fs::write(&path, format!("{line}\n")).unwrap();
     path
 }
@@ -457,6 +461,100 @@ fn the_report_carries_the_named_projects_costs() {
         Arc::ptr_eq(&built, again.projects.built.as_ref().unwrap()),
         "nothing moved, nothing built"
     );
+}
+
+/// PRD lane-two-columns B31: a project's published cost moves with what its
+/// calls of the last days cost. A later view of a Claude call that raises
+/// no token count changes nothing and builds nothing; one that raises the
+/// output reprices the call; older history read in leaves the cost as built.
+#[test]
+fn a_projects_cost_moves_only_with_a_call_of_its_days() {
+    let home = tempfile::tempdir().unwrap();
+    let node = OwnNode::new(home.path());
+    let mut engine = Engine::open(
+        &home.path().join("ledger.sqlite3"),
+        "physical-device".into(),
+        AiUsageQueue::new(),
+    )
+    .unwrap();
+    let now = crate::links::now_ms();
+    // Micro-USD per token: input 1, output 10, cache read 0.1, cache write 2.
+    engine.prices = Cache {
+        attempted_at: Some(now),
+        table: Some(
+            super::super::prices::Table::parse(
+                br#"{"fixture-model":{"litellm_provider":"anthropic","input_cost_per_token":0.000001,"output_cost_per_token":0.00001,"cache_read_input_token_cost":0.0000001,"cache_creation_input_token_cost":0.000002}}"#,
+                now,
+            )
+            .unwrap(),
+        ),
+    };
+    // One call's views, each line a later view of the same native call.
+    let views = |id: &str, at: jiff::Timestamp, outputs: &[u64]| {
+        let path = fixture_at(home.path(), id, at);
+        let mut line: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        line["cwd"] = "/work/hide".into();
+        let mut body = String::new();
+        for output in outputs {
+            line["message"]["usage"]["output_tokens"] = (*output).into();
+            body.push_str(&format!("{line}\n"));
+        }
+        std::fs::write(&path, body).unwrap();
+    };
+    let projects = Arc::new(vec![ProjectRoots {
+        workspace_id: "hide".into(),
+        roots: vec!["/work/hide".into()],
+    }]);
+    let published = |engine: &mut Engine| {
+        for work in &mut engine.agents {
+            work.listed = None;
+        }
+        for _ in 0..60 {
+            engine.step(
+                &node,
+                Activity {
+                    visible: true,
+                    open: true,
+                },
+            );
+        }
+        // Not the rebuild wait this test is about.
+        engine.costs.built = None;
+        let built = engine.report(true, &projects).projects.built.unwrap();
+        let calls = engine
+            .store
+            .daily()
+            .unwrap()
+            .iter()
+            .map(|row| row.totals.calls)
+            .sum::<u64>();
+        (built[0].micro_usd, calls, built)
+    };
+
+    let at = jiff::Timestamp::now();
+    views("call", at, &[20]);
+    // 10 input + 200 output + 90 cache read + 60 cache write.
+    let (first, calls, built) = published(&mut engine);
+    assert_eq!((first, calls), (360, 1));
+
+    views("call", at, &[20, 19]);
+    let (same, calls, again) = published(&mut engine);
+    assert_eq!((same, calls), (360, 1), "no new maximum");
+    assert!(Arc::ptr_eq(&built, &again), "nothing built");
+
+    views("call", at, &[20, 19, 25]);
+    let (raised, calls, built) = published(&mut engine);
+    assert_eq!((raised, calls), (410, 1), "the output's new maximum");
+
+    views("old", at - jiff::SignedDuration::from_hours(20 * 24), &[20]);
+    let (old, calls, again) = published(&mut engine);
+    assert_eq!((old, calls), (410, 2), "a call older than the eight days");
+    assert!(Arc::ptr_eq(&built, &again), "nothing built");
+
+    views("new", at, &[20]);
+    let (new, calls, _) = published(&mut engine);
+    assert_eq!((new, calls), (770, 3));
 }
 
 /// PRD lane-two-columns B31, B33: a build that fails keeps the last costs,

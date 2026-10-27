@@ -254,6 +254,7 @@ fn replay_copies_restart_and_changed_completed_values_never_add_twice() {
             Ingested {
                 added: 1,
                 repeated: 1,
+                newest_ms: Some(now),
                 ..Default::default()
             }
         );
@@ -736,5 +737,169 @@ fn experimental_rows_keep_their_old_count_and_new_attempts_add_only_once() {
     assert_eq!(
         rows.iter().map(|row| row.totals.tokens.input).sum::<u64>(),
         60
+    );
+}
+
+fn project_costs(
+    store: &Store,
+    limit: usize,
+    now: u64,
+) -> Vec<super::super::project_cost::ProjectCost> {
+    use super::super::project_cost::{Preparation, ProjectRoots, since};
+    let projects = [ProjectRoots {
+        workspace_id: "hide".into(),
+        roots: vec!["/work/hide".into()],
+    }];
+    let today = local_day(now, &jiff::tz::TimeZone::UTC)
+        .unwrap()
+        .parse()
+        .unwrap();
+    let mut preparation = Preparation::new(&projects, today).unwrap();
+    let limited = store
+        .recent_calls("node-a", since(now), limit, |agent, day, event| {
+            preparation.add(agent, day, &event)
+        })
+        .unwrap();
+    preparation.finish(limited, None, now).unwrap()
+}
+
+/// PRD lane-two-columns B31: a project's cost read call by call from the
+/// store is the sum of what its calls recorded: the own device's calls of
+/// the seven days ending today whose session ran in its checkout, and past
+/// the read limit only the newest, marked limited.
+#[test]
+fn a_project_cost_read_from_the_store_sums_its_recorded_calls() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(&hide_kit::layout::usage_store(dir.path())).unwrap();
+    let zone = jiff::tz::TimeZone::UTC;
+    let now = instant("2026-10-23");
+    let priced = |key: u8, day: &str, cwd: &str, micro_usd: u64| {
+        let mut event = call(key, day);
+        event.cwd = Some(cwd.into());
+        event.recorded_cost_micro_usd = Some(micro_usd);
+        event
+    };
+    let calls = vec![
+        priced(1, "2026-10-23", "/work/hide", 3_000_000),
+        priced(2, "2026-10-22", "/elsewhere", 7_000_000),
+        priced(3, "2026-10-21", "/work/hide/src", 2_000_000),
+        priced(4, "2026-10-17", "/work/hide", 1_000_000),
+        // Read, since the read reaches back eight days, but before the seven.
+        priced(5, "2026-10-16", "/work/hide", 9_000_000),
+        priced(6, "2026-10-01", "/work/hide", 9_000_000),
+    ];
+    store
+        .ingest("node-a", Agent::Claude, &source(), &step(calls), now, &zone)
+        .unwrap();
+    store
+        .ingest(
+            "node-b",
+            Agent::Claude,
+            &source(),
+            &step(vec![priced(7, "2026-10-23", "/work/hide", 9_000_000)]),
+            now,
+            &zone,
+        )
+        .unwrap();
+
+    let all = project_costs(&store, 100, now);
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].micro_usd, 6_000_000);
+    assert!(!all[0].limited);
+    assert_eq!(
+        all[0]
+            .days
+            .iter()
+            .map(|day| (day.date.as_str(), day.micro_usd))
+            .collect::<Vec<_>>(),
+        [
+            ("2026-10-17", 1_000_000),
+            ("2026-10-18", 0),
+            ("2026-10-19", 0),
+            ("2026-10-20", 0),
+            ("2026-10-21", 2_000_000),
+            ("2026-10-22", 0),
+            ("2026-10-23", 3_000_000),
+        ]
+    );
+
+    let newest = project_costs(&store, 3, now);
+    assert_eq!(
+        (newest[0].micro_usd, newest[0].limited),
+        (5_000_000, true),
+        "past the limit the three newest calls are read"
+    );
+}
+
+/// Past the read limit the projects' costs keep the newest calls, and
+/// calls of one time by agent and then key, whatever order they were
+/// written in and whichever plan SQLite reads them by; before, the plan
+/// picked which of two calls of one time a limit of one kept.
+#[test]
+fn calls_of_one_time_across_the_read_limit_are_kept_by_agent_and_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut store = Store::open(&hide_kit::layout::usage_store(dir.path())).unwrap();
+    let zone = jiff::tz::TimeZone::UTC;
+    let now = instant("2026-10-23");
+    let tied = now - 60_000;
+    let priced = |key: u8, at_ms: u64, micro_usd: u64| {
+        let mut event = call(key, "2026-10-23");
+        event.at_ms = at_ms;
+        event.cwd = Some("/work/hide".into());
+        event.recorded_cost_micro_usd = Some(micro_usd);
+        event
+    };
+    // Written in the order they are read in, which a read walking the time
+    // index backwards would reverse.
+    for (agent, event) in [
+        (Agent::Claude, priced(2, tied, 1)),
+        (Agent::Claude, priced(3, tied, 10)),
+        (Agent::Codex, priced(1, tied, 100)),
+        (Agent::Claude, priced(9, now, 1000)),
+    ] {
+        store
+            .ingest("node-a", agent, &source(), &step(vec![event]), now, &zone)
+            .unwrap();
+    }
+    let read = |store: &Store| {
+        [1, 2, 3, 4]
+            .map(|limit| project_costs(store, limit, now))
+            .map(|costs| (costs[0].micro_usd, costs[0].limited))
+    };
+    // The newest call, then claude key 2, claude key 3, codex key 1.
+    let expected = [(1000, true), (1001, true), (1011, true), (1111, false)];
+    assert_eq!(read(&store), expected);
+
+    store.execute_for_test("DROP INDEX events_device_at");
+    assert_eq!(read(&store), expected, "read without the index");
+}
+
+/// The projects' costs read one device's newest calls by its index rather
+/// than sorting the window, sorting only calls of one time; a store from
+/// before the index gains it when it opens, its version unchanged so an
+/// older build still opens it.
+#[test]
+fn a_store_from_before_the_cost_index_gains_it_without_a_version_change() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = hide_kit::layout::usage_store(dir.path());
+    Store::open(&path)
+        .unwrap()
+        .execute_for_test("DROP INDEX events_device_at");
+    let store = Store::open(&path).unwrap();
+    assert_eq!(user_version(&path), 3);
+    let mut query = store
+        .connection
+        .prepare(&format!("EXPLAIN QUERY PLAN {RECENT_CALLS}"))
+        .unwrap();
+    let plan = query
+        .query_map(params!["node-a", 0, 1], |row| row.get::<_, String>(3))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert!(
+        plan.iter().any(|step| step.contains("events_device_at"))
+            // Sorting the calls of one time is "FOR LAST 2 TERMS OF ORDER BY".
+            && !plan.iter().any(|step| step == "USE TEMP B-TREE FOR ORDER BY"),
+        "{plan:?}"
     );
 }
