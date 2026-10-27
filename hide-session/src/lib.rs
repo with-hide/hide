@@ -33,6 +33,7 @@ mod conversation_cursor;
 pub mod cursor;
 mod envelope;
 pub mod environment;
+mod file_cache;
 mod grok;
 mod label_owner;
 pub mod label_transcript;
