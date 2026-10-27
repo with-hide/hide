@@ -261,6 +261,7 @@ fn row(
         basis: None,
         auto: false,
         hold: None,
+        returned_after_skip: false,
         escalated: None,
         evidence: Vec::new(),
         attempt: None,

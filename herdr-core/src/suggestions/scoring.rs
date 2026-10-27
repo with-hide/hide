@@ -6,7 +6,7 @@
 use super::ledger::{RecordEntry, RecordIndex, Signal};
 use super::notebook::{Line, LineId};
 use super::policy::{self, Quantity};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// A line's counted pain.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -70,6 +70,29 @@ pub(crate) fn score_records<'a>(records: impl Iterator<Item = &'a RecordEntry>, 
         prs: counted_prs,
         always,
     }
+}
+
+/// Whether a line the operator skipped at `skipped_at` may rise once more
+/// (D-43): the sessions and pull requests first seen after the skip, the
+/// units [`score`] counts, reach [`policy::SKIP_RETURN_SHARE`] of those seen
+/// up to it. A session that goes on past the skip is not new.
+pub(crate) fn outgrew_skip(line: &Line, index: &RecordIndex, skipped_at: u64) -> bool {
+    let mut had = BTreeSet::new();
+    let mut since = BTreeSet::new();
+    for record in line.records.iter().filter_map(|id| index.get(*id)) {
+        let unit = match (&record.session, record.pr) {
+            (Some(session), _) => (Some((session.agent.as_str(), session.id.as_str())), None),
+            (None, Some(pr)) => (None, Some(pr)),
+            (None, None) => continue,
+        };
+        if record.at_unix_ms <= skipped_at {
+            had.insert(unit);
+        } else {
+            since.insert(unit);
+        }
+    }
+    let new = since.difference(&had).count();
+    new as f64 >= (had.len() as f64 * policy::SKIP_RETURN_SHARE).max(1.0)
 }
 
 /// D-11's three questions, as the core can answer them: the line names one
@@ -213,6 +236,45 @@ mod tests {
             "{score:?}"
         );
         assert!(!score.always);
+    }
+
+    /// D-43: a skip is outgrown by as many new sessions and pull requests
+    /// as the line had when it was skipped; one that goes on past the skip
+    /// is not new.
+    #[test]
+    fn a_skip_is_outgrown_when_new_sessions_and_pull_requests_double_its_evidence() {
+        let skipped = NOW - DAY_MS;
+        let mut index = RecordIndex {
+            entries: vec![
+                entry(1, Signal::FailedTool, Some("a"), None, skipped - 1),
+                entry(2, Signal::FailedTool, Some("b"), None, skipped),
+                entry(3, Signal::CheckFailed, None, Some(7), skipped - 1),
+                entry(4, Signal::FailedTool, Some("a"), None, NOW),
+                entry(5, Signal::CheckFailed, None, Some(7), NOW),
+                entry(6, Signal::FailedTool, Some("c"), None, NOW),
+                entry(7, Signal::CheckFailed, None, Some(9), NOW),
+            ],
+        };
+        assert!(
+            !outgrew_skip(&line_of(&index), &index, skipped),
+            "c and #9 are new, a and #7 went on: two of three"
+        );
+        index
+            .entries
+            .push(entry(8, Signal::FailedTool, Some("d"), None, NOW));
+        assert!(outgrew_skip(&line_of(&index), &index, skipped));
+
+        let gone = RecordIndex {
+            entries: vec![entry(1, Signal::FailedTool, Some("a"), None, NOW)],
+        };
+        assert!(
+            !outgrew_skip(&line_of(&gone), &gone, NOW),
+            "nothing came after the skip"
+        );
+        assert!(
+            outgrew_skip(&line_of(&gone), &gone, NOW - 1),
+            "with nothing kept from before the skip, one new session is enough"
+        );
     }
 
     #[test]

@@ -272,7 +272,8 @@ pub(crate) fn moved(
         AttemptMove::Closed => {
             attempt.phase = AttemptPhase::Closed;
             // Closing the pull request unmerged is the operator's word that
-            // the fix is not wanted: the line is struck as `안 함` is.
+            // the fix is not wanted now: the line is skipped as `넘어가기`
+            // skips it.
             line.struck = Some(Strike {
                 by: StruckBy::Operator,
                 reason: None,
@@ -460,7 +461,7 @@ mod tests {
 
     /// A move names its attempt by its start: one meant for an earlier
     /// attempt changes nothing; a merge starts the watch, and a pull
-    /// request closed unmerged strikes the line as the operator's `안 함`.
+    /// request closed unmerged skips the line as the operator's `넘어가기`.
     #[test]
     fn a_move_lands_only_on_its_own_attempt() {
         let index = RecordIndex::default();
