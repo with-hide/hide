@@ -35,7 +35,7 @@ Running a command again changes nothing more, so after a timeout read `hide miss
 
 ## 1. Before the plan
 
-- Run `hide mission settings` for the operator's defaults: the concurrency cap, the default scope, the worker candidates, and `checkers`, how each node is reviewed and verified.
+- Run `hide mission settings` for the operator's defaults: the concurrency cap, the default scope, the worker candidates, the verification strength (`default_strength`) and whether checkers come from another company (`other_vendor`).
 - Run `hide agent catalog` for the agents installed here, their models, their efforts and their weekly usage.
   The catalog reads the model lists if nobody has looked at them yet and waits up to 10 seconds for them; a list it still could not read comes with `models_unavailable_reason` instead of models (`models_read_timeout` after that wait; a device's models are read on the core's machine only) and `cli_default_model`, the model the agent runs with when asked for none.
   Name such an agent's model from its candidate's fixed model, or from `cli_default_model`.
@@ -57,6 +57,8 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
   "cap": 4,
   "github": "octocat",
   "check": "cargo test && pnpm test",
+  "strength": "thorough",
+  "strength_why": "the parser's stored format changes",
   "merge_order": ["api", "screen"],
   "nodes": [
     {"key": "parser", "title": "#1232 parser (outside)", "kind": "external", "external": {"pr": 1232}},
@@ -88,7 +90,7 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
   It adds no review and no screenshot by default.
 - A review or a verify is a checker on the node, not a node of its own: `checks` lists at most one `review` and one `verify`, each with one to five agents in `by` (worker objects) and, for several, `rule` `all` (the default) or `majority` (`mission_checkers_invalid` otherwise).
   Each adds the line `review` or `verify`, which passes only when the checker recorded it, never the node's worker; a checker the node's worker is refused (`mission_checker_is_worker`).
-  Follow the mission's `checkers` in `hide mission show`, Settings › Conductor's review and verify defaults as they were when it was created: `none` adds no checker, `one` one, `many` `count` of them under `rule`, and `conductor` leaves it to you; with `other_vendor`, prefer an agent of another company than the node's worker, and name its model and effort as the setting says.
+  Which nodes get one, and how many, follows the mission's verification strength (below).
 - One change node is one pull request unless the operator asked to review several together.
 - Stack a pull request on another only when it needs that unmerged change; otherwise every change starts from main.
   Merge from the bottom of a stack up, or as the repository's own rules say.
@@ -99,9 +101,28 @@ Write the plan as JSON and set it with `hide mission plan --file plan.json`:
   If no candidate can run, say so in the plan.
   Hide refuses a worker that is none of the candidates (`mission_candidate_refused`): another agent, a model other than the one a candidate fixes (or any model where it keeps the CLI's default), or an effort other than a fixed one.
 - Declare the `issues` and `paths` a node touches: the plan's answer lists `overlaps`, the other missions of this project on the same issue or files.
-- Show the plan in the conversation: the nodes and their kinds, dependencies, the PR or delivery of each and the merge order, what is verified together, the check command, each worker with its model and effort, the cap, the scope (up to ready pull requests, or through the merge), the GitHub account, and any overlap.
+- Show the plan in the conversation: the nodes and their kinds, dependencies, the PR or delivery of each and the merge order, what is verified together, the check command, each worker with its model and effort, each node's checkers, the verification strength (with its one-line reason when it differs from the setting), the cap, the scope (up to ready pull requests, or through the merge), the GitHub account, and any overlap.
   The operator's changes in conversation change this mission only; the settings stay as they are.
 - The plan shows on your pane's mission chip; nothing opens in the operator's lane, so tell them the plan is up in the conversation.
+
+### Verification strength
+
+The mission's `strength` in `hide mission show` says how much checking you plan: Settings › Conductor's `default_strength` when the mission was created, until a plan changes it.
+Propose it in the plan's `strength`: `fast`, `normal` or `thorough` (빠르게, 보통, 꼼꼼하게 in Korean); when it differs from the setting, give why in one line in `strength_why` and say it with the plan.
+When the operator asks for another strength, before or during the mission ("check this one thoroughly"), send the plan again with the new `strength` and its `strength_why`; Hide records the change as a mission event and the map's head shows it.
+Hide enforces none of it: the gate holds only each node's own lines, the check command and CI; the strength is how you choose each node's `checks` and how many review rounds you run.
+
+- `fast`: the node's own lines and CI only; a reviewer only on a node whose failure would be costly; one review round, with no re-review.
+- `normal`: judge each node's risk.
+  A risky node (a stored format, access, a gate, code many places depend on) gets a `review` and a `verify`, a check that runs it.
+  An ordinary node gets one of the two.
+  A low-risk node (docs, copy, a small fix) gets no checker.
+  Review again at most twice, and a re-review reads only what changed since the review before.
+- `thorough`: a `review` and a `verify` on every change node; several checkers deciding by `majority` on the risky ones; review again at most three times.
+- After the last round the strength allows, a serious finding still open is fixed in the node; a minor or rare-case one goes to the report as a follow-up.
+- Choose every checker from the worker candidates in Settings › Conductor, as you choose workers; with no candidates, among the agents installed here.
+  With the mission's `other_vendor` true, prefer a candidate of another company than the node's worker (a codex checker for a claude worker, a claude one for a codex worker); with it false, any candidate.
+- A mission created before verification strength has none and shows the review and verify defaults it recorded (`checkers`) instead: follow them, or name a strength in the next plan.
 
 ## Cutting the mission and briefing a worker
 
