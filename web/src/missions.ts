@@ -9,7 +9,7 @@ import type { MessageKey } from "./i18n/catalogs";
 import { PROVIDER_KINDS, type ProviderKind } from "./agentPicker";
 import { agentsByPane } from "./paneAgents";
 import { orderByDependencies } from "./projectBoard";
-import type { AgentRow, AgentStartChoice, Mission, MissionChecker, MissionCriterion, MissionEvent, MissionEventsSnapshot, MissionNode, MissionVerdict, RowMark, SnapshotRest } from "./snapshot";
+import type { AgentRow, AgentStartChoice, Mission, MissionChecker, MissionCriterion, MissionWorker, MissionEvent, MissionEventsSnapshot, MissionNode, MissionVerdict, RowMark, SnapshotRest } from "./snapshot";
 
 export function missionOf(rest: SnapshotRest | null | undefined, id: string): Mission | null {
   return rest?.missions?.items.find((mission) => mission.id === id) ?? null;
@@ -88,49 +88,34 @@ export function nodeLine(node: MissionNode, t: TFunction<"translation">): string
   return t(kindWord(node.kind));
 }
 
-/**
- * The model a worker's pane runs with: the launch Hide recorded for the
- * node's pane on its machine (`overview_graph.sessions`), null when it has
- * no pane, the pane was not started by Hide or the launch named no model.
- */
-export function launchModelOf(rest: SnapshotRest | null | undefined, mission: Mission, node: MissionNode): string | null {
-  return launchOf(rest, mission, node.pane_id, node.machine)?.model ?? null;
-}
-
-/** The model and effort Hide recorded launching in a pane (`overview_graph.sessions`), on its machine or the mission's. */
-function launchOf(rest: SnapshotRest | null | undefined, mission: Mission, paneId: string | null | undefined, machine: string | null | undefined): { model: string | null; effort: string | null } | null {
+/** The launch Hide recorded for a pane (`overview_graph.sessions`), on its machine or the mission's; the store's own row, so a selector can return it. */
+export function launchSession(rest: SnapshotRest | null | undefined, mission: Mission, paneId: string | null | undefined, machine: string | null | undefined): LaunchSession | null {
   if (!paneId) return null;
   const device = machine ?? mission.device_id;
-  const session = rest?.overview_graph?.sessions.find((one) => one.device_id === device && one.pane_id === paneId);
-  return session ? { model: session.launch_model ?? null, effort: session.launch_effort ?? null } : null;
+  return rest?.overview_graph?.sessions.find((one) => one.device_id === device && one.pane_id === paneId) ?? null;
 }
 
-/**
- * A checker as its strip row names it (B29): the model and effort its pane
- * was started with, read from the checker's own pane once the core bound it,
- * else what the plan asked; the agent's name only when neither names a model.
- */
-export function checkerWords(rest: SnapshotRest | null | undefined, mission: Mission, checker: MissionChecker): string {
-  const launch = launchOf(rest, mission, checker.pane_id, checker.machine);
-  const { agent, model, effort } = checker.worker;
-  return [launch?.model ?? model ?? agent, launch?.effort ?? effort].filter(Boolean).join("·");
-}
+type LaunchSession = NonNullable<SnapshotRest["overview_graph"]>["sessions"][number];
+
+/** What runs in a pane or what the plan asked, and which of the two it is. */
+export type RunWords = { words: string; planned: boolean };
 
 /**
- * A worker as the card names it: the model and the effort, never the agent's
- * name (its logo stands beside the words). A working or review node shows
- * the model its pane runs (`launchModel`) and falls back to the plan's; a
- * planned node shows the plan's. With no model (an agent that takes none)
- * the effort stands alone, `자동` while the Conductor will choose it.
+ * A worker or a checker as the panel and a checker strip name it (B29),
+ * never by its agent, whose logo stands beside the words. Once Hide proved
+ * the pane's launch choice, only that launch speaks: its model, or the CLI's
+ * default when it set none, and its effort when it set one; the plan is not
+ * mixed in. The core sends a session it proved no choice for with neither
+ * value, so neither value is no proof of a launch. Without one the plan's
+ * model and effort are shown marked as planned (`자동` for an effort the
+ * Conductor will choose), or nothing.
  */
-export function workerWords(node: MissionNode, launchModel: string | null, auto: string): string | null {
-  const worker = node.worker;
-  if (!worker) return null;
-  const live = node.status === "working" || node.status === "review";
-  const model = (live ? launchModel : null) ?? worker.model ?? null;
-  const effort = worker.effort ?? (worker.effort_auto ? auto : null);
-  if (model && effort) return `${model}·${effort}`;
-  return model ?? effort;
+export function runWords(launch: LaunchSession | null, plan: MissionWorker | null | undefined, words: { auto: string; defaultModel: string }): RunWords | null {
+  if (launch && (launch.launch_model || launch.launch_effort)) return { words: [launch.launch_model ?? words.defaultModel, launch.launch_effort].filter(Boolean).join("·"), planned: false };
+  if (!plan) return null;
+  const effort = plan.effort ?? (plan.effort_auto ? words.auto : null);
+  const planned = [plan.model, effort].filter(Boolean).join("·");
+  return planned ? { words: planned, planned: true } : null;
 }
 
 /** A change node's steps: work, PR or branch, review, merge or main (D-42 B, D-48). */

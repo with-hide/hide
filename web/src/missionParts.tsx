@@ -6,9 +6,9 @@ import { PrMark } from "./components/pr-mark";
 import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
-import { checkerState, checkerWords, nodeTimes, shortCommit, type NodeLook, type NodeResult } from "./missions";
+import { checkerState, launchSession, nodeTimes, runWords, shortCommit, type NodeLook, type NodeResult } from "./missions";
 import { allAgents, agentsByPane } from "./paneAgents";
-import type { Mission, MissionChecker, MissionEvent, MissionNode } from "./snapshot";
+import type { Mission, MissionChecker, MissionEvent, MissionNode, MissionWorker } from "./snapshot";
 import { useShellStore } from "./store";
 
 // The parts a mission's map, its node panel and the Conductor pane's popover
@@ -85,12 +85,12 @@ const CHECKER_TONE = { pass: "text-muted-foreground", fail: "text-mission-failed
 export function CheckerRow({ mission, kind, checker }: { mission: Mission; kind: "review" | "verify"; checker: MissionChecker }) {
   const { t } = useInterfaceTranslation();
   const state = checkerState(checker);
-  const words = useShellStore((s) => checkerWords(s.rest, mission, checker));
+  const run = useRunWords(mission, checker.pane_id, checker.machine, checker.worker);
   const status = state === "pass" || state === "fail" ? t(`mission.checker.${state}`) : t(`mission.checker.${state}.${kind}`);
   return (
     <span className="flex min-w-0 items-center gap-xs" data-node-checker={checker.worker.agent} data-checker-state={state}>
       <AgentMark kind={checker.worker.agent} />
-      <span className="min-w-0 flex-1 truncate" title={words}>{words}</span>
+      <span className="min-w-0 flex-1 truncate" title={run?.text} data-run={run?.from}>{run?.text}</span>
       <span className={cn("shrink-0", CHECKER_TONE[state])}>
         {state === "pass" ? "✓ " : state === "fail" ? "✕ " : ""}
         {status}
@@ -99,3 +99,14 @@ export function CheckerRow({ mission, kind, checker }: { mission: Mission; kind:
   );
 }
 
+/**
+ * What runs in a pane as Hide launched it, else what the plan asked marked
+ * planned (B29); `from` says which, for a reader that tells them apart.
+ */
+export function useRunWords(mission: Mission, paneId: string | null | undefined, machine: string | null | undefined, plan: MissionWorker | null | undefined): { text: string; from: "launch" | "plan" } | null {
+  const { t } = useInterfaceTranslation();
+  const launch = useShellStore((s) => launchSession(s.rest, mission, paneId, machine));
+  const run = runWords(launch, plan, { auto: t("mission.auto"), defaultModel: t("conductor.defaultModel") });
+  if (!run) return null;
+  return run.planned ? { text: t("mission.planned", { words: run.words }), from: "plan" } : { text: run.words, from: "launch" };
+}

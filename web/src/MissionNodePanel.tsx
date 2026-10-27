@@ -11,7 +11,7 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { formatDateTime } from "./i18n/format";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
-import { CheckerRow, lookWord, useNodeTimes, useWorkerRow } from "./missionParts";
+import { CheckerRow, lookWord, useNodeTimes, useRunWords, useWorkerRow } from "./missionParts";
 import {
   cardLine,
   criteriaTally,
@@ -20,17 +20,15 @@ import {
   eventWords,
   heldQuestion,
   kindWord,
-  launchModelOf,
   mainCommit,
   nodeLook,
   ownCriteria,
   shortCommit,
-  workerWords,
 } from "./missions";
 import { PlanChecklist } from "./PlanChecklist";
 import { planNowLine } from "./plans";
 import { sessionOfAgent } from "./sessionWork";
-import type { Mission, MissionCriterion, MissionCriterionState, MissionEvent, MissionNode } from "./snapshot";
+import type { Mission, MissionCriterion, MissionEvent, MissionNode } from "./snapshot";
 import { useShellStore } from "./store";
 
 // The node the operator picked on a mission's map (PRD mission-map-git-criteria
@@ -42,8 +40,7 @@ import { useShellStore } from "./store";
 export function MissionNodePanel({ mission, node, events, end, onSelect, onClose, actions }: { mission: Mission; node: MissionNode; events: MissionEvent[] | null; end: number; onSelect: (key: string) => void; onClose: () => void; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const look = nodeLook(mission, node);
-  const launchModel = useShellStore((s) => launchModelOf(s.rest, mission, node));
-  const worker = workerWords(node, launchModel, t("mission.auto"));
+  const worker = useRunWords(mission, node.pane_id, node.machine, node.worker);
   const times = useNodeTimes(mission, node, events, end);
   const facts = [
     ...(times?.took ? [t("mission.elapsed.total", { elapsed: times.took })] : []),
@@ -70,7 +67,7 @@ export function MissionNodePanel({ mission, node, events, end, onSelect, onClose
           {worker ? (
             <>
               <span aria-hidden="true">·</span>
-              <span className="flex min-w-0 items-center gap-xxs"><AgentMark kind={node.worker?.agent} /><span className="truncate">{worker}</span></span>
+              <span className="flex min-w-0 items-center gap-xxs"><AgentMark kind={node.worker?.agent} /><span className="truncate" data-run={worker.from}>{worker.text}</span></span>
             </>
           ) : null}
         </p>

@@ -112,11 +112,11 @@ test("the Conductor's first plan shows on its pane, the map follows the record, 
     await mission(conductor, ["mission", "decide", "--line", "화면 PR 방식 선택"]);
     // The decision is the operator's turn, above the map.
     await expect(map.locator('[data-mission-turn] [data-mission-banner="decision"]')).toContainText("화면 PR 방식 선택");
-    // A card opens its node's panel in the app too: its worker's model and the core's events for it (B31).
+    // A card opens its node's panel in the app too: its worker's planned model, since the pane is not one Hide launched with a choice, and the core's events for it (B31).
     await node.click();
     const panel = map.locator('[data-mission-panel="api"] [data-mission-detail="api"]');
     await expect(panel).toBeVisible();
-    await expect(panel.locator("[data-panel-meta]")).toContainText("opus");
+    await expect(panel.locator("[data-panel-meta]")).toContainText("opus (planned)");
     await panel.locator("[data-panel-events-toggle]").click();
     await expect(panel.locator('[data-panel-event="node"]').first()).toBeVisible();
     // Escape lets the pick go and leaves the lane open (B30).

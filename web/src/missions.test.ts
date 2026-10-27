@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { english } from "./i18n/catalogs";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { cardLine, checkerState, chipWords, conductedBy, checkerWords, criteriaTally, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, launchModelOf, missionCounts, nodeLine, nodeMark, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems, workerWords } from "./missions";
+import { cardLine, checkerState, chipWords, conductedBy, criteriaTally, launchSession, runWords, criterionName, missionHeadCells, criterionNote, defectEdges, firstPlans, kindWord, landingLeft, missionCells, missionOfPane, missionResults, missionTally, missionTone, missionWorkLine, neighbours, nodeLook, nodeResult, nodeTimes, nodeTone, paneChipWords, missionCounts, nodeLine, nodeMark, stackWaiting, stageWord, takeOverPrompt, takeOverProvider, turnItems } from "./missions";
 import type { AgentRow, Mission, MissionCriterion, MissionEvent, MissionNode, SnapshotRest } from "./snapshot";
 
 // What the map and the Conductor row read from a mission (PRD
@@ -68,28 +68,32 @@ describe("the numbers and words", () => {
     expect(nodeMark(node("a", { status: "done" }), null)).toBe("done");
   });
 
-  it("names a worker by its model and effort, never its agent, `auto` for an effort the Conductor chooses", () => {
-    expect(workerWords(node("a", { worker: { agent: "codex", model: "gpt-6-astra", effort: "high", effort_auto: true } }), null, "auto")).toBe("gpt-6-astra·high");
-    expect(workerWords(node("a", { worker: { agent: "claude", model: "opus", effort_auto: true } }), null, "auto")).toBe("opus·auto");
-    // An agent that takes no model: the effort alone, or nothing.
-    expect(workerWords(node("a", { worker: { agent: "opencode", effort_auto: true } }), null, "auto")).toBe("auto");
-    expect(workerWords(node("a", { worker: { agent: "opencode" } }), null, "auto")).toBeNull();
+  it("names what runs from the pane's launch alone, and the plan's words marked planned before a launch (B29)", () => {
+    const words = { auto: "auto", defaultModel: "default model" };
+    const plan = { agent: "codex", model: "gpt-6-astra", effort: "high", effort_auto: false };
+    const launch = (launch_model: string | null, launch_effort: string | null) => ({ device_id: "mac", pane_id: "p9", session_digest: "d", launch_model, launch_effort });
+    // Before Hide recorded a launch: the plan's words, marked planned; `auto` for an effort the Conductor chooses; never the agent.
+    expect(runWords(null, plan, words)).toEqual({ words: "gpt-6-astra·high", planned: true });
+    expect(runWords(null, { agent: "claude", model: "opus", effort_auto: true }, words)).toEqual({ words: "opus·auto", planned: true });
+    expect(runWords(null, { agent: "opencode" }, words)).toBeNull();
+    expect(runWords(null, null, words)).toBeNull();
+    // A launch speaks alone: its effort over a different planned one, its model over the plan's.
+    expect(runWords(launch("gpt-6-sol", "low"), plan, words)).toEqual({ words: "gpt-6-sol·low", planned: false });
+    // A launch that set no effort shows none, and one that set no model ran the CLI's default; the plan fills neither.
+    expect(runWords(launch("gpt-6-sol", null), plan, words)).toEqual({ words: "gpt-6-sol", planned: false });
+    expect(runWords(launch(null, "low"), plan, words)).toEqual({ words: "default model·low", planned: false });
+    // A session with neither value carries no proven launch: the plan's words stay marked planned.
+    expect(runWords(launch(null, null), plan, words)).toEqual({ words: "gpt-6-astra·high", planned: true });
   });
 
-  it("shows the model the pane runs while the node works, and the plan's otherwise", () => {
-    const planned = node("a", { worker: { agent: "claude", model: "opus", effort: "high" } });
-    expect(workerWords(planned, "sonnet", "auto")).toBe("opus·high");
-    expect(workerWords({ ...planned, status: "working" }, "sonnet", "auto")).toBe("sonnet·high");
-    expect(workerWords({ ...planned, status: "review" }, "sonnet", "auto")).toBe("sonnet·high");
-    expect(workerWords({ ...planned, status: "working" }, null, "auto")).toBe("opus·high");
+  it("finds a pane's launch on its machine, else on the mission's", () => {
     const m = mission("m", { device_id: "mac" });
-    const rest = { overview_graph: { sessions: [{ device_id: "mac", pane_id: "p9", session_digest: "d", launch_model: "sonnet", launch_effort: null }, { device_id: "mini", pane_id: "p9", session_digest: "e", launch_model: "haiku", launch_effort: null }] } } as unknown as SnapshotRest;
-    expect(launchModelOf(rest, m, node("a", { pane_id: "p9" }))).toBe("sonnet");
-    expect(launchModelOf(rest, m, node("a", { pane_id: "p9", machine: "mini" }))).toBe("haiku");
-    expect(launchModelOf(rest, m, node("a", { pane_id: "p8" }))).toBeNull();
-    expect(launchModelOf(rest, m, node("a"))).toBeNull();
+    const rest = { overview_graph: { sessions: [{ device_id: "mac", pane_id: "p9", session_digest: "d", launch_model: "sonnet", launch_effort: null }, { device_id: "mini", pane_id: "p9", session_digest: "e", launch_model: "haiku", launch_effort: "high" }] } } as unknown as SnapshotRest;
+    expect(launchSession(rest, m, "p9", null)?.launch_model).toBe("sonnet");
+    expect(launchSession(rest, m, "p9", "mini")?.launch_model).toBe("haiku");
+    expect(launchSession(rest, m, "p8", null)).toBeNull();
+    expect(launchSession(rest, m, null, null)).toBeNull();
   });
-
 });
 
 describe("a takeover", () => {
@@ -285,20 +289,6 @@ describe("a node's finish lines (PRD mission-map-git-criteria B6, B12, B23, B28,
     expect([checkerState(checker("codex")), checkerState(checker("codex", "open", "agent-3")), checkerState(checker("codex", "pass", "agent-3")), checkerState(checker("codex", "fail", "agent-3"))]).toEqual(["waiting", "running", "pass", "fail"]);
   });
 
-  it("names a checker by the model and effort its own pane was started with once the core bound it, else by what the plan asked (B29)", () => {
-    const m = mission("m", { device_id: "mac" });
-    const rest = { overview_graph: { sessions: [
-      { device_id: "mac", pane_id: "w1:p4", session_digest: "a", launch_model: "gpt-6", launch_effort: "xhigh" },
-      { device_id: "mini", pane_id: "w2:p1", session_digest: "b", launch_model: "opus-5", launch_effort: null },
-    ] } } as unknown as SnapshotRest;
-    const planned = { worker: { agent: "codex", model: null, effort: "high" }, state: "open" as const };
-    expect(checkerWords(rest, m, planned)).toBe("codex·high");
-    expect(checkerWords(rest, m, { ...planned, agent_id: "agent-3", pane_id: "w1:p4" })).toBe("gpt-6·xhigh");
-    // On another machine its pane is read there; a launch with no effort keeps the plan's.
-    expect(checkerWords(rest, m, { ...planned, agent_id: "agent-4", pane_id: "w2:p1", machine: "mini" })).toBe("opus-5·high");
-    // A pane Hide recorded no launch for keeps the plan's words.
-    expect(checkerWords(rest, m, { ...planned, agent_id: "agent-5", pane_id: "w1:p9" })).toBe("codex·high");
-  });
 });
 
 describe("a node's times from its events (PRD mission-map-git-criteria B28)", () => {
