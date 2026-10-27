@@ -2353,7 +2353,7 @@ mod tests {
     /// its sentence as its one line, and its file is copied aside once.
     #[test]
     fn a_schema_one_book_is_converted_and_its_file_kept_aside() {
-        let mut node = serde_json::to_value(&mission()).unwrap();
+        let mut node = serde_json::to_value(mission()).unwrap();
         node["nodes"] = serde_json::json!([
             {"key": "a", "title": "A", "kind": "change", "depends_on": [], "status": "done",
              "delivery": "pr", "worker": null, "agent_id": null, "pr": 3, "base_pr": null,
