@@ -184,12 +184,19 @@ impl Runtime {
             .collect()
     }
 
-    /// The gate on a mission's close as done or waiting for the merge
-    /// (B10): every node is done or dropped, and every done node's lines
-    /// are still met now.
-    pub(super) fn gate_close(&self, mission: &Mission, end: MissionEnd) -> Result<(), String> {
-        if mission.exempt || end == MissionEnd::Cancelled {
-            return Ok(());
+    /// What keeps `mission` from ending as done now, against `pulls` (B10):
+    /// a node neither done nor dropped, or a done node whose lines no longer
+    /// hold. The Conductor's close as done or merge_wait and both closes a
+    /// waiting mission makes by itself, on its pull requests merged (B41) or
+    /// its branches in main (B18), ask this one rule; a mission made before
+    /// criteria is not held (D-19).
+    pub(super) fn close_held(
+        &self,
+        mission: &Mission,
+        pulls: Option<&GithubProjectSnapshot>,
+    ) -> Option<String> {
+        if mission.exempt {
+            return None;
         }
         let open: Vec<&str> = mission
             .nodes
@@ -198,29 +205,23 @@ impl Runtime {
             .map(|node| node.key.as_str())
             .collect();
         if !open.is_empty() {
-            return Err(crate::coordination::refusal(
+            return Some(crate::coordination::refusal(
                 "mission_nodes_unfinished",
                 &open.join(", "),
             ));
         }
-        let unmet = self.done_unmet(mission, self.mission_pulls(mission));
-        if unmet.is_empty() {
-            return Ok(());
-        }
-        Err(crate::coordination::refusal(
-            "mission_criteria_unmet",
-            &unmet.join("; "),
-        ))
+        let unmet = self.done_unmet(mission, pulls);
+        (!unmet.is_empty())
+            .then(|| crate::coordination::refusal("mission_criteria_unmet", &unmet.join("; ")))
     }
 
-    /// Whether a mission waiting for its merges may close by itself on
-    /// `pulls` (B10, B41): every done node's lines are still met.
-    pub(super) fn may_close_itself(
-        &self,
-        mission: &Mission,
-        pulls: Option<&GithubProjectSnapshot>,
-    ) -> bool {
-        mission.exempt || self.done_unmet(mission, pulls).is_empty()
+    /// The gate on the Conductor's close: a cancel is never held.
+    pub(super) fn gate_close(&self, mission: &Mission, end: MissionEnd) -> Result<(), String> {
+        if end == MissionEnd::Cancelled {
+            return Ok(());
+        }
+        self.close_held(mission, self.mission_pulls(mission))
+            .map_or(Ok(()), Err)
     }
 
     /// The node `patch` would leave, with the lines that rest on what it

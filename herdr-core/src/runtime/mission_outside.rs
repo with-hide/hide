@@ -48,9 +48,25 @@ pub(crate) struct Outside {
     /// The outside nodes the last read could not answer, by mission and
     /// node, with why. Memory only: a restart reads them again.
     unread: BTreeMap<(String, String), String>,
+    /// How often each mission was reopened while this core runs, so a
+    /// branch read asked before a reopen proves nothing after it; memory
+    /// only, as a read out does not outlive a restart.
+    reopens: BTreeMap<String, u64>,
 }
 
 impl Outside {
+    /// Marks `mission` reopened, forgetting the missions `book` no longer
+    /// holds so the map stays within the book's own cap.
+    pub(super) fn reopened(&mut self, mission: &str, book: &MissionBook) {
+        self.reopens
+            .retain(|id, _| book.missions.iter().any(|kept| kept.id == *id));
+        *self.reopens.entry(mission.to_owned()).or_default() += 1;
+    }
+
+    pub(super) fn reopens_of(&self, mission: &str) -> u64 {
+        self.reopens.get(mission).copied().unwrap_or(0)
+    }
+
     pub(super) fn unread(&self, mission: &str, node: &str) -> bool {
         self.unread
             .contains_key(&(mission.to_owned(), node.to_owned()))
@@ -72,8 +88,15 @@ pub(crate) enum Found {
 pub(crate) enum Watch {
     /// An outside node, to main.
     Outside(External),
-    /// A direct change's branch, as the node names it, to main.
-    Landing(Option<String>),
+    /// A direct change's branch, as the node names it, to main, asked after
+    /// the mission's `reopens`-th reopen and for the node's finish at
+    /// `done`: an answer that comes back after either moved on proves
+    /// nothing.
+    Landing {
+        branch: Option<String>,
+        reopens: u64,
+        done: Option<u64>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -121,15 +144,16 @@ fn found_of(badge: PullRequestBadge) -> Found {
     }
 }
 
-/// The direct changes a mission waiting for its branches still waits on.
+/// The direct changes of a mission waiting for its branches: each done one,
+/// read again on every read while the mission waits, since its branch can
+/// move on after it was seen in main (B17, B18).
 fn landing(
     mission: &crate::missions::Mission,
 ) -> impl Iterator<Item = &crate::missions::MissionNode> {
     mission.nodes.iter().filter(move |node| {
         mission.status == MissionStatus::MergeWait
             && super::missions::lands_by_branch(node)
-            && node.in_main.is_none()
-            && !matches!(node.status, NodeStatus::Dropped | NodeStatus::Failed)
+            && node.status == NodeStatus::Done
     })
 }
 
@@ -150,6 +174,7 @@ fn followed(mission: &crate::missions::Mission) -> bool {
 /// change that names no branch cannot be read and is answered so at once.
 fn outside_asks(
     book: &MissionBook,
+    outside: &Outside,
     device: &str,
     project: &str,
     listed: Option<&GithubProjectSnapshot>,
@@ -196,7 +221,11 @@ fn outside_asks(
             let ask = Ask {
                 mission: mission.id.clone(),
                 node: node.key.clone(),
-                watch: Watch::Landing(node.branch.clone()),
+                watch: Watch::Landing {
+                    branch: node.branch.clone(),
+                    reopens: outside.reopens_of(&mission.id),
+                    done: node.finished_at_unix_ms,
+                },
             };
             if node.branch.is_none() {
                 let reason = "The node names no branch, so Hide cannot see it reach main";
@@ -236,6 +265,7 @@ impl Runtime {
     pub(crate) fn follow_outside_stored(&mut self, device: &str, project: &str) -> bool {
         let (found, asks) = outside_asks(
             &self.missions.book,
+            &self.missions.outside,
             device,
             project,
             self.listed_pulls(device, project),
@@ -250,7 +280,13 @@ impl Runtime {
         project: &str,
         listed: Option<&GithubProjectSnapshot>,
     ) -> bool {
-        let (found, asks) = outside_asks(&self.missions.book, device, project, listed);
+        let (found, asks) = outside_asks(
+            &self.missions.book,
+            &self.missions.outside,
+            device,
+            project,
+            listed,
+        );
         self.follow_outside(device, project, found, asks)
     }
 
@@ -306,6 +342,7 @@ impl Runtime {
     ) -> bool {
         let (mut answers, asks) = outside_asks(
             &self.missions.book,
+            &self.missions.outside,
             device,
             project,
             self.listed_pulls(device, project),
@@ -414,8 +451,17 @@ impl Runtime {
                         && node.external.as_ref() == Some(external)
                         && !settled(node.status)
                 }),
-                Watch::Landing(branch) => landing(mission)
-                    .position(|node| node.key == ask.node && node.branch == *branch)
+                Watch::Landing {
+                    branch,
+                    reopens,
+                    done,
+                } => landing(mission)
+                    .position(|node| {
+                        node.key == ask.node
+                            && node.branch == *branch
+                            && node.finished_at_unix_ms == *done
+                            && self.missions.outside.reopens_of(&ask.mission) == *reopens
+                    })
                     .and_then(|_| mission.nodes.iter().position(|node| node.key == ask.node)),
             };
             let Some(at) = current else {
@@ -437,16 +483,27 @@ impl Runtime {
             };
             flags_moved |= flag_moved;
             let Watch::Outside(external) = &ask.watch else {
-                if let Found::InMain(Some(commit)) = found {
-                    mission.nodes[at].in_main = Some(commit);
-                    mission.updated_at_unix_ms = now;
+                // A branch read now replaces what an earlier read proved: in
+                // main at its head now, or no longer, once it moved on.
+                let node = &mut mission.nodes[at];
+                let proof = match (found, node.branch.clone()) {
+                    (Found::InMain(Some(commit)), Some(branch)) => {
+                        Some(crate::missions::Landed { branch, commit })
+                    }
+                    (Found::Open, _) => None,
+                    _ => node.in_main.clone(),
+                };
+                if proof != node.in_main {
                     crate::diagnostic!(json!({
-                        "component": "missions", "kind": "mission.branch_in_main",
+                        "component": "missions",
+                        "kind": if proof.is_some() { "mission.branch_in_main" } else { "mission.branch_left_main" },
                         "mission": ask.mission, "node": ask.node,
                     }));
-                    landed.insert(ask.mission.clone());
+                    node.in_main = proof;
+                    mission.updated_at_unix_ms = now;
                     changed = true;
                 }
+                landed.insert(ask.mission.clone());
                 continue;
             };
             let (status, wake) = match found {
@@ -481,7 +538,7 @@ impl Runtime {
             changed = true;
         }
         for id in landed {
-            self.close_if_landed(&id, now);
+            changed |= self.close_if_landed(&id, now);
         }
         if flags_moved {
             // The unread mark is drawn from memory, not the book.
@@ -518,8 +575,11 @@ fn read_one(
                 })
             })
         }
-        Watch::Outside(External::Branch(name)) | Watch::Landing(Some(name)) => branch(name),
-        Watch::Landing(None) => Err("The node names no branch".to_owned()),
+        Watch::Outside(External::Branch(name))
+        | Watch::Landing {
+            branch: Some(name), ..
+        } => branch(name),
+        Watch::Landing { branch: None, .. } => Err("The node names no branch".to_owned()),
     };
     answer.unwrap_or_else(Found::Unread)
 }

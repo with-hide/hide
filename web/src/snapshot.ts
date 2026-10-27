@@ -1377,8 +1377,11 @@ export type MissionNode = {
   reopened: number;
   started_at_unix_ms: number | null;
   finished_at_unix_ms: number | null;
-  /** A direct change's commit on main (B33). */
+  /** A direct change's commit on main, as the Conductor recorded it (B33). */
   commit: string | null;
+  /** The commit of the node's branch Hide read in main for a mission waiting
+   * on its branches, while that read stands (`→ main <sha7>`, B17). */
+  in_main?: string;
   verdict: MissionVerdict | null;
   checks: { passed: number; total: number } | null;
   /** The worker's own plan (PRD hide-plan D-17, D-18). */

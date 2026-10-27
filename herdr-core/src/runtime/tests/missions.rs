@@ -2747,7 +2747,7 @@ fn a_failed_ci_rerun_sends_the_node_back_to_work_and_reads_no_more_runs_on_that_
 /// main, and then closes itself with the commit it found.
 #[test]
 fn a_branch_mission_waits_for_its_branch_to_reach_main_then_closes() {
-    use crate::runtime::mission_outside::{Ask, Found, Watch};
+    use crate::runtime::mission_outside::Found;
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     command(
@@ -2779,23 +2779,224 @@ fn a_branch_mission_waits_for_its_branch_to_reach_main_then_closes() {
     )
     .unwrap();
     assert_eq!(closed["mission"]["status"], "merge_wait");
-    let place = (crate::node::TEST_NODE.to_owned(), PROJECT.to_owned());
-    let ask = || Ask {
-        mission: "mission-1".into(),
-        node: "fix".into(),
-        watch: Watch::Landing(Some("feat/fix".into())),
-    };
     let status = |runtime: &Runtime| runtime.missions.book.get("mission-1").unwrap().status;
-    runtime.ingest_outside(&place, vec![(ask(), Found::Open)]);
+    land(&mut runtime, "fix", Found::Open);
     assert_eq!(status(&runtime), MissionStatus::MergeWait);
-    runtime.ingest_outside(&place, vec![(ask(), Found::InMain(Some(HEAD.into())))]);
+    land(&mut runtime, "fix", Found::InMain(Some(HEAD.into())));
     assert_eq!(status(&runtime), MissionStatus::Done);
+    assert_eq!(node_view(&runtime, "fix").in_main.as_deref(), Some(HEAD));
+}
+
+/// The branch read Hide asks for `node` of the waiting mission now.
+fn landing_ask(runtime: &Runtime, node: &str) -> crate::runtime::mission_outside::Ask {
+    use crate::runtime::mission_outside::{Ask, Watch};
+    let mission = runtime.missions.book.get("mission-1").unwrap();
+    let row = mission.node(node).unwrap();
+    Ask {
+        mission: "mission-1".into(),
+        node: node.into(),
+        watch: Watch::Landing {
+            branch: row.branch.clone(),
+            reopens: runtime.missions.outside.reopens_of("mission-1"),
+            done: row.finished_at_unix_ms,
+        },
+    }
+}
+
+/// `found` as the answer of a branch read for `node` asked now.
+fn land(runtime: &mut Runtime, node: &str, found: crate::runtime::mission_outside::Found) {
+    let ask = landing_ask(runtime, node);
+    answer(runtime, ask, found);
+}
+
+fn answer(
+    runtime: &mut Runtime,
+    ask: crate::runtime::mission_outside::Ask,
+    found: crate::runtime::mission_outside::Found,
+) {
+    let place = (crate::node::TEST_NODE.to_owned(), PROJECT.to_owned());
+    runtime.ingest_outside(&place, vec![(ask, found)]);
+}
+
+/// A running mission of two direct changes, `a` on `feat/a` worked by
+/// `recipient` and `b` on `feat/b` worked by `reviewer`, each done with its
+/// line met and waiting on its branch.
+fn waiting_on_branches(runtime: &mut Runtime) {
+    command(
+        runtime,
+        "sender",
+        json!({"op": "create", "title": "Two branches"}),
+    )
+    .unwrap();
+    command(
+        runtime,
+        "sender",
+        json!({"op": "plan", "plan": {"nodes": [
+            {"key": "a", "title": "A", "kind": "change", "delivery": "direct", "criteria": ["a works"]},
+            {"key": "b", "title": "B", "kind": "change", "delivery": "direct", "criteria": ["b works"]},
+        ]}}),
+    )
+    .unwrap();
+    command(runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(runtime);
+    for (node, agent, pane) in [("a", "agent-2", "recipient"), ("b", "agent-3", "reviewer")] {
+        command(
+            runtime,
+            "sender",
+            json!({"op": "node", "node": node, "patch": {"status": "working", "agent_id": agent, "branch": format!("feat/{node}")}}),
+        )
+        .unwrap();
+        command(runtime, pane, record_of(node, "c1", json!({}))).unwrap();
+        command(
+            runtime,
+            "sender",
+            json!({"op": "node", "node": node, "patch": {"status": "done"}}),
+        )
+        .unwrap();
+    }
+    let (closed, _) = command(
+        runtime,
+        "sender",
+        json!({"op": "close", "end": "merge_wait"}),
+    )
+    .unwrap();
+    assert_eq!(closed["mission"]["status"], "merge_wait");
+}
+
+fn mission_status(runtime: &Runtime) -> MissionStatus {
+    runtime.missions.book.get("mission-1").unwrap().status
+}
+
+/// Re-review finding 1: a waiting mission closes by itself, on its pull
+/// request merged, only by the rule the Conductor's close is held to: a
+/// node a defect sent back to work, or a node failed, keeps it waiting.
+#[test]
+fn a_mission_waiting_on_its_pull_requests_keeps_waiting_while_a_node_is_back_at_work_or_failed() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running_criteria_mission(&mut runtime);
+    met_fix(&mut runtime);
+    for (node, status) in [("fix", "done"), ("docs", "dropped")] {
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "node", "node": node, "patch": {"status": status}}),
+        )
+        .unwrap();
+    }
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "merge_wait"}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "defect", "node": "fix", "found_by": "docs", "line": "drops a v1 node"}),
+    )
+    .unwrap();
+    assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Working);
+    let merged = github(vec![pull(7, HEAD, PullRequestBadge::Merged, None)], false);
+    runtime.github = merged.clone();
+    runtime.note_mission_pulls(crate::node::TEST_NODE, &merged);
+    assert_eq!(mission_status(&runtime), MissionStatus::MergeWait);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "failed"}}),
+    )
+    .unwrap();
+    runtime.note_mission_pulls(crate::node::TEST_NODE, &merged);
+    assert_eq!(mission_status(&runtime), MissionStatus::MergeWait);
+}
+
+/// Re-review finding 1: the same rule holds the close a waiting mission
+/// makes on its branches in main.
+#[test]
+fn a_mission_waiting_on_its_branches_keeps_waiting_while_a_node_is_back_at_work_or_failed() {
+    use crate::runtime::mission_outside::Found;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    waiting_on_branches(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "defect", "node": "b", "found_by": "a", "line": "b drops a field"}),
+    )
+    .unwrap();
+    land(&mut runtime, "a", Found::InMain(Some(HEAD.into())));
+    assert_eq!(mission_status(&runtime), MissionStatus::MergeWait);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "b", "patch": {"status": "failed"}}),
+    )
+    .unwrap();
+    land(&mut runtime, "a", Found::InMain(Some(HEAD.into())));
+    assert_eq!(mission_status(&runtime), MissionStatus::MergeWait);
+}
+
+/// Re-review finding 2: a branch read in main proves that branch, at that
+/// node's finish, in that wait: a node moved to another branch, a branch
+/// that moved on, a reopened mission and an answer asked before any of
+/// them prove nothing.
+#[test]
+fn a_branch_read_in_main_proves_only_that_branch_while_its_node_and_wait_stand() {
+    use crate::runtime::mission_outside::Found;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    waiting_on_branches(&mut runtime);
+    let (a1, b1, c1) = ("a".repeat(40), "b".repeat(40), "c".repeat(40));
+    land(&mut runtime, "a", Found::InMain(Some(a1.clone())));
+    assert_eq!(node_view(&runtime, "a").in_main, Some(a1.clone()));
+    let before_move = landing_ask(&runtime, "a");
+
+    // The Conductor moves `a` to another branch: what was read of the old
+    // one proves nothing, then or when its late answer comes.
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "a", "patch": {"branch": "feat/c"}}),
+    )
+    .unwrap();
+    assert_eq!(node_view(&runtime, "a").in_main, None);
+    answer(&mut runtime, before_move, Found::InMain(Some(a1)));
+    land(&mut runtime, "b", Found::InMain(Some(b1.clone())));
+    assert_eq!(mission_status(&runtime), MissionStatus::MergeWait);
+    assert_eq!(node_view(&runtime, "a").in_main, None);
+
+    // A branch that moved on past main is no longer in it.
+    land(&mut runtime, "b", Found::Open);
+    assert_eq!(node_view(&runtime, "b").in_main, None);
+    land(&mut runtime, "b", Found::InMain(Some(b1.clone())));
+    land(&mut runtime, "a", Found::InMain(Some(c1.clone())));
+    assert_eq!(mission_status(&runtime), MissionStatus::Done);
+
+    // Reopened, the same branches are read again before it closes, and an
+    // answer asked in the earlier wait proves nothing in the next.
+    let earlier = landing_ask(&runtime, "a");
+    command(&mut runtime, "sender", json!({"op": "reopen"})).unwrap();
     assert_eq!(
-        runtime.missions.book.get("mission-1").unwrap().nodes[0]
-            .in_main
-            .as_deref(),
-        Some(HEAD)
+        (
+            node_view(&runtime, "a").in_main,
+            node_view(&runtime, "b").in_main
+        ),
+        (None, None)
     );
+    let (closed, _) = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "merge_wait"}),
+    )
+    .unwrap();
+    assert_eq!(closed["mission"]["status"], "merge_wait");
+    land(&mut runtime, "b", Found::InMain(Some(b1)));
+    answer(&mut runtime, earlier, Found::InMain(Some(c1.clone())));
+    assert_eq!(mission_status(&runtime), MissionStatus::MergeWait);
+    assert_eq!(node_view(&runtime, "a").in_main, None);
+    land(&mut runtime, "a", Found::InMain(Some(c1)));
+    assert_eq!(mission_status(&runtime), MissionStatus::Done);
 }
 
 /// This machine's host answering a node's calls, as the core's link to it
@@ -2931,10 +3132,28 @@ fn a_git_mission_in_a_repository_with_no_remote_follows_its_branches_into_main()
     git_in(&repo, &["merge", "-q", "--no-ff", "-m", "fix", "feat/fix"]);
     runtime.read_outside_through(device, &root, &host);
     assert_eq!(status(&runtime), MissionStatus::Done);
+    // The commit found in main is what `hide mission show` and the
+    // snapshot give the map for `→ main <sha7>`, beside a commit the
+    // Conductor never recorded.
+    let landed = git_in(&repo, &["rev-parse", "feat/fix"]);
+    let (shown, _) = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "show", "mission": "mission-1"}),
+    )
+    .unwrap();
+    let fix = &shown["mission"]["nodes"][1];
     assert_eq!(
-        runtime.missions.book.missions[0].nodes[1]
-            .in_main
-            .as_deref(),
-        Some(git_in(&repo, &["rev-parse", "feat/fix"]).as_str())
+        (&fix["in_main"], &fix["commit"]),
+        (&json!(landed), &Value::Null)
     );
+    runtime.refresh_missions();
+    let snapshot = serde_json::to_value(&runtime.snapshot.missions).unwrap();
+    let published = snapshot["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|mission| mission["id"] == "mission-1")
+        .unwrap();
+    assert_eq!(published["nodes"][1]["in_main"], json!(landed));
 }

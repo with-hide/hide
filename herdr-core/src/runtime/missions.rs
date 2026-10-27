@@ -170,6 +170,11 @@ pub struct NodeView {
     pub started_at_unix_ms: Option<u64>,
     pub finished_at_unix_ms: Option<u64>,
     pub commit: Option<String>,
+    /// The commit of the node's branch Hide read in main for a mission
+    /// waiting on its branches, while that read stands (B17 `→ main
+    /// <sha7>`); `commit` is what the Conductor recorded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub in_main: Option<String>,
     pub verdict: Option<Verdict>,
     pub checks: Option<Checks>,
     /// The worker's own plan (PRD hide-plan D-17, D-18): the value its pane's
@@ -272,8 +277,17 @@ fn stack_settled(mission: &Mission) -> bool {
                 .pr_seen
                 .as_ref()
                 .is_some_and(|seen| seen.merged || seen.closed),
-            None => !lands_by_branch(node) || node.in_main.is_some(),
+            None => !lands_by_branch(node) || landed(node).is_some(),
         })
+}
+
+/// The commit Hide read in main for the branch the node names now, while
+/// that read stands (B17 `→ main <sha7>`).
+pub(super) fn landed(node: &crate::missions::MissionNode) -> Option<&str> {
+    node.in_main
+        .as_ref()
+        .filter(|landed| node.branch.as_deref() == Some(landed.branch.as_str()))
+        .map(|landed| landed.commit.as_str())
 }
 
 /// A change that reaches main as its branch, with no pull request.
@@ -383,7 +397,9 @@ impl Runtime {
         };
         if mission.status != MissionStatus::MergeWait
             || !stack_settled(mission)
-            || !self.may_close_itself(mission, self.mission_pulls(mission))
+            || self
+                .close_held(mission, self.mission_pulls(mission))
+                .is_some()
         {
             return false;
         }
@@ -937,9 +953,15 @@ impl Runtime {
         {
             return Err("mission_already_conducting".into());
         }
+        // Work reopened can go on the same branches, so what was read in
+        // main, or is being read now, is read again at the next wait (B17).
+        self.missions.outside.reopened(id, &self.missions.book);
         let target = self.missions.book.get_mut(id).ok_or("mission_unknown")?;
         target.status = MissionStatus::Running;
         target.closed_at_unix_ms = None;
+        for node in &mut target.nodes {
+            node.in_main = None;
+        }
         target.updated_at_unix_ms = now;
         Ok(true)
     }
@@ -1255,7 +1277,7 @@ impl Runtime {
             let closes = |runtime: &Self, mission: &Mission| {
                 mission.status == MissionStatus::MergeWait
                     && stack_settled(mission)
-                    && runtime.may_close_itself(mission, Some(project))
+                    && runtime.close_held(mission, Some(project)).is_none()
             };
             if seen_updates.is_empty() && events.is_empty() && !closes(self, mission) {
                 continue;
@@ -1635,6 +1657,7 @@ impl Runtime {
                     started_at_unix_ms: node.started_at_unix_ms,
                     finished_at_unix_ms: node.finished_at_unix_ms,
                     commit: node.commit.clone(),
+                    in_main: landed(node).map(str::to_owned),
                     verdict: node.verdict,
                     checks: node.checks,
                     plan: record.and_then(|record| self.worker_plan(&record.machine, &record.pane)),
