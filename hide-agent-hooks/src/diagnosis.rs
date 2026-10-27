@@ -6,13 +6,13 @@
 //! that matches is the one shown; nothing falls through to an empty value or
 //! an invented cause (PRD B21, B32, D-64).
 
-use std::ffi::{OsStr, OsString};
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::ffi::OsStr;
+use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use hide_platform::process::run_to_end;
+use hide_platform::programs::Program;
 use serde::{Deserialize, Serialize};
 
 use crate::install::{HookStatus, InstallFailure, status};
@@ -268,16 +268,14 @@ pub struct Diagnosis {
 }
 
 impl Diagnosis {
-    /// Reads every runtime under `home`. It performs file reads and no
+    /// Reads every runtime under `home`, each runtime's program found on
+    /// `search` ([`runtime_compatibility`]). It performs file reads and no
     /// writes, so it is safe to call from a background reader.
-    pub fn read(home: &Path) -> Self {
-        Self::read_with_probe(home, runtime_compatibility)
+    pub fn read(home: &Path, search: &OsStr) -> Self {
+        Self::read_with_probe(home, |runtime| runtime_compatibility(runtime, search))
     }
 
-    fn read_with_probe(
-        home: &Path,
-        probe: impl Fn(AgentRuntime, &Path) -> MemoryCompatibility,
-    ) -> Self {
+    fn read_with_probe(home: &Path, probe: impl Fn(AgentRuntime) -> MemoryCompatibility) -> Self {
         Self {
             runtimes: AgentRuntime::ALL
                 .into_iter()
@@ -287,7 +285,7 @@ impl Diagnosis {
                     path: runtime.config_path(home).display().to_string(),
                     status: status(runtime, home),
                     current_version: HOOK_ENTRY_VERSION,
-                    memory_compatibility: probe(runtime, home),
+                    memory_compatibility: probe(runtime),
                 })
                 .collect(),
             last_report_failure: last_failure(home),
@@ -332,30 +330,34 @@ impl Diagnosis {
 
 const RUNTIME_VERSION_PROBE_TIMEOUT: Duration = Duration::from_millis(750);
 
-/// Whether the runtime installed under `home` is new enough for the hook Hide
+/// Whether the runtime found on `search` is new enough for the hook Hide
 /// writes, read from its `--version` within a short bound.
-pub fn runtime_compatibility(runtime: AgentRuntime, home: &Path) -> MemoryCompatibility {
-    let minimum = minimum_memory_version(runtime);
-    let Some(binary) = runtime_binary(runtime, home) else {
-        return MemoryCompatibility::UpdateRequired {
+///
+/// `search` is the account's search (`hide_platform::programs`), the login
+/// shell's folders first, because the program a pane runs is the one the
+/// operator's shell finds: a stale copy in an install folder that a daemon's
+/// own `PATH` reaches first must not stand in for it.
+pub fn runtime_compatibility(runtime: AgentRuntime, search: &OsStr) -> MemoryCompatibility {
+    match runtime_program(runtime, search) {
+        Some(program) => program_compatibility(runtime, &program),
+        None => MemoryCompatibility::UpdateRequired {
             installed_version: None,
-            minimum_version: minimum.to_owned(),
-        };
-    };
-    let Some(output) = cli_path(home)
-        .and_then(|path| version_output(&binary, &path, RUNTIME_VERSION_PROBE_TIMEOUT))
-    else {
-        return MemoryCompatibility::UpdateRequired {
-            installed_version: None,
-            minimum_version: minimum.to_owned(),
-        };
-    };
-    let installed = parse_version(&output);
-    match installed.as_deref() {
-        Some(version) if version_at_least(version, minimum) => MemoryCompatibility::Supported {
-            version: version.to_owned(),
+            minimum_version: minimum_memory_version(runtime).to_owned(),
         },
-        _ => MemoryCompatibility::UpdateRequired {
+    }
+}
+
+/// [`runtime_compatibility`] of a program already found, so a caller that
+/// names the program in what it says checks that same one.
+pub fn program_compatibility(runtime: AgentRuntime, program: &Program) -> MemoryCompatibility {
+    let minimum = minimum_memory_version(runtime);
+    let installed = version_output(program, RUNTIME_VERSION_PROBE_TIMEOUT)
+        .and_then(|output| parse_version(&output));
+    match installed {
+        Some(version) if version_at_least(&version, minimum) => {
+            MemoryCompatibility::Supported { version }
+        }
+        installed => MemoryCompatibility::UpdateRequired {
             installed_version: installed,
             minimum_version: minimum.to_owned(),
         },
@@ -369,34 +371,18 @@ fn minimum_memory_version(runtime: AgentRuntime) -> &'static str {
     }
 }
 
-pub(crate) fn runtime_binary(runtime: AgentRuntime, home: &Path) -> Option<PathBuf> {
+/// The runtime's program on `search`.
+pub fn runtime_program(runtime: AgentRuntime, search: &OsStr) -> Option<Program> {
     let name = match runtime {
         AgentRuntime::ClaudeCode => "claude",
         AgentRuntime::Codex => "codex",
     };
-    find_binary(name, home)
+    Program::find(search, name)
 }
 
-/// The program `name` as a hook's daemon would find it on [`cli_path`],
-/// without the login shell's folders, which only the install kit and Hide AI
-/// read (`hide_platform::programs`).
-pub fn find_binary(name: &str, home: &Path) -> Option<PathBuf> {
-    hide_platform::host::find_program(&cli_path(home)?, name)
-}
-
-/// The `PATH` an agent's CLI is found on and run with: the daemon's own
-/// `PATH`, then the folders installers put a CLI in that such a `PATH` may
-/// not reach. A device helper started over SSH has only the system folders.
-/// A CLI installed as a script starts its interpreter from the same `PATH`
-/// (pnpm's `codex` is a shell script that runs `node`), so a CLI found here
-/// is run with this value, never with the daemon's `PATH` alone.
-pub fn cli_path(home: &Path) -> Option<OsString> {
-    hide_platform::programs::cli_path_with(home, None)
-}
-
-fn version_output(binary: &Path, path: &OsStr, timeout: Duration) -> Option<String> {
-    let mut command = Command::new(binary);
-    command.arg("--version").env("PATH", path);
+fn version_output(program: &Program, timeout: Duration) -> Option<String> {
+    let mut command = program.command();
+    command.arg("--version");
     let finished = run_to_end(&mut command, timeout, &AtomicBool::new(false)).ok()?;
     let output = if finished.stdout.trim().is_empty() {
         finished.stderr
@@ -438,7 +424,7 @@ mod tests {
     use super::*;
     use crate::install::InstallFailure;
 
-    fn compatible(_runtime: AgentRuntime, _home: &Path) -> MemoryCompatibility {
+    fn compatible(_runtime: AgentRuntime) -> MemoryCompatibility {
         MemoryCompatibility::Supported {
             version: "999.0.0".to_owned(),
         }
@@ -504,7 +490,7 @@ mod tests {
             path: "/tmp/hooks.json".to_owned(),
             status: HookStatus::Outdated { version: 2 },
             current_version: HOOK_ENTRY_VERSION,
-            memory_compatibility: compatible(AgentRuntime::Codex, Path::new("/tmp")),
+            memory_compatibility: compatible(AgentRuntime::Codex),
         };
         assert_eq!(row.headline(), "Update required (v2, current v10)");
         assert!(row.offers_install());

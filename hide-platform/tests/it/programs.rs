@@ -46,12 +46,52 @@ fn a_program_only_the_login_shells_path_reaches_is_found() {
         &AtomicBool::new(false),
         "hide-fixture-agent-a",
     );
-    assert_eq!(found, Some(installed));
+    assert_eq!(
+        found.as_ref().map(programs::Program::path),
+        Some(installed.as_path())
+    );
     assert_eq!(
         programs::find_cli_with(&home, None, &AtomicBool::new(false), "hide-fixture-agent-a"),
         None,
         "with no shell to ask, that folder is not searched"
     );
+}
+
+/// The incident of 2026-10-27: the operator's terminal ran an nvm Codex
+/// that its startup files put on the `PATH`, and an older Codex left in
+/// `~/.local/bin` was what Hide asked for its version, so the hook was
+/// refused as needing an update the operator had already made. The copy the
+/// login shell finds is the one found, and it runs with the `PATH` it was
+/// found on, so the interpreter only that folder holds (nvm's `node`) starts.
+#[test]
+fn the_copy_the_login_shell_finds_wins_over_an_older_one_in_an_install_folder() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("home");
+    let installer_bin = root.path().join("installer-bin");
+    crate::stand_ins::program(
+        &home.join(".local/bin/hide-fixture-agent-c"),
+        "#!/bin/sh\necho old\n",
+    );
+    crate::stand_ins::program(
+        &installer_bin.join("hide-fixture-agent-c"),
+        "#!/bin/sh\nexec hide-fixture-interpreter-c\n",
+    );
+    crate::stand_ins::program(
+        &installer_bin.join("hide-fixture-interpreter-c"),
+        "#!/bin/sh\necho new\n",
+    );
+    let shell = shell_adding_installer_bin(root.path());
+
+    let found = programs::find_cli_with(
+        &home,
+        Some(&shell),
+        &AtomicBool::new(false),
+        "hide-fixture-agent-c",
+    )
+    .expect("the login shell's copy is found");
+    assert_eq!(found.path(), installer_bin.join("hide-fixture-agent-c"));
+    let output = found.command().output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "new\n");
 }
 
 #[test]
@@ -61,8 +101,10 @@ fn a_program_in_an_install_folder_the_daemons_path_misses_is_found() {
     let installed = program(&home.join(".local/bin"), "hide-fixture-agent-b");
 
     assert_eq!(
-        programs::find_cli_with(&home, None, &AtomicBool::new(false), "hide-fixture-agent-b"),
-        Some(installed)
+        programs::find_cli_with(&home, None, &AtomicBool::new(false), "hide-fixture-agent-b")
+            .as_ref()
+            .map(programs::Program::path),
+        Some(installed.as_path())
     );
     assert_eq!(
         programs::find_cli_with(&home, None, &AtomicBool::new(false), "hide-fixture-absent"),

@@ -825,6 +825,51 @@ fn a_program_on_the_login_shells_path_is_installed_and_the_shell_is_asked_again_
     assert_eq!(asked(), 2);
 }
 
+/// The feedback of 2026-10-27: the operator's terminal ran an nvm copy of
+/// the agent, which its startup files put on the `PATH`, while an older copy
+/// sat in `~/.local/bin`; Hide asked the older one for its version and
+/// refused the hook as needing an update the operator had already made. The
+/// version is asked of the copy the login shell finds, run with the `PATH`
+/// it was found on (the nvm copy is a script that runs nvm's `node`), and a
+/// refusal names the copy it judged.
+#[test]
+fn the_hook_is_judged_by_the_copy_the_login_shell_runs_not_an_older_one_in_an_install_folder() {
+    let mut fixture = Fixture::new();
+    executable(
+        &fixture.home().join(".local/bin/claude"),
+        "#!/bin/sh\necho '2.1.100 (Claude Code)'\n",
+    );
+    executable(
+        &fixture.home().join(".nvm/bin/claude"),
+        "#!/bin/sh\nexec hide-fixture-node \"$@\"\n",
+    );
+    executable(
+        &fixture.home().join(".nvm/bin/hide-fixture-node"),
+        "#!/bin/sh\necho '2.1.300 (Claude Code)'\n",
+    );
+    let shell = fixture.root.join("bin/login-shell");
+    program(
+        &shell,
+        "#!/bin/sh\n[ \"$1\" = -ilc ] || exit 64\nPATH=\"$HOME/.nvm/bin\"\nexport PATH\neval \"$2\"\n",
+    );
+
+    let refused = apply(&fixture.target, &Scope::automatic());
+    let hook = agent(&refused, "claude-code").hook.clone().unwrap();
+    assert_ne!(hook.state, ComponentState::Installed);
+    let reason = hook.reason.unwrap();
+    assert!(
+        reason.contains("2.1.100") && reason.contains(".local/bin/claude"),
+        "{reason}"
+    );
+
+    fixture.target.login_shell = Some(shell);
+    let report = apply(&fixture.target, &Scope::automatic());
+    assert_eq!(
+        agent(&report, "claude-code").hook.as_ref().unwrap().state,
+        ComponentState::Installed
+    );
+}
+
 #[test]
 fn a_machine_the_kit_has_never_touched_waits_for_the_first_choice_before_any_agent_gets_anything() {
     let fixture = Fixture::fresh();

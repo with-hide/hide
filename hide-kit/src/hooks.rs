@@ -106,19 +106,25 @@ pub(crate) fn observe(target: &KitTarget, runtime: AgentRuntime) -> Observed {
         ));
     }
     // Only a CLI that answers with a version older than the hook needs is a
-    // reason not to install; one Hide cannot find may be on a PATH the
-    // daemon does not see, and a hook for it does no harm.
-    if let MemoryCompatibility::UpdateRequired {
-        installed_version: Some(installed),
-        minimum_version,
-    } = hide_agent_hooks::runtime_compatibility(runtime, &target.home)
+    // reason not to install; one Hide cannot find does not run in a pane
+    // either, and a hook for it does no harm. The program asked is the one
+    // the operator's shell runs (`agents::search_path`), and the reason names
+    // it, so an older copy elsewhere is neither what is judged nor what the
+    // operator is sent to update.
+    if let Some(program) =
+        hide_agent_hooks::runtime_program(runtime, &crate::agents::search_path(target))
+        && let MemoryCompatibility::UpdateRequired {
+            installed_version: Some(installed),
+            minimum_version,
+        } = hide_agent_hooks::program_compatibility(runtime, &program)
     {
         return Observed::Blocked(Reason::with(
             PartCause::UpdateAgent,
             minimum_version.to_string(),
             format!(
-                "{} {installed} is older than {minimum_version}, which Hide's hook needs; update it",
-                runtime.label()
+                "{} {installed} at {} is older than {minimum_version}, which Hide's hook needs; update it",
+                runtime.label(),
+                program.path().display()
             ),
         ));
     }
@@ -162,7 +168,7 @@ pub(crate) fn remove(target: &KitTarget, runtime: AgentRuntime) -> RemoveOutcome
         AgentRuntime::Codex => Agent::Codex,
     };
     let tools = Tools {
-        codex: target.codex.as_deref(),
+        codex: target.codex.as_ref(),
         stop: &target.stop,
     };
     match folder_trust::forget_all(agent, &target.home, tools) {

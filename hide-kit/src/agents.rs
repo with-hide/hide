@@ -23,8 +23,10 @@
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 
 use hide_agent_hooks::guidance::GuidanceAgent;
+use hide_platform::programs::Program;
 use serde::{Deserialize, Serialize};
 
 use crate::{ComponentId, ComponentState, KitTarget};
@@ -345,34 +347,42 @@ impl Detection {
 
 /// Where the agents' programs are looked for: the folders the account's
 /// login shell puts on its `PATH`, then the daemon's own `PATH` and the
-/// usual install folders (`hide_platform::programs`). A join fails
-/// only for a folder whose name holds the separator, which no search can
-/// hold, so then nothing is found.
-fn search_path(target: &KitTarget) -> OsString {
+/// usual install folders (`hide_platform::programs`). Every program the kit
+/// checks or runs for an agent (whether it is installed, whether its version
+/// takes Hide's hook, the Codex it asks about trust and its daemon) is found
+/// here and run with it, so they are the one program the operator's shell
+/// runs. A join fails only for a folder whose name holds the separator,
+/// which no search can hold, so then nothing is found.
+pub(crate) fn search_path(target: &KitTarget) -> OsString {
+    search(&target.home, target.login_shell.as_deref(), &target.stop)
+}
+
+/// The program `name` on [`search`], for a target being built.
+pub(crate) fn find(
+    home: &Path,
+    login_shell: Option<&Path>,
+    stop: &AtomicBool,
+    name: &str,
+) -> Option<Program> {
+    Program::find(&search(home, login_shell, stop), name)
+}
+
+fn search(home: &Path, login_shell: Option<&Path>, stop: &AtomicBool) -> OsString {
     // A test machine's own agents must not decide what a fixture home finds,
     // so under test the search is the fixture's `~/.local/bin` and what the
     // fixture's stand-in shell answers, never this process's `PATH`.
     #[cfg(test)]
     {
-        let shell = hide_platform::programs::login_shell_path(
-            &target.home,
-            target.login_shell.as_deref(),
-            &target.stop,
-        );
+        let shell = hide_platform::programs::login_shell_path(home, login_shell, stop);
         let folders = shell
             .iter()
             .flat_map(std::env::split_paths)
-            .chain([target.home.join(".local/bin")]);
+            .chain([home.join(".local/bin")]);
         std::env::join_paths(folders).unwrap_or_default()
     }
     #[cfg(not(test))]
     {
-        hide_platform::programs::search_path(
-            &target.home,
-            target.login_shell.as_deref(),
-            &target.stop,
-        )
-        .unwrap_or_default()
+        hide_platform::programs::search_path(home, login_shell, stop).unwrap_or_default()
     }
 }
 

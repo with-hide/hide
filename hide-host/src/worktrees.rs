@@ -2274,10 +2274,10 @@ fn forget_agent_trust(checkout: &Path) {
     let stop = std::sync::atomic::AtomicBool::new(false);
     for agent in Agent::ALL {
         let codex = (agent == Agent::Codex)
-            .then(|| hide_ai::resolve_binary(Path::new("codex")))
+            .then(|| hide_platform::programs::find_cli("codex"))
             .flatten();
         let tools = Tools {
-            codex: codex.as_deref(),
+            codex: codex.as_ref(),
             stop: &stop,
         };
         if let Err(failure) = folder_trust::forget(agent, &home, checkout, tools) {

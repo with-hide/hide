@@ -18,14 +18,13 @@
 //! it once openai/codex#48500 runs a daemon's hooks in each window's
 //! environment (D-26).
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use hide_platform::process::{Finished, RunFailure, run_to_end};
-
-use crate::runtime::AgentRuntime;
+use hide_platform::programs::Program;
 
 /// The feature `codex features` names the shared daemon by.
 pub const DAEMON_FEATURE: &str = "daemon_auto_start";
@@ -56,16 +55,10 @@ pub enum DaemonSetting {
     Off,
 }
 
-/// The `codex` this machine's account would run, or `None` when Hide finds
-/// none on the login PATH or in the usual install folders.
-pub fn find_codex(home: &Path) -> Option<PathBuf> {
-    crate::diagnosis::runtime_binary(AgentRuntime::Codex, home)
-}
-
 /// Reads the actual binary's feature capability without querying or starting
 /// a daemon and without changing the account's setting.
 pub fn read_setting(
-    codex: &Path,
+    codex: &Program,
     home: &Path,
     stop: &AtomicBool,
 ) -> Result<DaemonSetting, ReadError> {
@@ -77,7 +70,7 @@ pub fn read_setting(
     if !listed.succeeded() {
         return Err(ReadError {
             failure: ReadFailure::Exited { code: listed.code },
-            message: failed(codex, "features list", &listed),
+            message: failed(codex.path(), "features list", &listed),
         });
     }
     parse_feature_list(&listed.stdout).map_err(|message| ReadError {
@@ -128,7 +121,7 @@ pub enum SwitchFailure {
 /// Turns the shared daemon off for every Codex started from now on. The
 /// setting is changed only when Codex says it did: a refusal, a timeout and
 /// a stop leave it as it was.
-pub fn turn_off(codex: &Path, home: &Path, stop: &AtomicBool) -> Result<(), SwitchError> {
+pub fn turn_off(codex: &Program, home: &Path, stop: &AtomicBool) -> Result<(), SwitchError> {
     let finished = run(
         codex,
         home,
@@ -145,7 +138,7 @@ pub fn turn_off(codex: &Path, home: &Path, stop: &AtomicBool) -> Result<(), Swit
     } else {
         Err(SwitchError {
             failure: SwitchFailure::Refused,
-            message: failed(codex, "features disable", &finished),
+            message: failed(codex.path(), "features disable", &finished),
         })
     }
 }
@@ -156,7 +149,7 @@ pub fn turn_off(codex: &Path, home: &Path, stop: &AtomicBool) -> Result<(), Swit
 /// socket is gone ([`CONTROL_SOCKET`]); a failure with the socket still there
 /// is an error, as is an exit-0 answer Hide cannot read, never a daemon that
 /// is down (engineering rule 4).
-pub fn daemon_running(codex: &Path, home: &Path, stop: &AtomicBool) -> Result<bool, String> {
+pub fn daemon_running(codex: &Program, home: &Path, stop: &AtomicBool) -> Result<bool, String> {
     match daemon_answer(codex, home, stop)? {
         Answer::Running => Ok(true),
         Answer::Down(_) => Ok(false),
@@ -176,7 +169,7 @@ enum Answer {
     Unsure(String),
 }
 
-fn daemon_answer(codex: &Path, home: &Path, stop: &AtomicBool) -> Result<Answer, String> {
+fn daemon_answer(codex: &Program, home: &Path, stop: &AtomicBool) -> Result<Answer, String> {
     let finished = run(
         codex,
         home,
@@ -186,7 +179,7 @@ fn daemon_answer(codex: &Path, home: &Path, stop: &AtomicBool) -> Result<Answer,
     )?;
     if !finished.succeeded() {
         let answer = exited(
-            codex,
+            codex.path(),
             "app-server daemon version",
             &finished,
             &finished.stderr,
@@ -247,7 +240,7 @@ pub enum Stopped {
 /// bootstrap` manager started it again) is a failure, not a stop; a second
 /// request over a daemon that is down asks `daemon stop` again, which is a
 /// no-op that answers `notRunning` (engineering rule 11).
-pub fn stop(codex: &Path, home: &Path, stop: &AtomicBool) -> Result<Stopped, String> {
+pub fn stop(codex: &Program, home: &Path, stop: &AtomicBool) -> Result<Stopped, String> {
     let not_running = match daemon_answer(codex, home, stop)? {
         Answer::Running => None,
         Answer::Down(why) | Answer::Unsure(why) => Some(why),
@@ -260,7 +253,7 @@ pub fn stop(codex: &Path, home: &Path, stop: &AtomicBool) -> Result<Stopped, Str
         stop,
     )?;
     if !finished.succeeded() {
-        return Err(failed(codex, "app-server daemon stop", &finished));
+        return Err(failed(codex.path(), "app-server daemon stop", &finished));
     }
     match daemon_status(&finished.stdout).as_deref() {
         Some("notRunning") => {
@@ -312,33 +305,27 @@ fn parse_feature_list(stdout: &str) -> Result<DaemonSetting, String> {
 /// launching shell carried never redirects which setting is changed, and a
 /// Windows Codex, a script that runs Node, has the `SystemRoot` Node needs
 /// to start. Its `PATH` is the one it was found on
-/// ([`crate::diagnosis::cli_path`]), so a Codex installed by pnpm, a script
-/// that runs `node`, finds `node` there.
+/// ([`hide_platform::programs::Program`]), so a Codex installed by pnpm or
+/// nvm, a script that runs `node`, finds `node` there.
 fn run(
-    codex: &Path,
+    codex: &Program,
     home: &Path,
     args: &[&str],
     deadline: Duration,
     stop: &AtomicBool,
 ) -> Result<Finished, RunError> {
-    let mut command = Command::new(codex);
+    let mut command = Command::new(codex.path());
     hide_platform::process::restrict_to_login_environment(&mut command);
     command
         .args(args)
         .env("HOME", home)
         .env("CODEX_HOME", home.join(".codex"))
-        .env(
-            "PATH",
-            crate::diagnosis::cli_path(home).ok_or_else(|| RunError {
-                failure: SwitchFailure::CouldNotStart,
-                message: format!("a folder under {} cannot be put on a PATH", home.display()),
-            })?,
-        );
+        .env("PATH", codex.search());
     let name = format!("codex {}", args.join(" "));
     run_to_end(&mut command, deadline, stop).map_err(|failure| match failure {
         RunFailure::Start(error) => RunError {
             failure: SwitchFailure::CouldNotStart,
-            message: format!("{} could not start: {error}", codex.display()),
+            message: format!("{} could not start: {error}", codex.path().display()),
         },
         RunFailure::Wait(error) => RunError {
             failure: SwitchFailure::CouldNotStart,
@@ -408,6 +395,16 @@ fn exited(codex: &Path, what: &str, finished: &Finished, printed: &str) -> Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+
+    /// `codex` run as the daemon's search would run it, with this process's
+    /// `PATH` and the usual install folders under `home`.
+    fn program(codex: PathBuf, home: &Path) -> Program {
+        Program::named(
+            codex,
+            hide_platform::programs::cli_path_with(home, None).unwrap(),
+        )
+    }
 
     #[test]
     fn the_daemon_row_is_read_by_its_last_column() {
@@ -448,10 +445,11 @@ mod tests {
             ),
         );
 
-        let found = crate::find_binary("hide-fixture-codex", home.path());
-        assert_eq!(found.as_deref(), Some(shim.as_path()));
+        let search = hide_platform::programs::cli_path_with(home.path(), None).unwrap();
+        let found = Program::find(&search, "hide-fixture-codex").unwrap();
+        assert_eq!(found.path(), shim.as_path());
         assert_eq!(
-            read_setting(&shim, home.path(), &AtomicBool::new(false)),
+            read_setting(&found, home.path(), &AtomicBool::new(false)),
             Ok(DaemonSetting::Off)
         );
     }
@@ -473,7 +471,11 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            read_setting(&codex, home.path(), &AtomicBool::new(false)),
+            read_setting(
+                &program(codex, home.path()),
+                home.path(),
+                &AtomicBool::new(false)
+            ),
             Ok(DaemonSetting::On)
         );
     }
@@ -482,7 +484,7 @@ mod tests {
     /// file `setting` in its HOME, so the test never touches an account's
     /// real one.
     #[cfg(unix)]
-    fn stand_in(home: &Path, disable: &str) -> PathBuf {
+    fn stand_in(home: &Path, disable: &str) -> Program {
         let bin = home.join("bin/hide-fixture-codex-switch");
         std::fs::write(home.join("setting"), "true").unwrap();
         crate::stand_ins::program(
@@ -491,7 +493,7 @@ mod tests {
                 "#!/bin/sh\ncase \"$1 $2\" in\n  'features list') echo \"daemon_auto_start  stable  $(cat \"$HOME/setting\")\" ;;\n  'features disable') {disable} ;;\n  *) exit 2 ;;\nesac\n"
             ),
         );
-        bin
+        program(bin, home)
     }
 
     #[cfg(unix)]
@@ -517,7 +519,7 @@ mod tests {
             Ok(DaemonSetting::Off)
         );
 
-        let missing = home.path().join("bin/no-such-codex");
+        let missing = program(home.path().join("bin/no-such-codex"), home.path());
         assert_eq!(
             turn_off(&missing, home.path(), &stop)
                 .expect_err("not there")
@@ -555,7 +557,7 @@ mod tests {
     /// A stand-in `codex` whose daemon is the file `running` in its HOME;
     /// each call is logged with the `CODEX_HOME` it was given.
     #[cfg(unix)]
-    fn fake_daemon() -> (tempfile::TempDir, PathBuf) {
+    fn fake_daemon() -> (tempfile::TempDir, Program) {
         let home = tempfile::tempdir().unwrap();
         let codex = home.path().join("bin/codex");
         crate::stand_ins::program(
@@ -578,6 +580,7 @@ mod tests {
                 "exit 2\n",
             ),
         );
+        let codex = program(codex, home.path());
         (home, codex)
     }
 

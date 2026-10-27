@@ -1168,11 +1168,20 @@ fn fake_codex(fixture: &mut Fixture, daemon: &str) -> PathBuf {
     let folder = fixture.home().join(".codex");
     std::fs::create_dir_all(&folder).unwrap();
     std::fs::write(folder.join("daemon"), format!("{daemon}\n")).unwrap();
-    fixture.target.codex = Some(codex.clone());
+    fixture.use_codex(&codex);
     codex
 }
 
 impl Fixture {
+    /// Gives the target `codex` as the Codex it found, run with this
+    /// process's `PATH` and the usual install folders under the fixture home.
+    fn use_codex(&mut self, codex: &Path) {
+        self.target.codex = Some(hide_platform::programs::Program::named(
+            codex.to_path_buf(),
+            hide_platform::programs::cli_path_with(self.home(), None).unwrap(),
+        ));
+    }
+
     /// How many times the kit asked Codex to stop its shared daemon.
     fn daemon_stops(&self) -> usize {
         std::fs::read_to_string(self.home().join("codex.log"))
@@ -2192,7 +2201,7 @@ fn intermediate_kit_links_refuse_before_services_status_or_any_mutation() {
             &codex,
             "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$HOME/status-called\"\nexit 1\n",
         );
-        fixture.target.codex = Some(codex);
+        fixture.use_codex(&codex);
         let daemon_home = fixture.home().join(".hcoord");
         std::fs::create_dir_all(&daemon_home).unwrap();
         let daemon = UnixListener::bind(daemon_home.join("api.sock")).unwrap();
@@ -2264,7 +2273,7 @@ fn writable_retirement_records_refuse_before_services_status_or_any_mutation() {
                 &codex,
                 "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$HOME/status-called\"\nexit 1\n",
             );
-            fixture.target.codex = Some(codex);
+            fixture.use_codex(&codex);
             let daemon_home = fixture.home().join(".hcoord");
             std::fs::create_dir_all(&daemon_home).unwrap();
             let daemon = UnixListener::bind(daemon_home.join("api.sock")).unwrap();
@@ -2533,7 +2542,7 @@ fn record_preflight_commands(fixture: &mut Fixture) {
         &codex,
         "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$HOME/status-called\"\nexit 1\n",
     );
-    fixture.target.codex = Some(codex);
+    fixture.use_codex(&codex);
 }
 
 fn assert_preflight_refusal_preserves_fixture(fixture: &Fixture, daemon: Option<&UnixListener>) {

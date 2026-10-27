@@ -383,7 +383,8 @@ impl LocalTakeover {
     fn operator_herdr(&self) -> Option<PathBuf> {
         match &self.operator_herdr {
             Some(herdr) => Some(herdr.clone()),
-            None => hide_platform::programs::find_cli("herdr"),
+            None => hide_platform::programs::find_cli("herdr")
+                .map(hide_platform::programs::Program::into_path),
         }
     }
 }

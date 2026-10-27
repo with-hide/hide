@@ -1261,10 +1261,10 @@ pub fn handle_with_progress(
             })?;
             let folder = folder.as_path();
             let codex = (agent == Agent::Codex)
-                .then(|| hide_ai::resolve_binary(Path::new("codex")))
+                .then(|| hide_platform::programs::find_cli("codex"))
                 .flatten();
             let tools = Tools {
-                codex: codex.as_deref(),
+                codex: codex.as_ref(),
                 stop: &env.stop,
             };
             if trusted {
@@ -1382,7 +1382,13 @@ pub fn handle_with_progress(
         Call::VolumeFree { path } => to_value(crate::disk::volume_free_bytes(&absolute(&path)?)),
         Call::HookDiagnosis => {
             let home = env.home("HOME is not set, so the agent hooks have no account to read")?;
-            to_value(hide_agent_hooks::Diagnosis::read(&home))
+            let search = hide_platform::programs::account_path_now().ok_or_else(|| {
+                HostError::new(
+                    ErrorCode::Io,
+                    "this account's program search could not be read, so the agents' versions are unknown",
+                )
+            })?;
+            to_value(hide_agent_hooks::Diagnosis::read(&home, &search))
         }
         Call::GuardrailPolicy { policy, sequence } => {
             // The last sequence written under each home, held across the

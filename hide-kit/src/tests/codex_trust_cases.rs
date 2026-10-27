@@ -20,7 +20,7 @@ fn fake_codex() -> PathBuf {
 fn with_codex() -> Fixture {
     let mut fixture = Fixture::new();
     std::fs::create_dir_all(fixture.home().join(".codex")).unwrap();
-    fixture.target.codex = Some(fake_codex());
+    fixture.use_codex(&fake_codex());
     fixture
 }
 
@@ -94,7 +94,7 @@ fn a_route_move_refreshes_both_installed_hooks_and_codex_trust_once() {
     }
     assert!(matches!(
         hide_agent_hooks::codex_trust::trust_own_hooks(
-            fixture.target.codex.as_deref().unwrap(),
+            fixture.target.codex.as_ref().unwrap(),
             fixture.home(),
             old,
             &[],
@@ -278,7 +278,7 @@ fn the_first_run_pass_that_switches_codex_on_has_codex_trust_the_hook_in_that_pa
     // scope's own switch is what says the agent is on.
     let mut fixture = Fixture::fresh();
     std::fs::create_dir_all(fixture.home().join(".codex")).unwrap();
-    fixture.target.codex = Some(fake_codex());
+    fixture.use_codex(&fake_codex());
 
     let held = apply(&fixture.target, &Scope::automatic());
     assert_eq!(codex_part(&held).state, ComponentState::Off, "{held:?}");

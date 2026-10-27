@@ -443,7 +443,10 @@ impl NodeTerminals {
             let herdr = hide_platform::host::home_dir()
                 .ok()
                 .and_then(|home| hide_kit::device_herdr::pinned_for_account(&home))
-                .or_else(|| hide_platform::programs::find_cli("herdr"));
+                .or_else(|| {
+                    hide_platform::programs::find_cli("herdr")
+                        .map(hide_platform::programs::Program::into_path)
+                });
             Box::new(LocalAttacher::new(herdr, socket.into())) as Box<dyn super::Attacher>
         }))
     }
