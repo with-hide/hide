@@ -39,7 +39,7 @@ jobs:
   build:
     name: helper (${{ matrix.platform }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 50
+    timeout-minutes: 75
     env:
       HIDE_POSTHOG_PROJECT_TOKEN: ${{ vars.HIDE_POSTHOG_PROJECT_TOKEN }}
     strategy:
@@ -71,6 +71,21 @@ jobs:
         run: |
           . scripts/toolchain-env.sh
           rustup target add "$TARGET"
+      # A private repository's runner has half the memory: the release link ran it out and the runner died without a log.
+      - name: Add swap for the release link
+        run: |
+          free -m
+          df -h /
+          gib=$((1024 * 1024 * 1024))
+          free_gib=$(( $(df --output=avail -B1 / | tail -1) / gib ))
+          size_gib=$(( free_gib - 12 < 8 ? free_gib - 12 : 8 ))
+          if [ "$size_gib" -ge 2 ]; then
+            sudo fallocate -l "${size_gib}G" /hide-swapfile
+            sudo chmod 600 /hide-swapfile
+            sudo mkswap /hide-swapfile
+            sudo swapon /hide-swapfile
+          fi
+          swapon --show
       - name: Build the complete helper kit
         env:
           PLATFORM: ${{ matrix.platform }}
