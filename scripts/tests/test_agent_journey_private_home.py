@@ -116,7 +116,7 @@ class PrivateHome(unittest.TestCase):
         for missing in ('key_env', 'evidence', 'auto_update'):
             incomplete = {'fake_home': {key: value for key, value in row['fake_home'].items() if key != missing}}
             self.assertIsNotNone(fake_private.exception(incomplete, pin))
-        self.assertIsNotNone(fake_private.exception(row, {**pin, 'pinned': 'installer takes no version'}))
+        self.assertIsNotNone(fake_private.exception(row, {**pin, 'installer': 'unknown'}))
         self.assertIsNotNone(fake_private.exception({}, pin))
         for missing in ('name', 'value'):
             update = {key: value for key, value in row['fake_home']['auto_update'].items() if key != missing}

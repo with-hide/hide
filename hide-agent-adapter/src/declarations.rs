@@ -595,7 +595,7 @@ pub const ADAPTERS: &[AgentAdapter] = &[
                 name: "AGY_CLI_DISABLE_AUTO_UPDATE",
                 value: "1",
             }),
-            reason: "The installer cannot select a pinned release.",
+            reason: "The API-key environment has not been proven.",
         },
         id: "antigravity",
         label: "Antigravity",

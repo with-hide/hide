@@ -88,11 +88,11 @@ class FakeModel(unittest.TestCase):
 
     def test_a_cli_answering_another_version_than_the_pin_fails(self):
         agent = {"id": "antigravity", "version": "1.4.3",
-                 "pin": {"version": "1.4.2", "matches": False, "pinned": "installer takes no version"}}
+                 "pin": {"version": "1.4.2", "matches": False}}
         passed, notes = lane.judge(report(self.table(), [agent], fake_model=True), "fake")
         self.assertFalse(passed)
         self.assertEqual(notes, ["::error title=agent journey antigravity::answered '1.4.3', contracts/agent-clis.json "
-                                 "pins 1.4.2 (installer takes no version)"])
+                                 "pins 1.4.2"])
 
     def test_a_report_without_a_row_the_lane_stands_for_fails(self):
         # Every row it has passes, but Codex's is not there to pass.

@@ -277,7 +277,7 @@ NAMED_LANES = (
     # The journey's controller builds the desktop e2e's spawn provider.
     ("web/e2e/shims/spawn-provider.c", WEB_E2E_LANES | JOURNEY_LANES),
     # The pin table's reader, which the installer imports too.
-    ("scripts/agent_journey/clis.py", JOURNEY_LANES | AGENT_CLI_LANES),
+    ("scripts/agent_journey/clis.py", JOURNEY_LANES | AGENT_CLI_LANES | {"agy-contract"}),
     ("scripts/agent_journey/*", JOURNEY_LANES),
     ("scripts/agent-journey-check.py", JOURNEY_LANES),
     ("scripts/agent-journey-lane.py", JOURNEY_LANES),
@@ -313,10 +313,10 @@ NAMED_LANES = (
     (".github/workflows/agy-contract.yml", {"agy-contract"}),
     (".github/workflows/omp-contract.yml", {"omp-contract"}),
     (".github/workflows/agent-journey.yml", JOURNEY_LANES),
-    ("scripts/install-agy.sh", {"agy-contract"} | AGENT_CLI_LANES),
     (".github/workflows/agent-clis.yml", AGENT_CLI_LANES),
-    ("contracts/agent-clis.json", AGENT_CLI_LANES),
-    ("scripts/install-agent-clis.py", AGENT_CLI_LANES),
+    # The agy contract installs the pinned agy with the same script.
+    ("contracts/agent-clis.json", {"agy-contract"} | AGENT_CLI_LANES),
+    ("scripts/install-agent-clis.py", {"agy-contract"} | AGENT_CLI_LANES),
     (".github/workflows/remote-mailbox.yml", {"remote-mailbox"}),
     (".github/workflows/package.yml", set()),
     (".github/workflows/device-helpers.yml", set()),

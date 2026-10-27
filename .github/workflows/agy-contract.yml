@@ -3,8 +3,9 @@
 #
 # Each leg runs the agy tests of the crates that write agy's files, read its
 # conversations and drive it for Hide AI against stand-ins and fixtures, then
-# installs the vendor's current agy into the runner and checks that the real
-# binary reads the `hide` block Hide writes, in the runner's throwaway home.
+# installs the agy `contracts/agent-clis.json` pins into the runner and checks
+# that the real binary reads the `hide` block Hide writes, in the runner's
+# throwaway home; the daily agent canary measures agy's latest release.
 # A pull request runs Windows (`pr.yml`, the `agy-contract` lane), where the
 # hook commands and the install folder differ; `rust` runs the same tests on
 # Linux, and `nightly.yml` runs the whole contract on all three systems.
@@ -42,10 +43,17 @@ jobs:
       # One package and target list for every step, so cargo resolves features
       # once and builds the test binaries once.
       TEST_TARGETS: -p hide-agent-hooks -p hide-session -p hide-ai -p hide-kit --lib --bin hide-agent-hooks --test it
+      # The installer needs Python 3.12; Windows names it python.
+      PYTHON: ${{ matrix.system == 'windows' && 'python' || 'python3' }}
     steps:
       - name: Keep line endings as committed
         run: git config --global core.autocrlf false
       - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        if: runner.os == 'Windows'
+        timeout-minutes: 5
+        with:
+          python-version: "3.12"
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: ". -> target"
@@ -63,18 +71,14 @@ jobs:
         # (`hide-ai/tests/it/text_clis.rs` is Unix only).
         timeout-minutes: 10
         run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'test(/antigravity|agy/)'
-      - name: Install agy
+      - name: Install the pinned agy
         id: agy
         timeout-minutes: 5
-        run: |
-          # Its own line, so a failed install fails the step instead of
-          # writing an empty path.
-          bin=$(bash scripts/install-agy.sh | tr -d '\r')
-          echo "bin=$bin" >> "$GITHUB_OUTPUT"
+        run: '"$PYTHON" scripts/install-agent-clis.py agy'
       - name: The real agy reads Hide's hook block
         timeout-minutes: 5
         env:
-          HIDE_AGY_BINARY: ${{ steps.agy.outputs.bin }}
+          HIDE_AGY_BINARY: ${{ steps.agy.outputs.agy }}
         run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'test(=agy_binary::the_real_agy_loads_hide_s_hook_block)' --run-ignored only --no-capture
       - name: Report flaky and failed tests
         if: ${{ !cancelled() }}

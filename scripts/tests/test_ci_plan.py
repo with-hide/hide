@@ -418,12 +418,13 @@ class NamedPaths(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual(self.lanes(path), want)
 
-    def test_a_pin_or_its_installer_plans_the_lane_that_installs_every_pinned_cli(self):
-        for path in ("contracts/agent-clis.json", "scripts/install-agent-clis.py", ".github/workflows/agent-clis.yml"):
+    def test_a_pin_or_its_installer_plans_the_lanes_that_install_pinned_clis(self):
+        for path in ("contracts/agent-clis.json", "scripts/install-agent-clis.py"):
             with self.subTest(path=path):
-                self.assertEqual(self.lanes(path), {"policy", "agent-clis"})
-        self.assertEqual(self.lanes("scripts/install-agy.sh"), {"policy", "agy-contract", "agent-clis"})
-        self.assertEqual(self.lanes("scripts/agent_journey/clis.py"), {"policy", "agent-journey", "agent-clis"})
+                self.assertEqual(self.lanes(path), {"policy", "agy-contract", "agent-clis"})
+        self.assertEqual(self.lanes(".github/workflows/agent-clis.yml"), {"policy", "agent-clis"})
+        self.assertEqual(self.lanes("scripts/agent_journey/clis.py"),
+                         {"policy", "agent-journey", "agent-clis", "agy-contract"})
 
     def test_the_journey_and_its_stand_ins_plan_the_journey_lane(self):
         for path in ("scripts/agent_journey/cells.py", "scripts/agent-journey-check.py", "scripts/agent-journey-lane.py",

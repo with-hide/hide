@@ -25,11 +25,15 @@ AGENTS = [row["id"] for row in active_rows(CONTRACT)]
 KINDS = {row["id"]: row["herdr_kind"] for row in active_rows(CONTRACT)}
 
 
+def agy_manifest(system, version="1.4.9"):
+    return json.dumps({"version": version, "url": f"https://agy/{version}/{system}", "sha512": "AB" * 64})
+
+
 def sources(url):
     return {
         latest.GROK_CHANNEL: "1.0.70\n",
         latest.OMP_LATEST: json.dumps({"tag_name": "v18.13.1"}),
-        latest.AGY_MANIFEST: json.dumps({"version": "1.4.8", "url": "x"}),
+        **{manifest: agy_manifest(system) for system, manifest in latest.AGY_MANIFESTS.items()},
         latest.HERDR_LATEST: json.dumps({"tag_name": "v0.9.6"}),
     }[url]
 
@@ -52,7 +56,10 @@ class Latest(unittest.TestCase):
         self.assertEqual(set(versions), set(clis.table()))
         self.assertEqual(versions["grok"]["version"], "1.0.70")
         self.assertEqual(versions["omp"]["version"], "18.13.1")
-        self.assertEqual(versions["agy"]["version"], "1.4.8")
+        self.assertEqual(versions["agy"]["version"], "1.4.9")
+        # The row the canary installs from is the row a pin move copies.
+        self.assertEqual(versions["agy"]["files"], {system: {"url": f"https://agy/1.4.9/{system}", "sha512": "ab" * 64}
+                                                    for system in clis.AGY_SYSTEMS})
         self.assertEqual(versions["claude"]["version"], "9.9.9")
         self.assertEqual(versions["claude"]["package"], clis.table()["claude"]["package"])
         self.assertEqual(latest.herdr_latest(read=sources), "0.9.6")
@@ -62,6 +69,12 @@ class Latest(unittest.TestCase):
             latest.latest_table(clis.table(), read=lambda url: "<html>busy</html>", npm=lambda package: "1.0.0")
         with self.assertRaises(latest.SourceError):
             latest.latest_table(clis.table(), read=sources, npm=lambda package: "")
+
+    def test_agy_manifests_that_name_different_releases_or_no_file_fail(self):
+        linux = latest.AGY_MANIFESTS["linux-x64"]
+        for answer in (agy_manifest("linux-x64", "1.4.8"), json.dumps({"version": "1.4.9", "url": "x"})):
+            with self.subTest(answer=answer), self.assertRaises(latest.SourceError):
+                latest.agy_latest("agy", lambda url: answer if url == linux else sources(url))
 
     def test_the_table_override_is_what_the_journey_reads(self):
         table = ROOT / "contracts/agent-clis.json"
