@@ -258,19 +258,27 @@ struct ViewsMadeFrom {
 }
 
 /// Every pull request the mission still stands behind is merged or closed,
-/// as GitHub last answered: a node that failed or was dropped is out of its
-/// stack, and a mission with no pull request has none to wait on.
+/// as GitHub last answered, and every direct change's branch is in main, as
+/// Hide last read it off the lock (B18, `mission_outside`): a node that
+/// failed or was dropped is out of its stack, and a mission with neither has
+/// nothing to wait on.
 fn stack_settled(mission: &Mission) -> bool {
     mission
         .nodes
         .iter()
         .filter(|node| !matches!(node.status, NodeStatus::Dropped | NodeStatus::Failed))
-        .filter(|node| node.pr.is_some())
-        .all(|node| {
-            node.pr_seen
+        .all(|node| match node.pr {
+            Some(_) => node
+                .pr_seen
                 .as_ref()
-                .is_some_and(|seen| seen.merged || seen.closed)
+                .is_some_and(|seen| seen.merged || seen.closed),
+            None => !lands_by_branch(node) || node.in_main.is_some(),
         })
+}
+
+/// A change that reaches main as its branch, with no pull request.
+pub(super) fn lands_by_branch(node: &crate::missions::MissionNode) -> bool {
+    node.kind == NodeKind::Change && node.delivery == Some(Delivery::Direct) && node.pr.is_none()
 }
 
 fn seen_of(pull: &crate::model::PullRequestSnapshot) -> PrSeen {
@@ -364,6 +372,35 @@ impl Runtime {
         }
         self.missions.store = Some(store);
         self.missions.book_edit = self.missions.book_edit.wrapping_add(1);
+    }
+
+    /// Closes mission `id`, waiting for its merges, as done once its stack
+    /// is in main and every done node's lines still hold (B10, B18, B41);
+    /// whether it closed.
+    pub(super) fn close_if_landed(&mut self, id: &str, now: u64) -> bool {
+        let Some(mission) = self.missions.book.get(id) else {
+            return false;
+        };
+        if mission.status != MissionStatus::MergeWait
+            || !stack_settled(mission)
+            || !self.may_close_itself(mission, self.mission_pulls(mission))
+        {
+            return false;
+        }
+        let Some(mission) = self.missions.book.get_mut(id) else {
+            return false;
+        };
+        mission.status = MissionStatus::Done;
+        mission.closed_at_unix_ms = Some(now);
+        mission.updated_at_unix_ms = now;
+        let events = super::mission_events::end_decision(mission, now);
+        crate::diagnostic!(json!({
+            "component": "missions", "kind": "mission.closed_by_branches", "mission": id,
+        }));
+        self.missions.answers_held.remove(id);
+        self.save_missions();
+        self.record_mission_events(id, events);
+        true
     }
 
     /// The pull request lists the missions' maps read were replaced.
@@ -594,8 +631,14 @@ impl Runtime {
                         &node,
                     ));
                 }
-                self.gate_node_done(current, &bound, patch.status)?;
-                let mut next = crate::missions::apply_patch(&bound, &patch, now)?;
+                let mut next = self.prospective_node(current, &bound, &patch, now)?;
+                // Done is held against the node as this command leaves it:
+                // a done set now, or a done node given another pull request
+                // or worker (B9).
+                let subject_moved = next.pr != bound.pr || next.agent_id != bound.agent_id;
+                if patch.status == Some(NodeStatus::Done) || subject_moved {
+                    self.gate_node_done(current, &next)?;
+                }
                 // A pull request named now starts its wakes from what GitHub
                 // says of it now, so its first change after this one wakes.
                 if next.pr != current.nodes[index].pr
@@ -653,7 +696,7 @@ impl Runtime {
                 let id = self.conducted_mission(&actor, mission.as_deref(), false)?;
                 let current = self.missions.book.get(&id).ok_or("mission_unknown")?;
                 if current.status != MissionStatus::Cancelled {
-                    Self::gate_close(current, end)?;
+                    self.gate_close(current, end)?;
                 }
                 let target = self.missions.book.get_mut(&id).ok_or("mission_unknown")?;
                 let status = match (target.status, end) {
@@ -693,8 +736,13 @@ impl Runtime {
                     "component": "missions", "kind": "mission.closed",
                     "mission": id, "end": status,
                 }));
+                let place = (target.device_id.clone(), target.project.clone());
                 self.save_missions();
                 self.record_mission_events(&id, events);
+                // A mission now waiting for its branches reads them at once.
+                if status == MissionStatus::MergeWait {
+                    self.follow_outside_stored(&place.0, &place.1);
+                }
                 Ok((json!({"mission": self.mission_view_of(&id)}), changed))
             }
             MissionCommand::Reopen { mission } => {
@@ -1140,7 +1188,7 @@ impl Runtime {
                     // A CI failing again on the head its rerun was for sends
                     // the node back to work (B13).
                     let node = &mission.nodes[at];
-                    if !matches!(node.status, NodeStatus::Review | NodeStatus::Waiting) {
+                    if !super::mission_criteria::back_to_work(node.status) {
                         continue;
                     }
                     let patch = crate::missions::NodePatch {
@@ -1204,10 +1252,12 @@ impl Runtime {
             }
             // With nothing new from GitHub, the last answers still decide a
             // waiting stack, as when it was merged before the wait began.
-            if seen_updates.is_empty()
-                && events.is_empty()
-                && !(mission.status == MissionStatus::MergeWait && stack_settled(mission))
-            {
+            let closes = |runtime: &Self, mission: &Mission| {
+                mission.status == MissionStatus::MergeWait
+                    && stack_settled(mission)
+                    && runtime.may_close_itself(mission, Some(project))
+            };
+            if seen_updates.is_empty() && events.is_empty() && !closes(self, mission) {
                 continue;
             }
             changed = true;
@@ -1236,8 +1286,12 @@ impl Runtime {
             }
             // A mission waiting on the operator's merges is done once every
             // pull request of its stack is merged, whether or not a Conductor
-            // is there to say so (B41).
-            if mission.status == MissionStatus::MergeWait && stack_settled(mission) {
+            // is there to say so (B41), and only while every done node's
+            // lines still hold (B10): a commit no check ran on keeps it
+            // waiting, for its Conductor to see.
+            let closes = closes(self, &self.missions.book.missions[index]);
+            let mission = &mut self.missions.book.missions[index];
+            if closes {
                 mission.status = MissionStatus::Done;
                 mission.closed_at_unix_ms = Some(now);
                 mission.updated_at_unix_ms = now;
@@ -1533,18 +1587,16 @@ impl Runtime {
                 });
                 let pr_state = pull
                     .map(|pull| PrState::of(pull.badge, pull.is_draft, pull.checks, pull.review));
-                let head = (!node.criteria.is_empty())
-                    .then(|| self.node_head(mission, node))
-                    .flatten();
-                let criteria: Vec<Criterion> = node
-                    .criteria
-                    .iter()
-                    .map(|line| {
-                        let mut line = line.clone();
-                        line.state = line.shown(head.as_deref());
-                        line
-                    })
-                    .collect();
+                let mut criteria: Vec<Criterion> = if node.criteria.is_empty() {
+                    Vec::new()
+                } else {
+                    self.shown_criteria(mission, node)
+                };
+                for checker in criteria.iter_mut().flat_map(|line| &mut line.checkers) {
+                    let record = checker.agent_id.as_deref().and_then(|id| agents.get(id));
+                    checker.pane_id = record.map(|record| record.pane.clone());
+                    checker.machine = record.map(|record| record.machine.clone());
+                }
                 let count = |pick: fn(CriterionState) -> bool| {
                     u32::try_from(criteria.iter().filter(|line| pick(line.state)).count())
                         .unwrap_or(u32::MAX)
@@ -1779,9 +1831,17 @@ fn worker_records<'a, 'm>(
     ledger: Option<&'a crate::delivery::ledger::Ledger>,
     missions: impl Iterator<Item = &'m Mission>,
 ) -> HashMap<&'a str, &'a crate::coordination::AgentRecord> {
+    // The nodes' workers and their bound checkers (B29).
     let wanted: std::collections::HashSet<&str> = missions
         .flat_map(|mission| &mission.nodes)
-        .filter_map(|node| node.agent_id.as_deref())
+        .flat_map(|node| {
+            node.agent_id.as_deref().into_iter().chain(
+                node.criteria
+                    .iter()
+                    .flat_map(|line| &line.checkers)
+                    .filter_map(|checker| checker.agent_id.as_deref()),
+            )
+        })
         .collect();
     let Some(ledger) = ledger.filter(|_| !wanted.is_empty()) else {
         return HashMap::new();

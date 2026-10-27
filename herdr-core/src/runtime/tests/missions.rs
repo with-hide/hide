@@ -2018,6 +2018,26 @@ fn criteria_plan() -> Value {
 
 const HEAD: &str = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678";
 
+/// The fixture checkout, where the `recipient` worker's pane is, at `head`.
+fn checkout_at(runtime: &mut Runtime, head: &str) {
+    let checkout = &mut runtime.snapshot.navigator.workspaces[0].checkouts[0];
+    checkout.head_oid = Some(head.into());
+    if let Some(worktree) = checkout.worktree.as_mut() {
+        worktree.head_sha = Some(head.into());
+    }
+}
+
+/// One `record` of `line` on `node` as passed, with `extra`'s fields and an
+/// evidence line unless `extra` gives its own.
+fn record_of(node: &str, line: &str, extra: Value) -> Value {
+    let mut command =
+        json!({"op": "record", "node": node, "line": line, "pass": true, "evidence": "it ran"});
+    for (key, value) in extra.as_object().unwrap() {
+        command[key] = value.clone();
+    }
+    command
+}
+
 /// PRD mission-map-git-criteria B1-B10: a node is done only once every
 /// line is met, each line is recorded by its owner alone, the node's worker
 /// is never its reviewer, and the mission closes only with every node done
@@ -2050,6 +2070,7 @@ fn a_node_is_done_only_once_its_owners_met_every_line() {
     );
     command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
     with_worker_and_reviewer(&mut runtime);
+    checkout_at(&mut runtime, HEAD);
     command(
         &mut runtime,
         "sender",
@@ -2063,13 +2084,7 @@ fn a_node_is_done_only_once_its_owners_met_every_line() {
         crate::coordination::split_refusal(&refused),
         ("mission_criteria_unmet", Some("fix: c1, check, review, ci"))
     );
-    let record = |line: &str, extra: Value| {
-        let mut command = json!({"op": "record", "node": "fix", "line": line, "pass": true});
-        for (key, value) in extra.as_object().unwrap() {
-            command[key] = value.clone();
-        }
-        command
-    };
+    let record = |line: &str, extra: Value| record_of("fix", line, extra);
     // Only the worker records its own lines and the check command.
     assert_eq!(
         command(&mut runtime, "reviewer", record("c1", json!({}))).unwrap_err(),
@@ -2079,6 +2094,19 @@ fn a_node_is_done_only_once_its_owners_met_every_line() {
         command(&mut runtime, "sender", record("c1", json!({}))).unwrap_err(),
         "mission_criterion_not_yours"
     );
+    // Every record carries the line it rests on, a worker's and a
+    // checker's alike (B5).
+    for evidence in [json!({"evidence": "  "}), json!({"evidence": null})] {
+        let mut blank = record("c1", json!({}));
+        blank["evidence"] = evidence["evidence"].clone();
+        if blank["evidence"].is_null() {
+            blank.as_object_mut().unwrap().remove("evidence");
+        }
+        assert_eq!(
+            command(&mut runtime, "recipient", blank).unwrap_err(),
+            "mission_evidence_missing"
+        );
+    }
     assert!(
         command(
             &mut runtime,
@@ -2129,6 +2157,29 @@ fn a_node_is_done_only_once_its_owners_met_every_line() {
         .0,
         "mission_checker_is_worker"
     );
+    // The bound checker is shown where it works (B29).
+    let view = runtime.mission_view_of("mission-1").unwrap();
+    let review = view.nodes[0]
+        .criteria
+        .iter()
+        .find(|line| line.key == "review")
+        .unwrap();
+    assert_eq!(
+        (
+            review.checkers[0].pane_id.as_deref(),
+            review.checkers[0].machine.as_deref()
+        ),
+        (Some("reviewer"), Some(crate::node::TEST_NODE))
+    );
+    assert_eq!(
+        command(
+            &mut runtime,
+            "reviewer",
+            record("review", json!({"evidence": " "}))
+        )
+        .unwrap_err(),
+        "mission_evidence_missing"
+    );
     command(&mut runtime, "reviewer", record("review", json!({}))).unwrap();
     // GitHub reads the pull request with its CI passing on that head.
     let read = github(vec![pull(7, HEAD, PullRequestBadge::Open, None)], false);
@@ -2146,13 +2197,10 @@ fn a_node_is_done_only_once_its_owners_met_every_line() {
         .collect();
     assert_eq!(by, ["worker", "worker", "hide", "checker"]);
 
-    // A commit after the check passed opens the line again (B7).
-    let pushed = github(
-        vec![pull(7, &"f".repeat(40), PullRequestBadge::Open, None)],
-        false,
-    );
-    runtime.github = pushed.clone();
-    runtime.note_mission_pulls(crate::node::TEST_NODE, &pushed);
+    // A commit in the worktree after the check passed opens the line again
+    // (B7).
+    let next = "f".repeat(40);
+    checkout_at(&mut runtime, &next);
     let view = runtime.mission_view_of("mission-1").unwrap();
     let check = view.nodes[0]
         .criteria
@@ -2161,7 +2209,8 @@ fn a_node_is_done_only_once_its_owners_met_every_line() {
         .unwrap();
     assert_eq!(check.state, crate::mission_criteria::CriterionState::Open);
 
-    // The mission closes as done only once every node is done or dropped.
+    // The mission closes as done only once every node is done or dropped,
+    // and every line of a node already done is still met.
     let close = json!({"op": "close", "end": "done"});
     assert_eq!(
         crate::coordination::split_refusal(
@@ -2173,6 +2222,18 @@ fn a_node_is_done_only_once_its_owners_met_every_line() {
         &mut runtime,
         "sender",
         json!({"op": "node", "node": "docs", "patch": {"status": "dropped"}}),
+    )
+    .unwrap();
+    assert_eq!(
+        crate::coordination::split_refusal(
+            &command(&mut runtime, "sender", close.clone()).unwrap_err()
+        ),
+        ("mission_criteria_unmet", Some("fix: check"))
+    );
+    command(
+        &mut runtime,
+        "recipient",
+        record("check", json!({"commit": next})),
     )
     .unwrap();
     command(&mut runtime, "sender", close).unwrap();
@@ -2350,7 +2411,7 @@ fn node_view(runtime: &Runtime, key: &str) -> crate::runtime::missions::NodeView
 #[test]
 fn an_outside_node_is_done_once_its_pull_request_or_branch_is_in_main() {
     use crate::missions::{External, WakeEvent};
-    use crate::runtime::mission_outside::{Ask, Found};
+    use crate::runtime::mission_outside::{Ask, Found, Watch};
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
     command(
@@ -2398,7 +2459,7 @@ fn an_outside_node_is_done_once_its_pull_request_or_branch_is_in_main() {
     let lib = || Ask {
         mission: "mission-1".into(),
         node: "lib".into(),
-        external: External::Branch("feat/lib".into()),
+        watch: Watch::Outside(External::Branch("feat/lib".into())),
     };
     runtime.ingest_outside(
         &place,
@@ -2409,7 +2470,7 @@ fn an_outside_node_is_done_once_its_pull_request_or_branch_is_in_main() {
     );
     let read = node_view(&runtime, "lib");
     assert_eq!((read.status, read.unread), (NodeStatus::Waiting, true));
-    runtime.ingest_outside(&place, vec![(lib(), Found::InMain)]);
+    runtime.ingest_outside(&place, vec![(lib(), Found::InMain(Some(HEAD.into())))]);
     let read = node_view(&runtime, "lib");
     assert_eq!((read.status, read.unread), (NodeStatus::Done, false));
     let last = runtime.missions.book.missions[0]
@@ -2464,4 +2525,416 @@ fn an_outside_pull_request_closed_without_a_merge_blocks_the_nodes_after_it() {
     )
     .unwrap_err();
     assert!(refused.contains("mission_nodes_unfinished"), "{refused}");
+}
+
+fn criteria_plan_checked_by(check: &str) -> Value {
+    let mut plan = criteria_plan();
+    plan["plan"]["check"] = json!(check);
+    plan
+}
+
+fn running_criteria_mission(runtime: &mut Runtime) {
+    command(
+        runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(runtime, "sender", criteria_plan()).unwrap();
+    command(runtime, "sender", json!({"op": "start"})).unwrap();
+    with_worker_and_reviewer(runtime);
+    checkout_at(runtime, HEAD);
+}
+
+/// The fix node of `running_criteria_mission` with its pull request 7 at
+/// `HEAD`, every line recorded by its owner and GitHub's CI passing.
+fn met_fix(runtime: &mut Runtime) {
+    command(
+        runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "working", "agent_id": "agent-2", "pr": 7, "reviewer": "agent-3"}}),
+    )
+    .unwrap();
+    command(runtime, "recipient", record_of("fix", "c1", json!({}))).unwrap();
+    command(
+        runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": HEAD})),
+    )
+    .unwrap();
+    command(runtime, "reviewer", record_of("fix", "review", json!({}))).unwrap();
+    let read = github(vec![pull(7, HEAD, PullRequestBadge::Open, None)], false);
+    runtime.github = read.clone();
+    runtime.note_mission_pulls(crate::node::TEST_NODE, &read);
+}
+
+fn line_state(runtime: &Runtime, key: &str) -> crate::mission_criteria::CriterionState {
+    node_view(runtime, "fix")
+        .criteria
+        .into_iter()
+        .find(|line| line.key == key)
+        .unwrap()
+        .state
+}
+
+/// Review findings 1 and 2: one change that brings a failing pull request
+/// along with done is gated as the node it would leave, and a mission
+/// waiting on its merges closes itself only while every done node still
+/// meets its lines.
+#[test]
+fn a_waiting_mission_closes_itself_only_while_its_done_nodes_meet_every_line() {
+    use crate::mission_criteria::CriterionState;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running_criteria_mission(&mut runtime);
+    met_fix(&mut runtime);
+    let mut failing = pull(8, HEAD, PullRequestBadge::Open, None);
+    failing.checks = PullRequestChecks::Failed;
+    let read = github(
+        vec![pull(7, HEAD, PullRequestBadge::Open, None), failing],
+        false,
+    );
+    runtime.github = read.clone();
+    runtime.note_mission_pulls(crate::node::TEST_NODE, &read);
+    let refused = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "done", "pr": 8}}),
+    )
+    .unwrap_err();
+    assert_eq!(
+        crate::coordination::split_refusal(&refused),
+        ("mission_criteria_unmet", Some("fix: ci"))
+    );
+    assert_eq!(node_view(&runtime, "fix").pr, Some(7));
+    for (node, status) in [("fix", "done"), ("docs", "dropped")] {
+        command(
+            &mut runtime,
+            "sender",
+            json!({"op": "node", "node": node, "patch": {"status": status}}),
+        )
+        .unwrap();
+    }
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "merge_wait"}),
+    )
+    .unwrap();
+    let status = |runtime: &Runtime| runtime.missions.book.get("mission-1").unwrap().status;
+    assert_eq!(status(&runtime), MissionStatus::MergeWait);
+
+    // The pull request is merged with a commit no check ran on.
+    let late = "e".repeat(40);
+    let merged = github(vec![pull(7, &late, PullRequestBadge::Merged, None)], false);
+    runtime.github = merged.clone();
+    runtime.note_mission_pulls(crate::node::TEST_NODE, &merged);
+    assert_eq!(line_state(&runtime, "check"), CriterionState::Open);
+    assert_eq!(status(&runtime), MissionStatus::MergeWait);
+
+    // The worker runs the check on the merged commit, and the next read
+    // closes the mission.
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": late})),
+    )
+    .unwrap();
+    runtime.note_mission_pulls(crate::node::TEST_NODE, &merged);
+    assert_eq!(status(&runtime), MissionStatus::Done);
+}
+
+/// Review findings 3 and 4: a passed check holds only while Hide reads the
+/// folder it ran in at that commit, whoever works there, and a replan
+/// that changes the check command asks for it again on the same commit.
+#[test]
+fn a_check_holds_only_on_its_folders_current_commit_and_its_command() {
+    use crate::mission_criteria::CriterionState;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running_criteria_mission(&mut runtime);
+    met_fix(&mut runtime);
+    assert_eq!(line_state(&runtime, "check"), CriterionState::Pass);
+
+    // The same command again keeps the line; another one opens it.
+    command(&mut runtime, "sender", criteria_plan()).unwrap();
+    assert_eq!(line_state(&runtime, "check"), CriterionState::Pass);
+    command(
+        &mut runtime,
+        "sender",
+        criteria_plan_checked_by("cargo test --workspace"),
+    )
+    .unwrap();
+    assert_eq!(line_state(&runtime, "check"), CriterionState::Open);
+    command(
+        &mut runtime,
+        "recipient",
+        record_of("fix", "check", json!({"commit": HEAD})),
+    )
+    .unwrap();
+    assert_eq!(line_state(&runtime, "check"), CriterionState::Pass);
+
+    // The worker ending leaves the folder, and its head, known.
+    let mut ledger = (**runtime.delivery_ledger.as_ref().unwrap()).clone();
+    ledger
+        .agents
+        .iter_mut()
+        .find(|agent| agent.id == "agent-2")
+        .unwrap()
+        .ended = true;
+    runtime.delivery_ledger = Ok(Arc::new(ledger));
+    assert_eq!(line_state(&runtime, "check"), CriterionState::Pass);
+
+    // A folder Hide no longer reads has no head, and nothing passes on it.
+    let mission = runtime.missions.book.get_mut("mission-1").unwrap();
+    mission.nodes[0].folder = Some("/checkouts/fixture-removed".into());
+    assert_eq!(line_state(&runtime, "check"), CriterionState::Open);
+    let refused = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "done"}}),
+    )
+    .unwrap_err();
+    assert_eq!(
+        crate::coordination::split_refusal(&refused),
+        ("mission_criteria_unmet", Some("fix: check"))
+    );
+}
+
+/// Review finding 5: a pull request's CI gets one rerun per head however
+/// many runs GitHub reports, and a spent rerun sends a node in review back
+/// to its worker.
+#[test]
+fn a_failed_ci_rerun_sends_the_node_back_to_work_and_reads_no_more_runs_on_that_head() {
+    use crate::mission_criteria::CriterionState;
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    running_criteria_mission(&mut runtime);
+    met_fix(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "review"}}),
+    )
+    .unwrap();
+    let read = |runtime: &mut Runtime, checks| {
+        let mut pull = pull(7, HEAD, PullRequestBadge::Open, None);
+        pull.checks = checks;
+        let read = github(vec![pull], false);
+        runtime.github = read.clone();
+        runtime.note_mission_pulls(crate::node::TEST_NODE, &read);
+    };
+    read(&mut runtime, PullRequestChecks::Failed);
+    assert_eq!(line_state(&runtime, "ci"), CriterionState::Fail);
+    assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Review);
+    // The rerun runs and passes: the line passes with its rerun counted.
+    read(&mut runtime, PullRequestChecks::Pending);
+    read(&mut runtime, PullRequestChecks::Passing);
+    assert_eq!(line_state(&runtime, "ci"), CriterionState::Pass);
+    assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Review);
+    // Another run on the same head fails: there is no second rerun.
+    read(&mut runtime, PullRequestChecks::Pending);
+    read(&mut runtime, PullRequestChecks::Failed);
+    assert_eq!(line_state(&runtime, "ci"), CriterionState::Fail);
+    assert_eq!(node_view(&runtime, "fix").status, NodeStatus::Working);
+    // A later pass on that head is not read; a new head starts over.
+    read(&mut runtime, PullRequestChecks::Passing);
+    assert_eq!(line_state(&runtime, "ci"), CriterionState::Fail);
+}
+
+/// Review finding 6: a mission whose change reaches main as its branch,
+/// with no GitHub, waits after its close until Hide reads that branch in
+/// main, and then closes itself with the commit it found.
+#[test]
+fn a_branch_mission_waits_for_its_branch_to_reach_main_then_closes() {
+    use crate::runtime::mission_outside::{Ask, Found, Watch};
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "plan", "plan": {"nodes": [
+            {"key": "fix", "title": "Fix it", "kind": "change", "delivery": "direct", "criteria": ["it works"]},
+        ]}}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    without_gate(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "done", "branch": "feat/fix"}}),
+    )
+    .unwrap();
+    let (closed, _) = command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "merge_wait"}),
+    )
+    .unwrap();
+    assert_eq!(closed["mission"]["status"], "merge_wait");
+    let place = (crate::node::TEST_NODE.to_owned(), PROJECT.to_owned());
+    let ask = || Ask {
+        mission: "mission-1".into(),
+        node: "fix".into(),
+        watch: Watch::Landing(Some("feat/fix".into())),
+    };
+    let status = |runtime: &Runtime| runtime.missions.book.get("mission-1").unwrap().status;
+    runtime.ingest_outside(&place, vec![(ask(), Found::Open)]);
+    assert_eq!(status(&runtime), MissionStatus::MergeWait);
+    runtime.ingest_outside(&place, vec![(ask(), Found::InMain(Some(HEAD.into())))]);
+    assert_eq!(status(&runtime), MissionStatus::Done);
+    assert_eq!(
+        runtime.missions.book.get("mission-1").unwrap().nodes[0]
+            .in_main
+            .as_deref(),
+        Some(HEAD)
+    );
+}
+
+/// This machine's host answering a node's calls, as the core's link to it
+/// does.
+struct Host(hide_host::serve::Env);
+
+impl crate::node_access::NodeLink for Host {
+    fn call(
+        &self,
+        call: hide_node_link::protocol::Call,
+        _: Duration,
+    ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+        hide_host::serve::handle_in(call, &self.0)
+            .map(crate::node_access::LinkAnswer::Parsed)
+            .map_err(crate::node_access::LinkError::Refused)
+    }
+}
+
+fn git_in(root: &std::path::Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap().trim().to_owned()
+}
+
+/// Review finding 14: in a repository with no remote, a git mission's main
+/// is the branch the repository's main worktree has out. An outside branch
+/// merged there is done, a waiting mission's own branch keeps it waiting
+/// until it is merged too, and the commit found is the one in main.
+#[test]
+fn a_git_mission_in_a_repository_with_no_remote_follows_its_branches_into_main() {
+    use crate::missions::WakeEvent;
+    let folder = tempfile::tempdir().unwrap();
+    let repo = std::fs::canonicalize(folder.path()).unwrap();
+    for args in [
+        &["init", "-q", "-b", "trunk"][..],
+        &["config", "user.name", "Fixture"],
+        &["config", "user.email", "fixture@example.invalid"],
+        &["config", "commit.gpgsign", "false"],
+        &["commit", "-q", "--allow-empty", "-m", "seed"],
+        &["branch", "feat/lib"],
+        &["branch", "feat/fix"],
+    ] {
+        git_in(&repo, args);
+    }
+    for branch in ["feat/lib", "feat/fix"] {
+        git_in(&repo, &["checkout", "-q", branch]);
+        git_in(&repo, &["commit", "-q", "--allow-empty", "-m", branch]);
+    }
+    git_in(&repo, &["checkout", "-q", "trunk"]);
+    git_in(&repo, &["merge", "-q", "--no-ff", "-m", "lib", "feat/lib"]);
+    let listed = hide_host::worktrees::read(
+        &repo,
+        &Default::default(),
+        None,
+        None,
+        &hide_host::worktrees::Measured::default(),
+        false,
+    )
+    .unwrap();
+    assert_eq!(listed.base_branch.as_deref(), Some("trunk"));
+    let root = hide_platform::path::to_wire(&repo).unwrap();
+
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "create", "title": "Fix the bug"}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "plan", "plan": {"nodes": [
+            {"key": "lib", "title": "The library branch", "kind": "external", "external": {"branch": "feat/lib"}},
+            {"key": "fix", "title": "Fix it", "kind": "change", "delivery": "direct",
+             "criteria": ["it works"], "depends_on": ["lib"]},
+        ]}}),
+    )
+    .unwrap();
+    command(&mut runtime, "sender", json!({"op": "start"})).unwrap();
+    without_gate(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "node", "node": "fix", "patch": {"status": "done", "branch": "feat/fix"}}),
+    )
+    .unwrap();
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "merge_wait"}),
+    )
+    .unwrap();
+    // The mission's project is the repository on disk.
+    runtime.missions.book.missions[0].project = root.clone();
+    runtime
+        .worktree_catalog
+        .projects
+        .push(crate::model::ProjectWorktreesSnapshot {
+            root_path: root.clone(),
+            base_branch: listed.base_branch.clone(),
+            ..Default::default()
+        });
+    let host = Host(hide_host::serve::Env::standalone(Some(repo.clone())));
+    let device = crate::node::TEST_NODE;
+    let status = |runtime: &Runtime| runtime.missions.book.get("mission-1").unwrap().status;
+
+    runtime.read_outside_through(device, &root, &host);
+    let lib = node_view(&runtime, "lib");
+    assert_eq!((lib.status, lib.unread), (NodeStatus::Done, false));
+    let last = runtime.missions.book.missions[0]
+        .wakes
+        .last()
+        .cloned()
+        .unwrap();
+    assert_eq!(
+        (last.node.as_str(), last.event),
+        ("lib", WakeEvent::OutsideDone)
+    );
+    assert_eq!(status(&runtime), MissionStatus::MergeWait);
+    assert_eq!(runtime.missions.book.missions[0].nodes[1].in_main, None);
+
+    git_in(&repo, &["merge", "-q", "--no-ff", "-m", "fix", "feat/fix"]);
+    runtime.read_outside_through(device, &root, &host);
+    assert_eq!(status(&runtime), MissionStatus::Done);
+    assert_eq!(
+        runtime.missions.book.missions[0].nodes[1]
+            .in_main
+            .as_deref(),
+        Some(git_in(&repo, &["rev-parse", "feat/fix"]).as_str())
+    );
 }

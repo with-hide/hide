@@ -5,7 +5,8 @@
 //! The core publishes one policy file per machine, `~/.hide/agent-hooks/
 //! guardrails.json` ([`policy_path`]), naming each project of that
 //! machine with a protection on: its main worktree root, the base branch the
-//! operator chose (none for automatic, which is `origin/HEAD`) and its
+//! operator chose (none for automatic, which is `origin/HEAD`, or with no
+//! remote the main worktree's branch) and its
 //! [`Rules`]. The hook reads that file and the repository's own Git files and
 //! decides here, on the machine the agent runs on; no tool call asks the
 //! daemon (D-11).
@@ -207,7 +208,8 @@ pub struct Policy {
 pub struct ProjectPolicy {
     /// The project's main worktree root, as this machine's catalog spells it.
     pub root: String,
-    /// The base branch the operator chose; `None` reads `origin/HEAD`.
+    /// The base branch the operator chose; `None` reads `origin/HEAD`, or in
+    /// a repository with no remote its main worktree's branch.
     #[serde(default)]
     pub base: Option<String>,
     pub rules: Rules,
@@ -375,7 +377,8 @@ impl Refusal {
     }
 
     /// The base branch is the operator's to name when the repository names
-    /// none (no `origin/HEAD` for Auto), so the reason says where.
+    /// none (for Auto, no `origin/HEAD`, and a remote that keeps the main
+    /// worktree's branch from counting), so the reason says where.
     fn base_unknown() -> Self {
         Self::unread(Rule::BaseBranch, "the base branch")
     }

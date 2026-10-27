@@ -40,6 +40,8 @@ pub enum Input {
     Sha256,
     /// A git commit: 7 to 64 hexadecimal digits.
     Commit,
+    /// Two decimal integers as `<passed>/<total>`.
+    Ratio,
     /// A watch approval: not blank, at most 256 bytes, without control
     /// characters.
     Approval,
@@ -59,6 +61,7 @@ impl Input {
             Body => "body",
             Sha256 => "sha256",
             Commit => "commit",
+            Ratio => "ratio",
             Approval => "approval",
             Unsigned => "unsigned",
             Json => "json",
@@ -170,7 +173,7 @@ const fn spec(
     }
 }
 
-use Input::{Approval, Body, Commit, Json, Key, OneOf, Session, Sha256, Text, Unsigned};
+use Input::{Approval, Body, Commit, Json, Key, OneOf, Ratio, Session, Sha256, Text, Unsigned};
 
 const ID: &[Arg] = &[Arg {
     name: "id",
@@ -506,6 +509,9 @@ pub const COMMANDS: &[Spec] = &[
             cleared("--line", Text, &["--no-line"]),
             cleared("--change", Text, &["--no-change"]),
             cleared("--review", Text, &["--no-review"]),
+            cleared("--commit", Commit, &["--no-commit"]),
+            cleared("--verdict", OneOf(&["pass", "fail"]), &["--no-verdict"]),
+            cleared("--checks", Ratio, &["--no-checks"]),
             clearing("--no-agent-id", &["--agent-id"]),
             clearing("--no-pr", &["--pr"]),
             clearing("--no-base-pr", &["--base-pr"]),
@@ -513,6 +519,9 @@ pub const COMMANDS: &[Spec] = &[
             clearing("--no-line", &["--line"]),
             clearing("--no-change", &["--change"]),
             clearing("--no-review", &["--review"]),
+            clearing("--no-commit", &["--commit"]),
+            clearing("--no-verdict", &["--verdict"]),
+            clearing("--no-checks", &["--checks"]),
             optional("--reviewer", Key),
             optional("--verifier", Key),
         ],
@@ -557,7 +566,7 @@ pub const COMMANDS: &[Spec] = &[
                 requires: &[],
                 conflicts: &["--pass"],
             },
-            optional("--evidence", Text),
+            required("--evidence", Text),
             optional("--commit", Commit),
             switch("--rerun"),
         ],
@@ -569,6 +578,8 @@ pub const COMMANDS: &[Spec] = &[
             "mission_criterion_not_yours",
             "mission_commit_required",
             "mission_rerun_spent",
+            "mission_evidence_missing",
+            "mission_checkout_unknown",
             "mission_closed",
         ],
     },
@@ -634,6 +645,10 @@ pub const COMMANDS: &[Spec] = &[
             optional("--mission", Key),
             cleared("--line", Text, &["--clear"]),
             clearing("--clear", &["--line"]),
+            optional("--why", Text),
+            optional("--option", Text),
+            optional("--recommend", Unsigned),
+            optional("--node", Key),
         ],
         &["mission"],
     ),
@@ -661,6 +676,7 @@ pub const COMMANDS: &[Spec] = &[
         answers: &["mission"],
         refusals: &[
             "mission_nodes_unfinished",
+            "mission_criteria_unmet",
             "mission_not_started",
             "mission_cancelled",
         ],
@@ -870,6 +886,7 @@ fn body() -> Value {
             "body": format!("not blank, at most {BODY_LIMIT} bytes"),
             "approval": "not blank, at most 256 bytes, no control characters",
             "commit": "7 to 64 hexadecimal digits",
+            "ratio": "two decimal integers as <passed>/<total>, such as 6/6",
             "unsigned": "a decimal integer from 0 to 18446744073709551615",
             "json": "a JSON document of the shape hide mission help or hide plan help shows",
             "one_of": "one of the listed values",
@@ -982,6 +999,7 @@ mod tests {
                 "BA7816BF",
             ),
             Commit => ("abc1234", "xyz"),
+            Ratio => ("3/4", "x/4"),
             Approval => ("approved by the lead", " "),
             Unsigned => ("1", "-1"),
             Json => ("{\"nodes\": []}", "{nodes"),
@@ -1141,6 +1159,171 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The flags `hide mission`'s parser reads for each verb are the ones
+    /// the contract names for it, values and switches alike, and every flag
+    /// its usage and guides show for a mission command is among them: a flag
+    /// added to one and not the other is refused before the parser sees it.
+    #[test]
+    fn each_mission_flag_the_parser_reads_is_one_the_contract_names() {
+        let missions: Vec<&Spec> = COMMANDS
+            .iter()
+            .filter(|spec| spec.words.first() == Some(&"mission"))
+            .collect();
+        let spec_of = |verb: &str| {
+            missions
+                .iter()
+                .find(|spec| spec.words.get(1) == Some(&verb))
+                .copied()
+        };
+        for (verb, valued, switches) in crate::mission_cli::FLAGS {
+            let spec = spec_of(verb).unwrap_or_else(|| panic!("hide mission {verb} has no spec"));
+            let read: std::collections::BTreeSet<(&str, bool)> = valued
+                .iter()
+                .map(|flag| (*flag, true))
+                .chain(switches.iter().map(|flag| (*flag, false)))
+                .collect();
+            let named: std::collections::BTreeSet<(&str, bool)> = spec
+                .options
+                .iter()
+                .map(|option| (option.name, option.value.is_some()))
+                .collect();
+            assert_eq!(read, named, "hide mission {verb}");
+        }
+        for spec in &missions {
+            assert!(
+                crate::mission_cli::FLAGS
+                    .iter()
+                    .any(|(verb, ..)| spec.words.get(1) == Some(verb)),
+                "hide {} is not read by the parser",
+                spec.words.join(" ")
+            );
+        }
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let mut documents = vec![("usage".to_owned(), crate::mission_cli::USAGE.to_owned())];
+        for path in [
+            "assets/mission/help.md",
+            "assets/guide.md",
+            "../docs/delivery.md",
+            "../docs/agent-hooks.md",
+        ] {
+            documents.push((
+                path.to_owned(),
+                std::fs::read_to_string(root.join(path)).unwrap(),
+            ));
+        }
+        let mut shown = 0;
+        for (name, text) in &documents {
+            // A usage line the help wraps goes on indented, from `[--`.
+            let mut last: Option<&str> = None;
+            for line in text.lines() {
+                let mut commands: Vec<(&str, &str)> = Vec::new();
+                for (at, _) in line.match_indices("hide mission ") {
+                    let command = &line[at + "hide mission ".len()..];
+                    let command = command.split('`').next().unwrap_or_default();
+                    if let Some(verb) = command.split_whitespace().next() {
+                        commands.push((verb, command));
+                    }
+                }
+                match (commands.last(), last) {
+                    (Some((verb, _)), _) => last = Some(verb),
+                    (None, Some(verb)) if line.trim_start().starts_with("[--") => {
+                        commands.push((verb, line));
+                    }
+                    (None, _) => last = None,
+                }
+                for (verb, command) in commands {
+                    if verb == "help" {
+                        continue;
+                    }
+                    let spec = spec_of(verb)
+                        .unwrap_or_else(|| panic!("{name} shows hide mission {verb}: {line}"));
+                    for word in command.split(|c: char| !(c.is_ascii_lowercase() || c == '-')) {
+                        if word.starts_with("--") && word.len() > 2 {
+                            shown += 1;
+                            assert!(
+                                spec.options.iter().any(|option| option.name == word),
+                                "{name} shows hide mission {verb} {word}, which the contract refuses: {line}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        assert!(shown > 50, "the documents show {shown} mission flags");
+    }
+
+    /// The commands the mission guide teaches pass the flag check and the
+    /// parser together, as `hide` runs them.
+    #[test]
+    fn the_mission_commands_the_guide_teaches_parse_whole() {
+        let line = |words: &[&str]| {
+            std::iter::once("hide")
+                .chain(words.iter().copied())
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        for words in [
+            &[
+                "mission",
+                "decide",
+                "--line",
+                "Skip the check?",
+                "--why",
+                "fails on main",
+                "--option",
+                "skip",
+                "--option",
+                "fix",
+                "--recommend",
+                "1",
+                "--node",
+                "fix",
+            ][..],
+            &["mission", "decide", "--clear"],
+            &[
+                "mission",
+                "node",
+                "branch",
+                "--branch",
+                "x",
+                "--commit",
+                "abc1234",
+                "--verdict",
+                "pass",
+                "--checks",
+                "3/4",
+            ],
+            &[
+                "mission",
+                "node",
+                "branch",
+                "--no-commit",
+                "--no-verdict",
+                "--no-checks",
+            ],
+            &[
+                "mission",
+                "record",
+                "core",
+                "check",
+                "--pass",
+                "--evidence",
+                "cargo test passed",
+                "--commit",
+                "abc1234",
+            ],
+        ] {
+            assert!(
+                takes(&line(words)),
+                "{words:?}: {:?}",
+                parse_args(&line(words))
+            );
+        }
+        assert!(!takes(&line(&[
+            "mission", "node", "branch", "--commit", "main"
+        ])));
     }
 
     #[test]

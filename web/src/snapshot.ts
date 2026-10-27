@@ -1271,7 +1271,8 @@ export type MissionRecordedRole = "worker" | "checker" | "conductor" | "hide";
 export type MissionCheckRule = "all" | "majority";
 
 /** One agent of a review or verification: what the plan asked, the registration bound to it and its own answer. */
-export type MissionChecker = { worker: MissionWorker; agent_id?: string; state: MissionCriterionState; evidence?: string; at_unix_ms?: number };
+/** One checker of a review or verify line; `pane_id` and `machine` are the bound checker's pane now, as the core resolves it from `agent_id` (B29). */
+export type MissionChecker = { worker: MissionWorker; agent_id?: string; state: MissionCriterionState; evidence?: string; at_unix_ms?: number; pane_id?: string; machine?: string };
 
 /** One finish line of a node (`Criterion`): only the fields its kind carries are present. */
 export type MissionCriterion = {

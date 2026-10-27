@@ -36,9 +36,10 @@ const PLAN = {
   scope: "pr",
   check: "true",
   nodes: [
-    { key: "cause", title: "원인 조사", kind: "research", criteria: ["원인을 재현 단계와 함께 적는다"] },
-    { key: "api", title: "API 추가", kind: "change", delivery: "pr", worker: { agent: "claude", model: "opus" }, criteria: ["목록 API가 페이지를 나눠 준다", "빈 목록에서 빈 배열을 준다"] },
-    { key: "screen", title: "API 쓰는 화면", kind: "change", delivery: "pr", depends_on: ["api"], criteria: ["새 API로 목록을 그린다"] },
+    // Every node names its own finish line (PRD mission-map-git-criteria B1).
+    { key: "cause", title: "원인 조사", kind: "research", criteria: ["원인을 한 줄로 적는다"] },
+    { key: "api", title: "API 추가", kind: "change", delivery: "pr", criteria: ["엔드포인트가 응답한다"], worker: { agent: "claude", model: "opus" } },
+    { key: "screen", title: "API 쓰는 화면", kind: "change", delivery: "pr", criteria: ["화면이 API 값을 보인다"], depends_on: ["api"] },
   ],
 };
 
@@ -106,8 +107,8 @@ test("the Conductor's first plan shows on its pane, the map follows the record, 
     const node = map.locator('[data-mission-node="api"]');
     await expect(node).toHaveAttribute("data-node-status", "working");
     await expect(node.locator("[data-node-line]")).toHaveText("엔드포인트 작성 중");
-    // Its finish lines are counted on the card: the two the plan gave and the mission's check command, none passed yet.
-    await expect(node.locator("[data-node-criteria]")).toHaveAttribute("data-node-criteria", "0/3");
+    // Its finish lines are counted on the card: the one the plan gave and the mission's check command, none passed yet.
+    await expect(node.locator("[data-node-criteria]")).toHaveAttribute("data-node-criteria", "0/2");
     await mission(conductor, ["mission", "decide", "--line", "화면 PR 방식 선택"]);
     // The decision is the operator's turn, above the map.
     await expect(map.locator('[data-mission-turn] [data-mission-banner="decision"]')).toContainText("화면 PR 방식 선택");
@@ -127,7 +128,7 @@ test("the Conductor's first plan shows on its pane, the map follows the record, 
     // Closed by the operator, a later plan does not open it again.
     await map.locator("[data-detail-close]").click();
     await expect(map).toHaveCount(0);
-    await mission(conductor, ["mission", "plan", "--json", JSON.stringify({ ...PLAN, nodes: [...PLAN.nodes, { key: "together", title: "함께 확인", kind: "verify", depends_on: ["screen"], criteria: ["합친 변경으로 목록이 열린다"] }] })]);
+    await mission(conductor, ["mission", "plan", "--json", JSON.stringify({ ...PLAN, nodes: [...PLAN.nodes, { key: "together", title: "함께 확인", kind: "verify", criteria: ["두 변경이 함께 동작한다"], depends_on: ["screen"] }] })]);
     const shown = await mission(conductor, ["mission", "show"]);
     expect(JSON.stringify(shown.result)).toContain("together");
     await expect(map).toHaveCount(0);
