@@ -2153,7 +2153,7 @@ mod tests {
     /// names its session's kind.
     #[test]
     fn improvements_from_three_sessions_rise_as_one_line_with_their_kinds() {
-        let mut fixture = Fixture::new();
+        let fixture = Fixture::new();
         fixture.open();
         let text = "dev 서버와 e2e 포트 규칙이 문서에 없어 설정 파일 6개를 뒤져 찾음";
         fixture.improve_in_sessions(
@@ -2193,7 +2193,7 @@ mod tests {
     /// session record is.
     #[test]
     fn the_session_switch_off_keeps_no_improvement() {
-        let mut fixture = Fixture::new();
+        let fixture = Fixture::new();
         fixture.open();
         let read = fixture.settings(SettingsChange::SignalGroup(SignalGroup::Session, false));
         assert!(
@@ -2792,6 +2792,7 @@ mod tests {
                 at_unix_ms: START,
                 always: false,
                 head: None,
+                improvement: None,
             }],
         });
         client.send(Command::Wake);
