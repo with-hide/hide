@@ -55,6 +55,12 @@ ${ZONES}
 .pc-learned{list-style:none;margin:var(--spacing-md) 0 0;padding:0}
 .pc-learned li{display:flex;align-items:center;gap:var(--spacing-sm);padding:var(--spacing-xs) 0;font-size:var(--text-subhead);border-top:var(--size-hairline) solid var(--practice-line)}
 .pc-learned li:first-child{border-top:0}
+.pc-ways{display:flex;flex-direction:column;gap:var(--spacing-xs);margin-top:var(--spacing-md)}
+.pc-way{font:inherit;display:flex;align-items:center;gap:var(--spacing-sm);width:100%;text-align:left;border:var(--size-hairline) solid var(--practice-line);border-radius:var(--radius-lg);padding:var(--spacing-sm) var(--spacing-md);background:transparent;color:var(--practice-text);cursor:pointer;transition:background .2s,border-color .2s}
+.pc-way:hover,.pc-way:focus-visible{background:color-mix(in srgb,var(--practice-accent) 18%,transparent);border-color:var(--practice-accent);outline:none}
+.pc-way>span:first-child{flex:1;min-width:0;display:flex;flex-direction:column;gap:var(--spacing-xxs)}
+.pc-way b{font-size:var(--text-subhead);font-weight:600}
+.pc-way small{font-size:var(--text-body);color:var(--practice-mute)}
 .pc-up{margin:var(--spacing-md) 0 0;font-size:var(--text-body);color:var(--practice-mute)}
 .pc-again{margin-right:auto;margin-left:calc(var(--spacing-xs) * -1)}
 .pc-keys{display:inline-flex;gap:var(--spacing-xxs);vertical-align:middle}

@@ -13,6 +13,7 @@ import { useShellStore } from "../store";
 import { pasteText, terminalFor } from "../terminals";
 import { useUiStore } from "../ui";
 import type { PracticeChapter, PracticeDrag, PracticeMenu, PracticePick, PracticeStep, PracticeTyping } from "./chapter";
+import { FIRST_CHAPTER } from "./channel";
 import { COACH_CSS } from "./coachStyle";
 import type { PracticeWorld } from "./world";
 
@@ -553,7 +554,7 @@ export function PracticeCoach({ chapter, model, next, resume, onStep, onNext, on
     <div className="pc-layer" data-practice-layer data-keyboard-stays="true" onPointerDown={(event) => event.stopPropagation()} onMouseDown={(event) => event.preventDefault()} data-practice-step={step.id} data-practice-index={index} data-practice-steps={chapter.steps.length} data-practice-ended={ended || undefined} data-practice-settling={settling || undefined}>
       <style>{COACH_CSS}</style>
       {/* What the coach points with, all of it stepping aside while the shell's palette or switcher is up; the chord, marks and hand still sit above the bubble (`z-index` in the style). */}
-      {ended ? <EndCard chapter={chapter} next={next} title={title} say={say} onFinish={finish} onRestart={onRestart} onHub={onHub} /> : palette ? null : (
+      {ended ? (chapter.id === FIRST_CHAPTER && next ? <ChoiceCard chapter={chapter} next={next} say={say} onNext={finish} onRestart={onRestart} onHub={onHub} onLeave={onLeave} /> : <EndCard chapter={chapter} next={next} title={title} say={say} onFinish={finish} onRestart={onRestart} onHub={onHub} />) : palette ? null : (
         <>
           {zones.length ? <div className="pc-zdim" /> : null}
           {zones.map((rect, at) => rect ? (
@@ -660,6 +661,44 @@ function EndCard({ chapter, next, title, say, onFinish, onRestart, onHub }: EndP
           <button type="button" className="pc-back pc-again" onClick={onRestart} data-practice-again>{say("practice.again")}</button>
           {next ? <button type="button" className="pc-go pc-sub" onClick={onHub} data-practice-end-hub>{toHub}</button> : null}
           <button type="button" className="pc-go" onClick={onFinish} data-practice-go>{go} <span className="pc-kc">⏎</span></button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+type ChoiceProps = { chapter: PracticeChapter; next: PracticeChapter; say: Say; onNext: () => void; onRestart: () => void; onHub: () => void; onLeave: () => void };
+
+/**
+ * The first chapter finished: a newcomer has only looked around, so the card asks what next instead of
+ * leading on, the three ways drawn alike; ⏎ is still the next chapter, as on every end card.
+ */
+function ChoiceCard({ chapter, next, say, onNext, onRestart, onHub, onLeave }: ChoiceProps) {
+  const ways = [
+    { key: "leave", title: say("practice.choice.useNow"), line: say("practice.choice.useNowLine"), press: onLeave, enter: false },
+    { key: "next", title: say("practice.choice.keepOn", { number: next.number }), line: say(`practice.${next.id}.title`), press: onNext, enter: true },
+    { key: "hub", title: say("practice.choice.pick"), line: say("practice.choice.pickLine"), press: onHub, enter: false },
+  ];
+  const again = say("practice.hubAgain");
+  return (
+    <>
+      <div className="pc-zdim pc-end-dim" />
+      <div className="pc-end" data-practice-end data-practice-choice>
+        <div className="pc-end-head">
+          <span className="pc-badge">✓</span>
+          <div><div className="pc-kick">{say("practice.ended", { number: chapter.number })}</div><h3>{say("practice.choice.choose")}</h3></div>
+        </div>
+        <div className="pc-ways">
+          {ways.map((way) => (
+            <button key={way.key} type="button" className="pc-way" onClick={way.press} data-practice-choice-way={way.key} data-practice-go={way.enter || undefined}>
+              <span><b>{way.title}</b><small>{way.line}</small></span>
+              {way.enter ? <span className="pc-kc">⏎</span> : null}
+            </button>
+          ))}
+        </div>
+        <p className="pc-up">{again}</p>
+        <div className="pc-row">
+          <button type="button" className="pc-back pc-again" onClick={onRestart} data-practice-again>{say("practice.again")}</button>
         </div>
       </div>
     </>

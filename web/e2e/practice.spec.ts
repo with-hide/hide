@@ -234,6 +234,20 @@ test("the bubble's Exit closes the practice from any step, keeping where the cha
   });
 });
 
+test("the first chapter ends by asking what next, and Use Hide now closes the practice", async ({ page }) => {
+  await withPractice(page, async (practice) => {
+    await practice.locator('[data-practice-hub-chapter="overview"] [data-practice-play]').click();
+    const layer = practice.locator('[data-practice-chapter="overview"] [data-practice-layer]');
+    await pressTo(practice, "overview", Number(await layer.getAttribute("data-practice-steps")) - 1);
+    await practice.keyboard.press("Enter");
+    const choice = practice.locator('[data-practice-chapter="overview"] [data-practice-choice]');
+    await expect(choice.locator("[data-practice-choice-way]")).toHaveCount(3);
+    const closed = practice.waitForEvent("close");
+    await choice.locator('[data-practice-choice-way="leave"]').click();
+    await closed;
+  });
+});
+
 test("the chapter list leads back to Hide, and a finished chapter stops on its end card", async ({ page }) => {
   await withPractice(page, async (practice) => {
     await practice.locator('[data-practice-hub-chapter="switch"] [data-practice-play]').click();
