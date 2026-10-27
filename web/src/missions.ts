@@ -9,7 +9,7 @@ import type { MessageKey } from "./i18n/catalogs";
 import { PROVIDER_KINDS, type ProviderKind } from "./agentPicker";
 import { agentsByPane } from "./paneAgents";
 import { orderByDependencies } from "./projectBoard";
-import type { AgentRow, AgentStartChoice, Mission, MissionEvent, MissionEventsSnapshot, MissionNode, MissionVerdict, RowMark, SnapshotRest } from "./snapshot";
+import type { AgentRow, AgentStartChoice, Mission, MissionChecker, MissionCriterion, MissionEvent, MissionEventsSnapshot, MissionNode, MissionVerdict, RowMark, SnapshotRest } from "./snapshot";
 
 export function missionOf(rest: SnapshotRest | null | undefined, id: string): Mission | null {
   return rest?.missions?.items.find((mission) => mission.id === id) ?? null;
@@ -119,11 +119,6 @@ export function workerWords(node: MissionNode, launchModel: string | null, auto:
 /** A change node's steps: work, PR or branch, review, merge or main (D-42 B, D-48). */
 export const STAGE_STEPS = 4;
 
-/** How many step cells a card draws: the four of a change node, none for a research or verify node, whose status mark already says where it is. */
-export function stepsOf(node: MissionNode): number {
-  return node.kind === "change" ? STAGE_STEPS : 0;
-}
-
 /**
  * The card's status mark (B15): its worker's own mark while its row is
  * listed, so a node reads as its agent does everywhere; else the node's
@@ -190,11 +185,10 @@ export function paneChipWords(mission: Mission): { state: PaneChipState; key: Me
 }
 
 /**
- * A node's state as the map's colour says it (PRD mission-plan-visibility
- * D-11, B14): the whole card border, the legend, the chip's cell and the flow
- * row's bar share it. A node that cannot start yet waits; once the mission is
- * cancelled, a node it never finished is cancelled, and a dropped node left
- * the plan, so it counts in neither the legend nor the chip.
+ * A node's state as the head's and the chip's cells colour it (PRD
+ * mission-plan-visibility D-11, B8). A node that cannot start yet waits; once
+ * the mission is cancelled, a node it never finished is cancelled, and a
+ * dropped node left the plan, so it has no cell.
  */
 export type NodeTone = "done" | "working" | "review" | "hold" | "failed" | "waiting" | "cancelled" | "dropped";
 
@@ -219,25 +213,16 @@ export function nodeTone(mission: Mission, node: MissionNode): NodeTone {
   }
 }
 
-/** The legend's order (B13): what finished, what moves, what waits on the operator, what is still ahead. */
-export const LEGEND_TONES = ["done", "review", "working", "hold", "failed", "waiting", "cancelled"] as const satisfies readonly NodeTone[];
-
-export type LegendTone = (typeof LEGEND_TONES)[number];
-
-/** The head's legend (B13): each state with nodes in it and how many, in `LEGEND_TONES` order. */
-export function missionLegend(mission: Mission): { tone: LegendTone; count: number }[] {
-  const counts = new Map<NodeTone, number>();
-  for (const node of mission.nodes) counts.set(nodeTone(mission, node), (counts.get(nodeTone(mission, node)) ?? 0) + 1);
-  return LEGEND_TONES.flatMap((tone) => (counts.get(tone) ? [{ tone, count: counts.get(tone)! }] : []));
-}
+/** A cell's state on the head's and the chip's bar (B8, B24): what finished, what moves, what waits on the operator, what is still ahead. */
+export type CellTone = Exclude<NodeTone, "dropped">;
 
 /** The nodes top down by what they wait on, a dropped node where it stood (B17). */
 export function orderedNodes(mission: Mission): MissionNode[] {
   return orderByDependencies(mission.nodes, (node) => node.key, (node) => node.depends_on).map(({ item }) => item);
 }
 
-/** The chip's and the head's bar (B8, B13): one cell per node in the plan, in order. */
-export function missionCells(mission: Mission): LegendTone[] {
+/** The chip's and the head's bar (B8, B24): one cell per node in the plan, in order. */
+export function missionCells(mission: Mission): CellTone[] {
   return orderedNodes(mission).flatMap((node) => {
     const tone = nodeTone(mission, node);
     return tone === "dropped" ? [] : [tone];
@@ -245,7 +230,7 @@ export function missionCells(mission: Mission): LegendTone[] {
 }
 
 /** The colour a mission's own chip wears on the sidebar row and the Overview (B35): its decision, else its state. */
-export function missionTone(mission: Mission): LegendTone {
+export function missionTone(mission: Mission): CellTone {
   if (mission.decision && missionOpen(mission)) return "hold";
   switch (mission.status) {
     case "planning":
@@ -336,79 +321,253 @@ export function missionResults(mission: Mission): { node: MissionNode; result: N
   });
 }
 
+/**
+ * How a card is drawn (PRD mission-map-git-criteria D-02, B26): its icon's
+ * shape says the state, and colour is kept for what wants a look (working,
+ * review, a decision, a failure). Finished work is grey, and once it reached
+ * main it is `landed`, a faint check with no fill; an outside node watches
+ * until its pull request merges or its branch reaches main.
+ */
+export type NodeLook = "waiting" | "working" | "review" | "hold" | "failed" | "done" | "landed" | "external" | "cancelled" | "dropped";
+
+export function nodeLook(mission: Mission, node: MissionNode): NodeLook {
+  if (node.status === "dropped") return "dropped";
+  if (node.kind === "external") {
+    if (node.status === "done") return "landed";
+    if (node.status === "failed") return "failed";
+    return mission.status === "cancelled" ? "cancelled" : "external";
+  }
+  const tone = nodeTone(mission, node);
+  if (tone === "done") return nodeLanded(node) ? "landed" : "done";
+  return tone;
+}
+
+/** A finished change is in main: its pull request merged or its commit recorded there; an outside node is done only once it reached main (B17, B19). */
+export function nodeLanded(node: MissionNode): boolean {
+  if (node.status !== "done") return false;
+  return node.kind === "external" || node.pr_state === "merged" || node.commit != null;
+}
+
+/**
+ * What a finished change still waits on before main (B27): the operator's
+ * merge of its pull request, or a branch to join in a git mission; none for
+ * work that reached main, research, a verify node or a cancelled mission.
+ */
+export function landingLeft(mission: Mission, node: MissionNode): "merge" | "join" | null {
+  if (node.kind !== "change" || node.status !== "done" || nodeLanded(node) || mission.status === "cancelled") return null;
+  if (node.pr != null) return node.pr_state === "closed" ? null : "merge";
+  return "join";
+}
+
+/** A card's `기준 n/m` and `⤳k` (B28): none for a mission from before criteria (B23) or a node with no lines, as an outside one. */
+export function criteriaTally(mission: Mission, node: MissionNode): { met: number; total: number; skipped: number } | null {
+  if (mission.exempt || node.criteria.length === 0) return null;
+  return { met: node.criteria_met, total: node.criteria.length, skipped: node.criteria_skipped };
+}
+
+/** The lines a node still has to meet, open or failed, in its order (B22, B28). */
+export function linesLeft(node: MissionNode): MissionCriterion[] {
+  return node.criteria.filter((line) => line.state === "open" || line.state === "fail");
+}
+
+/** Who checks a review or verify line, by agent, as its words name them (`codex 리뷰`, B32). */
+function checkerNames(line: MissionCriterion): string {
+  return [...new Set((line.checkers ?? []).map((checker) => checker.worker.agent))].join(" · ");
+}
+
+/**
+ * A line in words (B32): the Conductor's own words for the node's criteria
+ * and a defect, and for the lines Hide adds the check command, the CI and the
+ * review or verification with its checkers' names; no origin and no column
+ * of who checks.
+ */
+export function criterionName(line: MissionCriterion, t: TFunction<"translation">): string {
+  switch (line.kind) {
+    case "own":
+    case "defect":
+      return line.text ?? line.key;
+    case "check":
+      return t("mission.line.check");
+    case "ci":
+      return t("mission.line.ci");
+    case "review":
+    case "verify": {
+      const who = checkerNames(line);
+      return who ? t(`mission.line.${line.kind}.by`, { who }) : t(`mission.line.${line.kind}`);
+    }
+  }
+}
+
+/** A line in one word for `남음: 리뷰, CI` (B28): a criterion by its number, the rest by kind. */
+export function criterionShort(line: MissionCriterion, t: TFunction<"translation">): string {
+  if (line.kind === "own") return t("mission.line.short.own", { number: line.key.replace(/^\D+/, "") || line.key });
+  return t(`mission.line.short.${line.kind}`);
+}
+
+/** Of several checkers, how many passed (`2/3 통과`, B6); none for one checker or a line without them. */
+export function checkerTally(line: MissionCriterion): { passed: number; total: number } | null {
+  const checkers = line.checkers ?? [];
+  if (checkers.length < 2) return null;
+  return { passed: checkers.filter((checker) => checker.state === "pass").length, total: checkers.length };
+}
+
+/** One checker on its strip (B29): its answer, else at work once the Conductor bound an agent to it, else still to start. */
+export function checkerState(checker: MissionChecker): "pass" | "fail" | "running" | "waiting" {
+  if (checker.state === "pass" || checker.state === "fail") return checker.state;
+  return checker.agent_id ? "running" : "waiting";
+}
+
+/**
+ * What a line adds after its words (B12, B21, B32): why it was skipped, the
+ * operator's decision for a check or CI line, a rerun that passed, a rerun
+ * running, the checkers' count while several decide, or the node that found
+ * a defect.
+ */
+export function criterionNote(line: MissionCriterion, mission: Mission, t: TFunction<"translation">): string | null {
+  if (line.state === "skipped" && line.skip) return line.skip.decision != null ? t("mission.line.operator", { reason: line.skip.reason }) : line.skip.reason;
+  if (line.rerunning) return t("mission.line.rerunning");
+  if (line.state === "pass" && line.reruns) return t("mission.line.reruns", { count: line.reruns });
+  const tally = checkerTally(line);
+  if (tally && line.state === "open") return t("mission.line.passedOf", { passed: String(tally.passed), total: String(tally.total) });
+  if (line.kind === "defect" && line.found_by) {
+    const finder = mission.nodes.find((node) => node.key === line.found_by);
+    return t("mission.line.foundBy", { node: finder?.title ?? line.found_by });
+  }
+  return null;
+}
+
+/**
+ * A node's times from its events (B28): how long it took, from the first
+ * time it went to work to when it ended, or to `end` while it has not; and
+ * how long decisions held it, every held stretch added. Null with no event
+ * that moved it, as in a mission recorded before its events, so no number is
+ * drawn for it.
+ */
+export function nodeTimes(node: MissionNode, events: readonly MissionEvent[], end: number): { took: number | null; held: number; running: boolean } | null {
+  const moves = events.filter((event) => event.kind === "node" && event.node === node.key && event.status);
+  if (moves.length === 0) return null;
+  const start = moves.find((move) => move.status === "working" || move.status === "review");
+  const last = moves[moves.length - 1]!;
+  const running = last.status !== "done" && last.status !== "failed" && last.status !== "dropped";
+  const stop = running ? end : last.at_unix_ms;
+  let held = 0;
+  moves.forEach((move, index) => {
+    if (move.status === "held") held += Math.max(0, (moves[index + 1]?.at_unix_ms ?? stop) - move.at_unix_ms);
+  });
+  return { took: start ? Math.max(0, stop - start.at_unix_ms) : null, held, running };
+}
+
+/**
+ * Where a defect a later node found points (B21): from the node that found it
+ * to the node it opened again, while that line is still open or failing.
+ */
+export function defectEdges(mission: Mission): { from: string; to: string }[] {
+  const keys = new Set(mission.nodes.map((node) => node.key));
+  const edges = new Map<string, { from: string; to: string }>();
+  for (const node of mission.nodes) {
+    for (const line of node.criteria) {
+      if (line.kind !== "defect" || !line.found_by || !keys.has(line.found_by) || (line.state !== "open" && line.state !== "fail")) continue;
+      edges.set(`${line.found_by}>${node.key}`, { from: line.found_by, to: node.key });
+    }
+  }
+  return [...edges.values()];
+}
+
+/** The card a selection keeps lit (B30): itself and every card one edge away, either way. */
+export function neighbours(edges: readonly { from: string; to: string }[], key: string): Set<string> {
+  const near = new Set([key]);
+  for (const edge of edges) {
+    if (edge.from === key) near.add(edge.to);
+    if (edge.to === key) near.add(edge.from);
+  }
+  return near;
+}
+
+/**
+ * The card's one line under its title (B28): where a working node is (its
+ * worker's plan, the Conductor's line, else what is left), what a held,
+ * failed or blocked node waits on, what a planned node waits for, and what
+ * an outside node watches; nothing for finished work, whose result speaks.
+ */
+export function cardLine(mission: Mission, node: MissionNode, planLine: string | null, t: TFunction<"translation">): { text: string; attention: boolean } | null {
+  const look = nodeLook(mission, node);
+  if (look === "cancelled" || look === "dropped" || look === "done" || look === "landed") return null;
+  if (node.kind === "external") {
+    if (look === "failed") return { text: t("mission.outside.closed"), attention: true };
+    return { text: t(node.unread ? "mission.outside.unread" : "mission.outside.waiting"), attention: false };
+  }
+  if (look === "working" || look === "review") {
+    const left = linesLeft(node);
+    const text = planLine ?? node.line ?? (left.length > 0 ? t("mission.line.left", { lines: left.map((line) => criterionShort(line, t)).join(", ") }) : null);
+    return text ? { text, attention: false } : null;
+  }
+  if (look === "hold") return { text: t("mission.line.held"), attention: false };
+  if (look === "failed") return { text: node.line ?? t("mission.status.failed"), attention: true };
+  if (node.blocked) return { text: nodeLine(node, t), attention: true };
+  const before = node.depends_on.flatMap((key) => {
+    const dep = mission.nodes.find((other) => other.key === key);
+    return dep && dep.status !== "done" && dep.status !== "dropped" ? [dep.pr != null ? `#${dep.pr}` : dep.title] : [];
+  });
+  if (before.length > 0) return { text: t("mission.line.waitsFor", { names: before.join(" ") }), attention: false };
+  return node.line ? { text: node.line, attention: false } : null;
+}
+
+/**
+ * The changes left to merge or join, in the order the Conductor gave (B18,
+ * B25): the plan's merge order first, then any other finished change not in
+ * main yet, top down.
+ */
+export function landingOrder(mission: Mission): MissionNode[] {
+  const left = orderedNodes(mission).filter((node) => landingLeft(mission, node) !== null);
+  const at = (node: MissionNode) => {
+    const index = mission.merge_order.indexOf(node.key);
+    return index === -1 ? mission.merge_order.length : index;
+  };
+  return left.map((node, index) => ({ node, index })).sort((a, b) => at(a.node) - at(b.node) || a.index - b.index).map(({ node }) => node);
+}
+
+/** Why a worker's row was raised to the operator (`AgentRow.escalation`, docs/status-model.md, Delegated escalation). */
+export type EscalationCause = NonNullable<AgentRow["escalation"]>["cause"];
+
+/**
+ * What only the operator can do now (B25): answer the decision, take over a
+ * mission no Conductor holds, clear a worker the core raised past its parent
+ * (one of the six escalation causes), see an outside pull request closed
+ * without its merge, and merge or join what waits for main. A worker's own
+ * block its parent can handle stays on its card, and a finished or cancelled
+ * mission has nothing here.
+ */
+export type TurnItem =
+  | { kind: "decision" }
+  | { kind: "takeover" }
+  | { kind: "worker_blocked"; node: MissionNode; cause: EscalationCause; line: string | null }
+  | { kind: "outside_closed"; node: MissionNode }
+  | { kind: "landing"; nodes: MissionNode[]; git: boolean };
+
+export function turnItems(mission: Mission, workerRow: (node: MissionNode) => AgentRow | null): TurnItem[] {
+  if (!missionOpen(mission)) return [];
+  const items: TurnItem[] = [];
+  if (mission.decision) items.push({ kind: "decision" });
+  else if (!mission.conductor.present) items.push({ kind: "takeover" });
+  for (const node of orderedNodes(mission)) {
+    const escalation = node.status === "working" || node.status === "review" ? workerRow(node)?.escalation : null;
+    if (escalation) {
+      const request = workerRow(node)?.request;
+      items.push({ kind: "worker_blocked", node, cause: escalation.cause, line: request?.end === "blocked" && request.line ? request.line : null });
+    }
+  }
+  for (const node of orderedNodes(mission)) if (node.kind === "external" && node.status === "failed") items.push({ kind: "outside_closed", node });
+  if (mission.status === "merge_wait") {
+    const nodes = landingOrder(mission);
+    if (nodes.length > 0) items.push({ kind: "landing", nodes, git: nodes.every((node) => node.pr == null) });
+  }
+  return items;
+}
+
 /** The events the core sends for `missionId`, which it does only for the mission open in the 보기 slot (D-22). */
 export function missionEventsOf(rest: SnapshotRest | null | undefined, missionId: string): MissionEventsSnapshot | null {
   const events = rest?.mission_events;
   return events && events.mission === missionId ? events : null;
-}
-
-/** One stretch of a node's bar (B18): worked, in review, an attempt that failed, or stopped on a decision or a free place. */
-export type SegmentTone = "worked" | "review" | "failed" | "paused";
-/** A mark on a bar or on the axis (B18, B31): ⑂ a merge, ↓ main, ! a decision, ✓ its answer, ⊘ an answer not delivered, ✎ a replan, × the cancel. */
-export type FlowMarkKind = "merged" | "landed" | "asked" | "answered" | "undelivered" | "unconfirmed" | "replanned" | "cancelled";
-
-/** The marks a decision leaves, wherever it sits. */
-function decisionMark(event: MissionEvent): FlowMarkKind | null {
-  switch (event.kind) {
-    case "asked":
-      return "asked";
-    case "answered":
-      return "answered";
-    case "answer_undelivered":
-      return "undelivered";
-    case "answer_unconfirmed":
-      return "unconfirmed";
-    default:
-      return null;
-  }
-}
-
-/** Where on the axis a moment falls, as a percentage. */
-function axisAt(at: number, span: { from: number; to: number }): number {
-  return ((Math.min(Math.max(at, span.from), span.to) - span.from) / (span.to - span.from)) * 100;
-}
-
-/**
- * A node's bar from its events (B18): from each status it moved to until the
- * next, a working stretch that ended in a failure red, a finished node's
- * bar ending where it finished, and a node still at work running to the
- * axis end, its end `live` while the mission is open. Null when the node has
- * no status event, as in a mission recorded before its events, so the bar
- * is the one its times draw (B19).
- */
-export function nodeSegments(mission: Mission, node: MissionNode, events: MissionEvent[], span: { from: number; to: number }): { segments: { left: number; width: number; tone: SegmentTone }[]; live: boolean } | null {
-  const moves = events.filter((event) => event.kind === "node" && event.node === node.key && event.status);
-  if (moves.length === 0) return null;
-  const segments: { left: number; width: number; tone: SegmentTone }[] = [];
-  moves.forEach((move, index) => {
-    const next = moves[index + 1];
-    const status = move.status!;
-    if (status === "done" || status === "dropped" || (status === "failed" && !next)) return;
-    const end = next?.at_unix_ms ?? span.to;
-    const tone: SegmentTone = status === "working" ? (next?.status === "failed" ? "failed" : "worked") : status === "review" ? "review" : "paused";
-    const left = axisAt(move.at_unix_ms, span);
-    const width = axisAt(end, span) - left;
-    if (width > 0) segments.push({ left, width, tone });
-  });
-  const last = moves[moves.length - 1]!.status;
-  return { segments, live: missionOpen(mission) && (last === "working" || last === "review") };
-}
-
-/** The marks on a node's bar (B18): its merges, its commits on main and the decisions that named it. */
-export function nodeMarks(node: MissionNode, events: MissionEvent[], span: { from: number; to: number }): { at: number; kind: FlowMarkKind; event: MissionEvent }[] {
-  return events.flatMap((event) => {
-    if (event.node !== node.key) return [];
-    const kind: FlowMarkKind | null = event.kind === "pr_merged" ? "merged" : event.kind === "landed" ? "landed" : decisionMark(event);
-    return kind ? [{ at: axisAt(event.at_unix_ms, span), kind, event }] : [];
-  });
-}
-
-/** The marks on the axis itself (B18, B24, B31): each replan, a decision that named no node with its answer, and the cancel. */
-export function axisMarks(events: MissionEvent[], span: { from: number; to: number }): { at: number; kind: FlowMarkKind; event: MissionEvent }[] {
-  return events.flatMap((event) => {
-    const kind: FlowMarkKind | null = event.kind === "replanned" ? "replanned" : event.kind === "cancelled" ? "cancelled" : event.node ? null : decisionMark(event);
-    return kind ? [{ at: axisAt(event.at_unix_ms, span), kind, event }] : [];
-  });
 }
 
 /** An event in words (B20, B31): what happened, and the one line it carried. */
@@ -457,32 +616,6 @@ export function heldQuestion(mission: Mission, node: MissionNode): string | null
   if (node.status !== "held" || nodeTone(mission, node) === "cancelled" || !mission.decision) return null;
   const named = mission.question?.node;
   return named == null || named === node.key ? mission.decision : null;
-}
-
-/** The flow table's time axis (B17): the mission's start to its close, or to now while it is open. */
-export function flowSpan(mission: Mission, now: number): { from: number; to: number } {
-  const from = mission.started_at_unix_ms ?? mission.created_at_unix_ms;
-  return { from, to: Math.max(from + 1, mission.closed_at_unix_ms ?? now) };
-}
-
-/**
- * A node's one bar on that axis, as percentages (B19): from its start to its
- * finish, or to the axis end while it has not finished; none before it starts.
- */
-export function nodeBar(node: MissionNode, span: { from: number; to: number }): { left: number; width: number } | null {
-  if (node.started_at_unix_ms == null) return null;
-  const length = span.to - span.from;
-  const start = Math.min(Math.max(node.started_at_unix_ms, span.from), span.to);
-  const end = Math.min(Math.max(node.finished_at_unix_ms ?? span.to, start), span.to);
-  return { left: ((start - span.from) / length) * 100, width: ((end - start) / length) * 100 };
-}
-
-/** The flow table's filter (B17): every node, the ones not finished, or the finished ones. */
-export type FlowFilter = "all" | "now" | "finished";
-
-export function flowShows(node: MissionNode, filter: FlowFilter): boolean {
-  const finished = node.status === "done" || node.status === "failed" || node.status === "dropped";
-  return filter === "all" || (filter === "finished") === finished;
 }
 
 /**

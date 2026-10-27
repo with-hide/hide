@@ -7,7 +7,7 @@ import { Popover, PopoverAnchor, PopoverContent } from "./components/ui/popover"
 import { useInterfaceTranslation } from "./i18n/client";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
-import { useWorkerRow, ResultTail } from "./MissionMap";
+import { useWorkerRow, ResultTail } from "./missionParts";
 import { allAgents } from "./paneAgents";
 import { liveNodes, missionCells, missionOfPane, missionOpen, missionResults, missionTally, nodeMark, paneChipWords, stageWord, type PaneChipState } from "./missions";
 import { PanePlanChip, usePaneChipPopover } from "./PanePlanChip";

@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
-// A mission's detail in the 보기 slot (PRD software-factory-conductor B15-B21,
-// B43; PRD mission-plan-visibility B12-B30, B39): what it shows in each state
-// of the record and its events, and the one event each press sends.
+// A mission's page in the 보기 slot (PRD software-factory-conductor B43; PRD
+// mission-plan-visibility B25-B30, B39; PRD mission-map-git-criteria
+// B21-B35): what it shows in each state of the record and its events, what a
+// pick lights and opens, and the one event each press sends.
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
@@ -9,7 +10,7 @@ import { createActions } from "./actions";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { initializeInterfaceI18n } from "./i18n/instance";
 import { MissionMap } from "./MissionMap";
-import type { Mission, MissionEvent, MissionNode, SnapshotRest } from "./snapshot";
+import type { AgentRow, Mission, MissionCriterion, MissionEvent, MissionNode, SnapshotRest } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import type { DispatchFn } from "./ws";
@@ -33,13 +34,13 @@ function mission(extra: Partial<Mission> = {}): Mission {
   return { id: "mission-1", title: "Fix the bug", workspace_id: "w", project: "/repo", checkout_path: "/repo", device_id: "mac", status: "running", scope: "pr", cap: 4, exempt: false, checkers: null, conductor: { pane_id: "p1", name: "conductor", agent_kind: "claude", session: null, present: true, takes_answers: true }, nodes: [], merge_order: [], check: null, github: null, decision: null, question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: Date.now() - 180_000, closed_at_unix_ms: null, running: 2, stale: false, github_stale: false, github_read_at_unix_ms: null, ...extra };
 }
 
-async function mount(missions: { items: Mission[]; failed?: string }, remote: unknown[] = [], sessions: unknown[] = [], more: Partial<SnapshotRest> = {}) {
+async function mount(missions: { items: Mission[]; failed?: string }, remote: unknown[] = [], sessions: unknown[] = [], more: Partial<SnapshotRest> = {}, agents: AgentRow[] = []) {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("ResizeObserver", class { observe() {} unobserve() {} disconnect() {} });
   vi.stubGlobal("CSS", { escape: (value: string) => value });
   initializeInterfaceI18n("en");
   useShellStore.setState({
-    agents: [],
+    agents,
     rest: { ...more, missions, navigator: { devices: [{ id: "mac", kind: "local", label: "This Mac" }, { id: "mini", kind: "remote", label: "mini" }], workspaces: [] }, status: { remote }, overview_graph: { sessions } } as unknown as SnapshotRest,
   });
   const events: Parameters<DispatchFn>[0][] = [];
@@ -65,13 +66,12 @@ async function press(target: Element, key: string) {
   await act(async () => { target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })); });
 }
 
-it("shows one planning line before a plan, and a head of state, time, a cell per node, n / m done and a legend of the states with nodes in it (B12, B13)", async () => {
+it("reads top down as the head, 내 차례 only when the operator has something to do, the map and the node panel, with no flow table, legend or tabs (B24)", async () => {
   const empty = await mount({ items: [mission({ status: "planning", started_at_unix_ms: null })] });
   try {
     expect(empty.q("[data-mission-planning]")?.textContent).toBe("Planning");
     expect(empty.q("[data-mission-pill]")?.textContent).toBe("Planning");
-    expect(empty.q("[data-mission-banner]")).toBeNull();
-    expect(empty.q("[data-mission-flow]")).toBeNull();
+    expect(empty.q("[data-mission-turn]")).toBeNull();
   } finally { await empty.unmount(); }
   const nodes = [node("a", { status: "done" }), node("b", { status: "working", depends_on: ["a"] }), node("c", { status: "review", depends_on: ["a"] }), node("d", { status: "held" }), node("e", { depends_on: ["b"] }), node("f", { status: "dropped" })];
   const running = await mount({ items: [mission({ nodes })] });
@@ -80,15 +80,15 @@ it("shows one planning line before a plan, and a head of state, time, a cell per
     expect(running.q('[data-mission-stat="time"]')?.textContent).toBe("3m so far");
     expect(running.q('[data-mission-stat="done"]')?.textContent).toBe("1 / 5 done");
     expect(running.q("[data-mission-summary] [data-progress-cells]")?.getAttribute("data-progress-cells")).toBe("done hold working review waiting");
-    expect(running.q("[data-mission-legend]")?.getAttribute("data-mission-legend")).toBe("done:1 review:1 working:1 hold:1 waiting:1");
-    expect(running.q("[data-mission-legend]")?.textContent).toBe("Done1Review1Working1Decision1Waiting1");
-    // No PR count, no cap: the head says the state, the time and the cells (B13).
-    expect(running.q("[data-mission-summary]")?.textContent).not.toContain("/4");
+    expect(running.q("[data-mission-turn]")).toBeNull();
     expect(running.container.querySelectorAll("[data-mission-node]")).toHaveLength(6);
-    expect(running.q("[data-mission-report]")).not.toBeNull();
-    // One page: the head, the map, then the flow table.
-    const order = [...running.container.querySelectorAll("[data-mission-summary], [data-mission-fit], [data-mission-flow]")].map((part) => (part as HTMLElement).dataset.missionSummary ? "head" : (part as HTMLElement).dataset.missionFit ? "map" : "flow");
-    expect(order).toEqual(["head", "map", "flow"]);
+    expect(running.container.querySelector("[data-mission-legend], [data-mission-flow], [data-mission-zoom], [role=tablist], [data-node-steps], [data-node-base]")).toBeNull();
+    // Nothing picked: the panel says how to fill it.
+    expect(running.q("[data-mission-panel]")?.getAttribute("data-mission-panel")).toBe("none");
+    const parts = () => [...running.container.querySelectorAll<HTMLElement>("[data-mission-summary], [data-mission-turn], [data-mission-map], [data-mission-panel]")].map((part) => Object.keys(part.dataset)[0]);
+    expect(parts()).toEqual(["missionSummary", "missionMap", "missionPanel"]);
+    await running.rerender(mission({ nodes, decision: "Rail or slot?" }));
+    expect(parts()).toEqual(["missionSummary", "missionTurn", "missionMap", "missionPanel"]);
   } finally { await running.unmount(); }
 });
 
@@ -229,11 +229,12 @@ it("answers a decision without choices by writing, as one from before choices is
   } finally { await map.unmount(); }
 });
 
-it("offers Take over when no Conductor holds an open mission, which starts an agent asked to take it", async () => {
+it("offers Take over in 내 차례 when no Conductor holds an open mission, which starts an agent asked to take it", async () => {
   const gone = mission({ conductor: { ...mission().conductor, present: false }, nodes: [node("a")] });
   const map = await mount({ items: [gone] });
   try {
-    expect(map.q('[data-mission-banner="no-conductor"]')?.textContent).toContain("No Conductor");
+    expect(map.q("[data-mission-turn]")?.getAttribute("data-mission-turn")).toBe("takeover");
+    expect(map.q('[data-mission-turn-item="takeover"]')?.textContent).toContain("No Conductor");
     await act(async () => map.q("[data-mission-takeover]")!.click());
     const start = map.events.find((event) => event.kind === "agent_start_in_checkout");
     expect(start?.payload).toMatchObject({ checkout_path: "/repo", provider: "claude" });
@@ -241,7 +242,7 @@ it("offers Take over when no Conductor holds an open mission, which starts an ag
   } finally { await map.unmount(); }
   const done = await mount({ items: [{ ...gone, status: "done" }] });
   try {
-    expect(done.q("[data-mission-banner]")).toBeNull();
+    expect(done.q("[data-mission-turn]")).toBeNull();
   } finally { await done.unmount(); }
 });
 
@@ -266,320 +267,270 @@ it("dims a mission whose device does not answer and says whose last values it sh
   } finally { await map.unmount(); }
 });
 
-it("draws a card's state as its whole border, with its PR mark, the base of its stack, its steps, badges and the model its pane runs, and a research node with its conclusion and no steps (B14-B16, B22)", async () => {
+const line = (key: string, kind: MissionCriterion["kind"], extra: Partial<MissionCriterion> = {}): MissionCriterion => ({ key, kind, state: "open", ...extra });
+const checker = (agent: string, state: MissionCriterion["state"] = "open", agent_id?: string) => ({ worker: { agent, model: null, effort: "high" }, state, ...(agent_id ? { agent_id } : {}) });
+const card = (map: { q: (selector: string) => HTMLElement | null }, key: string) => map.q(`[data-mission-node="${key}"]`)!;
+
+it("draws each card's state as its mark and border, colour only for what wants a look, with its line, result, landing tag and criteria (B26-B28)", async () => {
   const nodes = [
-    node("api", { pr: 1503, pr_state: "mergeable", stage: 3, status: "review", pane_id: "p9", worker: { agent: "claude", model: "opus", effort: "high", effort_auto: false } }),
-    node("screen", { pr: 1504, base_pr: 1503, pr_state: "failed", stage: 2, status: "failed", depends_on: ["api"], line: "CI failed · attempt 2/2", attempts: 2 }),
-    node("cause", { kind: "research", delivery: null, status: "done", line: "The cache was stale", worker: { agent: "opencode", effort_auto: false } }),
-    node("together", { kind: "verify", delivery: null, status: "planned", depends_on: ["screen"], worker: { agent: "codex", model: "gpt-6-astra", effort_auto: true } }),
+    node("core", { title: "제안 core: 기록·공책·점수·반영", status: "review", pr: 1703, pr_state: "mergeable", criteria: [line("c1", "own", { state: "pass" }), line("check", "check", { state: "pass" }), line("review", "review", { checkers: [checker("codex", "open", "agent-7")] }), line("ci", "ci")], criteria_met: 2, criteria_skipped: 0 }),
+    node("engine", { status: "working", depends_on: ["core"], pr: 1704, line: "replay 19/31", reopened: 1, criteria: [line("c1", "own", { state: "pass" }), line("c2", "own", { state: "skipped", skip: { reason: "only 31 sessions" } }), line("c3", "own"), line("ci", "ci")], criteria_met: 2, criteria_skipped: 1 }),
+    node("tool", { status: "held", depends_on: ["core"] }),
+    node("api", { status: "done", pr: 1650, pr_state: "mergeable" }),
+    node("old", { status: "done", pr: 1600, pr_state: "merged" }),
+    node("branch", { status: "done", delivery: "direct", branch: "feat/a-very-long-branch-name-for-the-screen-node" }),
+    node("broken", { status: "failed", line: "CI failed twice" }),
+    node("outside", { title: "바깥: isolated 앱 실행기 정리", kind: "external", delivery: null, external: { pr: 1232 }, status: "waiting" }),
+    node("unread", { kind: "external", delivery: null, external: { branch: "tools/runner" }, status: "waiting", unread: true }),
+    node("next", { depends_on: ["engine", "outside"] }),
   ];
-  const map = await mount({ items: [mission({ nodes })] }, [], [{ device_id: "mac", pane_id: "p9", session_digest: "d", launch_model: "sonnet", launch_effort: null }]);
+  const map = await mount({ items: [mission({ nodes, decision: "Rail or slot?", question: { key: 1, why: null, recommend: null, node: "tool", asked_at_unix_ms: Date.now() } })] });
   try {
-    const screen = map.q('[data-mission-node="screen"]')!;
-    // The border is the node's state; the PR's own state is only its mark's colour, and no card has a band.
-    expect(screen.dataset.nodeTone).toBe("failed");
-    expect(screen.className).toContain("border-mission-failed");
-    expect(map.container.querySelector('[data-mission-node][class*="border-l-"]')).toBeNull();
-    expect(map.q('[data-mission-node="api"]')?.className).toContain("ring-mission-review/20");
-    expect(map.q('[data-mission-node="together"]')?.className).toContain("border-dashed");
-    expect(screen.querySelector("[data-node-attempts]")?.textContent).toBe("↻2");
-    expect(screen.querySelector("[data-pr-mark]")?.getAttribute("data-pr-mark")).toBe("failed");
-    expect(screen.querySelector("[data-node-base]")?.textContent).toContain(`${"#"}1503`);
-    expect(screen.querySelector("[data-node-steps]")?.getAttribute("data-node-steps")).toBe("2");
-    // The worker line is the model the pane runs, never the agent's name; a planned node shows the plan's.
-    expect(map.q('[data-mission-node="api"] [data-node-worker]')?.getAttribute("data-node-worker")).toBe("sonnet·high");
-    expect(map.q('[data-mission-node="together"] [data-node-worker]')?.getAttribute("data-node-worker")).toBe("gpt-6-astra·auto");
-    expect(map.q('[data-mission-node="cause"] [data-node-worker]')).toBeNull();
-    const cause = map.q('[data-mission-node="cause"]')!;
-    expect(cause.querySelector("[data-pr-mark]")).toBeNull();
-    expect(cause.querySelector("[data-node-steps]")).toBeNull();
-    expect(map.q('[data-mission-node="together"] [data-node-steps]')).toBeNull();
-    expect(cause.querySelector("[data-node-conclusion=folded]")?.getAttribute("title")).toBe("The cache was stale");
-    expect(cause.className).toContain("border-mission-done/60");
-    // A planned node waiting on an earlier one reads its kind: the edge says what it waits for.
-    expect(map.q('[data-mission-node="together"] [data-node-line]')?.textContent).toBe("Verify together");
-    // Pressing a card opens its row in the flow table, not a popover (B20).
-    await act(async () => screen.click());
-    const detail = map.q('[data-flow-row="screen"] [data-mission-detail="screen"]')!;
-    expect(detail.textContent).toContain("Attempts2");
-    expect(detail.querySelector<HTMLButtonElement>("[data-node-terminal]")?.disabled).toBe(true);
-    expect(detail.querySelector<HTMLButtonElement>("[data-node-pr-card]")?.disabled).toBe(true);
-    expect(map.q('[data-flow-row="cause"] [data-node-pr-card]')).toBeNull();
+    expect(Object.fromEntries(nodes.map((n) => [n.key, card(map, n.key).dataset.nodeLook]))).toEqual({ core: "review", engine: "working", tool: "hold", api: "done", old: "landed", branch: "done", broken: "failed", outside: "external", unread: "external", next: "waiting" });
+    // Each mark says its state on hover and to a screen reader, and the card's name starts with the same words.
+    expect(card(map, "tool").querySelector("[data-node-mark]")?.getAttribute("aria-label")).toBe("Waiting for a decision");
+    expect(card(map, "tool").getAttribute("aria-label")).toBe("Node tool · Waiting for a decision · Rail or slot?");
+    expect(card(map, "old").querySelector("[data-node-mark]")?.getAttribute("aria-label")).toBe("In main");
+    // Colour belongs to work, review, a decision and a failure; done is grey and in main has no surface.
+    expect(card(map, "engine").className).toContain("border-mission-working");
+    expect(card(map, "core").className).toContain("ring-mission-review/20");
+    expect(card(map, "api").className).toContain("border-border");
+    expect(card(map, "api").className).not.toMatch(/mission-done/);
+    expect(card(map, "old").className).toContain("bg-transparent");
+    expect(card(map, "outside").className).toContain("border-dotted");
+    // A pull request's number is plain on a card; its state's colours are the panel's.
+    expect(card(map, "core").querySelector("[data-node-pr]")?.textContent).toBe(`${"#"}1703`);
+    expect(card(map, "core").querySelector("[data-pr-mark]")).toBeNull();
+    expect(card(map, "core").querySelector("[data-node-criteria]")?.textContent).toBe("criteria 2/4");
+    expect(card(map, "engine").querySelector("[data-node-criteria]")?.textContent).toBe("criteria 2/4⤳1");
+    expect(card(map, "engine").getAttribute("aria-label")).toContain("criteria 2/4 · 1 skipped");
+    expect(card(map, "engine").querySelector("[data-node-reopened]")?.textContent).toBe("↻1");
+    expect(card(map, "engine").querySelector("[data-node-line]")?.textContent).toBe("replay 19/31");
+    // The review card says what is left; the waiting one what it waits for, by number.
+    expect(card(map, "core").querySelector("[data-node-line]")?.textContent).toBe("left: review, CI");
+    expect(card(map, "next").querySelector("[data-node-line]")?.textContent).toBe(`waiting for ${"#"}1704 바깥: isolated 앱 실행기 정리`);
+    expect(card(map, "api").querySelector("[data-node-landing]")?.textContent).toBe("Merge left");
+    expect(card(map, "branch").querySelector("[data-node-landing]")?.textContent).toBe("Join left");
+    expect(card(map, "old").querySelector("[data-node-landing]")).toBeNull();
+    expect(card(map, "broken").querySelector('[data-node-line="attention"]')?.textContent).toBe("CI failed twice");
+    expect(card(map, "outside").querySelector("[data-node-pr]")?.textContent).toBe(`${"#"}1232`);
+    expect(card(map, "unread").querySelector("[data-node-line]")?.textContent).toBe("Could not check");
+    // A long title wraps to two lines and a long branch truncates inside the card (B34).
+    expect(card(map, "core").querySelector("[title='제안 core: 기록·공책·점수·반영']")?.className).toContain("line-clamp-2");
+    expect(card(map, "branch").querySelector("[data-node-branch] .truncate")).not.toBeNull();
   } finally { await map.unmount(); }
 });
 
-it("marks a held card with !, says every badge in the card's name, and draws a research or verify line as a result only once the node ended (B16, B22, B36)", async () => {
+it("glues the other agents checking a node under its card, each with its face, model and effort and where it is, and the rule when several decide (B29)", async () => {
   const nodes = [
-    node("base", { status: "held" }),
-    node("retry", { status: "working", attempts: 3, change: "Split from api" }),
-    node("reading", { kind: "research", delivery: null, status: "working", line: "Reading 3 of 5 logs" }),
-    node("checking", { kind: "verify", delivery: null, status: "working", line: "4 of 6 so far" }),
-    node("cause", { kind: "research", delivery: null, status: "done", line: "The cache was stale" }),
-    node("broken", { status: "failed", pr: 1600, pr_state: "failed", line: "CI failed · attempt 2/2" }),
-    node("queued", { status: "waiting", line: "Waits on the API merge" }),
+    node("core", { status: "review", criteria: [line("review", "review", { checkers: [checker("codex", "open", "agent-7")] })] }),
+    node("all", { depends_on: ["core"], kind: "verify", delivery: null, criteria: [line("verify", "verify", { rule: "all", checkers: [checker("claude", "pass", "agent-8"), checker("codex", "pass", "agent-9"), checker("gemini")] })] }),
+    node("alone", { status: "working", criteria: [line("c1", "own")] }),
   ];
-  const map = await mount({ items: [mission({ nodes, decision: "Which base?" })] });
-  try {
-    const card = (key: string) => map.q(`[data-mission-node="${key}"]`)!;
-    expect(card("base").querySelector("[data-node-held]")?.textContent).toBe("!");
-    expect(card("base").getAttribute("aria-label")).toBe("Node base · Held · Which base?");
-    expect(card("retry").querySelector("[data-node-held]")).toBeNull();
-    expect(card("retry").getAttribute("aria-label")).toBe("Node retry · Working · Attempt 3 · Changed by a replan · Split from api");
-    // A running research or verify node's line is where it is, said once, never a result.
-    for (const key of ["reading", "checking"]) {
-      expect(card(key).querySelector("[data-node-conclusion], [data-node-verify]")).toBeNull();
-      expect(card(key).querySelectorAll("[data-node-now]")).toHaveLength(1);
-    }
-    expect(card("cause").querySelector("[data-node-conclusion=folded]")).not.toBeNull();
-    // A done research node's row writes its conclusion out under its own label, not under Now.
-    await act(async () => card("cause").click());
-    const detail = map.q('[data-mission-detail="cause"]')!;
-    expect(detail.querySelector("[data-flow-result=conclusion]")?.textContent).toBe("The cache was stale");
-    expect(detail.textContent).toContain("ConclusionThe cache was stale");
-    expect(detail.textContent).not.toContain("Now");
-    await act(async () => card("reading").click());
-    expect(map.q('[data-mission-detail="reading"]')?.textContent).toContain("NowReading 3 of 5 logs");
-    expect(map.q('[data-mission-detail="reading"] [data-flow-result]')).toBeNull();
-    // A failed or waiting node's row still says why, though its card shows its PR instead.
-    await act(async () => card("broken").click());
-    expect(map.q('[data-mission-detail="broken"]')?.textContent).toContain("NowCI failed · attempt 2/2");
-    await act(async () => card("queued").click());
-    expect(map.q('[data-mission-detail="queued"]')?.textContent).toContain("NowWaits on the API merge");
-  } finally { await map.unmount(); }
-  // A cancelled mission's work stopped: no held mark, no line of where it is.
-  const cancelled = await mount({ items: [mission({ nodes: [node("base", { status: "held" }), node("run", { status: "working", line: "Writing tests" })], status: "cancelled", closed_at_unix_ms: Date.now(), decision: "Which base?" })] });
-  try {
-    expect(cancelled.q('[data-mission-node="base"] [data-node-held]')).toBeNull();
-    expect(cancelled.q('[data-mission-node="base"]')?.getAttribute("aria-label")).toBe("Node base · Held");
-    expect(cancelled.q('[data-mission-node="run"] [data-node-now]')).toBeNull();
-    await act(async () => cancelled.q('[data-mission-node="run"]')!.click());
-    expect(cancelled.q('[data-mission-detail="run"]')?.textContent).not.toContain("Writing tests");
-  } finally { await cancelled.unmount(); }
-});
-
-it("puts the worker's own plan on the card's last line and folded in the node's detail, else the Conductor's line (PRD hide-plan B15, B16)", async () => {
-  const own = {
-    pane_id: "p2", session: { device_id: "mac", agent: "codex", session_id: "worker-session" },
-    steps: [
-      { key: "core", title: "Core events", depends_on: [], status: "working" as const, line: null, output: null, changed: false, change: null, waiting: false },
-      { key: "web", title: "Web map", depends_on: ["core"], status: "planned" as const, line: null, output: "pr" as const, changed: false, change: null, waiting: true },
-    ],
-    review: "approved" as const, ask: null, progress: { current: "core", next: "web", done: 0, total: 2, finished: false },
-    created_at_unix_ms: 1, updated_at_unix_ms: Date.now() - 12 * 60_000,
-  };
-  const map = await mount({ items: [mission({ nodes: [
-    node("a", { status: "working", branch: "gen-prd/a", stage: 1, line: "Conductor's line", plan: own }),
-    node("b", { status: "working", branch: "gen-prd/b", stage: 1, line: "Conductor's line" }),
-  ] })] });
-  try {
-    expect(map.q('[data-mission-node="a"] [data-node-now]')?.textContent).toBe("Now: Core events (0/2)");
-    expect(map.q('[data-mission-node="b"] [data-node-now]')?.textContent).toBe("Conductor's line");
-    await act(async () => map.q('[data-mission-node="a"]')!.click());
-    const detail = map.q('[data-mission-detail="a"]')!;
-    expect(detail.querySelector("[data-node-step-names]")?.textContent).toBe("Code → PR → Review → Merge");
-    expect(detail.querySelector("[data-node-plan]")?.getAttribute("data-node-plan")).toBe("folded");
-    expect(detail.querySelector("[data-node-plan-toggle]")?.textContent).toBe("Own plan· updated 12m ago");
-    // Opening it lists the steps, never a map (PRD mission-plan-visibility B20, D-07).
-    await act(async () => detail.querySelector<HTMLButtonElement>("[data-node-plan-toggle]")!.click());
-    expect([...detail.querySelectorAll<HTMLElement>("[data-plan-row]")].map((step) => step.dataset.planRow)).toEqual(["core", "web"]);
-    expect(detail.querySelector("[data-plan-graph]")).toBeNull();
-  } finally { await map.unmount(); }
-});
-
-it("draws every node, done ones too, and outlines the ones at work", async () => {
-  const nodes = Array.from({ length: 14 }, (_, index) => node(`n-${index}`, { status: index < 6 ? "done" : index < 9 ? "working" : "planned" }));
   const map = await mount({ items: [mission({ nodes })] });
   try {
-    expect(map.container.querySelectorAll("[data-mission-node]")).toHaveLength(14);
-    expect([...map.container.querySelectorAll<HTMLElement>("[data-node-moving]")].map((card) => card.dataset.missionNode)).toEqual(["n-6", "n-7", "n-8"]);
+    const rows = (key: string) => [...card(map, key).querySelectorAll<HTMLElement>("[data-node-checker]")].map((row) => [row.dataset.nodeChecker, row.dataset.checkerState, row.querySelector("[title]")?.textContent, row.lastElementChild?.textContent]);
+    expect(rows("core")).toEqual([["codex", "running", "codex·high", "reviewing"]]);
+    expect(rows("all")).toEqual([["claude", "pass", "claude·high", "✓ passed"], ["codex", "pass", "codex·high", "✓ passed"], ["gemini", "waiting", "gemini·high", "verification to start"]]);
+    expect(card(map, "all").querySelector("[data-node-check-rule]")?.textContent).toBe("all 3 pass · 2/3 passed");
+    // A node checked by no other agent has no strip.
+    expect(card(map, "alone").querySelector("[data-node-checkers]")).toBeNull();
   } finally { await map.unmount(); }
 });
 
-/** A CSS length as the box style writes it. */
-const px = (value: number) => `${value}px`;
-
-it("shrinks a map wider than its slot to the slot's width, and 100% draws it at its own size", async () => {
-  const width = vi.spyOn(HTMLElement.prototype, "offsetWidth", "get").mockReturnValue(1800);
-  const height = vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(600);
-  const room = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(900);
-  const map = await mount({ items: [mission({ nodes: [node("a", { status: "working" }), node("b")] })] });
+it("shows how long a node took and how long a decision held it from its events, and no number without them or while the device is gone (B28, B35)", async () => {
+  // The page's clock moves by whole minutes.
+  const now = Math.floor(Date.now() / 60_000) * 60_000;
+  const at = (minutes: number) => now - minutes * 60_000;
+  const nodes = [node("a", { status: "done", pr: 3, pr_state: "merged" }), node("b", { status: "held" }), node("c", { status: "working" })];
+  const move = (minutes: number, key: string, status: MissionNode["status"]): MissionEvent => ({ at_unix_ms: at(minutes), kind: "node", node: key, status });
+  const events = [move(90, "a", "working"), move(30, "a", "done"), move(40, "b", "working"), move(25, "b", "held")];
+  const map = await mount({ items: [mission({ nodes })] }, [], [], { mission_events: { mission: "mission-1", events, dropped: 0 } });
   try {
-    const fit = map.q("[data-mission-fit]")!;
-    expect(fit.dataset.missionScale).toBe("0.50");
-    // The box holds the shrunk size, so the slot does not scroll sideways.
-    expect((fit.firstElementChild as HTMLElement).style.width).toBe(px(900));
-    expect((fit.firstElementChild as HTMLElement).style.height).toBe(px(300));
-    await act(async () => map.q('[data-mission-zoom-choice="actual"]')!.click());
-    expect(map.q("[data-mission-fit]")?.dataset.missionScale).toBe("1.00");
-    expect((map.q("[data-mission-fit]")!.firstElementChild as HTMLElement).style.width).toBe(px(1800));
-  } finally {
-    await map.unmount();
-    width.mockRestore();
-    height.mockRestore();
-    room.mockRestore();
-  }
+    expect(card(map, "a").querySelector("[data-node-time]")?.textContent).toBe("1h");
+    expect(card(map, "b").querySelector('[data-node-time="held"]')?.textContent).toBe("held 25m");
+    // A node with no event that moved it draws no time.
+    expect(card(map, "c").querySelector("[data-node-time]")).toBeNull();
+  } finally { await map.unmount(); }
+  const stale = await mount({ items: [mission({ nodes, device_id: "mini", stale: true })] }, [], [], { mission_events: { mission: "mission-1", events, dropped: 0 } });
+  try {
+    // The finished node's time stays; the running ones stop, and so does the head's.
+    expect(card(stale, "a").querySelector("[data-node-time]")?.textContent).toBe("1h");
+    expect(card(stale, "b").querySelector("[data-node-time]")).toBeNull();
+    expect(stale.q('[data-mission-stat="time"]')).toBeNull();
+  } finally { await stale.unmount(); }
 });
 
-it("lists a row per node in order on the mission's time axis, filters it, and a card pressed on the map opens its row whatever the filter hid (B17, B19, B20)", async () => {
-  // An open mission's axis runs to the end of the current minute; the clock is held on a minute so the bars measure exactly.
-  vi.useFakeTimers({ toFake: ["Date"], now: 1_800_000_000_000 });
-  const start = Date.now() + 60_000 - 100 * 60_000;
-  const at = (minutes: number) => start + minutes * 60_000;
+it("lights a picked card and the cards one edge away and dims the rest, and the same card, an empty spot or Escape lets go (B30)", async () => {
+  const nodes = [node("a"), node("b", { depends_on: ["a"] }), node("c", { depends_on: ["b"] }), node("d", { depends_on: ["a"] })];
+  const map = await mount({ items: [mission({ nodes })] });
+  try {
+    const dimmed = () => [...map.container.querySelectorAll<HTMLElement>("[data-node-dimmed]")].map((el) => el.dataset.missionNode ?? "report");
+    await act(async () => card(map, "b").click());
+    expect(card(map, "b").getAttribute("aria-pressed")).toBe("true");
+    expect(dimmed()).toEqual(["d"]);
+    expect(map.q('[data-mission-report][class*="opacity-(--opacity-dimmed)"]')).not.toBeNull();
+    expect(map.q("[data-mission-panel]")?.getAttribute("data-mission-panel")).toBe("b");
+    // Edges not touching the pick dim with the cards.
+    expect([...map.container.querySelectorAll<SVGPathElement>("[data-edge-dimmed]")].map((edge) => edge.dataset.dependencyEdge).sort()).toEqual(["a>d", "c>#report", "d>#report"]);
+    await act(async () => card(map, "b").click());
+    expect(dimmed()).toEqual([]);
+    expect(map.q("[data-mission-panel]")?.getAttribute("data-mission-panel")).toBe("none");
+    await act(async () => card(map, "c").click());
+    await act(async () => map.q("[data-mission-map]")!.click());
+    expect(map.q("[data-mission-panel]")?.getAttribute("data-mission-panel")).toBe("none");
+    await act(async () => card(map, "c").click());
+    const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    await act(async () => { card(map, "c").dispatchEvent(escape); });
+    expect(escape.defaultPrevented).toBe(true);
+    expect(map.q("[data-mission-panel]")?.getAttribute("data-mission-panel")).toBe("none");
+    // With nothing picked, Escape is the lane's.
+    const again = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    await act(async () => { card(map, "c").dispatchEvent(again); });
+    expect(again.defaultPrevented).toBe(false);
+  } finally { await map.unmount(); }
+});
+
+it("opens the picked node's panel: its head, where it is, what it made, its finish lines as one list, its connections that pick, its ways out and its folded events (B31-B33)", async () => {
+  const plan = {
+    pane_id: "p2", session: { device_id: "mac", agent: "codex", session_id: "worker-session" },
+    steps: [{ key: "parse", title: "Command parser", depends_on: [], status: "working" as const, line: null, output: null, changed: false, change: null, waiting: false }],
+    review: "approved" as const, ask: null, progress: { current: "parse", next: null, done: 0, total: 1, finished: false }, created_at_unix_ms: 1, updated_at_unix_ms: Date.now(),
+  };
   const nodes = [
-    node("ui", { status: "working", depends_on: ["api"], started_at_unix_ms: at(50) }),
-    node("api", { status: "done", started_at_unix_ms: at(0), finished_at_unix_ms: at(50), pr: 1503, pr_state: "merged" }),
-    node("cause", { kind: "research", delivery: null, status: "done", started_at_unix_ms: at(0), finished_at_unix_ms: at(25), line: "The cache was stale" }),
-    node("fix", { delivery: "direct", status: "planned", depends_on: ["cause"], branch: "fix/cache" }),
-    node("check", { kind: "verify", delivery: null, status: "planned", depends_on: ["ui"] }),
+    node("core", { title: "Core", pr: 1703, pr_state: "merged", status: "done" }),
+    node("engine", {
+      title: "조사 에이전트: Hide가 실행하는 명령 읽기", status: "working", depends_on: ["core"], pr: 1704, base_pr: 1703, pr_state: "mergeable", pr_url: "https://github.com/o/r/pull/1704", branch: "hide-ai-engine", plan, attempts: 2,
+      worker: { agent: "claude", model: "opus", effort: "xhigh", effort_auto: false },
+      criteria: [line("c1", "own", { text: "명령 읽기가 cat/rg 잡음을 걸러낸다", state: "pass" }), line("c2", "own", { text: "실제 세션 50개 replay", state: "skipped", skip: { reason: "세션이 31개뿐" } }), line("check", "check", { state: "fail" }), line("ci", "ci", { state: "pass", reruns: 1 }), line("review", "review", { checkers: [checker("codex")] })],
+      criteria_met: 3, criteria_skipped: 1,
+    }),
+    node("verify", { title: "세 PR 함께 확인", kind: "verify", delivery: null, depends_on: ["engine"] }),
   ];
-  const map = await mount({ items: [mission({ nodes, started_at_unix_ms: start })] });
+  const minute = Math.floor(Date.now() / 60_000) * 60_000;
+  const events: MissionEvent[] = [{ at_unix_ms: minute - 60_000, kind: "node", node: "engine", status: "working" }, { at_unix_ms: minute - 30_000, kind: "pr_opened", node: "engine", pr: 1704 }];
+  const map = await mount({ items: [mission({ nodes })] }, [], [], { mission_events: { mission: "mission-1", events, dropped: 0 } });
   try {
-    const rows = () => [...map.container.querySelectorAll<HTMLElement>("[data-flow-row]")].map((row) => row.dataset.flowRow);
-    expect(rows()).toEqual(["api", "cause", "ui", "fix", "check"]);
-    // The kind in one word beside the title, a PR change saying none.
-    expect(map.q('[data-flow-row="cause"] button')?.textContent).toContain("Research");
-    expect(map.q('[data-flow-row="fix"] button')?.textContent).toContain("Direct");
-    expect(map.q('[data-flow-row="check"] button')?.textContent).toContain("Verify");
-    // One bar from start to finish, or to now while it runs, and none before it starts.
-    expect(map.q('[data-flow-row="api"] [data-flow-bar]')?.getAttribute("data-flow-bar")).toBe("0.0 50.0");
-    expect(map.q('[data-flow-row="ui"] [data-flow-bar]')?.getAttribute("data-flow-bar")).toBe("50.0 50.0");
-    expect(map.q('[data-flow-row="fix"] [data-flow-bar]')).toBeNull();
-    expect(map.q("[data-mission-flow-axis]")?.getAttribute("data-mission-flow-axis")?.split("|").at(-1)).toBe("now");
-    // A mission recorded before its events opens a row to its times, with no list of events.
-    await act(async () => map.q('[data-flow-row="api"] button')!.click());
-    expect(map.q('[data-mission-detail="api"] [data-flow-times]')?.textContent).toMatch(/^Started .+Finished .+$/);
-    await act(async () => map.q('[data-mission-flow-choice="now"]')!.click());
-    expect(rows()).toEqual(["ui", "fix", "check"]);
-    await act(async () => map.q('[data-mission-flow-choice="finished"]')!.click());
-    expect(rows()).toEqual(["api", "cause"]);
-    await act(async () => map.q('[data-mission-node="ui"]')!.click());
-    expect(map.q("[data-mission-flow]")?.dataset.missionFlow).toBe("all");
-    expect(map.q('[data-flow-row="ui"] button')?.getAttribute("aria-expanded")).toBe("true");
-    expect(map.q('[data-mission-node="ui"]')?.getAttribute("aria-pressed")).toBe("true");
+    await act(async () => card(map, "engine").click());
+    const panel = map.q('[data-mission-detail="engine"]')!;
+    expect([...panel.querySelectorAll<HTMLElement>("[data-panel-part]")].map((part) => part.dataset.panelPart)).toEqual(["head", "now", "result", "criteria", "links", "ways", "events"]);
+    expect(panel.querySelector("[data-panel-title]")?.textContent).toBe("조사 에이전트: Hide가 실행하는 명령 읽기");
+    expect(panel.querySelector("[data-panel-meta]")?.textContent).toBe("Working·Change·opus·xhigh");
+    expect(panel.querySelector("[data-panel-facts]")?.textContent).toBe("took 1m · Attempt 2");
+    expect([...panel.querySelectorAll<HTMLElement>("[data-plan-row]")].map((row) => row.dataset.planRow)).toEqual(["parse"]);
+    // What it made: the PR in its state, the base it stacks on, the CI line and the branch.
+    expect(panel.querySelector("[data-pr-mark]")?.getAttribute("data-pr-mark")).toBe("mergeable");
+    expect(panel.querySelector("[data-panel-base]")?.textContent).toBe(`on ${"#"}1703`);
+    expect(panel.querySelector('[data-panel-part="result"]')?.textContent).toContain("✓rerun 1 time");
+    expect(panel.querySelector("[data-panel-branch]")?.textContent).toBe("hide-ai-engine");
+    // One list of ✓ ○ ⤳ ✕, a skipped line with its reason, the review by its checker's name.
+    const lines = [...panel.querySelectorAll<HTMLElement>("[data-panel-line]")].map((row) => row.textContent);
+    expect(lines).toEqual(["✓명령 읽기가 cat/rg 잡음을 걸러낸다", "⤳실제 세션 50개 replay세션이 31개뿐", "✕Check command passes", "✓CI passesrerun 1 time", "○codex review"]);
+    expect(panel.querySelector('[data-panel-part="criteria"] h4')?.textContent).toBe("Done when · 3/5");
+    expect(panel.querySelector('[data-panel-links="before"]')?.textContent).toBe(`Waits onCore${"#"}1703`);
+    // A connection picks its node.
+    await act(async () => (panel.querySelector('[data-panel-link="verify"]') as HTMLElement).click());
+    expect(map.q("[data-mission-panel]")?.getAttribute("data-mission-panel")).toBe("verify");
+    await act(async () => (map.q('[data-panel-link="engine"]') as HTMLElement).click());
+    const back = map.q('[data-mission-detail="engine"]')!;
+    expect(back.querySelector("[data-node-pr-card]")).not.toBeNull();
+    expect(back.querySelector("[data-node-terminal]")).not.toBeNull();
+    expect(back.querySelector("[data-node-record]")).not.toBeNull();
+    expect(back.querySelector("[data-panel-events-toggle]")?.textContent).toBe("2 events");
+    expect(back.querySelector("[data-panel-event]")).toBeNull();
+    await act(async () => (back.querySelector("[data-panel-events-toggle]") as HTMLElement).click());
+    expect([...back.querySelectorAll<HTMLElement>("[data-panel-event]")].map((row) => row.dataset.panelEvent)).toEqual(["node", "pr_opened"]);
+    await act(async () => (back.querySelector("[data-panel-close]") as HTMLElement).click());
+    expect(map.q("[data-mission-panel]")?.getAttribute("data-mission-panel")).toBe("none");
   } finally { await map.unmount(); }
 });
 
-it("puts a finished mission's report and results first, each result by its kind and no PR number on a mission that had none (B22, B23)", async () => {
-  const nodes = [
-    node("rules", { kind: "research", delivery: null, status: "done", line: "close 12 of 19" }),
-    node("bump", { delivery: "direct", status: "done", branch: "release/1.0.0", depends_on: ["rules"] }),
-    node("agents", { kind: "verify", delivery: null, status: "done", line: "7 of 7 pass", depends_on: ["bump"] }),
-  ];
-  const report = "Released 1.0.0.\nNotes published.\nSite deployed.\nFloor raised.";
-  const map = await mount({ items: [mission({ status: "done", nodes, report, started_at_unix_ms: 0, closed_at_unix_ms: 3 * 3_600_000 })] });
+it("puts a held node's question and choices in its panel, read only, and the worker's plan line on a working card (B31; PRD hide-plan B16)", async () => {
+  const own = {
+    pane_id: "p2", session: { device_id: "mac", agent: "codex", session_id: "worker-session" },
+    steps: [{ key: "core", title: "Core events", depends_on: [], status: "working" as const, line: null, output: null, changed: false, change: null, waiting: false }, { key: "web", title: "Web map", depends_on: ["core"], status: "planned" as const, line: null, output: "pr" as const, changed: false, change: null, waiting: true }],
+    review: "approved" as const, ask: null, progress: { current: "core", next: "web", done: 0, total: 2, finished: false }, created_at_unix_ms: 1, updated_at_unix_ms: Date.now(),
+  };
+  const map = await mount({ items: [asked({ nodes: [node("api", { status: "working", line: "Conductor's line", plan: own }), node("screen", { title: "API screen", status: "held" })] })] });
   try {
-    expect(map.q("[data-mission-pill]")?.textContent).toBe("Finished");
-    expect(map.q('[data-mission-stat="time"]')?.textContent).toBe("took 3h");
-    const order = [...map.container.querySelectorAll("[data-mission-summary], [data-mission-report-text], [data-mission-results], [data-mission-fit], [data-mission-flow]")].map((part) => Object.keys((part as HTMLElement).dataset)[0]);
-    expect(order).toEqual(["missionSummary", "missionReportText", "missionResults", "missionFit", "missionFlow"]);
-    // A long report shows its first lines until 펼치기.
-    expect(map.q("[data-mission-report-text] p")?.textContent).toBe("Released 1.0.0.\nNotes published.\nSite deployed.");
-    await act(async () => map.q("[data-mission-report-toggle]")!.click());
-    expect(map.q("[data-mission-report-text] p")?.textContent).toBe(report);
-    const results = [...map.container.querySelectorAll<HTMLElement>("[data-mission-result-row]")].map((row) => [...row.querySelectorAll("td")].map((cell) => cell.textContent));
-    expect(results).toEqual([["Node rules", "Research", "Conclusion: close 12 of 19"], ["Node bump", "Direct", "release/1.0.0"], ["Node agents", "Verify", "7 of 7 pass"]]);
-    expect(map.container.querySelector("[data-pr-mark], [data-node-pr]")).toBeNull();
-    expect(map.container.textContent).not.toContain("#");
+    expect(card(map, "api").querySelector("[data-node-line]")?.textContent).toBe("Now: Core events (0/2)");
+    await act(async () => card(map, "screen").click());
+    const panel = map.q('[data-mission-detail="screen"]')!;
+    expect(panel.querySelector("[data-panel-question]")?.textContent).toBe("Which base for the screen PR?");
+    expect(panel.querySelector("[data-panel-options]")?.textContent).toBe("Stack on the API PRRecommendedWait for the API PR to merge");
+    expect(panel.querySelector("button[data-mission-option]")).toBeNull();
   } finally { await map.unmount(); }
 });
 
-it("draws a cancelled mission in grey, its unfinished nodes dashed grey, with no banner to act on (B24)", async () => {
+it("lists only what the operator can do in 내 차례: the decision whose node chip picks the node, a worker the core raised, an outside PR closed unmerged, the merge order (B18, B20, B25)", async () => {
+  const raised = { pane_id: "p2", escalation: { cause: "child_blocked", letter_id: null, since_unix_ms: 1, human_notice: true }, request: { verb: "blocked", verb_since_unix_ms: 1, line: "Login expired", end: "blocked", request: null, later_by: null, pull_requests: [] } } as unknown as AgentRow;
+  const nodes = [node("api", { status: "working", pane_id: "p2" }), node("outside", { kind: "external", delivery: null, external: { pr: 1232 }, status: "failed" })];
+  const map = await mount({ items: [asked({ nodes: [...nodes, node("screen", { title: "API screen", status: "held" })] })] }, [], [], {}, [raised]);
+  try {
+    expect(map.q("[data-mission-turn]")?.getAttribute("data-mission-turn")).toBe("decision worker_blocked outside_closed");
+    expect(map.q("[data-mission-turn] h3")?.textContent).toBe("Your turn 3");
+    expect(map.q('[data-mission-turn-item="worker_blocked"]')?.textContent).toContain("worker stuck: Login expired");
+    expect(map.q('[data-mission-turn-item="outside_closed"]')?.textContent).toContain("Closed without merge");
+    // The node chip of an item picks its node on the map.
+    await act(async () => map.q("[data-mission-banner-node]")!.click());
+    expect(map.q("[data-mission-panel]")?.getAttribute("data-mission-panel")).toBe("screen");
+    await act(async () => map.q('[data-mission-turn-node="outside"]')!.click());
+    expect(map.q("[data-mission-panel]")?.getAttribute("data-mission-panel")).toBe("outside");
+  } finally { await map.unmount(); }
+  const prs = [node("ui", { title: "UI", status: "done", pr: 1705, pr_state: "mergeable", base_pr: 1703, depends_on: ["core"] }), node("core", { title: "Core", status: "done", pr: 1703, pr_state: "mergeable" })];
+  const waiting = await mount({ items: [mission({ status: "merge_wait", nodes: prs, merge_order: ["core", "ui"] })] });
+  try {
+    expect(waiting.q('[data-mission-turn-item="merge"] [data-mission-landing-order]')?.getAttribute("data-mission-landing-order")).toBe("core ui");
+    expect(waiting.q('[data-mission-turn-item="merge"]')?.textContent).toContain(`Merge orderCore${"#"}1703→UI${"#"}1705`);
+    // The stack is the purple dashed edge, and nothing else marks it.
+    expect(waiting.q('[data-dependency-edge="core>ui"]')?.getAttribute("class")).toContain("text-mission-review");
+    expect(waiting.q('[data-dependency-edge="core>ui"]')?.hasAttribute("data-edge-dashed")).toBe(true);
+  } finally { await waiting.unmount(); }
+});
+
+it("draws a defect a later node found as a red dashed edge back to the node it opened, until its line passes (B21)", async () => {
+  const defect = (state: MissionCriterion["state"]) => line("d1", "defect", { text: "the filter resets on reload", found_by: "verify", state });
+  const nodes = (state: MissionCriterion["state"]) => [node("api", { status: "working", reopened: 1, criteria: [defect(state)], criteria_met: 0 }), node("verify", { kind: "verify", delivery: null, depends_on: ["api"], status: "held" })];
+  const map = await mount({ items: [mission({ nodes: nodes("open") })] });
+  try {
+    const edge = map.q('[data-dependency-edge="verify~api"]');
+    expect(edge?.getAttribute("class")).toContain("text-mission-failed");
+    expect(edge?.hasAttribute("data-edge-dashed")).toBe(true);
+    await act(async () => card(map, "api").click());
+    expect(map.q('[data-panel-line="d1"]')?.textContent).toBe("○the filter resets on reloadfound by Node verify");
+    await map.rerender(mission({ nodes: nodes("pass") }));
+    expect(map.q('[data-dependency-edge="verify~api"]')).toBeNull();
+  } finally { await map.unmount(); }
+});
+
+it("shows a mission from before criteria with its old sentence and no count (B23)", async () => {
+  const map = await mount({ items: [mission({ exempt: true, nodes: [node("a", { criteria: [line("c1", "own", { text: "the lens keeps its filter" })] }), node("b")] })] });
+  try {
+    expect(map.container.querySelector("[data-node-criteria]")).toBeNull();
+    expect(card(map, "a").querySelector("[data-node-old-criteria]")?.textContent).toBe("the lens keeps its filter");
+    await act(async () => card(map, "a").click());
+    expect(map.q("[data-panel-old-criteria]")?.textContent).toBe("the lens keeps its filter");
+    expect(map.q("[data-panel-line]")).toBeNull();
+  } finally { await map.unmount(); }
+});
+
+it("folds a finished mission's report into one line under the head that opens to all of it, and rests a cancelled mission's unfinished cards (B24, B35)", async () => {
+  const report = "Released 1.0.0.\nNotes published.";
+  const done = await mount({ items: [mission({ status: "done", report, nodes: [node("a", { status: "done", pr: 1, pr_state: "merged" })], started_at_unix_ms: 0, closed_at_unix_ms: 3 * 3_600_000 })] });
+  try {
+    expect(done.q("[data-mission-pill]")?.textContent).toBe("Finished");
+    expect(done.q('[data-mission-stat="time"]')?.textContent).toBe("took 3h");
+    expect(done.q("[data-mission-report-text] p")?.textContent).toBe("Released 1.0.0.");
+    await act(async () => done.q("[data-mission-report-toggle]")!.click());
+    expect(done.q("[data-mission-report-text] p")?.textContent).toBe(report);
+    expect(done.q("[data-mission-turn]")).toBeNull();
+  } finally { await done.unmount(); }
   const gone = { ...mission().conductor, present: false };
-  const nodes = [node("a", { status: "done", pr: 1503, pr_state: "merged" }), node("b", { status: "working", depends_on: ["a"] }), node("c", { depends_on: ["b"] })];
-  const map = await mount({ items: [mission({ status: "cancelled", conductor: gone, decision: "Keep going?", nodes, started_at_unix_ms: 0, closed_at_unix_ms: 3_600_000 })] });
+  const cancelled = await mount({ items: [mission({ status: "cancelled", conductor: gone, decision: "Keep going?", nodes: [node("a", { status: "done", pr: 1503, pr_state: "merged" }), node("b", { status: "working", depends_on: ["a"] })] })] });
   try {
-    expect(map.q("[data-mission-pill]")?.textContent).toBe("Cancelled");
-    expect(map.q("[data-mission-pill]")?.className).toContain("text-mission-cancelled");
-    expect([...map.container.querySelectorAll<HTMLElement>("[data-mission-node]")].map((card) => card.dataset.nodeTone)).toEqual(["done", "cancelled", "cancelled"]);
-    expect(map.q('[data-mission-node="b"]')?.className).toContain("border-dashed");
-    // Its work stopped: the unfinished node rests, and no line from it is lit.
-    expect(map.q('[data-mission-node="b"] [data-mark]')?.getAttribute("data-mark")).toBe("quiet");
-    expect(map.container.querySelector(".text-mission-working")).toBeNull();
-    expect(map.q("[data-mission-legend]")?.getAttribute("data-mission-legend")).toBe("done:1 cancelled:2");
-    expect(map.q("[data-mission-banner]")).toBeNull();
-    expect(map.q('[data-mission-result-row="a"] [data-pr-mark=merged]')).not.toBeNull();
-  } finally { await map.unmount(); }
-});
-
-it("draws each node's bar from its events: worked, review, a failed attempt and a stop in their colours, its merges and decisions marked, the working end live, and the events in its row (B18, B20, B21)", async () => {
-  const start = Date.now() - 60 * 60_000;
-  const at = (minutes: number) => start + minutes * 60_000;
-  const nodes = [
-    node("a", { status: "done", started_at_unix_ms: at(10), finished_at_unix_ms: at(40), pr: 1, pr_state: "merged" }),
-    node("b", { status: "working", started_at_unix_ms: at(20), attempts: 2 }),
-    node("c", { status: "working", started_at_unix_ms: at(5) }),
-    // Worked before its events were kept; only its end was recorded.
-    node("d", { status: "done", started_at_unix_ms: at(2), finished_at_unix_ms: at(41) }),
-  ];
-  const events: MissionEvent[] = [
-    { at_unix_ms: at(0), kind: "planned", count: 3 },
-    { at_unix_ms: at(10), kind: "node", node: "a", status: "working" },
-    { at_unix_ms: at(15), kind: "replanned", count: 2, line: "Split the API" },
-    { at_unix_ms: at(20), kind: "node", node: "b", status: "working" },
-    { at_unix_ms: at(25), kind: "node", node: "a", status: "review" },
-    { at_unix_ms: at(30), kind: "node", node: "b", status: "failed", line: "CI failed" },
-    { at_unix_ms: at(32), kind: "retried", node: "b", count: 2 },
-    { at_unix_ms: at(33), kind: "node", node: "b", status: "working" },
-    { at_unix_ms: at(35), kind: "asked", node: "b", line: "Keep the old flag?", options: ["Keep", "Drop"] },
-    { at_unix_ms: at(40), kind: "node", node: "a", status: "done" },
-    { at_unix_ms: at(40), kind: "pr_merged", node: "a", pr: 1 },
-    { at_unix_ms: at(41), kind: "node", node: "d", status: "done" },
-  ];
-  const map = await mount({ items: [mission({ nodes, started_at_unix_ms: start })] }, [], [], { mission_events: { mission: "mission-1", events, dropped: 3 } });
-  try {
-    const track = (key: string) => map.q(`[data-flow-track="${key}"]`)!;
-    const tones = (key: string) => [...track(key).querySelectorAll("[data-flow-segment]")].map((segment) => segment.getAttribute("data-flow-segment"));
-    expect(tones("a")).toEqual(["worked", "review"]);
-    expect(tones("b")).toEqual(["failed", "paused", "worked"]);
-    expect(track("a").querySelector("[data-flow-live]")).toBeNull();
-    expect(track("b").querySelector("[data-flow-live]")).not.toBeNull();
-    expect([...track("a").querySelectorAll("[data-flow-mark]")].map((mark) => mark.textContent)).toEqual(["⑂"]);
-    expect([...track("b").querySelectorAll("[data-flow-mark]")].map((mark) => mark.textContent)).toEqual(["!"]);
-    expect(map.q("[data-flow-axis-marks]")?.getAttribute("data-flow-axis-marks")).toBe("replanned");
-    // A node with no event that draws a stretch keeps the bar its times draw (B19).
-    expect(track("c").getAttribute("data-flow-drawn")).toBe("times");
-    expect(track("c").querySelector("[data-flow-bar]")).not.toBeNull();
-    expect(track("d").getAttribute("data-flow-drawn")).toBe("times");
-    expect(map.q("[data-mission-flow-dropped]")?.textContent).toBe("3 earlier events omitted");
-    await act(async () => (map.q('[data-flow-row="a"] button') as HTMLElement).click());
-    const detail = map.q('[data-mission-detail="a"]')!;
-    expect([...detail.querySelectorAll("[data-flow-event]")].map((row) => row.getAttribute("data-flow-event"))).toEqual(["node", "node", "node", "pr_merged"]);
-    expect(detail.textContent).toContain("PR #1 merged");
-    expect(detail.querySelector("[data-flow-times]")).toBeNull();
-    await act(async () => (map.q('[data-flow-row="b"] button') as HTMLElement).click());
-    const b = map.q('[data-mission-detail="b"]')!;
-    expect(b.textContent).toContain("FailedCI failed");
-    expect(b.textContent).toContain("Attempt 2");
-    expect(b.textContent).toContain("Decision askedKeep the old flag? / Keep / Drop");
-  } finally { await map.unmount(); }
-  // Another mission's events draw nothing here.
-  const other = await mount({ items: [mission({ nodes, started_at_unix_ms: start })] }, [], [], { mission_events: { mission: "mission-2", events, dropped: 0 } });
-  try {
-    expect(other.q('[data-flow-track="a"]')?.getAttribute("data-flow-drawn")).toBe("times");
-    expect(other.q("[data-mission-flow-dropped]")).toBeNull();
-  } finally { await other.unmount(); }
-});
-
-it("shows a direct change's commit on main and a verify node's verdict as their results, and a cancel's time (B22, B24)", async () => {
-  const nodes = [
-    node("fix", { delivery: "direct", status: "done", branch: "fix/cache", commit: "abc1234def5678" }),
-    node("check", { kind: "verify", delivery: null, status: "failed", verdict: "fail", checks: { passed: 3, total: 5 }, line: "2 failed" }),
-    node("pass", { kind: "verify", delivery: null, status: "done", verdict: "pass", checks: null }),
-    node("late", { status: "working", started_at_unix_ms: Date.now() - 20 * 60_000 }),
-  ];
-  const closed = Date.now() - 5 * 60_000;
-  const events: MissionEvent[] = [{ at_unix_ms: Date.now() - 20 * 60_000, kind: "node", node: "late", status: "working" }, { at_unix_ms: closed, kind: "cancelled" }];
-  const map = await mount({ items: [mission({ status: "cancelled", nodes, closed_at_unix_ms: closed })] }, [], [], { mission_events: { mission: "mission-1", events, dropped: 0 } });
-  try {
-    const result = (key: string) => map.q(`[data-mission-result-row="${key}"]`)?.textContent;
-    expect(result("fix")).toContain("→ main abc1234");
-    expect(result("check")).toContain("FAIL 3/5");
-    expect(result("pass")).toContain("PASS");
-    expect(map.q("[data-node-commit]")?.getAttribute("title")).toBe("abc1234def5678");
-    expect(map.q("[data-mission-cancelled-at]")?.textContent).toMatch(/^Cancelled /);
-    expect(map.q("[data-flow-axis-marks]")?.getAttribute("data-flow-axis-marks")).toBe("cancelled");
-    // A node the cancel stopped is grey, not the green of work, and nothing on it blinks (B24).
-    expect(map.q('[data-flow-track="late"] [data-flow-segment]')?.className).toContain("bg-mission-cancelled");
-    expect(map.q('[data-flow-track="late"] [data-flow-live]')).toBeNull();
-  } finally { await map.unmount(); }
+    expect([card(cancelled, "a").dataset.nodeLook, card(cancelled, "b").dataset.nodeLook]).toEqual(["landed", "cancelled"]);
+    expect(card(cancelled, "b").className).toContain("border-dashed");
+    expect(cancelled.container.querySelector(".text-mission-working")).toBeNull();
+    expect(cancelled.q("[data-mission-turn]")).toBeNull();
+  } finally { await cancelled.unmount(); }
 });
