@@ -121,7 +121,8 @@ export function PaneHeaderBand({ paneId, header, actions }: { paneId: string; he
   const ownProgress = band || off ? null : mission ? missionLine?.text ?? null : planLine ?? header?.progress ?? null;
   const request = off ? null : header?.request ?? null;
   const finished = !band && !off && (header?.finished ?? false);
-  const waitingOnChildren = band || off ? null : header?.waiting_on_children ?? null;
+  // A Conductor's mission line already names the work its children do.
+  const waitingOnChildren = band || off || missionLine ? null : header?.waiting_on_children ?? null;
   // Before any early return: a hook runs on every render.
   const unreachable = useUnreachable(band?.action?.pane_id ?? null);
   const workingLine = header?.working ? <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-[calc(2*var(--size-hairline))] bg-agent-working" data-pane-working-line={paneId} /> : null;

@@ -27,6 +27,7 @@ Herdr preparation, version/program/ping/start failures, a missing update outside
 Inbound nodes that dial this core perform no outbound bootstrap and are outside this event.
 The runtime admits one token per outbound helper establish or bootstrap Retry, associates it with the host generation, and consumes it before capture at the final bootstrap or Apply result.
 Only the first Apply claims a token; status polls, snapshots, duplicate completions and superseded generations cannot recapture it, while reconnects and Retry admit a fresh token.
+A Retry after a failed Herdr start reconnects the device, so the reconnect's token is the one that Retry settles; a Retry of a refused kit admits its own token for the Apply.
 Cancellation, consent withdrawal and removal discard pending tokens; at most 128 attempts are retained, with a content-free diagnostic at the cap.
 Capture uses the existing bounded Sink under the short runtime admission, with no network, disk, subprocess or new worker on that path; opt-out drops the outcome without replay.
 No prompt, response, conversation, code, path, file name, session id, provider, model, project name, token count, account identity, device name or local usage ledger enters that transport.
