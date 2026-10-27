@@ -386,6 +386,12 @@ pub enum EstablishError {
     },
     /// This build cannot serve the device; nothing was installed.
     Unsupported(String),
+    /// Acquiring the release kit for a known foreign platform failed.
+    Download {
+        os: String,
+        arch: String,
+        reason: String,
+    },
     Install(String),
     Helper(String),
 }
@@ -403,6 +409,7 @@ impl fmt::Display for EstablishError {
             Self::Unsupported(reason) | Self::Install(reason) | Self::Helper(reason) => {
                 formatter.write_str(reason)
             }
+            Self::Download { reason, .. } => formatter.write_str(reason),
         }
     }
 }

@@ -253,6 +253,13 @@ pub(crate) fn spawn_device_worker(
                     return;
                 };
                 let Ok(changed) = core.lock().map(|mut locked| {
+                    if let DeviceKitAnswer::Report(report) = &answer {
+                        locked.complete_device_connect_kit(
+                            &device_id,
+                            call.connect_attempt,
+                            report,
+                        );
+                    }
                     locked.ingest_device_kit_answer(&device_id, answer, call.daemon_off_run)
                 }) else {
                     return;

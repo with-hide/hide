@@ -176,8 +176,13 @@ impl HelperPackages {
             && (os != std::env::consts::OS || arch != std::env::consts::ARCH)
             && device_bundles::supported(os, arch)
         {
-            return device_bundles::payload(self.directory.as_deref(), os, arch)
-                .map_err(EstablishError::Install);
+            return device_bundles::payload(self.directory.as_deref(), os, arch).map_err(
+                |reason| EstablishError::Download {
+                    os: os.to_owned(),
+                    arch: arch.to_owned(),
+                    reason,
+                },
+            );
         }
         let helper = self.find(os, arch).map_err(EstablishError::Unsupported)?;
         let helper = read_package(HELPER_NAME, &helper).map_err(EstablishError::Install)?;
