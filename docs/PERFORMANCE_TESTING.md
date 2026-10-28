@@ -647,8 +647,10 @@ A green run proves the measurement was valid, not that performance held; read th
 Each run keeps its run directory, without the throwaway Chrome profile, as the artifact `perf-run-<date>-<run id>-<attempt>` for 30 days, and its record alone as `perf-record-<date>` for 90.
 Read a series with `gh run download <run id> -n perf-record-<date>`; nothing about a run is committed.
 
-The job costs about 22 runner minutes a night on `macos-15`, most of it the release build.
-Its first run on a branch, with no Rust cache, took 21.8 minutes: about a minute of setup, a minute for the web shell, 16.4 minutes for the release `hided` (14.4 in another run) and 3.6 for the measurement.
+The job costs about 17 runner minutes a night on `macos-15`, most of it the release build.
+Its first run on a branch, with no Rust cache, took 21.8 minutes when the release profile had one codegen unit: about a minute of setup, a minute for the web shell, 16.4 minutes for the release `hided` (14.4 in another run) and 3.6 for the measurement.
+Sixteen units cut a clean macOS release build by 29% (`docs/BUILD.md`, The release profile), so the release `hided` should now take about 12 minutes.
+The same change raised `hided`'s resident memory by about 5 MiB once, so the series steps up by that much at the merge that moved to sixteen units, not through a leak.
 Main's run saves the release dependencies to the cache, which saves about a minute and a half at most, because `herdr-core` and `hided` themselves are most of the build.
 The job stops at 45 minutes and the build at 30, so a stalled run is cut short rather than holding a runner.
 

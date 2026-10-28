@@ -93,8 +93,9 @@ nextest still runs each test in a process of its own.
 
 `[profile.release]` links with thin LTO in sixteen codegen units, where it used one.
 The release jobs build from a clean target, so the build is most of their time, and sixteen units let rustc optimize one crate on several cores.
+Turning LTO off with one unit was also measured and was slower on macOS (19.2 min), so thin LTO stays.
 
-Three clean builds of `hided`, `hide` and `hide-agent-hooks` per profile on the hosted runners the release uses, from the same source, gave these medians:
+Three clean builds of `hided`, `hide` and `hide-agent-hooks` per profile on hosted runners, from the same source, gave these medians:
 
 | System | One unit | Sixteen units | Three binaries |
 | --- | --- | --- | --- |
@@ -104,7 +105,8 @@ Three clean builds of `hided`, `hide` and `hide-agent-hooks` per profile on the 
 
 The two builds of `hided` were also compared at run time on one macOS arm64 hosted runner, four alternating trials each of the `keys` scenario in `docs/PERFORMANCE_TESTING.md`.
 Key echo and CPU did not move beyond the spread between trials, idle or with five panes printing.
-`hided` holds about 4.7 MiB more resident memory (62 MiB against 57 MiB), the larger binary's code, in every trial.
+Startup to a healthy `/health` took 168 ms against 134 ms, the median of four trials each, about 35 ms more.
+`hided` holds about 4.7 MiB more resident memory (62 MiB against 57 MiB) in every trial, probably the larger binary's code.
 
 ## The toolchain is never copied
 
