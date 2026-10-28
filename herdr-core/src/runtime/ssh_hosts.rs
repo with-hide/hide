@@ -165,6 +165,7 @@ impl Runtime {
                     .iter()
                     .map(|distribution| WslDistributionSnapshot {
                         name: distribution.name.clone(),
+                        device_name: super::devices::wsl_device_label(&distribution.name),
                         wsl_version: distribution.wsl_version,
                         default: distribution.default,
                         added_as: registrations

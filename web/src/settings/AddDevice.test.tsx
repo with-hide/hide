@@ -3,7 +3,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { createActions } from "../actions";
-import type { Device, SshHost, SshHosts } from "../snapshot";
+import type { Device, SshHost, SshHosts, WslDistribution } from "../snapshot";
 import { useShellStore } from "../store";
 import type { DispatchFn } from "../ws";
 import { AddDevice } from "./AddDevice";
@@ -15,6 +15,7 @@ vi.hoisted(() => {
 
 const host = (alias: string, over: Partial<SshHost> = {}): SshHost => ({ alias, address: `fixture@${alias}.example.invalid:22`, added_as: null, problem: null, ...over });
 const hosts = (list: SshHost[], over: Partial<SshHosts> = {}): SshHosts => ({ state: "ready", truncated: false, hosts: list, ...over });
+const distro = (name: string, over: Partial<WslDistribution> = {}): WslDistribution => ({ name, device_name: `WSL ${name}`, wsl_version: 2, default: false, added_as: null, problem: null, ...over });
 
 afterEach(() => {
   document.body.innerHTML = "";
@@ -142,5 +143,46 @@ it("keeps a refused Add enabled with its reason after the core clears last_error
   await act(async () => { q('[data-add-device="true"]')?.click(); });
   expect(q('[data-add-device-error="true"]')).toBeNull();
   expect(q('[data-add-device="true"]')?.hasAttribute("disabled")).toBe(true);
+  await unmount();
+});
+
+// PRD wsl-device B4: this PC's WSL distributions sit beside the Hosts under the same consent, the
+// default one first; one is added by its name alone and takes the name the core gives it (D-20).
+it("lists this PC's WSL distributions first and adds one under the core's name with the same consent (B4)", async () => {
+  const { events, q, unmount } = await mount(hosts([host("lab")], { wsl: [distro("Debian"), distro("Ubuntu", { default: true })] }));
+  const rows = [...document.querySelectorAll("[data-wsl-distro], [data-ssh-host]")].map((row) => row.getAttribute("data-wsl-distro") ?? row.getAttribute("data-ssh-host"));
+  expect(rows).toEqual(["Ubuntu", "Debian", "lab"]);
+  await act(async () => { q('[data-wsl-distro="Ubuntu"] [role="radio"]')?.click(); });
+  const name = q("[data-device-label]") as HTMLInputElement;
+  expect(name.value).toBe("WSL Ubuntu");
+  expect(name.hasAttribute("disabled")).toBe(true);
+  // The bridged Herdr is the core's to find: no socket to type for a distribution.
+  expect(q("[data-device-socket]")).toBeNull();
+  expect(q('[data-add-device-installs="true"]')?.querySelectorAll("li")).toHaveLength(3);
+  await act(async () => { q('[data-add-device="true"]')?.click(); });
+  const register = sent(events, "register_device");
+  expect(register).toHaveLength(1);
+  expect(register[0]?.payload).toEqual({ wsl_distro: "Ubuntu", host_consent: true });
+  await unmount();
+});
+
+// B28, and WSL 1 left to its own command: a distribution that cannot connect is dimmed with why, and
+// one already added says under which name.
+it("dims a distribution that is added, unfinished or on WSL 1, with why (B28)", async () => {
+  const { q, unmount } = await mount(hosts([], { wsl: [distro("Ubuntu", { added_as: "WSL Ubuntu" }), distro("Fresh", { problem: "setup_unfinished" }), distro("Legacy", { wsl_version: 1, problem: "wsl1" }), distro("Arch")] }));
+  expect(q('[data-wsl-distro-note="Ubuntu"]')?.textContent).toBe("Added as WSL Ubuntu");
+  expect(q('[data-wsl-distro-note="Fresh"]')?.textContent).toBe("Finish setting up the distribution first");
+  expect(q('[data-wsl-command="Legacy"]')?.textContent).toBe("wsl --set-version Legacy 2");
+  for (const name of ["Ubuntu", "Fresh", "Legacy"]) expect(q(`[data-wsl-distro="${name}"] [role="radio"]`)?.hasAttribute("disabled")).toBe(true);
+  expect(q('[data-wsl-distro="Arch"] [role="radio"]')?.hasAttribute("disabled")).toBe(false);
+  // Distributions to choose from are a list, not the empty ~/.ssh/config hint.
+  expect(q('[data-ssh-hosts-state="empty"]')).toBeNull();
+  await unmount();
+});
+
+// B25: a listing that could not read the distributions says so; it never reads as "no WSL".
+it("says the distributions could not be read rather than showing none (B25)", async () => {
+  const { q, unmount } = await mount(hosts([host("lab")], { wsl: [], wsl_problem: "unreadable" }));
+  expect(q('[data-wsl-problem="unreadable"]')?.textContent).toBe("This PC's WSL distributions couldn't be read. Reopen this to try again.");
   await unmount();
 });

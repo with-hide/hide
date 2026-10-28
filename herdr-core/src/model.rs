@@ -6363,6 +6363,8 @@ impl Default for SshHostsSnapshot {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct WslDistributionSnapshot {
     pub name: String,
+    /// The name the device gets when it is added (PRD wsl-device D-20).
+    pub device_name: String,
     /// 1 or 2; only a WSL 2 distribution connects.
     pub wsl_version: u8,
     /// The distribution `wsl.exe` runs when none is named.

@@ -736,6 +736,11 @@ pub(super) struct DeviceRefusal {
     pub(super) message: String,
 }
 
+/// The name a WSL distribution's device is given: `WSL Ubuntu` (D-20).
+pub(super) fn wsl_device_label(distro: &str) -> String {
+    format!("WSL {distro}")
+}
+
 /// The device id of the WSL distribution `distro`: `wsl-` and its name in
 /// lowercase, any letter that is not a digit, an ASCII letter or `-` written
 /// as `-`, so the id is one plain word whatever the name.
@@ -893,7 +898,7 @@ impl Runtime {
         }
         let registration = crate::model::DeviceRegistration {
             id: id.clone(),
-            label: format!("WSL {distro}"),
+            label: wsl_device_label(distro),
             origin: LinkOrigin::Wsl {
                 distro: distro.to_owned(),
             },
