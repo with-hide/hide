@@ -1,142 +1,61 @@
-# The nightly performance lane: one fixed fixture measured against the
-# product `hided` every night, so a change in the terminal path's cost shows
-# up as a dated record instead of in the operator's window.
-# docs/PERFORMANCE_TESTING.md, "The nightly performance lane", owns the
-# fixture contract and what a red run means.
-#
-# `scripts/web-shell-measure/run.sh --isolated-headless` with
-# `MEASURE_SCENARIO=topology MEASURE_SCALE=operator` fills a private pinned
-# Herdr to the operator's scale (scale.sh: 43 workspaces, 62 tabs, 66 panes,
-# 30 agents, 5 printing), opens the release `hided` built here in the hosted
-# image's Google Chrome, headless, and records idle resources, one key echo
-# distribution while an agent changes state every two seconds, and 20 rounds
-# of split, zoom, close, new tab and tab switch latencies. run.sh starts Chrome
-# with `--remote-debugging-port=0` and reads the port Chrome chose from
-# `DevToolsActivePort` in the run's own profile.
-#
-# `scripts/web-shell-measure/nightly.py` judges the run, and the job fails only
-# when the fixture is not the lane's, a measurement is invalid by
-# summarize.py's own contract, or one is missing because the run stopped. No
-# figure is held to a past run's number: the echo has no agreed limit, and the
-# frame window, whose 16.7 ms budget is the one limit the guide states, is not
-# run here, because headless Chrome's 60 Hz frame clock sits on that budget.
-# A failed check becomes a `Failed measurement` annotation, which the nightly
-# report files as a `nightly-failure` issue naming every pull request merged
-# since the lane last passed; a run that stopped is filed by its failed step.
-#
-# Each run keeps its run directory, without the throwaway Chrome profile, for
-# 30 days and its record, named by date, for 90; nothing is committed.
-# nightly.yml calls it; run it alone by hand (workflow_dispatch) to measure a
-# branch without starting every lane.
-name: perf
-
+name: Release profile measurement (temporary branch only)
 on:
-  workflow_call:
   workflow_dispatch:
-
 permissions:
   contents: read
-
 jobs:
   measure:
-    name: topology operator
-    runs-on: macos-15
-    timeout-minutes: 45
+    name: profile (${{ matrix.os }}, repeat ${{ matrix.repeat }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        repeat: [1, 2, 3]
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v7
-        timeout-minutes: 5
+        with:
+          path: harness
+      - uses: actions/checkout@v7
+        with:
+          ref: 4164c701ca4a2b785a7f1fffe59f225f1846c6c2
+          path: source
       - uses: pnpm/action-setup@v6
-        timeout-minutes: 5
         with:
           version: 10
       - uses: actions/setup-node@v4
-        timeout-minutes: 5
         with:
           node-version: 22
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
-      - uses: Swatinem/rust-cache@v2
-        timeout-minutes: 5
+      - uses: actions/setup-python@v5
         with:
-          workspaces: ". -> target"
-          # The release dependencies, which no other lane builds. Main's run
-          # saves them, so a nightly compiles only the workspace's own crates.
-          shared-key: perf-release
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Name the run
-        id: run
+          python-version: '3.12'
+      - run: python -m pip install psutil==7.2.2
+      - name: Build the pinned source web assets
+        working-directory: source
         run: |
-          day=$(date -u +%F)
-          echo "date=$day" >> "$GITHUB_OUTPUT"
-          echo "dir=$GITHUB_WORKSPACE/agents/runs/perf-nightly/$day-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
-      - name: Install web dependencies
-        timeout-minutes: 5
-        run: bash scripts/verify-web.sh install
-      - name: Build the web shell
-        timeout-minutes: 5
-        run: bash scripts/verify-web.sh web build
-      - name: Build the release hided
-        # The measured daemon alone: release `hided` embeds `web/dist`, and
-        # run.sh starts nothing else this workspace builds. It lands at the
-        # fixed `target/release/hided` run.sh reads (docs/BUILD.md).
-        timeout-minutes: 30
-        run: bash scripts/verify-cargo.sh build --release -p hided --bin hided
-      - name: Fetch the pinned Herdr runtime
-        id: herdr
-        timeout-minutes: 5
-        # Assigned first, so a failed fetch fails this step rather than
-        # handing the next one an empty path.
+          bash scripts/verify-web.sh install
+          bash scripts/verify-web.sh web build
+      - name: Observe Defender configuration
+        if: runner.os == 'Windows'
+        shell: pwsh
         run: |
-          bin=$(zsh scripts/fetch-herdr-runtime.sh --platform macos-aarch64)
-          echo "bin=$bin" >> "$GITHUB_OUTPUT"
-      - name: Measure the topology at operator scale
-        timeout-minutes: 15
+          New-Item -ItemType Directory -Force results | Out-Null
+          Get-MpComputerStatus | Select-Object AntivirusEnabled,RealTimeProtectionEnabled,AntivirusSignatureVersion | ConvertTo-Json | Out-File results/defender-status.json
+      - name: Measure three clean release profiles
         env:
-          HERDR_BIN_PATH: ${{ steps.herdr.outputs.bin }}
-          HIDE_MEASURE_RUN_DIR: ${{ steps.run.outputs.dir }}
-          MEASURE_SCENARIO: topology
-          MEASURE_SCALE: operator
-          MEASURE_TOPOLOGY_ROUNDS: "20"
-        run: bash scripts/web-shell-measure/run.sh --isolated-headless
-      - name: Judge the run
-        # It reads what the run wrote even when the run stopped, so the
-        # summary says which measurements exist.
-        if: ${{ !cancelled() && steps.run.outcome == 'success' }}
-        timeout-minutes: 2
-        env:
-          RUN_DIR: ${{ steps.run.outputs.dir }}
-        run: python3 scripts/web-shell-measure/nightly.py "$RUN_DIR" "$RUN_DIR/nightly-summary.json"
-      - name: Report failed measurements
-        # Writes each failed check as the annotation the nightly report
-        # files; it cannot fail the job, which the judge already decided.
-        if: ${{ !cancelled() && steps.run.outcome == 'success' }}
-        continue-on-error: true
-        timeout-minutes: 2
-        env:
-          RUN_DIR: ${{ steps.run.outputs.dir }}
-        run: python3 scripts/ci-flaky-report.py --measurement "$RUN_DIR/nightly-summary.json"
-      - name: Keep the run
-        # Every file the run wrote but the browser profile, which is not
-        # evidence and which the repository never keeps.
-        if: ${{ !cancelled() && steps.run.outcome == 'success' }}
-        uses: actions/upload-artifact@v7
-        timeout-minutes: 5
+          REPEAT: ${{ matrix.repeat }}
+        run: |
+          cd source
+          source scripts/toolchain-env.sh
+          python ../harness/scripts/profile-measure.py --source . --output ../results --repeat "$REPEAT"
+      - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: perf-run-${{ steps.run.outputs.date }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            ${{ steps.run.outputs.dir }}
-            !${{ steps.run.outputs.dir }}/chrome-profile
-          if-no-files-found: error
-          retention-days: 30
-      - name: Keep the record
-        # The record alone, a few kilobytes named by its date, so a trend
-        # reads one small artifact per night.
-        if: ${{ !cancelled() && steps.run.outcome == 'success' }}
-        uses: actions/upload-artifact@v7
-        timeout-minutes: 5
-        with:
-          name: perf-record-${{ steps.run.outputs.date }}
-          path: ${{ steps.run.outputs.dir }}/nightly-summary.json
-          if-no-files-found: ignore
-          overwrite: true
-          retention-days: 90
+          name: profile-${{ matrix.os }}-${{ matrix.repeat }}-attempt-${{ github.run_attempt }}
+          path: results
+          retention-days: 7
