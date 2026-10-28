@@ -1,4 +1,4 @@
-// hide-opencode-server@4 sha256=a97053c5554a9de02eb99213935a006f1ff0fb4359464b48ae02b6006f0468d1
+// hide-opencode-server@5 sha256=32505185fdd497d8751c586cb5acf88a58414c136b450a38d18316f569e21aee
 // Hide's OpenCode 2 plugin, its server half, written by Hide's install kit (hide-agent-hooks).
 // An edit is kept and shown as edited in Settings; Reinstall puts Hide's back.
 // OpenCode 2 runs one server for every terminal attached to it, so this half is never any pane's: what needs the
@@ -60,13 +60,19 @@ export const RPC = {
 // call reaches the helper for them only while some project has a protection on, read again when the file changes,
 // so a machine with none starts no helper for a file tool (PRD agent-guardrails B27).
 const POLICY = path.join(homedir(), ".hide", "agent-hooks", "guardrails.json");
+const GLOBAL_INSTRUCTION = "global-instruction.md";
 const FILE_TOOLS = new Set(["read", "edit", "write", "patch"]);
 // The arguments that name a file; the rest of a write (its content) is not sent.
 const PATH_ARGS = ["path", "filePath"];
 const policy = { mtimeMs: -1, size: -1, on: null };
 
 /** Whether some project has a protection on: null when the policy is missing or unreadable. */
-export function policyOn() {
+export /** Whether `text` can name the Hide global instruction, matched as the helper's guard matches it. */
+function namesGlobal(text) {
+  return typeof text === "string" && text.toLowerCase().includes(GLOBAL_INSTRUCTION);
+}
+
+function policyOn() {
   let stat;
   try {
     stat = statSync(POLICY);
@@ -435,7 +441,9 @@ async function onTool(state, ctx, registration, event) {
   // terminal showing that session's root is then asked.
   const known = await rootOf(state, ctx, event.sessionID);
   const root = known ?? event.sessionID;
-  const guarded = policyOn();
+  // A call naming the Hide global instruction is judged as a guarded one: the helper refuses its write whatever the
+  // guardrails say (PRD memory-self-improve D-07).
+  const guarded = namesGlobal(tool === "shell" ? request.command : JSON.stringify(input ?? {})) || policyOn();
   // A shell call that can start an agent through Herdr is the spawn guard's.
   const launch = tool === "shell" && (request.command.includes("herdr") || request.command.includes("HERDR_BIN_PATH"));
   // The terminal is asked for what only a pane can judge, and then judges the guardrails too; a missing or

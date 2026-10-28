@@ -1,4 +1,4 @@
-// hide-opencode-plugin@9 sha256=e77b53ad20d267cdc9f17e259e456ddef63d4d02784177cce800772f74c775e2
+// hide-opencode-plugin@10 sha256=705c7722fc55327b2f814ed351a96938a7888b56906810791b17785f119a77ca
 // Hide's OpenCode 1.x plugin, written by Hide's install kit (hide-agent-hooks).
 // An edit is kept and shown as edited in Settings; Reinstall puts Hide's back.
 // Outside a Herdr pane Hide manages, or when its helper is gone, it does nothing.
@@ -41,6 +41,9 @@ const PENDING_AGE_MS = 10 * 60 * 1000;
 // call reaches the helper for them only while some project has a protection on, read again when the file changes,
 // so a machine with none starts no helper for a file tool (PRD agent-guardrails B27).
 const POLICY = path.join(homedir(), ".hide", "agent-hooks", "guardrails.json");
+// A call naming the Hide global instruction always asks the helper, which refuses its write whatever the guardrails
+// say (PRD memory-self-improve D-07); the name is matched as the helper's guard matches it.
+const GLOBAL_INSTRUCTION = "global-instruction.md";
 const FILE_TOOLS = new Set(["read", "edit", "write", "apply_patch", "multiedit"]);
 // The arguments that name a file; the rest of a write (its content) is not sent.
 const PATH_ARGS = ["filePath", "path", "file_path"];
@@ -48,6 +51,11 @@ const policy = { mtimeMs: -1, size: -1, on: null };
 
 /** Whether a tool call asks the helper for the guardrails. A policy that is missing or unreadable (`on` is null)
  * does in a Herdr pane, where the helper records why; a session outside one starts no helper for it. */
+/** Whether `text` can name the Hide global instruction. */
+function namesGlobal(text) {
+  return typeof text === "string" && text.toLowerCase().includes(GLOBAL_INSTRUCTION);
+}
+
 function guardrailsOn(state) {
   const on = policyOn();
   return on ?? !state.guardOnly;
@@ -485,13 +493,13 @@ async function onTool(state, sessionID, directory, input, output) {
     // start an agent through Herdr.
     if (typeof command !== "string") return null;
     const launch = !state.guardOnly && (command.includes("herdr") || command.includes("HERDR_BIN_PATH"));
-    if (!launch && !guardrailsOn(state)) return null;
+    if (!launch && !namesGlobal(command) && !guardrailsOn(state)) return null;
     // OpenCode runs a relative `workdir` in the session's folder, not where this process started.
     const workdir = output.args.workdir;
     const cwd = typeof workdir === "string" && workdir ? (typeof directory === "string" ? path.resolve(directory, workdir) : workdir) : directory;
     request = { session_id: sessionID, tool, command, cwd };
   } else if (FILE_TOOLS.has(tool)) {
-    if (!guardrailsOn(state)) return null;
+    if (!namesGlobal(JSON.stringify(output?.args ?? {})) && !guardrailsOn(state)) return null;
     request = { session_id: sessionID, tool, args: fileArgs(output?.args), cwd: directory };
   } else {
     return null;

@@ -124,6 +124,21 @@ test("outside a Herdr pane the plugin only guards a protected project's tools", 
   }
   await sleep(100);
   assert.deepEqual(calls(), []);
+  // With no protection on, a call naming the Hide global instruction still asks the helper (D-07).
+  policy({});
+  {
+    const hooks = await plugin({});
+    const write = { command: "echo x >> ~/.hide/state/Global-Instruction.md" };
+    await assert.rejects(hooks["tool.execute.before"]({ tool: "bash", sessionID: "ses_a" }, { args: write }), /Not run: guarded/);
+    await assert.rejects(
+      hooks["tool.execute.before"]({ tool: "write", sessionID: "ses_a" }, { args: { filePath: "/h/.hide/state/global-instruction.md", content: "x" } }),
+      /Not run: guarded/,
+    );
+    const [shell, file] = await until("tool", 2);
+    assert.equal(shell.input.command, write.command);
+    assert.deepEqual(file.input.args, { filePath: "/h/.hide/state/global-instruction.md" });
+    rmSync(LOG, { force: true });
+  }
   policy({ files: true, paths: [".env"] });
   try {
     const hooks = await plugin({});

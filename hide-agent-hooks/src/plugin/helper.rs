@@ -421,6 +421,7 @@ fn tool(home: &Path, agent: &Agent, input: Input, deadline: Instant) -> Value {
     if let Some(reason) =
         call().and_then(|call| hide_agent_hooks::global_guard::refusal(home, &call))
     {
+        hide_agent_hooks::global_guard::record_refusal(home, runtime, pane.as_deref());
         return json!({ "deny": reason });
     }
     // The guardrails hold in any session of a guarded project, a Herdr pane

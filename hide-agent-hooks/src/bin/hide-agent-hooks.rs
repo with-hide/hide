@@ -839,11 +839,27 @@ fn guard_refusal(
     // (PRD memory-self-improve D-07); only a payload naming it is read.
     if let Some(home) = &home
         && hide_agent_hooks::global_guard::may_name(payload)
-        && let Some(call) =
-            hide_agent_hooks::guardrails::payload::read_hook(payload, truncated, dialect)
-        && let Some(reason) = hide_agent_hooks::global_guard::refusal(home, &call)
     {
-        return Some(reason);
+        use hide_agent_hooks::global_guard;
+        let call = hide_agent_hooks::guardrails::payload::read_hook(payload, truncated, dialect);
+        // A call cut before Hide could read what it does is refused, not
+        // guessed: its payload names the file.
+        let unread = truncated
+            && call.as_ref().is_none_or(|call| {
+                matches!(
+                    call.action,
+                    hide_agent_hooks::guardrails::Action::UnreadWrite
+                )
+            });
+        let reason = if unread {
+            Some(global_guard::unread_refusal())
+        } else {
+            call.and_then(|call| global_guard::refusal(home, &call))
+        };
+        if let Some(reason) = reason {
+            global_guard::record_refusal(home, runtime_id, pane.as_deref());
+            return Some(reason);
+        }
     }
     // The project's guardrails come first, in any session of a guarded
     // project, a Herdr pane or not (PRD agent-guardrails B22): they read only

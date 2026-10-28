@@ -255,11 +255,14 @@ Grok's `SessionStart` cannot add context and an Antigravity session's own child 
 A session on a device whose link is down gets no answer from the core, so it starts without the instruction and the hook records `memory.unavailable`, as it does for Memory; the next session after the link returns gets it (B3).
 A session started outside a Hide pane has no Hide hook identity and gets nothing.
 
-Because every session takes the file as the operator's own instruction, no agent writes it (D-07): the pre-tool hook refuses a file tool's write to it and a shell call with a word or redirection naming it, in every session and Project and whatever the project's guardrails say (`hide_agent_hooks::global_guard`).
-It looks for the file in every state folder the account's core can have, `HIDE_STATE_DIR`, the folder the kit installed the hook for, `$XDG_STATE_HOME/hide` and `~/.hide/state`, and only a payload that names `global-instruction.md` is parsed, so other calls cost one byte search.
+Because every session takes the file as the operator's own instruction, no agent writes it (D-07): the pre-tool hook refuses a file tool's write to it, a shell call with a word or redirection naming it, and a shell call that names it by its bare name beside a state folder or runs in one (`cd ~/.hide/state && ... >> global-instruction.md`, a `bash -c` script, an `eval`), in every session and Project and whatever the project's guardrails say (`hide_agent_hooks::global_guard`).
+It looks for the file in every state folder the account's core can have, `HIDE_STATE_DIR`, the folder the kit installed the hook for, `$XDG_STATE_HOME/hide` and `~/.hide/state`, and for the file a link at any of them points to; names are compared without case, as macOS and Windows find files.
+Only a payload that names `global-instruction.md` is parsed, so other calls cost one byte search; a payload that names it but was cut at the hook's read limit before Hide could read what the call does is refused rather than guessed.
 A file tool's read passes; a shell call cannot be told apart from a write, so one naming the file is refused, read or not.
-Like the guardrails it is a guard, not a security boundary: a script that writes the file another way is not seen, and the file stays a plain file the operator's own processes can change; a confirm before a hand edit counts is a follow-up, not this change.
-OpenCode, Pi and omp take the same refusal through the plugin helper.
+Each refusal writes one `global_instruction` `guard.refused` line to `spawn-guard.log` with the runtime and the pane, never the command or its paths.
+OpenCode, Pi and omp take the same refusal through the plugin helper: their plugin and extension send a call naming the file to the helper whether or not a project guardrail is on.
+Like the guardrails it is a guard, not a security boundary: a script that spells the name another way is not seen, Claude Code's PowerShell tool on Windows reaches no pre-tool hook, and the file stays a plain file the operator's own processes can change; a confirm before a hand edit counts is a follow-up, not this change.
+The core follows a link at the file only to an existing regular `.md` or `.txt` file: through a link it never makes a file or a folder, and a link to anything else is read as an unreadable file, given to no session.
 
 ### What a hook records when it fails
 

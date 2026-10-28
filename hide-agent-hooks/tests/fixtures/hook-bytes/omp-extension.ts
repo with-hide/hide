@@ -1,4 +1,4 @@
-// hide-extension@10 sha256=0d47a40f7ee7d2ccd74e8170ab3ac55058d1b58c3b286b18b94389d621d2d32a
+// hide-extension@11 sha256=1e3fd2166666f48311c64b32adfd7d168d8403f690422f18a3bd6fdb111c2252
 // Hide's extension for Pi and omp, written by Hide's install kit (hide-agent-hooks).
 // An edit is kept and shown as edited in Settings; Reinstall puts Hide's back.
 // Outside a Herdr pane, in an agent started from another Pi's or omp's shell, or when its helper is gone, it does
@@ -14,7 +14,7 @@ import path from "node:path";
 const HELPER = "/kit path/it's/hide-agent-hooks";
 const ROUTE = [];
 const AGENT = "omp";
-const VERSION = 10;
+const VERSION = 11;
 
 // The prompt budget is Claude Code's prompt hook's; the tool budget is the spawn guard's. Both hosts wait for
 // a handler far longer (omp gives up at 30 s and then blocks the tool), so these are the limits.
@@ -41,6 +41,9 @@ const CUSTOM_TYPE = "hide";
 // call reaches the helper for them only while some project has a protection on, read again when the file changes,
 // so a machine with none starts no helper for a file tool (PRD agent-guardrails B27).
 const POLICY = path.join(homedir(), ".hide", "agent-hooks", "guardrails.json");
+// A call naming the Hide global instruction always asks the helper, which refuses its write whatever the guardrails
+// say (PRD memory-self-improve D-07); the name is matched as the helper's guard matches it.
+const GLOBAL_INSTRUCTION = "global-instruction.md";
 const FILE_TOOLS = new Set(["read", "edit", "write"]);
 // The arguments that name a file; the rest of a write (its content) is not sent.
 const PATH_ARGS = ["filePath", "path", "file_path"];
@@ -48,6 +51,11 @@ const policy = { mtimeMs: -1, size: -1, on: null };
 
 /** Whether a tool call asks the helper for the guardrails. A policy that is missing or unreadable (`on` is null)
  * does in a Herdr pane, where the helper records why; a session outside one starts no helper for it. */
+/** Whether `text` can name the Hide global instruction. */
+function namesGlobal(text) {
+  return typeof text === "string" && text.toLowerCase().includes(GLOBAL_INSTRUCTION);
+}
+
 function guardrailsOn(state) {
   const on = policyOn();
   return on ?? !state.guardOnly;
@@ -509,11 +517,11 @@ async function onTool(state, event, ctx) {
     // it can start an agent through Herdr.
     if (typeof command !== "string") return null;
     const launch = !state.guardOnly && (command.includes("herdr") || command.includes("HERDR_BIN_PATH"));
-    if (!launch && !guardrailsOn(state)) return null;
+    if (!launch && !namesGlobal(command) && !guardrailsOn(state)) return null;
     const cwd = typeof event.input.cwd === "string" && event.input.cwd ? event.input.cwd : ctx?.cwd;
     request = { tool, command, cwd };
   } else if (FILE_TOOLS.has(tool)) {
-    if (!guardrailsOn(state)) return null;
+    if (!namesGlobal(JSON.stringify(event?.input ?? {})) && !guardrailsOn(state)) return null;
     request = { tool, args: fileArgs(event?.input), cwd: ctx?.cwd };
   } else {
     return null;
