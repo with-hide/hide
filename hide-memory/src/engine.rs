@@ -265,6 +265,7 @@ impl HideNativeAnalyzer {
                     human_offsets: Vec::new(),
                     // So are the times they were said.
                     source_times: Default::default(),
+                    source_words: Default::default(),
                     // Whether each exists in the checkout is the caller's check.
                     cited_paths: candidate.cited_paths,
                     relation,

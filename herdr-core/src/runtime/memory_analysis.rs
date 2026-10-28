@@ -2880,7 +2880,8 @@ fn comparison_text(group: &[Value]) -> String {
 /// Checks the answer against what was sent: a candidate citing an event
 /// outside the group is left out, and the operator's own words are the
 /// sources whose event is `human`, which the store needs to let a correction
-/// replace a card (D-14). Answers how many were left out.
+/// replace a card (D-14), each with a digest of its text, so the same words a
+/// forked session copied count once. Answers how many were left out.
 pub(super) fn validate_candidates(candidates: &mut Vec<Candidate>, events: &[Value]) -> usize {
     let offsets = events
         .iter()
@@ -2903,6 +2904,15 @@ pub(super) fn validate_candidates(candidates: &mut Vec<Candidate>, events: &[Val
             ))
         })
         .collect::<HashMap<_, _>>();
+    let words = events
+        .iter()
+        .filter_map(|event| {
+            Some((
+                event.get("offset")?.as_u64()?,
+                hide_memory::words_digest(event.get("text")?.as_str()?),
+            ))
+        })
+        .collect::<HashMap<_, _>>();
     let before = candidates.len();
     candidates.retain(|candidate| {
         candidate
@@ -2921,6 +2931,11 @@ pub(super) fn validate_candidates(candidates: &mut Vec<Candidate>, events: &[Val
             .source_offsets
             .iter()
             .filter_map(|offset| Some((*offset, *times.get(offset)?)))
+            .collect();
+        candidate.source_words = candidate
+            .human_offsets
+            .iter()
+            .filter_map(|offset| Some((*offset, words.get(offset)?.clone())))
             .collect();
     }
     before - candidates.len()
@@ -3209,6 +3224,7 @@ mod tests {
                         source_offsets: vec![1],
                         human_offsets: vec![1],
                         source_times: Default::default(),
+                        source_words: Default::default(),
                         cited_paths: Vec::new(),
                         relation: CandidateRelation::New,
                     }],
@@ -5266,6 +5282,7 @@ mod tests {
                     source_offsets: vec![1],
                     human_offsets: vec![1],
                     source_times: Default::default(),
+                    source_words: Default::default(),
                     cited_paths: vec![],
                     relation: CandidateRelation::New,
                 }],
@@ -5724,6 +5741,7 @@ mod tests {
                 source_offsets: vec![1],
                 human_offsets: vec![1],
                 source_times: Default::default(),
+                source_words: Default::default(),
                 cited_paths: vec![],
                 relation: CandidateRelation::New,
             })
@@ -6374,6 +6392,7 @@ mod tests {
             source_offsets: vec![offset],
             human_offsets: Vec::new(),
             source_times: Default::default(),
+            source_words: Default::default(),
             cited_paths: Vec::new(),
             relation: CandidateRelation::Supersedes {
                 target_id: "card".to_owned(),
@@ -6396,6 +6415,139 @@ mod tests {
         assert_eq!(checked[0].source_times, [(1, 10)].into());
         assert_eq!(checked[1].source_times, [(2, 20)].into());
         assert_eq!(checked.len(), 2);
+    }
+
+    /// The index's first two cards after a fork of the fixture's session is
+    /// analyzed: the fork copies the operator's first line under the fork's
+    /// own time, as Codex writes a fork, and then has `said_after` from the
+    /// operator, if any. A rival card stands on two sessions of its own.
+    fn index_after_fork(said_after: Option<&str>) -> Vec<u64> {
+        const FORK: &str = "claude-memory-fork";
+        let fixture = Fixture::new();
+        fixture.answer(&[]);
+        assert_eq!(
+            closed_pass(&fixture, &[], true),
+            ["analyzing", "learned one"]
+        );
+
+        let forked_at = 1_791_680_400_000; // 2026-10-11T01:00:00Z
+        let mut store = fixture.store();
+        let mut rival = |session: &str, relation| {
+            let words = format!("Keep commits small, said in {session}");
+            store
+                .apply_candidates(
+                    &AnalysisBatch {
+                        id: session.to_owned(),
+                        project_id: fixture.project_id.clone(),
+                        provider: "codex".to_owned(),
+                        analysis_provider: "codex".to_owned(),
+                        session_id: session.to_owned(),
+                        content_hash: session.to_owned(),
+                        created_at_unix_ms: forked_at,
+                    },
+                    &[Candidate {
+                        text: "Keep commits small".to_owned(),
+                        title: String::new(),
+                        aliases: Vec::new(),
+                        // A preference, which no pass asks to place in the
+                        // repository, so the fork's analysis is the one call.
+                        kind: CandidateKind::Preference,
+                        confidence: 0.9,
+                        salience: 0.75,
+                        source_offsets: vec![1],
+                        human_offsets: vec![1],
+                        source_times: [(1, forked_at)].into(),
+                        source_words: [(1, hide_memory::words_digest(&words))].into(),
+                        cited_paths: Vec::new(),
+                        relation,
+                    }],
+                )
+                .unwrap();
+        };
+        rival("rival-a", CandidateRelation::New);
+        let target_id = fixture
+            .store()
+            .item_by_number(&fixture.project_id, 3)
+            .unwrap()
+            .unwrap()
+            .id;
+        rival(
+            "rival-b",
+            CandidateRelation::Same {
+                target_id: target_id.clone(),
+            },
+        );
+        // Checked, as a pass would have, so this pass asks only for the fork.
+        assert!(
+            store
+                .confirm_card(&target_id, 1, None, &[], forked_at)
+                .unwrap()
+        );
+        drop(store);
+
+        let mut copied = fixture.lines[0].clone();
+        copied["sessionId"] = json!(FORK);
+        copied["timestamp"] = json!("2026-10-11T01:00:00Z");
+        let mut lines = vec![copied];
+        let mut offsets = vec![0];
+        if let Some(words) = said_after {
+            let mut said = lines[0].clone();
+            said["message"]["content"] = json!(words);
+            offsets.push(format!("{}\n", lines[0]).len() as u64);
+            lines.push(said);
+        }
+        std::fs::write(
+            fixture.locator.with_file_name(format!("{FORK}.jsonl")),
+            lines
+                .iter()
+                .map(|line| format!("{line}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        fixture.push(json!({
+            "candidates": [{
+                "text": "Run tests with nextest before a merge.",
+                "title": "Tests run with nextest",
+                "aliases": ["테스트", "nextest"],
+                "kind": "rule",
+                "confidence": 0.9,
+                "salience": 0.8,
+                "source_offsets": offsets,
+                "cited_paths": [],
+                "relation": "same",
+                "target_id": "m2",
+            }],
+            "alias_backfill": [],
+        }));
+        assert_eq!(
+            fixture
+                .run(("claude", FORK.to_owned()), false, true, &[], true)
+                .0,
+            ["analyzing", "analyzed"]
+        );
+        fixture
+            .store()
+            .retrieve(&hide_memory::RetrievalQuery::session_start(
+                &fixture.project_id,
+            ))
+            .unwrap()
+            .items
+            .iter()
+            .take(2)
+            .map(|item| item.number)
+            .collect()
+    }
+
+    #[test]
+    fn a_forked_session_counts_only_what_the_operator_said_after_the_fork() {
+        // The fork's copy of the operator's words is the same thing said once:
+        // the card still rests on one session and the rival on two goes first.
+        assert_eq!(index_after_fork(None), [3, 2]);
+        // Saying it again in the fork is a second session behind the card.
+        assert_eq!(
+            index_after_fork(Some("Run tests with nextest on every branch too")),
+            [2, 3]
+        );
     }
 
     fn closed_pass(fixture: &Fixture, delegated: &[&str], ai: bool) -> Vec<&'static str> {
@@ -6535,6 +6687,7 @@ mod tests {
                     source_offsets: vec![1],
                     human_offsets: Vec::new(),
                     source_times: Default::default(),
+                    source_words: Default::default(),
                     cited_paths: vec!["src/lib.rs".to_owned()],
                     relation: CandidateRelation::New,
                 }],
@@ -6583,6 +6736,7 @@ mod tests {
                     source_offsets: vec![1],
                     human_offsets: Vec::new(),
                     source_times: Default::default(),
+                    source_words: Default::default(),
                     cited_paths: Vec::new(),
                     relation: CandidateRelation::New,
                 }],
@@ -6696,6 +6850,7 @@ mod tests {
                     source_offsets: vec![1],
                     human_offsets: Vec::new(),
                     source_times: Default::default(),
+                    source_words: Default::default(),
                     cited_paths: Vec::new(),
                     relation: CandidateRelation::New,
                 }],
@@ -6750,6 +6905,7 @@ mod tests {
                     source_offsets: vec![1],
                     human_offsets: vec![1],
                     source_times: Default::default(),
+                    source_words: Default::default(),
                     cited_paths: Vec::new(),
                     relation: CandidateRelation::Same {
                         target_id: seeded.id.clone(),
@@ -6812,6 +6968,7 @@ mod tests {
                     source_offsets: vec![1],
                     human_offsets: vec![1],
                     source_times: Default::default(),
+                    source_words: Default::default(),
                     cited_paths: Vec::new(),
                     relation: CandidateRelation::Same {
                         target_id: seeded.id,
@@ -6878,6 +7035,7 @@ mod tests {
                     source_offsets: vec![1],
                     human_offsets: vec![1],
                     source_times: Default::default(),
+                    source_words: Default::default(),
                     cited_paths: Vec::new(),
                     relation: CandidateRelation::Same {
                         target_id: seeded.id,

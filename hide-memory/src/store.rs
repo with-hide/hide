@@ -21,8 +21,9 @@ pub(crate) mod hold;
 mod progress;
 mod reinforcement;
 pub use progress::{CorrectionCheck, InputFailure};
+pub use reinforcement::words_digest;
 
-const SCHEMA_VERSION: i64 = 20;
+const SCHEMA_VERSION: i64 = 21;
 /// Version 2 names where analysis can go: the agent Hide AI runs on and any
 /// agent the operator added under its fallback list (PRD settings-cleanup
 /// D-26), which now includes vendors other than the two it was limited to.
@@ -122,6 +123,11 @@ pub struct Candidate {
     pub human_offsets: Vec<u64>,
     /// When each source offset was said, as the conversation recorded it.
     pub source_times: BTreeMap<u64, u64>,
+    /// A digest of the operator's words at each human source offset
+    /// ([`words_digest`]), so a forked session's copy of them is not counted
+    /// as the operator saying them again.
+    #[serde(default)]
+    pub source_words: BTreeMap<u64, String>,
     /// Repository-relative files the card rests on, already checked by the
     /// caller to exist inside the checkout (D-26).
     pub cited_paths: Vec<String>,
@@ -3371,7 +3377,7 @@ impl MemoryStore {
             "SELECT i.id,i.number,r.revision,r.title,p.target_path,p.pr_number,p.repository,i.salience,i.confidence,i.updated_at_ms,{} FROM memory_items i JOIN memory_revisions r ON r.item_id=i.id AND r.revision=i.current_revision \
              LEFT JOIN card_promotions p ON p.item_id=i.id AND p.revision=i.current_revision AND p.state='merged' \
              WHERE i.project_id=?1 AND i.lifecycle='active' AND r.kind IN ('rule','decision','lesson','preference') AND NOT {} AND NOT EXISTS(SELECT 1 FROM card_comparisons c WHERE c.item_id=i.id AND c.revision=i.current_revision AND p.item_id IS NULL AND json_extract(c.data,'$.authority')!='card_newer') AND (r.verified_at_ms IS NOT NULL OR p.item_id IS NOT NULL)",
-            reinforcement::COLUMNS,
+            reinforcement::columns(),
             hold::held(2)
         ))?;
         let mut lines = statement
@@ -3603,7 +3609,7 @@ impl MemoryStore {
         if query.is_empty() {
             return Ok(Vec::new());
         }
-        let mut statement = self.connection.prepare(&format!("SELECT i.id,i.number,r.revision,r.title,r.aliases,r.body||COALESCE((SELECT '\nPending document update: '||json_extract(c.data,'$.document') FROM card_comparisons c WHERE c.item_id=i.id AND c.revision=i.current_revision AND json_extract(c.data,'$.authority')='card_newer'),''),COALESCE((SELECT s.provider||':'||s.session_id FROM memory_sources s WHERE s.item_id=i.id ORDER BY s.provider,s.session_id,s.event_offset LIMIT 1),''),i.confidence,i.salience,i.updated_at_ms,r.kind,{} FROM memory_fts f JOIN memory_items i ON i.id=f.item_id JOIN memory_revisions r ON r.item_id=i.id AND r.revision=i.current_revision WHERE f.project_id=?1 AND i.lifecycle='active' AND memory_fts MATCH ?2 AND (?4=0 OR (r.verified_at_ms IS NOT NULL AND NOT {} AND NOT EXISTS(SELECT 1 FROM card_comparisons c WHERE c.item_id=i.id AND c.revision=i.current_revision AND json_extract(c.data,'$.authority')!='card_newer') AND NOT EXISTS(SELECT 1 FROM card_promotions p WHERE p.item_id=i.id AND p.revision=i.current_revision AND p.state='merged'))) ORDER BY bm25(memory_fts),i.updated_at_ms DESC,i.id LIMIT ?3", reinforcement::COLUMNS, hold::held(5)))?;
+        let mut statement = self.connection.prepare(&format!("SELECT i.id,i.number,r.revision,r.title,r.aliases,r.body||COALESCE((SELECT '\nPending document update: '||json_extract(c.data,'$.document') FROM card_comparisons c WHERE c.item_id=i.id AND c.revision=i.current_revision AND json_extract(c.data,'$.authority')='card_newer'),''),COALESCE((SELECT s.provider||':'||s.session_id FROM memory_sources s WHERE s.item_id=i.id ORDER BY s.provider,s.session_id,s.event_offset LIMIT 1),''),i.confidence,i.salience,i.updated_at_ms,r.kind,{} FROM memory_fts f JOIN memory_items i ON i.id=f.item_id JOIN memory_revisions r ON r.item_id=i.id AND r.revision=i.current_revision WHERE f.project_id=?1 AND i.lifecycle='active' AND memory_fts MATCH ?2 AND (?4=0 OR (r.verified_at_ms IS NOT NULL AND NOT {} AND NOT EXISTS(SELECT 1 FROM card_comparisons c WHERE c.item_id=i.id AND c.revision=i.current_revision AND json_extract(c.data,'$.authority')!='card_newer') AND NOT EXISTS(SELECT 1 FROM card_promotions p WHERE p.item_id=i.id AND p.revision=i.current_revision AND p.state='merged'))) ORDER BY bm25(memory_fts),i.updated_at_ms DESC,i.id LIMIT ?3", reinforcement::columns(), hold::held(5)))?;
         let mut candidates = statement
             .query_map(
                 params![
@@ -3906,6 +3912,18 @@ COMMIT;"#,
         // evidence whose cursor advanced without a single analysis batch.
         // Unrelated completed history and receipt cursors remain untouched.
         transaction.execute_batch("DELETE FROM session_cursors AS c WHERE operator_events BETWEEN 1 AND 2 AND NOT EXISTS(SELECT 1 FROM analysis_batches b WHERE b.project_id=c.project_id AND b.provider=c.provider AND b.session_id=c.session_id); PRAGMA user_version=20;")?;
+        transaction.commit()?;
+        version = 20;
+    }
+    // Version 21 keeps a digest of the operator's words on each source, so a
+    // forked session's copy of them is counted once; the sources written
+    // before it have none and each counts as its own words.
+    if version == 20 {
+        back_up(connection, path, version)?;
+        let transaction = connection.unchecked_transaction()?;
+        transaction.execute_batch(
+            "ALTER TABLE memory_sources ADD COLUMN words TEXT; PRAGMA user_version=21;",
+        )?;
         transaction.commit()?;
         version = SCHEMA_VERSION;
     }
@@ -4432,7 +4450,7 @@ fn backup_path(path: &Path, version: i64) -> std::path::PathBuf {
 }
 
 /// The schema versions a migration keeps a backup of.
-const BACKUP_VERSIONS: [i64; 4] = [7, 8, 15, 16];
+const BACKUP_VERSIONS: [i64; 5] = [7, 8, 15, 16, 20];
 
 /// Removes a deleted Project from every backup copy, so its cards do not
 /// outlive the delete there.
@@ -4620,7 +4638,7 @@ CREATE INDEX memory_items_project_state ON memory_items(project_id,lifecycle,upd
 CREATE UNIQUE INDEX memory_items_project_number ON memory_items(project_id,number);
 CREATE TABLE memory_revisions(id TEXT PRIMARY KEY,item_id TEXT NOT NULL REFERENCES memory_items(id) ON DELETE CASCADE,revision INTEGER NOT NULL,body TEXT NOT NULL,kind TEXT NOT NULL,lifecycle TEXT NOT NULL,created_at_ms INTEGER NOT NULL,batch_id TEXT NOT NULL,title TEXT NOT NULL DEFAULT '',aliases TEXT NOT NULL DEFAULT '[]',cited_paths TEXT NOT NULL DEFAULT '[]',verified_at_ms INTEGER,docs_compared INTEGER NOT NULL DEFAULT 1 CHECK(docs_compared IN (0,1)),UNIQUE(item_id,revision));
 CREATE TABLE memory_evidence(item_id TEXT NOT NULL REFERENCES memory_items(id) ON DELETE CASCADE,revision INTEGER NOT NULL,kind TEXT NOT NULL CHECK(kind IN('file','path','command')),value TEXT NOT NULL,fingerprint TEXT,present INTEGER NOT NULL,PRIMARY KEY(item_id,revision,kind,value));
-CREATE TABLE memory_sources(item_id TEXT NOT NULL REFERENCES memory_items(id) ON DELETE CASCADE,revision INTEGER NOT NULL,provider TEXT NOT NULL,session_id TEXT NOT NULL,event_offset INTEGER NOT NULL,content_hash TEXT NOT NULL,available INTEGER NOT NULL DEFAULT 1,human INTEGER NOT NULL DEFAULT 0,at_ms INTEGER,PRIMARY KEY(item_id,provider,session_id,event_offset,content_hash));
+CREATE TABLE memory_sources(item_id TEXT NOT NULL REFERENCES memory_items(id) ON DELETE CASCADE,revision INTEGER NOT NULL,provider TEXT NOT NULL,session_id TEXT NOT NULL,event_offset INTEGER NOT NULL,content_hash TEXT NOT NULL,available INTEGER NOT NULL DEFAULT 1,human INTEGER NOT NULL DEFAULT 0,at_ms INTEGER,words TEXT,PRIMARY KEY(item_id,provider,session_id,event_offset,content_hash));
 CREATE TABLE batch_changes(batch_id TEXT NOT NULL,item_id TEXT NOT NULL REFERENCES memory_items(id) ON DELETE CASCADE,previous_lifecycle TEXT,previous_revision INTEGER,PRIMARY KEY(batch_id,item_id));
 CREATE TABLE injection_receipts(id TEXT PRIMARY KEY,project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,runtime TEXT NOT NULL,session_id TEXT NOT NULL,turn_id TEXT,outcome TEXT NOT NULL,created_at_ms INTEGER NOT NULL);
 CREATE INDEX injection_receipts_session ON injection_receipts(runtime,session_id,project_id);
@@ -4984,7 +5002,8 @@ fn attach_sources(
     for offset in &candidate.source_offsets {
         let human = candidate.human_offsets.contains(offset);
         let at = candidate.source_times.get(offset);
-        transaction.execute("INSERT OR IGNORE INTO memory_sources(item_id,revision,provider,session_id,event_offset,content_hash,available,human,at_ms) VALUES(?1,?2,?3,?4,?5,?6,1,?7,?8)",params![item_id,revision,batch.provider,batch.session_id,offset,batch.content_hash,human as i64,at])?;
+        let words = candidate.source_words.get(offset).filter(|_| human);
+        transaction.execute("INSERT OR IGNORE INTO memory_sources(item_id,revision,provider,session_id,event_offset,content_hash,available,human,at_ms,words) VALUES(?1,?2,?3,?4,?5,?6,1,?7,?8,?9)",params![item_id,revision,batch.provider,batch.session_id,offset,batch.content_hash,human as i64,at,words])?;
     }
     Ok(())
 }
@@ -5534,6 +5553,7 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
             source_offsets: vec![7],
             human_offsets: vec![7],
             source_times: BTreeMap::from([(7, 90)]),
+            source_words: Default::default(),
             cited_paths: Vec::new(),
             relation,
         }
@@ -6489,7 +6509,7 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
         }
         connection
             .execute_batch(
-                "DROP TABLE input_failures; DROP TABLE analysis_progress; DROP TABLE analysis_queue; DROP TABLE analysis_proposals; DROP TABLE memory_projection_state; DROP TABLE correction_checks; DROP TABLE memory_contexts; DROP TABLE receipt_contexts; DROP TABLE analysis_schedule; ALTER TABLE projects DROP COLUMN evictions_seen_at_ms; ALTER TABLE projects DROP COLUMN answered_at_ms; PRAGMA user_version=16;",
+                "ALTER TABLE memory_sources DROP COLUMN words; DROP TABLE input_failures; DROP TABLE analysis_progress; DROP TABLE analysis_queue; DROP TABLE analysis_proposals; DROP TABLE memory_projection_state; DROP TABLE correction_checks; DROP TABLE memory_contexts; DROP TABLE receipt_contexts; DROP TABLE analysis_schedule; ALTER TABLE projects DROP COLUMN evictions_seen_at_ms; ALTER TABLE projects DROP COLUMN answered_at_ms; PRAGMA user_version=16;",
             )
             .unwrap();
         drop(connection);
@@ -8700,6 +8720,93 @@ PRAGMA user_version=14;"#,
     }
 
     #[test]
+    fn a_correction_counts_only_its_own_words_and_its_undo_brings_back_the_old_ones() {
+        let (_temp, mut store, project) = store();
+        let now = now_ms();
+        let day = 86_400_000;
+        let card = |title: &str, said_at: u64, relation: CandidateRelation| Candidate {
+            title: title.to_owned(),
+            source_times: BTreeMap::from([(7, said_at)]),
+            ..candidate(&format!("{title} body"), relation)
+        };
+        store
+            .apply_candidates(
+                &sourced_batch(&project, "b", "s0"),
+                &[
+                    card(
+                        "Said in three sessions long ago",
+                        now - 90 * day,
+                        CandidateRelation::New,
+                    ),
+                    card(
+                        "Said in two sessions lately",
+                        now - day,
+                        CandidateRelation::New,
+                    ),
+                ],
+            )
+            .unwrap();
+        for session in ["s1", "s2"] {
+            say_again(&mut store, &project, 1, session, now - 90 * day);
+        }
+        say_again(&mut store, &project, 2, "s1", now - day);
+        let index = |store: &MemoryStore| {
+            store
+                .retrieve(&RetrievalQuery::session_start(&project))
+                .unwrap()
+                .item_key()
+        };
+        assert_eq!(index(&store), "m2@1,m1@1");
+
+        let target_id = store.item_by_number(&project, 1).unwrap().unwrap().id;
+        store
+            .apply_candidates(
+                &sourced_batch(&project, "correction", "s9"),
+                &[card(
+                    "Corrected once just now",
+                    now,
+                    CandidateRelation::Supersedes { target_id },
+                )],
+            )
+            .unwrap();
+        // The new text rests on the one session that said it, not on the
+        // three that said the text it replaced.
+        assert_eq!(index(&store), "m2@1,m1@2");
+
+        store.undo_batch(&project, "correction").unwrap();
+        // The old text is back with its own sessions and their time, not the
+        // correction's.
+        assert_eq!(index(&store), "m2@1,m1@1");
+    }
+
+    #[test]
+    fn a_version_twenty_store_is_backed_up_and_still_gives_its_cards() {
+        let (temp, mut store, project) = store();
+        store
+            .apply_candidates(
+                &sourced_batch(&project, "b", "s0"),
+                &[candidate("Lint before tests.", CandidateRelation::New)],
+            )
+            .unwrap();
+        say_again(&mut store, &project, 1, "s1", 90);
+        store
+            .connection
+            .execute_batch("ALTER TABLE memory_sources DROP COLUMN words; PRAGMA user_version=20;")
+            .unwrap();
+        drop(store);
+        let path = temp.path().join("memory.sqlite3");
+        let store = MemoryStore::open(&path).unwrap();
+        assert!(backup_path(&path, 20).exists());
+        assert_eq!(
+            store
+                .retrieve(&RetrievalQuery::session_start(&project))
+                .unwrap()
+                .item_key(),
+            "m1@1"
+        );
+    }
+
+    #[test]
     fn a_project_without_index_cards_gets_no_index() {
         let (_temp, mut store, project) = store();
         store
@@ -10334,7 +10441,7 @@ PRAGMA user_version=14;"#,
         connection.execute_batch(SCHEMA).unwrap();
         connection
             .execute_batch(
-                "DROP TABLE card_comparisons; DROP TABLE promotion_batches; ALTER TABLE memory_revisions DROP COLUMN docs_compared; ALTER TABLE card_promotions DROP COLUMN repository; ALTER TABLE card_promotions DROP COLUMN failure; ALTER TABLE analysis_calls DROP COLUMN checks; ALTER TABLE projects DROP COLUMN evictions_seen_at_ms; ALTER TABLE projects DROP COLUMN answered_at_ms; PRAGMA user_version=9;",
+                "ALTER TABLE memory_sources DROP COLUMN words; DROP TABLE card_comparisons; DROP TABLE promotion_batches; ALTER TABLE memory_revisions DROP COLUMN docs_compared; ALTER TABLE card_promotions DROP COLUMN repository; ALTER TABLE card_promotions DROP COLUMN failure; ALTER TABLE analysis_calls DROP COLUMN checks; ALTER TABLE projects DROP COLUMN evictions_seen_at_ms; ALTER TABLE projects DROP COLUMN answered_at_ms; PRAGMA user_version=9;",
             )
             .unwrap();
         let scratch = tempfile::tempdir().unwrap();

@@ -2123,6 +2123,7 @@ mod tests {
                     source_offsets: vec![7],
                     human_offsets: vec![7],
                     source_times: BTreeMap::from([(7, 90)]),
+                    source_words: Default::default(),
                     cited_paths: Vec::new(),
                     relation: hide_memory::CandidateRelation::New,
                 }],
