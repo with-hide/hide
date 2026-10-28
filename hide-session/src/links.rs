@@ -183,7 +183,7 @@ impl LinkAccumulator {
         if kind != EventKind::Human
             || self.sidechain_line
             || text.trim().is_empty()
-            || crate::is_letter_bell(text)
+            || crate::is_bell_line(text)
         {
             return;
         }

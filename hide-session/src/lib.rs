@@ -27,6 +27,7 @@ use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 pub mod antigravity;
+pub mod bell_line;
 mod catalog;
 mod claude_attachment;
 mod conversation_cursor;
@@ -50,9 +51,9 @@ pub mod tools;
 pub mod turns;
 pub mod usage;
 
+pub use bell_line::is_bell_line;
 pub use envelope::{
-    BELL_INBOX, BELL_MARK, envelope_from_operator, envelope_header, envelope_names,
-    envelope_sender, is_letter, is_letter_bell,
+    envelope_from_operator, envelope_header, envelope_names, envelope_sender, is_letter,
 };
 pub use named_prs::NamedPr;
 pub use refusal::ReadRefusal;

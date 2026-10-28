@@ -5,9 +5,8 @@
 //! later headers never select a different sender. The independent examples
 //! in `contracts/delivery-envelope.json` bind this reader and mailbox::pull.
 //!
-//! The doorbell's line (`herdr-core/src/delivery/bell.rs`) wakes a pane for a
-//! letter and carries no envelope; it is written from [`BELL_MARK`] and
-//! [`BELL_INBOX`] here, so the line and [`is_letter_bell`] cannot drift.
+//! The doorbell's line that wakes a pane for a letter carries no envelope;
+//! [`crate::bell_line`] reads it.
 
 /// The most characters of a sender's name a message's facts keep.
 const MAX_SENDER_CHARS: usize = 128;
@@ -71,33 +70,11 @@ pub fn envelope_header(text: &str) -> Option<(String, String)> {
     })
 }
 
-/// What the doorbell's line begins with, before a space and the sender.
-pub const BELL_MARK: char = '🦉';
-
-/// What the doorbell's line ends with when it names where the letter is.
-pub const BELL_INBOX: &str = " · hide inbox";
-
-/// Whether `text` is the doorbell's line: one line that begins with
-/// [`BELL_MARK`], or, as Codex CLI on Windows can record it with every
-/// character above U+FFFF dropped, one that ends with [`BELL_INBOX`] (a line
-/// Codex is rung with always names the inbox). The transcript keeps no other
-/// mark of it: the line the ledger saved outlives neither the letter's
-/// retention nor the session file it is read from.
-pub fn is_letter_bell(text: &str) -> bool {
-    let text = text.trim();
-    if text.contains('\n') {
-        return false;
-    }
-    text.strip_prefix(BELL_MARK)
-        .is_some_and(|rest| rest.starts_with(' '))
-        || text.ends_with(BELL_INBOX)
-}
-
 /// Whether a person's message in a transcript is a Hide letter rather than
 /// the operator's own words: another agent's envelope or the doorbell's line.
 /// A letter the operator's Send made is the operator's.
 pub fn is_letter(text: &str) -> bool {
-    is_letter_bell(text) || (envelope_header(text).is_some() && !envelope_from_operator(text))
+    crate::is_bell_line(text) || (envelope_header(text).is_some() && !envelope_from_operator(text))
 }
 
 #[cfg(test)]
@@ -173,29 +150,6 @@ mod tests {
     }
 
     #[test]
-    fn the_doorbells_line_is_a_letter_with_or_without_its_owl() {
-        for line in [
-            "🦉 ci-lead 보고: PR #881 · 외 2통",
-            "🦉 ci-lead report",
-            "  🦉 Codex report: private · hide inbox\n",
-            // Codex CLI on Windows dropped the owl and the summary's cat.
-            "Codex 보고: Readthe letter · hide inbox",
-        ] {
-            assert!(is_letter_bell(line), "{line}");
-            assert!(is_letter(line), "{line}");
-        }
-        for line in [
-            "fix the 🦉 icon",
-            "🦉ci-lead report",
-            "🦉 ci-lead report\nand also run the tests",
-            "hide inbox",
-            "please check the hide inbox",
-        ] {
-            assert!(!is_letter_bell(line), "{line}");
-        }
-    }
-
-    #[test]
     fn another_agents_envelope_is_a_letter_and_the_operators_send_is_not() {
         assert!(is_letter(
             "Hide letter letter-1 from ci-lead (claude) [report]\nDone"
@@ -204,5 +158,6 @@ mod tests {
             "Hide letter letter-1 from operator (operator) [request]\nLook here"
         ));
         assert!(!is_letter("레이어 2도 1.0.1에 포함"));
+        assert!(is_letter("🦉 ci-lead 보고: 레이어 2도 1.0.1에 포함"));
     }
 }

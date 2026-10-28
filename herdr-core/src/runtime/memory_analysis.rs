@@ -3706,6 +3706,51 @@ mod tests {
     }
 
     #[test]
+    fn an_instruction_shaped_like_the_bell_stays_the_operators_and_the_bell_is_its_senders() {
+        // An instruction the operator typed that begins with the owl or ends
+        // with the inbox tail is theirs: an operator event and a human
+        // source. The doorbell's line Hide typed is the letter's.
+        let fixture = Fixture::new();
+        let checkout = fixture.root.to_string_lossy().into_owned();
+        let user = |text: &str| {
+            json!({"type": "user", "sessionId": SESSION, "cwd": checkout,
+                "timestamp": "2026-10-11T00:00:00Z", "origin": {"kind": "human"},
+                "message": {"role": "user", "content": text}})
+        };
+        fixture.write(&[
+            user("🦉 아이콘은 항상 파란색으로"),
+            user("새 탭은 항상 옆에 열어 · hide inbox"),
+            user("🦉 ci-lead 보고: PR #12를 열었습니다 · 외 1통"),
+        ]);
+        fixture.answer(&[]);
+        assert_eq!(fixture.pass(false, true), ["analyzing", "learned one"]);
+        let sent: Value = serde_json::from_str(&fixture.backend.inputs.lock().unwrap()[0]).unwrap();
+        let kinds = sent["new_events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|event| event["kind"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(kinds, ["human", "human", "letter"]);
+        let store = fixture.store();
+        let cursor = store
+            .load_cursor(
+                CursorReader::Analysis,
+                &fixture.project_id,
+                "claude",
+                SESSION,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(cursor.operator_events, 2);
+        let learned = store
+            .item_by_number(&fixture.project_id, 2)
+            .unwrap()
+            .expect("the analysis wrote a card from the owl instruction");
+        assert_eq!(learned.human_source_count, 1);
+    }
+
+    #[test]
     fn a_pass_records_receipts_a_live_pane_cannot_and_analyzes_a_closed_session_once() {
         // B1, B2, B3, B27, D-16.
         let fixture = Fixture::new();
