@@ -70,18 +70,23 @@ pub fn serve(input: impl BufRead, output: impl Write + Send) -> io::Result<()> {
     serve_in(input, output, Env::of_process(), Services::none())
 }
 
-/// [`serve`] with the node's terminal service.
+/// [`serve`] with the node's terminal service. `own_herdr` is the socket
+/// of the account's Herdr this node bridges to its core over its link
+/// streams, for a helper whose core reaches no socket on this machine (a
+/// WSL distribution's, PRD wsl-device D-07); an SSH device's helper bridges
+/// none, since its core reaches the socket over SSH.
 pub fn serve_with_terminals(
     input: impl BufRead,
     output: impl Write + Send,
     terminals: &dyn Terminals,
+    own_herdr: Option<PathBuf>,
 ) -> io::Result<()> {
     serve_with(
         input,
         output,
         Services {
             terminals: Some(terminals),
-            herdr_socket: None,
+            herdr_socket: own_herdr,
             heartbeat: false,
             checkout_callers: false,
             opened_roots: None,
@@ -104,7 +109,8 @@ pub struct Services<'a> {
     pub terminals: Option<&'a dyn Terminals>,
     /// The node's own Herdr socket, which its core reaches only through the
     /// link: a node that dialed its core (PRD core-host-node-remote-core
-    /// D-18). A device its core dialed has none, and refuses Herdr streams.
+    /// D-18), and a WSL distribution's helper (PRD wsl-device D-07). An SSH
+    /// device has none, and refuses Herdr streams.
     pub herdr_socket: Option<PathBuf>,
     /// Whether the node says it is alive every
     /// [`hide_node_link::panes::HEARTBEAT`]: a node that dialed its core,
@@ -224,6 +230,7 @@ fn serve_in(
     let env = Env {
         kit: services.kit,
         stop: Arc::default(),
+        bridged_herdr: services.herdr_socket.clone(),
         ..env
     };
     let env = match services.worktree_facts {
@@ -841,6 +848,9 @@ pub struct Env {
     /// The account's state folder, where View feedback screenshots are
     /// staged and letter attachments placed (`crate::feedback`).
     pub state: Option<PathBuf>,
+    /// The socket of the Herdr this node's link bridges, which its Hello
+    /// names; none for a node that bridges none.
+    pub bridged_herdr: Option<PathBuf>,
 }
 
 /// The AI backends a node answering for this process keeps, shared by every
@@ -906,6 +916,7 @@ impl Env {
             worktrees: Arc::default(),
             state: std::env::var_os("HOME")
                 .map(|home| hide_kit::layout::state_dir_from_process(Path::new(&home))),
+            bridged_herdr: None,
         }
     }
 
@@ -922,6 +933,7 @@ impl Env {
             label_locks: Arc::default(),
             worktrees: Arc::default(),
             state: None,
+            bridged_herdr: None,
         }
     }
 
@@ -971,6 +983,10 @@ pub fn handle_with_progress(
                 },
             },
             reader_features: Some(hide_node_link::sessions::ReaderFeatures::implemented()),
+            herdr_socket: env
+                .bridged_herdr
+                .as_ref()
+                .map(|socket| socket.to_string_lossy().into_owned()),
         }),
         Call::LabelLock {
             herdr_socket,

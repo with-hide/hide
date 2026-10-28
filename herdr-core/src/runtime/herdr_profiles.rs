@@ -257,7 +257,10 @@ impl Runtime {
                 if state == "failed" || state == "added" || registration.herdr_session.is_none() {
                     self.retry_remote_device(&registration.id);
                 } else if state == "connected" {
-                    self.retry_device_host_now(&registration.id);
+                    self.retry_device_host_now(
+                        &registration.id,
+                        super::hosts::HostAttempt::Operator,
+                    );
                     let kit = self.kit_view(&registration.id);
                     if kit.unavailable.is_some() {
                         self.queue_device_kit(
@@ -308,7 +311,7 @@ impl Runtime {
                     .push(registration.clone());
                 self.rebuild_device_rows();
                 self.persist_current_ui_state();
-                self.connect_remote_device(&registration);
+                self.connect_remote_device(&registration, super::hosts::HostAttempt::Operator);
                 registration
             }
         };

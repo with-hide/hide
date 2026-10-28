@@ -845,7 +845,7 @@ impl Runtime {
                 return false;
             }
             self.close_device_host(device_id, "retrying Herdr bootstrap");
-            return self.retry_device_host_now(device_id);
+            return self.retry_device_host_now(device_id, super::hosts::HostAttempt::Background);
         }
         // A refused pass (or this node's start failure) needs another
         // automatic pass even when each individual kit part is installed.
@@ -1091,7 +1091,7 @@ impl Runtime {
             )
         };
         if !reachable(self) {
-            self.start_device_host(device_id);
+            self.start_device_host(device_id, super::hosts::HostAttempt::Background);
         }
         if installs && reachable(self) {
             self.set_kit_busy(device_id);
@@ -1387,7 +1387,8 @@ impl Runtime {
             })),
         }
         self.device_kit_removing.remove(device_id);
-        self.device_registration_exists(device_id) && self.start_device_host(device_id)
+        self.device_registration_exists(device_id)
+            && self.start_device_host(device_id, super::hosts::HostAttempt::Background)
     }
 
     /// The helper connection a device's turn-off was confirmed on ended

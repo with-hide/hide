@@ -16,6 +16,13 @@ use crate::model::{
 };
 use crate::remote::{Arrived, CapabilityReport, CapabilityState, DeviceTransport, DialedTransport};
 
+/// Where a registration's link comes from.
+enum Source {
+    Arrived(Arrived),
+    Ssh(String),
+    Wsl(String),
+}
+
 /// How the core reaches a connected device: over a dial of its own, or over
 /// the link a node that dials in brought.
 #[derive(Clone)]
@@ -77,7 +84,7 @@ pub(super) struct RemoteDeviceConnection {
     pub(super) transport: DeviceReach,
     /// `None` when the coordinator could not be started; the status entry
     /// then carries why.
-    sync: Option<session_sync::SessionSyncHandle>,
+    pub(super) sync: Option<session_sync::SessionSyncHandle>,
     /// True while a connection test runs; one test per device at a time, so
     /// a second click cannot stack SSH handshakes behind the first.
     test_in_flight: bool,
@@ -140,7 +147,8 @@ impl Runtime {
         let registrations = self.snapshot.ui_state.device_registrations.clone();
         let mut changed = false;
         for registration in &registrations {
-            changed |= self.connect_remote_device(registration);
+            changed |=
+                self.connect_remote_device(registration, super::hosts::HostAttempt::Background);
         }
         changed
     }
@@ -148,7 +156,11 @@ impl Runtime {
     /// Opens the remote status entry for a device and starts its coordinator.
     /// A device that cannot be started still gets its entry, carrying the
     /// reason, so the row never reads as "not attempted".
-    pub(super) fn connect_remote_device(&mut self, registration: &DeviceRegistration) -> bool {
+    pub(super) fn connect_remote_device(
+        &mut self,
+        registration: &DeviceRegistration,
+        attempt: super::hosts::HostAttempt,
+    ) -> bool {
         let device_id = registration.id.clone();
         if self.remote_connections.contains_key(&device_id) {
             return false;
@@ -157,13 +169,16 @@ impl Runtime {
         // brought its link; until then its row reads not connected.
         let source = match &registration.origin {
             LinkOrigin::Inbound => match self.inbound_arrivals.remove(&device_id) {
-                Some(arrived) => Ok(arrived),
+                Some(arrived) => Source::Arrived(arrived),
                 None => return false,
             },
             // A core waiting for its move's link dials nothing; releasing
             // the hold connects every registration again.
-            LinkOrigin::Dialed { .. } if self.effects_held() => return false,
-            LinkOrigin::Dialed { ssh_alias } => Err(ssh_alias.clone()),
+            LinkOrigin::Dialed { .. } | LinkOrigin::Wsl { .. } if self.effects_held() => {
+                return false;
+            }
+            LinkOrigin::Dialed { ssh_alias } => Source::Ssh(ssh_alias.clone()),
+            LinkOrigin::Wsl { distro } => Source::Wsl(distro.clone()),
         };
         if !self
             .snapshot
@@ -191,12 +206,16 @@ impl Runtime {
                 return Err("This device's id contains \":\", so its panes cannot be told apart from another device's; remove it and register it under another id".to_owned());
             }
             let (transport, arrived) = match source {
-                Ok(Arrived {
+                Source::Arrived(Arrived {
                     transport,
                     node,
                     hear_close,
                 }) => (DeviceReach::Inbound(transport), Some((node, hear_close))),
-                Err(ssh_alias) => {
+                Source::Wsl(distro) => (
+                    DeviceReach::Dialed(self.devices.wsl_transport(&device_id, &distro)?),
+                    None,
+                ),
+                Source::Ssh(ssh_alias) => {
                     let home_path = self.home_path.as_ref().ok_or_else(|| {
                         "HOME is unavailable, so the SSH config cannot be resolved".to_owned()
                     })?;
@@ -258,7 +277,9 @@ impl Runtime {
             context.runtime.clone(),
             context.notifier.clone(),
         );
-        if registration.origin == LinkOrigin::Inbound {
+        // Its machine is read through its node, as this machine is through
+        // its own: a node that dials in, and a WSL distribution of this PC.
+        if registration.origin.reports_own_facts() {
             sync_context = sync_context.dialed_in(
                 super::inbound::InboundLink::for_device(&device_id, context.runtime.clone()),
                 self.own_node(),
@@ -290,7 +311,7 @@ impl Runtime {
         );
         let host_changed = match arrived {
             Some((node, hear_close)) => self.start_arrived_host(&device_id, node, hear_close),
-            None => self.start_device_host(&device_id),
+            None => self.start_device_host(&device_id, attempt),
         };
         changed || host_changed || self.refresh_device_snapshots()
     }
@@ -464,7 +485,7 @@ impl Runtime {
             "device.retry",
             format!("Reconnecting SSH device {device_id}"),
         );
-        self.connect_remote_device(&registration);
+        self.connect_remote_device(&registration, super::hosts::HostAttempt::Operator);
         self.refresh_device_snapshots();
         true
     }
@@ -715,6 +736,23 @@ pub(super) struct DeviceRefusal {
     pub(super) message: String,
 }
 
+/// The device id of the WSL distribution `distro`: `wsl-` and its name in
+/// lowercase, any letter that is not a digit, an ASCII letter or `-` written
+/// as `-`, so the id is one plain word whatever the name.
+pub(super) fn wsl_device_id(distro: &str) -> String {
+    let name: String = distro
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    format!("wsl-{name}")
+}
+
 impl DeviceRefusal {
     fn new(code: &'static str, message: impl Into<String>) -> Self {
         Self {
@@ -732,6 +770,15 @@ impl Runtime {
         &mut self,
         payload: super::events::RegisterDevicePayload,
     ) -> Result<String, DeviceRefusal> {
+        if let Some(distro) = payload.wsl_distro.as_deref() {
+            if !payload.ssh_alias.trim().is_empty() {
+                return Err(DeviceRefusal::new(
+                    "device.invalid",
+                    "A device is either an SSH alias or a WSL distribution",
+                ));
+            }
+            return self.register_wsl_device(distro.trim(), payload.host_consent);
+        }
         let id = payload.id.trim().to_owned();
         let label = payload.label.trim().to_owned();
         let ssh_alias = payload.ssh_alias.trim().to_owned();
@@ -815,7 +862,56 @@ impl Runtime {
             "device.registered",
             format!("Registered SSH device {id} ({ssh_alias})"),
         );
-        self.connect_remote_device(&registration);
+        self.connect_remote_device(&registration, super::hosts::HostAttempt::Operator);
+        Ok(id)
+    }
+
+    /// Registers this PC's WSL distribution `distro` as the device
+    /// `wsl-<distro>` named `WSL <distro>` (PRD wsl-device D-20) and starts
+    /// its connection, which installs Hide's helper there only when
+    /// `consent` is given (B2, B4). One device per distribution.
+    fn register_wsl_device(
+        &mut self,
+        distro: &str,
+        consent: bool,
+    ) -> Result<String, DeviceRefusal> {
+        if !hide_platform::wsl::valid_distribution_name(distro) {
+            return Err(DeviceRefusal::new(
+                "device.invalid",
+                format!("{distro:?} is not a WSL distribution name"),
+            ));
+        }
+        let id = wsl_device_id(distro);
+        let registrations = &self.snapshot.ui_state.device_registrations;
+        if let Some(existing) = registrations.iter().find(|registration| {
+            registration.id == id || registration.origin.wsl_distro() == Some(distro)
+        }) {
+            return Err(DeviceRefusal::new(
+                "device.duplicate",
+                format!("{distro} is already registered as {}", existing.label),
+            ));
+        }
+        let registration = crate::model::DeviceRegistration {
+            id: id.clone(),
+            label: format!("WSL {distro}"),
+            origin: LinkOrigin::Wsl {
+                distro: distro.to_owned(),
+            },
+            herdr_socket_path: None,
+            herdr_session: None,
+            host_consent: consent.then(|| self.new_host_consent()),
+        };
+        self.snapshot
+            .ui_state
+            .device_registrations
+            .push(registration.clone());
+        self.rebuild_device_rows();
+        self.persist_current_ui_state();
+        self.push_diagnostic(
+            "device.registered",
+            format!("Registered WSL device {id} ({distro})"),
+        );
+        self.connect_remote_device(&registration, super::hosts::HostAttempt::Operator);
         Ok(id)
     }
 
@@ -951,6 +1047,7 @@ impl Runtime {
                     herdr_socket_path,
                     herdr_session: None,
                     host_consent: false,
+                    wsl_distro: None,
                 };
                 let id = self.register_device(payload).map_err(refused)?;
                 let device = self

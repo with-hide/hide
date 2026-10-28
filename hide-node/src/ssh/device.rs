@@ -8,7 +8,7 @@ use super::*;
 use hide_node_link::attachments::AttachmentFile;
 use hide_node_link::device::{
     DeviceConnector, DeviceTransport, DialedTransport, EstablishError, Established, HostConsent,
-    OnClose, SshHostListing,
+    OnClose, SshHostListing, Wake,
 };
 
 /// Opens the SSH transport to a device by alias. It carries this build's
@@ -28,6 +28,9 @@ pub struct Connector {
     /// Herdr the status read asks first.
     helper_root: Option<String>,
     herdr_program: PathBuf,
+    /// This PC's WSL, whose distributions are devices too (PRD wsl-device
+    /// D-01); none where there is no WSL.
+    wsl: Option<host::wsl::WslAccess>,
 }
 
 impl Connector {
@@ -41,7 +44,15 @@ impl Connector {
             terminals: None,
             helper_root: None,
             herdr_program: PathBuf::from("herdr"),
+            wsl: None,
         }
+    }
+
+    /// Reaches WSL distributions through `access`: this PC's WSL, or a
+    /// test's stand-in.
+    pub fn with_wsl(mut self, access: host::wsl::WslAccess) -> Self {
+        self.wsl = Some(access);
+        self
     }
 
     /// The helper root the core installs under on each device.
@@ -130,6 +141,31 @@ impl DeviceConnector for Connector {
                 sink,
             }),
         }))
+    }
+
+    fn wsl_transport(&self, node: &str, distro: &str) -> Result<Arc<dyn DialedTransport>, String> {
+        let access = self.wsl.clone().ok_or_else(|| {
+            "WSL distributions can be connected only from the Windows app".to_owned()
+        })?;
+        Ok(Arc::new(host::wsl::WslDevice::new(
+            distro,
+            access,
+            self.packages.clone(),
+            self.panes.clone().map(|events| PaneHook {
+                node: node.to_owned(),
+                events,
+            }),
+            self.terminals.clone().map(|sink| TerminalHook {
+                node: node.to_owned(),
+                sink,
+            }),
+        )?))
+    }
+
+    fn wsl_distributions(&self) -> hide_node_link::device::WslListing {
+        self.wsl
+            .as_ref()
+            .map_or_else(|| Ok(Vec::new()), host::wsl::WslAccess::listing)
     }
 
     fn ssh_hosts(&self, home: &Path, registered: &[String], stop: &AtomicBool) -> SshHostListing {
@@ -280,6 +316,8 @@ impl DialedTransport for SshDevice {
         &self,
         consent: &HostConsent,
         retirement_projects: &[String],
+        // An SSH device is never off in a way Hide could start it.
+        _wake: Wake,
         on_close: OnClose,
     ) -> Result<Established, EstablishError> {
         host::establish(

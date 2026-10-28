@@ -14,8 +14,8 @@ pub use hide_node_link::device::{
     DEFAULT_HELPER_ROOT, DeviceConnector, DeviceTransport, DialedTransport, EstablishError,
     Established, HOST_CONSENT_CARRIED_FROM, HOST_CONSENT_CONTRACT, HOST_KEY_CHANGED,
     HOST_KEY_UNKNOWN, NodeReady, OnClose, RemoteConnectionState, RemoteDiagnostic, RemoteError,
-    RemoteHostIdentity, RemoteResult, RemoteStage, SshHostListing, connection_problem,
-    valid_remote_socket_path,
+    RemoteHostIdentity, RemoteResult, RemoteStage, SshHostListing, Wake, WslListing,
+    connection_problem, valid_remote_socket_path,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

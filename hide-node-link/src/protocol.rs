@@ -1140,6 +1140,14 @@ pub struct Hello {
     /// remain available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reader_features: Option<crate::sessions::ReaderFeatures>,
+    /// The socket of the node's own Herdr, as the node spells it, when its
+    /// link streams bridge that server to the core: a WSL distribution's
+    /// helper, whose Herdr no socket on the core's machine reaches (PRD
+    /// wsl-device D-07). Absent for a node that bridges none. Both ends of
+    /// a link run one build, so the field never meets a peer that lacks it;
+    /// its default only keeps a Hello without it readable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub herdr_socket: Option<String>,
 }
 
 impl Hello {

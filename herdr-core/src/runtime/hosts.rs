@@ -20,7 +20,7 @@ use crate::model::{DeviceHostSnapshot, HostConsent};
 use crate::node_access::NodeLink;
 use crate::remote::{
     EstablishError, Established, HOST_CONSENT_CARRIED_FROM, HOST_CONSENT_CONTRACT, NodeReady,
-    OnClose,
+    OnClose, Wake,
 };
 
 /// A node and the link that reads its files.
@@ -97,11 +97,36 @@ enum HostStart {
         client: Arc<dyn crate::remote::DialedTransport>,
         consent: HostConsent,
         retirement_projects: Vec<String>,
+        wake: Wake,
     },
     Arrived {
         node: NodeReady,
         hear_close: Box<dyn FnOnce(OnClose) + Send + 'static>,
     },
+}
+
+/// Why a device's link is tried. This is the one place that decides whether
+/// the attempt may start a machine that is off, a WSL distribution of this
+/// PC (PRD wsl-device D-11, B3, B23, B24): only the app opening and the
+/// operator's own asking may; everything Hide does by itself may not.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum HostAttempt {
+    /// The app opened a window on this core.
+    AppOpened,
+    /// The operator asked: `다시 연결`, consent given, a device added.
+    Operator,
+    /// Hide's own work: the core starting, a scheduled retry, a read or kit
+    /// job that needs the link, the device's session answering again.
+    Background,
+}
+
+impl HostAttempt {
+    fn wake(self) -> Wake {
+        match self {
+            Self::AppOpened | Self::Operator => Wake::Allowed,
+            Self::Background => Wake::NotAllowed,
+        }
+    }
 }
 
 /// A connection attempt that reached the device's node.
@@ -314,7 +339,7 @@ impl Runtime {
                 "contract": HOST_CONSENT_CONTRACT,
             }));
             self.close_device_host(device_id, "consent renewed");
-            self.retry_device_host_now(device_id);
+            self.retry_device_host_now(device_id, HostAttempt::Operator);
             self.relist_remote_files(device_id);
         } else {
             registration.host_consent = None;
@@ -358,21 +383,25 @@ impl Runtime {
     }
 
     /// Starts a helper connection for a consented device unless one is
-    /// running or starting. Returns whether the device row changed. A node
-    /// that dials this core is started only by the link it brings
-    /// ([`Self::start_arrived_host`]).
-    pub(super) fn start_device_host(&mut self, device_id: &str) -> bool {
+    /// running or starting, for `attempt`. Returns whether the device row
+    /// changed. A node that dials this core is started only by the link it
+    /// brings ([`Self::start_arrived_host`]).
+    pub(super) fn start_device_host(&mut self, device_id: &str, attempt: HostAttempt) -> bool {
         let Some(registration) = self.device_registration(device_id).cloned() else {
             return false;
         };
         if !registration.origin.core_redials() || self.effects_held() {
             return false;
         }
-        if matches!(
-            self.device_hosts.get(device_id).map(|host| &host.phase),
-            Some(HostPhase::Connecting | HostPhase::Ready { .. })
-        ) {
-            return false;
+        match self.device_hosts.get(device_id).map(|host| &host.phase) {
+            Some(HostPhase::Connecting) => {
+                if attempt.wake() == Wake::Allowed {
+                    self.device_wake_pending.insert(device_id.to_owned());
+                }
+                return false;
+            }
+            Some(HostPhase::Ready { .. }) => return false,
+            _ => {}
         }
         let generation = self.advance_host_generation(device_id);
         // This is the attempt a waiting retry was for; a failed one
@@ -422,6 +451,7 @@ impl Runtime {
             return self.refresh_device_snapshots();
         };
         let retirement_projects = self.retirement_projects(device_id);
+        self.device_wake_pending.remove(device_id);
         self.spawn_host_start(
             device_id,
             generation,
@@ -429,8 +459,33 @@ impl Runtime {
                 client,
                 consent,
                 retirement_projects,
+                wake: attempt.wake(),
             },
         )
+    }
+
+    /// The app opened a window on this core: each WSL distribution that is
+    /// off or lost is tried with leave to start it (B3); one whose attempt
+    /// is running gets that leave for the attempt after it, should it find
+    /// the distribution off.
+    pub(super) fn wake_devices_for_app(&mut self) -> bool {
+        let woken: Vec<String> = self
+            .snapshot
+            .ui_state
+            .device_registrations
+            .iter()
+            .filter(|registration| registration.origin.wsl_distro().is_some())
+            .map(|registration| registration.id.clone())
+            .collect();
+        let mut changed = false;
+        for device_id in woken {
+            let ended = self.device_host_ended(&device_id);
+            if ended {
+                self.device_host_retries.remove(&device_id);
+            }
+            changed |= self.start_device_host(&device_id, HostAttempt::AppOpened);
+        }
+        changed
     }
 
     /// Takes the node a node that dialed this core brought: its link is up
@@ -495,9 +550,10 @@ impl Runtime {
                         client,
                         consent,
                         retirement_projects,
+                        wake,
                     } => (
                         client
-                            .establish(&consent, &retirement_projects, on_close)
+                            .establish(&consent, &retirement_projects, wake, on_close)
                             .map(HostReady::Dialed),
                         None,
                     ),
@@ -550,14 +606,14 @@ impl Runtime {
             .get(device_id)
             .and_then(|retry| retry.at_unix_ms)
             .is_some_and(|at| now_unix_ms < at);
-        !waiting && self.start_device_host(device_id)
+        !waiting && self.start_device_host(device_id, HostAttempt::Background)
     }
 
-    /// The operator asked for the device's link: it is tried at once and
-    /// its retry schedule begins over.
-    pub(super) fn retry_device_host_now(&mut self, device_id: &str) -> bool {
+    /// The device's link is asked for now: it is tried at once and its retry
+    /// schedule begins over.
+    pub(super) fn retry_device_host_now(&mut self, device_id: &str, attempt: HostAttempt) -> bool {
         self.device_host_retries.remove(device_id);
-        self.start_device_host(device_id)
+        self.start_device_host(device_id, attempt)
     }
 
     /// The link was lost or could not start: it is tried again after the
@@ -602,7 +658,7 @@ impl Runtime {
                 self.device_hosts.get(&device_id).map(|host| &host.phase),
                 Some(HostPhase::Unavailable(_))
             ) {
-                changed |= self.start_device_host(&device_id);
+                changed |= self.start_device_host(&device_id, HostAttempt::Background);
             } else if let Some(retry) = self.device_host_retries.get_mut(&device_id) {
                 retry.at_unix_ms = None;
             }
@@ -687,7 +743,7 @@ impl Runtime {
                     "kind": "host.retry_due_session_back",
                     "target": device_id,
                 }));
-                self.start_device_host(device_id)
+                self.start_device_host(device_id, HostAttempt::Background)
             }
             Some(HostPhase::Connecting) => {
                 retry.session_back = SessionBack::DuringAttempt;
@@ -801,6 +857,18 @@ impl Runtime {
                         helper_path,
                     },
                 );
+                // A WSL distribution's Herdr rides this link: its session
+                // reads again now rather than at its next reconnect.
+                if self
+                    .link_origin(device_id)
+                    .is_some_and(|origin| origin.wsl_distro().is_some())
+                    && let Some(sync) = self
+                        .remote_connections
+                        .get(device_id)
+                        .and_then(|connection| connection.sync.as_ref())
+                {
+                    sync.republish_waker().refresh_topology();
+                }
                 match node.terminals {
                     Ok(terminals) => {
                         self.terminals.install_device(device_id, terminals);
@@ -878,10 +946,15 @@ impl Runtime {
                     .or_default()
                     .unavailable = Some(message.clone());
                 // A changed identity or an unsupported device waits for the
-                // operator; anything else may pass, so it is tried again.
+                // operator, and a WSL distribution that is off for an attempt
+                // that may wake it; anything else may pass, so it is tried
+                // again.
+                let wake_next = self.device_wake_pending.remove(device_id)
+                    && matches!(error, EstablishError::Stopped(_));
                 let phase = match error {
                     EstablishError::IdentityChanged { .. } => HostPhase::IdentityChanged(message),
                     EstablishError::Unsupported(_) => HostPhase::Unsupported(message),
+                    EstablishError::Stopped(_) => HostPhase::Unavailable(message),
                     _ => {
                         if self
                             .link_origin(device_id)
@@ -895,6 +968,9 @@ impl Runtime {
                 self.set_host_phase(device_id, phase);
                 self.refresh_device_catalog(device_id);
                 self.clear_kit_busy(device_id);
+                if wake_next {
+                    self.start_device_host(device_id, HostAttempt::AppOpened);
+                }
             }
         }
         self.refresh_device_snapshots();

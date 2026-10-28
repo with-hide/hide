@@ -1240,6 +1240,10 @@ pub struct Runtime {
     device_hosts: HashMap<String, hosts::DeviceHost>,
     /// When each device's lost or failed link is tried again.
     device_host_retries: HashMap<String, hosts::HostRetry>,
+    /// The devices for which an attempt that may wake the machine was asked
+    /// while one that may not was running (`hosts::HostAttempt`): should
+    /// that one find the machine off, the next one may wake it.
+    device_wake_pending: HashSet<String>,
     /// The last helper attempt number, for every device. Never reset, so an
     /// answer from an attempt made before a device was removed and added
     /// again under the same id cannot match the new attempt.
@@ -2222,6 +2226,7 @@ impl Runtime {
             device_herdr_behind: HashMap::new(),
             device_hosts: HashMap::new(),
             device_host_retries: HashMap::new(),
+            device_wake_pending: HashSet::new(),
             last_host_generation: 0,
             changes_published_key: None,
             checkout_header: checkout_git::State::default(),
