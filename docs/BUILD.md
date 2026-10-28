@@ -89,6 +89,25 @@ A test that runs its own binary again to play a role names that test with its mo
 nextest still runs each test in a process of its own.
 `test_debug_build_size.py` refuses a `tests/*.rs` file.
 
+## The release profile
+
+`[profile.release]` links with thin LTO in sixteen codegen units, where it used one.
+The release jobs build from a clean target, so the build is most of their time, and sixteen units let rustc optimize one crate on several cores.
+Turning LTO off with one unit was also measured and was slower on macOS (19.2 min), so thin LTO stays.
+
+Three clean builds of `hided`, `hide` and `hide-agent-hooks` per profile on hosted runners, from the same source, gave these medians:
+
+| System | One unit | Sixteen units | Three binaries |
+| --- | --- | --- | --- |
+| macOS arm64 | 22.7 min | 16.0 min (-29%) | +20.9 MB (+17%) |
+| Windows x64 | 22.1 min | 17.0 min (-23%) | +10.7 MB (+6%) |
+| Linux x64 | 15.1 min | 12.8 min (-15%) | +20.3 MB (+14%) |
+
+The two builds of `hided` were also compared at run time on one macOS arm64 hosted runner, four alternating trials each of the `keys` scenario in `docs/PERFORMANCE_TESTING.md`.
+Key echo and CPU did not move beyond the spread between trials, idle or with five panes printing.
+Startup to a healthy `/health` took 168 ms against 134 ms, the median of four trials each, about 35 ms more.
+`hided` holds about 4.7 MiB more resident memory (62 MiB against 57 MiB) in every trial, probably the larger binary's code.
+
 ## The toolchain is never copied
 
 `scripts/toolchain-env.sh` is sourced by every script that calls cargo, and it resolves `CARGO_HOME` and `RUSTUP_HOME` from the cargo shim's own location so an isolated HOME reuses the machine's installed toolchain.
