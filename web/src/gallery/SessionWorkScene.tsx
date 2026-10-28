@@ -1,6 +1,9 @@
 // Production screens over invented wire values for the approved record design.
 // These examples prove layout; the isolated daemon tests own runtime policy.
 import { useLayoutEffect, useMemo } from "react";
+import { configureFileBytes, receiveBytes } from "../fileBytes";
+import invoicesDark from "./landing-invoices-dark.svg?url";
+import invoicesLight from "./landing-invoices-light.svg?url";
 import { createActions } from "../actions";
 import { legacyAgentRow } from "../../test/legacyAgentRow";
 import { requireInterfaceLanguage } from "../i18n/locale";
@@ -9,7 +12,7 @@ import { Palette } from "../Palette";
 import { SlotSessionRecord } from "../SessionRecord";
 import { TooltipProvider } from "../components/ui/tooltip";
 import { useFollowInterfaceLanguage } from "../i18n/translator";
-import type { MissedWork, SessionRecord as RecordValue, WorkFlow, WorkOutput, WorkRequest, WorkSession } from "../snapshot";
+import type { MissedWork, PlanView, RecordView, SessionRecord as RecordValue, WorkFlow, WorkOutput, WorkRequest, WorkSession } from "../snapshot";
 import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
 import { REFERENCE_FOLDS, sidebarScene } from "./sceneData";
@@ -62,6 +65,27 @@ BASE.outputs = [pr(1533, "pane 카드 정리", "merged", SESSION, BASE.title), .
 BASE.pr_groups = [{ child: null, name: BASE.title, outputs: [BASE.outputs[0]!] }, ...children.filter((child) => child.outputs.length).map((child) => ({ child: child.session, name: child.title, outputs: child.outputs }))];
 BASE.children = children;
 
+const step = (key: string, title: string, status: "done" | "working" | "planned", line: string | null = null) => ({ key, title, depends_on: [], status, line, output: null, changed: false, change: null, waiting: false });
+// The session's own plan while it works (PRD session-docs-and-assistant D-41).
+const PLAN: PlanView = {
+  pane_id: "a1", session: SESSION, review: "approved", ask: null, created_at_unix_ms: AT, updated_at_unix_ms: AT + 240 * MIN,
+  steps: [step("frame", "PRD 뼈대 쓰기", "done"), step("before", "고치기 전 화면 찍기", "done"), step("table", "결정표 쓰기", "working", "D-04 숨긴 항목 위치"), step("fix", "메뉴 고치기", "planned"), step("pr", "고친 뒤 화면 찍고 PR", "planned")],
+  progress: { current: "table", next: "fix", done: 2, total: 5, finished: false },
+};
+/** The Views the session and its children opened, for the 결과물 gallery (D-40); `checkout` is the scene's checkout path. */
+function viewsFor(checkout: string): RecordView[] {
+  const view = (id: string, patch: Partial<RecordView>): RecordView => ({ device_id: "local", checkout_path: checkout, display_id: id, kind: "file", label: id, path: `${checkout}/${id}`, session: SESSION, ...patch });
+  return [
+    view("menu-after.svg", { label: "menu-after.svg", path: `${checkout}/agents/runs/menu/menu-after.svg`, document_kind: "image" }),
+    view("page", { kind: "browser", path: "", label: "메뉴 미리보기", url: "http://localhost:5173/menu" }),
+    view("prd.md", { label: "prd.md", path: `${checkout}/docs/menu/prd.md`, document_kind: "markdown", lines: ["# 메뉴 개편 PRD", "", "## 목표", "- 자주 쓰는 세 항목을 앞으로", "## 결정", "| D-01 | ⌘K 순서 |"] }),
+    view("diff", { kind: "diff", label: "Menu.tsx (working diff)", path: `${checkout}/web/src/Menu.tsx`, session: { ...CHILD_SESSION, session_id: "child-2" } }),
+    view("linear", { kind: "browser", path: "", label: "MENU-42 메뉴 개편", url: "https://linear.example.invalid/team/issue/MENU-42" }),
+    view("spec.pdf", { label: "spec.pdf", path: `${checkout}/docs/menu/spec.pdf`, document_kind: "pdf" }),
+    view("notes.md", { label: "notes.md", path: `${checkout}/docs/menu/notes.md` }),
+  ];
+}
+
 /** The scene's record for a `case`: the default, or one that shows a state the record draws. */
 function recordFor(base: RecordValue, kind: string | null): RecordValue {
   const record = structuredClone(base);
@@ -98,7 +122,12 @@ export function SessionWorkScene({ params }: { params: URLSearchParams }) {
     base.rest.status = { ...base.rest.status, background_ai: { provider: "claude", providers: [], unavailable_reason: null, enabled: state !== "off", chosen: true, agent_summary: true } };
     base.rest.navigator!.focused_workspace_id = project.id;
     base.rest.navigator!.focused_checkout_id = project.checkouts[0]!.id;
-    base.agents = [legacyAgentRow({ ...base.agents.find((row) => row.pane_id === "a1")!, pane_id: "a1", agent_kind: "claude", session_id: SESSION.session_id, identity_label: record.title!, group: "working", mark: "going", activity: "working", status_code: "working", detail: "Mac 로컬 검증 결과와 남은 항목을 정리하고 있어요.", message: "Mac 로컬 검증 결과와 남은 항목을 정리하고 있어요.", changed_at_unix_ms: Date.now() - 60_000 })];
+    const asking = params.get("case") === "now-ask";
+    base.agents = [legacyAgentRow({ ...base.agents.find((row) => row.pane_id === "a1")!, pane_id: "a1", agent_kind: "claude", session_id: SESSION.session_id, identity_label: record.title!, group: "working", mark: "going", activity: "working", status_code: asking ? "question" : "working", detail: "Mac 로컬 검증 결과와 남은 항목을 정리하고 있어요.", message: "Mac 로컬 검증 결과와 남은 항목을 정리하고 있어요.", changed_at_unix_ms: Date.now() - 60_000,
+      request: { verb: "working", verb_since_unix_ms: AT + 266 * MIN, request: { text: "메뉴 PRD 써줘. 전후 화면 포함", cut: false, images: 0, at_unix_ms: AT + 266 * MIN, sender: { kind: "operator" } }, request_summary: "메뉴 PRD 써줘. 전후 화면 포함", later_by: null, pull_requests: [] } })];
+    // The pane's second row: its request and what it does now, or the question it asks (D-41).
+    base.rest.terminal = { headers: { a1: { working: !asking, notice: null, band: asking ? { kind: "answer", reason: "숨긴 항목을 오른쪽 끝에 둘까요, 더보기에 넣을까요?", since_unix_ms: AT + 270 * MIN, read: false, action: null, more: 0 } : null, progress: "결정표 쓰는 중", request: { text: "메뉴 PRD 써줘. 전후 화면 포함", images: 0 } } } };
+    if (params.get("case") !== "now-noplan") base.rest.plans = { items: [PLAN] };
     // A stopped pane, so the record's last real turn is the state on top (B10).
     if (params.get("case")?.endsWith("limited") || params.get("case") === "facts") base.agents = base.agents.map((row) => legacyAgentRow({ ...row, status_code: "done", mark: "done", group: "idle", activity: "stopped" }));
     if (state === "off") {
@@ -114,7 +143,8 @@ export function SessionWorkScene({ params }: { params: URLSearchParams }) {
       record.asks = []; record.children = [];
       base.agents = state === "restore-live" ? base.agents.map(row => legacyAgentRow({...row,status_code:"done",mark:"done",group:"idle",activity:"stopped"})) : [];
     }
-    return { base, record, project };
+    const views = params.get("case") === "empty" ? [] : viewsFor(project.checkouts[0]!.path);
+    return { base, record, project, views };
   }, [params, state]);
   const actions = useMemo(() => createActions((event) => {
     if (event.kind === "agent_start_in_checkout") {
@@ -125,12 +155,31 @@ export function SessionWorkScene({ params }: { params: URLSearchParams }) {
     return true;
   }), [fixture, state]);
   useLayoutEffect(() => {
-    useShellStore.setState({ rest: fixture.base.rest, agents: fixture.base.agents, connection: "live", linkSummaries: { filling:false, projects:{[fixture.project.id]:{work:[{session:SESSION,title:fixture.record.title,fallback_title:fixture.record.fallback_title,native_title:fixture.record.native_title,manual_title:null,cwd:fixture.record.cwd,ended_at_unix_ms:AT,open_missed:0,subtree_open_missed:0,missed:[]}]}} }, sessionRecord: { session: SESSION, loading: state === "loading", failure: state === "failed" ? "fixture_read_failed" : null, record: state === "loading" || state === "failed" ? null : fixture.record } });
+    useShellStore.setState({ rest: fixture.base.rest, agents: fixture.base.agents, connection: "live", linkSummaries: { filling:false, projects:{[fixture.project.id]:{work:[{session:SESSION,title:fixture.record.title,fallback_title:fixture.record.fallback_title,native_title:fixture.record.native_title,manual_title:null,cwd:fixture.record.cwd,ended_at_unix_ms:AT,open_missed:0,subtree_open_missed:0,missed:[]}]}} }, sessionRecord: { session: SESSION, loading: state === "loading", failure: state === "failed" ? "fixture_read_failed" : null, record: state === "loading" || state === "failed" ? null : fixture.record, views: fixture.views } });
     useUiStore.setState({ screen: { kind: "workspace" }, overlay: state === "search" ? "search" : "none" });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
     document.documentElement.style.setProperty("--interface-scale", String(scale));
   }, [fixture, state, theme, scale, params]);
+  // An image tile's bytes, answered as hided answers a `file_bytes` request.
+  useLayoutEffect(() => {
+    let live = true;
+    configureFileBytes((message) => {
+      const { request_id, path } = message.payload as { request_id: string; path: string };
+      void fetch(theme === "dark" ? invoicesDark : invoicesLight).then((answer) => answer.arrayBuffer()).then((body) => {
+        if (!live) return;
+        const bytes = new Uint8Array(body);
+        const header = new TextEncoder().encode(JSON.stringify({ type: "file_bytes", request_id, path, offset: 0, total: bytes.byteLength, eof: true }));
+        const frame = new Uint8Array(4 + header.byteLength + bytes.byteLength);
+        new DataView(frame.buffer).setUint32(0, header.byteLength, false);
+        frame.set(header, 4);
+        frame.set(bytes, 4 + header.byteLength);
+        receiveBytes(frame.buffer);
+      });
+      return true;
+    });
+    return () => { live = false; };
+  }, [theme]);
   return <TooltipProvider><div style={{ width: Number(params.get("width") ?? 680) }} className="flex h-full min-w-0 flex-col bg-background text-foreground" data-gallery-scene="session-record">
     {state === "ended" ? <TaskLens actions={actions} /> : <SlotSessionRecord actions={actions} target={SESSION} />}
     {state === "search" ? <Palette actions={actions} /> : null}

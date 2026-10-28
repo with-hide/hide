@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import type { Actions } from "./actions";
 import { browserStillOf, addressShown } from "./browserViews";
 import { FileMark } from "./components/file-mark";
-import { requestFileBytesWithTotal, type FileSource } from "./fileBytes";
+import { blobUrl, requestFileBytesWithTotal, type FileSource } from "./fileBytes";
 import { fileIcon } from "./fileIcons";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
@@ -32,7 +32,7 @@ export function RecordGallery({ tiles, omitted, actions }: { tiles: readonly Gal
         {tile.kind === "view" ? <ViewTile view={tile.view} thumb={tile.thumb} actions={actions} /> : <ArtifactTile name={tile.name} />}
       </li>)}
       {more > 0 ? <li className="min-w-0">
-        <button type="button" className={cn(TILE, "h-full items-center justify-center py-sm text-subhead font-semibold text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring")} aria-label={t("record.galleryMore", { count: more })} onClick={() => setAll(true)} data-record-gallery-more={more}>+{more}</button>
+        <button type="button" className={cn(TILE, "h-full w-full items-center justify-center py-sm text-subhead font-semibold text-muted-foreground outline-none hover:bg-accent hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring")} aria-label={t("record.galleryMore", { count: more })} onClick={() => setAll(true)} data-record-gallery-more={more}>+{more}</button>
       </li> : null}
     </ul>
     {omitted > 0 && (all || more === 0) ? <p className="pt-xs text-micro text-muted-foreground" data-record-views-omitted={omitted}>{t("record.viewsOmitted", { count: omitted })}</p> : null}
@@ -113,7 +113,7 @@ function useImage(path: string, source: FileSource): string | "failed" | null {
       .then(({ bytes, total }) => {
         if (!live) return;
         if (total > IMAGE_BYTES) return setUrl("failed");
-        made = URL.createObjectURL(new Blob([bytes as BlobPart], { type: path.toLowerCase().endsWith(".svg") ? "image/svg+xml" : "image/*" }));
+        made = blobUrl(bytes, path.toLowerCase().endsWith(".svg") ? "image/svg+xml" : "image/*");
         setUrl(made);
       })
       .catch(() => { if (live) setUrl("failed"); });
