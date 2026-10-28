@@ -1089,7 +1089,11 @@ fn seed_memory(
             analysis_provider: "codex".into(),
             session_id: "source-session".into(),
             content_hash: format!("{node}-hash"),
-            created_at_unix_ms: 1,
+            // Made now, as an analysis makes it: a card made long ago and
+            // never given is archived by the core's first aging pass.
+            created_at_unix_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_millis() as u64,
         },
         &[hide_memory::Candidate {
             text: rule.into(),
