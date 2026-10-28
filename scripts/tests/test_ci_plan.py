@@ -23,6 +23,11 @@ FULL = [
     "policy", "rust", "checks", "os-contract", "os-contract-macos", "agy-contract", "omp-contract", "agent-journey",
     "windows-check", "windows-e2e", "windows-desktop", "web-e2e", "remote-mailbox", "desktop-e2e",
 ]
+# Every lane, independently named: CI edits must exercise the planner's decisions.
+ALL = [
+    "policy", "rust", "checks", "os-contract", "os-contract-macos", "agy-contract", "omp-contract", "agent-journey",
+    "agent-clis", "windows-check", "windows-e2e", "windows-desktop", "web-e2e", "remote-mailbox", "desktop-e2e", "package",
+]
 # A full plan with a package input.
 PACKAGED = FULL + ["package"]
 # The paths a pull request changed when `package.yml` had its own trigger.
@@ -277,13 +282,62 @@ class Selection(unittest.TestCase):
         for path in (
             "hided/src/lib.rs", "hided/src/core.rs", "herdr-core/src/lib.rs", "hide-platform/src/process.rs",
             "desktop/src/main/index.ts", "desktop/e2e/fixture.ts", "web/src/store.ts", "docs/TESTING.md",
-            ".github/workflows/pr.yml", "Cargo.lock", "pnpm-lock.yaml",
+            "Cargo.lock", "pnpm-lock.yaml",
         ):
             with self.subTest(path=path):
                 self.assertNotIn("package", plan(path)["lanes"])
         self.assertEqual(set(plan("hide-kit/src/lib.rs")["lanes"]) & MACOS_LANES, {"package"})
-        self.assertEqual(plan(".github/workflows/package.yml")["lanes"], ["policy", "package"])
-        self.assertEqual(plan(".github/workflows/device-helpers.yml")["lanes"], ["policy", "package"])
+        self.assertEqual(plan(".github/workflows/package.yml")["lanes"], ALL)
+        self.assertEqual(plan(".github/workflows/device-helpers.yml")["lanes"], ALL)
+
+    def test_each_macos_lane_keeps_its_inputs_for_added_modified_and_deleted_paths(self):
+        # Expected coverage from the lane commands and approved crate-only rule,
+        # independent of the planner's map. Other operating systems stay planned.
+        cases = (
+            ("docs/TESTING.md", set()),
+            ("herdr-core/src/lib.rs", set()),
+            ("web/mobile.html", set()),
+            ("web/public/m/sw.js", set()),
+            ("web/e2e/new-tab.spec.ts", set()),
+            ("web/src/Overview.tsx", {"desktop-e2e"}),
+            ("web/e2e/herdr-fixture.ts", {"desktop-e2e"}),
+            ("desktop/src/main/index.ts", {"desktop-e2e"}),
+            ("desktop/src/main/updater.ts", {"desktop-e2e", "package"}),
+            ("desktop/src/main/updater.test.ts", set()),
+            ("desktop/scripts/installers.mjs", {"package"}),
+            ("hide-kit/src/lib.rs", {"package"}),
+            ("hide-ai/src/omp.rs", {"omp-contract"}),
+            ("hide-platform/src/process.rs", {"os-contract-macos", "omp-contract"}),
+            ("hide-herdr-client/src/lib.rs", {"os-contract-macos"}),
+        )
+        for status in ("A", "M", "D"):
+            for path, expected in cases:
+                with self.subTest(status=status, path=path):
+                    result = plan(path, status=status)
+                    self.assertEqual(set(result["lanes"]) & MACOS_LANES, expected)
+                    ci.aggregate(needs_for(result))
+                    for lane in expected:
+                        for outcome in ("skipped", "failure", "cancelled"):
+                            with self.assertRaises(ValueError):
+                                ci.aggregate(needs_for(result, **{lane: outcome}))
+
+    def test_package_helpers_need_only_checks_and_the_package_chain(self):
+        for status in ("A", "M", "D"):
+            for name in ("build-identity.mjs", "device-helpers.mjs", "fuses.mjs", "fuses.d.mts", "installers.mjs",
+                         "macos-signing.mjs", "release-binaries.mjs", "smoke-windows-installer.mjs"):
+                with self.subTest(status=status, helper=name):
+                    result = plan("desktop/scripts/" + name, status=status)
+                    self.assertFalse(result["full"])
+                    self.assertEqual(result["lanes"], ["policy", "checks", "package"])
+                    ci.aggregate(needs_for(result))
+                    for outcome in ("skipped", "failure", "cancelled"):
+                        with self.assertRaises(ValueError):
+                            ci.aggregate(needs_for(result, package=outcome))
+        # New helper names stay conservative until their readers are established.
+        self.assertEqual(plan("desktop/scripts/new-helper.mjs")["lanes"], PACKAGED)
+        self.assertEqual(plan("desktop/scripts/installers.mjs", "herdr-core/src/lib.rs")["lanes"],
+                         ["policy", "rust", "checks", "os-contract", "windows-check", "windows-e2e",
+                          "windows-desktop", "web-e2e", "remote-mailbox", "package"])
 
     def test_the_desktop_lane_follows_what_the_app_runs(self):
         for path in (
@@ -343,7 +397,8 @@ class Selection(unittest.TestCase):
                 result = ci.select(entries, CRATES, ROOT)
                 self.assertTrue(result["full"])
                 package = any(path in PACKAGE_INPUTS for _, path in entries)
-                self.assertEqual(result["lanes"], PACKAGED if package else FULL)
+                ci_change = any(path.startswith(".github/workflows/") or path == "scripts/ci-plan.py" for _, path in entries)
+                self.assertEqual(result["lanes"], ALL if ci_change else PACKAGED if package else FULL)
                 self.assertEqual(result["rust_packages"], EVERY_PACKAGE)
 
     def test_a_push_and_a_failed_comparison_run_everything(self):
@@ -459,9 +514,7 @@ class NamedPaths(unittest.TestCase):
         for path in (
             "site/index.html", "tools/t1-preflight/README.md", "spikes/web-shell/measure/summarize.py", "agents/prd/x/prd.md",
             ".gitignore", "web/.gitignore", "LICENSE", "NOTICE", ".github/pull_request_template.md", ".github/dependabot.yml",
-            ".github/workflows/nightly.yml", ".github/workflows/herdr-update.yml", ".github/workflows/perf.yml",
             ".github/ISSUE_TEMPLATE/bug.yml", ".github/DISCUSSION_TEMPLATE/ideas.yml", ".github/APPROVED_CONTRIBUTORS",
-            ".github/workflows/contribution-gate.yml",
             "scripts/tests/test_ci_plan.py", "scripts/check-harness-ignore-anchor.sh",
             "scripts/pen-system.mjs", "scripts/design-review.mjs", "scripts/web-shell-measure/run.sh",
             # The design contract's generators and checks, which `design-contract.yml` runs.
@@ -485,13 +538,13 @@ class NamedPaths(unittest.TestCase):
         for path in ("contracts/agent-clis.json", "scripts/install-agent-clis.py"):
             with self.subTest(path=path):
                 self.assertEqual(self.lanes(path), {"policy", "agy-contract", "agent-clis"})
-        self.assertEqual(self.lanes(".github/workflows/agent-clis.yml"), {"policy", "agent-clis"})
+        self.assertEqual(plan(".github/workflows/agent-clis.yml")["lanes"], ALL)
         self.assertEqual(self.lanes("scripts/agent_journey/clis.py"),
                          {"policy", "agent-journey", "agent-clis", "agy-contract"})
 
     def test_the_journey_and_its_stand_ins_plan_the_journey_lane(self):
         for path in ("scripts/agent_journey/cells.py", "scripts/agent-journey-check.py", "scripts/agent-journey-lane.py",
-                     "contracts/agent-journey.json", ".github/workflows/agent-journey.yml"):
+                     "contracts/agent-journey.json"):
             with self.subTest(path=path):
                 self.assertEqual(self.lanes(path), {"policy", "agent-journey"})
         for path in ("web/e2e/shims/claude-shim.c", "web/e2e/shims/live-check.h", "web/e2e/shims/spawn-provider.c"):
@@ -623,7 +676,8 @@ class NamedPaths(unittest.TestCase):
         ):
             with self.subTest(path=path):
                 self.assertTrue(plan(path)["full"])
-                self.assertEqual(plan(path)["lanes"], PACKAGED if path in PACKAGE_INPUTS else FULL)
+                ci_change = path.startswith(".github/workflows/") or path == "scripts/ci-plan.py"
+                self.assertEqual(plan(path)["lanes"], ALL if ci_change else PACKAGED if path in PACKAGE_INPUTS else FULL)
 
     def test_a_crate_readme_is_still_the_crates_change(self):
         # The crate may include it in a doc test; the documentation rule only
@@ -704,19 +758,23 @@ def runner_jobs(block):
 class Workflows(unittest.TestCase):
     """`pr.yml` has the jobs the plan names, and the job count TESTING.md states."""
 
-    def test_a_workflow_a_lane_calls_plans_the_lanes_that_call_it(self):
-        callers = {}
-        for lane, block in pr_jobs().items():
-            for called in re.findall(r"uses: \./(\.github/workflows/[a-z0-9-]+\.yml)", block):
-                callers.setdefault(called, set()).add(lane)
-        self.assertEqual(len(callers), 9)
-        for workflow, lanes in callers.items():
-            with self.subTest(workflow=workflow):
-                result = plan(workflow)
-                self.assertFalse(result["full"])
-                # `package.yml` reaches `package` through PACKAGE_PATHS, like every package input.
-                self.assertEqual(set(result["lanes"]), lanes | {"policy"})
-                self.assertEqual(result["rust_packages"], [])
+    def test_ci_definitions_exercise_every_lane_including_package(self):
+        paths = [path.relative_to(ROOT).as_posix() for path in (ROOT / ".github/workflows").glob("*.yml")]
+        paths += [".github/actions/rust-cache/action.yml", "scripts/ci-plan.py"]
+        for status in ("A", "M", "D"):
+            for path in paths:
+                with self.subTest(status=status, path=path):
+                    result = plan(path, status=status)
+                    self.assertTrue(result["full"])
+                    self.assertEqual(result["lanes"], ALL)
+                    self.assertEqual(result["rust_packages"], EVERY_PACKAGE)
+
+    def test_a_new_push_cancels_the_previous_pr_run_but_a_body_edit_does_not(self):
+        workflow = (ROOT / ".github/workflows/pr.yml").read_text()
+        concurrency = workflow[workflow.index("\nconcurrency:\n"):workflow.index("\njobs:\n")]
+        self.assertIn("group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}", concurrency)
+        self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action != 'edited' }}", concurrency)
+        self.assertRegex(workflow, r"types: \[[^\]]*\bsynchronize\b[^\]]*\]")
 
     def test_the_package_lane_is_the_only_way_a_pull_request_reaches_package_yml(self):
         # One list of package paths: `package.yml` has no trigger to keep in step with PACKAGE_PATHS.
