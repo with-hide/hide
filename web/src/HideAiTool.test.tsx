@@ -312,13 +312,13 @@ describe("the Hide AI tool", () => {
     await render(suggestionsProject({ global: { path: "/state/global-instruction.md", unusable: null }, rows: [
       suggestionRow("s1", { outcome: "local", basis: { signal: "repeated_request", tag: "korean" }, local, evidence: [said] }),
       suggestionRow("s2", { outcome: "local", local: { ...local, line: "No em dash.", recurred: true } }),
-      suggestionRow("s3", { outcome: "local", local: { ...local, preview: null } }),
+      suggestionRow("s3", { outcome: "local", local: { ...local, preview: null, failure: "no_room" } }),
       suggestionRow("s4", { outcome: "local", group: "applied", state: "applied", local: { ...local, present: true, preview: null } }),
       suggestionRow("s5", { outcome: "local", group: "applied", state: "applied", local: { ...local, preview: null, failure: "edited" } }),
     ] }));
     expect(q("[data-suggestions-global]")).toBeNull();
     expect(q('[data-suggestion="s1"] [data-suggestion-local-line]')?.textContent).toContain("Answer in Korean when asked in Korean.");
-    expect(q('[data-suggestion="s2"] [data-suggestion-local]')?.textContent).toBe("Said again after it went in");
+    expect(q('[data-suggestion="s2"] [data-suggestion-local]')?.textContent).toBe("Said again after it went inOpen file");
     // No room for the line: held, with the file to make room in.
     expect(q('[data-suggestion="s3"] [data-suggestion-local]')?.textContent).toContain("No room");
     expect(q('[data-suggestion="s3"] [data-suggestion-apply]')?.hasAttribute("disabled")).toBe(true);

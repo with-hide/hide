@@ -117,6 +117,7 @@ const LOCAL_FAILURE_KEYS: Record<SuggestionLocalFailure, MessageKey> = {
   edited: "suggestions.local.failure.edited",
   write_failed: "suggestions.local.failure.write_failed",
   evidence_unconfirmed: "suggestions.local.failure.evidence_unconfirmed",
+  bad_line: "suggestions.local.failure.bad_line",
 };
 
 /** The failures the operator settles in the file itself. */
@@ -128,9 +129,10 @@ export function localLine(t: TFunction<"translation">, row: Pick<SuggestionRow, 
   // The open evidence decides before the last press: none of its words could be read now (B7).
   const failure: SuggestionLocalFailure | null = row.group === "choose" && row.evidence_unconfirmed ? "evidence_unconfirmed" : local.failure;
   if (failure) return { text: t(LOCAL_FAILURE_KEYS[failure]), tone: "warning", openFile: OPENS_FILE.has(failure) };
-  // No preview without a press: the file cannot be read as it is, which the tab's own line says once, or the line has no room in it.
-  if (row.group === "choose" && local.preview === null && !local.present) return unusable ? null : { text: t("suggestions.local.failure.no_room"), tone: "warning", openFile: true };
-  if (row.group === "choose" && local.recurred) return { text: t("suggestions.local.recurred"), tone: "warning", openFile: false };
+  // No preview and no reason: the file cannot be read as it is, which the tab's own line says once.
+  if (row.group === "choose" && local.preview === null && !local.present && unusable) return null;
+  // Said again with the line in the file: the operator rewords it there, or skips it.
+  if (row.group === "choose" && local.recurred) return { text: t("suggestions.local.recurred"), tone: "warning", openFile: true };
   if (local.present) return { text: t(row.group === "choose" ? "suggestions.local.present" : "suggestions.local.applied"), tone: row.group === "choose" ? "muted" : "success", openFile: false };
   return null;
 }

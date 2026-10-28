@@ -301,6 +301,12 @@ pub struct SuggestionEvidenceSnapshot {
     /// reads; the shell never sees it.
     #[serde(skip)]
     pub offset: Option<u64>,
+    /// The digest of the words at `offset`, so an excerpt shows those words
+    /// and not whatever the session holds there now; never sent.
+    #[serde(skip)]
+    pub words: Option<String>,
+    /// How an ignored memory had been given to that session (B15).
+    pub given: Option<crate::suggestions::ledger::Given>,
     /// The words, masked and cut, once the row's evidence was opened (PRD
     /// memory-self-improve B7).
     pub excerpt: Option<String>,

@@ -9049,6 +9049,7 @@ mod wire_enum_tests {
                 LocalFailure::Edited,
                 LocalFailure::WriteFailed,
                 LocalFailure::EvidenceUnconfirmed,
+                LocalFailure::BadLine,
             ];
             for variant in failures {
                 match variant {
@@ -9058,7 +9059,8 @@ mod wire_enum_tests {
                     | LocalFailure::Changed
                     | LocalFailure::Edited
                     | LocalFailure::WriteFailed
-                    | LocalFailure::EvidenceUnconfirmed => {}
+                    | LocalFailure::EvidenceUnconfirmed
+                    | LocalFailure::BadLine => {}
                 }
             }
             assert_wire(&contract, "suggestion_local_failure", &failures);
@@ -9073,6 +9075,16 @@ mod wire_enum_tests {
             }
             assert_wire(&contract, "global_instruction_unusable", &unusable);
             checked.insert("global_instruction_unusable");
+
+            use crate::suggestions::ledger::Given;
+            let given = [Given::Index, Given::Body];
+            for variant in given {
+                match variant {
+                    Given::Index | Given::Body => {}
+                }
+            }
+            assert_wire(&contract, "suggestion_given", &given);
+            checked.insert("suggestion_given");
         }
 
         let unavailable = [

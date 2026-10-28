@@ -100,6 +100,8 @@ function GlobalInstruction({ project, actions }: { project: ProjectSuggestions; 
 /** `파일 열기`: the Hide global instruction in the system's editor, where the operator fixes what Hide cannot (B5, B9, B10). */
 function OpenFile({ path, actions }: { path: string; actions: Actions }) {
   const { t } = useInterfaceTranslation();
+  // The path is the core's machine's; a window elsewhere has no such file to open.
+  if (!actions.onCoreMachine()) return null;
   return (
     <button type="button" className="pointer-events-auto shrink-0 text-subtle-foreground underline-offset-4 hover:text-foreground hover:underline" title={path} onClick={() => actions.openOwnedFile(path)} data-suggestion-open-file={path}>
       {t("suggestions.local.openFile")}
@@ -325,7 +327,12 @@ function Evidence({ evidence, project, actions }: { evidence: SuggestionEvidence
         data-suggestion-evidence-gone={evidence.gone ? "true" : undefined}
       >
         {evidence.agent ? <AgentLogo agent={evidence.agent} label={evidence.agent} /> : <span aria-hidden="true" className="size-(--size-icon-lg)" />}
-        {evidence.improvement ? (
+        {evidence.given ? (
+        <span className="flex min-w-0 items-center gap-xs">
+          <Badge data-suggestion-evidence-given={evidence.given}>{t(evidence.given === "index" ? "suggestions.evidence.givenIndex" : "suggestions.evidence.givenBody")}</Badge>
+          <span className="min-w-0 truncate text-subtle-foreground">{name} · {signal}{evidence.gone ? ` · ${t("suggestions.evidence.gone")}` : ""}</span>
+        </span>
+      ) : evidence.improvement ? (
           <span className="flex min-w-0 items-center gap-xs">
             <Badge data-suggestion-evidence-improvement={evidence.improvement}>{t(`suggestions.improvement.${evidence.improvement}`)}</Badge>
             <span className="min-w-0 truncate text-subtle-foreground">{name}{evidence.gone ? ` · ${t("suggestions.evidence.gone")}` : ""}</span>

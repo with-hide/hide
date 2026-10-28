@@ -197,6 +197,20 @@ pub struct Said {
     /// Hide global instruction a fix wrote from one that was not (D-33).
     #[serde(default)]
     pub session_started_at_unix_ms: Option<u64>,
+    /// How an ignored memory had been given, in the session's start list or
+    /// in full (B15); none for a repeated request.
+    #[serde(default)]
+    pub given: Option<Given>,
+}
+
+/// How a memory reached the session that ignored it (B15).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Given {
+    /// Its line in the session's start list.
+    Index,
+    /// Its whole text with a prompt.
+    Body,
 }
 
 /// A pull request a record names.
@@ -377,6 +391,7 @@ mod tests {
                 offset,
                 words: words.map(str::to_owned),
                 session_started_at_unix_ms: None,
+                given: None,
             }),
             ..failed("x", session)
         };

@@ -3,6 +3,7 @@
 //! stored, the read runs off the lock through the node that holds the
 //! sessions, and each excerpt is masked and cut before it reaches the
 //! snapshot. A row none of whose words can be read again cannot be applied.
+//! One read runs at a time; a row opened while it runs is read when it ends.
 
 use super::*;
 use crate::model::ProjectSuggestionsSnapshot;
@@ -23,10 +24,14 @@ pub(super) struct SuggestionEvidencePayload {
 /// The excerpts of the one row whose evidence is open.
 #[derive(Default)]
 pub(super) struct EvidenceWork {
-    row: Option<String>,
+    /// The Project and row open: row ids repeat across Projects.
+    open: Option<(String, String)>,
     generation: u64,
     /// Each evidence place read, and its masked excerpt or none.
     read: Option<Vec<Excerpt>>,
+    /// A read thread is running; it reads the open row again when it ends
+    /// on an older one.
+    running: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -38,31 +43,61 @@ struct Excerpt {
 
 impl EvidenceWork {
     /// Whether the open row's words were read and none could be (B7).
-    pub(super) fn unconfirmed(&self, row: &str) -> bool {
-        self.row.as_deref() == Some(row)
+    pub(super) fn unconfirmed(&self, workspace_id: &str, row: &str) -> bool {
+        self.open
+            .as_ref()
+            .is_some_and(|(workspace, open)| workspace == workspace_id && open == row)
             && self
                 .read
                 .as_ref()
                 .is_some_and(|read| !read.is_empty() && read.iter().all(|e| e.text.is_none()))
+    }
+
+    /// Forgets the open row, so a read still running is dropped when it ends.
+    pub(super) fn close(&mut self) {
+        self.generation += 1;
+        self.open = None;
+        self.read = None;
     }
 }
 
 impl Runtime {
     pub(super) fn open_suggestion_evidence(&mut self, payload: SuggestionEvidencePayload) -> bool {
         let work = &mut self.suggestions_work.evidence;
-        work.generation += 1;
-        work.read = None;
-        work.row = payload.id.clone();
+        work.close();
         let Some(id) = payload.id else {
             return self.compose_suggestions();
+        };
+        if self
+            .suggestions_work
+            .opened
+            .as_ref()
+            .is_none_or(|opened| opened.workspace_id != payload.workspace_id)
+        {
+            return self.compose_suggestions();
+        }
+        self.suggestions_work.evidence.open = Some((payload.workspace_id, id));
+        self.read_suggestion_evidence();
+        self.compose_suggestions()
+    }
+
+    /// Starts reading the open row's words, unless a read is running, which
+    /// starts this one when it ends.
+    fn read_suggestion_evidence(&mut self) {
+        let work = &self.suggestions_work.evidence;
+        if work.running || work.read.is_some() {
+            return;
+        }
+        let Some((workspace_id, id)) = work.open.clone() else {
+            return;
         };
         let Some(opened) = self
             .suggestions_work
             .opened
             .clone()
-            .filter(|opened| opened.workspace_id == payload.workspace_id)
+            .filter(|opened| opened.workspace_id == workspace_id)
         else {
-            return false;
+            return;
         };
         let places = self
             .snapshot
@@ -85,7 +120,7 @@ impl Runtime {
             })
             .unwrap_or_default();
         if places.is_empty() {
-            return self.compose_suggestions();
+            return;
         }
         let (Some(context), Ok((_, link))) = (
             self.worker_context.clone(),
@@ -101,10 +136,11 @@ impl Runtime {
                     })
                     .collect(),
             );
-            return self.compose_suggestions();
+            return;
         };
         let database = self.memory_database_path();
         let generation = self.suggestions_work.evidence.generation;
+        self.suggestions_work.evidence.running = true;
         let spawned = thread::Builder::new()
             .name("hide-suggestion-evidence".to_owned())
             .spawn(move || {
@@ -115,10 +151,12 @@ impl Runtime {
                 let changed = match runtime.lock() {
                     Ok(mut guard) => {
                         let work = &mut guard.suggestions_work.evidence;
-                        if work.generation != generation {
-                            return;
+                        work.running = false;
+                        if work.generation == generation {
+                            work.read = Some(read);
                         }
-                        work.read = Some(read);
+                        // A row opened while this ran is read now.
+                        guard.read_suggestion_evidence();
                         guard.compose_suggestions()
                     }
                     Err(_) => return,
@@ -129,12 +167,12 @@ impl Runtime {
                 }
             });
         if let Err(error) = spawned {
+            self.suggestions_work.evidence.running = false;
             crate::diagnostic!(json!({
                 "component": "suggestions", "kind": "evidence.read_not_started",
                 "message": error.to_string(),
             }));
         }
-        self.compose_suggestions()
     }
 }
 
@@ -164,6 +202,9 @@ fn read_excerpts(
                         offset,
                     )
                 })
+                // Only the operator's own words stand as evidence: a session
+                // rewritten since may hold a letter or an answer there now.
+                .filter(|event| event.from_operator())
                 .map(|event| {
                     let masked = hide_memory::redact(&event.text).text;
                     masked
@@ -193,11 +234,14 @@ fn read_excerpts(
 /// Lays the open row's excerpts on it: each read place's words or its
 /// `근거 확인 불가`, and the row's block when none could be read (B7).
 pub(super) fn lay_excerpts(project: &mut ProjectSuggestionsSnapshot, work: &EvidenceWork) {
-    let (Some(id), Some(read)) = (work.row.as_deref(), work.read.as_ref()) else {
+    let (Some((workspace_id, id)), Some(read)) = (work.open.as_ref(), work.read.as_ref()) else {
         return;
     };
-    let unconfirmed = work.unconfirmed(id);
-    let Some(row) = project.rows.iter_mut().find(|row| row.id == id) else {
+    if *workspace_id != project.workspace_id {
+        return;
+    }
+    let unconfirmed = work.unconfirmed(workspace_id, id);
+    let Some(row) = project.rows.iter_mut().find(|row| row.id == *id) else {
         return;
     };
     for evidence in &mut row.evidence {

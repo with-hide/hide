@@ -1388,6 +1388,15 @@ fn walk_project(
                     "archived": aged.archived,
                 }));
             }
+            if aged.changes_trimmed > 0 {
+                crate::diagnostic!(json!({
+                    "component": "memory",
+                    "kind": "card_changes.trimmed",
+                    "project_id": project_id,
+                    "trimmed": aged.changes_trimmed,
+                    "limit": hide_memory::CHANGE_LIMIT,
+                }));
+            }
             for card in aged.recheck_expired {
                 crate::diagnostic!(json!({
                     "component": "memory",
@@ -2343,27 +2352,24 @@ fn analyze_session(
         }
         if !written.summary.duplicate_batch {
             learned += written.summary.created + written.summary.superseded;
-            taught.signals.extend(memory_signals(
-                store,
-                project_id,
-                root,
-                session,
-                &written.summary,
-            ));
-            taught
-                .cards
-                .extend(
-                    written
-                        .summary
-                        .outcomes
-                        .iter()
-                        .filter_map(|outcome| match outcome {
-                            hide_memory::CandidateOutcome::Created { number }
-                            | hide_memory::CandidateOutcome::Merged { number }
-                            | hide_memory::CandidateOutcome::Superseded { number } => Some(*number),
-                            _ => None,
-                        }),
-                );
+            let (signals, repeated) =
+                memory_signals(store, project_id, root, session, &written.summary);
+            taught.signals.extend(signals);
+            // A turn counted as a repeat raises no correction of its own
+            // (D-37, B13): its card's repeat records stand for it.
+            taught.cards.extend(
+                written
+                    .summary
+                    .outcomes
+                    .iter()
+                    .filter_map(|outcome| match outcome {
+                        hide_memory::CandidateOutcome::Created { number }
+                        | hide_memory::CandidateOutcome::Merged { number }
+                        | hide_memory::CandidateOutcome::Superseded { number } => Some(*number),
+                        _ => None,
+                    })
+                    .filter(|number| !repeated.contains(number)),
+            );
         }
         completed = index + 1;
         store
@@ -2445,15 +2451,21 @@ pub(super) struct Taught {
 /// each meaning the batch named was said, with the operator's words behind
 /// the card that says the same, which the ledger keeps once whatever sends
 /// them again; and one record per card the session was given and ignored.
-/// A record carries places and digests, never words (D-43).
+/// A record carries places and digests, never words (D-43). Also answers
+/// the cards this session's own repeats name.
 fn memory_signals(
     store: &MemoryStore,
     project_id: &str,
     root: &str,
     session: &ProjectSession,
     summary: &hide_memory::ApplySummary,
-) -> Vec<crate::suggestions::ledger::Observation> {
-    use crate::suggestions::ledger::{Observation, Said, SessionRef, Signal};
+) -> (
+    Vec<crate::suggestions::ledger::Observation>,
+    std::collections::BTreeSet<u64>,
+) {
+    use crate::suggestions::ledger::{Given, Observation, Said, SessionRef, Signal};
+    let key = format!("{}:{}", session.agent.as_str(), session.id);
+    let mut repeated = std::collections::BTreeSet::new();
     let observation = |signal, tag: String, session: SessionRef, at, said| Observation {
         signal,
         tag,
@@ -2473,6 +2485,11 @@ fn memory_signals(
                 sources
                     .into_iter()
                     .filter(|source| summary.repeated.contains(&source.meaning))
+                    .inspect(|source| {
+                        if source.session == key {
+                            repeated.extend(source.card);
+                        }
+                    })
                     .filter_map(|source| {
                         let (agent, id) = source.session.split_once(':')?;
                         Some(observation(
@@ -2490,6 +2507,7 @@ fn memory_signals(
                                 offset: source.event_offset,
                                 words: source.words,
                                 session_started_at_unix_ms: source.session_started_unix_ms,
+                                given: None,
                             },
                         ))
                     }),
@@ -2510,7 +2528,6 @@ fn memory_signals(
         ) else {
             continue;
         };
-        let key = format!("{}:{}", session.agent.as_str(), session.id);
         let Some(miss) = misses
             .iter()
             .rev()
@@ -2518,14 +2535,19 @@ fn memory_signals(
         else {
             continue;
         };
-        // The card's text is the line a stronger fix writes; a long card
-        // stands by its index line.
-        let line = if card.body.chars().count() <= hide_memory::store_limits::LINE_CHARS
-            && !card.body.contains('\n')
-        {
-            card.body.clone()
-        } else {
-            card.title.clone()
+        // Only a card the operator said stands behind a stronger fix: an
+        // agent's own note never becomes the operator's instruction (B18).
+        if card.human_source_count == 0 {
+            continue;
+        }
+        // The card's text is the line a stronger fix writes, kept as a
+        // repeat's line is; a long card stands by its index line.
+        let Some(line) = (!card.body.contains('\n'))
+            .then(|| hide_memory::instruction_line(&card.body))
+            .flatten()
+            .or_else(|| hide_memory::instruction_line(&card.title))
+        else {
+            continue;
         };
         signals.push(observation(
             Signal::MemoryIgnored,
@@ -2542,10 +2564,15 @@ fn memory_signals(
                 offset: miss.event_offset,
                 words: None,
                 session_started_at_unix_ms: session.started_at_unix_ms,
+                given: match miss.via.as_deref() {
+                    Some("index") => Some(Given::Index),
+                    Some("body") => Some(Given::Body),
+                    _ => None,
+                },
             },
         ));
     }
-    signals
+    (signals, repeated)
 }
 
 /// The cards a session taught or confirmed, as that session's corrections
@@ -6478,7 +6505,10 @@ mod tests {
             availability: SessionAvailability::Available,
             stamp: None,
         };
-        let signals = memory_signals(&store, "p", "/repo", &session, &summary);
+        let (signals, repeated) = memory_signals(&store, "p", "/repo", &session, &summary);
+        // s2's turn is in the repeat, so the card it taught is no correction
+        // of its own (D-37, B13).
+        assert_eq!(repeated, [card.number].into());
         // The ledger keeps one record per key: the same words said again
         // (here the card's own source in s2) are one (D-37).
         let repeats = signals

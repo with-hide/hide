@@ -173,6 +173,11 @@ impl Runtime {
                 None => Command::Close,
             });
         }
+        if self.suggestions_work.opened != opened {
+            // Another Project's rows share these ids; what was read for the
+            // last one says nothing about them.
+            self.suggestions_work.evidence.close();
+        }
         self.suggestions_work.opened = opened;
         self.compose_suggestions()
     }
@@ -248,7 +253,10 @@ impl Runtime {
         // A row none of whose words could be read again is not applied
         // (PRD memory-self-improve D-34, B7).
         if matches!(action, LineAction::Apply | LineAction::Retry)
-            && self.suggestions_work.evidence.unconfirmed(&payload.id)
+            && self
+                .suggestions_work
+                .evidence
+                .unconfirmed(&payload.workspace_id, &payload.id)
         {
             crate::diagnostic!(json!({
                 "component": "suggestions", "kind": "apply.refused",

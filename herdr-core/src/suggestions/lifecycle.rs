@@ -47,6 +47,14 @@ pub struct LocalApply {
     /// The line the last apply wrote, which its Undo takes out.
     #[serde(default)]
     pub line: Option<String>,
+    /// The file already had the line when the operator pressed, so Hide
+    /// wrote nothing and its Undo takes nothing out (B8, B9).
+    #[serde(default)]
+    pub adopted: bool,
+    /// A write saved before it is made, so a press repeated after a write
+    /// whose answer was lost reads the file as that write's (B8, B9).
+    #[serde(default)]
+    pub writing: Option<LocalWrite>,
     #[serde(default)]
     pub applied_at_unix_ms: Option<u64>,
     /// The operator said it again in a session that was given the line, so
@@ -55,6 +63,14 @@ pub struct LocalApply {
     pub recurred_at_unix_ms: Option<u64>,
     #[serde(default)]
     pub failure: Option<LocalFailure>,
+}
+
+/// A write to the Hide global instruction that may have landed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalWrite {
+    Apply(String),
+    Revert(String),
 }
 
 /// Why a press on a global instruction line wrote nothing (B5, B8-B10,
@@ -76,6 +92,9 @@ pub enum LocalFailure {
     WriteFailed,
     /// No readable words stand behind the line (B7, D-34).
     EvidenceUnconfirmed,
+    /// The line carries markup, a character no one would see, or a secret,
+    /// so no session is given it.
+    BadLine,
 }
 
 impl LocalFailure {
@@ -88,7 +107,8 @@ impl LocalFailure {
             Refusal::Unusable {
                 unusable: Unusable::Unreadable,
             } => Self::Unreadable,
-            Refusal::NoRoom | Refusal::BadLine => Self::NoRoom,
+            Refusal::NoRoom => Self::NoRoom,
+            Refusal::BadLine => Self::BadLine,
             Refusal::Changed { .. } => Self::Changed,
             Refusal::Edited { .. } => Self::Edited,
             Refusal::WriteFailed => Self::WriteFailed,

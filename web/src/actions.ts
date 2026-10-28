@@ -2103,6 +2103,12 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       bridge.openPath(path);
     },
 
+    /** Whether this window runs on the core's machine, where a path the core names is a file it can open. */
+    onCoreMachine(): boolean {
+      const now = rest();
+      return now !== null && windowDeviceId(now.navigator?.devices) === localDeviceId(now);
+    },
+
     /** One change in the ⚙ sheet's 제안 group (D-26); the fields left out stay as they are. */
     suggestionSettings(workspaceId: string, patch: SuggestionSettingsPatch) {
       dispatch({ schema_version: 2, kind: "suggestion_settings", payload: { workspace_id: workspaceId, ...patch } });

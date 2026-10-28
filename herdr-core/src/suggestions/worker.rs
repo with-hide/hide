@@ -15,7 +15,7 @@ use super::analysis::{
 };
 use super::apply::{self as applying, ApplyOrder, FollowedAttempt};
 use super::ledger::{Observation, RecordIndex, SessionRef, SignalGroup};
-use super::lifecycle::{AttemptMove, AttemptPhase, LocalFailure};
+use super::lifecycle::{AttemptMove, AttemptPhase, LocalFailure, LocalWrite};
 use super::notebook::{Line, LineId, Notebook, NotebookEdit, Outcome, Stage, Strike, StruckBy};
 use super::policy::{self, Quantity};
 use super::read::{self, ReadInput};
@@ -1545,9 +1545,11 @@ impl Worker {
 
     /// Writes a new suggestion's line into the Hide global instruction on the
     /// operator's press, whatever the apply mode, with no GitHub (PRD
-    /// memory-self-improve D-07, D-33, B8, B10, B29). The same press twice,
-    /// or again after a write whose answer was lost, writes it once; a line
-    /// already in the file is not written again.
+    /// memory-self-improve D-07, D-33, B8, B10, B29). The press carries the
+    /// token of the line and file it was shown; any other line or file is
+    /// refused with a new preview. The same press twice, or again after a
+    /// write whose answer was lost, writes it once; a line the operator
+    /// already had is adopted, not written, and its Undo takes nothing out.
     fn apply_local(&mut self, project: &str, line_id: LineId, seen: Option<&str>) {
         let now = self.now();
         let state_dir = self.state_dir();
@@ -1573,20 +1575,38 @@ impl Worker {
             return;
         };
         let local = life.local.get_or_insert_with(Default::default);
+        // A write saved before it was made and the line now in the file: that
+        // write landed and its answer was lost.
+        let ours = local.writing == Some(LocalWrite::Apply(text.clone()));
+        let mut adopted = false;
         let written = match global_instruction::holds(&state_dir, &text) {
-            Ok(true) => Ok(()),
-            Ok(false) => {
-                global_instruction::preview(&state_dir, &text).and_then(|preview| match seen {
-                    Some(seen) if seen != preview.before => {
-                        Err(global_instruction::Refusal::Changed { preview })
-                    }
-                    _ => global_instruction::apply(&state_dir, &preview),
-                })
+            Ok(true) => {
+                adopted = !ours;
+                Ok(())
             }
+            Ok(false) => match global_instruction::preview(&state_dir, &text) {
+                Ok(preview) if seen != Some(preview.token().as_str()) => {
+                    Err(global_instruction::Refusal::Changed { preview })
+                }
+                Ok(preview) => {
+                    local.writing = Some(LocalWrite::Apply(text.clone()));
+                    if let Err(code) = store.save_line(project, &line, &life) {
+                        return log_store("apply_local", &code);
+                    }
+                    let local = life.local.get_or_insert_with(Default::default);
+                    let written = global_instruction::apply(&state_dir, &preview);
+                    local.writing = None;
+                    written
+                }
+                Err(refusal) => Err(refusal),
+            },
             Err(unusable) => Err(global_instruction::Refusal::Unusable { unusable }),
         };
+        let local = life.local.get_or_insert_with(Default::default);
+        local.writing = None;
         let outcome = match written {
             Ok(()) => {
+                local.adopted = adopted;
                 local.line = Some(text);
                 local.applied_at_unix_ms = Some(now);
                 local.recurred_at_unix_ms = None;
@@ -1605,6 +1625,7 @@ impl Worker {
                     LocalFailure::Edited => "edited",
                     LocalFailure::WriteFailed => "write_failed",
                     LocalFailure::EvidenceUnconfirmed => "evidence_unconfirmed",
+                    LocalFailure::BadLine => "bad_line",
                 }
             }
         };
@@ -1620,8 +1641,9 @@ impl Worker {
 
     /// Takes the line Hide wrote back out of its global instruction, and only
     /// it (D-30, B9): the row returns to 고를 것. A line the operator edited
-    /// or removed is left as it is and the row says so; a second press
-    /// changes nothing.
+    /// or removed is left as it is and the row says so; a line they had
+    /// before the press stays; a second press, or one after a write whose
+    /// answer was lost, changes nothing more.
     fn revert_local(&mut self, project: &str, line_id: LineId) {
         let now = self.now();
         let state_dir = self.state_dir();
@@ -1642,8 +1664,28 @@ impl Worker {
         let Some(text) = local.line.clone().filter(|_| line.stage == Stage::Settled) else {
             return;
         };
-        let outcome = match global_instruction::revert(&state_dir, &text) {
+        let reverted = if local.adopted {
+            Ok(())
+        } else {
+            let ours = local.writing == Some(LocalWrite::Revert(text.clone()));
+            match global_instruction::holds(&state_dir, &text) {
+                Ok(false) if ours => Ok(()),
+                _ => {
+                    local.writing = Some(LocalWrite::Revert(text.clone()));
+                    if let Err(code) = store.save_line(project, &line, &life) {
+                        return log_store("revert_local", &code);
+                    }
+                    global_instruction::revert(&state_dir, &text)
+                }
+            }
+        };
+        let Some(local) = life.local.as_mut() else {
+            return;
+        };
+        local.writing = None;
+        let outcome = match reverted {
             Ok(()) => {
+                local.adopted = false;
                 local.line = None;
                 local.applied_at_unix_ms = None;
                 local.recurred_at_unix_ms = None;
@@ -2183,6 +2225,7 @@ mod tests {
                 offset,
                 words: Some(format!("{session}-{offset}")),
                 session_started_at_unix_ms: Some(started),
+                given: None,
             }),
         }
     }
@@ -2257,6 +2300,58 @@ mod tests {
         let read = fixture.read_until(|read| read.rows[0].group == SuggestionGroup::Choose);
         assert!(read.rows[0].local.as_ref().unwrap().recurred);
         assert!(read.rows[0].local.as_ref().unwrap().present);
+    }
+
+    /// B8, B9: a press without the token of the line and file it was shown
+    /// writes nothing, and a line the operator already had is adopted, so
+    /// its Undo leaves their file as it is.
+    #[test]
+    fn a_press_writes_only_what_it_was_shown_and_never_takes_out_the_operators_own_line() {
+        let fixture = Fixture::new();
+        let state_dir = fixture.store.parent().unwrap().to_owned();
+        let path = hide_kit::layout::global_instruction(&state_dir);
+        std::fs::write(&path, "My own line.\n").unwrap();
+        fixture.open();
+        let observe = |facts| {
+            fixture.send(Command::ObserveProject {
+                project_id: "project/repo".into(),
+                facts,
+            })
+        };
+        observe(vec![said("a", 1, START - 3, START - 10)]);
+        observe(vec![
+            said("a", 4, START - 2, START - 10),
+            said("b", 2, START - 1, START - 5),
+        ]);
+        let read = fixture.read_until(|read| !chosen(read).is_empty());
+        let line = read::line_of_row(&read.rows[0].id).unwrap();
+        let act = |action, seen: Option<String>| {
+            fixture.send(Command::Action {
+                project: project(),
+                line,
+                action,
+                seen,
+            })
+        };
+        act(LineAction::Apply, None);
+        act(LineAction::Apply, Some("another line's token".into()));
+        let read = fixture.read_until(|read| {
+            read.rows[0].local.as_ref().unwrap().failure == Some(LocalFailure::Changed)
+        });
+        assert_eq!(read.rows[0].group, SuggestionGroup::Choose);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "My own line.\n");
+
+        // The operator writes the same line by hand, then presses.
+        std::fs::write(&path, "My own line.\n  Answer the operator in Korean.\n").unwrap();
+        act(LineAction::Apply, None);
+        fixture.read_until(|read| read.rows[0].group == SuggestionGroup::Applied);
+        act(LineAction::Revert, None);
+        fixture.read_until(|read| read.rows[0].group == SuggestionGroup::Choose);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "My own line.\n  Answer the operator in Korean.\n",
+            "the operator's own line stays"
+        );
     }
 
     fn project() -> ProjectRef {

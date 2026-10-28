@@ -946,10 +946,14 @@ An open issue reads `이슈 열림` with the issue.
 A merged row folds under `반영됨 N · 효과 있었음 M`; while the watch runs its line is the quiet `지켜보는 중 · 세션 2/5`, a row whose problem did not come back reads `효과 있었음`, and nothing else is said (B15).
 A request the operator keeps repeating and a memory agents keep missing rise here too (PRD memory-self-improve B6, B12, B18), titled `같은 요청을 계속 하고 있어요: <meaning>` or `에이전트가 받은 기억을 계속 놓쳐요: m31` when the analysis left no discomfort; a project's way of working rises as any suggestion does, with a skill for a procedure as its first fix.
 A personal preference's fix is one line of the Hide global instruction, which every Hide pane session is given: in place of `고칠 것` the row shows `Hide 전역 지시에 들어갈 줄` over the line in a tinted box, and its button is `Hide 전역 지시에 넣기`, which needs no GitHub and is never pressed automatically (B8).
-The press goes in with the preview the row was drawn from; when the file changed since, nothing is written and the row reads `파일이 바뀌어서 새 미리보기예요` with the new one, and when the line has no room it reads `자리 없음: Hide 전역 지시가 한도를 넘어요` with `파일 열기`, its button held (B10).
+The press goes in with the preview the row was drawn from; when the file or the line changed since, nothing is written and the row reads `파일이 바뀌어서 새 미리보기예요` with the new one, and when the line has no room it reads `자리 없음: Hide 전역 지시가 한도를 넘어요` with `파일 열기`, its button held (B10).
+A line with markup, a hidden character or a secret reads `이 줄은 넣을 수 없어요: 마크업, 보이지 않는 문자나 비밀값이 있어요`, its button held.
+A line the file already had reads `이미 Hide 전역 지시에 있어요` and offers only `넘어가기`; pressed when the file had it, it is adopted, and its `되돌리기` leaves the file as it is.
 A write that failed reads `파일을 쓰지 못했어요` and its button becomes `다시 시도` (B29).
 An applied line folds under 반영됨 reading `Hide 전역 지시에 들어 있어요` in the success colour, with `되돌리기`, which takes out only that line and brings the row back to 고를 것 (B9); a line changed by hand reads `손으로 고친 줄이라 그대로 뒀어요` with `파일 열기` and no `되돌리기`.
-Said again in a session that was given the line, the row comes back to 고를 것 reading `넣은 뒤에도 또 말했어요` in the warning colour (B11).
+Said again in a session that was given the line, the row comes back to 고를 것 reading `넣은 뒤에도 또 말했어요` in the warning colour with `파일 열기`, where the operator rewords it, and `넘어가기` (B11).
+An ignored memory's evidence carries a chip, `목록으로 받음` or `본문으로 받음`, saying how the session had been given it (B15).
+`파일 열기` shows only in a window on the core's machine, whose file it is.
 Opening a row reads its operator's words again, masked, at most 300 characters each and five a row, each a quiet quoted line under its evidence; words that cannot be read again say `근거 확인 불가`, and when none can, the row reads `근거를 확인할 수 없어 넣지 않아요` and its button is held (B7).
 The tab's first line is `Hide 전역 지시` with `너무 커서 세션에 넣지 않아요` or `읽을 수 없어 세션에 넣지 않아요` and `파일 열기` while sessions are not given the file because it was edited past its limit or out of UTF-8, and nothing while they are (B5); `파일 열기` hands the file to the system's editor.
 
@@ -1005,6 +1009,7 @@ An already verified card awaiting its first document comparison stays usable and
 A card neither given nor said for 30 days shows `30일 안 씀` beside its kind and is still given (PRD memory-self-improve B22).
 After 60 days it leaves the list for `보관 N`, a folded line under the cards that opens to each archived card's number, title, archive date and `되살리기`, which brings it back with a fresh clock.
 A card shown in full has `다시 확인` beside `지우기`: it takes the card out of the hooks until it is checked again, and while it waits the button reads `다시 확인 중` (B27).
+Hide AI finishes the check, so with Hide AI off (Settings › Hide AI) `다시 확인` is dimmed with `다시 확인하려면 Hide AI가 켜져 있어야 해요. 설정 › Hide AI에서 켜요` as its hint, and the core refuses it as `hide memory recheck` does (D-41).
 Under its sources, `변경 기록` lists what Hide changed on the card by itself, newest first: `안 쓰는 기억으로 표시`, `보관됨`, `되살림`, the operator's words added as aliases, the memories merged into it, and each recheck with who asked and, once its sources were read again, how many were letters and how many could not be read (`근거 확인 불가`) (B34).
 Each line has `되돌리기`, or says why it cannot be taken back (a later change replaced it, a merged memory changed or is gone, the check already ended), and a taken-back line stays dimmed as `되돌림`.
 Nothing here alerts: a miss, an alias or an aging move is only a history line (B17).

@@ -326,7 +326,13 @@ pub(crate) fn next_auto(notebook: &Notebook, lives: &BTreeMap<LineId, LineLife>)
     notebook
         .lines
         .iter()
-        .filter(|line| line.stage == Stage::Suggested && line.struck.is_none())
+        // A global instruction line waits for the operator's press whatever
+        // the mode (D-33), so it never holds up the pull requests behind it.
+        .filter(|line| {
+            line.stage == Stage::Suggested
+                && line.struck.is_none()
+                && line.outcome != Some(Outcome::Local)
+        })
         .min_by_key(|line| {
             (
                 lives
@@ -554,6 +560,29 @@ mod tests {
         ));
         assert_eq!(applying.stage, Stage::Candidate);
         assert_eq!(applying.struck.unwrap().by, StruckBy::Operator);
+    }
+
+    /// memory-self-improve D-33: a global instruction line raised first
+    /// waits for the operator's press and the automatic mode takes the pull
+    /// request behind it.
+    #[test]
+    fn the_automatic_mode_passes_over_a_global_instruction_line() {
+        let mut notebook = Notebook::default();
+        let mut lives = BTreeMap::new();
+        for (id, raised, outcome) in [(1, 100, Outcome::Local), (2, 200, Outcome::Pr)] {
+            let mut suggested = line(Stage::Suggested);
+            suggested.id = LineId(id);
+            suggested.outcome = Some(outcome);
+            notebook.lines.push(suggested);
+            lives.insert(
+                LineId(id),
+                LineLife {
+                    raised_at_unix_ms: Some(raised),
+                    ..Default::default()
+                },
+            );
+        }
+        assert_eq!(next_auto(&notebook, &lives), Some(LineId(2)));
     }
 
     /// B13, D-29: the automatic mode applies the suggestion raised first,

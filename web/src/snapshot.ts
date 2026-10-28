@@ -2349,7 +2349,7 @@ export type SuggestionApplyMode = "confirm" | "auto_pr";
 /** `suggestion_outcome`: what applying a suggestion makes (D-15, D-50); `local` writes a line of the Hide global instruction (PRD memory-self-improve D-07). */
 export type SuggestionOutcome = "pr" | "issue" | "local";
 /** `suggestion_local_failure`: why the last press on a global instruction row wrote or took back nothing (PRD memory-self-improve B7-B10, B29). */
-export type SuggestionLocalFailure = "no_room" | "too_large" | "unreadable" | "changed" | "edited" | "write_failed" | "evidence_unconfirmed";
+export type SuggestionLocalFailure = "no_room" | "too_large" | "unreadable" | "changed" | "edited" | "write_failed" | "evidence_unconfirmed" | "bad_line";
 /** `global_instruction_unusable`: why sessions are not given the Hide global instruction (B5). */
 export type GlobalInstructionUnusable = "too_large" | "unreadable";
 /** `suggestions_status`: the tab's one line (D-44). */
@@ -2379,13 +2379,15 @@ export type SuggestionEvidence = {
   excerpt?: string | null;
   /** They could not be read again (`근거 확인 불가`). */
   unreadable?: boolean;
+  /** How an ignored memory had been given to that session, in its start list or in full (memory-self-improve B15). */
+  given?: "index" | "body" | null;
 };
 
 /** A global instruction row's own state (PRD memory-self-improve B6-B11). */
 export type SuggestionLocal = {
   /** The line the press writes, or wrote. */
   line: string;
-  /** What `apply` sends back, so a file changed since is refused with a new one; null when the line cannot be written now or is already there. */
+  /** The token `apply` sends back, naming this line in this file, so another line or a file changed since is refused with a new one; null when the line cannot be written now (`failure` says why) or is already there. */
   preview: string | null;
   /** The file already has the line, by an earlier fix or by hand. */
   present: boolean;

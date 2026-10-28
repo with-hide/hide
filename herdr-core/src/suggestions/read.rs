@@ -4,7 +4,7 @@
 //! and the records. The runtime lays only the facts the lock has on it.
 
 use super::ledger::{RecordEntry, RecordId, RecordIndex, SessionRef, Signal};
-use super::lifecycle::{AttemptPhase, LineLife};
+use super::lifecycle::{AttemptPhase, LineLife, LocalFailure};
 use super::notebook::{Line, LineId, Notebook, Outcome, Stage, StruckBy};
 use super::policy;
 use super::settings::{ApplyMode, Settings};
@@ -97,11 +97,16 @@ fn local(
             .lines()
             .any(|candidate| candidate.trim() == text.trim())
     });
-    let preview = match &global.read {
-        Ok(current) if !present => crate::global_instruction::preview_against(current, &text)
-            .ok()
-            .map(|preview| preview.before),
-        _ => None,
+    // The token a press sends back names this line in this file (B8); a
+    // line that cannot go in now says why before any press.
+    let (preview, cannot) = match &global.read {
+        Ok(current) if !present => {
+            match crate::global_instruction::preview_against(current, &text) {
+                Ok(preview) => (Some(preview.token()), None),
+                Err(refusal) => (None, Some(LocalFailure::of(&refusal))),
+            }
+        }
+        _ => (None, None),
     };
     Some(crate::model::SuggestionLocalSnapshot {
         line: text,
@@ -110,7 +115,7 @@ fn local(
         applied_at_unix_ms: applied.and_then(|local| local.applied_at_unix_ms),
         recurred: applied.is_some_and(|local| local.recurred_at_unix_ms.is_some())
             && line.stage == Stage::Suggested,
-        failure: applied.and_then(|local| local.failure),
+        failure: applied.and_then(|local| local.failure).or(cannot),
     })
 }
 
@@ -242,6 +247,8 @@ fn evidence(line: &Line, input: &ReadInput<'_>) -> Vec<SuggestionEvidenceSnapsho
                     .is_some_and(|kept| !kept.contains(session))
             }),
             offset: record.said.as_ref().map(|said| said.offset),
+            words: record.said.as_ref().and_then(|said| said.words.clone()),
+            given: record.said.as_ref().and_then(|said| said.given),
             excerpt: None,
             unreadable: false,
         })
