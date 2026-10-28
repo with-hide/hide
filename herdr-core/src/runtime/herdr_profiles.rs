@@ -102,12 +102,27 @@ impl Runtime {
             return false;
         }
         self.herdr_profiles_job = None;
+        // A listing that could not be read proves nothing about WSL, so the
+        // step keeps its failed state with Retry rather than reading empty
+        // and being skipped (B1, B25); only a listing read empty is none.
+        let answer = answer.and_then(|listing| match wsl {
+            Ok(distributions) => Ok((listing, distributions)),
+            Err(reason) => {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "herdr_profiles",
+                    "kind": "wsl.listing_failed",
+                    "request": id,
+                    "message": reason,
+                }));
+                Err("This PC's WSL distributions could not be read. Retry".to_owned())
+            }
+        });
         match answer {
             Err(error) => {
                 self.snapshot.status.herdr_profiles.state = "failed".to_owned();
                 self.snapshot.status.herdr_profiles.error = Some(error);
             }
-            Ok(listing) => {
+            Ok((listing, distributions)) => {
                 self.herdr_profile_endpoints = listing.endpoints;
                 let profiles = listing
                     .profiles
@@ -147,7 +162,7 @@ impl Runtime {
                     })
                     .collect::<Vec<_>>();
                 let profiles = self
-                    .default_wsl_row(wsl)
+                    .default_wsl_row(distributions)
                     .into_iter()
                     .chain(profiles)
                     .collect();
@@ -211,21 +226,11 @@ impl Runtime {
     /// The step's row for this PC's default WSL distribution (PRD wsl-device
     /// B1, B29), or none without WSL. One that cannot connect (WSL 1, its
     /// setup unfinished) is a row with that problem. Another distribution is
-    /// no row: Add device lists it (D-13). A listing that could not be read
-    /// shows no row and is logged; Add device says so where it can be read
-    /// again (B25).
-    fn default_wsl_row(&self, wsl: &WslListing) -> Option<HerdrProfileSnapshot> {
-        let distributions = match wsl {
-            Ok(distributions) => distributions,
-            Err(reason) => {
-                crate::diagnostic!(serde_json::json!({
-                    "component": "herdr_profiles",
-                    "kind": "wsl.listing_failed",
-                    "message": reason,
-                }));
-                return None;
-            }
-        };
+    /// no row: Add device lists it (D-13).
+    fn default_wsl_row(
+        &self,
+        distributions: &[hide_node_link::device::WslDistribution],
+    ) -> Option<HerdrProfileSnapshot> {
         let distribution = distributions.iter().find(|found| found.default)?;
         let registration = self.wsl_registration(&distribution.name);
         let device_id = registration.map(|registration| registration.id.clone());
@@ -590,7 +595,7 @@ mod tests {
     }
 
     /// B29, D-14: a default distribution that cannot connect is its row with
-    /// why; no WSL, no default or an unreadable listing is no row.
+    /// why; no WSL or no default is no row.
     #[test]
     fn a_default_wsl_1_or_unfinished_distribution_says_why_and_no_wsl_is_no_row() {
         let first = |wsl: WslListing| {
@@ -613,11 +618,7 @@ mod tests {
             first(Ok(vec![fresh])).problem.as_deref(),
             Some("setup_unfinished")
         );
-        for wsl in [
-            Ok(Vec::new()),
-            Ok(vec![distro("Debian", 2, false)]),
-            Err("the registry could not be read".to_owned()),
-        ] {
+        for wsl in [Ok(Vec::new()), Ok(vec![distro("Debian", 2, false)])] {
             assert_eq!(first(wsl).wsl_distro, None);
         }
         // A WSL 1 row sent to connect anyway is refused and registers nothing.
@@ -627,6 +628,49 @@ mod tests {
         assert_eq!(
             runtime.snapshot.status.herdr_profiles.profiles[0].connect_refusal,
             Some(HerdrProfileRefusal::InvalidTarget)
+        );
+    }
+
+    /// B1, B25: on a PC with no saved profiles, a WSL listing that could not
+    /// be read keeps the Devices step, failed with Retry, instead of reading
+    /// as empty; only a listing read empty skips it.
+    #[test]
+    fn an_unreadable_wsl_listing_keeps_the_step_and_only_a_read_empty_one_skips_it() {
+        let at_devices = |wsl: &WslListing| {
+            let mut runtime = super::super::tests::runtime();
+            runtime.snapshot.ui_state.first_run = Some(crate::model::FirstRun {
+                version: crate::model::FIRST_RUN_VERSION,
+                step: crate::model::FirstRunStep::Devices,
+            });
+            runtime.herdr_profiles_job = Some(HerdrProfilesJob {
+                id: 1,
+                stop: Arc::new(AtomicBool::new(false)),
+            });
+            runtime.settle_herdr_profiles(
+                1,
+                Ok(HerdrProfileListing {
+                    profiles: Vec::new(),
+                    endpoints: Default::default(),
+                    truncated: false,
+                }),
+                wsl,
+            );
+            runtime
+        };
+        let unreadable = at_devices(&Err("the registry could not be read".to_owned()));
+        let profiles = &unreadable.snapshot.status.herdr_profiles;
+        assert_eq!(profiles.state, "failed");
+        assert!(profiles.error.is_some());
+        assert!(profiles.profiles.is_empty());
+        assert_eq!(
+            unreadable.first_run_step(),
+            Some(crate::model::FirstRunStep::Devices)
+        );
+        let empty = at_devices(&Ok(Vec::new()));
+        assert_eq!(empty.snapshot.status.herdr_profiles.state, "ready");
+        assert_eq!(
+            empty.first_run_step(),
+            Some(crate::model::FirstRunStep::Notifications)
         );
     }
 

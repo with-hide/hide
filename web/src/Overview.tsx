@@ -72,7 +72,7 @@ export function OverviewPage({ actions }: { actions: Actions }) {
  * A compact device choice names its connection state. Picking another
  * device changes only the Overview and clears its previous project scope.
  */
-function DeviceSwitch({ selected }: { selected: string }) {
+export function DeviceSwitch({ selected }: { selected: string }) {
   const { t } = useInterfaceTranslation();
   const devices = useShellStore((s) => s.rest?.navigator?.devices);
   const rows = useMemo(() => {
@@ -93,12 +93,14 @@ function DeviceSwitch({ selected }: { selected: string }) {
   </div>;
 }
 
-function DeviceLabel({ id, own, label }: { id: string; own: boolean; label: string; place?: string | null }) {
+/** A device's letters and name, then, for a WSL distribution, where it is, as the sidebar title says it (PRD wsl-device B5). */
+function DeviceLabel({ id, own, label, place }: { id: string; own: boolean; label: string; place: string | null }) {
   const { t } = useInterfaceTranslation();
   const connected = useShellStore((s) => deviceConnected(s.rest, id));
   return <span className="flex min-w-0 items-center gap-xs">
     <span aria-hidden="true" className="shrink-0 text-muted-foreground">{own ? <LaptopIcon className="size-(--size-icon)" /> : tileMonogram(label)}</span>
     <span className="truncate font-medium">{label}</span>
+    {place ? <span className="shrink-0 text-caption text-muted-foreground" data-device-place="true">{place}</span> : null}
     <span className={cn("shrink-0 text-micro", connected ? "text-success" : "text-muted-foreground")} data-device-choice-offline={!connected || undefined}>{t(connected ? "devices.line.ready" : "devices.rail.notConnected")}</span>
   </span>;
 }
@@ -113,7 +115,7 @@ const DeviceChoice = memo(function DeviceChoice({ id, own, label, place }: { id:
       data-overview-device-choice={id}
       data-connected={connected ? "true" : "false"}
     >
-      <DeviceLabel id={id} own={own} label={label} />
+      <DeviceLabel id={id} own={own} label={label} place={place} />
     </DropdownMenuRadioItem>;
 });
 

@@ -2200,6 +2200,7 @@ An old installation or discovery answer can settle its own operation but cannot 
 Devices reads only the saved Herdr machine configuration, without probing SSH or contacting a listed machine.
 In the Windows app it also lists this PC's default WSL distribution first, read from WSL's own registry without starting it, as `WSL Ubuntu` over `이 PC (WSL)`, and the step is then titled `Hide에서 쓸 기기를 연결하세요` (PRD wsl-device B1, D-13); another distribution is not listed here and is added later from Add device.
 Loading, a failed read with Retry, a proven empty result, disabled or invalid profiles and already-added machines are distinct states; only the proven empty result skips Devices.
+A WSL list that could not be read is a failed read too, with the same Retry, and never an empty one, so a PC that has WSL does not lose the step to a registry it could not read (B1).
 Every profile starts unchecked and names its label, SSH target and Herdr session, including when these need to wrap.
 The WSL row starts checked until the operator unchecks it, which the draft keeps (`first_run_choices.devices` stays null until a row is checked or unchecked), and it names no target, session or `Herdr에 저장됨`.
 Its Connect is the install consent, as Add device's is: nothing is installed in WSL before it, and it registers the distribution's device, which installs Hide's helper and hooks there, and brings its `WU` tile to the front in the same event, so the project step adds to it and a WSL agent can be started at once (B2).
