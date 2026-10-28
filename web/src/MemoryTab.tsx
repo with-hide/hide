@@ -605,6 +605,8 @@ function CardDetail({ card, project, actions, busy }: { card: MemoryCard; projec
   const humans = card.sources.filter((source) => source.human).length;
   const id = project.workspace_id;
   const rechecking = waitingRecheck(card);
+  // A recheck ends in Hide AI's check, so the core refuses it while Hide AI is off (PRD memory-self-improve D-41).
+  const aiOn = useShellStore((state) => { const ai = state.rest?.status?.background_ai; return ai ? ai.enabled && ai.chosen !== false : false; });
   return (
     <div className="flex flex-col gap-md pt-xs" data-memory-detail={card.number}>
       {card.previous ? (
@@ -658,7 +660,7 @@ function CardDetail({ card, project, actions, busy }: { card: MemoryCard; projec
         {rechecking ? (
           <span className="text-caption text-muted-foreground" data-memory-rechecking={card.number}>{t("memory.rechecking")}</span>
         ) : (
-          <Button size="sm" variant="ghost" disabled={busy} onClick={() => actions.memoryAction(id, "recheck", card.number)} data-memory-recheck={card.number}>
+          <Button size="sm" variant="ghost" disabled={busy || !aiOn} title={aiOn ? undefined : t("memory.recheckNeedsAi")} onClick={() => actions.memoryAction(id, "recheck", card.number)} data-memory-recheck={card.number}>
             <RefreshCwIcon aria-hidden="true" />
             {t("memory.recheck")}
           </Button>

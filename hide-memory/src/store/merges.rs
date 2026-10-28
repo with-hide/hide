@@ -19,24 +19,33 @@ pub const MERGES_PER_ANSWER: usize = 5;
 /// The most cards one merge folds in.
 pub const ABSORBED_PER_MERGE: usize = 4;
 
+/// What folding needs to know of a card: its lifecycle, check, recheck,
+/// revision and aging.
+type FoldFacts = (String, Option<u64>, Option<u64>, u64, String);
+
 /// A card that cannot be folded, with why.
 fn unmergeable(
     transaction: &Transaction<'_>,
     project_id: &str,
     item_id: &str,
 ) -> Result<Option<&'static str>, MemoryError> {
-    let row: Option<(String, Option<u64>, Option<u64>, u64)> = transaction
+    let row: Option<FoldFacts> = transaction
         .query_row(
-            "SELECT i.lifecycle,r.verified_at_ms,i.recheck_at_ms,i.current_revision FROM memory_items i JOIN memory_revisions r ON r.item_id=i.id AND r.revision=i.current_revision WHERE i.id=?1 AND i.project_id=?2",
+            "SELECT i.lifecycle,r.verified_at_ms,i.recheck_at_ms,i.current_revision,i.aging FROM memory_items i JOIN memory_revisions r ON r.item_id=i.id AND r.revision=i.current_revision WHERE i.id=?1 AND i.project_id=?2",
             params![item_id, project_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
         )
         .optional()?;
-    let Some((lifecycle, verified, recheck, revision)) = row else {
+    let Some((lifecycle, verified, recheck, revision, aging)) = row else {
         return Ok(Some("card_missing"));
     };
     if lifecycle != "active" {
         return Ok(Some("card_not_active"));
+    }
+    // An archived card is out of every hook; one kept by a merge would take
+    // the absorbed card out with it. Saying it again revives it instead.
+    if aging == "archived" {
+        return Ok(Some("card_archived"));
     }
     // Waiting to be checked, held, or standing for a document: never folded.
     if verified.is_none() || recheck.is_some() {
@@ -405,5 +414,36 @@ mod tests {
         let summary = merge(&mut store, "m1", keep, absorbed);
         assert_eq!(summary.merges_refused, ["card_unverified"]);
         assert_eq!(state(&store, absorbed), "active");
+    }
+
+    #[test]
+    fn an_archived_card_never_keeps_an_active_one_out_of_the_hooks() {
+        let (_dir, mut store) = store();
+        let archived = card(
+            &mut store,
+            "a",
+            "s1",
+            CandidateKind::Rule,
+            "Lint first",
+            999 * DAY,
+        );
+        let active = card(
+            &mut store,
+            "b",
+            "s2",
+            CandidateKind::Rule,
+            "Run lint first",
+            999 * DAY,
+        );
+        store
+            .connection
+            .execute(
+                "UPDATE memory_items SET aging='archived' WHERE id=?1",
+                [id_of(&store, archived)],
+            )
+            .unwrap();
+        let summary = merge(&mut store, "m1", archived, active);
+        assert_eq!(summary.merges_refused, ["card_archived"]);
+        assert_eq!(state(&store, active), "active");
     }
 }

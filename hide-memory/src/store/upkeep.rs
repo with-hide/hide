@@ -65,8 +65,9 @@ pub const ARCHIVE_AFTER_MS: u64 = 60 * DAY_MS;
 pub const RECHECK_EXPIRY_MS: u64 = 7 * DAY_MS;
 /// How often one Project's cards are aged; a pass in between does nothing.
 pub const AGING_EVERY_MS: u64 = 60 * 60 * 1000;
-/// The most change rows a Project keeps; the oldest go first, and their
-/// changes can no longer be taken back (B33).
+/// The most change rows a Project keeps after each aging run; the oldest go
+/// first, their changes can no longer be taken back, and the run reports how
+/// many went (B33).
 pub const CHANGE_LIMIT: usize = 2_000;
 const DAY_MS: u64 = 24 * 60 * 60 * 1000;
 
@@ -156,6 +157,8 @@ pub struct AgingReport {
     pub archived: Vec<u64>,
     /// Cards whose recheck ran out and that went back into the hooks.
     pub recheck_expired: Vec<u64>,
+    /// Change rows past [`CHANGE_LIMIT`] the run removed, oldest first.
+    pub changes_trimmed: usize,
     /// Whether the run was skipped as too soon after the last.
     pub skipped: bool,
 }
@@ -172,12 +175,16 @@ pub(super) fn record_change(
         "INSERT INTO card_changes(project_id,item_id,kind,data,at_ms) VALUES(?1,?2,?3,?4,?5)",
         params![project_id, item_id, kind.as_str(), data.to_string(), now],
     )?;
-    let id = connection.last_insert_rowid() as u64;
-    connection.execute(
+    Ok(connection.last_insert_rowid() as u64)
+}
+
+/// Cuts `project_id`'s change history back to [`CHANGE_LIMIT`], answering
+/// how many rows went.
+fn trim_changes(connection: &Connection, project_id: &str) -> Result<usize, MemoryError> {
+    Ok(connection.execute(
         "DELETE FROM card_changes WHERE project_id=?1 AND id IN (SELECT id FROM card_changes WHERE project_id=?1 ORDER BY id DESC LIMIT -1 OFFSET ?2)",
         params![project_id, CHANGE_LIMIT as u64],
-    )?;
-    Ok(id)
+    )?)
 }
 
 /// Whether a card's rule or decision was said by the operator in two or
@@ -279,6 +286,7 @@ impl MemoryStore {
             }
         }
         report.recheck_expired = recheck::expire(&transaction, project_id, now)?;
+        report.changes_trimmed = trim_changes(&transaction, project_id)?;
         transaction.execute(
             "UPDATE projects SET aged_at_ms=?2 WHERE id=?1",
             params![project_id, now],
@@ -692,6 +700,43 @@ pub(super) mod tests {
             .map(|change| change.kind)
             .collect::<Vec<_>>();
         assert_eq!(kinds, [ChangeKind::Archive, ChangeKind::Stale]);
+    }
+
+    #[test]
+    fn an_aging_run_cuts_the_change_history_back_to_its_limit_and_says_how_many_went() {
+        let (_dir, mut store) = store();
+        let start = 1_000 * DAY;
+        let number = card(
+            &mut store,
+            "b1",
+            "s1",
+            CandidateKind::Lesson,
+            "Lesson one",
+            start,
+        );
+        let id = id_of(&store, number);
+        for _ in 0..CHANGE_LIMIT + 3 {
+            record_change(
+                &store.connection,
+                "p",
+                &id,
+                ChangeKind::Stale,
+                &serde_json::json!({}),
+                start,
+            )
+            .unwrap();
+        }
+        let report = store.age_cards("p", start + DAY).unwrap();
+        assert_eq!(report.changes_trimmed, 3);
+        let kept: usize = store
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM card_changes WHERE project_id='p'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(kept, CHANGE_LIMIT);
     }
 
     #[test]

@@ -384,8 +384,11 @@ describe("the Memory tab", () => {
     expect(history).toContain("Merged m5, m6");
     expect(history).toContain("Undone");
     expect(container.querySelector("[data-memory-undo-blocked='recheck_finished']")).not.toBeNull();
-    // A finished recheck leaves the card free to be checked again.
-    expect(container.querySelector("[data-memory-recheck='3']")).not.toBeNull();
+    // A finished recheck leaves the card free to be checked again, once Hide AI is on to check it (D-41).
+    expect(container.querySelector("[data-memory-recheck='3']")?.hasAttribute("disabled")).toBe(true);
+    expect(container.querySelector("[data-memory-recheck='3']")?.getAttribute("title")).toBe("Checking again needs Hide AI. Turn it on in Settings › Hide AI");
+    await act(async () => useShellStore.setState({ rest: { ...rest, status: { background_ai: { enabled: true, provider: "claude", chosen: true, unavailable_reason: null, providers: [], refusal: null } } } as unknown as SnapshotRest }));
+    expect(container.querySelector("[data-memory-recheck='3']")?.hasAttribute("disabled")).toBe(false);
     await click("[data-memory-undo-change='40']");
     expect(container.querySelector("[data-memory-undo-change='39']")).toBeNull();
     await click("[data-memory-recheck='3']");

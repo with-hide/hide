@@ -101,8 +101,10 @@ impl MemoryStore {
             return Ok(());
         }
         if let Requester::Agent { runtime, session } = requester {
+            // A prompt delivery, of the body or the start list, gives the
+            // card; an agent's own `show` is its read, not a delivery (B28).
             let given: bool = transaction.query_row(
-                "SELECT EXISTS(SELECT 1 FROM injection_receipts ir JOIN injection_receipt_items rii ON rii.receipt_id=ir.id WHERE ir.project_id=?1 AND ir.runtime=?2 AND ir.session_id=?3 AND rii.item_id=?4)",
+                "SELECT EXISTS(SELECT 1 FROM injection_receipts ir JOIN injection_receipt_items rii ON rii.receipt_id=ir.id WHERE ir.project_id=?1 AND ir.runtime=?2 AND ir.session_id=?3 AND rii.item_id=?4 AND COALESCE(ir.turn_id,'')<>'show')",
                 params![project_id, runtime, session, id],
                 |row| row.get(0),
             )?;
@@ -393,6 +395,14 @@ mod tests {
             runtime: "claude",
             session: "s5",
         };
+        assert!(matches!(
+            store.recheck("p", number, agent, 1_000 * DAY),
+            Err(MemoryError::Refused("recheck_not_given"))
+        ));
+        // The agent's own `show` reads the card; it was not given it.
+        store
+            .record_receipt("p", "claude", "s5", "show", "m1@1", 1_000 * DAY)
+            .unwrap();
         assert!(matches!(
             store.recheck("p", number, agent, 1_000 * DAY),
             Err(MemoryError::Refused("recheck_not_given"))

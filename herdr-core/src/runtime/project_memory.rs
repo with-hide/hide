@@ -941,6 +941,19 @@ impl Runtime {
             );
             return true;
         };
+        // A recheck is finished by Hide AI's check, so it is refused while
+        // Hide AI is off, as `hide memory recheck` is (PRD
+        // memory-self-improve D-41).
+        if payload.action == MemoryAction::Recheck && !self.ai_active() {
+            self.memory_action_failed(
+                &payload.workspace_id,
+                payload.action,
+                "memory.recheck_ai_off",
+                "Rechecking needs Hide AI; turn it on in Settings > Hide AI",
+                false,
+            );
+            return true;
+        }
         // The Project's id is only known once the worker read the folder; a
         // pass is stopped now and again when the switch is written.
         if matches!(payload.action, MemoryAction::Disable | MemoryAction::Delete) {
