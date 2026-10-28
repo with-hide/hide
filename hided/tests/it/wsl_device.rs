@@ -71,7 +71,7 @@ fn as_root(distro: &str, script: &str) -> String {
 }
 
 /// Sets a value of the distribution's own registry entry, as WSL's first
-/// run and `wsl --manage --set-default-user` do.
+/// run does when it marks the setup done.
 fn set_registry(id: &str, name: &str, value: u32) {
     let script = format!(
         "Set-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Lxss\\{{{id}}}' -Name {name} -Value {value} -Type DWord"
@@ -81,6 +81,31 @@ fn set_registry(id: &str, name: &str, value: u32) {
         .status()
         .expect("powershell runs");
     assert!(status.success(), "{script}");
+}
+
+/// Makes `user` the distribution's default user where WSL reads it when the
+/// distribution starts (`/etc/wsl.conf`), then stops the distribution so its
+/// next start reads it. A `DefaultUid` written to the registry while the
+/// distribution ran was not used (GitHub's Windows runner, 2026-10-28).
+fn set_default_user(distro: &str, user: &str) {
+    as_root(
+        distro,
+        &format!(
+            "touch /etc/wsl.conf; if grep -q '^\\[user\\]' /etc/wsl.conf; then sed -i 's/^default=.*/default={user}/' /etc/wsl.conf; else printf '\\n[user]\\ndefault={user}\\n' >> /etc/wsl.conf; fi"
+        ),
+    );
+    stop(distro);
+}
+
+fn stop(distro: &str) {
+    // A distribution that is already stopped has nothing to end.
+    let _ = Command::new("wsl.exe")
+        .args(["--terminate", distro])
+        .status()
+        .expect("wsl.exe runs");
+    wait_for("the distribution to stop", || {
+        (!running(distro)).then_some(())
+    });
 }
 
 fn running(distro: &str) -> bool {
@@ -144,8 +169,9 @@ fn pane_of(value: &Value) -> Option<&str> {
 #[ignore = "a real WSL 2 distribution of the runner's own; the windows wsl lane sets it up"]
 fn a_wsl_distribution_connects_works_and_ends_with_its_link() {
     let distro = std::env::var("HIDE_E2E_WSL_DISTRO").expect("set HIDE_E2E_WSL_DISTRO");
-    let packages =
-        PathBuf::from(std::env::var_os("HIDE_E2E_WSL_PACKAGES").expect("set HIDE_E2E_WSL_PACKAGES"));
+    let packages = PathBuf::from(
+        std::env::var_os("HIDE_E2E_WSL_PACKAGES").expect("set HIDE_E2E_WSL_PACKAGES"),
+    );
     let access = WslAccess::of_this_pc().expect("this runner has WSL");
     let sink = Arc::new(Sink::default());
     let connector = hide_node::ssh::Connector::new(Some(packages))
@@ -160,7 +186,10 @@ fn a_wsl_distribution_connects_works_and_ends_with_its_link() {
         .iter()
         .find(|row| row.name == distro)
         .expect("the lane's distribution is listed");
-    println!("wsl_version={} setup_unfinished={}", row.wsl_version, row.setup_unfinished);
+    println!(
+        "wsl_version={} setup_unfinished={}",
+        row.wsl_version, row.setup_unfinished
+    );
     assert_eq!(row.wsl_version, 2, "the lane runs WSL 2");
     let id = hide_platform::wsl::distributions()
         .unwrap()
@@ -180,22 +209,25 @@ fn a_wsl_distribution_connects_works_and_ends_with_its_link() {
             refused.err()
         );
     }
-    // What the first run would have done: the account's user, default.
-    let uid: u32 = as_root(
+    // What the first run would have done: the account's user, made the
+    // default, and the setup marked done. Each try starts from a fresh
+    // account, so a retry finds nothing an earlier try left there.
+    as_root(
         &distro,
-        &format!("id -u {USER} 2>/dev/null || {{ useradd -m -s /bin/bash {USER} && id -u {USER}; }}"),
-    )
-    .trim()
-    .parse()
-    .unwrap();
-    set_registry(&id, "DefaultUid", uid);
+        &format!(
+            "pkill -KILL -u {USER} 2>/dev/null; userdel -r -f {USER} 2>/dev/null; useradd -m -s /bin/bash {USER}"
+        ),
+    );
     set_registry(&id, "RunOOBE", 0);
+    set_default_user(&distro, USER);
     let windows_settings = PathBuf::from(std::env::var_os("USERPROFILE").unwrap())
         .join(".claude")
         .join("settings.json");
     let windows_settings_before = std::fs::read(&windows_settings).ok();
 
-    // B2, B4: consent, install, start; Hello names Linux.
+    // B3, B4: an attempt with leave starts the stopped distribution, then
+    // consent, install, start; Hello names Linux.
+    assert!(!running(&distro));
     let (first, closed) = establish(&*transport, &consent(None), Wake::Allowed);
     let first = first.unwrap_or_else(|error| panic!("first connection: {error}"));
     assert!(first.installed, "the first connection installs the helper");
@@ -205,7 +237,10 @@ fn a_wsl_distribution_connects_works_and_ends_with_its_link() {
     println!("upload={:?}", first.upload);
     // A fresh distribution has no Herdr answering, so the kit ran before
     // the terminals and started the pinned one inside WSL.
-    let kit = first.kit.as_ref().expect("the fresh distribution's kit ran");
+    let kit = first
+        .kit
+        .as_ref()
+        .expect("the fresh distribution's kit ran");
     assert!(kit.is_ok(), "{:?}", kit.as_ref().err());
     let link = Arc::clone(&first.node.host);
 
@@ -219,10 +254,21 @@ fn a_wsl_distribution_connects_works_and_ends_with_its_link() {
             "su - {USER} -c 'mkdir -p project && cd project && git init -q && printf \"hello\\n\" > a.txt && git add a.txt && git -c user.name=t -c user.email=t@example.invalid commit -qm init && printf \"more\\n\" >> a.txt'"
         ),
     );
-    let home = first.node.hello.home.clone().expect("the helper names its home");
+    let home = first
+        .node
+        .hello
+        .home
+        .clone()
+        .expect("the helper names its home");
     let project = format!("{home}/project");
-    let opened: RootOpened =
-        call_as(&*link, Call::RootOpen { root: project.clone() }, TIMEOUT).unwrap();
+    let opened: RootOpened = call_as(
+        &*link,
+        Call::RootOpen {
+            root: project.clone(),
+        },
+        TIMEOUT,
+    )
+    .unwrap();
     let root = RootRef {
         path: project.clone(),
         identity: opened.identity,
@@ -260,7 +306,9 @@ fn a_wsl_distribution_connects_works_and_ends_with_its_link() {
         "workspace.create",
         json!({"cwd": project, "label": "wsl"}),
     );
-    let pane = pane_of(&created).expect("the new workspace's pane").to_owned();
+    let pane = pane_of(&created)
+        .expect("the new workspace's pane")
+        .to_owned();
     let terminals = first
         .node
         .terminals
@@ -279,7 +327,11 @@ fn a_wsl_distribution_connects_works_and_ends_with_its_link() {
             .any(|report| matches!(report, TerminalReport::State { pane: reported, state } if reported == &pane && state.state == "controlling"))
             .then_some(())
     });
-    terminals.key(KeyTarget::Pane(pane.clone()), b"printf 'wsl_%s\\n' answered\r".to_vec(), 1);
+    terminals.key(
+        KeyTarget::Pane(pane.clone()),
+        b"printf 'wsl_%s\\n' answered\r".to_vec(),
+        1,
+    );
     wait_for("the command's output", || {
         String::from_utf8_lossy(&sink.output.lock().unwrap())
             .contains("wsl_answered")
@@ -288,15 +340,24 @@ fn a_wsl_distribution_connects_works_and_ends_with_its_link() {
 
     // B27: the link's end ends its helper inside WSL; Herdr and the pane stay.
     link.close("the test ends the link");
-    let reason = closed.recv_timeout(TIMEOUT).expect("the link's end is heard");
+    let reason = closed
+        .recv_timeout(TIMEOUT)
+        .expect("the link's end is heard");
     println!("link ended: {reason}");
     wait_for("the helper to end inside WSL", || {
-        as_root(&distro, "pgrep -f '[n]ode serve' >/dev/null && echo alive || echo gone")
-            .contains("gone")
-            .then_some(())
+        as_root(
+            &distro,
+            "pgrep -f '[n]ode serve' >/dev/null && echo alive || echo gone",
+        )
+        .contains("gone")
+        .then_some(())
     });
     assert!(
-        as_root(&distro, "pgrep -x herdr >/dev/null && echo alive || echo gone").contains("alive"),
+        as_root(
+            &distro,
+            "pgrep -x herdr >/dev/null && echo alive || echo gone"
+        )
+        .contains("alive"),
         "Herdr outlives the link"
     );
     drop(first);
@@ -314,35 +375,33 @@ fn a_wsl_distribution_connects_works_and_ends_with_its_link() {
     assert!(!again.installed);
     assert_eq!(again.upload.sent, 0, "{:?}", again.upload);
     let snapshot = herdr(&*transport, "session.snapshot", json!({}));
-    assert!(snapshot.to_string().contains(&pane), "the pane outlived the link");
+    assert!(
+        snapshot.to_string().contains(&pane),
+        "the pane outlived the link"
+    );
     again.node.host.close("the test ends the second link");
     drop(again);
 
     // B30: the Windows account's agent settings are not the WSL device's.
-    assert_eq!(std::fs::read(&windows_settings).ok(), windows_settings_before);
+    assert_eq!(
+        std::fs::read(&windows_settings).ok(),
+        windows_settings_before
+    );
 
     // B28: another default user is another identity, asked again.
-    let other: u32 = as_root(&distro, "id -u other 2>/dev/null || { useradd -m other && id -u other; }")
-        .trim()
-        .parse()
-        .unwrap();
-    set_registry(&id, "DefaultUid", other);
+    as_root(&distro, "id -u other >/dev/null 2>&1 || useradd -m other");
+    set_default_user(&distro, "other");
     let (changed, _) = establish(&*transport, &bound, Wake::Allowed);
     assert!(
         matches!(changed, Err(EstablishError::IdentityChanged { .. })),
         "{:?}",
         changed.err()
     );
-    set_registry(&id, "DefaultUid", uid);
+    set_default_user(&distro, USER);
 
     // B22, B24: a stopped distribution stays stopped for an attempt without
     // leave; B3, B23: one with leave starts it and connects.
-    let status = Command::new("wsl.exe")
-        .args(["--terminate", &distro])
-        .status()
-        .unwrap();
-    assert!(status.success());
-    wait_for("the distribution to stop", || (!running(&distro)).then_some(()));
+    assert!(!running(&distro));
     let (stopped, _) = establish(&*transport, &bound, Wake::NotAllowed);
     assert!(
         matches!(stopped, Err(EstablishError::Stopped(_))),
