@@ -1792,11 +1792,13 @@ export type FirstRunStep = "herdr" | "agents" | "devices" | "notifications" | "p
 
 export type FirstRun = { version: number; step: FirstRunStep };
 export type FirstRunProjectForm = { view?: "add" | "clone" | "create" | ""; url?: string; parent?: string; name?: string };
-export type FirstRunChoices = { agents?: string[] | null; devices?: string[]; project_device?: string | null; project_path?: string; project_form?: FirstRunProjectForm; notifications_answered?: boolean };
+export type FirstRunChoices = { agents?: string[] | null; /** Null until a device row is checked or unchecked (PRD wsl-device B1). */ devices?: string[] | null; project_device?: string | null; project_path?: string; project_form?: FirstRunProjectForm; notifications_answered?: boolean };
 export type HerdrProfileRefusal = "no_consent" | "disabled" | "invalid_target" | "discovery_pending" | "device_limit" | "profile_moved";
 
 export type HerdrProfile = {
   id: string; label: string; target: string; session: string; enabled: boolean;
+  /** Set on the one row that is this PC's default WSL distribution, not a saved profile (PRD wsl-device B1). */
+  wsl_distro?: string | null;
   added_as: string | null; problem: string | null; device_id: string | null;
   connect_state: string;
   /** Why Hide declined to connect it (`herdr_profile_refusal`); a tried connection that failed has none. */

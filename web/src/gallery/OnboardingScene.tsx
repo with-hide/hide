@@ -51,6 +51,8 @@ export const ONBOARDING_STATES = [
   "devices-disabled",
   "devices-partial",
   "devices-long32",
+  "devices-wsl",
+  "devices-wsl1",
   "notifications",
   "notifications-asking",
   "notifications-on",
@@ -274,6 +276,9 @@ function sceneRest(state: OnboardingState, system: OnboardingSystem): SnapshotRe
   const savedProfiles = state === "devices-long32" ? Array.from({ length: 32 }, (_, index) => profile(`research-${index}`, `연구 개발팀의 아주 긴 기기 이름 ${index + 1} · 프로젝트 빌드 서버`, { target: `developer-${index}@very-long-research-hostname.engineering.example.test:2222`, session: "research-team-project-session-with-a-long-name" }))
     : state === "devices-disabled" ? [profile("build", "Build server", { enabled: false, problem: "disabled" }), profile("existing", "Design Mac", { added_as: "Design Mac", device_id: "existing", connect_state: "added" }), profile("invalid", "Unavailable configuration", { problem: "invalid_target" })]
     : state === "devices-partial" ? [profile("build", "Build server", { added_as: "Build server", device_id: "build", connect_state: "connected" }), profile("research", "Research server", { added_as: "Research server", device_id: "research", connect_state: "failed", connect_refusal: null })]
+    // This PC's default WSL distribution, which the core lists first (PRD wsl-device B1, B29).
+    : state === "devices-wsl" ? [profile("wsl:Ubuntu", "WSL Ubuntu", { target: "Ubuntu", session: "default", wsl_distro: "Ubuntu" }), profile("build", "Build server")]
+    : state === "devices-wsl1" ? [profile("wsl:Ubuntu-20.04", "WSL Ubuntu-20.04", { target: "Ubuntu-20.04", session: "default", wsl_distro: "Ubuntu-20.04", problem: "wsl1" }), profile("build", "Build server")]
     : [profile("build", "Build server"), profile("research", "Research server", { session: "experiments" })];
   const deviceStep = state.startsWith("devices");
   return {
@@ -290,7 +295,7 @@ function sceneRest(state: OnboardingState, system: OnboardingSystem): SnapshotRe
     ui_state: {
       left_sidebar_visible: true,
       first_run: { version: 1, step },
-      first_run_choices: { devices: state === "devices-partial" ? ["build", "research"] : [], project_form: { view: state === "project-add" ? "add" : "" } },
+      first_run_choices: { devices: state === "devices-partial" ? ["build", "research"] : state.startsWith("devices-wsl") ? null : [], project_form: { view: state === "project-add" ? "add" : "" } },
       agent_onboarding: state === "agents-refused" ? null : step === "agents" || step === "herdr" ? "pending" : "done",
       desktop_notifications: enabled,
       desktop_notifications_done: state === "settings-done-only" || state === "settings-both",
