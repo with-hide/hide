@@ -43,7 +43,7 @@ function assertIdentity(identity) {
   }
 }
 
-/** Validates both complete artifacts before the Mac package starts its native build. */
+/** Validates both complete artifacts before the Mac package assembles its app. */
 export function deviceHelperResources(directory, identity) {
   assertIdentity(identity);
   return Object.keys(DEVICE_PLATFORMS).flatMap((platform) => {
@@ -60,6 +60,13 @@ export function deviceHelperResources(directory, identity) {
       return [`${name}-${platform}`, source];
     });
   });
+}
+
+/** Each platform's helper digests, read after the same checks, for the release candidate's receipt. */
+export function deviceHelperDigests(directory, identity) {
+  const resources = new Map(deviceHelperResources(directory, identity));
+  return Object.fromEntries(Object.keys(DEVICE_PLATFORMS).map((platform) => [platform,
+    Object.fromEntries(HELPER_PROGRAMS.map((name) => [name, digest(fs.readFileSync(resources.get(`${name}-${platform}`)))]))]));
 }
 
 /** Prepare release assets outside the app; only the resulting manifest ships inside it. */

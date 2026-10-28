@@ -322,12 +322,18 @@ if name == 'playwright' and '--list' in args:
         self.assertEqual(self.records()[0]["argv"], ["--dir", "web", "exec", "playwright", "test", "--shard=1/4"])
         self.assertEqual(self.run_entry("verify-web.sh", "desktop", "package").returncode, 0)
         self.assertEqual(self.records()[1]["argv"], ["--dir", "desktop", "package"])
+        # The macOS lane's two halves: the release binaries alone, then the host build and the app from them.
+        self.assertEqual(self.run_entry("verify-web.sh", "desktop", "package", "compile").returncode, 0)
+        self.assertEqual(self.records()[2]["argv"], ["--dir", "desktop", "exec", "node", "scripts/package.mjs", "compile"])
+        self.assertEqual(self.run_entry("verify-web.sh", "desktop", "package", "assemble").returncode, 0)
+        self.assertEqual(self.records()[3]["argv"], ["--dir", "desktop", "package", "assemble"])
 
     def test_web_install_is_locked_and_invalid_package_actions_fail(self):
         self.assertEqual(self.run_entry("verify-web.sh", "install", "--ignore-scripts").returncode, 0)
         self.assertEqual(self.records()[0]["argv"], ["install", "--frozen-lockfile", "--ignore-scripts"])
         for args in [("install", "--no-frozen-lockfile"), ("elsewhere", "test"),
-                     ("web", "package"), ("web", "test:e2e"), ("retired", "e2e"), ("desktop", "unknown")]:
+                     ("web", "package"), ("web", "test:e2e"), ("retired", "e2e"), ("desktop", "unknown"),
+                     ("desktop", "package", "sign"), ("desktop", "package", "compile", "assemble")]:
             with self.subTest(args=args):
                 self.assertEqual(self.run_entry("verify-web.sh", *args).returncode, 2)
         self.assertEqual(len(self.records()), 1)

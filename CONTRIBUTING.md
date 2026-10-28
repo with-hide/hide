@@ -348,14 +348,15 @@ Pushing a tag by hand does not start official publication; the former public `re
 Signing credentials and the maintainer's publication procedure are managed outside this public repository.
 Existing releases and downloads remain available.
 
-The public [unsigned release candidate](docs/BUILD.md#unsigned-release-candidates) prepares Linux and Windows packages and runs the agent journey's CI lanes on an exact verified source.
-It creates no tag or Release, and produces its candidate receipt only after both gates pass.
+The public [unsigned release candidate](docs/BUILD.md#unsigned-release-candidates) prepares Linux and Windows packages and the two Linux device helpers the Mac app's device bundles are made from, and runs the agent journey's CI lanes on an exact main source.
+It may start while that source's own `verify` push run is still running, so the publish, not the candidate, requires that run to have passed.
+It creates no tag or Release, and produces its candidate receipt, which records the helpers' digests, only after its packages, helpers and journey pass.
 It runs the Linux/macOS stand-ins, the Windows form checks and the fake-model checks on all three systems, and signs no agent in: since 2026-10-27, by the operator's decision, a real login is measured only on the Mac, because what only a login proves (the provider's sign-in, quota and billed usage) is the provider's, not Hide's code.
 Public CI keeps the source, installation and update checks; official macOS signing and final publication run privately.
 
 An official release requires:
 
-- The source commit's own `verify` push run on main passed, including its full Rust, web, desktop and package lanes.
+- The source commit's own `verify` push run on main passed, including its full Rust, web, desktop and package lanes; the publish checks this run, which the candidate's receipt names.
 - The [agent journey](docs/VERIFICATION.md#agent-journey) ran on the source locally on the Mac, the fake model first and then with the agents signed in there ([A release's run on the Mac](docs/VERIFICATION.md#local-mode-macos)), which is a release's only evidence of a real login, and in the public candidate's stand-in and fake-model CI lanes.
   A failed local journey cell stops the release unless the operator explicitly approves and records that exception for this version; every unmeasured cell and its reason is shown in the version approval.
   The public candidate and the source's main `verify` run must succeed; operator approval cannot bypass either failed CI gate.
@@ -363,7 +364,7 @@ An official release requires:
 - The candidate's Linux and Windows installers pass their installation, packaged-app and local-feed update checks.
   The official macOS app and dmg pass Developer ID signing, notarization, mounting and isolated packaged-app checks, including the app expanded from its update zip.
   Those macOS checks do not measure an installed app replacing itself through its updater.
-- The [release asset gate](docs/BUILD.md#release-asset-gate) accepts exactly fifteen files and their matching checksums and update digests.
+- The [release asset gate](docs/BUILD.md#release-asset-gate) accepts exactly eighteen files and their matching checksums and update digests.
 - The operator approves that version after reviewing the evidence and its limits.
 
 The publisher creates the public source tag and adds the verified files to its matching draft without deleting or overwriting assets.

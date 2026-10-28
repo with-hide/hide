@@ -4,10 +4,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { releaseKind } from "./check-release-assets.mjs";
+import { deviceHelperDigests } from "../desktop/scripts/device-helpers.mjs";
 
 const REPOSITORY = "with-hide/hide";
 const SHA = /^[a-f0-9]{40}$/;
 const DECIMAL = /^[1-9][0-9]*$/;
+// A verify run that has started, or has passed. A `pending` run waits behind
+// another main run, and the next push to main replaces it (pr.yml's
+// concurrency), so a candidate naming it could name a run that never runs.
+const STARTED = new Set(["queued", "in_progress"]);
 
 export function candidateReceipt(inputs, context, verification) {
   if (context.repository !== REPOSITORY || context.event !== "workflow_dispatch"
@@ -29,34 +34,51 @@ export function candidateReceipt(inputs, context, verification) {
     || verification.repository?.full_name !== REPOSITORY
     || verification.path !== ".github/workflows/pr.yml" || verification.name !== "verify"
     || verification.event !== "push" || verification.head_branch !== "main"
-    || verification.head_sha !== inputs.public_sha || verification.status !== "completed"
-    || verification.conclusion !== "success" || !Array.isArray(verification.pull_requests)
+    || verification.head_sha !== inputs.public_sha || !Array.isArray(verification.pull_requests)
     || verification.pull_requests.length !== 0) {
-    throw new Error("verification_run_id must be the successful verify push/main run of public_sha");
+    throw new Error("verification_run_id must be the verify push/main run of public_sha");
+  }
+  if (!STARTED.has(verification.status) && !(verification.status === "completed" && verification.conclusion === "success")) {
+    throw new Error(`verify run ${verification.id} is ${verification.status}${verification.conclusion ? `/${verification.conclusion}` : ""}: `
+      + "dispatch while it runs or after it passed, never while it waits behind another main run or after it failed");
   }
   return {
-    schema: 2, repository: REPOSITORY, public_sha: inputs.public_sha, tag: inputs.tag,
+    schema: 3, repository: REPOSITORY, public_sha: inputs.public_sha, tag: inputs.tag,
     build_order: inputs.build_order, verification_run_id: inputs.verification_run_id,
     workflow_sha: context.workflowSha, run_id: context.runId, run_attempt: Number(context.runAttempt),
     // No candidate calls a signed-in provider since 2026-10-27 (docs/BUILD.md,
-    // Unsigned release candidates); schema 2 keeps the field its consumer reads.
+    // Unsigned release candidates); the field stays because its consumer reads it.
     live_agents: false,
   };
+}
+
+/** The receipt with the digests of both device helpers this run built, checked against its identity. */
+export function withDeviceHelpers(receipt, directory) {
+  if (receipt.schema !== 3 || "device_helpers" in receipt) throw new Error("device helpers complete a schema 3 receipt once");
+  const identity = { commit: receipt.public_sha, version: receipt.tag.replace(/^v/, ""), order: receipt.build_order };
+  return { ...receipt, device_helpers: deviceHelperDigests(directory, identity) };
 }
 
 // Only GitHub's runtime-injected variables are read here. Candidate inputs
 // come from its event file, not a second application environment contract.
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   try {
-    if (process.argv.length !== 3) throw new Error("usage: node scripts/release-candidate.mjs verification-run.json");
-    const event = JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, "utf8"));
-    const verification = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
-    const receipt = candidateReceipt(event.inputs ?? {}, {
-      repository: process.env.GITHUB_REPOSITORY, event: process.env.GITHUB_EVENT_NAME,
-      ref: process.env.GITHUB_REF, sha: process.env.GITHUB_SHA,
-      workflowSha: process.env.GITHUB_WORKFLOW_SHA, runId: process.env.GITHUB_RUN_ID,
-      runAttempt: process.env.GITHUB_RUN_ATTEMPT,
-    }, verification);
+    const [action, ...files] = process.argv.slice(2);
+    let receipt;
+    if (action === "source" && files.length === 1) {
+      const event = JSON.parse(fs.readFileSync(process.env.GITHUB_EVENT_PATH, "utf8"));
+      const verification = JSON.parse(fs.readFileSync(files[0], "utf8"));
+      receipt = candidateReceipt(event.inputs ?? {}, {
+        repository: process.env.GITHUB_REPOSITORY, event: process.env.GITHUB_EVENT_NAME,
+        ref: process.env.GITHUB_REF, sha: process.env.GITHUB_SHA,
+        workflowSha: process.env.GITHUB_WORKFLOW_SHA, runId: process.env.GITHUB_RUN_ID,
+        runAttempt: process.env.GITHUB_RUN_ATTEMPT,
+      }, verification);
+    } else if (action === "device-helpers" && files.length === 2) {
+      receipt = withDeviceHelpers(JSON.parse(fs.readFileSync(files[0], "utf8")), files[1]);
+    } else {
+      throw new Error("usage: node scripts/release-candidate.mjs source verification-run.json | device-helpers receipt.json device-helpers-folder");
+    }
     console.log(JSON.stringify(receipt));
   } catch (error) {
     console.error(error.message);

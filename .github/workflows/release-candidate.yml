@@ -1,5 +1,7 @@
 # Manual unsigned preparation only. No tag, release or signing credential is
-# written here; a consumer must verify this successful main run and receipt.
+# written here; a consumer must verify this successful main run and receipt,
+# and that the verify run the receipt names concluded success, which this
+# workflow does not wait for.
 name: release candidate
 run-name: Candidate ${{ inputs.tag }} from ${{ inputs.public_sha }}
 
@@ -15,7 +17,7 @@ on:
         required: true
         type: string
       verification_run_id:
-        description: Successful pr.yml push/main run of exactly public_sha.
+        description: The pr.yml push/main run of exactly public_sha, running or passed.
         required: true
         type: string
       build_order:
@@ -45,7 +47,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Require the exact verified main source
+      - name: Require the exact main source and its verify run
         id: source
         env:
           GH_TOKEN: ${{ github.token }}
@@ -56,7 +58,7 @@ jobs:
           # checker also validates all inputs before they reach a build.
           [[ "$VERIFICATION_RUN" =~ ^[1-9][0-9]*$ ]]
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$VERIFICATION_RUN" > "$RUNNER_TEMP/verification.json"
-          node scripts/release-candidate.mjs "$RUNNER_TEMP/verification.json" > "$RUNNER_TEMP/candidate.json"
+          node scripts/release-candidate.mjs source "$RUNNER_TEMP/verification.json" > "$RUNNER_TEMP/candidate.json"
           git merge-base --is-ancestor "$PUBLIC_SHA" origin/main
           echo "receipt=$(cat "$RUNNER_TEMP/candidate.json")" >> "$GITHUB_OUTPUT"
       - name: Require the build steps the source was verified with
@@ -66,8 +68,8 @@ jobs:
           # The called workflows' steps come from this dispatch revision but
           # run on public_sha's checkout, so a step added after public_sha
           # would reach files the source does not have.
-          if ! git diff --quiet "$PUBLIC_SHA" HEAD -- .github/workflows/package.yml .github/workflows/agent-journey.yml; then
-            echo "::error::package.yml or agent-journey.yml changed on main after $PUBLIC_SHA; choose a newer public_sha whose verify push run passed"
+          if ! git diff --quiet "$PUBLIC_SHA" HEAD -- .github/workflows/package.yml .github/workflows/device-helpers.yml .github/workflows/agent-journey.yml; then
+            echo "::error::package.yml, device-helpers.yml or agent-journey.yml changed on main after $PUBLIC_SHA; choose a newer public_sha"
             exit 1
           fi
 
@@ -96,21 +98,32 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      # The dispatch revision, as in validate: the receipt is written by main's
+      # checker, never by the source it describes.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Record the successful candidate
+      - uses: actions/download-artifact@v8
+        with:
+          name: hide-device-helper-linux-x86_64
+          path: agents/runs/release-candidate/device-helpers/linux-x86_64
+          digest-mismatch: error
+      - uses: actions/download-artifact@v8
+        with:
+          name: hide-device-helper-linux-aarch64
+          path: agents/runs/release-candidate/device-helpers/linux-aarch64
+          digest-mismatch: error
+      - name: Record the successful candidate and its device helpers
         env:
           RECEIPT: ${{ needs.validate.outputs.receipt }}
         run: |
-          mkdir -p agents/runs/release-candidate
-          node --input-type=module <<'NODE'
-          import fs from 'node:fs';
-          const receipt = JSON.parse(process.env.RECEIPT);
-          fs.writeFileSync('agents/runs/release-candidate/candidate.json', JSON.stringify(receipt) + '\n');
-          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
-            'Signed-in providers: not measured on CI; the release measures them on the Mac. Fixture and fake-model checks passed.\n');
-          NODE
+          printf '%s\n' "$RECEIPT" > "$RUNNER_TEMP/source.json"
+          node scripts/release-candidate.mjs device-helpers "$RUNNER_TEMP/source.json" agents/runs/release-candidate/device-helpers > agents/runs/release-candidate/candidate.json
+          echo 'Signed-in providers: not measured on CI; the release measures them on the Mac. Fixture and fake-model checks passed.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'The verify run this receipt names was not awaited; the publish requires that it concluded success.' >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v7
         with:
           name: hide-release-candidate
