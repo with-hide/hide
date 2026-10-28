@@ -219,7 +219,8 @@ fn a_wsl_distribution_connects_works_and_ends_with_its_link() {
             "su - {USER} -c 'mkdir -p project && cd project && git init -q && printf \"hello\\n\" > a.txt && git add a.txt && git -c user.name=t -c user.email=t@example.invalid commit -qm init && printf \"more\\n\" >> a.txt'"
         ),
     );
-    let project = format!("/home/{USER}/project");
+    let home = first.node.hello.home.clone().expect("the helper names its home");
+    let project = format!("{home}/project");
     let opened: RootOpened =
         call_as(&*link, Call::RootOpen { root: project.clone() }, TIMEOUT).unwrap();
     let root = RootRef {

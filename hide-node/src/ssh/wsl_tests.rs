@@ -322,17 +322,17 @@ fn a_child_link_ends_its_child_and_ends_with_it() {
 
 #[test]
 fn the_probe_reads_the_account_and_refuses_what_it_cannot_run_as() {
-    let probe = Probe::read("alice\n1000\n/home/alice\nLinux x86_64\nsha256sum\n").unwrap();
+    let probe = Probe::read("alice\n1000\n/srv/alice\nLinux x86_64\nsha256sum\n").unwrap();
     assert_eq!(
         probe,
         Probe {
             user: "alice".to_owned(),
-            home: "/home/alice".to_owned(),
+            home: "/srv/alice".to_owned(),
             os: "linux".to_owned(),
             arch: "x86_64".to_owned(),
         }
     );
-    assert!(Probe::read("alice\n1000\n/home/alice\nLinux x86_64\nnone\n").is_err());
-    assert!(Probe::read("Alice Smith\n1000\n/home/alice\nLinux x86_64\nsha256sum\n").is_err());
-    assert!(Probe::read("alice\n1000\n/home/alice\nLinux riscv64\nsha256sum\n").is_err());
+    assert!(Probe::read("alice\n1000\n/srv/alice\nLinux x86_64\nnone\n").is_err());
+    assert!(Probe::read("Alice Smith\n1000\n/srv/alice\nLinux x86_64\nsha256sum\n").is_err());
+    assert!(Probe::read("alice\n1000\n/srv/alice\nLinux riscv64\nsha256sum\n").is_err());
 }
