@@ -19,6 +19,7 @@ use crate::{
 
 pub(crate) mod hold;
 mod progress;
+mod reinforcement;
 pub use progress::{CorrectionCheck, InputFailure};
 
 const SCHEMA_VERSION: i64 = 20;
@@ -572,13 +573,18 @@ struct RetrievalCandidate {
     confidence: f64,
     salience: f64,
     updated_at_unix_ms: u64,
+    /// Distinct sessions with the operator's words behind the card.
+    human_sessions: u64,
+    /// When the operator last said it, or the card's creation.
+    last_said_at_unix_ms: u64,
     rank: usize,
     score: f64,
 }
 
 impl RetrievalQuery {
-    /// The session-start index: rule, decision and lesson cards by salience,
-    /// one line each, no bodies (D-03, D-04).
+    /// The session-start index: rule, decision and lesson cards by salience
+    /// and the operator's reinforcement, one line each, no bodies (D-03,
+    /// D-04).
     pub fn session_start(project_id: impl Into<String>) -> Self {
         Self {
             project_id: project_id.into(),
@@ -3335,7 +3341,7 @@ impl MemoryStore {
                     return Ok(empty(InjectionOutcome::Deadline));
                 }
                 matched = candidates.len();
-                select_bodies(candidates, query)
+                select_bodies(by_reinforcement(candidates, now_ms()), query)
             }
         };
         if expired() {
@@ -3355,39 +3361,60 @@ impl MemoryStore {
         })
     }
 
-    /// The index lines: rule, decision and lesson cards by salience. A card
-    /// in the repository's own files is a line that points at the file
-    /// (B10, D-04).
+    /// The index lines: rule, decision and lesson cards by salience weighed
+    /// by how many sessions the operator said each in and how recently
+    /// ([`reinforcement::weight`]). A card in the repository's own files is a
+    /// line that points at the file (B10, D-04).
     fn index(&self, project_id: &str, limit: usize) -> Result<Vec<InjectedItem>, MemoryError> {
+        let now = now_ms();
         let mut statement = self.connection.prepare(&format!(
-            "SELECT i.id,i.number,r.revision,r.title,p.target_path,p.pr_number,p.repository FROM memory_items i JOIN memory_revisions r ON r.item_id=i.id AND r.revision=i.current_revision \
+            "SELECT i.id,i.number,r.revision,r.title,p.target_path,p.pr_number,p.repository,i.salience,i.confidence,i.updated_at_ms,{} FROM memory_items i JOIN memory_revisions r ON r.item_id=i.id AND r.revision=i.current_revision \
              LEFT JOIN card_promotions p ON p.item_id=i.id AND p.revision=i.current_revision AND p.state='merged' \
-             WHERE i.project_id=?1 AND i.lifecycle='active' AND r.kind IN ('rule','decision','lesson','preference') AND NOT {} AND NOT EXISTS(SELECT 1 FROM card_comparisons c WHERE c.item_id=i.id AND c.revision=i.current_revision AND p.item_id IS NULL AND json_extract(c.data,'$.authority')!='card_newer') AND (r.verified_at_ms IS NOT NULL OR p.item_id IS NOT NULL) ORDER BY i.salience DESC,i.confidence DESC,i.updated_at_ms DESC,i.id LIMIT ?2",
-            hold::held(3)
+             WHERE i.project_id=?1 AND i.lifecycle='active' AND r.kind IN ('rule','decision','lesson','preference') AND NOT {} AND NOT EXISTS(SELECT 1 FROM card_comparisons c WHERE c.item_id=i.id AND c.revision=i.current_revision AND p.item_id IS NULL AND json_extract(c.data,'$.authority')!='card_newer') AND (r.verified_at_ms IS NOT NULL OR p.item_id IS NOT NULL)",
+            reinforcement::COLUMNS,
+            hold::held(2)
         ))?;
-        Ok(statement
-            .query_map(params![project_id, limit as u64, now_ms()], |row| {
+        let mut lines = statement
+            .query_map(params![project_id, now], |row| {
                 let title: String = row.get(3)?;
                 let path: Option<String> = row.get(4)?;
                 let pull_request: Option<u64> = row.get(5)?;
                 let repository: Option<String> = row.get(6)?;
-                Ok(InjectedItem {
-                    id: row.get(0)?,
-                    number: row.get(1)?,
-                    revision: row.get(2)?,
-                    text: match (path, pull_request) {
-                        (Some(path), _) => format!("{title} -> {path}"),
-                        (None, Some(number)) => {
-                            match repository {
-                                Some(repository) => format!("{title} -> merged in pull request {repository}#{number}"),
-                                None => format!("{title} -> merged in pull request #{number} (original repository unknown)"),
-                            }
-                        }
-                        (None, None) => title,
+                let salience: f64 = row.get(7)?;
+                let weighted = salience * reinforcement::weight(row.get(10)?, row.get(11)?, now);
+                let order = (weighted, row.get::<_, f64>(8)?, row.get::<_, u64>(9)?);
+                Ok((
+                    order,
+                    InjectedItem {
+                        id: row.get(0)?,
+                        number: row.get(1)?,
+                        revision: row.get(2)?,
+                        text: match (path, pull_request) {
+                            (Some(path), _) => format!("{title} -> {path}"),
+                            (None, Some(number)) => match repository {
+                                Some(repository) => format!(
+                                    "{title} -> merged in pull request {repository}#{number}"
+                                ),
+                                None => format!(
+                                    "{title} -> merged in pull request #{number} (original repository unknown)"
+                                ),
+                            },
+                            (None, None) => title,
+                        },
                     },
-                })
+                ))
             })?
-            .collect::<rusqlite::Result<Vec<_>>>()?)
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        lines.sort_by(|(left, left_item), (right, right_item)| {
+            right
+                .0
+                .total_cmp(&left.0)
+                .then_with(|| right.1.total_cmp(&left.1))
+                .then_with(|| right.2.cmp(&left.2))
+                .then_with(|| left_item.id.cmp(&right_item.id))
+        });
+        lines.truncate(limit);
+        Ok(lines.into_iter().map(|(_, item)| item).collect())
     }
 
     /// Records a receipt a session carried for the cards it was given in
@@ -3576,7 +3603,7 @@ impl MemoryStore {
         if query.is_empty() {
             return Ok(Vec::new());
         }
-        let mut statement = self.connection.prepare(&format!("SELECT i.id,i.number,r.revision,r.title,r.aliases,r.body||COALESCE((SELECT '\nPending document update: '||json_extract(c.data,'$.document') FROM card_comparisons c WHERE c.item_id=i.id AND c.revision=i.current_revision AND json_extract(c.data,'$.authority')='card_newer'),''),COALESCE((SELECT s.provider||':'||s.session_id FROM memory_sources s WHERE s.item_id=i.id ORDER BY s.provider,s.session_id,s.event_offset LIMIT 1),''),i.confidence,i.salience,i.updated_at_ms,r.kind FROM memory_fts f JOIN memory_items i ON i.id=f.item_id JOIN memory_revisions r ON r.item_id=i.id AND r.revision=i.current_revision WHERE f.project_id=?1 AND i.lifecycle='active' AND memory_fts MATCH ?2 AND (?4=0 OR (r.verified_at_ms IS NOT NULL AND NOT {} AND NOT EXISTS(SELECT 1 FROM card_comparisons c WHERE c.item_id=i.id AND c.revision=i.current_revision AND json_extract(c.data,'$.authority')!='card_newer') AND NOT EXISTS(SELECT 1 FROM card_promotions p WHERE p.item_id=i.id AND p.revision=i.current_revision AND p.state='merged'))) ORDER BY bm25(memory_fts),i.updated_at_ms DESC,i.id LIMIT ?3", hold::held(5)))?;
+        let mut statement = self.connection.prepare(&format!("SELECT i.id,i.number,r.revision,r.title,r.aliases,r.body||COALESCE((SELECT '\nPending document update: '||json_extract(c.data,'$.document') FROM card_comparisons c WHERE c.item_id=i.id AND c.revision=i.current_revision AND json_extract(c.data,'$.authority')='card_newer'),''),COALESCE((SELECT s.provider||':'||s.session_id FROM memory_sources s WHERE s.item_id=i.id ORDER BY s.provider,s.session_id,s.event_offset LIMIT 1),''),i.confidence,i.salience,i.updated_at_ms,r.kind,{} FROM memory_fts f JOIN memory_items i ON i.id=f.item_id JOIN memory_revisions r ON r.item_id=i.id AND r.revision=i.current_revision WHERE f.project_id=?1 AND i.lifecycle='active' AND memory_fts MATCH ?2 AND (?4=0 OR (r.verified_at_ms IS NOT NULL AND NOT {} AND NOT EXISTS(SELECT 1 FROM card_comparisons c WHERE c.item_id=i.id AND c.revision=i.current_revision AND json_extract(c.data,'$.authority')!='card_newer') AND NOT EXISTS(SELECT 1 FROM card_promotions p WHERE p.item_id=i.id AND p.revision=i.current_revision AND p.state='merged'))) ORDER BY bm25(memory_fts),i.updated_at_ms DESC,i.id LIMIT ?3", reinforcement::COLUMNS, hold::held(5)))?;
         let mut candidates = statement
             .query_map(
                 params![
@@ -3599,6 +3626,8 @@ impl MemoryStore {
                         confidence: row.get(7)?,
                         salience: row.get(8)?,
                         updated_at_unix_ms: row.get(9)?,
+                        human_sessions: row.get(11)?,
+                        last_said_at_unix_ms: row.get(12)?,
                         rank: 0,
                         score: 0.0,
                     })
@@ -3668,6 +3697,35 @@ fn write_promotion(
             ],
         )?;
     Ok(())
+}
+
+/// The matched cards in the order a prompt is given them: the matcher's score
+/// times the square root of the operator's reinforcement
+/// ([`reinforcement::weight`]), so among cards that match about as well, one
+/// the operator said across sessions and lately goes before a one-off or stale
+/// one. The root keeps the weight's spread under two, so it rarely outweighs a
+/// whole shared word. Every card here already passed the matcher's minimum
+/// score.
+fn by_reinforcement(
+    mut candidates: Vec<RetrievalCandidate>,
+    now_unix_ms: u64,
+) -> Vec<RetrievalCandidate> {
+    let key = |candidate: &RetrievalCandidate| {
+        candidate.score
+            * reinforcement::weight(
+                candidate.human_sessions,
+                candidate.last_said_at_unix_ms,
+                now_unix_ms,
+            )
+            .sqrt()
+    };
+    candidates.sort_by(|left, right| {
+        key(right)
+            .total_cmp(&key(left))
+            .then_with(|| left.rank.cmp(&right.rank))
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    candidates
 }
 
 /// Whole cards for a prompt: distinct sessions' cards first, no card the
@@ -8537,6 +8595,108 @@ PRAGMA user_version=14;"#,
         assert!(context.contains("\nm23 Rule title 22\n"));
         assert!(!context.contains("Durable rule number"));
         assert_eq!(index.item_key().split(',').next(), Some("m23@1"));
+    }
+
+    /// The operator says card `number` again in `session` at `at_ms`, which
+    /// analysis merges into it as the same card.
+    fn say_again(store: &mut MemoryStore, project: &str, number: u64, session: &str, at_ms: u64) {
+        let target_id = store.item_by_number(project, number).unwrap().unwrap().id;
+        store
+            .apply_candidates(
+                &sourced_batch(project, &format!("{number}-{session}-{at_ms}"), session),
+                &[Candidate {
+                    source_times: BTreeMap::from([(7, at_ms)]),
+                    ..candidate("said again", CandidateRelation::Same { target_id })
+                }],
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn the_index_puts_cards_said_in_more_sessions_and_lately_before_more_salient_ones() {
+        let (_temp, mut store, project) = store();
+        let now = now_ms();
+        let day = 86_400_000;
+        let card = |title: &str, salience: f64, said_at: Option<u64>| Candidate {
+            title: title.to_owned(),
+            salience,
+            human_offsets: said_at.map(|_| vec![7]).unwrap_or_default(),
+            source_times: BTreeMap::from([(7, said_at.unwrap_or(now))]),
+            ..candidate(&format!("{title} body"), CandidateRelation::New)
+        };
+        store
+            .apply_candidates(
+                &AnalysisBatch {
+                    created_at_unix_ms: now - day,
+                    ..sourced_batch(&project, "b", "s0")
+                },
+                &[
+                    card("Said in three sessions", 0.7, Some(now - day)),
+                    card("Said three times in one session", 0.8, Some(now - day)),
+                    card("Never said by the operator", 0.9, None),
+                    card("Said long ago", 0.95, Some(now - 200 * day)),
+                ],
+            )
+            .unwrap();
+        for session in ["s1", "s2"] {
+            say_again(&mut store, &project, 1, session, now - day);
+        }
+        for earlier in 1..=2 {
+            say_again(&mut store, &project, 2, "s0", now - day - earlier);
+        }
+        let titles = store
+            .retrieve(&RetrievalQuery::session_start(&project))
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|item| item.text)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            titles,
+            [
+                "Said in three sessions",
+                "Said three times in one session",
+                "Never said by the operator",
+                "Said long ago",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_prompt_gets_the_reinforced_card_first_among_equal_matches_and_no_unmatched_one() {
+        let (_temp, mut store, project) = store();
+        let now = now_ms();
+        let said = |text: &str| Candidate {
+            source_times: BTreeMap::from([(7, now)]),
+            ..candidate(text, CandidateRelation::New)
+        };
+        store
+            .apply_candidates(
+                &sourced_batch(&project, "b", "s0"),
+                &[
+                    said("Deploy previews use staging buckets for every branch."),
+                    said("Deploy previews use staging."),
+                    said("Lint before tests."),
+                ],
+            )
+            .unwrap();
+        for session in ["s1", "s2"] {
+            say_again(&mut store, &project, 1, session, now);
+            say_again(&mut store, &project, 3, session, now);
+        }
+        let given = store
+            .retrieve(&RetrievalQuery::prompt(
+                &project,
+                "deploy previews staging",
+                vec![],
+            ))
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|item| item.number)
+            .collect::<Vec<_>>();
+        // The shorter card ranks first by BM25 alone.
+        assert_eq!(given, [1, 2]);
     }
 
     #[test]

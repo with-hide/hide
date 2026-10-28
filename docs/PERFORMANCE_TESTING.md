@@ -899,6 +899,7 @@ The old `session-search.sqlite3` is opened read-only only to read each project's
 
 `UserPromptSubmit` is a separate high-frequency boundary.
 The hook accepts at most 256 KiB of input and asks the core with one `hide workspace memory` beside its letter pull, carrying the prompt's first 8 KiB; the core uses the attested checkout's prepared Project and at most 1024 bytes of confirmed task context, opens its store read-only, checks schema and the writer's indexed projection certificate, and requests at most sixty local FTS candidates within the earlier of the caller expiry and the 100 ms retrieval deadline.
+The sixty candidates carry two more columns, the operator's distinct sessions and last time behind each card (`memory_sources` read through its primary key, which starts with the card id, so each is a lookup of the card's few source rows; the operator's busiest card has 13), and are ordered in memory by score times the root of that weight, with no stored count, migration or write.
 The body selector keeps at most three whole items and 600 estimated body tokens; the final escaped envelope, including wrappers and receipts, is trimmed to a shared 1200 estimated rendered-token limit, off the runtime lock.
 These are local estimates, not provider billing tokens.
 The core sets a one-second Memory answer deadline; `CoreHandle::memory_scope` bounds its owner reply with the remaining expiry, and remote admission, write and answer share one absolute deadline.
@@ -908,6 +909,8 @@ The prompt supervisor bounds the inner helper at 1,850 ms from the outer helper'
 The core's lookup starts no model, embedding, transcript scan, child process, network request, repository discovery, full-store scan, or database write.
 Missing, locked, corrupt, stale, unresolved, unreachable or over-deadline inputs exit successfully with empty context so prompt submission continues.
 `SessionStart` reads the Project's index under the same read-only and fail-open ownership and the same Memory read budget: at most 20 one-line rule, decision, lesson and preference cards and no body.
+The index reads every eligible card of the Project, as its salience order already did, now with the same two source lookups per card, and keeps the 20 with the highest salience times weight; the 10,000-card cap bounds it.
+On 2026-10-28, against a copy of the operator's store (462 eligible cards, 1,208 sources) in a release build with a warm page cache, the index read took 0.6 ms at the median before and 1.6 ms after, and the prompt match 4.4 ms and 4.6 ms, out of 30 rounds of eight real prompts; linear in cards, the index at the 10,000-card cap is about 35 ms, inside the 100 ms retrieval deadline.
 Its separate Workspace probe has a two-second CLI timeout and runs beside Memory when its thread starts; later count-report calls also have their own two-second timeouts.
 The installed SessionStart entry has an eight-second runtime timeout, so the Memory budget is not a whole-session-hook deadline.
 `hide memory show|search|forget|undo|outdated|placed|building|unbuilt|skipped` is one store read or write on hided's blocking task; `add` is one provider call bounded at 50 s.
