@@ -251,7 +251,7 @@ fn an_earlier_builds_two_stubs_give_way_to_the_current_ones() {
             .text()
             .contains(hide_agent_hooks::intent_table!())
     );
-    assert!(GUIDE_SKILL.text().contains("<!-- hide-skill@2:"));
+    assert!(GUIDE_SKILL.text().contains("<!-- hide-skill@3:"));
     // The Conductor's stub names missions and the Conductor for the agent
     // choosing it, and sends it to the help that owns the commands.
     assert!(
