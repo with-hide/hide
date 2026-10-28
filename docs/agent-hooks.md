@@ -263,6 +263,7 @@ Each refusal writes one `global_instruction` `guard.refused` line to `spawn-guar
 OpenCode, Pi and omp take the same refusal through the plugin helper: their plugin and extension send a call naming the file to the helper whether or not a project guardrail is on.
 Like the guardrails it is a guard, not a security boundary: a script that spells the name another way is not seen, Claude Code's PowerShell tool on Windows reaches no pre-tool hook, and the file stays a plain file the operator's own processes can change; a confirm before a hand edit counts is a follow-up, not this change.
 The core follows a link at the file only to an existing regular `.md` or `.txt` file: through a link it never makes a file or a folder, and a link to anything else is read as an unreadable file, given to no session.
+A move of the core carries the text such a link points to as a regular file, since the link would point nowhere on the receiving machine, and leaves a link it does not read through behind with a `global_instruction.link_left` diagnostic.
 
 ### What a hook records when it fails
 

@@ -81,6 +81,16 @@ pub fn read(state_dir: &Path) -> Result<Instruction, Unusable> {
     Ok(instruction(text))
 }
 
+/// The file a link at the name points to, when the core reads through it
+/// ([`target`]'s rule), or `None` when the name is no link or a link the core
+/// does not follow. A core move carries this file's text in the link's place.
+pub(crate) fn linked_file(state_dir: &Path) -> Option<std::path::PathBuf> {
+    match target(state_dir) {
+        Ok((file, true)) => Some(file),
+        _ => None,
+    }
+}
+
 /// The file the name stands for: the name itself, or the file a link there
 /// points at, and whether it is a link's. A link is followed only to an
 /// existing regular `.md` or `.txt` file: through a link Hide never makes a

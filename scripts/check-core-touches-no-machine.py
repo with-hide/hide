@@ -114,12 +114,13 @@ STORES = {
         "written, before any link exists (PRD core-host-node D-10)",
     ),
     "herdr-core/src/node_migration/copy.rs": (
-        58,
+        59,
         "copies, places and sets aside the core's own stores for a move of "
         "the core (PRD core-host-node-move), run by the hided whose state "
         "folder holds them while no core runs on it; the retired "
         "session-search store moves read-only, kept for its retention "
-        "settings (PRD overview-device-tasks D-20)",
+        "settings (PRD overview-device-tasks D-20), and a global instruction "
+        "kept through a link moves as the text it points to",
     ),
     "herdr-core/src/node_migration/reown.rs": (
         4,
