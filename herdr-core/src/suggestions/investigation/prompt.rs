@@ -425,6 +425,7 @@ mod tests {
             at_unix_ms: 0,
             always: false,
             improvement: None,
+            said: None,
             line: None,
             fresh: true,
         }

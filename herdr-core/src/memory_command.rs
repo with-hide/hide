@@ -86,6 +86,13 @@ pub enum MemoryCommand {
     Release {
         number: u64,
     },
+    /// Card `number` waits out of every hook until it is checked again: its
+    /// sources are read again for letters, then the repository check keeps,
+    /// corrects or forgets it (PRD memory-self-improve B27, B28). An agent
+    /// asks only for a card its own conversation was given.
+    Recheck {
+        number: u64,
+    },
     /// The agent promoting card `number` names the repository file it put
     /// the card in, which the card points at once the pull request merges.
     Placed {
@@ -127,7 +134,8 @@ impl MemoryCommand {
             Self::Show { number }
             | Self::Forget { number }
             | Self::Undo { number }
-            | Self::Release { number } => *number > 0,
+            | Self::Release { number }
+            | Self::Recheck { number } => *number > 0,
             Self::Stale { number, reason } => {
                 *number > 0
                     && !reason.trim().is_empty()
@@ -403,6 +411,44 @@ impl PreparedMemory {
                     "outcome": "held",
                     "expires_at": utc(hold.expires_at_unix_ms),
                 }))
+            }
+            MemoryCommand::Recheck { number } => {
+                // A person at a shell asks as the operator; an agent only
+                // for a card its own session was given, which Hide can tell
+                // only when it knows that session (B28).
+                let requester = match &self.caller {
+                    MemoryCaller::Person => hide_memory::Requester::Operator,
+                    MemoryCaller::Agent(Some((runtime, session))) => {
+                        hide_memory::Requester::Agent { runtime, session }
+                    }
+                    MemoryCaller::Agent(None) | MemoryCaller::Checkout => {
+                        return Err("memory_recheck_session_required".into());
+                    }
+                };
+                if self.settings.is_none() {
+                    return Err("memory_recheck_ai_off".into());
+                }
+                store
+                    .recheck(&identity.id, number, requester, now)
+                    .map_err(|error| match error {
+                        hide_memory::MemoryError::MemoryMissing => {
+                            "memory_card_not_found".to_owned()
+                        }
+                        hide_memory::MemoryError::Disabled => "memory_off".to_owned(),
+                        hide_memory::MemoryError::Refused(reason) => {
+                            format!("memory_{reason}")
+                        }
+                        error => store_failure(&identity.id, &error),
+                    })?;
+                crate::diagnostic!(json!({
+                    "component": "memory",
+                    "kind": "recheck.asked",
+                    "project_id": identity.id,
+                    "card": number,
+                    "caller": self.caller.code(),
+                }));
+                self.report(&identity.id, MemoryChange::Other);
+                Ok(json!({"card": card_name(number), "outcome": "waiting"}))
             }
             MemoryCommand::Release { number } => {
                 let item = store
@@ -899,6 +945,21 @@ pub fn next_action(code: &str) -> &'static str {
         "memory_stale_shown_only" => {
             "Reading a card with hide memory show does not let a session report it; only a card a prompt gave this session can be reported"
         }
+        "memory_recheck_session_required" => {
+            "Only an agent whose session Hide knows, or a person in a Hide shell pane, can ask for a recheck; run it from the agent's own pane"
+        }
+        "memory_recheck_ai_off" => {
+            "Rechecking needs Hide AI; turn it on in Settings > Hide AI, or tell the operator"
+        }
+        "memory_recheck_not_given" => {
+            "An agent can recheck only a card its own conversation was given; tell the operator about this one instead"
+        }
+        "memory_recheck_full" => {
+            "This Project already has 20 cards waiting to be checked; try again once some are checked"
+        }
+        "memory_stale_index_only" => {
+            "A card seen only in the session-start list cannot be reported; only a card a prompt gave this session in full can be reported"
+        }
         "memory_stale_receipts_full" => {
             "Hide cannot tell which cards this session was given because this Project's delivery records are full; tell the operator instead"
         }
@@ -1163,6 +1224,48 @@ mod tests {
         MemoryCaller::Agent(Some(("claude".to_owned(), session.to_owned())))
     }
 
+    /// PRD memory-self-improve B27, B28: an agent rechecks only a card its
+    /// conversation was given, the operator any, and never with Hide AI off.
+    #[test]
+    fn a_recheck_needs_hide_ai_and_an_agent_only_rechecks_a_card_it_was_given() {
+        let fixture = Fixture::new();
+        let recheck = |caller: MemoryCaller, ai: bool| {
+            fixture.run_as(
+                MemoryCommand::Recheck { number: 1 },
+                ai,
+                None,
+                Vec::new(),
+                caller,
+            )
+        };
+        assert_eq!(
+            recheck(MemoryCaller::Person, false),
+            Err("memory_recheck_ai_off".into())
+        );
+        assert_eq!(
+            recheck(MemoryCaller::Checkout, true),
+            Err("memory_recheck_session_required".into())
+        );
+        assert_eq!(
+            recheck(agent("caller-session"), true),
+            Err("memory_recheck_not_given".into())
+        );
+        fixture.give("caller-session");
+        assert_eq!(
+            recheck(agent("caller-session"), true).unwrap()["outcome"],
+            "waiting"
+        );
+        let card = fixture
+            .run(MemoryCommand::Show { number: 1 }, false)
+            .unwrap();
+        assert_eq!(card["verifying"], true);
+        // Asked again while waiting, it stays as it is.
+        assert_eq!(
+            recheck(MemoryCaller::Person, true).unwrap()["outcome"],
+            "waiting"
+        );
+    }
+
     #[test]
     fn a_card_a_prompt_gave_the_caller_is_held_shown_and_an_agents_release_spends_its_report() {
         // PRD memory-stale-cards B1-B3, B5, B11, D-10 as amended.
@@ -1230,6 +1333,11 @@ mod tests {
             "memory_stale_already_reported",
             "memory_stale_not_received",
             "memory_stale_shown_only",
+            "memory_stale_index_only",
+            "memory_recheck_session_required",
+            "memory_recheck_ai_off",
+            "memory_recheck_not_given",
+            "memory_recheck_full",
             "memory_stale_receipts_full",
             "memory_stale_session_limit",
             "memory_stale_project_limit",
@@ -1662,6 +1770,8 @@ mod tests {
                 "target_id": null,
             }],
             "alias_backfill": [],
+        "repeats": [],
+        "merges": [],
         }));
         let add = || {
             fixture.run(
@@ -1743,6 +1853,8 @@ mod tests {
                     "target_id": null,
                 }],
                 "alias_backfill": [],
+            "repeats": [],
+            "merges": [],
             })
         };
         let add = || {

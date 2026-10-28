@@ -122,6 +122,11 @@ impl Runtime {
         match order.outcome {
             Outcome::Pr => self.start_suggestion_agent(key, &node, order),
             Outcome::Issue => self.start_suggestion_issue(key, &node, order),
+            // The worker writes a global instruction line itself and never
+            // orders an agent for one (`applying::begin` refuses it).
+            Outcome::Local => {
+                self.move_attempt(&key, AttemptMove::Failed("start_failed".into()));
+            }
         }
         false
     }
@@ -394,6 +399,7 @@ impl Runtime {
                     continue;
                 }
                 Outcome::Issue => self.issue_move(&attempt, &node),
+                Outcome::Local => None,
             };
             if let Some(change) = change {
                 let followed = &mut self.suggestions_work.apply.followed[index];

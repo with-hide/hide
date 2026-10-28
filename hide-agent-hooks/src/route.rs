@@ -113,13 +113,22 @@ pub fn apply(command: &mut Command) -> Result<(), &'static str> {
     if std::env::var_os(STATE_VARIABLE).is_some_and(|value| !value.is_empty()) {
         return Ok(());
     }
-    static ROUTE: OnceLock<Result<Option<PathBuf>, ()>> = OnceLock::new();
-    let route = ROUTE.get_or_init(|| parse(std::env::args().skip(1)));
-    let route = route.as_ref().map_err(|_| "record")?;
+    let route = installed().as_ref().map_err(|_| "record")?;
     if let Some(route) = route {
         command.env(STATE_VARIABLE, route);
     }
     Ok(())
+}
+
+/// The route the kit installed this hook with, read from its arguments once.
+fn installed() -> &'static Result<Option<PathBuf>, ()> {
+    static ROUTE: OnceLock<Result<Option<PathBuf>, ()>> = OnceLock::new();
+    ROUTE.get_or_init(|| parse(std::env::args().skip(1)))
+}
+
+/// The state folder the kit installed this hook for, when it named one.
+pub(crate) fn installed_state_dir() -> Option<PathBuf> {
+    installed().as_ref().ok().cloned().flatten()
 }
 
 /// Read a generated shell command for install diagnosis only. Execution

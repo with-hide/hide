@@ -38,6 +38,7 @@ mod fork;
 mod github;
 mod github_poll;
 mod github_store;
+pub mod global_instruction;
 mod handle;
 pub mod herdr_contract;
 pub mod herdr_takeover;

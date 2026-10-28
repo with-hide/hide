@@ -139,9 +139,12 @@ pub trait Analysis: Send {
 pub struct TagGrouping;
 
 impl TagGrouping {
-    fn outcome(signal: Signal) -> Outcome {
-        match signal {
+    /// A CI line is an issue; the operator's personal way of working goes
+    /// into the Hide global instruction (PRD memory-self-improve D-06).
+    fn outcome(entry: &super::ledger::RecordEntry) -> Outcome {
+        match entry.signal {
             Signal::CheckFailed => Outcome::Issue,
+            _ if entry.said.as_ref().is_some_and(|said| said.personal) => Outcome::Local,
             _ => Outcome::Pr,
         }
     }
@@ -158,6 +161,7 @@ impl Analysis for TagGrouping {
 
     fn run(&mut self, input: &AnalysisInput, pen: &mut dyn NotebookPen) -> AnalysisEnd {
         let mut groups: BTreeMap<(Signal, &str), Vec<RecordId>> = BTreeMap::new();
+        let mut outcomes = BTreeMap::new();
         let mut passed = Vec::new();
         for entry in input.records.fresh() {
             // A correction is named by its Memory card, which Memory itself
@@ -167,6 +171,9 @@ impl Analysis for TagGrouping {
                 passed.push(entry.id);
                 continue;
             }
+            outcomes
+                .entry((entry.signal, entry.tag.as_str()))
+                .or_insert_with(|| Self::outcome(entry));
             groups
                 .entry((entry.signal, entry.tag.as_str()))
                 .or_default()
@@ -193,7 +200,7 @@ impl Analysis for TagGrouping {
                         discomfort: None,
                         records: chunk.to_vec(),
                         basis: Some((signal, tag.to_owned())),
-                        outcome: Some(Self::outcome(signal)),
+                        outcome: outcomes.get(&(signal, tag)).copied(),
                     },
                 };
                 match pen.write(edit) {
@@ -274,6 +281,7 @@ mod tests {
             at_unix_ms: 1,
             always: false,
             improvement: None,
+            said: None,
             line: None,
             fresh: true,
         }

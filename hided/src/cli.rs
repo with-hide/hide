@@ -105,7 +105,7 @@ pub enum CommandKind {
 
 const LINKS_USAGE: &str = "usage: hide links pr <number> | issue <number> | branch <name> | session <id> [--all-projects]";
 
-const MEMORY_USAGE: &str = "usage: hide memory show <card> | search <words> | add <text> | forget <card> | undo <card> | placed <card> <path> | building <card> <branch> <path> | unbuilt <card> <reason> | outdated <card> <reason> | skipped <card> <reason> | stale <card> <reason> | release <card>";
+const MEMORY_USAGE: &str = "usage: hide memory show <card> | search <words> | add <text> | forget <card> | undo <card> | placed <card> <path> | building <card> <branch> <path> | unbuilt <card> <reason> | outdated <card> <reason> | skipped <card> <reason> | stale <card> <reason> | release <card> | recheck <card>";
 
 const BROWSER_USAGE: &str = "usage: hide browser open <url-or-path> [--wait] [--request-id <id>] | connect [--display <id>] | help | <command> <display> ... (see hide browser help)";
 
@@ -196,7 +196,7 @@ fn help_text() -> String {
         text.push_str(&indent(lines));
     }
     text.push_str(
-        "\nCommands that act on the operator's screen (workspace, file, diff, view, browser) need Hide's window open and a pane or shell inside a registered checkout.\nThey never start Hide.\nhide links needs only that pane or shell and a running Hide, and reads the project it is in unless --all-projects is given.\nhide memory reads, adds to and forgets from that project's Project Memory, which Hide keeps for the projects of its own device and of every linked device with a Memory reader.\nhide memory release ends a hold that an agent's stale report put on a card.\nRun in a Hide shell pane with no agent, it also lets that card's text be reported stale once more.\n",
+        "\nCommands that act on the operator's screen (workspace, file, diff, view, browser) need Hide's window open and a pane or shell inside a registered checkout.\nThey never start Hide.\nhide links needs only that pane or shell and a running Hide, and reads the project it is in unless --all-projects is given.\nhide memory reads, adds to and forgets from that project's Project Memory, which Hide keeps for the projects of its own device and of every linked device with a Memory reader.\nhide memory release ends a hold that an agent's stale report put on a card.\nhide memory recheck has a card checked again, out of every hook until the check ends; an agent may ask only for a card its conversation was given.\nRun in a Hide shell pane with no agent, it also lets that card's text be reported stale once more.\n",
     );
     text
 }
@@ -441,6 +441,8 @@ fn parse_memory<'a>(mut iter: impl Iterator<Item = &'a String>) -> Result<Comman
             .map(|number| MemoryCommand::Undo { number }),
         (Some("release"), [card]) => herdr_core::memory_command::parse_card(card)
             .map(|number| MemoryCommand::Release { number }),
+        (Some("recheck"), [card]) => herdr_core::memory_command::parse_card(card)
+            .map(|number| MemoryCommand::Recheck { number }),
         (Some("placed"), [card, path]) => {
             herdr_core::memory_command::parse_card(card).map(|number| MemoryCommand::Placed {
                 number,
@@ -1048,6 +1050,10 @@ fn memory_text(
                 _ => format!("Released {card}; Hide hands it to agents again.\n"),
             }
         }
+        MemoryCommand::Recheck { .. } => format!(
+            "{} waits to be checked again; Hide stops giving it until the check keeps, corrects or forgets it.\n",
+            text(&result["card"])
+        ),
         MemoryCommand::Placed { .. } => format!(
             "{} points at {} once its pull request merges.\n",
             text(&result["card"]),
@@ -3308,6 +3314,10 @@ mod tests {
         assert_eq!(
             parse(&["hide", "memory", "release", "m5"]),
             Ok(CommandKind::Memory(MemoryCommand::Release { number: 5 }))
+        );
+        assert_eq!(
+            parse(&["hide", "memory", "recheck", "m5"]),
+            Ok(CommandKind::Memory(MemoryCommand::Recheck { number: 5 }))
         );
         for bad in [
             &["hide", "memory", "forget"][..],

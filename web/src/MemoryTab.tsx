@@ -1,4 +1,4 @@
-import { ChevronDownIcon, ChevronRightIcon, FileIcon, LoaderCircleIcon, MoreHorizontalIcon, SettingsIcon, SparklesIcon, Trash2Icon, Undo2Icon, UserIcon } from "lucide-react";
+import { ArchiveRestoreIcon, ChevronDownIcon, ChevronRightIcon, FileIcon, LoaderCircleIcon, MoreHorizontalIcon, RefreshCwIcon, SettingsIcon, SparklesIcon, Trash2Icon, Undo2Icon, UserIcon } from "lucide-react";
 import { useUiStore } from "./ui";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
@@ -27,7 +27,7 @@ import type { MessageKey } from "./i18n/catalogs";
 import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
 import { cardName, memoryCards, memoryTabQuestions, memoryTime, selectableMemoryQuestions, sourceTime, visibleCards } from "./memoryList";
-import { catalogWorkspaces, frontCheckout, type MemoryCard, type MemoryCardKind, type MemoryQuestion, type MemoryRow, type ProjectMemory } from "./snapshot";
+import { catalogWorkspaces, frontCheckout, type MemoryCard, type MemoryCardKind, type MemoryChange, type MemoryQuestion, type MemoryRow, type ProjectMemory } from "./snapshot";
 import { useShellStore } from "./store";
 
 const KIND: Record<MemoryCardKind, MessageKey> = { rule: "memory.kind.rule", decision: "memory.kind.decision", lesson: "memory.kind.lesson", fact: "memory.kind.fact", preference: "memory.kind.preference" };
@@ -202,6 +202,7 @@ function MemoryBody({ project, actions }: { project: ProjectMemory; actions: Act
         {project.enabled && !project.capacity_reached && evicted > 0 ? <p ref={evictedLine} className="break-keep text-caption text-subtle-foreground" data-memory-evicted={evicted}>{t("memory.evicted", { count: evicted })}</p> : null}
         {project.enabled && memoryTabQuestions(project).length > 0 ? <Questions project={project} actions={actions} busy={busy} /> : null}
         {project.enabled ? <Cards project={project} actions={actions} busy={busy} onDelete={() => setDeleting(true)} /> : null}
+        {project.enabled && project.archived?.length ? <Archived project={project} actions={actions} busy={busy} /> : null}
       </div>
       {project.forgotten !== null ? (
         <div className="pointer-events-none absolute inset-x-0 bottom-0 flex p-md">
@@ -519,6 +520,7 @@ function CardRow({ row, project, actions, busy }: { row: MemoryRow; project: Pro
         </button>
         <span className="flex flex-wrap items-center gap-x-sm gap-y-xxs text-caption text-muted-foreground">
           <span className="rounded-xs bg-secondary px-xxs">{t(KIND[row.kind])}</span>
+          {row.stale && !merged ? <span className="whitespace-nowrap" data-memory-stale={row.number}>{t("memory.stale")}</span> : null}
           {outdated ? <span className="flex w-full min-w-0 items-center gap-xs" data-memory-outdated={row.number}><span className="shrink-0 whitespace-nowrap">{t("memory.docs.outdated")} ·</span><DocumentName path={row.document_comparison!.document} />{row.document_comparison!.document_at_unix_ms ? <span className="shrink-0 whitespace-nowrap">· {formatDateTime(language, row.document_comparison!.document_at_unix_ms, { year:"numeric", month:"short", day:"numeric" })}</span> : null}</span> : null}
           {merged ? (
             <>
@@ -602,6 +604,9 @@ function CardDetail({ card, project, actions, busy }: { card: MemoryCard; projec
   const [previous, setPrevious] = useState(false);
   const humans = card.sources.filter((source) => source.human).length;
   const id = project.workspace_id;
+  const rechecking = waitingRecheck(card);
+  // A recheck ends in Hide AI's check, so the core refuses it while Hide AI is off (PRD memory-self-improve D-41).
+  const aiOn = useShellStore((state) => { const ai = state.rest?.status?.background_ai; return ai ? ai.enabled && ai.chosen !== false : false; });
   return (
     <div className="flex flex-col gap-md pt-xs" data-memory-detail={card.number}>
       {card.previous ? (
@@ -650,10 +655,106 @@ function CardDetail({ card, project, actions, busy }: { card: MemoryCard; projec
           ))}
         </div>
       ) : null}
-      <Button size="sm" variant="ghost" className="self-end text-destructive hover:text-destructive" disabled={busy} onClick={() => actions.memoryAction(id, "forget", card.number)} data-memory-forget={card.number}>
-        <Trash2Icon aria-hidden="true" />
-        {t("memory.forget")}
-      </Button>
+      {card.changes?.length ? <History card={card} project={project} actions={actions} busy={busy} /> : null}
+      <div className="flex items-center justify-end gap-xs">
+        {rechecking ? (
+          <span className="text-caption text-muted-foreground" data-memory-rechecking={card.number}>{t("memory.rechecking")}</span>
+        ) : (
+          <Button size="sm" variant="ghost" disabled={busy || !aiOn} title={aiOn ? undefined : t("memory.recheckNeedsAi")} onClick={() => actions.memoryAction(id, "recheck", card.number)} data-memory-recheck={card.number}>
+            <RefreshCwIcon aria-hidden="true" />
+            {t("memory.recheck")}
+          </Button>
+        )}
+        <Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" disabled={busy} onClick={() => actions.memoryAction(id, "forget", card.number)} data-memory-forget={card.number}>
+          <Trash2Icon aria-hidden="true" />
+          {t("memory.forget")}
+        </Button>
+      </div>
     </div>
+  );
+}
+
+/** A recheck asked and not yet ended: its history row can still be taken back. */
+function waitingRecheck(card: MemoryCard): boolean {
+  return (card.changes ?? []).some((change) => change.kind === "recheck" && !change.undone && change.undo_blocked === null);
+}
+
+/** What Hide changed on a card by itself, each line with its Undo or why there is none (B21, B34). */
+function History({ card, project, actions, busy }: { card: MemoryCard; project: ProjectMemory; actions: Actions; busy: boolean }) {
+  const { t, i18n } = useInterfaceTranslation();
+  const language = requireInterfaceLanguage(i18n.language);
+  return (
+    <div className="flex flex-col gap-xxs" data-memory-history={card.number}>
+      <span className="text-caption text-muted-foreground">{t("memory.history")}</span>
+      {(card.changes ?? []).map((change) => (
+        <span key={change.id} className={cn("grid grid-cols-[1fr_auto_auto] items-baseline gap-x-sm text-caption", change.undone && "opacity-(--opacity-dimmed)")} data-memory-change={change.kind}>
+          <span className="min-w-0 break-words break-keep text-subtle-foreground">
+            {changeText(change, t)}
+            {change.kind === "recheck" && change.letters ? <span className="block text-muted-foreground">{t("memory.change.letters", { count: change.letters })}</span> : null}
+            {change.kind === "recheck" && change.unreadable ? <span className="block text-muted-foreground" data-memory-unreadable={change.unreadable}>{t("memory.change.unreadable", { count: change.unreadable })}</span> : null}
+            {!change.undone && change.undo_blocked ? <span className="block text-muted-foreground" data-memory-undo-blocked={change.undo_blocked}>{t(`memory.blocked.${change.undo_blocked}`)}</span> : null}
+          </span>
+          <span className="font-mono text-muted-foreground">{memoryTime(change.at_unix_ms, language)}</span>
+          {change.undone ? (
+            <span className="text-muted-foreground">{t("memory.change.undone")}</span>
+          ) : change.undo_blocked ? (
+            <span />
+          ) : (
+            <button type="button" disabled={busy} className="flex items-center gap-xxs text-subtle-foreground hover:text-foreground disabled:opacity-(--opacity-disabled)" onClick={() => actions.memoryUndoChange(project.workspace_id, card.number, change.id)} data-memory-undo-change={change.id}>
+              <Undo2Icon aria-hidden="true" className="size-(--size-icon-sm)" />
+              {t("memory.undo")}
+            </button>
+          )}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function changeText(change: MemoryChange, t: ReturnType<typeof useInterfaceTranslation>["t"]): string {
+  switch (change.kind) {
+    case "alias":
+      return t("memory.change.alias", { aliases: change.aliases.join(", ") });
+    case "merge":
+      return t("memory.change.merge", { cards: change.cards.map(cardName).join(", ") });
+    case "recheck":
+      return t("memory.change.recheck", { who: t(change.by_agent ? "memory.change.recheckAgent" : "memory.change.recheckYou") });
+    default:
+      return t(`memory.change.${change.kind}`);
+  }
+}
+
+/** Cards out of the hooks after 60 quiet days, folded under one line, each with 되살리기 (B22). */
+function Archived({ project, actions, busy }: { project: ProjectMemory; actions: Actions; busy: boolean }) {
+  const { t, i18n } = useInterfaceTranslation();
+  const language = requireInterfaceLanguage(i18n.language);
+  const [open, setOpen] = useState(false);
+  const archived = project.archived ?? [];
+  const Icon = open ? ChevronDownIcon : ChevronRightIcon;
+  return (
+    <section aria-label={t("memory.archived", { count: archived.length })} className="flex flex-col gap-sm" data-memory-archived={archived.length}>
+      <button type="button" aria-expanded={open} className="flex items-center gap-xs self-start text-caption text-subtle-foreground hover:text-foreground" onClick={() => setOpen(!open)}>
+        <Icon aria-hidden="true" className="size-(--size-icon-sm)" />
+        {t("memory.archived", { count: archived.length })}
+      </button>
+      {open ? (
+        <>
+          <p className="break-keep text-caption text-muted-foreground">{t("memory.archivedHint")}</p>
+          <ol className="flex flex-col">
+            {archived.map((card) => (
+              <li key={card.number} className="grid grid-cols-[auto_1fr_auto_auto] items-center gap-x-sm px-xs py-xs" data-memory-archived-card={card.number}>
+                <span className="font-mono text-caption text-muted-foreground">{cardName(card.number)}</span>
+                <span className="min-w-0 truncate text-body text-subtle-foreground" title={card.title}>{card.title}</span>
+                <span className="whitespace-nowrap font-mono text-caption text-muted-foreground">{memoryTime(card.archived_at_unix_ms, language)}</span>
+                <Button size="sm" variant="ghost" disabled={busy} onClick={() => actions.memoryAction(project.workspace_id, "revive", card.number)} data-memory-revive={card.number}>
+                  <ArchiveRestoreIcon aria-hidden="true" />
+                  {t("memory.revive")}
+                </Button>
+              </li>
+            ))}
+          </ol>
+        </>
+      ) : null}
+    </section>
   );
 }

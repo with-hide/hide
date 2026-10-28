@@ -2086,9 +2086,32 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "memory_action", payload: { workspace_id: workspaceId, action, number, ...(numbers.length ? { numbers } : {}) } });
     },
 
+    /** Takes back one row of a card's change history (PRD memory-self-improve B34). */
+    memoryUndoChange(workspaceId: string, number: number, change: number) {
+      dispatch({ schema_version: 2, kind: "memory_action", payload: { workspace_id: workspaceId, action: "undo_change", number, change } });
+    },
+
     /** One operator action on a row of the opened Project's 제안 tab (PRD hide-ai-suggestions B10-B16). */
-    suggestionAction(workspaceId: string, id: string, action: SuggestionAction) {
-      dispatch({ schema_version: 2, kind: "suggestion_action", payload: { workspace_id: workspaceId, id, action } });
+    suggestionAction(workspaceId: string, id: string, action: SuggestionAction, preview?: string) {
+      dispatch({ schema_version: 2, kind: "suggestion_action", payload: { workspace_id: workspaceId, id, action, ...(preview === undefined ? {} : { preview }) } });
+    },
+
+    /** The row whose evidence is open, read again masked (PRD memory-self-improve B7); null when none is. */
+    suggestionEvidence(workspaceId: string, id: string | null) {
+      dispatch({ schema_version: 2, kind: "suggestion_evidence", payload: { workspace_id: workspaceId, id } });
+    },
+
+    /** Hands a file Hide owns, such as the Hide global instruction, to the system's editor; refusals are the host's to log. */
+    openOwnedFile(path: string) {
+      const bridge = hostBridge();
+      if (!bridge) return diagnostic("open file: this host cannot open a path");
+      bridge.openPath(path);
+    },
+
+    /** Whether this window runs on the core's machine, where a path the core names is a file it can open. */
+    onCoreMachine(): boolean {
+      const now = rest();
+      return now !== null && windowDeviceId(now.navigator?.devices) === localDeviceId(now);
     },
 
     /** One change in the ⚙ sheet's 제안 group (D-26); the fields left out stay as they are. */

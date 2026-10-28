@@ -130,6 +130,7 @@ impl Runtime {
             workspace_id,
             action,
             number: Some(number),
+            change: None,
         })
     }
 }
@@ -266,6 +267,8 @@ fn row(
         evidence: Vec::new(),
         attempt: None,
         watch: None,
+        local: None,
+        evidence_unconfirmed: false,
     }
 }
 

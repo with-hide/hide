@@ -19,6 +19,10 @@ pub(crate) const QUERY_TERM_LIMIT: usize = 24;
 pub(crate) const COMPARISON_TERM_LIMIT: usize = 96;
 /// A card needs one whole word, stem or alias, or two strong pieces.
 pub(crate) const MINIMUM_SCORE: f64 = 0.8;
+/// The lower bar a card clears to be compared with new words, so the
+/// analysis sees a same-meaning card said in other words (PRD
+/// memory-self-improve D-38).
+pub(crate) const COMPARISON_MINIMUM_SCORE: f64 = 0.4;
 /// The share of a Hangul word's pieces a card must hold, starting with its
 /// first, for the word to count when neither it nor its stem is found whole.
 const GRAM_SHARE: f64 = 0.6;

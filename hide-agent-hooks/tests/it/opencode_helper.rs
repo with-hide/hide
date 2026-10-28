@@ -29,10 +29,12 @@ case "$1 $2" in
     echo '{"ok":true,"result":{"observed":true}}' ;;
   "workspace memory")
     cat > "${HOME%/*}/memory-prompt-$4"
+    global=''
+    if [ -f "${HOME%/*}/global" ] && [ "$4" = SessionStart ]; then global=',"global":"GLOBAL\n"'; fi
     if [ -f "${HOME%/*}/memory-off" ]; then
-      echo '{"type":"workspace_result","ok":true,"result":{"context":null,"outcome":"disabled"}}'
+      printf '%s\n' "{\"type\":\"workspace_result\",\"ok\":true,\"result\":{\"context\":null,\"outcome\":\"disabled\"$global}}"
     else
-      printf '%s\n' "{\"type\":\"workspace_result\",\"ok\":true,\"result\":{\"context\":\"MEMORY-$4\\n\",\"outcome\":\"provided\",\"count\":1}}"
+      printf '%s\n' "{\"type\":\"workspace_result\",\"ok\":true,\"result\":{\"context\":\"MEMORY-$4\\n\",\"outcome\":\"provided\",\"count\":1$global}}"
     fi ;;
   *) exit 1 ;;
 esac
@@ -247,6 +249,45 @@ fn a_prompt_takes_the_panes_letters_for_this_session_and_confirms_nothing() {
             "workspace memory --event UserPromptSubmit --runtime opencode --session ses_root",
         ]
     );
+}
+
+/// PRD memory-self-improve B1, B2: the session's first prompt carries the
+/// Hide global instruction, before Memory and whether or not Memory is on,
+/// and a later prompt does not carry it again.
+#[test]
+fn the_first_prompt_carries_the_global_instruction_once_with_memory_on_or_off() {
+    let machine = Machine::new();
+    let shared = machine.home.parent().unwrap();
+    std::fs::write(shared.join("global"), "").unwrap();
+    let prompt = |first: bool| {
+        machine.run(
+            "prompt",
+            &json!({"session_id": "ses_root", "prompt": "Fix it", "cwd": machine.home, "first": first}),
+            true,
+        )["context"]
+            .clone()
+    };
+    assert_eq!(
+        prompt(true),
+        json!("GLOBAL\nMEMORY-SessionStart\nMEMORY-UserPromptSubmit\nLETTER-FOR-THIS-PANE")
+    );
+    // The start guidance arrived before the session-start capsule did: the
+    // next prompt still asking for that capsule carries it.
+    let answer = machine.run(
+        "prompt",
+        &json!({"session_id": "ses_root", "prompt": "Fix it", "cwd": machine.home,
+            "first": false, "memory_first": true}),
+        true,
+    );
+    assert!(
+        answer["context"]
+            .as_str()
+            .unwrap()
+            .starts_with("GLOBAL\nMEMORY-SessionStart")
+    );
+    std::fs::write(shared.join("memory-off"), "").unwrap();
+    assert_eq!(prompt(true), json!("GLOBAL\nLETTER-FOR-THIS-PANE"));
+    assert_eq!(prompt(false), json!("LETTER-FOR-THIS-PANE"));
 }
 
 #[test]

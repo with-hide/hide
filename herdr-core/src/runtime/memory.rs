@@ -889,6 +889,11 @@ impl MemoryReceipt {
         &self.item_key
     }
 
+    /// Whether it records the session-start index rather than bodies.
+    pub(super) fn is_index(&self) -> bool {
+        self.event == hide_memory::hook::HookEvent::SessionStart.name()
+    }
+
     /// The numbers of the cards it names.
     fn numbers(&self) -> Vec<u64> {
         self.items
@@ -906,22 +911,48 @@ pub(super) fn trusted_memory_receipt(
     provider_injected: bool,
     text: &str,
 ) -> Option<MemoryReceipt> {
+    trusted_memory_receipts(
+        store,
+        project_id,
+        provider,
+        session_id,
+        provider_injected,
+        text,
+    )
+    .into_iter()
+    .find(|receipt| !receipt.is_index())
+}
+
+/// Every receipt line of `text` whose tag the store signed: the bodies a
+/// prompt gave, and the session-start index (PRD memory-self-improve D-35),
+/// which one message of a host without a start hook carries together.
+pub(super) fn trusted_memory_receipts(
+    store: &MemoryStore,
+    project_id: &str,
+    provider: &str,
+    session_id: &str,
+    provider_injected: bool,
+    text: &str,
+) -> Vec<MemoryReceipt> {
     if !provider_injected {
-        return None;
+        return Vec::new();
     }
-    let receipt = memory_receipt(text)?;
-    store
-        .verify_receipt_auth(
-            project_id,
-            provider,
-            session_id,
-            &MemoryStore::context_receipt_event(&receipt.event, receipt.generation),
-            &receipt.item_key,
-            &receipt.auth,
-        )
-        .ok()
-        .filter(|valid| *valid)
-        .map(|_| receipt)
+    text.lines()
+        .filter(|line| line.trim_start().starts_with("<hide-memory-receipt "))
+        .filter_map(memory_receipt)
+        .filter(|receipt| {
+            store
+                .verify_receipt_auth(
+                    project_id,
+                    provider,
+                    session_id,
+                    &MemoryStore::context_receipt_event(&receipt.event, receipt.generation),
+                    &receipt.item_key,
+                    &receipt.auth,
+                )
+                .is_ok_and(|valid| valid)
+        })
+        .collect()
 }
 
 fn memory_receipt(text: &str) -> Option<MemoryReceipt> {

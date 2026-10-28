@@ -71,6 +71,8 @@ pub(crate) struct FollowedAttempt {
 pub(crate) enum NotReady {
     /// Apply needs a new suggestion; retry needs a failed attempt.
     Stage,
+    /// A global instruction line is written by the worker, not an agent.
+    Local,
 }
 
 /// Begins an attempt on `line`: a new suggestion on a press or by itself, or
@@ -106,9 +108,12 @@ pub(crate) fn begin(
     let pr = continues.and_then(|attempt| attempt.pr.clone());
     let repository = continues.and_then(|attempt| attempt.repository.clone());
     let outcome = line.outcome.unwrap_or(Outcome::Pr);
+    if outcome == Outcome::Local {
+        return Err(NotReady::Local);
+    }
     let brief = brief(line, index, pr.clone());
     let (issue_title, issue_since) = match outcome {
-        Outcome::Pr => (None, None),
+        Outcome::Pr | Outcome::Local => (None, None),
         Outcome::Issue => (
             continues
                 .and_then(|attempt| attempt.issue_title.clone())
@@ -185,13 +190,32 @@ fn brief(line: &Line, index: &RecordIndex, pr: Option<PrRef>) -> ApplyBrief {
     ApplyBrief {
         discomfort: line.discomfort.clone(),
         cause: line.cause.clone(),
-        fix: line.fix.clone(),
+        fix: line.fix.clone().or_else(|| said_fix(line, index)),
         basis: line.basis.clone(),
         level: line.level,
         prs,
         records: line.records.len(),
         pr,
     }
+}
+
+/// What a line of the operator's repeated request or ignored card asks the
+/// repository for: the line Memory named, as a skill when it is a procedure
+/// (PRD memory-self-improve D-20).
+fn said_fix(line: &Line, index: &RecordIndex) -> Option<String> {
+    let text = super::read::local_line(line, index)?;
+    let procedure = line
+        .records
+        .iter()
+        .filter_map(|id| index.get(*id))
+        .any(|entry| entry.said.as_ref().is_some_and(|said| said.procedure));
+    Some(if procedure {
+        format!(
+            "a skill the agents can follow for this procedure the operator keeps asking for: {text}"
+        )
+    } else {
+        format!("a rule the agents always follow, which the operator keeps asking for: {text}")
+    })
 }
 
 /// Saves a move onto the attempt it names; answers whether anything
@@ -302,7 +326,13 @@ pub(crate) fn next_auto(notebook: &Notebook, lives: &BTreeMap<LineId, LineLife>)
     notebook
         .lines
         .iter()
-        .filter(|line| line.stage == Stage::Suggested && line.struck.is_none())
+        // A global instruction line waits for the operator's press whatever
+        // the mode (D-33), so it never holds up the pull requests behind it.
+        .filter(|line| {
+            line.stage == Stage::Suggested
+                && line.struck.is_none()
+                && line.outcome != Some(Outcome::Local)
+        })
         .min_by_key(|line| {
             (
                 lives
@@ -530,6 +560,29 @@ mod tests {
         ));
         assert_eq!(applying.stage, Stage::Candidate);
         assert_eq!(applying.struck.unwrap().by, StruckBy::Operator);
+    }
+
+    /// memory-self-improve D-33: a global instruction line raised first
+    /// waits for the operator's press and the automatic mode takes the pull
+    /// request behind it.
+    #[test]
+    fn the_automatic_mode_passes_over_a_global_instruction_line() {
+        let mut notebook = Notebook::default();
+        let mut lives = BTreeMap::new();
+        for (id, raised, outcome) in [(1, 100, Outcome::Local), (2, 200, Outcome::Pr)] {
+            let mut suggested = line(Stage::Suggested);
+            suggested.id = LineId(id);
+            suggested.outcome = Some(outcome);
+            notebook.lines.push(suggested);
+            lives.insert(
+                LineId(id),
+                LineLife {
+                    raised_at_unix_ms: Some(raised),
+                    ..Default::default()
+                },
+            );
+        }
+        assert_eq!(next_auto(&notebook, &lives), Some(LineId(2)));
     }
 
     /// B13, D-29: the automatic mode applies the suggestion raised first,
