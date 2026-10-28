@@ -33,11 +33,14 @@
 # signature and reach no secret.
 #
 # Every call also builds the two Linux device helpers (`device-helpers.yml`),
-# which the Mac app's device bundles are made from and which a release
-# candidate hands the private publisher (docs/BUILD.md). The Mac lane is two
-# jobs, so its native build does not wait for them: `compile (macos)` builds
-# the web shell and the release binaries while the helpers build, and
-# `package (macos)` needs both before it assembles the app, so a failed helper
+# which a release candidate hands the private publisher (docs/BUILD.md), and
+# makes the Linux device bundles from them once (`device-bundles`): the Mac
+# app and the Windows app, whose WSL distributions are Linux devices (PRD
+# wsl-device D-04), ship that one manifest, so each names the archives the
+# release has. The Mac and Windows native builds do not wait for the
+# helpers: `compile (macos)` and `compile (windows)` build the web shell and
+# the release binaries while the helpers build, and each package job needs
+# its compile and the bundles before it assembles the app, so a failed helper
 # or compile fails the package and no app is made without them.
 name: package
 
@@ -127,8 +130,102 @@ jobs:
       version: ${{ needs.helper-identity.outputs.version }}
       build-order: ${{ needs.helper-identity.outputs.build-order }}
 
+  device-bundles:
+    name: device bundles
+    needs: [helper-identity, device-helpers]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: with-hide/hide
+          ref: ${{ needs.helper-identity.outputs.source-sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install zsh for the Herdr fetch
+        run: sudo apt-get install -y --no-install-recommends zsh
+      - uses: actions/download-artifact@v8
+        with:
+          name: hide-device-helper-linux-x86_64
+          path: desktop/out/device-helpers/linux-x86_64
+      - uses: actions/download-artifact@v8
+        with:
+          name: hide-device-helper-linux-aarch64
+          path: desktop/out/device-helpers/linux-aarch64
+      - name: Make the Linux device bundles and their manifest
+        env:
+          VERSION: ${{ needs.helper-identity.outputs.version }}
+          SOURCE_SHA: ${{ needs.helper-identity.outputs.source-sha }}
+          BUILD_ORDER: ${{ needs.helper-identity.outputs.build-order }}
+        run: node desktop/scripts/device-helpers.mjs bundle "$VERSION" "$SOURCE_SHA" "$BUILD_ORDER"
+      - name: Keep the bundles for the packages that carry their manifest
+        uses: actions/upload-artifact@v7
+        with:
+          name: hide-device-bundles
+          path: desktop/out/device-bundles/*
+          if-no-files-found: error
+          retention-days: 7
+
+  windows-compile:
+    name: compile (windows)
+    needs: helper-identity
+    env:
+      HIDE_POSTHOG_PROJECT_TOKEN: ${{ vars.HIDE_POSTHOG_PROJECT_TOKEN }}
+      # The identity the bundles are made with; `package (windows)` checks the
+      # binaries' record against its own before it uses them.
+      HIDE_VERSION: ${{ needs.helper-identity.outputs.version }}
+      HIDE_BUILD_ORDER: ${{ needs.helper-identity.outputs.build-order }}
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Keep line endings as committed
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+        with:
+          repository: with-hide/hide
+          ref: ${{ inputs.source-sha || github.sha }}
+      # Saved by a run on main (the nightly, a candidate dispatched from main);
+      # a pull request and a release tag read it and never write it.
+      - uses: ./.github/actions/rust-cache
+        timeout-minutes: 10
+        with:
+          set: release
+          save: ${{ github.ref == 'refs/heads/main' }}
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install dependencies
+        timeout-minutes: 5
+        run: bash scripts/verify-web.sh install
+      - name: Build the web shell and the release binaries
+        timeout-minutes: 50
+        env:
+          HIDE_WEB_TYPECHECKED_SHA: ${{ inputs.web-typechecked && (inputs.source-sha || github.sha) || '' }}
+        run: bash scripts/verify-web.sh desktop package compile
+      - name: Keep the release binaries for the package job
+        uses: actions/upload-artifact@v7
+        with:
+          name: hide-windows-release-binaries
+          path: |
+            target/release/hided.exe
+            target/release/hide.exe
+            target/release/hide-agent-hooks.exe
+            desktop/out/release-binaries.json
+          if-no-files-found: error
+          retention-days: 1
+
   package:
     name: package (${{ matrix.system }})
+    needs: [helper-identity, device-bundles, windows-compile]
     env:
       HIDE_POSTHOG_PROJECT_TOKEN: ${{ vars.HIDE_POSTHOG_PROJECT_TOKEN }}
     runs-on: ${{ matrix.runner }}
@@ -156,8 +253,10 @@ jobs:
           repository: with-hide/hide
           ref: ${{ inputs.source-sha || github.sha }}
       # Saved by a run on main (the nightly, a candidate dispatched from main);
-      # a pull request and a release tag read it and never write it.
+      # a pull request and a release tag read it and never write it. The
+      # Windows app is assembled from `compile (windows)`'s binaries.
       - uses: ./.github/actions/rust-cache
+        if: matrix.system == 'linux'
         timeout-minutes: 10
         with:
           set: release
@@ -173,7 +272,28 @@ jobs:
       - name: Install zsh for the Herdr fetch, rpmbuild for the rpm and a display for the update test
         if: matrix.system == 'linux'
         run: sudo apt-get install -y --no-install-recommends zsh rpm xvfb
+      - name: Take the identity the binaries and the bundles were made with
+        if: matrix.system == 'windows'
+        env:
+          VERSION: ${{ needs.helper-identity.outputs.version }}
+          BUILD_ORDER: ${{ needs.helper-identity.outputs.build-order }}
+        run: |
+          echo "HIDE_VERSION=${VERSION#v}" >> "$GITHUB_ENV"
+          echo "HIDE_BUILD_ORDER=$BUILD_ORDER" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v8
+        if: matrix.system == 'windows'
+        with:
+          name: hide-windows-release-binaries
+          path: ${{ github.workspace }}
+          digest-mismatch: error
+      - uses: actions/download-artifact@v8
+        if: matrix.system == 'windows'
+        with:
+          name: hide-device-bundles
+          path: desktop/out/device-bundles
+          digest-mismatch: error
       - name: Name the version
+        if: matrix.system == 'linux'
         env:
           REQUESTED: ${{ inputs.version }}
           REQUESTED_ORDER: ${{ inputs.build-order }}
@@ -201,7 +321,10 @@ jobs:
         timeout-minutes: 50
         env:
           HIDE_WEB_TYPECHECKED_SHA: ${{ inputs.web-typechecked && (inputs.source-sha || github.sha) || '' }}
-        run: bash scripts/verify-web.sh desktop package | tee "$RUNNER_TEMP/package.out"
+          # Windows assembles `compile (windows)`'s checked binaries with the
+          # run's device bundles; Linux builds its own.
+          PHASE: ${{ matrix.system == 'windows' && 'assemble' || '' }}
+        run: bash scripts/verify-web.sh desktop package $PHASE | tee "$RUNNER_TEMP/package.out"
       - name: Check each installer against its checksum
         working-directory: desktop/out/release
         run: for checksum in *.sha256; do sha256sum -c "$checksum"; done
@@ -420,7 +543,7 @@ jobs:
 
   macos-package:
     name: package (macos)
-    needs: [helper-identity, device-helpers, macos-compile]
+    needs: [helper-identity, device-bundles, macos-compile]
     env:
       HIDE_POSTHOG_PROJECT_TOKEN: ${{ vars.HIDE_POSTHOG_PROJECT_TOKEN }}
     if: ${{ inputs.include-macos }}
@@ -472,12 +595,9 @@ jobs:
           digest-mismatch: error
       - uses: actions/download-artifact@v8
         with:
-          name: hide-device-helper-linux-x86_64
-          path: desktop/out/device-helpers/linux-x86_64
-      - uses: actions/download-artifact@v8
-        with:
-          name: hide-device-helper-linux-aarch64
-          path: desktop/out/device-helpers/linux-aarch64
+          name: hide-device-bundles
+          path: desktop/out/device-bundles
+          digest-mismatch: error
       - name: Install the Developer ID certificate and the notary key
         # The certificate goes into a keychain of this job's own, put on the
         # search list so codesign finds it; the step names the one Developer
