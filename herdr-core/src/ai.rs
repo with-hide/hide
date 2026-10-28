@@ -402,7 +402,7 @@ pub(crate) type DeviceLinks = Arc<dyn Fn(&str) -> Option<Arc<dyn NodeLink>> + Se
 /// node, and the connected devices an agent may be placed on. A device's
 /// link is looked up each time its agent is asked, so a device that is not
 /// connected answers unavailable without being woken, and one that connects
-/// again answers again with nothing rebuilt.
+/// again answers through its next link.
 #[derive(Clone)]
 pub(crate) struct AiMachines {
     pub(crate) own: Arc<dyn NodeLink>,
@@ -410,6 +410,18 @@ pub(crate) struct AiMachines {
 }
 
 impl AiMachines {
+    /// Whether each device `settings` places an agent on is connected now,
+    /// in device order. A router holds what it was told of an agent for its
+    /// availability window, so a router kept across jobs is built again
+    /// when this changes, and a device that is back is asked at once.
+    pub(crate) fn reach(&self, settings: &AiSettings) -> Vec<bool> {
+        let devices: BTreeSet<String> = settings.machines_by_provider().into_values().collect();
+        devices
+            .iter()
+            .map(|device| (self.devices)(device).is_some())
+            .collect()
+    }
+
     /// Only the core's own node, for a core that reaches no device.
     #[cfg(test)]
     pub(crate) fn own(node: Arc<dyn NodeLink>) -> Self {
