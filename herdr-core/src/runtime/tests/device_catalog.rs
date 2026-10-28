@@ -1160,10 +1160,11 @@ fn a_device_registration_is_listed_without_panes_pinned_and_removed_on_that_devi
     );
 }
 
-/// B24: a device's helper judges a folder against that device's home, so a
-/// folder outside it is refused with the reason and nothing is registered.
+/// B24, wsl-device B15/B21: a device's helper judges a folder against that
+/// device's home, so a folder outside it is asked about and nothing is
+/// registered until the request confirms that same folder.
 #[test]
-fn a_device_folder_outside_its_home_is_refused_by_its_helper() {
+fn a_device_folder_outside_its_home_is_registered_only_with_its_confirmation() {
     let t = tree();
     let mut runtime = runtime();
     runtime.device_hosts.insert(
@@ -1191,13 +1192,29 @@ fn a_device_folder_outside_its_home_is_refused_by_its_helper() {
     // Named by the helper's code, so the shell words it as it words this
     // Mac's refusal; the helper's sentence stays for the diagnostic log.
     let error = runtime.snapshot.status.last_error.clone().unwrap();
-    assert_eq!(error.kind, "workspace.create_refused.outside_root");
-    assert!(
-        error.message.contains("inside the home folder"),
-        "{}",
-        error.message
-    );
+    assert_eq!(error.kind, "workspace.create_refused.needs_confirmation");
+    assert!(error.message.contains("confirmation"), "{}", error.message);
     assert!(runtime.snapshot.ui_state.workspace_registrations.is_empty());
+
+    // A confirmation of another folder is not this folder's.
+    dispatch(
+        &mut runtime,
+        "create_workspace",
+        serde_json::json!({"device_id": TARGET, "path": t.other, "label": "Other", "initialize_git": false, "confirmed_outside_home": t.main}),
+    );
+    let error = runtime.snapshot.status.last_error.clone().unwrap();
+    assert_eq!(error.kind, "workspace.create_refused.needs_confirmation");
+    assert!(runtime.snapshot.ui_state.workspace_registrations.is_empty());
+
+    dispatch(
+        &mut runtime,
+        "create_workspace",
+        serde_json::json!({"device_id": TARGET, "path": t.other, "label": "Other", "initialize_git": false, "confirmed_outside_home": t.other}),
+    );
+    let registrations = &runtime.snapshot.ui_state.workspace_registrations;
+    assert_eq!(registrations.len(), 1);
+    assert_eq!(registrations[0].device_id, TARGET);
+    assert_eq!(registrations[0].path, t.other);
 }
 
 /// Create new project is this Mac's: a device's helper registers folders
