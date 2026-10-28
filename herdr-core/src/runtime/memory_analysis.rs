@@ -2744,6 +2744,11 @@ pub(crate) fn write_cards(
             json!({"component":"memory", "kind":"card.evicted", "project_id":source.project_id, "batch_id":batch_id, "card":number, "reason":"card_capacity"})
         );
     }
+    for number in &summary.sources_full {
+        crate::diagnostic!(
+            json!({"component":"memory", "kind":"card.sources_full", "project_id":source.project_id, "batch_id":batch_id, "card":number, "limit":hide_memory::CARD_SOURCE_LIMIT})
+        );
+    }
     for backfill in output.backfill {
         if let Err(error) = store.fill_aliases(
             source.project_id,

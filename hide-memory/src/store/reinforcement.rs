@@ -46,46 +46,64 @@ pub(super) struct Support {
     pub last_said_at_ms: Option<u64>,
 }
 
-/// The support of every active card of `project_id`, or of `items` alone.
+/// Rows read, and cards tallied, between two looks at the caller's expiry.
+const EXPIRY_STRIDE: usize = 256;
+
+/// The support of every active card of `project_id`, or of `items` alone,
+/// or `None` once `expired` says the caller's deadline passed. A card with
+/// more of the operator's sources than [`crate::CARD_SOURCE_LIMIT`], which
+/// no write leaves, fails the read rather than being counted in part.
 pub(super) fn support(
     connection: &Connection,
     project_id: &str,
     items: Option<&[String]>,
-) -> Result<HashMap<String, Support>, MemoryError> {
+    expired: &dyn Fn() -> bool,
+) -> Result<Option<HashMap<String, Support>>, MemoryError> {
+    let mut statement;
+    let mut rows = match items {
+        None => {
+            statement = connection.prepare_cached(SAID)?;
+            statement.query([project_id])?
+        }
+        Some(items) => {
+            let ids = serde_json::to_string(items)
+                .map_err(|error| MemoryError::InvalidState(error.to_string()))?;
+            statement = connection.prepare_cached(&format!(
+                "{SAID} AND i.id IN (SELECT value FROM json_each(?2))"
+            ))?;
+            statement.query(params![project_id, ids])?
+        }
+    };
     let mut said = HashMap::<String, Vec<Said>>::new();
-    let mut read = |row: &rusqlite::Row<'_>| -> rusqlite::Result<()> {
-        said.entry(row.get(0)?).or_default().push(Said {
+    let mut read = 0;
+    while let Some(row) = rows.next()? {
+        read += 1;
+        if read % EXPIRY_STRIDE == 0 && expired() {
+            return Ok(None);
+        }
+        let item: String = row.get(0)?;
+        let sources = said.entry(item).or_default();
+        if sources.len() == crate::CARD_SOURCE_LIMIT {
+            return Err(MemoryError::Integrity(format!(
+                "memory_card_sources_over_limit:{}",
+                row.get::<_, String>(0)?
+            )));
+        }
+        sources.push(Said {
             session: row.get(1)?,
             at: row.get(2)?,
             words: row.get(3)?,
             started: row.get(4)?,
         });
-        Ok(())
-    };
-    match items {
-        None => {
-            let mut statement = connection.prepare_cached(SAID)?;
-            let mut rows = statement.query([project_id])?;
-            while let Some(row) = rows.next()? {
-                read(row)?;
-            }
-        }
-        Some(items) => {
-            let ids = serde_json::to_string(items)
-                .map_err(|error| MemoryError::InvalidState(error.to_string()))?;
-            let mut statement = connection.prepare_cached(&format!(
-                "{SAID} AND i.id IN (SELECT value FROM json_each(?2))"
-            ))?;
-            let mut rows = statement.query(params![project_id, ids])?;
-            while let Some(row) = rows.next()? {
-                read(row)?;
-            }
-        }
     }
-    Ok(said
-        .into_iter()
-        .map(|(item, said)| (item, tally(&said)))
-        .collect())
+    let mut support = HashMap::with_capacity(said.len());
+    for (tallied, (item, said)) in said.into_iter().enumerate() {
+        if tallied % EXPIRY_STRIDE == 0 && expired() {
+            return Ok(None);
+        }
+        support.insert(item, tally(&said));
+    }
+    Ok(Some(support))
 }
 
 /// Counts each thing said once, for the session that said it first.

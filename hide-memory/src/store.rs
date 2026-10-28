@@ -214,6 +214,9 @@ pub struct ApplySummary {
     pub evictions_purged: usize,
     /// New cards left out because their session reached its limit (D-02).
     pub session_limited: usize,
+    /// Cards, by number, that kept none of this batch's new operator sources
+    /// past [`crate::CARD_SOURCE_LIMIT`].
+    pub sources_full: Vec<u64>,
     pub duplicate_batch: bool,
     /// One per candidate, in order; empty for a duplicate batch.
     pub outcomes: Vec<CandidateOutcome>,
@@ -1828,7 +1831,11 @@ impl MemoryStore {
                     }
                     let item_id =
                         stable_id("memory", &[&batch.id, &index.to_string(), &redacted.text]);
-                    let number = create_item(&transaction, batch, candidate, &item_id, &card)?;
+                    let (number, full) =
+                        create_item(&transaction, batch, candidate, &item_id, &card)?;
+                    if full {
+                        summary.sources_full.push(number);
+                    }
                     write_evidence(
                         &transaction,
                         &item_id,
@@ -1854,13 +1861,17 @@ impl MemoryStore {
                 }
                 CandidateRelation::Same { target_id } => {
                     require_active_target(&transaction, &batch.project_id, target_id)?;
-                    attach_sources(
+                    if attach_sources(
                         &transaction,
                         batch,
                         candidate,
                         target_id,
                         current_revision(&transaction, target_id)?,
-                    )?;
+                    )? {
+                        summary
+                            .sources_full
+                            .push(item_number(&transaction, target_id)?);
+                    }
                     summary.merged_sources += 1;
                     CandidateOutcome::Merged {
                         number: item_number(&transaction, target_id)?,
@@ -1908,7 +1919,11 @@ impl MemoryStore {
                     transaction.execute("UPDATE memory_revisions SET lifecycle='superseded' WHERE item_id=?1 AND revision=?2", params![target_id,previous.1])?;
                     transaction.execute("INSERT INTO memory_revisions(id,item_id,revision,body,title,aliases,cited_paths,kind,lifecycle,created_at_ms,batch_id) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'active',?9,?10)", params![revision_id(target_id,revision),target_id,revision,card.body,card.title,card.aliases_json(),card.cited_json(),candidate.kind.as_str(),batch.created_at_unix_ms,batch.id])?;
                     transaction.execute("UPDATE memory_items SET lifecycle='active',current_revision=?2,confidence=?3,salience=?4,updated_at_ms=?5,outdated_reason=NULL WHERE id=?1", params![target_id,revision,candidate.confidence,candidate.salience,batch.created_at_unix_ms])?;
-                    attach_sources(&transaction, batch, candidate, target_id, revision)?;
+                    if attach_sources(&transaction, batch, candidate, target_id, revision)? {
+                        summary
+                            .sources_full
+                            .push(item_number(&transaction, target_id)?);
+                    }
                     write_evidence(
                         &transaction,
                         target_id,
@@ -3325,12 +3340,22 @@ impl MemoryStore {
             token_count: 0,
             matched: 0,
         };
+        // One read snapshot: the cards and the operator's words behind them
+        // are read as of one moment, so a correction that lands between the
+        // reads is seen whole or not at all. Nothing here writes; the end of
+        // the read rolls it back.
+        let _snapshot = self.connection.unchecked_transaction()?;
         if !self.project_enabled(&query.project_id)? {
             return Ok(empty(InjectionOutcome::Disabled));
         }
         let mut matched = 0;
         let selected = match query.kind {
-            InjectionKind::Index => self.index(&query.project_id, query.maximum_items)?,
+            InjectionKind::Index => {
+                match self.index(&query.project_id, query.maximum_items, &expired)? {
+                    Some(lines) => lines,
+                    None => return Ok(empty(InjectionOutcome::Deadline)),
+                }
+            }
             InjectionKind::Bodies => {
                 // A card in the repository's own files is read there (B12),
                 // and is left out before the candidate limit, so it takes no
@@ -3349,8 +3374,15 @@ impl MemoryStore {
                     .iter()
                     .map(|candidate| candidate.id.clone())
                     .collect::<Vec<_>>();
-                let support =
-                    reinforcement::support(&self.connection, &query.project_id, Some(&ids))?;
+                let Some(support) = reinforcement::support(
+                    &self.connection,
+                    &query.project_id,
+                    Some(&ids),
+                    &expired,
+                )?
+                else {
+                    return Ok(empty(InjectionOutcome::Deadline));
+                };
                 select_bodies(by_reinforcement(candidates, &support, now_ms()), query)
             }
         };
@@ -3375,7 +3407,13 @@ impl MemoryStore {
     /// by how many sessions the operator said each in and how recently
     /// ([`reinforcement::weight`]). A card in the repository's own files is a
     /// line that points at the file (B10, D-04).
-    fn index(&self, project_id: &str, limit: usize) -> Result<Vec<InjectedItem>, MemoryError> {
+    /// `None` once `expired` says the caller's deadline passed.
+    fn index(
+        &self,
+        project_id: &str,
+        limit: usize,
+        expired: &dyn Fn() -> bool,
+    ) -> Result<Option<Vec<InjectedItem>>, MemoryError> {
         let now = now_ms();
         let mut statement = self.connection.prepare(&format!(
             "SELECT i.id,i.number,r.revision,r.title,p.target_path,p.pr_number,p.repository,i.salience,i.confidence,i.updated_at_ms,r.created_at_ms FROM memory_items i JOIN memory_revisions r ON r.item_id=i.id AND r.revision=i.current_revision \
@@ -3383,7 +3421,10 @@ impl MemoryStore {
              WHERE i.project_id=?1 AND i.lifecycle='active' AND r.kind IN ('rule','decision','lesson','preference') AND NOT {} AND NOT EXISTS(SELECT 1 FROM card_comparisons c WHERE c.item_id=i.id AND c.revision=i.current_revision AND p.item_id IS NULL AND json_extract(c.data,'$.authority')!='card_newer') AND (r.verified_at_ms IS NOT NULL OR p.item_id IS NOT NULL)",
             hold::held(2)
         ))?;
-        let support = reinforcement::support(&self.connection, project_id, None)?;
+        let Some(support) = reinforcement::support(&self.connection, project_id, None, expired)?
+        else {
+            return Ok(None);
+        };
         let mut lines = statement
             .query_map(params![project_id, now], |row| {
                 let title: String = row.get(3)?;
@@ -3426,7 +3467,7 @@ impl MemoryStore {
                 .then_with(|| left_item.id.cmp(&right_item.id))
         });
         lines.truncate(limit);
-        Ok(lines.into_iter().map(|(_, item)| item).collect())
+        Ok(Some(lines.into_iter().map(|(_, item)| item).collect()))
     }
 
     /// Records a receipt a session carried for the cards it was given in
@@ -4984,7 +5025,7 @@ fn create_item(
     candidate: &Candidate,
     item_id: &str,
     card: &CardText,
-) -> Result<u64, MemoryError> {
+) -> Result<(u64, bool), MemoryError> {
     let number: u64 = transaction.query_row(
         "UPDATE projects SET next_number=next_number+1 WHERE id=?1 RETURNING next_number-1",
         [&batch.project_id],
@@ -4993,9 +5034,9 @@ fn create_item(
     transaction.execute("INSERT INTO memory_items(id,project_id,number,lifecycle,current_revision,confidence,salience,created_at_ms,updated_at_ms) VALUES(?1,?2,?3,'active',1,?4,?5,?6,?6)",params![item_id,batch.project_id,number,candidate.confidence,candidate.salience,batch.created_at_unix_ms])?;
     transaction.execute("INSERT INTO memory_revisions(id,item_id,revision,body,title,aliases,cited_paths,kind,lifecycle,created_at_ms,batch_id) VALUES(?1,?2,1,?3,?4,?5,?6,?7,'active',?8,?9)",params![revision_id(item_id,1),item_id,card.body,card.title,card.aliases_json(),card.cited_json(),candidate.kind.as_str(),batch.created_at_unix_ms,batch.id])?;
     record_batch_change(transaction, &batch.id, item_id, None, None)?;
-    attach_sources(transaction, batch, candidate, item_id, 1)?;
+    let full = attach_sources(transaction, batch, candidate, item_id, 1)?;
     reindex(transaction, &batch.project_id, item_id, card)?;
-    Ok(number)
+    Ok((number, full))
 }
 
 fn attach_sources(
@@ -5004,14 +5045,31 @@ fn attach_sources(
     candidate: &Candidate,
     item_id: &str,
     revision: u64,
-) -> Result<(), MemoryError> {
+) -> Result<bool, MemoryError> {
+    // Every session start reads all of a card's operator sources, so they
+    // stop at a limit; true when this batch had more than the card had room
+    // for.
+    let held: usize = transaction.query_row(
+        "SELECT count(*) FROM memory_sources WHERE item_id=?1 AND human=1",
+        [item_id],
+        |row| row.get(0),
+    )?;
+    let mut room = crate::CARD_SOURCE_LIMIT.saturating_sub(held);
+    let mut full = false;
     for offset in &candidate.source_offsets {
         let human = candidate.human_offsets.contains(offset);
+        if human && room == 0 {
+            full = true;
+            continue;
+        }
         let at = candidate.source_times.get(offset);
         let words = candidate.source_words.get(offset).filter(|_| human);
-        transaction.execute("INSERT OR IGNORE INTO memory_sources(item_id,revision,provider,session_id,event_offset,content_hash,available,human,at_ms,words) VALUES(?1,?2,?3,?4,?5,?6,1,?7,?8,?9)",params![item_id,revision,batch.provider,batch.session_id,offset,batch.content_hash,human as i64,at,words])?;
+        let added = transaction.execute("INSERT OR IGNORE INTO memory_sources(item_id,revision,provider,session_id,event_offset,content_hash,available,human,at_ms,words) VALUES(?1,?2,?3,?4,?5,?6,1,?7,?8,?9)",params![item_id,revision,batch.provider,batch.session_id,offset,batch.content_hash,human as i64,at,words])?;
+        if human {
+            room -= added;
+        }
     }
-    Ok(())
+    Ok(full)
 }
 
 fn item_number(transaction: &Transaction<'_>, item_id: &str) -> Result<u64, MemoryError> {
@@ -8783,6 +8841,131 @@ PRAGMA user_version=14;"#,
         // The old text is back with its own sessions and their time, not the
         // correction's.
         assert_eq!(index(&store), "m2@1,m1@1");
+    }
+
+    #[test]
+    fn a_correction_between_the_card_read_and_the_support_read_is_not_half_seen() {
+        let (temp, mut store, project) = store();
+        let now = now_ms();
+        let day = 86_400_000;
+        let said = |text: &str, at: u64| Candidate {
+            source_times: BTreeMap::from([(7, at)]),
+            ..candidate(text, CandidateRelation::New)
+        };
+        store
+            .apply_candidates(
+                &sourced_batch(&project, "b", "s0"),
+                &[
+                    said(
+                        "Deploy previews use staging buckets for every branch.",
+                        now - 90 * day,
+                    ),
+                    said("Deploy previews use staging.", now - 30 * day),
+                ],
+            )
+            .unwrap();
+        // Another connection corrects card 1 and has it said in three fresh
+        // sessions while this read is between its card list and its support.
+        let writer = std::cell::RefCell::new(
+            MemoryStore::open(&temp.path().join("memory.sqlite3")).unwrap(),
+        );
+        let corrected = std::cell::Cell::new(false);
+        let given = store
+            .retrieve_with_expiry(
+                &RetrievalQuery::prompt(&project, "deploy previews staging", vec![]),
+                || {
+                    if !corrected.replace(true) {
+                        let mut writer = writer.borrow_mut();
+                        let target_id = writer.item_by_number(&project, 1).unwrap().unwrap().id;
+                        writer
+                            .apply_candidates(
+                                &sourced_batch(&project, "correction", "s9"),
+                                &[Candidate {
+                                    source_times: BTreeMap::from([(7, now)]),
+                                    ..candidate(
+                                        "Deploy previews use staging buckets, always.",
+                                        CandidateRelation::Supersedes { target_id },
+                                    )
+                                }],
+                            )
+                            .unwrap();
+                        for session in ["s10", "s11"] {
+                            say_again(&mut writer, &project, 1, session, now);
+                        }
+                    }
+                    false
+                },
+            )
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|item| (item.number, item.revision))
+            .collect::<Vec<_>>();
+        assert!(corrected.get());
+        // Card 1 as this read saw it, said once 90 days ago, not ranked by
+        // the three recent sessions of a text it did not see.
+        assert_eq!(given, [(2, 1), (1, 1)]);
+    }
+
+    #[test]
+    fn a_card_keeps_operator_sources_up_to_its_limit_and_reports_a_batch_past_it() {
+        let (_temp, mut store, project) = store();
+        store
+            .apply_candidates(
+                &sourced_batch(&project, "b", "s0"),
+                &[candidate("Lint before tests.", CandidateRelation::New)],
+            )
+            .unwrap();
+        let target_id = store.item_by_number(&project, 1).unwrap().unwrap().id;
+        let again = |offsets: std::ops::Range<u64>| Candidate {
+            source_offsets: offsets.clone().collect(),
+            human_offsets: offsets.collect(),
+            ..candidate(
+                "said again",
+                CandidateRelation::Same {
+                    target_id: target_id.clone(),
+                },
+            )
+        };
+        let summary = store
+            .apply_candidates(
+                &sourced_batch(&project, "many", "s1"),
+                &[again(0..crate::CARD_SOURCE_LIMIT as u64)],
+            )
+            .unwrap();
+        assert_eq!(summary.sources_full, [1]);
+        let held = |store: &MemoryStore| -> usize {
+            store
+                .connection
+                .query_row(
+                    "SELECT count(*) FROM memory_sources WHERE item_id=?1 AND human=1",
+                    [&target_id],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(held(&store), crate::CARD_SOURCE_LIMIT);
+        let summary = store
+            .apply_candidates(&sourced_batch(&project, "one more", "s2"), &[again(0..1)])
+            .unwrap();
+        assert_eq!(summary.sources_full, [1]);
+        assert_eq!(held(&store), crate::CARD_SOURCE_LIMIT);
+        let prompt = RetrievalQuery::prompt(&project, "lint before tests", vec![]);
+        assert_eq!(store.retrieve(&prompt).unwrap().items.len(), 1);
+
+        // A card past the limit, which no write leaves, fails the read
+        // rather than being counted in part.
+        store
+            .connection
+            .execute(
+                "INSERT INTO memory_sources(item_id,revision,provider,session_id,event_offset,content_hash,available,human,at_ms) VALUES(?1,1,'codex','s3',1,'h',1,1,90)",
+                [&target_id],
+            )
+            .unwrap();
+        assert!(matches!(
+            store.retrieve(&prompt),
+            Err(MemoryError::Integrity(reason)) if reason.starts_with("memory_card_sources_over_limit:")
+        ));
     }
 
     /// The operator says `words` in `session` at `at`: a new card with

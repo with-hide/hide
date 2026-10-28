@@ -58,6 +58,11 @@ pub fn database_path(state_dir: &std::path::Path) -> std::path::PathBuf {
 }
 
 pub const ACTIVE_MEMORY_LIMIT: usize = 10_000;
+/// The operator's sources one card keeps: the words behind how often and how
+/// lately they said it, read in full by every session start. A card at the
+/// limit keeps what it has, and each write that would add more reports the
+/// card (`ApplySummary::sources_full`); real cards hold a dozen or so.
+pub const CARD_SOURCE_LIMIT: usize = 1_000;
 /// The most cards a full Project keeps forgotten for new ones, for Undo;
 /// the oldest past it are removed for good.
 pub const EVICTED_CARD_LIMIT: usize = 1_000;
