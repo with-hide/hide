@@ -392,7 +392,7 @@ test("hide browser: a page unloaded past the live-page cap reports unloaded, and
   // Loaded again hidden, behind the page the operator sees, and nothing on the screen moved.
   expect(await live(`${origin}/unload-1`)).toEqual([false]);
   expect(await shownViews()).toEqual(views);
-  expect(await state(oldest)).toBe("loaded");
+  await expect.poll(() => state(oldest)).toBe("loaded");
   // It is live again, so the next one shown least recently made room.
   await expect.poll(() => state(next)).toBe("unloaded");
 });

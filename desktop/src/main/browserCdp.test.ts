@@ -565,6 +565,27 @@ describe("scoped desktop CDP public boundary", () => {
     expect(asked).toEqual(["pending"]);
   });
 
+  it("carries the area authority in force once an agent's page has loaded again", async () => {
+    const during = { change: () => {} };
+    const { address, client, incarnate, authority } = await fixture({
+      revive: async (scope, pages) => {
+        during.change();
+        if (!pages.some((page) => page.id === scope.display_id)) pages.push(electronPage(33, scope.display_id!, scope.area_id, scope.workspace));
+        return "loaded";
+      },
+    });
+    const connect = () => fetch(`${address.endpoint}/connect`, { method: "POST", headers: { authorization: `Bearer ${address.token}`, "content-type": "application/json" }, body: JSON.stringify({ workspace: "local\0/checkout", area_id: "a1", display_id: "reloaded" }) });
+    // The area moved to a new incarnation during the load: the capability is granted under it and drives the page.
+    during.change = () => incarnate(2);
+    const moved = await connect();
+    expect(moved.status).toBe(200);
+    const cap = await moved.json() as { browser_ws_url: string };
+    expect(await attach(await client(cap.browser_ws_url), "page-33")).toEqual(expect.any(String));
+    // The area lost its authority during the load: nothing is granted.
+    during.change = () => authority(false);
+    expect((await connect()).status).toBe(409);
+  });
+
   it("grants nothing to a connection whose page loaded across a revoke", async () => {
     const during = { revoke: async (): Promise<unknown> => undefined };
     const { address } = await fixture({
