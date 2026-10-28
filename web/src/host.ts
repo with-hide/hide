@@ -97,6 +97,7 @@ export type BrowserHostEvent =
   | { kind: "state"; workspace: string; id: string; load: number; state: BrowserPageState; external?: true }
   /** Actual debugger ownership, scoped to `device_id + NUL + checkout_path`. */
   | { kind: "attached"; workspace: string; id: string; attached: boolean }
+  /** The host unloaded the page (hidden and idle, or past its live-page cap); the core reports that load `unloaded` until it loads again. */
   | { kind: "gone"; workspace: string; id: string; load: number; url: string; external?: true }
   /** The page opened a tab: it becomes another browser display, beside the page `id`. */
   | { kind: "open"; workspace: string; id: string; url: string }

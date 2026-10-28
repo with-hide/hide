@@ -10,7 +10,9 @@
 //   closed     -> the core's inventory no longer names it: destroyed,
 //                 which ends its renderer process
 //
-// A hidden page past `MAX_LIVE_VIEWS` is closed and loads again when shown.
+// A hidden page past `MAX_LIVE_VIEWS`, or one hidden and idle for
+// `IDLE_UNLOAD_MS`, is unloaded: closed, reported `gone`, and loaded again
+// when shown or when an agent drives it (`cdpRevive`).
 //
 // A sized popup a page on screen opens (a sign-in window) is a real child
 // window that keeps its opener, belongs to that page and closes with it; a
@@ -24,7 +26,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import type { BrowserDevicePlacement, BrowserHostEvent, BrowserPageState, BrowserPlacement, BrowserRect } from "../../../web/src/host";
 import { hostChord, isCycleCommand, keySystemOf, matchHost, releaseModifier, systemRegistry, type Command, type CommandId } from "../../../web/src/shortcuts";
 import { BROWSER_CAPTURE_CHANNEL, BROWSER_COMMAND_CHANNEL, BROWSER_CYCLE_END_CHANNEL, BROWSER_EVENT_CHANNEL, BROWSER_SYNC_CHANNEL } from "../channel";
-import { appScheme, browserPartition, deviceEmulation, isLocalNetworkHost, isPopup, loadable, localPageRequest, MAX_AUTHORIZED_SCOPES, MAX_LIVE_VIEWS, MAX_POPUPS, overCap, parseCommand, parseSync, parseTarget, popupBounds, remoteRequest, toBounds, viewKey } from "./browserSync";
+import { appScheme, browserPartition, deviceEmulation, IDLE_CHECK_MS, IDLE_UNLOAD_MS, idleExpired, isLocalNetworkHost, isPopup, loadable, localPageRequest, MAX_AUTHORIZED_SCOPES, MAX_LIVE_VIEWS, MAX_POPUPS, overCap, parseCommand, parseSync, parseTarget, popupBounds, remoteRequest, toBounds, viewKey } from "./browserSync";
 import { nextZoomFactor, type PageZoom } from "../../../web/src/zoomSteps";
 import type { HostLog } from "./log";
 import type { CdpPage, CdpRetirement, CdpScope } from "./browserCdp";
@@ -33,6 +35,8 @@ import { errorCode, externalPartition, type ExternalFiles } from "./externalFile
 
 /** Page state reports coalesce to one per view in this window, so a title ticking every frame costs one event. */
 const REPORT_COALESCE_MS = 100;
+/** How long an agent's connection waits for an unloaded page's load, inside hided's 8 s gateway timeout. */
+const REVIVE_WAIT_MS = 5_000;
 /** Chromium's code for a load a newer one replaced; not a failure. */
 const ERR_ABORTED = -3;
 const PAGE_PERMISSIONS = new Set(["clipboard-sanitized-write"]);
@@ -62,6 +66,14 @@ type Page = {
   /** Placed on its slot in the front Workspace, shown or standing behind its still for an overlay. */
   placed: boolean;
   shownAt: number;
+  /** The last time the page was on screen or held by something that would break if it closed. */
+  idleSince: number;
+  /** Media plays in it, heard or not. */
+  playing: boolean;
+  /** Its downloads in progress, its popups' included. */
+  downloads: number;
+  /** Called once its load settles, for an agent's connection waiting on it. */
+  settled: (() => void) | null;
   state: BrowserPageState;
   /** The device size the page lays out at, null to fit its slot, with the bounds it was last placed at. */
   device: BrowserDevicePlacement | null;
@@ -101,11 +113,26 @@ const MAX_HOST_VERDICTS = 64;
 
 export type ResolvedPage = { url: string; source_url: string; load: number };
 
+/** Why a page closes: a CDP retirement, or `idle` for one unloaded past `IDLE_UNLOAD_MS` (retired as `evicted`). */
+type Closing = CdpRetirement["reason"] | "idle";
+
+/**
+ * What an unloaded web page needs to load again hidden for an agent: one per
+ * display the core still retains, so the core's inventory bounds them.
+ */
+type Unloaded = { workspace: string; id: string; area_id: string; url: string; load: number; device: BrowserDevicePlacement | null; bounds: BrowserRect | null };
+
+/** The idle bound and its check, with the clock both read; tests shorten them. */
+export type IdleClock = { bound: number; every: number; now: () => number };
+
 /** A popup window a page opened, under the page that owns it (for a popup's own popup, the same page). */
 type Popup = { window: BrowserWindow; owner: Page };
 
 export class BrowserViews {
   private readonly pages = new Map<string, Page>();
+  /** Unloaded web pages by key, until their display closes or they show again. */
+  private readonly unloaded = new Map<string, Unloaded>();
+  private idleTimer: NodeJS.Timeout | null = null;
   /** Area membership comes from the core's retained inventory, including hidden workspaces. */
   private cdpAreas = new Map<string, string>();
   private cdpChanged: ((retirement?: CdpRetirement) => void) | null = null;
@@ -242,6 +269,7 @@ export class BrowserViews {
     private readonly words: () => TFunction<"translation">,
     /** The outside files this window's operator granted. */
     private readonly externals: ExternalFiles,
+    private readonly idle: IdleClock = { bound: IDLE_UNLOAD_MS, every: IDLE_CHECK_MS, now: Date.now },
   ) {
     ipcMain.on(BROWSER_CYCLE_END_CHANNEL, (event, cycleId: unknown) => {
       if (!this.trusted(event)) return this.log.event("browser.ipc_refused", { channel: "cycle_end" });
@@ -304,6 +332,9 @@ export class BrowserViews {
   /** The window the pages are drawn in. A new window starts with no pages. */
   attach(window: BrowserWindow): void {
     this.window = window;
+    // One check while the window lives, the only work an idle screen adds (B12).
+    if (this.idleTimer) clearInterval(this.idleTimer);
+    this.idleTimer = setInterval(() => this.unloadIdle(), this.idle.every);
     // Once a native page starts a hold, its shell input uses the same IPC
     // route. Even a quick release cannot overtake the forwarded first chord.
     window.webContents.on("before-input-event", (event, input) => this.routeCycleInput(event, input));
@@ -340,7 +371,12 @@ export class BrowserViews {
     window.on("closed", () => {
       this.cancelCycle();
       for (const page of [...this.pages.values()]) this.destroy(page, "window_closed");
-      if (this.window === window) this.window = null;
+      if (this.window === window) {
+        this.window = null;
+        this.unloaded.clear();
+        if (this.idleTimer) clearInterval(this.idleTimer);
+        this.idleTimer = null;
+      }
     });
   }
 
@@ -444,6 +480,7 @@ export class BrowserViews {
     // current contract requires it and matches placement to retained rows.
     this.cdpAreas = new Map(retained.flatMap((row) => row.area_id ? [[viewKey(row.workspace, row.id), row.area_id] as const] : []));
     const listed = new Set(retained.map((row) => viewKey(row.workspace, row.id)));
+    for (const key of this.unloaded.keys()) if (!listed.has(key)) this.unloaded.delete(key);
     const placed = new Set(displays.map((display) => viewKey(workspace ?? "", display.id)));
     for (const page of [...this.pages.values()]) {
       if (!listed.has(page.key)) this.destroy(page, "closed");
@@ -454,7 +491,7 @@ export class BrowserViews {
         this.show(page, false);
       }
     }
-    const now = Date.now();
+    const now = this.idle.now();
     const zoom = window.webContents.getZoomFactor();
     for (const display of displays) {
       const key = viewKey(workspace ?? "", display.id);
@@ -482,11 +519,10 @@ export class BrowserViews {
       this.emulate(page);
       this.show(page, display.visible);
       page.shownAt = now;
+      page.idleSince = now;
+      this.unloaded.delete(key);
     }
-    for (const key of overCap([...this.pages.values()], MAX_LIVE_VIEWS)) {
-      const page = this.pages.get(key);
-      if (page) this.destroy(page, "evicted");
-    }
+    this.evictOverCap();
     this.publishCdp();
     if (attachmentEpoch && /^[A-Za-z0-9-]{1,64}$/.test(attachmentEpoch) && attachmentEpoch !== this.attachmentEpoch) {
       this.attachmentEpoch = attachmentEpoch;
@@ -549,6 +585,10 @@ export class BrowserViews {
       visible: false,
       placed: false,
       shownAt: 0,
+      idleSince: this.idle.now(),
+      playing: false,
+      downloads: 0,
+      settled: null,
       state: { url: display.url, title: "", loading: true, canGoBack: false, canGoForward: false, failure: null, zoom: 1 },
       device: null,
       bounds: null,
@@ -597,7 +637,14 @@ export class BrowserViews {
           page.cdpDownloadRefused = true;
           this.log.event("browser.download_refused", { reason: "cdp_filesystem_boundary", display_id: page.id });
         }
-      } else this.log.event("browser.download", { mime: item.getMimeType() });
+      } else {
+        this.log.event("browser.download", { mime: item.getMimeType() });
+        // A download in progress holds its page alive past the idle bound (B3).
+        if (page) {
+          page.downloads++;
+          item.once("done", () => { page.downloads--; });
+        }
+      }
     });
     pageSession.webRequest.onBeforeRequest({ urls: ["<all_urls>"] }, (details, callback) => {
       const page = this.ownerOf(details.webContentsId);
@@ -715,6 +762,8 @@ export class BrowserViews {
     contents.on("did-start-loading", () => this.update(page, { loading: true, failure: null }));
     contents.on("did-stop-loading", () => this.update(page, { loading: false, ...history() }));
     contents.on("did-navigate", (_event, url) => {
+      // A new document plays nothing yet.
+      page.playing = false;
       // A new document takes its host's zoom, and starts without the device size.
       this.update(page, { url: this.sourceAddress(page, url), zoom: contents.getZoomFactor(), ...history() });
       this.emulate(page, true);
@@ -735,6 +784,8 @@ export class BrowserViews {
       if (isMainFrame) this.update(page, { url: this.sourceAddress(page, url), ...history() });
     });
     contents.on("page-title-updated", (_event, title) => this.update(page, { title }));
+    contents.on("media-started-playing", () => { page.playing = true; });
+    contents.on("media-paused", () => { page.playing = false; });
     contents.on("did-fail-load", (_event, code, description, url, isMainFrame) => {
       if (!isMainFrame || code === ERR_ABORTED) return;
       this.log.event("browser.load_failed", { code, description });
@@ -742,6 +793,7 @@ export class BrowserViews {
     });
     contents.on("render-process-gone", (_event, details) => {
       if (this.cycleInput?.page === page) this.cancelCycle();
+      page.playing = false;
       this.log.event("browser.page_gone", { reason: details.reason });
       this.update(page, { loading: false, failure: this.words()("native.browser.stopped") });
     });
@@ -998,6 +1050,7 @@ export class BrowserViews {
 
   private update(page: Page, change: Partial<BrowserPageState>): void {
     page.state = { ...page.state, ...change };
+    if (page.settled && (!page.state.loading || page.state.failure)) page.settled();
     if (page.report) return;
     page.report = setTimeout(() => {
       page.report = null;
@@ -1048,16 +1101,113 @@ export class BrowserViews {
     if (!visible && (keyboard || this.cycleInput?.page === page) && this.window?.isFocused()) this.window.webContents.focus();
   }
 
+  /** Closes the hidden pages past `MAX_LIVE_VIEWS`, least recently shown first, whatever holds them (B2). */
+  private evictOverCap(): void {
+    for (const key of overCap([...this.pages.values()], MAX_LIVE_VIEWS)) {
+      const page = this.pages.get(key);
+      if (page) this.destroy(page, "evicted");
+    }
+  }
+
+  /**
+   * Whether closing the page now would break something the operator or an
+   * agent sees: it is on screen (drawn in the front Workspace, even with the
+   * window minimized or covered), plays media, downloads, is driven over CDP
+   * (Comment included) or has a popup open (B3, B5).
+   */
+  private held(page: Page): boolean {
+    if (page.visible || page.placed || page.playing || page.downloads > 0) return true;
+    if (this.cdpLeases.has(page.view.webContents.id)) return true;
+    for (const popup of this.popups.values()) if (popup.owner === page) return true;
+    return false;
+  }
+
+  /** The idle check: a held page starts its bound again, and one hidden and idle past it is unloaded (B1, B4). */
+  private unloadIdle(): void {
+    const now = this.idle.now();
+    const views = [...this.pages.values()].map((page) => {
+      const held = this.held(page);
+      if (held) page.idleSince = now;
+      return { key: page.key, held, idleSince: page.idleSince };
+    });
+    const expired = idleExpired(views, now, this.idle.bound);
+    for (const key of expired) {
+      const page = this.pages.get(key);
+      if (page) this.destroy(page, "idle");
+    }
+  }
+
+  /**
+   * An agent's connection to a display with no live page: an unloaded web
+   * page loads its address again, hidden, with the screen, its selection and
+   * its areas left as they are, and the connection waits for that load (B10).
+   * A load that failed stays failed on its tab, and the agent's next
+   * connection loads it again (B11). `none` is a display with nothing to
+   * load again here.
+   */
+  async cdpRevive(scope: CdpScope): Promise<"none" | "loaded" | "failed"> {
+    const window = this.window;
+    if (!window || !scope.display_id) return "none";
+    const key = viewKey(scope.workspace, scope.display_id);
+    const record = this.unloaded.get(key);
+    if (!record || record.area_id !== scope.area_id || this.cdpAreas.get(key) !== scope.area_id) return "none";
+    let page = this.pages.get(key);
+    if (page && !page.state.failure) return "none";
+    if (page) this.load(page, record.url);
+    else {
+      page = this.create(window, record.workspace, { id: record.id, area_id: record.area_id, url: record.url, load: record.load, rect: null, visible: false });
+      page.device = record.device;
+      page.bounds = record.bounds;
+      if (record.bounds) page.view.setBounds(record.bounds);
+      this.emulate(page);
+    }
+    // Loaded again counts as seen, so the next check does not close it at once.
+    page.shownAt = page.idleSince = this.idle.now();
+    this.log.event("browser.reloaded_for_agent", { id: page.id });
+    this.evictOverCap();
+    this.publishCdp();
+    await this.waitSettled(page);
+    if (this.pages.get(key) !== page || page.state.failure) return "failed";
+    this.unloaded.delete(key);
+    return "loaded";
+  }
+
+  /** Resolves once the page's load settles, it closes, or `REVIVE_WAIT_MS` passes; a page still loading then is driven as it is. */
+  private waitSettled(page: Page): Promise<void> {
+    if (!page.state.loading || page.state.failure) return Promise.resolve();
+    return new Promise((done) => {
+      const finish = () => {
+        clearTimeout(timer);
+        if (page.settled === finish) page.settled = null;
+        done();
+      };
+      const timer = setTimeout(finish, REVIVE_WAIT_MS);
+      page.settled?.();
+      page.settled = finish;
+    });
+  }
+
   private hideAll(): void {
     for (const page of this.pages.values()) this.show(page, false);
   }
 
-  private destroy(page: Page, reason: CdpRetirement["reason"]): void {
-    if (reason === "evicted") this.emit({ kind: "gone", workspace: page.workspace, id: page.id, load: page.applied, url: page.state.url, ...(page.grant ? { external: true as const } : {}) });
+  private destroy(page: Page, reason: Closing): void {
+    const unloading = reason === "evicted" || reason === "idle";
+    if (unloading) {
+      // The core reports the page `unloaded` until it shows or an agent drives it again.
+      this.emit({ kind: "gone", workspace: page.workspace, id: page.id, load: page.applied, url: page.state.url, ...(page.grant ? { external: true as const } : {}) });
+      const area_id = this.cdpAreas.get(page.key);
+      // Only a web page enters CDP, so only it can be loaded again for an agent.
+      if (area_id && page.fileRestricted && !page.grant) {
+        this.unloaded.set(page.key, { workspace: page.workspace, id: page.id, area_id, url: page.state.url, load: page.applied, device: page.device, bounds: page.bounds });
+      }
+      this.log.event("browser.unloaded", { id: page.id, reason: reason === "idle" ? "idle" : "cap" });
+    }
+    page.settled?.();
     if (this.cycleInput?.page === page) this.cancelCycle();
     if (this.returnTo === page) this.returnTo = null;
     this.pages.delete(page.key);
-    this.publishCdp({ contentsId: page.view.webContents.id, reason });
+    this.publishCdp({ contentsId: page.view.webContents.id, reason: reason === "idle" ? "evicted" : reason });
     // An outside file's page resolved no route, so the daemon has none to let go.
     if (!page.grant) this.release(page.workspace, page.id, page.applied);
     if (page.report) clearTimeout(page.report);

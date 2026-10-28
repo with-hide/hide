@@ -1186,6 +1186,7 @@ export class DesktopHost {
       pages: () => browsers.cdpPages(), changed: (listener) => browsers.observeCdp(listener),
       incarnation: (scope) => browsers.cdpIncarnation(scope),
       attached: (page, attached) => browsers.cdpAttached(page, attached),
+      revive: (scope) => browsers.cdpRevive(scope),
       action: (scope, action, signal) => this.browserControlAction(scope, action, signal),
       chromeVersion,
       log: (event, fields) => this.log.event(event, fields),

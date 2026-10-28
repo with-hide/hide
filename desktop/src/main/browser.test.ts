@@ -349,3 +349,140 @@ describe("native held cycle delivery", () => {
     expect(forwarded()).toHaveLength(5);
   });
 });
+
+describe("unloading hidden pages (PRD browser-tab-idle-unload)", () => {
+  const BOUND = 1000;
+  const EVERY = 100;
+  const workspace = "local\u0000/checkout";
+
+  function views() {
+    vi.useFakeTimers();
+    let now = 0;
+    const log = { event: vi.fn() };
+    const subject = new BrowserViews(log as unknown as HostLog, () => true, vi.fn(), vi.fn(), vi.fn(), () => english, new ExternalFiles(vi.fn()), { bound: BOUND, every: EVERY, now: () => now });
+    const send = vi.fn();
+    const shellContents = Object.assign(new EventEmitter(), { isDestroyed: () => false, send, focus: vi.fn(), getZoomFactor: () => 1 });
+    const window = Object.assign(new EventEmitter(), { isFocused: () => true, isDestroyed: () => false, webContents: shellContents, contentView: { removeChildView: vi.fn(), addChildView: vi.fn() } });
+    subject.attach(window as never);
+    const pages = Reflect.get(subject, "pages") as Map<string, Record<string, unknown>>;
+    let contentsId = 0;
+    const page = (id: string, extra: Record<string, unknown> = {}) => {
+      const contents = Object.assign(new EventEmitter(), { id: ++contentsId, isFocused: () => false, isDestroyed: () => false, close: vi.fn(), setWindowOpenHandler: vi.fn(), getURL: () => `https://${id}.example/`, getTitle: () => id });
+      const value = {
+        key: `${workspace}\u0001${id}`, workspace, id, visible: false, placed: false, shownAt: 0, idleSince: 0, playing: false, downloads: 0, settled: null,
+        view: { webContents: contents, setVisible: vi.fn(), setBounds: vi.fn() }, state: { url: `https://${id}.example/`, loading: false, failure: null },
+        report: null, route: null, applied: 3, partition: "persist:hide-browser-web", fileRestricted: true, device: null, emulated: null, bounds: { x: 0, y: 0, width: 640, height: 480 }, ...extra,
+      };
+      Reflect.get(subject, "watch").call(subject, value);
+      pages.set(value.key, value);
+      (Reflect.get(subject, "cdpAreas") as Map<string, string>).set(value.key, "a1");
+      return value;
+    };
+    const gone = () => send.mock.calls.filter(([channel, event]) => channel === BROWSER_EVENT_CHANNEL && (event as { kind: string }).kind === "gone").map(([, event]) => (event as { id: string }).id);
+    const unloads = () => log.event.mock.calls.filter(([name]) => name === "browser.unloaded").map(([, fields]) => fields);
+    return {
+      subject, window, send, log, page, pages, gone, unloads,
+      /** Moves the clock and lets the checks that fall due run. */
+      pass: async (ms: number) => { for (let at = 0; at < ms; at += EVERY) { now += EVERY; await vi.advanceTimersByTimeAsync(EVERY); } },
+    };
+  }
+
+  it("closes a hidden idle page past the bound and keeps every page something holds (B1, B3, B5)", async () => {
+    try {
+      const { subject, page, gone, unloads, pass } = views();
+      page("idle");
+      page("shown", { visible: true });
+      // Drawn in its slot behind an overlay's still, or in a minimized window, it still counts as seen.
+      page("placed", { placed: true });
+      const playing = page("playing");
+      (playing.view.webContents as EventEmitter).emit("media-started-playing");
+      page("downloading", { downloads: 1 });
+      const driven = page("driven");
+      Reflect.get(subject, "cdpLeases").set((driven.view.webContents as { id: number }).id, {});
+      const opener = page("opener");
+      Reflect.get(subject, "popups").set(99, { window: {}, owner: opener });
+      await pass(BOUND - EVERY);
+      expect(gone()).toEqual([]);
+      await pass(EVERY);
+      expect(gone()).toEqual(["idle"]);
+      expect(unloads()).toEqual([{ id: "idle", reason: "idle" }]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("counts the bound again from when a hold ends (B4)", async () => {
+    try {
+      const { page, gone, pass } = views();
+      const playing = page("playing");
+      const contents = playing.view.webContents as EventEmitter;
+      contents.emit("media-started-playing");
+      await pass(BOUND * 3);
+      contents.emit("media-paused");
+      await pass(BOUND - EVERY);
+      expect(gone()).toEqual([]);
+      await pass(EVERY);
+      expect(gone()).toEqual(["playing"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops checking when the window closes (B12)", async () => {
+    try {
+      const { window } = views();
+      expect(vi.getTimerCount()).toBe(1);
+      window.emit("closed");
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("loads an unloaded page again hidden for an agent, refuses while its load fails, and loads it again on the next connection (B10, B11)", async () => {
+    try {
+      const { subject, page, pages, send, log, pass } = views();
+      page("mock");
+      await pass(BOUND);
+      expect(pages.size).toBe(0);
+      const created: Record<string, unknown>[] = [];
+      let revived!: ReturnType<typeof page>;
+      Reflect.set(subject, "create", (_window: unknown, owner: string, display: Record<string, unknown>) => {
+        created.push({ owner, ...display });
+        revived = page(display.id as string, { state: { url: display.url, loading: true, failure: null } });
+        return revived;
+      });
+      const load = vi.fn();
+      Reflect.set(subject, "load", load);
+      const update = (change: Record<string, unknown>) => Reflect.get(subject, "update").call(subject, revived, change);
+      const scope = { workspace, area_id: "a1", display_id: "mock" };
+      send.mockClear();
+      const first = subject.cdpRevive(scope);
+      expect(created).toEqual([{ owner: workspace, id: "mock", area_id: "a1", url: "https://mock.example/", load: 3, rect: null, visible: false }]);
+      expect(revived.view.setVisible).not.toHaveBeenCalled();
+      update({ loading: false, failure: "Failed to load (-105)" });
+      expect(await first).toBe("failed");
+      // The next connection loads the failed page again, in place.
+      const second = subject.cdpRevive(scope);
+      expect(load).toHaveBeenCalledExactlyOnceWith(revived, "https://mock.example/");
+      update({ loading: true, failure: null });
+      update({ loading: false });
+      expect(await second).toBe("loaded");
+      // Loaded, it is just seen: the next check keeps it.
+      await pass(EVERY);
+      expect(pages.has(revived.key as string)).toBe(true);
+      // Nothing moved on the operator's screen.
+      expect(send.mock.calls.map(([, event]) => (event as { kind: string }).kind).filter((kind) => kind !== "state")).toEqual([]);
+      expect(log.event.mock.calls.filter(([name]) => name === "browser.reloaded_for_agent")).toEqual([["browser.reloaded_for_agent", { id: "mock" }], ["browser.reloaded_for_agent", { id: "mock" }]]);
+      // A display not yet shown since the app started stays pending, so its connection keeps the 409 (D-16, B15);
+      // one it never unloaded, or an area that does not hold it, has nothing to load either.
+      (Reflect.get(subject, "cdpAreas") as Map<string, string>).set(`${workspace}\u0001pending`, "a1");
+      expect(await subject.cdpRevive({ ...scope, display_id: "pending" })).toBe("none");
+      expect(pages.has(`${workspace}\u0001pending`)).toBe(false);
+      expect(await subject.cdpRevive({ ...scope, display_id: "other" })).toBe("none");
+      expect(await subject.cdpRevive({ ...scope, area_id: "a2" })).toBe("none");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

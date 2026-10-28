@@ -39,6 +39,8 @@ type Options = {
   changed: (listener: (retirement?: CdpRetirement) => void) => () => void;
   action: (scope: CdpScope, action: CdpAction, signal: AbortSignal) => Promise<CdpActionResult>;
   attached: (page: CdpPage, attached: boolean) => void;
+  /** Loads a display's unloaded page again, hidden, for an agent's connection to it (`BrowserViews.cdpRevive`). */
+  revive?: (scope: CdpScope) => Promise<"none" | "loaded" | "failed">;
   log: (event: string, fields: Record<string, string | number | boolean>) => void;
   chromeVersion: string;
   /** Wall clock is a platform boundary; protocol/server timers stay native. */
@@ -367,7 +369,14 @@ export class BrowserCdpGateway {
         if (existing) { this.eligible(existing); if (!this.capabilities.has(existing.path)) existing = undefined; }
         if (!existing && this.capabilities.size >= MAX_CAPABILITIES) { this.reply(response, 429, { error: "Capability limit exceeded" }); return; }
         const capability: Capability = existing ?? { path: `/cdp/${secret()}`, scope, ...(purpose ? { purpose } : {}), incarnation, generations: new Map() };
-        const pages = this.eligible(capability);
+        let pages = this.eligible(capability);
+        // An agent's display whose page the host unloaded loads again before it is driven.
+        if (scope.display_id && pages.length === 0 && !purpose && this.options.revive) {
+          const revived = await this.options.revive(scope);
+          if (this.stopped || !this.available) { this.reply(response, 503, { error: "Desktop is not attached" }); return; }
+          if (revived === "failed") { this.reply(response, 409, { error: "Display page failed to load" }); return; }
+          pages = this.eligible(capability);
+        }
         if (scope.display_id && pages.length === 0) { this.reply(response, 409, { error: purpose ? "Display has no eligible browser target" : "Display has no eligible HTTP(S) browser target; native files are unsupported" }); return; }
         this.capabilities.set(capability.path, capability);
         this.reply(response, 200, { cdp_http_url: `${this.endpoint}${capability.path}`, browser_ws_url: this.browserUrl(capability), ...(scope.display_id ? { display_id: scope.display_id } : {}) });

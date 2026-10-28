@@ -18,6 +18,10 @@ export const MAX_RETAINED_DISPLAYS = 256 * MAX_SYNCED_DISPLAYS;
 export const MAX_AUTHORIZED_SCOPES = 256 * (MAX_SYNCED_DISPLAYS + 1);
 /** Live pages at once; a hidden one past this is closed and loads again when shown. */
 export const MAX_LIVE_VIEWS = 12;
+/** How long a hidden page stays alive unseen and idle before it is closed, to load again when shown or driven. */
+export const IDLE_UNLOAD_MS = 12 * 60 * 60 * 1000;
+/** How often the window's pages are checked against `IDLE_UNLOAD_MS`; the one work an idle screen adds. */
+export const IDLE_CHECK_MS = 60_000;
 /** Popup windows open at once across every page; a page asking for one more is refused. */
 export const MAX_POPUPS = 4;
 const MAX_TEXT = 8192;
@@ -364,6 +368,17 @@ export function overCap(views: readonly LiveView[], cap: number): string[] {
     .sort((a, b) => a.shownAt - b.shownAt)
     .slice(0, excess)
     .map((view) => view.key);
+}
+
+/** A live page as the idle check sees it: `held` while it is on screen or doing something that would break (playing, downloading, driven, a popup open). */
+export type IdleView = { key: string; held: boolean; idleSince: number };
+
+/**
+ * The pages to close because they have been hidden and idle for `bound`
+ * since `idleSince`; a held page is never one, whatever its age.
+ */
+export function idleExpired(views: readonly IdleView[], now: number, bound: number): string[] {
+  return views.filter((view) => !view.held && now - view.idleSince >= bound).map((view) => view.key);
 }
 
 /**
