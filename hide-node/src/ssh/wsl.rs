@@ -438,7 +438,8 @@ struct CallGate {
     freed: std::sync::Condvar,
 }
 
-struct CallSlot;
+/// One admitted call; its end frees the gate's slot.
+struct CallSlot(&'static CallGate);
 
 impl CallGate {
     fn admit(&'static self, deadline: Instant) -> Option<CallSlot> {
@@ -452,14 +453,14 @@ impl CallGate {
                 .unwrap_or_else(|poisoned| poisoned.into_inner().0);
         }
         *running += 1;
-        Some(CallSlot)
+        Some(CallSlot(self))
     }
 }
 
 impl Drop for CallSlot {
     fn drop(&mut self) {
-        *lock_recover(&CALLS.running) -= 1;
-        CALLS.freed.notify_one();
+        *lock_recover(&self.0.running) -= 1;
+        self.0.freed.notify_one();
     }
 }
 

@@ -333,3 +333,22 @@ fn the_probe_reads_the_account_and_refuses_what_it_cannot_run_as() {
     assert!(Probe::read("Alice Smith\n1000\n/srv/alice\nLinux x86_64\nsha256sum\n").is_err());
     assert!(Probe::read("alice\n1000\n/srv/alice\nLinux riscv64\nsha256sum\n").is_err());
 }
+
+#[test]
+fn a_call_past_the_cap_waits_until_its_deadline_and_one_that_ends_frees_a_slot() {
+    let gate: &'static CallGate = Box::leak(Box::new(CallGate {
+        running: Mutex::new(0),
+        freed: std::sync::Condvar::new(),
+    }));
+    let mut held: Vec<_> = (0..MAX_CALLS)
+        .map(|_| gate.admit(Instant::now()).expect("a free slot"))
+        .collect();
+    let asked = Instant::now();
+    assert!(
+        gate.admit(asked + Duration::from_millis(50)).is_none(),
+        "a call past the cap was admitted"
+    );
+    assert!(asked.elapsed() >= Duration::from_millis(50));
+    held.pop();
+    assert!(gate.admit(Instant::now()).is_some());
+}
