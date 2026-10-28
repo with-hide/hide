@@ -2304,6 +2304,20 @@ mod grok {
     }
 
     #[test]
+    fn a_grok_fork_starts_when_its_summary_says_not_at_the_records_it_copied() {
+        // A fork keeps its parent's record times; `summary.json` says when
+        // the fork itself was made.
+        let native = Native::new();
+        native.summary(|summary| summary["created_at"] = json!("2030-01-01T00:00:00.000000Z"));
+        let project = hide_project::resolve(&native.cwd, "local").unwrap();
+        let sessions = SessionCatalog::new(native.home.path(), "local")
+            .project_sessions(&project)
+            .unwrap()
+            .sessions;
+        assert_eq!(sessions[0].started_at_unix_ms, Some(1_893_456_000_000));
+    }
+
+    #[test]
     fn catalog_and_link_reads_list_only_root_conversations() {
         let native = Native::new();
         let child = native
@@ -2633,6 +2647,24 @@ mod pi {
             Some("pi-native-a")
         );
         assert_eq!(linked.facts.session_id.as_deref(), Some("pi-native-a"));
+    }
+
+    #[test]
+    fn a_pi_fork_starts_when_its_header_says_not_at_the_records_it_copied() {
+        // A fork copies its parent's records with their own times; its header
+        // says when the fork itself was made.
+        let native = Native::new();
+        let body = fs::read_to_string(&native.path).unwrap();
+        let (header, records) = body.split_once('\n').unwrap();
+        let mut header: serde_json::Value = serde_json::from_str(header).unwrap();
+        header["timestamp"] = json!("2030-01-01T00:00:00.000Z");
+        fs::write(&native.path, format!("{header}\n{records}")).unwrap();
+        let project = hide_project::resolve(&native.cwd, "local").unwrap();
+        let sessions = SessionCatalog::new(native.home.path(), "local")
+            .project_sessions(&project)
+            .unwrap()
+            .sessions;
+        assert_eq!(sessions[0].started_at_unix_ms, Some(1_893_456_000_000));
     }
 
     #[test]

@@ -492,6 +492,10 @@ fn read_project_session(
     let pi_before = (agent.requires_native_file_proof())
         .then(|| crate::confirm_session_file(home, agent, &path, Some(&id), cwd.to_str()));
     let stamp = crate::stamp::stamp_at(&path);
+    // When the session itself was made, where its file says so apart from
+    // its records: a Pi or Grok fork copies its parent's records with their
+    // own times, so its first record tells the parent's start, not its own.
+    let mut opened_at_unix_ms = None;
     let (mut parsed, mut unavailable) = match (pi_before.as_ref(), metadata) {
         (Some(Err(reason)), _) => (None, Some(reason.to_string())),
         (_, Some(metadata)) if metadata.len() > SESSION_READ_LIMIT_BYTES => {
@@ -501,9 +505,14 @@ fn read_project_session(
             Ok(contents) => {
                 let mut parsed = parse_events(agent, &contents);
                 parsed.coalesce();
+                opened_at_unix_ms = pi_header_time(agent, &contents);
                 if agent == Agent::Grok {
-                    // Grok keeps its current title beside the conversation.
+                    // Grok keeps its current title and when the session was
+                    // made beside the conversation.
                     let summary = crate::grok::summary(&path, &mut 0).ok();
+                    opened_at_unix_ms = summary
+                        .as_ref()
+                        .and_then(|summary| summary.created_at_unix_ms);
                     (parsed.title, parsed.custom_title) =
                         summary.map(|summary| summary.title).unzip();
                 }
@@ -542,7 +551,9 @@ fn read_project_session(
         locator: path,
         checkout_path: cwd,
         first_human_request: first_human(events).map(compact_snippet),
-        started_at_unix_ms: events.first().map(|event| event.at_unix_ms),
+        started_at_unix_ms: opened_at_unix_ms
+            .filter(|_| parsed.is_some())
+            .or_else(|| events.first().map(|event| event.at_unix_ms)),
         updated_at_unix_ms: events
             .last()
             .map(|event| event.at_unix_ms)
@@ -625,6 +636,17 @@ impl Transcript {
         self.checkpoint = cursor.checkpoint();
         Ok(self)
     }
+}
+
+/// The time a Pi or omp session's header line says the session was made.
+fn pi_header_time(agent: Agent, contents: &str) -> Option<u64> {
+    if !matches!(agent, Agent::Pi | Agent::Omp) {
+        return None;
+    }
+    let header: serde_json::Value = serde_json::from_str(contents.lines().next()?).ok()?;
+    (header["type"] == "session")
+        .then(|| crate::timestamp_ms(header.get("timestamp")).ok())
+        .flatten()
 }
 
 /// The listed facts of a Claude or Codex transcript, read on from `kept`,
