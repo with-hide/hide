@@ -154,9 +154,9 @@ pub struct SshDevice {
 }
 
 impl SshDevice {
-    /// The already initialized SSH client, for a ready route's forwards.
-    /// A snapshot or route read never resolves configuration or starts I/O.
-    pub fn client(&self) -> Option<&Arc<RusshRemoteClient>> {
+    /// The already initialized SSH client, for the cached Herdr reads. A
+    /// snapshot read never resolves configuration or starts I/O.
+    fn client(&self) -> Option<&Arc<RusshRemoteClient>> {
         self.client
             .initialized
             .get()
@@ -250,9 +250,6 @@ impl DeviceTransport for SshDevice {
             .and_then(|client| client.cached_herdr_version())
     }
 
-    fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
-        self
-    }
 }
 
 impl DialedTransport for SshDevice {

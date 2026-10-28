@@ -97,9 +97,6 @@ impl DeviceTransport for HeldLink {
         None
     }
 
-    fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
-        self
-    }
 }
 
 fn shared_runtime() -> SharedRuntime {

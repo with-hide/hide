@@ -26,14 +26,14 @@ use crate::remote::{
 /// A node and the link that reads its files.
 pub(crate) type LinkedNode = (crate::node::NodeId, Arc<dyn NodeLink>);
 
-/// The daemon may open a pane-scoped return route only while the same
-/// consented helper and SSH device connection are live. All fields are owned
-/// handles, so no network work is done under the runtime lock.
+/// A connected device's node link, which the daemon's Browser View routes
+/// ride to the device's loopback and files, over whichever link the device
+/// has. All fields are owned handles, so no network work is done under the
+/// runtime lock.
 #[derive(Clone)]
 pub struct WorkspaceRemoteRoute {
     pub device_id: String,
     pub generation: u64,
-    pub transport: Arc<dyn crate::remote::DialedTransport>,
     pub channel: Arc<dyn NodeLink>,
 }
 
@@ -146,16 +146,9 @@ impl Runtime {
                 {
                     return None;
                 }
-                // A return route is an SSH forward of the core's own dial.
-                let DeviceReach::Dialed(transport) =
-                    &self.remote_connections.get(device_id)?.transport
-                else {
-                    return None;
-                };
                 Some(WorkspaceRemoteRoute {
                     device_id: device_id.clone(),
                     generation: host.generation,
-                    transport: Arc::clone(transport),
                     channel: Arc::clone(channel),
                 })
             })

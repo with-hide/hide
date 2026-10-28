@@ -996,6 +996,107 @@ fn a_link_ending_mid_request_removes_what_it_staged() {
     assert!(!Path::new(&first).exists(), "the ended link left {first}");
 }
 
+/// B9: a device's localhost page rides its node link, whichever link that
+/// is: a connection to the page's forward reaches the device's loopback
+/// server, dropping the forward ends that server's connection, and a
+/// forward whose link ended reaches nothing.
+#[test]
+fn a_device_page_rides_its_node_link_and_ends_with_it() {
+    use hided::page_forward::PageForward;
+    use std::io::Write;
+    let device = Device::start();
+    let server = PageServer::start();
+    let link = || {
+        device
+            .link
+            .as_any()
+            .and_then(|link| link.downcast_ref::<hide_node::ssh::RemoteHost>())
+            .expect("a device link carries streams")
+            .clone()
+    };
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let forward = runtime
+        .block_on(PageForward::start(link(), server.address, None, false))
+        .unwrap();
+    let mut page = std::net::TcpStream::connect(forward.local_addr()).unwrap();
+    page.set_read_timeout(Some(TIMEOUT)).unwrap();
+    page.write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .unwrap();
+    assert!(read_page(&mut page).ends_with("hello"));
+    drop(forward);
+    server
+        .ended
+        .recv_timeout(TIMEOUT)
+        .expect("the node kept the page's connection after its forward ended");
+
+    let forward = runtime
+        .block_on(PageForward::start(link(), server.address, None, false))
+        .unwrap();
+    device.link.close("contract");
+    assert!(!forward.live());
+    let mut page = std::net::TcpStream::connect(forward.local_addr()).unwrap();
+    page.set_read_timeout(Some(TIMEOUT)).unwrap();
+    let _ = page.write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    assert_eq!(read_page(&mut page), "", "an ended link still reached the page");
+}
+
+/// A device's loopback server for one page: it answers each request
+/// `hello` and tells `ended` when a connection to it closes.
+struct PageServer {
+    address: std::net::SocketAddr,
+    ended: std::sync::mpsc::Receiver<()>,
+}
+
+impl PageServer {
+    fn start() -> Self {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (closed, ended) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for connection in listener.incoming() {
+                let Ok(mut connection) = connection else {
+                    break;
+                };
+                let closed = closed.clone();
+                std::thread::spawn(move || {
+                    let mut request = Vec::new();
+                    let mut chunk = [0_u8; 1024];
+                    while let Ok(read) = connection.read(&mut chunk) {
+                        if read == 0 {
+                            break;
+                        }
+                        request.extend_from_slice(&chunk[..read]);
+                        if request.windows(4).any(|end| end == b"\r\n\r\n") {
+                            request.clear();
+                            let answer = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello";
+                            if connection.write_all(answer).is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    let _ = closed.send(());
+                });
+            }
+        });
+        Self { address, ended }
+    }
+}
+
+/// What a page's connection answered, up to its `hello` or its end.
+fn read_page(page: &mut std::net::TcpStream) -> String {
+    use std::io::Read;
+    let mut answer = Vec::new();
+    let mut chunk = [0_u8; 1024];
+    while !answer.ends_with(b"hello") {
+        match page.read(&mut chunk) {
+            Ok(0) | Err(_) => break,
+            Ok(read) => answer.extend_from_slice(&chunk[..read]),
+        }
+    }
+    String::from_utf8_lossy(&answer).into_owned()
+}
+
 /// Stages one file of `count` through the device's node link.
 fn stage(
     device: &Device,

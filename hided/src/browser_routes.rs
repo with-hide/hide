@@ -1,5 +1,7 @@
-//! Native Browser View routes into a consented SSH device. A route belongs
-//! to one core-owned View and load stamp; it never falls back to this Mac.
+//! Native Browser View routes into a connected device. A route belongs to
+//! one core-owned View and load stamp; it never falls back to this Mac. A
+//! device's page and files ride the device's node link, whichever link the
+//! device has (`page_forward`).
 //!
 //! The same registry serves a node whose core runs on another machine
 //! (`node_pages`): there the View's source comes from the core over the
@@ -22,8 +24,7 @@ use axum::routing::get;
 use herdr_core::node_access::{self, NodeLink};
 use herdr_core::workspace_control::BrowserRouteSource;
 use hide_node::ssh::upstream::Upstream;
-use hide_node::ssh::{RemoteLocalForward, RusshRemoteClient};
-use hide_node_link::device::RemoteResult;
+use hide_node::ssh::{RemoteHost, RemoteLocalForward};
 use percent_encoding::{NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
@@ -31,6 +32,7 @@ use tokio::sync::{Mutex, Semaphore, oneshot, watch};
 
 use crate::browser_assets::{self, Asset};
 use crate::core::CoreHandle;
+use crate::page_forward::PageForward;
 use crate::state_file::new_token;
 use hide_node::pane_proof::process_start;
 
@@ -59,38 +61,13 @@ pub trait PageSources: Send + Sync + 'static {
 
 /// How a page of another machine is reached from this one.
 pub enum Way {
-    /// A device this core reached over SSH: its loopback through that
-    /// connection, its files over its link.
-    Device {
-        client: Arc<RusshRemoteClient>,
-        files: Arc<dyn NodeLink>,
-    },
+    /// A connected device: its loopback and its files through its node
+    /// link, whichever link that is.
+    Device(RemoteHost),
     /// The core's machine, from a node whose core runs there: its loopback
     /// through the link's SSH connection. Its files are not read from here,
     /// so its `file:` pages are refused.
     Core(Arc<Upstream>),
-}
-
-impl Way {
-    fn forward(
-        &self,
-        remote: SocketAddr,
-        alternate: Option<SocketAddr>,
-        preserve_numeric_host: bool,
-        canceled: oneshot::Receiver<()>,
-    ) -> RemoteResult<RemoteLocalForward> {
-        match self {
-            Self::Device { client, .. } => client.start_local_workspace_forward(
-                remote,
-                alternate,
-                preserve_numeric_host,
-                canceled,
-            ),
-            Self::Core(upstream) => {
-                upstream.page_forward(remote, alternate, preserve_numeric_host, canceled)
-            }
-        }
-    }
 }
 
 impl PageSources for CoreHandle {
@@ -116,10 +93,14 @@ impl PageSources for CoreHandle {
             .into_iter()
             .find(|route| route.device_id == device)
             .ok_or("host_unavailable")?;
-        Ok(Way::Device {
-            client: ssh_client(&route).ok_or("host_unavailable")?,
-            files: route.channel,
-        })
+        // Every device link this daemon builds is a `RemoteHost`; one it
+        // cannot carry a stream over is not a way to the device's pages.
+        let link = route
+            .channel
+            .as_any()
+            .and_then(|link| link.downcast_ref::<RemoteHost>())
+            .ok_or("host_unavailable")?;
+        Ok(Way::Device(link.clone()))
     }
 }
 
@@ -132,6 +113,9 @@ struct Key {
 }
 
 enum RouteKind {
+    /// A device's page, over its node link.
+    Page(PageForward),
+    /// A page of the core's machine, over the node's SSH connection to it.
     Http(RemoteLocalForward),
     File(oneshot::Sender<()>),
 }
@@ -170,6 +154,18 @@ impl RouteEntry {
         }
     }
 
+    /// Whether the route still reaches its page: one over a node link that
+    /// has ended reaches nothing.
+    fn live(&self) -> bool {
+        match self {
+            Self::Pending { .. } => true,
+            Self::Ready(route) => match &route.kind {
+                RouteKind::Page(forward) => forward.live(),
+                RouteKind::Http(_) | RouteKind::File(_) => true,
+            },
+        }
+    }
+
     fn close(self) {
         match self {
             Self::Pending { result, cancel, .. } => {
@@ -184,6 +180,7 @@ impl RouteEntry {
 impl Route {
     fn close(self) {
         match self.kind {
+            RouteKind::Page(forward) => drop(forward),
             RouteKind::Http(forward) => forward.close(),
             RouteKind::File(stop) => {
                 let _ = stop.send(());
@@ -248,6 +245,7 @@ impl BrowserRoutes {
         if let Some(entry) = routes.get(&key)
             && entry.source() == &source
             && entry.owner_started() == owner_started
+            && entry.live()
         {
             match entry {
                 RouteEntry::Ready(route) => {
@@ -312,7 +310,7 @@ impl BrowserRoutes {
             .await
             .map_err(|_| "core_unavailable")??;
         let (url, kind) = if crate::file_url::is_file_url(&source.url) {
-            let Way::Device { files, .. } = &way else {
+            let Way::Device(link) = &way else {
                 return Err("file_page_unavailable");
             };
             let (path, suffix) =
@@ -337,7 +335,7 @@ impl BrowserRoutes {
                 key: key.clone(),
                 owner_started,
                 source: source.clone(),
-                channel: Arc::clone(files),
+                channel: Arc::new(link.clone()),
                 secret: secret.clone(),
                 entry: relative.clone(),
                 allowed: Arc::new(Mutex::new(HashMap::new())),
@@ -376,20 +374,30 @@ impl BrowserRoutes {
             ));
             let preserve_numeric_host =
                 scheme == "https" && host != "localhost" && host != "0.0.0.0";
-            let forward = tokio::task::spawn_blocking(move || {
-                way.forward(remote, alternate, preserve_numeric_host, canceled)
-            })
-            .await
-            .map_err(|_| "route_failed")?
-            .map_err(|error| {
+            let forwarded = match way {
+                Way::Device(link) => {
+                    PageForward::start(link, remote, alternate, preserve_numeric_host)
+                        .await
+                        .map(|forward| (forward.local_addr(), RouteKind::Page(forward)))
+                        .map_err(|error| error.to_string())
+                }
+                Way::Core(upstream) => tokio::task::spawn_blocking(move || {
+                    upstream.page_forward(remote, alternate, preserve_numeric_host, canceled)
+                })
+                .await
+                .map_err(|error| error.to_string())
+                .and_then(|forward| forward.map_err(|error| error.to_string()))
+                .map(|forward| (forward.local_addr(), RouteKind::Http(forward))),
+            };
+            let (local_addr, kind) = forwarded.map_err(|reason| {
                 eprintln!(
                     "{}",
-                    serde_json::json!({"component":"browser_routes","kind":"forward.failed","reason":error.to_string()})
+                    serde_json::json!({"component":"browser_routes","kind":"forward.failed","reason":reason})
                 );
                 "route_failed"
             })?;
-            let url = forwarded_url(&scheme, &host, forward.local_addr(), &tail);
-            (url, RouteKind::Http(forward))
+            let url = forwarded_url(&scheme, &host, local_addr, &tail);
+            (url, kind)
         } else {
             return Ok(None);
         };
@@ -511,8 +519,9 @@ impl BrowserRoutes {
         }
     }
 
-    /// Closes every route whose owner, View or desktop is gone, every 2 s
-    /// until `shutdown`; the caller may also end it by aborting the task.
+    /// Closes every route whose owner, View, desktop or node link is gone,
+    /// every 2 s until `shutdown`; the caller may also end it by aborting
+    /// the task.
     pub fn spawn_reaper(
         self: &Arc<Self>,
         desktop_renderers: Arc<AtomicUsize>,
@@ -529,12 +538,18 @@ impl BrowserRoutes {
                     .await
                     .iter()
                     .map(|(key, entry)| {
-                        (key.clone(), entry.source().clone(), entry.owner_started())
+                        (
+                            key.clone(),
+                            entry.source().clone(),
+                            entry.owner_started(),
+                            entry.live(),
+                        )
                     })
                     .collect();
-                for (key, source, owner_started) in candidates {
+                for (key, source, owner_started, live) in candidates {
                     let load = source.load;
-                    let stale = if desktop_renderers.load(Ordering::SeqCst) == 0
+                    let stale = if !live
+                        || desktop_renderers.load(Ordering::SeqCst) == 0
                         || process_start(key.owner_pid) != Some(owner_started)
                     {
                         true
@@ -846,25 +861,12 @@ fn decoded_path_for_mime(path: &str) -> String {
     percent_decode_str(path).decode_utf8_lossy().into_owned()
 }
 
-/// The SSH client behind a route's device transport, for the loopback
-/// forward this daemon opens itself. Every device this daemon builds is an
-/// `SshDevice`, so `None` means a transport this daemon did not build.
-fn ssh_client(
-    route: &herdr_core::WorkspaceRemoteRoute,
-) -> Option<Arc<hide_node::ssh::RusshRemoteClient>> {
-    Arc::clone(&route.transport)
-        .into_any()
-        .downcast::<hide_node::ssh::SshDevice>()
-        .ok()
-        .and_then(|device| device.client().cloned())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn every_admitted_loopback_address_has_an_ssh_target() {
+    fn every_admitted_loopback_address_has_a_loopback_target() {
         for address in [
             "http://localhost:5173/",
             "http://localhost.:5173/",

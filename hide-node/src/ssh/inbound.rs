@@ -175,9 +175,6 @@ impl DeviceTransport for InboundTransport {
         None
     }
 
-    fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
-        self
-    }
 }
 
 impl Drop for InboundTransport {
