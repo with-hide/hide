@@ -113,7 +113,7 @@ if (typechecked) {
     throw new Error("cannot delegate the web typecheck with changed web inputs or lockfile");
   }
   console.log(`Web typecheck delegated to verify for ${commit}; acceptance requires that gate to pass. Building with Vite only.`);
-  pnpm(["--dir", "web", "exec", "vite", "build"]);
+  pnpm(["--dir", "web", "bundle"]);
 } else {
   pnpm(["--dir", "web", "build"]);
 }

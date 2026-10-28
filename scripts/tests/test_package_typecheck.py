@@ -55,7 +55,7 @@ class PackageTypecheck(unittest.TestCase):
             'cd web || exit 25\n'
             'case "$*" in\n'
             '  "--dir web build") script=$(node -p "require(\'./package.json\').scripts.build"); exec sh -c "$script" ;;\n'
-            '  "--dir web exec vite build") exec vite build ;;\n'
+            '  "--dir web bundle") script=$(node -p "require(\'./package.json\').scripts.bundle"); exec sh -c "$script" ;;\n'
             '  *) echo "unexpected package command" >&2; exit 25 ;;\n'
             'esac\n'
         )
