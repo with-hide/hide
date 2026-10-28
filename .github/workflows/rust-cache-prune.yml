@@ -1,4 +1,4 @@
-# After a run of main's head, deletes main's Rust dependency caches that run
+# After a run of main's head, deletes main's Rust dependency caches that head
 # replaced (scripts/prune-rust-caches.py; docs/BUILD.md, "CI's Rust caches").
 # GitHub keeps every saved key until the 10 GB limit evicts one, and it evicted
 # the entries main's runs read while older copies stayed.
@@ -6,9 +6,8 @@ name: rust cache prune
 
 on:
   workflow_run:
-    # The runs that build main's head: a push's verify run and the nightly,
-    # which between them restore or save every set. A release candidate may
-    # build an older commit, so what it touched says nothing about the head.
+    # The runs that build main's head and save its sets: a push's verify run
+    # and the nightly. A release candidate may build an older commit.
     workflows: [verify, nightly]
     types: [completed]
     branches: [main]
@@ -36,8 +35,12 @@ jobs:
       actions: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
       - name: Delete main's replaced Rust caches
         env:
           GH_TOKEN: ${{ github.token }}
-          SINCE: ${{ github.event.workflow_run.run_started_at }}
-        run: python3 scripts/prune-rust-caches.py --repo "$GITHUB_REPOSITORY" --since "$SINCE"
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          # The dependency hash `.github/actions/rust-cache` puts in the key.
+          DEPS: ${{ hashFiles('Cargo.lock', 'Cargo.toml', '*/Cargo.toml', 'rust-toolchain.toml') }}
+        run: python3 scripts/prune-rust-caches.py --repo "$GITHUB_REPOSITORY" --head "$HEAD_SHA" --deps "$DEPS"

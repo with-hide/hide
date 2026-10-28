@@ -31,10 +31,12 @@ runs:
     - uses: Swatinem/rust-cache@v2
       with:
         workspaces: ". -> target"
-        # One key per set and system, not per job. rust-cache hashes the
-        # lockfile, the members' manifests and rust-toolchain.toml but not the
-        # root manifest, whose profiles change what every dependency compiles to.
-        shared-key: ${{ inputs.set }}-${{ hashFiles('Cargo.toml') }}
+        # One key per set and system, not per job, named by what decides the
+        # dependency build: the lockfile, every manifest (the root's profiles
+        # included, which rust-cache does not hash) and the pinned toolchain.
+        # The prune names main's head's entries by this hash; the expression
+        # is written again in rust-cache-prune.yml.
+        shared-key: ${{ inputs.set }}-${{ hashFiles('Cargo.lock', 'Cargo.toml', '*/Cargo.toml', 'rust-toolchain.toml') }}
         # Dependencies only: the workspace's own crates are removed before a save.
         cache-workspace-crates: false
         save-if: ${{ inputs.save }}

@@ -7,7 +7,6 @@ pushed main's own entries out of the 10 GB limit (2026-10-28). docs/BUILD.md,
 "CI's Rust caches", owns the sets, the savers and the release argument.
 """
 import contextlib
-from datetime import datetime, timezone
 import importlib.util
 import io
 import subprocess
@@ -15,6 +14,8 @@ import sys
 import unittest
 from pathlib import Path
 from unittest import mock
+
+import tomllib
 
 import yaml
 
@@ -27,6 +28,8 @@ prune = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(prune)
 
 ON_MAIN = "${{ github.ref == 'refs/heads/main' }}"
+# What decides a dependency build, hashed into every key and by the prune.
+DEPS = "hashFiles('Cargo.lock', 'Cargo.toml', '*/Cargo.toml', 'rust-toolchain.toml')"
 # Each set's savers, one per system: (workflow, job id) and the exact `save`.
 SAVERS = {
     'workspace': {
@@ -42,6 +45,11 @@ SAVERS = {
 
 def load(path):
     return yaml.safe_load(path.read_text())
+
+
+def load_toml(path):
+    with open(path, 'rb') as file:
+        return tomllib.load(file)
 
 
 def cache_steps():
@@ -65,10 +73,10 @@ class RustCacheAction(unittest.TestCase):
         self.assertIn('rustup toolchain uninstall', normalize['run'])
         self.assertEqual(cache['uses'], 'Swatinem/rust-cache@v2')
 
-    def test_keys_by_set_and_root_manifest_keeps_dependencies_only_and_saves_as_told(self):
+    def test_keys_by_set_and_dependencies_keeps_dependencies_only_and_saves_as_told(self):
         self.assertEqual(self.steps[1]['with'], {
             'workspaces': '. -> target',
-            'shared-key': "${{ inputs.set }}-${{ hashFiles('Cargo.toml') }}",
+            'shared-key': f'${{{{ inputs.set }}}}-${{{{ {DEPS} }}}}',
             'cache-workspace-crates': False,
             'save-if': '${{ inputs.save }}',
         })
@@ -115,89 +123,97 @@ class PruneWorkflow(unittest.TestCase):
         self.assertEqual(self.workflow['permissions'], {'contents': 'read'})
         self.assertEqual(self.workflow['jobs']['prune']['permissions'], {'contents': 'read', 'actions': 'write'})
 
-    def test_passes_when_the_head_s_run_started(self):
-        step = self.workflow['jobs']['prune']['steps'][-1]
-        self.assertEqual(step['env']['SINCE'], '${{ github.event.workflow_run.run_started_at }}')
-        self.assertIn('--since "$SINCE"', step['run'])
+    def test_hands_the_head_and_its_dependency_hash_as_the_action_computes_it(self):
+        checkout, step = self.workflow['jobs']['prune']['steps']
+        self.assertEqual(checkout['with']['ref'], '${{ github.event.workflow_run.head_sha }}')
+        self.assertEqual(step['env']['HEAD_SHA'], '${{ github.event.workflow_run.head_sha }}')
+        self.assertEqual(step['env']['DEPS'], f'${{{{ {DEPS} }}}}')
+        self.assertIn('--head "$HEAD_SHA" --deps "$DEPS"', step['run'])
+
+    def test_the_dependency_hash_covers_every_member_manifest(self):
+        # `*/Cargo.toml` reaches members one folder down, and no deeper.
+        members = load_toml(ROOT / 'Cargo.toml')['workspace']['members']
+        self.assertEqual([member for member in members if '/' in member], [])
 
 
-RUN = datetime(2026, 10, 28, 6, 0, tzinfo=timezone.utc)
-M = 'a' * 64
+HEAD = 'c' * 40
+B = 'b' * 64  # main's head
+A = 'a' * 64  # an older commit
 
 
-def entry(id, key, created, accessed=None, ref=prune.MAIN):
+def entry(id, key, created='2026-10-28T04:00:00Z', ref=prune.MAIN):
     return {'id': id, 'key': key, 'ref': ref, 'created_at': created,
-            'last_accessed_at': accessed or created, 'size_in_bytes': 1}
+            'last_accessed_at': created, 'size_in_bytes': 1}
 
 
-def gone(entries):
-    return [doomed['id'] for doomed in prune.doomed(entries, RUN)]
+def key(set, deps, system='Linux-x64'):
+    return f'v0-rust-{set}-{deps}-{system}-770ca156-de5473c3'
+
+
+def gone(entries, deps=B):
+    return [doomed['id'] for doomed in prune.doomed(entries, deps)]
 
 
 class Prune(unittest.TestCase):
-    def test_keeps_what_the_head_s_run_restored_and_deletes_the_rest_of_its_group(self):
+    def test_deletes_another_commit_s_entry_once_the_head_s_is_saved(self):
         self.assertEqual(gone([
-            # Restored by the run (an exact hit moves only last_accessed_at).
-            entry(1, f'v0-rust-workspace-{M}-Linux-x64-770ca156-de5473c3', '2026-10-28T04:39:00Z',
-                  accessed='2026-10-28T06:05:00Z'),
-            entry(2, f'v0-rust-workspace-{M}-Linux-x64-770ca156-75249a22', '2026-10-27T19:33:00Z'),
-            # Another root manifest is the same set and system.
-            entry(3, f'v0-rust-workspace-{"b" * 64}-Linux-x64-770ca156-75249a22', '2026-10-27T19:30:00Z'),
-        ]), [3, 2])
-
-    def test_never_deletes_the_head_s_entry_for_a_later_save_of_an_older_commit(self):
-        # A candidate built an older commit and saved its key after the
-        # head's last restore; the head's run touched only its own.
-        self.assertEqual(gone([
-            entry(1, f'v0-rust-release-{M}-Linux-x64-770ca156-de5473c3', '2026-10-28T03:00:00Z',
-                  accessed='2026-10-28T06:10:00Z'),
-            entry(2, f'v0-rust-release-{M}-Linux-x64-770ca156-75249a22', '2026-10-28T05:30:00Z'),
+            entry(1, key('workspace', B)),
+            entry(2, key('workspace', A), created='2026-10-27T19:33:00Z'),
+            entry(3, key('workspace', A, 'Windows_NT-x64'), created='2026-10-27T19:39:00Z'),
         ]), [2])
 
-    def test_keeps_an_entry_saved_after_the_run_started(self):
-        # A later merge's run saved a newer key while this one ran.
+    def test_a_late_save_or_read_of_an_older_commit_never_deletes_the_head_s(self):
+        # A candidate built A after the head's run, saving and reading A's
+        # entry last; only the dependency hash names what to keep.
         self.assertEqual(gone([
-            entry(1, f'v0-rust-workspace-{M}-Linux-x64-770ca156-de5473c3', '2026-10-28T06:05:00Z'),
-            entry(2, f'v0-rust-workspace-{M}-Linux-x64-770ca156-0badf00d', '2026-10-28T06:20:00Z'),
-            entry(3, f'v0-rust-workspace-{M}-Linux-x64-770ca156-75249a22', '2026-10-27T19:33:00Z'),
-        ]), [3])
+            entry(1, key('release', B), created='2026-10-28T03:00:00Z'),
+            entry(2, key('release', A), created='2026-10-28T05:30:00Z'),
+        ]), [2])
 
-    def test_leaves_a_group_the_run_did_not_touch(self):
-        # A push run builds no release, and a failed save leaves nothing new.
+    def test_leaves_a_set_whose_head_entry_is_not_saved_yet(self):
         self.assertEqual(gone([
-            entry(1, f'v0-rust-release-{M}-Linux-x64-770ca156-de5473c3', '2026-10-28T03:00:00Z'),
-            entry(2, f'v0-rust-release-{M}-Linux-x64-770ca156-75249a22', '2026-10-27T19:33:00Z'),
+            entry(1, key('platform', B)),
+            entry(2, key('workspace', A)),
+            entry(3, key('release', A)),
         ]), [])
 
-    def test_deletes_a_key_from_before_the_sets_only_when_its_system_has_a_replacement(self):
+    def test_never_deletes_a_key_from_before_the_sets_for_another_set_s_save(self):
         self.assertEqual(gone([
-            entry(1, 'v0-rust-rust-Linux-x64-e3a6d410-de5473c3', '2026-10-28T04:39:00Z'),
-            entry(2, 'v0-rust-web-e2e-mailbox-Linux-x64-770ca156-de5473c3', '2026-10-28T04:30:00Z'),
-            entry(3, f'v0-rust-workspace-{M}-Linux-x64-770ca156-de5473c3', '2026-10-28T06:30:00Z'),
-            # No Windows entry of the sets was saved or restored yet.
-            entry(4, 'v0-rust-windows-check-Windows_NT-x64-15d0a0c1-de5473c3', '2026-10-28T04:39:00Z'),
-        ]), [2, 1])
+            entry(1, key('platform', B)),
+            entry(2, 'v0-rust-web-e2e-mailbox-Linux-x64-770ca156-de5473c3'),
+            entry(3, 'v0-rust-rust-Linux-x64-e3a6d410-de5473c3'),
+        ]), [])
 
     def test_leaves_other_refs_and_other_caches(self):
         self.assertEqual(gone([
-            entry(1, f'v0-rust-workspace-{M}-Linux-x64-770ca156-75249a22', '2026-10-27T19:33:00Z',
-                  ref='refs/pull/1/merge'),
-            entry(2, 'node-cache-Linux-x64-pnpm-a944ed6b', '2026-10-27T04:42:00Z'),
-            entry(3, f'v0-rust-workspace-{M}-Linux-x64-770ca156-de5473c3', '2026-10-28T06:05:00Z'),
+            entry(1, key('workspace', B)),
+            entry(2, key('workspace', A), ref='refs/pull/1/merge'),
+            entry(3, 'node-cache-Linux-x64-pnpm-a944ed6b'),
         ]), [])
 
-    def test_a_failed_delete_is_a_warning_and_the_run_passes(self):
-        stale = entry(1, f'v0-rust-workspace-{M}-Linux-x64-770ca156-75249a22', '2026-10-27T19:33:00Z')
-        head = entry(2, f'v0-rust-workspace-{M}-Linux-x64-770ca156-de5473c3', '2026-10-28T06:05:00Z')
-        refused = subprocess.CompletedProcess([], 1, '', 'HTTP 403: Resource not accessible by integration')
+    def run_main(self, entries, head=HEAD, delete=None):
         output = io.StringIO()
-        with mock.patch.object(prune, 'listed', return_value=[stale, head]), \
-                mock.patch.object(prune.subprocess, 'run', return_value=refused), \
-                mock.patch.object(sys, 'argv', ['prune', '--repo', 'owner/repo', '--since', '2026-10-28T06:00:00Z']), \
+        answer = delete or subprocess.CompletedProcess([], 0, '', '')
+        with mock.patch.object(prune, 'listed', return_value=entries), \
+                mock.patch.object(prune, 'main_head', return_value=head), \
+                mock.patch.object(prune.subprocess, 'run', return_value=answer) as run, \
+                mock.patch.object(sys, 'argv', ['prune', '--repo', 'owner/repo', '--head', HEAD, '--deps', B]), \
                 contextlib.redirect_stdout(output):
             self.assertEqual(prune.main(), 0)
-        self.assertIn(f'::warning title=rust cache prune::deleting {stale["key"]} failed: HTTP 403', output.getvalue())
-        self.assertIn('2 of 2 Rust entries on main kept', output.getvalue())
+        return output.getvalue(), run
+
+    def test_deletes_nothing_once_main_has_moved_past_the_head(self):
+        # A newer head's entry carries other deps and would look replaced.
+        output, run = self.run_main([entry(1, key('workspace', B)), entry(2, key('workspace', A))], head='d' * 40)
+        self.assertIn('nothing deleted', output)
+        run.assert_not_called()
+
+    def test_a_failed_delete_is_a_warning_and_the_run_passes(self):
+        stale = entry(2, key('workspace', A))
+        refused = subprocess.CompletedProcess([], 1, '', 'HTTP 403: Resource not accessible by integration')
+        output, _ = self.run_main([entry(1, key('workspace', B)), stale], delete=refused)
+        self.assertIn(f'::warning title=rust cache prune::deleting {stale["key"]} failed: HTTP 403', output)
+        self.assertIn('2 of 2 Rust entries on main kept', output)
 
 
 if __name__ == '__main__':
