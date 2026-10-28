@@ -2081,6 +2081,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "memory_action", payload: { workspace_id: workspaceId, action, number, ...(numbers.length ? { numbers } : {}) } });
     },
 
+    /** Takes back one row of a card's change history (PRD memory-self-improve B34). */
+    memoryUndoChange(workspaceId: string, number: number, change: number) {
+      dispatch({ schema_version: 2, kind: "memory_action", payload: { workspace_id: workspaceId, action: "undo_change", number, change } });
+    },
+
     /** One operator action on a row of the opened Project's 제안 tab (PRD hide-ai-suggestions B10-B16). */
     suggestionAction(workspaceId: string, id: string, action: SuggestionAction) {
       dispatch({ schema_version: 2, kind: "suggestion_action", payload: { workspace_id: workspaceId, id, action } });

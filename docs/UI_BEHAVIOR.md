@@ -993,6 +993,12 @@ An Outdated comparison dims its card and names the document and its date, asks n
 Document references in card metadata and Compare headers show a single-line filename, truncated when needed, with the full path on hover and the date alongside.
 An unverified card waiting to be checked against the repository again is dimmed; only the card the worker is checking shows `확인 중` in its existing status line, and a promotion keeps priority there.
 An already verified card awaiting its first document comparison stays usable and keeps its suggestions while waiting, even when the checking budget is spent.
+A card neither given nor said for 30 days shows `30일 안 씀` beside its kind and is still given (PRD memory-self-improve B22).
+After 60 days it leaves the list for `보관 N`, a folded line under the cards that opens to each archived card's number, title, archive date and `되살리기`, which brings it back with a fresh clock.
+A card shown in full has `다시 확인` beside `지우기`: it takes the card out of the hooks until it is checked again, and while it waits the button reads `다시 확인 중` (B27).
+Under its sources, `변경 기록` lists what Hide changed on the card by itself, newest first: `안 쓰는 기억으로 표시`, `보관됨`, `되살림`, the operator's words added as aliases, the memories merged into it, and each recheck with who asked and, once its sources were read again, how many were letters and how many could not be read (`근거 확인 불가`) (B34).
+Each line has `되돌리기`, or says why it cannot be taken back (a later change replaced it, a merged memory changed or is gone, the check already ended), and a taken-back line stays dimmed as `되돌림`.
+Nothing here alerts: a miss, an alias or an aging move is only a history line (B17).
 The waiting reason or exhausted checking budget is explained once above the list, without repeating it on every row.
 When no card is usable and cards await checks, the existing empty slot says why and that accepted cards return one by one.
 The core supplies the checking budget's next reset timestamp, and its explanation draws that date and time in the viewer's timezone and interface language, with no UTC wording.

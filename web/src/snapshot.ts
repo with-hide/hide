@@ -2226,7 +2226,19 @@ export type MemoryCardKind = "rule" | "decision" | "lesson" | "fact" | "preferen
 export type MemoryPromotionState = "running" | "pr_open" | "merged" | "failed" | "unconfirmed" | "building" | "unbuilt";
 
 /** What the Memory tab's operator asks for (`memory_action`). */
-export type MemoryAction = "enable" | "disable" | "delete" | "forget" | "undo" | "promote" | "dismiss" | "card_right" | "doc_right";
+export type MemoryAction = "enable" | "disable" | "delete" | "forget" | "undo" | "promote" | "dismiss" | "card_right" | "doc_right" | "revive" | "recheck" | "undo_change";
+
+/** Why a history row cannot be taken back (`memory_undo_blocked`). */
+export type MemoryUndoBlocked = "later_change" | "merged_card_changed" | "merged_card_gone" | "recheck_finished";
+
+/** One row of a card's change history (`memory_change_kind`, PRD memory-self-improve B34); `id` is what `undo_change` names. */
+export type MemoryChange = { id: number; at_unix_ms: number; undone: boolean; undo_blocked: MemoryUndoBlocked | null } & (
+  | { kind: "stale" | "archive" | "revive" }
+  | { kind: "alias"; aliases: string[] }
+  | { kind: "merge"; cards: number[] }
+  /** `letters` and `unreadable` are counted once the sources were read again. */
+  | { kind: "recheck"; by_agent: boolean; letters: number | null; unreadable: number | null }
+);
 
 /** One card of the opened Project, as its two-line row shows it. */
 export type MemoryRow = {
@@ -2243,6 +2255,8 @@ export type MemoryRow = {
   updated_at_unix_ms: number;
   /** Waiting to be checked against the repository again; agents are not given it meanwhile (`확인 중`). */
   verifying: boolean;
+  /** Neither given nor said for 30 days; still given (`30일 안 씀`). Absent on older daemons. */
+  stale?: boolean;
   /** Null for an ordinary card, a dismissed one, or one whose pull request closed unmerged. */
   document_comparison?: MemoryDocument | null;
   promotion: {
@@ -2286,6 +2300,8 @@ export type MemoryCard = {
   sources: { provider_label: string; at_unix_ms: number | null; human: boolean }[];
   /** The text the current one replaced, which Undo brings back. */
   previous: { body: string; changed_at_unix_ms: number } | null;
+  /** What Hide changed by itself or on a recheck, newest first. Absent on older daemons. */
+  changes?: MemoryChange[];
 };
 
 /** One opened Project's Memory (`memory.project`), keyed by the catalog Project a shell opened. */
@@ -2315,6 +2331,8 @@ export type ProjectMemory = {
   action_failure?: MemoryAction | null;
   expanded: MemoryCard | null;
   search: { query: string; numbers: number[] } | null;
+  /** Cards out of the hooks after 60 quiet days, newest first. Absent on older daemons. */
+  archived?: { number: number; title: string; archived_at_unix_ms: number }[];
 };
 
 /** The `memory` section: absent until a shell opens a Project's Memory. */
