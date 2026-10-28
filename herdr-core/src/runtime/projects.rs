@@ -1632,6 +1632,17 @@ impl Runtime {
     /// does not flicker. `now` is passed in so a test moves it without
     /// sleeping.
     pub(super) fn read_when_looked_at(&mut self, path: &str, now: std::time::Instant) -> LookRead {
+        self.read_when_asked(path, now, GITHUB_LOOK_AFTER)
+    }
+
+    /// The look rule with the age a good answer must reach before it is
+    /// asked again.
+    pub(super) fn read_when_asked(
+        &mut self,
+        path: &str,
+        now: std::time::Instant,
+        older_than: std::time::Duration,
+    ) -> LookRead {
         let at = match self.github_clock.get(path) {
             Some(GithubClock::Answered {
                 at,
@@ -1642,7 +1653,7 @@ impl Runtime {
             _ => return LookRead::Never,
         };
         if !matches!(self.sighted_read(path), SightedRead::Now)
-            || now.duration_since(at) < GITHUB_LOOK_AFTER
+            || now.duration_since(at) < older_than
         {
             return LookRead::Later;
         }
