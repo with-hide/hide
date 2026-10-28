@@ -1453,9 +1453,7 @@ fn view_status_value(env: &Env, view_id: &str, report: bool) -> Result<serde_jso
 fn view_status(env: &Env, view_id: &str) -> Result<(), String> {
     let answer = view_status_value(env, view_id, true)?;
     println!("{answer}");
-    if let Ok(mut credential) = crate::workspace_cli::Credential::acquire(env) {
-        crate::workspace_cli::note_view_read(&mut credential, view_id);
-    }
+    crate::workspace_cli::note_view_read(env, view_id);
     Ok(())
 }
 

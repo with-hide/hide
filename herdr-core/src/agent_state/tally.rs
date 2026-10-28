@@ -166,7 +166,9 @@ fn rank_within(agent: &SidebarAgentSnapshot, ownership: Ownership) -> (u8, u8) {
         agent.blocked,
         ownership,
         agent.wait.is_some(),
-        !agent.unseen_views.is_empty(),
+        // Only an operator row's View is the operator's to look at; a
+        // delegated child's ranks among its siblings by its own axes (D-10).
+        agent.look.is_some(),
     );
     (group.rank(), demand_rank)
 }
@@ -581,7 +583,7 @@ pub mod phone {
     /// rest.
     fn line(agent: &Value) -> Option<Line> {
         match str_of(agent, "status_code") {
-            "sleeping" if str_of(agent, "mark") != "turn" => return None,
+            "sleeping" if !matches!(str_of(agent, "mark"), "turn" | "look") => return None,
             "waking" | "sleep_failed" | "unknown" => {
                 return Some(Line {
                     text: String::new(),

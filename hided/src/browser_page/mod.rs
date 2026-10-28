@@ -555,11 +555,8 @@ pub fn run(env: &Env, command: Command) -> Result<(), String> {
             .await
             .unwrap_or_else(|_| Err(Failure::new("page_unresponsive", None)))
     });
-    if read
-        && outcome.is_ok()
-        && let Ok(mut credential) = crate::workspace_cli::Credential::acquire(env)
-    {
-        crate::workspace_cli::note_view_read(&mut credential, &display);
+    if read && outcome.is_ok() {
+        crate::workspace_cli::note_view_read(env, &display);
     }
     match outcome {
         Ok(Output::Text(text)) => {

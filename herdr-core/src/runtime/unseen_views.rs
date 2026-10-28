@@ -292,7 +292,15 @@ impl Runtime {
                     .any(|opener| opener.of_session(&scope))
             })
             .map(|display| {
-                let target = display.url.as_deref().unwrap_or(&display.path);
+                // A name is the file's or the page's, so a control character
+                // in it never starts a line of its own in the letter.
+                let target: String = display
+                    .url
+                    .as_deref()
+                    .unwrap_or(&display.path)
+                    .chars()
+                    .map(|c| if c.is_control() { ' ' } else { c })
+                    .collect();
                 let seen = if display.unseen.is_some() {
                     "not seen by the operator"
                 } else {

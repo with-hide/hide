@@ -125,6 +125,32 @@ fn unseen(runtime: &Runtime, view: &str) -> bool {
         .is_some_and(|display| display.unseen.is_some())
 }
 
+/// `hide view status <view>` or a `hide browser` read from `caller`'s pane,
+/// as the CLI reports it after the read (`Action::Read`).
+fn read(runtime: &mut Runtime, caller: &str, view: &str) {
+    let expected = runtime
+        .workspace_control_query(
+            crate::node::TEST_NODE,
+            caller,
+            crate::workspace_control::Query::Info,
+        )
+        .unwrap()
+        .context;
+    let answer = runtime
+        .workspace_control_action(
+            crate::node::TEST_NODE,
+            caller,
+            &expected,
+            &format!("{}-read-{caller}-{view}", unix_milliseconds()),
+            Action::Read {
+                view_id: view.to_owned(),
+            },
+            Ok(None),
+        )
+        .unwrap();
+    assert!(!answer.changed);
+}
+
 /// The recipient's prompt blocked on the operator, or answered.
 fn blocked(runtime: &mut Runtime, blocked: bool) {
     let recipient = runtime
@@ -417,11 +443,11 @@ fn a_childs_unseen_view_turns_its_ancestors_unread_until_one_reads_it_or_the_ope
     assert_ne!(row(&guard, "sender").group, "needs_you");
     // The child's own read and a caller that is no ancestor change nothing
     // (B23).
-    guard.note_ancestor_read(&key(), &view, "recipient");
+    read(&mut guard, "recipient", &view);
     guard.note_ancestor_read(&key(), &view, "stranger");
     assert!(row(&guard, "sender").unread);
     // (3) Its parent reads it: the signal goes, the View stays unseen (B22).
-    guard.note_ancestor_read(&key(), &view, "sender");
+    read(&mut guard, "sender", &view);
     assert!(!row(&guard, "sender").unread);
     assert!(unseen(&guard, &view));
     // (5) The parent opens it again from its own pane: it is the parent's
@@ -504,4 +530,120 @@ fn a_row_pressed_in_a_list_brings_its_newest_unseen_view_forward_and_sees_it() {
     guard.sync_workspace_view();
     assert!(!unseen(&guard, &view));
     assert!(row(&guard, "recipient").look.is_none());
+}
+
+#[test]
+fn a_restart_keeps_an_unseen_view_unseen_and_a_seen_one_seen() {
+    let (root, runtime) = fixture(false);
+    let mut guard = runtime.lock().unwrap();
+    keyboard(&mut guard, Some("sender"));
+    let unread = open(&mut guard, "recipient", "src/a.ts");
+    let read = open(&mut guard, "recipient", "src/b.ts");
+    guard.set_window_focused(false);
+    keyboard(&mut guard, Some("recipient"));
+    look_at(&mut guard, &read);
+    guard.set_window_focused(true);
+    assert!(unseen(&guard, &unread) && !unseen(&guard, &read));
+    keyboard(&mut guard, Some("sender"));
+
+    // B17: the views file the saver writes, read again as a restart does.
+    let path = root.path().join("views.json");
+    let views = guard.workspace_views.as_ref().unwrap().views.clone();
+    crate::workspace_views::save(&path, &views).unwrap();
+    let panel = (
+        guard.snapshot.ui_state.right_panel_visible,
+        guard.snapshot.ui_state.right_panel_section,
+    );
+    guard.workspace_views = Some(WorkspaceViewStore::open(path, panel).0);
+    guard.sync_workspace_view();
+
+    assert!(unseen(&guard, &unread) && !unseen(&guard, &read));
+    let recipient = row(&guard, "recipient");
+    assert_eq!(
+        (recipient.group.as_str(), recipient.mark),
+        ("needs_you", RowMark::Look)
+    );
+    assert_eq!(recipient.look.as_ref().unwrap().view_id, unread);
+}
+
+/// `hide browser open <url>` from `caller`, through the action the daemon
+/// commits.
+fn open_page(runtime: &mut Runtime, caller: &str, url: &str) -> String {
+    let expected = runtime
+        .workspace_control_query(
+            crate::node::TEST_NODE,
+            caller,
+            crate::workspace_control::Query::Info,
+        )
+        .unwrap()
+        .context;
+    runtime
+        .workspace_control_action(
+            crate::node::TEST_NODE,
+            caller,
+            &expected,
+            &format!("{}-page-{caller}-{url}", unix_milliseconds()),
+            Action::OpenBrowser {
+                url: url.to_owned(),
+                area_id: None,
+                new_target: false,
+            },
+            Ok(None),
+        )
+        .unwrap()
+        .view_id
+}
+
+#[test]
+fn an_open_again_from_behind_is_unseen_even_when_it_passed_through_the_front() {
+    let (_root, runtime) = fixture(false);
+    let mut guard = runtime.lock().unwrap();
+    keyboard(&mut guard, Some("sender"));
+    let page = open_page(&mut guard, "recipient", "https://example.test/a");
+    let other = open_page(&mut guard, "recipient", "https://example.test/b");
+    // Both pages are the operator's own and seen, the second in front.
+    guard
+        .change_view_layout(&key(), |layout, _| {
+            for id in [&page, &other] {
+                let display = layout.display_mut(id).unwrap();
+                display.operator = true;
+                display.unseen = None;
+            }
+            Ok(((), true))
+        })
+        .unwrap();
+    look_at(&mut guard, &other);
+    // B14: the agent behind opens the first page again; the operator's front
+    // is put back, so the page is news, though it was in front mid-action.
+    assert_eq!(
+        open_page(&mut guard, "recipient", "https://example.test/a"),
+        page
+    );
+    guard.sync_workspace_view();
+    assert!(unseen(&guard, &page));
+    assert_eq!(
+        row(&guard, "recipient").look.as_ref().unwrap().view_id,
+        page
+    );
+    // B5: an open from the pane the operator is in is seen in the same event.
+    keyboard(&mut guard, Some("recipient"));
+    let shown = open_page(&mut guard, "recipient", "https://example.test/c");
+    assert!(!unseen(&guard, &shown));
+}
+
+#[test]
+fn reads_keep_no_receipt_so_any_number_of_them_leaves_room_for_an_open() {
+    let (_root, runtime) = fixture(true);
+    let mut guard = runtime.lock().unwrap();
+    // The operator read the parent before the child opened anything.
+    keyboard(&mut guard, Some("sender"));
+    keyboard(&mut guard, None);
+    let view = open_page(&mut guard, "recipient", "https://example.test/report");
+    assert!(row(&guard, "sender").unread);
+    // More reads than the kept results hold, each still taken in (D-22).
+    for _ in 0..200 {
+        read(&mut guard, "sender", &view);
+    }
+    assert!(!row(&guard, "sender").unread);
+    open_page(&mut guard, "recipient", "https://example.test/next");
 }

@@ -208,6 +208,12 @@ impl Runtime {
                 next_action: "Run hide view list and start a new request with a fresh ID",
             });
         }
+        // A read changes no View, so its retry repeats nothing: it keeps no
+        // receipt, and so never takes a place among the kept results or
+        // waits for one (PRD unseen-agent-views D-22).
+        if !keeps_receipt(action) {
+            return Ok((context, None));
+        }
         self.workspace_actions
             .retain(|record| now.saturating_sub(record.at) <= ACTION_RETRY_WINDOW_MS);
         if let Some(record) = self.workspace_actions.iter().find(|record| {
@@ -248,11 +254,13 @@ impl Runtime {
     ) -> Result<ActionPreparation, Refusal> {
         let preparation =
             self.prepare_view_action(device_id, pane_id, expected, request_id, action)?;
-        if !self.workspace_actions.iter().any(|record| {
-            record.device_id == device_id
-                && record.pane_id == pane_id
-                && record.request_id == request_id
-        }) {
+        if keeps_receipt(action)
+            && !self.workspace_actions.iter().any(|record| {
+                record.device_id == device_id
+                    && record.pane_id == pane_id
+                    && record.request_id == request_id
+            })
+        {
             self.workspace_actions.push_back(RecordedAction {
                 device_id: device_id.to_owned(),
                 pane_id: pane_id.to_owned(),
@@ -391,17 +399,23 @@ impl Runtime {
                 && lane_call(&action);
             let mut applied =
                 self.apply_workspace_action(&key, &context, pane_id, request_id, &action, material);
-            if let Ok(done) = &mut applied {
-                self.stamp_control_opener(&key, pane_id, &action, &done.view_id);
-                if calls_lane {
-                    self.apply_area_intent_to(&key, AreaIntent::Documents);
-                    // A view already in front still calls the lane, which
-                    // the page sees only if the change is announced.
-                    done.changed = true;
-                }
+            if let Ok(done) = &mut applied
+                && calls_lane
+            {
+                self.apply_area_intent_to(&key, AreaIntent::Documents);
+                // A view already in front still calls the lane, which the
+                // page sees only if the change is announced.
+                done.changed = true;
             }
             if let Some(kept) = kept {
                 self.restore_front(kept);
+            }
+            // Stamped on the screen the action leaves, so an open the
+            // operator is looking at once it lands is seen in this same
+            // event, and one put back behind is not (PRD unseen-agent-views
+            // B5, B14).
+            if let Ok(done) = &applied {
+                self.stamp_control_opener(&key, pane_id, &action, &done.view_id);
             }
             applied
         })();
@@ -409,6 +423,9 @@ impl Runtime {
             && let (Some(before), Some(store)) = (browser_load, self.workspace_views.as_mut())
         {
             store.browser_load = before;
+        }
+        if !keeps_receipt(&action) {
+            return result;
         }
         if let Some(record) = self.workspace_actions.iter_mut().find(|record| {
             record.device_id == device_id
@@ -1014,4 +1031,9 @@ pub(super) fn lane_call(action: &Action) -> bool {
             false
         }
     }
+}
+
+/// Whether an action keeps a receipt for its retry: everything but a read.
+fn keeps_receipt(action: &Action) -> bool {
+    !matches!(action, Action::Read { .. })
 }
