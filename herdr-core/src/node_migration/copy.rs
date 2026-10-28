@@ -119,26 +119,30 @@ pub fn stage(state_dir: &Path, staging: &Path, ai_settings: &Path) -> Result<Man
             Err(error) => return Err(refuse(&from, error)),
         };
         // A global instruction kept elsewhere through a link moves as the
-        // text it points to, since the link would point nowhere on the
-        // receiving machine; a link the core does not read through is left
+        // text the core reads through it (capped, UTF-8, opened without
+        // following a further link), since the link would point nowhere on
+        // the receiving machine; one the core reads as unusable stays
         // behind. Any other link is refused below.
-        let linked = metadata.is_symlink() && *name == hide_kit::layout::GLOBAL_INSTRUCTION;
-        let from = if !linked {
-            from
-        } else if let Some(file) = crate::global_instruction::linked_file(state_dir) {
-            file
-        } else {
-            crate::diagnostic!(serde_json::json!({
-                "component": "core_move",
-                "kind": "global_instruction.link_left",
-            }));
+        if metadata.is_symlink() && *name == hide_kit::layout::GLOBAL_INSTRUCTION {
+            match crate::global_instruction::read(state_dir) {
+                Ok(instruction) => {
+                    std::fs::write(&to, instruction.text).map_err(|error| refuse(&to, error))?;
+                    hide_platform::fs::private::restrict_to_owner(&to)
+                        .map_err(|error| refuse(&to, error))?;
+                }
+                Err(unusable) => crate::diagnostic!(serde_json::json!({
+                    "component": "core_move",
+                    "kind": "global_instruction.link_left",
+                    "reason": unusable.as_str(),
+                })),
+            }
             continue;
-        };
+        }
         if *name == SESSION_SEARCH && metadata.is_file() {
             stage_retention(&from, &to)?;
         } else if metadata.is_dir() {
             copy_folder(&from, &to)?;
-        } else if !metadata.is_file() && !linked {
+        } else if !metadata.is_file() {
             return Err(refuse(&from, "is neither a file nor a folder"));
         } else if name.ends_with(".sqlite3") {
             vacuum_into(&from, &to)?;
@@ -743,11 +747,11 @@ mod tests {
 
     /// A global instruction kept in the operator's dotfiles through a link
     /// moves as the text the core reads, a regular file on the receiving
-    /// machine; a link the core does not read through stays behind and the
-    /// move goes on.
+    /// machine; a link the core reads as unusable stays behind and the move
+    /// goes on.
     #[cfg(unix)]
     #[test]
-    fn a_linked_global_instruction_moves_as_its_text_and_a_link_the_core_skips_stays_behind() {
+    fn a_linked_global_instruction_moves_as_its_text_and_an_unusable_one_stays_behind() {
         let name = hide_kit::layout::GLOBAL_INSTRUCTION;
         let source = folder();
         let dotfiles = tempfile::tempdir().unwrap();
@@ -764,15 +768,24 @@ mod tests {
         );
         assert!(manifest.files.contains_key(name));
 
-        let source = folder();
+        // A file the core would not read, of another kind or over the cap.
         let image = dotfiles.path().join("agents.png");
         std::fs::write(&image, "not text").unwrap();
-        std::os::unix::fs::symlink(&image, source.path().join(name)).unwrap();
-        let staging = source.path().join("move-staging/i1");
-        let manifest = stage(source.path(), &staging, &settings(source.path())).unwrap();
-        assert!(!staging.join(name).exists());
-        assert!(!manifest.files.contains_key(name));
-        assert!(manifest.files.contains_key("labels.json"));
+        let large = dotfiles.path().join("large.md");
+        std::fs::write(
+            &large,
+            "x".repeat(crate::global_instruction::LIMIT_BYTES + 1),
+        )
+        .unwrap();
+        for target in [image, large] {
+            let source = folder();
+            std::os::unix::fs::symlink(&target, source.path().join(name)).unwrap();
+            let staging = source.path().join("move-staging/i1");
+            let manifest = stage(source.path(), &staging, &settings(source.path())).unwrap();
+            assert!(!staging.join(name).exists());
+            assert!(!manifest.files.contains_key(name));
+            assert!(manifest.files.contains_key("labels.json"));
+        }
     }
 
     /// A manifest's paths become paths on the machine that reads it, so one
