@@ -441,7 +441,9 @@ fn retired_cursor_install_is_refused_and_removal_keeps_the_operators_hooks() {
 /// for first use", the `#< CLIXML` progress record a timed-out run left on
 /// stderr). A start that only ran `exit 0` left that to the command: four
 /// tests paying it together took 38 to 48 s, and the two that paid it inside
-/// their 15 s failed (issues 198 and 199).
+/// their 15 s failed (issues 198 and 199). These tests check what the command
+/// does once PowerShell is warm; the installed command still pays that first
+/// use on an account with no module cache, which is hide-private issue 318.
 fn agy_shell(command: &str) -> Command {
     use std::os::windows::process::CommandExt;
 
