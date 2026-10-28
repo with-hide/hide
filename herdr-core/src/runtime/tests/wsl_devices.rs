@@ -18,6 +18,9 @@ use std::sync::mpsc;
 struct Attempts {
     wakes: Mutex<Vec<Wake>>,
     held: Mutex<Option<mpsc::Receiver<()>>>,
+    /// Set when `wsl.exe` cannot say which distributions run: an attempt
+    /// without leave fails rather than finding the distribution off.
+    undetermined: std::sync::atomic::AtomicBool,
 }
 
 struct Distributions(Arc<Attempts>);
@@ -113,7 +116,14 @@ impl DialedTransport for OffDistribution {
             let _ = held.recv_timeout(Duration::from_secs(10));
         }
         self.0.wakes.lock().unwrap().push(wake);
+        let undetermined = self
+            .0
+            .undetermined
+            .load(std::sync::atomic::Ordering::SeqCst);
         Err(match wake {
+            Wake::NotAllowed if undetermined => EstablishError::Helper(
+                "wsl.exe could not list the running distributions (exit code: 1)".to_owned(),
+            ),
             Wake::NotAllowed => EstablishError::Stopped("Ubuntu is off".to_owned()),
             Wake::Allowed => EstablishError::Helper("the test starts no helper".to_owned()),
         })
@@ -336,4 +346,47 @@ fn add_device_lists_distributions_with_what_keeps_one_from_connecting() {
             ("Legacy", false, None, Some("wsl1")),
         ]
     );
+}
+
+/// D-15, B24: when `wsl.exe` cannot say whether the distribution runs, the
+/// attempt is a failure that is tried again, and every retry is Hide's own,
+/// so none may start the distribution.
+#[test]
+fn a_distribution_whose_state_cannot_be_read_is_retried_without_leave() {
+    let (shared, attempts) = wsl_runtime();
+    attempts
+        .undetermined
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    {
+        let mut runtime = shared.lock().unwrap();
+        let consent = runtime.new_host_consent();
+        runtime
+            .snapshot
+            .ui_state
+            .device_registrations
+            .push(crate::model::DeviceRegistration {
+                id: "wsl-ubuntu".to_owned(),
+                label: "WSL Ubuntu".to_owned(),
+                origin: crate::model::LinkOrigin::Wsl {
+                    distro: "Ubuntu".to_owned(),
+                },
+                herdr_socket_path: None,
+                herdr_session: None,
+                host_consent: Some(consent),
+            });
+        runtime.rebuild_device_rows();
+        runtime.connect_registered_devices();
+    }
+    for attempt in 1..=3 {
+        wait_for_attempts(&attempts, attempt);
+        host_settled(&shared);
+        let mut runtime = shared.lock().unwrap();
+        let at = runtime.device_host_retries["wsl-ubuntu"]
+            .at_unix_ms
+            .expect("a failure that says nothing is tried again");
+        runtime.tick_device_hosts(at);
+    }
+    wait_for_attempts(&attempts, 4);
+    host_settled(&shared);
+    assert_eq!(wakes(&attempts), [Wake::NotAllowed; 4]);
 }

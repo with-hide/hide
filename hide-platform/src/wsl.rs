@@ -87,22 +87,17 @@ pub fn running_from(program: &Path, deadline: Duration) -> io::Result<BTreeSet<S
                 "wsl.exe could not list the running distributions: {error}"
             )),
         })?;
-    // A list with no running distribution exits nonzero on some WSL
-    // releases and says so in the account's language. A failing service
-    // exits nonzero too, silently or naming a `Wsl/` error code, so only an
-    // exit that says something and names no error code reads as none.
-    let stdout = decode(&output.stdout);
+    // With `--quiet`, a list with no running distribution exits 0 and
+    // writes nothing (WSL's `WslClient.cpp`; only the form without
+    // `--quiet` prints a sentence and exits -1), so a nonzero exit is
+    // always a failure, whatever it wrote.
     if !output.status.success() {
-        let stderr = decode(&output.stderr);
-        let said = format!("{stdout}{stderr}");
-        if said.trim().is_empty() || said.contains("Wsl/") {
-            return Err(io::Error::other(format!(
-                "wsl.exe could not list the running distributions ({})",
-                output.status
-            )));
-        }
+        return Err(io::Error::other(format!(
+            "wsl.exe could not list the running distributions ({})",
+            output.status
+        )));
     }
-    Ok(running_names(&stdout))
+    Ok(running_names(&decode(&output.stdout)))
 }
 
 /// The names in a `--list --running --quiet` answer: one per line, and any
@@ -456,18 +451,14 @@ mod tests {
         };
         assert!(answer("exit 1").is_err(), "silent and failing");
         assert!(
-            answer("echo 'Error code: Wsl/Service/E_UNEXPECTED'; exit 1").is_err(),
-            "a service error"
+            answer("echo 'Access is denied.' >&2; exit 1").is_err(),
+            "a refusal on standard error"
         );
         assert!(
-            answer("echo 'Wsl/Service/E_UNEXPECTED' >&2; exit 1").is_err(),
-            "a service error on standard error"
+            answer("echo 'There are no running distributions.'; exit 1").is_err(),
+            "whatever a failing exit says"
         );
-        assert_eq!(
-            answer("echo 'There are no running distributions.'; exit 1").unwrap(),
-            BTreeSet::new()
-        );
-        assert_eq!(answer("exit 0").unwrap(), BTreeSet::new());
+        assert_eq!(answer("exit 0").unwrap(), BTreeSet::new(), "none runs");
         assert_eq!(
             answer("echo Ubuntu; exit 0").unwrap(),
             BTreeSet::from(["Ubuntu".to_owned()])

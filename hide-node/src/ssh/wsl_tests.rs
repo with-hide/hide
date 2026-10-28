@@ -17,6 +17,10 @@ const FAKE_WSL: &str = r#"#!/bin/sh
 here=$(dirname "$0")
 printf '%s\n' "$*" >> "$here/calls.log"
 if [ "$1" = "--list" ]; then
+    if [ -e "$here/list-refused" ]; then
+        echo 'Access is denied.' >&2
+        exit 1
+    fi
     cat "$here/running" 2>/dev/null
     exit 0
 fi
@@ -130,6 +134,19 @@ fn an_attempt_that_may_not_wake_a_stopped_distribution_runs_nothing_in_it() {
     let device = fixture.device(fixture.packages());
     let error = establish(&device, &consent(None), Wake::NotAllowed);
     assert!(matches!(error, EstablishError::Stopped(_)), "{error}");
+    assert_eq!(fixture.calls(), ["--list --running --quiet"]);
+}
+
+/// D-15, B24: a listing that fails says nothing about which distributions
+/// run: the attempt is a failure, not stopped, and still runs nothing in
+/// the distribution.
+#[test]
+fn a_failing_listing_is_no_answer_and_wakes_nothing() {
+    let fixture = fixture();
+    std::fs::write(fixture.dir.path().join("list-refused"), "").unwrap();
+    let device = fixture.device(fixture.packages());
+    let error = establish(&device, &consent(None), Wake::NotAllowed);
+    assert!(matches!(error, EstablishError::Helper(_)), "{error}");
     assert_eq!(fixture.calls(), ["--list --running --quiet"]);
 }
 
