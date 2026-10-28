@@ -899,7 +899,10 @@ impl Runtime {
                                 load: display.load,
                                 state: match reported {
                                     None => "pending",
-                                    Some(page) if !page.present => "disconnected",
+                                    // The host unloaded the page (hidden and idle,
+                                    // or past its live-page cap); it loads again
+                                    // when shown or driven.
+                                    Some(page) if !page.present => "unloaded",
                                     Some(page) if page.failure.is_some() => "failed",
                                     Some(page) if page.loading => "loading",
                                     Some(_) => "loaded",

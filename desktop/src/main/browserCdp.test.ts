@@ -70,7 +70,7 @@ class CdpClient {
 
 const shutdown: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const close of shutdown.splice(0).reverse()) await close(); });
-async function fixture(options: { loseFirstOpenResponse?: boolean; alwaysLoseResponse?: boolean; refuseOpen?: boolean; deferCloseRetirement?: boolean } = {}) {
+async function fixture(options: { loseFirstOpenResponse?: boolean; alwaysLoseResponse?: boolean; refuseOpen?: boolean; deferCloseRetirement?: boolean; revive?: (scope: CdpScope, pages: CdpPage[]) => Promise<"none" | "loaded" | "failed"> } = {}) {
   const first = electronPage(11, "d1");
   const second = electronPage(12, "d2");
   const foreign = electronPage(13, "d3", "a2");
@@ -90,6 +90,7 @@ async function fixture(options: { loseFirstOpenResponse?: boolean; alwaysLoseRes
     incarnation: () => incarnation,
     changed: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
     attached: (page, value) => { attached.set(page.id, value); },
+    ...(options.revive ? { revive: (scope: CdpScope) => options.revive!(scope, pages) } : {}),
     chromeVersion: "144.0.0.0",
     now: () => time,
     log: () => {},
@@ -523,6 +524,80 @@ describe("scoped desktop CDP public boundary", () => {
     expect((await browser.call("Target.attachToTarget", { targetId: "page-11" })).error).toBeDefined();
     expect(await customRequest(`${address.endpoint}/connect`, "POST", { authorization: `Bearer ${address.token}` }, JSON.stringify({ workspace: first.workspace, area_id: "a1", display_id: first.id }))).toBe(409);
     expect(first.contents.debugger.isAttached()).toBe(false);
+  });
+
+  it("loads an unloaded display's page again before connecting an agent to it, and refuses while its load fails (PRD browser-tab-idle-unload B10, B11)", async () => {
+    let outcome: "loaded" | "failed" = "failed";
+    const asked: CdpScope[] = [];
+    const { address, client } = await fixture({
+      revive: async (scope, pages) => {
+        asked.push(scope);
+        if (scope.display_id !== "unloaded" || pages.some((page) => page.id === "unloaded")) return "none";
+        if (outcome === "loaded") pages.push(electronPage(31, scope.display_id, scope.area_id, scope.workspace));
+        return outcome;
+      },
+    });
+    const connect = (body: Json) => fetch(`${address.endpoint}/connect`, { method: "POST", headers: { authorization: `Bearer ${address.token}`, "content-type": "application/json" }, body: JSON.stringify(body) });
+    const scope = { workspace: "local\0/checkout", area_id: "a1", display_id: "unloaded" };
+    const failed = await connect(scope);
+    expect(failed.status).toBe(409);
+    expect(await failed.json()).toEqual({ error: "Display page failed to load" });
+    // The agent's next connection loads it again.
+    outcome = "loaded";
+    const connected = await connect(scope);
+    expect(connected.status).toBe(200);
+    const cap = await connected.json() as { browser_ws_url: string; display_id: string };
+    expect(cap.display_id).toBe("unloaded");
+    expect((await attach(await client(cap.browser_ws_url), "page-31"))).toEqual(expect.any(String));
+    // A live page answers `none` and connects as before; an area connection and Comment never ask.
+    expect((await connect({ workspace: "local\0/checkout", area_id: "a1", display_id: "d1" })).status).toBe(200);
+    await connect({ workspace: "local\0/checkout", area_id: "a1" });
+    await connect({ ...scope, display_id: "other", purpose: "comment" });
+    expect(asked.map((row) => row.display_id)).toEqual(["unloaded", "unloaded", "d1"]);
+  });
+
+  it("keeps the 409 for a display with nothing to load again, such as one pending since the app started (PRD browser-tab-idle-unload D-16, B15)", async () => {
+    const asked: string[] = [];
+    const { address } = await fixture({ revive: async (scope) => { asked.push(scope.display_id!); return "none"; } });
+    const response = await fetch(`${address.endpoint}/connect`, { method: "POST", headers: { authorization: `Bearer ${address.token}`, "content-type": "application/json" }, body: JSON.stringify({ workspace: "local\0/checkout", area_id: "a1", display_id: "pending" }) });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "Display has no eligible HTTP(S) browser target; native files are unsupported" });
+    expect(asked).toEqual(["pending"]);
+  });
+
+  it("carries the area authority in force once an agent's page has loaded again", async () => {
+    const during = { change: () => {} };
+    const { address, client, incarnate, authority } = await fixture({
+      revive: async (scope, pages) => {
+        during.change();
+        if (!pages.some((page) => page.id === scope.display_id)) pages.push(electronPage(33, scope.display_id!, scope.area_id, scope.workspace));
+        return "loaded";
+      },
+    });
+    const connect = () => fetch(`${address.endpoint}/connect`, { method: "POST", headers: { authorization: `Bearer ${address.token}`, "content-type": "application/json" }, body: JSON.stringify({ workspace: "local\0/checkout", area_id: "a1", display_id: "reloaded" }) });
+    // The area moved to a new incarnation during the load: the capability is granted under it and drives the page.
+    during.change = () => incarnate(2);
+    const moved = await connect();
+    expect(moved.status).toBe(200);
+    const cap = await moved.json() as { browser_ws_url: string };
+    expect(await attach(await client(cap.browser_ws_url), "page-33")).toEqual(expect.any(String));
+    // The area lost its authority during the load: nothing is granted.
+    during.change = () => authority(false);
+    expect((await connect()).status).toBe(409);
+  });
+
+  it("grants nothing to a connection whose page loaded across a revoke", async () => {
+    const during = { revoke: async (): Promise<unknown> => undefined };
+    const { address } = await fixture({
+      revive: async (scope, pages) => {
+        await during.revoke();
+        pages.push(electronPage(32, scope.display_id!, scope.area_id, scope.workspace));
+        return "loaded";
+      },
+    });
+    during.revoke = () => fetch(`${address.endpoint}/revoke`, { method: "POST", headers: { authorization: `Bearer ${address.token}` } });
+    const response = await fetch(`${address.endpoint}/connect`, { method: "POST", headers: { authorization: `Bearer ${address.token}`, "content-type": "application/json" }, body: JSON.stringify({ workspace: "local\0/checkout", area_id: "a1", display_id: "late" }) });
+    expect(response.status).toBe(503);
   });
 
   it("revokes an area capability if a bound native generation becomes a file", async () => {

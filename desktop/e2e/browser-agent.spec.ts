@@ -367,3 +367,32 @@ test("hide browser: a busy, hidden, file or missing display and a stale ref are 
   expect(await json(["snapshot", fileDisplay])).toMatchObject({ ok: false, reason: "display_unsupported" });
   expect(await json(["snapshot", "browser-missing"])).toMatchObject({ ok: false, reason: "display_missing" });
 });
+
+test("hide browser: a page unloaded past the live-page cap reports unloaded, and an agent's command loads it again without moving the operator's Views (PRD browser-tab-idle-unload B2, B9, B10)", async () => {
+  await start();
+  const live = (address: string) => app!.evaluate(({ BrowserWindow }, address) => BrowserWindow.getAllWindows()[0]!.contentView.children.flatMap((view) => {
+    const contents = (view as { webContents?: Electron.WebContents }).webContents;
+    return contents && !contents.isDestroyed() && contents.getURL() === address ? [(view as Electron.View).getVisible()] : [];
+  }), address);
+  const state = async (display: string) => {
+    const { out } = await hideCli(["view", "status", display]);
+    return (JSON.parse(out.trim().split("\n").at(-1)!) as { view: { page: { state: string } } }).view.page.state;
+  };
+  // Twelve pages live at once: the thirteenth shown closes the one shown least recently.
+  const displays: string[] = [];
+  for (let index = 1; index <= 13; index++) displays.push(await openDisplay(`${origin}/unload-${index}`));
+  const [oldest, next] = [displays[0]!, displays[1]!];
+  await expect.poll(() => live(`${origin}/unload-1`)).toEqual([]);
+  await expect.poll(() => state(oldest)).toBe("unloaded");
+  expect(await state(displays[12]!)).toBe("loaded");
+
+  const views = await shownViews();
+  const read = await snapshot(oldest);
+  expect(read).toMatch(new RegExp(`^# Agent fixture\\n# ${origin.replaceAll(".", "\\.")}/unload-1\\n`));
+  // Loaded again hidden, behind the page the operator sees, and nothing on the screen moved.
+  expect(await live(`${origin}/unload-1`)).toEqual([false]);
+  expect(await shownViews()).toEqual(views);
+  await expect.poll(() => state(oldest)).toBe("loaded");
+  // It is live again, so the next one shown least recently made room.
+  await expect.poll(() => state(next)).toBe("unloaded");
+});

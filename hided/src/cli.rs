@@ -1570,6 +1570,13 @@ fn browser_open(
                 );
                 return Err("page_unavailable".to_owned());
             }
+            Some("unloaded") => {
+                println!(
+                    "{}",
+                    serde_json::json!({"ok":false,"request_id":answer["request_id"],"applied":"applied","reason":"page_unloaded","view_id":view_id,"page":page,"next_action":format!("Run a hide browser command on {view_id}; Hide loads the page again without showing it")})
+                );
+                return Err("page_unloaded".to_owned());
+            }
             Some("pending" | "loading") => {}
             _ => {
                 println!(

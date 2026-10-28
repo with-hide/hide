@@ -707,7 +707,8 @@ fn browser_load_status_tracks_the_current_load_and_retry_does_not_reload() {
     }))
     .unwrap();
     runtime.record_browser_state(gone);
-    assert_eq!(page(&runtime).state, "disconnected");
+    // A page the host unloaded is not a lost window (PRD browser-tab-idle-unload B9).
+    assert_eq!(page(&runtime).state, "unloaded");
     runtime
         .workspace_control_action(
             crate::node::TEST_NODE,

@@ -39,6 +39,8 @@ type Options = {
   changed: (listener: (retirement?: CdpRetirement) => void) => () => void;
   action: (scope: CdpScope, action: CdpAction, signal: AbortSignal) => Promise<CdpActionResult>;
   attached: (page: CdpPage, attached: boolean) => void;
+  /** Loads a display's unloaded page again, hidden, for an agent's connection to it (`BrowserViews.cdpRevive`). */
+  revive?: (scope: CdpScope) => Promise<"none" | "loaded" | "failed">;
   log: (event: string, fields: Record<string, string | number | boolean>) => void;
   chromeVersion: string;
   /** Wall clock is a platform boundary; protocol/server timers stay native. */
@@ -208,6 +210,8 @@ export class BrowserCdpGateway {
   private readonly listenAbort = new AbortController();
   private closing: Promise<void> | null = null;
   private stopped = false;
+  /** Bumped by every revoke of all capabilities, so a `/connect` that waited across one grants nothing. */
+  private revocations = 0;
   private available = false;
   private httpPending = 0;
   private readonly unsubscribe: () => void;
@@ -263,6 +267,7 @@ export class BrowserCdpGateway {
   }
 
   private revokeAll(): void {
+    this.revocations++;
     this.capabilities.clear();
     for (const client of [...this.clients]) this.end(client);
   }
@@ -360,9 +365,26 @@ export class BrowserCdpGateway {
         if (!scope) { this.reply(response, 400, { error: "Invalid scope" }); return; }
         const purpose = purposeOf(body, scope);
         if (purpose === null) { this.reply(response, 400, { error: "Invalid purpose" }); return; }
-        const incarnation = this.options.incarnation(scope);
-        if (incarnation === null || !Number.isSafeInteger(incarnation) || incarnation < 0) { this.reply(response, 409, { error: "Workspace area is no longer authorized" }); return; }
+        const authorized = () => {
+          const incarnation = this.options.incarnation(scope);
+          return incarnation !== null && Number.isSafeInteger(incarnation) && incarnation >= 0 ? incarnation : null;
+        };
+        let incarnation = authorized();
+        if (incarnation === null) { this.reply(response, 409, { error: "Workspace area is no longer authorized" }); return; }
         if (this.stopped || !this.available) { this.reply(response, 503, { error: "Desktop is not attached" }); return; }
+        // An agent's display whose page the host unloaded loads again, or
+        // finishes loading again, before it is driven; any other display
+        // answers `none` at once.
+        if (scope.display_id && !purpose && this.options.revive) {
+          const revocations = this.revocations;
+          const revived = await this.options.revive(scope);
+          // A revoke during the load ended what this request was granted.
+          if (this.stopped || !this.available || this.revocations !== revocations) { this.reply(response, 503, { error: "Desktop is not attached" }); return; }
+          if (revived === "failed") { this.reply(response, 409, { error: "Display page failed to load" }); return; }
+          // The area's authority can move while the page loads; the capability carries the one in force now.
+          incarnation = authorized();
+          if (incarnation === null) { this.reply(response, 409, { error: "Workspace area is no longer authorized" }); return; }
+        }
         let existing = [...this.capabilities.values()].find((item) => JSON.stringify(item.scope) === JSON.stringify(scope) && item.purpose === purpose);
         if (existing) { this.eligible(existing); if (!this.capabilities.has(existing.path)) existing = undefined; }
         if (!existing && this.capabilities.size >= MAX_CAPABILITIES) { this.reply(response, 429, { error: "Capability limit exceeded" }); return; }

@@ -12,7 +12,7 @@ There is no Herdr browser pane and no chromux profile behind it, and nothing is 
 | The core | Browser View layout, requested address and load stamp, and the native page's reported loading state | `herdr-core/src/view_layout.rs`, `herdr-core/src/runtime/view_areas.rs`, `herdr-core/src/runtime/workspace_control.rs` |
 | hided | The local `file:` event boundary, checkout-scoped Browser commands and gateway discovery, and native routes into consented SSH devices and, on a node whose core runs on another machine, into the core's machine and the node's own window's gateway | `hided/src/server.rs`, `hided/src/file_url.rs`, `hided/src/workspace_cli.rs`, `hided/src/browser_control.rs`, `hided/src/browser_relay.rs`, `hided/src/browser_routes.rs`, `hided/src/node_pages.rs`, `hided/src/node_browser.rs`, `hided/src/browser_assets.rs` |
 | The web shell | Where each page sits, since only it has the geometry, the toolbar, the overlay freeze, and the notice in a plain browser tab | `web/src/BrowserDisplay.tsx`, `web/src/browserViews.ts`, `web/src/host.ts` |
-| The desktop app | The pages: one `WebContentsView` per display it was asked to show, their navigation, route requests, and their lifetime | `desktop/src/main/browser.ts`, `desktop/src/main/browserSync.ts`, `desktop/src/main/host.ts`, `desktop/src/preload/index.ts` |
+| The desktop app | The pages: one `WebContentsView` per display it was asked to show, their navigation, route requests, and their lifetime, including when a hidden one is unloaded | `desktop/src/main/browser.ts`, `desktop/src/main/browserSync.ts`, `desktop/src/main/host.ts`, `desktop/src/preload/index.ts` |
 
 The core never loads a page and the desktop app never decides which displays exist.
 The core's Browser View inventory is sent as an empty array when the last page closes, so the native host removes that page even when no other Browser View remains.
@@ -26,8 +26,10 @@ Only checkouts in the current connected catalog contribute to that inventory; a 
 - `hide browser open <url-or-path> [--beside] [--wait] [--request-id <id>]` from a shell the daemon can bind to a checkout: a connected Herdr pane, or a local process whose working directory is inside a registered checkout (`docs/ARCHITECTURE.md`, hided and the WebSocket boundary).
   The CLI resolves a relative file on the calling machine, gives loopback hosts `http` and other hosts `https`, and submits one action scoped to the caller's checkout with no Workspace override.
   The core checks an HTML file against that checkout on its own device and reads it outside the core lock before placing its Browser View.
-  The action result confirms View placement, while `hide view status <view-id>` returns `pending`, `loading`, `loaded`, `failed`, `disconnected`, or `unsupported` for its native page.
-  `disconnected` means a native page existed for that load but was removed or its desktop renderer disconnected; `unsupported` means no desktop renderer was available for a pending page.
+  The action result confirms View placement, while `hide view status <view-id>` returns `pending`, `loading`, `loaded`, `failed`, `unloaded`, `disconnected`, or `unsupported` for its native page.
+  `unloaded` means the desktop app closed that load's page to give its memory back ([Unloading hidden pages](#unloading-hidden-pages)); it loads again when shown or when an agent drives it.
+  `disconnected` means no desktop renderer is attached for a page that had loaded; `unsupported` means no desktop renderer was available for a pending page.
+  `--wait` ends with `page_unloaded` for an unloaded page, which a `hide browser` command on it loads again.
   On the checkout on screen, only an open from the pane the operator is in, the selected pane of the front Workspace, brings the page to the front of its area and calls the lane.
   Another pane there, of the same tab or another, adds its page to the checkout's one list, in the area it lands in and behind the one in front, and moves no tab, checkout or keyboard; the same address opened from two tabs is one page, so the operator's page and load stay unchanged.
   On a checkout not on screen, a pane of its active tab brings its page to the front of that checkout, where it loads and can be driven, and a pane of another tab adds it behind; neither calls the lane or moves the screen.
@@ -71,6 +73,7 @@ A remote `file:` address is loaded through a checkout-scoped route, never as a f
 `hide browser connect [--display <id>]` uses the caller's existing Workspace credential and prints a JSON result with `cdp_http_url` and `browser_ws_url`.
 It accepts no Workspace override and requires a connected desktop renderer.
 An explicit display must be a browser in that credential's checkout; an omitted display uses that checkout's active View area for new targets.
+An explicit display whose web page the desktop app unloaded loads its address again first, hidden, and the connection waits up to five seconds for that load, then drives the page as it is; a page command (`hide browser snapshot` and the rest) connects the same way.
 Discovery does not reveal the Workspace, activate the app, or start a daemon.
 
 The desktop registers one private numeric-loopback gateway address and random control token with hided through daemon-authenticated `/browser-control`.
@@ -409,10 +412,29 @@ The link never reaches the log, since an app link often carries a sign-in code.
 The shell tells the host, in one sync, every browser display of the Workspace in front, the rectangle its slot occupies now, and the core's retained Browser View inventory across all Workspaces and their checkout lists.
 A display the inventory no longer names is closed, which ends its renderer process even when its Workspace is in the background.
 A retained display absent from the current front placements, including a page behind the front, is hidden and keeps its page, so moving a page between areas or Workspaces never reloads it.
-At most 12 pages live at once (`MAX_LIVE_VIEWS`); past that, the page shown least recently among the hidden ones is closed and loads its address again when it is next shown.
+At most 12 pages live at once (`MAX_LIVE_VIEWS`); past that, the page shown least recently among the hidden ones is unloaded, whatever holds it ([Unloading hidden pages](#unloading-hidden-pages)).
 The host checks every field of a sync before it places anything and drops a message that fails whole; only the shell the daemon serves may send one.
 Native page reports carry the display's current load stamp, so a late report from a previous reload cannot mark the new request loaded.
-An evicted page reports its disappearance as disconnected until shown again.
+
+### Unloading hidden pages
+
+A page's renderer holds its memory for as long as it lives, so the desktop app closes a hidden page nobody needs and loads it again when it is wanted (PRD browser-tab-idle-unload).
+A page is unloaded when it has been hidden and idle for 12 hours (`IDLE_UNLOAD_MS`), or when it is the least recently shown hidden page past the 12-page cap.
+Hidden means not drawn in the Hide window: a page in the front Workspace's slot is seen even while the window is minimized or covered, and a page behind a still for an overlay is seen too.
+Idle means nothing that would break if it closed: it plays no media, heard or not, has no download in progress, holds no CDP session (an agent's or Comment's), and has no popup open.
+The 12 hours count from the last time the page was seen or held, so a page whose playback, download, session or popup ends gets 12 more hours from then; the cap ignores what holds a page.
+One check runs each minute while the window is open (`IDLE_CHECK_MS`), reading at most the 12 live pages, and stops with the window; nothing else runs for it.
+
+An unloaded page closes like an evicted one: its renderer ends, its tab and title stay in the View list looking as they did, and the host reports it `gone`, which the core reports as `unloaded` for that load.
+Shown again, it loads its address in place behind the ordinary loading state; its session, so a sign-in, stays, while its scroll position and anything typed into it are gone, and a load that fails shows the ordinary failure with the toolbar's reload.
+An agent's connection to an unloaded web page (`/connect` naming its display) loads it again hidden, without moving the operator's View, area, tab or keyboard (`BrowserViews.cdpRevive`): the host keeps the address, load stamp and size of each unloaded web page whose display the core still retains, follows the address and stamp the front Workspace's sync gives it, and drops them with the display or once the page has loaded.
+A second connection while that load runs waits for the same load, and a capability revoked during the wait is not granted (`503`).
+A page loaded again this way counts as just seen, so the next check does not close it again.
+When that load fails, the connection is refused with `Display page failed to load`, the View reports `failed`, and the next connection loads it again; so does a load that fails after the five-second wait.
+A display in a background Workspace whose load the core moved while its page was unloaded keeps the stamp the host last saw, so loading it for an agent fails its route until the operator shows the display once.
+A file page or an outside file is not loaded again for an agent, since neither enters CDP; it loads when shown.
+A page the core has not yet seen since the app started stays `pending`, as before, until it is shown.
+Each unload is logged as `browser.unloaded {id, reason: idle | cap}` and each load for an agent as `browser.reloaded_for_agent {id}`; neither names the address.
 
 ## Keyboard ownership and cycling
 
