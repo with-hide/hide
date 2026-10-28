@@ -1679,7 +1679,7 @@ fn a_pane_close_takes_its_sessions_views_once_it_completes() {
 /// first lines, and follows the View list as one closes; a plain shell's and
 /// the operator's Views, and another session's, are not the record's.
 #[test]
-fn a_session_record_lists_the_views_its_session_tree_opened() {
+fn a_session_record_lists_the_outputs_its_session_tree_opened() {
     use crate::links::ledger::{SessionIdentity, SessionRecord, SessionRecordSnapshot};
     let (mut runtime, checkout, directory) = setup("record-views");
     let mut payload = tab_order_payload(&directory.to_string_lossy(), &TABS, &TABS, TABS[0]);
@@ -1705,6 +1705,18 @@ fn a_session_record_lists_the_views_its_session_tree_opened() {
     control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", false, "a");
     control_file(&mut runtime, "w-order:t2:p", &directory, "b.md", false, "b");
     control_file(&mut runtime, "w-order:t3:p", &directory, "c.md", false, "c");
+    // Source code and a log the session only opened are not its outputs.
+    for (file, suffix) in [("main.rs", "rs"), ("build.log", "log")] {
+        std::fs::write(directory.join(file), "fn main() {}\n").expect("fixture");
+        control_file(
+            &mut runtime,
+            "w-order:t1:p",
+            &directory,
+            file,
+            false,
+            suffix,
+        );
+    }
     open(&mut runtime, &checkout, &directory, "d.md");
     let session = |id: &str| SessionIdentity {
         device_id: crate::node::TEST_NODE.into(),

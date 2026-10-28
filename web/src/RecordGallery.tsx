@@ -64,10 +64,9 @@ function Row({ tile, actions }: { tile: GalleryTile; actions: Actions }) {
   </button>;
 }
 
-/** The View's kind as its tab draws it: a page's globe, a diff's ±, a file's type. */
+/** The View's kind as its tab draws it: a page's globe, a file's type. */
 function Mark({ view }: { view: RecordView }) {
   if (view.kind === "browser") return <GlobeIcon aria-hidden="true" className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />;
-  if (view.kind === "diff") return <span aria-hidden="true" className="w-(--size-icon-sm) shrink-0 text-center font-mono text-warning">±</span>;
   return <FileMark icon={fileIcon(view.label)} className="size-(--size-icon-sm)" />;
 }
 

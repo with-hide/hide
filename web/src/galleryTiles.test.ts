@@ -15,7 +15,7 @@ it("gives a thumbnail only to an image and a page this window holds a capture of
   expect(picture(view("b.webp"))).toBe("image");
   expect(picture(view("captured", { kind: "browser", path: "", url: "https://example.invalid" }))).toBe("still");
   expect(picture(view("uncaptured", { kind: "browser", path: "", url: "https://example.invalid" }))).toBe("row");
-  for (const other of [view("c.md", { document_kind: "markdown", lines: ["# c"] }), view("e.pdf", { document_kind: "pdf" }), view("f", { kind: "diff" }), view("g", { kind: "external", path: "" })]) expect(picture(other)).toBe("row");
+  for (const other of [view("c.md", { document_kind: "markdown", lines: ["# c"] }), view("e.pdf", { document_kind: "pdf" }), view("g", { kind: "external", path: "" })]) expect(picture(other)).toBe("row");
   expect(pictureOf({ kind: "artifact", name: "Release notes" }, still)).toBeNull();
 });
 

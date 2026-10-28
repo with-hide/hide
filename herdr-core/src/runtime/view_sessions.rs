@@ -569,9 +569,9 @@ impl Runtime {
         self.snapshot.session_record = Some(Arc::new(next));
     }
 
-    /// The Views `record`'s session and its descendants opened, in every
-    /// checkout's list, the one looked at last first, each once; past
-    /// `RECORD_VIEWS` only counted. A session is found by its native session,
+    /// The outputs among the Views `record`'s session and its descendants
+    /// opened (`is_output`), in every checkout's list, the one looked at last
+    /// first, each once; past `RECORD_VIEWS` only counted. A session is found by its native session,
     /// as `hide view list --session` finds it, on its own machine.
     fn record_views(
         &self,
@@ -607,6 +607,9 @@ impl Runtime {
         let layouts: Vec<(WorkspaceKey, &Layout)> = self.every_view_layout().collect();
         for (key, layout) in &layouts {
             for display in layout.displays() {
+                if !is_output(display) {
+                    continue;
+                }
                 let Some(session) = whose(display) else {
                     continue;
                 };
@@ -672,6 +675,46 @@ impl Runtime {
         (views, omitted)
     }
 }
+
+/// Whether a View is a 결과물, something made for a person to look at, by
+/// its kind and, for a file, its extension: a page always, a diff never, a
+/// file when `OUTPUT_EXTENSIONS` names its extension. A source file, a log or
+/// a configuration file the agent only opened is not one. Interim until the
+/// agent names its outputs itself (`hide output add`, Desk phase 2).
+fn is_output(display: &Display) -> bool {
+    use crate::view_layout::DisplayKind;
+    let name = match display.kind {
+        DisplayKind::Browser => return true,
+        DisplayKind::Diff => return false,
+        DisplayKind::File => hide_platform::path::wire_name(&display.path),
+        DisplayKind::External => match &display.external {
+            Some(file) => file.name.as_str(),
+            None => return false,
+        },
+    };
+    name.rsplit_once('.').is_some_and(|(stem, extension)| {
+        !stem.is_empty()
+            && OUTPUT_EXTENSIONS
+                .iter()
+                .flat_map(|(_, extensions)| extensions.iter())
+                .any(|output| output.eq_ignore_ascii_case(extension))
+    })
+}
+
+/// The files that are a 결과물, by extension: each row a kind of output.
+const OUTPUT_EXTENSIONS: &[(&str, &[&str])] = &[
+    (
+        "image",
+        &["png", "jpg", "jpeg", "gif", "webp", "bmp", "avif", "svg"],
+    ),
+    ("pdf", &["pdf"]),
+    ("video", &["mp4", "webm", "mov"]),
+    ("board", &["pen", "excalidraw", "tldraw", "drawio"]),
+    (
+        "document",
+        &["md", "markdown", "mdx", "html", "htm", "txt", "rst", "adoc"],
+    ),
+];
 
 /// Views one record lists; the rest are counted, not sent.
 const RECORD_VIEWS: usize = 64;

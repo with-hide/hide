@@ -551,7 +551,7 @@ it("draws an image as a thumbnail and every View with no picture as a compact ro
     view("doc", { checkout_path: checkout.path, path: `${checkout.path}/docs/doc.md`, lines: ["", "# Menu PRD", "body"] }),
     view("page", { kind: "browser", path: "", label: "Menu preview", url: "http://localhost:5173/menu", document_kind: undefined, lines: undefined }),
     view("shot", { label: "after.png", path: "/fixture/checkout/after.png", document_kind: "image", lines: undefined }),
-    view("child-diff", { kind: "diff", label: "menu.ts (working diff)", path: "/fixture/checkout/web/src/menu.ts", document_kind: undefined, lines: undefined, session: CHILD }),
+    view("child-board", { label: "menu.excalidraw", path: "/fixture/checkout/design/menu.excalidraw", document_kind: undefined, lines: undefined, session: CHILD }),
     view("e"), view("f"),
   ];
   const record = { ...BASE, artifacts: ["Release notes"] };
@@ -562,10 +562,10 @@ it("draws an image as a thumbnail and every View with no picture as a compact ro
     expect(gallery.getAttribute("data-record-gallery")).toBe("7");
     const kinds = () => [...gallery.querySelectorAll("[data-record-view]")].map((tile) => `${tile.getAttribute("data-record-view")}:${tile.getAttribute("data-record-view-thumb")}`);
     // A page this window took no capture of is a row with its address.
-    expect(kinds()).toEqual(["shot:image", "doc:row", "page:row", "child-diff:row", "e:row"]);
+    expect(kinds()).toEqual(["shot:image", "doc:row", "page:row", "child-board:row", "e:row"]);
     expect(text(gallery.querySelector('[data-record-view="doc"] [data-record-view-detail]'))).toBe("Menu PRD");
     expect(text(gallery.querySelector('[data-record-view="page"] [data-record-view-detail]'))).toBe("localhost:5173/menu");
-    expect(text(gallery.querySelector('[data-record-view="child-diff"] [data-record-view-detail]'))).toBe("web/src");
+    expect(text(gallery.querySelector('[data-record-view="child-board"] [data-record-view-detail]'))).toBe("design");
     const more = gallery.querySelector<HTMLButtonElement>("[data-record-gallery-more]")!;
     expect(more.getAttribute("data-record-gallery-more")).toBe("2");
     await act(async () => more.click());
