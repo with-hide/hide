@@ -6491,13 +6491,18 @@ pub struct BackgroundAiSnapshot {
     /// without a model, and the first agent that is switched on and signed in
     /// is chosen by itself (D-18, D-27).
     pub provider: Option<String>,
+    /// The connected device `provider` runs on; `None` is the core's own
+    /// machine (PRD wsl-device B11).
+    pub device: Option<String>,
     /// Whether `provider` is a stored choice.
     pub chosen: bool,
     /// The `에이전트 요약` switch: agent labels are asked for and shown.
     pub agent_summary: bool,
     /// One row per agent Hide AI knows, in the fixed order. An agent that is
     /// not on this Mac is still a row, because "not here" and "not signed in"
-    /// are different answers.
+    /// are different answers. The rows of the agents on each connected device
+    /// follow, keyed by `device_id`, and an agent placed on a device that is
+    /// not connected has a row that says it cannot answer.
     pub providers: Vec<BackgroundAiProviderSnapshot>,
     /// The agents tried, in this order, when `provider` cannot answer; empty
     /// until the operator adds one (D-16).
@@ -6536,6 +6541,9 @@ impl BackgroundAiSnapshot {
 pub struct BackgroundAiProviderSnapshot {
     /// The provider layer's own id, such as `codex`.
     pub id: String,
+    /// The connected device this row's agent runs on; `None` is the core's
+    /// own machine (PRD wsl-device B11).
+    pub device_id: Option<String>,
     pub label: String,
     /// The id the Agents tab and the logos key the same agent by: the kit's
     /// adapter id (`claude-code`, `codex`, `grok`, `opencode`, `pi`,
@@ -6613,6 +6621,8 @@ impl BackgroundAiProviderSnapshot {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct BackgroundAiFallbackSnapshot {
     pub provider: String,
+    /// The connected device it runs on; `None` is the core's own machine.
+    pub device: Option<String>,
     /// The model it is asked for; empty is the CLI's default.
     pub model: String,
 }

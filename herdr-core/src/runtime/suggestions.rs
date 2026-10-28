@@ -772,7 +772,7 @@ impl Sink for RuntimeSink {
 /// operator's Hide AI and the folders the Project may be read in.
 struct InvestigationParts {
     settings: hide_ai::AiSettings,
-    own_node: Arc<dyn crate::node_access::NodeLink>,
+    machines: crate::ai::AiMachines,
     gate: Arc<hide_ai::UsageLimits>,
     usage: Arc<dyn hide_ai::AiUsageSink>,
     memory: PathBuf,
@@ -801,7 +801,7 @@ impl Runtime {
             .collect();
         Some(InvestigationParts {
             settings: self.ai_settings.clone()?,
-            own_node: self.own_node(),
+            machines: self.ai_machines(),
             gate: self.usage_gate(),
             usage: self.ai_usage(),
             memory: self.memory_database_path(),
@@ -828,7 +828,7 @@ pub(super) fn analysis_factory(runtime: Weak<Mutex<Runtime>>) -> AnalysisFactory
             return Box::new(TagGrouping) as Box<dyn Analysis>;
         };
         let router = Arc::new(crate::ai::memory_router(
-            &parts.own_node,
+            &parts.machines,
             &parts.settings,
             &parts.gate,
             &parts.usage,

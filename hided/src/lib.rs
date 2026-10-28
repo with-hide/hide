@@ -34,6 +34,7 @@ pub mod node_cli;
 pub mod node_daemon;
 pub mod node_pages;
 pub mod node_uploads;
+pub mod page_forward;
 pub mod plan_cli;
 
 mod hook_request;

@@ -1302,6 +1302,11 @@ pub(super) struct AiSettingsPayload {
     /// An agent to take out of that list.
     #[serde(default)]
     pub(super) fallback_remove: Option<String>,
+    /// The connected device the agent `provider` or `fallback_add` names
+    /// runs on, whichever the event carries; absent or empty is the core's
+    /// own machine (PRD wsl-device B11).
+    #[serde(default)]
+    pub(super) device: Option<String>,
     /// The Usage limit (PRD hide-ai-usage-limit D-01): a percent from 1 to
     /// 100, or `"none"`. A value that is neither is refused with the event.
     #[serde(default)]

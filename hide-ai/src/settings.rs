@@ -57,6 +57,13 @@ pub struct AiSettings {
     /// for every feature Hide AI starts on its own; absent from the file it
     /// is 90%, and it is written only when the operator chose another.
     pub usage_limit: UsageLimit,
+    /// The connected device each agent runs on, by the agent's id: an agent
+    /// with no entry runs on the core's own machine (PRD wsl-device B11).
+    /// One machine per agent, so Runs on and a fallback entry never name the
+    /// same agent twice. The key is a string so an entry for an agent a newer
+    /// Hide knows survives this build's rewrite; written only when an agent
+    /// runs on a device.
+    pub machines: BTreeMap<String, String>,
 }
 
 /// One agent the operator added under "If <Runs on> can't answer".
@@ -88,6 +95,8 @@ struct RawSettingsOut {
     fallback: Vec<FallbackEntry>,
     #[serde(skip_serializing_if = "UsageLimit::is_default")]
     usage_limit: UsageLimit,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    machines: BTreeMap<String, String>,
 }
 
 impl From<AiSettings> for RawSettingsOut {
@@ -99,6 +108,7 @@ impl From<AiSettings> for RawSettingsOut {
             enabled: settings.enabled,
             fallback: settings.fallback,
             usage_limit: settings.usage_limit,
+            machines: settings.machines,
         }
     }
 }
@@ -118,6 +128,8 @@ struct RawSettings {
     fallback: Vec<RawFallback>,
     #[serde(default)]
     usage_limit: UsageLimit,
+    #[serde(default)]
+    machines: BTreeMap<String, String>,
 }
 
 #[derive(Deserialize)]
@@ -138,6 +150,12 @@ impl From<RawSettings> for AiSettings {
             enabled: raw.enabled,
             fallback: Vec::new(),
             usage_limit: raw.usage_limit,
+            // An empty device id names no device: the core's machine.
+            machines: raw
+                .machines
+                .into_iter()
+                .filter(|(_, device)| !device.is_empty())
+                .collect(),
         };
         for entry in raw.fallback {
             if let Some(entry_provider) = ProviderId::from_id(&entry.provider) {
@@ -170,6 +188,7 @@ impl Default for AiSettings {
             enabled: on(),
             fallback: Vec::new(),
             usage_limit: UsageLimit::default(),
+            machines: BTreeMap::new(),
         }
     }
 }
@@ -203,6 +222,33 @@ impl AiSettings {
     pub fn set_model(&mut self, provider: ProviderId, model: impl Into<String>) {
         self.models
             .insert(provider.as_str().to_owned(), model.into());
+    }
+
+    /// The device `provider` runs on; `None` is the core's own machine.
+    pub fn machine(&self, provider: ProviderId) -> Option<&str> {
+        self.machines.get(provider.as_str()).map(String::as_str)
+    }
+
+    /// Places `provider` on a connected device, or with `None` on the core's
+    /// own machine, wherever it is in the order.
+    pub fn place(&mut self, provider: ProviderId, device: Option<String>) {
+        match device.filter(|device| !device.is_empty()) {
+            Some(device) => {
+                self.machines.insert(provider.as_str().to_owned(), device);
+            }
+            None => {
+                self.machines.remove(provider.as_str());
+            }
+        }
+    }
+
+    /// The device each agent this build knows runs on, for the agents placed
+    /// on one; every other agent runs on the core's own machine.
+    pub fn machines_by_provider(&self) -> BTreeMap<ProviderId, String> {
+        PROVIDERS
+            .iter()
+            .filter_map(|provider| Some((*provider, self.machine(*provider)?.to_owned())))
+            .collect()
     }
 
     /// The model each provider's backend is built with: a fallback agent with
@@ -302,12 +348,14 @@ impl AiSettings {
     }
 
     /// Whether a router built for `other` asks the same agents, in the same
-    /// order, for the same models as one built for this value. Whoever holds
+    /// order, for the same models, on the same machines as one built for this
+    /// value. Whoever holds
     /// a router across a settings change compares with this, so a removed
     /// fallback agent stops receiving text and an added one is tried.
     pub fn routes_like(&self, other: &Self) -> bool {
         self.router_config().priority == other.router_config().priority
             && self.models_by_provider() == other.models_by_provider()
+            && self.machines_by_provider() == other.machines_by_provider()
     }
 
     /// The agent a first run should start on: the first of the fixed order
@@ -834,6 +882,35 @@ mod tests {
             "a saved choice reads as chosen"
         );
         std::fs::remove_dir_all(home).expect("the temporary home is removable");
+    }
+
+    /// PRD wsl-device B11: an agent placed on a device keeps that place
+    /// through a save, an older file reads every agent on the core's machine,
+    /// and a router held across a move of an agent to another machine is
+    /// rebuilt.
+    #[test]
+    fn an_agent_placed_on_a_device_stays_there_and_an_older_file_runs_everything_here() {
+        let older: AiSettings =
+            serde_json::from_str(r#"{"provider":"claude","models":{}}"#).unwrap();
+        assert!(older.machines_by_provider().is_empty());
+        let written = serde_json::to_string(&older).unwrap();
+        assert!(!written.contains("machines"), "{written}");
+
+        let mut placed = older.clone();
+        placed.set_provider(ProviderId::CLAUDE);
+        placed.place(ProviderId::CLAUDE, Some("wsl-ubuntu".to_owned()));
+        assert_eq!(placed.machine(ProviderId::CLAUDE), Some("wsl-ubuntu"));
+        assert!(
+            !placed.routes_like(&older),
+            "the agent moved to another machine"
+        );
+        let reread: AiSettings =
+            serde_json::from_str(&serde_json::to_string(&placed).unwrap()).unwrap();
+        assert_eq!(reread, placed);
+
+        placed.place(ProviderId::CLAUDE, None);
+        assert_eq!(placed.machine(ProviderId::CLAUDE), None);
+        assert!(placed.routes_like(&older));
     }
 
     /// The PR summary feature was removed (PRD pr-card-and-session-record-redesign

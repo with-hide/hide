@@ -5,7 +5,7 @@ import { Button } from "../components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "../components/ui/dropdown-menu";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Group, Row } from "../components/settings-rows";
-import { CLI_DEFAULT, addableProviders, modelChoices, modelToValue, providerById, unusableProviders, valueToModel } from "../hideAi";
+import { CLI_DEFAULT, addableProviders, modelChoices, modelToValue, providerById, rowKey, unusableProviders, valueToModel } from "../hideAi";
 import { useInterfaceTranslation } from "../i18n/client";
 import type { AiProvider, BackgroundAi } from "../snapshot";
 import { ProviderState, useHideAiWords } from "./hideAiParts";
@@ -19,13 +19,15 @@ import { ProviderState, useHideAiWords } from "./hideAiParts";
  */
 export function HideAiFallback({ ai, actions, onChange }: { ai: BackgroundAi; actions: Actions; onChange: () => void }) {
   const { t } = useInterfaceTranslation();
+  const { name } = useHideAiWords();
   const chosen = providerById(ai, ai.provider);
   if (!chosen) return null;
   const entries = ai.fallback ?? [];
+  const agent = name(chosen);
   return (
     <Group
-      title={t("hideAi.fallbackTitle", { agent: chosen.label })}
-      note={[t("hideAi.fallbackNote", { agent: chosen.label }), entries.length === 0 ? t("hideAi.fallbackEmpty", { agent: chosen.label }) : null].filter(Boolean).join(" ")}
+      title={t("hideAi.fallbackTitle", { agent })}
+      note={[t("hideAi.fallbackNote", { agent }), entries.length === 0 ? t("hideAi.fallbackEmpty", { agent }) : null].filter(Boolean).join(" ")}
       data-settings-group="hide-ai-fallback"
     >
       {entries.map((entry, index) => {
@@ -39,6 +41,7 @@ export function HideAiFallback({ ai, actions, onChange }: { ai: BackgroundAi; ac
 
 function FallbackRow({ index, provider, model, actions, onChange }: { index: number; provider: AiProvider; model: string; actions: Actions; onChange: () => void }) {
   const { t } = useInterfaceTranslation();
+  const { name } = useHideAiWords();
   const choices = modelChoices(provider, model);
   return (
     <Row
@@ -49,7 +52,7 @@ function FallbackRow({ index, provider, model, actions, onChange }: { index: num
             {index + 1}
           </span>
           <AgentLogo agent={provider.agent} label={provider.label} />
-          <span className="min-w-0 break-words">{provider.label}</span>
+          <span className="min-w-0 break-words">{name(provider)}</span>
         </span>
       }
     >
@@ -62,7 +65,7 @@ function FallbackRow({ index, provider, model, actions, onChange }: { index: num
           actions.chooseAi(provider.id, valueToModel(value));
         }}
       >
-        <SelectTrigger aria-label={t("hideAi.fallbackModelAria", { agent: provider.label })} data-ai-fallback-model={provider.id}>
+        <SelectTrigger aria-label={t("hideAi.fallbackModelAria", { agent: name(provider) })} data-ai-fallback-model={provider.id}>
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -76,7 +79,7 @@ function FallbackRow({ index, provider, model, actions, onChange }: { index: num
       <Button
         variant="ghost"
         size="icon-sm"
-        aria-label={t("hideAi.removeAria", { agent: provider.label })}
+        aria-label={t("hideAi.removeAria", { agent: name(provider) })}
         data-ai-fallback-remove={provider.id}
         onClick={() => {
           onChange();
@@ -96,7 +99,7 @@ function FallbackRow({ index, provider, model, actions, onChange }: { index: num
  */
 function AddAgent({ ai, actions, onChange }: { ai: BackgroundAi; actions: Actions; onChange: () => void }) {
   const { t } = useInterfaceTranslation();
-  const { state } = useHideAiWords();
+  const { name, state } = useHideAiWords();
   const addable = addableProviders(ai);
   const unusable = unusableProviders(ai);
   return (
@@ -111,24 +114,24 @@ function AddAgent({ ai, actions, onChange }: { ai: BackgroundAi; actions: Action
         <DropdownMenuContent align="end" data-ai-add-menu="true">
           {addable.map((provider) => (
             <DropdownMenuItem
-              key={provider.id}
-              data-ai-add-item={provider.id}
+              key={rowKey(provider)}
+              data-ai-add-item={rowKey(provider)}
               onSelect={() => {
                 onChange();
-                actions.addAiFallback(provider.id);
+                actions.addAiFallback(provider.id, provider.device_id ?? null);
               }}
             >
               <AgentLogo agent={provider.agent} label={provider.label} />
-              <span className="min-w-0 flex-1">{provider.label}</span>
+              <span className="min-w-0 flex-1">{name(provider)}</span>
               <span className="text-caption text-muted-foreground">{state(provider).text}</span>
             </DropdownMenuItem>
           ))}
           {addable.length > 0 && unusable.length > 0 ? <DropdownMenuSeparator /> : null}
           {unusable.length > 0 ? <DropdownMenuLabel>{t("hideAi.cantUse")}</DropdownMenuLabel> : null}
           {unusable.map((provider) => (
-            <DropdownMenuItem key={provider.id} disabled data-ai-unusable-item={provider.id}>
+            <DropdownMenuItem key={rowKey(provider)} disabled data-ai-unusable-item={rowKey(provider)}>
               <AgentLogo agent={provider.agent} label={provider.label} />
-              <span className="min-w-0 flex-1">{provider.label}</span>
+              <span className="min-w-0 flex-1">{name(provider)}</span>
               <span className="text-caption text-muted-foreground">{state(provider).text}</span>
             </DropdownMenuItem>
           ))}

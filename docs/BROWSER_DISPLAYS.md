@@ -10,7 +10,7 @@ There is no Herdr browser pane and no chromux profile behind it, and nothing is 
 | Owner | Holds | Code |
 | --- | --- | --- |
 | The core | Browser View layout, requested address and load stamp, and the native page's reported loading state | `herdr-core/src/view_layout.rs`, `herdr-core/src/runtime/view_areas.rs`, `herdr-core/src/runtime/workspace_control.rs` |
-| hided | The local `file:` event boundary, checkout-scoped Browser commands and gateway discovery, and native routes into consented SSH devices and, on a node whose core runs on another machine, into the core's machine and the node's own window's gateway | `hided/src/server.rs`, `hided/src/file_url.rs`, `hided/src/workspace_cli.rs`, `hided/src/browser_control.rs`, `hided/src/browser_relay.rs`, `hided/src/browser_routes.rs`, `hided/src/node_pages.rs`, `hided/src/node_browser.rs`, `hided/src/browser_assets.rs` |
+| hided | The local `file:` event boundary, checkout-scoped Browser commands and gateway discovery, and native routes into connected devices over their node links and, on a node whose core runs on another machine, into the core's machine and the node's own window's gateway | `hided/src/server.rs`, `hided/src/file_url.rs`, `hided/src/workspace_cli.rs`, `hided/src/browser_control.rs`, `hided/src/browser_relay.rs`, `hided/src/browser_routes.rs`, `hided/src/page_forward.rs`, `hided/src/node_pages.rs`, `hided/src/node_browser.rs`, `hided/src/browser_assets.rs` |
 | The web shell | Where each page sits, since only it has the geometry, the toolbar, the overlay freeze, and the notice in a plain browser tab | `web/src/BrowserDisplay.tsx`, `web/src/browserViews.ts`, `web/src/host.ts` |
 | The desktop app | The pages: one `WebContentsView` per display it was asked to show, their navigation, route requests, and their lifetime, including when a hidden one is unloaded | `desktop/src/main/browser.ts`, `desktop/src/main/browserSync.ts`, `desktop/src/main/host.ts`, `desktop/src/preload/index.ts` |
 
@@ -345,23 +345,22 @@ The channel pins the checkout root, refuses traversal and links outside that roo
 The route serves the opened HTML plus at most 128 declared relative stylesheets, images, scripts, and CSS image or font URLs.
 It refuses undeclared checkout files, including same-directory secrets, and sends a restrictive content security policy that prevents a remote HTML preview from contacting another origin.
 The native page receives a random loopback route for its own View and load stamp; the route URL does not replace the remote address stored in the core or shown in the toolbar.
-Remote `localhost`, `localhost.`, IPv4 `127/8`, IPv6 loopback, and IPv4-mapped IPv6 loopback HTTP, HTTPS, and WebSocket traffic instead uses a dedicated SSH local forward to that device's loopback port, whose channels open on the device's one SSH connection.
+Remote `localhost`, `localhost.`, IPv4 `127/8`, IPv6 loopback, and IPv4-mapped IPv6 loopback HTTP, HTTPS, and WebSocket traffic instead uses a dedicated forward to that device's loopback port through the device's node link, whichever link the device has (an SSH device, a node that dialed in, a WSL device): each connection to the forward is one link stream that the node connects to its own loopback (`hided/src/page_forward.rs`, `LinkEnd::Loopback`), and the node refuses any address that is not loopback.
 The native route binds a local loopback IP and uses its actual local port.
-For `localhost`, the forward reserves both IPv4 and IPv6 loopback at that port before publishing the route, so either resolver choice reaches the SSH device.
+For `localhost`, the forward reserves both IPv4 and IPv6 loopback at that port before publishing the route, and a stream the node cannot connect to the first address tries the other, so either resolver choice reaches the device.
 HTTPS keeps the source hostname or numeric loopback IP in the browser URL for certificate checks.
 If this Mac cannot bind a numeric source IP for an HTTPS forward, the route fails explicitly.
 The wildcard spelling `0.0.0.0` uses `127.0.0.1` as its safe local destination and a certificate for the wildcard name may fail validation.
 The remote source address remains in the Browser toolbar.
 Absolute loopback subrequests from a forwarded page use that View's forward when their scheme and source port match; other loopback requests are refused instead of reaching this Mac.
-If the SSH route fails, the page shows the failure; it never tries the same port on this Mac.
-Each native route is bounded, belongs to the desktop process that requested it, and closes when its View closes, its device disconnects, or that process exits.
-Closing a route cancels its pending SSH channel open and its active transfer tasks before releasing both local listeners.
-An individual SSH channel open has a 15-second limit, including the alternate localhost address attempt.
-Creating a route reserves its View and load briefly, then connects to SSH outside the route registry lock.
-Other Views can close while that connection is pending, and a canceled or superseded reservation cannot publish a late forward.
-The complete SSH connection and authentication attempt has a 15-second limit.
-Closing a pending View cancels its SSH connection, and at most four route builds may be in flight even when Views are repeatedly opened and closed.
-Cancellation during SSH key exchange also shuts down the TCP socket before a session handle exists, so the connection cannot outlive its build permit.
+If the route fails, the page shows the failure; it never tries the same port on this Mac.
+Each native route is bounded, belongs to the desktop process that requested it, and closes when its View closes, its device's link ends, or that process exits.
+A forward carries at most 16 connections at once and a link at most 32 page streams; a connection past either is closed, and the first refusal a forward meets is logged (`page_forward` `stream.refused`).
+Closing a route aborts its connections, which closes each one's stream on the node, before releasing both local listeners.
+A route whose link ended is not reused: the next resolve builds it again on the device's current link, and the reaper releases it within two seconds.
+A device whose link is down answers `host_unavailable` without being woken.
+Creating a route reserves its View and load briefly, then builds it outside the route registry lock.
+Other Views can close while that build is pending, and a canceled or superseded reservation cannot publish a late forward; at most four route builds may be in flight even when Views are repeatedly opened and closed.
 
 ### A screen whose core runs on another machine
 
@@ -397,7 +396,7 @@ A `file:` page that moves to a file outside the checkouts keeps showing it in it
 
 Web pages in every Workspace share one persistent session for logins, cookies, origin storage and zoom.
 Remote loopback pages use a persistent session per device, and HTML file previews keep a separate session per Workspace; none uses the shell's session.
-This keeps localhost cookies of this Mac, each SSH device, and remote HTML previews apart even when their host names are equal.
+This keeps localhost cookies of this Mac, each device, and remote HTML previews apart even when their host names are equal.
 Pages run in a sandboxed renderer with context isolation, no Node and no preload, so nothing in a page reaches the `hideHost` bridge or the daemon's token.
 Existing Workspace-specific web sessions are not copied into the shared session, so an upgrade may require one new login per site.
 A page gets no permission but writing the clipboard, because a prompt it would raise has nowhere to show; a download follows Chromium's default and is logged as `browser.download`.
@@ -583,6 +582,7 @@ The spec also replays a native HTML5 drag through the gateway and sees the page 
 Playwright dismisses a dialog no listener handles, so that test listens and answers it the way the operator would.
 `desktop/e2e/remote-browser-agent.spec.ts` runs the same snapshot and click from a device pane over the isolated SSH server, and the Workspace commands' `renderer_unavailable` once the desktop is gone.
 `hided/tests/it/remote_core.rs` opens a page on the core's machine from its checkout with no window and with the node's desktop window attached, resolves its route on the node's daemon, reads the core machine's loopback page through the routed address, and sees the route close on release.
+`hided/tests/it/node_contract.rs` (`a_device_page_rides_its_node_link_and_ends_with_it`) reaches a device's loopback server through the page forward over the isolated SSH device's node link, sees dropping the forward close that server's connection on the device, and sees a forward whose link ended reach nothing.
 `desktop/e2e/remote-workspace.spec.ts` additionally uses an isolated SSH server, whose sessions get the private HOME `desktop/e2e/device-home.ts` proves because connecting installs Hide's kit there, and two private Herdr servers to prove remote CLI origin, HTTP and WebSocket forwarding, absolute loopback subrequests, local and remote cookie separation, remote popup address ownership, relative HTML assets, refusal of undeclared files and external requests, a device agent's open staying behind until the operator is on the device, background View cleanup, route cleanup on close and forced candidate exit, and a return route that comes back after the device's helper connection ends and reconnects, with every remote command run through the `hide` Hide installed and linked on the device.
 
 ## Running Workspace servers

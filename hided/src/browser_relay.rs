@@ -142,7 +142,9 @@ pub(crate) async fn connect_through(
 /// The link stream as an async stream: its reads and writes block on the
 /// link, so a thread each moves its bytes through an in-memory pipe, and
 /// either side ending ends the other.
-fn bridge(stream: hide_node::ssh::LinkStream) -> std::io::Result<tokio::io::DuplexStream> {
+pub(crate) fn bridge(
+    stream: hide_node::ssh::LinkStream,
+) -> std::io::Result<tokio::io::DuplexStream> {
     use std::io::{Read, Write};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let (ours, theirs) = tokio::io::duplex(hide_node_link::panes::MAX_CHUNK);

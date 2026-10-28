@@ -216,7 +216,15 @@ use crate::error::HostError;
 /// --log-failed`, answered cut to its end) on the node that holds the
 /// Project (PRD hide-ai-suggestions B7). A helper on 53 would refuse them
 /// as unknown, so it is refused at Hello and upgraded.
-pub const PROTOCOL_VERSION: u32 = 54;
+/// 55: every device link carries what used to need the SSH connection
+/// beside it (PRD wsl-device D-14, B9, B10): a stream to a page server on the
+/// node's own loopback ([`LinkEnd::Loopback`]) and a terminal attachment
+/// staged on the node's machine ([`Call::StageAttachment`],
+/// [`Call::RemoveAttachments`]); and a device answers the Hide AI calls, so
+/// an agent signed in only there runs Hide AI with its own login (D-03,
+/// D-06). A helper on 54 would refuse all three, so it is refused at Hello
+/// and upgraded.
+pub const PROTOCOL_VERSION: u32 = 55;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).
@@ -271,12 +279,13 @@ pub struct ShellLaunch {
     pub env: std::collections::BTreeMap<String, String>,
 }
 
-/// What a link stream the core opens on a node that dialed it reaches on
-/// the node's machine ([`Call::LinkOpen`]).
+/// What a link stream the core opens on a node reaches on the node's
+/// machine ([`Call::LinkOpen`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LinkEnd {
-    /// The node's own Herdr socket (D-18, D-19).
+    /// The node's own Herdr socket (D-18, D-19), on a node that dialed its
+    /// core.
     Herdr,
     /// The browser relay of the node's daemon, which carries a caller's CDP
     /// to the gateway of the desktop window whose registration the daemon
@@ -284,6 +293,11 @@ pub enum LinkEnd {
     /// shows (B15). The stream's first bytes ask for a relay ticket the
     /// node handed out over this link.
     BrowserRelay,
+    /// A server on the node machine's own loopback, which a Browser View of
+    /// the core's machine shows (PRD wsl-device B9): every device's link
+    /// carries it, however the link opened. The node refuses any address
+    /// that is not its loopback.
+    Loopback { address: std::net::SocketAddr },
 }
 
 impl LinkEnd {
@@ -293,7 +307,14 @@ impl LinkEnd {
         match self {
             Self::Herdr => crate::panes::MAX_HERDR_STREAMS,
             Self::BrowserRelay => crate::panes::MAX_BROWSER_STREAMS,
+            Self::Loopback { .. } => crate::panes::MAX_PAGE_STREAMS,
         }
+    }
+
+    /// Whether `other` counts against the same cap: every page stream does,
+    /// whichever port it reaches.
+    pub fn shares_cap(self, other: Self) -> bool {
+        std::mem::discriminant(&self) == std::mem::discriminant(&other)
     }
 }
 
@@ -650,6 +671,24 @@ pub enum Call {
     RemoveClipboard {
         path: String,
     },
+    /// Stages the `index`th of the `count` files of terminal attachment
+    /// `request` on this node's machine, for a pane there, and answers its
+    /// path (PRD wsl-device B10). One file per call keeps a request line
+    /// under the link's line cap. A file already staged at that place with
+    /// the same bytes is kept, so a retry writes nothing twice; other bytes
+    /// there are refused. A request whose files did not all arrive when the
+    /// link ends is removed with it.
+    StageAttachment {
+        request: String,
+        index: usize,
+        count: usize,
+        file: crate::feedback::File,
+    },
+    /// Removes every file attachment `request` staged; one already gone is
+    /// not an error.
+    RemoveAttachments {
+        request: String,
+    },
     /// Ends the job `leader` leads, a pane's foreground job, for agent sleep
     /// (`hide_platform::process::terminate_group`): `SIGTERM` to its process
     /// group on Unix, and on Windows, where Herdr names the job by its first
@@ -959,10 +998,11 @@ impl Call {
     }
 
     /// Whether a device's node answers this request. A device answers the
-    /// work on its own files, repositories, sessions, processes, kit and
-    /// panes; what acts with the operator's own logins (GitHub, the AI
-    /// providers and their usage), the files the operator picked on this
-    /// machine, are the core's own node's, and a device refuses them unrun.
+    /// work on its own files, repositories, sessions, processes, kit, panes
+    /// and the Hide AI agents signed in there; GitHub and the usage reads,
+    /// which act with the core machine's logins, and the files the operator
+    /// picked on the core's machine are the core's own node's, and a device
+    /// refuses them unrun.
     /// The match names every request, so
     /// a new one is decided here before it compiles.
     pub fn answered_by_device(&self) -> bool {
@@ -1047,14 +1087,19 @@ impl Call {
             | Self::LabelLock { .. }
             | Self::LabelUnlock { .. }
             | Self::Feedback { .. }
-            | Self::Cancel { .. } => true,
-            Self::AiAvailability { .. }
+            | Self::StageAttachment { .. }
+            | Self::RemoveAttachments { .. }
+            // An agent signed in on the device runs Hide AI there with its
+            // own login; no credential crosses the link (PRD wsl-device
+            // D-03, D-06).
+            | Self::AiAvailability { .. }
             | Self::AiModels { .. }
             | Self::AiExecute { .. }
             | Self::AiMeasurement { .. }
             | Self::AiRestart { .. }
             | Self::AiRelease { .. }
-            | Self::UsageLimitFetch { .. }
+            | Self::Cancel { .. } => true,
+            Self::UsageLimitFetch { .. }
             | Self::UsagePriceFetch
             | Self::Gh { .. }
             | Self::ReadAttachments { .. }

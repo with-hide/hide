@@ -1431,6 +1431,33 @@ mod omp {
     }
 
     #[test]
+    fn an_omp_fork_starts_when_its_header_past_the_title_slot_says() {
+        // The fixture's first line is the title slot and the session header is
+        // the second; a fork's header time is after the records it copied.
+        let native = Native::new();
+        let mut lines: Vec<serde_json::Value> = fs::read_to_string(&native.path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        assert_eq!(lines[0]["type"], "title");
+        lines[1]["timestamp"] = json!("2030-01-01T00:00:00.000Z");
+        fs::write(
+            &native.path,
+            lines.iter().map(|v| format!("{v}\n")).collect::<String>(),
+        )
+        .unwrap();
+        let project =
+            hide_project::resolve(Path::new(native.request.cwd.as_deref().unwrap()), "local")
+                .unwrap();
+        let catalog = hide_session::SessionCatalog::new(native.home.path(), "local")
+            .project_sessions(&project)
+            .unwrap()
+            .sessions;
+        assert_eq!(catalog[0].started_at_unix_ms, Some(1_893_456_000_000));
+    }
+
+    #[test]
     fn legacy_current_header_wins_over_audit_and_nested_children_never_enter_root_catalog() {
         let native = Native::new();
         let body = fs::read_to_string(&native.path).unwrap();
@@ -2393,6 +2420,20 @@ mod grok {
     }
 
     #[test]
+    fn a_grok_fork_starts_when_its_summary_says_not_at_the_records_it_copied() {
+        // A fork keeps its parent's record times; `summary.json` says when
+        // the fork itself was made.
+        let native = Native::new();
+        native.summary(|summary| summary["created_at"] = json!("2030-01-01T00:00:00.000000Z"));
+        let project = hide_project::resolve(&native.cwd, "local").unwrap();
+        let sessions = SessionCatalog::new(native.home.path(), "local")
+            .project_sessions(&project)
+            .unwrap()
+            .sessions;
+        assert_eq!(sessions[0].started_at_unix_ms, Some(1_893_456_000_000));
+    }
+
+    #[test]
     fn catalog_and_link_reads_list_only_root_conversations() {
         let native = Native::new();
         let child = native
@@ -2722,6 +2763,24 @@ mod pi {
             Some("pi-native-a")
         );
         assert_eq!(linked.facts.session_id.as_deref(), Some("pi-native-a"));
+    }
+
+    #[test]
+    fn a_pi_fork_starts_when_its_header_says_not_at_the_records_it_copied() {
+        // A fork copies its parent's records with their own times; its header
+        // says when the fork itself was made.
+        let native = Native::new();
+        let body = fs::read_to_string(&native.path).unwrap();
+        let (header, records) = body.split_once('\n').unwrap();
+        let mut header: serde_json::Value = serde_json::from_str(header).unwrap();
+        header["timestamp"] = json!("2030-01-01T00:00:00.000Z");
+        fs::write(&native.path, format!("{header}\n{records}")).unwrap();
+        let project = hide_project::resolve(&native.cwd, "local").unwrap();
+        let sessions = SessionCatalog::new(native.home.path(), "local")
+            .project_sessions(&project)
+            .unwrap()
+            .sessions;
+        assert_eq!(sessions[0].started_at_unix_ms, Some(1_893_456_000_000));
     }
 
     #[test]

@@ -60,6 +60,7 @@ mod group_tabs_remote;
 mod guardrails;
 #[path = "tests/herdr_takeover.rs"]
 mod herdr_takeover;
+mod hide_ai_devices;
 #[path = "tests/home.rs"]
 mod home;
 #[path = "tests/inbound.rs"]

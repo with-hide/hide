@@ -662,13 +662,11 @@ pub trait DeviceTransport: Send + Sync {
     fn cached_herdr_socket(&self) -> Option<String> {
         None
     }
-    /// The concrete transport, for the shell that built it and reaches parts
-    /// the core does not use (browser and return-route forwards).
-    fn into_any(self: std::sync::Arc<Self>) -> std::sync::Arc<dyn std::any::Any + Send + Sync>;
 }
 
-/// A device the core dials over SSH: it tests the connection, installs and
-/// starts the device's node, and stages attachments there.
+/// A device the core dials over SSH: it tests the connection, and installs
+/// and starts the device's node. What the core then does on the device goes
+/// through that node's link.
 pub trait DialedTransport: DeviceTransport {
     /// Probes each stage of a connection for the operator's test; `check`
     /// decodes the Herdr stage's snapshot.
@@ -684,16 +682,6 @@ pub trait DialedTransport: DeviceTransport {
         wake: Wake,
         on_close: OnClose,
     ) -> Result<Established, EstablishError>;
-    /// Stages `files` on the device under `request_id`; answers each one's
-    /// path there.
-    fn stage_attachments(
-        &self,
-        request_id: &str,
-        files: &[crate::attachments::AttachmentFile],
-        cancelled: &std::sync::atomic::AtomicBool,
-    ) -> Result<Vec<String>, String>;
-    /// Removes what `request_id` staged.
-    fn remove_attachments(&self, request_id: &str, files: &[crate::attachments::AttachmentFile]);
 }
 
 #[cfg(test)]

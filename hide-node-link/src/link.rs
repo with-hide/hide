@@ -109,6 +109,13 @@ pub trait NodeLink: Send + Sync {
         false
     }
 
+    /// The link as its own type, for the daemon that built it to reach what
+    /// only that type carries, such as a stream to the node's loopback. A
+    /// link that carries no streams answers `None`.
+    fn as_any(&self) -> Option<&(dyn std::any::Any + Send + Sync)> {
+        None
+    }
+
     /// Why the connection ended, once it has; `None` while it takes requests.
     fn closed_reason(&self) -> Option<String> {
         None

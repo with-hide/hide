@@ -1026,6 +1026,10 @@ impl NodeLink for RemoteHost {
         RemoteHost::closed_reason(self)
     }
 
+    fn as_any(&self) -> Option<&(dyn std::any::Any + Send + Sync)> {
+        Some(self)
+    }
+
     fn close(&self, reason: &str) {
         RemoteHost::close(self, reason)
     }

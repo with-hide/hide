@@ -226,11 +226,15 @@ fn serve_in(
     services: Services<'_>,
 ) -> io::Result<()> {
     // A kit step still running when this link ends stops with it, and so
-    // does none of the next link's (a node that dials its core again).
+    // does none of the next link's (a node that dials its core again). The
+    // Hide AI backends the core asked for over this link end with it too,
+    // so a core that links again never finds a resident provider process of
+    // the link before it.
     let env = Env {
         kit: services.kit,
         stop: Arc::default(),
         bridged_herdr: services.herdr_socket.clone(),
+        ai: Arc::default(),
         ..env
     };
     let env = match services.worktree_facts {
@@ -246,6 +250,7 @@ fn serve_in(
     // Ends the heartbeat when the input does.
     let input_ended = (Mutex::new(false), std::sync::Condvar::new());
     let link = crate::link_bridge::LinkBridge::new(services.herdr_socket, services.browser);
+    let staging = crate::attachments::Staging::new(env.state.as_deref(), env.home.as_deref());
     let output = Mutex::new(output);
     // The calls handed to a worker and not yet answered, each with whether
     // it was asked to stop; the reader enters one before handing it over, so
@@ -295,6 +300,7 @@ fn serve_in(
             let env = &env;
             let running = &running;
             let link = &link;
+            let staging = &staging;
             scope.spawn(move || {
                 loop {
                     let request = match receiver.lock().map(|receiver| receiver.recv()) {
@@ -331,6 +337,19 @@ fn serve_in(
                         Call::StreamClose { stream } => panes.close_stream(stream),
                         Call::LinkOpen { stream, end } => link.open(scope, output, stream, end),
                         Call::LinkWrite { stream, data } => link.write(stream, &data),
+                        Call::StageAttachment {
+                            request,
+                            index,
+                            count,
+                            file,
+                        } => staging
+                            .stage(&request, index, count, &file)
+                            .map(Value::from)
+                            .map_err(|reason| HostError::new(ErrorCode::Io, reason)),
+                        Call::RemoveAttachments { request } => staging
+                            .remove(&request)
+                            .map(|()| Value::Null)
+                            .map_err(|reason| HostError::new(ErrorCode::Io, reason)),
                         Call::LinkClose { stream } => {
                             link.close(stream);
                             Ok(Value::Null)
@@ -468,8 +487,10 @@ fn serve_in(
         if let Some(terminals) = terminals {
             terminals.stop();
         }
-        // Each link stream's reader ends with its connection.
+        // Each link stream's reader ends with its connection, and a request
+        // staged in part goes with it, a file being written once it is.
         link.stop();
+        staging.end();
         // The connection is gone: a kit step still running ends its child
         // rather than keep the helper alive after it, and the pane service
         // ends its listener and streams so the scope can close.
@@ -1499,6 +1520,10 @@ pub fn handle_with_progress(
             "Only a device node's link carries its panes' credentials and commands",
         )),
         Call::LinkOpen { end, .. } => Err(crate::link_bridge::unreached(end)),
+        Call::StageAttachment { .. } | Call::RemoveAttachments { .. } => Err(HostError::new(
+            ErrorCode::Unsupported,
+            "A node answered in its core's process stages nothing: its panes take a picked file's own path",
+        )),
         Call::LinkWrite { .. } | Call::LinkClose { .. } => Err(HostError::new(
             ErrorCode::NotFound,
             "This node holds no link streams",

@@ -12,7 +12,9 @@ import {
   modelToValue,
   modelsFailed,
   nobodySignedIn,
+  parseRowKey,
   providerById,
+  rowKey,
   runsOnChoices,
   usageLimitChoices,
   usageLimitOf,
@@ -37,7 +39,7 @@ import { useErrorSince } from "../errorSince";
  */
 export function HideAiTab({ actions }: { actions: Actions }) {
   const { t } = useInterfaceTranslation();
-  const { refusal, signIn } = useHideAiWords();
+  const { name, refusal, signIn } = useHideAiWords();
   const ai = useShellStore((s) => s.rest?.status?.background_ai);
   const kitAgents = useShellStore((s) => s.rest?.navigator?.devices?.find((device) => device.kind !== "remote")?.kit?.agents);
   const issueSettings = useShellStore((s) => s.rest?.ui_state?.issue_settings);
@@ -67,7 +69,7 @@ export function HideAiTab({ actions }: { actions: Actions }) {
       <Note key="paused" tone="warn" data-ai-paused="true">
         {ai.refusal.reason === "past_limit" && everyAgentPast
           ? t("hideAi.pausedAllPast", { limit: ai.refusal.limit ?? "" })
-          : `${refusal(refused.label, ai.refusal)} · ${t("hideAi.paused", { agent: refused.label })}`}
+          : `${refusal(refused, ai.refusal)} · ${t("hideAi.paused", { agent: name(refused) })}`}
       </Note>
     ) : null,
     ai && !selected && nobodySignedIn(ai) ? (
@@ -108,21 +110,23 @@ export function HideAiTab({ actions }: { actions: Actions }) {
         <Group title={t("hideAi.runsOn")} note={t("hideAi.runsOnNote")} data-settings-group="hide-ai-runs-on">
           <Row label={t("hideAi.agent")} detail={agentLines.length > 0 ? <div className="flex flex-col gap-xs">{agentLines}</div> : null}>
             <Select
-              value={ai?.provider ?? undefined}
+              value={selected ? rowKey(selected) : undefined}
               disabled={choices.length === 0}
               onValueChange={(value) => {
                 changed();
-                actions.chooseAi(value);
+                const { provider, device } = parseRowKey(value);
+                actions.chooseAi(provider, undefined, device);
               }}
             >
-              <SelectTrigger aria-label={t("hideAi.agentAria")} data-ai-provider="true">
+              {/* A device agent's name carries its machine (B11), longer than the control's width: the trigger grows to show it whole. */}
+              <SelectTrigger className="w-auto min-w-(--size-settings-control-w)" aria-label={t("hideAi.agentAria")} data-ai-provider="true">
                 <SelectValue placeholder={t("hideAi.choose")} />
               </SelectTrigger>
               <SelectContent>
                 {choices.map((provider) => (
-                  <SelectItem key={provider.id} value={provider.id}>
+                  <SelectItem key={rowKey(provider)} value={rowKey(provider)}>
                     <AgentLogo agent={provider.agent} label={provider.label} />
-                    {provider.label}
+                    {name(provider)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -157,7 +161,7 @@ export function HideAiTab({ actions }: { actions: Actions }) {
             <Row
               label={
                 <Status tone="warn" data-ai-using={answering.id}>
-                  {t("hideAi.using", { using: answering.label, reason: refusal(refused.label, ai.refusal) })}
+                  {t("hideAi.using", { using: name(answering), reason: refusal(refused, ai.refusal) })}
                 </Status>
               }
             />

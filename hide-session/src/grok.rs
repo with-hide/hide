@@ -35,6 +35,9 @@ pub(crate) struct Summary {
     /// The automatic title and the operator's `/rename`, with an empty
     /// string standing for none so a cleared title revokes an older one.
     pub title: (String, String),
+    /// When this session itself was made: a fork's own time, while the
+    /// records it copied keep their parent's.
+    pub created_at_unix_ms: Option<u64>,
 }
 
 /// `urlencoding::encode` of the cwd, which Grok uses as the group name.
@@ -140,6 +143,7 @@ pub(crate) fn summary(path: &Path, read_bytes: &mut u64) -> Result<Summary> {
         id: id.to_owned(),
         cwd,
         title,
+        created_at_unix_ms: crate::timestamp_ms(value.get("created_at")).ok(),
     })
 }
 

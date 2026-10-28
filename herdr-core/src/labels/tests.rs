@@ -257,6 +257,7 @@ impl Harness {
                     Arc::new(NoopLogSink),
                 ))
             }),
+            Box::new(|_| Vec::new()),
             Arc::default(),
         )
         .unwrap();

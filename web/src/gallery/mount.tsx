@@ -22,6 +22,7 @@ import { OverviewScene, overviewSceneParams } from "./OverviewScene";
 import { UsageScene } from "./UsageScene";
 import { ProjectSettingsScene } from "./ProjectSettingsScene";
 import { AddDeviceScene } from "./AddDeviceScene";
+import { HideAiSettingsScene } from "./HideAiSettingsScene";
 import { SessionWorkScene } from "./SessionWorkScene";
 import { PrCardScene } from "./PrCardScene";
 import { CloseTreeScene } from "./CloseTreeScene";
@@ -56,6 +57,11 @@ export function mountGallery(root: Root) {
     if (scene === "add-device") {
       document.title = "hide · Add device scene";
       root.render(<StrictMode><AddDeviceScene params={params} /></StrictMode>);
+      return;
+    }
+    if (scene === "hide-ai-settings") {
+      document.title = "hide · Hide AI settings scene";
+      root.render(<StrictMode><HideAiSettingsScene params={params} /></StrictMode>);
       return;
     }
     if (scene === "close-tree") {
