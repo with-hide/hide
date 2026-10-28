@@ -257,7 +257,7 @@ Hashes are lowercase SHA-256 hex.
 The app ships this small manifest; `desktop/out/release/` receives a copy and both archives alongside the installers and updater files.
 `desktop/out/device-bundles/` keeps the intermediate output, never anything under `/tmp`.
 
-The private publisher must take the two artifacts from the release candidate run it selected, as it takes the Linux and Windows packages, require every helper's SHA-256 to equal the receipt's `device_helpers`, download them into the paths above, then run `pnpm --dir desktop package` with its Developer ID settings; it builds no helper itself.
+The private publisher must take the two artifacts from the release candidate run it selected, as it takes the Linux and Windows packages and [the Mac binaries](#the-candidates-mac-build), require every helper's SHA-256 to equal the receipt's `device_helpers`, download them into the paths above, then run `desktop package assemble` with its Developer ID settings; it builds no helper and compiles no binary itself.
 It must publish both `hide-device-<platform>-<app-version>.tar.gz` assets and `device-bundles.json` on the **same public `v<app-version>` release** as the Mac app.
 Do not re-sign or repack an archive after the manifest is made, and do not substitute output from another source or run.
 The public release validator and draft writer require 18 assets in total: the existing 15 installers, checksums, updater files and blockmaps, plus both Linux bundles and their manifest.
@@ -305,13 +305,14 @@ The command installs nothing; [The Installed App Is The Operator's](../AGENTS.md
 
 `release-candidate.yml` is a manual preparation workflow on protected `main`.
 It creates no tag or release and reads no signing credential.
-Its four required string inputs are `public_sha` (a full lowercase commit SHA), `tag` (`vX.Y.Z` or `vX.Y.Z-rc.N`), `verification_run_id` (the `pr.yml` push/main run of that exact source, queued, running or passed), and `build_order` (a positive decimal integer no larger than 9007199254740991).
+Its four required string inputs are `public_sha` (a full lowercase commit SHA), `tag` (`vX.Y.Z` or `vX.Y.Z-rc.N`), `verification_run_id` (the `pr.yml` push/main run of that exact source, queued, running or passed), and `build_order` (a positive decimal integer no larger than 9007199254740991); `macos_runner` picks where [the Mac binaries](#the-candidates-mac-build) compile, `mini` unless the operator chooses `hosted`.
 The source must already be an ancestor of main; a branch, fork, PR run or different source is refused before building, and so is a verify run that failed or still waits behind another main run (`pending`), which the next push to main replaces.
 The candidate does not wait for that verify run: it may start while the source's push verify runs, and the publish, not the candidate, requires that the run it names concluded success.
 The workflow revision is main's dispatch revision and may differ from the source revision it builds.
 `package.yml`, `device-helpers.yml` and `agent-journey.yml` run their steps from that dispatch revision on the source's checkout, so the workflow refuses a source at which any of them differs from main; choose a newer source instead.
 
 The workflow reuses `package.yml` for unsigned Linux and Windows installers, including their installation, packaged-window and update checks, and for both [Linux device helpers](#device-helper-release-bundles), built beside them on public runners.
+Beside them it compiles the Mac app's release binaries on the Mac mini ([The candidate's Mac build](#the-candidates-mac-build)).
 It runs the existing `agent-journey.yml` on the same source, with stand-ins on Linux and macOS, Windows form checks, and fake-model lanes on all three systems.
 It signs no agent in: since 2026-10-27, by the operator's decision, a real login is measured only by the release's local run on the Mac ([CONTRIBUTING.md: Releases](../CONTRIBUTING.md#releases)), so the workflow summary records signed-in providers as **not measured**; package, stand-in and fake-model failures block the receipt.
 A successful candidate does not establish that any provider answered.
@@ -320,22 +321,42 @@ The reusable workflows' optional `source-sha` defaults to the caller commit, and
 An explicit order allows separately prepared packages of one numeric version to share one build identity.
 The operator assigns a strictly increasing order within that numeric version, including release-candidate to stable transitions; a private-only change takes a new patch version.
 
-Only after packaging, both helpers and the selected journey succeed does the workflow upload `hide-release-candidate`, containing only `candidate.json`:
+Only after packaging, both helpers, the Mac binaries and the selected journey succeed does the workflow upload `hide-release-candidate`, containing only `candidate.json`:
 
 ```json
-{"schema":3,"repository":"with-hide/hide","public_sha":"<source SHA>","tag":"vX.Y.Z","build_order":"<decimal>","verification_run_id":"<decimal>","workflow_sha":"<workflow SHA>","run_id":"<decimal>","run_attempt":1,"live_agents":false,
- "device_helpers":{"linux-aarch64":{"hide":"<sha256>","hide-agent-hooks":"<sha256>","hided":"<sha256>"},"linux-x86_64":{"hide":"<sha256>","hide-agent-hooks":"<sha256>","hided":"<sha256>"}}}
+{"schema":4,"repository":"with-hide/hide","public_sha":"<source SHA>","tag":"vX.Y.Z","build_order":"<decimal>","verification_run_id":"<decimal>","workflow_sha":"<workflow SHA>","run_id":"<decimal>","run_attempt":1,"live_agents":false,
+ "device_helpers":{"linux-aarch64":{"hide":"<sha256>","hide-agent-hooks":"<sha256>","hided":"<sha256>"},"linux-x86_64":{"hide":"<sha256>","hide-agent-hooks":"<sha256>","hided":"<sha256>"}},
+ "macos_binaries":{"hide":"<sha256>","hide-agent-hooks":"<sha256>","hided":"<sha256>"}}
 ```
 
-The installer artifacts keep the names `hide-package-linux` and `hide-package-windows`, and the helper artifacts `hide-device-helper-linux-x86_64` and `hide-device-helper-linux-aarch64`; candidate artifacts expire after seven days.
+The installer artifacts keep the names `hide-package-linux` and `hide-package-windows`, the helper artifacts `hide-device-helper-linux-x86_64` and `hide-device-helper-linux-aarch64`, and the Mac binaries `hide-macos-release-binaries`; candidate artifacts expire after seven days.
 All receipt fields describe public facts, with IDs and order as decimal strings and `schema` and `run_attempt` as integers.
 Schema 2 adds the boolean `live_agents`, which records whether provider checks were requested, not their per-cell verdicts; since 2026-10-27 it is always `false`, kept so the private consumer that requires it reads the receipt unchanged.
 Schema 3 adds `device_helpers`, each Linux platform's helper digests, recorded by the receipt job only after it checked both artifacts' manifests, executable headers and digests against `public_sha`, the tag's version and `build_order` (`withDeviceHelpers` in `scripts/release-candidate.mjs`); from schema 3, `verification_run_id` names the verify run without proving it passed.
+Schema 4 adds `macos_binaries`, the digests of `hided`, `hide` and `hide-agent-hooks` compiled for macOS, recorded only after the compile artifact's `release-binaries.json` named `public_sha`, the tag's version and `build_order` and every binary matched it (`withMacosBinaries`).
 Consumers retaining schema 1 support must treat its missing selection as the original live-enabled workflow, never as evidence that all providers passed.
 A consumer verifies the successful manual main run, its trusted workflow revision, current attempt, matching receipt and artifact inventory, and that the verify run the receipt names and its `verify` job concluded success, before consuming it; a receipt alone proves neither GitHub origin nor that a package is signed.
 Run evidence and reports remain workflow artifacts, separate from distributable files.
 Release approval must disclose unmeasured provider coverage; it does not waive signing, installation, update checks or version approval.
 Candidate preparation creates no public tag or Release; only the official publisher creates the approved release tag and publishes the final assets.
+
+### The candidate's Mac build
+
+The candidate's `compile (macos)` job runs `desktop package compile` on the source and uploads `hide-macos-release-binaries`: `target/release/{hided,hide,hide-agent-hooks}` and `desktop/out/release-binaries.json`, the record [`package.mjs assemble`](#the-desktop-app) checks before it packages them.
+The private publisher downloads that artifact from the candidate run, requires each binary's SHA-256 to equal the receipt's `macos_binaries`, puts them where `assemble` reads them, and assembles, signs and notarizes the app; it compiles nothing.
+Waiting for a hosted macOS runner took 53 minutes at the 90th percentile of 40 pull request verify runs (October 2026), so the job runs on the operator's Mac mini, a self-hosted runner of this public repository labelled `hide-candidate`, which no other workflow names (`scripts/tests/test_release_candidate.py`).
+
+A self-hosted runner of a public repository would run whatever a pull request's workflow asks of it, so the Mac mini takes only this job:
+
+- **Only this workflow, on main.** The Team plan's runner groups can be limited to repositories but not to workflows, so the runner refuses the rest itself: its job-started hook (`scripts/candidate-runner/job-started.sh`) fails every job, before any of its steps runs, unless the job's repository, event, ref and workflow ref are this repository's `release-candidate.yml` dispatched on `refs/heads/main`. A hook sees the job's own `github` context and never a workflow's `env:`, so no pull request, fork or branch push can name those values. Pull requests from outside contributors also wait for a maintainer's approval before any workflow runs.
+- **Its own account.** The runner runs as `hiderunner`, a standard account with no login and a password no one knows, from a LaunchDaemon, so it needs no one logged in; it cannot read the operator's home. Its hooks are root's, under `/usr/local/libexec/hide-candidate-runner`.
+- **Nothing kept.** The job-completed hook (`scripts/candidate-runner/job-completed.sh`) empties the runner's work folder after every job, whatever its result: the checkout and its release build, the cargo registry (the daemon points `CARGO_HOME` there), setup-node's Node and pnpm with its store. The account keeps only rustup and the toolchain the source pins; the hook removes any other.
+
+`scripts/candidate-runner/setup.sh` sets the Mac mini up; its administrator runs `sudo bash setup.sh` from a copy of that folder once and pastes the registration token GitHub shows under the repository's Settings, Actions, Runners, New self-hosted runner.
+A second run keeps the account and the registration and replaces only what differs; each run fails unless the administrator's own launchd services, runner configuration and Rust toolchain are as it found them.
+To retire it, `sudo launchctl bootout system/dev.withhide.candidate-runner`, remove the runner from the repository's settings, then delete the account.
+
+When the Mac mini does not answer (a queued `compile (macos)` waits up to a day for it), cancel the candidate and dispatch it again with `macos_runner: hosted`, which compiles the same binaries on GitHub's `macos-15`, free for this public repository, and the receipt checks them the same way.
 
 ## Release asset gate
 
