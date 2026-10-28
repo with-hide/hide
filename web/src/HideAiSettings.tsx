@@ -26,9 +26,9 @@ import { suggestionTitle } from "./suggestionList";
 
 const QUANTITIES: readonly SuggestionQuantity[] = ["few", "normal", "many"];
 const APPLY_MODES: readonly SuggestionApplyMode[] = ["confirm", "auto_pr"];
-/** Where 읽을 곳 reads (D-52); the core keeps the seven signals and one switch turns a group's. */
+/** Where 읽을 곳 reads (D-52); the core keeps the nine signals and one switch turns a group's. */
 const SIGNAL_GROUPS: readonly { group: SuggestionSignalGroup; signals: readonly SuggestionSignal[] }[] = [
-  { group: "session", signals: ["failed_tool", "agent_wait", "correction", "label_missed", "improvement"] },
+  { group: "session", signals: ["failed_tool", "agent_wait", "correction", "repeated_request", "memory_ignored", "label_missed", "improvement"] },
   { group: "github", signals: ["check_failed", "change_request"] },
 ];
 

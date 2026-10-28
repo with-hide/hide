@@ -2339,15 +2339,19 @@ export type ProjectMemory = {
 export type MemorySection = { project: ProjectMemory | null };
 
 /** What a suggestion rests on (`contracts/snapshot-wire-enums.json`: `suggestion_signal`). */
-export type SuggestionSignal = "failed_tool" | "agent_wait" | "correction" | "label_missed" | "improvement" | "check_failed" | "change_request";
+export type SuggestionSignal = "failed_tool" | "agent_wait" | "correction" | "label_missed" | "improvement" | "check_failed" | "change_request" | "repeated_request" | "memory_ignored";
 /** `suggestion_improvement_kind`: how a turn lost time at an improvement point (D-55). */
 export type SuggestionImprovementKind = "no_doc" | "searched_again" | "wrong_guess" | "tool_friction";
 /** `suggestion_quantity`: how many suggestions come up a week (PRD hide-ai-suggestions D-09, D-10). */
 export type SuggestionQuantity = "few" | "normal" | "many";
 /** `suggestion_apply_mode`: whether a new suggestion waits for `문서 고치는 PR 열기` or opens its pull request by itself (D-28). */
 export type SuggestionApplyMode = "confirm" | "auto_pr";
-/** `suggestion_outcome`: what applying a suggestion makes (D-15, D-50). */
-export type SuggestionOutcome = "pr" | "issue";
+/** `suggestion_outcome`: what applying a suggestion makes (D-15, D-50); `local` writes a line of the Hide global instruction (PRD memory-self-improve D-07). */
+export type SuggestionOutcome = "pr" | "issue" | "local";
+/** `suggestion_local_failure`: why the last press on a global instruction row wrote or took back nothing (PRD memory-self-improve B7-B10, B29). */
+export type SuggestionLocalFailure = "no_room" | "too_large" | "unreadable" | "changed" | "edited" | "write_failed" | "evidence_unconfirmed";
+/** `global_instruction_unusable`: why sessions are not given the Hide global instruction (B5). */
+export type GlobalInstructionUnusable = "too_large" | "unreadable";
 /** `suggestions_status`: the tab's one line (D-44). */
 export type SuggestionsStatus = "first_run_pending" | "investigating" | "none_today" | "not_investigated" | "idle" | "off";
 /** `suggestion_group`: 고를 것, 반영 중 and the folded 반영됨 (D-07). */
@@ -2371,6 +2375,24 @@ export type SuggestionEvidence = {
   url: string | null;
   at_unix_ms: number;
   gone: boolean;
+  /** The operator's words, masked and cut, once the row was opened (PRD memory-self-improve B7). Absent on older daemons. */
+  excerpt?: string | null;
+  /** They could not be read again (`근거 확인 불가`). */
+  unreadable?: boolean;
+};
+
+/** A global instruction row's own state (PRD memory-self-improve B6-B11). */
+export type SuggestionLocal = {
+  /** The line the press writes, or wrote. */
+  line: string;
+  /** What `apply` sends back, so a file changed since is refused with a new one; null when the line cannot be written now or is already there. */
+  preview: string | null;
+  /** The file already has the line, by an earlier fix or by hand. */
+  present: boolean;
+  applied_at_unix_ms: number | null;
+  /** Said again in a session that was given it, so offered again (B11). */
+  recurred: boolean;
+  failure: SuggestionLocalFailure | null;
 };
 
 /** One row of the 제안 tab, in the core's drawing order; `id` (`s12`, `m72`) names it in every `suggestion_action`. */
@@ -2408,6 +2430,10 @@ export type SuggestionRow = {
     failure: string | null;
   } | null;
   watch: { sessions_seen: number; sessions_needed: number } | null;
+  /** A global instruction line's state; null for other rows. Absent on older daemons. */
+  local?: SuggestionLocal | null;
+  /** The row's evidence was opened and none of its words could be read, so it cannot be applied (B7). */
+  evidence_unconfirmed?: boolean;
 };
 
 export type SuggestionSignalSetting = { signal: SuggestionSignal; enabled: boolean; unavailable: "no_github" | "memory_off" | "analysis_off" | null };
@@ -2440,13 +2466,15 @@ export type ProjectSuggestions = {
   rows: SuggestionRow[];
   /** The 제안 tab's number and the rail's, which adds the Memory tab's own; both 0 while the head switch is off (D-01). */
   counts: { suggestions: number; rail: number };
+  /** The Hide global instruction's file and why sessions are not given it (PRD memory-self-improve B5); absent before the worker read it. */
+  global?: { path: string; unusable: GlobalInstructionUnusable | null } | null;
 };
 
 /** The `suggestions` section: absent until the Hide AI tool opens a Project. */
 export type SuggestionsSection = { project: ProjectSuggestions | null };
 
 /** What the operator does to one row (`suggestion_action`). */
-export type SuggestionAction = "apply" | "dismiss" | "restore" | "retry";
+export type SuggestionAction = "apply" | "dismiss" | "restore" | "retry" | "revert";
 
 /** Where ⚙'s 읽을 곳 reads (D-52): the session records' four signals or GitHub's two; one switch turns its group. */
 export type SuggestionSignalGroup = "session" | "github";

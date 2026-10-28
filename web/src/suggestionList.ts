@@ -4,7 +4,7 @@
 // mark and line, so the components draw them without deciding anything.
 import type { TFunction } from "i18next";
 import type { MessageKey } from "./i18n/catalogs";
-import type { ProjectSuggestions, SuggestionRow, SuggestionState } from "./snapshot";
+import type { GlobalInstructionUnusable, ProjectSuggestions, SuggestionLocalFailure, SuggestionRow, SuggestionState } from "./snapshot";
 
 export type SuggestionGroups = { choose: SuggestionRow[]; applying: SuggestionRow[]; applied: SuggestionRow[] };
 
@@ -89,9 +89,48 @@ export function memoryTabCount(project: Pick<ProjectSuggestions, "counts">): num
   return Math.max(0, project.counts.rail - project.counts.suggestions);
 }
 
-/** Whether a row offers its apply button: a new suggestion, unless GitHub is needed, where that line stands instead (B10, B18). */
-export function applyOffer(row: Pick<SuggestionRow, "group" | "hold" | "outcome">): "pr" | "issue" | "github_needed" | null {
+/**
+ * Whether a row offers its apply button: a new suggestion, unless GitHub is
+ * needed, where that line stands instead (B10, B18). A global instruction
+ * row needs no GitHub (PRD memory-self-improve B8): it offers its press
+ * while the core gave a preview to send back, and shows it held while none
+ * of its evidence could be read (B7) or the line has no room (B10).
+ */
+export function applyOffer(row: Pick<SuggestionRow, "group" | "hold" | "outcome" | "local" | "evidence_unconfirmed">): "pr" | "issue" | "local" | "local_held" | "github_needed" | null {
   if (row.group !== "choose") return null;
+  if (row.outcome === "local") {
+    if (!row.local || row.local.present) return null;
+    return row.local.preview !== null && !row.evidence_unconfirmed ? "local" : "local_held";
+  }
   if (row.hold === "github_needed") return "github_needed";
   return row.outcome;
+}
+
+/** A global instruction row's line under its title, its tone, and whether it offers `파일 열기` (B5, B9, B10, B11, B29). */
+export type LocalLine = { text: string; tone: "muted" | "warning" | "success"; openFile: boolean };
+
+const LOCAL_FAILURE_KEYS: Record<SuggestionLocalFailure, MessageKey> = {
+  no_room: "suggestions.local.failure.no_room",
+  too_large: "suggestions.local.failure.too_large",
+  unreadable: "suggestions.local.failure.unreadable",
+  changed: "suggestions.local.failure.changed",
+  edited: "suggestions.local.failure.edited",
+  write_failed: "suggestions.local.failure.write_failed",
+  evidence_unconfirmed: "suggestions.local.failure.evidence_unconfirmed",
+};
+
+/** The failures the operator settles in the file itself. */
+const OPENS_FILE: ReadonlySet<SuggestionLocalFailure> = new Set(["no_room", "too_large", "unreadable", "edited"]);
+
+export function localLine(t: TFunction<"translation">, row: Pick<SuggestionRow, "group" | "local" | "evidence_unconfirmed">, unusable: GlobalInstructionUnusable | null): LocalLine | null {
+  const local = row.local;
+  if (!local) return null;
+  // The open evidence decides before the last press: none of its words could be read now (B7).
+  const failure: SuggestionLocalFailure | null = row.group === "choose" && row.evidence_unconfirmed ? "evidence_unconfirmed" : local.failure;
+  if (failure) return { text: t(LOCAL_FAILURE_KEYS[failure]), tone: "warning", openFile: OPENS_FILE.has(failure) };
+  // No preview without a press: the file cannot be read as it is, which the tab's own line says once, or the line has no room in it.
+  if (row.group === "choose" && local.preview === null && !local.present) return unusable ? null : { text: t("suggestions.local.failure.no_room"), tone: "warning", openFile: true };
+  if (row.group === "choose" && local.recurred) return { text: t("suggestions.local.recurred"), tone: "warning", openFile: false };
+  if (local.present) return { text: t(row.group === "choose" ? "suggestions.local.present" : "suggestions.local.applied"), tone: row.group === "choose" ? "muted" : "success", openFile: false };
+  return null;
 }
