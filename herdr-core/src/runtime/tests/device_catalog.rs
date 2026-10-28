@@ -1206,6 +1206,20 @@ fn a_device_folder_outside_its_home_is_registered_only_with_its_confirmation() {
     assert_eq!(error.kind, "workspace.create_refused.needs_confirmation");
     assert!(runtime.snapshot.ui_state.workspace_registrations.is_empty());
 
+    // A folder inside a repository there asks about the repository, which is
+    // what registering it would add.
+    let inner = format!("{}/src", t.main);
+    std::fs::create_dir_all(&inner).unwrap();
+    dispatch(
+        &mut runtime,
+        "create_workspace",
+        serde_json::json!({"device_id": TARGET, "path": inner, "label": "src", "initialize_git": false, "confirmed_outside_home": inner}),
+    );
+    let error = runtime.snapshot.status.last_error.clone().unwrap();
+    assert_eq!(error.kind, "workspace.create_refused.needs_confirmation");
+    assert_eq!(error.confirm.as_deref(), Some(t.main.as_str()));
+    assert!(runtime.snapshot.ui_state.workspace_registrations.is_empty());
+
     dispatch(
         &mut runtime,
         "create_workspace",

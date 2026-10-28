@@ -113,3 +113,100 @@ fn a_confirmation_does_not_reach_past_home_s_own_refusals() {
     std::os::unix::fs::symlink(outer.path(), &up).unwrap();
     assert_eq!(code(&up), ErrorCode::OutsideRoot);
 }
+
+/// A repository at `main` with a linked worktree at `linked`, as Git writes
+/// the two (`hide_project` reads them without a git process).
+fn repository_with_worktree(main: &Path, linked: &Path) {
+    let admin = main.join(".git/worktrees/linked");
+    std::fs::create_dir_all(&admin).unwrap();
+    std::fs::write(main.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+    std::fs::create_dir_all(linked).unwrap();
+    std::fs::write(
+        linked.join(".git"),
+        format!("gitdir: {}\n", admin.display()),
+    )
+    .unwrap();
+    std::fs::write(admin.join("HEAD"), "ref: refs/heads/feature\n").unwrap();
+    std::fs::write(admin.join("commondir"), "../..\n").unwrap();
+    std::fs::write(
+        admin.join("gitdir"),
+        format!("{}\n", linked.join(".git").display()),
+    )
+    .unwrap();
+}
+
+/// PRD wsl-device B15: a registration adds the project a folder belongs to,
+/// so a folder inside a repository outside home, or a linked worktree of one
+/// wherever it is, asks about that repository's root (`confirm`), and only
+/// the root confirmed is registered.
+#[test]
+fn a_folder_in_a_project_outside_home_asks_about_the_project_it_adds() {
+    let home = tempfile::tempdir().unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let repo = elsewhere.path().join("repo");
+    let linked = elsewhere.path().join("away/linked");
+    repository_with_worktree(&repo, &linked);
+    let public = repo.join("public");
+    std::fs::create_dir(&public).unwrap();
+    let root = hide_platform::fs::identity::canonical(&repo)
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let asked = |path: &Path, confirmed: Option<&Path>| {
+        let error = check(path, confirmed, home.path()).unwrap_err();
+        (error.code, error.confirm)
+    };
+
+    assert_eq!(asked(&public, None), (ErrorCode::NeedsConfirmation, None));
+    for folder in [&public, &linked] {
+        assert_eq!(
+            asked(folder, Some(folder)),
+            (ErrorCode::NeedsConfirmation, Some(root.clone())),
+            "{folder:?}"
+        );
+    }
+    let added = check(&repo, Some(&repo), home.path()).unwrap();
+    assert_eq!(added.root, root);
+    assert!(added.is_git);
+
+    // A worktree under home whose repository is outside it asks too.
+    let other = elsewhere.path().join("other");
+    let inward = home.path().join("inward");
+    repository_with_worktree(&other, &inward);
+    assert_eq!(
+        asked(&inward, None),
+        (
+            ErrorCode::NeedsConfirmation,
+            Some(
+                hide_platform::fs::identity::canonical(&other)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned()
+            )
+        )
+    );
+}
+
+/// A folder on a drive that is a link to a network share is judged by where
+/// it leads: no confirmation makes the share a project.
+#[cfg(windows)]
+#[test]
+fn a_confirmed_link_to_a_network_share_is_refused_like_the_share() {
+    let home = tempfile::tempdir().unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let shared = elsewhere.path().join("shared");
+    std::fs::create_dir(&shared).unwrap();
+    // The same folder through the drive's administrative share.
+    let local = hide_platform::fs::identity::canonical(&shared).unwrap();
+    let local = local.to_string_lossy();
+    let share = format!(r"\\localhost\{}${}", &local[..1], &local[2..]);
+    let link = elsewhere.path().join("share-link");
+    std::os::windows::fs::symlink_dir(&share, &link).unwrap();
+    let refused = check(&link, Some(&link), home.path()).unwrap_err();
+    assert_eq!(
+        refused.code,
+        ErrorCode::OutsideRoot,
+        "{share}: {}",
+        refused.message
+    );
+}

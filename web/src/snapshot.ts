@@ -2768,7 +2768,7 @@ export type SnapshotRest = {
     /** The answers to the latest `browser_open` events that named themselves, oldest first and bounded. */
     browser_opens?: import("./viewLayout").BrowserOpenReceipt[];
     /** The core's most recent failure; the shell logs its detail (B5). */
-    last_error?: { kind: string; message: string; retryable: boolean; occurred_at: number; request_id?: string | null } | null;
+    last_error?: { kind: string; message: string; retryable: boolean; occurred_at: number; request_id?: string | null; confirm?: string | null } | null;
   };
   recent_closed?: RecentClosed;
   explorer_operation?: ExplorerOperation | null;

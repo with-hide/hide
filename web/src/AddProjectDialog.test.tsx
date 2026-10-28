@@ -60,8 +60,8 @@ const creates = (events: Sent[]) => events.filter((event) => event.kind === "cre
 const find = (selector: string) => document.querySelector<HTMLElement>(selector);
 
 /** What hided answers a `create_workspace` it did not forward. */
-const refuse = (path: string, reason: string) =>
-  act(async () => useShellStore.setState({ pathRefusal: { kind: "create_workspace", path, reason } } as never));
+const refuse = (path: string, reason: string, confirm?: string) =>
+  act(async () => useShellStore.setState({ pathRefusal: { kind: "create_workspace", path, reason, ...(confirm ? { confirm } : {}) } } as never));
 
 afterEach(() => {
   delete window.hideHost;
@@ -100,6 +100,22 @@ it("asks once about a folder outside home and sends it again with the confirmati
   await again.unmount();
 });
 
+it("asks about the project a folder outside home belongs to and confirms that project, not the folder", async () => {
+  const picked = "/srv/repo/public";
+  window.hideHost = { kind: "electron", platform: "linux", pickFolder: vi.fn(async () => picked) } as never;
+  const { events, unmount } = await mount(state());
+  await act(async () => find("[data-add-project-browse]")!.click());
+  await refuse(picked, "needs_confirmation");
+  await act(async () => find("[data-registration-confirm-add]")!.click());
+  expect(creates(events).at(-1)).toEqual({ path: picked, label: "public", initialize_git: false, confirmed_outside_home: picked });
+
+  await refuse(picked, "needs_confirmation", "/srv/repo");
+  expect(find("[data-registration-confirm]")?.getAttribute("data-registration-confirm")).toBe("/srv/repo");
+  await act(async () => find("[data-registration-confirm-add]")!.click());
+  expect(creates(events).at(-1)).toEqual({ path: "/srv/repo", label: "repo", initialize_git: false, confirmed_outside_home: "/srv/repo" });
+  await unmount();
+});
+
 it("leaves out the slow line for a folder outside home that is not on the C drive", async () => {
   window.hideHost = { kind: "electron", platform: "darwin", pickFolder: vi.fn(async () => "/Volumes/Work/app") } as never;
   const { unmount } = await mount(state());
@@ -129,6 +145,16 @@ it("asks the same question when a device's helper answers that its folder is out
   expect(find("[data-registration-slow]")).not.toBeNull();
   await act(async () => find("[data-registration-confirm-add]")!.click());
   expect(creates(events).at(-1)).toEqual({ device_id: "ubuntu", path: "/mnt/c/work/app", label: "app", initialize_git: false, confirmed_outside_home: "/mnt/c/work/app" });
+
+  // The helper names the repository the folder belongs to; that is what is asked about and confirmed.
+  await act(async () =>
+    useShellStore.setState((current: ReturnType<typeof useShellStore.getState>) => ({
+      rest: { ...current.rest, status: { last_error: { kind: "workspace.create_refused.needs_confirmation", message: "outside", occurred_at: Date.now() + 2_000, confirm: "/mnt/c/work" } } },
+    }) as never),
+  );
+  expect(find("[data-registration-confirm]")?.getAttribute("data-registration-confirm")).toBe("/mnt/c/work");
+  await act(async () => find("[data-registration-confirm-add]")!.click());
+  expect(creates(events).at(-1)).toEqual({ device_id: "ubuntu", path: "/mnt/c/work", label: "work", initialize_git: false, confirmed_outside_home: "/mnt/c/work" });
   await unmount();
 });
 

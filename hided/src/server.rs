@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 use crate::attachments::{self, Attachments};
-use crate::boundary::{self, Boundary, Listing, Refusal};
+use crate::boundary::{self, Boundary, Listing, Refusal, Unregistrable};
 use crate::core::CoreHandle;
 use crate::index::{IndexAnswer, IndexService};
 use crate::pane_auth::Registry;
@@ -3586,8 +3586,10 @@ pub(crate) async fn send_opened_file_bytes(
 ///
 /// The registration line reads `$HOME`: a `create_workspace` whose path does
 /// not resolve under home, or is written outside it without the operator's
-/// confirmation of that path (`confirmed_outside_home`), is answered with a
-/// `path_refused` frame and never reaches the core. Create new project and
+/// confirmation of that path (`confirmed_outside_home`), or belongs to a
+/// project outside home that is not that folder (the frame's `confirm` names
+/// the project's root), is answered with a `path_refused` frame and never
+/// reaches the core. Create new project and
 /// Clone from URL take no confirmation. A `remote_file_list` names a path on a remote machine,
 /// which this boundary knows nothing about, and is forwarded as it came.
 ///
@@ -3613,15 +3615,7 @@ fn apply_boundary(boundary: &Boundary, event: &mut Value) -> Option<Value> {
         "create_workspace" if event.pointer("/payload/new_folder") == Some(&Value::Bool(true)) => {
             new_project(boundary, event, &kind)
         }
-        "create_workspace" => {
-            let confirmed = event
-                .pointer("/payload/confirmed_outside_home")
-                .and_then(Value::as_str)
-                .map(str::to_owned);
-            rewrite(event, &kind, "path", |raw| {
-                boundary.resolve_workspace(raw, confirmed.as_deref())
-            })
-        }
+        "create_workspace" => register(boundary, event, &kind),
         "clone_repository" => clone_admit(boundary, event, &kind),
         "file_list" => explorer_listing(boundary, event, &kind),
         "file_open" | "reveal_path" => explorer_open(boundary, event, &kind),
@@ -3855,6 +3849,30 @@ fn refused(kind: &str, path: &str, refusal: Refusal) -> Value {
         "type": "path_refused",
         "payload": {"kind": kind, "path": path, "reason": refusal.code()},
     })
+}
+
+/// A `create_workspace` for an existing folder: its path is rewritten to the
+/// one the boundary registers, or refused; a question about the project the
+/// folder belongs to names that project's root as `confirm`, which the
+/// operator confirms in place of the folder asked about.
+fn register(boundary: &Boundary, event: &mut Value, kind: &str) -> Option<Value> {
+    let raw = payload_str(event, "path");
+    let confirmed = event
+        .pointer("/payload/confirmed_outside_home")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    match boundary.resolve_registration(&raw, confirmed.as_deref()) {
+        Ok(real) => {
+            event["payload"]["path"] = Value::String(hide_platform::path::to_wire_lossy(&real));
+            None
+        }
+        Err(Unregistrable::Refused(refusal)) => Some(refused(kind, &raw, refusal)),
+        Err(Unregistrable::ConfirmProject(root)) => {
+            let mut frame = refused(kind, &raw, Refusal::NeedsConfirmation);
+            frame["payload"]["confirm"] = Value::String(hide_platform::path::to_wire_lossy(&root));
+            Some(frame)
+        }
+    }
 }
 
 /// Checks one path field and rewrites it to the spelling that was checked.
@@ -5245,6 +5263,29 @@ mod tests {
                 .unwrap()
                 .display()
                 .to_string()
+        );
+
+        // A folder inside a repository there is answered with the question
+        // about the repository, which the frame names as `confirm`.
+        let app = outside.path().join("app");
+        std::fs::create_dir_all(app.join(".git")).unwrap();
+        std::fs::write(app.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::create_dir_all(app.join("src")).unwrap();
+        let src = app.join("src").display().to_string();
+        let mut event = json!({"schema_version": 2, "kind": "create_workspace", "payload": {
+            "path": src, "label": "src", "initialize_git": false, "confirmed_outside_home": src,
+        }});
+        let answer = apply_boundary(&boundary, &mut event).expect("asked");
+        assert_eq!(
+            answer["payload"]["reason"], "needs_confirmation",
+            "{answer}"
+        );
+        assert_eq!(answer["payload"]["path"], src.as_str());
+        assert_eq!(
+            answer["payload"]["confirm"],
+            hide_platform::path::to_wire_lossy(
+                &hide_platform::fs::identity::canonical(&app).unwrap()
+            )
         );
     }
 }

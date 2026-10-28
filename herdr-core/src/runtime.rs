@@ -2709,6 +2709,7 @@ impl Runtime {
             retryable,
             occurred_at: unix_milliseconds(),
             request_id: None,
+            confirm: None,
         });
     }
 

@@ -4,7 +4,9 @@
 // growing closes the dialog, and a refusal (hided's `path_refused`, the core's
 // error, worded by its kind, or the one the shell can see itself) stays inside
 // it, naming the folder. A folder outside home is answered with a question
-// rather than a refusal, hided's or the device's alike (PRD wsl-device B15).
+// rather than a refusal, hided's or the device's alike (PRD wsl-device B15),
+// about the folder the answer names: the one sent, or the root of the project
+// outside home it belongs to, which is what a registration adds.
 
 import { useEffect, useState } from "react";
 import { folderLabel, onCDrive, refusalText } from "./addProject";
@@ -51,16 +53,16 @@ export function useRegistration(registrations: readonly WorkspaceRegistration[])
   const coreError = useErrorSince(sent?.at ?? null, ["workspace.create", "workspace.remove_in_flight", "workspace.control_unavailable"]);
   const added = sent !== null && registrations.some((row) => row.device_id === sent.device && !sent.known.has(row.id));
 
-  const hidedReason = sent && pathRefusal?.kind === "create_workspace" && pathRefusal.path === sent.path ? pathRefusal.reason : null;
+  const hided = sent && pathRefusal?.kind === "create_workspace" && pathRefusal.path === sent.path ? pathRefusal : null;
   const shown = shellRefusal
     ? { ...shellRefusal, text: refusalText(shellRefusal.reason, t) }
-    : sent && hidedReason
-      ? { path: sent.path, reason: hidedReason, text: refusalText(hidedReason, t) }
+    : sent && hided
+      ? { path: hided.confirm ?? sent.path, reason: hided.reason, text: refusalText(hided.reason, t) }
       : sent && coreError
         ? coreError.kind === "workspace.create_registered"
           ? { path: sent.path, reason: "already_registered", text: refusalText("already_registered", t) }
           : coreError.kind === DEVICE_ASKS
-            ? { path: sent.path, reason: "needs_confirmation", text: refusalText("needs_confirmation", t) }
+            ? { path: coreError.confirm ?? sent.path, reason: "needs_confirmation", text: refusalText("needs_confirmation", t) }
             : { path: sent.path, reason: coreError.kind, text: coreErrorText(coreError, t, "coreError.project.addFailed") }
         : null;
 

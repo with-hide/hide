@@ -895,7 +895,8 @@
           ]
         },
         "path": { "type": "string" },
-        "reason": { "$ref": "#/$defs/pathRefusalReason" }
+        "reason": { "$ref": "#/$defs/pathRefusalReason" },
+        "confirm": { "type": "string", "description": "Only on a `create_workspace` answered `needs_confirmation` whose folder belongs to a project outside home that is not that folder (inside a repository there, or a linked worktree of one): that project's root, the folder the operator is asked about and confirms instead, because a registration adds the project." }
       }
     },
     "cloneTarget": {

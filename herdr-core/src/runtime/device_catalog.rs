@@ -1071,7 +1071,17 @@ impl Runtime {
                 },
                 REGISTRABLE_TIMEOUT,
             )
-            .map_err(|error| (registration_refusal_kind(&error), error.to_string()))
+            .map_err(|error| {
+                let confirm = match &error {
+                    LinkError::Refused(refused) => refused.confirm.clone(),
+                    _ => None,
+                };
+                (
+                    registration_refusal_kind(&error),
+                    error.to_string(),
+                    confirm,
+                )
+            })
         };
         let Some(context) = self.worker_context.clone() else {
             let answer = ask();
@@ -1108,7 +1118,7 @@ impl Runtime {
         &mut self,
         device: &str,
         label: String,
-        answer: Result<hide_node_link::register::Registrable, (&'static str, String)>,
+        answer: Result<hide_node_link::register::Registrable, RegistrationRefusal>,
     ) -> bool {
         // A device removed while its helper judged the folder takes no
         // registration from that late answer.
@@ -1122,12 +1132,15 @@ impl Runtime {
         }
         let registrable = match answer {
             Ok(registrable) => registrable,
-            Err((kind, message)) => {
+            Err((kind, message, confirm)) => {
                 crate::diagnostic!(serde_json::json!({
                     "component": "registration", "kind": "create.refused",
                     "target": device, "message": message,
                 }));
                 self.set_error(kind, message, false);
+                if let Some(error) = self.snapshot.status.last_error.as_mut() {
+                    error.confirm = confirm;
+                }
                 return true;
             }
         };
@@ -1344,6 +1357,11 @@ const REGISTRATION_TERMINAL_REPORT: FailureReport = FailureReport::Log {
 /// outside the home folder as the same sentences this Mac's refusals use
 /// (`create_workspace`'s `path_refused`), and the helper's sentence, with the
 /// device's paths in it, is the diagnostic log's.
+/// A device helper's refusal of a registration: the core's kind for it, the
+/// helper's sentence for the diagnostic log, and the folder the helper asks
+/// the operator about instead of the one sent (`HostError::confirm`).
+type RegistrationRefusal = (&'static str, String, Option<String>);
+
 fn registration_refusal_kind(error: &LinkError) -> &'static str {
     match error {
         LinkError::Refused(refused) => match refused.code {

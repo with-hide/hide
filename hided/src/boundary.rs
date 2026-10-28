@@ -135,6 +135,21 @@ impl Refusal {
     }
 }
 
+/// Why a `create_workspace` was not forwarded: its path was refused, or the
+/// folder belongs to a project outside home other than the folder confirmed,
+/// whose root the operator is asked about instead.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Unregistrable {
+    Refused(Refusal),
+    ConfirmProject(PathBuf),
+}
+
+impl From<Refusal> for Unregistrable {
+    fn from(refusal: Refusal) -> Self {
+        Self::Refused(refusal)
+    }
+}
+
 /// One child a listing shows: its name, the path a client sends back, and
 /// whether it is a directory, which the Explorer draws and opens differently.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
@@ -188,6 +203,18 @@ pub fn valid_name(name: &str) -> bool {
 fn on_a_local_volume(path: &Path) -> bool {
     match path.components().next() {
         Some(Component::Prefix(prefix)) => matches!(prefix.kind(), std::path::Prefix::Disk(_)),
+        _ => true,
+    }
+}
+
+/// [`on_a_local_volume`] for a path the system resolved, which may keep the
+/// `\\?\` spelling of a drive when the path needs it.
+fn resolved_on_a_local_volume(path: &Path) -> bool {
+    match path.components().next() {
+        Some(Component::Prefix(prefix)) => matches!(
+            prefix.kind(),
+            std::path::Prefix::Disk(_) | std::path::Prefix::VerbatimDisk(_)
+        ),
         _ => true,
     }
 }
@@ -885,11 +912,7 @@ impl Boundary {
     /// for one even when it leads back in. Home, and a folder holding it, is
     /// never a workspace (`home_root`), and a network share is no project's
     /// identity (PRD wsl-device D-15), so neither can be confirmed.
-    pub fn resolve_workspace(
-        &self,
-        raw: &str,
-        confirmed: Option<&str>,
-    ) -> Result<PathBuf, Refusal> {
+    fn resolve_workspace(&self, raw: &str, confirmed: Option<&str>) -> Result<PathBuf, Refusal> {
         let expanded = self.expand(raw)?;
         let path = Path::new(&expanded);
         if self.strip_home(path).is_none() {
@@ -927,11 +950,47 @@ impl Boundary {
                 // A loop or a denied directory, as the walk under home answers.
                 _ => Refusal::InvalidPath,
             })?;
+        // A link written outside home is judged by where it leads, as the
+        // path itself was.
+        if !resolved_on_a_local_volume(&real) {
+            return Err(Refusal::OutsideHome);
+        }
         if self.holds_home(&real) {
             return Err(Refusal::HomeRoot);
         }
         if !fs::metadata(&real).map_err(|_| Refusal::NotFound)?.is_dir() {
             return Err(Refusal::NotADirectory);
+        }
+        Ok(real)
+    }
+
+    /// The path a `create_workspace` registers: [`Self::resolve_workspace`]'s,
+    /// judged again by the project it belongs to, because the catalog shows
+    /// and opens that project's root, not the folder asked for. A root under
+    /// home adds nothing a folder under home could not; a root outside home is
+    /// registered only as the very folder confirmed, so a folder inside a
+    /// repository there, or a linked worktree of one, is answered with the
+    /// question about that root (`Unregistrable::ConfirmProject`). A root
+    /// holding home, or on a network share, is no project.
+    pub fn resolve_registration(
+        &self,
+        raw: &str,
+        confirmed: Option<&str>,
+    ) -> Result<PathBuf, Unregistrable> {
+        let real = self.resolve_workspace(raw, confirmed)?;
+        let (root, _) =
+            hide_host::register::project_root(&real).map_err(|_| Refusal::InvalidPath)?;
+        if !resolved_on_a_local_volume(&root) {
+            return Err(Refusal::OutsideHome.into());
+        }
+        if self.strip_home(&root).is_some() {
+            return Ok(real);
+        }
+        if self.holds_home(&root) {
+            return Err(Refusal::HomeRoot.into());
+        }
+        if root != real {
+            return Err(Unregistrable::ConfirmProject(root));
         }
         Ok(real)
     }
@@ -1087,6 +1146,38 @@ mod windows_tests {
             Err(Refusal::HomeRoot),
             "the drive home is on holds it"
         );
+    }
+
+    /// A folder on a drive that is a link to a network share is judged by
+    /// where it leads: no confirmation makes the share a project.
+    #[test]
+    fn a_confirmed_link_to_a_network_share_is_refused_like_the_share() {
+        let outer = tempfile::tempdir().unwrap();
+        let home = outer.path().join("home");
+        let outside = outer.path().join("outside");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(outside.join("shared")).unwrap();
+        let boundary = Boundary::new(&home).unwrap();
+        // The same folder through the drive's administrative share.
+        let local = hide_platform::fs::identity::canonical(&outside.join("shared")).unwrap();
+        let local = local.to_string_lossy();
+        let share = format!(r"\\localhost\{}${}", &local[..1], &local[2..]);
+        let link = outside.join("share-link");
+        std::os::windows::fs::symlink_dir(&share, &link).unwrap();
+        let written = hide_platform::path::to_wire_lossy(&link);
+        assert_eq!(
+            boundary.resolve_registration(&written, Some(&written)),
+            Err(Unregistrable::Refused(Refusal::OutsideHome)),
+            "{written} -> {share}"
+        );
+        for (path, local) in [
+            (r"C:\work", true),
+            (r"\\?\C:\work", true),
+            (r"\\server\share\work", false),
+            (r"\\?\UNC\server\share\work", false),
+        ] {
+            assert_eq!(resolved_on_a_local_volume(Path::new(path)), local, "{path}");
+        }
     }
 }
 
@@ -1481,6 +1572,92 @@ mod tests {
             );
             assert!(f.boundary.open_file(&path).is_err(), "{path}");
         }
+    }
+
+    /// A repository at `main` with a linked worktree at `linked`, as Git
+    /// writes the two (`hide_project` reads them without a git process).
+    fn repository_with_worktree(main: &Path, linked: &Path) {
+        let admin = main.join(".git/worktrees/linked");
+        fs::create_dir_all(&admin).unwrap();
+        fs::write(main.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        fs::create_dir_all(linked).unwrap();
+        fs::write(
+            linked.join(".git"),
+            format!("gitdir: {}\n", admin.display()),
+        )
+        .unwrap();
+        fs::write(admin.join("HEAD"), "ref: refs/heads/feature\n").unwrap();
+        fs::write(admin.join("commondir"), "../..\n").unwrap();
+        fs::write(
+            admin.join("gitdir"),
+            format!("{}\n", linked.join(".git").display()),
+        )
+        .unwrap();
+    }
+
+    /// PRD wsl-device B15: a registration adds the project a folder belongs
+    /// to, so a folder inside a repository outside home, or a linked worktree
+    /// of one, asks about that repository's root, the confirmation of the
+    /// folder never covers it, and the root confirmed is what is registered
+    /// and whose files are read.
+    #[test]
+    fn a_folder_in_a_project_outside_home_asks_about_the_project_it_adds() {
+        let f = fixture();
+        let repo = f.outside.join("repo");
+        repository_with_worktree(&repo, &f.outside.join("elsewhere/linked"));
+        fs::create_dir_all(repo.join("public")).unwrap();
+        fs::write(repo.join("private.key"), "k").unwrap();
+        let root = repo.canonicalize().unwrap();
+        let ask_root = Err(Unregistrable::ConfirmProject(root.clone()));
+
+        let public = s(&repo.join("public"));
+        assert_eq!(
+            f.boundary.resolve_registration(&public, None),
+            Err(Unregistrable::Refused(Refusal::NeedsConfirmation))
+        );
+        assert_eq!(
+            f.boundary.resolve_registration(&public, Some(&public)),
+            ask_root
+        );
+        let linked = s(&f.outside.join("elsewhere/linked"));
+        assert_eq!(
+            f.boundary.resolve_registration(&linked, Some(&linked)),
+            ask_root,
+            "a linked worktree adds its repository"
+        );
+        // A worktree under home whose repository is outside asks too, though
+        // the folder itself needs no confirmation.
+        let inward = f.home.join("projects/inward");
+        let other = f.outside.join("other-repo");
+        repository_with_worktree(&other, &inward);
+        assert_eq!(
+            f.boundary.resolve_registration(&s(&inward), None),
+            Err(Unregistrable::ConfirmProject(other.canonicalize().unwrap()))
+        );
+
+        let root_text = s(&root);
+        assert_eq!(
+            f.boundary
+                .resolve_registration(&root_text, Some(&root_text)),
+            Ok(root.clone())
+        );
+        // What a folder under home belongs to under home asks nothing more.
+        assert_eq!(
+            f.boundary
+                .resolve_registration(&s(&f.home.join("projects/alpha")), None),
+            Ok(f.home.join("projects/alpha"))
+        );
+        f.boundary.set_roots(vec![Root {
+            workspace_id: "w".to_owned(),
+            checkout_id: "c".to_owned(),
+            path: root.clone(),
+        }]);
+        assert!(f.boundary.open_file(&s(&root.join("private.key"))).is_ok());
+        let beside = f.outside.join("secret").canonicalize().unwrap();
+        assert_eq!(
+            f.boundary.resolve_target(&s(&beside)),
+            Err(Refusal::OutsideCheckout)
+        );
     }
 
     #[test]

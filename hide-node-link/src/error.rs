@@ -12,6 +12,11 @@ pub struct HostError {
     /// The revision found on disk when a save was refused as a conflict.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actual_revision: Option<String>,
+    /// The folder a `NeedsConfirmation` refusal asks the operator about, when
+    /// it is not the one the request named: the project that folder belongs
+    /// to, which is what a registration would add.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirm: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -80,6 +85,16 @@ impl HostError {
             code,
             message: message.into(),
             actual_revision: None,
+            confirm: None,
+        }
+    }
+
+    /// A folder outside home asked about: `confirm` names the folder to ask
+    /// about when it is not the one the request named.
+    pub fn needs_confirmation(confirm: Option<String>, message: impl Into<String>) -> Self {
+        Self {
+            confirm,
+            ..Self::new(ErrorCode::NeedsConfirmation, message)
         }
     }
 
@@ -88,6 +103,7 @@ impl HostError {
             code: ErrorCode::Conflict,
             message: message.into(),
             actual_revision,
+            confirm: None,
         }
     }
 

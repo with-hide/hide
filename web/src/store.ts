@@ -46,7 +46,8 @@ export type DirectoryList = {
 /** A device folder its helper could not list now (`directory_unavailable`); the reason is the helper's. */
 /** `reason` is the helper's refusal code on `code: "refused"`, worded by `fileFailure.ts`; its sentence stays in hided's log. */
 export type DirectoryUnavailable = { device_id: string; root_path: string; code: string; reason: string | null };
-export type PathRefusal = { kind: string; path: string; reason: string };
+/** `confirm` is the project root a `needs_confirmation` asks about instead of the folder sent. */
+export type PathRefusal = { kind: string; path: string; reason: string; confirm?: string };
 /** hided's answer to where a clone would land: `path` when it may, `reason` when it may not. */
 export type CloneTarget = { parent: string; name: string; path: string | null; reason: string | null };
 /**
@@ -472,7 +473,7 @@ export const useShellStore = create<Store>((set, get) => ({
     }
     if (frame.type === "path_refused") {
       set({
-        pathRefusal: { kind: payload.kind ?? "", path: payload.path ?? "", reason: payload.reason ?? "" },
+        pathRefusal: { kind: payload.kind ?? "", path: payload.path ?? "", reason: payload.reason ?? "", ...(payload.confirm ? { confirm: payload.confirm } : {}) },
       });
       return [];
     }

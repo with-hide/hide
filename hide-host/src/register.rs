@@ -9,10 +9,13 @@
 //! registration may name: whether a path is outside home is read from how it
 //! is written, so a symlink under home that leads out of it stays refused, a
 //! folder written outside home is not read until it is confirmed, and home
-//! and any folder holding it are never a project. The project the folder
-//! belongs to must be inside that home too, or outside it under the same
-//! confirmation, because the registration names the project, not the folder
-//! asked for.
+//! and any folder holding it are never a project. The registration names the
+//! project the folder belongs to, not the folder asked for, so a project
+//! outside home must be the very folder confirmed: a folder inside a
+//! repository, or a linked worktree of one elsewhere, is answered with the
+//! question about that repository's root (`HostError::confirm`). Every path
+//! is judged again after its links are followed, so a link to a network
+//! share is refused like the share.
 
 use std::path::{Component, Path, PathBuf};
 
@@ -60,8 +63,8 @@ pub fn check(path: &Path, confirmed: Option<&Path>, home: &Path) -> HostResult<R
             return Err(home_refusal());
         }
         if confirmed.filter(|confirmed| plain_absolute(confirmed)) != Some(path) {
-            return Err(HostError::new(
-                ErrorCode::NeedsConfirmation,
+            return Err(HostError::needs_confirmation(
+                None,
                 format!(
                     "{} is outside the home folder {}; adding it needs the operator's confirmation",
                     path.display(),
@@ -83,6 +86,9 @@ pub fn check(path: &Path, confirmed: Option<&Path>, home: &Path) -> HostResult<R
         ));
     }
     let inside = |place: &Path| place != real_home && place.starts_with(&real_home);
+    if !resolved_on_a_local_volume(&real) {
+        return Err(network_refusal(path, &real));
+    }
     if holds_home(&real) {
         return Err(home_refusal());
     }
@@ -95,23 +101,55 @@ pub fn check(path: &Path, confirmed: Option<&Path>, home: &Path) -> HostResult<R
             ),
         ));
     }
-    let facts = hide_project::facts(&real)
-        .map_err(|error| HostError::new(ErrorCode::Io, error.to_string()))?;
-    if holds_home(&facts.root) || (written_inside && !inside(&facts.root)) {
-        return Err(HostError::new(
-            ErrorCode::OutsideRoot,
+    let (root, is_git) = project_root(&real)?;
+    if !resolved_on_a_local_volume(&root) {
+        return Err(network_refusal(path, &root));
+    }
+    if holds_home(&root) {
+        return Err(home_refusal());
+    }
+    // A project outside home is registered only as the folder confirmed; any
+    // other answer would add more than the operator was asked about.
+    if !inside(&root) && root != real {
+        return Err(HostError::needs_confirmation(
+            Some(root.to_string_lossy().into_owned()),
             format!(
-                "{} belongs to {}, which is not a folder inside the home folder {}",
+                "{} belongs to the project {}, which is outside the home folder {}; adding it needs the operator's confirmation of {}",
                 real.display(),
-                facts.root.display(),
-                real_home.display()
+                root.display(),
+                real_home.display(),
+                root.display()
             ),
         ));
     }
     Ok(Registrable {
-        root: facts.root.to_string_lossy().into_owned(),
-        is_git: facts.kind == hide_project::ProjectKind::Git,
+        root: root.to_string_lossy().into_owned(),
+        is_git,
     })
+}
+
+/// The project a registration of the folder at `real` adds, as the system
+/// spells it, and whether it is a Git repository: the root of the repository
+/// the folder is in (its main checkout's, for a linked worktree), or the
+/// folder itself. hided judges this machine's registrations by the same root.
+pub fn project_root(real: &Path) -> HostResult<(PathBuf, bool)> {
+    let facts = hide_project::facts(real)
+        .map_err(|error| HostError::new(ErrorCode::Io, error.to_string()))?;
+    let root = hide_platform::fs::identity::canonical(&facts.root).map_err(|error| {
+        HostError::io(&error, format!("{} cannot be read", facts.root.display()))
+    })?;
+    Ok((root, facts.kind == hide_project::ProjectKind::Git))
+}
+
+fn network_refusal(path: &Path, real: &Path) -> HostError {
+    HostError::new(
+        ErrorCode::OutsideRoot,
+        format!(
+            "{} leads to the network path {}, which cannot be a project",
+            path.display(),
+            real.display()
+        ),
+    )
 }
 
 /// An absolute path with no `.` or `..` component, which would otherwise
@@ -129,6 +167,18 @@ fn plain_absolute(path: &Path) -> bool {
 fn on_a_local_volume(path: &Path) -> bool {
     match path.components().next() {
         Some(Component::Prefix(prefix)) => matches!(prefix.kind(), std::path::Prefix::Disk(_)),
+        _ => true,
+    }
+}
+
+/// [`on_a_local_volume`] for a path the system resolved, which may keep the
+/// `\\?\` spelling of a drive when the path needs it.
+fn resolved_on_a_local_volume(path: &Path) -> bool {
+    match path.components().next() {
+        Some(Component::Prefix(prefix)) => matches!(
+            prefix.kind(),
+            std::path::Prefix::Disk(_) | std::path::Prefix::VerbatimDisk(_)
+        ),
         _ => true,
     }
 }
