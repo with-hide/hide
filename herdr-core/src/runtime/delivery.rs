@@ -1138,6 +1138,14 @@ impl Runtime {
             }
             _ => None,
         };
+        // A report names the Views its sender opened, so the agent that
+        // answers for its work finds them (PRD unseen-agent-views D-21).
+        if !repeated
+            && let Command::Send { kind, body, .. } = &mut command
+            && kind == "report"
+        {
+            self.list_opened_views(&actor.pane_id, body);
+        }
         if (matches!(&command, Command::Send { .. }) && !repeated)
             || matches!(&command, Command::WatchAssign { .. })
         {

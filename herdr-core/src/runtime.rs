@@ -82,6 +82,7 @@ mod terminal;
 mod terminal_input;
 mod tree_close;
 mod tree_reopen;
+mod unseen_views;
 pub(crate) mod usage_ledger;
 mod usage_limit;
 mod view_areas;
@@ -1544,6 +1545,11 @@ pub struct Runtime {
     birth_clock: session::BirthClock,
     next_async_operation_id: u64,
     workspace_creations_in_flight: HashSet<String>,
+    /// Rows Herdr shows without a registration whose machine is judging
+    /// their folder for a pin or a closing last pane, by row id
+    /// (`projects::RowPending`).
+    row_registrations: HashMap<String, projects::RowPending>,
+    row_registration_generation: u64,
     /// Each open file tab's document, edited under a number so a snapshot
     /// read re-sends a View document only when it moved.
     editor_documents: HashMap<String, Edited<EditorDocumentSnapshot>>,
@@ -1664,6 +1670,14 @@ pub struct Runtime {
     /// Whether a window draws the snapshot (`ui_attached`); a core no daemon
     /// told otherwise is drawn.
     ui_attached: bool,
+    /// Whether a window holding the keyboard draws the Workspace screen, as
+    /// the daemon summed every window's report (`window_focus`); no window
+    /// told it, nothing is in front of the operator (PRD unseen-agent-views
+    /// D-07).
+    window_focused: bool,
+    /// The View store's generation the rows' unseen Views were last laid
+    /// against (`settle_unseen_views`).
+    unseen_laid_generation: u64,
     /// The last labels the local session-sync coordinator published, laid on
     /// every local projection this runtime ingests, whichever path brings it.
     label_overlay: crate::labels::overlay::LabelOverlay,
@@ -2342,6 +2356,8 @@ impl Runtime {
             birth_clock: Arc::new(Instant::now),
             next_async_operation_id: 0,
             workspace_creations_in_flight: HashSet::new(),
+            row_registrations: HashMap::new(),
+            row_registration_generation: 0,
             editor_documents: HashMap::new(),
             archive_documents: HashMap::new(),
             session_catalog_rows: Vec::new(),
@@ -2397,6 +2413,8 @@ impl Runtime {
             restore_hint_pending: true,
             last_session_spaces: Vec::new(),
             ui_attached: true,
+            window_focused: false,
+            unseen_laid_generation: 0,
             label_overlay: Default::default(),
             label_services: None,
             pull_request_times: Default::default(),
@@ -2715,6 +2733,7 @@ impl Runtime {
             retryable,
             occurred_at: unix_milliseconds(),
             request_id: None,
+            confirm: None,
         });
     }
 

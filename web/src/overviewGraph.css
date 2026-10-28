@@ -82,7 +82,7 @@
 .og-orb .og-provider { width: 60%; height: 60%; }
 .og-session[data-mark="going"] .og-orb, .og-session[data-mark="waiting"] .og-orb { border-color: var(--agent-working); }
 .og-session[data-mark="waiting"] .og-orb { border-style: dashed; }
-.og-session[data-mark="turn"] .og-orb, .og-session[data-folded-turn="true"] .og-orb { border-color: var(--warning); box-shadow: 0 0 0 var(--size-hairline) var(--warning); }
+.og-session[data-mark="turn"] .og-orb, .og-session[data-mark="look"] .og-orb, .og-session[data-folded-turn="true"] .og-orb { border-color: var(--warning); box-shadow: 0 0 0 var(--size-hairline) var(--warning); }
 .og-session[data-mark="done"] .og-orb { border-color: var(--success); }
 .og-session[data-mark="unread"] .og-orb { border-color: var(--foreground); }
 .og-session-drag { cursor: grab; }

@@ -153,6 +153,33 @@ The one way a descendant moves its root between groups is the waiting state belo
 
 Regression owners: `a_descendants_demand_or_completion_turns_every_ancestor_unread_and_nothing_else_does`, `an_ancestors_group_comes_from_its_own_axes_and_a_child_never_makes_it_needs_you`.
 
+## A View to look at
+
+An agent that opens a View with `hide file open`, `hide diff open` or `hide browser open` opens it to show the operator, so the View is unseen until the operator looks at it (PRD unseen-agent-views D-05, D-06).
+A View the operator opened, from the Explorer, ⌘P, a new tab's address field or a path or address clicked in a terminal, is never unseen, and an agent's `hide browser snapshot`, `click` or other command on a page leaves the View as it was.
+A new target a page opens on its own (a link to a new tab) is the page's, not a new open.
+The record is the View's own (`Display::unseen` in `view_layout.rs`, `Unseen` in `view_feedback.rs`): when the open happened, as a generation that moves on each open, and whether an ancestor has read it; it is stored with the checkout's View layout, so it survives a restart, and it goes with the View, so there are never more records than open Views (D-09, D-12).
+A stored record that does not read leaves the View unseen and the load's repair says so in the diagnostic log; a View stored before the record existed reads as seen (D-27, B18, B33).
+
+A View is seen when, in one window, all of these hold (D-07): the window holds the keyboard on the Workspace screen (the shell's `window_focus`, which hided aggregates across windows and lets go with a connection), the View's checkout is in front, the lane shows the documents and not Sessions or the 보기 slot, the View is the selected tab of the active View area, and the Files strip of the session in front shows it.
+The core decides it on every snapshot (`settle_unseen_views` in `runtime/unseen_views.rs`), from state it already holds; the shell sends only the window's focus, and only when it changes.
+An open of a View that is already looked at in the same event is never unseen, so nothing flickers (B5, B14), and an open again of a seen View is news again (D-11).
+
+The View's last opener's row carries it (D-19): an operator-owned row with an unseen View is in Needs You, whatever its own axes say, and draws the `look` mark (The mark).
+Seeing the View does not read the pane, and reading the pane does not see the View (D-20); when the last unseen View is seen or closed the row goes back to the group its own axes give it (B4, B13).
+The row carries `look` on the wire: the newest unseen View's id and name, how many there are, the checkout it sits in and the group the row would be in with nothing to look at.
+Its line is `볼 것 · <newest View>`, with ` 외 N` for the rest (`lineParts` in `web/src/agentRow.ts`); a question, approval, block or native question or plan on the same row takes the mark and the line, which then ends with `볼 것 N` (D-14, D-18).
+Pressing the row focuses its pane and brings the newest unseen View forward in the same event (`focus_pane` with `reveal_unseen`), which sees it; a device's row focuses its pane on the device and the View through the checkout's focus.
+A pane's `N views` list marks each View the operator has not looked at with the same mark (B10).
+A View to look at is counted with the operator's turns on every badge and in the rail, and sends no phone push, desktop notice or sound: those follow `look.group`, the row's group without it (D-13, B12).
+
+A delegated child's unseen View never puts a row in Needs You (D-10): the child stays in Working or Seen, and the View is a descendant signal (`view:<id>@<generation>`) that turns every ancestor unread, as A descendant's change turns its ancestors unread above.
+An ancestor that reads the View through its own pane, with `hide view status <view-id>` or a `hide browser snapshot`, `screenshot`, `eval`, `console` or `network` on it, turns that signal off for every ancestor, and the View stays unseen in the child's `N views` (D-22, D-23); the child itself, an unrelated agent, the operator's shell and `hide view list` do not.
+An ancestor that opens the View again from its own pane becomes its opener, so its own row has it to look at (D-21, B24).
+`hide view list` says which Views the operator has not looked at (`unseen`), and a report letter lists the Views its sender opened and whether each was seen.
+
+Regression owners: `herdr-core/src/runtime/tests/unseen_views.rs`, `a_seen_record_that_does_not_read_is_unseen_and_a_missing_one_is_seen` in `view_layout.rs`, and the look line in `web/src/agentRow.test.ts`.
+
 ## A quiet row that waits
 
 A row with no demand of its own, not blocked and stopped (idle or done) waits when something in progress will wake it: work that is still running, or an answer someone is still making for it.
@@ -286,12 +313,12 @@ The sections are named for whose move is next: Needs You (`내 차례`) and Unre
 
 | Group | Membership |
 | --- | --- |
-| Needs You | An unread demand - question, approval or block - or a pane Herdr reports as blocked, or whose native question or plan waits for the operator, right now |
+| Needs You | An unread demand - question, approval or block - or a pane Herdr reports as blocked, or whose native question or plan waits for the operator, right now, or an operator-owned row with a View to look at |
 | Done (Unread) | No demand, stopped, completion reported, and unread |
 | Working | Running, or a quiet row waiting on a working descendant, a proven background task or a reply still being made |
 | Seen | Everything else: ready idle, read demands, read completions, unknown |
 
-A blocked pane, or one whose native question or plan waits for the operator, stays in Needs You whether or not it has been read.
+A blocked pane, or one whose native question or plan waits for the operator, stays in Needs You whether or not it has been read, and so does a row with a View to look at until the operator looks at it (A View to look at).
 The prompt is still waiting, so it leaves the group when answered rather than when looked at.
 
 A delegated row sits only in Working or Seen, and a Hide AI row for a home only in Needs You or Seen.
@@ -307,13 +334,15 @@ While a member is archived, its delivery registration and the watches on it are 
 
 ## The mark
 
-Every row draws one of eight marks, decided once in the core (`RowMark::of` in `agent_state/tally.rs`) and carried on the wire as `mark` (`turn`, `going`, `waiting`, `done`, `unread`, `quiet`, `unknown`, `asleep`); no surface derives a mark of its own (status-marks D-01, D-12), the dimming of an unknown row included (`rowDimmed` reads `mark`, never `status_code`; sidebar-quiet-mark-indent D-04).
+Every row draws one of nine marks, decided once in the core (`RowMark::of` in `agent_state/tally.rs`) and carried on the wire as `mark` (`turn`, `look`, `going`, `waiting`, `done`, `unread`, `quiet`, `unknown`, `asleep`); no surface derives a mark of its own (status-marks D-01, D-12), the dimming of an unknown row included (`rowDimmed` reads `mark`, never `status_code`; sidebar-quiet-mark-indent D-04).
 `going` and `waiting` are the one in-progress mark in two shapes (D-25): every count and precedence takes them as one, and only the ring is drawn apart.
+`turn` and `look` are the operator's turn in two shapes: every count takes them as one, and only the badge's glyph is drawn apart.
 Four say whose move is next, and their shapes alone tell them apart; `unknown` says Hide cannot tell, and `asleep` is an agent Hide stopped that wakes when opened (D-21):
 
 | Mark | Shape | When |
 | --- | --- | --- |
 | `turn` | A `!` in a 12 px warning badge | The operator's turn: the row is in Needs You or carries an escalation, or it is an own question, approval or block the operator has read (drawn at `--opacity-read-status`) |
+| `look` | An eye in the same 12 px warning badge | The operator's turn to look at a View the agent opened, with nothing else asked of them on the row (A View to look at); its hover and name read `볼 것 · <View>` |
 | `going` | A static three-quarter ring in the working colour | In progress: the agent works |
 | `waiting` | The same ring dashed, also static (`2.2 2` over a path length of 19) | In progress while the agent waits (`wait`) on children, a background task, its pull request's checks or a reply; its hover and name read `진행 중 · 대기` |
 | `done` | A 7 px green dot | Unread, and the label read the turn as finished |
@@ -515,7 +544,7 @@ A read block in Seen cannot outrank an unread question in Needs You.
 The Workspace draws the representative agent's exact mark, color, and emphasis through the shared presentation.
 
 The web shell draws no representative chip; it draws a status badge in its place.
-The same pass counts each agent under the mark its own row draws (`RowMark`): `turn`, `going` (a `waiting` row counted here too, D-25), `done` and `unread`.
+The same pass counts each agent under the mark its own row draws (`RowMark`): `turn` (a `look` row counted here too), `going` (a `waiting` row counted here too, D-25), `done` and `unread`.
 A quiet row is counted in none of them, so the badge claims nothing but whose move is next.
 The counts ride the summary as `marks`; the web sidebar draws them on a checkout's row only, and a project or folder row draws none.
 The badge draws one mark and count per mark, in the order whose move is next (turn, in progress, finished to read, to read), zero ones left out, in the shapes and colors the rows use, so it says what opening the rows would show (B19).
@@ -677,16 +706,16 @@ The core reads GitHub for every registered local Git project from the moment a w
 A project's status is read once when a window first attaches, again five minutes after its last answer, or sooner when that read failed to get the project's pull requests or its issues (`Runtime::reread_stale_github`, with the clock passed in so a test advances it without sleeping; a project whose ask is unanswered is not asked again, so a slow pass is never overtaken by the next), and on an explicit refresh, which advances that repository's generation.
 When the operator looks at a project, the web shell sends `github_request` with `look` (the window gains focus or becomes visible, and a project is brought to the front; `web/src/githubLook.ts`), and the core reads that project again when its last answer worked and is at least 30 seconds old (`Runtime::read_when_looked_at`, `GITHUB_LOOK_AFTER`, the clock passed in), so a project the operator comes back to does not wait out the five minutes.
 A look is the stale re-read's ask and nothing more: it asks nothing while an ask is outstanding, for a project in failure backoff, one whose last read missed its pull requests, or one answered "no GitHub remote"; it never sets `loading`; it is honored only for the local Git project in front, and a look the core does not honor is silent (no error, no frame); a request that names `refresh` is a refresh whether or not it names `look`.
-While a window is attached, an advisory poll asks GitHub once a minute whether anything behind the marks changed, and only says so (`crate::github_poll`, `Runtime::ask_polled_changes`).
+While a window is attached, an advisory poll asks GitHub whether anything behind the marks changed, every 15 seconds for the project in front and once a minute for each other one, and only says so (`crate::github_poll`, `Runtime::ask_polled_changes`).
 It watches the projects whose last read worked and holds an open pull request, and the project in front even with none open, by the repository its read named, so a pull request opened elsewhere shows within the minute (PRD git-freshness D-10); the project in front first and at most eight (a count past that is written as `poll.over_limit` when it changes): the repository's open pull request list, and the check runs and commit status of the head commit of up to four open pull requests whose checks were pending, each by a conditional `gh api` read with the entity tag it last saw; a 304 means unchanged and costs no rate limit, and a tag seen for the first time is a baseline, not a change.
-The check runs and the status of a pending head commit are read the same way: a different tag only makes the poll read what the list adds up to (`passing`, `pending`, `failed`, by the rule the mark uses), and it counts a change only when that combined result, over the check runs and the status together, differs from the last one. One job of many finishing asks nothing; the last one finishing, or a failure, asks one read within a minute.
+The check runs and the status of a pending head commit are read the same way: a different tag only makes the poll read what the list adds up to (`passing`, `pending`, `failed`, by the rule the mark uses), and it counts a change only when that combined result, over the check runs and the status together, differs from the last one. One job of many finishing asks nothing; the last one finishing, or a failure, asks one read within the poll's interval for that project.
 The open list moves its tag for a comment, a label, a review or a new `updated_at` as well, so a different tag there is not enough: the poll then reads one digest of the list (each pull request's number, head commit and draft flag, `gh api --jq`) and counts it a change only when that digest differs from the last one, which a pull request opened, merged or closed, a push, or a draft flip does.
 A comment, a label, a review or an `updated_at` alone is left to the five-minute read and to a look.
-A change is asked for through the look rule above, so it waits out the thirty seconds, never overtakes an ask, a failure backoff or a repository with no GitHub remote, and never sets `loading`; the poll writes no pull request state and never touches the five-minute clock or its backoff.
+A change is asked for through the look rule above without its thirty seconds, since an answer that just landed may predate the change GitHub reported and the poll's interval already bounds how often it asks; it never overtakes an ask, a failure backoff or a repository with no GitHub remote, and never sets `loading`; the poll writes no pull request state and never touches the five-minute clock or its backoff.
 A failure of the poll (no `gh`, no login, the network, a reply it cannot read) pauses that project alone, 60 seconds and twice as long each time up to 15 minutes, and is written once per kind as `poll.failed`; the reason shows nothing on screen (design principle 13).
 With fewer than a tenth of the account's requests left, nothing is polled until `x-ratelimit-reset` (`poll.rate_floor`).
 A project the poll is not watching, paused or under the floor, has its GitHub status marked stale as after a failed read (`Runtime::note_poll_held`), so its marks dim with `GitHub 읽기 실패 · N분 전 값` until its next read answers (PRD git-freshness B23).
-A change in the first minute after a project's baseline is read only by the five-minute clock, because the poll has no earlier tag to compare it with.
+A change in the first interval after a project's baseline is read only by the five-minute clock, because the poll has no earlier tag to compare it with.
 A local agent's session that prints the address of a pull request the last answer does not hold asks for its project as well, so a pull request an agent opens reaches its row when the label worker next reads that session (its turn ending, at the latest) rather than up to five minutes later (`Runtime::read_sighted_pull_requests`).
 The project is the one whose pull requests are in that repository, else the printing pane's project when none of its pull requests names another repository, so a repository's first pull request is found and a fork's checkout whose agent opens a pull request upstream is not read for it; an address no read project owns is written to the diagnostic log as `read.sighted_unowned` and nothing more.
 The sighting keeps the rule above: a project whose last read worked and has nothing asked since is asked at once and its clock waits for that answer; a project with any ask outstanding (a read in flight, its first read, a refresh, or an answer the clock has not taken yet) is not asked again, and is read once more after that answer lands only if the answer does not hold the pull request and the sighting is still under fifteen minutes old; a project whose last read failed to get its pull requests is left to its own retry, and one that got them and missed only its issues is asked as one that worked.
@@ -707,6 +736,7 @@ A restored answer is stale until a read replaces it: `stale` is set and `last_su
 A file that cannot be read, decoded or is of another schema version is not used and is named in the diagnostic log as `snapshot.discarded`; the next answer replaces it.
 `loading` is true only for a project with no answer to show whose first read has not yet answered; a project the reader answers nothing for is not loading either, and a project with a restored or earlier answer is loading only while an explicit refresh of it is in flight.
 A project's pull requests are two [`gh pr list`](https://cli.github.com/manual/gh_pr_list) calls asked for at the same time, each under the 15-second limit: the 200 newest pull requests of any state without `statusCheckRollup` (with `headRefOid`, `isCrossRepository`, `createdAt`, `closedAt`, `author`, `mergeStateStatus` and `reviewRequests`), and the open ones with `number,statusCheckRollup` only.
+The rest of a project's read is asked beside that list rather than after it: the repository's name and the issues (their open and closed lists at the same time) start with the pull requests, and the review asks and the merge queue facts start together once the list has answered, so the issues no longer hold a merged pull request's state back by as long again.
 The same open-check rollup also supplies optional `PullRequestWork.check_counts`: total, passed, failed, running, waiting, skipped and unknown, each check counted once.
 Completed success is passed; neutral and skipped remain skipped; failure conclusions are failed; active CheckRuns are running, queued CheckRuns waiting, and an unread or unfamiliar state unknown.
 Legacy StatusContexts keep SUCCESS, FAILURE/ERROR, PENDING and EXPECTED distinct; an absent rollup stays unknown while an explicitly empty rollup has zero checks.
@@ -1162,6 +1192,7 @@ A checkout names its issue or memo by the resolution below, and a started item r
 The existing generation-driven GitHub reader fetches PRs, repository identity and open issues together; a 201st sentinel proves overflow and `sort:updated-desc` determines backlog order.
 Missing closed or cross-repository linked issues use one bounded read-only GraphQL query, not one process per card.
 A link GitHub cannot resolve (its repository or issue is gone, private to this login, or never existed) comes back `null` beside a `NOT_FOUND` error while the others are answered, and `gh` exits 1 for the whole answer; the node hands such an answer back as output (`hide-host/src/gh.rs`), the core leaves those links out with one `linked_issue.unavailable` diagnostic and their count, and any other GraphQL error still fails the read.
+The reader remembers each link that came back that way, for the project, and leaves it out of the query for an hour while something still links it (`UnresolvedLinks` in `github.rs`): a repository whose issues moved to another one otherwise asked for every moved issue on every read.
 The issue addresses a session's tools printed join this query only when the issue is in the project's own repository, the one GitHub answered for its checkout (`LinkStore::ledger_issue_refs`): an address an agent printed from a test fixture, such as `acme/repo`, is not the project's issue and once failed every issue read of the project.
 An enriched issue lookup may retry once without optional Project fields; basic issue facts remain usable and the Project failure stays in the diagnostic and GitHub availability path.
 Linked issues take priority within the combined 200-identity project limit.

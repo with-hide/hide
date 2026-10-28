@@ -8,7 +8,8 @@ import { Hint } from "./ui/tooltip";
  * An agent's status mark: whose move is next, one size on every surface that
  * lists agents (docs/status-model.md, One meaning across surfaces). The core
  * names the mark; this draws it. The shapes differ without their
- * colours: the operator's turn is a `!` in a warning badge, in progress is a
+ * colours: the operator's turn is a `!` in a warning badge, a View to look
+ * at the same badge with an eye (PRD unseen-agent-views D-15), in progress is a
  * static three-quarter ring (dashed while it waits on proven work, D-25), to read is a small dot (green only when the label
  * read the turn as finished), and quiet, an agent at rest, a faint hollow ring
  * smaller and thinner than the in-progress one (sidebar-quiet-mark-indent D-02).
@@ -32,6 +33,13 @@ export function StatusMark({ mark, label, className, ...rest }: { mark: RowMark 
         <svg viewBox="0 0 12 12" className="size-full">
           <circle cx="6" cy="6" r="6" className="fill-warning" />
           <path d="M5.25 2.6h1.5l-.25 4.6h-1zM5.25 8.2h1.5v1.4h-1.5z" className="fill-status-foreground" />
+        </svg>
+      ) : mark === "look" ? (
+        <svg viewBox="0 0 12 12" className="size-full">
+          {/* The operator's turn to look at a View: the same badge, an eye in place of the `!` (PRD unseen-agent-views D-15). */}
+          <circle cx="6" cy="6" r="6" className="fill-warning" />
+          <path d="M2.2 6C3.1 4.3 4.4 3.4 6 3.4S8.9 4.3 9.8 6C8.9 7.7 7.6 8.6 6 8.6S3.1 7.7 2.2 6Z" className="fill-status-foreground" />
+          <circle cx="6" cy="6" r="1.25" className="fill-warning" />
         </svg>
       ) : mark === "going" || mark === "waiting" ? (
         <svg viewBox="0 0 12 12" className="size-full">

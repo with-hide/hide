@@ -223,6 +223,15 @@ pub struct Display {
     /// such a View is in every session's strip (D-10).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub operator: bool,
+    /// What an agent opened here that the operator has not looked at yet
+    /// (PRD unseen-agent-views D-07, D-19); absent once they have, and on a
+    /// View stored before this was kept (D-27).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::view_feedback::unseen_or_unreadable"
+    )]
+    pub unseen: Option<crate::view_feedback::Unseen>,
     /// An external display's grant, name and viewer; absent for every other
     /// kind. A stored file never carries one (`workspace_views::save`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -257,6 +266,7 @@ impl Display {
         self.opener = None;
         self.openers.clear();
         self.operator = false;
+        self.unseen = None;
     }
 
     /// Whether the Files strip of `scope` shows this View: the operator's
@@ -307,7 +317,14 @@ impl AreaItem for Display {
     fn repair_area(items: &mut [Self], active: Option<&str>, notes: &mut Vec<String>) {
         let mut groups = 0;
         let mut addresses = 0;
+        let mut unreadable = 0;
         for display in items.iter_mut() {
+            // A seen record that does not read is unseen, never seen
+            // (PRD unseen-agent-views D-12, B18).
+            if let Some(unseen) = display.unseen.as_mut().filter(|unseen| unseen.unreadable) {
+                unseen.unreadable = false;
+                unreadable += 1;
+            }
             // A View stored before Views belonged to sessions goes to the
             // session its mark names, else to the operator (PRD
             // session-files D-29). Expected once per View, so no note.
@@ -373,6 +390,11 @@ impl AreaItem for Display {
         if addresses > 0 {
             notes.push(format!(
                 "{addresses} views had an address or path that did not fit their kind"
+            ));
+        }
+        if unreadable > 0 {
+            notes.push(format!(
+                "{unreadable} views had a seen record that did not read and are unseen"
             ));
         }
         let keep = items
@@ -453,6 +475,7 @@ impl Layout {
             opener: None,
             openers: Vec::new(),
             operator: false,
+            unseen: None,
             external: None,
         }
     }
@@ -977,6 +1000,36 @@ mod tests {
         );
         assert_eq!(layout.display(&file).unwrap().url, None);
         assert!(layout.repair().is_empty(), "a repaired tree needs nothing");
+    }
+
+    /// PRD unseen-agent-views B18, B33: a stored seen record that does not
+    /// read leaves its View unseen and the repair says so; a View stored
+    /// before the record was kept reads as seen.
+    #[test]
+    fn a_seen_record_that_does_not_read_is_unseen_and_a_missing_one_is_seen() {
+        let mut layout = with_files(&["broken", "kept", "older"]);
+        layout.display_mut(&id(&layout, "kept")).unwrap().unseen =
+            Some(crate::view_feedback::Unseen::opened(7, None));
+        let broken = id(&layout, "broken");
+        layout.display_mut(&broken).unwrap().unseen =
+            Some(crate::view_feedback::Unseen::opened(5, None));
+        let stored = serde_json::to_string(&layout)
+            .unwrap()
+            .replace(r#"{"opened_unix_ms":5}"#, r#""not a record""#);
+        let mut read: Layout = serde_json::from_str(&stored).unwrap();
+
+        let notes = read.repair();
+        assert_eq!(
+            notes,
+            ["1 views had a seen record that did not read and are unseen"]
+        );
+        assert!(read.display(&broken).unwrap().unseen.is_some());
+        assert_eq!(
+            read.display(&id(&read, "kept")).unwrap().unseen,
+            Some(crate::view_feedback::Unseen::opened(7, None))
+        );
+        assert_eq!(read.display(&id(&read, "older")).unwrap().unseen, None);
+        assert!(read.repair().is_empty(), "a repaired tree needs nothing");
     }
 
     /// PRD session-files D-29: a View stored before Views belonged to

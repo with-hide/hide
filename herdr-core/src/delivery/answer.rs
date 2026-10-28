@@ -127,6 +127,7 @@ pub struct PsAgent {
 #[serde(rename_all = "snake_case")]
 pub enum PsState {
     Turn,
+    Look,
     Going,
     Waiting,
     Done,
@@ -143,6 +144,7 @@ impl From<crate::agent_state::RowMark> for PsState {
         use crate::agent_state::RowMark;
         match mark {
             RowMark::Turn => Self::Turn,
+            RowMark::Look => Self::Look,
             RowMark::Going => Self::Going,
             RowMark::Waiting => Self::Waiting,
             RowMark::Done => Self::Done,

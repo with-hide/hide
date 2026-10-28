@@ -224,7 +224,17 @@ use crate::error::HostError;
 /// an agent signed in only there runs Hide AI with its own login (D-03,
 /// D-06). A helper on 54 would refuse all three, so it is refused at Hello
 /// and upgraded.
-pub const PROTOCOL_VERSION: u32 = 55;
+/// 56: `Call::Registrable` carries the operator's confirmation of a folder
+/// outside the host's home (`confirmed_outside_home`), and the helper answers
+/// `needs_confirmation` for such a folder without one (PRD wsl-device D-02,
+/// D-10). A helper on 55 would drop the confirmation and refuse every folder
+/// outside its home, so it is refused at Hello and upgraded.
+/// 57: a node started with `node serve --own-herdr` bridges its own Herdr
+/// over its link and names that server's socket in its Hello
+/// (`Hello::herdr_socket`), which is how the core reaches a WSL
+/// distribution's Herdr (PRD wsl-device D-07). A helper on 56 has no such
+/// flag, so it is refused at Hello and upgraded.
+pub const PROTOCOL_VERSION: u32 = 57;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).
@@ -478,9 +488,13 @@ pub enum Call {
         path: String,
     },
     /// The project a folder would be registered as, judged against the
-    /// host's own home folder (`hide_host::register::check`).
+    /// host's own home folder (`hide_host::register::check`); a folder
+    /// written outside it is judged only when `confirmed_outside_home` names
+    /// it, the operator's confirmation of that one path.
     Registrable {
         path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        confirmed_outside_home: Option<String>,
     },
     /// Makes this host's Hide Home folder (`~/hide`) hold one link per
     /// project in `projects` and nothing Hide did not make
@@ -1193,6 +1207,11 @@ pub struct Hello {
     /// its default only keeps a Hello without it readable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub herdr_socket: Option<String>,
+    /// Where the node shows the drives of the Windows PC it runs on, when it
+    /// is a WSL distribution (`hide_platform::host::windows_drives`), so Add
+    /// a project can spell a pasted `C:\` path as that node's own path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub windows_drives: Option<String>,
 }
 
 impl Hello {

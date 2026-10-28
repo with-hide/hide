@@ -296,3 +296,23 @@ describe("asksOperator", () => {
     expect(asksOperator(row("works"))).toBe(false);
   });
 });
+
+describe("a View to look at (PRD unseen-agent-views D-05, D-14, D-18)", () => {
+  const look = (count: number) => ({ group: "working", count, view_id: "v1", label: "login.ts", workspace_id: "w", checkout_id: "c" });
+
+  it("leads the row's line with 볼 것 and the newest View, counting the rest", async () => {
+    const { t } = await createInterfaceI18n("ko");
+    const one = row("a", { group: "needs_you", mark: "look", look: look(1) });
+    expect(lineText(t, one, sidebarLine(one)!)).toBe("볼 것 · login.ts");
+    const three = row("b", { group: "needs_you", mark: "look", look: look(3) });
+    expect(lineText(t, three, sidebarLine(three)!)).toBe("볼 것 · login.ts 외 2");
+    expect(lineTone(sidebarLine(three)!, three)).toBe(lineTone(sidebarLine(row("q", { demand: "question", activity: "stopped", group: "needs_you", emphasized: true, unread: true }))!, three));
+    expect(markWords(t, three)).toBe("볼 것 · login.ts");
+  });
+
+  it("gives the line to a question on the same row and ends it with the count", async () => {
+    const { t } = await createInterfaceI18n("ko");
+    const asking = row("q", { demand: "question", activity: "stopped", status_code: "question", detail: "배포할까요?", group: "needs_you", emphasized: true, unread: true, mark: "turn", look: look(2) });
+    expect(lineText(t, asking, sidebarLine(asking)!)).toBe("질문 · 배포할까요? · 볼 것 2");
+  });
+});

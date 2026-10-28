@@ -725,8 +725,10 @@ async fn registration_refusals_are_answered_by_hided() {
             "not_found",
         ),
         (wire(&home.join("projects/file.txt")), "not_a_directory"),
-        (wire(outside.path()), "outside_home"),
-        (wire(&outside.path().join("nope")), "outside_home"),
+        // Written outside home, a folder asks for the operator's
+        // confirmation before anything there is read (PRD wsl-device B15).
+        (wire(outside.path()), "needs_confirmation"),
+        (wire(&outside.path().join("nope")), "needs_confirmation"),
         (wire(&home), "home_root"),
         ("relative/path".to_owned(), "invalid_path"),
     ];
@@ -740,6 +742,31 @@ async fn registration_refusals_are_answered_by_hided() {
         assert_eq!(refused["type"], "path_refused", "{path}");
         assert_eq!(refused["payload"]["reason"], reason, "{path}");
         assert_eq!(refused["payload"]["kind"], "create_workspace");
+    }
+    // A confirmation names one path: another path's is no confirmation, and
+    // a confirmed path is then answered by what is there (B18). A confirmed
+    // symlink out of home stays refused.
+    let elsewhere = wire(&outside.path().join("elsewhere"));
+    let missing = wire(&outside.path().join("nope"));
+    let escape = wire(&home.join("projects/escape"));
+    for (path, confirmed, reason) in [
+        (
+            wire(outside.path()),
+            elsewhere.clone(),
+            "needs_confirmation",
+        ),
+        (missing.clone(), missing.clone(), "not_found"),
+        (escape.clone(), escape.clone(), "outside_home"),
+    ] {
+        let refused = send_event(
+            &mut socket,
+            "create_workspace",
+            json!({"path": path, "label": "x", "initialize_git": false,
+                "confirmed_outside_home": confirmed}),
+        )
+        .await;
+        assert_eq!(refused["type"], "path_refused", "{path}");
+        assert_eq!(refused["payload"]["reason"], reason, "{path}");
     }
     running.stop();
 }

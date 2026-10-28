@@ -576,6 +576,10 @@ pub struct OpenedViewSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     pub comments: usize,
+    /// The operator has not looked at it since the agent opened it (PRD
+    /// unseen-agent-views B10).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unseen: bool,
 }
 
 /// A View a session record's session, or one of its descendants, opened:
@@ -1328,6 +1332,11 @@ pub struct DeviceHostSnapshot {
     /// `macos aarch64` as the helper reported it.
     pub platform: Option<String>,
     pub helper_path: Option<String>,
+    /// Where the device shows the drives of the Windows PC it runs on, when
+    /// it is a WSL distribution (`/mnt`), as its helper reported it; Add a
+    /// project spells a pasted `C:\` path under it (PRD wsl-device B16).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub windows_drives: Option<String>,
 }
 
 /// One staged connection test of an SSH device: SSH, authentication, Herdr,
@@ -1686,6 +1695,46 @@ pub struct SidebarAgentSnapshot {
     /// Absent until the core has built it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request: Option<crate::request_view::AgentRequestSnapshot>,
+    /// The Views this row's agent opened last that the operator has not
+    /// looked at, newest first (PRD unseen-agent-views D-14, D-19). Laid by
+    /// the runtime from the View layouts before the lineage, never by a
+    /// session read; a delegated row hands them up as descendant signals.
+    #[serde(skip_serializing)]
+    pub(crate) unseen_views: Vec<UnseenViewFact>,
+    /// `볼 것` on an operator's own row: what its line names and what a press
+    /// brings forward (D-05, D-14). Absent on every other row.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub look: Option<LookSnapshot>,
+}
+
+/// One View an agent opened that the operator has not looked at yet.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct UnseenViewFact {
+    pub device_id: String,
+    pub path: String,
+    pub view_id: String,
+    pub label: String,
+    /// The checkout's catalog ids, when the catalog names it now.
+    pub workspace_id: Option<String>,
+    pub checkout_id: Option<String>,
+    pub opened_unix_ms: u64,
+    /// An ancestor read it (D-22): it sends its ancestors no signal.
+    pub ancestors_read: bool,
+}
+
+/// What an operator's row says about the Views it opened that they have not
+/// seen: the newest, named and pressed, and how many there are (D-14).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct LookSnapshot {
+    /// The group the row would be in with nothing to look at, which the
+    /// phone's and the desktop's notifications follow instead of Needs You
+    /// (D-13, B12).
+    pub group: String,
+    pub count: u32,
+    pub view_id: String,
+    pub label: String,
+    pub workspace_id: Option<String>,
+    pub checkout_id: Option<String>,
 }
 
 /// What a sleeping agent's row and pane say about it.
@@ -2688,7 +2737,8 @@ pub struct DescendantCountsSnapshot {
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct DescendantSignal {
     pub pane_id: String,
-    /// `question`, `approval`, `error` or `completed`.
+    /// `question`, `approval`, `error`, `completed`, or `view:<id>@<opened>`
+    /// for a View it opened that nobody has looked at.
     pub kind: String,
 }
 
@@ -6900,6 +6950,11 @@ pub struct LastErrorSnapshot {
     /// and no other.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
+    /// The folder a `workspace.create_refused.needs_confirmation` asks the
+    /// operator about when it is not the one sent: the project outside the
+    /// device's home that folder belongs to (PRD wsl-device B15).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confirm: Option<String>,
 }
 
 impl Snapshot {
@@ -7546,10 +7601,12 @@ mod wire_enum_tests {
             RowMark::Quiet,
             RowMark::Unknown,
             RowMark::Asleep,
+            RowMark::Look,
         ];
         for variant in marks {
             match variant {
                 RowMark::Turn
+                | RowMark::Look
                 | RowMark::Going
                 | RowMark::Waiting
                 | RowMark::Done

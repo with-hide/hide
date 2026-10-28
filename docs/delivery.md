@@ -502,6 +502,7 @@ A done target remains watched until exit, explicit stop or a completion report.
 The first receipt, an acknowledgement or the actual post-flush confirmation, records `hook_confirmed: true` and ends a matching sender-parent watch for `hide request send --kind report`; a confirmation still does after cancellation or the delivery deadline, and replay after restart preserves a watch explicitly started after that receipt.
 A `progress` letter is received the same way and ends no watch: it is the interim report, such as a plan, and the child is still at work after it.
 A report from an unwatched sender is an ordinary letter; the parent can restart a watch explicitly.
+A report ends with the Views its sender opened that are still open, each with its id, what it shows and whether the operator has seen it, and how to read one or show it again (PRD unseen-agent-views D-21); the list stays inside the letter's size cap and ends with how many more there are when it is cut, and a repeated report adds nothing.
 
 ## Code-owned identities
 

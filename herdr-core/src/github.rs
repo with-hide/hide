@@ -102,6 +102,15 @@ fn read_reason(cached: Option<u64>, generation: u64) -> Option<ReadReason> {
 /// is where one that was read while it was open is still found.
 type KnownChecks = HashMap<(u32, String), PullRequestChecks>;
 
+/// Linked issues GitHub answered for with nothing Hide can draw (gone,
+/// transferred, private to this login), by when it said so. Each read used to
+/// ask for every one again, and a repository whose issues moved elsewhere
+/// asked for a hundred of them a minute; one is asked again only after
+/// `UNRESOLVED_LINK_RETRY`, and only while something still links it.
+type UnresolvedLinks = std::collections::BTreeMap<crate::issues::IssueReference, Instant>;
+
+const UNRESOLVED_LINK_RETRY: Duration = Duration::from_secs(60 * 60);
+
 struct CachedProject {
     generation: u64,
     repository: Option<String>,
@@ -109,6 +118,7 @@ struct CachedProject {
     /// Kept across a failed read, so a pull request that merged while GitHub
     /// was unreachable still has the checks it was last seen with.
     checks: KnownChecks,
+    unresolved: UnresolvedLinks,
 }
 
 /// The last answer per requested root, kept on the worker's side so a pass
@@ -187,12 +197,16 @@ fn read(
         // repositories with no GitHub remote asks nothing.
         let authentication = std::cell::OnceCell::new();
         for (project, _) in due {
-            let known = cache
+            let cached = cache
                 .get(&project.root)
-                .filter(|cached| cached.repository == project.repository)
+                .filter(|cached| cached.repository == project.repository);
+            let known = cached
                 .map(|cached| cached.checks.clone())
                 .unwrap_or_default();
-            let answer = read_root(node, &authentication, project, &known);
+            let mut unresolved = cached
+                .map(|cached| cached.unresolved.clone())
+                .unwrap_or_default();
+            let answer = read_root(node, &authentication, project, &known, &mut unresolved);
             let checks = carried_checks(&answer, known);
             cache.insert(
                 project.root.clone(),
@@ -201,6 +215,7 @@ fn read(
                     repository: project.repository.clone(),
                     answer,
                     checks,
+                    unresolved,
                 },
             );
         }
@@ -230,6 +245,7 @@ fn read_root(
     authentication: &std::cell::OnceCell<Result<Option<String>, GhFailure>>,
     request: &GithubProjectRequest,
     known: &KnownChecks,
+    unresolved: &mut UnresolvedLinks,
 ) -> GithubProjectSnapshot {
     let started = Instant::now();
     let (place, root_path) = match &request.repository {
@@ -271,6 +287,7 @@ fn read_root(
                 viewer.as_deref(),
                 &request.links,
                 known,
+                unresolved,
             ),
         }
     };
@@ -339,9 +356,23 @@ fn read_project(
     viewer: Option<&str>,
     links: &[crate::issues::IssueReference],
     known: &KnownChecks,
+    unresolved: &mut UnresolvedLinks,
 ) -> GithubProjectSnapshot {
     let run = |arguments: &[&str]| gh_at(node, root, arguments);
-    let mut pull_requests = match list_pull_requests(&run, known) {
+    // The issues share nothing with the pull requests but the repository, so
+    // they are read beside them: read one after the other, the issues held
+    // every pull request's state back by as long again.
+    let (listed, repository, issues) = std::thread::scope(|scope| {
+        let issues = scope.spawn(|| read_issues(node, root, links, unresolved));
+        let repository = scope.spawn(|| issue_repository(node, root).map_err(GhFailure::network));
+        let listed = list_pull_requests(&run, known);
+        (listed, repository.join(), issues.join())
+    });
+    let repository = repository
+        .unwrap_or_else(|_| Err(GhFailure::network("gh repository reader failed".to_owned())));
+    let issues =
+        issues.unwrap_or_else(|_| Err(GhFailure::network("gh issue reader failed".to_owned())));
+    let mut pull_requests = match listed {
         Ok(value) => value,
         Err(reason) if reason.category == GithubFailureCategory::NoGithubRemote => {
             return no_github_remote(root_path);
@@ -359,9 +390,8 @@ fn read_project(
     // derived from them, and a failed one leaves those unknown on every pull
     // request, never "no" (issue #1189, replacing PRD work-tab-pr-lens D-25's
     // all-or-nothing rule).
-    let repository = issue_repository(node, root).map_err(GhFailure::network);
     let unread_queries = add_extra_facts(&run, repository, viewer, &mut pull_requests);
-    match read_issues(node, root, links) {
+    match issues {
         Ok((issues, warning)) => GithubProjectSnapshot {
             root_path,
             viewer: viewer.map(str::to_owned),
@@ -417,7 +447,17 @@ fn add_extra_facts(
     if viewer.is_none() {
         unread_queries.push(ExtraQuery::Account);
     }
-    let asked = match read_review_asked(run) {
+    let (asked, facts) = std::thread::scope(|scope| {
+        let facts = scope.spawn(|| repository.and_then(|repository| read_facts(run, &repository)));
+        let asked = read_review_asked(run);
+        let facts = facts.join().unwrap_or_else(|_| {
+            Err(GhFailure::network(
+                "gh merge queue reader failed".to_owned(),
+            ))
+        });
+        (asked, facts)
+    });
+    let asked = match asked {
         Ok(asked) => Some(asked),
         Err(reason) => {
             unread(ExtraQuery::ReviewRequests, &reason.reason);
@@ -425,7 +465,6 @@ fn add_extra_facts(
             None
         }
     };
-    let facts = repository.and_then(|repository| read_facts(run, &repository));
     let facts = match facts {
         Ok(facts) => Some(facts),
         Err(reason) => {
@@ -728,6 +767,7 @@ fn read_issues(
     node: &dyn NodeLink,
     root: &Where,
     links: &[crate::issues::IssueReference],
+    unresolved: &mut UnresolvedLinks,
 ) -> Result<(crate::issues::ProjectIssuesSnapshot, Option<GhFailure>), GhFailure> {
     let repository_json = gh_at(
         node,
@@ -787,10 +827,15 @@ fn read_issues(
         .filter(|reference| seen.insert((*reference).clone()))
         .take(crate::issues::ISSUE_LIMIT)
         .collect();
+    let now = Instant::now();
+    unresolved.retain(|reference, at| {
+        now.duration_since(*at) < UNRESOLVED_LINK_RETRY && links.contains(&reference)
+    });
     let missing: Vec<_> = links
         .iter()
         .copied()
         .filter(|reference| !listed.iter().any(|issue| &issue.reference == *reference))
+        .filter(|reference| !unresolved.contains_key(*reference))
         .collect();
     // Closed and cross-repository links are read together in one bounded
     // GraphQL query, rather than spawning one subprocess per card.
@@ -800,6 +845,11 @@ fn read_issues(
         let (linked, linked_warning) = read_linked_issues(node, root, &missing)?;
         if warning.is_none() {
             warning = linked_warning;
+        }
+        for reference in &missing {
+            if !linked.iter().any(|issue| &issue.reference == *reference) {
+                unresolved.insert((*reference).clone(), now);
+            }
         }
         linked
     };
@@ -876,7 +926,7 @@ fn read_issues(
 /// shows them without a read of its own. One more than `ISSUE_LIMIT` is asked
 /// for, so the sentinel proves overflow.
 fn list_issues(
-    run: &impl Fn(&[&str]) -> Result<String, GhFailure>,
+    run: &(impl Fn(&[&str]) -> Result<String, GhFailure> + Sync),
     include_projects: bool,
 ) -> Result<Vec<crate::issues::IssueSnapshot>, GhFailure> {
     let fields = if include_projects {
@@ -884,10 +934,10 @@ fn list_issues(
     } else {
         ISSUE_LIST_FIELDS
     };
-    let mut issues = Vec::new();
     // Independent bounds preserve the open list when recent closed work is
-    // busy. Each sentinel is retained until read_issues reports overflow.
-    for state in ["open", "closed"] {
+    // busy. Each sentinel is retained until read_issues reports overflow. The
+    // two lists are asked at the same time.
+    let list = |state: &str| {
         let output = run(&[
             "issue",
             "list",
@@ -900,8 +950,16 @@ fn list_issues(
             "--json",
             fields,
         ])?;
-        issues.extend(crate::issues::parse_issues(&output).map_err(GhFailure::network)?);
-    }
+        crate::issues::parse_issues(&output).map_err(GhFailure::network)
+    };
+    let (open, closed) = std::thread::scope(|scope| {
+        let closed = scope.spawn(|| list("closed"));
+        (list("open"), closed.join())
+    });
+    let mut issues = open?;
+    issues.extend(
+        closed.map_err(|_| GhFailure::network("gh closed issue reader failed".to_owned()))??,
+    );
     Ok(issues)
 }
 
@@ -2669,6 +2727,60 @@ fn run_gh_call_at(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A repository whose issue list is empty, and where every linked issue
+    /// asked for is gone; it counts the linked-issue queries.
+    #[derive(Default)]
+    struct GoneLinks {
+        linked_queries: std::sync::atomic::AtomicUsize,
+    }
+
+    impl NodeLink for GoneLinks {
+        fn call(
+            &self,
+            call: Call,
+            _timeout: Duration,
+        ) -> Result<crate::node_access::LinkAnswer, hide_node_link::LinkError> {
+            let Call::Gh { args, .. } = call else {
+                panic!("only gh is asked");
+            };
+            let stdout = match args.first().map(String::as_str) {
+                Some("repo") => r#"{"nameWithOwner":"acme/project","id":"R1","visibility":"PUBLIC","defaultBranchRef":{"name":"main"}}"#.to_owned(),
+                Some("issue") => "[]".to_owned(),
+                _ if args.iter().any(|arg| arg.contains("HideLinkedIssues")) => {
+                    self.linked_queries
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    r#"{"data":{"r0":{"issue":null}},"errors":[{"type":"NOT_FOUND"}]}"#.to_owned()
+                }
+                _ => r#"{"data":{}}"#.to_owned(),
+            };
+            Ok(serde_json::to_value(GhAnswer::Output { stdout })
+                .unwrap()
+                .into())
+        }
+    }
+
+    #[test]
+    fn a_linked_issue_github_cannot_find_is_not_asked_for_again_while_it_is_linked() {
+        let node = GoneLinks::default();
+        let root = Where::Repository("acme/project".to_owned());
+        let gone = crate::issues::IssueReference::parse("acme/project#7", None).unwrap();
+        let mut unresolved = UnresolvedLinks::new();
+        let asked = || {
+            node.linked_queries
+                .load(std::sync::atomic::Ordering::Relaxed)
+        };
+
+        read_issues(&node, &root, std::slice::from_ref(&gone), &mut unresolved).unwrap();
+        assert_eq!(asked(), 1);
+        read_issues(&node, &root, std::slice::from_ref(&gone), &mut unresolved).unwrap();
+        assert_eq!(asked(), 1, "the second read asks nothing for it");
+
+        read_issues(&node, &root, &[], &mut unresolved).unwrap();
+        assert!(unresolved.is_empty(), "a link nothing holds is let go");
+        read_issues(&node, &root, std::slice::from_ref(&gone), &mut unresolved).unwrap();
+        assert_eq!(asked(), 2, "linked again, it is asked again");
+    }
 
     #[test]
     fn a_compare_says_contains_only_for_ahead_or_identical() {

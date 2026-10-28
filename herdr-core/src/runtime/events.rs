@@ -94,6 +94,11 @@ pub(super) struct FocusPaneRequestPayload {
     pub(super) client_id: Option<String>,
     #[serde(default)]
     pub(super) sequence: Option<u64>,
+    /// The press came from a list of what the operator has to do: a row
+    /// with a View to look at brings that View forward too, in the same
+    /// event (PRD unseen-agent-views B3, D-14).
+    #[serde(default)]
+    pub(super) reveal_unseen: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -123,6 +128,15 @@ pub(super) struct RequestViewPayload {
     pub(super) observing: bool,
 }
 
+/// Whether any window holding the keyboard draws the Workspace screen, as
+/// the daemon sums every window's report; sent only when that changes (PRD
+/// unseen-agent-views D-07).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct WindowFocusPayload {
+    pub(super) focused: bool,
+}
+
 #[derive(Debug, Deserialize)]
 pub(super) struct CreateWorkspacePayload {
     /// The device that holds the folder; this machine when absent. A
@@ -138,6 +152,11 @@ pub(super) struct CreateWorkspacePayload {
     /// again, because the check and the make are not one step.
     #[serde(default)]
     pub(super) new_folder: bool,
+    /// The folder outside home the operator confirmed adding, as the request
+    /// spells it (PRD wsl-device D-10). hided has judged this machine's; a
+    /// device's helper judges its own with it (`Call::Registrable`).
+    #[serde(default)]
+    pub(super) confirmed_outside_home: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1709,6 +1728,7 @@ pub(super) enum Event {
     OverviewRefresh(OverviewRefreshPayload),
     OverviewOpenResult(PaneTargetPayload),
     RequestView(RequestViewPayload),
+    WindowFocus(WindowFocusPayload),
     /// The card's refresh button, opening the delete confirmation, and a
     /// completed worktree removal. All three say "read again now" about a
     /// different set of readers, and none needs a target: the card is always
@@ -2015,6 +2035,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "overview_refresh" => decode!(OverviewRefreshPayload, OverviewRefresh),
         "overview_open_result" => decode!(PaneTargetPayload, OverviewOpenResult),
         "request_view" => decode!(RequestViewPayload, RequestView),
+        "window_focus" => decode!(WindowFocusPayload, WindowFocus),
         "cleanup_review" => decode!(CleanupReviewPayload, CleanupReview),
         "cleanup_confirm" => decode!(CleanupConfirmPayload, CleanupConfirm),
         "cleanup_dismiss" => Ok(Event::CleanupDismiss),
@@ -2303,7 +2324,11 @@ impl Runtime {
                 if payload.origin == PaneFocusOrigin::Operator {
                     self.acknowledge_operator_focus(payload.client_id.as_deref(), payload.sequence);
                 }
+                let pane_id = payload.pane_id.clone();
                 self.focus_pane(payload.pane_id, payload.origin, payload.request_id);
+                if payload.reveal_unseen && self.snapshot.status.last_error.is_none() {
+                    self.reveal_unseen_view(&pane_id);
+                }
                 if payload.focus_device
                     && self.snapshot.status.last_error.is_none()
                     && !self.device_in_front(self.node.as_str())
@@ -2376,7 +2401,12 @@ impl Runtime {
                         );
                         return true;
                     }
-                    return self.create_device_registration(&device, payload.path, payload.label);
+                    return self.create_device_registration(
+                        &device,
+                        payload.path,
+                        payload.label,
+                        payload.confirmed_outside_home,
+                    );
                 }
                 if let Some(context) = self.live.as_ref().cloned() {
                     // A folder whose removal is still closing panes keeps the
@@ -3860,6 +3890,7 @@ impl Runtime {
                 self.observe_request_view(payload.observing, std::time::Instant::now());
                 false
             }
+            Event::WindowFocus(payload) => self.set_window_focused(payload.focused),
             Event::OverviewRefresh(payload) => {
                 let project = self
                     .snapshot

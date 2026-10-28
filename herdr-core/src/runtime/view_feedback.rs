@@ -355,7 +355,15 @@ impl Runtime {
             Caller::Pane(pane) => self.opener_of_pane(pane),
             Caller::Checkout { .. } => None,
         };
+        // An agent's open is for the operator to look at (PRD
+        // unseen-agent-views D-06); nobody's is the operator's own, and a
+        // page's own new target, opened by a `hide browser` action, is not
+        // an open.
+        let agent = opener.is_some() && super::workspace_control::lane_call(action);
         self.stamp_view_opener(key, view_id, opener);
+        if agent {
+            self.mark_view_unseen(key, view_id);
+        }
     }
 
     /// A terminal link the operator clicked in an agent's pane names the
@@ -1646,6 +1654,7 @@ impl Runtime {
         let mut displays = Vec::new();
         collect_displays(&layout.root, &mut displays);
         let mut opened: Vec<OpenedViewSnapshot> = Vec::new();
+        let views = self.view_layout_of(key);
         for display in &displays {
             let Some(pane) = display.opener.as_ref().and_then(|o| o.pane_id.clone()) else {
                 continue;
@@ -1666,6 +1675,9 @@ impl Runtime {
                     path: display.path.clone(),
                     url: display.url.clone(),
                     comments: display.comments,
+                    unseen: views
+                        .and_then(|views| views.display(&display.id))
+                        .is_some_and(|stored| stored.unseen.is_some()),
                 }),
             }
         }
@@ -2118,10 +2130,7 @@ mod tests {
                 Ok((id, true))
             })
             .unwrap();
-        let open = crate::workspace_control::Action::OpenFile {
-            path: path.into(),
-            beside: false,
-        };
+        let open = crate::workspace_control::Action::OpenFile { path: path.into() };
         runtime.stamp_control_opener(&key, "recipient", &open, &view);
         view
     }
@@ -2192,7 +2201,6 @@ mod tests {
         let checkout = crate::workspace_control::checkout_caller_id(&"a".repeat(32), CHECKOUT);
         let open = crate::workspace_control::Action::OpenFile {
             path: "src/login.ts".into(),
-            beside: false,
         };
         assert!(guard.opener_of_pane("sender").is_none());
         guard.stamp_control_opener(&key(), &checkout, &open, &view);

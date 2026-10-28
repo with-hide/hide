@@ -1647,25 +1647,18 @@ fn the_poll_reads_at_most_eight_projects_the_one_in_front_first() {
 }
 
 #[test]
-fn a_polled_change_asks_the_read_by_the_look_rule_and_sets_no_spinner() {
+fn a_polled_change_asks_the_read_at_once_and_sets_no_spinner() {
     let mut runtime = runtime();
     let answered = Instant::now();
     answered_project(&mut runtime, "/tmp/a", answered);
     runtime.note_polled_changes(vec!["/tmp/a".to_owned()]);
 
-    runtime.ask_polled_changes(answered + Duration::from_secs(29));
+    runtime.ask_polled_changes(answered + Duration::from_secs(1));
     assert_eq!(
         generation_of(&runtime, "/tmp/a"),
-        0,
-        "within 30 s nothing is asked"
+        1,
+        "an answer a second old may predate the change GitHub reported"
     );
-    assert!(
-        runtime.github_polled.contains("/tmp/a"),
-        "the change is kept"
-    );
-
-    runtime.ask_polled_changes(answered + Duration::from_secs(30));
-    assert_eq!(generation_of(&runtime, "/tmp/a"), 1, "after 30 s one ask");
     assert!(runtime.github_polled.is_empty());
     assert!(
         !row_loading(&runtime, 0),
@@ -1728,18 +1721,17 @@ fn a_polled_change_is_not_asked_while_a_read_is_out_and_is_let_go_when_it_cannot
 }
 
 #[test]
-fn a_polled_change_leaves_the_five_minute_clock_where_it_was() {
+fn an_empty_poll_answer_leaves_the_five_minute_clock_where_it_was() {
     let mut runtime = runtime();
     let answered = Instant::now();
     answered_project(&mut runtime, "/tmp/a", answered);
     let clock = runtime.github_clock.get("/tmp/a").copied();
     runtime.note_polled_changes(Vec::new());
-    runtime.note_polled_changes(vec!["/tmp/a".to_owned()]);
     runtime.ask_polled_changes(answered + Duration::from_secs(5));
     assert_eq!(
         runtime.github_clock.get("/tmp/a").copied(),
         clock,
-        "marking a change and an ask that has to wait do not move the clock"
+        "no change marked, nothing asked, the clock stays"
     );
     assert_eq!(generation_of(&runtime, "/tmp/a"), 0);
 }

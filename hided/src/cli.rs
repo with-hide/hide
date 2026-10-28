@@ -57,7 +57,6 @@ pub enum CommandKind {
     Dev,
     BrowserOpen {
         target: String,
-        beside: bool,
         wait: bool,
         request_id: Option<String>,
     },
@@ -108,11 +107,16 @@ const LINKS_USAGE: &str = "usage: hide links pr <number> | issue <number> | bran
 
 const MEMORY_USAGE: &str = "usage: hide memory show <card> | search <words> | add <text> | forget <card> | undo <card> | placed <card> <path> | building <card> <branch> <path> | unbuilt <card> <reason> | outdated <card> <reason> | skipped <card> <reason> | stale <card> <reason> | release <card>";
 
-const BROWSER_USAGE: &str = "usage: hide browser open <url-or-path> [--beside] [--wait] [--request-id <id>] | connect [--display <id>] | help | <command> <display> ... (see hide browser help)";
+const BROWSER_USAGE: &str = "usage: hide browser open <url-or-path> [--wait] [--request-id <id>] | connect [--display <id>] | help | <command> <display> ... (see hide browser help)";
 
-const FILE_USAGE: &str = "usage: hide file open <path> [--beside] [--request-id <id>]";
+/// What an open with the `--beside` it no longer takes answers (PRD
+/// unseen-agent-views D-24, B27): an agent's open is always a tab of the
+/// active View area, and only the operator splits the areas.
+const BESIDE_REMOVED: &str = "open no longer takes --beside: run the same command again without --beside; the View opens as a tab of the active View area";
 
-const DIFF_USAGE: &str = "usage: hide diff open <path> [--beside] [--request-id <id>]";
+const FILE_USAGE: &str = "usage: hide file open <path> [--request-id <id>]";
+
+const DIFF_USAGE: &str = "usage: hide diff open <path> [--request-id <id>]";
 
 const VIEW_USAGE: &str = "usage: hide view list [--session <id|here>] | status <view-id> | select <view-id> [--request-id <id>] | close <view-id> [--request-id <id>] | split <view-id> --area <area-id> --edge left|right|up|down [--request-id <id>] | move <view-id> --area <area-id> --index <n> [--request-id <id>]";
 
@@ -184,7 +188,7 @@ fn help_text() -> String {
         "hide workspace info",
         FILE_USAGE.trim_start_matches("usage: "),
         DIFF_USAGE.trim_start_matches("usage: "),
-        "hide browser open <url-or-path> [--beside] [--wait] [--request-id <id>]\nhide browser connect [--display <id>]\nhide browser snapshot|click|fill|type|press|hover|drag|scroll|wait|screenshot|eval|console|network <display> ...\nhide browser help",
+        "hide browser open <url-or-path> [--wait] [--request-id <id>]\nhide browser connect [--display <id>]\nhide browser snapshot|click|fill|type|press|hover|drag|scroll|wait|screenshot|eval|console|network <display> ...\nhide browser help",
         "hide view list [--session <id|here>]\nhide view status <view-id>\nhide view select <view-id> [--request-id <id>]\nhide view close <view-id> [--request-id <id>]\nhide view split <view-id> --area <area-id> --edge left|right|up|down [--request-id <id>]\nhide view move <view-id> --area <area-id> --index <n> [--request-id <id>]",
         LINKS_USAGE.trim_start_matches("usage: "),
         MEMORY_USAGE.trim_start_matches("usage: "),
@@ -487,10 +491,10 @@ fn parse_open<'a>(
         .next()
         .filter(|path| !path.is_empty() && !path.starts_with('-'))
         .ok_or(usage)?;
-    let (mut beside, mut request_id) = (false, None);
+    let mut request_id = None;
     while let Some(option) = iter.next() {
         match option.as_str() {
-            "--beside" if !beside => beside = true,
+            "--beside" => return Err(BESIDE_REMOVED.to_owned()),
             "--request-id" if request_id.is_none() => {
                 request_id = Some(
                     iter.next()
@@ -503,15 +507,9 @@ fn parse_open<'a>(
         }
     }
     let action = if file {
-        Action::OpenFile {
-            path: path.clone(),
-            beside,
-        }
+        Action::OpenFile { path: path.clone() }
     } else {
-        Action::OpenDiff {
-            path: path.clone(),
-            beside,
-        }
+        Action::OpenDiff { path: path.clone() }
     };
     Ok(CommandKind::WorkspaceAction { action, request_id })
 }
@@ -622,10 +620,10 @@ fn parse_browser<'a>(mut iter: impl Iterator<Item = &'a String>) -> Result<Comma
     if verb != Some("open") {
         return Err(BROWSER_USAGE.to_owned());
     }
-    let (mut target, mut beside, mut wait, mut request_id) = (None, false, false, None);
+    let (mut target, mut wait, mut request_id) = (None, false, None);
     while let Some(arg) = iter.next() {
         match arg.as_str() {
-            "--beside" if !beside => beside = true,
+            "--beside" => return Err(BESIDE_REMOVED.to_owned()),
             "--wait" if !wait => wait = true,
             "--request-id" if request_id.is_none() => {
                 request_id = Some(
@@ -642,7 +640,6 @@ fn parse_browser<'a>(mut iter: impl Iterator<Item = &'a String>) -> Result<Comma
     let target = target.ok_or_else(|| BROWSER_USAGE.to_owned())?;
     Ok(CommandKind::BrowserOpen {
         target,
-        beside,
         wait,
         request_id,
     })
@@ -773,10 +770,9 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         CommandKind::Dev => dev(env),
         CommandKind::BrowserOpen {
             target,
-            beside,
             wait,
             request_id,
-        } => browser_open(&env, &target, beside, wait, request_id.as_deref()),
+        } => browser_open(&env, &target, wait, request_id.as_deref()),
         CommandKind::BrowserConnect { display_id } => {
             let answer = browser_connect_value(&env, display_id.as_deref(), true)?;
             println!("{answer}");
@@ -1183,23 +1179,21 @@ fn workspace_action_value(
     request_id: Option<&str>,
 ) -> Result<serde_json::Value, String> {
     let action = match action {
-        Action::OpenFile { path, beside } => Action::OpenFile {
+        Action::OpenFile { path } => Action::OpenFile {
             path: match absolute_caller_path(&path) {
                 Ok(path) => path,
                 Err(reason) => {
                     return workspace_refusal(&reason, "Check the current directory and retry");
                 }
             },
-            beside,
         },
-        Action::OpenDiff { path, beside } => Action::OpenDiff {
+        Action::OpenDiff { path } => Action::OpenDiff {
             path: match absolute_caller_path(&path) {
                 Ok(path) => path,
                 Err(reason) => {
                     return workspace_refusal(&reason, "Check the current directory and retry");
                 }
             },
-            beside,
         },
         other => other,
     };
@@ -1459,6 +1453,7 @@ fn view_status_value(env: &Env, view_id: &str, report: bool) -> Result<serde_jso
 fn view_status(env: &Env, view_id: &str) -> Result<(), String> {
     let answer = view_status_value(env, view_id, true)?;
     println!("{answer}");
+    crate::workspace_cli::note_view_read(env, view_id);
     Ok(())
 }
 
@@ -1466,7 +1461,6 @@ fn view_status(env: &Env, view_id: &str) -> Result<(), String> {
 fn browser_open(
     env: &Env,
     target: &str,
-    beside: bool,
     wait: bool,
     request_id: Option<&str>,
 ) -> Result<(), String> {
@@ -1486,7 +1480,6 @@ fn browser_open(
             url,
             area_id: None,
             new_target: false,
-            beside,
         },
         request_id,
     )?;
@@ -3201,19 +3194,15 @@ mod tests {
             parse(&["hide", "browser", "open", "index.html"]),
             Ok(CommandKind::BrowserOpen {
                 target: "index.html".into(),
-                beside: false,
                 wait: false,
                 request_id: None,
             })
         );
+        // Open no longer takes --beside, and says how to run it again
+        // (PRD unseen-agent-views B27).
         assert_eq!(
             parse(&["hide", "browser", "open", "--beside", "localhost:3000"]),
-            Ok(CommandKind::BrowserOpen {
-                target: "localhost:3000".into(),
-                beside: true,
-                wait: false,
-                request_id: None,
-            })
+            Err(BESIDE_REMOVED.to_owned())
         );
         assert_eq!(
             parse(&[
@@ -3227,7 +3216,6 @@ mod tests {
             ]),
             Ok(CommandKind::BrowserOpen {
                 target: "localhost:3000".into(),
-                beside: false,
                 wait: true,
                 request_id: Some("1234567890000-abc".into()),
             })
@@ -3239,7 +3227,6 @@ mod tests {
             &["hide", "browser", "open", "a", "b"],
             &["hide", "browser", "open", "a", "--pane"],
             &["hide", "browser", "open", "a", "--reveal"],
-            &["hide", "browser", "open", "a", "--beside", "--beside"],
             &[
                 "hide", "browser", "open", "a", "--pane", "p1", "--pane", "p2",
             ],
@@ -3604,28 +3591,35 @@ mod tests {
             parse_args(&line.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>())
         };
         assert_eq!(
-            parse(&["hide", "file", "open", "src/lib.rs", "--beside"]),
+            parse(&["hide", "file", "open", "src/lib.rs"]),
             Ok(CommandKind::WorkspaceAction {
                 action: Action::OpenFile {
                     path: "src/lib.rs".into(),
-                    beside: true,
                 },
                 request_id: None,
             })
         );
+        for removed in [
+            &["hide", "file", "open", "src/lib.rs", "--beside"][..],
+            &["hide", "diff", "open", "src/lib.rs", "--beside"],
+        ] {
+            assert_eq!(
+                parse(removed),
+                Err(BESIDE_REMOVED.to_owned()),
+                "{removed:?}"
+            );
+        }
         assert_eq!(
             parse(&["hide", "diff", "open", "src/lib.rs"]),
             Ok(CommandKind::WorkspaceAction {
                 action: Action::OpenDiff {
                     path: "src/lib.rs".into(),
-                    beside: false,
                 },
                 request_id: None,
             })
         );
         assert!(parse(&["hide", "file", "open", "src/lib.rs", "--workspace", "other"]).is_err());
         assert!(parse(&["hide", "file", "open", "src/lib.rs", "--reveal"]).is_err());
-        assert!(parse(&["hide", "diff", "open", "src/lib.rs", "--beside", "--beside"]).is_err());
     }
 
     #[test]

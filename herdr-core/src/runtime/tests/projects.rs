@@ -1525,6 +1525,231 @@ fn pin_event(workspace_id: &str, pinned: bool) -> Vec<u8> {
     .unwrap()
 }
 
+/// This machine's node answering the registration check (`Call::Registrable`)
+/// as `judged` says, once its gate is open, and anything else as the node in
+/// this process does: a folder outside home is the helper's to judge
+/// (`hide_host::register`), and what the core does with each answer, and
+/// with requests that arrive while it waits, is what these tests read.
+struct JudgingNode {
+    judged: Option<hide_node_link::ErrorCode>,
+    open: std::sync::Mutex<bool>,
+    opened: std::sync::Condvar,
+    asked: std::sync::atomic::AtomicUsize,
+}
+
+impl JudgingNode {
+    fn new(judged: Option<hide_node_link::ErrorCode>, open: bool) -> Arc<Self> {
+        Arc::new(Self {
+            judged,
+            open: std::sync::Mutex::new(open),
+            opened: std::sync::Condvar::new(),
+            asked: std::sync::atomic::AtomicUsize::new(0),
+        })
+    }
+
+    fn release(&self) {
+        *self.open.lock().unwrap() = true;
+        self.opened.notify_all();
+    }
+
+    fn asked(&self) -> usize {
+        self.asked.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl crate::node_access::NodeLink for JudgingNode {
+    fn call(
+        &self,
+        call: hide_node_link::protocol::Call,
+        timeout: std::time::Duration,
+    ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+        let hide_node_link::protocol::Call::Registrable { path, .. } = call else {
+            return hide_node::Local::of_process().call(call, timeout);
+        };
+        self.asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let open = self.open.lock().unwrap();
+        drop(self.opened.wait_while(open, |open| !*open).unwrap());
+        match self.judged {
+            None => Ok(crate::node_access::LinkAnswer::Parsed(
+                serde_json::json!({"root": path, "is_git": false}),
+            )),
+            Some(code) => Err(crate::node_access::LinkError::Refused(
+                hide_node_link::HostError::new(code, format!("{path} was judged")),
+            )),
+        }
+    }
+
+    fn in_process(&self) -> bool {
+        true
+    }
+}
+
+/// A machine that judges every folder as asked: registrable (`None`) or
+/// refused with that code.
+pub(super) fn judging(
+    judged: Option<hide_node_link::ErrorCode>,
+) -> Arc<dyn crate::node_access::NodeLink> {
+    JudgingNode::new(judged, true)
+}
+
+fn row_id(runtime: &Runtime, label: &str) -> String {
+    runtime
+        .snapshot
+        .navigator
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.label == label)
+        .map(|workspace| workspace.id.clone())
+        .expect("the row Herdr shows")
+}
+
+/// Requests for one row while its machine judges it join that one check:
+/// two pins and a closing pane ask once and register the row once, pinned.
+#[test]
+fn a_row_pinned_twice_while_its_machine_answers_is_registered_once() {
+    let node = JudgingNode::new(None, false);
+    let mut runtime = runtime();
+    runtime.own_node = node.clone();
+    runtime.ingest_session(Ok(context_payload()));
+    let alpha = row_id(&runtime, "hide-context-alpha");
+    let shared = SharedRuntime::new(runtime);
+    shared
+        .lock()
+        .unwrap()
+        .install_worker_context(shared.weak(), crate::handle::ChangeNotifier::noop());
+
+    for _ in 0..2 {
+        shared
+            .lock()
+            .unwrap()
+            .dispatch_json(&pin_event(&alpha, true));
+    }
+    shared
+        .lock()
+        .unwrap()
+        .retain_project_before_last_pane_closes("w1:p1");
+    wait_for("the check to be asked", || node.asked() == 1);
+    node.release();
+    wait(&shared, "the row's answer", |runtime| {
+        runtime.row_registrations.is_empty()
+    });
+
+    let runtime = shared.lock().unwrap();
+    assert_eq!(node.asked(), 1, "one check for the row");
+    let registrations = &runtime.snapshot.ui_state.workspace_registrations;
+    assert_eq!(registrations.len(), 1, "{registrations:?}");
+    assert_eq!(registrations[0].id, alpha);
+    assert!(registrations[0].pinned);
+}
+
+/// A closing last pane's registration that is answered after Herdr closed
+/// the workspace still lands: the row is registered and the coordinator is
+/// asked to read the session again, so the rebuilt catalog draws it.
+#[test]
+fn a_retain_answered_after_the_workspace_closed_asks_for_the_row_again() {
+    let node = JudgingNode::new(None, false);
+    let mut runtime = runtime();
+    runtime.own_node = node.clone();
+    runtime.ingest_session(Ok(context_payload()));
+    let alpha = row_id(&runtime, "hide-context-alpha");
+    let shared = SharedRuntime::new(runtime);
+    shared
+        .lock()
+        .unwrap()
+        .install_worker_context(shared.weak(), crate::handle::ChangeNotifier::noop());
+
+    shared
+        .lock()
+        .unwrap()
+        .retain_project_before_last_pane_closes("w1:p1");
+    wait_for("the check to be asked", || node.asked() == 1);
+    {
+        // Herdr closes the workspace with its pane before the answer.
+        let mut runtime = shared.lock().unwrap();
+        let mut closed = context_payload();
+        closed
+            .workspaces
+            .retain(|workspace| workspace.workspace_id != "w1");
+        closed.tabs.retain(|tab| tab.workspace_id != "w1");
+        closed.panes.retain(|pane| pane.pane_id != "w1:p1");
+        closed.layouts.retain(|layout| layout.workspace_id != "w1");
+        runtime.ingest_session(Ok(closed));
+        assert!(
+            runtime
+                .snapshot
+                .navigator
+                .workspaces
+                .iter()
+                .all(|row| row.id != alpha)
+        );
+        runtime.take_republish_request();
+    }
+    node.release();
+    wait(&shared, "the late answer", |runtime| {
+        runtime.row_registrations.is_empty()
+    });
+
+    let mut runtime = shared.lock().unwrap();
+    let registrations = &runtime.snapshot.ui_state.workspace_registrations;
+    assert_eq!(registrations.len(), 1, "{registrations:?}");
+    assert_eq!(registrations[0].id, alpha);
+    assert!(
+        runtime.take_republish_request(),
+        "the catalog is read again"
+    );
+}
+
+/// An answer that arrives after the row stopped waiting for it registers
+/// nothing: the row was removed, or its pin withdrawn, meanwhile.
+#[test]
+fn a_late_answer_registers_nothing_after_the_row_is_removed_or_unpinned() {
+    let node = JudgingNode::new(None, false);
+    let mut runtime = runtime();
+    runtime.own_node = node.clone();
+    runtime.ingest_session(Ok(context_payload()));
+    let alpha = row_id(&runtime, "hide-context-alpha");
+    let zeta = row_id(&runtime, "hide-context-zeta");
+    let shared = SharedRuntime::new(runtime);
+    shared
+        .lock()
+        .unwrap()
+        .install_worker_context(shared.weak(), crate::handle::ChangeNotifier::noop());
+
+    for id in [&alpha, &zeta] {
+        shared.lock().unwrap().dispatch_json(&pin_event(id, true));
+    }
+    wait_for("both checks to be asked", || node.asked() == 2);
+    {
+        let mut runtime = shared.lock().unwrap();
+        runtime.dispatch_json(
+            &serde_json::to_vec(&serde_json::json!({
+                "schema_version": SCHEMA_VERSION, "kind": "remove_workspace",
+                "payload": {"workspace_id": alpha}
+            }))
+            .unwrap(),
+        );
+        runtime.dispatch_json(&pin_event(&zeta, false));
+    }
+    node.release();
+    wait(&shared, "both late answers", |runtime| {
+        runtime
+            .snapshot
+            .status
+            .diagnostics
+            .iter()
+            .filter(|row| row.kind == "workspace.row_registration_stale")
+            .count()
+            == 2
+    });
+
+    let runtime = shared.lock().unwrap();
+    assert!(
+        runtime.snapshot.ui_state.workspace_registrations.is_empty(),
+        "{:?}",
+        runtime.snapshot.ui_state.workspace_registrations
+    );
+}
+
 /// PRD sidebar-context-menus B3, D-14. A row Herdr shows without a
 /// registration is pinned by registering it with the id, label, root and
 /// device the row carries, in the same event, and the next catalog rebuild
@@ -1533,6 +1758,7 @@ fn pin_event(workspace_id: &str, pinned: bool) -> Vec<u8> {
 #[test]
 fn pinning_an_unregistered_row_registers_and_pins_it_in_one_event() {
     let mut runtime = runtime();
+    runtime.own_node = judging(None);
     runtime.ingest_session(Ok(context_payload()));
     let row = |runtime: &Runtime, label: &str| {
         runtime
@@ -2683,12 +2909,49 @@ fn a_registration_herdr_already_has_a_workspace_for_is_listed_once() {
     assert_eq!(catalog[0].session_workspace_ids, vec!["w41".to_owned()]);
 }
 
+/// PRD wsl-device B18: a pin or a closing last pane registers no folder its
+/// machine's registration check refuses without a confirmation, a folder
+/// outside that machine's home; the pin says so, the close only logs it,
+/// since the operator asked to close a pane.
+#[test]
+fn a_row_outside_home_is_not_registered_by_a_pin_or_a_closing_pane() {
+    let mut runtime = runtime();
+    runtime.own_node = judging(Some(hide_node_link::ErrorCode::NeedsConfirmation));
+    runtime.ingest_session(Ok(context_payload()));
+    let alpha = runtime
+        .snapshot
+        .navigator
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.label == "hide-context-alpha")
+        .cloned()
+        .expect("the row Herdr shows");
+
+    assert!(runtime.dispatch_json(&pin_event(&alpha.id, true)));
+    assert!(runtime.snapshot.ui_state.workspace_registrations.is_empty());
+    assert_eq!(
+        runtime
+            .snapshot
+            .status
+            .last_error
+            .as_ref()
+            .map(|error| error.kind.as_str()),
+        Some("workspace.pin_refused.needs_confirmation")
+    );
+
+    runtime.snapshot.status.last_error = None;
+    runtime.retain_project_before_last_pane_closes("w1:p1");
+    assert!(runtime.snapshot.ui_state.workspace_registrations.is_empty());
+    assert!(runtime.snapshot.status.last_error.is_none());
+}
+
 /// The user's report: a project that exists only as a Herdr workspace,
 /// one tab, one pane. Closing that pane made Herdr close the workspace,
 /// and the project vanished from the sidebar.
 #[test]
 fn closing_the_last_pane_keeps_an_unregistered_project_listed() {
     let mut runtime = runtime();
+    runtime.own_node = judging(None);
     let checkout_path = "/private/tmp/hide-retain-project";
     let spaces = vec![workspace::SessionSpace {
         checkout: None,

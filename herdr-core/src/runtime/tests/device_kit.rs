@@ -168,6 +168,7 @@ fn device_runtime(
                             "/home/me/.local/share/hide/host-helper/0123456789abcdef/hided"
                                 .to_owned(),
                         ),
+                        windows_drives: None,
                     },
                     generation: 1,
                 },
@@ -2168,6 +2169,32 @@ fn a_devices_terminals_ride_its_link_and_end_with_it() {
     );
 }
 
+/// PRD wsl-device B16: where a WSL device shows its PC's drives is the
+/// helper's own report, carried on the device's host row while its link
+/// lives; a device that reports none has none.
+#[test]
+fn a_devices_windows_drives_are_what_its_helper_reports() {
+    let probe = device_runtime(None, None);
+    for reported in [Some("/mnt"), None] {
+        let shared = device_runtime(Some(granted(&probe)), None);
+        let mut runtime = shared.lock().unwrap();
+        runtime.start_device_host(DEVICE, hosts::HostAttempt::Background);
+        let generation = runtime.device_host_generation(DEVICE);
+        let mut connected = established_with_terminals();
+        connected.node.hello.windows_drives = reported.map(str::to_owned);
+        runtime.ingest_host_established(
+            DEVICE,
+            generation,
+            Ok(hosts::HostReady::Dialed(connected)),
+        );
+        assert_eq!(
+            runtime.host_snapshot(DEVICE).windows_drives.as_deref(),
+            reported,
+            "{reported:?}"
+        );
+    }
+}
+
 /// A device's connection whose node runs a terminal service.
 fn established_with_terminals() -> hide_node_link::device::Established {
     established(
@@ -2216,6 +2243,7 @@ pub(super) fn node_ready(
             },
             reader_features: None,
             herdr_socket: None,
+            windows_drives: None,
         },
         terminals: terminals.ok_or_else(|| "the test's node runs no terminal service".to_owned()),
     }

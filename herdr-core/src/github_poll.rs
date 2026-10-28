@@ -1,5 +1,6 @@
-//! The advisory poll: every minute, ask GitHub whether the lists behind a
-//! project's pull request marks changed, and say so.
+//! The advisory poll: every fifteen seconds for the project in front and
+//! every minute for the rest, ask GitHub whether the lists behind a project's
+//! pull request marks changed, and say so.
 //!
 //! It never writes pull request state. It reads three kinds of list with the
 //! entity tag it last saw (`If-None-Match`), through the operator's own `gh`:
@@ -33,8 +34,13 @@ use crate::model::GithubFailureCategory;
 use crate::node_access::NodeLink;
 use crate::reader::BackgroundRead;
 
-/// How often a pass runs.
-const POLL_EVERY: Duration = Duration::from_secs(60);
+/// How often a pass runs, which is how often the project in front is read: a
+/// merge or a push there shows within seconds, not within the minute. An
+/// unchanged list answers 304, which costs no rate limit.
+const POLL_EVERY: Duration = Duration::from_secs(15);
+
+/// How often a project not in front is read; a pass inside this skips it.
+const POLL_BEHIND_EVERY: Duration = Duration::from_secs(60);
 
 /// The most projects one pass reads, the one in front first.
 pub(crate) const POLL_PROJECT_LIMIT: usize = 8;
@@ -78,6 +84,9 @@ pub(crate) struct PollProject {
     pub(crate) path: String,
     /// The lowercase `owner/name` its open pull requests are in.
     pub(crate) repository: String,
+    /// The project the operator is looking at, read on every pass; the rest
+    /// are read once per `POLL_BEHIND_EVERY`.
+    pub(crate) in_front: bool,
     /// The head commits of open pull requests whose checks were pending, at
     /// most `POLL_PENDING_LIMIT`.
     pub(crate) heads: Vec<String>,
@@ -205,6 +214,10 @@ pub(crate) struct PollState {
     combined: HashMap<(String, String), &'static str>,
     /// The projects waiting out a failure, at most `POLL_PROJECT_LIMIT`.
     pauses: HashMap<String, Pause>,
+    /// When each watched project was last read, kept for the last request's
+    /// projects (at most `POLL_PROJECT_LIMIT`), so one not in front is read
+    /// once per `POLL_BEHIND_EVERY`.
+    read_at: HashMap<String, Instant>,
     /// Polling is stopped until this unix second: the rate limit's floor.
     rate_until: Option<u64>,
 }
@@ -238,6 +251,7 @@ pub(crate) fn pass(
             .any(|project| &project.path == path && project.heads.contains(head))
     });
     state.pauses.retain(|path, _| watched(path));
+    state.read_at.retain(|path, _| watched(path));
     let mut answer = PollAnswer::default();
     if let Some(until) = state.rate_until {
         if clock.unix < until {
@@ -256,6 +270,14 @@ pub(crate) fn pass(
             .pauses
             .get(&project.path)
             .is_some_and(|pause| clock.now < pause.until)
+        {
+            continue;
+        }
+        if !project.in_front
+            && state
+                .read_at
+                .get(&project.path)
+                .is_some_and(|at| clock.now.duration_since(*at) < POLL_BEHIND_EVERY)
         {
             continue;
         }
@@ -391,6 +413,7 @@ pub(crate) fn pass(
             }));
             answer.changed.push(project.path.clone());
         }
+        state.read_at.insert(project.path.clone(), clock.now);
         match failure {
             None => {
                 state.pauses.remove(&project.path);
@@ -593,6 +616,14 @@ mod tests {
             path: path.to_owned(),
             repository: format!("acme/{}", path.trim_start_matches('/')),
             heads: heads.iter().map(|head| (*head).to_owned()).collect(),
+            in_front: true,
+        }
+    }
+
+    fn behind(path: &str) -> PollProject {
+        PollProject {
+            in_front: false,
+            ..project(path, &[])
         }
     }
 
@@ -748,6 +779,42 @@ mod tests {
         assert!(
             second[0].contains(&"If-None-Match: W/\"one\"".to_owned()),
             "the tag it saw comes back: {second:?}"
+        );
+    }
+
+    #[test]
+    fn the_project_in_front_is_read_every_pass_and_one_behind_once_a_minute() {
+        let script = Script::new();
+        let mut state = PollState::default();
+        let start = Instant::now();
+        let request = request(vec![project("/front", &[]), behind("/back")]);
+        let pass_at = |state: &mut PollState, seconds| {
+            run(
+                state,
+                &script,
+                &request,
+                start + Duration::from_secs(seconds),
+                1000,
+            );
+            let asked = script.asked_endpoints();
+            script.take_asked();
+            asked
+        };
+        let read = |asked: &[String], part: &str| asked.iter().any(|e| e.contains(part));
+
+        let first = pass_at(&mut state, 0);
+        assert!(read(&first, "/front/pulls") && read(&first, "/back/pulls"));
+        for seconds in [15, 30, 45] {
+            let asked = pass_at(&mut state, seconds);
+            assert!(read(&asked, "/front/pulls"), "front at {seconds} s");
+            assert!(
+                !read(&asked, "/back/pulls"),
+                "behind skipped at {seconds} s"
+            );
+        }
+        assert!(
+            read(&pass_at(&mut state, 60), "/back/pulls"),
+            "behind read again a minute after its last read"
         );
     }
 

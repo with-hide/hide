@@ -705,3 +705,70 @@ fn the_primary_language_is_a_tag_or_says_the_system_names_none() {
         Err(error) => assert_eq!(error.kind(), ErrorKind::NotFound, "{error}"),
     }
 }
+
+/// PRD wsl-device B16: a WSL distribution says where the PC's drives are,
+/// from its kernel release or the variable `wsl.exe` sets, and any other
+/// machine says it is not one.
+#[test]
+fn a_wsl_distribution_names_where_the_windows_drives_are() {
+    let none = |_: &str| None;
+    let distro = |name: &str| (name == "WSL_DISTRO_NAME").then(|| "Ubuntu".into());
+    for release in [
+        "5.15.153.1-microsoft-standard-WSL2",
+        "4.4.0-19041-Microsoft",
+    ] {
+        assert_eq!(
+            host::windows_drives_from(release, &none, None).unwrap(),
+            "/mnt",
+            "{release}"
+        );
+    }
+    assert_eq!(
+        host::windows_drives_from("6.8.0-45-generic", &distro, None).unwrap(),
+        "/mnt"
+    );
+    assert_eq!(
+        host::windows_drives_from("6.8.0-45-generic", &none, None)
+            .unwrap_err()
+            .kind(),
+        ErrorKind::NotFound,
+        "an ordinary Linux server is not a WSL distribution"
+    );
+    let moved = "[boot]\nsystemd=true\n\n[automount]\nenabled = true\nroot = \"/win/\" # moved\n";
+    assert_eq!(
+        host::windows_drives_from("5.15-microsoft-standard-WSL2", &none, Some(moved)).unwrap(),
+        "/win"
+    );
+    let elsewhere = "[network]\nroot = /nope\n";
+    assert_eq!(
+        host::windows_drives_from("5.15-microsoft-standard-WSL2", &none, Some(elsewhere)).unwrap(),
+        "/mnt",
+        "a root outside [automount] moves nothing"
+    );
+    assert_eq!(
+        host::windows_drives_from(
+            "5.15-microsoft-standard-WSL2",
+            &none,
+            Some("[automount]\nroot = win\n")
+        )
+        .unwrap_err()
+        .kind(),
+        ErrorKind::InvalidData
+    );
+}
+
+#[test]
+fn only_a_linux_machine_reads_whether_it_is_a_wsl_distribution() {
+    let answer = host::windows_drives();
+    if cfg!(target_os = "linux") {
+        assert!(
+            matches!(&answer, Ok(root) if root.starts_with('/'))
+                || answer
+                    .as_ref()
+                    .is_err_and(|error| error.kind() == ErrorKind::NotFound),
+            "{answer:?}"
+        );
+    } else {
+        assert_eq!(answer.unwrap_err().kind(), ErrorKind::Unsupported);
+    }
+}

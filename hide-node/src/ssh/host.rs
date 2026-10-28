@@ -3297,6 +3297,7 @@ mod tests {
             },
             reader_features: None,
             herdr_socket: None,
+            windows_drives: None,
         };
         let refusal = helper_protocol_refusal(&hello(23)).expect("refused");
         assert_eq!(

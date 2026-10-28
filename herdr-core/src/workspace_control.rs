@@ -82,11 +82,9 @@ pub fn gateway_caller_id(key: &str, canonical_path: &str) -> String {
 pub enum Action {
     OpenFile {
         path: String,
-        beside: bool,
     },
     OpenDiff {
         path: String,
-        beside: bool,
     },
     OpenBrowser {
         url: String,
@@ -94,9 +92,6 @@ pub enum Action {
         area_id: Option<String>,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         new_target: bool,
-        /// Open to the side, as a file or diff `--beside` does.
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-        beside: bool,
     },
     Select {
         view_id: String,
@@ -119,6 +114,13 @@ pub enum Action {
         view_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         expected_browser_area: Option<String>,
+    },
+    /// The caller read a View through the CLI (`hide view status`, `hide
+    /// browser snapshot|screenshot|eval|console|network`). It changes no
+    /// View; a read by an ancestor of the agent that opened it turns that
+    /// View's signal off on every ancestor (PRD unseen-agent-views D-22).
+    Read {
+        view_id: String,
     },
 }
 
@@ -157,6 +159,9 @@ pub struct View {
     pub openers: Vec<ViewOpener>,
     /// Whether the operator opened it, which puts it in every strip.
     pub operator: bool,
+    /// Whether an agent opened it and the operator has not looked at it yet
+    /// (PRD unseen-agent-views D-21); the last of `openers` opened it.
+    pub unseen: bool,
 }
 
 /// A session that opened a View, as `hide view list` names it.
@@ -386,7 +391,6 @@ mod tests {
                 url: "https://example.test/page".into(),
                 area_id: None,
                 new_target: false,
-                beside: false,
             }
         );
         assert_eq!(serde_json::to_value(action).unwrap(), legacy);
@@ -398,7 +402,6 @@ mod tests {
             url: "https://example.test/page".into(),
             area_id: Some("a1".into()),
             new_target: true,
-            beside: false,
         };
         let wire = serde_json::to_value(&action).unwrap();
         assert_eq!(wire["area_id"], "a1");

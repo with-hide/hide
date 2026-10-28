@@ -120,7 +120,7 @@ export function SessionGraphNode({ id, data, selected }: NodeProps<SessionNode>)
   const { t } = useInterfaceTranslation();
   const { row, root, branch, choose, highlight, team } = data;
   const reveal = useRevealNode(id);
-  const asking = row.agent.mark === "turn";
+  const asking = row.agent.mark === "turn" || row.agent.mark === "look";
   const launch = launchWords(row);
   return <div className="og-session" data-root={root} data-mark={row.agent.mark} data-selected={selected} data-current={data.current} data-context={data.context} data-muted={data.muted} data-highlighted={data.highlighted} data-folded-turn={team?.folded === true && team.turn > 0} data-graph-session={row.agent.pane_id}>
     <Ports />

@@ -2354,3 +2354,65 @@ fn a_file_another_handle_holds_refuses_a_reader_only_on_windows_and_only_while_h
     // ERROR_ACCESS_DENIED on Windows.
     assert!(!held_by_another(&std::io::Error::from_raw_os_error(5)));
 }
+
+/// A folder is found below another by what it is, not by how it is spelled:
+/// a link to the folder, or the system's own other spelling of a temporary
+/// folder (`/var` and `/private/var` on macOS), is the folder; a sibling with
+/// a name that starts the same is not.
+#[test]
+fn below_and_holds_judge_a_folder_by_identity_not_spelling() {
+    let outer = folder();
+    let home = outer.path().join("home");
+    fs::create_dir_all(home.join("projects/app")).unwrap();
+    fs::create_dir_all(outer.path().join("home-sibling")).unwrap();
+    let alias = outer.path().join("alias");
+    link::create_link(&home, &alias).unwrap();
+    let real = identity::canonical(&home).unwrap();
+
+    for spelling in [home.clone(), real.clone(), alias.clone()] {
+        assert_eq!(
+            identity::below(&spelling.join("projects/app"), &home),
+            Some(PathBuf::from("projects/app")),
+            "{spelling:?}"
+        );
+        assert_eq!(identity::below(&spelling, &home), Some(PathBuf::new()));
+    }
+    assert_eq!(
+        identity::below(&outer.path().join("home-sibling"), &home),
+        None
+    );
+    assert_eq!(
+        identity::below(&outer.path().join("missing/x"), &home),
+        None
+    );
+
+    for holder in [real.clone(), real.parent().unwrap().to_path_buf(), alias] {
+        assert!(identity::holds(&holder, &home), "{holder:?}");
+    }
+    let root = real.ancestors().last().unwrap().to_path_buf();
+    assert!(identity::holds(&root, &home), "{root:?}");
+    assert!(!identity::holds(&real.join("projects"), &home));
+    assert!(!identity::holds(&outer.path().join("home-sibling"), &home));
+}
+
+/// A drive, in either spelling, is this machine's own volume; a network
+/// share is not, whichever way it is written.
+#[test]
+fn a_network_share_is_not_a_local_volume() {
+    assert!(identity::on_a_local_volume(Path::new("/srv/app")));
+    #[cfg(windows)]
+    for (path, local) in [
+        (r"C:\work", true),
+        (r"\\?\C:\work", true),
+        (r"\\server\share\work", false),
+        (r"\\?\UNC\server\share\work", false),
+        (r"\\wsl$\Ubuntu\home", false),
+        (r"\\.\pipe\x", false),
+    ] {
+        assert_eq!(
+            identity::on_a_local_volume(Path::new(path)),
+            local,
+            "{path}"
+        );
+    }
+}

@@ -97,6 +97,7 @@ fn semantic_readers_converge_with_null_empty_reordering_and_future_reset() {
         retryable: false,
         occurred_at: 1,
         request_id: None,
+        confirm: None,
     });
     let active = runtime.snapshot_delta_payload(first.revision);
     runtime.snapshot.navigator.root_path = None;

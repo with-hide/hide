@@ -260,6 +260,9 @@ fn a_tree_close_starts_the_deepest_listed_panes_first_and_the_target_last() {
 #[test]
 fn a_descendant_that_is_its_projects_last_pane_keeps_the_project_like_an_ordinary_close() {
     let mut runtime = tree_runtime(&[]);
+    // B is a temporary folder outside this process's home, which a real
+    // machine asks about first; this one admits it as a folder under home.
+    runtime.own_node = super::projects::judging(None);
     assert!(
         runtime
             .snapshot()

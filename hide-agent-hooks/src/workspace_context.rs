@@ -110,13 +110,13 @@ fn format_context(program: &OsString, reference: &Path, answer: &Value) -> Optio
             .push("watch assign <watch-or-target-id> --observer <id> [--expected-generation <n>]");
     }
     if has("file.open") {
-        commands.push("file open <path> [--beside]");
+        commands.push("file open <path>");
     }
     if has("diff.open") {
-        commands.push("diff open <path> [--beside]");
+        commands.push("diff open <path>");
     }
     if has("browser.open") {
-        commands.push("browser open <url-or-path> [--beside] [--wait]");
+        commands.push("browser open <url-or-path> [--wait]");
         commands.push(
             "browser snapshot|click|fill|type|press|hover|drag|scroll|wait|screenshot|eval|console|network <display> ... (read and drive a browser display; `browser help` explains refs, checking with `--diff`, and failures)",
         );
@@ -196,7 +196,7 @@ mod tests {
             context
                 .contains("HIDE_CAP_REF='/srv/state/pane-capabilities/ref.json' '/opt/hide/hide'")
         );
-        assert!(context.contains("browser open <url-or-path> [--beside] [--wait], browser snapshot|click|fill|type|press|hover|drag|scroll|wait|screenshot|eval|console|network <display> ... (read and drive a browser display; `browser help` explains refs, checking with `--diff`, and failures), view close <view-id>"));
+        assert!(context.contains("browser open <url-or-path> [--wait], browser snapshot|click|fill|type|press|hover|drag|scroll|wait|screenshot|eval|console|network <display> ... (read and drive a browser display; `browser help` explains refs, checking with `--diff`, and failures), view close <view-id>"));
         assert!(!context.contains("file open"));
         // The letter guidance is for a pane that can send and receive them.
         assert!(!context.contains("A letter's first line"));

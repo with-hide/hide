@@ -10,7 +10,8 @@ export const coreErrorsEnglish = {
 
   "coreError.project.addFailed": "The project could not be added. If it keeps happening, check Recent in Settings.",
   "coreError.project.addRefused": "This folder cannot be added as a project on this device.",
-  "coreError.project.outsideRoot": "Only a folder inside the home folder, in a repository that is also inside it, can be added.",
+  "coreError.project.outsideRoot": "This folder can't be a project: it is the home folder or holds it, leads out of the home folder through a link, or is on a network.",
+  "coreError.project.pinNeedsConfirmation": "A folder outside the home folder can be pinned after you add it with Add project.",
   "coreError.project.localOnly": "A new project can be created only on the device the core runs on.",
   "coreError.project.addUnconfirmed": "Hide could not confirm the project was added. Check the list, and add it again if it is missing.",
   "coreError.project.addInFlight": "This project is still being added. Remove it once its first terminal opens.",
@@ -151,7 +152,8 @@ const ko = {
 
   "coreError.project.addFailed": "프로젝트를 추가하지 못했어요. 계속 그러면 설정의 최근 기록을 확인하세요.",
   "coreError.project.addRefused": "이 기기에서는 이 폴더를 프로젝트로 추가할 수 없어요.",
-  "coreError.project.outsideRoot": "홈 폴더 안에 있고, 저장소도 홈 폴더 안에 있는 폴더만 추가할 수 있어요.",
+  "coreError.project.outsideRoot": "이 폴더는 프로젝트로 추가할 수 없어요. 홈 폴더이거나 홈 폴더를 품은 폴더, 링크로 홈 밖에 나가는 폴더, 또는 네트워크 폴더예요.",
+  "coreError.project.pinNeedsConfirmation": "홈 밖 폴더는 프로젝트 추가에서 확인한 뒤에 고정할 수 있어요.",
   "coreError.project.localOnly": "새 프로젝트는 core가 실행되는 기기에서만 만들 수 있어요.",
   "coreError.project.addUnconfirmed": "프로젝트가 추가됐는지 확인하지 못했어요. 목록을 확인하고, 없으면 다시 추가하세요.",
   "coreError.project.addInFlight": "이 프로젝트를 아직 추가하는 중이에요. 첫 터미널이 열린 뒤 제거하세요.",
@@ -292,7 +294,8 @@ const ja = {
 
   "coreError.project.addFailed": "プロジェクトを追加できませんでした。繰り返す場合は、設定の最近の記録を確認してください。",
   "coreError.project.addRefused": "このデバイスでは、このフォルダをプロジェクトとして追加できません。",
-  "coreError.project.outsideRoot": "追加できるのは、ホームフォルダ内にあり、リポジトリもホームフォルダ内にあるフォルダだけです。",
+  "coreError.project.outsideRoot": "このフォルダはプロジェクトにできません。ホームフォルダそのものかそれを含むフォルダ、リンクでホームフォルダの外へ出るフォルダ、またはネットワーク上のフォルダです。",
+  "coreError.project.pinNeedsConfirmation": "ホームフォルダの外にあるフォルダは、「プロジェクトを追加」で確認してから固定できます。",
   "coreError.project.localOnly": "新しいプロジェクトはcoreが動いているデバイスでのみ作成できます。",
   "coreError.project.addUnconfirmed": "プロジェクトが追加されたか確認できませんでした。一覧を確認し、なければもう一度追加してください。",
   "coreError.project.addInFlight": "このプロジェクトはまだ追加中です。最初のペインが開いてから削除してください。",
@@ -433,7 +436,8 @@ const zhCN = {
 
   "coreError.project.addFailed": "无法添加项目。如果反复出现，请在设置中查看最近记录。",
   "coreError.project.addRefused": "无法在此设备上将此文件夹添加为项目。",
-  "coreError.project.outsideRoot": "只能添加位于主文件夹内、且所属仓库也在主文件夹内的文件夹。",
+  "coreError.project.outsideRoot": "此文件夹不能作为项目：它是主文件夹或包含主文件夹、通过链接通向主文件夹之外，或位于网络上。",
+  "coreError.project.pinNeedsConfirmation": "主文件夹之外的文件夹需要先在“添加项目”中确认，然后才能固定。",
   "coreError.project.localOnly": "只能在运行 core 的设备上创建新项目。",
   "coreError.project.addUnconfirmed": "无法确认项目是否已添加。请查看列表，如果没有请重新添加。",
   "coreError.project.addInFlight": "此项目仍在添加中。请在第一个窗格打开后再移除。",

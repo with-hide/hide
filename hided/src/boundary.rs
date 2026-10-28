@@ -5,15 +5,19 @@
 //! of them before the core sees it.
 //!
 //! The registration flow (`create_workspace`, the folder Add a project
-//! picked) lives behind `$HOME`, as it did in S2: a path
-//! written outside home is refused as `outside_home` before anything is
-//! read, and a path under home is resolved one component at a time from home,
-//! where a symlink's target is tested as written the same way before it is
-//! followed. So the reason a client reads never says whether a path outside
-//! home exists, not even through a symlink it planted under home. `..` and
-//! encoded segments are refused on shape or resolve like any other name. The
-//! boundary root is read from `HOME` at boot and is not configurable
-//! (`practices/env.md`); an allowed-roots setting is an S5 candidate.
+//! picked) lives behind `$HOME`, as it did in S2: a path under home is
+//! resolved one component at a time from home, where a symlink's target is
+//! tested as written the same way before it is followed, so a symlink planted
+//! under home never leads a registration out of it. A path written outside
+//! home is read only once the request carries the operator's confirmation of
+//! that same path (PRD wsl-device D-02, D-10); until then it is answered
+//! `needs_confirmation` before anything is read, so an unconfirmed request
+//! never learns whether a path outside home exists. Creating a new folder and
+//! cloning stay inside home. `..` and encoded segments are refused on shape
+//! or resolve like any other name. The boundary root is read from `HOME` at
+//! boot and is not configurable (`practices/env.md`), and nothing remembers a
+//! confirmation: the registration it made is the permission, so removing the
+//! project removes it.
 //!
 //! The Explorer's file work (open, reveal, save, create, rename, move,
 //! trash, and later the index and the attachment bytes) lives behind the
@@ -96,8 +100,15 @@ pub enum Refusal {
     OutsideHome,
     /// The real path is not under a registered checkout root.
     OutsideCheckout,
-    /// The path is the home directory itself; a workspace is a subdirectory.
+    /// The path is the home directory itself, or a folder holding it; a
+    /// workspace is a subdirectory.
     HomeRoot,
+    /// The path is in a Git repository that holds home (dotfiles kept in
+    /// `~/.git`), so its project would be home.
+    ProjectHoldsHome,
+    /// The path is written outside home and the request did not carry the
+    /// operator's confirmation of it; nothing about it was read.
+    NeedsConfirmation,
     /// Nothing exists at the path.
     NotFound,
     /// The path exists but is not a directory.
@@ -117,12 +128,29 @@ impl Refusal {
             Self::OutsideHome => "outside_home",
             Self::OutsideCheckout => "outside_checkout",
             Self::HomeRoot => "home_root",
+            Self::ProjectHoldsHome => "project_holds_home",
+            Self::NeedsConfirmation => "needs_confirmation",
             Self::NotFound => "not_found",
             Self::NotADirectory => "not_a_directory",
             Self::NotAFile => "not_a_file",
             Self::InvalidPath => "invalid_path",
             Self::AlreadyExists => "already_exists",
         }
+    }
+}
+
+/// Why a `create_workspace` was not forwarded: its path was refused, or the
+/// folder belongs to a project outside home other than the folder confirmed,
+/// whose root the operator is asked about instead.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Unregistrable {
+    Refused(Refusal),
+    ConfirmProject(PathBuf),
+}
+
+impl From<Refusal> for Unregistrable {
+    fn from(refusal: Refusal) -> Self {
+        Self::Refused(refusal)
     }
 }
 
@@ -854,14 +882,61 @@ impl Boundary {
         Ok(current)
     }
 
-    /// The canonical path a `create_workspace` may carry: a directory strictly
-    /// under home.
-    pub fn resolve_workspace(&self, raw: &str) -> Result<PathBuf, Refusal> {
-        let real = self.resolve_dir(raw)?;
-        if real == self.home {
-            return Err(Refusal::HomeRoot);
-        }
-        Ok(real)
+    /// The path a `create_workspace` registers, judged by the one
+    /// registration rule a device's helper also answers with
+    /// (`hide_host::register::judge`) against this machine's home: a directory
+    /// under home that stays under it, or an existing directory written
+    /// outside home that `confirmed` names, the operator's confirmation of
+    /// that one path as the request spells it, and whose project is that
+    /// folder. A folder in a project outside home is answered with the
+    /// question about the project's root (`Unregistrable::ConfirmProject`).
+    /// Home and a folder holding it are never a workspace (`home_root`), nor
+    /// is a folder of a repository that holds home (`project_holds_home`), and
+    /// a network share, written or reached through a link, is no project's
+    /// identity (PRD wsl-device D-15).
+    pub fn resolve_registration(
+        &self,
+        raw: &str,
+        confirmed: Option<&str>,
+    ) -> Result<PathBuf, Unregistrable> {
+        use hide_host::register::Unregistrable as Judged;
+        let expanded = self.expand(raw)?;
+        // A confirmation that is not a path this daemon reads confirms nothing.
+        let confirmed = confirmed.and_then(|raw| self.expand(raw).ok());
+        // Below home, the walk refuses a path that leaves home before it
+        // reads anything past home, so the reason never says what is there.
+        let walk = |rest: &Path| {
+            let resolved = self.walk(&self.home, rest, Refusal::OutsideHome).map_err(
+                |refusal| match refusal {
+                    Refusal::OutsideHome => Judged::OutsideHome,
+                    Refusal::NotFound => Judged::NotFound,
+                    Refusal::NotADirectory => Judged::NotADirectory,
+                    _ => Judged::InvalidPath,
+                },
+            )?;
+            // The walk left no link, so this only settles the spelling the
+            // system keeps (letter case on a volume that ignores it).
+            hide_platform::fs::identity::canonical(&resolved).map_err(|_| Judged::InvalidPath)
+        };
+        hide_host::register::judge_with(
+            Path::new(&expanded),
+            confirmed.as_deref().map(Path::new),
+            &self.home,
+            walk,
+        )
+        .map(|judged| judged.real)
+        .map_err(|refusal| match refusal {
+            Judged::NeedsConfirmation(Some(root)) => Unregistrable::ConfirmProject(root),
+            Judged::NeedsConfirmation(None) => Refusal::NeedsConfirmation.into(),
+            Judged::InvalidPath => Refusal::InvalidPath.into(),
+            Judged::HomeRoot => Refusal::HomeRoot.into(),
+            Judged::ProjectHoldsHome(_) => Refusal::ProjectHoldsHome.into(),
+            Judged::OutsideHome => Refusal::OutsideHome.into(),
+            Judged::NotFound => Refusal::NotFound.into(),
+            Judged::NotADirectory => Refusal::NotADirectory.into(),
+            // A loop or a denied directory, as a walk under home answers.
+            Judged::Unreadable(_) => Refusal::InvalidPath.into(),
+        })
     }
 
     /// Where Add a project's Create new project would make its folder: `name`
@@ -970,9 +1045,104 @@ impl Boundary {
     }
 }
 
+/// The Windows forms of the confirmed outside-home line (PRD wsl-device B21).
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+
+    /// [`Boundary::resolve_registration`] as the refusal its frame carries.
+    fn workspace(
+        boundary: &Boundary,
+        raw: &str,
+        confirmed: Option<&str>,
+    ) -> Result<PathBuf, Refusal> {
+        boundary
+            .resolve_registration(raw, confirmed)
+            .map_err(|refused| match refused {
+                Unregistrable::Refused(refusal) => refusal,
+                Unregistrable::ConfirmProject(_) => Refusal::NeedsConfirmation,
+            })
+    }
+
+    #[test]
+    fn a_folder_on_a_drive_is_confirmable_and_a_network_share_is_not() {
+        let outer = tempfile::tempdir().unwrap();
+        let home = outer.path().join("home");
+        let outside = outer.path().join("outside");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        let boundary = Boundary::new(&home).unwrap();
+        let written = hide_platform::path::to_wire_lossy(&outside);
+        assert_eq!(
+            workspace(&boundary, &written, None),
+            Err(Refusal::NeedsConfirmation)
+        );
+        assert_eq!(
+            workspace(&boundary, &written, Some(&written)),
+            Ok(hide_platform::fs::identity::canonical(&outside).unwrap())
+        );
+        for share in [
+            "//server/share/app",
+            "//wsl$/Ubuntu/home/me/app",
+            "//wsl.localhost/Ubuntu/home/me/app",
+            "//?/C:/app",
+        ] {
+            assert_eq!(
+                workspace(&boundary, share, Some(share)),
+                Err(Refusal::OutsideHome),
+                "{share}"
+            );
+        }
+        let drive = &written[..3];
+        assert_eq!(
+            workspace(&boundary, drive, Some(drive)),
+            Err(Refusal::HomeRoot),
+            "the drive home is on holds it"
+        );
+    }
+
+    /// A folder on a drive that is a link to a network share is judged by
+    /// where it leads: no confirmation makes the share a project.
+    #[test]
+    fn a_confirmed_link_to_a_network_share_is_refused_like_the_share() {
+        let outer = tempfile::tempdir().unwrap();
+        let home = outer.path().join("home");
+        let outside = outer.path().join("outside");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(outside.join("shared")).unwrap();
+        let boundary = Boundary::new(&home).unwrap();
+        // The same folder through the drive's administrative share.
+        let local = hide_platform::fs::identity::canonical(&outside.join("shared")).unwrap();
+        let local = local.to_string_lossy();
+        let share = format!(r"\\localhost\{}${}", &local[..1], &local[2..]);
+        let link = outside.join("share-link");
+        std::os::windows::fs::symlink_dir(&share, &link).unwrap();
+        let written = hide_platform::path::to_wire_lossy(&link);
+        assert_eq!(
+            boundary.resolve_registration(&written, Some(&written)),
+            Err(Unregistrable::Refused(Refusal::OutsideHome)),
+            "{written} -> {share}"
+        );
+    }
+}
+
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+
+    /// [`Boundary::resolve_registration`] as the refusal its frame carries.
+    fn workspace(
+        boundary: &Boundary,
+        raw: &str,
+        confirmed: Option<&str>,
+    ) -> Result<PathBuf, Refusal> {
+        boundary
+            .resolve_registration(raw, confirmed)
+            .map_err(|refused| match refused {
+                Unregistrable::Refused(refusal) => refusal,
+                Unregistrable::ConfirmProject(_) => Refusal::NeedsConfirmation,
+            })
+    }
     use std::os::unix::fs::symlink;
 
     struct Fixture {
@@ -1114,12 +1284,12 @@ mod tests {
         let escape = s(&f.home.join("projects/escape"));
         assert_eq!(f.boundary.resolve_dir(&escape), Err(Refusal::OutsideHome));
         assert_eq!(
-            f.boundary.resolve_workspace(&escape),
+            workspace(&f.boundary, &escape, None),
             Err(Refusal::OutsideHome)
         );
         let deeper = s(&f.home.join("projects/escape/secret"));
         assert_eq!(
-            f.boundary.resolve_workspace(&deeper),
+            workspace(&f.boundary, &deeper, None),
             Err(Refusal::OutsideHome)
         );
         // Past the escape the reason is the same whether the rest exists,
@@ -1133,7 +1303,7 @@ mod tests {
         ] {
             let path = s(&f.home.join("projects/escape").join(tail));
             assert_eq!(
-                f.boundary.resolve_workspace(&path),
+                workspace(&f.boundary, &path, None),
                 Err(Refusal::OutsideHome),
                 "{tail}"
             );
@@ -1150,24 +1320,30 @@ mod tests {
         let f = fixture();
         let dotdot = format!("{}/projects/../../outside", s(&f.home));
         assert_eq!(
-            f.boundary.resolve_workspace(&dotdot),
+            workspace(&f.boundary, &dotdot, None),
             Err(Refusal::InvalidPath)
         );
         let encoded = format!("{}/projects/%2e%2e/%2e%2e/outside", s(&f.home));
         assert_eq!(
-            f.boundary.resolve_workspace(&encoded),
+            workspace(&f.boundary, &encoded, None),
             Err(Refusal::NotFound)
         );
         assert_eq!(
-            f.boundary.resolve_workspace(&s(&f.outside)),
-            Err(Refusal::OutsideHome)
+            workspace(&f.boundary, &s(&f.outside), None),
+            Err(Refusal::NeedsConfirmation)
         );
         let sibling_prefix = format!("{}-extra", s(&f.home));
         fs::create_dir_all(&sibling_prefix).unwrap();
         assert_eq!(
-            f.boundary.resolve_workspace(&sibling_prefix),
-            Err(Refusal::OutsideHome),
+            workspace(&f.boundary, &sibling_prefix, None),
+            Err(Refusal::NeedsConfirmation),
             "a sibling whose name starts with the home path is outside"
+        );
+        // A confirmed path outside home is refused on shape like any other.
+        let outside_dotdot = format!("{}/secret/../secret", s(&f.outside));
+        assert_eq!(
+            workspace(&f.boundary, &outside_dotdot, Some(&outside_dotdot)),
+            Err(Refusal::InvalidPath)
         );
     }
 
@@ -1185,8 +1361,8 @@ mod tests {
             &"/etc/nope-zzz".to_owned(),
         ] {
             assert_eq!(
-                f.boundary.resolve_workspace(path),
-                Err(Refusal::OutsideHome),
+                workspace(&f.boundary, path, None),
+                Err(Refusal::NeedsConfirmation),
                 "{path}: the reason must not tell whether it exists"
             );
             assert_eq!(
@@ -1214,7 +1390,7 @@ mod tests {
             for tail in ["", "child"] {
                 let path = s(&f.home.join("projects").join(name).join(tail));
                 assert_eq!(
-                    f.boundary.resolve_workspace(&path),
+                    workspace(&f.boundary, &path, None),
                     Err(Refusal::OutsideHome),
                     "{name}/{tail}"
                 );
@@ -1225,9 +1401,314 @@ mod tests {
         let inbound = f.outside.join("inbound");
         symlink(f.home.join("projects/alpha"), &inbound).unwrap();
         assert_eq!(
-            f.boundary.resolve_workspace(&s(&inbound)),
-            Err(Refusal::OutsideHome)
+            workspace(&f.boundary, &s(&inbound), None),
+            Err(Refusal::NeedsConfirmation)
         );
+    }
+
+    /// PRD wsl-device B15, B18, B20: an existing folder written outside home
+    /// is registered only with the operator's confirmation of that same path,
+    /// and nothing remembers it.
+    #[test]
+    fn a_folder_outside_home_is_registered_only_with_its_own_confirmation() {
+        let f = fixture();
+        let secret = s(&f.outside.join("secret"));
+        let real = f.outside.join("secret").canonicalize().unwrap();
+        assert_eq!(
+            workspace(&f.boundary, &secret, Some(&secret)),
+            Ok(real.clone())
+        );
+        // The confirmation is compared as a path, so a trailing slash on
+        // either side names the same folder.
+        assert_eq!(
+            workspace(&f.boundary, &format!("{secret}/"), Some(&secret)),
+            Ok(real)
+        );
+        // A confirmation of one folder does not carry to another, not even a
+        // child or a parent of it.
+        fs::create_dir_all(f.outside.join("secret/child")).unwrap();
+        fs::create_dir_all(f.outside.join("other")).unwrap();
+        for (path, confirmed) in [
+            (s(&f.outside.join("other")), secret.clone()),
+            (s(&f.outside.join("secret/child")), secret.clone()),
+            (secret.clone(), s(&f.outside.join("secret/child"))),
+            (secret.clone(), "relative".to_owned()),
+            (secret.clone(), String::new()),
+        ] {
+            assert_eq!(
+                workspace(&f.boundary, &path, Some(&confirmed)),
+                Err(Refusal::NeedsConfirmation),
+                "{path} confirmed as {confirmed}"
+            );
+        }
+        // The boundary keeps no grant: the same folder asks again, which is
+        // what a removed project's next add meets.
+        assert_eq!(
+            workspace(&f.boundary, &secret, None),
+            Err(Refusal::NeedsConfirmation)
+        );
+    }
+
+    /// PRD wsl-device B18: a confirmed folder is answered by what is there,
+    /// the reasons a path under home gets, and confirming changes nothing
+    /// about a symlink that leaves home, home itself or a folder holding it.
+    #[test]
+    fn a_confirmation_keeps_the_refusals_a_path_gets_today() {
+        let f = fixture();
+        let file = f.outside.join("secret/marker.txt");
+        fs::write(&file, "x").unwrap();
+        for (path, reason) in [
+            (s(&f.outside.join("nope")), Refusal::NotFound),
+            (s(&file), Refusal::NotADirectory),
+            (s(&file.join("child")), Refusal::NotADirectory),
+        ] {
+            assert_eq!(
+                workspace(&f.boundary, &path, Some(&path)),
+                Err(reason),
+                "{path}"
+            );
+        }
+        let escape = s(&f.home.join("projects/escape/secret"));
+        assert_eq!(
+            workspace(&f.boundary, &escape, Some(&escape)),
+            Err(Refusal::OutsideHome),
+            "a symlink under home that leaves it is not confirmable"
+        );
+        let parent = f.home.parent().unwrap().to_path_buf();
+        for holder in [s(&f.home), s(&parent), "/".to_owned()] {
+            assert_eq!(
+                workspace(&f.boundary, &holder, Some(&holder)),
+                Err(Refusal::HomeRoot),
+                "{holder}"
+            );
+        }
+        // A confirmed outside path that leads to a folder holding home is
+        // refused once it is read.
+        let up = f.outside.join("up");
+        symlink(&parent, &up).unwrap();
+        assert_eq!(
+            workspace(&f.boundary, &s(&up), Some(&s(&up))),
+            Err(Refusal::HomeRoot)
+        );
+        // A path written outside home that leads back into it is registered
+        // as the folder it leads to once confirmed.
+        let inbound = f.outside.join("inbound");
+        symlink(f.home.join("projects/alpha"), &inbound).unwrap();
+        assert_eq!(
+            workspace(&f.boundary, &s(&inbound), Some(&s(&inbound))),
+            Ok(f.home.join("projects/alpha"))
+        );
+    }
+
+    /// PRD wsl-device B19: a project registered outside home is a checkout
+    /// root like any other; its files are read and nothing beside it is.
+    #[test]
+    fn a_checkout_outside_home_confines_its_files_like_one_inside() {
+        let f = fixture();
+        let root = f.outside.join("secret").canonicalize().unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join("src/main.rs"), "fn main() {}").unwrap();
+        fs::create_dir_all(f.outside.join("beside")).unwrap();
+        fs::write(f.outside.join("beside/key"), "k").unwrap();
+        symlink(f.outside.join("beside"), root.join("leak")).unwrap();
+        f.boundary.set_roots(vec![Root {
+            workspace_id: "w".to_owned(),
+            checkout_id: "c".to_owned(),
+            path: root.clone(),
+        }]);
+        let main = s(&root.join("src/main.rs"));
+        assert!(f.boundary.open_file(&main).is_ok());
+        assert!(f.boundary.list_children(&root, &s(&root)).is_ok());
+        let beside = f.outside.join("beside").canonicalize().unwrap();
+        for path in [s(&root.join("leak/key")), s(&beside.join("key"))] {
+            assert_eq!(
+                f.boundary.resolve_target(&path),
+                Err(Refusal::OutsideCheckout),
+                "{path}"
+            );
+            assert!(f.boundary.open_file(&path).is_err(), "{path}");
+        }
+    }
+
+    /// A repository at `main` with a linked worktree at `linked`, as Git
+    /// writes the two (`hide_project` reads them without a git process).
+    fn repository_with_worktree(main: &Path, linked: &Path) {
+        let admin = main.join(".git/worktrees/linked");
+        fs::create_dir_all(&admin).unwrap();
+        fs::write(main.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
+        fs::create_dir_all(linked).unwrap();
+        fs::write(
+            linked.join(".git"),
+            format!("gitdir: {}\n", admin.display()),
+        )
+        .unwrap();
+        fs::write(admin.join("HEAD"), "ref: refs/heads/feature\n").unwrap();
+        fs::write(admin.join("commondir"), "../..\n").unwrap();
+        fs::write(
+            admin.join("gitdir"),
+            format!("{}\n", linked.join(".git").display()),
+        )
+        .unwrap();
+    }
+
+    /// PRD wsl-device B15: a registration adds the project a folder belongs
+    /// to, so a folder inside a repository outside home, or a linked worktree
+    /// of one, is asked about once, by that repository's root; the
+    /// confirmation of the folder alone never covers it, and the root
+    /// confirmed is what is registered and whose files are read.
+    #[test]
+    fn a_folder_in_a_project_outside_home_asks_about_the_project_it_adds() {
+        let f = fixture();
+        let repo = f.outside.join("repo");
+        repository_with_worktree(&repo, &f.outside.join("elsewhere/linked"));
+        fs::create_dir_all(repo.join("public")).unwrap();
+        fs::write(repo.join("private.key"), "k").unwrap();
+        let root = repo.canonicalize().unwrap();
+        let ask_root = Err(Unregistrable::ConfirmProject(root.clone()));
+
+        let public = s(&repo.join("public"));
+        for confirmed in [None, Some(public.as_str())] {
+            assert_eq!(
+                f.boundary.resolve_registration(&public, confirmed),
+                ask_root,
+                "asked once, about the project it adds"
+            );
+        }
+        assert_eq!(
+            f.boundary.resolve_registration(&public, Some(&s(&root))),
+            Ok(root.join("public")),
+            "the root's confirmation adds the folder's project"
+        );
+        let linked = s(&f.outside.join("elsewhere/linked"));
+        assert_eq!(
+            f.boundary.resolve_registration(&linked, Some(&linked)),
+            ask_root,
+            "a linked worktree adds its repository"
+        );
+        // A worktree under home whose repository is outside asks too, though
+        // the folder itself needs no confirmation.
+        let inward = f.home.join("projects/inward");
+        let other = f.outside.join("other-repo");
+        repository_with_worktree(&other, &inward);
+        assert_eq!(
+            f.boundary.resolve_registration(&s(&inward), None),
+            Err(Unregistrable::ConfirmProject(other.canonicalize().unwrap()))
+        );
+
+        let root_text = s(&root);
+        assert_eq!(
+            f.boundary
+                .resolve_registration(&root_text, Some(&root_text)),
+            Ok(root.clone())
+        );
+        // What a folder under home belongs to under home asks nothing more.
+        assert_eq!(
+            f.boundary
+                .resolve_registration(&s(&f.home.join("projects/alpha")), None),
+            Ok(f.home.join("projects/alpha"))
+        );
+        f.boundary.set_roots(vec![Root {
+            workspace_id: "w".to_owned(),
+            checkout_id: "c".to_owned(),
+            path: root.clone(),
+        }]);
+        assert!(f.boundary.open_file(&s(&root.join("private.key"))).is_ok());
+        let beside = f.outside.join("secret").canonicalize().unwrap();
+        assert_eq!(
+            f.boundary.resolve_target(&s(&beside)),
+            Err(Refusal::OutsideCheckout)
+        );
+    }
+
+    /// A folder whose `.git` names a git directory with no `commondir` (a
+    /// submodule's, a separate git directory, a bare bundle's
+    /// `gitdir: ./.bare`) is registered as its own project, as main did.
+    #[test]
+    fn a_folder_whose_git_directory_lives_elsewhere_is_its_own_project() {
+        let f = fixture();
+        let pointed = |folder: &Path, git_dir: &Path, written: &str| {
+            fs::create_dir_all(git_dir).unwrap();
+            fs::write(git_dir.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+            fs::create_dir_all(folder).unwrap();
+            fs::write(folder.join(".git"), format!("gitdir: {written}\n")).unwrap();
+        };
+        let lib = f.home.join("projects/parent/lib");
+        let modules = f.home.join("projects/parent/.git/modules/lib");
+        pointed(&lib, &modules, &s(&modules));
+        assert_eq!(f.boundary.resolve_registration(&s(&lib), None), Ok(lib));
+
+        let bundle = f.outside.join("bundle");
+        pointed(&bundle, &bundle.join(".bare"), "./.bare");
+        let written = s(&bundle);
+        assert_eq!(
+            f.boundary.resolve_registration(&written, Some(&written)),
+            Ok(bundle.canonicalize().unwrap())
+        );
+    }
+
+    /// PRD wsl-device B18: a folder behind one the operator cannot read is
+    /// answered `invalid_path`, as a walk under home answers it today, and
+    /// one outside home is asked about first and answered so once confirmed;
+    /// a folder that is itself closed registers as it does today, since
+    /// nothing inside it is read to add it.
+    #[test]
+    fn a_folder_behind_one_the_operator_cannot_read_is_refused_as_today() {
+        use std::os::unix::fs::PermissionsExt;
+        let f = fixture();
+        let closed = f.home.join("projects/closed");
+        let locked = f.home.join("projects/locked");
+        let outside = f.outside.join("closed");
+        for folder in [closed.join("app"), locked.clone(), outside.join("app")] {
+            fs::create_dir_all(folder).unwrap();
+        }
+        let deny = |mode| {
+            for folder in [&closed, &locked, &outside] {
+                fs::set_permissions(folder, fs::Permissions::from_mode(mode)).unwrap();
+            }
+        };
+        deny(0o000);
+        let inside = s(&closed.join("app"));
+        let beyond = s(&outside.join("app"));
+        let answers = [
+            workspace(&f.boundary, &inside, None),
+            workspace(&f.boundary, &beyond, None),
+            workspace(&f.boundary, &beyond, Some(&beyond)),
+            workspace(&f.boundary, &s(&locked), None),
+        ];
+        // Access comes back before the fixture is dropped, or it could not
+        // be removed.
+        deny(0o755);
+        assert_eq!(
+            answers,
+            [
+                Err(Refusal::InvalidPath),
+                Err(Refusal::NeedsConfirmation),
+                Err(Refusal::InvalidPath),
+                Ok(locked.canonicalize().unwrap()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_folder_in_a_repository_holding_home_is_refused_with_its_own_reason() {
+        let f = fixture();
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "-q"])
+                .arg(&f.home)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let alpha = s(&f.home.join("projects/alpha"));
+        for confirmed in [None, Some(alpha.as_str())] {
+            assert_eq!(
+                workspace(&f.boundary, &alpha, confirmed),
+                Err(Refusal::ProjectHoldsHome)
+            );
+        }
+        assert_eq!(Refusal::ProjectHoldsHome.code(), "project_holds_home");
+        assert_eq!(workspace(&f.boundary, "~", None), Err(Refusal::HomeRoot));
     }
 
     #[test]
@@ -1241,12 +1722,12 @@ mod tests {
         let canonical = real_home.canonicalize().unwrap();
         assert_eq!(boundary.home(), canonical);
         assert_eq!(
-            boundary.resolve_workspace(&s(&link_home.join("projects/alpha"))),
+            workspace(&boundary, &s(&link_home.join("projects/alpha")), None),
             Ok(canonical.join("projects/alpha")),
             "the spelling HOME uses is under home"
         );
         assert_eq!(
-            boundary.resolve_workspace(&s(&canonical.join("projects/alpha"))),
+            workspace(&boundary, &s(&canonical.join("projects/alpha")), None),
             Ok(canonical.join("projects/alpha"))
         );
         assert_eq!(boundary.resolve_dir(&s(&link_home)), Ok(canonical));
@@ -1257,53 +1738,56 @@ mod tests {
         let f = fixture();
         let file = s(&f.home.join("projects/notes.txt"));
         assert_eq!(
-            f.boundary.resolve_workspace(&file),
+            workspace(&f.boundary, &file, None),
             Err(Refusal::NotADirectory)
         );
         assert_eq!(f.boundary.resolve_dir(&file), Err(Refusal::NotADirectory));
         let filelink = s(&f.home.join("projects/filelink"));
         assert_eq!(
-            f.boundary.resolve_workspace(&filelink),
+            workspace(&f.boundary, &filelink, None),
             Err(Refusal::NotADirectory)
         );
         let under_file = s(&f.home.join("projects/notes.txt/child"));
         assert!(matches!(
-            f.boundary.resolve_workspace(&under_file),
+            workspace(&f.boundary, &under_file, None),
             Err(Refusal::NotFound | Refusal::NotADirectory)
         ));
         let missing = s(&f.home.join("projects/nope"));
         assert_eq!(
-            f.boundary.resolve_workspace(&missing),
+            workspace(&f.boundary, &missing, None),
             Err(Refusal::NotFound)
         );
         assert_eq!(
-            f.boundary.resolve_workspace(&s(&f.home)),
+            workspace(&f.boundary, &s(&f.home), None),
             Err(Refusal::HomeRoot)
         );
         assert_eq!(f.boundary.resolve_dir(&s(&f.home)), Ok(f.home.clone()));
         assert_eq!(f.boundary.resolve_dir("~"), Ok(f.home.clone()));
         assert_eq!(
-            f.boundary.resolve_workspace("~/projects/alpha").unwrap(),
+            workspace(&f.boundary, "~/projects/alpha", None).unwrap(),
             f.home.join("projects/alpha")
         );
-        assert_eq!(f.boundary.resolve_workspace("~"), Err(Refusal::HomeRoot));
+        assert_eq!(workspace(&f.boundary, "~", None), Err(Refusal::HomeRoot));
         assert_eq!(
-            f.boundary.resolve_workspace("~user/x"),
+            workspace(&f.boundary, "~user/x", None),
             Err(Refusal::InvalidPath)
         );
-        assert_eq!(f.boundary.resolve_workspace(""), Err(Refusal::InvalidPath));
+        assert_eq!(workspace(&f.boundary, "", None), Err(Refusal::InvalidPath));
         assert_eq!(
-            f.boundary.resolve_workspace("projects"),
+            workspace(&f.boundary, "projects", None),
             Err(Refusal::InvalidPath)
         );
         assert_eq!(
-            f.boundary
-                .resolve_workspace(&format!("{}\0", s(&f.home.join("projects")))),
+            workspace(
+                &f.boundary,
+                &format!("{}\0", s(&f.home.join("projects"))),
+                None
+            ),
             Err(Refusal::InvalidPath)
         );
         // A hidden directory may be added like any other.
         let hidden = s(&f.home.join("projects/.hidden"));
-        assert!(f.boundary.resolve_workspace(&hidden).is_ok());
+        assert!(workspace(&f.boundary, &hidden, None).is_ok());
     }
 
     #[test]
@@ -1311,27 +1795,31 @@ mod tests {
         let f = fixture();
         symlink("alpha", f.home.join("projects/relative-alias")).unwrap();
         assert_eq!(
-            f.boundary
-                .resolve_workspace(&s(&f.home.join("projects/relative-alias"))),
+            workspace(
+                &f.boundary,
+                &s(&f.home.join("projects/relative-alias")),
+                None
+            ),
             Ok(f.home.join("projects/alpha"))
         );
         symlink("../projects/alpha", f.home.join("projects/dotdot-alias")).unwrap();
         assert_eq!(
-            f.boundary
-                .resolve_workspace(&s(&f.home.join("projects/dotdot-alias"))),
+            workspace(&f.boundary, &s(&f.home.join("projects/dotdot-alias")), None),
             Ok(f.home.join("projects/alpha"))
         );
         symlink("loop-b", f.home.join("projects/loop-a")).unwrap();
         symlink("loop-a", f.home.join("projects/loop-b")).unwrap();
         assert_eq!(
-            f.boundary
-                .resolve_workspace(&s(&f.home.join("projects/loop-a"))),
+            workspace(&f.boundary, &s(&f.home.join("projects/loop-a")), None),
             Err(Refusal::InvalidPath)
         );
         symlink("nowhere", f.home.join("projects/dangling-inside")).unwrap();
         assert_eq!(
-            f.boundary
-                .resolve_workspace(&s(&f.home.join("projects/dangling-inside"))),
+            workspace(
+                &f.boundary,
+                &s(&f.home.join("projects/dangling-inside")),
+                None
+            ),
             Err(Refusal::NotFound),
             "a dangling target under home is a missing path under home"
         );
@@ -1342,12 +1830,12 @@ mod tests {
         let f = fixture();
         let alias = s(&f.home.join("projects/alias"));
         assert_eq!(
-            f.boundary.resolve_workspace(&alias).unwrap(),
+            workspace(&f.boundary, &alias, None).unwrap(),
             f.home.join("projects/alpha")
         );
         let trailing = format!("{}/", s(&f.home.join("projects/alpha")));
         assert_eq!(
-            f.boundary.resolve_workspace(&trailing).unwrap(),
+            workspace(&f.boundary, &trailing, None).unwrap(),
             f.home.join("projects/alpha")
         );
     }

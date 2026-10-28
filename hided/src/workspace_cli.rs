@@ -907,6 +907,37 @@ pub fn request_action(
     })
 }
 
+/// Tells the core this caller read `view_id` (PRD unseen-agent-views D-22).
+/// The read has already answered, so a failure here leaves the caller's
+/// answer as it is and is said once on stderr, the CLI's log.
+pub fn note_view_read(env: &Env, view_id: &str) {
+    let outcome = Credential::acquire(env).and_then(|mut credential| {
+        fresh_request_id().and_then(|request_id| {
+            request_action(
+                &mut credential,
+                Action::Read {
+                    view_id: view_id.to_owned(),
+                },
+                &request_id,
+            )
+        })
+    });
+    let refused = match &outcome {
+        Ok(answer) if answer["ok"] == true => return,
+        Ok(answer) => answer["reason"].as_str().unwrap_or("refused").to_owned(),
+        Err(reason) => reason.clone(),
+    };
+    eprintln!(
+        "{}",
+        json!({
+            "component": "hide",
+            "kind": "view_read.unsent",
+            "view": view_id,
+            "reason": refused,
+        })
+    );
+}
+
 pub fn valid_request_id(id: &str) -> bool {
     let Some((timestamp, suffix)) = id.split_once('-') else {
         return false;
