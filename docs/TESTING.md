@@ -97,6 +97,9 @@ When the behavior depends on the order of two events, the test fixes that order;
   Fence the page's effects with two animation frames before asserting that something did not move; a check that passes on the first poll proves nothing about an effect that has not run yet.
 - A rule the core decides is gated one layer lower, in `herdr-core/src/runtime/tests/control_order.rs`: `FakeHerdr` records what actually left over the socket, and the test hands the runtime each answer itself (`complete_lane_tab`, `complete_lane_pane_focus`), so late, replaced, refused and lost answers arrive in the order the test chooses.
   Put an order rule there; an e2e spec keeps one representative journey that shows the pieces are connected.
+- A test that hands the delivery store its passes itself starts the store alone (`Worker::store`), not with the doorbell and watch producers (`Worker::spawn`), which pass on their own clocks.
+  The store still passes on its own while a registration move or end is asked for, so the test looks at what an event left under that event's own lock, and stops the store before it compares the ledger file with the published ledger.
+  `SleepingChild` in `herdr-core/src/runtime/tests/agent_sleep.rs` ran the producers, and in more than fifty recorded Linux CI runs a pass of theirs moved the woken pane's registration between the wake and the test's look; an order such a pass can make is a test of its own there (`a_pass_begun_before_the_wake_keeps_the_record_and_the_next_one_moves_the_registration`).
 - Before releasing, assert the barrier the race needs, such as the number of accepted requests, so a stale snapshot or an earlier diagnostic cannot satisfy it.
 - After releasing, assert the outcome and the boundary's own record (`gate.requests`, `gate.maximum()`), which show the order the product actually saw.
 - A race the test cannot order proves nothing either way; find the boundary to gate before writing the assertion.
