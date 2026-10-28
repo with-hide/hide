@@ -21,7 +21,7 @@
   "detail_item_kind": ["pull_request", "record", "mission", "worktrees", "cost", "plan"],
   "agent_onboarding": ["pending", "done"],
   "agent_wait": ["children", "background", "reply", "checks"],
-  "row_mark": ["turn", "going", "waiting", "done", "unread", "quiet", "unknown", "asleep"],
+  "row_mark": ["turn", "going", "waiting", "done", "unread", "quiet", "unknown", "asleep", "look"],
   "agent_status_code": ["error", "question", "approval", "working", "done", "idle", "unknown", "starting", "waiting", "unfinished", "stopped", "attached", "sleeping", "waking", "sleep_failed"],
   "changed_file_status": ["modified", "added", "deleted", "untracked", "renamed", "conflict"],
   "color_theme": ["hide", "neutral"],

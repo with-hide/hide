@@ -87,6 +87,7 @@ mod usage_limit;
 mod view_areas;
 mod view_callers;
 mod view_feedback;
+mod unseen_views;
 mod view_sessions;
 mod workspace_control;
 mod workspace_view;
@@ -1659,6 +1660,14 @@ pub struct Runtime {
     /// Whether a window draws the snapshot (`ui_attached`); a core no daemon
     /// told otherwise is drawn.
     ui_attached: bool,
+    /// Whether a window holding the keyboard draws the Workspace screen, as
+    /// the daemon summed every window's report (`window_focus`); no window
+    /// told it, nothing is in front of the operator (PRD unseen-agent-views
+    /// D-07).
+    window_focused: bool,
+    /// The View store's generation the rows' unseen Views were last laid
+    /// against (`settle_unseen_views`).
+    unseen_laid_generation: u64,
     /// The last labels the local session-sync coordinator published, laid on
     /// every local projection this runtime ingests, whichever path brings it.
     label_overlay: crate::labels::overlay::LabelOverlay,
@@ -2391,6 +2400,8 @@ impl Runtime {
             restore_hint_pending: true,
             last_session_spaces: Vec::new(),
             ui_attached: true,
+            window_focused: false,
+            unseen_laid_generation: 0,
             label_overlay: Default::default(),
             label_services: None,
             pull_request_times: Default::default(),

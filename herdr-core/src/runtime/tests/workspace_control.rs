@@ -575,7 +575,6 @@ fn file_open_reads_outside_the_runtime_then_places_once_in_the_callers_workspace
     let before = runtime.snapshot.navigator.focused_workspace_id.clone();
     let action = Action::OpenFile {
         path: path.to_string_lossy().into_owned(),
-        beside: false,
     };
     let id = action_id("file-open");
     let ActionPreparation::Read(source) = runtime
@@ -628,7 +627,6 @@ fn browser_load_status_tracks_the_current_load_and_retry_does_not_reload() {
         url: "https://example.test/page".into(),
         area_id: None,
         new_target: false,
-        beside: false,
     };
     let request_id = action_id("browser-open");
     let first = runtime
@@ -756,7 +754,6 @@ fn browser_new_target_uses_the_named_area_and_duplicate_intent_converges() {
         url: "https://example.test/page".into(),
         area_id: Some("a1".into()),
         new_target: true,
-        beside: false,
     };
     let id = action_id("new-browser-target");
     let first = runtime
@@ -844,7 +841,6 @@ fn browser_explicit_area_dedupes_only_within_that_area() {
         url: "https://example.test/other".into(),
         area_id: Some("a1".into()),
         new_target: false,
-        beside: false,
     };
     let first = runtime
         .workspace_control_action(
@@ -1003,7 +999,6 @@ fn browser_unknown_area_refuses_without_mutating_empty_or_existing_views() {
             url: "https://example.test/page".into(),
             area_id: Some("missing-area".into()),
             new_target: true,
-            beside: false,
         };
         let id = action_id("unknown-browser-area");
         let before = browser_control_state(&runtime);
@@ -1066,7 +1061,6 @@ fn browser_area_removed_during_file_read_refuses_without_mutation() {
         url: format!("file://{}", path.display()),
         area_id: Some(other_area.clone()),
         new_target: true,
-        beside: false,
     };
     let id = action_id("browser-area-disappeared");
     let ActionPreparation::Read(source) = runtime
@@ -1442,7 +1436,6 @@ fn browser_file_source_is_confined_to_the_calling_checkout() {
         url: format!("file://{}", outside.display()),
         area_id: None,
         new_target: false,
-        beside: false,
     };
     let ActionPreparation::Read(source) = runtime
         .workspace_control_prepare_action(
@@ -1463,7 +1456,6 @@ fn browser_file_source_is_confined_to_the_calling_checkout() {
         url: format!("file://{}", inside.display()),
         area_id: None,
         new_target: false,
-        beside: false,
     };
     let id = action_id("inside-html");
     let ActionPreparation::Read(source) = runtime
@@ -1525,7 +1517,6 @@ fn diff_open_requires_a_real_working_tree_change() {
         .context;
     let action = Action::OpenDiff {
         path: path.to_string_lossy().into_owned(),
-        beside: false,
     };
     let clean_id = action_id("clean");
     let ActionPreparation::Read(source) = runtime
@@ -1747,7 +1738,6 @@ fn checkout_callers_in_one_checkout_keep_separate_retry_records() {
                 url: "http://localhost:3000".into(),
                 area_id: None,
                 new_target: false,
-                beside: false,
             },
             Ok(None),
         )

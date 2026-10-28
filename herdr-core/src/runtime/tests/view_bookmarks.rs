@@ -296,19 +296,17 @@ fn control(
         .expect("the action applies")
 }
 
-/// `hide file open [--beside] <name>` from `caller`, with the host read the
+/// `hide file open <name>` from `caller`, with the host read the
 /// daemon does off the lock.
 fn control_file(
     runtime: &mut Runtime,
     caller: &str,
     directory: &Path,
     name: &str,
-    beside: bool,
     suffix: &str,
 ) {
     let action = Action::OpenFile {
         path: directory.join(name).to_string_lossy().into_owned(),
-        beside,
     };
     let expected = runtime
         .workspace_control_query(crate::node::TEST_NODE, caller, Query::Info)
@@ -339,7 +337,6 @@ fn open_page(url: &str) -> Action {
         url: url.to_owned(),
         area_id: None,
         new_target: false,
-        beside: false,
     }
 }
 
@@ -514,7 +511,6 @@ fn a_background_agents_open_joins_the_list_and_moves_nothing() {
             "w-order:t2:p",
             &directory,
             "c.md",
-            false,
             "background",
         );
         runtime.sync_workspace_view();
@@ -606,7 +602,6 @@ fn a_front_tab_open_calls_the_lane_and_keeps_the_explorer() {
         "w-order:t1:p",
         &directory,
         "b.md",
-        false,
         "beside-tree",
     );
     runtime.sync_workspace_view();
@@ -637,7 +632,6 @@ fn only_the_operators_pane_brings_its_open_forward() {
         "w-order:t1:q",
         &directory,
         "b.md",
-        false,
         "sibling-pane",
     );
     runtime.sync_workspace_view();
@@ -655,7 +649,6 @@ fn only_the_operators_pane_brings_its_open_forward() {
         &shell,
         &directory,
         "c.md",
-        false,
         "shell-open",
     );
     runtime.sync_workspace_view();
@@ -700,7 +693,6 @@ fn only_the_operators_pane_brings_its_open_forward() {
         "w-order:t1:p",
         &directory,
         "d.md",
-        false,
         "left-tab",
     );
     runtime.sync_workspace_view();
@@ -758,7 +750,6 @@ fn closing_an_agent_tab_keeps_its_views() {
         "w-order:t3:p",
         &directory,
         "c.md",
-        false,
         "front-c",
     );
     runtime.sync_workspace_view();
@@ -854,7 +845,6 @@ fn a_background_open_into_an_empty_list_survives_agent_switch() {
         "w-order:t2:p",
         &directory,
         "c.md",
-        false,
         "background-empty",
     );
     runtime.sync_workspace_view();
@@ -899,7 +889,6 @@ fn an_open_with_nothing_to_close_is_refused_and_changes_nothing() {
         .context;
     let action = Action::OpenFile {
         path: directory.join("c.md").to_string_lossy().into_owned(),
-        beside: true,
     };
     let id = format!("{}-refused-file", unix_milliseconds());
     let crate::workspace_control::ActionPreparation::Read(source) = runtime
@@ -959,31 +948,6 @@ fn the_same_address_from_two_tabs_is_one_page() {
     assert_eq!(runtime.snapshot.browser_views.len(), 1);
 }
 
-/// A session that opens its page beside it again gets that page back,
-/// loaded again, wherever it now stands, rather than a second copy in the
-/// area beside the one in use.
-#[test]
-fn a_session_opening_its_page_beside_again_gets_that_page_back() {
-    let (mut runtime, _checkout, directory) = setup("beside-again");
-    sessions_focus(&mut runtime, &directory, TABS[0]);
-    let url = "https://example.test/review";
-    let beside = |url: &str| Action::OpenBrowser {
-        url: url.to_owned(),
-        area_id: None,
-        new_target: false,
-        beside: true,
-    };
-    let first = control(&mut runtime, "w-order:t1:p", beside(url), "first");
-    let again = control(&mut runtime, "w-order:t1:p", beside(url), "again");
-    assert_eq!(again.view_id, first.view_id);
-    assert!(again.load > first.load, "the page is loaded again");
-    let pages = layout(&runtime, &directory)
-        .displays()
-        .filter(|display| display.url.as_deref() == Some(url))
-        .count();
-    assert_eq!(pages, 1);
-}
-
 /// B14: the list, the selection and every tab's bookmark come back after a
 /// restart.
 #[test]
@@ -998,7 +962,6 @@ fn the_list_and_selection_survive_a_restart_and_agent_switch() {
         "w-order:t1:p",
         &directory,
         "c.md",
-        false,
         "restart-background",
     );
     let before = runtime
@@ -1162,7 +1125,6 @@ fn async_completion_is_bound_to_the_original_tab_and_failure_is_atomic() {
         .context;
     let action = Action::OpenFile {
         path: directory.join("c.md").to_string_lossy().into_owned(),
-        beside: false,
     };
     let id = format!("{}-async", unix_milliseconds());
     let crate::workspace_control::ActionPreparation::Read(source) = runtime
@@ -1255,7 +1217,6 @@ fn a_delegated_tabs_pane_manages_views_in_the_checkouts_list() {
         caller,
         &directory,
         "c.md",
-        true,
         "delegated-file",
     );
     let page = control(
@@ -1367,7 +1328,6 @@ fn open_file_result(
 ) -> crate::workspace_control::ActionResult {
     let action = Action::OpenFile {
         path: directory.join(name).to_string_lossy().into_owned(),
-        beside: false,
     };
     let expected = runtime
         .workspace_control_query(crate::node::TEST_NODE, caller, Query::Info)
@@ -1478,8 +1438,8 @@ fn drawn(runtime: &Runtime) -> (Vec<String>, Vec<String>) {
 fn the_strip_follows_the_session_whose_pane_has_the_keyboard() {
     let (mut runtime, checkout, directory) = setup("session-strip");
     sessions_focus(&mut runtime, &directory, TABS[0]);
-    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", false, "a");
-    control_file(&mut runtime, "w-order:t2:p", &directory, "b.md", false, "b");
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
+    control_file(&mut runtime, "w-order:t2:p", &directory, "b.md", "b");
     open(&mut runtime, &checkout, &directory, "c.md");
     assert_eq!(
         drawn(&runtime).0,
@@ -1520,7 +1480,7 @@ fn the_strip_follows_the_session_whose_pane_has_the_keyboard() {
         ["c.md"],
         "a plain shell shows the operator's only"
     );
-    control_file(&mut runtime, "w-order:t3:p", &directory, "d.md", false, "d");
+    control_file(&mut runtime, "w-order:t3:p", &directory, "d.md", "d");
     runtime.sync_workspace_view();
     assert_eq!(drawn(&runtime).0, ["c.md", "d.md"]);
     session_tab(&mut runtime, &checkout, &directory, TABS[0]);
@@ -1569,10 +1529,10 @@ fn moving_between_plain_shells_moves_no_view() {
         runtime.sync_workspace_view();
     };
     shells(&mut runtime, TABS[0]);
-    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", false, "a");
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
     dispatch_focus_tab(&mut runtime, &checkout, TABS[1]);
     shells(&mut runtime, TABS[1]);
-    control_file(&mut runtime, "w-order:t2:p", &directory, "b.md", false, "b");
+    control_file(&mut runtime, "w-order:t2:p", &directory, "b.md", "b");
     let b = display_id(&runtime, &directory, "b.md");
     view_act(
         &mut runtime,
@@ -1598,13 +1558,12 @@ fn moving_between_plain_shells_moves_no_view() {
 fn a_closed_sessions_views_close_and_shared_or_unsaved_ones_stay() {
     let (mut runtime, checkout, directory) = setup("session-close");
     sessions_focus(&mut runtime, &directory, TABS[0]);
-    control_file(&mut runtime, "w-order:t2:p", &directory, "b.md", false, "b");
+    control_file(&mut runtime, "w-order:t2:p", &directory, "b.md", "b");
     control_file(
         &mut runtime,
         "w-order:t2:p",
         &directory,
         "d.md",
-        false,
         "d2",
     );
     control_file(
@@ -1612,11 +1571,10 @@ fn a_closed_sessions_views_close_and_shared_or_unsaved_ones_stay() {
         "w-order:t1:p",
         &directory,
         "d.md",
-        false,
         "d1",
     );
     open(&mut runtime, &checkout, &directory, "c.md");
-    control_file(&mut runtime, "w-order:t2:p", &directory, "a.md", false, "a");
+    control_file(&mut runtime, "w-order:t2:p", &directory, "a.md", "a");
 
     let rows = runtime
         .workspace_control_query(crate::node::TEST_NODE, "w-order:t2:p", Query::ViewList)
@@ -1675,7 +1633,7 @@ fn a_closed_sessions_views_close_and_shared_or_unsaved_ones_stay() {
 fn a_pane_close_takes_its_sessions_views_once_it_completes() {
     let (mut runtime, checkout, directory) = setup("session-pane-close");
     sessions_focus(&mut runtime, &directory, TABS[0]);
-    control_file(&mut runtime, "w-order:t2:p", &directory, "b.md", false, "b");
+    control_file(&mut runtime, "w-order:t2:p", &directory, "b.md", "b");
     open(&mut runtime, &checkout, &directory, "c.md");
     runtime.dispatch_json(&explorer_event(
         "close_pane",
@@ -1727,9 +1685,9 @@ fn a_session_record_lists_the_outputs_its_session_tree_opened() {
     .expect("agent rows");
     runtime.ingest_session(Ok(payload));
     runtime.sync_workspace_view();
-    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", false, "a");
-    control_file(&mut runtime, "w-order:t2:p", &directory, "b.md", false, "b");
-    control_file(&mut runtime, "w-order:t3:p", &directory, "c.md", false, "c");
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", "a");
+    control_file(&mut runtime, "w-order:t2:p", &directory, "b.md", "b");
+    control_file(&mut runtime, "w-order:t3:p", &directory, "c.md", "c");
     // Source code and a log the session only opened are not its outputs.
     for (file, suffix) in [("main.rs", "rs"), ("build.log", "log")] {
         std::fs::write(directory.join(file), "fn main() {}\n").expect("fixture");
@@ -1738,7 +1696,6 @@ fn a_session_record_lists_the_outputs_its_session_tree_opened() {
             "w-order:t1:p",
             &directory,
             file,
-            false,
             suffix,
         );
     }

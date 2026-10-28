@@ -763,6 +763,8 @@ mod tests {
             awaited_replies: Vec::new(),
             hide_ai: None,
             request: None,
+            unseen_views: Vec::new(),
+            look: None,
         }
     }
 

@@ -33,7 +33,6 @@ use crate::model::{
     BrowserOpenReceiptSnapshot, ViewAreaSnapshot, ViewDisplaySnapshot, ViewDisplayState,
     ViewLayoutSnapshot, ViewLimitsSnapshot, ViewNodeSnapshot, ViewSplitSnapshot,
 };
-use crate::view_feedback::SessionScope;
 use crate::view_layout::{
     Display, DisplayKind, Edge, ExternalFile, ExternalKind, Layout, LayoutError, MAX_SPLIT_DEPTH,
     MAX_VIEW_AREAS, MAX_VIEW_DISPLAYS, Node, browser_address, browser_title, is_file_address,
@@ -59,66 +58,6 @@ const BESIDE_ORDER: [Edge; 4] = [Edge::Right, Edge::Left, Edge::Down, Edge::Up];
 
 // Every View diff is taken in the one Changes read, one per area at most.
 const _: () = assert!(MAX_VIEW_AREAS <= hide_node_link::git::MAX_DIFFS);
-
-/// Open to the side for a page (`hide browser open --beside`), as for a
-/// file: the area next to the active one, else a new area to the right of
-/// the active one; an empty active area takes the page itself. A page of
-/// `url` the calling session already opened, in any area, or one already in
-/// that neighbouring area, is focused and loaded again rather than opened a
-/// second time.
-pub(super) fn place_page_beside(
-    layout: &mut Layout,
-    url: &str,
-    caller: Option<&SessionScope>,
-    load: u64,
-    stamp: u64,
-) -> Result<String, LayoutError> {
-    let base = layout.active_area().id.clone();
-    let neighbour = BESIDE_ORDER
-        .iter()
-        .find_map(|edge| layout.neighbour(&base, *edge));
-    let is_page = |display: &&Display| {
-        display.kind == DisplayKind::Browser && display.url.as_deref() == Some(url)
-    };
-    let own = caller.and_then(|scope| {
-        layout
-            .displays()
-            .filter(is_page)
-            .filter(|display| display.openers.iter().any(|o| o.of_session(scope)))
-            .max_by_key(|display| display.last_focused_unix_ms)
-            .map(|display| display.id.clone())
-    });
-    let shown = own.or_else(|| {
-        let area = layout.area(neighbour.as_deref()?)?;
-        area.displays
-            .iter()
-            .filter(is_page)
-            .max_by_key(|display| display.last_focused_unix_ms)
-            .map(|display| display.id.clone())
-    });
-    if let Some(id) = shown {
-        layout.focus(&id, stamp)?;
-        if let Some(display) = layout.display_mut(&id) {
-            display.load = load;
-        }
-        return Ok(id);
-    }
-    let display = layout.new_browser_display(url, load);
-    let id = display.id.clone();
-    match neighbour {
-        Some(target) => layout.insert(&target, display, stamp)?,
-        None if layout
-            .area(&base)
-            .is_some_and(|area| area.displays.is_empty()) =>
-        {
-            layout.insert(&base, display, stamp)?
-        }
-        None => {
-            layout.split_new(&base, Edge::Right, display, stamp)?;
-        }
-    }
-    Ok(id)
-}
 
 /// The payload of `view_layout`: one operator action on the View areas of
 /// the Workspace the operator saw. Each is one event and one frame; a
@@ -2046,7 +1985,6 @@ impl Runtime {
             url: url.to_owned(),
             area_id: bound_area,
             new_target: false,
-            beside: false,
         };
         let reveal_context = if reveal {
             Some(
@@ -3194,6 +3132,21 @@ fn first_snapshot_area(node: &ViewNodeSnapshot) -> &str {
 
 /// A page's name on its tab: its title once it has one, else its host (for
 /// a file, its file name), else its address.
+/// A View's name as its tab says it, from what the View holds alone.
+pub(super) fn display_label(display: &Display) -> String {
+    match display.kind {
+        DisplayKind::Browser => browser_label(display),
+        DisplayKind::External => display
+            .external
+            .as_ref()
+            .map_or_else(String::new, |file| file.name.clone()),
+        DisplayKind::File => file_label(&display.path),
+        DisplayKind::Diff => {
+            super::editor::diff_label(&display.path, display.committed.unwrap_or(false))
+        }
+    }
+}
+
 pub(super) fn browser_label(display: &Display) -> String {
     if display.is_new_tab() {
         return "New tab".to_owned();

@@ -50,6 +50,10 @@ pub enum RowMark {
     /// Hide put the agent to sleep; opening it wakes it. A grey moon, the
     /// one shape outside the four, counted on no badge (status-marks D-21).
     Asleep,
+    /// The operator's move is to look: the agent opened a View they have not
+    /// seen and nothing else is asked of them (PRD unseen-agent-views D-05,
+    /// D-15). The turn's badge with an eye, counted as the turn (B12).
+    Look,
 }
 
 impl RowMark {
@@ -58,6 +62,7 @@ impl RowMark {
     pub(crate) fn of(agent: &SidebarAgentSnapshot) -> Self {
         match Self::awake(agent) {
             Self::Turn => Self::Turn,
+            Self::Look => Self::Look,
             _ if agent.sleep.is_some() => Self::Asleep,
             mark => mark,
         }
@@ -68,6 +73,17 @@ impl RowMark {
     pub(crate) fn awake(agent: &SidebarAgentSnapshot) -> Self {
         let ownership = ownership_of(agent);
         let (demand, activity, _) = axes_of(agent);
+        // A View to look at is the turn only when nothing else is asked:
+        // a block, a question, an approval or a raise outranks it and takes
+        // the mark (D-18).
+        if agent.look.is_some()
+            && demand == AgentDemand::None
+            && !agent.blocked
+            && agent.raised.is_empty()
+            && agent.escalation.is_none()
+        {
+            return Self::Look;
+        }
         // The group already holds every call on the operator: an own unread
         // demand, a blocked prompt, a raise from below, an escalated child
         // and a home's turn.
@@ -100,7 +116,7 @@ impl RowMark {
 
     pub(crate) fn count_into(self, counts: &mut crate::model::MarkCountsSnapshot) {
         match self {
-            Self::Turn => counts.turn += 1,
+            Self::Turn | Self::Look => counts.turn += 1,
             Self::Going | Self::Waiting => counts.going += 1,
             Self::Done => counts.done += 1,
             Self::Unread => counts.unread += 1,
@@ -150,6 +166,7 @@ fn rank_within(agent: &SidebarAgentSnapshot, ownership: Ownership) -> (u8, u8) {
         agent.blocked,
         ownership,
         agent.wait.is_some(),
+        !agent.unseen_views.is_empty(),
     );
     (group.rank(), demand_rank)
 }
@@ -717,7 +734,14 @@ pub mod phone {
                     .unwrap_or_else(|| pane_id.to_owned()),
                 // A quiet row the operator starred or read and left
                 // unanswered stands in 다시 볼 것 (PRD revisit-group D-10).
-                group: match str_of(agent, "group") {
+                // A View to look at calls no notification (PRD
+                // unseen-agent-views D-13, B12): notices follow the group the
+                // row would have without it.
+                group: match agent
+                    .pointer("/look/group")
+                    .and_then(Value::as_str)
+                    .unwrap_or_else(|| str_of(agent, "group"))
+                {
                     "seen" if agent.get("revisit").is_some_and(|value| !value.is_null()) => {
                         "revisit".to_owned()
                     }

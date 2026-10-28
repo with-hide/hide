@@ -62,20 +62,22 @@ hide device remove <device id> [--json]
 ## The operator's screen
 
 ```
-hide file open <path> [--beside]
-hide diff open <path> [--beside]
-hide browser open <url-or-path> [--beside] [--wait]
+hide file open <path>
+hide diff open <path>
+hide browser open <url-or-path> [--wait]
 hide view list [--session <id|here>] | status <view-id> | select <view-id> | close <view-id>
 hide view split <view-id> --area <area-id> --edge left|right|up|down
 hide view move <view-id> --area <area-id> --index <n>
 ```
 
 - These need the Hide window open and your pane in a checkout Hide knows; a refusal says which is missing.
-- `file open` and `diff open` show a file or its changes in a View beside the agents, and `browser open` a page; open only what the operator should look at now, and say what you opened.
-- `--beside` opens it in the View area next to the one in use, or in a new area to its right, as Open to the side does; a page of the same address already there comes forward instead of opening again.
+- `file open` and `diff open` show a file or its changes in a View beside the agents, and `browser open` a page, always as a tab of the active View area; a page of the same address already open there comes forward instead of opening again. Only the operator splits the View areas, and open takes no `--beside`.
+- Open is how you show the operator a result: until they look at it, your row waits in their Needs You as To look at (`볼 것`), even while you keep working. Open only what the operator should look at, and say what you opened.
+- Check a page for yourself with your own browser tool, such as `aside`, not `browser open`: a page you open in Hide waits for the operator like any result.
 - What you open belongs to your session: the operator sees it in the Files list while your pane has the keyboard, and it closes when your pane closes or your session is archived.
 - While the operator looks at this checkout from another pane, what you open waits in your session's Files list instead of taking the screen.
-- The `view` commands arrange the Views that are already open; `view list` gives their ids, areas and the sessions that opened each, and `--session here` keeps only yours.
+- The `view` commands arrange the Views that are already open; `view list` gives their ids, areas and the sessions that opened each, whether the operator has seen each (`unseen`), and `--session here` keeps only yours.
+- What a delegated child opens does not wait for the operator: it marks your row to read, and the child's report letter lists it. You answer for it: read it with `view status <view-id>` or `browser snapshot|screenshot|eval|console|network <display>` from your own pane, which clears that mark, and when the operator should see it, open it again from your own pane so it waits for them as yours.
 
 ## Project Memory
 

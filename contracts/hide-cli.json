@@ -1466,6 +1466,7 @@
                     "description": "The row's mark as every surface draws it (docs/status-model.md, The mark), `disconnected` for a row on a device that does not answer, and `ended` for an ended registration.",
                     "enum": [
                         "turn",
+                        "look",
                         "going",
                         "waiting",
                         "done",

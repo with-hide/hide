@@ -355,7 +355,15 @@ impl Runtime {
             Caller::Pane(pane) => self.opener_of_pane(pane),
             Caller::Checkout { .. } => None,
         };
+        // An agent's open is for the operator to look at (PRD
+        // unseen-agent-views D-06); nobody's is the operator's own, and a
+        // page's own new target, opened by a `hide browser` action, is not
+        // an open.
+        let agent = opener.is_some() && super::workspace_control::lane_call(action);
         self.stamp_view_opener(key, view_id, opener);
+        if agent {
+            self.mark_view_unseen(key, view_id);
+        }
     }
 
     /// A terminal link the operator clicked in an agent's pane names the
@@ -2120,7 +2128,6 @@ mod tests {
             .unwrap();
         let open = crate::workspace_control::Action::OpenFile {
             path: path.into(),
-            beside: false,
         };
         runtime.stamp_control_opener(&key, "recipient", &open, &view);
         view
@@ -2192,7 +2199,6 @@ mod tests {
         let checkout = crate::workspace_control::checkout_caller_id(&"a".repeat(32), CHECKOUT);
         let open = crate::workspace_control::Action::OpenFile {
             path: "src/login.ts".into(),
-            beside: false,
         };
         assert!(guard.opener_of_pane("sender").is_none());
         guard.stamp_control_opener(&key(), &checkout, &open, &view);

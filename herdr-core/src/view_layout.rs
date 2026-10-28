@@ -223,6 +223,15 @@ pub struct Display {
     /// such a View is in every session's strip (D-10).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub operator: bool,
+    /// What an agent opened here that the operator has not looked at yet
+    /// (PRD unseen-agent-views D-07, D-19); absent once they have, and on a
+    /// View stored before this was kept (D-27).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::view_feedback::unseen_or_unreadable"
+    )]
+    pub unseen: Option<crate::view_feedback::Unseen>,
     /// An external display's grant, name and viewer; absent for every other
     /// kind. A stored file never carries one (`workspace_views::save`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -257,6 +266,7 @@ impl Display {
         self.opener = None;
         self.openers.clear();
         self.operator = false;
+        self.unseen = None;
     }
 
     /// Whether the Files strip of `scope` shows this View: the operator's
@@ -307,7 +317,14 @@ impl AreaItem for Display {
     fn repair_area(items: &mut [Self], active: Option<&str>, notes: &mut Vec<String>) {
         let mut groups = 0;
         let mut addresses = 0;
+        let mut unreadable = 0;
         for display in items.iter_mut() {
+            // A seen record that does not read is unseen, never seen
+            // (PRD unseen-agent-views D-12, B18).
+            if let Some(unseen) = display.unseen.as_mut().filter(|unseen| unseen.unreadable) {
+                unseen.unreadable = false;
+                unreadable += 1;
+            }
             // A View stored before Views belonged to sessions goes to the
             // session its mark names, else to the operator (PRD
             // session-files D-29). Expected once per View, so no note.
@@ -373,6 +390,11 @@ impl AreaItem for Display {
         if addresses > 0 {
             notes.push(format!(
                 "{addresses} views had an address or path that did not fit their kind"
+            ));
+        }
+        if unreadable > 0 {
+            notes.push(format!(
+                "{unreadable} views had a seen record that did not read and are unseen"
             ));
         }
         let keep = items
@@ -453,6 +475,7 @@ impl Layout {
             opener: None,
             openers: Vec::new(),
             operator: false,
+            unseen: None,
             external: None,
         }
     }

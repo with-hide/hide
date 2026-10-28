@@ -36,7 +36,7 @@ pub const HOOK_ENTRY_VERSION: u32 = 10;
 #[macro_export]
 macro_rules! intent_table {
     () => {
-        "Inside Hide, turn what the operator asks for into its command:\n| The operator asks | Run |\n| --- | --- |\n| open a file or diff beside you | `hide file open <path> --beside`, `hide diff open <path> --beside` |\n| open a web page beside you | `hide browser open <url-or-path> --beside` |\n| start an agent beside you | `hide agent spawn --beside …` (your own checkout only; add `--parent here` to supervise it) |\n| hand work to an agent and collect its result | `hide agent spawn --parent here …` |\n| start independent work the operator will handle | `hide agent spawn …` without --parent |\nWithout --beside, `hide agent spawn` opens the agent in a tab of its own. Never start an agent with `\"${HERDR_BIN_PATH:-herdr}\" pane split` or `\"${HERDR_BIN_PATH:-herdr}\" agent start`: that pane has no parent, letters or watch."
+        "Inside Hide, turn what the operator asks for into its command:\n| The operator asks | Run |\n| --- | --- |\n| show the operator a file, a diff or a web page | `hide file open <path>`, `hide diff open <path>`, `hide browser open <url-or-path>`: it opens as a tab of the active View area and waits in the operator's Needs You as To look at until they look at it |\n| check a page for yourself (your own browser QA) | your own browser tool, such as `aside`, not `hide browser open`: a page you open in Hide waits for the operator |\n| collect what a delegated child opened | `hide view list` shows what the operator has not seen and who opened it; read it with `hide view status <view-id>` or `hide browser snapshot <display>`, and to show it, open it again from your own pane |\n| start an agent beside you | `hide agent spawn --beside …` (your own checkout only; add `--parent here` to supervise it) |\n| hand work to an agent and collect its result | `hide agent spawn --parent here …` |\n| start independent work the operator will handle | `hide agent spawn …` without --parent |\nWithout --beside, `hide agent spawn` opens the agent in a tab of its own. Never start an agent with `\"${HERDR_BIN_PATH:-herdr}\" pane split` or `\"${HERDR_BIN_PATH:-herdr}\" agent start`: that pane has no parent, letters or watch."
     };
 }
 
@@ -523,9 +523,12 @@ mod tests {
             // command for each request (PRD agent-beside-and-session-guide B18).
             assert!(PURPOSE_CONTEXT.starts_with("Inside Hide, turn what the operator asks for"));
             for command in [
-                "`hide file open <path> --beside`",
-                "`hide diff open <path> --beside`",
-                "`hide browser open <url-or-path> --beside`",
+                "`hide file open <path>`",
+                "`hide diff open <path>`",
+                "`hide browser open <url-or-path>`",
+                "waits in the operator's Needs You as To look at",
+                "such as `aside`, not `hide browser open`",
+                "open it again from your own pane",
                 "`hide agent spawn --beside …`",
                 "`hide agent spawn --parent here …`",
                 "`hide agent spawn …` without --parent",
@@ -533,6 +536,10 @@ mod tests {
             ] {
                 assert!(PURPOSE_CONTEXT.contains(command), "{command}");
             }
+            // Open takes no --beside; only a spawn does (PRD
+            // unseen-agent-views B29).
+            assert!(!PURPOSE_CONTEXT.contains("open <path> --beside"));
+            assert!(!PURPOSE_CONTEXT.contains("<url-or-path> --beside"));
             for event in [
                 HookEvent::SubagentStart,
                 HookEvent::SubagentStop,

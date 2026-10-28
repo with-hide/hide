@@ -90,6 +90,53 @@ impl Opener {
     }
 }
 
+/// An agent's open the operator has not looked at yet (PRD
+/// unseen-agent-views D-07, D-19). It lives on the View, so it closes with it
+/// and never outnumbers the open Views (B32); looking at the View removes it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct Unseen {
+    /// When the agent opened it: its open's generation, so a later open is
+    /// news again to every ancestor (D-11) and the newest names the row (D-14).
+    pub opened_unix_ms: u64,
+    /// An ancestor of the opener read the View through the CLI (D-22): the
+    /// ancestors' signal is off while the operator still has not seen it
+    /// (D-23).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ancestors_read: bool,
+    /// The stored record did not read; the load's repair says so and keeps it
+    /// unseen (D-12, B18).
+    #[serde(skip)]
+    pub unreadable: bool,
+}
+
+impl Unseen {
+    /// A new open at `now`, a generation past `before` even within one
+    /// millisecond.
+    pub fn opened(now: u64, before: Option<&Self>) -> Self {
+        Self {
+            opened_unix_ms: before.map_or(now, |before| now.max(before.opened_unix_ms + 1)),
+            ancestors_read: false,
+            unreadable: false,
+        }
+    }
+}
+
+/// Reads a stored seen record: one that does not read is an unseen View, not
+/// a seen one and not a failed load (D-12).
+pub fn unseen_or_unreadable<'de, D>(deserializer: D) -> Result<Option<Unseen>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.map(|value| {
+        serde_json::from_value(value).unwrap_or(Unseen {
+            opened_unix_ms: 0,
+            ancestors_read: false,
+            unreadable: true,
+        })
+    }))
+}
+
 /// The session a pane stands for in the Files strip (PRD session-files
 /// D-10): its machine, its Herdr terminal and the native session of the
 /// agent in it, absent for a plain shell.
