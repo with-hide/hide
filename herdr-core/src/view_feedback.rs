@@ -78,6 +78,26 @@ impl Opener {
     pub fn key(&self) -> String {
         format!("{}/{}", self.device_id, self.terminal_id)
     }
+
+    /// Whether this opener is the session `scope` stands for (PRD
+    /// session-files D-10): the same terminal, whichever agent runs in it now,
+    /// so an agent that exits to its shell keeps its Views (D-27), or the same
+    /// native session in another pane (B4).
+    pub fn of_session(&self, scope: &SessionScope) -> bool {
+        self.device_id == scope.device_id
+            && (self.terminal_id == scope.terminal_id
+                || (self.session.is_some() && self.session == scope.session))
+    }
+}
+
+/// The session a pane stands for in the Files strip (PRD session-files
+/// D-10): its machine, its Herdr terminal and the native session of the
+/// agent in it, absent for a plain shell.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionScope {
+    pub device_id: String,
+    pub terminal_id: String,
+    pub session: Option<String>,
 }
 
 /// What a comment was left on: a file, a diff of one Changes group, or a

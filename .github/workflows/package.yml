@@ -31,6 +31,14 @@
 # included, with the secrets of the `release` environment, which only a `v*`
 # tag can use (docs/BUILD.md). Pull requests and the nightly keep the ad-hoc
 # signature and reach no secret.
+#
+# Every call also builds the two Linux device helpers (`device-helpers.yml`),
+# which the Mac app's device bundles are made from and which a release
+# candidate hands the private publisher (docs/BUILD.md). The Mac lane is two
+# jobs, so its native build does not wait for them: `compile (macos)` builds
+# the web shell and the release binaries while the helpers build, and
+# `package (macos)` needs both before it assembles the app, so a failed helper
+# or compile fails the package and no app is made without them.
 name: package
 
 on:
@@ -48,6 +56,10 @@ on:
         description: Explicit positive build order, or main history order when omitted.
         type: string
         default: ''
+      web-typechecked:
+        description: Caller requires this source's verify web build before accepting or publishing these packages.
+        type: boolean
+        default: false
       include-macos:
         description: Also build the macOS dmg and zip and test their packaged app.
         type: boolean
@@ -80,7 +92,6 @@ permissions:
 
 jobs:
   helper-identity:
-    if: ${{ inputs.include-macos }}
     runs-on: ubuntu-latest
     outputs:
       source-sha: ${{ steps.identity.outputs.commit }}
@@ -106,7 +117,6 @@ jobs:
 
   device-helpers:
     needs: helper-identity
-    if: ${{ inputs.include-macos }}
     uses: ./.github/workflows/device-helpers.yml
     with:
       source-sha: ${{ needs.helper-identity.outputs.source-sha }}
@@ -176,6 +186,8 @@ jobs:
         # fetches the pinned Herdr and refuses when any of them cannot run;
         # electron-builder then wraps the app in desktop/out/release.
         timeout-minutes: 50
+        env:
+          HIDE_WEB_TYPECHECKED_SHA: ${{ inputs.web-typechecked && (inputs.source-sha || github.sha) || '' }}
         run: bash scripts/verify-web.sh desktop package | tee "$RUNNER_TEMP/package.out"
       - name: Check each installer against its checksum
         working-directory: desktop/out/release
@@ -250,7 +262,9 @@ jobs:
       - name: Build two release versions of the same app for the update test
         # N is installed, N+1 is served from a local feed (PRD auto-update
         # D-29); both are the package above with another version, so the
-        # update changes nothing but the version.
+        # update changes nothing but the version. On Linux the script builds
+        # only the deb this test updates through; the shipped rpm and its
+        # Fedora install check above still use the full release set.
         timeout-minutes: 15
         run: |
           bundle="$(sed -n 's/^bundle=//p' "$RUNNER_TEMP/package.out")"
@@ -325,9 +339,54 @@ jobs:
           # is there to be tried on a real machine within the week.
           retention-days: 7
 
+  macos-compile:
+    name: compile (macos)
+    needs: helper-identity
+    if: ${{ inputs.include-macos }}
+    env:
+      HIDE_POSTHOG_PROJECT_TOKEN: ${{ vars.HIDE_POSTHOG_PROJECT_TOKEN }}
+      # The identity the helpers are built with; `package (macos)` checks the
+      # binaries' record against its own before it uses them.
+      HIDE_VERSION: ${{ needs.helper-identity.outputs.version }}
+      HIDE_BUILD_ORDER: ${{ needs.helper-identity.outputs.build-order }}
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: with-hide/hide
+          ref: ${{ inputs.source-sha || github.sha }}
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install dependencies
+        timeout-minutes: 5
+        run: bash scripts/verify-web.sh install
+      - name: Build the web shell and the release binaries
+        timeout-minutes: 50
+        env:
+          HIDE_WEB_TYPECHECKED_SHA: ${{ inputs.web-typechecked && (inputs.source-sha || github.sha) || '' }}
+        run: bash scripts/verify-web.sh desktop package compile
+      - name: Keep the release binaries for the package job
+        uses: actions/upload-artifact@v7
+        with:
+          name: hide-macos-release-binaries
+          path: |
+            target/release/hided
+            target/release/hide
+            target/release/hide-agent-hooks
+            desktop/out/release-binaries.json
+          if-no-files-found: error
+          retention-days: 1
+
   macos-package:
     name: package (macos)
-    needs: [helper-identity, device-helpers]
+    needs: [helper-identity, device-helpers, macos-compile]
     env:
       HIDE_POSTHOG_PROJECT_TOKEN: ${{ vars.HIDE_POSTHOG_PROJECT_TOKEN }}
     if: ${{ inputs.include-macos }}
@@ -372,6 +431,11 @@ jobs:
       - name: Install dependencies
         timeout-minutes: 5
         run: bash scripts/verify-web.sh install
+      - uses: actions/download-artifact@v8
+        with:
+          name: hide-macos-release-binaries
+          path: ${{ github.workspace }}
+          digest-mismatch: error
       - uses: actions/download-artifact@v8
         with:
           name: hide-device-helper-linux-x86_64
@@ -423,14 +487,16 @@ jobs:
           echo "HIDE_SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
           echo "HIDE_NOTARY_KEY_PATH=$RUNNER_TEMP/notary-key.p8" >> "$GITHUB_ENV"
       - name: Package the app, its dmg, zip and update files
-        # With developer-id the packager also signs, notarizes and staples the
-        # app and the dmg, and fails unless Gatekeeper accepts both as notarized.
+        # From the release binaries `compile (macos)` built, checked against
+        # their record. With developer-id the packager also signs, notarizes and
+        # staples the app and the dmg, and fails unless Gatekeeper accepts both
+        # as notarized.
         timeout-minutes: 80
         env:
           HIDE_MACOS_SIGNING: ${{ inputs.macos-signing }}
           HIDE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
           HIDE_NOTARY_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
-        run: bash scripts/verify-web.sh desktop package
+        run: bash scripts/verify-web.sh desktop package assemble
       - name: Verify the dmg, the zip and the app the zip holds
         id: bundle
         run: |

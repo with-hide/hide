@@ -408,6 +408,7 @@ impl Runtime {
             Err(code) => snapshot.failure = Some(code),
         }
         self.snapshot.session_record = Some(Arc::new(snapshot));
+        self.settle_record_views();
         true
     }
 

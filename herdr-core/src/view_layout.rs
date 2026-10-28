@@ -33,6 +33,9 @@ pub const MAX_SPLIT_DEPTH: usize = 3;
 /// Displays one checkout may hold at once; an open past it closes the view
 /// looked at longest ago (PRD lane-files-checkout-views D-07).
 pub const MAX_VIEW_DISPLAYS: usize = 32;
+/// Sessions one View remembers as its openers; a further one forgets the
+/// session that opened it longest ago (PRD session-files D-26).
+pub const MAX_VIEW_OPENERS: usize = 8;
 #[cfg(test)]
 use crate::split_tree::successor;
 use crate::split_tree::{AreaItem, TreeLimits};
@@ -209,6 +212,17 @@ pub struct Display {
     /// opened (PRD view-opener-feedback D-02, D-03).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opener: Option<crate::view_feedback::Opener>,
+    /// Every session that opened this View, the one that did longest ago
+    /// first: the View is in each of their Files strips (PRD session-files
+    /// D-10, D-26). The mark above is the last of them, unless the operator's
+    /// own address took it off.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub openers: Vec<crate::view_feedback::Opener>,
+    /// Whether the operator opened it, from the Explorer, ⌘K, the file tree,
+    /// a new tab's address field or a caller Hide could not bind to a pane:
+    /// such a View is in every session's strip (D-10).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub operator: bool,
     /// An external display's grant, name and viewer; absent for every other
     /// kind. A stored file never carries one (`workspace_views::save`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -219,6 +233,40 @@ impl Display {
     /// A shell-owned new-tab page; no native page exists until navigation.
     pub fn is_new_tab(&self) -> bool {
         self.kind == DisplayKind::Browser && self.url.is_none()
+    }
+
+    /// Records `opener` as the session that opened this View last: its mark,
+    /// and one of the sessions whose strip shows it (D-26).
+    pub fn opened_by(&mut self, opener: crate::view_feedback::Opener) {
+        // One session once: its terminal, or its native session found again
+        // in another pane (D-10).
+        self.openers.retain(|known| {
+            !(known.device_id == opener.device_id
+                && (known.terminal_id == opener.terminal_id
+                    || (known.session.is_some() && known.session == opener.session)))
+        });
+        if self.openers.len() >= MAX_VIEW_OPENERS {
+            self.openers.remove(0);
+        }
+        self.openers.push(opener.clone());
+        self.opener = Some(opener);
+    }
+
+    /// The View shows something else now, opened by whoever opens it.
+    pub fn forget_openers(&mut self) {
+        self.opener = None;
+        self.openers.clear();
+        self.operator = false;
+    }
+
+    /// Whether the Files strip of `scope` shows this View: the operator's
+    /// Views show in every session's, and a session's only in its own
+    /// (D-10). With no session, a plain shell has the keyboard and only the
+    /// operator's show (D-28). A View no session opened is the operator's.
+    pub fn shown_to(&self, scope: Option<&crate::view_feedback::SessionScope>) -> bool {
+        self.operator
+            || self.openers.is_empty()
+            || scope.is_some_and(|scope| self.openers.iter().any(|o| o.of_session(scope)))
     }
 
     /// Whether this display shows the document named by `path`, `kind` and,
@@ -260,6 +308,15 @@ impl AreaItem for Display {
         let mut groups = 0;
         let mut addresses = 0;
         for display in items.iter_mut() {
+            // A View stored before Views belonged to sessions goes to the
+            // session its mark names, else to the operator (PRD
+            // session-files D-29). Expected once per View, so no note.
+            if display.openers.is_empty() && !display.operator {
+                match display.opener.clone() {
+                    Some(opener) => display.openers.push(opener),
+                    None => display.operator = true,
+                }
+            }
             // A diff shows one Changes group, the working one unless
             // stored otherwise, and a file none: a diff stored
             // without its group would never find its tab again.
@@ -394,6 +451,8 @@ impl Layout {
             title: None,
             load: 0,
             opener: None,
+            openers: Vec::new(),
+            operator: false,
             external: None,
         }
     }
@@ -918,5 +977,32 @@ mod tests {
         );
         assert_eq!(layout.display(&file).unwrap().url, None);
         assert!(layout.repair().is_empty(), "a repaired tree needs nothing");
+    }
+
+    /// PRD session-files D-29: a View stored before Views belonged to
+    /// sessions goes to the session its mark names, else to the operator,
+    /// silently and once.
+    #[test]
+    fn a_view_stored_before_sessions_goes_to_its_mark_or_the_operator() {
+        let mut layout = with_files(&["marked", "plain"]);
+        let marked = id(&layout, "marked");
+        let opener = crate::view_feedback::Opener {
+            device_id: "local".into(),
+            terminal_id: "t1".into(),
+            session: Some("s1".into()),
+            resume: None,
+            resume_path: None,
+            provider: "codex".into(),
+            name: "Agent".into(),
+        };
+        layout.display_mut(&marked).unwrap().opener = Some(opener.clone());
+        assert!(layout.repair().is_empty(), "the move says nothing");
+        let marked = layout.display(&marked).unwrap();
+        assert_eq!(
+            (marked.openers.as_slice(), marked.operator),
+            (std::slice::from_ref(&opener), false)
+        );
+        let plain = layout.display(&id(&layout, "plain")).unwrap();
+        assert!(plain.operator && plain.openers.is_empty());
     }
 }

@@ -320,6 +320,24 @@ pub struct WorkspaceViewSnapshot {
     /// view-opener-feedback); absent while there are none and no Send to say.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub feedback: Option<ViewFeedbackSnapshot>,
+    /// For each pane of the checkout, the Views of unsaved documents its
+    /// close would close with its session, so the shell asks first (PRD
+    /// session-files D-14); absent while there are none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub session_drafts: Vec<SessionDraftsSnapshot>,
+}
+
+/// The Views of unsaved documents one pane's session alone opened.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SessionDraftsSnapshot {
+    pub pane_id: String,
+    pub views: Vec<SessionDraftSnapshot>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SessionDraftSnapshot {
+    pub display_id: String,
+    pub tab_id: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -558,6 +576,34 @@ pub struct OpenedViewSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     pub comments: usize,
+}
+
+/// A View a session record's session, or one of its descendants, opened:
+/// one tile of the record's 결과물 gallery (PRD session-docs-and-assistant
+/// D-40). It names the View by the checkout that holds it, and carries only
+/// what Hide already holds about it: an open document's first lines, never
+/// a read or a capture made for the tile.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct RecordViewSnapshot {
+    pub device_id: String,
+    /// The checkout whose View list holds it.
+    pub checkout_path: String,
+    pub display_id: String,
+    pub kind: crate::view_layout::DisplayKind,
+    /// Its name as its tab says it.
+    pub label: String,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// The kind of the file its editor tab holds; absent while none does.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub document_kind: Option<DocumentKind>,
+    /// The first lines of the text document its editor tab holds, each cut
+    /// to a bounded length; empty for anything else.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub lines: Vec<String>,
+    /// The session of the record's tree that opened it.
+    pub session: crate::links::ledger::SessionIdentity,
 }
 
 /// Where a Send stands (B21, B27, B28, B20).

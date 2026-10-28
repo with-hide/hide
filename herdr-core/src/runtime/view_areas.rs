@@ -568,7 +568,7 @@ impl Runtime {
     }
 
     /// Every Workspace's layout, each with the Workspace it belongs to.
-    fn every_view_layout(&self) -> impl Iterator<Item = (WorkspaceKey, &Layout)> {
+    pub(super) fn every_view_layout(&self) -> impl Iterator<Item = (WorkspaceKey, &Layout)> {
         self.workspace_views.iter().flat_map(|store| {
             store
                 .views
@@ -608,6 +608,14 @@ impl Runtime {
         let Some(key) = self.workspace_key(workspace_id, checkout_id) else {
             return false;
         };
+        // Another session's View, a recent surface's or a session record's
+        // tile, brings that session's pane to the keyboard first, so the View
+        // shows in its own strip, as a pane's `N views` row does (PRD
+        // session-files D-12).
+        if let Some(pane) = self.hidden_view_pane(&key, display_id) {
+            self.focus_pane(pane, super::events::PaneFocusOrigin::Operator, None);
+            self.settle_view_sessions();
+        }
         self.apply_area_intent_to(&key, AreaIntent::Documents);
         match self.change_view_layout(&key, |layout, stamp| {
             layout
@@ -1323,7 +1331,7 @@ impl Runtime {
                 display.title = None;
                 display.load = 0;
                 display.preview = false;
-                display.opener = None;
+                display.forget_openers();
                 layout.focus(id, stamp)?;
                 Ok(((), true))
             });
@@ -1367,7 +1375,7 @@ impl Runtime {
                         (kind == DisplayKind::Diff).then_some(committed.unwrap_or(false));
                     // The preview shows another document now, opened by
                     // whoever opens it.
-                    display.opener = None;
+                    display.forget_openers();
                     layout.focus(slot_id, stamp)?;
                 }
                 // A document with unsaved work keeps its display, opened for
@@ -1643,6 +1651,14 @@ impl Runtime {
         self.reconcile_view_displays();
         let outcome = match action {
             ViewLayoutAction::Focus { display_id } => {
+                // A View of a session the strip does not show, a pane's
+                // `N views` row, brings that session's pane to the keyboard
+                // first, so the View shows in its own strip (PRD
+                // session-files D-12).
+                if let Some(pane) = self.hidden_view_pane(&key, &display_id) {
+                    self.focus_pane(pane, super::events::PaneFocusOrigin::Operator, None);
+                    self.settle_view_sessions();
+                }
                 self.change_view_layout(&key, |layout, stamp| {
                     layout
                         .focus(&display_id, stamp)
@@ -1660,11 +1676,15 @@ impl Runtime {
                 display_id,
                 area_id,
                 index,
-            } => self.change_view_layout(&key, |layout, stamp| {
-                layout
-                    .move_display(&display_id, &area_id, index, stamp)
-                    .map(|changed| (changed, changed))
-            }),
+            } => {
+                // The shell counts the strip it draws, not the area's whole list.
+                let index = self.drawn_index(&key, &display_id, &area_id, index);
+                self.change_view_layout(&key, |layout, stamp| {
+                    layout
+                        .move_display(&display_id, &area_id, index, stamp)
+                        .map(|changed| (changed, changed))
+                })
+            }
             ViewLayoutAction::Split {
                 display_id,
                 area_id,
@@ -2048,18 +2068,35 @@ impl Runtime {
                             && display.url.as_deref() == Some(url)
                     })
                     .map(|display| display.id.clone());
+                // A page's own new tab belongs to whoever that page belongs
+                // to; any other page opened with no agent is the operator's
+                // (PRD session-files D-10, D-30).
+                let parent = beside_display
+                    .and_then(|id| layout.display(id))
+                    .map(|page| (page.openers.clone(), page.operator, page.opener.clone()));
+                let own = |display: &mut Display| match (&opener, &parent) {
+                    (Some(opener), _) => display.opened_by(opener.clone()),
+                    (None, Some((openers, operator, mark))) => {
+                        for known in openers {
+                            if !display.openers.iter().any(|held| held.same_agent(known)) {
+                                display.openers.push(known.clone());
+                            }
+                        }
+                        display.operator |= *operator;
+                        display.opener = display.opener.take().or_else(|| mark.clone());
+                    }
+                    (None, None) => display.operator = true,
+                };
                 if let Some(display_id) = shown {
                     layout.focus(&display_id, stamp)?;
                     if let Some(display) = layout.display_mut(&display_id) {
                         display.load = load;
-                        if opener.is_some() {
-                            display.opener = opener;
-                        }
+                        own(display);
                     }
                     return Ok((display_id, true));
                 }
                 let mut display = layout.new_browser_display(url, load);
-                display.opener = opener;
+                own(&mut display);
                 let display_id = display.id.clone();
                 // A page's own new tab stands beside that page (Open to the
                 // side's order): in the area next to it, else, its area being
@@ -2128,8 +2165,10 @@ impl Runtime {
                 display.url = Some(url);
                 display.title = None;
                 // The operator's own address makes the page the operator's
-                // (D-03, B4).
+                // (D-03, B4), in every session's strip (PRD session-files
+                // D-10).
                 display.opener = None;
+                display.operator = true;
             }
             display.load = load;
             Ok(((), changed))
@@ -2336,7 +2375,7 @@ impl Runtime {
     /// view of it, so a close it sent bare can never drop the text. A close
     /// that leaves the files tool with no view and its tree off closes the
     /// lane, once the save it waits on has landed (`close_emptied_lane`).
-    fn close_view_display(
+    pub(super) fn close_view_display(
         &mut self,
         key: &WorkspaceKey,
         display_id: &str,
@@ -2759,6 +2798,7 @@ impl Runtime {
         if !view.shows_documents() {
             return Vec::new();
         }
+        let scope = store.front.as_ref().and_then(|key| self.strip_session(key));
         view.layout
             .areas()
             .into_iter()
@@ -2766,6 +2806,7 @@ impl Runtime {
                 let active = area.active.as_ref()?;
                 area.displays.iter().find(|display| &display.id == active)
             })
+            .filter(|display| display.shown_to(scope))
             .collect()
     }
 
@@ -2966,36 +3007,87 @@ impl Runtime {
         (ViewDisplayState::Unavailable, Some(reason.to_owned()))
     }
 
-    /// The front Workspace's tree as the snapshot carries it. It runs on
-    /// every snapshot read, over at most `MAX_VIEW_DISPLAYS` displays: one
-    /// map of the editor's tabs and one root check, then a map lookup per
-    /// display.
+    /// The front Workspace's tree as the snapshot carries it: the strip of
+    /// the session whose pane has the keyboard, so an area that holds none of
+    /// its or the operator's Views is not drawn and its neighbour takes the
+    /// space (PRD session-files D-10). It runs on every snapshot read, over
+    /// at most `MAX_VIEW_DISPLAYS` displays: one map of the editor's tabs
+    /// and one root check, then a map lookup per display.
     pub(super) fn view_layout_snapshot(
         &self,
         key: &WorkspaceKey,
         layout: &Layout,
     ) -> ViewLayoutSnapshot {
+        self.view_layout_projection(key, layout, true)
+    }
+
+    /// The tree as the snapshot carries it: the strip's, or with `strip`
+    /// false every View, which a pane's `N views` list reads (B8).
+    pub(super) fn view_layout_projection(
+        &self,
+        key: &WorkspaceKey,
+        layout: &Layout,
+        strip: bool,
+    ) -> ViewLayoutSnapshot {
         let facts = self.display_facts(key);
+        let scope = self.strip_session(key);
+        let shown = |display: &Display| !strip || display.shown_to(scope);
+        let active_area = layout.active_area().id.clone();
+        let root = self
+            .view_node_snapshot(&facts, &shown, &layout.root)
+            .unwrap_or_else(|| {
+                ViewNodeSnapshot::Area(ViewAreaSnapshot {
+                    id: active_area.clone(),
+                    active: None,
+                    displays: Vec::new(),
+                })
+            });
+        let active_area = if snapshot_has_area(&root, &active_area) {
+            active_area
+        } else {
+            first_snapshot_area(&root).to_owned()
+        };
         ViewLayoutSnapshot {
-            root: self.view_node_snapshot(&facts, &layout.root),
-            active_area: layout.active_area().id.clone(),
+            root,
+            active_area,
             limits: ViewLimitsSnapshot {
                 areas: MAX_VIEW_AREAS,
                 depth: MAX_SPLIT_DEPTH,
                 displays: MAX_VIEW_DISPLAYS,
             },
-            display_count: layout.display_count(),
+            display_count: layout.displays().filter(|display| shown(display)).count(),
         }
     }
 
-    fn view_node_snapshot(&self, facts: &DisplayFacts<'_>, node: &Node) -> ViewNodeSnapshot {
+    fn view_node_snapshot(
+        &self,
+        facts: &DisplayFacts<'_>,
+        drawn: &dyn Fn(&Display) -> bool,
+        node: &Node,
+    ) -> Option<ViewNodeSnapshot> {
         match node {
-            Node::Area(area) => ViewNodeSnapshot::Area(ViewAreaSnapshot {
-                id: area.id.clone(),
-                active: area.active.clone(),
-                displays: area
+            Node::Area(area) => {
+                let shown: Vec<&Display> = area
                     .displays
                     .iter()
+                    .filter(|display| drawn(display))
+                    .collect();
+                let active = area
+                    .active
+                    .as_ref()
+                    .filter(|id| shown.iter().any(|display| &display.id == *id))
+                    .cloned()
+                    .or_else(|| {
+                        shown
+                            .iter()
+                            .max_by_key(|display| display.last_focused_unix_ms)
+                            .map(|display| display.id.clone())
+                    })?;
+                Some(ViewNodeSnapshot::Area(ViewAreaSnapshot {
+                id: area.id.clone(),
+                active: Some(active),
+                displays: shown
+                    .into_iter()
                     .map(|display| {
                         let (state, reason) = self.display_state(facts, display);
                         let tab = display
@@ -3050,21 +3142,47 @@ impl Runtime {
                         }
                     })
                     .collect(),
-            }),
-            Node::Split(split) => ViewNodeSnapshot::Split(ViewSplitSnapshot {
-                id: split.id.clone(),
-                axis: split.axis,
-                ratio: split.ratio,
-                first: Box::new(self.view_node_snapshot(facts, &split.first)),
-                second: Box::new(self.view_node_snapshot(facts, &split.second)),
-            }),
+            }))
+            }
+            Node::Split(split) => {
+                let first = self.view_node_snapshot(facts, drawn, &split.first);
+                let second = self.view_node_snapshot(facts, drawn, &split.second);
+                match (first, second) {
+                    (Some(first), Some(second)) => {
+                        Some(ViewNodeSnapshot::Split(ViewSplitSnapshot {
+                            id: split.id.clone(),
+                            axis: split.axis,
+                            ratio: split.ratio,
+                            first: Box::new(first),
+                            second: Box::new(second),
+                        }))
+                    }
+                    (one, other) => one.or(other),
+                }
+            }
         }
+    }
+}
+
+fn snapshot_has_area(node: &ViewNodeSnapshot, id: &str) -> bool {
+    match node {
+        ViewNodeSnapshot::Area(area) => area.id == id,
+        ViewNodeSnapshot::Split(split) => {
+            snapshot_has_area(&split.first, id) || snapshot_has_area(&split.second, id)
+        }
+    }
+}
+
+fn first_snapshot_area(node: &ViewNodeSnapshot) -> &str {
+    match node {
+        ViewNodeSnapshot::Area(area) => &area.id,
+        ViewNodeSnapshot::Split(split) => first_snapshot_area(&split.first),
     }
 }
 
 /// A page's name on its tab: its title once it has one, else its host (for
 /// a file, its file name), else its address.
-fn browser_label(display: &Display) -> String {
+pub(super) fn browser_label(display: &Display) -> String {
     if display.is_new_tab() {
         return "New tab".to_owned();
     }

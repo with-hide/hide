@@ -36,6 +36,7 @@ Only checkouts in the current connected catalog contribute to that inventory; a 
   The desktop window's gateway, acting for a CDP client that creates a page, brings that page forward, since a page loads only in front; it acts as `gateway:<key>:<path>`, one key per window, so the core tells it from a checkout shell (`gateway_caller_id`).
   A new page that is not in front can stay pending until it first appears.
   An agent reads the checkout's Views (`hide view list`, `hide view status`, select, close, `--wait`) from any of its tabs, even when its tab is not the Workspace's active tab and the Workspace was never in front: every caller sees the same list, so such a page is listed as `pending` rather than missing.
+  Each row names the sessions that opened it (`openers`, `here` on the caller's own) and whether the operator did, and `hide view list --session <id|here>` keeps the rows one session opened (PRD session-files D-31); the Files strip on screen shows only the keyboard session's and the operator's ([UI_BEHAVIOR.md](UI_BEHAVIOR.md#file-views-per-checkout)).
   `--wait` polls that state for at most ten seconds and returns a failure if the page fails, disconnects, or remains pending; it does not reveal a hidden View.
   If a later status query fails, the refusal still carries the applied open request ID and View ID for reconciliation.
   The action receipt and page status carry the load stamp, so a concurrent reopen that supersedes the requested load returns `page_superseded` instead of the newer load's result.

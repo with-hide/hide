@@ -78,7 +78,7 @@ impl Runtime {
     /// machine's selected pane, or the pane a device's Herdr has focused,
     /// which the shell draws focused and follows (`remoteView` in
     /// `web/src/remote.ts`).
-    fn operator_pane(&self, device: &str) -> Option<&str> {
+    pub(super) fn operator_pane(&self, device: &str) -> Option<&str> {
         if device == self.node.as_str() {
             return self.snapshot.terminal.pane_id.as_deref();
         }

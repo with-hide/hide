@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import { AgentLogo } from "./components/agent-logo";
 import { Elapsed } from "./components/elapsed";
+import { HideAiExplainer } from "./components/hide-ai-explainer";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { useInterfaceTranslation } from "./i18n/client";
@@ -11,6 +12,7 @@ import { cn } from "./lib/utils";
 import { sourceTime } from "./memoryList";
 import { allAgents } from "./navigation";
 import { catalogWorkspaces, type ProjectSuggestions, type SuggestionEvidence, type SuggestionRow } from "./snapshot";
+import { suggestionSteps } from "./hideAiSteps";
 import { useShellStore } from "./store";
 import { applyOffer, appliedSummary, attemptLine, suggestionGroups, suggestionMark, suggestionTitle, type SuggestionMark } from "./suggestionList";
 import { useUiStore } from "./ui";
@@ -31,14 +33,13 @@ export function SuggestionsTab({ project, actions }: { project: ProjectSuggestio
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-auto px-md pb-lg" data-suggestions={project.status}>
       {line ? (
-        <div className="flex items-center gap-sm py-md" data-suggestions-status={project.status}>
-          <p className="min-w-0 flex-1 break-keep text-caption text-muted-foreground">{t(line)}</p>
+        <HideAiExplainer title={t(line)} steps={suggestionSteps(t)} data-suggestions-status={project.status}>
           {project.status === "off" ? (
-            <Button size="sm" variant="outline" onClick={() => actions.suggestionSettings(project.workspace_id, { suggestions_enabled: true })} data-suggestions-turn-on="true">
+            <Button size="sm" variant="outline" className="self-start" onClick={() => actions.suggestionSettings(project.workspace_id, { suggestions_enabled: true })} data-suggestions-turn-on="true">
               {t("suggestions.turnOn")}
             </Button>
           ) : null}
-        </div>
+        </HideAiExplainer>
       ) : null}
       {project.status === "off" ? null : (
         <>
@@ -60,7 +61,7 @@ export function SuggestionsTab({ project, actions }: { project: ProjectSuggestio
   );
 }
 
-/** The tab's one line (D-44); `조사 중` and `조사 못 함` sit in the head, and the rows stay as they were. */
+/** The tab's one line (D-44), the owl's title over what the tab gives while nothing is open or it is off; `조사 중` and `조사 못 함` sit in the head, and the rows stay as they were. */
 function statusLine(project: ProjectSuggestions, open: number): "suggestions.status.firstRun" | "suggestions.status.noneToday" | "suggestions.status.off" | null {
   switch (project.status) {
     case "first_run_pending": return "suggestions.status.firstRun";

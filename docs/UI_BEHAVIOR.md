@@ -357,11 +357,20 @@ When the last view closes, the viewing column closes; the lane stays while it ha
 
 ### File Views per checkout
 
-The checkout owns the Files View list, its split, its selected Views and its active area, whichever Agent tab is in front.
-Every tab sees the same list.
+The checkout owns one Files View list, its split and its active area, and each View remembers the sessions that opened it and whether the operator did (PRD session-files D-10, D-26).
+The Files strip shows only the Views the session whose pane has the keyboard opened, and the operator's own, which show in every session; in a split Agent tab the pane with the keyboard decides (D-13).
+The operator's Views are those opened from the Explorer, ⌘K, the file tree, a new tab's address field or an address typed into a page, by a caller Hide could not bind to a pane, and every View that was open before the update without an opener mark (D-29).
+A pane with no agent session, a plain shell, shows only the operator's Views, and a path clicked or opened there is the operator's (D-28).
+A session is its terminal or its native session, so a session found again in another pane keeps its Views, and an agent that exits to its shell or sleeps keeps them too (D-27).
+The same rule holds for a file, a diff, a page, an image and a PDF (D-30); there is no folded list of other sessions' Views, which show when their session has the keyboard (D-15).
+Switching Agent tab or pane, through the strip, sidebar, search, cycling or a confirmed local or device switch, switches the strip and the shown View together: each session shows again the View it last showed, the first time its first View, and with none of its own the operator's; the previous View does not stay behind as a dimmed tab (D-12).
+Plain shells, and agents that have opened nothing in the checkout, share the operator's strip, so moving the keyboard among them leaves the View in front where it is.
+A View named from elsewhere, a pane's `N views` row, Recent Panels or a session record's gallery tile, that the strip does not show brings the session that opened it to the keyboard first, so it shows in that session's strip.
+An area that holds none of the strip's Views is not drawn, and its neighbour takes the space; a dragged tab lands among the Views the strip draws.
 The lane, its tool, pin, tree and widths, and document editing and saving remain shared by the Workspace.
-Changing Agent tabs through the strip, sidebar, search, cycling or a confirmed local or device switch changes no View selection, split or list.
-Closing an Agent tab keeps its Views and documents.
+A session's Views close when Hide closes its pane, its tab or its subtree, or archives it (`세션 보관`), and only then; a View another session also opened, and the operator's, stay (D-14, D-27).
+Before such a close, a View of a document with unsaved work that only that session's Views show asks once for the whole close: `Save and close` saves each and then closes, `Close without saving` drops the text, and `Cancel` closes nothing; a document whose text this page does not hold stays open as the operator's View, as does one a close that did not ask finds unsaved.
+A pane that closes outside Hide, such as a shell's `exit`, closes no Views; they leave the strip with their session and the cap below closes them first.
 Closing the lane preserves its documents, unsaved text and save state.
 Closing the selected input View chooses its area's most recently visited surviving View, then the right neighbour and then the left when none was visited, and the keyboard follows the confirmed result.
 Closing a background View, including the selected View of another area, leaves input where it was.
@@ -371,7 +380,7 @@ The last View returns input to the existing tree if it is on, else closes the la
 A last document reference waits for save protection; failure or conflict leaves it open, and a newer input destination wins over a delayed close completion.
 
 From the pane the operator is in, a file, diff or browser open or a select brings the View to the front, its area becomes the active one and the lane is called to Files.
-From another pane of the Workspace on screen, of the same tab or another, the View is added at the end of the area it lands in; the selection, the active area, the keyboard, the lane and the tab on screen stay as they were, and the Files icon's badge counts it.
+From another pane of the Workspace on screen, of the same tab or another, the View is added at the end of the area it lands in, in that pane's session's strip; the selection, the active area, the keyboard, the lane and the tab on screen stay as they were, and the Files icon's badge counts the Views the strip on screen draws.
 On a Workspace not on screen, the agent in its active tab brings the View to that Workspace's front and an agent in another tab adds it behind; neither moves the screen or calls the lane.
 A shell bound only to the checkout counts as another pane there; the browser gateway's new page comes to the front of its area, where it loads.
 The operator brings it forward from the strip; selecting the caller's tab does not.
@@ -386,16 +395,16 @@ The desktop hides every retained page absent from the current placements.
 The list, split and selection are saved with the Workspace and survive restart and core moves.
 Obsolete `tab_views` bookmarks are ignored without erasing the saved `view_layout`, lane, documents or comments.
 A first start after the update shows an empty list: Views saved per tab by the earlier build are not read, while the lane's tool, pin, tree, widths, comments and the Agent layout are kept.
-Authoritative topology drops a closed tab's pending opens and keeps the Views and documents.
+Authoritative topology drops a closed tab's pending opens and keeps the Views and documents; only Hide's own close closes a session's Views.
 An unanswered connected-device session or unresolved catalog preserves saved state.
 Local and connected-device callers follow the same rules; the phone keeps its existing flow.
 No additional badge, notice or setting is introduced.
 The checkout keeps at most 32 Views in its six View areas and depth three.
 An open that would add the 33rd View first closes the View looked at longest ago in the checkout, the way closing its last View closes a file (Reopen Closed brings it back); a View in front of any area and a document with unsaved work never close.
 Only when nothing can close is the open refused, with the View notice, and existing content stays as it was.
-Web owner: none, the shell draws the existing snapshot projection.
-Core owner: `herdr-core/src/runtime/{view_callers,view_areas,workspace_control,workspace_view}.rs` and `herdr-core/src/workspace_views.rs`.
-Regression owners are `runtime/tests/view_bookmarks.rs`, `web/e2e/{view-bookmarks,right-lane}.spec.ts` and `desktop/e2e/browser.spec.ts`.
+Web owner: the shell draws the snapshot projection, the strip already filtered, and asks the unsaved question in `web/src/Overlays.tsx` (`ConfirmViewsClose`) from the projection's `session_drafts`.
+Core owner: `herdr-core/src/runtime/{view_sessions,view_callers,view_areas,workspace_control,workspace_view}.rs` and `herdr-core/src/workspace_views.rs`.
+Regression owners are `runtime/tests/view_bookmarks.rs`, `runtime/view_sessions.rs`, `web/e2e/{view-bookmarks,right-lane}.spec.ts` and `desktop/e2e/browser.spec.ts`.
 
 ### Opening, preview, and Open to the side
 
@@ -487,6 +496,7 @@ In a plain browser tab the view keeps its address on the toolbar row, level with
 Each area's selected View shows its actual opener's 14px provider mark at the right of the address or path toolbar, while tabs retain their type mark and title without repeated opener logos: a page, a file, a diff, an image or a PDF opened by `hide file open`, `hide diff open` or `hide browser open` from the agent's pane, or by the operator clicking a path or an address in that agent's terminal (PRD view-opener-feedback D-02, D-04, D-24).
 A View the operator opened from the Explorer, ⌘K, the file tree or a new tab's address field, and one a caller Hide could not bind to a pane opened, wears no mark.
 The mark follows the agent that last opened the View; a link inside the page and an agent's `hide browser` command keep it, and an address the operator types takes it off.
+Two sessions that open the same View both keep it in their strips, and the mark is the one that opened it last (PRD session-files D-26).
 Its hint, above the toolbar mark, says the agent's name, `Opened this · <product>` and `Click to go to its pane`, and the mark's accessible name says the same; the tab's tooltip also identifies its opener, including on background tabs.
 Opening, waiting and unavailable Views retain a path toolbar with the same opener, and a missing or unknown opener creates no invented identity.
 Pressing it brings the agent's pane forward with the keyboard, leaving the View selected; an agent whose pane closed is found again by its session in another pane, and one found nowhere draws its mark dimmed with `(closed)` in the hint and goes nowhere.
@@ -556,7 +566,7 @@ A press while the lane already draws that record turns the lane back to its tool
 Whether the lane draws that record is read from the slot's front item and the lane's tool, both of which the core keeps.
 A plain shell, and an agent pane whose session is not known yet, keeps the plain head with nothing to press; the head becomes the button in place once the session is known, on a device's pane as on this Mac's (B24).
 Over a narrow window the record shows in the lane floating over the panes (`web/src/PaneHeaderBand.tsx`, `PaneRecordButton`).
-The provider logo is drawn on a pane's own header, and in the heads and places that are about the agent or its provider itself: the start picker, Settings, the footer's usage chips and the Usage pages, the session record's head, the tree popover's head, the last-words popover's head, the phone's detail head, the Memory tool's Hide AI chip, the first-run tiles, and the selected View's toolbar ([View openers and comments](#view-openers-and-comments)).
+The provider logo is drawn on a pane's own header, and in the heads and places that are about the agent or its provider itself: the start picker, Settings, the footer's usage chips and the Usage pages, the session record's head, the tree popover's head, the last-words popover's head, the phone's detail head, the Hide AI tool's ⚙ chip, the first-run tiles, and the selected View's toolbar ([View openers and comments](#view-openers-and-comments)).
 The sidebar's 프로젝트 and 태스크 rows and the Agent tabs draw it only by the operator's choice or while ⌥ is held ([Agent logo view mode](#agent-logo-view-mode)); ⌘K and the recent-pane list and the phone's list lead with the status mark alone in both modes (PRD agent-mark-quiet); a session record's children, the PR card's session rows and the child tree popover's rows draw the logo after the status mark in both modes (PRD record-card-readability D-06, D-09).
 A pane header draws exactly one logo, the pane's own agent, for each of the seven supported agents: Claude Code, Codex, Grok, OpenCode, Pi, omp and Antigravity, the same logo Settings and the first-run choice draw.
 A row without a logo names its agent by product name (`Claude Code`, `Codex`, the adapter's label, never the raw kind) in its hover hint and its accessible name, and the pane header's logo and title say it the same way.
@@ -899,8 +909,9 @@ The core counts both: 제안's number is its new suggestions and its rows that a
 The lane keeps the tool's id `memory`, so a saved lane, a chord and `Toggle Hide AI tool` (`toggle_lane_memory`) reach it as before; ⇧⌘L, a Memory card number under a conversation and Project Settings' `Open project Memory` open it on the Memory tab, and a Needs You row on 제안.
 The tab shown and the 제안 row open are this window's, not the core's.
 
-Its head reads `Hide AI · <project>` beside the brain, then the Hide AI chip (the agent Hide AI asks now with its logo, the listed agent standing in while Runs on is past the usage limit), the switch for all of Hide AI in this Project, ⚙ and `✕`, which closes the tool column.
-The switch is on from the start; turned off, neither 제안 nor Memory reads anything, Hide AI makes no call for the Project, the rail and the tabs count nothing, and the tool says `Hide AI가 꺼져 있어요` with one line on what turning it on reads (B3).
+Its head reads `Hide AI · <project>` beside the brain, then the switch for all of Hide AI in this Project, ⚙ and `✕`, which closes the tool column; the agent Hide AI asks now is named in ⚙, not in the head.
+The switch is on from the start; turned off, neither 제안 nor Memory reads anything, Hide AI makes no call for the Project, the rail and the tabs count nothing, and the reading owl says `Hide AI가 꺼져 있어요` over what 제안 and Memory each give once it is on, under their names (B3).
+Where a tab has nothing to show yet, the same owl explains it: its state is the title and what the tab does for the operator follows in three short steps, each with its mark (`HideAiExplainer`); Memory's are `우리가 대화하며 정한 것을 기억해요`, `모든 에이전트가 같은 기억을 써요` and `같은 말을 두 번 하지 않아도 돼요`.
 Turning it on gives each of the two back as it was.
 The first time the tool opens with Hide AI on, two lines above the tabs say that investigating uses the operator's own subscription and what is sent; they stay while the tool stays open and are not shown again (B3, D-36).
 While the Project is still being read the tool says so; a Project that is not registered, or whose Hide AI could not be read, says that in one line, the second with `다시 읽기`.
@@ -909,7 +920,7 @@ While the Project is still being read the tool says so; a Project that is not re
 
 The 제안 tab lists what Hide AI suggests fixing, the fixes under way and the ones applied (D-05 to D-07).
 The core decides every group, mark, hold and count; the screen draws them and every press is one `suggestion_action` (`apply`, `dismiss`, `restore`, `retry`) naming the row by its id (`s12` for a suggestion, `m72` for a memory on its way into the documents).
-The tab has one line for its state and no more (D-44): `다음에 Hide를 열 때 첫 조사` before the first investigation, `오늘은 제안 없음` when today's run left nothing open, and `제안이 꺼져 있어요` with `켜기` when ⚙ turned suggestions off; while a run goes, `조사 중` sits small in the head and the rows stay as they were, and after a run that could not investigate `조사 못 함` sits there the same way until a run investigates, nothing new having risen from it (D-35).
+The tab has one line for its state and no more (D-44): `다음에 Hide를 열 때 첫 조사` before the first investigation, `오늘은 제안 없음` when today's run left nothing open, each of these two as the owl's title over what the tab gives the operator, `세션과 PR 리뷰에서 에이전트가 자주 막히는 곳을 찾아요`, `같은 실수가 반복되지 않게 개선 방향을 제안해요` and `고르면 PR로 반영돼서, 에이전트가 알아서 똑똑해져요`, and `제안이 꺼져 있어요` over the same steps with `켜기` under them when ⚙ turned suggestions off; while a run goes, `조사 중` sits small in the head and the rows stay as they were, and after a run that could not investigate `조사 못 함` sits there the same way until a run investigates, nothing new having risen from it (D-35).
 A failure the operator cannot act on, such as a run that hit its turn or time limit or the usage limit, goes to the diagnostic log and draws nothing.
 
 The rows fall into `고를 것`, `반영 중` and the folded `반영됨`, each head with its count, and a row's mark says whose move it is (D-37): a green open circle for a new suggestion, a yellow dot for the operator's turn, a blue turning ring with dimmed text while Hide AI works; a row under 반영됨 has no mark.
@@ -929,14 +940,14 @@ An open issue reads `이슈 열림` with the issue.
 A merged row folds under `반영됨 N · 효과 있었음 M`; while the watch runs its line is the quiet `지켜보는 중 · 세션 2/5`, a row whose problem did not come back reads `효과 있었음`, and nothing else is said (B15).
 A row being applied whose agent lives is also one row in the sidebar's and the 태스크 list's Needs You while it is the operator's turn (see Work Hide AI does for a home), and choosing that row opens this tool on 제안 with the row open (B11); a memory on its way into the documents is one of these rows from its first offer, named by its memory with its number (`m72`) before the title, and so is a promotion already under way before this change (D-02, B2).
 
-⚙ opens a sheet under the head (D-26, B19).
-At its top `조사하는 AI` and the chip of the agent Settings › Hide AI chose, which opens that page, and under it one line, `설정 › Hide AI의 순서를 따라요. 한도에 걸리면 다음 AI로` (D-53); when that agent cannot promise to only read (OpenCode), `이 AI로는 조사할 수 없음` stands under it and no investigation runs.
-The 제안 group has its own switch, `제안 양` (`적게`, `보통`, `많이`, each with what it means and how many a week), `반영 방식` (`확인하고 반영`, `버튼을 누르면 PR이나 이슈를 열어요`, or `자동으로 PR 열기`), `읽을 곳`, and `넘어간 제안 N개`, which unfolds to each one with `되살리기` and a quiet line saying whether it can still rise once (`다시 쌓이면 한 번 올라와요`) or not (`다시 올라오지 않아요`); restoring one lets the core judge it again on what piled up.
+⚙ opens a sheet under the head in three areas (D-26, B19): what 제안 and Memory share, then 제안, then Memory.
+The shared area is a tinted box: `사용하는 AI` and the chip of the agent Settings › Hide AI chose (the listed agent standing in while Runs on is past the usage limit), which opens that page, then `설정 › Hide AI의 순서를 따라요. 한도에 걸리면 다음 AI로` (D-53) and the line on what is sent; when that agent cannot promise to only read (OpenCode), `이 AI로는 조사할 수 없음` stands under the chip and no investigation runs.
+제안 and Memory each open with a head of their own, a mark, the name, what it does and its own switch, and their settings sit under the name.
+제안 holds `제안 양` (`적게`, `보통`, `많이`, one segmented choice with what the chosen one means and how many a week under it), `반영 방식` (`확인하고 반영`, `버튼을 누르면 PR이나 이슈를 열어요`, or `자동으로 PR 열기`, the same way), `읽을 곳`, and `넘어간 제안 N개`, which unfolds to each one with `되살리기` and a quiet line saying whether it can still rise once (`다시 쌓이면 한 번 올라와요`) or not (`다시 올라오지 않아요`); restoring one lets the core judge it again on what piled up.
 `읽을 곳` has two switches (D-52): `세션 기록` (`실패한 명령 · 에이전트 막힘 · 내 정정 · 세션에 남은 문제 · 개선할 점`) and `GitHub` (`CI 실패 · 리뷰 지적`).
 The core keeps seven signals; a switch shows on while any signal of its group that can be read is on, and one press is one `suggestion_settings` with `signal_group`, which turns the whole group (B5).
 `GitHub` is off with `GitHub 저장소가 아니에요` under it when the repository is not on GitHub; with Memory off, `Memory가 꺼져 있어 내 정정은 읽지 않아요` stands under `세션 기록`, and with Hide AI or the turn-end analysis (Settings › Hide AI's agent summaries) off, `개선할 점은 턴 끝 분석이 켜져야 기록돼요` stands there the same way (B27, D-57).
-The Memory group has Memory's own switch and `이 프로젝트의 기억 지우기`, which asks first, naming the Project and the number of memories.
-Last, one line on what is sent.
+Memory holds `이 프로젝트의 기억 지우기` in the destructive colour, which asks first, naming the Project and the number of memories.
 With the head switch off every switch in the sheet is dimmed.
 
 ### The Memory tab
@@ -1472,7 +1483,7 @@ In the 보기 slot the head says `계획 n/m · <N분 전 갱신>` (`계획 N단
 While the plan waits for review a band says `검토 기다림 · 대화에서 답하세요` with one button, `대화로`, which goes to the pane; there is no button that approves, and the band goes once the agent runs `hide plan approve`.
 A finished plan's band says `끝남`; a plan whose session is gone draws one line saying so.
 While a plan runs, the pane's second row shows the current step and its line, `<단계> · <line>`, in the progress place; while it waits for review the row is the ask band, `Plan review · N steps` (`계획 검토 · N단계` in Korean) worded by the shell from the subject the core sends, and the sidebar's second line says the same ([status-model.md](status-model.md#a-plan-waiting-for-review-is-a-question)).
-The session record has a `계획` section with the count, `끝남` once finished, and the checklist, kept after the session ends; while the session works its `지금` box says the current step and its line as the second row does.
+The session record has a `계획` section with the count, `끝남` once finished, and the checklist, kept after the session ends; while its pane works or asks, a running plan moves into the record's `지금` block ([The session record](#the-session-record)) and the section is not drawn.
 Settings › Agents lists the three skills Hide installs, `hide`, `hide-conductor` (waypoints) and `hide-plan` (list-checks), each with one line on what it is for and the help it points at; they come and go with each agent's switch.
 
 ### The session record
@@ -1483,6 +1494,11 @@ The record starts with its title and agent logo, then `<device> · <agent produc
 The title is the flow the operator asked the most in, the later one on a tie, while the pane and the sidebar keep the current flow's name; with Hide AI off it is the session's own title (PRD session-record-fact-status D-06, B9, B10).
 Its native status and elapsed time share a quiet row with a `터미널 열림` or `터미널 닫힘` chip; there is no coloured action box.
 An open pane offers `터미널로 이동` even after its work ends, or `답하러 가기` while asking.
+While that pane works or asks, a `지금` block stands right under the status row and above `나를 기다리는 것` (PRD session-docs-and-assistant D-41), drawn alike in the lane's 보기 slot and the Overview's panel.
+Its first line is the turn in the pane's own words, `<request> → <now>`: who sent the request and its line as the second row and the turn card show it (the label's summary, else the request's own first line), then the second row's progress place, an ask's words in the warning colour while it asks, else a running plan's `<단계> · <line>`, else the agent's own sentence.
+The work it delegated is `함께 진행한 세션`'s to count, and Hide keeps no count of the files a turn read or changed, so the block says neither.
+Under the turn comes a running plan, `계획 n/m` over its checklist with done, current and later marks, which the `계획` section then leaves out; with no plan there is no plan part.
+A part Hide does not hold is not drawn, and the block is absent while the pane neither works nor asks and for a closed pane; while it asks, the question is said in the block and not again under the status row.
 A closed pane offers `세션 복구하기`, using the existing native-session resume in a new pane in the registered checkout containing its original working folder on its device.
 A missing conversation path, unsupported agent, disconnected device or missing checkout disables restore and states why beside the action.
 A restore in flight shows `복구하는 중…` and accepts no second click; a failed start shows an inline reason with Retry, and a successful start focuses the resumed pane.
@@ -1491,7 +1507,7 @@ Archived sessions keep their existing tree-aware `이어가기` action.
 While the agent neither works nor asks, the status row reads the record's last real turn: its end word and line, with a turn its provider refused for a usage limit or an API error (`한도`) skipped and its line shown as a small badge beside the word, such as `한도 소진 · 10-22 13:00 풀림`; when every turn hit the limit the word is `막힘` with the badge (PRD session-record-goal-flow D-10, B10).
 When every pull request first printed in that turn's flow, a child's among them, that had not settled by that turn's end has merged or closed since, the row reads `머지됨` (or `닫힘` when none merged) with `#n`, or `PR n개` for several, and the time since the last one settled, in place of the line; a turn that asked, was blocked or hit a limit keeps its own word (fact-status D-01, B2, B3).
 A pane at work or asking is the state now, and a pane drawing a limit as a block defers to the record's word and badge.
-There is no `요청한 작업` checklist, no checkbox and no tab row (D-01, B2); below the status come, in this order, `나를 기다리는 것`, the goal flows, the PRs and outputs, and `함께 진행한 세션`.
+There is no `요청한 작업` checklist, no checkbox and no tab row (D-01, B2); below the status come, in this order, the `지금` block, `나를 기다리는 것`, the goal flows, the PRs and outputs, and `함께 진행한 세션`.
 `나를 기다리는 것` lists the questions and decisions the agent asked the operator in the current flow and that no later turn answered (moving on to the next flow answers the ones before it, and asking one again later in the new flow lists it again, fact-status D-03, B6), one line each with `넘기기`; a line put away keeps its place with `되돌리기` while the record stays open and turns open again if the agent asks it again after it was gone; the operator's next request, or a delegated session's parent's reply, removes the lines asked before it, the agent's still-open question staying listed, and with none open the section is absent (D-12, B11, B12).
 The goal flows follow in the order the goal changed, each with its name, when it began and its request count (`지금` for the current one); the current flow is open, and a past flow is folded to its result and opens on a click (D-03, D-11, B3, B13).
 The result is, newest knowledge first: `머지됨` or `닫힘` with `#n` or `PR n개` and the time, when every pull request first printed in the flow settled after its line (fact-status B1, B3); the line the label gave as the flow closed, with no word (B4); `넘어감` with the line of its last turn when that turn asked or waited and the operator went on (B5); else the line of its last `끝` turn with the `끝` word, else its last real turn's end word and line, else its last turn's, so a flow with a judged turn always has a result (B7).
@@ -1506,13 +1522,22 @@ When the record has dropped its oldest requests past its cap, `오래된 요청 
 `PR` lists this session's pull requests, then one group per direct child, under that child's name, holding the pull requests of the child and all its descendants (D-14, B18).
 Open and failing pull requests show as rows with a state mark, number and title; merged and closed ones fold into one `끝난 PR n개` line that opens them all, and the head reads `전부 머지됨` when every pull request merged (B19).
 Every output opens the existing PR card or issue action, and a GitHub value that cannot be refreshed stays dimmed with its last-read time.
-`결과물` lists, once each, the outputs other than pull requests (a board, a document, an issue, a release) this session and its descendants made, and is absent with none (D-16, B22).
+`결과물` lists the outputs among the Views this session and its descendants opened, in every checkout, the one looked at last first, then the outputs other than pull requests its turns named (a board, a document, an issue, a release, D-16), each once (PRD session-docs-and-assistant D-40); pull requests stay in `PR`, and the section is absent with none (B22).
+An output is something made for a person to look at, not something the agent merely opened: every page (a preview address or an outside link), and a file whose extension names an image, a PDF, a video, a board (`.pen`, `.excalidraw`, `.tldraw`, `.drawio`) or a document written for people (Markdown, HTML, plain text, reStructuredText, AsciiDoc); source code, diffs and changed files, logs and configuration files are left out, since the pull request and Changes already show the code.
+The core decides it in one table by the View's kind and the file's extension (`is_output` in `herdr-core/src/runtime/view_sessions.rs`), and an opened code file simply is not listed; this kind filter is interim until the agent names its outputs itself with `hide output add` (Desk phase 2).
+A View belongs to the record when one of its openers is a session of the record's tree, found by its native session on its own machine as `hide view list --session` finds it ([File Views per checkout](#file-views-per-checkout)); a drilled child's record shows its own subtree's Views, and closing a View takes it away.
+Only an item with a real picture is a thumbnail, in three columns of short, wide tiles: an image, read through the file read its viewer uses (past 8 MiB it draws its file mark instead), and a page this window already holds a capture of; no page is loaded or captured for it.
+Every other item is one compact row under the thumbnails: its kind mark, its name and one short muted detail, an open document's first heading (else its first line), a page's address, or for another file, such as a PDF or a board, the folder it sits in within its checkout; a named output has a package mark and no detail.
+Pressing a View's thumbnail or row brings that View to the front of its checkout's documents: in the Workspace on screen as a pane's `N views` row does, and from the Overview or another checkout by bringing that checkout forward with the View, the session that opened it taking the keyboard when its strip does not show the View; a device's View brings its Workspace forward only, and nothing opens in a popup.
+A named output's row opens nothing.
+The section shows the first three thumbnails and four rows, and `+N` for the rest, which shows them all; the core sends at most 64 Views and counts the rest, said once as `오래된 View n개는 보이지 않음` once all are shown.
+The Views do not depend on Hide AI; with summaries Off the gallery keeps them and leaves out the named outputs.
 `함께 진행한 세션` is a flat list, five initially with a way to show more.
 Each row shows its state now, from its live pane, else from its last real turn (`머지됨` or `닫힘` when that turn's flow's pull requests settled after it, as on the top state, fact-status B2), the agent logo and product name, the name of the work it was given (never an envelope's words), and its PR count (B20, B26).
 Pressing a child expands its flows and pull requests in place, one child at a time, while the current session stays on screen.
 An explicit `기록 열기` opens that child's record as the next slot item with the existing back action; a live child also offers its terminal action.
 A History hit opens the flow holding the request, with its words shown and the query marked; a request the record no longer keeps says so (B32).
-With summaries Off, the record is the native or manual title, native status, every request in time order as sent with `AI 요약 꺼짐` said once, the pull requests and the child sessions, with no flow names, results, summaries or `나를 기다리는 것` (D-20, B28).
+With summaries Off, the record is the native or manual title, native status, the `지금` block from what the pane shows, every request in time order as sent with `AI 요약 꺼짐` said once, the pull requests, the opened Views and the child sessions, with no flow names, results, summaries, named outputs or `나를 기다리는 것` (D-20, B28).
 A record written before flows keeps its stored goals as flows, its requests with no summary as their first words and its past flows' results as their end words only (B27).
 The problems and follow-ups a turn found leave the record and stay in the Overview backlog's missed group ([백로그](#백로그)).
 Loading, failure, retry, disconnection, archive and resume continue to use their existing runtime policies.
@@ -1521,7 +1546,8 @@ An archived session's record keeps every part above, and its `지금` box reads 
 A live root whose archive left members closed lists them under its `지금` box, each with its state and its own `이어가기` (B24).
 A first record read uses a small skeleton; a failed read shows Retry, and a disconnected device retains the last read dimmed until reconnection refreshes it.
 GitHub values that cannot be refreshed stay dimmed with their last-read time in the tooltip; failure is never a false zero.
-Web owners: `web/src/SessionRecord.tsx`, `web/src/DetailPanel.tsx`, and `web/e2e/session-panel.spec.ts`.
+Web owners: `web/src/SessionRecord.tsx`, `web/src/RecordGallery.tsx` and `web/src/galleryTiles.ts` (the gallery), `web/src/DetailPanel.tsx`, and `web/e2e/session-panel.spec.ts`.
+Core owner of the record's Views: `herdr-core/src/runtime/view_sessions.rs` (`settle_record_views`), held by `runtime/tests/view_bookmarks.rs`.
 
 
 ### The PR list and the PR card

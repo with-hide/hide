@@ -55,13 +55,14 @@ class ReleaseCandidate(unittest.TestCase):
         runs = ROOT / "agents/runs/release-candidate-tests"
         runs.mkdir(parents=True, exist_ok=True)
         for changed, refused in [("README.md", False), (".github/workflows/agent-journey.yml", True),
-                                 (".github/workflows/package.yml", True)]:
+                                 (".github/workflows/package.yml", True), (".github/workflows/device-helpers.yml", True)]:
             with self.subTest(changed=changed), tempfile.TemporaryDirectory(dir=runs) as temp:
                 repo = Path(temp)
                 git = lambda *args: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
                                                    cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
                 git("init", "-q")
-                for name in ("README.md", ".github/workflows/agent-journey.yml", ".github/workflows/package.yml"):
+                for name in ("README.md", ".github/workflows/agent-journey.yml", ".github/workflows/package.yml",
+                             ".github/workflows/device-helpers.yml"):
                     (repo / name).parent.mkdir(parents=True, exist_ok=True)
                     (repo / name).write_text("first\n")
                 git("add", "-A")
@@ -113,6 +114,21 @@ class ReleaseCandidate(unittest.TestCase):
                 for step in job.get("steps", []):
                     if step.get("uses", "").startswith("actions/checkout@"):
                         self.assertEqual(step["with"]["ref"], "${{ inputs.source-sha || github.sha }}")
+
+    def test_no_receipt_or_mac_app_exists_without_both_device_helpers(self):
+        # A failed helper must skip what needs it: the Mac app's assembly and,
+        # through `packages`, the candidate's receipt. The Mac compile alone
+        # starts beside the helpers.
+        jobs = yaml.safe_load((WORKFLOWS / "package.yml").read_text())["jobs"]
+        self.assertNotIn("if", jobs["device-helpers"])
+        self.assertNotIn("if", jobs["helper-identity"])
+        self.assertEqual(jobs["macos-compile"]["needs"], "helper-identity")
+        self.assertEqual(set(jobs["macos-package"]["needs"]), {"helper-identity", "device-helpers", "macos-compile"})
+        for name in ("macos-compile", "macos-package"):
+            self.assertEqual(jobs[name]["if"], "${{ inputs.include-macos }}")
+        receipt = yaml.safe_load((WORKFLOWS / "release-candidate.yml").read_text())["jobs"]["receipt"]
+        downloads = [step["with"]["name"] for step in receipt["steps"] if step.get("uses", "").startswith("actions/download-artifact@")]
+        self.assertEqual(downloads, ["hide-device-helper-linux-x86_64", "hide-device-helper-linux-aarch64"])
 
 
 if __name__ == "__main__":

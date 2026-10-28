@@ -2527,7 +2527,29 @@ export type SessionRecord = {
   plan?: PlanView;
 };
 export type SessionWorkSummary = { session: WorkSession; title: string; fallback_title: string; native_title: string | null; manual_title: string | null; cwd: string | null; ended_at_unix_ms: number | null; open_missed: number; subtree_open_missed: number; missed: MissedWork[] };
-export type SessionRecordSection = { session: WorkSession | null; loading: boolean; failure: string | null; record: SessionRecord | null };
+/** A View a record's session or a descendant opened: one tile of its 결과물 gallery (`RecordViewSnapshot`, PRD session-docs-and-assistant D-40). */
+export type RecordView = {
+  device_id: string;
+  /** The checkout whose View list holds it. */
+  checkout_path: string;
+  display_id: string;
+  kind: ViewDisplaySnapshot["kind"];
+  label: string;
+  path: string;
+  url?: string;
+  /** The kind of the file its editor tab holds; absent while none does. */
+  document_kind?: DocumentKind;
+  /** The first lines of the text document its editor tab holds. */
+  lines?: string[];
+  session: WorkSession;
+};
+export type SessionRecordSection = {
+  session: WorkSession | null; loading: boolean; failure: string | null; record: SessionRecord | null;
+  /** The Views the record's session tree opened, the one looked at last first; absent while there are none. */
+  views?: RecordView[];
+  /** The Views past the core's cap, counted. */
+  views_omitted?: number;
+};
 export type SessionSearchStatus = "current" | "working" | "done" | "needs_you" | "archived" | "retained";
 export type SessionSearchCursor = { at_unix_ms: number; device_id: string; agent: string; session_id: string };
 export type SessionSearchOptions = { request_id?: string | null; device_id?: string | null; project_root?: string | null; agent?: string | null; since_unix_ms?: number | null; until_unix_ms?: number | null; status?: SessionSearchStatus | null; include_titles?: boolean; include_flows?: boolean; cursor?: SessionSearchCursor | null };

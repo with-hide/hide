@@ -95,8 +95,8 @@ class Splitting(unittest.TestCase):
 
     def test_the_web_lane_uses_the_fewest_shards_within_its_recorded_work_budget(self):
         # Policy: size from recorded test work within 60% of the 1200s cap.
-        # A count of four violates the approved recording's budget; six spends
-        # another runner even though five fits. Read the caller's actual count.
+        # Read the caller's actual count: one fewer must exceed the budget,
+        # while every selected shard must fit the current recording.
         workflow = (ROOT / ".github/workflows/pr.yml").read_text()
         lane = re.split(r"\n(?=  [a-z0-9-]+:\n)",
                         workflow.split("\n  web-e2e:\n", 1)[1], maxsplit=1)[0]

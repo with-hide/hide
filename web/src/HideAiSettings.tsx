@@ -1,5 +1,5 @@
-import { BrainIcon, ChevronRightIcon, SettingsIcon } from "lucide-react";
-import { useState } from "react";
+import { BookMarkedIcon, BrainIcon, ChevronRightIcon, LightbulbIcon, SettingsIcon, Trash2Icon, type LucideIcon } from "lucide-react";
+import { useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentLogo } from "./components/agent-logo";
 import {
@@ -14,8 +14,8 @@ import {
 } from "./components/ui/alert-dialog";
 import { Button } from "./components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "./components/ui/popover";
-import { RadioGroup, RadioGroupItem } from "./components/ui/radio-group";
 import { Switch } from "./components/ui/switch";
+import { ToggleGroup, ToggleGroupItem } from "./components/ui/toggle-group";
 import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
 import type { MessageKey } from "./i18n/catalogs";
@@ -34,11 +34,11 @@ const SIGNAL_GROUPS: readonly { group: SuggestionSignalGroup; signals: readonly 
 
 /**
  * The Hide AI tool's ⚙ (PRD hide-ai-suggestions D-26, D-27, B5, B13, B16,
- * B19): the AI that investigates, which Settings › Hide AI chooses; the
- * 제안 group (its own switch, how many, how fixes are applied, where it
- * reads, the skipped lines); the Memory group (its own switch and deleting its
- * memories); and one line on what is sent. With the head switch off every
- * switch here is dimmed: nothing is read either way.
+ * B19), in three areas: what both share (the AI it uses, which Settings ›
+ * Hide AI chooses, and what is sent to it); 제안, under its own head and
+ * switch (how many, how fixes are applied, where it reads, the skipped lines);
+ * and Memory, under its own head and switch (deleting its memories). With the
+ * head switch off every switch here is dimmed: nothing is read either way.
  */
 export function HideAiSettings({ project, actions }: { project: ProjectSuggestions; actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -64,8 +64,7 @@ export function HideAiSettings({ project, actions }: { project: ProjectSuggestio
           <span className="min-w-0 truncate font-normal text-subtle-foreground">· {label}</span>
         </h4>
         <Provider project={project} actions={actions} onLeave={() => setOpen(false)} />
-        <section className={cn("flex flex-col gap-sm border-t border-border pt-md", off && "opacity-(--opacity-dimmed)")} data-hide-ai-settings-group="suggestions">
-          <GroupSwitch name={t("suggestions.settings.suggestions")} note={t("suggestions.settings.suggestionsNote")} checked={settings.suggestions_enabled} disabled={off} onChange={(on) => actions.suggestionSettings(id, { suggestions_enabled: on })} data="suggestions" />
+        <Section icon={LightbulbIcon} name={t("suggestions.settings.suggestions")} note={t("suggestions.settings.suggestionsNote")} checked={settings.suggestions_enabled} disabled={off} dimmed={off} onChange={(on) => actions.suggestionSettings(id, { suggestions_enabled: on })} data="suggestions">
           <Choice
             name={t("suggestions.settings.quantity")}
             value={settings.quantity}
@@ -84,47 +83,55 @@ export function HideAiSettings({ project, actions }: { project: ProjectSuggestio
           />
           <ReadFrom project={project} actions={actions} disabled={suggestionsOff} />
           <Dismissed project={project} actions={actions} disabled={suggestionsOff} />
-        </section>
+        </Section>
         <MemoryGroup project={project} actions={actions} />
-        <p className="border-t border-border pt-sm text-caption text-muted-foreground" data-hide-ai-sent="true">{t("hideAiTool.sent")}</p>
       </PopoverContent>
     </Popover>
   );
 }
 
-/** The AI chip (D-27, D-53, B19): the agent Settings › Hide AI asks now, a press opens that page, and a line says its order holds; OpenCode cannot promise to only read, so investigating does not run on it. */
+/**
+ * What 제안 and Memory share (D-27, D-53, B19): the agent Settings › Hide AI
+ * asks now, a press opens that page, its order holding at a usage limit, and
+ * what is sent to it; OpenCode cannot promise to only read, so investigating
+ * does not run on it.
+ */
 function Provider({ project, actions, onLeave }: { project: ProjectSuggestions; actions: Actions; onLeave: () => void }) {
   const { t } = useInterfaceTranslation();
   const ai = useShellStore((state) => state.rest?.status?.background_ai ?? null);
   const answering = ai?.refusal?.using ?? ai?.provider ?? null;
   const provider = answering ? ai?.providers.find((row) => row.id === answering) ?? null : null;
   return (
-    <div className="flex min-w-0 flex-col gap-xxs" data-hide-ai-provider={project.ai}>
+    <div className="flex min-w-0 flex-col gap-xs rounded-md bg-secondary p-sm" data-hide-ai-provider={project.ai}>
       <div className="flex min-w-0 items-center gap-sm">
-        <span className="min-w-0 flex-1 text-caption text-subtle-foreground">{t("suggestions.settings.ai")}</span>
-        <Button size="sm" variant="secondary" className="min-w-0" onClick={() => { onLeave(); actions.openSettings("hideAi"); }} data-hide-ai-provider-chip={provider?.agent ?? "none"}>
+        <span className="min-w-0 flex-1 text-caption font-medium text-foreground">{t("suggestions.settings.ai")}</span>
+        <Button size="sm" variant="outline" className="min-w-0" onClick={() => { onLeave(); actions.openSettings("hideAi"); }} data-hide-ai-provider-chip={provider?.agent ?? "none"}>
           {provider ? <AgentLogo agent={provider.agent} label={provider.label} /> : null}
           <span className="truncate">{provider ? provider.label : t("suggestions.settings.aiNone")}</span>
           <ChevronRightIcon aria-hidden="true" />
         </Button>
       </div>
-      <span className="self-end break-keep text-right text-micro text-muted-foreground" data-hide-ai-provider-order="true">{t("suggestions.settings.aiOrder")}</span>
-      {project.ai === "cannot_investigate" ? <span className="self-end text-caption text-warning" data-hide-ai-cannot-investigate="true">{t("suggestions.settings.cannotInvestigate")}</span> : null}
-      {project.ai === "not_ready" ? <span className="self-end text-caption text-muted-foreground">{t("suggestions.settings.aiNotReady")}</span> : null}
+      {project.ai === "cannot_investigate" ? <span className="text-caption text-warning" data-hide-ai-cannot-investigate="true">{t("suggestions.settings.cannotInvestigate")}</span> : null}
+      {project.ai === "not_ready" ? <span className="text-caption text-muted-foreground">{t("suggestions.settings.aiNotReady")}</span> : null}
+      <span className="break-keep text-micro text-muted-foreground" data-hide-ai-provider-order="true">{t("suggestions.settings.aiOrder")}</span>
+      <span className="break-keep text-micro text-muted-foreground" data-hide-ai-sent="true">{t("hideAiTool.sent")}</span>
     </div>
   );
 }
 
-function GroupSwitch({ name, note, checked, disabled, onChange, data }: { name: string; note: string; checked: boolean; disabled: boolean; onChange: (on: boolean) => void; data: string }) {
+/** One area of the sheet: its mark, name and what it does beside its own switch, and its settings under the name. */
+function Section({ icon: Icon, name, note, checked, disabled, dimmed, onChange, data, children }: { icon: LucideIcon; name: string; note: string; checked: boolean; disabled: boolean; dimmed: boolean; onChange: (on: boolean) => void; data: string; children?: ReactNode }) {
   const switchId = `hide-ai-group-${data}`;
   return (
-    <div className="flex min-w-0 items-center gap-sm">
-      <label htmlFor={switchId} className="flex min-w-0 flex-1 flex-col">
-        <span className="text-body font-medium text-foreground">{name}</span>
-        <span className="break-keep text-micro text-muted-foreground">{note}</span>
+    <section className={cn("grid grid-cols-[auto_minmax(0,1fr)_auto] items-start gap-x-sm gap-y-md border-t border-border pt-md", dimmed && "opacity-(--opacity-dimmed)")} data-hide-ai-settings-group={data}>
+      <Icon aria-hidden="true" className="mt-xxs size-(--size-icon) text-foreground" />
+      <label htmlFor={switchId} className="flex min-w-0 flex-col">
+        <span className="text-body font-semibold text-foreground">{name}</span>
+        <span className="break-keep text-caption text-muted-foreground">{note}</span>
       </label>
       <Switch id={switchId} checked={checked} disabled={disabled} onCheckedChange={onChange} data-hide-ai-group-switch={data} />
-    </div>
+      {children ? <div className="col-span-2 col-start-2 flex min-w-0 flex-col gap-md">{children}</div> : null}
+    </section>
   );
 }
 
@@ -140,7 +147,7 @@ function ReadFrom({ project, actions, disabled }: { project: ProjectSuggestions;
   const id = project.workspace_id;
   return (
     <div className="flex flex-col gap-xs" data-hide-ai-read-from="true">
-      <span className="text-micro text-muted-foreground">{t("suggestions.settings.readFrom")}</span>
+      <span className="text-caption text-subtle-foreground">{t("suggestions.settings.readFrom")}</span>
       {SIGNAL_GROUPS.map(({ group, signals }) => {
         const rows = project.settings.signals.filter((row) => signals.includes(row.signal));
         const readable = rows.filter((row) => row.unavailable === null);
@@ -165,25 +172,20 @@ function ReadFrom({ project, actions, disabled }: { project: ProjectSuggestions;
   );
 }
 
-/** A choice of a few levels, each with what it means; the core keeps the value. */
+/** A choice of a few levels, side by side, with what the chosen one means under it; the core keeps the value. */
 function Choice({ name, value, options, disabled, onChange, data }: { name: string; value: string; options: { value: string; label: string; note: string }[]; disabled: boolean; onChange: (value: string) => void; data: string }) {
+  const chosen = options.find((option) => option.value === value);
   return (
-    <div className="flex flex-col gap-xs" data-hide-ai-choice={data} data-hide-ai-choice-value={value}>
-      <span className="text-micro text-muted-foreground">{name}</span>
-      <RadioGroup value={value} disabled={disabled} onValueChange={onChange} aria-label={name} className="gap-xxs">
-        {options.map((option) => {
-          const itemId = `hide-ai-${data}-${option.value}`;
-          return (
-            <label key={option.value} htmlFor={itemId} className={cn("grid cursor-pointer grid-cols-[auto_1fr] items-start gap-x-sm rounded-sm px-xs py-xs", value === option.value && "bg-secondary")}>
-              <RadioGroupItem id={itemId} value={option.value} className="mt-xxs" />
-              <span className="flex min-w-0 flex-col">
-                <span className="text-caption text-foreground">{option.label}</span>
-                <span className="break-keep text-micro text-muted-foreground">{option.note}</span>
-              </span>
-            </label>
-          );
-        })}
-      </RadioGroup>
+    <div className="flex min-w-0 flex-col gap-xs" data-hide-ai-choice={data} data-hide-ai-choice-value={value}>
+      <span className="text-caption text-subtle-foreground">{name}</span>
+      <ToggleGroup type="single" value={value} disabled={disabled} onValueChange={(next) => next && next !== value && onChange(next)} aria-label={name} className="w-full">
+        {options.map((option) => (
+          <ToggleGroupItem key={option.value} id={`hide-ai-${data}-${option.value}`} value={option.value} size="sm" className="min-w-0 flex-1">
+            <span className="truncate">{option.label}</span>
+          </ToggleGroupItem>
+        ))}
+      </ToggleGroup>
+      {chosen ? <span className="break-keep text-micro text-muted-foreground">{chosen.note}</span> : null}
     </div>
   );
 }
@@ -223,12 +225,12 @@ function MemoryGroup({ project, actions }: { project: ProjectSuggestions; action
   const busy = !memory || memory.loading || memory.pending_action !== null || memory.unavailable !== null;
   const count = memory?.rows.length ?? 0;
   return (
-    <section className={cn("flex flex-col gap-sm border-t border-border pt-md", off && "opacity-(--opacity-dimmed)")} data-hide-ai-settings-group="memory">
-      <GroupSwitch name={t("suggestions.settings.memory")} note={t("suggestions.settings.memoryNote")} checked={memory?.enabled ?? false} disabled={off || busy} onChange={(on) => actions.memoryAction(project.workspace_id, on ? "enable" : "disable")} data="memory" />
+    <Section icon={BookMarkedIcon} name={t("suggestions.settings.memory")} note={t("suggestions.settings.memoryNote")} checked={memory?.enabled ?? false} disabled={off || busy} dimmed={off} onChange={(on) => actions.memoryAction(project.workspace_id, on ? "enable" : "disable")} data="memory">
       {count > 0 ? (
-        <button type="button" disabled={busy} className="self-start text-caption text-subtle-foreground underline-offset-4 hover:text-foreground hover:underline disabled:opacity-(--opacity-disabled)" onClick={() => setDeleting(true)} data-memory-delete="settings">
+        <Button size="sm" variant="ghost" disabled={busy} className="self-start text-destructive" onClick={() => setDeleting(true)} data-memory-delete="settings">
+          <Trash2Icon aria-hidden="true" />
           {t("suggestions.settings.deleteMemory")}
-        </button>
+        </Button>
       ) : null}
       <AlertDialog open={deleting} onOpenChange={setDeleting}>
         <AlertDialogContent>
@@ -244,6 +246,6 @@ function MemoryGroup({ project, actions }: { project: ProjectSuggestions; action
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </section>
+    </Section>
   );
 }

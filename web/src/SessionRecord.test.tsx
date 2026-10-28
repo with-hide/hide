@@ -6,7 +6,7 @@ import { createActions } from "./actions";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { initializeInterfaceI18n } from "./i18n/instance";
 import { SessionRecord, SlotSessionRecord } from "./SessionRecord";
-import type { MissedWork, RecordStatus, SessionRecord as RecordValue, SnapshotRest, WorkFlow, WorkOutput, WorkRequest, WorkSession } from "./snapshot";
+import type { MissedWork, RecordStatus, RecordView, SessionRecord as RecordValue, SnapshotRest, WorkFlow, WorkOutput, WorkRequest, WorkSession } from "./snapshot";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { REFERENCE_FOLDS, sidebarScene } from "./gallery/sceneData";
@@ -475,14 +475,103 @@ it("does not restore a removed nested checkout in its still registered parent fo
   } finally { await view.unmount(); }
 });
 
-it("says the plan's current step and its line in the 지금 box while the session works, and no step otherwise (B7)", async () => {
-  const step = (key: string, status: "done" | "working" | "planned", line: string | null = null) => ({ key, title: `${key} title`, depends_on: [], status, line, output: null, changed: false, change: null, waiting: false });
-  const plan = { pane_id: "", session: SESSION, steps: [step("spec", "done"), step("core", "working", "events land")], review: "approved" as const, ask: null, progress: { current: "core", next: null, done: 1, total: 2, finished: false }, created_at_unix_ms: AT, updated_at_unix_ms: AT };
-  const working = await mount({ ...BASE, status: status("working", "Writing events"), plan });
+const planStep = (key: string, status: "done" | "working" | "planned", line: string | null = null) => ({ key, title: `${key} title`, depends_on: [], status, line, output: null, changed: false, change: null, waiting: false });
+const PLAN = { pane_id: "", session: SESSION, steps: [planStep("spec", "done"), planStep("core", "working", "events land"), planStep("ship", "planned")], review: "approved" as const, ask: null, progress: { current: "core", next: "ship", done: 1, total: 3, finished: false }, created_at_unix_ms: AT, updated_at_unix_ms: AT };
+
+/** The reference scene with pane `a1` holding the record's session, working or asking, its second row as given. */
+function liveScene(state: "working" | "question" | "done", options: { plan?: boolean; header?: boolean } = {}): SnapshotRest {
+  const scene = sidebarScene("reference", REFERENCE_FOLDS, AT);
+  const pane = scene.agents.find((row) => row.pane_id === "a1")!;
+  Object.assign(pane, {
+    session_id: SESSION.session_id,
+    status_code: state,
+    request: { verb: "working", verb_since_unix_ms: AT, request: { text: "Write the menu PRD with before and after shots\nand the decision table", cut: false, images: 0, at_unix_ms: AT, sender: { kind: "operator" } }, request_summary: "Write the menu PRD", later_by: null, pull_requests: [] },
+  });
+  useShellStore.setState({ connection: "live", agents: scene.agents });
+  const band = state === "question" ? { kind: "answer" as const, reason: "Hide the rare items at the end?", since_unix_ms: AT, read: false, action: null, more: 0 } : null;
+  return {
+    ...scene.rest,
+    terminal: options.header === false ? {} : { headers: { a1: { working: state === "working", notice: null, band, progress: "Writing the decision table", request: { text: "Write the menu PRD", images: 0 } } } },
+    ...(options.plan ? { plans: { items: [PLAN] } } : {}),
+  } as SnapshotRest;
+}
+
+it("draws the 지금 block under the status while the pane works: the request, what it does now and its plan (D-41)", async () => {
+  const { container, unmount } = await mount({ ...BASE, plan: PLAN }, { rest: liveScene("working", { plan: true }) });
   try {
-    expect(working.container.querySelector("[data-record-now]")!.getAttribute("data-record-now")).toBe("working");
-    expect(text(working.container.querySelector("[data-record-now-step]"))).toBe("core title · events land");
+    const now = container.querySelector("[data-record-now-work]")!;
+    expect(now.getAttribute("data-record-now-work")).toBe("working");
+    expect(container.querySelector("[data-record-now]")!.contains(now)).toBe(true);
+    expect(text(now.querySelector("[data-record-now-request]"))).toContain("Write the menu PRD");
+    // A running plan's step stands where the second row puts it.
+    expect(text(now.querySelector("[data-record-now-doing]"))).toBe("core title · events land");
+    // Delegated work is 함께 진행한 세션's to count, not the block's.
+    expect(now.textContent).not.toMatch(/Delegated/);
+    expect(now.querySelector("[data-record-now-plan]")!.getAttribute("data-record-now-plan")).toBe("1/3");
+    // The plan is drawn once, in the block.
+    expect(container.querySelector("[data-record-plan]")).toBeNull();
+  } finally { await unmount(); }
+});
+
+it("says the agent's own sentence with no plan, and the question it asks while asking, once (D-41)", async () => {
+  const working = await mount(BASE, { rest: liveScene("working") });
+  try {
+    expect(text(working.container.querySelector("[data-record-now-doing]"))).toBe("Writing the decision table");
+    expect(working.container.querySelector("[data-record-now-plan]")).toBeNull();
   } finally { await working.unmount(); }
-  const done = await mount({ ...BASE, plan });
-  try { expect(done.container.querySelector("[data-record-now-step]")).toBeNull(); } finally { await done.unmount(); }
+  const asking = await mount(BASE, { rest: liveScene("question") });
+  try {
+    const now = asking.container.querySelector("[data-record-now-work]")!;
+    expect(now.getAttribute("data-record-now-work")).toBe("question");
+    expect(text(now.querySelector("[data-record-now-doing]"))).toContain("Hide the rare items at the end?");
+    expect(asking.container.querySelector("[data-record-now-words]")).toBeNull();
+  } finally { await asking.unmount(); }
+});
+
+it("leads with the request's own first line when no row shows the turn, and draws no block once the pane neither works nor asks (D-41)", async () => {
+  const quiet = await mount(BASE, { rest: liveScene("working", { header: false }) });
+  try {
+    expect(text(quiet.container.querySelector("[data-record-now-request]"))).toContain("Write the menu PRD");
+    expect(quiet.container.querySelector("[data-record-now-doing]")).toBeNull();
+  } finally { await quiet.unmount(); }
+  const done = await mount({ ...BASE, plan: PLAN }, { rest: liveScene("done", { plan: true }) });
+  try {
+    expect(done.container.querySelector("[data-record-now-work]")).toBeNull();
+    expect(done.container.querySelector("[data-record-plan]")).not.toBeNull();
+  } finally { await done.unmount(); }
+});
+
+const view = (id: string, patch: Partial<RecordView> = {}): RecordView => ({ device_id: "local", checkout_path: "/fixture/checkout", display_id: id, kind: "file", label: `${id}.md`, path: `/fixture/checkout/${id}.md`, document_kind: "markdown", lines: [`# ${id}`, "first lines"], session: SESSION, ...patch });
+
+it("draws an image as a thumbnail and every View with no picture as a compact row, then the named outputs, with +N for the rest (D-40)", async () => {
+  const scene = sidebarScene("reference", REFERENCE_FOLDS, AT).rest;
+  const rest = { ...scene, status: { ...scene.status, background_ai: { provider: "claude", providers: [], unavailable_reason: null, enabled: true, chosen: true, agent_summary: true } } } as SnapshotRest;
+  const checkout = rest.navigator!.workspaces!.find((row) => row.id === "hide")!.checkouts[0]!;
+  const views = [
+    view("doc", { checkout_path: checkout.path, path: `${checkout.path}/docs/doc.md`, lines: ["", "# Menu PRD", "body"] }),
+    view("page", { kind: "browser", path: "", label: "Menu preview", url: "http://localhost:5173/menu", document_kind: undefined, lines: undefined }),
+    view("shot", { label: "after.png", path: "/fixture/checkout/after.png", document_kind: "image", lines: undefined }),
+    view("child-board", { label: "menu.excalidraw", path: "/fixture/checkout/design/menu.excalidraw", document_kind: undefined, lines: undefined, session: CHILD }),
+    view("e"), view("f"),
+  ];
+  const record = { ...BASE, artifacts: ["Release notes"] };
+  const { container, sent, unmount } = await mount(record, { rest });
+  try {
+    await act(async () => useShellStore.setState({ sessionRecord: { session: SESSION, loading: false, failure: null, record, views } }));
+    const gallery = container.querySelector("[data-record-gallery]")!;
+    expect(gallery.getAttribute("data-record-gallery")).toBe("7");
+    const kinds = () => [...gallery.querySelectorAll("[data-record-view]")].map((tile) => `${tile.getAttribute("data-record-view")}:${tile.getAttribute("data-record-view-thumb")}`);
+    // A page this window took no capture of is a row with its address.
+    expect(kinds()).toEqual(["shot:image", "doc:row", "page:row", "child-board:row", "e:row"]);
+    expect(text(gallery.querySelector('[data-record-view="doc"] [data-record-view-detail]'))).toBe("Menu PRD");
+    expect(text(gallery.querySelector('[data-record-view="page"] [data-record-view-detail]'))).toBe("localhost:5173/menu");
+    expect(text(gallery.querySelector('[data-record-view="child-board"] [data-record-view-detail]'))).toBe("design");
+    const more = gallery.querySelector<HTMLButtonElement>("[data-record-gallery-more]")!;
+    expect(more.getAttribute("data-record-gallery-more")).toBe("2");
+    await act(async () => more.click());
+    expect(kinds()).toHaveLength(6);
+    expect(text(gallery.querySelector("[data-record-artifact]"))).toBe("Release notes");
+    await act(async () => gallery.querySelector<HTMLButtonElement>('[data-record-view="doc"]')!.click());
+    expect(sent.find((event) => event.kind === "focus_checkout")?.payload).toMatchObject({ checkout_id: checkout.id, display_id: "doc" });
+  } finally { await unmount(); }
 });

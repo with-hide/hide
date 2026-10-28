@@ -10,8 +10,8 @@
 # skipped, so a lane whose `if:` is wrong fails `verify` rather than passing
 # it. A push to main, a comparison that cannot be computed, and a path no rule
 # claims plan every lane; main's full run is the net under a lane a pull
-# request left out. Nightly's call plans every lane too, and a lane it fails
-# opens a `nightly-failure` issue, which a failed push run does not.
+# request left out. Nightly owns agy and the journey directly, leaving their
+# internal lanes out of its call; a lane it fails opens a `nightly-failure` issue, which a failed push run does not.
 #
 # A pull request whose last green run still stands reruns `policy` and any
 # changed registered desktop unit tests: what it adds to main changed since that run
@@ -44,7 +44,7 @@
 # accepted risk), and `nightly.yml` the macOS web `@platform` tests, the macOS
 # mailbox lane and the rest of the OS contract.
 # Everything else runs on Linux: the Rust suite, the unit suites, the invariant
-# checks, the whole web end-to-end, dealt out to five shards by `web-e2e.yml`,
+# checks, the whole web end-to-end, dealt out to six shards by `web-e2e.yml`,
 # and the remote mailbox lane over private SSH (`remote-mailbox`).
 # `nightly.yml` runs the web end-to-end's `@platform` tests on macOS, and the
 # rest of the web end-to-end is the same code on every system, so the move of
@@ -77,8 +77,13 @@ on:
     types: [opened, synchronize, reopened, ready_for_review, edited]
   push:
     branches: [main]
-  # nightly.yml runs every lane on main once a day.
+  # nightly.yml runs every lane once a day, with agent checks owned there.
   workflow_call:
+    inputs:
+      nightly-agent-checks:
+        description: Nightly owns agy and the complete journey in its direct jobs.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -120,7 +125,7 @@ jobs:
         # The crate graph comes from `cargo metadata`, which needs no build.
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/ci-plan.py plan --event "$GITHUB_EVENT_NAME" --draft "${{ github.event.pull_request.draft || false }}" --record ci-plan.json
+        run: python3 scripts/ci-plan.py plan --event "$GITHUB_EVENT_NAME" --draft "${{ github.event.pull_request.draft || false }}" --nightly-agent-checks "${{ inputs.nightly-agent-checks || false }}" --record ci-plan.json
       # The commits this run's lanes checked, for the pull request's next run.
       # Without it the next run plans its lanes as usual, so a failed upload
       # leaves this run's plan standing.
@@ -515,15 +520,11 @@ jobs:
       lane: linux
       runner: ubuntu-latest
       herdr-platform: linux-x86_64
-      # Five shards: the approved single-run recording after fixture readiness
-      # (379 Linux tests, run 40243767490 attempt 1, 2026-10-25) totals 3246 s.
-      # Four plan 811.8 s, above the unchanged 720 s budget; five plan at most
-      # 649.5 s. This is one sample, not the usual 20-run median or a wall-time
-      # forecast (docs/TESTING.md). The organization runs 20 jobs at once:
-      # six were cut to four in 2026-10-05 after 23 of 99 runs queued a Linux
-      # shard over 10 minutes, then returned to six as the suite grew.
-      # Parallel daemon/web builds add one job; one fewer shard offsets it.
-      shards: 5
+      # Median per test from twenty successful main runs, 2026-10-26..28:
+      # 385 Linux tests total 3851.3 s; five shards plan at most 770.3 s,
+      # six at most 641.9 s. Six is the smallest count within 720 s.
+      # Test-work weights exclude setup/queues; the step still caps at 20 min.
+      shards: 6
 
   # The remote mailbox crate-boundary lane (hided/tests/it/remote_delivery.rs,
   # docs/TESTING.md), in `remote-mailbox.yml`. It has its own job because it was
@@ -683,6 +684,7 @@ jobs:
       # A pull request's package reports a version no release uses.
       version: 0.0.0-ci.${{ github.run_number }}
       include-macos: true
+      web-typechecked: ${{ contains(fromJSON(needs.plan.outputs.lanes), 'checks') }}
 
   verify:
     name: verify

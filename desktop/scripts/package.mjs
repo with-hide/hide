@@ -16,6 +16,12 @@
 // built by device-helpers.yml at this exact source, version and build order,
 // publishing them separately while the app carries only their manifest.
 //
+// `package.mjs compile` stops after the web shell and the release binaries,
+// recording them in desktop/out/release-binaries.json, and `package.mjs
+// assemble` packages exactly those binaries, so package.yml's Mac lane builds
+// them in one job while the device helpers build and assembles the app in
+// another once both are done. Without a phase one run does both.
+//
 // The CLI finds `hided` beside its own file and the daemon offers its own
 // program to a device, which runs it as `hided node serve`, so all of them
 // ship flat in the resources
@@ -32,6 +38,7 @@ import { APP_ID, buildInstallers } from "./installers.mjs";
 import { assertNotarized, developerIdOptions, macosSigning, notarizeApp } from "./macos-signing.mjs";
 import { orderOnMain, resolveVersion } from "./build-identity.mjs";
 import { DEVICE_PLATFORMS, DEVICE_BUNDLE_MANIFEST, prepareDeviceBundles } from "./device-helpers.mjs";
+import { checkReleaseBinaries, recordReleaseBinaries } from "./release-binaries.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repo = path.resolve(root, "..");
@@ -84,6 +91,8 @@ if (!system) throw new Error(`hide has no package for ${platform}`);
 const arch = process.arch;
 if (arch !== system.arch) throw new Error(`the pinned Herdr serves ${system.label} ${system.arch} only, and this machine is ${arch}`);
 const exe = platform === "win32" ? ".exe" : "";
+const [phase = "both", ...extraArguments] = process.argv.slice(2);
+if (!["both", "compile", "assemble"].includes(phase) || extraArguments.length > 0) throw new Error("usage: package.mjs [compile|assemble]");
 const version = resolveVersion();
 // Read before the build, so a release missing a signing secret fails in
 // seconds rather than after it.
@@ -95,14 +104,34 @@ const release = path.join(out, "release");
 fs.rmSync(packaged, { recursive: true, force: true });
 fs.rmSync(release, { recursive: true, force: true });
 fs.mkdirSync(out, { recursive: true });
+const binariesRecord = path.join(out, "release-binaries.json");
+if (phase !== "assemble") fs.rmSync(binariesRecord, { force: true });
 
-// Release hided embeds web/dist, so the web shell is built first; the cargo
-// wrapper reuses the machine's toolchain and keeps output in this worktree.
-pnpm(["--dir", "web", "build"]);
 // The binaries report the version the app ships and the commit it was built
 // from (`hide version`); a package that cannot name its commit is refused.
 const commit = run("git", ["rev-parse", "HEAD"]);
 if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error(`the package's commit could not be read (got '${commit}')`);
+// Optional CI-only source identity, supplied by package.yml when its caller
+// requires this source's verify web build before accepting the packages.
+// No value means a standalone build, including CI callers without that gate.
+if (phase !== "assemble") {
+  const typechecked = process.env.HIDE_WEB_TYPECHECKED_SHA;
+  if (typechecked) {
+    if (process.env.GITHUB_ACTIONS !== "true" || typechecked !== commit) {
+      throw new Error("HIDE_WEB_TYPECHECKED_SHA requires GitHub Actions and the package checkout's exact commit");
+    }
+    // The commit binds the lockfile and source only while the checkout is clean.
+    if (run("git", ["status", "--porcelain", "--untracked-files=normal", "--", "web", "pnpm-lock.yaml", "pnpm-workspace.yaml"])) {
+      throw new Error("cannot delegate the web typecheck with changed web inputs or lockfile");
+    }
+    console.log(`Web typecheck delegated to verify for ${commit}; acceptance requires that gate to pass. Building with Vite only.`);
+    pnpm(["--dir", "web", "bundle"]);
+  } else {
+    pnpm(["--dir", "web", "build"]);
+  }
+}
+// Release hided embeds web/dist, so compile builds the shell before cargo;
+// the wrapper keeps native release output in this worktree.
 // Its place in main's history orders two builds of one release, so a newer
 // screen updates its core (hided/src/build_order.rs): the first-parent count
 // of the last commit it shares with main, so a branch's own commits never
@@ -110,21 +139,29 @@ if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error(`the package's commit could 
 // names it in HIDE_BUILD_ORDER, or is refused.
 const order = process.env.HIDE_BUILD_ORDER || orderOnMain();
 if (!/^[0-9]+$/.test(order)) throw new Error(`the package's build order could not be read (got '${order}')`);
-// Required artifacts are checked before the native release build. No partial
-// Mac app may silently leave another supported system without its kit.
+// Required artifacts are checked before the native release build, or before
+// the app is assembled from compiled binaries. No partial Mac app may
+// silently leave another supported system without its kit.
 const deviceBundles = path.join(out, "device-bundles");
-const deviceManifest = platform === "darwin"
+const deviceManifest = platform === "darwin" && phase !== "compile"
   ? prepareDeviceBundles(path.join(out, "device-helpers"), { version, commit, order }, deviceBundles,
       Object.fromEntries(Object.keys(DEVICE_PLATFORMS).map((name) => [name, run("zsh", ["scripts/fetch-herdr-runtime.sh", "--platform", name])])))
   : null;
-run("bash", ["scripts/verify-cargo.sh", "release"], { stdio: "inherit", env: { ...process.env, HIDE_VERSION: version, HIDE_COMMIT: commit, HIDE_BUILD_ORDER: order } });
+const cargoRelease = path.join(repo, "target", "release");
+const releaseBinaries = [`hided${exe}`, `hide${exe}`, `hide-agent-hooks${exe}`];
+if (phase === "assemble") {
+  checkReleaseBinaries(binariesRecord, cargoRelease, releaseBinaries, { commit, version, order });
+} else {
+  run("bash", ["scripts/verify-cargo.sh", "release"], { stdio: "inherit", env: { ...process.env, HIDE_VERSION: version, HIDE_COMMIT: commit, HIDE_BUILD_ORDER: order } });
+}
+if (phase === "compile") {
+  recordReleaseBinaries(binariesRecord, cargoRelease, releaseBinaries, { commit, version, order });
+  process.exit(0);
+}
 const herdr = system.herdr();
 
-const cargoRelease = path.join(repo, "target", "release");
 const shipped = [
-  [`hided${exe}`, path.join(cargoRelease, `hided${exe}`)],
-  [`hide${exe}`, path.join(cargoRelease, `hide${exe}`)],
-  [`hide-agent-hooks${exe}`, path.join(cargoRelease, `hide-agent-hooks${exe}`)],
+  ...releaseBinaries.map((name) => [name, path.join(cargoRelease, name)]),
   [`herdr${exe}`, herdr.executable],
 ];
 const missing = shipped.filter(([, source]) => {

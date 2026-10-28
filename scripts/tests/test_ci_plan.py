@@ -352,22 +352,51 @@ class Selection(unittest.TestCase):
         self.assertTrue(result["full"])
         self.assertIn("comparison unavailable", result["reasons"]["rust"][0])
 
-    def test_nightly_calls_verify_with_every_lane(self):
-        # The call plans every lane like a push, and a lane it fails reaches
-        # the nightly report, which waits for it in `needs`. The packages are
-        # the nightly's own call, so `verify` leaves them out.
+    def test_nightly_owns_the_agent_checks_once_and_keeps_failure_reporting(self):
+        # The default remains a full plan. Only the explicit caller contract
+        # removes the internal duplicates; the direct jobs remain mandatory.
         self.assertEqual(ci.plan("schedule", None, None, ROOT)["lanes"], FULL)
+        for event in ("schedule", "workflow_dispatch"):
+            result = ci.plan(event, None, None, ROOT, nightly_agent_checks=True)
+            self.assertEqual(result["lanes"], [lane for lane in FULL if lane not in {"agy-contract", "agent-journey"}])
+            ci.aggregate(needs_for(result))
+            for lane in ("agy_contract", "agent_journey"):
+                for outcome in ("success", "failure", "cancelled"):
+                    with self.subTest(event=event, lane=lane, outcome=outcome):
+                        with self.assertRaisesRegex(ValueError, "expected skipped"):
+                            ci.aggregate(needs_for(result, **{lane: outcome}))
+            with self.assertRaisesRegex(ValueError, "expected success"):
+                ci.aggregate(needs_for(result, web_e2e="failure"))
+        for event in ("pull_request", "push"):
+            with self.assertRaisesRegex(ValueError, "only nightly"):
+                ci.plan(event, None, None, ROOT, nightly_agent_checks=True)
         workflow = (ROOT / ".github/workflows/pr.yml").read_text()
         self.assertRegex(workflow, r"\n  workflow_call:\n")
+        self.assertIn('--nightly-agent-checks "${{ inputs.nightly-agent-checks || false }}"', workflow)
         # A called run takes the caller's name, so it never takes a push run's
         # pending place in the `verify-refs/heads/main` group.
         self.assertIn("group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}", workflow)
         nightly = (ROOT / ".github/workflows/nightly.yml").read_text()
         call = nightly[nightly.index("\n  verify:\n"):nightly.index("\n  package:\n")]
         self.assertIn("uses: ./.github/workflows/pr.yml", call)
+        self.assertIn("nightly-agent-checks: true", call)
         self.assertIn("issues: write", call)
         report = nightly[nightly.index("\n  report:\n"):]
-        self.assertRegex(report, r"needs: \[[^\]]*\bverify\b[^\]]*\]")
+        for job in ("verify", "agy-contract-all", "agent-journey"):
+            self.assertRegex(report, rf"needs: \[[^\]]*\b{job}\b[^\]]*\]")
+        self.assertIn("always() && github.ref == 'refs/heads/main'", report)
+        # A failed direct job fails the workflow; neither call may tolerate
+        # failure. Every dispatch choice retains exactly its direct checks.
+        for name in ("agy-contract-all", "agent-journey"):
+            block = nightly[nightly.index(f"\n  {name}:\n"):].split("\n\n")[0]
+            self.assertNotIn("continue-on-error", block)
+            self.assertIn("inputs.lane == 'linux'", block)
+            self.assertIn("inputs.lane == 'macos'", block)
+            self.assertIn("inputs.lane == 'windows'", block)
+            self.assertIn('["linux","macos","windows"]', block)
+            if name == "agent-journey":
+                self.assertIn("fake: true", block)
+                self.assertNotIn("stand-ins: false", block)
 
     def test_a_draft_plans_no_lane_and_ready_for_review_runs_them(self):
         result = ci.plan("pull_request", "0" * 40, "HEAD", ROOT, draft=True)
@@ -760,14 +789,49 @@ class Workflows(unittest.TestCase):
         # added, then the agent CLIs' Linux and Windows installs, which only a
         # pin change plans; a job beyond these is a new decision, made with
         # this number. The independent shared web build adds one job so it
-        # does not serialize the daemon and shell builds, offset by the measured
-        # reduction from six web shards to five.
-        self.assertLessEqual(most, 32, "a run starts more jobs than the suites and native SDK contracts need")
+        # does not serialize the daemon and shell builds. The refreshed
+        # twenty-run median requires six web shards.
+        self.assertLessEqual(most, 33, "a run starts more jobs than the suites and native SDK contracts need")
         testing = (ROOT / "docs/TESTING.md").read_text()
         self.assertIn(f"starts at most {most} jobs", testing)
 
 
 class Aggregate(unittest.TestCase):
+    def test_nightly_requires_selected_jobs_and_rejects_failed_or_missing_agent_checks(self):
+        jobs = {"web-e2e-macos", "web-e2e-windows", "remote-mailbox-macos", "agy-contract-all",
+                "agent-trust-contract-all", "agent-journey", "desktop-e2e", "perf", "verify", "package"}
+        for lane, selected in (
+            ("", jobs - {"web-e2e-windows"}),
+            ("all", jobs - {"web-e2e-windows"}),
+            ("linux", {"agy-contract-all", "agent-trust-contract-all", "agent-journey", "desktop-e2e"}),
+            ("macos", {"agy-contract-all", "agent-trust-contract-all", "agent-journey", "desktop-e2e",
+                       "web-e2e-macos", "remote-mailbox-macos", "perf"}),
+            ("windows", {"agy-contract-all", "agent-trust-contract-all", "agent-journey", "desktop-e2e", "web-e2e-windows"}),
+            ("agy", {"agy-contract-all", "agent-trust-contract-all"}),
+        ):
+            needs = {job: {"result": "success" if job in selected else "skipped"} for job in jobs}
+            ci.nightly_aggregate(needs, lane)
+            for job in jobs:
+                # Includes the direct agy and journey calls: a failed OS,
+                # stand-in or forms job fails that call, then this aggregate.
+                for outcome in {"success", "skipped", "failure", "cancelled"} - {needs[job]["result"]}:
+                    with self.subTest(lane=lane, job=job, outcome=outcome):
+                        with self.assertRaisesRegex(ValueError, job):
+                            ci.nightly_aggregate({**needs, job: {"result": outcome}}, lane)
+            with self.assertRaisesRegex(ValueError, "job contract"):
+                ci.nightly_aggregate({job: value for job, value in needs.items() if job != "agent-journey"}, lane)
+        with self.assertRaisesRegex(ValueError, "job contract"):
+            ci.nightly_aggregate(needs, "unknown")
+        nightly = (ROOT / ".github/workflows/nightly.yml").read_text()
+        report = nightly.split("\n  report:\n", 1)[1]
+        actual = {job.strip() for job in re.search(r"needs: \[([^\]]+)\]", report).group(1).split(",")}
+        self.assertEqual(actual, jobs)
+        self.assertIn('run: python3 scripts/ci-plan.py nightly-aggregate --lane "$LANE_INPUT"', report)
+        self.assertIn("NEEDS: ${{ toJSON(needs) }}", report)
+        self.assertIn("if: ${{ always() }}", report.split("steps:", 1)[0])
+        reporting = report.split("- name: Open, comment on and close", 1)[1]
+        self.assertIn("if: ${{ always() && github.ref == 'refs/heads/main' }}", reporting)
+
     def test_planned_success_and_unplanned_skip_pass(self):
         for result in (plan("docs/BUILD.md"), plan("web/src/Overview.tsx"), plan(".github/workflows/pr.yml"),
                        plan("herdr-core/src/lib.rs")):
