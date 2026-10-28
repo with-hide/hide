@@ -96,6 +96,50 @@ pub fn canonical(path: &Path) -> io::Result<PathBuf> {
     sys::canonical(path)
 }
 
+/// The part of `path` below `folder`, judged by identity rather than by
+/// text: the rest of `path` past its nearest ancestor, itself included, that
+/// leads to `folder`, so another spelling of the folder still counts (a link
+/// to it, another letter case on a volume that ignores case, macOS's
+/// `/System/Volumes/Data/Users/me` for `/Users/me`). Empty when `path` leads
+/// to `folder` itself, `None` when no ancestor does; an ancestor that cannot
+/// be looked up is not the folder.
+pub fn below(path: &Path, folder: &Path) -> Option<PathBuf> {
+    let folder = file_id(folder).ok()?;
+    path.ancestors()
+        .find(|ancestor| file_id(ancestor).is_ok_and(|id| id == folder))
+        .and_then(|ancestor| path.strip_prefix(ancestor).ok())
+        .map(Path::to_path_buf)
+}
+
+/// Whether `outer` is `inner` or a folder holding it, judged by identity:
+/// `inner`'s own path below some ancestor of it, followed from `outer`,
+/// leads to `inner`. So `/System/Volumes/Data` holds a home under `/Users`
+/// on macOS though no text says so.
+pub fn holds(outer: &Path, inner: &Path) -> bool {
+    let (Ok(target), Ok(real)) = (file_id(inner), canonical(inner)) else {
+        return false;
+    };
+    real.ancestors().any(|ancestor| {
+        real.strip_prefix(ancestor)
+            .is_ok_and(|rest| file_id(&outer.join(rest)).is_ok_and(|id| id == target))
+    })
+}
+
+/// Whether an absolute path names a place on one of this machine's own
+/// volumes: any path on macOS and Linux, a drive letter on Windows, in
+/// either spelling, where a network share (`\\server\share`, `\\wsl$\...`)
+/// and a device path are not. It reads nothing, so it can be asked before a
+/// path is looked up, and again of what the path resolved to.
+pub fn on_a_local_volume(path: &Path) -> bool {
+    match path.components().next() {
+        Some(std::path::Component::Prefix(prefix)) => matches!(
+            prefix.kind(),
+            std::path::Prefix::Disk(_) | std::path::Prefix::VerbatimDisk(_)
+        ),
+        _ => true,
+    }
+}
+
 /// The path the open file or folder is at now, as the system spells it:
 /// after a rename it is the new path. On Windows it keeps the `\\?\`
 /// prefix whatever its length, so two answers compare by prefix (a file

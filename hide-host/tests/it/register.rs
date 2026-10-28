@@ -210,3 +210,51 @@ fn a_confirmed_link_to_a_network_share_is_refused_like_the_share() {
         refused.message
     );
 }
+
+/// Where a path stands against home is judged by what it is, not by how it
+/// is spelled: macOS's `/System/Volumes/Data` spelling of home is home, and
+/// the folder holding it all holds home.
+#[cfg(target_os = "macos")]
+#[test]
+fn another_spelling_of_home_is_home() {
+    let outer = tempfile::tempdir().unwrap();
+    let home = hide_platform::fs::identity::canonical(outer.path())
+        .unwrap()
+        .join("home");
+    std::fs::create_dir_all(home.join("app")).unwrap();
+    let data = Path::new("/System/Volumes/Data");
+    let spelled = data.join(home.strip_prefix("/").unwrap());
+    assert!(
+        spelled.join("app").is_dir(),
+        "{spelled:?} is the same folder"
+    );
+    for holder in [spelled.as_path(), data] {
+        assert_eq!(
+            check(holder, Some(holder), &home).unwrap_err().code,
+            ErrorCode::OutsideRoot,
+            "{holder:?}"
+        );
+    }
+    // Registered by the spelling the system gives the folder.
+    let added = check(&spelled.join("app"), None, &home).unwrap();
+    assert_eq!(added.root, home.join("app").to_string_lossy());
+}
+
+/// On a volume that ignores letter case, home written in another case is
+/// still home: a folder under it needs no confirmation, and a link under it
+/// that leads out stays refused.
+#[test]
+fn home_in_another_letter_case_is_home_where_case_is_ignored() {
+    let outer = tempfile::tempdir().unwrap();
+    let home = outer.path().join("Home");
+    std::fs::create_dir_all(home.join("app")).unwrap();
+    if hide_platform::fs::identity::case_sensitive(outer.path()).unwrap() {
+        return;
+    }
+    let shouted = outer.path().join("HOME");
+    assert!(check(&shouted.join("app"), None, &home).is_ok());
+    assert_eq!(
+        check(&shouted, Some(&shouted), &home).unwrap_err().code,
+        ErrorCode::OutsideRoot
+    );
+}
