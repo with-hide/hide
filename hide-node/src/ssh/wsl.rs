@@ -22,7 +22,6 @@
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -488,10 +487,6 @@ impl DeviceTransport for WslDevice {
     fn cached_herdr_socket(&self) -> Option<String> {
         lock_recover(&self.herdr_socket).clone()
     }
-
-    fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
-        self
-    }
 }
 
 /// The device's Herdr through its current link; no link, no Herdr, and
@@ -739,22 +734,6 @@ impl DialedTransport for WslDevice {
             upload,
             kit,
         })
-    }
-
-    fn stage_attachments(
-        &self,
-        _request_id: &str,
-        _files: &[hide_node_link::attachments::AttachmentFile],
-        _cancelled: &AtomicBool,
-    ) -> Result<Vec<String>, String> {
-        Err("Attachments reach a WSL distribution through its node link".to_owned())
-    }
-
-    fn remove_attachments(
-        &self,
-        _request_id: &str,
-        _files: &[hide_node_link::attachments::AttachmentFile],
-    ) {
     }
 }
 

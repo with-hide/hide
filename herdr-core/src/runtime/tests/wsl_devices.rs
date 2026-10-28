@@ -86,10 +86,6 @@ impl DeviceTransport for OffDistribution {
     fn cached_herdr_version(&self) -> Option<String> {
         None
     }
-
-    fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
-        self
-    }
 }
 
 impl DialedTransport for OffDistribution {
@@ -121,22 +117,6 @@ impl DialedTransport for OffDistribution {
             Wake::NotAllowed => EstablishError::Stopped("Ubuntu is off".to_owned()),
             Wake::Allowed => EstablishError::Helper("the test starts no helper".to_owned()),
         })
-    }
-
-    fn stage_attachments(
-        &self,
-        _request_id: &str,
-        _files: &[hide_node_link::attachments::AttachmentFile],
-        _cancelled: &std::sync::atomic::AtomicBool,
-    ) -> Result<Vec<String>, String> {
-        Err("none".to_owned())
-    }
-
-    fn remove_attachments(
-        &self,
-        _request_id: &str,
-        _files: &[hide_node_link::attachments::AttachmentFile],
-    ) {
     }
 }
 
