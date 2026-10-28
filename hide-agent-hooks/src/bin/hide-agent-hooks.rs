@@ -835,6 +835,16 @@ fn guard_refusal(
         .ok()
         .filter(|value| !value.is_empty());
     let home = home_directory();
+    // No agent writes the Hide global instruction, in any session or project
+    // (PRD memory-self-improve D-07); only a payload naming it is read.
+    if let Some(home) = &home
+        && hide_agent_hooks::global_guard::may_name(payload)
+        && let Some(call) =
+            hide_agent_hooks::guardrails::payload::read_hook(payload, truncated, dialect)
+        && let Some(reason) = hide_agent_hooks::global_guard::refusal(home, &call)
+    {
+        return Some(reason);
+    }
     // The project's guardrails come first, in any session of a guarded
     // project, a Herdr pane or not (PRD agent-guardrails B22): they read only
     // local files, and a call they refuse never reaches the daemon.

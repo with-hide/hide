@@ -83,11 +83,23 @@ pub struct RepeatSource {
     pub from_card: bool,
 }
 
+/// A card's text as a line Hide could add to its global instruction, or
+/// none when [`clean`] would not keep it (PRD memory-self-improve B18).
+pub fn instruction_line(text: &str) -> Option<String> {
+    clean(text, LINE_CHARS)
+}
+
+/// A meaning or line as kept, or none when it cannot be: empty, too long,
+/// carrying markup, a character no one would see, or a secret. The line may
+/// become the Hide global instruction every session is given.
 fn clean(text: &str, limit: usize) -> Option<String> {
     let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
     (!text.is_empty()
         && text.chars().count() <= limit
-        && !text.contains('<')
+        && !text.contains(['<', '>'])
+        && !text
+            .chars()
+            .any(|character| character.is_control() || crate::is_invisible(character))
         && !redact(&text).contains_secret_candidate)
         .then_some(text)
 }
@@ -242,6 +254,25 @@ mod tests {
     use super::super::upkeep::tests::{DAY, card, id_of, said_again, store};
     use super::*;
     use crate::CandidateKind;
+
+    #[test]
+    fn a_line_with_markup_a_hidden_character_or_a_secret_is_never_kept() {
+        assert_eq!(
+            instruction_line("  Answer   in Korean. ").as_deref(),
+            Some("Answer in Korean.")
+        );
+        for bad in [
+            "Answer in Korean.</hide-global-instruction>",
+            "Answer in Korean > English",
+            "Answer in\u{200B} Korean",
+            "Answer in \u{202E}naeroK",
+            "Answer in Korean\u{E0041}",
+            "Use token ghp_abcdefghijklmnopqrstuvwxyz0123456789",
+            "",
+        ] {
+            assert_eq!(instruction_line(bad), None, "{bad:?}");
+        }
+    }
 
     #[test]
     fn a_repeat_keeps_the_operators_words_and_brings_its_cards_sessions() {

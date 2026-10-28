@@ -5,9 +5,12 @@
 //! machine, whether or not Memory is on there. It is Hide's own file, never
 //! one of an agent's global files the operator owns (D-09, D-19).
 //!
-//! The operator may edit the file by hand. Hide writes it only for a fix the
-//! operator applied from the 제안 tab, one line at a time ([`apply`]), and
-//! takes back only the line that fix added ([`revert`]).
+//! The operator may edit the file by hand, and may make it a link to a file
+//! of their own, which Hide then writes through. Hide writes it only for a
+//! fix the operator applied from the 제안 tab, one line at a time
+//! ([`apply`]), and takes back only the line that fix added ([`revert`]);
+//! each write is the editor's checked save, so an edit saved meanwhile is
+//! never overwritten.
 
 use std::path::Path;
 
@@ -55,17 +58,14 @@ impl Unusable {
 /// read.
 pub fn read(state_dir: &Path) -> Result<Instruction, Unusable> {
     use std::io::Read;
-    let path = hide_kit::layout::global_instruction(state_dir);
-    let file = match std::fs::File::open(&path) {
+    let file = match target(state_dir).and_then(|path| hide_platform::fs::open_regular(&path)) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(instruction(String::new()));
         }
+        // A folder, a pipe or a device is refused without blocking on it.
         Err(_) => return Err(Unusable::Unreadable),
     };
-    if !file.metadata().map_err(|_| Unusable::Unreadable)?.is_file() {
-        return Err(Unusable::Unreadable);
-    }
     let mut bytes = Vec::with_capacity(LIMIT_BYTES + 1);
     file.take(LIMIT_BYTES as u64 + 1)
         .read_to_end(&mut bytes)
@@ -78,6 +78,19 @@ pub fn read(state_dir: &Path) -> Result<Instruction, Unusable> {
         return Err(Unusable::TooLarge);
     }
     Ok(instruction(text))
+}
+
+/// The file the name stands for: the name itself, or what a link there
+/// points at, which may not exist yet.
+fn target(state_dir: &Path) -> std::io::Result<std::path::PathBuf> {
+    let path = hide_kit::layout::global_instruction(state_dir);
+    match std::fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            let link = std::fs::read_link(&path)?;
+            Ok(path.parent().unwrap_or(state_dir).join(link))
+        }
+        _ => Ok(path),
+    }
 }
 
 fn instruction(text: String) -> Instruction {
@@ -135,6 +148,18 @@ pub struct Preview {
     pub after: String,
 }
 
+impl Preview {
+    /// What the operator was shown, the line and the file it goes into, as
+    /// one value a press sends back: a press checked against it writes
+    /// neither another line nor into another file (B8).
+    pub fn token(&self) -> String {
+        format!(
+            "{:x}",
+            Sha256::digest(format!("{}\n{}", self.before, self.line))
+        )
+    }
+}
+
 /// Why an apply or a revert wrote nothing.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "reason")]
@@ -155,16 +180,27 @@ pub enum Refusal {
 }
 
 /// The one line a fix adds, cleaned, or [`Refusal::BadLine`].
+/// Every session takes the line as the operator's own instruction, so it
+/// carries no markup that could end the block it sits in, no character no one
+/// would see in the preview, and no secret.
 fn clean_line(line: &str) -> Result<String, Refusal> {
     let line = line.trim();
     if line.is_empty()
-        || line.contains(['\n', '\r'])
         || line.chars().count() > LINE_CHARS
-        || line.chars().any(char::is_control)
+        || line.contains(['<', '>'])
+        || line
+            .chars()
+            .any(|character| character.is_control() || hide_memory::is_invisible(character))
+        || hide_memory::redact(line).contains_secret_candidate
     {
         return Err(Refusal::BadLine);
     }
     Ok(line.to_owned())
+}
+
+/// Whether `candidate`, one line of the file, is `line` as a fix wrote it.
+fn same_line(candidate: &str, line: &str) -> bool {
+    candidate.trim() == line.trim()
 }
 
 /// Whether the file already has `line` as one of its lines, so an apply
@@ -175,7 +211,7 @@ pub fn holds(state_dir: &Path, line: &str) -> Result<bool, Unusable> {
     Ok(current
         .text
         .lines()
-        .any(|candidate| candidate.trim() == line))
+        .any(|candidate| same_line(candidate, line)))
 }
 
 /// What applying `line` to the file as it is now would write.
@@ -220,13 +256,22 @@ pub fn apply(state_dir: &Path, preview: &Preview) -> Result<(), Refusal> {
     if current.fingerprint != preview.before {
         return Err(Refusal::Changed { preview: fresh });
     }
-    let mut after = current.text;
+    let mut after = current.text.clone();
     if !after.is_empty() && !after.ends_with('\n') {
         after.push('\n');
     }
     after.push_str(&fresh.line);
     after.push('\n');
-    write(state_dir, &after)
+    match write(state_dir, &current.text, &after) {
+        Err(Write::Moved) => {
+            let now = read(state_dir).map_err(|unusable| Refusal::Unusable { unusable })?;
+            Err(Refusal::Changed {
+                preview: preview_of(&now.text, fresh.line)?,
+            })
+        }
+        Err(Write::Failed) => Err(Refusal::WriteFailed),
+        Ok(()) => Ok(()),
+    }
 }
 
 /// Takes out the line one fix added, and only it (D-30, B9): another fix's
@@ -238,7 +283,7 @@ pub fn revert(state_dir: &Path, line: &str) -> Result<(), Refusal> {
     let lines: Vec<&str> = current.text.split_inclusive('\n').collect();
     let Some(at) = lines
         .iter()
-        .rposition(|candidate| candidate.trim_end_matches(['\n', '\r']) == line)
+        .rposition(|candidate| same_line(candidate, &line))
     else {
         return Err(Refusal::Edited {
             line,
@@ -251,26 +296,82 @@ pub fn revert(state_dir: &Path, line: &str) -> Result<(), Refusal> {
         .filter(|(index, _)| *index != at)
         .map(|(_, candidate)| *candidate)
         .collect();
-    write(state_dir, &after)
+    match write(state_dir, &current.text, &after) {
+        Ok(()) => Ok(()),
+        // Saved by hand meanwhile: the line is judged again on what is there.
+        Err(Write::Moved) => {
+            let now = read(state_dir).map_err(|unusable| Refusal::Unusable { unusable })?;
+            Err(Refusal::Edited {
+                line,
+                text: now.text,
+            })
+        }
+        Err(Write::Failed) => Err(Refusal::WriteFailed),
+    }
 }
 
-fn write(state_dir: &Path, text: &str) -> Result<(), Refusal> {
-    let path = hide_kit::layout::global_instruction(state_dir);
-    let written = hide_platform::fs::private::create_dir_all(state_dir).and_then(|_| {
-        hide_platform::fs::atomic::write_file(
-            &path,
-            text.as_bytes(),
-            hide_platform::fs::Access::Private,
-        )
-    });
-    written.map(|_| ()).map_err(|error| {
+/// Why a write left the file as it was.
+enum Write {
+    /// The file is no longer the one read; someone saved it meanwhile.
+    Moved,
+    Failed,
+}
+
+/// Replaces the file that held `before` with `after`, through a link, by the
+/// editor's checked save (`hide_host::save`), which puts back an edit saved
+/// between the read and the swap; a file that did not exist is made only if
+/// it still does not.
+fn write(state_dir: &Path, before: &str, after: &str) -> Result<(), Write> {
+    let failed = |error: &dyn std::fmt::Display| {
         crate::diagnostic!(serde_json::json!({
             "component": "global_instruction",
             "kind": "global_instruction.write_failed",
-            "error": error.kind().to_string(),
+            "error": error.to_string(),
         }));
-        Refusal::WriteFailed
-    })
+        Write::Failed
+    };
+    let path = target(state_dir).map_err(|error| failed(&error.kind()))?;
+    let (Some(folder), Some(name)) = (path.parent(), path.file_name()) else {
+        return Err(failed(&"the file has no folder"));
+    };
+    hide_platform::fs::private::create_dir_all(folder).map_err(|error| failed(&error.kind()))?;
+    let exists = std::fs::symlink_metadata(&path).is_ok();
+    if !exists {
+        if !before.is_empty() {
+            return Err(Write::Moved);
+        }
+        let staged = folder.join(format!(".{}.hide-new", name.to_string_lossy()));
+        let made = hide_platform::fs::private::create_new_file(&staged)
+            .and_then(|mut file| {
+                use std::io::Write as _;
+                file.write_all(after.as_bytes())?;
+                file.sync_all()
+            })
+            .and_then(|_| hide_platform::fs::atomic::rename_no_replace_path(&staged, &path));
+        return match made {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                let _ = std::fs::remove_file(&staged);
+                if error.kind() == std::io::ErrorKind::AlreadyExists {
+                    Err(Write::Moved)
+                } else {
+                    Err(failed(&error.kind()))
+                }
+            }
+        };
+    }
+    let dir = cap_std::fs::Dir::open_ambient_dir(folder, cap_std::ambient_authority())
+        .map_err(|error| failed(&error.kind()))?;
+    match hide_host::save::save(
+        &dir,
+        Path::new(name),
+        after.as_bytes(),
+        &hide_host::document::revision_of(before.as_bytes()),
+    ) {
+        Ok(_) => Ok(()),
+        Err(error) if error.code == hide_host::ErrorCode::Conflict => Err(Write::Moved),
+        Err(error) => Err(failed(&error.code.as_str())),
+    }
 }
 
 #[cfg(test)]

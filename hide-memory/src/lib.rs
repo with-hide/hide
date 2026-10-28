@@ -26,7 +26,7 @@ pub use evidence::{
 pub use reconcile::{
     COMPARISON_EXCERPT_BYTES, DocumentAuthority, DocumentComparison, PROMOTION_BATCH_LIMIT,
 };
-pub use redaction::{RedactedText, redact};
+pub use redaction::{RedactedText, is_invisible, redact};
 pub use store::hold::{
     CardHold, EndedHold, ReleasedReport, StaleOutcome, StaleRefusal, StaleReporter,
 };
@@ -46,8 +46,9 @@ pub mod store_limits {
     pub use crate::store::repeats_limits::{LINE_CHARS, MEANING_CHARS, REPEATS_PER_ANSWER};
 }
 pub use store::{
-    Aging, AgingReport, CardChange, CardMiss, ChangeKind, Merge, Miss, RECHECK_LIMIT,
+    Aging, AgingReport, CHANGE_LIMIT, CardChange, CardMiss, ChangeKind, Merge, Miss, RECHECK_LIMIT,
     RepeatRequest, RepeatScope, RepeatSource, Requester, SourceRef, SourceVerdicts, SourcesOutcome,
+    instruction_line,
 };
 pub use verify::{
     Correction, DOCUMENT_EXCERPT_BYTES, DOCUMENT_LIMIT, EXCERPT_SOURCE_BYTES, Excerpt,

@@ -36,8 +36,8 @@ pub use misses::{CardMiss, Miss};
 pub use progress::{CorrectionCheck, InputFailure};
 pub use recheck::{RECHECK_LIMIT, Requester, SourceRef, SourceVerdicts, SourcesOutcome};
 pub use reinforcement::words_digest;
-pub use repeats::{RepeatRequest, RepeatScope, RepeatSource};
-pub use upkeep::{Aging, AgingReport, CardChange, ChangeKind};
+pub use repeats::{RepeatRequest, RepeatScope, RepeatSource, instruction_line};
+pub use upkeep::{Aging, AgingReport, CHANGE_LIMIT, CardChange, ChangeKind};
 
 const SCHEMA_VERSION: i64 = 22;
 /// Version 2 names where analysis can go: the agent Hide AI runs on and any

@@ -255,6 +255,12 @@ Grok's `SessionStart` cannot add context and an Antigravity session's own child 
 A session on a device whose link is down gets no answer from the core, so it starts without the instruction and the hook records `memory.unavailable`, as it does for Memory; the next session after the link returns gets it (B3).
 A session started outside a Hide pane has no Hide hook identity and gets nothing.
 
+Because every session takes the file as the operator's own instruction, no agent writes it (D-07): the pre-tool hook refuses a file tool's write to it and a shell call with a word or redirection naming it, in every session and Project and whatever the project's guardrails say (`hide_agent_hooks::global_guard`).
+It looks for the file in every state folder the account's core can have, `HIDE_STATE_DIR`, the folder the kit installed the hook for, `$XDG_STATE_HOME/hide` and `~/.hide/state`, and only a payload that names `global-instruction.md` is parsed, so other calls cost one byte search.
+A file tool's read passes; a shell call cannot be told apart from a write, so one naming the file is refused, read or not.
+Like the guardrails it is a guard, not a security boundary: a script that writes the file another way is not seen, and the file stays a plain file the operator's own processes can change; a confirm before a hand edit counts is a follow-up, not this change.
+OpenCode, Pi and omp take the same refusal through the plugin helper.
+
 ### What a hook records when it fails
 
 A hook that cannot get its answer goes on without it and records why in `~/.hide/agent-hooks/delivery-diagnostics.json`, private to the account, at most once per cause every ten minutes, with one JSON line on its standard error when it records.

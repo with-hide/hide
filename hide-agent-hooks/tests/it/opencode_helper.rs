@@ -271,6 +271,20 @@ fn the_first_prompt_carries_the_global_instruction_once_with_memory_on_or_off() 
         prompt(true),
         json!("GLOBAL\nMEMORY-SessionStart\nMEMORY-UserPromptSubmit\nLETTER-FOR-THIS-PANE")
     );
+    // The start guidance arrived before the session-start capsule did: the
+    // next prompt still asking for that capsule carries it.
+    let answer = machine.run(
+        "prompt",
+        &json!({"session_id": "ses_root", "prompt": "Fix it", "cwd": machine.home,
+            "first": false, "memory_first": true}),
+        true,
+    );
+    assert!(
+        answer["context"]
+            .as_str()
+            .unwrap()
+            .starts_with("GLOBAL\nMEMORY-SessionStart")
+    );
     std::fs::write(shared.join("memory-off"), "").unwrap();
     assert_eq!(prompt(true), json!("GLOBAL\nLETTER-FOR-THIS-PANE"));
     assert_eq!(prompt(false), json!("LETTER-FOR-THIS-PANE"));

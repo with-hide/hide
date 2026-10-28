@@ -324,9 +324,10 @@ fn prompt_memory(
             HookMemoryOutcome::Provided { .. } | HookMemoryOutcome::Empty
         );
         context.push_str(index.context.as_deref().unwrap_or_default());
-        // Once a session, with the start guidance: the index may be asked
-        // again on later prompts, the global instruction is not.
-        global = index.global.filter(|_| input.first);
+        // Once a session: with the start guidance, or with the session-start
+        // capsule when the guidance came first; Memory off answers no
+        // capsule, so a later prompt does not carry it again.
+        global = index.global.filter(|_| input.first || start);
     }
     let prompt = memory_context_until(request(HookEvent::UserPromptSubmit), home, deadline);
     let body = prompt.context.as_deref().unwrap_or_default();
@@ -415,6 +416,13 @@ fn tool(home: &Path, agent: &Agent, input: Input, deadline: Instant) -> Value {
             cwd: input.cwd.clone(),
         })
     };
+    // No agent writes the Hide global instruction (PRD memory-self-improve
+    // D-07), in any session or project.
+    if let Some(reason) =
+        call().and_then(|call| hide_agent_hooks::global_guard::refusal(home, &call))
+    {
+        return json!({ "deny": reason });
+    }
     // The guardrails hold in any session of a guarded project, a Herdr pane
     // or not (PRD agent-guardrails B22); the guards after them only in one.
     if let Some(reason) = guardrails::refusal_for(home, runtime, pane.as_deref(), call) {

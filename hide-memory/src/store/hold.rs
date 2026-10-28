@@ -404,9 +404,7 @@ impl MemoryStore {
 fn stored_reason(reason: &str) -> String {
     let visible = reason
         .chars()
-        .filter(|character| {
-            !matches!(character, '\u{00AD}' | '\u{034F}' | '\u{061C}' | '\u{180E}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{206F}' | '\u{FE00}'..='\u{FE0F}' | '\u{FEFF}' | '\u{E0000}'..='\u{E007F}')
-        })
+        .filter(|character| !crate::is_invisible(*character))
         .collect::<String>();
     let line = visible
         .split(|character: char| character.is_control() || character.is_whitespace())
