@@ -365,8 +365,12 @@ export class BrowserCdpGateway {
         if (!scope) { this.reply(response, 400, { error: "Invalid scope" }); return; }
         const purpose = purposeOf(body, scope);
         if (purpose === null) { this.reply(response, 400, { error: "Invalid purpose" }); return; }
-        const incarnation = this.options.incarnation(scope);
-        if (incarnation === null || !Number.isSafeInteger(incarnation) || incarnation < 0) { this.reply(response, 409, { error: "Workspace area is no longer authorized" }); return; }
+        const authorized = () => {
+          const incarnation = this.options.incarnation(scope);
+          return incarnation !== null && Number.isSafeInteger(incarnation) && incarnation >= 0 ? incarnation : null;
+        };
+        let incarnation = authorized();
+        if (incarnation === null) { this.reply(response, 409, { error: "Workspace area is no longer authorized" }); return; }
         if (this.stopped || !this.available) { this.reply(response, 503, { error: "Desktop is not attached" }); return; }
         // An agent's display whose page the host unloaded loads again, or
         // finishes loading again, before it is driven; any other display
@@ -377,6 +381,9 @@ export class BrowserCdpGateway {
           // A revoke during the load ended what this request was granted.
           if (this.stopped || !this.available || this.revocations !== revocations) { this.reply(response, 503, { error: "Desktop is not attached" }); return; }
           if (revived === "failed") { this.reply(response, 409, { error: "Display page failed to load" }); return; }
+          // The area's authority can move while the page loads; the capability carries the one in force now.
+          incarnation = authorized();
+          if (incarnation === null) { this.reply(response, 409, { error: "Workspace area is no longer authorized" }); return; }
         }
         let existing = [...this.capabilities.values()].find((item) => JSON.stringify(item.scope) === JSON.stringify(scope) && item.purpose === purpose);
         if (existing) { this.eligible(existing); if (!this.capabilities.has(existing.path)) existing = undefined; }

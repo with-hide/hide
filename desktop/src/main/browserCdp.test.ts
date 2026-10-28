@@ -556,6 +556,15 @@ describe("scoped desktop CDP public boundary", () => {
     expect(asked.map((row) => row.display_id)).toEqual(["unloaded", "unloaded", "d1"]);
   });
 
+  it("keeps the 409 for a display with nothing to load again, such as one pending since the app started (PRD browser-tab-idle-unload D-16, B15)", async () => {
+    const asked: string[] = [];
+    const { address } = await fixture({ revive: async (scope) => { asked.push(scope.display_id!); return "none"; } });
+    const response = await fetch(`${address.endpoint}/connect`, { method: "POST", headers: { authorization: `Bearer ${address.token}`, "content-type": "application/json" }, body: JSON.stringify({ workspace: "local\0/checkout", area_id: "a1", display_id: "pending" }) });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "Display has no eligible HTTP(S) browser target; native files are unsupported" });
+    expect(asked).toEqual(["pending"]);
+  });
+
   it("grants nothing to a connection whose page loaded across a revoke", async () => {
     const during = { revoke: async (): Promise<unknown> => undefined };
     const { address } = await fixture({
