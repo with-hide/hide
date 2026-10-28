@@ -122,7 +122,7 @@ fn format_context(program: &OsString, reference: &Path, answer: &Value) -> Optio
         );
     }
     if has("view.list") {
-        commands.push("view list");
+        commands.push("view list [--session <id|here>]");
     }
     if has("browser.status") {
         commands.push("view status <view-id>");

@@ -818,7 +818,10 @@ mod tests {
             ("/repo/c.rs", DisplayKind::File, None, false),
             ("/repo/d.md", DisplayKind::File, None, true),
         ] {
-            let display = layout.new_display(path, kind, committed, preview);
+            // Every View is someone's; these are the operator's (PRD
+            // session-files D-10), which a load reads back as they are.
+            let mut display = layout.new_display(path, kind, committed, preview);
+            display.operator = true;
             layout.insert("a1", display, 1).unwrap();
         }
         let b = layout.displays().nth(1).unwrap().id.clone();

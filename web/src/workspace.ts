@@ -66,7 +66,12 @@ export type WorkspaceView = {
   agent_layout?: import("./agentLayout").AgentLayout | null;
   /** The operator's comments on this checkout's Views; absent while there are none and no Send to say. */
   feedback?: import("./snapshot").ViewFeedback;
+  /** For each pane of the checkout, the Views of unsaved documents its close would close with its session (PRD session-files D-14); absent while there are none. */
+  session_drafts?: SessionDrafts[];
 };
+
+/** The Views of unsaved documents one pane's session alone opened. */
+export type SessionDrafts = { pane_id: string; views: { display_id: string; tab_id: string }[] };
 
 /** Whole-checkout facts from its owning node, never Changes' scoped rows. */
 export type CheckoutGitHeader = {

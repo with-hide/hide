@@ -744,9 +744,10 @@ fn a_background_select_moves_nothing_and_a_repeat_converges() {
     );
 }
 
-/// B10, D-14: a tab that leaves Herdr takes its bookmark and nothing else:
-/// the Views it opened stay in the list, a clean document stays open and a
-/// draft keeps its protection.
+/// B10, D-14: a tab that leaves Herdr without a close Hide asked for takes
+/// its bookmark and nothing else: the Views it opened stay in the list, a
+/// clean document stays open and a draft keeps its protection. Only Hide's
+/// own close or archive closes a session's Views (PRD session-files D-14).
 #[test]
 fn closing_an_agent_tab_keeps_its_views() {
     let (mut runtime, checkout, directory) = setup("tab-close");
@@ -1376,4 +1377,299 @@ fn listed(runtime: &Runtime, caller: &str) -> Vec<String> {
         .into_iter()
         .map(|view| view.view_id)
         .collect()
+}
+
+// PRD session-files: the Files strip shows the Views the session whose pane
+// has the keyboard opened, and the operator's own.
+
+/// The three tabs with Herdr focused on `active`: the first two panes run a
+/// Codex agent each, in terminal `term-<pane>` with session
+/// `session-<tab>`, and the third is a plain shell in its own terminal.
+fn sessions_focus(runtime: &mut Runtime, directory: &Path, active: &str) {
+    let mut payload = tab_order_payload(&directory.to_string_lossy(), &TABS, &TABS, active);
+    for pane in &mut payload.panes {
+        pane.terminal_id = Some(format!("term-{}", pane.pane_id));
+    }
+    payload.agents = serde_json::from_value(serde_json::json!(
+        TABS[..2]
+            .iter()
+            .map(|tab| serde_json::json!({
+                "pane_id": format!("{tab}:p"), "agent": "codex", "agent_status": "idle",
+                "state_change_seq": 1, "lineage_session": format!("session-{tab}"),
+            }))
+            .collect::<Vec<_>>()
+    ))
+    .expect("agent rows");
+    runtime.ingest_session(Ok(payload));
+    runtime.sync_workspace_view();
+}
+
+fn session_tab(runtime: &mut Runtime, checkout_id: &str, directory: &Path, tab_id: &str) {
+    dispatch_focus_tab(runtime, checkout_id, tab_id);
+    sessions_focus(runtime, directory, tab_id);
+}
+
+/// The published strip, in tree order, and what each drawn area shows.
+fn drawn(runtime: &Runtime) -> (Vec<String>, Vec<String>) {
+    fn walk(
+        node: &crate::model::ViewNodeSnapshot,
+        all: &mut Vec<String>,
+        fronts: &mut Vec<String>,
+    ) {
+        match node {
+            crate::model::ViewNodeSnapshot::Area(area) => {
+                let name = |display: &crate::model::ViewDisplaySnapshot| {
+                    name_of(display.url.as_deref().unwrap_or(&display.path))
+                };
+                all.extend(area.displays.iter().map(name));
+                fronts.extend(
+                    area.displays
+                        .iter()
+                        .filter(|display| area.active.as_ref() == Some(&display.id))
+                        .map(name),
+                );
+            }
+            crate::model::ViewNodeSnapshot::Split(split) => {
+                walk(&split.first, all, fronts);
+                walk(&split.second, all, fronts);
+            }
+        }
+    }
+    let (mut all, mut fronts) = (Vec::new(), Vec::new());
+    let view = runtime
+        .snapshot
+        .workspace_view
+        .as_ref()
+        .expect("a Workspace view is published");
+    walk(&view.layout.root, &mut all, &mut fronts);
+    (all, fronts)
+}
+
+/// D-10, D-12, D-13, D-28: switching the session with the keyboard switches
+/// the strip and the View together; each session shows again the View it
+/// last showed, the first time its first View, and a plain shell only the
+/// operator's, which a path it opens joins.
+#[test]
+fn the_strip_follows_the_session_whose_pane_has_the_keyboard() {
+    let (mut runtime, checkout, directory) = setup("session-strip");
+    sessions_focus(&mut runtime, &directory, TABS[0]);
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", false, "a");
+    control_file(&mut runtime, "w-order:t2:p", &directory, "b.md", false, "b");
+    open(&mut runtime, &checkout, &directory, "c.md");
+    assert_eq!(
+        drawn(&runtime).0,
+        ["a.md", "c.md"],
+        "another session's b.md is not drawn"
+    );
+    let a = display_id(&runtime, &directory, "a.md");
+    let c = display_id(&runtime, &directory, "c.md");
+    view_act(
+        &mut runtime,
+        &directory,
+        serde_json::json!({"action": "focus", "display_id": a}),
+    );
+
+    session_tab(&mut runtime, &checkout, &directory, TABS[1]);
+    assert_eq!(
+        drawn(&runtime),
+        (vec!["b.md".into(), "c.md".into()], vec!["b.md".into()])
+    );
+    view_act(
+        &mut runtime,
+        &directory,
+        serde_json::json!({"action": "focus", "display_id": c}),
+    );
+
+    session_tab(&mut runtime, &checkout, &directory, TABS[0]);
+    assert_eq!(
+        drawn(&runtime).1,
+        ["a.md"],
+        "the first session shows what it last showed"
+    );
+    session_tab(&mut runtime, &checkout, &directory, TABS[1]);
+    assert_eq!(drawn(&runtime).1, ["c.md"], "and so does the second");
+
+    session_tab(&mut runtime, &checkout, &directory, TABS[2]);
+    assert_eq!(
+        drawn(&runtime).0,
+        ["c.md"],
+        "a plain shell shows the operator's only"
+    );
+    control_file(&mut runtime, "w-order:t3:p", &directory, "d.md", false, "d");
+    runtime.sync_workspace_view();
+    assert_eq!(drawn(&runtime).0, ["c.md", "d.md"]);
+    session_tab(&mut runtime, &checkout, &directory, TABS[0]);
+    assert_eq!(
+        drawn(&runtime).0,
+        ["a.md", "c.md", "d.md"],
+        "the shell's open is the operator's"
+    );
+    assert_eq!(
+        strip(&runtime, &directory),
+        ["a.md", "b.md", "c.md", "d.md"]
+    );
+
+    // A pane's `N views` row for another session's View brings that
+    // session's pane to the keyboard and shows the View in its strip.
+    let b = display_id(&runtime, &directory, "b.md");
+    view_act(
+        &mut runtime,
+        &directory,
+        serde_json::json!({"action": "focus", "display_id": b}),
+    );
+    assert_eq!(
+        runtime.snapshot.terminal.pane_id.as_deref(),
+        Some("w-order:t2:p")
+    );
+    assert_eq!(
+        drawn(&runtime),
+        (
+            vec!["b.md".into(), "c.md".into(), "d.md".into()],
+            vec!["b.md".into()]
+        )
+    );
+}
+
+/// D-12, D-28: plain shells, each in its own terminal, share the operator's
+/// strip, so moving the keyboard between them leaves the View in front.
+#[test]
+fn moving_between_plain_shells_moves_no_view() {
+    let (mut runtime, checkout, directory) = setup("session-shells");
+    let shells = |runtime: &mut Runtime, active: &str| {
+        let mut payload = tab_order_payload(&directory.to_string_lossy(), &TABS, &TABS, active);
+        for pane in &mut payload.panes {
+            pane.terminal_id = Some(format!("term-{}", pane.pane_id));
+        }
+        runtime.ingest_session(Ok(payload));
+        runtime.sync_workspace_view();
+    };
+    shells(&mut runtime, TABS[0]);
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", false, "a");
+    dispatch_focus_tab(&mut runtime, &checkout, TABS[1]);
+    shells(&mut runtime, TABS[1]);
+    control_file(&mut runtime, "w-order:t2:p", &directory, "b.md", false, "b");
+    let b = display_id(&runtime, &directory, "b.md");
+    view_act(
+        &mut runtime,
+        &directory,
+        serde_json::json!({"action": "focus", "display_id": b}),
+    );
+    for tab in [TABS[0], TABS[1], TABS[0]] {
+        dispatch_focus_tab(&mut runtime, &checkout, tab);
+        shells(&mut runtime, tab);
+        assert_eq!(
+            drawn(&runtime),
+            (vec!["a.md".into(), "b.md".into()], vec!["b.md".into()]),
+            "{tab}"
+        );
+    }
+}
+
+/// D-14, D-26, D-31: closing a session closes the Views it alone opened; one
+/// another session opened too and the operator's stay, and a document with
+/// unsaved work is listed before the close and kept as the operator's
+/// rather than dropped. `hide view list` names each View's openers.
+#[test]
+fn a_closed_sessions_views_close_and_shared_or_unsaved_ones_stay() {
+    let (mut runtime, checkout, directory) = setup("session-close");
+    sessions_focus(&mut runtime, &directory, TABS[0]);
+    control_file(&mut runtime, "w-order:t2:p", &directory, "b.md", false, "b");
+    control_file(
+        &mut runtime,
+        "w-order:t2:p",
+        &directory,
+        "d.md",
+        false,
+        "d2",
+    );
+    control_file(
+        &mut runtime,
+        "w-order:t1:p",
+        &directory,
+        "d.md",
+        false,
+        "d1",
+    );
+    open(&mut runtime, &checkout, &directory, "c.md");
+    control_file(&mut runtime, "w-order:t2:p", &directory, "a.md", false, "a");
+
+    let rows = runtime
+        .workspace_control_query(crate::node::TEST_NODE, "w-order:t2:p", Query::ViewList)
+        .unwrap()
+        .views
+        .unwrap();
+    let row = |name: &str| rows.iter().find(|row| row.target.ends_with(name)).unwrap();
+    assert!(row("b.md").openers.iter().all(|opener| opener.here) && !row("b.md").operator);
+    let d: Vec<bool> = row("d.md")
+        .openers
+        .iter()
+        .map(|opener| opener.here)
+        .collect();
+    assert_eq!(d, [true, false], "both sessions, the last opener last");
+    assert!(row("c.md").operator && row("c.md").openers.is_empty());
+
+    runtime
+        .snapshot
+        .editor
+        .tabs
+        .iter_mut()
+        .find(|tab| tab.label == "a.md")
+        .unwrap()
+        .dirty = true;
+    runtime.sync_workspace_view();
+    let a = display_id(&runtime, &directory, "a.md");
+    let drafts = &runtime
+        .snapshot
+        .workspace_view
+        .as_ref()
+        .unwrap()
+        .session_drafts;
+    assert_eq!(drafts.len(), 1);
+    assert_eq!(drafts[0].pane_id, "w-order:t2:p");
+    assert_eq!(
+        drafts[0]
+            .views
+            .iter()
+            .map(|view| &view.display_id)
+            .collect::<Vec<_>>(),
+        [&a]
+    );
+
+    let ended = runtime.session_scope_of_pane("w-order:t2:p").unwrap();
+    runtime.close_session_views(&[ended]);
+    runtime.sync_workspace_view();
+    assert_eq!(strip(&runtime, &directory), ["d.md", "c.md", "a.md"]);
+    let kept = layout(&runtime, &directory).display(&a).unwrap();
+    assert!(kept.operator, "unsaved work stays, as the operator's");
+    assert_eq!(drawn(&runtime).0, ["d.md", "c.md", "a.md"]);
+}
+
+/// D-14: a pane close Hide asks for names the pane's session, and its Views
+/// close only once Herdr confirmed the close.
+#[test]
+fn a_pane_close_takes_its_sessions_views_once_it_completes() {
+    let (mut runtime, checkout, directory) = setup("session-pane-close");
+    sessions_focus(&mut runtime, &directory, TABS[0]);
+    control_file(&mut runtime, "w-order:t2:p", &directory, "b.md", false, "b");
+    open(&mut runtime, &checkout, &directory, "c.md");
+    runtime.dispatch_json(&explorer_event(
+        "close_pane",
+        serde_json::json!({"pane_id": "w-order:t2:p", "confirmed": false}),
+    ));
+    let ended = runtime.session_scope_of_pane("w-order:t2:p").unwrap();
+    let key = {
+        let [(key, operation)] = runtime.close_operations.iter().collect::<Vec<_>>()[..] else {
+            panic!("one close in progress");
+        };
+        assert_eq!(operation.view_sessions, [ended]);
+        key.clone()
+    };
+    assert_eq!(
+        strip(&runtime, &directory),
+        ["b.md", "c.md"],
+        "nothing closes before Herdr does"
+    );
+    runtime.close_operations.get_mut(&key).unwrap().phase = "completed".into();
+    runtime.promote_close_reservations();
+    assert_eq!(strip(&runtime, &directory), ["c.md"]);
 }

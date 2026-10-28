@@ -152,6 +152,27 @@ pub struct View {
     pub active_area: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub page: Option<BrowserPage>,
+    /// The sessions that opened it, the last one last, whose Files strips
+    /// show it (PRD session-files D-26, D-31); empty for the operator's own.
+    pub openers: Vec<ViewOpener>,
+    /// Whether the operator opened it, which puts it in every strip.
+    pub operator: bool,
+}
+
+/// A session that opened a View, as `hide view list` names it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ViewOpener {
+    pub name: String,
+    pub provider: String,
+    /// The agent's native session id, when Herdr recorded one; what
+    /// `--session <id>` matches.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
+    /// The pane the session is in now; absent while it is closed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pane_id: Option<String>,
+    /// Whether it is the caller's own session (`--session here`).
+    pub here: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

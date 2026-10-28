@@ -1421,6 +1421,7 @@ impl Runtime {
             }
         };
         let now = unix_milliseconds();
+        let view_sessions = self.closing_view_sessions(&request, &pane_ids);
         self.close_operations.insert(
             request.key.clone(),
             PendingClose {
@@ -1444,6 +1445,7 @@ impl Runtime {
                 retryable: true,
                 selection_restore: None,
                 request: request.clone(),
+                view_sessions,
             },
         );
         self.close_capture_order.push_back(request.key.clone());
@@ -1767,6 +1769,7 @@ impl Runtime {
         }
         let target_id = close_target_id(&request.target).to_owned();
         let pane_ids = Self::close_operation_pane_ids(&request.target, &request.panes);
+        let view_sessions = self.closing_view_sessions(request, &pane_ids);
         let now = unix_milliseconds();
         self.close_operations.insert(
             request.key.clone(),
@@ -1795,6 +1798,7 @@ impl Runtime {
                 message: None,
                 retryable: true,
                 selection_restore: None,
+                view_sessions,
             },
         );
         if !self
@@ -2126,6 +2130,9 @@ impl Runtime {
             self.close_capture_order.pop_front();
             self.close_operations.remove(&key);
             self.clear_close_guards(&operation);
+            if operation.phase == "completed" {
+                self.close_session_views(&operation.view_sessions);
+            }
             // Without a captured item the reopen would reach an older close.
             queued_close_completed |= self.reopen_after_close.as_deref() == Some(key.as_str())
                 && operation.request.retain_for_reopen

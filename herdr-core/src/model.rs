@@ -320,6 +320,24 @@ pub struct WorkspaceViewSnapshot {
     /// view-opener-feedback); absent while there are none and no Send to say.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub feedback: Option<ViewFeedbackSnapshot>,
+    /// For each pane of the checkout, the Views of unsaved documents its
+    /// close would close with its session, so the shell asks first (PRD
+    /// session-files D-14); absent while there are none.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub session_drafts: Vec<SessionDraftsSnapshot>,
+}
+
+/// The Views of unsaved documents one pane's session alone opened.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SessionDraftsSnapshot {
+    pub pane_id: String,
+    pub views: Vec<SessionDraftSnapshot>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SessionDraftSnapshot {
+    pub display_id: String,
+    pub tab_id: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
