@@ -73,7 +73,7 @@ on:
     # The `release` environment's signing secrets. A called workflow sees an
     # environment secret only when its caller passes it by name, even though
     # the job below names the environment; one not passed reaches the job as an
-    # empty string, without an error. Only release.yml passes them; pull
+    # empty string, without an error. Only release.yml passes these; pull
     # requests and the nightly sign ad-hoc and pass none.
     secrets:
       MACOS_DEVELOPER_ID_P12:
@@ -85,6 +85,10 @@ on:
       APPLE_NOTARY_KEY_ID:
         required: false
       APPLE_NOTARY_ISSUER_ID:
+        required: false
+      # The development issues App's key (docs/TESTING.md, Flaky tests); a
+      # run without it files no issue.
+      HIDE_ISSUES_APP_KEY:
         required: false
 
 permissions:
@@ -301,14 +305,28 @@ jobs:
           else
             xvfb-run -a bash scripts/verify-web.sh desktop e2e packaged-update.spec.ts
           fi
+      - name: Mint the development issues token
+        # Development issues live in with-hide/hide-private (docs/TESTING.md,
+        # Flaky tests); one App token reads this run here and files there. A run
+        # without the App's key, such as a fork's, files nothing and stays green.
+        id: issues-token
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.HIDE_ISSUES_APP_ID }}
+          private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
+          owner: with-hide
+          repositories: hide,hide-private
       - name: Report flaky and failed window tests
-        # See the macOS job below: this workflow has no `issues: write`.
+        # See the macOS job below.
         id: flaky
         if: ${{ !cancelled() }}
         continue-on-error: true
         timeout-minutes: 5
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.issues-token.outputs.token }}
         run: python3 scripts/ci-flaky-report.py --suite desktop --playwright desktop/e2e-report.json
       - name: Keep the packaged window
         if: ${{ matrix.system == 'windows' && steps.window.outcome == 'success' }}
@@ -531,19 +549,31 @@ jobs:
         run: |
           mkdir -p "$HIDE_E2E_SCREENSHOT_DIR"
           bash scripts/verify-web.sh desktop e2e local-kit.spec.ts server-picker.spec.ts status-page.spec.ts --project background
+      - name: Mint the development issues token
+        # Development issues live in with-hide/hide-private (docs/TESTING.md,
+        # Flaky tests); one App token reads this run here and files there. A run
+        # without the App's key, such as a fork's, files nothing and stays green.
+        id: issues-token
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.HIDE_ISSUES_APP_ID }}
+          private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
+          owner: with-hide
+          repositories: hide,hide-private
       - name: Report flaky and failed tests
         # A test that fails its retry too becomes a `Failed test` annotation,
         # which the run's summary shows and the nightly report files; see
-        # nightly.yml. Writing an annotation needs no permission, and this
-        # workflow has no `issues: write` (pr.yml and release.yml call it
-        # with `contents: read`), so a flaky test here is listed in the job
-        # summary as not filed.
+        # nightly.yml. Writing an annotation needs no permission; a flaky test
+        # is filed with the development issues App's token, as in every lane.
         id: flaky
         if: ${{ !cancelled() }}
         continue-on-error: true
         timeout-minutes: 5
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.issues-token.outputs.token }}
         run: python3 scripts/ci-flaky-report.py --suite desktop --playwright desktop/e2e-report.json
       - name: Keep the failed package run
         # A flaky run keeps it as a failed one does; see web-e2e.yml.

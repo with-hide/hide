@@ -84,6 +84,11 @@ on:
         description: Nightly owns agy and the complete journey in its direct jobs.
         type: boolean
         default: false
+    # The development issues App's key (docs/TESTING.md, Flaky tests). A run
+    # without it, such as a fork's, files no issue and passes as before.
+    secrets:
+      HIDE_ISSUES_APP_KEY:
+        required: false
 
 permissions:
   contents: read
@@ -188,7 +193,6 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
-      issues: write
     env:
       FULL: ${{ needs.plan.outputs.full }}
       PACKAGES: ${{ needs.plan.outputs.rust-packages }}
@@ -260,12 +264,26 @@ jobs:
           export HIDE_TEST_ZSH_BIN=$(command -v zsh) HIDE_TEST_FISH_BIN=$(command -v fish) HIDE_TEST_BASH_BIN=$(command -v bash)
           export HIDE_E2E_HERDR_BIN=$(zsh scripts/fetch-herdr-runtime.sh --platform linux-x86_64)
           bash scripts/verify-cargo.sh nextest --profile ci -p hide-host -p herdr-core --lib -E 'test(/^shell_integration::real_shell_tests::/) | test(/^agent_start::real_herdr_tests::/)' --run-ignored only --no-capture
+      - name: Mint the development issues token
+        # Development issues live in with-hide/hide-private (docs/TESTING.md,
+        # Flaky tests); one App token reads this run here and files there. A run
+        # without the App's key, such as a fork's, files nothing and stays green.
+        id: issues-token
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.HIDE_ISSUES_APP_ID }}
+          private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
+          owner: with-hide
+          repositories: hide,hide-private
       - name: Report flaky and failed tests
         if: ${{ !cancelled() }}
         continue-on-error: true
         timeout-minutes: 5
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.issues-token.outputs.token }}
         run: python3 scripts/ci-flaky-report.py --suite rust --junit target/nextest/ci/junit*.xml
 
   checks:
@@ -321,7 +339,6 @@ jobs:
     timeout-minutes: 50
     permissions:
       contents: read
-      issues: write
     defaults:
       run:
         shell: bash
@@ -478,12 +495,26 @@ jobs:
         if: ${{ !cancelled() && steps.web-deps.outcome == 'success' }}
         timeout-minutes: 10
         run: bash scripts/verify-web.sh desktop test
+      - name: Mint the development issues token
+        # Development issues live in with-hide/hide-private (docs/TESTING.md,
+        # Flaky tests); one App token reads this run here and files there. A run
+        # without the App's key, such as a fork's, files nothing and stays green.
+        id: issues-token
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.HIDE_ISSUES_APP_ID }}
+          private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
+          owner: with-hide
+          repositories: hide,hide-private
       - name: Report flaky and failed tests
         if: ${{ !cancelled() }}
         continue-on-error: true
         timeout-minutes: 5
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.issues-token.outputs.token }}
         run: python3 scripts/ci-flaky-report.py --suite rust --junit target/nextest/ci/junit*.xml
 
   # The browser `@platform` tests on Windows, the same set the macOS lane
@@ -493,9 +524,10 @@ jobs:
     needs: plan
     if: contains(fromJSON(needs.plan.outputs.lanes), 'windows-e2e')
     uses: ./.github/workflows/web-e2e.yml
+    secrets:
+      HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
     permissions:
       contents: read
-      issues: write
     with:
       lane: windows
       runner: windows-latest
@@ -513,9 +545,10 @@ jobs:
     needs: plan
     if: contains(fromJSON(needs.plan.outputs.lanes), 'web-e2e')
     uses: ./.github/workflows/web-e2e.yml
+    secrets:
+      HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
     permissions:
       contents: read
-      issues: write
     with:
       lane: linux
       runner: ubuntu-latest
@@ -543,9 +576,10 @@ jobs:
     needs: plan
     if: contains(fromJSON(needs.plan.outputs.lanes), 'remote-mailbox')
     uses: ./.github/workflows/remote-mailbox.yml
+    secrets:
+      HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
     permissions:
       contents: read
-      issues: write
     with:
       runner: ubuntu-latest
       herdr-platform: linux-x86_64
@@ -557,11 +591,12 @@ jobs:
     needs: plan
     if: contains(fromJSON(needs.plan.outputs.lanes), 'os-contract')
     uses: ./.github/workflows/os-contract.yml
+    secrets:
+      HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
     with:
       systems: '["linux","windows"]'
     permissions:
       contents: read
-      issues: write
 
   # Its macOS leg, for a change to `hide-platform` or `hide-herdr-client` (and
   # a full plan); the nightly runs it for every other change.
@@ -570,11 +605,12 @@ jobs:
     needs: plan
     if: contains(fromJSON(needs.plan.outputs.lanes), 'os-contract-macos')
     uses: ./.github/workflows/os-contract.yml
+    secrets:
+      HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
     with:
       systems: '["macos"]'
     permissions:
       contents: read
-      issues: write
 
   # agy against stand-ins and its installed binary on Windows, for a change
   # to a crate that writes agy's files, reads its conversations or drives it
@@ -595,11 +631,12 @@ jobs:
     needs: plan
     if: contains(fromJSON(needs.plan.outputs.lanes), 'agy-contract')
     uses: ./.github/workflows/agy-contract.yml
+    secrets:
+      HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
     with:
       systems: '["windows"]'
     permissions:
       contents: read
-      issues: write
 
   # The agent journey on the compiled Claude and Codex stand-ins, keyless, on
   # Linux, and its process jobs, private files and pane commands on Windows,
@@ -637,9 +674,10 @@ jobs:
     needs: plan
     if: contains(fromJSON(needs.plan.outputs.lanes), 'desktop-e2e')
     uses: ./.github/workflows/desktop-e2e.yml
+    secrets:
+      HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
     permissions:
       contents: read
-      issues: write
     with:
       lane: macos
       runner: macos-15
@@ -662,9 +700,10 @@ jobs:
     needs: plan
     if: contains(fromJSON(needs.plan.outputs.lanes), 'windows-desktop')
     uses: ./.github/workflows/desktop-e2e.yml
+    secrets:
+      HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
     permissions:
       contents: read
-      issues: write
     with:
       lane: windows
       runner: windows-latest
@@ -678,6 +717,8 @@ jobs:
     needs: plan
     if: contains(fromJSON(needs.plan.outputs.lanes), 'package')
     uses: ./.github/workflows/package.yml
+    secrets:
+      HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
     permissions:
       contents: read
     with:
@@ -691,7 +732,6 @@ jobs:
     permissions:
       contents: read
       actions: read
-      issues: write
     needs: [plan, policy, rust, checks, os-contract, os-contract-macos, agy-contract, omp-contract, agent-journey, agent-clis, windows-check, windows-e2e, windows-desktop, web-e2e, remote-mailbox, desktop-e2e, package]
     if: always()
     runs-on: ubuntu-latest
@@ -710,10 +750,24 @@ jobs:
         env:
           NEEDS: ${{ toJSON(needs) }}
         run: python3 scripts/ci-plan.py aggregate
+      - name: Mint the development issues token
+        # Development issues live in with-hide/hide-private (docs/TESTING.md,
+        # Flaky tests); one App token reads this run here and files there. A run
+        # without the App's key, such as a fork's, files nothing and stays green.
+        id: issues-token
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.HIDE_ISSUES_APP_ID }}
+          private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
+          owner: with-hide
+          repositories: hide,hide-private
       - name: Connect test failures and passes across job reruns
         if: ${{ !cancelled() }}
         continue-on-error: true
         timeout-minutes: 4
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.issues-token.outputs.token }}
         run: python3 scripts/ci-flaky-report.py --retry-history

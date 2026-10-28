@@ -195,7 +195,8 @@ if name == 'playwright' and '--list' in args:
                         e2e["steps"].index(one(e2e, name="End-to-end")))
         for step in (upload, download):
             self.assertNotIn("continue-on-error", step)
-        self.assertEqual(lane["permissions"], {"contents": "read", "issues": "write"})
+        # Flaky tests are filed with the development issues App's token, not this one.
+        self.assertEqual(lane["permissions"], {"contents": "read"})
 
         # Exercise the actual build command's prerequisite failure boundary.
         self.enable_package_scripts()

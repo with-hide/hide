@@ -118,15 +118,17 @@ jobs:
       include-macos: true
       macos-signing: developer-id
     # By name, not `secrets: inherit`: package.yml gets the five signing
-    # secrets and nothing else. They live only in the `release` environment,
-    # which package.yml's macOS job names; a secret not passed here would reach
-    # that job empty.
+    # secrets and the development issues App's key, and nothing else. The
+    # signing secrets live only in the `release` environment, which
+    # package.yml's macOS job names; a secret not passed here would reach that
+    # job empty.
     secrets:
       MACOS_DEVELOPER_ID_P12: ${{ secrets.MACOS_DEVELOPER_ID_P12 }}
       MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
       APPLE_NOTARY_KEY_P8: ${{ secrets.APPLE_NOTARY_KEY_P8 }}
       APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
       APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+      HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
 
   # The agent journey on the release's commit: the stand-ins on Linux and
   # macOS, the Windows forms and the fake model on all three systems

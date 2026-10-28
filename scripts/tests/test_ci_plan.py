@@ -380,7 +380,8 @@ class Selection(unittest.TestCase):
         call = nightly[nightly.index("\n  verify:\n"):nightly.index("\n  package:\n")]
         self.assertIn("uses: ./.github/workflows/pr.yml", call)
         self.assertIn("nightly-agent-checks: true", call)
-        self.assertIn("issues: write", call)
+        # Its lanes file flaky tests with the development issues App's key.
+        self.assertIn("HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}", call)
         report = nightly[nightly.index("\n  report:\n"):]
         for job in ("verify", "agy-contract-all", "agent-journey"):
             self.assertRegex(report, rf"needs: \[[^\]]*\b{job}\b[^\]]*\]")

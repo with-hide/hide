@@ -41,16 +41,20 @@ run on main closes its issues. docs/TESTING.md, "Flaky tests" and "Nightly
 failures", owns the policy.
 
     ci-flaky-report.py --nightly --lane-input all
-    ci-flaky-report.py --nightly --repo OWNER/REPO --run RUN_ID --dry-run
+    ci-flaky-report.py --nightly --runs-repo OWNER/REPO --run RUN_ID --dry-run
 
-It talks to GitHub through `gh` (GH_TOKEN, GITHUB_REPOSITORY and the run's
-GITHUB_* variables come from Actions). A lane's step needs `issues: write` and
-must not fail the lane: the flaky run already passed, and the report is a
-notice, so a GitHub error costs one missed issue the next flaky run files. The
-nightly report reads job logs, which needs gh 2.97 or newer, and refuses an
-older gh before the first log read. The report job needs `actions: read`, `checks: read`, `pull-requests: read` and
-`issues: write`, and fails when GitHub does, so a failure it could not file is
-a red job rather than a silence.
+The issues live in the private development repository (`ISSUE_REPOSITORY`), so
+the public repository's issues hold only user bug reports; the runs, jobs,
+logs, artifacts and pull requests read stay those of GITHUB_REPOSITORY. It
+talks to GitHub through `gh` (GH_TOKEN and the run's GITHUB_* variables come
+from Actions); GH_TOKEN is the issues GitHub App's token, minted for both
+repositories, which writes issues there and reads Actions, checks and pull
+requests here. A lane's step must not fail the lane: the flaky run already
+passed, and the report is a notice, so a GitHub error costs one missed issue
+the next flaky run files. The nightly report reads job logs, which needs gh
+2.97 or newer, and refuses an older gh before the first log read. The report
+job fails when GitHub does, so a failure it could not file is a red job rather
+than a silence.
 """
 import argparse
 from datetime import date, datetime, timedelta
@@ -67,6 +71,9 @@ import threading
 import xml.etree.ElementTree as ET
 import zipfile
 
+# Where every issue this script files lives: development issues stay out of the
+# public repository, whose issues are user bug reports.
+ISSUE_REPOSITORY = "with-hide/hide-private"
 LABEL = "quarantine"
 EXPIRY_DAYS = 7
 # A run with more flaky tests than this is a broken environment, not flakiness;
@@ -263,7 +270,8 @@ def run_facts(env):
     return {
         "marker": f"<!-- flaky-run:{run}:{env.get('GITHUB_RUN_ATTEMPT', '1')} -->",
         "run": f"{server}/{repo}/actions/runs/{run}",
-        "change": f"pull request #{pull.group(1)}" if pull else env.get("GITHUB_REF", "unknown ref"),
+        # The issue lives in another repository, where a bare #N names its own.
+        "change": f"pull request {repo}#{pull.group(1)}" if pull else env.get("GITHUB_REF", "unknown ref"),
         "sha": env.get("GITHUB_SHA", "unknown")[:12],
     }
 
@@ -351,32 +359,32 @@ def open_issues(repo, call=gh):
     return [issue for issue in issues if "pull_request" not in issue]
 
 
-def report(tests, system, env, call=gh, today=None):
+def report(tests, system, env, call=gh, today=None, issues=ISSUE_REPOSITORY):
     today = today or date.today()
-    repo, facts = env["GITHUB_REPOSITORY"], run_facts(env)
+    facts = run_facts(env)
     if len(tests) > MAX_PER_RUN:
         print(f"::warning::{len(tests)} flaky tests in one run; filing the first {MAX_PER_RUN}")
-    issues = open_issues(repo, call)
+    tracked = open_issues(issues, call)
     lines = [f"### Flaky tests ({system})", ""]
     for test in tests[:MAX_PER_RUN]:
         facts = {**facts, "sha": test.get("tested_sha", env.get("GITHUB_SHA", "unknown")[:12])}
-        issue = next((item for item in issues if tracks(item, test)), None)
+        issue = next((item for item in tracked if tracks(item, test)), None)
         if issue is None:
-            created = call([f"repos/{repo}/issues", "--input", "-"], new_issue(test, system, facts, today))
-            issues.append({**created, "body": created.get("body") or new_issue(test, system, facts, today)["body"]})
+            created = call([f"repos/{issues}/issues", "--input", "-"], new_issue(test, system, facts, today))
+            tracked.append({**created, "body": created.get("body") or new_issue(test, system, facts, today)["body"]})
             print(f"filed {created['html_url']} for {test['name']}")
             lines.append(f"- filed {created['html_url']}: {label_of(test)}")
             continue
         number = issue["number"]
-        comments = listing(call, f"repos/{repo}/issues/{number}/comments")
-        lines.append(f"- #{number}: {label_of(test)}")
+        comments = listing(call, f"repos/{issues}/issues/{number}/comments")
+        lines.append(f"- {issues}#{number}: {label_of(test)}")
         marker = test.get("marker", facts["marker"])
         if any(marker in (item.get("body") or "") for item in [issue, *comments]):
             continue
         match = re.search(r"^- Expires: (\d{4}-\d\d-\d\d)", issue.get("body") or "", re.M)
         expired = bool(match) and date.fromisoformat(match.group(1)) < today
-        call([f"repos/{repo}/issues/{number}/comments", "--input", "-"], {"body": comment(test, system, facts, expired)})
-        print(f"added the run to #{number} for {test['name']}")
+        call([f"repos/{issues}/issues/{number}/comments", "--input", "-"], {"body": comment(test, system, facts, expired)})
+        print(f"added the run to {issues}#{number} for {test['name']}")
     summary(lines)
 
 
@@ -546,7 +554,7 @@ def timestamp(value):
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
-def retry_history(env, call=gh, download=artifact_bytes):
+def retry_history(env, call=gh, download=artifact_bytes, issues=ISSUE_REPOSITORY):
     """Read all bounded evidence before writing any issue. No cross-run inference."""
     repo, run, attempt = env["GITHUB_REPOSITORY"], int(env["GITHUB_RUN_ID"]), int(env["GITHUB_RUN_ATTEMPT"])
     if not 1 <= attempt <= HISTORY_ATTEMPTS:
@@ -662,7 +670,7 @@ def retry_history(env, call=gh, download=artifact_bytes):
         print(f"::warning::{len(flakes)} cross-attempt flaky tests; filing the first {MAX_PER_RUN}")
     selected = flakes[:MAX_PER_RUN]
     for system in sorted({system for _, system in selected}):
-        report([test for test, os_name in selected if os_name == system], system, env, call=call)
+        report([test for test, os_name in selected if os_name == system], system, env, call=call, issues=issues)
 
 
 def lane_of(job_name):
@@ -775,10 +783,12 @@ def touches(filenames, paths):
 
 
 class Nightly:
-    """One nightly run's report: what it opens, comments and closes."""
+    """One nightly run's report: what it opens, comments and closes.
 
-    def __init__(self, repo, run_id, attempt, lane_input, call, root, today):
-        self.repo, self.call, self.root, self.today = repo, call, root, today
+    `repo` holds the run, its jobs and the pull requests; `issues` holds the issues."""
+
+    def __init__(self, repo, issues, run_id, attempt, lane_input, call, root, today):
+        self.repo, self.issues, self.call, self.root, self.today = repo, issues, call, root, today
         self.run = call([f"repos/{repo}/actions/runs/{run_id}"])
         self.run_id = str(run_id)
         self.attempt = int(attempt or self.run["run_attempt"])
@@ -898,7 +908,7 @@ class Nightly:
             if numbers is None:
                 listed = f"unknown, more than {PAGES * 100} commits since then"
             else:
-                listed = ", ".join(f"#{number}" for number in numbers) or "none"
+                listed = ", ".join(f"{self.repo}#{number}" for number in numbers) or "none"
             candidates = f"- Candidate pull requests (merged since then, touching {touched or 'nothing named'}): {listed}\n"
         label = {"test": "Test", "measurement": "Measurement"}.get(failure["kind"])
         what = f"- {label}: {self.subject(failure)}\n" if label else f"- Step: \"{failure['step']}\"\n"
@@ -947,7 +957,7 @@ class Nightly:
     def commented(self, issue):
         if self.marker in (issue.get("body") or ""):
             return True
-        comments = listing(self.call, f"repos/{self.repo}/issues/{issue['number']}/comments")
+        comments = listing(self.call, f"repos/{self.issues}/issues/{issue['number']}/comments")
         return any(self.marker in (item.get("body") or "") for item in comments)
 
     def plan(self):
@@ -955,7 +965,7 @@ class Nightly:
         if self.run.get("head_branch") != "main":
             return []
         issues = [
-            issue for issue in listing(self.call, f"repos/{self.repo}/issues?labels={NIGHTLY_LABEL}&state=open")
+            issue for issue in listing(self.call, f"repos/{self.issues}/issues?labels={NIGHTLY_LABEL}&state=open")
             if "pull_request" not in issue
         ]
         open_by_key = {canonical_key(key_of(issue)): issue for issue in issues if key_of(issue)}
@@ -992,21 +1002,21 @@ class Nightly:
         lines = ["### Nightly failures", ""]
         for action, number, payload in actions:
             if action == "open":
-                created = self.call([f"repos/{self.repo}/issues", "--input", "-"], payload)
+                created = self.call([f"repos/{self.issues}/issues", "--input", "-"], payload)
                 lines.append(f"- opened {created['html_url']}: {payload['title']}")
             elif action == "comment":
-                self.call([f"repos/{self.repo}/issues/{number}/comments", "--input", "-"], payload)
-                lines.append(f"- commented on #{number}")
+                self.call([f"repos/{self.issues}/issues/{number}/comments", "--input", "-"], payload)
+                lines.append(f"- commented on {self.issues}#{number}")
             else:
-                self.call([f"repos/{self.repo}/issues/{number}/comments", "--input", "-"], payload)
-                self.call([f"repos/{self.repo}/issues/{number}", "-X", "PATCH", "--input", "-"], {"state": "closed", "state_reason": "completed"})
-                lines.append(f"- closed #{number}")
+                self.call([f"repos/{self.issues}/issues/{number}/comments", "--input", "-"], payload)
+                self.call([f"repos/{self.issues}/issues/{number}", "-X", "PATCH", "--input", "-"], {"state": "closed", "state_reason": "completed"})
+                lines.append(f"- closed {self.issues}#{number}")
         for line in lines[2:]:
             print(line[2:])
         summary(lines if actions else lines + ["Nothing to write."])
 
 
-def describe(actions):
+def describe(actions, issues):
     """The plan as text, for a dry run."""
     if not actions:
         return "nothing to write"
@@ -1016,22 +1026,22 @@ def describe(actions):
             out.append(f"would open [{', '.join(payload['labels'])}] {payload['title']}")
             out.extend("    " + line for line in payload["body"].splitlines())
         else:
-            out.append(f"would {action} #{number}")
+            out.append(f"would {action} {issues}#{number}")
             out.extend("    " + line for line in payload["body"].splitlines())
     return "\n".join(out)
 
 
 def nightly(args, env, call=gh):
-    repo = args.repo or env["GITHUB_REPOSITORY"]
+    repo = args.runs_repo or env["GITHUB_REPOSITORY"]
     run = args.run or env["GITHUB_RUN_ID"]
     attempt = args.attempt or (None if args.run else env.get("GITHUB_RUN_ATTEMPT"))
     if not args.dry_run and env.get("GITHUB_REF") != "refs/heads/main":
         print("not a run of main; the nightly report writes nothing")
         return 0
-    report_run = Nightly(repo, run, attempt, args.lane_input, call, Path(__file__).resolve().parents[1], date.today())
+    report_run = Nightly(repo, args.issues_repo, run, attempt, args.lane_input, call, Path(__file__).resolve().parents[1], date.today())
     actions = report_run.plan()
     if args.dry_run:
-        print(describe(actions))
+        print(describe(actions, args.issues_repo))
         return 0
     report_run.apply(actions)
     return 0
@@ -1060,7 +1070,8 @@ def main(argv=None):
     parser.add_argument("--job-name", help="the reusable job's displayed name, including its lane and shard")
     parser.add_argument("--retry-history", action="store_true", help="connect explicit same-checkout failures and passes across this run's job attempts")
     parser.add_argument("--nightly", action="store_true", help="the nightly report job: file, comment on and close nightly-failure issues (needs gh 2.97 or newer)")
-    parser.add_argument("--repo", help="OWNER/REPO (default: GITHUB_REPOSITORY)")
+    parser.add_argument("--runs-repo", help="OWNER/REPO whose run is reported (default: GITHUB_REPOSITORY)")
+    parser.add_argument("--issues-repo", default=ISSUE_REPOSITORY, help=f"OWNER/REPO the issues live in (default: {ISSUE_REPOSITORY})")
     parser.add_argument("--run", help="the nightly run to report (default: this run)")
     parser.add_argument("--attempt", help="its attempt (default: this attempt, or the run's latest)")
     parser.add_argument("--lane-input", default="", help="the hand run's lane input; empty for the schedule")
@@ -1068,7 +1079,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.retry_history:
         try:
-            retry_history(os.environ)
+            retry_history(os.environ, issues=args.issues_repo)
         except (RuntimeError, KeyError, ValueError, TypeError, zipfile.BadZipFile) as error:
             print(f"::warning::job rerun test history was not reported: {error}")
             summary(["### Job rerun test history not reported", "", str(error)])
@@ -1133,7 +1144,7 @@ def main(argv=None):
         with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
             output.write("flaky=true\n")
     try:
-        report(tests, args.system, os.environ)
+        report(tests, args.system, os.environ, issues=args.issues_repo)
     except (RuntimeError, KeyError, ValueError) as error:
         # The lane has passed and stays passed, so the unfiled tests go where a
         # reader of the run sees them: the annotation and the job summary.

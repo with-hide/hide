@@ -95,7 +95,9 @@ class Record(unittest.TestCase):
         calls = []
 
         def gh(argv, **_):
-            calls.append(argv[1:])
+            # Every issue lives in the private development repository.
+            self.assertEqual(argv[-2:], ["--repo", "with-hide/hide-private"])
+            calls.append(argv[1:-2])
             return subprocess.CompletedProcess(argv, 0, "https://github.com/o/r/issues/77\n", "")
         record.apply(after, state, "https://run", run=gh)
         return after, calls
