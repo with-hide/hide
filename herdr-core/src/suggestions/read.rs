@@ -247,7 +247,6 @@ fn evidence(line: &Line, input: &ReadInput<'_>) -> Vec<SuggestionEvidenceSnapsho
                     .is_some_and(|kept| !kept.contains(session))
             }),
             offset: record.said.as_ref().map(|said| said.offset),
-            words: record.said.as_ref().and_then(|said| said.words.clone()),
             given: record.said.as_ref().and_then(|said| said.given),
             excerpt: None,
             unreadable: false,

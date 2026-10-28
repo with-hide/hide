@@ -126,16 +126,7 @@ impl Runtime {
             self.worker_context.clone(),
             self.memory_node(opened.node.as_str()),
         ) else {
-            self.suggestions_work.evidence.read = Some(
-                places
-                    .into_iter()
-                    .map(|(agent, session_id, _)| Excerpt {
-                        agent,
-                        session_id,
-                        text: None,
-                    })
-                    .collect(),
-            );
+            self.suggestions_work.evidence.read = Some(unread(&places));
             return;
         };
         let database = self.memory_database_path();
@@ -144,7 +135,18 @@ impl Runtime {
         let spawned = thread::Builder::new()
             .name("hide-suggestion-evidence".to_owned())
             .spawn(move || {
-                let read = read_excerpts(&database, link.as_ref(), &opened, places);
+                let fallback = unread(&places);
+                // A read that panics still ends this one: its places show as
+                // unreadable and the next row is read.
+                let read = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    read_excerpts(&database, link.as_ref(), &opened, places)
+                }))
+                .unwrap_or_else(|_| {
+                    crate::diagnostic!(json!({
+                        "component": "suggestions", "kind": "evidence.read_panicked",
+                    }));
+                    fallback
+                });
                 let Some(runtime) = context.runtime.upgrade() else {
                     return;
                 };
@@ -174,6 +176,18 @@ impl Runtime {
             }));
         }
     }
+}
+
+/// Each place as one whose words could not be read.
+fn unread(places: &[(String, String, u64)]) -> Vec<Excerpt> {
+    places
+        .iter()
+        .map(|(agent, session_id, _)| Excerpt {
+            agent: agent.clone(),
+            session_id: session_id.clone(),
+            text: None,
+        })
+        .collect()
 }
 
 /// Reads each place's words again, masked and cut; a place that cannot be

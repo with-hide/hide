@@ -233,6 +233,31 @@ impl MemoryStore {
         Ok(sources)
     }
 
+    /// The active cards whose operator words include any of `offsets` in
+    /// `session` (`provider:session`): a repeat's turns that also made or
+    /// confirmed a card, which raise no correction of their own (D-37).
+    pub fn cards_said_at(
+        &self,
+        project_id: &str,
+        session: &str,
+        offsets: &[u64],
+    ) -> Result<std::collections::BTreeSet<u64>, MemoryError> {
+        let Some((provider, session_id)) = session.split_once(':') else {
+            return Ok(Default::default());
+        };
+        let mut statement = self.connection.prepare(
+            "SELECT DISTINCT i.number FROM memory_items i JOIN memory_sources s ON s.item_id=i.id AND s.revision=i.current_revision AND s.human=1 \
+             WHERE i.project_id=?1 AND i.lifecycle='active' AND s.provider=?2 AND s.session_id=?3 AND s.event_offset IN (SELECT value FROM json_each(?4))",
+        )?;
+        let offsets = serde_json::to_string(offsets)
+            .map_err(|error| MemoryError::InvalidState(error.to_string()))?;
+        Ok(statement
+            .query_map(params![project_id, provider, session_id, offsets], |row| {
+                row.get(0)
+            })?
+            .collect::<rusqlite::Result<_>>()?)
+    }
+
     /// The meanings a Project already names, most recent first, for the
     /// analysis to name the same request the same way.
     pub fn known_meanings(

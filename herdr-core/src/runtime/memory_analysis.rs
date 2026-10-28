@@ -2466,6 +2466,7 @@ fn memory_signals(
     use crate::suggestions::ledger::{Given, Observation, Said, SessionRef, Signal};
     let key = format!("{}:{}", session.agent.as_str(), session.id);
     let mut repeated = std::collections::BTreeSet::new();
+    let mut said_here = Vec::new();
     let observation = |signal, tag: String, session: SessionRef, at, said| Observation {
         signal,
         tag,
@@ -2486,8 +2487,9 @@ fn memory_signals(
                     .into_iter()
                     .filter(|source| summary.repeated.contains(&source.meaning))
                     .inspect(|source| {
-                        if source.session == key {
+                        if source.session == key && !source.from_card {
                             repeated.extend(source.card);
+                            said_here.push(source.event_offset);
                         }
                     })
                     .filter_map(|source| {
@@ -2518,6 +2520,17 @@ fn memory_signals(
             })),
         }
     }
+    // A repeat's turn that also made or confirmed a card, matched or not,
+    // stands in its repeat records only.
+    if !said_here.is_empty() {
+        match store.cards_said_at(project_id, &key, &said_here) {
+            Ok(cards) => repeated.extend(cards),
+            Err(error) => crate::diagnostic!(json!({
+                "component": "memory", "kind": "repeats.read_failed",
+                "project_id": project_id, "message": error.to_string(),
+            })),
+        }
+    }
     for (number, miss) in &summary.misses {
         if *miss != hide_memory::Miss::Ignored {
             continue;
@@ -2538,6 +2551,10 @@ fn memory_signals(
         // Only a card the operator said stands behind a stronger fix: an
         // agent's own note never becomes the operator's instruction (B18).
         if card.human_source_count == 0 {
+            crate::diagnostic!(json!({
+                "component": "memory", "kind": "ignored_card.not_suggested",
+                "project_id": project_id, "card": number, "reason": "agent_card",
+            }));
             continue;
         }
         // The card's text is the line a stronger fix writes, kept as a
@@ -2547,6 +2564,10 @@ fn memory_signals(
             .flatten()
             .or_else(|| hide_memory::instruction_line(&card.title))
         else {
+            crate::diagnostic!(json!({
+                "component": "memory", "kind": "ignored_card.not_suggested",
+                "project_id": project_id, "card": number, "reason": "bad_line",
+            }));
             continue;
         };
         signals.push(observation(
@@ -6534,6 +6555,43 @@ mod tests {
                 .iter()
                 .all(|fact| fact.tag == "답은 한국어로" || fact.tag == "m1")
         );
+        // A repeat no card matched, whose turn made a new card: that card is
+        // no correction either (D-37).
+        let options = ApplyOptions {
+            repeats: vec![RepeatRequest {
+                meaning: "테스트는 nextest로".into(),
+                scope: RepeatScope::Project,
+                procedure: false,
+                target_id: None,
+                line: "Run tests with nextest.".into(),
+                sources: vec![(7, 30, Some("nextest".into()))],
+            }],
+            ..ApplyOptions::default()
+        };
+        let summary = store
+            .apply_candidates_with(
+                &batch("b3", "s3", 30),
+                &[Candidate {
+                    text: "Run tests with nextest".into(),
+                    title: "Run tests with nextest".into(),
+                    kind: CandidateKind::Rule,
+                    source_offsets: vec![7],
+                    human_offsets: vec![7],
+                    source_times: [(7, 30)].into(),
+                    source_words: [(7, "nextest".to_owned())].into(),
+                    ..candidate(CandidateRelation::New)
+                }],
+                &options,
+            )
+            .unwrap();
+        let made = store.item_by_number("p", 2).unwrap().unwrap();
+        assert_eq!(made.title, "Run tests with nextest");
+        let s3 = ProjectSession {
+            id: "s3".into(),
+            ..session
+        };
+        let (_, repeated) = memory_signals(&store, "p", "/repo", &s3, &summary);
+        assert_eq!(repeated, [2].into());
     }
 
     #[test]

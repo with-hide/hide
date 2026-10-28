@@ -58,7 +58,8 @@ impl Unusable {
 /// read.
 pub fn read(state_dir: &Path) -> Result<Instruction, Unusable> {
     use std::io::Read;
-    let file = match target(state_dir).and_then(|path| hide_platform::fs::open_regular(&path)) {
+    let file = match target(state_dir).and_then(|(path, _)| hide_platform::fs::open_regular(&path))
+    {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Ok(instruction(String::new()));
@@ -80,16 +81,35 @@ pub fn read(state_dir: &Path) -> Result<Instruction, Unusable> {
     Ok(instruction(text))
 }
 
-/// The file the name stands for: the name itself, or what a link there
-/// points at, which may not exist yet.
-fn target(state_dir: &Path) -> std::io::Result<std::path::PathBuf> {
+/// The file the name stands for: the name itself, or the file a link there
+/// points at, and whether it is a link's. A link is followed only to an
+/// existing regular `.md` or `.txt` file: through a link Hide never makes a
+/// file or a folder, and never reads or writes a file of another kind.
+fn target(state_dir: &Path) -> std::io::Result<(std::path::PathBuf, bool)> {
     let path = hide_kit::layout::global_instruction(state_dir);
     match std::fs::symlink_metadata(&path) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
-            let link = std::fs::read_link(&path)?;
-            Ok(path.parent().unwrap_or(state_dir).join(link))
+            let target = path
+                .parent()
+                .unwrap_or(state_dir)
+                .join(std::fs::read_link(&path)?);
+            let regular = std::fs::symlink_metadata(&target).is_ok_and(|target| target.is_file());
+            let text = target
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .is_some_and(|extension| {
+                    extension.eq_ignore_ascii_case("md") || extension.eq_ignore_ascii_case("txt")
+                });
+            if regular && text {
+                Ok((target, true))
+            } else {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "the link does not point at an existing text file",
+                ))
+            }
         }
-        _ => Ok(path),
+        _ => Ok((path, false)),
     }
 }
 
@@ -330,17 +350,22 @@ fn write(state_dir: &Path, before: &str, after: &str) -> Result<(), Write> {
         }));
         Write::Failed
     };
-    let path = target(state_dir).map_err(|error| failed(&error.kind()))?;
+    let (path, linked) = target(state_dir).map_err(|error| failed(&error.kind()))?;
     let (Some(folder), Some(name)) = (path.parent(), path.file_name()) else {
         return Err(failed(&"the file has no folder"));
     };
-    hide_platform::fs::private::create_dir_all(folder).map_err(|error| failed(&error.kind()))?;
+    if !linked {
+        hide_platform::fs::private::create_dir_all(folder)
+            .map_err(|error| failed(&error.kind()))?;
+    }
     let exists = std::fs::symlink_metadata(&path).is_ok();
     if !exists {
         if !before.is_empty() {
             return Err(Write::Moved);
         }
         let staged = folder.join(format!(".{}.hide-new", name.to_string_lossy()));
+        // A file left there by a write that stopped part way is Hide's own.
+        let _ = std::fs::remove_file(&staged);
         let made = hide_platform::fs::private::create_new_file(&staged)
             .and_then(|mut file| {
                 use std::io::Write as _;
@@ -501,6 +526,43 @@ mod tests {
             std::fs::read_to_string(file(state.path())).unwrap(),
             "Answer in Korean, mostly.\n"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_is_followed_only_to_an_existing_text_file() {
+        let state = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let link = |to: &Path| {
+            let _ = std::fs::remove_file(file(state.path()));
+            std::os::unix::fs::symlink(to, file(state.path())).unwrap();
+        };
+        let preview = |state: &Path| preview(state, "Answer in Korean.");
+        // An operator's own instruction kept in their dotfiles.
+        let notes = elsewhere.path().join("agents.md");
+        std::fs::write(&notes, "My own line\n").unwrap();
+        link(&notes);
+        apply(state.path(), &preview(state.path()).unwrap()).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&notes).unwrap(),
+            "My own line\nAnswer in Korean.\n"
+        );
+        // Another kind of file, a missing one, or one in a missing folder:
+        // nothing is read, made or written through the link.
+        let profile = elsewhere.path().join(".zshrc");
+        std::fs::write(&profile, "export A=1\n").unwrap();
+        for to in [
+            profile.clone(),
+            elsewhere.path().join("missing.md"),
+            elsewhere.path().join("new").join("agents.md"),
+        ] {
+            link(&to);
+            assert_eq!(read(state.path()), Err(Unusable::Unreadable), "{to:?}");
+            assert!(preview(state.path()).is_err());
+        }
+        assert_eq!(std::fs::read_to_string(&profile).unwrap(), "export A=1\n");
+        assert!(!elsewhere.path().join("missing.md").exists());
+        assert!(!elsewhere.path().join("new").exists());
     }
 
     #[test]

@@ -85,7 +85,7 @@ const APPLIED_ROWS: SuggestionRow[] = [
   row("s2", { group: "applied", state: "effective", discomfort: "커밋 메시지에 도구 이름이 들어가요", attempt: { phase: "merged", started_at_unix_ms: Date.now() - 6 * 1440 * MINUTE, pr_number: 1661, url: "https://github.com/hide/hide/pull/1661", agent_id: null, failure: null } }),
 ];
 
-const GLOBAL_PATH = "/Users/operator/.hide/state/global-instruction.md";
+const GLOBAL_PATH = "~/.hide/state/global-instruction.md";
 
 /** A personal request said again across sessions, opened with its words read back masked, one of them no longer readable (B6, B7). */
 const LOCAL_NEW: SuggestionRow = row("s21", {
