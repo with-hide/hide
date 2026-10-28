@@ -134,6 +134,13 @@ STORES = {
         "looks whether the core's Memory store exists before asking a node, "
         "a core store beside the core's state file",
     ),
+    "herdr-core/src/global_instruction.rs": (
+        16,
+        "the Hide global instruction beside the core's state file, which a "
+        "core move carries (`MOVES_WITH_CORE`): read as a regular file, a link "
+        "followed only to an existing text file, and written with the checked "
+        "save so an edit the operator made meanwhile is kept",
+    ),
 }
 
 # What a later layer of the PRD moves to a node, with that layer. Each entry
