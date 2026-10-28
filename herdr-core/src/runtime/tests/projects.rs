@@ -1525,6 +1525,42 @@ fn pin_event(workspace_id: &str, pinned: bool) -> Vec<u8> {
     .unwrap()
 }
 
+/// This machine's node answering the registration check (`Call::Registrable`)
+/// as `judged` says, and anything else as the node in this process does: a
+/// folder outside home is the helper's to judge (`hide_host::register`), and
+/// what the core does with each answer is what these tests read.
+struct JudgingNode {
+    judged: Option<hide_node_link::ErrorCode>,
+}
+
+impl crate::node_access::NodeLink for JudgingNode {
+    fn call(
+        &self,
+        call: hide_node_link::protocol::Call,
+        timeout: std::time::Duration,
+    ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+        let hide_node_link::protocol::Call::Registrable { path, .. } = call else {
+            return hide_node::Local::of_process().call(call, timeout);
+        };
+        match self.judged {
+            None => Ok(crate::node_access::LinkAnswer::Parsed(
+                serde_json::json!({"root": path, "is_git": false}),
+            )),
+            Some(code) => Err(crate::node_access::LinkError::Refused(
+                hide_node_link::HostError::new(code, format!("{path} was judged")),
+            )),
+        }
+    }
+
+    fn in_process(&self) -> bool {
+        true
+    }
+}
+
+fn judging(judged: Option<hide_node_link::ErrorCode>) -> Arc<dyn crate::node_access::NodeLink> {
+    Arc::new(JudgingNode { judged })
+}
+
 /// PRD sidebar-context-menus B3, D-14. A row Herdr shows without a
 /// registration is pinned by registering it with the id, label, root and
 /// device the row carries, in the same event, and the next catalog rebuild
@@ -1533,6 +1569,7 @@ fn pin_event(workspace_id: &str, pinned: bool) -> Vec<u8> {
 #[test]
 fn pinning_an_unregistered_row_registers_and_pins_it_in_one_event() {
     let mut runtime = runtime();
+    runtime.own_node = judging(None);
     runtime.ingest_session(Ok(context_payload()));
     let row = |runtime: &Runtime, label: &str| {
         runtime
@@ -2683,12 +2720,49 @@ fn a_registration_herdr_already_has_a_workspace_for_is_listed_once() {
     assert_eq!(catalog[0].session_workspace_ids, vec!["w41".to_owned()]);
 }
 
+/// PRD wsl-device B18: a pin or a closing last pane registers no folder its
+/// machine's registration check refuses without a confirmation, a folder
+/// outside that machine's home; the pin says so, the close only logs it,
+/// since the operator asked to close a pane.
+#[test]
+fn a_row_outside_home_is_not_registered_by_a_pin_or_a_closing_pane() {
+    let mut runtime = runtime();
+    runtime.own_node = judging(Some(hide_node_link::ErrorCode::NeedsConfirmation));
+    runtime.ingest_session(Ok(context_payload()));
+    let alpha = runtime
+        .snapshot
+        .navigator
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.label == "hide-context-alpha")
+        .cloned()
+        .expect("the row Herdr shows");
+
+    assert!(runtime.dispatch_json(&pin_event(&alpha.id, true)));
+    assert!(runtime.snapshot.ui_state.workspace_registrations.is_empty());
+    assert_eq!(
+        runtime
+            .snapshot
+            .status
+            .last_error
+            .as_ref()
+            .map(|error| error.kind.as_str()),
+        Some("workspace.pin_refused.needs_confirmation")
+    );
+
+    runtime.snapshot.status.last_error = None;
+    runtime.retain_project_before_last_pane_closes("w1:p1");
+    assert!(runtime.snapshot.ui_state.workspace_registrations.is_empty());
+    assert!(runtime.snapshot.status.last_error.is_none());
+}
+
 /// The user's report: a project that exists only as a Herdr workspace,
 /// one tab, one pane. Closing that pane made Herdr close the workspace,
 /// and the project vanished from the sidebar.
 #[test]
 fn closing_the_last_pane_keeps_an_unregistered_project_listed() {
     let mut runtime = runtime();
+    runtime.own_node = judging(None);
     let checkout_path = "/private/tmp/hide-retain-project";
     let spaces = vec![workspace::SessionSpace {
         checkout: None,

@@ -2408,7 +2408,12 @@ impl Runtime {
                 // Nothing is pinned without a registration: already the target state.
                 return false;
             }
-            return self.register_pinned(registration);
+            return match registration {
+                Ok(registration) => {
+                    self.register_row_once_judged(registration, RowRegistration::Pin)
+                }
+                Err(device) => self.register_pinned(Err(device)),
+            };
         }
         let Some(registration) = self
             .snapshot
@@ -4796,6 +4801,132 @@ impl Runtime {
         {
             return;
         }
+        self.register_row_once_judged(registration, RowRegistration::Retain);
+    }
+
+    /// Registers `registration`, a row Herdr shows without one, once the
+    /// row's machine has judged its folder by the registration rule with no
+    /// confirmation (`Call::Registrable`, `hide_host::register`), off the
+    /// runtime lock. A folder outside that machine's home, or one whose
+    /// project is another folder, is not registered by a pin or by its last
+    /// pane closing (PRD wsl-device B18): Add a project asks about it.
+    fn register_row_once_judged(
+        &mut self,
+        registration: crate::model::WorkspaceRegistration,
+        why: RowRegistration,
+    ) -> bool {
+        let channel = match self.node_link(&registration.device_id) {
+            Ok(channel) => channel,
+            Err(message) => {
+                return self.ingest_row_registration(
+                    registration,
+                    why,
+                    Err(crate::node_access::LinkError::NotConnected(message)),
+                );
+            }
+        };
+        let path = registration.path.clone();
+        let ask = move || {
+            crate::node_access::call_as::<hide_node_link::register::Registrable>(
+                channel.as_ref(),
+                hide_node_link::protocol::Call::Registrable {
+                    path,
+                    confirmed_outside_home: None,
+                },
+                super::device_catalog::REGISTRABLE_TIMEOUT,
+            )
+        };
+        let Some(context) = self.worker_context.clone() else {
+            let answer = ask();
+            return self.ingest_row_registration(registration, why, answer);
+        };
+        let spawned = thread::Builder::new()
+            .name("herdr-core-row-registration".to_owned())
+            .spawn(move || {
+                let answer = ask();
+                let Some(runtime) = context.runtime.upgrade() else {
+                    return;
+                };
+                let changed = match runtime.lock() {
+                    Ok(mut guard) => guard.ingest_row_registration(registration, why, answer),
+                    Err(_) => return,
+                };
+                drop(runtime);
+                if changed {
+                    context.notifier.notify();
+                }
+            });
+        if let Err(error) = spawned {
+            self.push_diagnostic(
+                "workspace.row_registration_unstarted",
+                format!("The registration check could not be started: {error}"),
+            );
+        }
+        true
+    }
+
+    /// The row's machine answered: its folder is registered as the project
+    /// it is, or it stays unregistered, which a pin reports and a closing
+    /// pane only logs, since the operator asked to close a pane.
+    fn ingest_row_registration(
+        &mut self,
+        registration: crate::model::WorkspaceRegistration,
+        why: RowRegistration,
+        answer: Result<hide_node_link::register::Registrable, crate::node_access::LinkError>,
+    ) -> bool {
+        let refusal = match answer {
+            Ok(judged) if Path::new(&judged.root) == Path::new(&registration.path) => None,
+            Ok(judged) => Some((
+                "workspace.create_refused".to_owned(),
+                format!(
+                    "{} belongs to the project {}, so it is not registered as a project of its own",
+                    registration.path, judged.root
+                ),
+            )),
+            Err(error) => {
+                let asks = matches!(
+                    &error,
+                    crate::node_access::LinkError::Refused(refused)
+                        if refused.code == hide_node_link::ErrorCode::NeedsConfirmation
+                );
+                let kind = if asks && matches!(why, RowRegistration::Pin) {
+                    "workspace.pin_refused.needs_confirmation"
+                } else {
+                    super::device_catalog::registration_refusal_kind(&error)
+                };
+                Some((kind.to_owned(), error.to_string()))
+            }
+        };
+        if let Some((kind, message)) = refusal {
+            crate::diagnostic!(serde_json::json!({
+                "component": "registration", "kind": "row.unregistered",
+                "target": registration.device_id, "workspace_id": registration.id,
+                "reason": kind, "message": message,
+            }));
+            if matches!(why, RowRegistration::Pin) {
+                self.set_error(kind, message, false);
+                return true;
+            }
+            return false;
+        }
+        match why {
+            RowRegistration::Pin => self.register_pinned(Ok(registration)),
+            RowRegistration::Retain => self.retain_registration(registration),
+        }
+    }
+
+    /// A row whose last pane is closing, registered so the project stays
+    /// listed once Herdr's workspace is gone.
+    fn retain_registration(&mut self, registration: crate::model::WorkspaceRegistration) -> bool {
+        if self
+            .snapshot
+            .ui_state
+            .workspace_registrations
+            .iter()
+            .any(|existing| existing.id == registration.id)
+        {
+            return false;
+        }
         self.push_diagnostic(
             "workspace.retained",
             format!(
@@ -4811,7 +4942,17 @@ impl Runtime {
         // sidebar shows right now; the sync that follows Herdr's
         // workspace_closed rebuilds the catalog off the runtime lock.
         self.persist_current_ui_state();
+        true
     }
+}
+
+/// Why a row Herdr shows without a registration is being registered.
+#[derive(Clone, Copy, Debug)]
+enum RowRegistration {
+    /// The operator pinned it.
+    Pin,
+    /// Its last pane is closing.
+    Retain,
 }
 
 /// Where a new tab in `checkout` of `project` on `device_id` goes: the owner

@@ -1035,7 +1035,7 @@ fn ask_facts(
     (answers, None)
 }
 
-const REGISTRABLE_TIMEOUT: Duration = Duration::from_secs(15);
+pub(super) const REGISTRABLE_TIMEOUT: Duration = Duration::from_secs(15);
 
 impl Runtime {
     /// `create_workspace` on a device (B23, B24): the device's helper judges
@@ -1362,7 +1362,7 @@ const REGISTRATION_TERMINAL_REPORT: FailureReport = FailureReport::Log {
 /// the operator about instead of the one sent (`HostError::confirm`).
 type RegistrationRefusal = (&'static str, String, Option<String>);
 
-fn registration_refusal_kind(error: &LinkError) -> &'static str {
+pub(super) fn registration_refusal_kind(error: &LinkError) -> &'static str {
     match error {
         LinkError::Refused(refused) => match refused.code {
             hide_node_link::ErrorCode::NotFound => "workspace.create_refused.not_found",
