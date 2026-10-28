@@ -1530,6 +1530,41 @@ fn the_strip_follows_the_session_whose_pane_has_the_keyboard() {
     );
 }
 
+/// D-12, D-28: plain shells, each in its own terminal, share the operator's
+/// strip, so moving the keyboard between them leaves the View in front.
+#[test]
+fn moving_between_plain_shells_moves_no_view() {
+    let (mut runtime, checkout, directory) = setup("session-shells");
+    let shells = |runtime: &mut Runtime, active: &str| {
+        let mut payload = tab_order_payload(&directory.to_string_lossy(), &TABS, &TABS, active);
+        for pane in &mut payload.panes {
+            pane.terminal_id = Some(format!("term-{}", pane.pane_id));
+        }
+        runtime.ingest_session(Ok(payload));
+        runtime.sync_workspace_view();
+    };
+    shells(&mut runtime, TABS[0]);
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", false, "a");
+    dispatch_focus_tab(&mut runtime, &checkout, TABS[1]);
+    shells(&mut runtime, TABS[1]);
+    control_file(&mut runtime, "w-order:t2:p", &directory, "b.md", false, "b");
+    let b = display_id(&runtime, &directory, "b.md");
+    view_act(
+        &mut runtime,
+        &directory,
+        serde_json::json!({"action": "focus", "display_id": b}),
+    );
+    for tab in [TABS[0], TABS[1], TABS[0]] {
+        dispatch_focus_tab(&mut runtime, &checkout, tab);
+        shells(&mut runtime, tab);
+        assert_eq!(
+            drawn(&runtime),
+            (vec!["a.md".into(), "b.md".into()], vec!["b.md".into()]),
+            "{tab}"
+        );
+    }
+}
+
 /// D-14, D-26, D-31: closing a session closes the Views it alone opened; one
 /// another session opened too and the operator's stay, and a document with
 /// unsaved work is listed before the close and kept as the operator's

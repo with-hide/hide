@@ -191,13 +191,24 @@ impl Runtime {
     }
 
     /// The session of the pane with the keyboard, when that pane is one of
-    /// the checkout `key`'s own (D-13).
+    /// the checkout `key`'s own (D-13) and its session opened a View there.
+    /// A session with none shows the operator's strip, so moving between
+    /// plain shells, or to an agent that opened nothing, moves no View (D-12,
+    /// D-28).
     fn keyboard_session(&self, key: &WorkspaceKey) -> Option<SessionScope> {
         let pane = self.operator_pane(&key.0)?.to_owned();
-        self.strip_pane_ids(key)
+        let scope = self
+            .strip_pane_ids(key)
             .contains(&pane)
             .then(|| self.session_scope_of_pane(&pane))
-            .flatten()
+            .flatten()?;
+        let layout = self.view_layout_of(key)?;
+        layout
+            .areas()
+            .iter()
+            .flat_map(|area| &area.displays)
+            .any(|display| display.openers.iter().any(|o| o.of_session(&scope)))
+            .then_some(scope)
     }
 
     /// The session the strip of `key` was last settled for.

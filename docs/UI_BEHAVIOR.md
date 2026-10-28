@@ -364,6 +364,7 @@ A pane with no agent session, a plain shell, shows only the operator's Views, an
 A session is its terminal or its native session, so a session found again in another pane keeps its Views, and an agent that exits to its shell or sleeps keeps them too (D-27).
 The same rule holds for a file, a diff, a page, an image and a PDF (D-30); there is no folded list of other sessions' Views, which show when their session has the keyboard (D-15).
 Switching Agent tab or pane, through the strip, sidebar, search, cycling or a confirmed local or device switch, switches the strip and the shown View together: each session shows again the View it last showed, the first time its first View, and with none of its own the operator's; the previous View does not stay behind as a dimmed tab (D-12).
+Plain shells, and agents that have opened nothing in the checkout, share the operator's strip, so moving the keyboard among them leaves the View in front where it is.
 An area that holds none of the strip's Views is not drawn, and its neighbour takes the space; a dragged tab lands among the Views the strip draws.
 The lane, its tool, pin, tree and widths, and document editing and saving remain shared by the Workspace.
 A session's Views close when Hide closes its pane, its tab or its subtree, or archives it (`세션 보관`), and only then; a View another session also opened, and the operator's, stay (D-14, D-27).
