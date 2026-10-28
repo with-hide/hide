@@ -1019,6 +1019,9 @@ impl Runtime {
         );
         self.device_hosts.remove(device_id);
         self.device_host_retries.remove(device_id);
+        // A row on this device no longer waits for its helper's answer.
+        self.row_registrations
+            .retain(|_, pending| pending.device_id != device_id);
         self.codex_daemon_off_running.remove(device_id);
         self.forget_guardrails_device(device_id);
         match why {

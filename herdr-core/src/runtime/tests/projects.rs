@@ -1526,11 +1526,35 @@ fn pin_event(workspace_id: &str, pinned: bool) -> Vec<u8> {
 }
 
 /// This machine's node answering the registration check (`Call::Registrable`)
-/// as `judged` says, and anything else as the node in this process does: a
-/// folder outside home is the helper's to judge (`hide_host::register`), and
-/// what the core does with each answer is what these tests read.
+/// as `judged` says, once its gate is open, and anything else as the node in
+/// this process does: a folder outside home is the helper's to judge
+/// (`hide_host::register`), and what the core does with each answer, and
+/// with requests that arrive while it waits, is what these tests read.
 struct JudgingNode {
     judged: Option<hide_node_link::ErrorCode>,
+    open: std::sync::Mutex<bool>,
+    opened: std::sync::Condvar,
+    asked: std::sync::atomic::AtomicUsize,
+}
+
+impl JudgingNode {
+    fn new(judged: Option<hide_node_link::ErrorCode>, open: bool) -> Arc<Self> {
+        Arc::new(Self {
+            judged,
+            open: std::sync::Mutex::new(open),
+            opened: std::sync::Condvar::new(),
+            asked: std::sync::atomic::AtomicUsize::new(0),
+        })
+    }
+
+    fn release(&self) {
+        *self.open.lock().unwrap() = true;
+        self.opened.notify_all();
+    }
+
+    fn asked(&self) -> usize {
+        self.asked.load(std::sync::atomic::Ordering::SeqCst)
+    }
 }
 
 impl crate::node_access::NodeLink for JudgingNode {
@@ -1542,6 +1566,9 @@ impl crate::node_access::NodeLink for JudgingNode {
         let hide_node_link::protocol::Call::Registrable { path, .. } = call else {
             return hide_node::Local::of_process().call(call, timeout);
         };
+        self.asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let open = self.open.lock().unwrap();
+        drop(self.opened.wait_while(open, |open| !*open).unwrap());
         match self.judged {
             None => Ok(crate::node_access::LinkAnswer::Parsed(
                 serde_json::json!({"root": path, "is_git": false}),
@@ -1558,7 +1585,108 @@ impl crate::node_access::NodeLink for JudgingNode {
 }
 
 fn judging(judged: Option<hide_node_link::ErrorCode>) -> Arc<dyn crate::node_access::NodeLink> {
-    Arc::new(JudgingNode { judged })
+    JudgingNode::new(judged, true)
+}
+
+fn row_id(runtime: &Runtime, label: &str) -> String {
+    runtime
+        .snapshot
+        .navigator
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.label == label)
+        .map(|workspace| workspace.id.clone())
+        .expect("the row Herdr shows")
+}
+
+/// Requests for one row while its machine judges it join that one check:
+/// two pins and a closing pane ask once and register the row once, pinned.
+#[test]
+fn a_row_pinned_twice_while_its_machine_answers_is_registered_once() {
+    let node = JudgingNode::new(None, false);
+    let mut runtime = runtime();
+    runtime.own_node = node.clone();
+    runtime.ingest_session(Ok(context_payload()));
+    let alpha = row_id(&runtime, "hide-context-alpha");
+    let shared = SharedRuntime::new(runtime);
+    shared
+        .lock()
+        .unwrap()
+        .install_worker_context(shared.weak(), crate::handle::ChangeNotifier::noop());
+
+    for _ in 0..2 {
+        shared
+            .lock()
+            .unwrap()
+            .dispatch_json(&pin_event(&alpha, true));
+    }
+    shared
+        .lock()
+        .unwrap()
+        .retain_project_before_last_pane_closes("w1:p1");
+    wait_for("the check to be asked", || node.asked() == 1);
+    node.release();
+    wait(&shared, "the row's answer", |runtime| {
+        runtime.row_registrations.is_empty()
+    });
+
+    let runtime = shared.lock().unwrap();
+    assert_eq!(node.asked(), 1, "one check for the row");
+    let registrations = &runtime.snapshot.ui_state.workspace_registrations;
+    assert_eq!(registrations.len(), 1, "{registrations:?}");
+    assert_eq!(registrations[0].id, alpha);
+    assert!(registrations[0].pinned);
+}
+
+/// An answer that arrives after the row stopped waiting for it registers
+/// nothing: the row was removed, or its pin withdrawn, meanwhile.
+#[test]
+fn a_late_answer_registers_nothing_after_the_row_is_removed_or_unpinned() {
+    let node = JudgingNode::new(None, false);
+    let mut runtime = runtime();
+    runtime.own_node = node.clone();
+    runtime.ingest_session(Ok(context_payload()));
+    let alpha = row_id(&runtime, "hide-context-alpha");
+    let zeta = row_id(&runtime, "hide-context-zeta");
+    let shared = SharedRuntime::new(runtime);
+    shared
+        .lock()
+        .unwrap()
+        .install_worker_context(shared.weak(), crate::handle::ChangeNotifier::noop());
+
+    for id in [&alpha, &zeta] {
+        shared.lock().unwrap().dispatch_json(&pin_event(id, true));
+    }
+    wait_for("both checks to be asked", || node.asked() == 2);
+    {
+        let mut runtime = shared.lock().unwrap();
+        runtime.dispatch_json(
+            &serde_json::to_vec(&serde_json::json!({
+                "schema_version": SCHEMA_VERSION, "kind": "remove_workspace",
+                "payload": {"workspace_id": alpha}
+            }))
+            .unwrap(),
+        );
+        runtime.dispatch_json(&pin_event(&zeta, false));
+    }
+    node.release();
+    wait(&shared, "both late answers", |runtime| {
+        runtime
+            .snapshot
+            .status
+            .diagnostics
+            .iter()
+            .filter(|row| row.kind == "workspace.row_registration_stale")
+            .count()
+            == 2
+    });
+
+    let runtime = shared.lock().unwrap();
+    assert!(
+        runtime.snapshot.ui_state.workspace_registrations.is_empty(),
+        "{:?}",
+        runtime.snapshot.ui_state.workspace_registrations
+    );
 }
 
 /// PRD sidebar-context-menus B3, D-14. A row Herdr shows without a
