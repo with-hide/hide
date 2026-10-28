@@ -945,8 +945,11 @@ mod tests {
     }
 
     /// A registration keeps the shape stores were written in: a dialed
-    /// device by its alias, a node that dials in by its flag. One that names
-    /// both or neither is dropped alone and the rest of the store loads.
+    /// device by its alias, a node that dials in by its flag, a WSL
+    /// distribution by its name. One that names more than one or none is
+    /// dropped alone and the rest of the store loads, which is also how a
+    /// build from before WSL devices reads a WSL record (it knows neither
+    /// field it names), so going back to it keeps every SSH device.
     #[test]
     fn device_registrations_load_by_how_their_link_opens() {
         let folder = tempfile::tempdir().unwrap();
@@ -961,11 +964,17 @@ mod tests {
             serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         let dialed = serde_json::json!({"id": "studio", "label": "studio", "ssh_alias": "studio-host", "herdr_socket_path": null, "host_consent": null});
         let inbound = serde_json::json!({"id": "laptop", "label": "MacBook", "ssh_alias": null, "herdr_socket_path": null, "host_consent": null, "inbound": true});
+        let wsl = serde_json::json!({"id": "wsl-ubuntu", "label": "WSL Ubuntu", "ssh_alias": null, "herdr_socket_path": null, "host_consent": null, "wsl_distro": "Ubuntu"});
+        // What a build from before WSL devices reads of the same record.
+        let wsl_as_an_older_build_reads_it = serde_json::json!({"id": "wsl-old", "label": "WSL Ubuntu", "ssh_alias": null, "herdr_socket_path": null, "host_consent": null});
         persisted["device_registrations"] = serde_json::json!([
             dialed,
             inbound,
+            wsl,
             {"id": "both", "label": "both", "ssh_alias": "both-host", "inbound": true},
+            {"id": "alias-and-wsl", "label": "both", "ssh_alias": "both-host", "wsl_distro": "Ubuntu"},
             {"id": "neither", "label": "neither"},
+            wsl_as_an_older_build_reads_it,
         ]);
         persisted["expanded_agent_pane_ids"] = serde_json::json!(["parent"]);
         fs::write(&path, serde_json::to_vec(&persisted).unwrap()).unwrap();
@@ -988,11 +997,17 @@ mod tests {
                     }
                 ),
                 ("laptop", crate::model::LinkOrigin::Inbound),
+                (
+                    "wsl-ubuntu",
+                    crate::model::LinkOrigin::Wsl {
+                        distro: "Ubuntu".to_owned()
+                    }
+                ),
             ]
         );
         assert_eq!(
             serde_json::to_value(&state.device_registrations).unwrap(),
-            serde_json::json!([dialed, inbound])
+            serde_json::json!([dialed, inbound, wsl])
         );
     }
 

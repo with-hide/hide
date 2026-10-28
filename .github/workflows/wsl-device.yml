@@ -1,0 +1,144 @@
+# The WSL device lane (hided/tests/it/wsl_device.rs, docs/TESTING.md): this
+# build's Linux helper, command and hooks and the pinned Linux Herdr,
+# installed through `wsl.exe` into a real WSL 2 distribution on GitHub's
+# Windows runner and reached over the one pipe the link owns (PRD wsl-device
+# D-16). Windows cannot build the Linux programs, so a Linux job builds them
+# and hands them to the Windows job as an artifact. The test owns the
+# distribution `setup-wsl` makes for it: it adds a user, changes the default
+# one and stops the distribution, which it may do only on a runner.
+# `pr.yml` runs it for a change to the crates the WSL link crosses.
+name: wsl device lane
+
+on:
+  workflow_call:
+    # The development issues App's key (docs/TESTING.md, Flaky tests). A run
+    # without it, such as a fork's, files no issue and passes as before.
+    secrets:
+      HIDE_ISSUES_APP_KEY:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  linux-kit:
+    name: wsl device linux kit
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        timeout-minutes: 5
+      - uses: ./.github/actions/rust-cache
+        timeout-minutes: 5
+        with:
+          set: workspace
+          save: false
+      - name: Install zsh
+        # The Herdr fetch script is zsh, which the Linux image lacks. The
+        # mirror can stall (web-e2e.yml), so apt retries and gives up on a
+        # silent connection.
+        timeout-minutes: 5
+        run: |
+          printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' \
+            | sudo tee /etc/apt/apt.conf.d/99-ci-timeouts >/dev/null
+          sudo apt-get install -y --no-install-recommends zsh
+      - name: Build the Linux programs
+        timeout-minutes: 20
+        run: bash scripts/verify-cargo.sh cli
+      - name: Fetch the pinned Linux Herdr
+        id: herdr
+        timeout-minutes: 5
+        # Assigned first, so a failed fetch fails this step rather than
+        # handing the next one an empty path.
+        run: |
+          bin=$(zsh scripts/fetch-herdr-runtime.sh --platform linux-x86_64)
+          echo "bin=$bin" >> "$GITHUB_OUTPUT"
+      - name: Name the programs for a Linux device
+        # The helper's package rule (`hided-linux-x86_64`, ...), stripped so
+        # the artifact stays small.
+        env:
+          HERDR: ${{ steps.herdr.outputs.bin }}
+        run: |
+          kit="$RUNNER_TEMP/wsl-kit"
+          mkdir -p "$kit"
+          for name in hided hide hide-agent-hooks; do
+            cp "target/debug/$name" "$kit/$name-linux-x86_64"
+            strip "$kit/$name-linux-x86_64"
+          done
+          cp "$HERDR" "$kit/herdr-linux-x86_64"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hide-wsl-kit
+          path: ${{ runner.temp }}/wsl-kit
+          retention-days: 1
+          if-no-files-found: error
+
+  windows:
+    name: wsl device windows
+    needs: linux-kit
+    runs-on: windows-latest
+    timeout-minutes: 50
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Keep line endings as committed
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+        timeout-minutes: 5
+      - uses: ./.github/actions/rust-cache
+        timeout-minutes: 5
+        with:
+          set: workspace
+          save: false
+      - name: Install cargo-nextest
+        timeout-minutes: 3
+        run: bash scripts/install-nextest.sh
+      - name: Build the WSL device test
+        # Built before the distribution exists, so a compile error is not
+        # read as WSL's.
+        timeout-minutes: 30
+        run: bash scripts/verify-cargo.sh nextest --profile ci -p hided --test it --no-run
+      - name: A fresh WSL 2 distribution
+        # Its first-run setup is left undone (RunOOBE 1, default user root),
+        # which the test reads as a distribution Hide must refuse before it
+        # sets the user up itself.
+        uses: Vampire/setup-wsl@v7
+        timeout-minutes: 10
+        with:
+          distribution: Ubuntu-24.04
+          wsl-version: 2
+          additional-packages: git
+      - uses: actions/download-artifact@v8
+        timeout-minutes: 5
+        with:
+          name: hide-wsl-kit
+          path: ${{ runner.temp }}/wsl-kit
+      - name: This PC's WSL distribution as a device
+        timeout-minutes: 15
+        env:
+          HIDE_E2E_WSL_DISTRO: Ubuntu-24.04
+          HIDE_E2E_WSL_PACKAGES: ${{ runner.temp }}/wsl-kit
+        # The test prints the WSL version and install counts it saw.
+        run: bash scripts/verify-cargo.sh nextest --profile ci -p hided --test it -E 'test(=wsl_device::a_wsl_distribution_connects_works_and_ends_with_its_link)' --run-ignored only --success-output immediate
+      - name: Mint the development issues token
+        # Development issues live in with-hide/hide-private (docs/TESTING.md,
+        # Flaky tests); one App token reads this run here and files there. A run
+        # without the App's key, such as a fork's, files nothing and stays green.
+        id: issues-token
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
+          private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
+          owner: with-hide
+          repositories: hide,hide-private
+      - name: Report flaky and failed tests
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ steps.issues-token.outputs.token }}
+        run: python3 scripts/ci-flaky-report.py --suite rust --junit target/nextest/ci/junit*.xml

@@ -359,7 +359,7 @@ impl Runtime {
         device_id: &str,
     ) -> Result<Arc<dyn crate::node_access::NodeLink>, String> {
         if device_id != self.node.as_str() && !self.device_hosts.contains_key(device_id) {
-            self.start_device_host(device_id);
+            self.start_device_host(device_id, super::hosts::HostAttempt::Background);
         }
         match self.device_hosts.get(device_id).map(|host| &host.phase) {
             _ if device_id == self.node.as_str() => Ok(Arc::clone(&self.own_node)),

@@ -232,7 +232,7 @@ fn a_bootstrapped_helpers_report_is_published_without_another_install_pass() {
     )))));
     {
         let mut runtime = shared.lock().unwrap();
-        runtime.start_device_host(DEVICE);
+        runtime.start_device_host(DEVICE, hosts::HostAttempt::Background);
         runtime.queue_device_kit(DEVICE, KitJob::Status);
         let generation = runtime.device_host_generation(DEVICE);
         runtime.ingest_host_established(
@@ -941,7 +941,10 @@ fn a_contract_2_consent_is_carried_to_the_kit_on_its_next_connection() {
         shared.lock().unwrap().host_snapshot(DEVICE).consent,
         "granted"
     );
-    shared.lock().unwrap().start_device_host(DEVICE);
+    shared
+        .lock()
+        .unwrap()
+        .start_device_host(DEVICE, hosts::HostAttempt::Background);
     let carried = shared
         .lock()
         .unwrap()
@@ -958,7 +961,10 @@ fn a_contract_2_consent_is_carried_to_the_kit_on_its_next_connection() {
     let mut elsewhere = consent;
     elsewhere.helper_root = "~/elsewhere".to_owned();
     let shared = device_runtime(Some(elsewhere), None);
-    shared.lock().unwrap().start_device_host(DEVICE);
+    shared
+        .lock()
+        .unwrap()
+        .start_device_host(DEVICE, hosts::HostAttempt::Background);
     let runtime = shared.lock().unwrap();
     assert_eq!(runtime.host_snapshot(DEVICE).consent, "outdated");
     assert_eq!(
@@ -1271,7 +1277,7 @@ fn a_device_added_again_during_its_removal_waits_to_connect() {
     let shared = with_consent(None);
     let mut runtime = shared.lock().unwrap();
     runtime.device_kit_removing.insert(DEVICE.to_owned());
-    runtime.start_device_host(DEVICE);
+    runtime.start_device_host(DEVICE, hosts::HostAttempt::Background);
     let host = runtime.host_snapshot(DEVICE);
     assert_eq!(host.state, "unavailable");
     assert!(
@@ -2064,7 +2070,7 @@ fn a_failed_device_link_is_tried_again_after_a_doubling_wait() {
     // Held throughout, so an attempt's own answer never lands; each failure
     // is ingested here instead.
     let mut runtime = shared.lock().unwrap();
-    runtime.start_device_host(DEVICE);
+    runtime.start_device_host(DEVICE, hosts::HostAttempt::Background);
     let mut waits = Vec::new();
     for _ in 0..7 {
         let generation = runtime.device_host_generation(DEVICE);
@@ -2096,7 +2102,7 @@ fn a_failed_device_link_is_tried_again_after_a_doubling_wait() {
             "again".to_owned(),
         )),
     );
-    runtime.retry_device_host_now(DEVICE);
+    runtime.retry_device_host_now(DEVICE, hosts::HostAttempt::Operator);
     assert_eq!(runtime.device_host_generation(DEVICE), generation + 1);
     let generation = runtime.device_host_generation(DEVICE);
     let before = super::unix_milliseconds();
@@ -2121,7 +2127,7 @@ fn a_devices_terminals_ride_its_link_and_end_with_it() {
     {
         let mut runtime = shared.lock().unwrap();
         let terminals = record_terminals(&mut runtime);
-        runtime.start_device_host(DEVICE);
+        runtime.start_device_host(DEVICE, hosts::HostAttempt::Background);
         assert!(matches!(
             runtime.device_hosts[DEVICE].phase,
             hosts::HostPhase::NotAllowed
@@ -2133,7 +2139,7 @@ fn a_devices_terminals_ride_its_link_and_end_with_it() {
     let shared = device_runtime(Some(granted(&probe)), None);
     let mut runtime = shared.lock().unwrap();
     let terminals = record_terminals(&mut runtime);
-    runtime.start_device_host(DEVICE);
+    runtime.start_device_host(DEVICE, hosts::HostAttempt::Background);
     let generation = runtime.device_host_generation(DEVICE);
     let established = established_with_terminals();
     runtime.ingest_host_established(
@@ -2172,7 +2178,7 @@ fn a_devices_windows_drives_are_what_its_helper_reports() {
     for reported in [Some("/mnt"), None] {
         let shared = device_runtime(Some(granted(&probe)), None);
         let mut runtime = shared.lock().unwrap();
-        runtime.start_device_host(DEVICE);
+        runtime.start_device_host(DEVICE, hosts::HostAttempt::Background);
         let generation = runtime.device_host_generation(DEVICE);
         let mut connected = established_with_terminals();
         connected.node.hello.windows_drives = reported.map(str::to_owned);
@@ -2236,6 +2242,7 @@ pub(super) fn node_ready(
                 reason: "test".to_owned(),
             },
             reader_features: None,
+            herdr_socket: None,
             windows_drives: None,
         },
         terminals: terminals.ok_or_else(|| "the test's node runs no terminal service".to_owned()),
@@ -2305,7 +2312,7 @@ fn a_devices_shown_pane_attaches_again_when_its_link_returns() {
             .count()
     };
 
-    runtime.start_device_host(DEVICE);
+    runtime.start_device_host(DEVICE, hosts::HostAttempt::Background);
     let first = runtime.device_host_generation(DEVICE);
     runtime.ingest_host_established(
         DEVICE,
@@ -2324,7 +2331,7 @@ fn a_devices_shown_pane_attaches_again_when_its_link_returns() {
         "the dropped link took its terminals with it"
     );
 
-    runtime.start_device_host(DEVICE);
+    runtime.start_device_host(DEVICE, hosts::HostAttempt::Background);
     let second = runtime.device_host_generation(DEVICE);
     assert_ne!(first, second);
     runtime.ingest_host_established(
@@ -2526,7 +2533,7 @@ fn a_device_session_that_answers_again_makes_the_helper_retry_due_once_per_outag
     let probe = device_runtime(None, None);
     let shared = device_runtime(Some(granted(&probe)), None);
     let mut runtime = shared.lock().unwrap();
-    runtime.start_device_host(DEVICE);
+    runtime.start_device_host(DEVICE, hosts::HostAttempt::Background);
     for _ in 0..4 {
         let generation = runtime.device_host_generation(DEVICE);
         runtime.ingest_host_established(DEVICE, generation, helper_failed());
@@ -2586,7 +2593,7 @@ fn a_device_pane_waiting_for_its_helper_reads_reconnecting_only_while_it_will_re
     let shared = device_runtime(Some(granted(&probe)), None);
     let mut runtime = shared.lock().unwrap();
     let _terminals = record_terminals(&mut runtime);
-    runtime.start_device_host(DEVICE);
+    runtime.start_device_host(DEVICE, hosts::HostAttempt::Background);
     let first = runtime.device_host_generation(DEVICE);
     runtime.ingest_host_established(
         DEVICE,
@@ -2613,7 +2620,7 @@ fn a_device_pane_waiting_for_its_helper_reads_reconnecting_only_while_it_will_re
     runtime.tick_device_hosts(at);
     assert_eq!(notice(&runtime).as_deref(), Some("unavailable"));
 
-    runtime.start_device_host(DEVICE);
+    runtime.start_device_host(DEVICE, hosts::HostAttempt::Background);
     let second = runtime.device_host_generation(DEVICE);
     runtime.ingest_host_established(
         DEVICE,
@@ -2675,7 +2682,7 @@ fn a_helper_link_that_closed_during_establish_is_retried_not_stored_ready() {
     let probe = device_runtime(None, None);
     let shared = device_runtime(Some(granted(&probe)), None);
     let mut runtime = shared.lock().unwrap();
-    runtime.start_device_host(DEVICE);
+    runtime.start_device_host(DEVICE, hosts::HostAttempt::Background);
     let generation = runtime.device_host_generation(DEVICE);
     let host = KitDevice::answering(Err("not asked".to_owned()));
     host.close("the link dropped during hello");
@@ -2707,7 +2714,7 @@ fn a_session_back_while_the_helper_link_starts_makes_its_failure_retry_at_once_o
     let probe = device_runtime(None, None);
     let shared = device_runtime(Some(granted(&probe)), None);
     let mut runtime = shared.lock().unwrap();
-    runtime.start_device_host(DEVICE);
+    runtime.start_device_host(DEVICE, hosts::HostAttempt::Background);
     for _ in 0..4 {
         let generation = runtime.device_host_generation(DEVICE);
         runtime.ingest_host_established(DEVICE, generation, helper_failed());
@@ -2753,7 +2760,7 @@ fn revoking_the_helper_ends_the_devices_terminals_and_its_panes_say_why() {
     let shared = device_runtime(Some(granted(&probe)), None);
     let mut runtime = shared.lock().unwrap();
     let terminals = record_terminals(&mut runtime);
-    runtime.start_device_host(DEVICE);
+    runtime.start_device_host(DEVICE, hosts::HostAttempt::Background);
     let generation = runtime.device_host_generation(DEVICE);
     runtime.ingest_host_established(
         DEVICE,
@@ -2826,7 +2833,7 @@ fn device_connect_statistics_count_each_ready_bootstrap_once() {
         }
         runtime.product_analytics = Some(statistics.clone());
         runtime.close_device_host(DEVICE, "fixture reconnect");
-        runtime.start_device_host(DEVICE);
+        runtime.start_device_host(DEVICE, hosts::HostAttempt::Background);
         // The fixture supplies an already-established device instead of
         // dialing SSH. Admit the same attempt the outbound worker owns.
         runtime.begin_device_connect(DEVICE);
@@ -3020,4 +3027,16 @@ fn device_connect_statistics_exclude_inbound_retry() {
     );
     settle(&shared);
     assert!(statistics.0.lock().unwrap().is_empty());
+}
+
+/// PRD wsl-device B27: a device's link ends when the core stops, and with
+/// it what the link owns on this machine, a WSL distribution's `wsl.exe`.
+#[test]
+fn a_connected_device_link_ends_when_the_core_stops() {
+    let helper = KitDevice::answering(Ok(report(&[])));
+    let shared = device_runtime(None, Some(Arc::clone(&helper)));
+    let (core, _notifier) = crate::Core::for_runtime_fixture(Arc::clone(&shared));
+    assert_eq!(helper.closed_reason(), None);
+    drop(core);
+    assert_eq!(helper.closed_reason().as_deref(), Some("core stopping"));
 }

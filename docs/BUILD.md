@@ -280,6 +280,7 @@ The suite runs the focus tests after every other one (`desktop/playwright.config
 
 The Mac desktop host remains Apple Silicon; Linux x64 and Linux ARM64 devices download their kit on first connection.
 The app carries only `Contents/Resources/device-bundles.json`, alongside its four native programs.
+The Windows app carries the same manifest in `resources/device-bundles.json`, because each WSL distribution of the PC is a Linux device that downloads its kit the same way (PRD wsl-device D-04).
 Foreign helper and Herdr binaries are separate release assets, never app resources.
 The pinned release publishes both Linux Herdr assets; their upstream digests live only in `contracts/herdr-bundle.json`.
 `scripts/bump-herdr.sh <release-tag>` verifies those assets with the host platforms, refusing a missing required asset or a changed digest of the same pinned release.
@@ -300,8 +301,11 @@ Never redirect a release target directory.
 
 Each producer manifest records platform, source commit, version, build order and each helper's SHA-256.
 `package.yml` resolves one identity with `desktop/scripts/build-identity.mjs` and calls the producer on every call, beside the Windows and Linux packages; a [release candidate](#unsigned-release-candidates) keeps both artifacts for the private publisher.
-Its macOS lane does not wait for them to compile: `compile (macos)` runs `desktop package compile` while the helpers build, and `package (macos)` needs both jobs, downloads the binaries and these artifacts from that run and runs `desktop package assemble`, so a failed helper skips the Mac app and fails the run.
-A local Mac package needs the same two directories at its exact identity; the identity command prints the values to give the producer.
+Its `device bundles` job then makes the bundles below once, with `desktop/scripts/device-helpers.mjs bundle <version> <source-sha> <build-order>`, and keeps them as the `hide-device-bundles` artifact (the two archives and `device-bundles.json`).
+The Mac and Windows apps both ship that one manifest: a gzip archive made twice would not be the same bytes, so a manifest made by one job and archives made by another would never match.
+Neither native lane waits for the helpers to compile: `compile (macos)` and `compile (windows)` run `desktop package compile` while the helpers build, and `package (macos)` and `package (windows)` need their compile and the bundles, download the binaries and `hide-device-bundles` into `desktop/out/device-bundles/` and run `desktop package assemble`, so a failed helper skips both apps and fails the run; `package (linux)` is a job of its own that waits for none of them, since the Linux app carries no device kit.
+A package that finds bundles there takes them only when they were made for its exact source, version and order and every archive has the size and digest the manifest names (`readDeviceBundles`); the Windows app refuses to package without them.
+A local Mac package without them needs the two helper directories at its exact identity and makes its own; the identity command prints the values to give the producer.
 `desktop/scripts/device-helpers.mjs build <platform> <version> <source-sha> <build-order>` is the producer command on its matching runner after dependency installation and `rustup target add <triple>`.
 Packaging refuses missing members, a different source/version/order, digest mismatches, links, files above 256 MiB and incorrect executable headers.
 Downloaded artifacts need not retain executable mode bits.
@@ -316,10 +320,11 @@ The uncompressed four-file total and the compressed archive are each capped at 2
 `device-bundles.json` has `format: 1`, `version`, full `commit`, decimal string `order`, and `platforms` keyed by the two Linux platform names above.
 Each platform records `asset`, archive `sha256`, archive `size` in bytes, and `files` keyed by the four program names, each with its final `sha256` and `size`.
 Hashes are lowercase SHA-256 hex.
-The app ships this small manifest; `desktop/out/release/` receives a copy and both archives alongside the installers and updater files.
+The app ships this small manifest; the Mac package's `desktop/out/release/` receives a copy and both archives alongside the installers and updater files, and the Windows package publishes neither, so each archive is a release asset once.
 `desktop/out/device-bundles/` keeps the intermediate output, never anything under `/tmp`.
 
 The private publisher must take the two artifacts from the release candidate run it selected, as it takes the Linux and Windows packages and [the Mac binaries](#the-candidates-mac-build), require every helper's SHA-256 to equal the receipt's `device_helpers`, download them into the paths above, then run `desktop package assemble` with its Developer ID settings; it builds no helper and compiles no binary itself.
+It must also download that run's `hide-device-bundles` into `desktop/out/device-bundles/`, so its Mac app publishes the archives the candidate's Windows app names; bundles it made itself would carry other digests, and every WSL kit download of that release would be refused.
 It must publish both `hide-device-<platform>-<app-version>.tar.gz` assets and `device-bundles.json` on the **same public `v<app-version>` release** as the Mac app.
 Do not re-sign or repack an archive after the manifest is made, and do not substitute output from another source or run.
 The public release validator and draft writer require 18 assets in total: the existing 15 installers, checksums, updater files and blockmaps, plus both Linux bundles and their manifest.

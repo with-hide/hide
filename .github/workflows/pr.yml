@@ -723,6 +723,19 @@ jobs:
       grep: "@platform"
       keep-screenshots: true
 
+  # A real WSL 2 distribution on the Windows runner, connected as a device
+  # through `wsl.exe` (see wsl-device.yml), for a change to the crates the
+  # WSL link crosses.
+  windows-wsl:
+    name: windows wsl
+    needs: plan
+    if: contains(fromJSON(needs.plan.outputs.lanes), 'windows-wsl')
+    uses: ./.github/workflows/wsl-device.yml
+    secrets:
+      HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
+    permissions:
+      contents: read
+
   package:
     name: package
     needs: plan
@@ -743,7 +756,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    needs: [plan, policy, rust, checks, os-contract, os-contract-macos, agy-contract, omp-contract, agent-journey, agent-clis, windows-check, windows-e2e, windows-desktop, web-e2e, remote-mailbox, desktop-e2e, package]
+    needs: [plan, policy, rust, checks, os-contract, os-contract-macos, agy-contract, omp-contract, agent-journey, agent-clis, windows-check, windows-e2e, windows-desktop, windows-wsl, web-e2e, remote-mailbox, desktop-e2e, package]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5

@@ -374,6 +374,7 @@ A test whose assertion requires a pipe to have no readers creates and closes tha
 `pr.yml`'s `plan` job reads the paths a pull request changes against the base it merges into and plans the lanes they need; `scripts/ci-plan.py` is the one place the rules live, and `scripts/tests/test_ci_plan.py` checks them against real paths.
 `MACOS_LANE_INPUTS` holds each macOS lane's covered paths together, including the existing crate-only desktop exception; Linux and Windows selection stays with the general classifier.
 `remote-mailbox` (the remote mailbox lane, its own Linux job) is planned for a change to any crate it builds and tests (`MAILBOX_CRATES` in the script: `herdr-core`, `hided`, `hide-agent-hooks`, `hide-host`, and so every crate they depend on); web code and web specs do not reach it.
+`windows-wsl` (the [WSL device lane](#wsl-device-lane)) is planned for a change to a crate the WSL link crosses (`WSL_CRATES`: `hide-platform`, `hide-node`, `hide-node-link`, `hide-host`), to the node command or to its test, and not for a crate that only consumes them: the core's decisions about a WSL device are unit tests in `herdr-core/src/runtime/tests/wsl_devices.rs`.
 Every lane is a job whose `if:` asks the plan, and `verify` passes only when every planned lane succeeded and every other lane was skipped.
 A planned lane that was skipped, failed or cancelled fails `verify`, so a wrong `if:` shows up as a red check rather than a lane quietly left out.
 
@@ -494,6 +495,16 @@ Of 400 failed runs from 2026-10-05 to 2026-10-27, the 33 that failed only in the
 Main's push run is the safety net for it.
 The desktop `@platform` tests run on Windows in a pull request (`windows-desktop`, about six minutes, on a Windows runner rather than a macOS one) and on Linux only in the nightly.
 
+### WSL device lane
+
+`hided/tests/it/wsl_device.rs` connects a real WSL 2 distribution of GitHub's Windows runner as a device, through the product's own `wsl.exe` connector, with this build's Linux helper, command and hooks and the pinned Linux Herdr.
+The runner runs WSL 2 itself, not WSL 1 (WSL 3.0.3, a 6.18 WSL 2 kernel, systemd as process 1, measured on `windows-latest` on 2026-10-28), so the lane proves the WSL 2 path and no WSL 1 path exists to prove.
+`wsl-device.yml` builds the Linux programs on a Linux runner, because the Windows runner cannot, and hands them to the Windows job as an artifact; `setup-wsl` makes a fresh `Ubuntu-24.04` with `git` and its first-run setup undone.
+The test owns that distribution, which nothing else on the runner uses: it reads the listing without starting anything, is refused while the first-run setup is undone, adds a user and makes it the default as the setup would, then installs, reads a Git project by its Linux path, types into a pane once, ends the link and checks the helper ended inside WSL while Herdr stayed, reconnects with nothing sent again, kills a second process of its own that holds a link (`a_link_owner_that_is_killed`, which runs only when the main test starts it, so the lane names the main test alone) and checks that helper ended too while the same Herdr process stayed, as a hided that crashed would leave it, is refused for another default user, and stops the distribution to check that an attempt without leave leaves it stopped and one with leave starts it.
+Stopping a distribution and changing its default user are the test's on a runner only; on a person's PC Hide never does either.
+The step prints the WSL version and the install's counts it saw.
+`hide-node/src/ssh/wsl_tests.rs` holds the same connector's rules on every Unix runner with a fake `wsl.exe` that logs each call: what a stopped distribution's attempt may run, the probe, the identity check, the resumed install and a child link's end, including one whose write is stuck on a child that stopped reading; `hide-platform/src/wsl.rs` checks that a `wsl.exe` that exits nonzero is never read as nothing running.
+
 ### OMP SDK boundary
 
 `hide-ai/tests/it/omp_sdk.rs` runs against each supported official npm SDK on Bun 1.3.14.
@@ -505,7 +516,7 @@ A passing fixture does not prove paid-service authentication or standalone suppo
 
 ### How many jobs a run starts
 
-A run that plans every lane a pull request can plan starts at most 33 jobs, ten more than the 2026-10-05 shape of run `37324202934` before the macOS and mailbox work: that work saved one, the e2e suites outgrew their shards' step caps, which took a second macOS desktop shard and two more web shards ([Balancing the e2e shards](#balancing-the-e2e-shards)), the agent journey's Linux stand-in job and Windows forms job added two, and the `agent CLIs` installs on Linux and Windows, which only a change to `contracts/agent-clis.json` or an installer plans, added two, and building the shared web shell in parallel with the daemon adds one; the refreshed twenty-run median requires six web shards.
+A run that plans every lane a pull request can plan starts at most 35 jobs, twelve more than the 2026-10-05 shape of run `37324202934` before the macOS and mailbox work: that work saved one, the e2e suites outgrew their shards' step caps, which took a second macOS desktop shard and two more web shards ([Balancing the e2e shards](#balancing-the-e2e-shards)), the agent journey's Linux stand-in job and Windows forms job added two, and the `agent CLIs` installs on Linux and Windows, which only a change to `contracts/agent-clis.json` or an installer plans, added two, building the shared web shell in parallel with the daemon adds one, and the WSL device lane's Linux build and Windows run add two; the refreshed twenty-run median requires six web shards.
 `scripts/tests/test_ci_plan.py` counts them from the workflows:
 
 | Jobs | Count | Why |
@@ -519,11 +530,12 @@ A run that plans every lane a pull request can plan starts at most 33 jobs, ten 
 | `omp SDK contract` (Linux, macOS, Windows) | 3 | both supported exact npm SDK versions on Bun 1.3.14, with synthetic stored login and localhost inference; the native SQLite, Bun runtime and package resolution need each system |
 | `agent journey` (Linux, Windows) | 2 | the journey on the compiled Claude and Codex stand-ins on Linux and its Windows forms (process jobs, private files, pane commands) on Windows, planned only for the journey's code, its contract and the stand-ins; the nightly and a release run every system with the fake model lane ([VERIFICATION.md](VERIFICATION.md#agent-journey)) |
 | `agent CLIs` (Linux, Windows) | 2 | every agent CLI `contracts/agent-clis.json` pins, installed at its pin and failing on another version, planned only for the table, its reader and the installers, so a pin moves in the pull request that installs it; the nightly's journey installs them on macOS too |
+| `windows wsl` (Linux, Windows) | 2 | a real WSL 2 distribution on the Windows runner connected as a device through `wsl.exe`, with this build's Linux programs, which only a Linux job can build, planned only for the crates the WSL link crosses (`hide-platform`, `hide-node`, `hide-node-link`, `hide-host`) and the node command ([WSL device lane](#wsl-device-lane)) |
 | `remote mailbox` | 1 | the lane that was the tail of the macOS `@platform` job, now on Linux and, in the nightly, on macOS |
 | `desktop e2e` | 2 | the only macOS lane of the desktop app's own changes, in two shards that build in place, because the whole suite outgrew one job's step cap ([Balancing the e2e shards](#balancing-the-e2e-shards)) |
 | `package` (Windows, Linux, macOS) | 3 | `package.yml`'s jobs, planned only for what goes into a package; before the lane its Windows and Linux jobs ran on the same paths outside `verify` |
 
-The common runs are smaller: a `herdr-core` or `hided` change starts 18 jobs with none on macOS, a web shell change 15 with two on macOS, a desktop-only change 7 with two on macOS (8 for `desktop/src/main`, which adds `windows check`), a `hide-platform` change 22 with two on macOS, a `hide-kit` or `hide-agent-hooks` change 22 with one on macOS (`package`), and a documentation change 3, as does a push that reuses the pull request's last green run.
+The common runs are smaller: a `herdr-core` or `hided` change starts 18 jobs with none on macOS, a web shell change 15 with two on macOS, a desktop-only change 7 with two on macOS (8 for `desktop/src/main`, which adds `windows check`), a `hide-platform` change 24 with two on macOS, a `hide-kit` or `hide-agent-hooks` change 22 with one on macOS (`package`), and a documentation change 3, as does a push that reuses the pull request's last green run.
 The median wall time and the share of runs whose Linux shards waited more than 10 minutes come from a measurement of the pull request runs after a change merges, taken the way issue #561 took its baseline; they are not in this guide because a pull request cannot prove them.
 The `plan` job's summary lists each lane with the paths that chose it.
 

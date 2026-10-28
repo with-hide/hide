@@ -21,12 +21,13 @@ MACOS_LANES = {"os-contract-macos", "desktop-e2e", "package", "omp-contract"}
 # `package` and `agent-clis`, which are planned by their own paths only.
 FULL = [
     "policy", "rust", "checks", "os-contract", "os-contract-macos", "agy-contract", "omp-contract", "agent-journey",
-    "windows-check", "windows-e2e", "windows-desktop", "web-e2e", "remote-mailbox", "desktop-e2e",
+    "windows-check", "windows-e2e", "windows-desktop", "windows-wsl", "web-e2e", "remote-mailbox", "desktop-e2e",
 ]
 # Every lane, independently named: CI edits must exercise the planner's decisions.
 ALL = [
     "policy", "rust", "checks", "os-contract", "os-contract-macos", "agy-contract", "omp-contract", "agent-journey",
-    "agent-clis", "windows-check", "windows-e2e", "windows-desktop", "web-e2e", "remote-mailbox", "desktop-e2e", "package",
+    "agent-clis", "windows-check", "windows-e2e", "windows-desktop", "windows-wsl", "web-e2e", "remote-mailbox", "desktop-e2e",
+    "package",
 ]
 # A full plan with a package input.
 PACKAGED = FULL + ["package"]
@@ -196,6 +197,22 @@ class Selection(unittest.TestCase):
                 self.assertNotIn("remote-mailbox", plan(path)["lanes"])
         # A change no rule claims plans every lane, this one included.
         self.assertIn("remote-mailbox", plan("scripts/verify-cargo.sh")["lanes"])
+
+    def test_the_wsl_lane_follows_the_crates_the_wsl_link_crosses(self):
+        for path in (
+            "hide-platform/src/wsl.rs", "hide-node/src/ssh/wsl.rs", "hide-node-link/src/device.rs",
+            "hide-host/src/serve.rs", "hided/src/node_cli.rs", "hided/tests/it/wsl_device.rs",
+            ".github/workflows/wsl-device.yml",
+        ):
+            with self.subTest(path=path):
+                self.assertIn("windows-wsl", plan(path)["lanes"])
+        # The core's WSL decisions have unit tests of their own; the daemon,
+        # the web shell and documentation do not reach the link.
+        for path in (
+            "herdr-core/src/runtime/hosts.rs", "hided/src/lib.rs", "web/src/settings/AddDevice.tsx", "docs/TESTING.md",
+        ):
+            with self.subTest(path=path):
+                self.assertNotIn("windows-wsl", plan(path)["lanes"])
 
     def test_desktop_changes_run_the_desktop_lanes(self):
         result = plan("desktop/src/preload/index.ts")
@@ -759,13 +776,16 @@ def runner_jobs(block):
         return int(re.search(r"\n      shards: (\d+)", block).group(1))
     if any(f"uses: ./.github/workflows/{name}.yml" in block for name in ("os-contract", "agy-contract", "omp-contract", "agent-clis")):
         return len(json.loads(re.search(r"systems: '(\[[^']*\])'", block).group(1)))
+    if "uses: ./.github/workflows/wsl-device.yml" in block:
+        # Windows cannot build the Linux programs the distribution runs.
+        return 2
     if "uses: ./.github/workflows/agent-journey.yml" in block:
         # The stand-ins run on each system but Windows, and Windows has its forms job.
         systems = json.loads(re.search(r"systems: '(\[[^']*\])'", block).group(1))
         return len([system for system in systems if system != "windows"]) + ("windows" in systems)
     if "uses: ./.github/workflows/package.yml" in block:
         package = (ROOT / ".github/workflows/package.yml").read_text()
-        return len(re.findall(r"\n          - system: ", package)) + ("include-macos: true" in block)
+        return len(re.findall(r"\n    name: package \((?:linux|windows)\)\n", package)) + ("include-macos: true" in block)
     return 1
 
 
@@ -874,8 +894,10 @@ class Workflows(unittest.TestCase):
         # pin change plans; a job beyond these is a new decision, made with
         # this number. The independent shared web build adds one job so it
         # does not serialize the daemon and shell builds. The refreshed
-        # twenty-run median requires six web shards.
-        self.assertLessEqual(most, 33, "a run starts more jobs than the suites and native SDK contracts need")
+        # twenty-run median requires six web shards. The WSL device lane's
+        # Linux build and Windows run add two, planned only for the crates the
+        # WSL link crosses.
+        self.assertLessEqual(most, 35, "a run starts more jobs than the suites and native SDK contracts need")
         testing = (ROOT / "docs/TESTING.md").read_text()
         self.assertIn(f"starts at most {most} jobs", testing)
 

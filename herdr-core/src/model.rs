@@ -914,6 +914,8 @@ pub struct DeviceSnapshot {
     /// for any other state.
     pub problem: Option<String>,
     pub ssh_alias: Option<String>,
+    /// The WSL distribution of this PC the device is (PRD wsl-device D-20).
+    pub wsl_distro: Option<String>,
     /// The Herdr socket the registration names on the device, if any.
     pub herdr_socket_path: Option<String>,
     pub agent_count: u32,
@@ -5125,20 +5127,30 @@ pub enum LinkOrigin {
     /// The machine's own node dials this core over the operator's SSH
     /// login; its id is its node id.
     Inbound,
+    /// A WSL distribution of the PC the core runs on, whose node the core
+    /// starts through `wsl.exe` (PRD wsl-device D-01, D-07).
+    Wsl { distro: String },
 }
 
 impl LinkOrigin {
     pub fn ssh_alias(&self) -> Option<&str> {
         match self {
             Self::Dialed { ssh_alias } => Some(ssh_alias),
-            Self::Inbound => None,
+            Self::Inbound | Self::Wsl { .. } => None,
+        }
+    }
+
+    pub fn wsl_distro(&self) -> Option<&str> {
+        match self {
+            Self::Wsl { distro } => Some(distro),
+            Self::Dialed { .. } | Self::Inbound => None,
         }
     }
 
     /// Whether the core brings a lost link back itself; a node that dials
     /// in comes back only by dialing again.
     pub fn core_redials(&self) -> bool {
-        matches!(self, Self::Dialed { .. })
+        matches!(self, Self::Dialed { .. } | Self::Wsl { .. })
     }
 
     /// Whether removing the registration takes Hide's kit off the machine:
@@ -5146,24 +5158,29 @@ impl LinkOrigin {
     /// in runs Hide itself and registers again on its next link, so the kit
     /// the core keeps there through that link stays.
     pub fn removes_kit(&self) -> bool {
-        matches!(self, Self::Dialed { .. })
+        matches!(self, Self::Dialed { .. } | Self::Wsl { .. })
     }
 
     /// Whether the core's helper there waits for the operator's consent; a
     /// node that dials in was allowed by the operator's own SSH login.
     pub fn takes_consent(&self) -> bool {
-        matches!(self, Self::Dialed { .. })
+        matches!(self, Self::Dialed { .. } | Self::Wsl { .. })
     }
 
-    /// Whether the machine's own node reports its facts (ports, disk,
-    /// GitHub) to the core, rather than the core reading them over a dial.
+    /// Whether the core reads the machine's facts (ports, disk, GitHub)
+    /// through its node as it reads its own machine's (D-29): a node that
+    /// dials in, and a WSL distribution of this PC, whose pull requests
+    /// this PC's GitHub login reads (PRD wsl-device D-18, B14). A device
+    /// the core dials over SSH has none of them.
     pub fn reports_own_facts(&self) -> bool {
-        matches!(self, Self::Inbound)
+        matches!(self, Self::Inbound | Self::Wsl { .. })
     }
 }
 
 /// A registration as the store and the shell spell it: the alias of a
-/// device the core dials, or the flag of a node that dials in, never both.
+/// device the core dials, the flag of a node that dials in, or the WSL
+/// distribution it is, exactly one. A build that knows only the first two
+/// reads a WSL record as naming neither and drops it alone (`persistence`).
 #[derive(Deserialize, Serialize)]
 struct StoredDeviceRegistration {
     id: String,
@@ -5178,24 +5195,27 @@ struct StoredDeviceRegistration {
     host_consent: Option<HostConsent>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     inbound: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    wsl_distro: Option<String>,
 }
 
 impl TryFrom<StoredDeviceRegistration> for DeviceRegistration {
     type Error = String;
 
     fn try_from(stored: StoredDeviceRegistration) -> Result<Self, String> {
-        let origin = match (stored.ssh_alias, stored.inbound) {
-            (Some(ssh_alias), false) => LinkOrigin::Dialed { ssh_alias },
-            (None, true) => LinkOrigin::Inbound,
-            (Some(_), true) => {
+        let origin = match (stored.ssh_alias, stored.inbound, stored.wsl_distro) {
+            (Some(ssh_alias), false, None) => LinkOrigin::Dialed { ssh_alias },
+            (None, true, None) => LinkOrigin::Inbound,
+            (None, false, Some(distro)) => LinkOrigin::Wsl { distro },
+            (None, false, None) => {
                 return Err(format!(
-                    "device {} has both an SSH alias and a node that dials in",
+                    "device {} names neither an SSH alias, a node that dials in nor a WSL distribution",
                     stored.id
                 ));
             }
-            (None, false) => {
+            _ => {
                 return Err(format!(
-                    "device {} has neither an SSH alias nor a node that dials in",
+                    "device {} names more than one way its link opens",
                     stored.id
                 ));
             }
@@ -5222,6 +5242,7 @@ impl From<DeviceRegistration> for StoredDeviceRegistration {
             herdr_session: registration.herdr_session,
             host_consent: registration.host_consent,
             inbound,
+            wsl_distro: registration.origin.wsl_distro().map(str::to_owned),
         }
     }
 }
@@ -6368,6 +6389,12 @@ pub struct SshHostsSnapshot {
     pub hosts: Vec<SshHostSnapshot>,
     /// The config names more concrete aliases than are listed.
     pub truncated: bool,
+    /// This PC's WSL distributions, listed beside the aliases (PRD
+    /// wsl-device B4); none on a system without WSL.
+    pub wsl: Vec<WslDistributionSnapshot>,
+    /// Why this PC's WSL distributions could not be read; a failed read is
+    /// never shown as "no WSL" (B25).
+    pub wsl_problem: Option<String>,
 }
 
 impl Default for SshHostsSnapshot {
@@ -6376,8 +6403,27 @@ impl Default for SshHostsSnapshot {
             state: "idle".to_owned(),
             hosts: Vec::new(),
             truncated: false,
+            wsl: Vec::new(),
+            wsl_problem: None,
         }
     }
+}
+
+/// One WSL distribution of this PC, as Add device lists it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct WslDistributionSnapshot {
+    pub name: String,
+    /// The name the device gets when it is added (PRD wsl-device D-20).
+    pub device_name: String,
+    /// 1 or 2; only a WSL 2 distribution connects.
+    pub wsl_version: u8,
+    /// The distribution `wsl.exe` runs when none is named.
+    pub default: bool,
+    /// The name of the registered device that already is this distribution.
+    pub added_as: Option<String>,
+    /// Why it cannot be connected: `setup_unfinished` (its first-run user
+    /// setup has not finished, B28) or `wsl1`.
+    pub problem: Option<String>,
 }
 
 /// One alias of the config.

@@ -116,14 +116,20 @@ class ReleaseCandidate(unittest.TestCase):
                         self.assertEqual(step["with"]["ref"], "${{ inputs.source-sha || github.sha }}")
 
     def test_no_receipt_or_mac_app_exists_without_both_device_helpers(self):
-        # A failed helper must skip what needs it: the Mac app's assembly and,
+        # A failed helper must skip what needs it: the bundles both apps ship
+        # the manifest of, so the Mac app's assembly, the Windows app's and,
         # through `packages`, the candidate's receipt. The Mac compile alone
         # starts beside the helpers.
         jobs = yaml.safe_load((WORKFLOWS / "package.yml").read_text())["jobs"]
         self.assertNotIn("if", jobs["device-helpers"])
         self.assertNotIn("if", jobs["helper-identity"])
+        self.assertNotIn("if", jobs["device-bundles"])
+        self.assertEqual(set(jobs["device-bundles"]["needs"]), {"helper-identity", "device-helpers"})
         self.assertEqual(jobs["macos-compile"]["needs"], "helper-identity")
-        self.assertEqual(set(jobs["macos-package"]["needs"]), {"helper-identity", "device-helpers", "macos-compile"})
+        self.assertEqual(set(jobs["macos-package"]["needs"]), {"helper-identity", "device-bundles", "macos-compile"})
+        self.assertEqual(set(jobs["windows-package"]["needs"]), {"helper-identity", "device-bundles", "windows-compile"})
+        # The Linux app carries no device kit, so its package waits for nothing.
+        self.assertNotIn("needs", jobs["package"])
         for name in ("macos-compile", "macos-package"):
             self.assertEqual(jobs[name]["if"], "${{ inputs.include-macos }}")
         receipt = yaml.safe_load((WORKFLOWS / "release-candidate.yml").read_text())["jobs"]["receipt"]

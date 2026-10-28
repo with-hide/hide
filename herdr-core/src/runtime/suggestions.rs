@@ -423,7 +423,9 @@ impl Runtime {
             "component": "suggestions", "kind": "wake", "cause": payload.cause.as_str(),
         }));
         self.send_suggestions(Command::Wake);
-        false
+        // The app opening is also what may start a WSL distribution that is
+        // off (PRD wsl-device B3); a resume or an unlock is not.
+        matches!(payload.cause, WakeCause::AppOpen) && self.wake_devices_for_app()
     }
 
     /// The worker's read of the opened Project.

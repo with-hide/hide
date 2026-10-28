@@ -142,6 +142,7 @@ mod view_bookmarks;
 mod workspace_control;
 #[path = "tests/workspace_view.rs"]
 mod workspace_view;
+mod wsl_devices;
 
 /// The `tab_list` Herdr answers a `tab.move` with, carrying the tabs in
 /// their new order. Only the order is read here; the other fields are

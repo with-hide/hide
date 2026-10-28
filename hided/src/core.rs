@@ -930,6 +930,12 @@ fn owner_loop(
     )
     .with_pane_events(panes)
     .with_terminals(Arc::clone(&terminals) as Arc<dyn DeviceSink>);
+    // This PC's WSL distributions are devices too (PRD wsl-device D-01);
+    // there is no WSL to reach on any other system.
+    let devices = match hide_node::ssh::host::wsl::WslAccess::of_this_pc() {
+        Some(wsl) => devices.with_wsl(wsl),
+        None => devices,
+    };
     let analytics = crate::env::product_analytics_token().and_then(|token| {
         match crate::product_analytics::Worker::start(home.as_deref(), &state_dir, token) {
             Ok(worker) => worker,

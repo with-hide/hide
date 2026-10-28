@@ -1753,6 +1753,8 @@ export type Device = {
    */
   problem?: string | null;
   ssh_alias: string | null;
+  /** The WSL distribution of this PC the device is (PRD wsl-device D-20); absent from an older daemon. */
+  wsl_distro?: string | null;
   /** The Herdr socket the registration names on the device; null reads its default server. */
   herdr_socket_path?: string | null;
   agent_count: number;
@@ -2102,12 +2104,30 @@ export type SshHost = {
   problem: "ssh_missing" | "ssh_failed" | "timed_out" | null;
 };
 
+/** One WSL distribution of this PC, listed beside the Hosts (PRD wsl-device B4). */
+export type WslDistribution = {
+  name: string;
+  /** The name the device gets when it is added: `WSL Ubuntu` (D-20). */
+  device_name: string;
+  wsl_version: number;
+  /** The distribution `wsl.exe` runs when none is named. */
+  default: boolean;
+  /** The name of the registered device that already is this distribution. */
+  added_as: string | null;
+  /** Why it cannot be connected: its first-run setup has not finished (B28), or it runs on WSL 1. */
+  problem: "setup_unfinished" | "wsl1" | null;
+};
+
 /** `idle` before the first `ssh_hosts_list`, `loading` while one runs (the last answer stays), `ready` once it is in. */
 export type SshHosts = {
   state: "idle" | "loading" | "ready";
   hosts: SshHost[];
   /** The config names more concrete aliases than are listed. */
   truncated: boolean;
+  /** This PC's WSL distributions; none off Windows. Absent from an older daemon. */
+  wsl?: WslDistribution[];
+  /** The distributions could not be read, which is never "no WSL" (B25). */
+  wsl_problem?: "unreadable" | null;
 };
 
 export type BackgroundAi = {

@@ -306,9 +306,17 @@ pub(super) struct WorkspacePinSetPayload {
 
 #[derive(Debug, Deserialize)]
 pub(super) struct RegisterDevicePayload {
+    /// Empty for a WSL distribution, whose id and name the core gives it.
+    #[serde(default)]
     pub(super) id: String,
+    #[serde(default)]
     pub(super) label: String,
+    #[serde(default)]
     pub(super) ssh_alias: String,
+    /// The WSL distribution of this PC to register instead of an SSH alias
+    /// (PRD wsl-device B4, D-20).
+    #[serde(default)]
+    pub(super) wsl_distro: Option<String>,
     /// The device's Herdr socket when its server is not at the default path.
     #[serde(default)]
     pub(super) herdr_socket_path: Option<String>,
@@ -2976,7 +2984,7 @@ impl Runtime {
                     );
                 } else if self.device_registration_exists(&device_id) {
                     self.close_device_host(&device_id, "retry requested");
-                    self.retry_device_host_now(&device_id);
+                    self.retry_device_host_now(&device_id, super::hosts::HostAttempt::Operator);
                 } else {
                     self.set_error(
                         "device.host.unknown_device",

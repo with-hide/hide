@@ -371,9 +371,26 @@ pub const DEFAULT_HELPER_ROOT: &str = hide_kit::layout::HELPER_ROOT;
 /// with another folder; `~` is the remote account's home.
 pub const DEFAULT_CLI_DIR: &str = "~/.local/bin";
 
+/// Whether a connection attempt may start a machine that is off: a WSL
+/// distribution that is not running (PRD wsl-device D-11). Only the app's
+/// launch and the operator's own `다시 연결` (or consent, or a fresh
+/// registration) may; a scheduled retry, a read that needs the link and
+/// every background job may not, and such an attempt on a machine that is
+/// off ends as [`EstablishError::Stopped`]. A device that cannot be off
+/// (one reached over SSH) ignores it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Wake {
+    Allowed,
+    NotAllowed,
+}
+
 #[derive(Debug)]
 pub enum EstablishError {
     Connect(RemoteError),
+    /// The machine is off and this attempt may not start it ([`Wake`]):
+    /// nothing was started, and only an attempt that may wake it, or the
+    /// machine starting by itself, brings the link back.
+    Stopped(String),
     /// The device answering the alias is not the one consent was given for.
     IdentityChanged {
         bound: Box<HostIdentity>,
@@ -401,9 +418,10 @@ impl fmt::Display for EstablishError {
                 observed.describe(),
                 bound.describe()
             ),
-            Self::Unsupported(reason) | Self::Install(reason) | Self::Helper(reason) => {
-                formatter.write_str(reason)
-            }
+            Self::Stopped(reason)
+            | Self::Unsupported(reason)
+            | Self::Install(reason)
+            | Self::Helper(reason) => formatter.write_str(reason),
             Self::Download { reason, .. } => formatter.write_str(reason),
         }
     }
@@ -537,6 +555,24 @@ pub struct HerdrProfileListing {
     pub truncated: bool,
 }
 
+/// One WSL distribution of this PC, as Add device lists it: read from the
+/// account's registry, so listing never starts WSL (PRD wsl-device D-13).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WslDistribution {
+    pub name: String,
+    /// 1 or 2.
+    pub wsl_version: u8,
+    /// Its first-run user setup has not finished, or it is still being
+    /// installed: it cannot be connected until it has (B28).
+    pub setup_unfinished: bool,
+    /// The distribution `wsl.exe` runs when none is named.
+    pub default: bool,
+}
+
+/// What one WSL listing found, or why there is none: an `Err` is a failure
+/// to read, never "no WSL" (B25); a PC without WSL lists none.
+pub type WslListing = Result<Vec<WslDistribution>, String>;
+
 /// Opens the transport to a registered device. The node that holds the SSH
 /// configuration and keys implements it (`hide_node::ssh`); the core asks it
 /// by alias and never reads `~/.ssh` itself (PRD core-host-node D-21).
@@ -590,6 +626,22 @@ pub trait DeviceConnector: Send + Sync {
         registered: &[String],
         stop: &std::sync::atomic::AtomicBool,
     ) -> SshHostListing;
+
+    /// The transport for the device `node`, the WSL distribution `distro` of
+    /// this PC (PRD wsl-device D-07); nothing starts until it is used.
+    fn wsl_transport(
+        &self,
+        _node: &str,
+        _distro: &str,
+    ) -> Result<std::sync::Arc<dyn DialedTransport>, String> {
+        Err("WSL distributions can be connected only from the Windows app".to_owned())
+    }
+
+    /// This PC's WSL distributions, for Add device. Blocking and bounded;
+    /// it starts no `wsl.exe`.
+    fn wsl_distributions(&self) -> WslListing {
+        Ok(Vec::new())
+    }
 }
 
 /// Decodes the Herdr snapshot a connection test fetched, given the device's
@@ -621,11 +673,13 @@ pub trait DialedTransport: DeviceTransport {
     fn capability_test(&self, operation_id: &str, check: SnapshotCheck<'_>) -> CapabilityReport;
     /// Connects, checks `consent` against the device that answered, installs
     /// this build's node when the device lacks it, and starts it. Blocking;
-    /// run it off the runtime lock. `on_close` hears why the link ended.
+    /// run it off the runtime lock. `on_close` hears why the link ended;
+    /// `wake` says whether a machine that is off may be started for it.
     fn establish(
         &self,
         consent: &HostConsent,
         retirement_projects: &[String],
+        wake: Wake,
         on_close: OnClose,
     ) -> Result<Established, EstablishError>;
 }

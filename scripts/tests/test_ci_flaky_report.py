@@ -244,7 +244,7 @@ class Workflows(unittest.TestCase):
                     uploads += 1
                     self.assertIn("if: ${{ failure() || steps.flaky.outputs.flaky == 'true' }}", step, workflow.name)
                     self.assertEqual(len(reports), 1, f"{workflow.name}: the job's report step has id flaky")
-        self.assertEqual(uploads, 4)
+        self.assertEqual(uploads, 5)
 
     def test_a_report_step_runs_the_script_once_so_its_annotations_fit_one_step(self):
         # GitHub keeps 10 error annotations per step; two reports in one step
@@ -255,7 +255,7 @@ class Workflows(unittest.TestCase):
                 if re.search(r"ci-flaky-report\.py --(suite|measurement)", step):
                     steps += 1
                     self.assertEqual(step.count("ci-flaky-report.py"), 1, f"{workflow.name}: {step.splitlines()[0]}")
-        self.assertEqual(steps, 11)
+        self.assertEqual(steps, 13)
 
 
 class Annotating(unittest.TestCase):

@@ -281,7 +281,12 @@ impl Device {
             granted_at_unix_ms: 1,
             identity: None,
         };
-        let established = match transport.establish(&consent, &[], Box::new(|_| {})) {
+        let established = match transport.establish(
+            &consent,
+            &[],
+            hide_node_link::device::Wake::Allowed,
+            Box::new(|_| {}),
+        ) {
             Ok(established) => established,
             Err(error) => panic!("the device's node did not start: {error:?}"),
         };
@@ -579,7 +584,12 @@ fn a_retained_protocol24_node_keeps_legacy_readers_then_upgrades_normally() {
         identity: None,
     };
     let established = transport
-        .establish(&consent, &[], Box::new(|_| {}))
+        .establish(
+            &consent,
+            &[],
+            hide_node_link::device::Wake::Allowed,
+            Box::new(|_| {}),
+        )
         .unwrap();
     assert_eq!(
         established.node.hello.protocol,
@@ -703,7 +713,12 @@ fn a_saturated_core_answers_busy_over_ssh_and_keeps_its_reader_usable() {
         links.push(
             device
                 .transport
-                .establish(&consent, &[], Box::new(|_| {}))
+                .establish(
+                    &consent,
+                    &[],
+                    hide_node_link::device::Wake::Allowed,
+                    Box::new(|_| {}),
+                )
                 .unwrap()
                 .node
                 .host,
