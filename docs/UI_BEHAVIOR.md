@@ -2203,6 +2203,8 @@ Loading, a failed read with Retry, a proven empty result, disabled or invalid pr
 Every profile starts unchecked and names its label, SSH target and Herdr session, including when these need to wrap.
 The WSL row starts checked until the operator unchecks it, which the draft keeps (`first_run_choices.devices` stays null until a row is checked or unchecked), and it names no target, session or `Herdr에 저장됨`.
 Its Connect is the install consent, as Add device's is: nothing is installed in WSL before it, and it registers the distribution's device, which installs Hide's helper and hooks there, and brings its `WU` tile to the front in the same event, so the project step adds to it and a WSL agent can be started at once (B2).
+Before Connect the WSL row lists no agents: only the distribution's own helper reads what is installed there, and reading it any earlier would start WSL before the consent, so the row is `WSL Ubuntu` over `이 PC (WSL)` alone (B1, by the operator's choice).
+After Connect its install runs as any device's does, and its agents show where a device's kit already shows them: the project step's agent choice and Settings › Agents.
 A default distribution on WSL 1 cannot be checked and says `WSL 1이에요. WSL 2로 바꾸면 연결할 수 있어요:` over its command `wsl --set-version <distribution> 2`, and one whose setup is unfinished says `배포판 설정을 먼저 마치세요` (B29); a PC without WSL has no WSL row, and its step is the saved profiles alone, skipped when there are none.
 Checking a device changes the draft alone; Connect selected explicitly allows Hide's helper, command and selected agent integrations on those checked devices through the existing Add device connector and install owner.
 Existing Herdr sessions, tabs and workspaces stay in place.
