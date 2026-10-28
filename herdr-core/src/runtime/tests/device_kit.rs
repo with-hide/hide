@@ -3028,3 +3028,15 @@ fn device_connect_statistics_exclude_inbound_retry() {
     settle(&shared);
     assert!(statistics.0.lock().unwrap().is_empty());
 }
+
+/// PRD wsl-device B27: a device's link ends when the core stops, and with
+/// it what the link owns on this machine, a WSL distribution's `wsl.exe`.
+#[test]
+fn a_connected_device_link_ends_when_the_core_stops() {
+    let helper = KitDevice::answering(Ok(report(&[])));
+    let shared = device_runtime(None, Some(Arc::clone(&helper)));
+    let (core, _notifier) = crate::Core::for_runtime_fixture(Arc::clone(&shared));
+    assert_eq!(helper.closed_reason(), None);
+    drop(core);
+    assert_eq!(helper.closed_reason().as_deref(), Some("core stopping"));
+}
