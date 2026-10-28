@@ -100,19 +100,18 @@ it("asks once about a folder outside home and sends it again with the confirmati
   await again.unmount();
 });
 
-it("asks about the project a folder outside home belongs to and confirms that project, not the folder", async () => {
+it("asks once about the project a folder outside home belongs to, and confirms that project", async () => {
   const picked = "/srv/repo/public";
   window.hideHost = { kind: "electron", platform: "linux", pickFolder: vi.fn(async () => picked) } as never;
   const { events, unmount } = await mount(state());
   await act(async () => find("[data-add-project-browse]")!.click());
-  await refuse(picked, "needs_confirmation");
-  await act(async () => find("[data-registration-confirm-add]")!.click());
-  expect(creates(events).at(-1)).toEqual({ path: picked, label: "public", initialize_git: false, confirmed_outside_home: picked });
-
   await refuse(picked, "needs_confirmation", "/srv/repo");
   expect(find("[data-registration-confirm]")?.getAttribute("data-registration-confirm")).toBe("/srv/repo");
   await act(async () => find("[data-registration-confirm-add]")!.click());
-  expect(creates(events).at(-1)).toEqual({ path: "/srv/repo", label: "repo", initialize_git: false, confirmed_outside_home: "/srv/repo" });
+  expect(creates(events)).toEqual([
+    { path: picked, label: "public", initialize_git: false },
+    { path: "/srv/repo", label: "repo", initialize_git: false, confirmed_outside_home: "/srv/repo" },
+  ]);
   await unmount();
 });
 

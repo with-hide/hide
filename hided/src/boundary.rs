@@ -1547,9 +1547,9 @@ mod tests {
 
     /// PRD wsl-device B15: a registration adds the project a folder belongs
     /// to, so a folder inside a repository outside home, or a linked worktree
-    /// of one, asks about that repository's root, the confirmation of the
-    /// folder never covers it, and the root confirmed is what is registered
-    /// and whose files are read.
+    /// of one, is asked about once, by that repository's root; the
+    /// confirmation of the folder alone never covers it, and the root
+    /// confirmed is what is registered and whose files are read.
     #[test]
     fn a_folder_in_a_project_outside_home_asks_about_the_project_it_adds() {
         let f = fixture();
@@ -1561,13 +1561,17 @@ mod tests {
         let ask_root = Err(Unregistrable::ConfirmProject(root.clone()));
 
         let public = s(&repo.join("public"));
+        for confirmed in [None, Some(public.as_str())] {
+            assert_eq!(
+                f.boundary.resolve_registration(&public, confirmed),
+                ask_root,
+                "asked once, about the project it adds"
+            );
+        }
         assert_eq!(
-            f.boundary.resolve_registration(&public, None),
-            Err(Unregistrable::Refused(Refusal::NeedsConfirmation))
-        );
-        assert_eq!(
-            f.boundary.resolve_registration(&public, Some(&public)),
-            ask_root
+            f.boundary.resolve_registration(&public, Some(&s(&root))),
+            Ok(root.join("public")),
+            "the root's confirmation adds the folder's project"
         );
         let linked = s(&f.outside.join("elsewhere/linked"));
         assert_eq!(

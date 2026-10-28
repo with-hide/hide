@@ -11,16 +11,18 @@
 //!
 //! A folder under home is registered when it resolves to a directory still
 //! under home: a symlink under home that leads out of it is refused, even
-//! confirmed. A folder outside home is registered only with the operator's
-//! confirmation of that same path; until then the path is looked up only to
-//! tell whether it is home or holds it, so a missing folder asks the same
-//! question as one that is there. Home and any folder
-//! holding it are never a project, and a network share is no project's
-//! identity, whether it is written or a link leads there. The registration
-//! adds the project the folder belongs to (the repository's root, its main
-//! checkout's for a linked worktree), so a project outside home must be the
-//! very folder confirmed: any other answers with the question about that
-//! root, which the operator confirms instead.
+//! confirmed. Home and any folder holding it are never a project, and a
+//! network share is no project's identity, whether it is written or a link
+//! leads there. A registration adds the project the folder belongs to (the
+//! repository's root, its main checkout's for a linked worktree), so a
+//! project outside home, or any folder written outside home, is registered
+//! only with the operator's confirmation of that project. An unconfirmed
+//! request is answered with the question, naming the project's root when it
+//! is not the folder as written, so the operator is asked once, about what
+//! would be added; to name it the folder is read, and one that is missing or
+//! is not a folder is asked about as written, so only a request that
+//! confirmed it learns why it cannot be added. The confirmation binds to the
+//! root: the root's own path, or the folder's when the folder is the root.
 
 use std::io;
 use std::path::{Component, Path, PathBuf};
@@ -84,17 +86,24 @@ pub fn judge_with(
     if identity::holds(path, home) {
         return Err(Unregistrable::HomeRoot);
     }
+    let confirmed = confirmed.filter(|confirmed| plain_absolute(confirmed));
     let below = identity::below(path, home);
     let written_inside = below.is_some();
     let real = match below {
         Some(rest) => under_home(&rest)?,
-        None if confirmed.filter(|confirmed| plain_absolute(confirmed)) == Some(path) => {
-            look_up(path)?
-        }
-        None => return Err(Unregistrable::NeedsConfirmation(None)),
+        None => match look_up(path) {
+            Ok(real) => real,
+            Err(refusal) if confirmed == Some(path) => return Err(refusal),
+            // Nothing there to name a project by: asked about as written.
+            Err(_) => return Err(Unregistrable::NeedsConfirmation(None)),
+        },
     };
     if !real.is_dir() {
-        return Err(Unregistrable::NotADirectory);
+        return Err(if written_inside || confirmed == Some(path) {
+            Unregistrable::NotADirectory
+        } else {
+            Unregistrable::NeedsConfirmation(None)
+        });
     }
     let inside = |place: &Path| {
         identity::below(place, home).is_some_and(|rest| !rest.as_os_str().is_empty())
@@ -115,10 +124,14 @@ pub fn judge_with(
     if identity::holds(&root, home) {
         return Err(Unregistrable::HomeRoot);
     }
-    // A project outside home is registered only as the folder confirmed; any
-    // other answer would add more than the operator was asked about.
-    if !inside(&root) && root != real {
-        return Err(Unregistrable::NeedsConfirmation(Some(root)));
+    // The operator confirms the project a registration adds: a confirmation
+    // of anything else would add more than they were asked about.
+    let confirms_root =
+        confirmed == Some(root.as_path()) || (confirmed == Some(path) && root == real);
+    if (!written_inside || !inside(&root)) && !confirms_root {
+        return Err(Unregistrable::NeedsConfirmation(
+            (root.as_path() != path).then_some(root),
+        ));
     }
     Ok(Judged { real, root, is_git })
 }

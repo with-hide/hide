@@ -137,8 +137,9 @@ fn repository_with_worktree(main: &Path, linked: &Path) {
 
 /// PRD wsl-device B15: a registration adds the project a folder belongs to,
 /// so a folder inside a repository outside home, or a linked worktree of one
-/// wherever it is, asks about that repository's root (`confirm`), and only
-/// the root confirmed is registered.
+/// wherever it is, is asked about once, by that repository's root
+/// (`confirm`), and the confirmation of that root registers it; the
+/// confirmation of the folder alone does not.
 #[test]
 fn a_folder_in_a_project_outside_home_asks_about_the_project_it_adds() {
     let home = tempfile::tempdir().unwrap();
@@ -157,17 +158,19 @@ fn a_folder_in_a_project_outside_home_asks_about_the_project_it_adds() {
         (error.code, error.confirm)
     };
 
-    assert_eq!(asked(&public, None), (ErrorCode::NeedsConfirmation, None));
     for folder in [&public, &linked] {
-        assert_eq!(
-            asked(folder, Some(folder)),
-            (ErrorCode::NeedsConfirmation, Some(root.clone())),
-            "{folder:?}"
-        );
+        for confirmed in [None, Some(folder.as_path())] {
+            assert_eq!(
+                asked(folder, confirmed),
+                (ErrorCode::NeedsConfirmation, Some(root.clone())),
+                "{folder:?} confirmed as {confirmed:?}"
+            );
+        }
+        let added = check(folder, Some(Path::new(&root)), home.path()).unwrap();
+        assert_eq!(added.root, root, "{folder:?}");
+        assert!(added.is_git);
     }
-    let added = check(&repo, Some(&repo), home.path()).unwrap();
-    assert_eq!(added.root, root);
-    assert!(added.is_git);
+    assert_eq!(check(&repo, Some(&repo), home.path()).unwrap().root, root);
 
     // A worktree under home whose repository is outside it asks too.
     let other = elsewhere.path().join("other");
