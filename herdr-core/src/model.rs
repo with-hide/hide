@@ -576,6 +576,10 @@ pub struct OpenedViewSnapshot {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     pub comments: usize,
+    /// The operator has not looked at it since the agent opened it (PRD
+    /// unseen-agent-views B10).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unseen: bool,
 }
 
 /// A View a session record's session, or one of its descendants, opened:

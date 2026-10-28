@@ -1654,6 +1654,7 @@ impl Runtime {
         let mut displays = Vec::new();
         collect_displays(&layout.root, &mut displays);
         let mut opened: Vec<OpenedViewSnapshot> = Vec::new();
+        let views = self.view_layout_of(key);
         for display in &displays {
             let Some(pane) = display.opener.as_ref().and_then(|o| o.pane_id.clone()) else {
                 continue;
@@ -1674,6 +1675,9 @@ impl Runtime {
                     path: display.path.clone(),
                     url: display.url.clone(),
                     comments: display.comments,
+                    unseen: views
+                        .and_then(|views| views.display(&display.id))
+                        .is_some_and(|stored| stored.unseen.is_some()),
                 }),
             }
         }

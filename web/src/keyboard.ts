@@ -33,6 +33,7 @@ import { hostChord, hostRegistry, isNumberedCommand, releaseModifier, matchHost,
 import { editorFor, type AgentRow, type SnapshotRest, type Workspace } from "./snapshot";
 import { useShellStore } from "./store";
 import { coveringLayer, useUiStore, type Cycle } from "./ui";
+import { installWindowFocus } from "./windowFocus";
 import { drawnViews, installKeyboardOwner, keyboardCommandOwner, noteCommandDelivered, subscribeKeyboardOwner } from "./viewFocus";
 
 /**
@@ -197,6 +198,7 @@ export function installKeyboard(actions: Actions): () => void {
   const host = hostKind();
   const system = keySystem();
   const removeKeyboardOwner = installKeyboardOwner();
+  const removeWindowFocus = installWindowFocus((focused) => actions.noteWindowFocus(focused));
   const unsubscribeOwner = subscribeKeyboardOwner(() => {
     const rest = useShellStore.getState().rest;
     const owner = keyboardCommandOwner();
@@ -636,6 +638,7 @@ export function installKeyboard(actions: Actions): () => void {
     onBlur();
     endNativeCycle();
     removeKeyboardOwner();
+    removeWindowFocus();
     unsubscribeBrowser?.();
     unsubscribeOwner();
     unsubscribeMenu?.();

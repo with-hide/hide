@@ -28,7 +28,8 @@ import type { AgentRow, AgentStatusCode, AskSubject, AgentWait, LineMode, MarkCo
  */
 export type { LineMode };
 
-export type RowLine = { text: string; mode: LineMode; pull_request?: number; subject?: AskSubject };
+/** `look`: the line names the newest View to look at, and counts every one (PRD unseen-agent-views D-14). */
+export type RowLine = { text: string; mode: LineMode; pull_request?: number; subject?: AskSubject; look?: number };
 
 /** The row's second line and why it shows, or null when the core gave it none. */
 export function rowLine(agent: Pick<AgentRow, "state">): RowLine | null {
@@ -44,9 +45,10 @@ export function rowLine(agent: Pick<AgentRow, "state">): RowLine | null {
  * draws its word (B5). A sleeping row has no line, its moon and hover say it;
  * a waking or failed one says so on its line (status-marks B31).
  */
-export function sidebarLine(agent: Pick<AgentRow, "state" | "status_code" | "mark">): RowLine | null {
+export function sidebarLine(agent: Pick<AgentRow, "state" | "status_code" | "mark" | "look">): RowLine | null {
   const own = stateLine(agent);
   if (own !== undefined) return own;
+  if (agent.mark === "look" && agent.look) return { text: agent.look.label, mode: "request", look: agent.look.count };
   const line = rowLine(agent);
   if (line && line.mode !== "quiet") return line;
   return agent.state.asking ? { text: "", mode: "request" } : null;
@@ -62,7 +64,7 @@ export function sidebarLine(agent: Pick<AgentRow, "state" | "status_code" | "mar
 export function stateLine(agent: Pick<AgentRow, "status_code" | "mark">): RowLine | null | undefined {
   switch (agent.status_code) {
     case "sleeping":
-      return agent.mark === "turn" ? undefined : null;
+      return agent.mark === "turn" || agent.mark === "look" ? undefined : null;
     case "waking":
     case "sleep_failed":
     case "unknown":
@@ -98,7 +100,7 @@ export function leadWord(t: TFunction<"translation">, agent: Pick<AgentRow, "sta
 }
 
 /** What `lineText` reads off a row: a desktop row, or the phone's. */
-export type LineAgent = { wait?: AgentWait | null; status_code: AgentStatusCode; descendant_counts?: { working: number } | null; background_left?: number | null };
+export type LineAgent = { wait?: AgentWait | null; status_code: AgentStatusCode; descendant_counts?: { working: number } | null; background_left?: number | null; look?: { count: number } | null };
 
 /**
  * A line in its three parts, so a narrow row cuts only the sentence: the word
@@ -112,11 +114,14 @@ export type LineParts = { lead: string | null; text: string | null; tail: string
  * lead with their word (`질문 · …`, `일 남음 · …`, D-04); a waiting in-progress
  * row leads with 대기 and says its sentence or, with none, the cause Hide
  * proved (B10, B29); the end of the checks a row waited on names the pull
- * request (B13).
+ * request (B13). A View to look at leads with 볼 것 and names the newest, `볼 것
+ * · login.ts 외 2`; on a row whose request outranks it, it ends the line as
+ * a count, `볼 것 1` (PRD unseen-agent-views D-14, D-18).
  */
 export function lineParts(t: TFunction<"translation">, agent: LineAgent, line: RowLine): LineParts {
   const word = leadWord(t, agent);
-  const tail = backgroundTail(t, agent);
+  const looks = line.look === undefined && agent.look ? t("agents.line.lookTail", { count: agent.look.count }) : null;
+  const tail = [backgroundTail(t, agent), looks].filter(Boolean).join(" · ") || null;
   const parts = (lead: string | null, text: string | null): LineParts => ({ lead, text: text || null, tail });
   switch (line.mode) {
     case "vanished":
@@ -130,6 +135,7 @@ export function lineParts(t: TFunction<"translation">, agent: LineAgent, line: R
     case "kept":
       return parts(word ?? statusText(t, agent.status_code), line.text);
     case "request":
+      if (line.look !== undefined) return parts(t("agents.mark.look"), line.look > 1 ? t("agents.line.lookMore", { label: line.text, count: line.look - 1 }) : line.text);
       return parts(word, line.subject ? askSubjectText(t, line.subject) : line.text);
     case "news":
       return parts(word, line.text);
@@ -177,22 +183,24 @@ export function markTone(agent: Pick<TabAgent, "state">): string {
   return agent.state.mark_tone.read ? "opacity-(--opacity-read-status)" : "";
 }
 
-/** The name of a mark, in the operator's language: 내 차례, 진행 중, 읽을 것, 조용함, 재움. An unknown row has no mark to name. */
+/** The name of a mark, in the operator's language: 내 차례, 볼 것, 진행 중, 읽을 것, 조용함, 재움. An unknown row has no mark to name. */
 export function markName(t: TFunction<"translation">, mark: Exclude<RowMark, "unknown">): string {
   return t(`agents.mark.${mark}`);
 }
 
 /**
  * What a mark says on hover and in a row's accessible name (B3): the state,
- * then the word that leads its line, `내 차례 · 질문`, `읽을 것 · 일 남음`. A
+ * then the word that leads its line, `내 차례 · 질문`, `읽을 것 · 일 남음`, or
+ * the View to look at, `볼 것 · login.ts`. A
  * quiet row adds the word only when it says something (일 남음, 질문); an in
  * progress row names nothing more, its line says why. A row of unknown state
  * has no mark and says only `상태 모름`. A sleeping row says its
  * own words, `재움 · 열면 깨어남` (B31), and a finished turn with tasks left
  * adds them, `읽을 것 · 끝남 · 백그라운드 2개 남음` (B27).
  */
-export function markWords(t: TFunction<"translation">, agent: Pick<AgentRow, "mark" | "status_code"> & { background_left?: number }): string {
+export function markWords(t: TFunction<"translation">, agent: Pick<AgentRow, "mark" | "status_code" | "look"> & { background_left?: number }): string {
   if (agent.mark === "asleep") return statusText(t, agent.status_code);
+  if (agent.mark === "look") return [markName(t, "look"), agent.look?.label].filter(Boolean).join(" · ");
   if (agent.mark === "unknown") return statusText(t, agent.status_code === "starting" ? "starting" : "unknown");
   const name = markName(t, agent.mark);
   const word = agent.mark === "going" ? null : agent.mark === "waiting" ? statusText(t, "waiting") : agent.mark === "quiet" ? (QUIET_WORDS.has(agent.status_code) ? statusText(t, agent.status_code) : null) : agent.mark === "unread" && agent.status_code === "stopped" ? statusText(t, agent.status_code) : leadWord(t, agent);

@@ -70,6 +70,7 @@ import {
   type Workspace,
   type LinkTarget,
   type PrMergeMethod,
+  type LookAt,
 } from "./snapshot";
 import { fileUrl, focusBrowserDisplay, isHtmlFile } from "./browserViews";
 import { requestLine } from "./editor/lineRequest";
@@ -1307,6 +1308,10 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     observeAgents(observing: boolean) {
       dispatch({ schema_version: 2, kind: "ai_settings", payload: { observing } });
     },
+    /** Whether this window holds the keyboard on the Workspace screen, so the View in front of it is seen (PRD unseen-agent-views D-07). */
+    noteWindowFocus(focused: boolean) {
+      dispatch({ schema_version: 2, kind: "window_focus", payload: { focused } });
+    },
     /** Whether this page shows the request view; while one does, the core re-reads running checks (PRD overview-request-view D-32). */
     observeRequestView(observing: boolean) {
       dispatch({ schema_version: 2, kind: "request_view", payload: { observing } });
@@ -2151,19 +2156,27 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const agent = agentsByPane(allPaneAgents(state.agents, state.rest?.status?.remote)).get(paneId);
       const home = homeOpening(state.rest, agent);
       if (home) return this.openSuggestion(home.deviceId, home.workspaceId, home.row);
-      this.openAgent(paneId);
+      this.openAgent(paneId, agent?.look);
     },
 
-    openAgent(paneId: string) {
+    /**
+     * A row with a View to look at brings its newest unseen View forward with
+     * the pane (PRD unseen-agent-views B3): the core does both in the pane's
+     * focus. A device's pane is focused on its device, and its View, which
+     * this core holds, follows in the checkout's focus.
+     */
+    openAgent(paneId: string, look?: LookAt) {
       beginOpening({ paneId });
       const node = localDeviceId(rest());
       const target = remoteTargetOfPane(rest(), paneId) ?? node;
       const forward = frontDeviceId(rest()) !== target;
       if (target !== node) {
         const event = remoteControl(target, { action: "focus_pane", pane_id: paneId });
-        return dispatch(forward ? withDeviceForward(event) : event);
+        dispatch(forward ? withDeviceForward(event) : event);
+        if (look?.workspace_id && look.checkout_id) dispatch({ schema_version: 2, kind: "focus_checkout", payload: { workspace_id: look.workspace_id, checkout_id: look.checkout_id, display_id: look.view_id } });
+        return;
       }
-      dispatch({ schema_version: 2, kind: "focus_pane", payload: { pane_id: paneId, origin: "operator", focus_device: forward } });
+      dispatch({ schema_version: 2, kind: "focus_pane", payload: { pane_id: paneId, origin: "operator", focus_device: forward, ...(look ? { reveal_unseen: true } : {}) } });
       // The core's answer moves the keys only when it moves the focus, so a
       // pane already focused would leave them on the row, link or mark that
       // was pressed. The operator asked for the pane, so the open takes the
