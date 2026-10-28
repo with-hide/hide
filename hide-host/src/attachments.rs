@@ -159,9 +159,34 @@ struct Partial {
     arrived: BTreeSet<usize>,
     /// Its files being written now.
     writing: usize,
-    /// Cancelled, or its link ended, while a file was being written: the
-    /// last write to finish removes the request's files.
+    /// Cancelled, its link ended, or a write of it unwound, while a file
+    /// was being written: the last write to leave removes its files.
     dropped: bool,
+}
+
+/// A write [`Staging::begin`] entered. It leaves exactly once: by
+/// [`Writing::finish`], or as it drops when its worker unwinds first, which
+/// drops its request so no file of it outlives the failure.
+struct Writing<'a> {
+    staging: &'a Staging,
+    request: String,
+    left: bool,
+}
+
+impl Writing<'_> {
+    fn finish(mut self, index: usize, written: Result<PathBuf, String>) -> Result<String, String> {
+        self.left = true;
+        self.staging.leave(&self.request, Some((index, written)))
+    }
+}
+
+impl Drop for Writing<'_> {
+    fn drop(&mut self) {
+        if !self.left {
+            // An unwound write has no caller to answer; `leave` logs what fails.
+            let _ = self.staging.leave(&self.request, None);
+        }
+    }
 }
 
 impl Staging {
@@ -193,14 +218,14 @@ impl Staging {
             return Err("A file exceeds the 20 MiB attachment limit.".to_owned());
         }
         let bytes = file.bytes()?;
-        self.begin(request, count)?;
+        let writing = self.begin(request, count)?;
         let written = self.write(request, index, &file.name, &bytes);
-        self.finish(request, index, written)
+        writing.finish(index, written)
     }
 
     /// Enters a write of `request`, which its link ending or its cancel
-    /// cannot overtake: the request stays until the write finishes.
-    fn begin(&self, request: &str, count: usize) -> Result<(), String> {
+    /// cannot overtake: the request stays until the write leaves.
+    fn begin(&self, request: &str, count: usize) -> Result<Writing<'_>, String> {
         let mut open = lock(&self.open);
         if open.ended {
             return Err("The link to this machine ended. Paste again.".to_owned());
@@ -221,7 +246,11 @@ impl Staging {
             return Err("This attachment was cancelled. Paste again.".to_owned());
         }
         partial.writing += 1;
-        Ok(())
+        Ok(Writing {
+            staging: self,
+            request: request.to_owned(),
+            left: false,
+        })
     }
 
     /// Writes the file at its place, or finds the same bytes already there.
@@ -265,32 +294,38 @@ impl Staging {
         Ok(path)
     }
 
-    /// Leaves the write [`Staging::begin`] entered. A request dropped while
-    /// it ran is refused, and its last write removes its files; a request
-    /// whose files all arrived, or that holds none, is no longer open.
-    fn finish(
+    /// Leaves a write [`Staging::begin`] entered, with what it wrote, or
+    /// with nothing when its worker unwound, which drops its request. A
+    /// request dropped while it ran is refused, and its last write removes
+    /// its files; a request whose files all arrived, or that holds none, is
+    /// no longer open.
+    fn leave(
         &self,
         request: &str,
-        index: usize,
-        written: Result<PathBuf, String>,
+        outcome: Option<(usize, Result<PathBuf, String>)>,
     ) -> Result<String, String> {
         let mut open = lock(&self.open);
-        let partial = open
-            .requests
-            .get_mut(request)
-            .ok_or("The attachment's request was lost while it was written.")?;
+        let Some(partial) = open.requests.get_mut(request) else {
+            eprintln!(
+                "{}",
+                serde_json::json!({"component":"node","kind":"terminal.attachment.request_lost","request_id":request})
+            );
+            return Err("The attachment's request was lost while it was written.".to_owned());
+        };
         partial.writing -= 1;
-        if partial.dropped {
+        let outcome = if partial.dropped { None } else { outcome };
+        let Some((index, written)) = outcome else {
+            partial.dropped = true;
             let last = partial.writing == 0;
             if last {
                 open.requests.remove(request);
             }
             drop(open);
             if last {
-                self.remove_files(request)?;
+                self.cleanup(request);
             }
             return Err("This attachment was cancelled or its link ended. Paste again.".to_owned());
-        }
+        };
         if written.is_ok() {
             partial.arrived.insert(index);
         }
@@ -364,12 +399,17 @@ impl Staging {
             gone
         };
         for request in gone {
-            if let Err(reason) = self.remove_files(&request) {
-                eprintln!(
-                    "{}",
-                    serde_json::json!({"component":"node","kind":"terminal.attachment.cleanup_failed","request_id":request,"reason":reason})
-                );
-            }
+            self.cleanup(&request);
+        }
+    }
+
+    /// Removes a dropped request's files, with no caller left to tell.
+    fn cleanup(&self, request: &str) {
+        if let Err(reason) = self.remove_files(request) {
+            eprintln!(
+                "{}",
+                serde_json::json!({"component":"node","kind":"terminal.attachment.cleanup_failed","request_id":request,"reason":reason})
+            );
         }
     }
 
@@ -579,7 +619,7 @@ mod tests {
     #[test]
     fn a_write_the_link_s_end_overtook_removes_its_own_file() {
         let (_folder, staging) = staging();
-        staging.begin(REQUEST, 2).unwrap();
+        let writing = staging.begin(REQUEST, 2).unwrap();
         staging.end();
         // The end saw the write under way and left the request to it.
         assert!(lock(&staging.open).requests[REQUEST].dropped);
@@ -587,8 +627,8 @@ mod tests {
         let path = written.clone().unwrap();
         assert!(path.exists());
         assert!(
-            staging
-                .finish(REQUEST, 0, written)
+            writing
+                .finish(0, written)
                 .unwrap_err()
                 .contains("link ended")
         );
@@ -613,13 +653,13 @@ mod tests {
     #[test]
     fn a_write_its_cancel_overtook_removes_its_own_file() {
         let (_folder, staging) = staging();
-        staging.begin(REQUEST, 1).unwrap();
+        let writing = staging.begin(REQUEST, 1).unwrap();
         staging.remove(REQUEST).unwrap();
         let written = staging.write(REQUEST, 0, "a.txt", b"a");
         let path = written.clone().unwrap();
         assert!(
-            staging
-                .finish(REQUEST, 0, written)
+            writing
+                .finish(0, written)
                 .unwrap_err()
                 .contains("cancelled")
         );
@@ -633,6 +673,26 @@ mod tests {
             .stage(other, 0, 1, &File::new("b.txt", b"b"))
             .unwrap();
         assert!(Path::new(&kept).exists());
+    }
+
+    /// A worker that unwinds after its file exists still leaves its write:
+    /// the request is dropped, and its files and its place go with it.
+    #[test]
+    fn a_write_whose_worker_unwinds_leaves_no_file_and_no_open_request() {
+        let (_folder, staging) = staging();
+        let earlier = staging
+            .stage(REQUEST, 0, 3, &File::new("a.txt", b"a"))
+            .unwrap();
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _writing = staging.begin(REQUEST, 3).unwrap();
+            let path = staging.write(REQUEST, 1, "b.txt", b"b").unwrap();
+            assert!(path.exists());
+            std::panic::panic_any(path);
+        }));
+        let path = unwound.unwrap_err().downcast::<PathBuf>().unwrap();
+        assert!(!path.exists(), "the unwound write left {}", path.display());
+        assert!(!Path::new(&earlier).exists());
+        assert!(lock(&staging.open).requests.is_empty());
     }
 
     /// A file of exactly the cap is staged; one byte more is refused.

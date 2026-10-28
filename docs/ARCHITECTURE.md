@@ -1025,7 +1025,7 @@ The bounds are eight files, 20 MiB per file and 40 MiB per intent; clipboard dec
 A device stages the immutable bytes through its node's link, the same way over every device link (`Call::StageAttachment`, one file per call so each stays under the link's line cap, answered by `hide-host/src/attachments.rs`, `Staging`), not a shell command, a subprocess or an SSH-only channel, and answers only device paths.
 Device staging lives in the node's private `<state>/terminal-attachments` folder, with generated exclusive filenames, 0700 folder and 0600 file permissions, ownership checks and same-byte verification before adopting a completed file on retry; the folder an earlier build staged into, `~/.hide-terminal-attachments`, is swept of expired files and removed once empty.
 The node tracks each request until its last file arrives: a link that ends with a request part way removes that request's files, and `Call::RemoveAttachments` removes a request's files when the core cancels, retires or finishes it.
-A file still being written when either happens is removed by its own write as it finishes, so neither can leave a file that appears after it (`hide-host/src/attachments.rs`, `Staging`).
+A file still being written when either happens is removed by its own write as it finishes, so neither can leave a file that appears after it, and a write whose worker unwinds drops its request the same way (`hide-host/src/attachments.rs`, `Staging` and its `Writing` guard).
 Each file's call is bounded at 60 seconds, a cancel stops the request between files and removes what it staged, and a device whose link is down refuses the request without waking it.
 Neither filesystem nor network I/O runs under `Mutex<Runtime>`.
 
