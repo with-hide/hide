@@ -24,7 +24,8 @@ describe("release binaries between compile and assemble", () => {
   it("hands assemble the recorded binaries, executable again", () => {
     const { folder, record } = compiled();
     checkReleaseBinaries(record, folder, names, identity);
-    for (const name of names) expect(fs.statSync(path.join(folder, name)).mode & 0o111).toBe(0o111);
+    // The packager's own test of each binary; Windows keeps no execute bit to check.
+    for (const name of names) expect(() => fs.accessSync(path.join(folder, name), fs.constants.X_OK)).not.toThrow();
   });
 
   it.each(["commit", "version", "order"])("refuses binaries built for another %s", (key) => {
