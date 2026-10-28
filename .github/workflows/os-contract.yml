@@ -41,10 +41,12 @@ jobs:
       - name: Keep line endings as committed
         run: git config --global core.autocrlf false
       - uses: actions/checkout@v7
-      - uses: Swatinem/rust-cache@v2
+      # hide-platform and hide-herdr-client alone, outside the shared feature
+      # set, are a dependency set of their own, which only this lane builds.
+      - uses: ./.github/actions/rust-cache
         with:
-          workspaces: ". -> target"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          set: platform
+          save: ${{ github.ref == 'refs/heads/main' }}
       - name: Install cargo-nextest
         # The Rust tests run under nextest's `ci` profile (one retry).
         timeout-minutes: 3

@@ -62,9 +62,11 @@ jobs:
           node --input-type=module -e 'import { releaseKind } from "./scripts/check-release-assets.mjs"; console.log(releaseKind(process.argv[1]));' "$GITHUB_REF_NAME"
           git fetch origin main
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main
-      - uses: Swatinem/rust-cache@v2
+      # Reads main's workspace set; a tag's own save would serve that tag alone.
+      - uses: ./.github/actions/rust-cache
         with:
-          workspaces: ". -> target"
+          set: workspace
+          save: false
       - name: Test the workspace
         run: bash scripts/verify-cargo.sh test
       - name: Typecheck, lint, unit test and build the web shell and the desktop app

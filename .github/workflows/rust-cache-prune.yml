@@ -1,0 +1,43 @@
+# After each run on main that can save a Rust dependency cache, keeps main's
+# newest entry per set and system and deletes the older ones
+# (scripts/prune-rust-caches.py; docs/BUILD.md, "CI's Rust caches"). GitHub
+# keeps every saved key until the 10 GB limit evicts one, and it evicted the
+# entries main's runs read while older copies stayed.
+name: rust cache prune
+
+on:
+  workflow_run:
+    # The runs whose jobs save a set: main's push run and the nightly save the
+    # debug sets, the nightly and a candidate the release set.
+    workflows: [verify, nightly, release candidate]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-cache-prune
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    # Main's runs only: `branches` matches a branch name, which a fork's pull
+    # request can also call main.
+    if: >-
+      github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.event != 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      # Deleting a cache entry.
+      actions: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Delete main's superseded Rust caches
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/prune-rust-caches.py --repo "$GITHUB_REPOSITORY"

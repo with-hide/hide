@@ -1,0 +1,39 @@
+# Every CI job's Rust dependency cache. docs/BUILD.md, "CI's Rust caches", owns
+# the sets, which job saves each, and why a restored release dependency cannot
+# change what ships; scripts/tests/test_rust_cache.py holds every job to this.
+name: Rust dependency cache
+description: Restore, and on main save, one dependency set's cache for this system.
+
+inputs:
+  set:
+    description: The dependency set, `workspace`, `platform` or `release`.
+    required: true
+  save:
+    description: Whether this job saves the set; true only for the set's one builder on main.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Keep only the pinned Rust toolchain
+      # rust-cache hashes every installed toolchain into its key, and runners of
+      # one image carry different stables beside the pinned one (on 2026-10-28
+      # some Linux runners had an extra stable, which made each Linux job keep
+      # two copies). Nothing here builds with the image's own toolchain.
+      shell: bash
+      run: |
+        rustc --version >/dev/null
+        pinned=$(rustup show active-toolchain | cut -d' ' -f1)
+        for toolchain in $(rustup toolchain list --quiet); do
+          [ "$toolchain" = "$pinned" ] || rustup toolchain uninstall "$toolchain"
+        done
+    - uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: ". -> target"
+        # One key per set and system, not per job. rust-cache hashes the
+        # lockfile, the members' manifests and rust-toolchain.toml but not the
+        # root manifest, whose profiles change what every dependency compiles to.
+        shared-key: ${{ inputs.set }}-${{ hashFiles('Cargo.toml') }}
+        # Dependencies only: the workspace's own crates are removed before a save.
+        cache-workspace-crates: false
+        save-if: ${{ inputs.save }}
