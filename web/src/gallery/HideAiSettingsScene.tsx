@@ -74,7 +74,7 @@ export function HideAiSettingsScene({ params }: { params: URLSearchParams }) {
   return (
     <TooltipProvider>
       <InterfaceLanguageBoundary />
-      <div className="w-[640px] bg-background p-lg" data-gallery-scene="hide-ai-settings" data-scene-ready="true">
+      <div className="w-[calc(var(--size-settings-sheet-w)-var(--size-settings-nav-w))] bg-background px-xl py-lg" data-gallery-scene="hide-ai-settings" data-scene-ready="true">
         <HideAiTab actions={actions} />
       </div>
     </TooltipProvider>
