@@ -996,6 +996,43 @@ fn a_link_ending_mid_request_removes_what_it_staged() {
     assert!(!Path::new(&first).exists(), "the ended link left {first}");
 }
 
+/// B10: a link that ends while the device writes a request's first file
+/// still takes that file: the write finishes before the request's files
+/// are removed, so its late arrival leaves nothing behind.
+#[test]
+fn a_link_ending_during_a_write_leaves_no_file() {
+    let device = Device::start();
+    let request = "5b0c9d8e-7f6a-4b5c-8d4e-3f2a1b0c9d8e";
+    let staged =
+        hide_kit::layout::terminal_attachments(&device.state).join(format!("hide-{request}-0.bin"));
+    // The largest file takes the longest to write, which the link's end
+    // has to land within.
+    let size = hide_node_link::attachments::MAX_FILE_BYTES as usize;
+    let link = Arc::clone(&device.link);
+    let writer = std::thread::spawn(move || {
+        call_as::<String>(
+            &*link,
+            Call::StageAttachment {
+                request: request.to_owned(),
+                index: 0,
+                count: 2,
+                file: hide_node_link::feedback::File::new("big.bin", &vec![1; size]),
+            },
+            TIMEOUT,
+        )
+    });
+    begun_within(&staged, &|| writer.is_finished(), TIMEOUT);
+    assert!(
+        staged.exists(),
+        "the device began no file: {:?}",
+        writer.join()
+    );
+    device.link.close("contract");
+    let _ = writer.join();
+    gone_within(&staged, TIMEOUT);
+    assert!(!staged.exists(), "the ended link left {}", staged.display());
+}
+
 /// B12: a device's node answers the Hide AI calls on its own link, with a
 /// backend of its own built for the core's instance and released by it,
 /// where a device used to refuse them. No provider is run.
@@ -1314,6 +1351,16 @@ fn a_draining_link_stops_its_reporting_call_and_closes() {
     gone_within(&socket, TIMEOUT);
     assert!(device.link.closed_reason().is_some());
     assert!(!socket.exists(), "the drained link kept its pane socket");
+}
+
+/// Waits until the node began writing `path`, or until `answered` says its
+/// call is over without it.
+#[allow(clippy::disallowed_methods)] // a polling helper: it sleeps between observations of a state, bounded by a deadline
+fn begun_within(path: &Path, answered: &dyn Fn() -> bool, bound: Duration) {
+    let deadline = std::time::Instant::now() + bound;
+    while !path.exists() && !answered() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(1));
+    }
 }
 
 /// Waits until the node removed `path`, which it does once its input ends.

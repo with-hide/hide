@@ -140,6 +140,8 @@ pub struct Staging {
     folder: Option<PathBuf>,
     legacy: Option<PathBuf>,
     legacy_swept: AtomicBool,
+    /// The link ended: no file is staged any more.
+    closed: AtomicBool,
     /// Requests staged in part on this link: how many files each carries
     /// and which arrived.
     open: Mutex<HashMap<String, (usize, BTreeSet<usize>)>>,
@@ -153,6 +155,7 @@ impl Staging {
             folder: state.map(hide_kit::layout::terminal_attachments),
             legacy: home.map(hide_kit::layout::legacy_terminal_attachments),
             legacy_swept: AtomicBool::new(false),
+            closed: AtomicBool::new(false),
             open: Mutex::new(HashMap::new()),
         }
     }
@@ -180,6 +183,9 @@ impl Staging {
             .ok_or("This machine has no state folder for attachments.")?;
         {
             let open = lock(&self.open);
+            if self.closed.load(Ordering::Acquire) {
+                return Err("The link to this machine ended. Paste again.".to_owned());
+            }
             if !open.contains_key(request) && open.len() >= MAX_OPEN_REQUESTS {
                 return Err("Too many attachments are being staged at once. Retry.".to_owned());
             }
@@ -251,8 +257,17 @@ impl Staging {
         Ok(())
     }
 
-    /// The link ended: every request staged in part goes with it.
+    /// The link ended: a file not yet begun is refused. A file being
+    /// written finishes, so [`Staging::end`] waits for the calls under way.
+    pub fn close(&self) {
+        let _open = lock(&self.open);
+        self.closed.store(true, Ordering::Release);
+    }
+
+    /// Every call on the ended link is done: each request staged in part
+    /// goes with it, the file written last included.
     pub fn end(&self) {
+        self.close();
         let open: Vec<String> = lock(&self.open)
             .drain()
             .map(|(request, _)| request)
@@ -464,6 +479,46 @@ mod tests {
         staging.end();
         assert!(!Path::new(&partial).exists());
         assert!(Path::new(&whole).exists());
+    }
+
+    /// Once the link ended no file is begun, and the request's files go
+    /// when its calls are done.
+    #[test]
+    fn a_closed_staging_begins_no_file() {
+        let (_folder, staging) = staging();
+        let first = staging
+            .stage(REQUEST, 0, 3, &File::new("a.txt", b"a"))
+            .unwrap();
+        staging.close();
+        assert!(
+            staging
+                .stage(REQUEST, 1, 3, &File::new("b.txt", b"b"))
+                .unwrap_err()
+                .contains("ended")
+        );
+        assert!(Path::new(&first).exists());
+        staging.end();
+        assert!(!Path::new(&first).exists());
+    }
+
+    /// A file of exactly the cap is staged; one byte more is refused.
+    #[test]
+    fn a_file_is_judged_by_its_bytes_against_the_cap() {
+        let (_folder, staging) = staging();
+        let cap = MAX_FILE_BYTES as usize;
+        for (index, size) in [cap - 1, cap].into_iter().enumerate() {
+            let path = staging
+                .stage(REQUEST, index, 2, &File::new("a.bin", &vec![1; size]))
+                .unwrap();
+            assert_eq!(fs::metadata(path).unwrap().len(), size as u64);
+        }
+        let other = "0f8fad5b-d9cb-469f-a165-70867728950e";
+        assert!(
+            staging
+                .stage(other, 0, 1, &File::new("a.bin", &vec![1; cap + 1]))
+                .unwrap_err()
+                .contains("20 MiB")
+        );
     }
 
     /// The folder's caps and its contents are judged before a byte is
