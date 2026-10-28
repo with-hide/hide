@@ -149,9 +149,9 @@ describe("a node's state colour (PRD mission-plan-visibility D-11, B8, B35)", ()
     expect(missionCells(m)).toEqual(["working", "done", "hold", "waiting"]);
   });
 
-  it("draws the mission page's head cells as its cards: done work grey, work in main fainter, an outside node waiting (PRD mission-map-git-criteria B26)", () => {
+  it("draws the mission page's head cells as its cards: finished work one green whether or not it reached main, an outside node waiting (PRD mission-map-git-criteria B26)", () => {
     const m = mission("m", { nodes: [node("spec", { status: "done", kind: "research", delivery: null }), node("api", { status: "done", pr: 3, pr_state: "merged" }), node("ui", { status: "done", pr: 4, pr_state: "mergeable", depends_on: ["api"] }), node("out", { kind: "external", delivery: null, external: { pr: 9 } }), node("old", { status: "dropped" })] });
-    expect(missionHeadCells(m)).toEqual(["done", "landed", "external", "done"]);
+    expect(missionHeadCells(m)).toEqual(["done", "done", "external", "done"]);
   });
 
   it("colours a mission's own chip by its decision, else its state", () => {
@@ -222,15 +222,16 @@ const line = (key: string, kind: MissionCriterion["kind"], extra: Partial<Missio
 const checker = (agent: string, state: MissionCriterion["state"] = "open", agent_id?: string) => ({ worker: { agent, model: null, effort: "high" }, state, ...(agent_id ? { agent_id } : {}) });
 
 describe("a card's look (PRD mission-map-git-criteria D-02, B26, B27)", () => {
-  it("draws each status as its shape, finished work grey until it reaches main, and an outside node watching until main", () => {
+  it("draws each status as its shape, finished work one look whether or not it reached main, and an outside node watching until main", () => {
     const m = mission("m");
     const looks = (["planned", "working", "review", "held", "failed", "done", "dropped"] as const).map((status) => nodeLook(m, node("n", { status })));
     expect(looks).toEqual(["waiting", "working", "review", "hold", "failed", "done", "dropped"]);
-    expect(nodeLook(m, node("n", { status: "done", pr: 3, pr_state: "merged" }))).toBe("landed");
-    expect(nodeLook(m, node("n", { status: "done", delivery: "direct", commit: "c216793eb4a1" }))).toBe("landed");
+    expect(nodeLook(m, node("n", { status: "done", pr: 3, pr_state: "merged" }))).toBe("done");
+    expect(nodeLook(m, node("n", { status: "done", delivery: "direct", commit: "c216793eb4a1" }))).toBe("done");
+    expect(nodeLook(m, node("n", { status: "done", kind: "research", delivery: null }))).toBe("done");
     expect(nodeLook(m, node("n", { status: "done", pr: 3, pr_state: "mergeable" }))).toBe("done");
     const outside = (status: MissionNode["status"]) => node("x", { kind: "external", delivery: null, external: { pr: 1232 }, status });
-    expect([nodeLook(m, outside("waiting")), nodeLook(m, outside("done")), nodeLook(m, outside("failed"))]).toEqual(["external", "landed", "failed"]);
+    expect([nodeLook(m, outside("waiting")), nodeLook(m, outside("done")), nodeLook(m, outside("failed"))]).toEqual(["external", "done", "failed"]);
     expect(nodeLook(mission("m", { status: "cancelled" }), node("n", { status: "working" }))).toBe("cancelled");
   });
 
@@ -258,7 +259,7 @@ describe("a card's look (PRD mission-map-git-criteria D-02, B26, B27)", () => {
     const m = mission("m", { status: "merge_wait" });
     const joined = node("b", { status: "done", delivery: "direct", branch: "feat/b", in_main: "9f3e2a1c0b7d" });
     expect(nodeResult(joined)).toEqual({ kind: "commit", commit: "9f3e2a1c0b7d" });
-    expect([nodeLook(m, joined), landingLeft(m, joined)]).toEqual(["landed", null]);
+    expect([nodeLook(m, joined), landingLeft(m, joined)]).toEqual(["done", null]);
     // The commit found in main wins over one the Conductor recorded; a recorded one stands alone for a direct change.
     expect(nodeResult(node("c", { status: "done", delivery: "direct", branch: "feat/c", in_main: "aaaaaaa1", commit: "bbbbbbb2" }))).toEqual({ kind: "commit", commit: "aaaaaaa1" });
     expect(nodeResult(node("d", { status: "done", delivery: "direct", commit: "c216793eb4a1" }))).toEqual({ kind: "commit", commit: "c216793eb4a1" });

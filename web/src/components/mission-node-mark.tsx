@@ -57,8 +57,6 @@ function Shape({ look }: { look: NodeLook }) {
           <path d="M3.4 6.2l1.8 1.8 3.4-3.6" fill="none" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="stroke-status-foreground" />
         </>
       );
-    case "landed":
-      return <path d="M3.2 6.2l1.9 1.9 3.7-3.9" fill="none" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" className="stroke-mission-done" />;
     case "external":
       return <circle cx="6" cy="6" r="4.6" fill="none" strokeWidth="1.3" strokeDasharray="0.1 2.1" strokeLinecap="round" className="stroke-muted-foreground" />;
     case "cancelled":

@@ -100,7 +100,7 @@ function Part({ title, children, part }: { title: ReactNode; children: ReactNode
 function Now({ mission, node }: { mission: Mission; node: MissionNode }) {
   const { t } = useInterfaceTranslation();
   const look = nodeLook(mission, node);
-  if (look === "done" || look === "landed" || look === "cancelled" || look === "dropped") return null;
+  if (look === "done" || look === "cancelled" || look === "dropped") return null;
   const question = heldQuestion(mission, node);
   if (look === "hold" && question) {
     const options = mission.question?.options ?? [];

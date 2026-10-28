@@ -312,23 +312,24 @@ it("draws each card's state as its mark and border, colour only for what wants a
   const launched = [{ device_id: "mac", pane_id: "w1:p2", session_digest: "e", launch_model: "opus", launch_effort: "high" }];
   const map = await mount({ items: [mission({ nodes, decision: "Rail or slot?", question: { key: 1, why: null, recommend: null, node: "tool", asked_at_unix_ms: Date.now() } })] }, [], launched);
   try {
-    expect(Object.fromEntries(nodes.map((n) => [n.key, card(map, n.key).dataset.nodeLook]))).toEqual({ core: "review", engine: "working", tool: "hold", api: "done", old: "landed", branch: "done", broken: "failed", outside: "external", unread: "external", "merged-out": "landed", "closed-out": "failed", v1: "done", next: "waiting" });
+    expect(Object.fromEntries(nodes.map((n) => [n.key, card(map, n.key).dataset.nodeLook]))).toEqual({ core: "review", engine: "working", tool: "hold", api: "done", old: "done", branch: "done", broken: "failed", outside: "external", unread: "external", "merged-out": "done", "closed-out": "failed", v1: "done", next: "waiting" });
     // Each mark says its state on hover and to a screen reader, and the card's name starts with the same words.
     expect(card(map, "tool").querySelector("[data-node-mark]")?.getAttribute("aria-label")).toBe("Waiting for a decision");
     expect(card(map, "tool").getAttribute("aria-label")).toBe("Node tool · Waiting for a decision · Rail or slot?");
-    expect(card(map, "old").querySelector("[data-node-mark]")?.getAttribute("aria-label")).toBe("In main");
-    // Done is a green disc on a faint green surface inside a plain border, never a green border;
-    // in main is a green check with no disc and no surface, so the two read apart.
+    // Finished work is one look whether or not it reached main: a green disc on a faint green
+    // surface inside a plain border, never a green border; what is left before main is its tag.
+    expect(card(map, "old").querySelector("[data-node-mark]")?.getAttribute("aria-label")).toBe("Work done");
     expect(card(map, "engine").className).toContain("border-mission-working");
     expect(card(map, "core").className).toContain("ring-mission-review/20");
     expect(card(map, "api").className).toContain("border-border");
     expect(card(map, "api").className).toContain("bg-mission-done/10");
     expect(card(map, "api").className).not.toMatch(/border-mission-done/);
     expect(card(map, "api").querySelector("[data-node-mark] circle")?.getAttribute("class")).toContain("fill-mission-done");
-    expect(card(map, "old").className).toContain("bg-transparent");
-    expect(card(map, "old").className).not.toMatch(/bg-mission-done/);
-    expect(card(map, "old").querySelector("[data-node-mark] circle")).toBeNull();
-    expect(card(map, "old").querySelector("[data-node-mark] path")?.getAttribute("class")).toContain("stroke-mission-done");
+    for (const key of ["old", "merged-out"]) {
+      expect(card(map, key).className).toContain("bg-mission-done/10");
+      expect(card(map, key).querySelector("[data-node-mark] circle")?.getAttribute("class")).toContain("fill-mission-done");
+    }
+    expect(card(map, "old").querySelector("[data-node-landing]")).toBeNull();
     expect(card(map, "outside").className).toContain("border-dotted");
     // A pull request's number is plain on a card; its state's colours are the panel's.
     expect(card(map, "core").querySelector("[data-node-pr]")?.textContent).toBe(`${"#"}1703`);
@@ -374,7 +375,7 @@ it("draws each card's state as its mark and border, colour only for what wants a
     const outside = (key: string) => [card(map, key).className.includes("border-dotted"), card(map, key).querySelector("[data-node-outside]")?.textContent, card(map, key).querySelector("[data-node-line]")?.textContent];
     expect(["outside", "unread", "merged-out", "closed-out"].map(outside)).toEqual([[true, `↗${"#"}1232`, "waiting for main"], [true, "↗tools/runner", "Could not check"], [true, `↗${"#"}1702`, "In main"], [true, `↗${"#"}1605`, "Closed without merge"]]);
     expect(card(map, "closed-out").className).toContain("border-mission-failed");
-    expect(card(map, "merged-out").getAttribute("aria-label")).toBe("Node merged-out · In main · Outside the mission");
+    expect(card(map, "merged-out").getAttribute("aria-label")).toBe("Node merged-out · Work done · Outside the mission");
     // A long title wraps to two lines and a long branch truncates inside the card (B34).
     expect(card(map, "core").querySelector("[title='제안 core: 기록·공책·점수·반영']")?.className).toContain("line-clamp-2");
     expect(card(map, "branch").querySelector("[data-node-branch] .truncate")).not.toBeNull();
@@ -604,7 +605,7 @@ it("folds a finished mission's report into its first words without Markdown mark
   const gone = { ...mission().conductor, present: false };
   const cancelled = await mount({ items: [mission({ status: "cancelled", conductor: gone, decision: "Keep going?", nodes: [node("a", { status: "done", pr: 1503, pr_state: "merged" }), node("b", { status: "working", depends_on: ["a"] })] })] });
   try {
-    expect([card(cancelled, "a").dataset.nodeLook, card(cancelled, "b").dataset.nodeLook]).toEqual(["landed", "cancelled"]);
+    expect([card(cancelled, "a").dataset.nodeLook, card(cancelled, "b").dataset.nodeLook]).toEqual(["done", "cancelled"]);
     expect(card(cancelled, "b").className).toContain("border-dashed");
     expect(cancelled.container.querySelector(".text-mission-working")).toBeNull();
     expect(cancelled.q("[data-mission-turn]")).toBeNull();

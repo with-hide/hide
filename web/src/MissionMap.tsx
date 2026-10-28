@@ -284,7 +284,7 @@ function Graph({ mission, selected, onSelect, events, end }: { mission: Mission;
   );
 }
 
-/** A card's border and surface by its look (B26): finished work a faint green surface inside its plain border, never a green border; in main no surface. */
+/** A card's border and surface by its look (B26): finished work a faint green surface inside its plain border, never a green border, in main or not. */
 const LOOK_CARD: Record<NodeLook, string> = {
   waiting: "border-dashed border-mission-waiting bg-transparent",
   working: "border-mission-working ring-2 ring-mission-working/20",
@@ -292,7 +292,6 @@ const LOOK_CARD: Record<NodeLook, string> = {
   hold: "border-mission-hold ring-2 ring-mission-hold/20",
   failed: "border-mission-failed",
   done: "border-border bg-mission-done/10",
-  landed: "border-border bg-transparent",
   external: "border-dotted border-mission-waiting bg-transparent",
   cancelled: "border-dashed border-mission-cancelled bg-transparent",
   dropped: "border-dashed border-border bg-transparent",
@@ -348,7 +347,7 @@ function NodeCard({ mission, node, selected, dimmed, onSelect, events, end }: { 
     >
       <span className="flex min-w-0 items-start gap-xs">
         <MissionNodeMark look={look} label={word} className="mt-xxs" />
-        <span className={cn("line-clamp-2 min-w-0 flex-1 break-words text-body font-semibold", (look === "landed" || look === "external" || look === "cancelled" || look === "waiting") && "text-muted-foreground", look === "dropped" && "text-muted-foreground line-through")} title={node.title}>
+        <span className={cn("line-clamp-2 min-w-0 flex-1 break-words text-body font-semibold", (look === "external" || look === "cancelled" || look === "waiting") && "text-muted-foreground", look === "dropped" && "text-muted-foreground line-through")} title={node.title}>
           {node.title}
         </span>
         <Badges mission={mission} node={node} />
