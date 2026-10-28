@@ -21,8 +21,9 @@ CANDIDATE = {
 
 
 def hook(name, env):
-    return subprocess.run(["bash", str(RUNNER / name)], env={"PATH": "/usr/bin:/bin", **env},
-                          capture_output=True, text=True, timeout=30)
+    # The shell and flags the runner starts a hook with.
+    return subprocess.run(["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", str(RUNNER / name)],
+                          env={"PATH": "/usr/bin:/bin", **env}, capture_output=True, text=True, timeout=30)
 
 
 class JobStarted(unittest.TestCase):
@@ -91,6 +92,12 @@ class JobCompleted(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(sorted(path.name for path in self.work.iterdir()), ["_temp"])
         self.assertFalse((self.home / "rustup.log").exists())
+
+    def test_a_failing_rustup_never_keeps_the_jobs_files(self):
+        (self.home / "bin/rustup").write_text("#!/bin/bash\nexit 1\n")
+        result = hook("job-completed.sh", self.env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(sorted(path.name for path in self.work.iterdir()), ["_temp"])
 
     def test_fails_where_there_is_no_work_folder(self):
         result = hook("job-completed.sh", {**self.env, "HOME": str(self.home / "elsewhere")})

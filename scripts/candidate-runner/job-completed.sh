@@ -16,22 +16,27 @@ if [[ ! -d "$work" ]]; then
   exit 1
 fi
 
+# The pin is read before the checkout that holds it goes.
+channel=""
 pin="${GITHUB_WORKSPACE:-}/rust-toolchain.toml"
 if [[ -n "${GITHUB_WORKSPACE:-}" && -f "$pin" ]]; then
   channel="$(sed -n 's/^channel *= *"\(.*\)"$/\1/p' "$pin")"
-  if [[ -n "$channel" ]]; then
-    rustup toolchain list | awk '$1 ~ /-/ { print $1 }' | while read -r toolchain; do
-      [[ "$toolchain" == "$channel"-* ]] || rustup toolchain uninstall "$toolchain"
-    done
-  fi
 fi
 
 # _temp is the runner's, which it empties itself at the start and end of a job.
 for entry in "$work"/* "$work"/.[!.]*; do
-  [[ -e "$entry" && "$entry" != "$work/_temp" ]] && rm -rf "$entry"
+  if [[ -e "$entry" && "$entry" != "$work/_temp" ]]; then rm -rf "$entry"; fi
 done
 left="$(find "$work" -mindepth 1 -maxdepth 1 ! -name _temp)"
 if [[ -n "$left" ]]; then
   echo "::error::the job's files could not all be removed: $left"
   exit 1
+fi
+
+# Last, so a rustup failure, which the runner's `bash -e -o pipefail` turns
+# into this hook's, never keeps the job's files.
+if [[ -n "$channel" ]]; then
+  rustup toolchain list | awk '$1 ~ /-/ { print $1 }' | while read -r toolchain; do
+    if [[ "$toolchain" != "$channel"-* ]]; then rustup toolchain uninstall "$toolchain"; fi
+  done
 fi
