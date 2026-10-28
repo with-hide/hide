@@ -40,15 +40,42 @@ export async function tabsBothSides(herdr: HerdrFixture, page: Page): Promise<un
   return { herdr: herdrTabs(herdr), page: await pageTabs(page) };
 }
 
+/** Failed requests one page keeps for its dump; past it only the count grows. */
+export const FAILED_REQUESTS_KEPT = 32;
+
+type FailedRequests = { kept: string[]; past: number };
+const failedRequests = new WeakMap<Page, FailedRequests>();
+
+/**
+ * Keeps the requests `page` makes that end without an answer, the first
+ * `FAILED_REQUESTS_KEPT` of them with Chromium's reason, for `pageSide` to
+ * report when a wait gives up. A lost request raises no page error, and an
+ * asset lost this way leaves the shell unmounted; a passing test prints
+ * nothing, and the record goes with the page when it closes. Paths only: the
+ * page address's hash carries the daemon's token.
+ */
+export function keepFailedRequests(page: Page): void {
+  if (failedRequests.has(page)) return;
+  const record: FailedRequests = { kept: [], past: 0 };
+  failedRequests.set(page, record);
+  page.on("requestfailed", (request) => {
+    if (record.kept.length < FAILED_REQUESTS_KEPT) record.kept.push(`${new URL(request.url()).pathname} ${request.failure()?.errorText ?? ""}`);
+    else record.past += 1;
+  });
+  page.once("close", () => failedRequests.delete(page));
+}
+
 /**
  * How far the page got toward the shell: its load state, whether the app
- * mounted and which screen it shows, the projects its sidebar lists, and each
- * request it made with the status it got (0 for one that never answered), so
- * a shell that never drew says whether an asset, the socket or the snapshot
- * stopped it. Paths only: the address's hash carries the daemon's token.
+ * mounted and which screen it shows, the projects its sidebar lists, each
+ * request it made with the status it got (0 for one that never answered) and
+ * the failed requests `keepFailedRequests` kept, so a shell that never drew
+ * says whether an asset, the socket or the snapshot stopped it. Paths only:
+ * the address's hash carries the daemon's token.
  */
-export function pageSide(page: Page): Promise<unknown> {
-  return page.evaluate(() => {
+export async function pageSide(page: Page): Promise<unknown> {
+  const failed = failedRequests.get(page) ?? null;
+  const drawn = await page.evaluate(() => {
     const requests = performance.getEntriesByType("resource").map((entry) => {
       const timing = entry as PerformanceResourceTiming;
       return { path: new URL(timing.name).pathname, status: timing.responseStatus, ms: Math.round(timing.duration) };
@@ -66,4 +93,5 @@ export function pageSide(page: Page): Promise<unknown> {
       requests,
     };
   });
+  return { ...drawn, failed: failed && { kept: [...failed.kept], past: failed.past } };
 }

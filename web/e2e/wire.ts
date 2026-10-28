@@ -5,7 +5,7 @@
 import { expect, type Locator, type Page, type WebSocket } from "@playwright/test";
 import path from "node:path";
 import { chord } from "./chords";
-import { dumpOnFailure, pageSide } from "./failure-dump";
+import { dumpOnFailure, keepFailedRequests, pageSide } from "./failure-dump";
 import { animationsFinished } from "./wait";
 
 /** What the English shell names the core's own machine on the system the fixture runs on (`systemMachineKey` in `web/src/screenMachine.ts`). */
@@ -23,14 +23,7 @@ export function countSent(page: Page, last: Map<string, Record<string, unknown>>
   // flow shows which side moved and when; Playwright prints it for a failure.
   const trace = process.env.HIDE_E2E_TRACE ? (line: string) => console.log(`[${Date.now()}] ${line}`) : null;
   page.on("pageerror", (error) => console.log(`[pageerror] ${error.message}`));
-  // A request with no answer (a refused or failed loopback connect) raises no
-  // page error; an asset lost this way leaves the shell unmounted. One the
-  // page or its closing cancelled is not a failure. The path only: the page
-  // address's hash carries the daemon's token.
-  page.on("requestfailed", (request) => {
-    const reason = request.failure()?.errorText ?? "";
-    if (reason !== "net::ERR_ABORTED") console.log(`[request failed] ${new URL(request.url()).pathname} ${reason}`);
-  });
+  keepFailedRequests(page);
   page.on("websocket", (ws: WebSocket) => {
     ws.on("socketerror", (error) => console.log(`[ws error] ${error}`));
     ws.on("close", () => trace?.("ws closed"));
