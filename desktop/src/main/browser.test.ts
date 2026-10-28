@@ -31,7 +31,7 @@ describe("native browser load generations", () => {
       const page = {
         key: "manual", workspace, id: "manual", applied: 1,
         partition: browserPartition(workspace, requested, null), route: null,
-        state: { url: requested, loading: true, failure: null }, report: null,
+        state: { url: requested, loading: true, failure: null }, report: null, settled: new Set(),
         view: { webContents: { loadURL } },
       };
       (Reflect.get(subject, "pages") as Map<string, unknown>).set(page.key, page);
@@ -367,9 +367,9 @@ describe("unloading hidden pages (PRD browser-tab-idle-unload)", () => {
     const pages = Reflect.get(subject, "pages") as Map<string, Record<string, unknown>>;
     let contentsId = 0;
     const page = (id: string, extra: Record<string, unknown> = {}) => {
-      const contents = Object.assign(new EventEmitter(), { id: ++contentsId, isFocused: () => false, isDestroyed: () => false, close: vi.fn(), setWindowOpenHandler: vi.fn(), getURL: () => `https://${id}.example/`, getTitle: () => id });
+      const contents = Object.assign(new EventEmitter(), { id: ++contentsId, isFocused: () => false, isDestroyed: () => false, isCurrentlyAudible: () => false, close: vi.fn(), setWindowOpenHandler: vi.fn(), getURL: () => `https://${id}.example/`, getTitle: () => id });
       const value = {
-        key: `${workspace}\u0001${id}`, workspace, id, visible: false, placed: false, shownAt: 0, idleSince: 0, playing: false, downloads: 0, settled: null,
+        key: `${workspace}\u0001${id}`, workspace, id, visible: false, placed: false, shownAt: 0, idleSince: 0, playing: false, downloads: 0, settled: new Set(),
         view: { webContents: contents, setVisible: vi.fn(), setBounds: vi.fn() }, state: { url: `https://${id}.example/`, loading: false, failure: null },
         report: null, route: null, applied: 3, partition: "persist:hide-browser-web", fileRestricted: true, device: null, emulated: null, bounds: { x: 0, y: 0, width: 640, height: 480 }, ...extra,
       };
@@ -396,7 +396,13 @@ describe("unloading hidden pages (PRD browser-tab-idle-unload)", () => {
       page("placed", { placed: true });
       const playing = page("playing");
       (playing.view.webContents as EventEmitter).emit("media-started-playing");
-      page("downloading", { downloads: 1 });
+      // A download its page started, through the session's own handler.
+      const downloading = page("downloading");
+      const handlers = new Map<string, (...args: unknown[]) => void>();
+      Object.assign(session, { fromPartition: vi.fn(() => ({ setPermissionRequestHandler: vi.fn(), setPermissionCheckHandler: vi.fn(), on: (name: string, handler: (...args: unknown[]) => void) => handlers.set(name, handler), webRequest: { onBeforeRequest: vi.fn() } })) });
+      Reflect.get(subject, "sessionFor").call(subject, "persist:hide-browser-web");
+      const item = Object.assign(new EventEmitter(), { getMimeType: () => "application/zip" });
+      handlers.get("will-download")!({ preventDefault: vi.fn() }, item, downloading.view.webContents);
       const driven = page("driven");
       Reflect.get(subject, "cdpLeases").set((driven.view.webContents as { id: number }).id, {});
       const opener = page("opener");
@@ -406,6 +412,10 @@ describe("unloading hidden pages (PRD browser-tab-idle-unload)", () => {
       await pass(EVERY);
       expect(gone()).toEqual(["idle"]);
       expect(unloads()).toEqual([{ id: "idle", reason: "idle" }]);
+      // The download finishing ends its hold, and the bound counts from then (B4).
+      item.emit("done");
+      await pass(BOUND);
+      expect(gone()).toEqual(["idle", "downloading"]);
     } finally {
       vi.useRealTimers();
     }
@@ -471,6 +481,8 @@ describe("unloading hidden pages (PRD browser-tab-idle-unload)", () => {
       // Loaded, it is just seen: the next check keeps it.
       await pass(EVERY);
       expect(pages.has(revived.key as string)).toBe(true);
+      // Loaded and settled, its record is gone: the next connection drives it as it is.
+      expect(await subject.cdpRevive(scope)).toBe("none");
       // Nothing moved on the operator's screen.
       expect(send.mock.calls.map(([, event]) => (event as { kind: string }).kind).filter((kind) => kind !== "state")).toEqual([]);
       expect(log.event.mock.calls.filter(([name]) => name === "browser.reloaded_for_agent")).toEqual([["browser.reloaded_for_agent", { id: "mock" }], ["browser.reloaded_for_agent", { id: "mock" }]]);
@@ -481,6 +493,42 @@ describe("unloading hidden pages (PRD browser-tab-idle-unload)", () => {
       expect(pages.has(`${workspace}\u0001pending`)).toBe(false);
       expect(await subject.cdpRevive({ ...scope, display_id: "other" })).toBe("none");
       expect(await subject.cdpRevive({ ...scope, area_id: "a2" })).toBe("none");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("holds a second connection until the page loads, and loads a page that failed after the wait again (B10, B11)", async () => {
+    try {
+      const { subject, page, pages, pass } = views();
+      page("slow");
+      await pass(BOUND);
+      let revived!: ReturnType<typeof page>;
+      Reflect.set(subject, "create", (_window: unknown, _owner: string, display: Record<string, unknown>) => {
+        revived = page(display.id as string, { state: { url: display.url, loading: true, failure: null } });
+        return revived;
+      });
+      const load = vi.fn();
+      Reflect.set(subject, "load", load);
+      const update = (change: Record<string, unknown>) => Reflect.get(subject, "update").call(subject, revived, change);
+      const scope = { workspace, area_id: "a1", display_id: "slow" };
+      let first: string | null = null;
+      let second: string | null = null;
+      void subject.cdpRevive(scope).then((outcome) => { first = outcome; });
+      void subject.cdpRevive(scope).then((outcome) => { second = outcome; });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(pages.size).toBe(1);
+      expect([first, second]).toEqual([null, null]);
+      // Past the wait both drive the page as it is, still loading.
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect([first, second]).toEqual(["loaded", "loaded"]);
+      // Its load fails later: the next connection loads it again.
+      update({ loading: false, failure: "Failed to load (-105)" });
+      const retry = subject.cdpRevive(scope);
+      expect(load).toHaveBeenCalledExactlyOnceWith(revived, "https://slow.example/");
+      update({ loading: true, failure: null });
+      update({ loading: false });
+      expect(await retry).toBe("loaded");
     } finally {
       vi.useRealTimers();
     }

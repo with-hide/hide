@@ -210,6 +210,8 @@ export class BrowserCdpGateway {
   private readonly listenAbort = new AbortController();
   private closing: Promise<void> | null = null;
   private stopped = false;
+  /** Bumped by every revoke of all capabilities, so a `/connect` that waited across one grants nothing. */
+  private revocations = 0;
   private available = false;
   private httpPending = 0;
   private readonly unsubscribe: () => void;
@@ -265,6 +267,7 @@ export class BrowserCdpGateway {
   }
 
   private revokeAll(): void {
+    this.revocations++;
     this.capabilities.clear();
     for (const client of [...this.clients]) this.end(client);
   }
@@ -365,18 +368,21 @@ export class BrowserCdpGateway {
         const incarnation = this.options.incarnation(scope);
         if (incarnation === null || !Number.isSafeInteger(incarnation) || incarnation < 0) { this.reply(response, 409, { error: "Workspace area is no longer authorized" }); return; }
         if (this.stopped || !this.available) { this.reply(response, 503, { error: "Desktop is not attached" }); return; }
+        // An agent's display whose page the host unloaded loads again, or
+        // finishes loading again, before it is driven; any other display
+        // answers `none` at once.
+        if (scope.display_id && !purpose && this.options.revive) {
+          const revocations = this.revocations;
+          const revived = await this.options.revive(scope);
+          // A revoke during the load ended what this request was granted.
+          if (this.stopped || !this.available || this.revocations !== revocations) { this.reply(response, 503, { error: "Desktop is not attached" }); return; }
+          if (revived === "failed") { this.reply(response, 409, { error: "Display page failed to load" }); return; }
+        }
         let existing = [...this.capabilities.values()].find((item) => JSON.stringify(item.scope) === JSON.stringify(scope) && item.purpose === purpose);
         if (existing) { this.eligible(existing); if (!this.capabilities.has(existing.path)) existing = undefined; }
         if (!existing && this.capabilities.size >= MAX_CAPABILITIES) { this.reply(response, 429, { error: "Capability limit exceeded" }); return; }
         const capability: Capability = existing ?? { path: `/cdp/${secret()}`, scope, ...(purpose ? { purpose } : {}), incarnation, generations: new Map() };
-        let pages = this.eligible(capability);
-        // An agent's display whose page the host unloaded loads again before it is driven.
-        if (scope.display_id && pages.length === 0 && !purpose && this.options.revive) {
-          const revived = await this.options.revive(scope);
-          if (this.stopped || !this.available) { this.reply(response, 503, { error: "Desktop is not attached" }); return; }
-          if (revived === "failed") { this.reply(response, 409, { error: "Display page failed to load" }); return; }
-          pages = this.eligible(capability);
-        }
+        const pages = this.eligible(capability);
         if (scope.display_id && pages.length === 0) { this.reply(response, 409, { error: purpose ? "Display has no eligible browser target" : "Display has no eligible HTTP(S) browser target; native files are unsupported" }); return; }
         this.capabilities.set(capability.path, capability);
         this.reply(response, 200, { cdp_http_url: `${this.endpoint}${capability.path}`, browser_ws_url: this.browserUrl(capability), ...(scope.display_id ? { display_id: scope.display_id } : {}) });

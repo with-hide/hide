@@ -72,8 +72,8 @@ type Page = {
   playing: boolean;
   /** Its downloads in progress, its popups' included. */
   downloads: number;
-  /** Called once its load settles, for an agent's connection waiting on it. */
-  settled: (() => void) | null;
+  /** Called once its load settles, for the agents' connections waiting on it; at most `MAX_HTTP_REQUESTS` of the gateway's. */
+  readonly settled: Set<() => void>;
   state: BrowserPageState;
   /** The device size the page lays out at, null to fit its slot, with the bounds it was last placed at. */
   device: BrowserDevicePlacement | null;
@@ -487,6 +487,7 @@ export class BrowserViews {
       else if (page.workspace !== workspace || !placed.has(page.key)) {
         // A retained page outside the front presentation stays alive and hidden.
         if (this.returnTo === page) this.returnTo = null;
+        if (page.placed || page.visible) page.idleSince = this.idle.now();
         page.placed = false;
         this.show(page, false);
       }
@@ -498,9 +499,13 @@ export class BrowserViews {
       let page = this.pages.get(key);
       if (!display.rect) {
         if (page) {
+          if (page.placed || page.visible) page.idleSince = now;
           page.placed = false;
           this.show(page, false);
         }
+        // An unloaded page follows the address and load the core asks of it now.
+        const record = this.unloaded.get(key);
+        if (record && !display.grant) Object.assign(record, { url: display.url, load: display.load });
         continue;
       }
       if (!page) page = this.create(window, workspace ?? "", display);
@@ -588,7 +593,7 @@ export class BrowserViews {
       idleSince: this.idle.now(),
       playing: false,
       downloads: 0,
-      settled: null,
+      settled: new Set(),
       state: { url: display.url, title: "", loading: true, canGoBack: false, canGoForward: false, failure: null, zoom: 1 },
       device: null,
       bounds: null,
@@ -1050,7 +1055,7 @@ export class BrowserViews {
 
   private update(page: Page, change: Partial<BrowserPageState>): void {
     page.state = { ...page.state, ...change };
-    if (page.settled && (!page.state.loading || page.state.failure)) page.settled();
+    if (!page.state.loading || page.state.failure) for (const done of [...page.settled]) done();
     if (page.report) return;
     page.report = setTimeout(() => {
       page.report = null;
@@ -1117,6 +1122,8 @@ export class BrowserViews {
    */
   private held(page: Page): boolean {
     if (page.visible || page.placed || page.playing || page.downloads > 0) return true;
+    // A second player still heard after the first one paused.
+    if (page.view.webContents.isCurrentlyAudible()) return true;
     if (this.cdpLeases.has(page.view.webContents.id)) return true;
     for (const popup of this.popups.values()) if (popup.owner === page) return true;
     return false;
@@ -1138,12 +1145,13 @@ export class BrowserViews {
   }
 
   /**
-   * An agent's connection to a display with no live page: an unloaded web
-   * page loads its address again, hidden, with the screen, its selection and
-   * its areas left as they are, and the connection waits for that load (B10).
-   * A load that failed stays failed on its tab, and the agent's next
-   * connection loads it again (B11). `none` is a display with nothing to
-   * load again here.
+   * An agent's connection to a display: an unloaded web page loads its
+   * address again, hidden, with the screen, its selection and its areas left
+   * as they are, and the connection waits for that load (B10). One already
+   * loading again is waited on the same way, so a second connection drives
+   * no half-loaded page. A load that failed stays failed on its tab, and the
+   * agent's next connection loads it again (B11). `none` is a display with
+   * nothing to load again here: a live page, a pending one, a file.
    */
   async cdpRevive(scope: CdpScope): Promise<"none" | "loaded" | "failed"> {
     const window = this.window;
@@ -1152,38 +1160,43 @@ export class BrowserViews {
     const record = this.unloaded.get(key);
     if (!record || record.area_id !== scope.area_id || this.cdpAreas.get(key) !== scope.area_id) return "none";
     let page = this.pages.get(key);
-    if (page && !page.state.failure) return "none";
-    if (page) this.load(page, record.url);
-    else {
-      page = this.create(window, record.workspace, { id: record.id, area_id: record.area_id, url: record.url, load: record.load, rect: null, visible: false });
-      page.device = record.device;
-      page.bounds = record.bounds;
-      if (record.bounds) page.view.setBounds(record.bounds);
-      this.emulate(page);
+    if (page && !page.state.loading && !page.state.failure) {
+      this.unloaded.delete(key);
+      return "none";
     }
-    // Loaded again counts as seen, so the next check does not close it at once.
-    page.shownAt = page.idleSince = this.idle.now();
-    this.log.event("browser.reloaded_for_agent", { id: page.id });
-    this.evictOverCap();
-    this.publishCdp();
+    if (!page || page.state.failure) {
+      if (page) this.load(page, record.url);
+      else {
+        page = this.create(window, record.workspace, { id: record.id, area_id: record.area_id, url: record.url, load: record.load, rect: null, visible: false });
+        page.device = record.device;
+        page.bounds = record.bounds;
+        if (record.bounds) page.view.setBounds(record.bounds);
+        this.emulate(page);
+      }
+      // Loaded again counts as seen, so the next check does not close it at once.
+      page.shownAt = page.idleSince = this.idle.now();
+      this.log.event("browser.reloaded_for_agent", { id: page.id });
+      this.evictOverCap();
+      this.publishCdp();
+    }
     await this.waitSettled(page);
     if (this.pages.get(key) !== page || page.state.failure) return "failed";
-    this.unloaded.delete(key);
+    // A page still loading past the wait is driven as it is; its record stays until it settles, so a failure later is loaded again too.
+    if (!page.state.loading) this.unloaded.delete(key);
     return "loaded";
   }
 
-  /** Resolves once the page's load settles, it closes, or `REVIVE_WAIT_MS` passes; a page still loading then is driven as it is. */
+  /** Resolves once the page's load settles, it closes, or `REVIVE_WAIT_MS` passes. */
   private waitSettled(page: Page): Promise<void> {
     if (!page.state.loading || page.state.failure) return Promise.resolve();
     return new Promise((done) => {
       const finish = () => {
         clearTimeout(timer);
-        if (page.settled === finish) page.settled = null;
+        page.settled.delete(finish);
         done();
       };
       const timer = setTimeout(finish, REVIVE_WAIT_MS);
-      page.settled?.();
-      page.settled = finish;
+      page.settled.add(finish);
     });
   }
 
@@ -1198,12 +1211,12 @@ export class BrowserViews {
       this.emit({ kind: "gone", workspace: page.workspace, id: page.id, load: page.applied, url: page.state.url, ...(page.grant ? { external: true as const } : {}) });
       const area_id = this.cdpAreas.get(page.key);
       // Only a web page enters CDP, so only it can be loaded again for an agent.
-      if (area_id && page.fileRestricted && !page.grant) {
+      if (area_id && page.fileRestricted && !page.grant && !isFileAddress(page.state.url)) {
         this.unloaded.set(page.key, { workspace: page.workspace, id: page.id, area_id, url: page.state.url, load: page.applied, device: page.device, bounds: page.bounds });
       }
       this.log.event("browser.unloaded", { id: page.id, reason: reason === "idle" ? "idle" : "cap" });
     }
-    page.settled?.();
+    for (const done of [...page.settled]) done();
     if (this.cycleInput?.page === page) this.cancelCycle();
     if (this.returnTo === page) this.returnTo = null;
     this.pages.delete(page.key);

@@ -73,7 +73,7 @@ A remote `file:` address is loaded through a checkout-scoped route, never as a f
 `hide browser connect [--display <id>]` uses the caller's existing Workspace credential and prints a JSON result with `cdp_http_url` and `browser_ws_url`.
 It accepts no Workspace override and requires a connected desktop renderer.
 An explicit display must be a browser in that credential's checkout; an omitted display uses that checkout's active View area for new targets.
-An explicit display whose web page the desktop app unloaded loads its address again first, hidden, and the connection waits up to five seconds for that load; a page command (`hide browser snapshot` and the rest) connects the same way.
+An explicit display whose web page the desktop app unloaded loads its address again first, hidden, and the connection waits up to five seconds for that load, then drives the page as it is; a page command (`hide browser snapshot` and the rest) connects the same way.
 Discovery does not reveal the Workspace, activate the app, or start a daemon.
 
 The desktop registers one private numeric-loopback gateway address and random control token with hided through daemon-authenticated `/browser-control`.
@@ -427,9 +427,11 @@ One check runs each minute while the window is open (`IDLE_CHECK_MS`), reading a
 
 An unloaded page closes like an evicted one: its renderer ends, its tab and title stay in the View list looking as they did, and the host reports it `gone`, which the core reports as `unloaded` for that load.
 Shown again, it loads its address in place behind the ordinary loading state; its session, so a sign-in, stays, while its scroll position and anything typed into it are gone, and a load that fails shows the ordinary failure with the toolbar's reload.
-An agent's connection to an unloaded web page (`/connect` naming its display) loads it again hidden, without moving the operator's View, area, tab or keyboard (`BrowserViews.cdpRevive`): the host keeps the address, load stamp and size of each unloaded web page whose display the core still retains, and drops them with the display.
+An agent's connection to an unloaded web page (`/connect` naming its display) loads it again hidden, without moving the operator's View, area, tab or keyboard (`BrowserViews.cdpRevive`): the host keeps the address, load stamp and size of each unloaded web page whose display the core still retains, follows the address and stamp the front Workspace's sync gives it, and drops them with the display or once the page has loaded.
+A second connection while that load runs waits for the same load, and a capability revoked during the wait is not granted (`503`).
 A page loaded again this way counts as just seen, so the next check does not close it again.
-When that load fails, the connection is refused with `Display page failed to load`, the View reports `failed`, and the next connection loads it again.
+When that load fails, the connection is refused with `Display page failed to load`, the View reports `failed`, and the next connection loads it again; so does a load that fails after the five-second wait.
+A display in a background Workspace whose load the core moved while its page was unloaded keeps the stamp the host last saw, so loading it for an agent fails its route until the operator shows the display once.
 A file page or an outside file is not loaded again for an agent, since neither enters CDP; it loads when shown.
 A page the core has not yet seen since the app started stays `pending`, as before, until it is shown.
 Each unload is logged as `browser.unloaded {id, reason: idle | cap}` and each load for an agent as `browser.reloaded_for_agent {id}`; neither names the address.

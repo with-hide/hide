@@ -532,7 +532,8 @@ describe("scoped desktop CDP public boundary", () => {
     const { address, client } = await fixture({
       revive: async (scope, pages) => {
         asked.push(scope);
-        if (outcome === "loaded") pages.push(electronPage(31, scope.display_id!, scope.area_id, scope.workspace));
+        if (scope.display_id !== "unloaded" || pages.some((page) => page.id === "unloaded")) return "none";
+        if (outcome === "loaded") pages.push(electronPage(31, scope.display_id, scope.area_id, scope.workspace));
         return outcome;
       },
     });
@@ -548,11 +549,25 @@ describe("scoped desktop CDP public boundary", () => {
     const cap = await connected.json() as { browser_ws_url: string; display_id: string };
     expect(cap.display_id).toBe("unloaded");
     expect((await attach(await client(cap.browser_ws_url), "page-31"))).toEqual(expect.any(String));
-    // A live page, an area connection and Comment never ask for one.
-    await connect({ workspace: "local\0/checkout", area_id: "a1", display_id: "d1" });
+    // A live page answers `none` and connects as before; an area connection and Comment never ask.
+    expect((await connect({ workspace: "local\0/checkout", area_id: "a1", display_id: "d1" })).status).toBe(200);
     await connect({ workspace: "local\0/checkout", area_id: "a1" });
     await connect({ ...scope, display_id: "other", purpose: "comment" });
-    expect(asked).toEqual([scope, scope]);
+    expect(asked.map((row) => row.display_id)).toEqual(["unloaded", "unloaded", "d1"]);
+  });
+
+  it("grants nothing to a connection whose page loaded across a revoke", async () => {
+    const during = { revoke: async (): Promise<unknown> => undefined };
+    const { address } = await fixture({
+      revive: async (scope, pages) => {
+        await during.revoke();
+        pages.push(electronPage(32, scope.display_id!, scope.area_id, scope.workspace));
+        return "loaded";
+      },
+    });
+    during.revoke = () => fetch(`${address.endpoint}/revoke`, { method: "POST", headers: { authorization: `Bearer ${address.token}` } });
+    const response = await fetch(`${address.endpoint}/connect`, { method: "POST", headers: { authorization: `Bearer ${address.token}`, "content-type": "application/json" }, body: JSON.stringify({ workspace: "local\0/checkout", area_id: "a1", display_id: "late" }) });
+    expect(response.status).toBe(503);
   });
 
   it("revokes an area capability if a bound native generation becomes a file", async () => {
