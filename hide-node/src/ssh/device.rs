@@ -5,7 +5,6 @@
 use super::host::{self, HelperPackages, PaneEventsSlot, PaneHook, TerminalHook};
 use super::hosts::{Resolve, ssh_g};
 use super::*;
-use hide_node_link::attachments::AttachmentFile;
 use hide_node_link::device::{
     DeviceConnector, DeviceTransport, DialedTransport, EstablishError, Established, HostConsent,
     OnClose, SshHostListing,
@@ -155,9 +154,9 @@ pub struct SshDevice {
 }
 
 impl SshDevice {
-    /// The already initialized SSH client, for a ready route's forwards.
-    /// A snapshot or route read never resolves configuration or starts I/O.
-    pub fn client(&self) -> Option<&Arc<RusshRemoteClient>> {
+    /// The already initialized SSH client, for the cached Herdr reads. A
+    /// snapshot read never resolves configuration or starts I/O.
+    fn client(&self) -> Option<&Arc<RusshRemoteClient>> {
         self.client
             .initialized
             .get()
@@ -250,10 +249,6 @@ impl DeviceTransport for SshDevice {
         self.client()
             .and_then(|client| client.cached_herdr_version())
     }
-
-    fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
-        self
-    }
 }
 
 impl DialedTransport for SshDevice {
@@ -291,23 +286,6 @@ impl DialedTransport for SshDevice {
             self.terminals.clone(),
             on_close,
         )
-    }
-
-    fn stage_attachments(
-        &self,
-        request_id: &str,
-        files: &[AttachmentFile],
-        cancelled: &AtomicBool,
-    ) -> Result<Vec<String>, String> {
-        self.client
-            .resolve()?
-            .stage_attachments(request_id, files, cancelled)
-    }
-
-    fn remove_attachments(&self, request_id: &str, files: &[AttachmentFile]) {
-        if let Some(client) = self.client() {
-            client.remove_attachments(request_id, files);
-        }
     }
 }
 

@@ -80,11 +80,16 @@ impl LabelServices {
         let store = Arc::new(LabelStore::open(state_dir, home.as_deref(), node.as_str()));
         let settings_home = home.clone();
         let standing = Arc::new(crate::ai::AiStanding::default());
-        // The labels run on the core's own machine's provider logins.
+        // The labels run on the logins of the machine each agent is placed
+        // on: the core's own unless the operator chose a device's.
+        let machines = crate::ai::AiMachines {
+            own: own_node,
+            devices: crate::runtime::device_links(runtime.clone()),
+        };
         let analyzer = LabelAnalyzer::spawn(
             Box::new(move || analysis_settings(&runtime, settings_home.as_deref())),
             Arc::clone(&standing),
-            own_node,
+            machines,
             gate,
             usage,
         )?;

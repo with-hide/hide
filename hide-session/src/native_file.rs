@@ -19,6 +19,10 @@ use crate::{
 pub(crate) struct Header {
     pub id: String,
     pub cwd: PathBuf,
+    /// When the session itself was made, which a fork's copied records do
+    /// not tell: Pi's and omp's header `timestamp`, Grok's summary
+    /// `created_at`.
+    pub opened_at_unix_ms: Option<u64>,
 }
 
 /// Routing constraint of Pi's native --session <id>: its default cwd folder
@@ -325,6 +329,7 @@ fn header_budgeted(agent: Agent, path: &Path, remaining: &mut u64) -> Result<Hea
         return Ok(Header {
             id: summary.id,
             cwd: summary.cwd,
+            opened_at_unix_ms: summary.created_at_unix_ms,
         });
     }
     let file =
@@ -381,6 +386,7 @@ pub(crate) fn header_from_reader(
     Ok(Header {
         id: id.to_owned(),
         cwd,
+        opened_at_unix_ms: crate::timestamp_ms(value.get("timestamp")).ok(),
     })
 }
 

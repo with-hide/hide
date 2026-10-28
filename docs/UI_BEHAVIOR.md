@@ -1002,7 +1002,7 @@ An empty Project says no cards yet and when sessions are analyzed.
 
 ## Terminal image attachment boundary
 
-Web owner: `web/src/attachments.ts`, `web/src/PaneView.tsx`, `web/src/explorerDrag.ts`, `web/src/terminals.ts`. Core owner: `herdr-core/src/runtime/attachments.rs`; device staging `hide-node/src/ssh/attachments.rs`.
+Web owner: `web/src/attachments.ts`, `web/src/PaneView.tsx`, `web/src/explorerDrag.ts`, `web/src/terminals.ts`. Core owner: `herdr-core/src/runtime/attachments.rs`; device staging `hide-host/src/attachments.rs`.
 
 Dragging an Explorer file onto a terminal focuses that pane and inserts the original absolute path as quoted text, without submitting it.
 Image files instead read through the checkout's existing bounded file-bytes stream and enter the same binary attachment flow as an external image drop, retaining their original format and filename.
@@ -1014,7 +1014,7 @@ Dropping local file URLs into a visible terminal focuses that receiving pane and
 Paste captures PNG or TIFF clipboard images at the same ingress; ordinary text and keys keep their existing terminal behavior.
 The core reserves the original pane and connection generation before asynchronous image preparation, file validation, or transfer, so later focus changes cannot redirect the attachment.
 Clipboard images are normalized into private PNG files off the input thread, while the core owns transfer state, held input, retry, and cancellation.
-Local files keep their original paths after validation; remote attachments are uploaded through authenticated SFTP and insert only the resulting remote paths.
+Local files keep their original paths after validation; a device's attachments are staged through that device's link and insert only the resulting device paths.
 When the terminal advertises bracketed paste, each path has its own paste frame and the complete drop is enqueued once in file order; otherwise the paths are inserted as shell-quoted text with a trailing space.
 Spaces and apostrophes survive; shell expansion characters are escaped, and paths containing control characters, symlinks, directories, and special files are refused with an actionable notice.
 Nothing performs automatic Enter or replaces existing prompt text.
@@ -2955,7 +2955,7 @@ A Mac whose kit has already run (an existing install) never sees it, and nothing
 Until the choice is made the kit puts nothing for Claude Code or Codex on a fresh Mac either, so the hooks wait for Continue or for Settings, Agents.
 A device whose own record waits gets the saved choice once per run, by what is installed there, as soon as it reports (also after it was not connected when Continue was pressed); with nothing chosen it is told that, so its record stops waiting, and nothing is installed for agents.
 A device that still waits after it was sent the choice is logged once (`first_run_choice.unanswered`) and not sent it again until it reconnects.
-Under `Continue`, one line names the agent Hide AI will use: the first agent in that fixed order that is switched on in the step and signed in (`firstRunAgent` in `web/src/hideAi.ts`, "Hide AI uses Claude Code", `Hide AI가 쓰는 에이전트: Claude Code`), read from `status.background_ai.providers[].state`, which the step asks the core to probe while it is open; with no such agent the line is absent, and it follows each flip of a tile (PRD settings-cleanup D-18, B45, B46).
+Under `Continue`, one line names the agent Hide AI will use: the first agent in that fixed order that is switched on in the step and signed in (`firstRunAgent` in `web/src/hideAi.ts`, "Hide AI uses Claude Code", `Hide AI가 쓰는 에이전트: Claude Code`), read from this machine's rows of `status.background_ai.providers[].state`, which the step asks the core to probe while it is open; with no such agent the line is absent, and it follows each flip of a tile (PRD settings-cleanup D-18, B45, B46).
 An agent installed later appears in these rows off and is never turned on by a pass.
 
 ### Conductor
@@ -2980,6 +2980,9 @@ Every value is the core's `status.background_ai`; the tab sends `ai_settings` ev
   Everything below it dims and is out of reach (`inert`), and the stored values stay as they were, so turning it on resumes with them.
 - **Runs on** has an Agent select and a Model select.
   The Agent select lists only agents the core would accept (`selectable`: installed, signed in, a Hide AI backend, a call that cannot change files) with each official mark, and the chosen agent stays in it with its state even when it has a problem; the same row shows its state as symbol and words (Signed in, Not signed in, Out of usage until 3:10 PM).
+  An agent signed in on a connected device is listed beside this machine's as its name and the device's, such as `Claude Code · WSL Ubuntu`, and choosing it runs Hide AI there on the device's own login (PRD wsl-device B11, B12).
+  A first run takes an agent signed in on the core's machine before a device's, and a choice the operator made never moves on its own, not even when the same agent signs in here later.
+  While the chosen device is not connected its row reads Unavailable, nothing wakes the device for Hide AI, and its work resumes once the device is back (B13); it cannot be chosen again until then.
   The Model select lists what the agent reported, with `CLI default` first where the agent can be asked without a model, and a marker "Fixed list" when an older peer reports that catalog form; the stored model is always offered, and a list that failed to load leaves it in place with one line.
 - **If <Runs on> can't answer** lists the agents the operator added, in the order added, each with a number, its mark and state, its own model select and a remove ×; there is no switch and no reordering, so an empty list is no fallback and a different order is a remove and an add.
   `+ Add agent` opens a menu of selectable agents not yet used; installed agents Hide AI cannot use yet are listed under "Hide AI can't use these yet", dimmed, each with its reason (not signed in, can't guarantee it only reads, not supported yet), and an agent that is not installed is not listed.
@@ -2994,7 +2997,7 @@ Every value is the core's `status.background_ai`; the tab sends `ai_settings` ev
 - While another agent answers, one line under Runs on reads "Using Codex · Claude Code is out of usage until 3:10 PM" (or "is past your 90% limit until Mon 9:00") and disappears when Runs on answers again.
   With the list empty and Runs on unable to answer, the Agent row says why and that Hide AI is paused; with every listed agent past the limit it reads "Hide AI is paused · every agent is past your 90% limit this week", agent labels show each session's own text and Memory analysis waits, and both resume on their own when the limit is raised or the week turns; nothing else on screen changes, and a failure the operator cannot act on stays in the diagnostic log.
 - With no agent signed in, one line says "Sign in to <first agent that is on> to use Hide AI" (or to turn an agent on in Agents when none is); it appears only after every agent has been probed, and Hide's other features keep working without AI.
-- Hide AI runs the core machine's agents, so in a window on another machine every sign-in state and line above names that machine ("Not signed in on Mac mini", "Claude Code is signed out on Mac mini", "Sign in to Codex on Mac mini to use Hide AI"); the agents have no one sign-in command, so the fix is the machine in words, as the move's Hide AI check says it; on the core's own machine nothing names a machine (PRD core-host-node-move B15, B1).
+- Hide AI runs the core machine's agents unless the operator chose a device's, so in a window on another machine every sign-in state and line above names the core's machine ("Not signed in on Mac mini", "Claude Code is signed out on Mac mini", "Sign in to Codex on Mac mini to use Hide AI"); the agents have no one sign-in command, so the fix is the machine in words, as the move's Hide AI check says it; on the core's own machine nothing names a machine, and a device's agent is already named with its device (PRD core-host-node-move B15, B1).
 - **Features** holds Agent summaries (the `agent_summary` switch of `ai_settings`: off, no agent label is asked for, the one being made is dropped, and every surface names each agent by its session's own title or its provider with no AI line or written question; on again, the kept labels return at once and each pane's current turn is asked for) and Worktree names (the same `issue_settings` value the Issues tab held).
 
 ## Mobile companion

@@ -74,8 +74,28 @@ export function percentOf(used: number): number {
   return Math.round(used);
 }
 
+/** The machine an agent of the order runs on: Runs on's, a fallback entry's, and for any other agent the core's own (null). */
+export function machineOf(ai: BackgroundAi | undefined, id: string | null | undefined): string | null {
+  if (!ai || !id) return null;
+  if (id === ai.provider) return ai.device ?? null;
+  return ai.fallback?.find((entry) => entry.provider === id)?.device ?? null;
+}
+
+/** The row of agent `id` on the machine the order runs it on (PRD wsl-device B11): one agent runs on one machine. */
 export function providerById(ai: BackgroundAi | undefined, id: string | null | undefined): AiProvider | null {
-  return ai?.providers.find((provider) => provider.id === id) ?? null;
+  const machine = machineOf(ai, id);
+  return ai?.providers.find((provider) => provider.id === id && (provider.device_id ?? null) === machine) ?? null;
+}
+
+/** A row's select value: its agent, and the device it runs on after an `@`; an agent id never holds one. */
+export function rowKey(provider: AiProvider): string {
+  return provider.device_id ? `${provider.id}@${provider.device_id}` : provider.id;
+}
+
+/** The agent and the device (null: the core's own machine) a select value names. */
+export function parseRowKey(value: string): { provider: string; device: string | null } {
+  const at = value.indexOf("@");
+  return at < 0 ? { provider: value, device: null } : { provider: value.slice(0, at), device: value.slice(at + 1) };
 }
 
 /**
@@ -94,9 +114,10 @@ export function summariesEnabled(ai: BackgroundAi | undefined): boolean {
   return ai?.enabled !== false && ai?.chosen !== false && ai?.agent_summary === true;
 }
 
-/** Runs on: every agent the core would accept, and the chosen one even when it has a problem (B34). */
+/** Runs on: every agent the core would accept, on each machine, and the chosen one even when it has a problem (B34). */
 export function runsOnChoices(ai: BackgroundAi): AiProvider[] {
-  return ai.providers.filter((provider) => provider.selectable || provider.id === ai.provider);
+  const chosen = providerById(ai, ai.provider);
+  return ai.providers.filter((provider) => provider.selectable || provider === chosen);
 }
 
 function inFallback(ai: BackgroundAi, id: string): boolean {
@@ -161,7 +182,8 @@ export function nobodySignedIn(ai: BackgroundAi): boolean {
  * agents in that order.
  */
 export function firstRunAgent(ai: BackgroundAi | undefined, on: ReadonlySet<string>): AiProvider | null {
-  return ai?.providers.find((provider) => on.has(provider.agent) && provider.state === "ready" && provider.login_checked !== false) ?? null;
+  // `on` is this machine's choice, so only this machine's rows answer it.
+  return ai?.providers.find((provider) => !provider.device_id && on.has(provider.agent) && provider.state === "ready" && provider.login_checked !== false) ?? null;
 }
 
 /** When a usage limit ends: the time of day today, with the weekday on another day. */

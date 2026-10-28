@@ -2,7 +2,7 @@ import { Status, type Tone } from "../components/settings-rows";
 import { percentOf, providerReason, resetTime } from "../hideAi";
 import { useInterfaceTranslation } from "../i18n/client";
 import { requireInterfaceLanguage } from "../i18n/locale";
-import { coreMachineAway } from "../screenMachine";
+import { coreMachineAway, machineName } from "../screenMachine";
 import type { AiProvider, AiRefusal } from "../snapshot";
 import { useShellStore } from "../store";
 
@@ -14,6 +14,9 @@ export function useHideAiWords() {
   const devices = useShellStore((s) => s.rest?.navigator?.devices);
   const coreMachine = coreMachineAway(devices, t);
   const time = (unixMs: number) => resetTime(language, unixMs);
+  /** An agent as the tab names it: "Claude Code", or for one on a connected device "Claude Code · WSL Ubuntu" (PRD wsl-device B11). */
+  const name = (provider: AiProvider): string =>
+    provider.device_id ? `${provider.label} · ${machineName(devices, provider.device_id, t)}` : provider.label;
   /** One short state: "Signed in", "Out of usage until 3:10 PM". */
   const state = (provider: AiProvider): { tone: Tone; text: string } => {
     switch (providerReason(provider)) {
@@ -21,7 +24,8 @@ export function useHideAiWords() {
         // An agent with no sign-in check is ready only because its program was found, so it does not claim to be signed in.
         return provider.login_checked === false ? { tone: "muted", text: t("hideAi.state.loginUnchecked") } : { tone: "ok", text: t("hideAi.state.ready") };
       case "needs_login":
-        return { tone: "warn", text: coreMachine ? t("hideAi.state.needsLoginOn", { machine: coreMachine }) : t("hideAi.state.needsLogin") };
+        // A device's row is named with its machine already; the core machine's is named only when this window is elsewhere.
+        return { tone: "warn", text: coreMachine && !provider.device_id ? t("hideAi.state.needsLoginOn", { machine: coreMachine }) : t("hideAi.state.needsLogin") };
       case "usage_limited":
         return {
           tone: "warn",
@@ -60,7 +64,8 @@ export function useHideAiWords() {
     return { tone: base.tone, text: t("hideAi.state.weekly", { state: base.text, percent }) };
   };
   /** Why Runs on is not answering, as a sentence about the agent: "Claude Code is out of usage until 3:10 PM". */
-  const refusal = (agent: string, why: AiRefusal): string => {
+  const refusal = (provider: AiProvider, why: AiRefusal): string => {
+    const agent = name(provider);
     switch (why.reason) {
       case "usage_limited":
         return why.retry_at_ms
@@ -71,7 +76,7 @@ export function useHideAiWords() {
           ? t("hideAi.reason.pastLimitUntil", { agent, limit: why.limit ?? "", time: time(why.retry_at_ms) })
           : t("hideAi.reason.pastLimit", { agent, limit: why.limit ?? "" });
       case "needs_login":
-        return coreMachine ? t("hideAi.reason.needsLoginOn", { agent, machine: coreMachine }) : t("hideAi.reason.needsLogin", { agent });
+        return coreMachine && !provider.device_id ? t("hideAi.reason.needsLoginOn", { agent, machine: coreMachine }) : t("hideAi.reason.needsLogin", { agent });
       case "not_installed":
         return t("hideAi.reason.notInstalled", { agent });
       case "unsupported":
@@ -82,7 +87,7 @@ export function useHideAiWords() {
   };
   /** The line that asks for a sign-in when no agent is signed in, on the machine whose agents Hide AI runs. */
   const signIn = (agent: string): string => (coreMachine ? t("hideAi.signInOn", { agent, machine: coreMachine }) : t("hideAi.signIn", { agent }));
-  return { state, stateWithUsage, refusal, signIn };
+  return { name, state, stateWithUsage, refusal, signIn };
 }
 
 /** An agent's state as symbol plus words, never colour alone (design 7). */

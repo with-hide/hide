@@ -8,7 +8,7 @@ use hide_kit::{ComponentId, ComponentReport, ComponentState, KitReport};
 use hide_node_link::protocol::{Call, KitAction};
 use std::sync::{Arc, Mutex};
 
-const DEVICE: &str = "studio";
+pub(super) const DEVICE: &str = "studio";
 
 /// A device helper that answers only kit calls: a set report, and a set
 /// removal outcome for `remove`.
@@ -211,7 +211,7 @@ fn settle(shared: &Mutex<Runtime>) {
     }
 }
 
-fn with_consent(helper: Option<Arc<KitDevice>>) -> SharedRuntime {
+pub(super) fn with_consent(helper: Option<Arc<KitDevice>>) -> SharedRuntime {
     let probe = device_runtime(None, None);
     let consent = granted(&probe);
     device_runtime(Some(consent), helper)

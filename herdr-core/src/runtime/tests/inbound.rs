@@ -67,7 +67,7 @@ struct HeldLink;
 
 /// A node's link that stands until the test lets it go, and then ends, so
 /// the core's phase for it can be read at each step.
-fn held_link() -> (Arrived, mpsc::Sender<()>) {
+pub(super) fn held_link() -> (Arrived, mpsc::Sender<()>) {
     held_link_to(super::device_kit::KitDevice::answering(Err(
         "not asked".to_owned()
     )))
@@ -97,13 +97,9 @@ impl DeviceTransport for HeldLink {
     fn cached_herdr_version(&self) -> Option<String> {
         None
     }
-
-    fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
-        self
-    }
 }
 
-fn shared_runtime() -> SharedRuntime {
+pub(super) fn shared_runtime() -> SharedRuntime {
     let shared = SharedRuntime::new(runtime());
     shared
         .lock()

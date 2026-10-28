@@ -521,12 +521,12 @@ impl Runtime {
             .map(|(id, _)| id.clone())
             .collect::<HashSet<_>>();
         let cancel = CancelToken::new();
-        let own_node = self.own_node();
+        let machines = self.ai_machines();
         let gate = self.usage_gate();
         let usage = self.ai_usage();
         let router = settings
             .as_ref()
-            .map(|settings| crate::ai::memory_router(&own_node, settings, &gate, &usage));
+            .map(|settings| crate::ai::memory_router(&machines, settings, &gate, &usage));
         let (nodes, unreached) = self.memory_nodes();
         let delegated = self.delegated_sessions();
         let language = self.output_language();
@@ -2144,9 +2144,11 @@ fn analyze_session(
         })
         .map(|(event, offset, text)| {
             // What another agent sent a session it started is that agent's
-            // instruction, not the operator's word (D-04).
+            // instruction, not the operator's word (D-04), and a Hide letter
+            // (its envelope, or the doorbell's line) is its sender's.
             let kind = match event.kind {
                 EventKind::Human if delegated => "parent_agent",
+                EventKind::Human if !event.from_operator() => "letter",
                 other => other.as_str(),
             };
             json!({
@@ -2744,6 +2746,11 @@ pub(crate) fn write_cards(
             json!({"component":"memory", "kind":"card.evicted", "project_id":source.project_id, "batch_id":batch_id, "card":number, "reason":"card_capacity"})
         );
     }
+    for number in &summary.sources_full {
+        crate::diagnostic!(
+            json!({"component":"memory", "kind":"card.sources_full", "project_id":source.project_id, "batch_id":batch_id, "card":number, "limit":hide_memory::CARD_SOURCE_LIMIT})
+        );
+    }
     for backfill in output.backfill {
         if let Err(error) = store.fill_aliases(
             source.project_id,
@@ -2880,7 +2887,8 @@ fn comparison_text(group: &[Value]) -> String {
 /// Checks the answer against what was sent: a candidate citing an event
 /// outside the group is left out, and the operator's own words are the
 /// sources whose event is `human`, which the store needs to let a correction
-/// replace a card (D-14). Answers how many were left out.
+/// replace a card (D-14), each with a digest of its text, so the same words a
+/// forked session copied count once. Answers how many were left out.
 pub(super) fn validate_candidates(candidates: &mut Vec<Candidate>, events: &[Value]) -> usize {
     let offsets = events
         .iter()
@@ -2903,6 +2911,15 @@ pub(super) fn validate_candidates(candidates: &mut Vec<Candidate>, events: &[Val
             ))
         })
         .collect::<HashMap<_, _>>();
+    let words = events
+        .iter()
+        .filter_map(|event| {
+            Some((
+                event.get("offset")?.as_u64()?,
+                hide_memory::words_digest(event.get("text")?.as_str()?),
+            ))
+        })
+        .collect::<HashMap<_, _>>();
     let before = candidates.len();
     candidates.retain(|candidate| {
         candidate
@@ -2921,6 +2938,11 @@ pub(super) fn validate_candidates(candidates: &mut Vec<Candidate>, events: &[Val
             .source_offsets
             .iter()
             .filter_map(|offset| Some((*offset, *times.get(offset)?)))
+            .collect();
+        candidate.source_words = candidate
+            .human_offsets
+            .iter()
+            .filter_map(|offset| Some((*offset, words.get(offset)?.clone())))
             .collect();
     }
     before - candidates.len()
@@ -3209,6 +3231,7 @@ mod tests {
                         source_offsets: vec![1],
                         human_offsets: vec![1],
                         source_times: Default::default(),
+                        source_words: Default::default(),
                         cited_paths: Vec::new(),
                         relation: CandidateRelation::New,
                     }],
@@ -3701,6 +3724,161 @@ mod tests {
             inputs[0].chars().count(),
             inputs[1].chars().count()
         );
+    }
+
+    #[test]
+    fn an_instruction_shaped_like_the_bell_stays_the_operators_and_the_bell_is_its_senders() {
+        // An instruction the operator typed that begins with the owl or ends
+        // with the inbox tail is theirs: an operator event and a human
+        // source. The doorbell's line Hide typed is the letter's.
+        let fixture = Fixture::new();
+        let checkout = fixture.root.to_string_lossy().into_owned();
+        let user = |text: &str| {
+            json!({"type": "user", "sessionId": SESSION, "cwd": checkout,
+                "timestamp": "2026-10-11T00:00:00Z", "origin": {"kind": "human"},
+                "message": {"role": "user", "content": text}})
+        };
+        fixture.write(&[
+            user("🦉 아이콘은 항상 파란색으로"),
+            user("새 탭은 항상 옆에 열어 · hide inbox"),
+            user("🦉 ci-lead 보고: PR #12를 열었습니다 · 외 1통"),
+        ]);
+        fixture.answer(&[]);
+        assert_eq!(fixture.pass(false, true), ["analyzing", "learned one"]);
+        let sent: Value = serde_json::from_str(&fixture.backend.inputs.lock().unwrap()[0]).unwrap();
+        let kinds = sent["new_events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|event| event["kind"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(kinds, ["human", "human", "letter"]);
+        let store = fixture.store();
+        let cursor = store
+            .load_cursor(
+                CursorReader::Analysis,
+                &fixture.project_id,
+                "claude",
+                SESSION,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(cursor.operator_events, 2);
+        let learned = store
+            .item_by_number(&fixture.project_id, 2)
+            .unwrap()
+            .expect("the analysis wrote a card from the owl instruction");
+        assert_eq!(learned.human_source_count, 1);
+    }
+
+    #[test]
+    fn a_bell_whose_summary_lost_its_emoji_or_looks_like_a_tail_is_still_its_senders() {
+        // Lines the bell writes for summaries that once read as the
+        // operator's: one Codex on Windows receives without its emoji, one
+        // with nothing but an emoji, and two shaped like the line's tails.
+        use crate::delivery::bell::{Ring, line};
+        let bell = |sender, kind, body, inbox, language| {
+            line(&Ring {
+                sender,
+                kind,
+                body,
+                others: 0,
+                inbox,
+                language,
+            })
+        };
+        let korean = crate::model::InterfaceLanguage::Korean;
+        let windows = |line: String| -> String {
+            line.chars()
+                .filter(|c| u32::from(*c) <= 0xFFFF)
+                .collect::<String>()
+                .trim()
+                .to_owned()
+        };
+        let bells = [
+            windows(bell("Codex", "report", "Read 🐈 the letter", true, korean)),
+            windows(bell("Codex", "report", "🐈", true, korean)),
+            bell("ci-lead", "report", "· hide inbox", false, korean),
+            bell(
+                "ci-lead",
+                "report",
+                "· and 2 more",
+                false,
+                crate::model::InterfaceLanguage::English,
+            ),
+        ];
+        let fixture = Fixture::new();
+        let checkout = fixture.root.to_string_lossy().into_owned();
+        let user = |text: &str| {
+            json!({"type": "user", "sessionId": SESSION, "cwd": checkout,
+                "timestamp": "2026-10-11T00:00:00Z", "origin": {"kind": "human"},
+                "message": {"role": "user", "content": text}})
+        };
+        let typed = "Always run tests with nextest before a merge";
+        let lines = std::iter::once(user(typed))
+            .chain(bells.iter().map(|text| user(text)))
+            .collect::<Vec<_>>();
+        fixture.write(&lines);
+        let offsets = lines
+            .iter()
+            .scan(0, |at, line| {
+                let offset = *at;
+                *at += line.to_string().len() as u64 + 1;
+                Some(offset)
+            })
+            .collect::<Vec<_>>();
+        fixture.push(json!({
+            "candidates": [{
+                "text": "Reports arrive as letters.",
+                "title": "Letters carry reports",
+                "aliases": [],
+                "kind": "decision",
+                "confidence": 0.9,
+                "salience": 0.8,
+                "source_offsets": offsets[1..],
+                "cited_paths": [],
+                "relation": "new",
+                "target_id": null,
+            }],
+            "alias_backfill": [],
+        }));
+        assert_eq!(fixture.pass(false, true), ["analyzing", "learned one"]);
+        let sent: Value = serde_json::from_str(&fixture.backend.inputs.lock().unwrap()[0]).unwrap();
+        let kinds = sent["new_events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|event| event["kind"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            ["human", "letter", "letter", "letter", "letter"],
+            "{bells:?}"
+        );
+        let store = fixture.store();
+        let cursor = store
+            .load_cursor(
+                CursorReader::Analysis,
+                &fixture.project_id,
+                "claude",
+                SESSION,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(cursor.operator_events, 1);
+        let learned = store
+            .item_by_number(&fixture.project_id, 2)
+            .unwrap()
+            .expect("the analysis wrote a card from the letters");
+        assert_eq!(learned.human_source_count, 0);
+        let contents = std::fs::read_to_string(&fixture.locator).unwrap();
+        let requests = hide_session::parse_events(hide_session::Agent::Claude, &contents)
+            .links
+            .requests
+            .into_iter()
+            .map(|request| request.text)
+            .collect::<Vec<_>>();
+        assert_eq!(requests, [typed]);
     }
 
     #[test]
@@ -4271,9 +4449,9 @@ mod tests {
         assert_eq!((fixture.calls(), analyzed_to()), (0, None));
 
         // Its pane closed: one call carries the operator's request, the
-        // letter and the image (message 0, 3 and 4) and the answer
-        // (message 5), never the text OpenCode or Hide's plugin added, and
-        // the cursor stands after the sixth and last message.
+        // letter as its sender's and the image (message 0, 3 and 4) and the
+        // answer (message 5), never the text OpenCode or Hide's plugin added,
+        // and the cursor stands after the sixth and last message.
         fixture.answer(&[]);
         assert_eq!(
             fixture.pass_for(key.clone(), false, true).0,
@@ -4285,7 +4463,7 @@ mod tests {
             events(&first),
             [
                 (0, "human".to_owned()),
-                (3, "human".to_owned()),
+                (3, "letter".to_owned()),
                 (4, "human".to_owned()),
                 (5, "assistant".to_owned()),
             ]
@@ -4513,9 +4691,9 @@ mod tests {
         assert_eq!((fixture.calls(), analyzed_to()), (0, None));
 
         // Its pane closed: one call carries the operator's request, the
-        // letter, the image and the answer (messages 0, 3, 4 and 5), never the
-        // text OpenCode or Hide's plugin added, and the cursor stands after
-        // the eighth and last message.
+        // letter as its sender's, the image and the answer (messages 0, 3, 4
+        // and 5), never the text OpenCode or Hide's plugin added, and the
+        // cursor stands after the eighth and last message.
         fixture.answer(&[]);
         assert_eq!(
             fixture.pass_for(key.clone(), false, true).0,
@@ -4538,7 +4716,7 @@ mod tests {
             events,
             [
                 (0, "human".to_owned()),
-                (3, "human".to_owned()),
+                (3, "letter".to_owned()),
                 (4, "human".to_owned()),
                 (5, "assistant".to_owned()),
             ]
@@ -5267,6 +5445,7 @@ mod tests {
                     source_offsets: vec![1],
                     human_offsets: vec![1],
                     source_times: Default::default(),
+                    source_words: Default::default(),
                     cited_paths: vec![],
                     relation: CandidateRelation::New,
                 }],
@@ -5725,6 +5904,7 @@ mod tests {
                 source_offsets: vec![1],
                 human_offsets: vec![1],
                 source_times: Default::default(),
+                source_words: Default::default(),
                 cited_paths: vec![],
                 relation: CandidateRelation::New,
             })
@@ -6375,6 +6555,7 @@ mod tests {
             source_offsets: vec![offset],
             human_offsets: Vec::new(),
             source_times: Default::default(),
+            source_words: Default::default(),
             cited_paths: Vec::new(),
             relation: CandidateRelation::Supersedes {
                 target_id: "card".to_owned(),
@@ -6397,6 +6578,273 @@ mod tests {
         assert_eq!(checked[0].source_times, [(1, 10)].into());
         assert_eq!(checked[1].source_times, [(2, 20)].into());
         assert_eq!(checked.len(), 2);
+    }
+
+    /// The index's first two cards after a fork of the fixture's session is
+    /// analyzed: the fork copies the operator's first line under the fork's
+    /// own time, as Codex writes a fork, and then has `said_after` from the
+    /// operator, if any. A rival card stands on two sessions of its own.
+    fn index_after_fork(said_after: Option<&str>) -> Vec<u64> {
+        const FORK: &str = "claude-memory-fork";
+        let fixture = Fixture::new();
+        fixture.answer(&[]);
+        assert_eq!(
+            closed_pass(&fixture, &[], true),
+            ["analyzing", "learned one"]
+        );
+
+        let forked_at = 1_791_680_400_000; // 2026-10-11T01:00:00Z
+        let mut store = fixture.store();
+        let mut rival = |session: &str, relation| {
+            let words = format!("Keep commits small, said in {session}");
+            store
+                .apply_candidates(
+                    &AnalysisBatch {
+                        id: session.to_owned(),
+                        project_id: fixture.project_id.clone(),
+                        provider: "codex".to_owned(),
+                        analysis_provider: "codex".to_owned(),
+                        session_id: session.to_owned(),
+                        content_hash: session.to_owned(),
+                        created_at_unix_ms: forked_at,
+                    },
+                    &[Candidate {
+                        text: "Keep commits small".to_owned(),
+                        title: String::new(),
+                        aliases: Vec::new(),
+                        // A preference, which no pass asks to place in the
+                        // repository, so the fork's analysis is the one call.
+                        kind: CandidateKind::Preference,
+                        confidence: 0.9,
+                        salience: 0.75,
+                        source_offsets: vec![1],
+                        human_offsets: vec![1],
+                        source_times: [(1, forked_at)].into(),
+                        source_words: [(1, hide_memory::words_digest(&words))].into(),
+                        cited_paths: Vec::new(),
+                        relation,
+                    }],
+                )
+                .unwrap();
+        };
+        rival("rival-a", CandidateRelation::New);
+        let target_id = fixture
+            .store()
+            .item_by_number(&fixture.project_id, 3)
+            .unwrap()
+            .unwrap()
+            .id;
+        rival(
+            "rival-b",
+            CandidateRelation::Same {
+                target_id: target_id.clone(),
+            },
+        );
+        // Checked, as a pass would have, so this pass asks only for the fork.
+        assert!(
+            store
+                .confirm_card(&target_id, 1, None, &[], forked_at)
+                .unwrap()
+        );
+        drop(store);
+
+        let mut copied = fixture.lines[0].clone();
+        copied["sessionId"] = json!(FORK);
+        copied["timestamp"] = json!("2026-10-11T01:00:00Z");
+        let mut lines = vec![copied];
+        let mut offsets = vec![0];
+        if let Some(words) = said_after {
+            let mut said = lines[0].clone();
+            said["message"]["content"] = json!(words);
+            offsets.push(format!("{}\n", lines[0]).len() as u64);
+            lines.push(said);
+        }
+        std::fs::write(
+            fixture.locator.with_file_name(format!("{FORK}.jsonl")),
+            lines
+                .iter()
+                .map(|line| format!("{line}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        fixture.push(json!({
+            "candidates": [{
+                "text": "Run tests with nextest before a merge.",
+                "title": "Tests run with nextest",
+                "aliases": ["테스트", "nextest"],
+                "kind": "rule",
+                "confidence": 0.9,
+                "salience": 0.8,
+                "source_offsets": offsets,
+                "cited_paths": [],
+                "relation": "same",
+                "target_id": "m2",
+            }],
+            "alias_backfill": [],
+        }));
+        assert_eq!(
+            fixture
+                .run(("claude", FORK.to_owned()), false, true, &[], true)
+                .0,
+            ["analyzing", "analyzed"]
+        );
+        fixture
+            .store()
+            .retrieve(&hide_memory::RetrievalQuery::session_start(
+                &fixture.project_id,
+            ))
+            .unwrap()
+            .items
+            .iter()
+            .take(2)
+            .map(|item| item.number)
+            .collect()
+    }
+
+    #[test]
+    fn a_forked_session_counts_only_what_the_operator_said_after_the_fork() {
+        // The fork's copy of the operator's words is the same thing said once:
+        // the card still rests on one session and the rival on two goes first.
+        assert_eq!(index_after_fork(None), [3, 2]);
+        // Saying it again in the fork is a second session behind the card.
+        assert_eq!(
+            index_after_fork(Some("Run tests with nextest on every branch too")),
+            [2, 3]
+        );
+    }
+
+    #[test]
+    fn an_omp_fork_that_kept_its_parents_times_does_not_take_the_parents_words() {
+        // omp keeps a forked record's own time; only the fork's header, past
+        // its title slot, says the fork began later. The parent says the rule
+        // again after the fork, which must make the card recent.
+        let fixture = Fixture::new();
+        let template: Vec<Value> = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../hide-session/tests/fixtures/adapters/omp-18.7.0/session.jsonl"),
+        )
+        .unwrap()
+        .lines()
+        .take(3)
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+        assert_eq!(template[0]["type"], "title");
+        let temp = std::env::temp_dir().canonicalize().unwrap();
+        let relative = fixture.root.strip_prefix(temp).unwrap().to_string_lossy();
+        let folder = fixture
+            .home
+            .join(hide_session::OMP_SESSIONS)
+            .join(format!("-tmp-{}", relative.replace(['/', '\\', ':'], "-")));
+        std::fs::create_dir_all(&folder).unwrap();
+        let said = |at: &str| {
+            let mut line = template[2].clone();
+            line["timestamp"] = json!(at);
+            line["message"]["content"] =
+                json!([{"type": "text", "text": "Run tests with nextest before a merge"}]);
+            line
+        };
+        let write = |id: &str, opened: &str, records: Vec<Value>| -> Vec<u64> {
+            let mut header = template[1].clone();
+            header["id"] = json!(id);
+            header["timestamp"] = json!(opened);
+            header["cwd"] = json!(fixture.root);
+            let mut body = format!("{}\n{header}\n", template[0]);
+            let mut offsets = Vec::new();
+            for record in records {
+                offsets.push(body.len() as u64);
+                body.push_str(&format!("{record}\n"));
+            }
+            std::fs::write(folder.join(format!("date_{id}.jsonl")), body).unwrap();
+            offsets
+        };
+        // The fork's name sorts before its parent's, so only its later start
+        // tells which session said the words first.
+        let parent = write(
+            "omp-parent-z",
+            "2026-10-03T01:00:00.000Z",
+            vec![
+                said("2026-10-03T01:00:00.000Z"),
+                said("2026-10-20T01:00:00.000Z"),
+            ],
+        );
+        let fork = write(
+            "omp-fork-a",
+            "2026-10-04T01:00:00.000Z",
+            vec![said("2026-10-03T01:00:00.000Z")],
+        );
+        let answer = |offsets: &[u64], relation: &str, target: Value| {
+            fixture.push(json!({
+                "candidates": [{
+                    "text": "Run tests with nextest before a merge.",
+                    "title": "Tests run with nextest",
+                    "aliases": ["nextest"],
+                    "kind": "preference",
+                    "confidence": 0.9,
+                    "salience": 0.8,
+                    "source_offsets": offsets,
+                    "cited_paths": [],
+                    "relation": relation,
+                    "target_id": target,
+                }],
+                "alias_backfill": [],
+            }));
+        };
+        answer(&parent, "new", Value::Null);
+        assert_eq!(
+            fixture
+                .run(("omp", "omp-parent-z".to_owned()), false, true, &[], true)
+                .0,
+            ["analyzing", "learned one"]
+        );
+        answer(&fork, "same", json!("m2"));
+        assert_eq!(
+            fixture
+                .run(("omp", "omp-fork-a".to_owned()), false, true, &[], true)
+                .0,
+            ["analyzing", "analyzed"]
+        );
+        // A rival said once, between the parent's two times.
+        let rival_at = 1_791_680_400_000; // 2026-10-11T01:00:00Z
+        fixture
+            .store()
+            .apply_candidates(
+                &AnalysisBatch {
+                    id: "rival".to_owned(),
+                    project_id: fixture.project_id.clone(),
+                    provider: "codex".to_owned(),
+                    analysis_provider: "codex".to_owned(),
+                    session_id: "rival".to_owned(),
+                    content_hash: "rival".to_owned(),
+                    created_at_unix_ms: rival_at,
+                },
+                &[Candidate {
+                    text: "Keep commits small".to_owned(),
+                    title: String::new(),
+                    aliases: Vec::new(),
+                    kind: CandidateKind::Preference,
+                    confidence: 0.9,
+                    salience: 0.8,
+                    source_offsets: vec![1],
+                    human_offsets: vec![1],
+                    source_times: [(1, rival_at)].into(),
+                    source_words: [(1, hide_memory::words_digest("Keep commits small"))].into(),
+                    cited_paths: Vec::new(),
+                    relation: CandidateRelation::New,
+                }],
+            )
+            .unwrap();
+        let order: Vec<u64> = fixture
+            .store()
+            .retrieve(&hide_memory::RetrievalQuery::session_start(
+                &fixture.project_id,
+            ))
+            .unwrap()
+            .items
+            .iter()
+            .map(|item| item.number)
+            .filter(|number| [2, 3].contains(number))
+            .collect();
+        assert_eq!(order, [2, 3]);
     }
 
     fn closed_pass(fixture: &Fixture, delegated: &[&str], ai: bool) -> Vec<&'static str> {
@@ -6536,6 +6984,7 @@ mod tests {
                     source_offsets: vec![1],
                     human_offsets: Vec::new(),
                     source_times: Default::default(),
+                    source_words: Default::default(),
                     cited_paths: vec!["src/lib.rs".to_owned()],
                     relation: CandidateRelation::New,
                 }],
@@ -6584,6 +7033,7 @@ mod tests {
                     source_offsets: vec![1],
                     human_offsets: Vec::new(),
                     source_times: Default::default(),
+                    source_words: Default::default(),
                     cited_paths: Vec::new(),
                     relation: CandidateRelation::New,
                 }],
@@ -6697,6 +7147,7 @@ mod tests {
                     source_offsets: vec![1],
                     human_offsets: Vec::new(),
                     source_times: Default::default(),
+                    source_words: Default::default(),
                     cited_paths: Vec::new(),
                     relation: CandidateRelation::New,
                 }],
@@ -6751,6 +7202,7 @@ mod tests {
                     source_offsets: vec![1],
                     human_offsets: vec![1],
                     source_times: Default::default(),
+                    source_words: Default::default(),
                     cited_paths: Vec::new(),
                     relation: CandidateRelation::Same {
                         target_id: seeded.id.clone(),
@@ -6813,6 +7265,7 @@ mod tests {
                     source_offsets: vec![1],
                     human_offsets: vec![1],
                     source_times: Default::default(),
+                    source_words: Default::default(),
                     cited_paths: Vec::new(),
                     relation: CandidateRelation::Same {
                         target_id: seeded.id,
@@ -6879,6 +7332,7 @@ mod tests {
                     source_offsets: vec![1],
                     human_offsets: vec![1],
                     source_times: Default::default(),
+                    source_words: Default::default(),
                     cited_paths: Vec::new(),
                     relation: CandidateRelation::Same {
                         target_id: seeded.id,

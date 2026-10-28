@@ -1,8 +1,10 @@
 //! Bounded, explicit terminal file ingress. No provider draft or submission state.
 //! The picked files are read by the node that holds them
-//! (`hide_host::attachments`); the clipboard image waits in a folder beside
-//! the core's state file, where the screen's hided staged it, and the core's
-//! own node removes it.
+//! (`hide_host::attachments`) and, for a device's pane, staged on that
+//! device through its node link, whichever way the link opened (PRD
+//! wsl-device B10); the clipboard image waits in a folder beside the core's
+//! state file, where the screen's hided staged it, and the core's own node
+//! removes it.
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -52,6 +54,58 @@ pub(crate) fn read_sources(
 
 /// Reading 40 MiB from a local disk takes well under a minute.
 const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// Stages `files` on the machine `link` reaches, one file per call so a
+/// cancel stops the transfer between two files, and answers each one's path
+/// there. A transfer that fails takes what it staged; one that was
+/// cancelled leaves that to the cancellation, which removes the request.
+pub(crate) fn stage(
+    link: &dyn crate::node_access::NodeLink,
+    request_id: &str,
+    files: &[AttachmentFile],
+    cancelled: &AtomicBool,
+) -> Result<Vec<String>, String> {
+    let mut paths = Vec::with_capacity(files.len());
+    for (index, file) in files.iter().enumerate() {
+        check_cancelled(cancelled)?;
+        let call = hide_node_link::protocol::Call::StageAttachment {
+            request: request_id.to_owned(),
+            index,
+            count: files.len(),
+            file: hide_node_link::feedback::File::new(file.name.clone(), &file.bytes),
+        };
+        match crate::node_access::call_as::<String>(link, call, STAGE_TIMEOUT) {
+            Ok(path) => paths.push(path),
+            Err(error) => {
+                if index > 0 {
+                    remove_staged(link, request_id);
+                }
+                return Err(match error {
+                    crate::node_access::LinkError::Refused(refusal) => refusal.message,
+                    other => format!("The file could not reach the device: {other}"),
+                });
+            }
+        }
+    }
+    check_cancelled(cancelled)?;
+    Ok(paths)
+}
+
+/// Asks the machine `link` reaches to remove what `request_id` staged; a
+/// failure is logged, and the node removes it 24 hours on all the same.
+pub(crate) fn remove_staged(link: &dyn crate::node_access::NodeLink, request_id: &str) {
+    let call = hide_node_link::protocol::Call::RemoveAttachments {
+        request: request_id.to_owned(),
+    };
+    if let Err(error) = crate::node_access::call_as::<()>(link, call, REMOVE_TIMEOUT) {
+        crate::diagnostic!(
+            serde_json::json!({"kind":"terminal.attachment.cleanup_deferred", "request_id":request_id, "error":error.to_string()})
+        );
+    }
+}
+
+/// One 20 MiB file across a device's link.
+const STAGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// The text a terminal receives for the staged files. A destination on a
 /// device is that device's path, spelled with `/` whatever system the core

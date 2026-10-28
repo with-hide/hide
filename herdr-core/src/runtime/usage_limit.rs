@@ -43,14 +43,24 @@ impl Runtime {
     /// Each agent's weekly figure, from the rows the toolbar's usage read
     /// answered: only a figure the agent gave for the seven-day window. An
     /// agent with no figure, or one whose window has reset, has no reading
-    /// and is never held back (D-07).
+    /// and is never held back (D-07). Those rows are this machine's
+    /// accounts, so an agent placed on a device has no reading here: its
+    /// usage counts on the device's account (PRD wsl-device B12).
     fn weekly_readings(&self) -> BTreeMap<ProviderId, UsageReading> {
+        let placed = self
+            .ai_settings
+            .as_ref()
+            .map(hide_ai::AiSettings::machines_by_provider)
+            .unwrap_or_default();
         // The usage rows are keyed by the agent's Herdr name, the provider
         // by the kit's adapter id; `agy` and `antigravity` are one agent.
         hide_agent_adapter::ADAPTERS
             .iter()
             .filter_map(|row| {
                 let provider = ProviderId::for_agent(row.id)?;
+                if placed.contains_key(&provider) {
+                    return None;
+                }
                 let (used_percent, resets_at_s) = self
                     .snapshot
                     .usage
@@ -106,13 +116,18 @@ impl Runtime {
         let mut moved = snapshot.usage_limit != limit;
         snapshot.usage_limit = limit;
         for row in &mut snapshot.providers {
-            let reading = ProviderId::from_id(&row.id).and_then(|id| readings.get(&id).copied());
+            // A device's row is that device's account, which these
+            // readings are not.
+            let reading = ProviderId::from_id(&row.id)
+                .filter(|_| row.device_id.is_none())
+                .and_then(|id| readings.get(&id).copied());
             let weekly = reading.map(|reading| BackgroundAiWeekly {
                 used_percent: reading.used_percent,
                 resets_at_ms: reading.resets_at_unix_ms,
             });
-            let past = ProviderId::from_id(&row.id)
-                .is_some_and(|id| self.usage_limits.past_limit(id, now).is_some());
+            let past = row.device_id.is_none()
+                && ProviderId::from_id(&row.id)
+                    .is_some_and(|id| self.usage_limits.past_limit(id, now).is_some());
             if row.weekly != weekly || row.past_limit != past {
                 row.weekly = weekly;
                 row.past_limit = past;

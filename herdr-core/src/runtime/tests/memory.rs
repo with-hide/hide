@@ -403,6 +403,7 @@ fn the_largest_comparison_set_and_event_group_fit_one_request() {
                     source_offsets: vec![index],
                     human_offsets: vec![index],
                     source_times: Default::default(),
+                    source_words: Default::default(),
                     cited_paths: Vec::new(),
                     relation: hide_memory::CandidateRelation::New,
                 })

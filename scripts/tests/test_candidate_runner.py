@@ -20,10 +20,10 @@ CANDIDATE = {
 }
 
 
-def hook(name, env):
+def hook(name, env, cwd=None):
     # The shell and flags the runner starts a hook with.
     return subprocess.run(["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", str(RUNNER / name)],
-                          env={"PATH": "/usr/bin:/bin", **env}, capture_output=True, text=True, timeout=30)
+                          env={"PATH": "/usr/bin:/bin", **env}, cwd=cwd, capture_output=True, text=True, timeout=30)
 
 
 class JobStarted(unittest.TestCase):
@@ -132,10 +132,12 @@ class JobCompleted(unittest.TestCase):
         (self.workspace / "rust-toolchain.toml").write_text('[toolchain]\nchannel = "2.0.0"\nprofile = "minimal"\n')
         (self.home / "kept").write_text("not the job's\n")
         # rustup as the account has it: two pins installed, one the source names.
+        # Like rustup, it will not start in a folder that no longer exists.
         bin = self.home / "bin"
         bin.mkdir()
         (bin / "rustup").write_text(
             "#!/bin/bash\n"
+            '/bin/pwd >/dev/null 2>&1 || { echo "error: Could not locate working directory." >&2; exit 1; }\n'
             'if [[ "$*" == "toolchain list" ]]; then\n'
             '  printf "2.0.0-aarch64-apple-darwin (active)\\n1.0.0-aarch64-apple-darwin\\n"\n'
             f'else echo "$*" >> "{self.home}/rustup.log"; fi\n')
@@ -147,6 +149,13 @@ class JobCompleted(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(sorted(path.name for path in self.work.iterdir()), ["_temp"])
         self.assertTrue((self.home / "kept").exists())
+        self.assertEqual((self.home / "rustup.log").read_text(), "toolchain uninstall 1.0.0-aarch64-apple-darwin\n")
+
+    def test_runs_from_the_jobs_checkout_it_removes(self):
+        # The runner starts the hook in the job's workspace, which the hook removes.
+        result = hook("job-completed.sh", self.env, cwd=self.workspace)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(sorted(path.name for path in self.work.iterdir()), ["_temp"])
         self.assertEqual((self.home / "rustup.log").read_text(), "toolchain uninstall 1.0.0-aarch64-apple-darwin\n")
 
     def test_without_a_checkout_it_still_empties_the_work_folder(self):

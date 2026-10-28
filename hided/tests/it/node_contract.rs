@@ -14,7 +14,6 @@ use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use hide_node_link::device::{
@@ -955,29 +954,246 @@ fn a_published_guardrail_policy_is_what_the_devices_hooks_read() {
 #[test]
 fn a_device_s_channels_share_its_one_connection() {
     let device = Device::start();
-    // The link, the install's reads and its SFTP made one connection.
+    // The link and the install's reads made one connection.
     assert_eq!(device.ssh.accepted(), 1);
-    // A Herdr channel, a status read and an attachment's SFTP open on it.
+    // A Herdr channel opens on it, and an attachment rides the node's link.
     device.transport.herdr_api_connector().connect().unwrap();
     let request = "8a6e0e4c-3f0b-4d2c-9a51-0c6f2b9d7e10";
-    let files = [hide_node_link::attachments::AttachmentFile {
-        path: "attached.txt".to_owned(),
-        name: "attached.txt".to_owned(),
-        bytes: b"attached\n".to_vec(),
-    }];
-    let staged = device
-        .transport
-        .stage_attachments(request, &files, &AtomicBool::new(false))
-        .unwrap();
-    assert_eq!(staged.len(), 1);
-    assert_eq!(fs::read(&staged[0]).unwrap(), b"attached\n");
-    device.transport.remove_attachments(request, &files);
-    assert!(!Path::new(&staged[0]).exists());
+    let staged = stage(&device, request, 0, 1, "attached.txt").unwrap();
+    assert!(
+        Path::new(&staged).starts_with(device.state.join("terminal-attachments")),
+        "staged at {staged}"
+    );
+    assert_eq!(fs::read(&staged).unwrap(), b"attached\n");
+    let _: Value = call_as(
+        &*device.link,
+        Call::RemoveAttachments {
+            request: request.to_owned(),
+        },
+        TIMEOUT,
+    )
+    .unwrap();
+    assert!(!Path::new(&staged).exists());
     assert_eq!(device.ssh.accepted(), 1);
     // Closing the link ends its node and leaves the connection to the rest.
     device.link.close("contract");
     device.transport.herdr_api_connector().connect().unwrap();
     assert_eq!(device.ssh.accepted(), 1);
+}
+
+/// B10: a request the link ends part way leaves nothing behind.
+#[test]
+fn a_link_ending_mid_request_removes_what_it_staged() {
+    let device = Device::start();
+    let request = "0d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+    let first = stage(&device, request, 0, 2, "first.txt").unwrap();
+    assert!(Path::new(&first).exists());
+    // A retried file is the same answer, and an index past its count is refused.
+    assert_eq!(stage(&device, request, 0, 2, "first.txt").unwrap(), first);
+    assert!(stage(&device, request, 2, 2, "second.txt").is_err());
+    device.link.close("contract");
+    gone_within(Path::new(&first), TIMEOUT);
+    assert!(!Path::new(&first).exists(), "the ended link left {first}");
+}
+
+/// B10, the journey: a link that ends while the device writes a request's
+/// first file leaves nothing behind. Which comes first, the end or the
+/// file, is ordered step by step in `hide-host`'s staging tests.
+#[test]
+fn a_link_ending_during_a_write_leaves_no_file() {
+    let device = Device::start();
+    let request = "5b0c9d8e-7f6a-4b5c-8d4e-3f2a1b0c9d8e";
+    let staged =
+        hide_kit::layout::terminal_attachments(&device.state).join(format!("hide-{request}-0.bin"));
+    // The largest file takes the longest to write, which the link's end
+    // has to land within.
+    let size = hide_node_link::attachments::MAX_FILE_BYTES as usize;
+    let link = Arc::clone(&device.link);
+    let writer = std::thread::spawn(move || {
+        call_as::<String>(
+            &*link,
+            Call::StageAttachment {
+                request: request.to_owned(),
+                index: 0,
+                count: 2,
+                file: hide_node_link::feedback::File::new("big.bin", &vec![1; size]),
+            },
+            TIMEOUT,
+        )
+    });
+    begun_within(&staged, &|| writer.is_finished(), TIMEOUT);
+    assert!(
+        staged.exists(),
+        "the device began no file: {:?}",
+        writer.join()
+    );
+    device.link.close("contract");
+    let _ = writer.join();
+    gone_within(&staged, TIMEOUT);
+    assert!(!staged.exists(), "the ended link left {}", staged.display());
+}
+
+/// B12: a device's node answers the Hide AI calls on its own link, with a
+/// backend of its own built for the core's instance and released by it,
+/// where a device used to refuse them. No provider is run.
+#[test]
+fn a_device_answers_hide_ai_for_its_own_agents() {
+    let device = Device::start();
+    let backend = hide_node_link::ai::BackendSpec {
+        instance: 7,
+        provider: hide_node_link::ai::ProviderId::CODEX,
+        model: String::new(),
+    };
+    let measured: hide_node_link::ai::ProcessMeasurement = call_as(
+        &*device.link,
+        Call::AiMeasurement {
+            backend: backend.clone(),
+        },
+        TIMEOUT,
+    )
+    .expect("the device answers a backend's measurement");
+    assert_eq!(
+        measured,
+        hide_node_link::ai::ProcessMeasurement::Unavailable
+    );
+    let _: Value = call_as(&*device.link, Call::AiRelease { instance: 7 }, TIMEOUT)
+        .expect("the device releases the backend");
+    // GitHub stays the core's (D-18): the device still refuses it.
+    let gh = call_as::<Value>(
+        &*device.link,
+        Call::Gh {
+            args: vec!["auth".to_owned(), "status".to_owned()],
+            cwd: None,
+            repository: None,
+        },
+        TIMEOUT,
+    );
+    assert!(gh.is_err(), "a device answered gh: {gh:?}");
+}
+
+/// B9: a device's localhost page rides its node link, whichever link that
+/// is: a connection to the page's forward reaches the device's loopback
+/// server, dropping the forward ends that server's connection, and a
+/// forward whose link ended reaches nothing.
+#[test]
+fn a_device_page_rides_its_node_link_and_ends_with_it() {
+    use hided::page_forward::PageForward;
+    use std::io::Write;
+    let device = Device::start();
+    let server = PageServer::start();
+    let link = || {
+        device
+            .link
+            .as_any()
+            .and_then(|link| link.downcast_ref::<hide_node::ssh::RemoteHost>())
+            .expect("a device link carries streams")
+            .clone()
+    };
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let forward = runtime
+        .block_on(PageForward::start(link(), server.address, None, false))
+        .unwrap();
+    let mut page = std::net::TcpStream::connect(forward.local_addr()).unwrap();
+    page.set_read_timeout(Some(TIMEOUT)).unwrap();
+    page.write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .unwrap();
+    assert!(read_page(&mut page).ends_with("hello"));
+    drop(forward);
+    server
+        .ended
+        .recv_timeout(TIMEOUT)
+        .expect("the node kept the page's connection after its forward ended");
+
+    let forward = runtime
+        .block_on(PageForward::start(link(), server.address, None, false))
+        .unwrap();
+    device.link.close("contract");
+    assert!(!forward.live());
+    let mut page = std::net::TcpStream::connect(forward.local_addr()).unwrap();
+    page.set_read_timeout(Some(TIMEOUT)).unwrap();
+    let _ = page.write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    assert_eq!(
+        read_page(&mut page),
+        "",
+        "an ended link still reached the page"
+    );
+}
+
+/// A device's loopback server for one page: it answers each request
+/// `hello` and tells `ended` when a connection to it closes.
+struct PageServer {
+    address: std::net::SocketAddr,
+    ended: std::sync::mpsc::Receiver<()>,
+}
+
+impl PageServer {
+    fn start() -> Self {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (closed, ended) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for connection in listener.incoming() {
+                let Ok(mut connection) = connection else {
+                    break;
+                };
+                let closed = closed.clone();
+                std::thread::spawn(move || {
+                    let mut request = Vec::new();
+                    let mut chunk = [0_u8; 1024];
+                    while let Ok(read) = connection.read(&mut chunk) {
+                        if read == 0 {
+                            break;
+                        }
+                        request.extend_from_slice(&chunk[..read]);
+                        if request.windows(4).any(|end| end == b"\r\n\r\n") {
+                            request.clear();
+                            let answer = b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello";
+                            if connection.write_all(answer).is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    let _ = closed.send(());
+                });
+            }
+        });
+        Self { address, ended }
+    }
+}
+
+/// What a page's connection answered, up to its `hello` or its end.
+fn read_page(page: &mut std::net::TcpStream) -> String {
+    use std::io::Read;
+    let mut answer = Vec::new();
+    let mut chunk = [0_u8; 1024];
+    while !answer.ends_with(b"hello") {
+        match page.read(&mut chunk) {
+            Ok(0) | Err(_) => break,
+            Ok(read) => answer.extend_from_slice(&chunk[..read]),
+        }
+    }
+    String::from_utf8_lossy(&answer).into_owned()
+}
+
+/// Stages one file of `count` through the device's node link.
+fn stage(
+    device: &Device,
+    request: &str,
+    index: usize,
+    count: usize,
+    name: &str,
+) -> Result<String, hide_node_link::LinkError> {
+    call_as(
+        &*device.link,
+        Call::StageAttachment {
+            request: request.to_owned(),
+            index,
+            count,
+            file: hide_node_link::feedback::File::new(name, b"attached\n"),
+        },
+        TIMEOUT,
+    )
 }
 
 /// What a device's terminals sent up its link: each pane's reports.
@@ -1135,6 +1351,16 @@ fn a_draining_link_stops_its_reporting_call_and_closes() {
     gone_within(&socket, TIMEOUT);
     assert!(device.link.closed_reason().is_some());
     assert!(!socket.exists(), "the drained link kept its pane socket");
+}
+
+/// Waits until the node began writing `path`, or until `answered` says its
+/// call is over without it.
+#[allow(clippy::disallowed_methods)] // a polling helper: it sleeps between observations of a state, bounded by a deadline
+fn begun_within(path: &Path, answered: &dyn Fn() -> bool, bound: Duration) {
+    let deadline = std::time::Instant::now() + bound;
+    while !path.exists() && !answered() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(1));
+    }
 }
 
 /// Waits until the node removed `path`, which it does once its input ends.

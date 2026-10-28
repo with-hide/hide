@@ -1331,8 +1331,9 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       updateUiState(hints);
     },
 
-    chooseAi(provider: string, model?: string) {
-      dispatch({ schema_version: 2, kind: "ai_settings", payload: model === undefined ? { provider } : { provider, model } });
+    /** Runs on is `provider` on `device` (null: the core's own machine); with `model`, that agent's model, wherever it runs. */
+    chooseAi(provider: string, model?: string, device: string | null = null) {
+      dispatch({ schema_version: 2, kind: "ai_settings", payload: model === undefined ? { provider, device } : { provider, model } });
     },
     /** The `에이전트 요약` switch (PRD overview-request-view D-11): off, agent labels are neither asked for nor shown. */
     setAgentSummary(on: boolean) {
@@ -1347,8 +1348,8 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "ai_settings", payload: { enabled: on } });
     },
     /** Adds an agent at the end of "If <Runs on> can't answer" (D-16). */
-    addAiFallback(provider: string) {
-      dispatch({ schema_version: 2, kind: "ai_settings", payload: { fallback_add: provider } });
+    addAiFallback(provider: string, device: string | null = null) {
+      dispatch({ schema_version: 2, kind: "ai_settings", payload: { fallback_add: provider, device } });
     },
     removeAiFallback(provider: string) {
       dispatch({ schema_version: 2, kind: "ai_settings", payload: { fallback_remove: provider } });

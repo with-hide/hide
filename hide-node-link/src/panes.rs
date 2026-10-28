@@ -35,6 +35,10 @@ pub const MAX_HERDR_STREAMS: usize = 32;
 /// Browser relay streams one link carries at once (B15): as many as the
 /// core relays `hide browser` commands at once.
 pub const MAX_BROWSER_STREAMS: usize = 4;
+/// Page streams one link carries at once (PRD wsl-device B9): the
+/// connections the Browser Views of the core's machine hold to the node's
+/// loopback servers, a few per page.
+pub const MAX_PAGE_STREAMS: usize = 32;
 /// How often a node that dialed its core writes [`NodeEvent::Ping`].
 pub const HEARTBEAT: std::time::Duration = std::time::Duration::from_secs(10);
 /// How long the attach role waits for a byte from its node before it ends
