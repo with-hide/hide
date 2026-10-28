@@ -256,7 +256,9 @@ jobs:
       - name: Build two release versions of the same app for the update test
         # N is installed, N+1 is served from a local feed (PRD auto-update
         # D-29); both are the package above with another version, so the
-        # update changes nothing but the version.
+        # update changes nothing but the version. On Linux the script builds
+        # only the deb this test updates through; the shipped rpm and its
+        # Fedora install check above still use the full release set.
         timeout-minutes: 15
         run: |
           bundle="$(sed -n 's/^bundle=//p' "$RUNNER_TEMP/package.out")"

@@ -18,14 +18,16 @@
 // macOS zip left none on the package lane, and Linux builds each type on its
 // own, so one writer gives every system the same file from the same facts.
 //
-// Each installer gets a `.sha256` naming only it. `out` ends holding exactly
-// the system's release files (`systemAssetNames`); anything else there is
-// removed first, and a failure leaves no partial set behind.
+// Each installer gets a `.sha256` naming only it. A release's `out` holds
+// exactly the system's release files (`systemAssetNames`); the Linux update
+// test keeps only the deb, its checksum and update file. Anything else there
+// is removed first, and a failure leaves no partial set behind.
 //
 // Usage, for a second build of an app already packaged (the CI update test):
 //   node desktop/scripts/installers.mjs <packaged app> <version> <out>
 // which first gives the app's own package.json that version, since the
-// updater reads the running version from there.
+// updater reads the running version from there. On Linux this test updates
+// through the deb only, so it builds no test-only rpm.
 
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -193,11 +195,11 @@ async function buildLinux(app, version, work, type) {
 
 /**
  * The system's update file, naming each file its updater installs: the zip on
- * macOS, setup.exe on Windows, and both Linux packages, of which
- * electron-updater picks the type the app was installed as.
+ * macOS, setup.exe on Windows, and the selected Linux packages, of which
+ * electron-updater picks the type the app was installed as. A release names
+ * both Linux types; the update test names only the deb it installs.
  */
-function writeUpdateInfo(out, version, system) {
-  const files = systemFiles(version, system);
+function writeUpdateInfo(out, version, files) {
   const entries = files.updates.map((name) => ({ url: name, sha512: sha512Base64(path.join(out, name)), size: fs.statSync(path.join(out, name)).size }));
   const lines = [`version: ${version}`, "files:"];
   for (const entry of entries) lines.push(`  - url: ${entry.url}`, `    sha512: ${entry.sha512}`, `    size: ${entry.size}`);
@@ -208,12 +210,17 @@ function writeUpdateInfo(out, version, system) {
 /**
  * Builds this system's installers for the packaged `app` into `out` and
  * answers the paths of what landed there. `signing` is macos-signing.mjs's
- * choice, read only on macOS.
+ * choice, read only on macOS. `updateTest` limits Linux's throwaway update
+ * feed to the deb; the default still builds and checks the full release set.
  */
-export async function buildInstallers({ app, version, out, signing = null }) {
+export async function buildInstallers({ app, version, out, signing = null, updateTest = false }) {
   const system = SYSTEM_OF[process.platform];
   if (!system) throw new Error(`hide has no installers for ${process.platform}`);
   const files = systemFiles(version, system);
+  if (updateTest && system === "linux") {
+    files.installers = files.installers.filter((name) => name.endsWith(".deb"));
+    files.updates = files.updates.filter((name) => name.endsWith(".deb"));
+  }
   fs.rmSync(out, { recursive: true, force: true });
   fs.mkdirSync(out, { recursive: true });
   const work = fs.mkdtempSync(path.join(path.dirname(out), "installers-"));
@@ -223,18 +230,20 @@ export async function buildInstallers({ app, version, out, signing = null }) {
     else if (system === "windows") await buildWindows(app, version, work);
     else {
       openToEveryAccount(app);
-      for (const type of ["deb", "rpm"]) await buildLinux(app, version, path.join(work, type), type);
+      for (const type of updateTest ? ["deb"] : ["deb", "rpm"]) await buildLinux(app, version, path.join(work, type), type);
     }
     for (const name of kept) {
       const source = system === "linux" ? path.join(work, name.endsWith(".rpm") ? "rpm" : "deb", name) : path.join(work, name);
       if (!fs.statSync(source, { throwIfNoEntry: false })?.isFile()) throw new Error(`electron-builder did not write ${name}`);
       fs.renameSync(source, path.join(out, name));
     }
-    writeUpdateInfo(out, version, system);
+    writeUpdateInfo(out, version, files);
     for (const name of files.installers) fs.writeFileSync(path.join(out, `${name}.sha256`), `${sha256File(path.join(out, name))}  ${name}\n`);
     const landed = fs.readdirSync(out).sort();
-    const expected = systemAssetNames(version, system);
-    if (JSON.stringify(landed) !== JSON.stringify(expected)) throw new Error(`installers differ from the release set: got [${landed.join(", ")}], expected [${expected.join(", ")}]`);
+    const expected = updateTest && system === "linux"
+      ? [...files.installers.flatMap((name) => [name, `${name}.sha256`]), files.updateInfo].sort()
+      : systemAssetNames(version, system);
+    if (JSON.stringify(landed) !== JSON.stringify(expected)) throw new Error(`installers differ from the expected set: got [${landed.join(", ")}], expected [${expected.join(", ")}]`);
     return Object.fromEntries(files.installers.map((name) => [name, path.join(out, name)]));
   } catch (error) {
     fs.rmSync(out, { recursive: true, force: true });
@@ -252,6 +261,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
   // macOS update needs a Developer ID build anyway (the PRD's stated risk).
   if (process.platform === "darwin") throw new Error("a second build of a packaged app is for the Windows and Linux update test only");
   await setAppVersion(path.resolve(app), version);
-  const built = await buildInstallers({ app: path.resolve(app), version, out: path.resolve(out) });
+  const built = await buildInstallers({ app: path.resolve(app), version, out: path.resolve(out), updateTest: true });
   for (const file of Object.values(built)) console.log(`installer=${file}`);
 }
