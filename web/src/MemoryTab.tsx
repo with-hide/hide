@@ -445,9 +445,9 @@ function MemoryEmpty({ project }: { project: ProjectMemory }) {
   if (project.rows.length === 0) {
     return (
       <HideAiExplainer title={t("memory.empty.title")} steps={[
-        { icon: MessagesSquareIcon, text: t("hideAiTool.explain.memory.find") },
-        { icon: BookmarkIcon, text: t("hideAiTool.explain.memory.keep") },
-        { icon: BotIcon, text: t("hideAiTool.explain.memory.give") },
+        { icon: MessagesSquareIcon, text: t("hideAiTool.explain.memory.remember") },
+        { icon: BotIcon, text: t("hideAiTool.explain.memory.shared") },
+        { icon: BookmarkIcon, text: t("hideAiTool.explain.memory.once") },
       ]} data-memory-empty="true">
         <MemoryExplanation project={project} />
       </HideAiExplainer>

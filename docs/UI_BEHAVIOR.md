@@ -901,7 +901,7 @@ The tab shown and the 제안 row open are this window's, not the core's.
 
 Its head reads `Hide AI · <project>` beside the brain, then the switch for all of Hide AI in this Project, ⚙ and `✕`, which closes the tool column; the agent Hide AI asks now is named in ⚙, not in the head.
 The switch is on from the start; turned off, neither 제안 nor Memory reads anything, Hide AI makes no call for the Project, the rail and the tabs count nothing, and the reading owl says `Hide AI가 꺼져 있어요` with one line on what turning it on reads (B3).
-Where a tab has nothing to show yet, the same owl explains it: its state is the title and the tab's work follows in three short steps, each with its mark (`HideAiExplainer`).
+Where a tab has nothing to show yet, the same owl explains it: its state is the title and what the tab does for the operator follows in three short steps, each with its mark (`HideAiExplainer`); Memory's are `우리가 대화하며 정한 것을 기억해요`, `모든 에이전트가 같은 기억을 써요` and `같은 말을 두 번 하지 않아도 돼요`.
 Turning it on gives each of the two back as it was.
 The first time the tool opens with Hide AI on, two lines above the tabs say that investigating uses the operator's own subscription and what is sent; they stay while the tool stays open and are not shown again (B3, D-36).
 While the Project is still being read the tool says so; a Project that is not registered, or whose Hide AI could not be read, says that in one line, the second with `다시 읽기`.
@@ -910,7 +910,7 @@ While the Project is still being read the tool says so; a Project that is not re
 
 The 제안 tab lists what Hide AI suggests fixing, the fixes under way and the ones applied (D-05 to D-07).
 The core decides every group, mark, hold and count; the screen draws them and every press is one `suggestion_action` (`apply`, `dismiss`, `restore`, `retry`) naming the row by its id (`s12` for a suggestion, `m72` for a memory on its way into the documents).
-The tab has one line for its state and no more (D-44): `다음에 Hide를 열 때 첫 조사` before the first investigation, `오늘은 제안 없음` when today's run left nothing open, each of these two as the owl's title over `세션 기록과 PR의 CI·리뷰를 읽어요`, `되풀이되는 문제를 하나로 묶어요` and `고칠 방법을 제안하고, 고르면 PR을 열어요`, and `제안이 꺼져 있어요` with `켜기` when ⚙ turned suggestions off; while a run goes, `조사 중` sits small in the head and the rows stay as they were, and after a run that could not investigate `조사 못 함` sits there the same way until a run investigates, nothing new having risen from it (D-35).
+The tab has one line for its state and no more (D-44): `다음에 Hide를 열 때 첫 조사` before the first investigation, `오늘은 제안 없음` when today's run left nothing open, each of these two as the owl's title over what the tab gives the operator, `세션과 PR 리뷰에서 에이전트가 자주 막히는 곳을 찾아요`, `같은 실수가 반복되지 않게 개선 방향을 제안해요` and `고르면 PR로 반영돼서, 에이전트가 알아서 똑똑해져요`, and `제안이 꺼져 있어요` with `켜기` when ⚙ turned suggestions off; while a run goes, `조사 중` sits small in the head and the rows stay as they were, and after a run that could not investigate `조사 못 함` sits there the same way until a run investigates, nothing new having risen from it (D-35).
 A failure the operator cannot act on, such as a run that hit its turn or time limit or the usage limit, goes to the diagnostic log and draws nothing.
 
 The rows fall into `고를 것`, `반영 중` and the folded `반영됨`, each head with its count, and a row's mark says whose move it is (D-37): a green open circle for a new suggestion, a yellow dot for the operator's turn, a blue turning ring with dimmed text while Hide AI works; a row under 반영됨 has no mark.

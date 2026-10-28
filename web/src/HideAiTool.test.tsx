@@ -132,9 +132,9 @@ describe("the Hide AI tool", () => {
     expect(q("[data-suggestions-status] [data-hide-ai-explainer-title]")?.textContent).toBe("First investigation the next time you open Hide");
     // With nothing open, the owl says what the tab does in three steps.
     expect([...document.querySelectorAll("[data-suggestions-status] li")].map((step) => step.textContent)).toEqual([
-      "Reads session records and PRs' CI and reviews",
-      "Groups a problem that keeps coming back",
-      "Suggests a fix, and opens a PR when you pick it",
+      "Finds where agents keep getting stuck in sessions and PR reviews",
+      "Suggests how to stop the same mistakes",
+      "Pick one and it lands as a PR, so agents get smarter on their own",
     ]);
     await render(suggestionsProject({ status: "investigating", rows: [suggestionRow("s1")] }));
     expect(q("[data-hide-ai-investigating]")?.textContent).toBe("Investigating");

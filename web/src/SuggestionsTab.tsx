@@ -1,4 +1,4 @@
-import { ChevronRightIcon, Layers2Icon, ScrollTextIcon, WrenchIcon } from "lucide-react";
+import { ChevronRightIcon, LightbulbIcon, ScrollTextIcon, SparklesIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import { AgentLogo } from "./components/agent-logo";
@@ -33,9 +33,9 @@ export function SuggestionsTab({ project, actions }: { project: ProjectSuggestio
     <div className="flex min-h-0 flex-1 flex-col overflow-auto px-md pb-lg" data-suggestions={project.status}>
       {line && line !== "suggestions.status.off" ? (
         <HideAiExplainer title={t(line)} steps={[
-          { icon: ScrollTextIcon, text: t("hideAiTool.explain.suggestions.read") },
-          { icon: Layers2Icon, text: t("hideAiTool.explain.suggestions.group") },
-          { icon: WrenchIcon, text: t("hideAiTool.explain.suggestions.fix") },
+          { icon: ScrollTextIcon, text: t("hideAiTool.explain.suggestions.find") },
+          { icon: LightbulbIcon, text: t("hideAiTool.explain.suggestions.suggest") },
+          { icon: SparklesIcon, text: t("hideAiTool.explain.suggestions.smarter") },
         ]} data-suggestions-status={project.status} />
       ) : line ? (
         <div className="flex items-center gap-sm py-md" data-suggestions-status={project.status}>
