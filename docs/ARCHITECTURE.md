@@ -1835,6 +1835,12 @@ launchd is the one implementation (`user_agents/launchd.rs`, with `/bin/launchct
 Rust turns a failed `print!` into a panic whose message ends in the operating system's error code, so `hide` installs one panic hook first thing in `main` (`exit_quietly_when_stdout_closes`) instead of every print site handling the failure: when the code is `BrokenPipe` by the standard library's own classification (`EPIPE` on Unix, a closed pipe on Windows, so no table of codes is kept) the process exits with status 141, 128 plus `SIGPIPE`, which is what a shell reports for a command a closed pipe killed, and prints nothing; any other panic, including a print that fails on a full disk, goes to the hook that was installed before.
 `hide-platform/tests/it/stdio.rs` writes to a pipe whose reader is already gone on every system, and `hided/tests/it/closed_stdout.rs` shows `hide version` doing the same.
 
+`wsl` answers which WSL distributions this Windows account has, and which of them run, without starting one (PRD wsl-device D-01, D-13).
+`distributions` reads the account's own `HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss` registry entries: each distribution's name, id, WSL version (the VM-mode bit of `Flags`), default user id, whether it is installed (`State`), whether its first-run setup is still pending (`RunOOBE`) and which one is the default.
+Reading the registry starts no WSL process at all, so opening Add device never wakes WSL, and it needs no parsing of `wsl.exe --list --verbose`, whose answer is localized text; a key with no id or no valid name is not a distribution and is left out, not guessed.
+`running_from` asks `wsl.exe --list --running --quiet` under a deadline, which answers from the WSL service without starting a distribution, and `decode` reads its UTF-16 or UTF-8 answer.
+Off Windows `distributions` and `program` answer `Unsupported`, while `running_from` asks whatever program it is given, so the connector's tests run on every Unix runner with a stand-in `wsl.exe`.
+
 `hide-platform/tests/` and `hide-herdr-client/tests/it/real_herdr.rs` (the client against the pinned Herdr, ignored unless `HIDE_E2E_HERDR_BIN` names the binary) are where a change to the transport is proved; the subscription's reader is the high-frequency path, and on Unix it is the same blocking `read` as before.
 `hided/tests/it/real_herdr.rs` is the same for the daemon: hided starts against a private pinned Herdr, answers `/health`, opens a Workspace through the shell's `/ws` events, and a line typed into its pane comes back on the terminal stream through `herdr terminal session control`; the Windows check runs it on Windows, where it is the proof that hided starts there.
 
@@ -2201,6 +2207,24 @@ A run that reaches a remote (a fetch, a clone) starts through `git_run::remote`,
 `git_run::output` ends the whole process tree at its deadline (15 s for a read, 10 minutes for a change such as a checkout, a fetch's own bound) and refuses an answer past its output cap (256 MiB unless the caller names less); a clone keeps its own streaming run and stall clock but starts from the same command.
 A credential helper still answers from what it already holds, which is how a background fetch uses the operator's login without asking.
 `git_run`'s own test fails when product code in `hide-host` spells a Git process any other way.
+
+### WSL distributions as devices
+
+On Windows, each WSL 2 distribution of this PC is a device of its own, reached through `wsl.exe` instead of SSH (PRD wsl-device).
+A registration stores the distribution's name (`wsl_distro`, `LinkOrigin::Wsl`) instead of an SSH alias; its id is `wsl-<name>` and its name `WSL <name>`, both the core's, so the Add device dialog shows the name and has nothing to type.
+A build before this field reads a WSL record as a registration with neither an alias nor a distribution and drops that record alone; its SSH devices stay (`persistence.rs`'s downgrade test).
+The core reaches it through the same `DeviceConnector` (`wsl_transport`, `wsl_distributions`) and `DialedTransport::establish` as an SSH device, and `hide-node/src/ssh/wsl.rs` is the transport.
+Its order refuses before it writes anything: a WSL 1 distribution or one whose first-run setup is pending is `Unsupported`, saying what fixes it (`wsl --set-version <name> 2`, or finishing the setup); a stopped distribution on an attempt that may not start it is `Stopped`, after one running check and no other call; then a probe as the default user reads the user, uid, home, `uname` and `sha256sum`, and the identity (the user, the distribution as host name, port 0, and `wsl:<distribution id>` as host key) must match the consent, or it is `IdentityChanged` and asked again.
+The install sends only what the version folder lacks or holds damaged, each file over the stdin of a `sh -c` that checks its digest and renames it into place, so a cut connection leaves no half file and the next one resumes.
+The helper then runs as `wsl.exe -d <name> -u <user> --cd ~ -e <helper> node serve --own-herdr`, its stdin and stdout the one link (`over_child` in `hide-node/src/ssh/host.rs`); the account's Herdr is reached through that same link, and the kit runs once on connection when that Herdr does not answer.
+The link owns the child: its end closes the child's stdin, waits five seconds, then ends its process tree, and the child's exit ends the link; Herdr outlives both.
+At most four `wsl.exe` calls run at once across every distribution; each has its own deadline (10 s for the running check, 60 s for the probe, 180 s for an install or kit pass).
+
+Starting a stopped distribution is a decision the core makes once per attempt (`HostAttempt` in `runtime/hosts.rs`): the app opening (`app_open`) and the operator's own reconnect (`device_host_retry`) may start it (`Wake::Allowed`), and every background retry, a link that ended and an automatic kit or project pass may not (`Wake::NotAllowed`).
+A `Stopped` answer leaves the device unavailable with no retry scheduled, the row's "not connected", until one of those two asks again; the app opening while such an attempt is still running is kept in `device_wake_pending` and taken by the next attempt.
+An SSH device takes the same argument and ignores it.
+Add device's listing reads `wsl_distributions` beside the SSH hosts on the same worker; a WSL 1 distribution or one whose setup is pending is listed with why it cannot be chosen, and an unreadable registry is `wsl_problem`, never an empty list.
+A WSL device's ports and disk are read through its node, as a node that dialed in reports its own (`reports_own_facts`), and its pull requests with this PC's GitHub login (D-18); its agent hooks and settings are written in the distribution's home only.
 
 ### A core on another machine
 
