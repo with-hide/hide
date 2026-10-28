@@ -18,7 +18,7 @@ use crate::remote::{Arrived, CapabilityReport, CapabilityState, DeviceTransport,
 
 /// Where a registration's link comes from.
 enum Source {
-    Arrived(Arrived),
+    Arrived(Box<Arrived>),
     Ssh(String),
     Wsl(String),
 }
@@ -169,7 +169,7 @@ impl Runtime {
         // brought its link; until then its row reads not connected.
         let source = match &registration.origin {
             LinkOrigin::Inbound => match self.inbound_arrivals.remove(&device_id) {
-                Some(arrived) => Source::Arrived(arrived),
+                Some(arrived) => Source::Arrived(Box::new(arrived)),
                 None => return false,
             },
             // A core waiting for its move's link dials nothing; releasing
@@ -206,11 +206,14 @@ impl Runtime {
                 return Err("This device's id contains \":\", so its panes cannot be told apart from another device's; remove it and register it under another id".to_owned());
             }
             let (transport, arrived) = match source {
-                Source::Arrived(Arrived {
-                    transport,
-                    node,
-                    hear_close,
-                }) => (DeviceReach::Inbound(transport), Some((node, hear_close))),
+                Source::Arrived(arrived) => {
+                    let Arrived {
+                        transport,
+                        node,
+                        hear_close,
+                    } = *arrived;
+                    (DeviceReach::Inbound(transport), Some((node, hear_close)))
+                }
                 Source::Wsl(distro) => (
                     DeviceReach::Dialed(self.devices.wsl_transport(&device_id, &distro)?),
                     None,

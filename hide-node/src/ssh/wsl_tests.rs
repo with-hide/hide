@@ -285,14 +285,11 @@ fn a_child_link_ends_its_child_and_ends_with_it() {
     let pid = child.id();
     let link = super::super::over_child("wsl:test", child, None, Box::new(|_| {})).unwrap();
     link.close("the test is done");
-    let since = Instant::now();
-    while hide_platform::process::is_alive(pid) && since.elapsed() < Duration::from_secs(10) {
-        std::thread::sleep(Duration::from_millis(20));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while hide_platform::process::is_alive(pid) {
+        assert!(Instant::now() < deadline, "the child outlived its link");
+        std::thread::yield_now();
     }
-    assert!(
-        !hide_platform::process::is_alive(pid),
-        "the child outlived its link"
-    );
     assert!(
         ended.exists(),
         "the child read the end of its input and exited by itself"
