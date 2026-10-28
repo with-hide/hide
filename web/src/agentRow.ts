@@ -114,13 +114,14 @@ export type LineParts = { lead: string | null; text: string | null; tail: string
  * lead with their word (`질문 · …`, `일 남음 · …`, D-04); a waiting in-progress
  * row leads with 대기 and says its sentence or, with none, the cause Hide
  * proved (B10, B29); the end of the checks a row waited on names the pull
- * request (B13). A View to look at leads with 볼 것 and names the newest, `볼 것
- * · login.ts 외 2`; on a row whose request outranks it, it ends the line as
- * a count, `볼 것 1` (PRD unseen-agent-views D-14, D-18).
+ * request (B13). A View to look at leads with 볼 것 and names the newest, the
+ * others counted in the tail a narrow row keeps, `볼 것 · login.ts · 외 2`; on
+ * a row whose request outranks it, it ends the line as a count, `볼 것 1` (PRD
+ * unseen-agent-views D-14, D-18).
  */
 export function lineParts(t: TFunction<"translation">, agent: LineAgent, line: RowLine): LineParts {
   const word = leadWord(t, agent);
-  const looks = line.look === undefined && agent.look ? t("agents.line.lookTail", { count: agent.look.count }) : null;
+  const looks = line.look === undefined ? (agent.look ? t("agents.line.lookTail", { count: agent.look.count }) : null) : line.look > 1 ? t("agents.line.lookOthers", { count: line.look - 1 }) : null;
   const tail = [backgroundTail(t, agent), looks].filter(Boolean).join(" · ") || null;
   const parts = (lead: string | null, text: string | null): LineParts => ({ lead, text: text || null, tail });
   switch (line.mode) {
@@ -135,7 +136,7 @@ export function lineParts(t: TFunction<"translation">, agent: LineAgent, line: R
     case "kept":
       return parts(word ?? statusText(t, agent.status_code), line.text);
     case "request":
-      if (line.look !== undefined) return parts(t("agents.mark.look"), line.look > 1 ? t("agents.line.lookMore", { label: line.text, count: line.look - 1 }) : line.text);
+      if (line.look !== undefined) return parts(t("agents.mark.look"), line.text);
       return parts(word, line.subject ? askSubjectText(t, line.subject) : line.text);
     case "news":
       return parts(word, line.text);

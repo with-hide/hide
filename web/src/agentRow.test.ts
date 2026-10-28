@@ -305,9 +305,17 @@ describe("a View to look at (PRD unseen-agent-views D-05, D-14, D-18)", () => {
     const one = row("a", { group: "needs_you", mark: "look", look: look(1) });
     expect(lineText(t, one, sidebarLine(one)!)).toBe("볼 것 · login.ts");
     const three = row("b", { group: "needs_you", mark: "look", look: look(3) });
-    expect(lineText(t, three, sidebarLine(three)!)).toBe("볼 것 · login.ts 외 2");
+    expect(lineText(t, three, sidebarLine(three)!)).toBe("볼 것 · login.ts · 외 2");
+    expect(lineParts(t, three, sidebarLine(three)!)).toEqual({ lead: "볼 것", text: "login.ts", tail: "외 2" });
     expect(lineTone(sidebarLine(three)!, three)).toBe(lineTone(sidebarLine(row("q", { demand: "question", activity: "stopped", group: "needs_you", emphasized: true, unread: true }))!, three));
     expect(markWords(t, three)).toBe("볼 것 · login.ts");
+  });
+
+  it("keeps the count in the tail a narrow row never cuts, however long the View's name", async () => {
+    const { t } = await createInterfaceI18n("ko");
+    const label = "feat: show an agent's unseen View as To look at in Needs You · Pull Request #1804";
+    const long = row("l", { group: "needs_you", mark: "look", look: { ...look(3), label } });
+    expect(lineParts(t, long, sidebarLine(long)!)).toEqual({ lead: "볼 것", text: label, tail: "외 2" });
   });
 
   it("gives the line to a question on the same row and ends it with the count", async () => {
