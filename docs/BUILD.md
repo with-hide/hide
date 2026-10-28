@@ -141,6 +141,14 @@ The sealed `test`, `lint`, `release` and `cli` invocations keep their existing b
 `web build` includes its typecheck before Vite bundles, so the no-argument gate and CI's web checks run it once before lint and unit tests, with no separate web typecheck over the same inputs.
 Desktop build uses esbuild without typechecking, so its separate typecheck remains required.
 Standalone package `build` and `e2e` commands keep their preparation: web build typechecks, web package e2e builds the shell, and desktop e2e builds the host.
+The desktop packager also runs the web build with its typecheck by default, for local builds and standalone CI calls alike.
+`package.yml` accepts `web-typechecked: true` only from a caller that requires the same source's verify web build before accepting or publishing its packages.
+It passes that source as `HIDE_WEB_TYPECHECKED_SHA`; `package.mjs` requires GitHub Actions, an exact checkout commit match and unchanged web inputs and lockfile with no untracked web source, then runs Vite without repeating `tsc`.
+The same source pins `pnpm-lock.yaml`, and both verify and packaging install it frozen with Node 22 and pnpm 10.
+The PR/main caller opts in only when its plan requires the `checks` lane, and the existing aggregate refuses a failed, cancelled or skipped planned check.
+A release candidate may build in parallel with verify, but its receipt and final publication must require a successful verify run of its exact public source.
+Until that gate passes, a built package is unverified; the opt-in is a dependency contract, not independent proof of success.
+Other callers leave the input false, and setting the source override outside GitHub Actions or for another commit fails packaging.
 `web e2e` through this wrapper runs Playwright against the web output already built; `desktop e2e` always rebuilds the desktop host before Playwright, including a direct local invocation.
 Both forward the test arguments and their exit status, so a missing test filter fails the caller.
 `<web|desktop> e2e-list [args...]` only discovers tests (`playwright test --list`); it needs no app build and cannot execute tests.

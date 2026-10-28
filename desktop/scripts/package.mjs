@@ -96,13 +96,29 @@ fs.rmSync(packaged, { recursive: true, force: true });
 fs.rmSync(release, { recursive: true, force: true });
 fs.mkdirSync(out, { recursive: true });
 
-// Release hided embeds web/dist, so the web shell is built first; the cargo
-// wrapper reuses the machine's toolchain and keeps output in this worktree.
-pnpm(["--dir", "web", "build"]);
 // The binaries report the version the app ships and the commit it was built
 // from (`hide version`); a package that cannot name its commit is refused.
 const commit = run("git", ["rev-parse", "HEAD"]);
 if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error(`the package's commit could not be read (got '${commit}')`);
+// Optional CI-only source identity, supplied by package.yml when its caller
+// requires this source's verify web build before accepting the packages.
+// No value means a standalone build, including CI callers without that gate.
+const typechecked = process.env.HIDE_WEB_TYPECHECKED_SHA;
+if (typechecked) {
+  if (process.env.GITHUB_ACTIONS !== "true" || typechecked !== commit) {
+    throw new Error("HIDE_WEB_TYPECHECKED_SHA requires GitHub Actions and the package checkout's exact commit");
+  }
+  // The commit binds the lockfile and source only while the checkout is clean.
+  if (run("git", ["status", "--porcelain", "--untracked-files=normal", "--", "web", "pnpm-lock.yaml", "pnpm-workspace.yaml"])) {
+    throw new Error("cannot delegate the web typecheck with changed web inputs or lockfile");
+  }
+  console.log(`Web typecheck delegated to verify for ${commit}; acceptance requires that gate to pass. Building with Vite only.`);
+  pnpm(["--dir", "web", "exec", "vite", "build"]);
+} else {
+  pnpm(["--dir", "web", "build"]);
+}
+// Release hided embeds web/dist, so both paths build the shell before cargo;
+// the wrapper keeps native release output in this worktree.
 // Its place in main's history orders two builds of one release, so a newer
 // screen updates its core (hided/src/build_order.rs): the first-parent count
 // of the last commit it shares with main, so a branch's own commits never
