@@ -52,6 +52,8 @@ jobs:
         run: |
           cd source
           source scripts/toolchain-env.sh
+          rustc --version
+          cargo --version
           python ../harness/scripts/profile-measure.py --source . --output ../results --repeat "$REPEAT"
       - uses: actions/upload-artifact@v4
         if: always()
