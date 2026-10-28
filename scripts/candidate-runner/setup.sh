@@ -37,6 +37,9 @@ operator="${SUDO_USER:-}"
 home_of() { local name="$1"; dscl . -read "/Users/$name" NFSHomeDirectory | awk '{ print $2 }'; }
 operator_home="$(home_of "$operator")"
 operator_uid="$(id -u "$operator")"
+# The runner's account cannot enter the administrator's home, where this copy
+# usually sits, and rustup-init refuses to start in a folder it cannot read.
+cd /
 
 # What this setup must leave as it found it: the administrator's launchd
 # services and their files (the hide-private runner and the Hermes gateways
