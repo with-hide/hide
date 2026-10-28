@@ -5036,14 +5036,26 @@ impl Runtime {
                 registration.label, registration.path
             ),
         );
+        let registration_id = registration.id.clone();
         self.snapshot
             .ui_state
             .workspace_registrations
             .push(registration);
         // The project id is path-keyed, so registering changes nothing the
-        // sidebar shows right now; the sync that follows Herdr's
-        // workspace_closed rebuilds the catalog off the runtime lock.
+        // sidebar shows while the row is drawn; the sync that follows Herdr's
+        // workspace_closed rebuilds the catalog off the runtime lock. An
+        // answer that lands after that sync finds the row gone, and asks the
+        // coordinator to read the session again so the rebuild includes it.
+        let drawn = self
+            .snapshot
+            .navigator
+            .workspaces
+            .iter()
+            .any(|row| row.id == registration_id);
         self.persist_current_ui_state();
+        if !drawn {
+            self.request_republish();
+        }
         true
     }
 }

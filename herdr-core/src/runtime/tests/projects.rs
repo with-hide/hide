@@ -1638,6 +1638,63 @@ fn a_row_pinned_twice_while_its_machine_answers_is_registered_once() {
     assert!(registrations[0].pinned);
 }
 
+/// A closing last pane's registration that is answered after Herdr closed
+/// the workspace still lands: the row is registered and the coordinator is
+/// asked to read the session again, so the rebuilt catalog draws it.
+#[test]
+fn a_retain_answered_after_the_workspace_closed_asks_for_the_row_again() {
+    let node = JudgingNode::new(None, false);
+    let mut runtime = runtime();
+    runtime.own_node = node.clone();
+    runtime.ingest_session(Ok(context_payload()));
+    let alpha = row_id(&runtime, "hide-context-alpha");
+    let shared = SharedRuntime::new(runtime);
+    shared
+        .lock()
+        .unwrap()
+        .install_worker_context(shared.weak(), crate::handle::ChangeNotifier::noop());
+
+    shared
+        .lock()
+        .unwrap()
+        .retain_project_before_last_pane_closes("w1:p1");
+    wait_for("the check to be asked", || node.asked() == 1);
+    {
+        // Herdr closes the workspace with its pane before the answer.
+        let mut runtime = shared.lock().unwrap();
+        let mut closed = context_payload();
+        closed
+            .workspaces
+            .retain(|workspace| workspace.workspace_id != "w1");
+        closed.tabs.retain(|tab| tab.workspace_id != "w1");
+        closed.panes.retain(|pane| pane.pane_id != "w1:p1");
+        closed.layouts.retain(|layout| layout.workspace_id != "w1");
+        runtime.ingest_session(Ok(closed));
+        assert!(
+            runtime
+                .snapshot
+                .navigator
+                .workspaces
+                .iter()
+                .all(|row| row.id != alpha)
+        );
+        runtime.take_republish_request();
+    }
+    node.release();
+    wait(&shared, "the late answer", |runtime| {
+        runtime.row_registrations.is_empty()
+    });
+
+    let mut runtime = shared.lock().unwrap();
+    let registrations = &runtime.snapshot.ui_state.workspace_registrations;
+    assert_eq!(registrations.len(), 1, "{registrations:?}");
+    assert_eq!(registrations[0].id, alpha);
+    assert!(
+        runtime.take_republish_request(),
+        "the catalog is read again"
+    );
+}
+
 /// An answer that arrives after the row stopped waiting for it registers
 /// nothing: the row was removed, or its pin withdrawn, meanwhile.
 #[test]
