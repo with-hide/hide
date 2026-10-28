@@ -65,7 +65,7 @@ hide device remove <device id> [--json]
 hide file open <path> [--beside]
 hide diff open <path> [--beside]
 hide browser open <url-or-path> [--beside] [--wait]
-hide view list | status <view-id> | select <view-id> | close <view-id>
+hide view list [--session <id|here>] | status <view-id> | select <view-id> | close <view-id>
 hide view split <view-id> --area <area-id> --edge left|right|up|down
 hide view move <view-id> --area <area-id> --index <n>
 ```
@@ -73,8 +73,9 @@ hide view move <view-id> --area <area-id> --index <n>
 - These need the Hide window open and your pane in a checkout Hide knows; a refusal says which is missing.
 - `file open` and `diff open` show a file or its changes in a View beside the agents, and `browser open` a page; open only what the operator should look at now, and say what you opened.
 - `--beside` opens it in the View area next to the one in use, or in a new area to its right, as Open to the side does; a page of the same address already there comes forward instead of opening again.
-- While the operator looks at this checkout from another pane, what you open joins its Files list behind what they see instead of taking the screen.
-- The `view` commands arrange the Views that are already open; `view list` gives their ids and areas.
+- What you open belongs to your session: the operator sees it in the Files list while your pane has the keyboard, and it closes when your pane closes or your session is archived.
+- While the operator looks at this checkout from another pane, what you open waits in your session's Files list instead of taking the screen.
+- The `view` commands arrange the Views that are already open; `view list` gives their ids, areas and the sessions that opened each, and `--session here` keeps only yours.
 
 ## Project Memory
 

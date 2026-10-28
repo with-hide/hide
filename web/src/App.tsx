@@ -12,7 +12,7 @@ import { configureFileBytes } from "./fileBytes";
 import { installKeyboard, observeRecent, reconcileHeldCycle } from "./keyboard";
 import { noteOperatorPointer, observeInputRequests } from "./keyTarget";
 import { OverviewModal, OverviewPage } from "./Overview";
-import { AgentCloseNotice, ConfirmClose, ConfirmTrash, CycleOverlay, NoticeBar } from "./Overlays";
+import { AgentCloseNotice, ConfirmClose, ConfirmTrash, ConfirmViewsClose, CycleOverlay, NoticeBar } from "./Overlays";
 import { ConfirmArchive, ConfirmArchiveDelete } from "./ArchiveDialogs";
 import { QuickAdd } from "./QuickAdd";
 import { Palette } from "./Palette";
@@ -268,6 +268,7 @@ export function App() {
     ["overview", <OverviewModal actions={actions} />],
     ["cycle", <CycleOverlay />],
     ["confirm_close", <ConfirmClose actions={actions} />],
+    ["confirm_views_close", <ConfirmViewsClose actions={actions} />],
     ["confirm_trash", <ConfirmTrash actions={actions} />],
     ["confirm_archive", <ConfirmArchive actions={actions} />],
     ["confirm_archive_delete", <ConfirmArchiveDelete actions={actions} />],

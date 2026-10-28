@@ -862,6 +862,10 @@ impl Runtime {
         // default one-empty-area layout, even when it is not the front one.
         let empty = crate::view_layout::Layout::default();
         let layout = self.view_layout_of(&key).unwrap_or(&empty);
+        let caller_session = match Caller::parse(pane_id) {
+            Caller::Pane(pane) => self.session_scope_of_pane(pane),
+            Caller::Checkout { .. } => None,
+        };
         let views = (query == Query::ViewList).then(|| {
             layout
                 .areas()
@@ -903,6 +907,23 @@ impl Runtime {
                                 failure: reported.and_then(|page| page.failure.clone()),
                             }
                         }),
+                        openers: display
+                            .openers
+                            .iter()
+                            .map(|opener| {
+                                let now = self.view_opener_snapshot(opener);
+                                crate::workspace_control::ViewOpener {
+                                    name: now.name,
+                                    provider: now.provider,
+                                    session: opener.resume.clone(),
+                                    pane_id: now.pane_id,
+                                    here: caller_session
+                                        .as_ref()
+                                        .is_some_and(|scope| opener.of_session(scope)),
+                                }
+                            })
+                            .collect(),
+                        operator: display.operator || display.openers.is_empty(),
                     })
                 })
                 .collect()

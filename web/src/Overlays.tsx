@@ -11,6 +11,7 @@ import { Button } from "./components/ui/button";
 import { Hint } from "./components/ui/tooltip";
 import { Input } from "./components/ui/input";
 import { useShellStore } from "./store";
+import { editorTabFor } from "./snapshot";
 import { focusTerminal } from "./terminals";
 import { keyboardOwner } from "./viewFocus";
 import { useUiStore, type Cycle } from "./ui";
@@ -285,6 +286,53 @@ export function SubtreeClose({ actions, kind, targetId, subtree, footer }: { act
         >
           {t("shell.closeAll")}
         </Button>
+      </AlertDialogFooter>
+    </>
+  );
+}
+
+/**
+ * A close that would close a session's Views of unsaved documents asks
+ * first (PRD session-files D-14): the files, then Cancel / Close without
+ * saving / Save and close, with Save and close the Enter default.
+ */
+export function ConfirmViewsClose({ actions }: { actions: Actions }) {
+  const pending = useUiStore((s) => s.pendingViewsClose);
+  const editor = useShellStore((s) => (pending ? s.editor : null));
+  const rows = pending && editor ? pending.views.map((view) => ({ id: view.display_id, label: editorTabFor(editor, view.tab_id)?.label ?? view.tab_id })) : [];
+  return (
+    <AlertDialog open={pending != null} onOpenChange={(open) => { if (!open) actions.cancelViewsClose(); }}>
+      {pending ? (
+        <AlertDialogContent data-confirm-views-close="true">
+          <ViewsCloseSheet actions={actions} rows={rows} />
+        </AlertDialogContent>
+      ) : null}
+    </AlertDialog>
+  );
+}
+
+/** The files a session close would close unsaved, then Cancel / Close without saving / Save and close. */
+export function ViewsCloseSheet({ actions, rows }: { actions: Actions; rows: { id: string; label: string }[] }) {
+  const { t } = useInterfaceTranslation();
+  return (
+    <>
+      <AlertDialogHeader>
+        <AlertDialogTitle>{t("shell.viewsClose.title")}</AlertDialogTitle>
+        <AlertDialogDescription>{t("shell.viewsClose.body", { count: rows.length })}</AlertDialogDescription>
+      </AlertDialogHeader>
+      <ul className="flex min-w-0 flex-col gap-xxs text-caption text-foreground" data-views-close-list="true">
+        {rows.map((row) => (
+          <li key={row.id} className="min-w-0 break-words" data-views-close-row={row.id}>{row.label}</li>
+        ))}
+      </ul>
+      <AlertDialogFooter>
+        <AlertDialogCancel data-views-close-cancel="true">{t("common.cancel")}</AlertDialogCancel>
+        <Button variant="secondary" onClick={() => actions.closeViewsWithoutSaving()} data-views-close-discard="true">
+          {t("shell.closeWithoutSaving")}
+        </Button>
+        <AlertDialogAction onClick={() => actions.saveViewsAndClose()} data-views-close-save="true">
+          {t("shell.saveAndClose")}
+        </AlertDialogAction>
       </AlertDialogFooter>
     </>
   );

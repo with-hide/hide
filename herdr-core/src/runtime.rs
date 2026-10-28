@@ -87,6 +87,7 @@ mod usage_limit;
 mod view_areas;
 mod view_callers;
 mod view_feedback;
+mod view_sessions;
 mod workspace_control;
 mod workspace_view;
 
@@ -1147,6 +1148,8 @@ pub struct Runtime {
     /// View openers waiting for their document, Sends under way, and the
     /// feedback worker (PRD view-opener-feedback).
     view_feedback: view_feedback::FeedbackRuntime,
+    /// Which session each Files strip was settled for (`view_sessions.rs`).
+    view_sessions: view_sessions::ViewSessions,
     /// The panes held as an unsent draft, kept across a restart so a daemon
     /// that starts over does not type a bell over what the operator typed
     /// (`composer_store.rs`); absent in a runtime with no state folder.
@@ -2189,6 +2192,7 @@ impl Runtime {
             delivery_client: None,
             delivery_observations: HashMap::new(),
             view_feedback: view_feedback::FeedbackRuntime::default(),
+            view_sessions: view_sessions::ViewSessions::default(),
             composer_marks: Vec::new(),
             delivery_input_traced: HashMap::new(),
             composer_store: None,

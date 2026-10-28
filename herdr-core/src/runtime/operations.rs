@@ -44,6 +44,9 @@ pub(super) struct PendingClose {
     pub(super) message: Option<String>,
     pub(super) retryable: bool,
     pub(super) selection_restore: Option<CloseSelectionRestore>,
+    /// The sessions whose Views close once this close completes (PRD
+    /// session-files D-14); none for a sleep, which keeps them (D-27).
+    pub(super) view_sessions: Vec<crate::view_feedback::SessionScope>,
 }
 
 impl PendingClose {
