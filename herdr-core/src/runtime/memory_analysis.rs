@@ -6550,6 +6550,140 @@ mod tests {
         );
     }
 
+    #[test]
+    fn an_omp_fork_that_kept_its_parents_times_does_not_take_the_parents_words() {
+        // omp keeps a forked record's own time; only the fork's header, past
+        // its title slot, says the fork began later. The parent says the rule
+        // again after the fork, which must make the card recent.
+        let fixture = Fixture::new();
+        let template: Vec<Value> = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../hide-session/tests/fixtures/adapters/omp-18.7.0/session.jsonl"),
+        )
+        .unwrap()
+        .lines()
+        .take(3)
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+        assert_eq!(template[0]["type"], "title");
+        let temp = std::env::temp_dir().canonicalize().unwrap();
+        let relative = fixture.root.strip_prefix(temp).unwrap().to_string_lossy();
+        let folder = fixture
+            .home
+            .join(hide_session::OMP_SESSIONS)
+            .join(format!("-tmp-{}", relative.replace(['/', '\\', ':'], "-")));
+        std::fs::create_dir_all(&folder).unwrap();
+        let said = |at: &str| {
+            let mut line = template[2].clone();
+            line["timestamp"] = json!(at);
+            line["message"]["content"] =
+                json!([{"type": "text", "text": "Run tests with nextest before a merge"}]);
+            line
+        };
+        let write = |id: &str, opened: &str, records: Vec<Value>| -> Vec<u64> {
+            let mut header = template[1].clone();
+            header["id"] = json!(id);
+            header["timestamp"] = json!(opened);
+            header["cwd"] = json!(fixture.root);
+            let mut body = format!("{}\n{header}\n", template[0]);
+            let mut offsets = Vec::new();
+            for record in records {
+                offsets.push(body.len() as u64);
+                body.push_str(&format!("{record}\n"));
+            }
+            std::fs::write(folder.join(format!("date_{id}.jsonl")), body).unwrap();
+            offsets
+        };
+        // The fork's name sorts before its parent's, so only its later start
+        // tells which session said the words first.
+        let parent = write(
+            "omp-parent-z",
+            "2026-10-03T01:00:00.000Z",
+            vec![
+                said("2026-10-03T01:00:00.000Z"),
+                said("2026-10-20T01:00:00.000Z"),
+            ],
+        );
+        let fork = write(
+            "omp-fork-a",
+            "2026-10-04T01:00:00.000Z",
+            vec![said("2026-10-03T01:00:00.000Z")],
+        );
+        let answer = |offsets: &[u64], relation: &str, target: Value| {
+            fixture.push(json!({
+                "candidates": [{
+                    "text": "Run tests with nextest before a merge.",
+                    "title": "Tests run with nextest",
+                    "aliases": ["nextest"],
+                    "kind": "preference",
+                    "confidence": 0.9,
+                    "salience": 0.8,
+                    "source_offsets": offsets,
+                    "cited_paths": [],
+                    "relation": relation,
+                    "target_id": target,
+                }],
+                "alias_backfill": [],
+            }));
+        };
+        answer(&parent, "new", Value::Null);
+        assert_eq!(
+            fixture
+                .run(("omp", "omp-parent-z".to_owned()), false, true, &[], true)
+                .0,
+            ["analyzing", "learned one"]
+        );
+        answer(&fork, "same", json!("m2"));
+        assert_eq!(
+            fixture
+                .run(("omp", "omp-fork-a".to_owned()), false, true, &[], true)
+                .0,
+            ["analyzing", "analyzed"]
+        );
+        // A rival said once, between the parent's two times.
+        let rival_at = 1_791_680_400_000; // 2026-10-11T01:00:00Z
+        fixture
+            .store()
+            .apply_candidates(
+                &AnalysisBatch {
+                    id: "rival".to_owned(),
+                    project_id: fixture.project_id.clone(),
+                    provider: "codex".to_owned(),
+                    analysis_provider: "codex".to_owned(),
+                    session_id: "rival".to_owned(),
+                    content_hash: "rival".to_owned(),
+                    created_at_unix_ms: rival_at,
+                },
+                &[Candidate {
+                    text: "Keep commits small".to_owned(),
+                    title: String::new(),
+                    aliases: Vec::new(),
+                    kind: CandidateKind::Preference,
+                    confidence: 0.9,
+                    salience: 0.8,
+                    source_offsets: vec![1],
+                    human_offsets: vec![1],
+                    source_times: [(1, rival_at)].into(),
+                    source_words: [(1, hide_memory::words_digest("Keep commits small"))].into(),
+                    cited_paths: Vec::new(),
+                    relation: CandidateRelation::New,
+                }],
+            )
+            .unwrap();
+        let order: Vec<u64> = fixture
+            .store()
+            .retrieve(&hide_memory::RetrievalQuery::session_start(
+                &fixture.project_id,
+            ))
+            .unwrap()
+            .items
+            .iter()
+            .map(|item| item.number)
+            .filter(|number| [2, 3].contains(number))
+            .collect();
+        assert_eq!(order, [2, 3]);
+    }
+
     fn closed_pass(fixture: &Fixture, delegated: &[&str], ai: bool) -> Vec<&'static str> {
         fixture
             .run(("claude", SESSION.to_owned()), false, true, delegated, ai)

@@ -638,15 +638,16 @@ impl Transcript {
     }
 }
 
-/// The time a Pi or omp session's header line says the session was made.
+/// The time a Pi or omp session's header says the session was made, read
+/// as every other reader of that header reads it, past omp's title slot.
 fn pi_header_time(agent: Agent, contents: &str) -> Option<u64> {
     if !matches!(agent, Agent::Pi | Agent::Omp) {
         return None;
     }
-    let header: serde_json::Value = serde_json::from_str(contents.lines().next()?).ok()?;
-    (header["type"] == "session")
-        .then(|| crate::timestamp_ms(header.get("timestamp")).ok())
-        .flatten()
+    let mut remaining = contents.len() as u64;
+    crate::native_file::header_from_reader(agent, &mut contents.as_bytes(), &mut remaining)
+        .ok()?
+        .opened_at_unix_ms
 }
 
 /// The listed facts of a Claude or Codex transcript, read on from `kept`,

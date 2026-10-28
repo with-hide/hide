@@ -354,6 +354,7 @@ pub(crate) fn header(path: &Path) -> Result<Header> {
     Ok(Header {
         id: row.id,
         cwd: row.cwd,
+        opened_at_unix_ms: None,
     })
 }
 

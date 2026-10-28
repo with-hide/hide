@@ -401,6 +401,7 @@ impl Database {
             header: crate::native_file::Header {
                 id,
                 cwd: sidecar.cwd,
+                opened_at_unix_ms: None,
             },
             root,
             created_at: metadata.created_at,
