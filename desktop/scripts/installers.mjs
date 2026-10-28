@@ -18,9 +18,10 @@
 // macOS zip left none on the package lane, and Linux builds each type on its
 // own, so one writer gives every system the same file from the same facts.
 //
-// Each installer gets a `.sha256` naming only it. `out` ends holding exactly
-// the system's release files (`systemAssetNames`); anything else there is
-// removed first, and a failure leaves no partial set behind.
+// Each installer gets a `.sha256` naming only it. A release's `out` holds
+// exactly the system's release files (`systemAssetNames`); the Linux update
+// test keeps only the deb, its checksum and update file. Anything else there
+// is removed first, and a failure leaves no partial set behind.
 //
 // Usage, for a second build of an app already packaged (the CI update test):
 //   node desktop/scripts/installers.mjs <packaged app> <version> <out>
@@ -194,8 +195,9 @@ async function buildLinux(app, version, work, type) {
 
 /**
  * The system's update file, naming each file its updater installs: the zip on
- * macOS, setup.exe on Windows, and both Linux packages, of which
- * electron-updater picks the type the app was installed as.
+ * macOS, setup.exe on Windows, and the selected Linux packages, of which
+ * electron-updater picks the type the app was installed as. A release names
+ * both Linux types; the update test names only the deb it installs.
  */
 function writeUpdateInfo(out, version, files) {
   const entries = files.updates.map((name) => ({ url: name, sha512: sha512Base64(path.join(out, name)), size: fs.statSync(path.join(out, name)).size }));
@@ -241,7 +243,7 @@ export async function buildInstallers({ app, version, out, signing = null, updat
     const expected = updateTest && system === "linux"
       ? [...files.installers.flatMap((name) => [name, `${name}.sha256`]), files.updateInfo].sort()
       : systemAssetNames(version, system);
-    if (JSON.stringify(landed) !== JSON.stringify(expected)) throw new Error(`installers differ from the release set: got [${landed.join(", ")}], expected [${expected.join(", ")}]`);
+    if (JSON.stringify(landed) !== JSON.stringify(expected)) throw new Error(`installers differ from the expected set: got [${landed.join(", ")}], expected [${expected.join(", ")}]`);
     return Object.fromEntries(files.installers.map((name) => [name, path.join(out, name)]));
   } catch (error) {
     fs.rmSync(out, { recursive: true, force: true });
