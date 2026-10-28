@@ -4,15 +4,14 @@
 // hash of its source: a test only copies a finished program, so no test
 // holds a compiler and a stale program cannot be mistaken for the current one.
 // A vitest file builds the programs it runs in its `beforeAll` instead; the
-// compiler runs as a child the build awaits, so the worker that runs that file
-// keeps answering vitest while clang runs: a synchronous build of every program
-// on a Windows runner held one for 81 s, and vitest failed the suite on the
-// worker's missed report (with-hide/hide-private#48).
+// compiler runs as a bounded child the build awaits, so the worker that runs
+// that file keeps answering vitest while clang runs: a synchronous build of
+// every program on a Windows runner held one for 81 s, and vitest failed the
+// suite on the worker's missed report (with-hide/hide-private#48).
 import { createHash } from "node:crypto";
-import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { promisify } from "node:util";
+import { runBounded } from "../bounded-child";
 
 const windows = process.platform === "win32";
 const ext = windows ? ".exe" : "";
@@ -33,7 +32,12 @@ const hashed = (source: string, name: FixtureShim): string => {
   return `${name}-${digest.digest("hex").slice(0, 12)}${ext}`;
 };
 
-const compile = promisify(execFile);
+/**
+ * One compile's bounds: inside the 120 s a vitest `beforeAll` gives its build,
+ * so a compiler that hangs is ended and its partial file removed before the
+ * hook is abandoned; the output cap is `execFileSync`'s default.
+ */
+const COMPILE = { timeoutMs: 60_000, outputBytes: 1024 * 1024 };
 
 /**
  * Compiles each of `programs` (every program this system builds unless
@@ -57,14 +61,21 @@ export async function buildFixtureShims(packageDir: string, programs: readonly F
     built[name] = program;
     if (fs.existsSync(program)) continue;
     const partial = `${program.slice(0, program.length - ext.length)}.${process.pid}.partial${ext}`;
+    let failure: unknown;
+    let output = "";
     try {
-      await compile(compiler, ["-O1", "-o", partial, source], { encoding: "utf8" });
+      const done = await runBounded(compiler, ["-O1", "-o", partial, source], COMPILE);
+      if (done.status !== 0) failure = new Error(`exit status ${done.status}, signal ${done.signal}`);
+      output = done.stdout + done.stderr;
     } catch (error) {
+      // The compiler's tree is gone by now; a compiler that cannot start has no output.
+      failure = error;
       const failed = error as { stdout?: string; stderr?: string };
+      output = `${failed.stdout ?? ""}${failed.stderr ?? ""}`;
+    }
+    if (failure) {
       fs.rmSync(partial, { force: true });
-      // A compiler that cannot start has no output; its error is the reason.
-      const output = `${failed.stdout ?? ""}${failed.stderr ?? ""}` || String(error);
-      throw new Error(`fixture C compiler ${compiler} failed on ${source}:\n${output}`, { cause: error });
+      throw new Error(`fixture C compiler ${compiler} failed on ${source}:\n${output || String(failure)}`, { cause: failure });
     }
     // Another build of the same source may have finished first; keep its program.
     if (fs.existsSync(program)) {
