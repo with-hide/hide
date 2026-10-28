@@ -240,8 +240,9 @@ A piece that another open change is still building is marked as pending with the
    Why: macOS can keep a window larger than the work area until the window is next ordered in, by the test's own `blur()` or `focus()`, and clamp it then, so the layout changes in the middle of the test; `area cycle native` lost both View areas that way in about one run in ten (issue 511).
 2. **Wait for a product signal, never for time.**
    The signals a spec waits on, in order of preference:
-   - A DOM state the product exports as a data attribute: `data-pane-view` and `data-focused` for pane focus, `data-checkout-kind` for a checkout row, `data-tab`, `data-main-view` for the Overview's tab.
+   - A DOM state the product exports as a data attribute: `data-pane-view` and `data-focused` for pane focus, `data-checkout-kind` for a checkout row, `data-tab`, `data-main-view` for the Overview's tab, `data-dependency-layout="layered"` for a dependency graph whose cards are placed (`placedBoxes` in `web/e2e/wire.ts`; the placed drawing mounts the cards anew).
      `expect(panes[0]).toHaveAttribute("data-focused", "true")` in `web/e2e/pane-focus-ordering.spec.ts` is the shape.
+     A value the page shows is not the expectation for itself: a new tab is the one Herdr created (`createdTabs` in `web/e2e/group-start-helper.ts`), which `waitForTerminal` waits for the page to select and draw, because the strip can still select the tab before it while the canvas already draws the new one.
    - A diagnostic `kind`, read from the snapshot frames the page receives (`observeDiagnostics` in the same file; `recordWire` in `web/e2e/s7.spec.ts`).
      Wait for `pane.focus.followed`, not for "a moment after the click".
    - What the fixture can read from the real systems: the bytes in a pane's input log, a Herdr answer, a file the core wrote.
