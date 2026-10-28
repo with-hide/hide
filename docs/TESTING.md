@@ -577,7 +577,7 @@ CI retries a failed test once, for classification and for the report, and for no
 Every issue CI files lives in the private repository with-hide/hide-private: the flaky `quarantine` issues, the `nightly-failure` issues, the `agent-canary` record and its failures, and the Herdr preview notice.
 The public repository with-hide/hide takes only user bug reports, through the bug form.
 `ISSUE_REPOSITORY` in `scripts/ci-flaky-report.py` and `scripts/agent-canary-record.py` names the private repository; the runs, jobs, logs, artifacts and pull requests they read stay the public repository's.
-Each job that files or reads these issues mints a token from the development issues GitHub App (`vars.HIDE_ISSUES_APP_ID` and `secrets.HIDE_ISSUES_APP_KEY`, in both the Actions and the Dependabot secret stores) with `actions/create-github-app-token`, for both repositories, and that one token reads the run here and writes the issue there.
+Each job that files or reads these issues mints a token from the development issues GitHub App (its Client ID in `vars.HIDE_ISSUES_APP_CLIENT_ID`, and `secrets.HIDE_ISSUES_APP_KEY` in both the Actions and the Dependabot secret stores) with `actions/create-github-app-token`, for both repositories, and that one token reads the run here and writes the issue there.
 A reusable workflow receives the key from each caller by name.
 A lane whose run has no key, such as a fork's, files nothing and still passes.
 

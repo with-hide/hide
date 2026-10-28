@@ -274,7 +274,7 @@ jobs:
         timeout-minutes: 2
         uses: actions/create-github-app-token@v3
         with:
-          client-id: ${{ vars.HIDE_ISSUES_APP_ID }}
+          client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
           private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
           owner: with-hide
           repositories: hide,hide-private
@@ -505,7 +505,7 @@ jobs:
         timeout-minutes: 2
         uses: actions/create-github-app-token@v3
         with:
-          client-id: ${{ vars.HIDE_ISSUES_APP_ID }}
+          client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
           private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
           owner: with-hide
           repositories: hide,hide-private
@@ -760,7 +760,7 @@ jobs:
         timeout-minutes: 2
         uses: actions/create-github-app-token@v3
         with:
-          client-id: ${{ vars.HIDE_ISSUES_APP_ID }}
+          client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
           private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
           owner: with-hide
           repositories: hide,hide-private
