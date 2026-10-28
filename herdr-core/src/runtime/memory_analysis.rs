@@ -2144,9 +2144,11 @@ fn analyze_session(
         })
         .map(|(event, offset, text)| {
             // What another agent sent a session it started is that agent's
-            // instruction, not the operator's word (D-04).
+            // instruction, not the operator's word (D-04), and a Hide letter
+            // (its envelope, or the doorbell's line) is its sender's.
             let kind = match event.kind {
                 EventKind::Human if delegated => "parent_agent",
+                EventKind::Human if !event.from_operator() => "letter",
                 other => other.as_str(),
             };
             json!({
@@ -3704,6 +3706,161 @@ mod tests {
     }
 
     #[test]
+    fn an_instruction_shaped_like_the_bell_stays_the_operators_and_the_bell_is_its_senders() {
+        // An instruction the operator typed that begins with the owl or ends
+        // with the inbox tail is theirs: an operator event and a human
+        // source. The doorbell's line Hide typed is the letter's.
+        let fixture = Fixture::new();
+        let checkout = fixture.root.to_string_lossy().into_owned();
+        let user = |text: &str| {
+            json!({"type": "user", "sessionId": SESSION, "cwd": checkout,
+                "timestamp": "2026-10-11T00:00:00Z", "origin": {"kind": "human"},
+                "message": {"role": "user", "content": text}})
+        };
+        fixture.write(&[
+            user("🦉 아이콘은 항상 파란색으로"),
+            user("새 탭은 항상 옆에 열어 · hide inbox"),
+            user("🦉 ci-lead 보고: PR #12를 열었습니다 · 외 1통"),
+        ]);
+        fixture.answer(&[]);
+        assert_eq!(fixture.pass(false, true), ["analyzing", "learned one"]);
+        let sent: Value = serde_json::from_str(&fixture.backend.inputs.lock().unwrap()[0]).unwrap();
+        let kinds = sent["new_events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|event| event["kind"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(kinds, ["human", "human", "letter"]);
+        let store = fixture.store();
+        let cursor = store
+            .load_cursor(
+                CursorReader::Analysis,
+                &fixture.project_id,
+                "claude",
+                SESSION,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(cursor.operator_events, 2);
+        let learned = store
+            .item_by_number(&fixture.project_id, 2)
+            .unwrap()
+            .expect("the analysis wrote a card from the owl instruction");
+        assert_eq!(learned.human_source_count, 1);
+    }
+
+    #[test]
+    fn a_bell_whose_summary_lost_its_emoji_or_looks_like_a_tail_is_still_its_senders() {
+        // Lines the bell writes for summaries that once read as the
+        // operator's: one Codex on Windows receives without its emoji, one
+        // with nothing but an emoji, and two shaped like the line's tails.
+        use crate::delivery::bell::{Ring, line};
+        let bell = |sender, kind, body, inbox, language| {
+            line(&Ring {
+                sender,
+                kind,
+                body,
+                others: 0,
+                inbox,
+                language,
+            })
+        };
+        let korean = crate::model::InterfaceLanguage::Korean;
+        let windows = |line: String| -> String {
+            line.chars()
+                .filter(|c| u32::from(*c) <= 0xFFFF)
+                .collect::<String>()
+                .trim()
+                .to_owned()
+        };
+        let bells = [
+            windows(bell("Codex", "report", "Read 🐈 the letter", true, korean)),
+            windows(bell("Codex", "report", "🐈", true, korean)),
+            bell("ci-lead", "report", "· hide inbox", false, korean),
+            bell(
+                "ci-lead",
+                "report",
+                "· and 2 more",
+                false,
+                crate::model::InterfaceLanguage::English,
+            ),
+        ];
+        let fixture = Fixture::new();
+        let checkout = fixture.root.to_string_lossy().into_owned();
+        let user = |text: &str| {
+            json!({"type": "user", "sessionId": SESSION, "cwd": checkout,
+                "timestamp": "2026-10-11T00:00:00Z", "origin": {"kind": "human"},
+                "message": {"role": "user", "content": text}})
+        };
+        let typed = "Always run tests with nextest before a merge";
+        let lines = std::iter::once(user(typed))
+            .chain(bells.iter().map(|text| user(text)))
+            .collect::<Vec<_>>();
+        fixture.write(&lines);
+        let offsets = lines
+            .iter()
+            .scan(0, |at, line| {
+                let offset = *at;
+                *at += line.to_string().len() as u64 + 1;
+                Some(offset)
+            })
+            .collect::<Vec<_>>();
+        fixture.push(json!({
+            "candidates": [{
+                "text": "Reports arrive as letters.",
+                "title": "Letters carry reports",
+                "aliases": [],
+                "kind": "decision",
+                "confidence": 0.9,
+                "salience": 0.8,
+                "source_offsets": offsets[1..],
+                "cited_paths": [],
+                "relation": "new",
+                "target_id": null,
+            }],
+            "alias_backfill": [],
+        }));
+        assert_eq!(fixture.pass(false, true), ["analyzing", "learned one"]);
+        let sent: Value = serde_json::from_str(&fixture.backend.inputs.lock().unwrap()[0]).unwrap();
+        let kinds = sent["new_events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|event| event["kind"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            ["human", "letter", "letter", "letter", "letter"],
+            "{bells:?}"
+        );
+        let store = fixture.store();
+        let cursor = store
+            .load_cursor(
+                CursorReader::Analysis,
+                &fixture.project_id,
+                "claude",
+                SESSION,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(cursor.operator_events, 1);
+        let learned = store
+            .item_by_number(&fixture.project_id, 2)
+            .unwrap()
+            .expect("the analysis wrote a card from the letters");
+        assert_eq!(learned.human_source_count, 0);
+        let contents = std::fs::read_to_string(&fixture.locator).unwrap();
+        let requests = hide_session::parse_events(hide_session::Agent::Claude, &contents)
+            .links
+            .requests
+            .into_iter()
+            .map(|request| request.text)
+            .collect::<Vec<_>>();
+        assert_eq!(requests, [typed]);
+    }
+
+    #[test]
     fn a_pass_records_receipts_a_live_pane_cannot_and_analyzes_a_closed_session_once() {
         // B1, B2, B3, B27, D-16.
         let fixture = Fixture::new();
@@ -4270,9 +4427,9 @@ mod tests {
         assert_eq!((fixture.calls(), analyzed_to()), (0, None));
 
         // Its pane closed: one call carries the operator's request, the
-        // letter and the image (message 0, 3 and 4) and the answer
-        // (message 5), never the text OpenCode or Hide's plugin added, and
-        // the cursor stands after the sixth and last message.
+        // letter as its sender's and the image (message 0, 3 and 4) and the
+        // answer (message 5), never the text OpenCode or Hide's plugin added,
+        // and the cursor stands after the sixth and last message.
         fixture.answer(&[]);
         assert_eq!(
             fixture.pass_for(key.clone(), false, true).0,
@@ -4284,7 +4441,7 @@ mod tests {
             events(&first),
             [
                 (0, "human".to_owned()),
-                (3, "human".to_owned()),
+                (3, "letter".to_owned()),
                 (4, "human".to_owned()),
                 (5, "assistant".to_owned()),
             ]
@@ -4512,9 +4669,9 @@ mod tests {
         assert_eq!((fixture.calls(), analyzed_to()), (0, None));
 
         // Its pane closed: one call carries the operator's request, the
-        // letter, the image and the answer (messages 0, 3, 4 and 5), never the
-        // text OpenCode or Hide's plugin added, and the cursor stands after
-        // the eighth and last message.
+        // letter as its sender's, the image and the answer (messages 0, 3, 4
+        // and 5), never the text OpenCode or Hide's plugin added, and the
+        // cursor stands after the eighth and last message.
         fixture.answer(&[]);
         assert_eq!(
             fixture.pass_for(key.clone(), false, true).0,
@@ -4537,7 +4694,7 @@ mod tests {
             events,
             [
                 (0, "human".to_owned()),
-                (3, "human".to_owned()),
+                (3, "letter".to_owned()),
                 (4, "human".to_owned()),
                 (5, "assistant".to_owned()),
             ]

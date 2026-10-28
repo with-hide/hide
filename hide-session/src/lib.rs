@@ -27,6 +27,7 @@ use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 pub mod antigravity;
+pub mod bell_line;
 mod catalog;
 mod claude_attachment;
 mod conversation_cursor;
@@ -50,7 +51,10 @@ pub mod tools;
 pub mod turns;
 pub mod usage;
 
-pub use envelope::{envelope_from_operator, envelope_header, envelope_names, envelope_sender};
+pub use bell_line::is_bell_line;
+pub use envelope::{
+    envelope_from_operator, envelope_header, envelope_names, envelope_sender, is_letter,
+};
 pub use named_prs::NamedPr;
 pub use refusal::ReadRefusal;
 pub use sightings::{
@@ -489,6 +493,14 @@ impl ConversationEvent {
             images: 0,
             part: None,
         }
+    }
+
+    /// Whether this is the operator's own words: a person's message that is
+    /// no Hide letter ([`is_letter`]). A letter keeps `EventKind::Human`, the
+    /// role it was typed in, so a turn and the session record still start
+    /// and name it; what weighs the operator's words asks this instead.
+    pub fn from_operator(&self) -> bool {
+        self.kind == EventKind::Human && !is_letter(&self.text)
     }
 
     fn with_context_reset(mut self, reset: bool) -> Self {

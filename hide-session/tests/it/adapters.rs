@@ -1140,6 +1140,95 @@ pub(crate) fn assert_same_facts(agent: &str, transcript: &LabelTranscript) {
     );
 }
 
+/// The fixtures' Hide letter from `ci-lead`, as every format writes its JSON
+/// string.
+const LETTER_JSON: &str = r"\nHide letter letter-1 from ci-lead (claude) [request]\nCI 다시 봐줘\nFull letter: hide request show letter-1\n";
+
+/// The doorbell's line that wakes a pane for that letter, which carries no
+/// envelope (`herdr-core/src/delivery/bell.rs`).
+const BELL: &str = "🦉 ci-lead 요청: CI 다시 봐줘 · hide inbox";
+
+/// The person's messages a conversation holds, and whether each is the
+/// operator's own words, which Project Memory weighs (`from_operator`).
+fn operator_words(events: &[hide_session::ConversationEvent]) -> Vec<(&str, bool)> {
+    events
+        .iter()
+        .filter(|event| event.kind == hide_session::EventKind::Human)
+        .filter(|event| !event.text.trim().is_empty())
+        .map(|event| (event.text.trim(), event.from_operator()))
+        .collect()
+}
+
+/// Each fixture's conversation with its letter replaced by the doorbell's
+/// line, and by instructions the operator typed that only begin or end like
+/// it: the bell keeps its turn but is never the operator's words, and they
+/// stay the operator's, in Memory's reading and as a link's request.
+#[test]
+fn the_doorbells_line_is_never_the_operators_words_and_a_look_alike_instruction_is() {
+    let typed = "요청 보기를 만들어줘\n긴 요청의 둘째 줄";
+    let cases = [
+        (BELL, false),
+        ("🦉 아이콘은 항상 파란색으로", true),
+        ("새 탭은 항상 옆에 열어 · hide inbox", true),
+    ];
+    for (agent, file) in [
+        (
+            Agent::Claude,
+            "claude-2.1.288/projects/-work-app/a1b2c3d4-0000-4000-8000-000000000001.jsonl",
+        ),
+        (
+            Agent::Codex,
+            "codex-0.160.0/sessions/2026/10/03/rollout-2026-10-03T01-00-00-0199a000-0000-7000-8000-000000000002.jsonl",
+        ),
+        (Agent::Grok, "grok-1.0.46/updates.jsonl"),
+        (Agent::Pi, "pi-1.0.4/session.jsonl"),
+        (Agent::Omp, "omp-18.7.0/session.jsonl"),
+    ] {
+        let contents = std::fs::read_to_string(fixtures().join(file)).unwrap();
+        assert!(contents.contains(LETTER_JSON), "{agent:?}");
+        for (said, operator) in cases {
+            let parsed = hide_session::parse_events(agent, &contents.replace(LETTER_JSON, said));
+            assert_eq!(
+                operator_words(&parsed.events),
+                [(typed, true), (said, operator)],
+                "{agent:?}"
+            );
+            let requests: Vec<_> = parsed
+                .links
+                .requests
+                .iter()
+                .map(|request| request.text.as_str())
+                .collect();
+            let expected: &[&str] = if operator { &[typed, said] } else { &[typed] };
+            assert_eq!(requests, expected, "{agent:?}: {said}");
+        }
+    }
+    for version in ["opencode-1.18.30", "opencode-2.0.29"] {
+        let sql = std::fs::read_to_string(fixtures().join(version).join("opencode.sql")).unwrap();
+        assert!(sql.contains(LETTER_JSON), "{version}");
+        for (said, operator) in cases {
+            let home = tempfile::tempdir().unwrap();
+            let folder = home.path().join(".local/share/opencode");
+            std::fs::create_dir_all(&folder).unwrap();
+            rusqlite::Connection::open(folder.join("opencode.db"))
+                .unwrap()
+                .execute_batch(&sql.replace(LETTER_JSON, said))
+                .unwrap();
+            let scope = hide_session::SessionReadScope {
+                id: OPENCODE_ROOT.to_owned(),
+                cwd: "/work/app".to_owned(),
+            };
+            let read =
+                hide_session::opencode::read_conversation(home.path(), &scope, None).unwrap();
+            assert_eq!(
+                operator_words(&read.events),
+                [(typed, true), (said, operator)],
+                "{version}"
+            );
+        }
+    }
+}
+
 /// A conversation page reaches the core as JSON over the node link
 /// (`Call::SessionConversation`), and the core reads every event back. Codex
 /// writes the instructions it adds to a turn as `developer` records, and a

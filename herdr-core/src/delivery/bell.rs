@@ -1,8 +1,10 @@
 //! The line the doorbell submits through Herdr's `agent.prompt`: who wrote, what kind
 //! of letter it is and the letter's first line, so the operator watching the
 //! pane can tell what arrived (`docs/delivery.md`, The bell line). Its words
-//! are in the operator's interface language; nothing reads them back, since a
-//! letter's turn is matched by the whole line its ledger kept.
+//! are in the operator's interface language; a letter's turn is matched by
+//! the whole line its ledger kept. Its parts are `hide_session::bell_line`'s,
+//! whose transcript readers tell the line from the operator's own words by
+//! them.
 //!
 //! The line reaches an agent's composer through that API, so it is one line
 //! and carries nothing a composer acts on while it is received: no
@@ -10,11 +12,11 @@
 //! picker or continue the line in the runtimes the doorbell rings.
 
 use crate::model::InterfaceLanguage;
-
-/// The longest sender name and letter summary the line carries, in
-/// characters; a longer one is cut and ends in `…`.
-const NAME_CHARS: usize = 32;
-const SUMMARY_CHARS: usize = 60;
+use hide_session::bell_line::{
+    BELL_CUT, BELL_DOT, BELL_DOT_STAND_IN, BELL_ENGLISH, BELL_INBOX, BELL_JAPANESE, BELL_KOREAN,
+    BELL_MARK, BELL_NAME_CHARS, BELL_SEPARATOR, BELL_SIMPLIFIED_CHINESE, BELL_SUMMARY_CHARS,
+    BellWords,
+};
 
 /// The longest line a letter may keep, in bytes. A line `line` makes is far
 /// shorter; a ledger holding a longer one was not written by this code.
@@ -38,26 +40,28 @@ pub(crate) struct Ring<'a> {
 /// (` · 외 N통`) when other letters wait for the same recipient and
 /// ` · hide inbox` when the ring asks for it.
 pub(crate) fn line(ring: &Ring) -> String {
-    let mut line = format!(
-        "🦉 {} {}",
-        inert(ring.sender, NAME_CHARS),
-        word(ring.kind, ring.language)
-    );
+    let words = words(ring.language);
+    // A sender with nothing left to show is still a name, so the line keeps
+    // the shape its readers know it by.
+    let sender = Some(inert(ring.sender, BELL_NAME_CHARS))
+        .filter(|sender| !sender.is_empty())
+        .unwrap_or_else(|| BELL_CUT.to_string());
+    let mut line = format!("{BELL_MARK} {sender} {}", words.kind(ring.kind));
     let summary = ring
         .body
         .lines()
-        .map(|line| inert(line, SUMMARY_CHARS))
+        .map(|line| inert(line, BELL_SUMMARY_CHARS))
         .find(|line| !line.is_empty());
     if let Some(summary) = summary {
         line.push_str(": ");
         line.push_str(&summary);
     }
     if ring.others > 0 {
-        line.push_str(" · ");
-        line.push_str(&more(ring.others, ring.language));
+        line.push_str(BELL_SEPARATOR);
+        line.push_str(&words.more(ring.others));
     }
     if ring.inbox {
-        line.push_str(" · hide inbox");
+        line.push_str(BELL_INBOX);
     }
     line
 }
@@ -78,42 +82,26 @@ pub(crate) fn valid_line(line: &str) -> bool {
     !line.is_empty() && line.len() <= LINE_LIMIT && !line.chars().any(char::is_control)
 }
 
-/// The kind of letter in `language`; a kind this build does not know is a
-/// letter.
-fn word(kind: &str, language: InterfaceLanguage) -> &'static str {
-    const KINDS: [&str; 6] = ["request", "block", "report", "progress", "reply", "watch"];
-    let words: [&str; 7] = match language {
-        InterfaceLanguage::English => [
-            "request", "blocked", "report", "progress", "reply", "watch", "letter",
-        ],
-        InterfaceLanguage::Korean => ["요청", "막힘", "보고", "진행", "답장", "감시", "편지"],
-        InterfaceLanguage::SimplifiedChinese => {
-            ["请求", "受阻", "报告", "进展", "回复", "监视", "信"]
-        }
-        InterfaceLanguage::Japanese => ["依頼", "ブロック", "報告", "進捗", "返信", "監視", "手紙"],
-    };
-    let index = KINDS
-        .iter()
-        .position(|known| *known == kind)
-        .unwrap_or(KINDS.len());
-    words[index]
-}
-
-/// How many other letters wait, in `language`.
-fn more(others: usize, language: InterfaceLanguage) -> String {
+/// The line's words in `language`.
+fn words(language: InterfaceLanguage) -> &'static BellWords {
     match language {
-        InterfaceLanguage::English => format!("and {others} more"),
-        InterfaceLanguage::Korean => format!("외 {others}통"),
-        InterfaceLanguage::SimplifiedChinese => format!("另有 {others} 封"),
-        InterfaceLanguage::Japanese => format!("ほか {others} 通"),
+        InterfaceLanguage::English => &BELL_ENGLISH,
+        InterfaceLanguage::Korean => &BELL_KOREAN,
+        InterfaceLanguage::SimplifiedChinese => &BELL_SIMPLIFIED_CHINESE,
+        InterfaceLanguage::Japanese => &BELL_JAPANESE,
     }
 }
 
 /// `text` as one line of at most `max` characters, cut with `…`, with the
 /// characters a composer acts on replaced by their full-width forms, which
-/// read the same and do nothing.
+/// read the same and do nothing (`BELL_INERT`). Characters above U+FFFF are
+/// left out before the spaces are folded, since Codex CLI on Windows drops
+/// them as it receives the line and its transcript then holds this same
+/// line without the owl; and `·` becomes `∙`, so the line's own ` · ` only
+/// ever opens one of its tails.
 fn inert(text: &str, max: usize) -> String {
-    let Some(line) = crate::display_text::one_line(text, max + 1) else {
+    let basic: String = text.chars().filter(|c| u32::from(*c) <= 0xFFFF).collect();
+    let Some(line) = crate::display_text::one_line(&basic, max + 1) else {
         return String::new();
     };
     let mut kept: String = line
@@ -126,12 +114,13 @@ fn inert(text: &str, max: usize) -> String {
             '$' => '＄',
             // A backslash before Enter continues the line in Claude Code.
             '\\' => '＼',
+            BELL_DOT => BELL_DOT_STAND_IN,
             c => c,
         })
         .collect();
     if line.chars().count() > max {
         kept = kept.trim_end().to_owned();
-        kept.push('…');
+        kept.push(BELL_CUT);
     }
     kept
 }
@@ -197,7 +186,10 @@ mod tests {
             worded(InterfaceLanguage::Japanese),
             "🦉 ci-lead 報告: PR #881 · ほか 2 通"
         );
-        assert_eq!(word("a_newer_kind", InterfaceLanguage::English), "letter");
+        assert_eq!(
+            words(InterfaceLanguage::English).kind("a_newer_kind"),
+            "letter"
+        );
     }
 
     #[test]
@@ -246,11 +238,67 @@ mod tests {
     }
 
     #[test]
+    fn every_line_the_bell_types_reads_as_a_letter_and_not_the_operators_words() {
+        let languages = [
+            InterfaceLanguage::English,
+            InterfaceLanguage::Korean,
+            InterfaceLanguage::SimplifiedChinese,
+            InterfaceLanguage::Japanese,
+        ];
+        let long_name = "n".repeat(40);
+        let long_body = "가 나".repeat(30);
+        let senders = [
+            "Codex",
+            "라벨 제목",
+            long_name.as_str(),
+            "a@b $c",
+            "🐈",
+            "a · b",
+        ];
+        let bodies = [
+            "레이어 2도 1.0.1에 포함🐈\nmore",
+            "",
+            long_body.as_str(),
+            "@src/main.rs $HOME C:\\ 보고: x · 외 2통",
+            "Read 🐈 the letter",
+            "🐈",
+            "· hide inbox",
+            "· and 2 more",
+        ];
+        for language in languages {
+            for kind in [
+                "request", "block", "report", "progress", "reply", "watch", "new",
+            ] {
+                for (sender, body) in senders.iter().cycle().zip(bodies.iter()) {
+                    for (others, inbox) in [(0, false), (2, false), (0, true), (11, true)] {
+                        let typed = line(&Ring {
+                            sender,
+                            kind,
+                            body,
+                            others,
+                            inbox,
+                            language,
+                        });
+                        assert!(hide_session::is_bell_line(&typed), "{typed}");
+                        assert!(hide_session::is_letter(&typed), "{typed}");
+                        if inbox {
+                            // Codex CLI on Windows drops what is above U+FFFF.
+                            let received: String =
+                                typed.chars().filter(|c| u32::from(*c) <= 0xFFFF).collect();
+                            assert!(hide_session::is_bell_line(&received), "{received}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn a_bell_with_a_non_bmp_summary_is_recognized_when_console_input_drops_it() {
         let bell = ring("sender", "report", "Read🐈the letter", 0);
-        assert_eq!(bell, "🦉 sender 보고: Read🐈the letter");
+        assert_eq!(bell, "🦉 sender 보고: Readthe letter");
         // SHA-256 of the received "sender 보고: Readthe letter", independently
-        // calculated after both the leading owl and summary's cat were lost.
+        // calculated after the leading owl was lost.
         assert!(hide_agent_hooks::delivery::matches_prompt_digest(
             &bell,
             "25b30086ee8c322631a41392425753beb05ed84f46d8aeadc5a682ddea42018b"
