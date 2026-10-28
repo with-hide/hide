@@ -9,12 +9,25 @@
 //! [`BELL_INBOX`] when the line names where the letter is. The transcript
 //! keeps no other mark of it: the line the ledger saved outlives neither the
 //! letter's retention nor the session file it is read from.
+//!
+//! The writer keeps the shape unambiguous, so the reader need not guess: a
+//! sender and summary carry no character above U+FFFF (Codex CLI on Windows
+//! drops them as it receives the line, which then differs from what was
+//! typed only by the missing owl) and no [`BELL_DOT`] (typed as
+//! [`BELL_DOT_STAND_IN`]), so [`BELL_SEPARATOR`] only ever opens a tail.
 
 /// What the line begins with, before a space and the sender.
 pub const BELL_MARK: char = '🦉';
 
+/// What comes before each tail of the line.
+pub const BELL_SEPARATOR: &str = " · ";
+
 /// What the line ends with when it names where the letter is.
 pub const BELL_INBOX: &str = " · hide inbox";
+
+/// The separator's dot, which a sender or summary carries as the stand-in.
+pub const BELL_DOT: char = '·';
+pub const BELL_DOT_STAND_IN: char = '∙';
 
 /// The longest sender name and letter summary the line carries, in
 /// characters; a longer one is cut and ends in [`BELL_CUT`].
@@ -117,7 +130,7 @@ pub fn is_bell_line(text: &str) -> bool {
 
 /// `rest` without a trailing ` · <N more>` in any language.
 fn strip_more(rest: &str) -> Option<&str> {
-    let (head, tail) = rest.rsplit_once(" · ")?;
+    let (head, tail) = rest.rsplit_once(BELL_SEPARATOR)?;
     LANGUAGES
         .iter()
         .any(|words| {
@@ -165,6 +178,12 @@ fn fits(part: &str, max: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_inbox_tail_opens_with_the_separator() {
+        assert!(BELL_INBOX.starts_with(BELL_SEPARATOR));
+        assert!(BELL_SEPARATOR.contains(BELL_DOT));
+    }
 
     #[test]
     fn the_doorbells_line_is_read_with_or_without_its_owl() {

@@ -13,8 +13,9 @@
 
 use crate::model::InterfaceLanguage;
 use hide_session::bell_line::{
-    BELL_CUT, BELL_ENGLISH, BELL_INBOX, BELL_JAPANESE, BELL_KOREAN, BELL_MARK, BELL_NAME_CHARS,
-    BELL_SIMPLIFIED_CHINESE, BELL_SUMMARY_CHARS, BellWords,
+    BELL_CUT, BELL_DOT, BELL_DOT_STAND_IN, BELL_ENGLISH, BELL_INBOX, BELL_JAPANESE, BELL_KOREAN,
+    BELL_MARK, BELL_NAME_CHARS, BELL_SEPARATOR, BELL_SIMPLIFIED_CHINESE, BELL_SUMMARY_CHARS,
+    BellWords,
 };
 
 /// The longest line a letter may keep, in bytes. A line `line` makes is far
@@ -40,11 +41,12 @@ pub(crate) struct Ring<'a> {
 /// ` · hide inbox` when the ring asks for it.
 pub(crate) fn line(ring: &Ring) -> String {
     let words = words(ring.language);
-    let mut line = format!(
-        "{BELL_MARK} {} {}",
-        inert(ring.sender, BELL_NAME_CHARS),
-        words.kind(ring.kind)
-    );
+    // A sender with nothing left to show is still a name, so the line keeps
+    // the shape its readers know it by.
+    let sender = Some(inert(ring.sender, BELL_NAME_CHARS))
+        .filter(|sender| !sender.is_empty())
+        .unwrap_or_else(|| BELL_CUT.to_string());
+    let mut line = format!("{BELL_MARK} {sender} {}", words.kind(ring.kind));
     let summary = ring
         .body
         .lines()
@@ -55,7 +57,7 @@ pub(crate) fn line(ring: &Ring) -> String {
         line.push_str(&summary);
     }
     if ring.others > 0 {
-        line.push_str(" · ");
+        line.push_str(BELL_SEPARATOR);
         line.push_str(&words.more(ring.others));
     }
     if ring.inbox {
@@ -92,9 +94,14 @@ fn words(language: InterfaceLanguage) -> &'static BellWords {
 
 /// `text` as one line of at most `max` characters, cut with `…`, with the
 /// characters a composer acts on replaced by their full-width forms, which
-/// read the same and do nothing (`BELL_INERT`).
+/// read the same and do nothing (`BELL_INERT`). Characters above U+FFFF are
+/// left out before the spaces are folded, since Codex CLI on Windows drops
+/// them as it receives the line and its transcript then holds this same
+/// line without the owl; and `·` becomes `∙`, so the line's own ` · ` only
+/// ever opens one of its tails.
 fn inert(text: &str, max: usize) -> String {
-    let Some(line) = crate::display_text::one_line(text, max + 1) else {
+    let basic: String = text.chars().filter(|c| u32::from(*c) <= 0xFFFF).collect();
+    let Some(line) = crate::display_text::one_line(&basic, max + 1) else {
         return String::new();
     };
     let mut kept: String = line
@@ -107,6 +114,7 @@ fn inert(text: &str, max: usize) -> String {
             '$' => '＄',
             // A backslash before Enter continues the line in Claude Code.
             '\\' => '＼',
+            BELL_DOT => BELL_DOT_STAND_IN,
             c => c,
         })
         .collect();
@@ -239,18 +247,29 @@ mod tests {
         ];
         let long_name = "n".repeat(40);
         let long_body = "가 나".repeat(30);
-        let senders = ["Codex", "라벨 제목", long_name.as_str(), "a@b $c"];
+        let senders = [
+            "Codex",
+            "라벨 제목",
+            long_name.as_str(),
+            "a@b $c",
+            "🐈",
+            "a · b",
+        ];
         let bodies = [
             "레이어 2도 1.0.1에 포함🐈\nmore",
             "",
             long_body.as_str(),
             "@src/main.rs $HOME C:\\ 보고: x · 외 2통",
+            "Read 🐈 the letter",
+            "🐈",
+            "· hide inbox",
+            "· and 2 more",
         ];
         for language in languages {
             for kind in [
                 "request", "block", "report", "progress", "reply", "watch", "new",
             ] {
-                for (sender, body) in senders.iter().zip(bodies.iter().cycle()) {
+                for (sender, body) in senders.iter().cycle().zip(bodies.iter()) {
                     for (others, inbox) in [(0, false), (2, false), (0, true), (11, true)] {
                         let typed = line(&Ring {
                             sender,
@@ -277,9 +296,9 @@ mod tests {
     #[test]
     fn a_bell_with_a_non_bmp_summary_is_recognized_when_console_input_drops_it() {
         let bell = ring("sender", "report", "Read🐈the letter", 0);
-        assert_eq!(bell, "🦉 sender 보고: Read🐈the letter");
+        assert_eq!(bell, "🦉 sender 보고: Readthe letter");
         // SHA-256 of the received "sender 보고: Readthe letter", independently
-        // calculated after both the leading owl and summary's cat were lost.
+        // calculated after the leading owl was lost.
         assert!(hide_agent_hooks::delivery::matches_prompt_digest(
             &bell,
             "25b30086ee8c322631a41392425753beb05ed84f46d8aeadc5a682ddea42018b"

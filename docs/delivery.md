@@ -296,6 +296,8 @@ The existing draft, identity and readiness checks, three-attempt limit and retry
 The line carries nothing a composer acts on while it is typed.
 Control characters become spaces, characters that draw nothing or reorder text are dropped (`display_text::one_line`), and runs of whitespace become one space.
 `@` opens the file picker in Claude Code and Codex and `$` opens Codex's skill picker, and Enter would accept the picker's choice instead of submitting, so both are typed as their full-width forms `＠` and `＄`; a backslash before Enter continues the line in Claude Code, so `\` is typed as `＼`.
+The sender and the summary carry no character above U+FFFF and no `·`: Codex CLI on Windows drops the former as it receives the line, so they are left out before the spaces are folded and its transcript holds the typed line less only the owl, and `·` is typed as `∙`, so the line's own ` · ` only ever opens the waiting-letter or inbox tail; a sender with nothing left to show is written as `…`.
+This makes the line's shape unambiguous for the transcript readers (`hide-session/src/bell_line.rs`) rather than leaving them to guess; a line an earlier build typed can still carry either, and one whose summary was only an emoji or began with `· ` may read as the operator's.
 `/`, `!` and `#` act only as a prompt's first character, and the line begins with `🦉`.
 
 ### Recognizing the bell

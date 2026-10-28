@@ -3751,6 +3751,116 @@ mod tests {
     }
 
     #[test]
+    fn a_bell_whose_summary_lost_its_emoji_or_looks_like_a_tail_is_still_its_senders() {
+        // Lines the bell writes for summaries that once read as the
+        // operator's: one Codex on Windows receives without its emoji, one
+        // with nothing but an emoji, and two shaped like the line's tails.
+        use crate::delivery::bell::{Ring, line};
+        let bell = |sender, kind, body, inbox, language| {
+            line(&Ring {
+                sender,
+                kind,
+                body,
+                others: 0,
+                inbox,
+                language,
+            })
+        };
+        let korean = crate::model::InterfaceLanguage::Korean;
+        let windows = |line: String| -> String {
+            line.chars()
+                .filter(|c| u32::from(*c) <= 0xFFFF)
+                .collect::<String>()
+                .trim()
+                .to_owned()
+        };
+        let bells = [
+            windows(bell("Codex", "report", "Read 🐈 the letter", true, korean)),
+            windows(bell("Codex", "report", "🐈", true, korean)),
+            bell("ci-lead", "report", "· hide inbox", false, korean),
+            bell(
+                "ci-lead",
+                "report",
+                "· and 2 more",
+                false,
+                crate::model::InterfaceLanguage::English,
+            ),
+        ];
+        let fixture = Fixture::new();
+        let checkout = fixture.root.to_string_lossy().into_owned();
+        let user = |text: &str| {
+            json!({"type": "user", "sessionId": SESSION, "cwd": checkout,
+                "timestamp": "2026-10-11T00:00:00Z", "origin": {"kind": "human"},
+                "message": {"role": "user", "content": text}})
+        };
+        let typed = "Always run tests with nextest before a merge";
+        let lines = std::iter::once(user(typed))
+            .chain(bells.iter().map(|text| user(text)))
+            .collect::<Vec<_>>();
+        fixture.write(&lines);
+        let offsets = lines
+            .iter()
+            .scan(0, |at, line| {
+                let offset = *at;
+                *at += line.to_string().len() as u64 + 1;
+                Some(offset)
+            })
+            .collect::<Vec<_>>();
+        fixture.push(json!({
+            "candidates": [{
+                "text": "Reports arrive as letters.",
+                "title": "Letters carry reports",
+                "aliases": [],
+                "kind": "decision",
+                "confidence": 0.9,
+                "salience": 0.8,
+                "source_offsets": offsets[1..],
+                "cited_paths": [],
+                "relation": "new",
+                "target_id": null,
+            }],
+            "alias_backfill": [],
+        }));
+        assert_eq!(fixture.pass(false, true), ["analyzing", "learned one"]);
+        let sent: Value = serde_json::from_str(&fixture.backend.inputs.lock().unwrap()[0]).unwrap();
+        let kinds = sent["new_events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|event| event["kind"].as_str().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            ["human", "letter", "letter", "letter", "letter"],
+            "{bells:?}"
+        );
+        let store = fixture.store();
+        let cursor = store
+            .load_cursor(
+                CursorReader::Analysis,
+                &fixture.project_id,
+                "claude",
+                SESSION,
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(cursor.operator_events, 1);
+        let learned = store
+            .item_by_number(&fixture.project_id, 2)
+            .unwrap()
+            .expect("the analysis wrote a card from the letters");
+        assert_eq!(learned.human_source_count, 0);
+        let contents = std::fs::read_to_string(&fixture.locator).unwrap();
+        let requests = hide_session::parse_events(hide_session::Agent::Claude, &contents)
+            .links
+            .requests
+            .into_iter()
+            .map(|request| request.text)
+            .collect::<Vec<_>>();
+        assert_eq!(requests, [typed]);
+    }
+
+    #[test]
     fn a_pass_records_receipts_a_live_pane_cannot_and_analyzes_a_closed_session_once() {
         // B1, B2, B3, B27, D-16.
         let fixture = Fixture::new();
