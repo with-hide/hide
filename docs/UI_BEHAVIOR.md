@@ -2198,8 +2198,12 @@ The agents step is the first-run agent choice (Settings: each machine's install 
 Returning to Agents shows the saved choice, or the machine's enabled agents when no draft exists; installed agents start enabled only for the unanswered initial choice.
 An old installation or discovery answer can settle its own operation but cannot advance a different step.
 Devices reads only the saved Herdr machine configuration, without probing SSH or contacting a listed machine.
+In the Windows app it also lists this PC's default WSL distribution first, read from WSL's own registry without starting it, as `WSL Ubuntu` over `이 PC (WSL)`, and the step is then titled `Hide에서 쓸 기기를 연결하세요` (PRD wsl-device B1, D-13); another distribution is not listed here and is added later from Add device.
 Loading, a failed read with Retry, a proven empty result, disabled or invalid profiles and already-added machines are distinct states; only the proven empty result skips Devices.
 Every profile starts unchecked and names its label, SSH target and Herdr session, including when these need to wrap.
+The WSL row starts checked until the operator unchecks it, which the draft keeps (`first_run_choices.devices` stays null until a row is checked or unchecked), and it names no target, session or `Herdr에 저장됨`.
+Its Connect is the install consent, as Add device's is: nothing is installed in WSL before it, and it registers the distribution's device, which installs Hide's helper and hooks there, and brings its `WU` tile to the front in the same event, so the project step adds to it and a WSL agent can be started at once (B2).
+A default distribution on WSL 1 cannot be checked and says `WSL 1이에요. WSL 2로 바꾸면 연결할 수 있어요:` over its command `wsl --set-version <distribution> 2`, and one whose setup is unfinished says `배포판 설정을 먼저 마치세요` (B29); a PC without WSL has no WSL row, and its step is the saved profiles alone, skipped when there are none.
 Checking a device changes the draft alone; Connect selected explicitly allows Hide's helper, command and selected agent integrations on those checked devices through the existing Add device connector and install owner.
 Existing Herdr sessions, tabs and workspaces stay in place.
 Connecting and installing hold the Connect control; per-device failures remain available for explicit Retry, while successful machines remain added and are not connected again by Back or re-entry.
@@ -2353,6 +2357,10 @@ A machine whose core runs on another machine (ARCHITECTURE.md, A core on another
 Its `다시 연결` is answered that the machine reconnects by itself, and removing it ends its connection until it attaches again; neither adds a state or a line of its own.
 The window's own machine is always the first tile and the one named This Mac (`이 Mac`), the laptop glyph (`web/src/screenMachine.ts`, `windowFirst`); on a window of a machine whose core runs elsewhere, the core's machine follows it, named by the name the operator registered it under before the core moved to it, which the core keeps (`machine_label`, ARCHITECTURE.md, Moving the core), and by the name its machine gives itself when it has none.
 The tile of the machine that runs the core wears a crown notched into its bottom-left corner (`--size-rail-crown` in a `--size-rail-badge` notch, the corner the `×` and the marks leave free), and its hint adds `core 실행 중`; the crown shows only once a machine dials in to a core, that is on a node's window or while any device dials in, since with one core and its devices nothing needs telling apart (PRD core-host-node-move B2).
+
+This PC's WSL distribution is a device like any other, one tile per distribution lettered from its name (`WSL Ubuntu` → `WU`) (PRD wsl-device B5, D-12, D-20).
+Every surface that names it says after its name where it is, the core's machine as this window names it, and never `원격`: the tile's hint and accessible name (`WSL Ubuntu · 이 PC · Needs You 3`), the sidebar title's smaller word, which is `원격` for an SSH device, the Overview's device switch, ⌘K's device row, its surface while it shows no tab, and the line under its name in Settings › Devices, in place of its Linux platform (`WSL Ubuntu · 이 PC · Herdr 0.9.5`) (`wslPlace` in `web/src/screenMachine.ts`).
+Choosing its tile scopes the sidebar, 태스크, PR, Overview, the tile counts and the ⌥⌘ numbers to its own items by the rules above (B6), and a stopped distribution reads as any device that is not connected.
 
 A window on a machine whose core runs elsewhere shows its core's state and takes its strip, in the place and size of the connection badge, when the core cannot draw it (W1 to W3, B16):
 
