@@ -538,7 +538,10 @@ test("Needs You and Unread are raised above Pinned and stay in their tree, whate
     git(repo, ["commit", "--allow-empty", "-m", "initial"]);
     const asking = await workspaceAt(herdr, repo, "배포 전 확인 요청");
     const [finished] = herdr.panes;
-    daemon = await startHided(herdr, "projects-raised");
+    // The fixture's folders are in the daemon's home, as an operator's projects
+    // are, so a pin registers them and a project outliving its last pane stays
+    // listed without asking about a folder outside home (PRD wsl-device B15).
+    daemon = await startHided(herdr, "projects-raised", herdr.root);
     const sent = countSent(page);
     await open(page, daemon);
 
@@ -824,7 +827,10 @@ test("section headers stay at the top of the scrolled list, and a row the keyboa
   try {
     const names = ["alpha-repo", "bravo-repo", "charlie-repo", "delta-repo", "echo-repo"];
     for (const name of names) await workspaceAt(herdr, repoAt(herdr, name), `${name} 작업`);
-    daemon = await startHided(herdr, "projects-sticky");
+    // The fixture's folders are in the daemon's home, as an operator's projects
+    // are, so a pin registers them and a project outliving its last pane stays
+    // listed without asking about a folder outside home (PRD wsl-device B15).
+    daemon = await startHided(herdr, "projects-sticky", herdr.root);
     await open(page, daemon);
     await expect(projectItem(page, "echo-repo")).toBeVisible({ timeout: 20_000 });
     await projectItem(page, "alpha-repo").locator("[data-project-row]").click({ button: "right" });

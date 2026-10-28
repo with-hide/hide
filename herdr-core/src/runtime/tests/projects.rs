@@ -1584,7 +1584,11 @@ impl crate::node_access::NodeLink for JudgingNode {
     }
 }
 
-fn judging(judged: Option<hide_node_link::ErrorCode>) -> Arc<dyn crate::node_access::NodeLink> {
+/// A machine that judges every folder as asked: registrable (`None`) or
+/// refused with that code.
+pub(super) fn judging(
+    judged: Option<hide_node_link::ErrorCode>,
+) -> Arc<dyn crate::node_access::NodeLink> {
     JudgingNode::new(judged, true)
 }
 

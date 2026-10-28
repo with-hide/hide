@@ -97,7 +97,10 @@ async function startMenus(page: Page, options: { pinned?: boolean } = {}) {
     writeFixtureTranscript(claudeProjects(herdr), SESSION, { task: "사이드바 메뉴 구현" });
     setFixtureSession(herdr, worktreePane, SESSION);
 
-    const daemon = await startHided(herdr, "sidebar-menus");
+    // The fixture's folders are in the daemon's home, as an operator's projects
+    // are, so a pin registers them and a project outliving its last pane stays
+    // listed without asking about a folder outside home (PRD wsl-device B15).
+    const daemon = await startHided(herdr, "sidebar-menus", herdr.root);
     await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: daemon.origin });
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(page.locator("[data-main-screen]")).toBeVisible({ timeout: 20_000 });

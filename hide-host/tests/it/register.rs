@@ -76,13 +76,23 @@ fn a_folder_in_a_repository_holding_home_is_refused_as_that_repository() {
 
     let refused = check(&app, None, &home).unwrap_err();
     assert_eq!(refused.code, ErrorCode::ProjectHoldsHome);
-    assert!(refused.message.contains("Git repository"), "{}", refused.message);
+    assert!(
+        refused.message.contains("Git repository"),
+        "{}",
+        refused.message
+    );
     assert_eq!(
         check(&app, Some(&app), &home).unwrap_err().code,
         ErrorCode::ProjectHoldsHome
     );
-    assert_eq!(check(&home, None, &home).unwrap_err().code, ErrorCode::OutsideRoot);
-    assert_eq!(check(&own, None, &home).unwrap().root, own.to_string_lossy());
+    assert_eq!(
+        check(&home, None, &home).unwrap_err().code,
+        ErrorCode::OutsideRoot
+    );
+    assert_eq!(
+        check(&own, None, &home).unwrap().root,
+        own.to_string_lossy()
+    );
 }
 
 /// PRD wsl-device B15, B18, B20: a folder outside the host's home is
