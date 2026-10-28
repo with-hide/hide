@@ -614,11 +614,16 @@ impl Runtime {
 
     fn set_host_phase(&mut self, device_id: &str, phase: HostPhase) {
         let waiting = self.helper_link_wait(device_id);
+        let linked = self.linked_node(device_id).is_ok();
         self.device_host_entry(device_id).phase = phase;
         // A pane of the device says what its link waits for, so its notice
         // follows the phase.
         if waiting != self.helper_link_wait(device_id) {
             self.refresh_pane_headers();
+        }
+        // Hide AI's rows of the device's agents follow its link (B13).
+        if linked != self.linked_node(device_id).is_ok() {
+            self.refresh_background_ai();
         }
     }
 
@@ -1009,6 +1014,7 @@ impl Runtime {
         self.device_hosts.remove(device_id);
         self.device_host_retries.remove(device_id);
         self.codex_daemon_off_running.remove(device_id);
+        self.refresh_background_ai();
         self.forget_guardrails_device(device_id);
         match why {
             Retiring::Removed => {
@@ -1026,6 +1032,20 @@ impl Runtime {
     /// The link to the machine this core runs on.
     pub(crate) fn own_node(&self) -> Arc<dyn NodeLink> {
         Arc::clone(&self.own_node)
+    }
+
+    /// Where Hide AI's agents run: this node, and each connected device,
+    /// looked up when its agent is asked and never woken (PRD wsl-device
+    /// B13). Asked off the runtime's lock, as every provider call is.
+    pub(crate) fn ai_machines(&self) -> crate::ai::AiMachines {
+        crate::ai::AiMachines {
+            own: self.own_node(),
+            devices: device_links(
+                self.worker_context
+                    .as_ref()
+                    .map_or_else(Weak::new, |context| context.runtime.clone()),
+            ),
+        }
     }
 
     /// The link to the node `device_id` names, or the sentence that says why
@@ -1342,4 +1362,15 @@ fn now_unix_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
         .unwrap_or(0)
+}
+
+/// A device's link as [`Runtime::linked_node`] answers it, looked up under a
+/// brief lock of `runtime`; `None` for a device that is not connected or a
+/// runtime that is gone. Never called under that lock.
+pub(crate) fn device_links(runtime: Weak<Mutex<Runtime>>) -> crate::ai::DeviceLinks {
+    Arc::new(move |device: &str| {
+        let runtime = runtime.upgrade()?;
+        let guard = runtime.lock().ok()?;
+        guard.linked_node(device).ok().map(|(_, link)| link)
+    })
 }

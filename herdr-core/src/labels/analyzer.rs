@@ -52,14 +52,14 @@ impl LabelAnalyzer {
     pub(crate) fn spawn(
         settings: SettingsSource,
         standing: Arc<crate::ai::AiStanding>,
-        node: Arc<dyn crate::node_access::NodeLink>,
+        machines: crate::ai::AiMachines,
         gate: Arc<hide_ai::UsageLimits>,
         usage: Arc<dyn hide_ai::AiUsageSink>,
     ) -> Result<Self, String> {
         Self::spawn_with(
             settings,
             Box::new(move |settings| {
-                Arc::new(crate::ai::labels_router(&node, settings, &gate, &usage))
+                Arc::new(crate::ai::labels_router(&machines, settings, &gate, &usage))
             }),
             standing,
         )

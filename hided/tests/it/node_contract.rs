@@ -996,6 +996,44 @@ fn a_link_ending_mid_request_removes_what_it_staged() {
     assert!(!Path::new(&first).exists(), "the ended link left {first}");
 }
 
+/// B12: a device's node answers the Hide AI calls on its own link, with a
+/// backend of its own built for the core's instance and released by it,
+/// where a device used to refuse them. No provider is run.
+#[test]
+fn a_device_answers_hide_ai_for_its_own_agents() {
+    let device = Device::start();
+    let backend = hide_node_link::ai::BackendSpec {
+        instance: 7,
+        provider: hide_node_link::ai::ProviderId::CODEX,
+        model: String::new(),
+    };
+    let measured: hide_node_link::ai::ProcessMeasurement = call_as(
+        &*device.link,
+        Call::AiMeasurement {
+            backend: backend.clone(),
+        },
+        TIMEOUT,
+    )
+    .expect("the device answers a backend's measurement");
+    assert_eq!(
+        measured,
+        hide_node_link::ai::ProcessMeasurement::Unavailable
+    );
+    let _: Value = call_as(&*device.link, Call::AiRelease { instance: 7 }, TIMEOUT)
+        .expect("the device releases the backend");
+    // GitHub stays the core's (D-18): the device still refuses it.
+    let gh = call_as::<Value>(
+        &*device.link,
+        Call::Gh {
+            args: vec!["auth".to_owned(), "status".to_owned()],
+            cwd: None,
+            repository: None,
+        },
+        TIMEOUT,
+    );
+    assert!(gh.is_err(), "a device answered gh: {gh:?}");
+}
+
 /// B9: a device's localhost page rides its node link, whichever link that
 /// is: a connection to the page's forward reaches the device's loopback
 /// server, dropping the forward ends that server's connection, and a
@@ -1037,7 +1075,11 @@ fn a_device_page_rides_its_node_link_and_ends_with_it() {
     let mut page = std::net::TcpStream::connect(forward.local_addr()).unwrap();
     page.set_read_timeout(Some(TIMEOUT)).unwrap();
     let _ = page.write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n");
-    assert_eq!(read_page(&mut page), "", "an ended link still reached the page");
+    assert_eq!(
+        read_page(&mut page),
+        "",
+        "an ended link still reached the page"
+    );
 }
 
 /// A device's loopback server for one page: it answers each request

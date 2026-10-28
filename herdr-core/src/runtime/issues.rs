@@ -1455,13 +1455,13 @@ impl Runtime {
             message: None,
         });
         let worker_request = request_id.clone();
-        let node = self.own_node();
+        let machines = self.ai_machines();
         let usage = self.ai_usage();
         if let Err(message) = self.spawn_issue_worker(
             "worktree-name",
             move || {
                 crate::ai::suggest_worktree_name(
-                    &node,
+                    &machines,
                     &settings,
                     &usage,
                     &worker_request,

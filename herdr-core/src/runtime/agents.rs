@@ -2138,6 +2138,10 @@ impl Runtime {
         if let Some(limit) = payload.usage_limit {
             next.usage_limit = limit;
         }
+        let device = match self.ai_device_named(payload.device.as_deref()) {
+            Ok(device) => device,
+            Err(()) => return true,
+        };
         if let Some(id) = payload.provider.as_deref() {
             let Some(provider) = self.ai_provider_named(id) else {
                 return true;
@@ -2158,12 +2162,16 @@ impl Runtime {
                     }
                 }
                 None => {
-                    if provider != next.provider || !next.chosen {
-                        if !self.ai_selectable(provider) {
+                    if provider != next.provider
+                        || !next.chosen
+                        || next.machine(provider) != device.as_deref()
+                    {
+                        if !self.ai_selectable(provider, device.as_deref()) {
                             self.refuse_unselectable(provider);
                             return true;
                         }
                         next.set_provider(provider);
+                        next.place(provider, device.clone());
                     }
                 }
             }
@@ -2172,7 +2180,7 @@ impl Runtime {
             let Some(provider) = self.ai_provider_named(id) else {
                 return true;
             };
-            if !self.ai_selectable(provider) {
+            if !self.ai_selectable(provider, device.as_deref()) {
                 self.refuse_unselectable(provider);
                 return true;
             }
@@ -2190,6 +2198,7 @@ impl Runtime {
                 self.set_error(kind, message, false);
                 return true;
             }
+            next.place(provider, device);
         }
         if let Some(id) = payload.fallback_remove.as_deref() {
             let Some(provider) = self.ai_provider_named(id) else {
@@ -2258,13 +2267,81 @@ impl Runtime {
         provider
     }
 
-    /// Whether the last read says `provider` can be chosen (D-15): its CLI
-    /// is installed, it is signed in, it has a backend and its call cannot
-    /// change files. A provider not read yet cannot.
-    fn ai_selectable(&self, provider: hide_ai::ProviderId) -> bool {
-        self.background_ai_providers
+    /// The device a settings event places its agent on: `None` for the
+    /// core's own machine, or a registered device. A device Hide does not
+    /// know is refused and says so.
+    fn ai_device_named(&mut self, device: Option<&str>) -> Result<Option<String>, ()> {
+        let Some(device) = device.filter(|device| !device.is_empty()) else {
+            return Ok(None);
+        };
+        if device == self.node.as_str() {
+            return Ok(None);
+        }
+        if !self.device_registration_exists(device) {
+            self.set_error(
+                "ai_settings.unknown_device",
+                format!("Hide has no device called {device} for Hide AI to run on"),
+                false,
+            );
+            return Err(());
+        }
+        Ok(Some(device.to_owned()))
+    }
+
+    /// Whether the last read says `provider` on `device` (`None`: the core's
+    /// own machine) can be chosen (D-15): its CLI is installed there, it is
+    /// signed in, it has a backend and its call cannot change files. A
+    /// provider not read yet, or on a device that is not connected, cannot.
+    fn ai_selectable(&self, provider: hide_ai::ProviderId, device: Option<&str>) -> bool {
+        self.background_ai_providers.iter().any(|row| {
+            row.id == provider.as_str() && row.device_id.as_deref() == device && row.selectable
+        }) && device.is_none_or(|device| self.linked_node(device).is_ok())
+    }
+
+    /// The agents to ask whether they are signed in on `machine` while
+    /// nobody has chosen (D-18, D-27): those switched on in its kit and
+    /// installed, only while Hide AI is on and nothing is chosen.
+    fn ai_selecting(&self, machine: &str) -> std::collections::BTreeSet<hide_ai::ProviderId> {
+        let settings = self.ai_settings.clone().unwrap_or_default();
+        if self.ai_settings.is_none() || !settings.enabled || settings.chosen {
+            return std::collections::BTreeSet::new();
+        }
+        self.kit_state(machine)
+            .agents
             .iter()
-            .any(|row| row.id == provider.as_str() && row.selectable)
+            .filter(|row| {
+                row.enabled && !matches!(row.availability, hide_kit::Availability::NotInstalled)
+            })
+            .filter_map(|row| hide_ai::ProviderId::for_agent(&row.id))
+            .collect()
+    }
+
+    /// The kit's own answer to "is this agent's program on `machine`"; none
+    /// until it has read, so no agent is called missing from no reading.
+    fn ai_cli_found(
+        &self,
+        machine: &str,
+    ) -> Option<std::collections::BTreeSet<hide_ai::ProviderId>> {
+        let kit = self.kit_state(machine);
+        (!kit.agents.is_empty()).then(|| {
+            kit.agents
+                .iter()
+                .filter(|row| !matches!(row.availability, hide_kit::Availability::NotInstalled))
+                .filter_map(|row| hide_ai::ProviderId::for_agent(&row.id))
+                .collect()
+        })
+    }
+
+    /// The registered devices whose link is up now, in their registered
+    /// order: the ones Hide AI's read asks, and a first run may choose from.
+    fn ai_connected_devices(&self) -> Vec<String> {
+        self.snapshot
+            .ui_state
+            .device_registrations
+            .iter()
+            .map(|registration| registration.id.clone())
+            .filter(|device| device != self.node.as_str() && self.linked_node(device).is_ok())
+            .collect()
     }
 
     fn refuse_unselectable(&mut self, provider: hide_ai::ProviderId) {
@@ -2287,45 +2364,22 @@ impl Runtime {
     /// is signed in can be chosen by itself (D-18, D-27).
     pub fn ai_request(&self) -> crate::ai::AiRequest {
         let settings = self.ai_settings.clone().unwrap_or_default();
-        let selecting = if self.ai_settings.is_some() && settings.enabled && !settings.chosen {
-            self.kit_state(self.node.as_str())
-                .agents
-                .iter()
-                .filter(|row| {
-                    row.enabled && !matches!(row.availability, hide_kit::Availability::NotInstalled)
-                })
-                .filter_map(|row| {
-                    hide_ai::PROVIDERS
-                        .iter()
-                        .find(|provider| provider.descriptor().agent == row.id)
-                        .copied()
-                })
-                .collect()
-        } else {
-            std::collections::BTreeSet::new()
-        };
-        let kit = self.kit_state(self.node.as_str());
-        // The kit's own answer to "is this agent's program on this Mac"; none
-        // until it has read, so no agent is called missing from no reading.
-        let cli_found = (!kit.agents.is_empty()).then(|| {
-            kit.agents
-                .iter()
-                .filter(|row| !matches!(row.availability, hide_kit::Availability::NotInstalled))
-                .filter_map(|row| {
-                    hide_ai::PROVIDERS
-                        .iter()
-                        .find(|provider| provider.descriptor().agent == row.id)
-                        .copied()
-                })
-                .collect()
-        });
         crate::ai::AiRequest {
             observing: self.ai_observing
                 || self.ai_start_observing
                 || self.ai_catalog_read_pending(),
             models: settings.models_by_provider(),
-            selecting,
-            cli_found,
+            selecting: self.ai_selecting(self.node.as_str()),
+            cli_found: self.ai_cli_found(self.node.as_str()),
+            devices: self
+                .ai_connected_devices()
+                .into_iter()
+                .map(|device| crate::ai::DeviceAsk {
+                    selecting: self.ai_selecting(&device),
+                    cli_found: self.ai_cli_found(&device),
+                    id: device,
+                })
+                .collect(),
         }
     }
 
@@ -2394,10 +2448,17 @@ impl Runtime {
             self.background_ai_providers.clone()
         };
         for row in read.providers {
-            if row.state != "unread"
-                && let Some(old) = providers.iter_mut().find(|old| old.id == row.id)
+            if row.state == "unread" {
+                continue;
+            }
+            match providers
+                .iter_mut()
+                .find(|old| old.id == row.id && old.device_id == row.device_id)
             {
-                *old = row;
+                Some(old) => *old = row,
+                // A device's rows arrive with its first read.
+                None if row.device_id.is_some() => providers.push(row),
+                None => {}
             }
         }
         let selected = self.choose_first_run_provider(&providers);
@@ -2412,8 +2473,11 @@ impl Runtime {
     /// The first run's choice (D-18, D-27): while nobody has chosen, the first
     /// agent of the fixed order that is switched on in this Mac's kit and
     /// signed in becomes Runs on, with its default model, and the choice is
-    /// stored. A stored choice is never replaced, and with no agent signed in
-    /// nothing is chosen and Hide features run without a model (B47).
+    /// stored. Only once every such agent here has answered and none is
+    /// signed in is the first one signed in on a connected device chosen, in
+    /// the devices' registered order (PRD wsl-device B11). A stored choice is
+    /// never replaced, and with no agent signed in nothing is chosen and Hide
+    /// features run without a model (B47).
     fn choose_first_run_provider(
         &mut self,
         providers: &[crate::model::BackgroundAiProviderSnapshot],
@@ -2424,28 +2488,27 @@ impl Runtime {
         if settings.chosen || !settings.enabled {
             return false;
         }
-        let on: Vec<String> = self
-            .kit_state(self.node.as_str())
-            .agents
-            .iter()
-            .filter(|row| row.enabled)
-            .map(|row| row.id.clone())
-            .collect();
-        let ready: Vec<(hide_ai::ProviderId, hide_ai::Availability)> = providers
-            .iter()
-            .filter(|row| row.state == "ready")
-            .filter_map(|row| {
-                let provider = hide_ai::ProviderId::from_id(&row.id)?;
-                on.iter()
-                    .any(|agent| agent == provider.descriptor().agent)
-                    .then_some((provider, hide_ai::Availability::Ready))
-            })
-            .collect();
-        let Some(provider) = hide_ai::AiSettings::provider_for_first_run(&ready) else {
+        let on = |machine: &str| {
+            self.ai_cli_found(machine)
+                .map(|_| self.ai_selecting(machine))
+        };
+        let here = first_run_ready(providers, None, on(self.node.as_str()).as_ref());
+        let chosen = match here {
+            FirstRun::Ready(provider) => Some((provider, None)),
+            FirstRun::Waiting => None,
+            FirstRun::NoneReady => self.ai_connected_devices().into_iter().find_map(|device| {
+                match first_run_ready(providers, Some(&device), on(&device).as_ref()) {
+                    FirstRun::Ready(provider) => Some((provider, Some(device))),
+                    FirstRun::Waiting | FirstRun::NoneReady => None,
+                }
+            }),
+        };
+        let Some((provider, device)) = chosen else {
             return false;
         };
         let mut next = settings.clone();
         next.set_provider(provider);
+        next.place(provider, device);
         self.ai_settings = Some(next.clone());
         self.pending_ai_settings_save = Some(next);
         true
@@ -2488,18 +2551,52 @@ impl Runtime {
                     .unwrap_or_else(|| settings.model(provider).to_owned());
             }
         }
+        let connected = self.ai_connected_devices();
+        providers.retain(|row| {
+            row.device_id
+                .as_ref()
+                .is_none_or(|device| connected.contains(device))
+        });
+        // An agent placed on a device has a row whatever its link: one the
+        // read has not reached yet, or one that cannot answer while its
+        // device is not connected, which is not woken for it (B13).
+        for provider in settings.router_config().priority {
+            let Some(device) = settings.machine(provider) else {
+                continue;
+            };
+            if providers
+                .iter()
+                .any(|row| row.id == provider.as_str() && row.device_id.as_deref() == Some(device))
+            {
+                continue;
+            }
+            let mut row = crate::model::BackgroundAiProviderSnapshot::unread(provider);
+            row.device_id = Some(device.to_owned());
+            row.model = settings.model(provider).to_owned();
+            if !connected.iter().any(|connected| connected == device) {
+                row.state = "unavailable".to_owned();
+                row.headline = "Cannot answer".to_owned();
+                row.message = Some("device_not_connected".to_owned());
+            }
+            providers.push(row);
+        }
         let snapshot = &mut self.snapshot.status.background_ai;
         snapshot.enabled = settings.enabled;
         snapshot.chosen = settings.chosen;
         snapshot.provider = settings
             .chosen
             .then(|| settings.provider.as_str().to_owned());
+        snapshot.device = settings
+            .chosen
+            .then(|| settings.machine(settings.provider).map(str::to_owned))
+            .flatten();
         snapshot.agent_summary = settings.agent_summary;
         snapshot.fallback = settings
             .fallback
             .iter()
             .map(|entry| crate::model::BackgroundAiFallbackSnapshot {
                 provider: entry.provider.as_str().to_owned(),
+                device: settings.machine(entry.provider).map(str::to_owned),
                 model: models.get(&entry.provider).cloned().unwrap_or_default(),
             })
             .collect();
@@ -3933,4 +4030,46 @@ pub(super) struct PendingFork {
     pub(super) kind: String,
     pub(super) name: String,
     pub(super) launch: hide_agent_adapter::LaunchChoice,
+}
+
+/// What one machine's rows say for a first run.
+enum FirstRun {
+    /// The first agent of the fixed order switched on there and signed in.
+    Ready(hide_ai::ProviderId),
+    /// Its kit or an agent switched on there has not answered yet.
+    Waiting,
+    /// Every agent switched on there answered, and none is signed in.
+    NoneReady,
+}
+
+/// The first-run answer of the rows of `device` (`None`: the core's own
+/// machine) for the agents switched on and installed in its kit, `on`, which
+/// is `None` while the kit has not answered.
+fn first_run_ready(
+    providers: &[crate::model::BackgroundAiProviderSnapshot],
+    device: Option<&str>,
+    on: Option<&std::collections::BTreeSet<hide_ai::ProviderId>>,
+) -> FirstRun {
+    let Some(on) = on else {
+        return FirstRun::Waiting;
+    };
+    let rows: Vec<_> = providers
+        .iter()
+        .filter(|row| row.device_id.as_deref() == device)
+        .filter_map(|row| Some((hide_ai::ProviderId::from_id(&row.id)?, row)))
+        .filter(|(provider, _)| on.contains(provider))
+        .collect();
+    let ready: Vec<(hide_ai::ProviderId, hide_ai::Availability)> = rows
+        .iter()
+        .filter(|(_, row)| row.state == "ready")
+        .map(|(provider, _)| (*provider, hide_ai::Availability::Ready))
+        .collect();
+    if let Some(provider) = hide_ai::AiSettings::provider_for_first_run(&ready) {
+        return FirstRun::Ready(provider);
+    }
+    if rows.len() < on.len() || rows.iter().any(|(_, row)| row.state == "unread") {
+        FirstRun::Waiting
+    } else {
+        FirstRun::NoneReady
+    }
 }
