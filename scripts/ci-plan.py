@@ -6,11 +6,13 @@
 step: a planned lane must have succeeded and an unplanned one must have been
 skipped, so a lane whose `if:` is wrong fails `verify` instead of passing it.
 
-A push to main, a comparison that cannot be computed, a path no rule claims
-and the nightly call all plan every lane but `package`, which only a change to
+A push to main, a comparison that cannot be computed and a path no rule
+claims plan every lane but `package`, which only a change to
 what goes into a package plans. No lane takes a macOS runner for anything but
 what only macOS proves (`os-contract-macos`, `desktop-e2e`, and `package`'s
 packaged app); the rest of the macOS checks are jobs of `nightly.yml`.
+Nightly explicitly owns agy and the journey in its direct calls and removes
+those two internal lanes from its verify plan.
 
 A pull request whose last green run still stands plans `policy` alone, or
 also the unit checks when only registered desktop unit tests changed: what
@@ -654,9 +656,21 @@ def still_stands(verified, base, head, entries, crates, root=ROOT):
     return why, delta
 
 
-def plan(event, base, head, root=ROOT, crates=None, draft=False, last_green=None):
+def plan(event, base, head, root=ROOT, crates=None, draft=False, last_green=None, nightly_agent_checks=False):
     """The lanes for base..head. `last_green` answers the commits of the pull
     request's latest green run, or raises; None skips the reuse check."""
+    if nightly_agent_checks:
+        if event not in ("schedule", "workflow_dispatch"):
+            raise ValueError("only nightly's scheduled or dispatched call can own the agent checks")
+        # The caller runs agy on all systems and the journey's stand-ins,
+        # Windows forms and fake model. Keep their failures in nightly's
+        # own jobs; verify requires these two internal jobs to skip.
+        result = plan(event, base, head, root, crates, draft, last_green)
+        owned = {"agy-contract", "agent-journey"}
+        result["lanes"] = [lane for lane in result["lanes"] if lane not in owned]
+        for lane in owned:
+            result["reasons"].pop(lane, None)
+        return result
     if draft:
         # A draft is not a merge candidate: no lane runs, `aggregate` fails
         # `verify` for it, and marking the pull request ready for review
@@ -742,6 +756,31 @@ def aggregate(needs):
         raise ValueError("; ".join(errors))
 
 
+def nightly_aggregate(needs, lane):
+    """Require the selected nightly jobs to succeed, and all others to skip."""
+    selected = {"agy-contract-all", "agent-trust-contract-all"}
+    if lane != "agy":
+        selected.update({"agent-journey", "desktop-e2e"})
+    if lane in ("", "all", "macos"):
+        selected.update({"web-e2e-macos", "remote-mailbox-macos", "perf"})
+    if lane == "windows":
+        selected.add("web-e2e-windows")
+    if lane in ("", "all"):
+        selected.update({"verify", "package"})
+    jobs = {"web-e2e-macos", "web-e2e-windows", "remote-mailbox-macos", "agy-contract-all",
+            "agent-trust-contract-all", "agent-journey", "desktop-e2e", "perf", "verify", "package"}
+    if lane not in ("", "all", "linux", "macos", "windows", "agy") or set(needs) != jobs:
+        raise ValueError("nightly's lane or needs do not match its job contract")
+    errors = []
+    for job in sorted(jobs):
+        expected = "success" if job in selected else "skipped"
+        result = needs[job]["result"]
+        if result != expected:
+            errors.append(f"{job}: expected {expected}, got {result}")
+    if errors:
+        raise ValueError("; ".join(errors))
+
+
 def summary(result, runs_url=None):
     if result.get("draft"):
         return "A draft pull request plans no lane; marking it ready for review runs them.\n"
@@ -772,8 +811,12 @@ def main():
     plan_parser.add_argument("--base", default="HEAD^1")
     plan_parser.add_argument("--head", default="HEAD")
     plan_parser.add_argument("--draft", choices=("true", "false"), default="false", help="the pull request is a draft")
+    plan_parser.add_argument("--nightly-agent-checks", choices=("true", "false"), default="false",
+                             help="nightly owns agy and the journey in its direct jobs")
     plan_parser.add_argument("--record", type=Path, help="write the plan record a pull request's next run reads here")
     sub.add_parser("aggregate", help="check toJSON(needs), read from NEEDS")
+    nightly_parser = sub.add_parser("nightly-aggregate", help="check nightly's direct jobs, read from NEEDS")
+    nightly_parser.add_argument("--lane", default="", choices=("", "all", "linux", "macos", "windows", "agy"))
     args = parser.parse_args()
 
     if args.command == "plan":
@@ -790,7 +833,8 @@ def main():
 
             def last_green():
                 return last_green_run(repo, pull["number"], head_repo, pull["head"]["ref"], run_id)
-        result = plan(args.event, args.base, args.head, draft=draft, last_green=last_green)
+        result = plan(args.event, args.base, args.head, draft=draft, last_green=last_green,
+                      nightly_agent_checks=args.nightly_agent_checks == "true")
         print(json.dumps(result, indent=2))
         if args.record and pull is not None and not draft:
             args.record.write_text(json.dumps(plan_record(result, pull["number"], run_id), indent=2) + "\n", encoding="utf-8")
@@ -807,7 +851,10 @@ def main():
     else:
         needs = json.loads(os.environ["NEEDS"])
         try:
-            aggregate(needs)
+            if args.command == "nightly-aggregate":
+                nightly_aggregate(needs, args.lane)
+            else:
+                aggregate(needs)
         except ValueError as error:
             print(f"verify failed: {error}", file=sys.stderr)
             print(json.dumps(needs, indent=2), file=sys.stderr)

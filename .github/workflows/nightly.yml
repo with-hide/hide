@@ -30,7 +30,9 @@
 # Codex, so a branch can check them by hand
 # (`gh workflow run nightly.yml --ref <branch> -f lane=agy`).
 # The schedule runs everything. A lane left out is skipped, and the failure
-# report ignores a skipped job.
+# report ignores a skipped job. The report job first checks that selected
+# jobs succeeded and all others skipped, on branches too; only its issue
+# reporting step is restricted to main, and it runs even if that check fails.
 #
 # The schedule is at 17 past the hour: GitHub delays runs scheduled on the
 # hour, when every repository's are due, and the 18:00 UTC run started
@@ -189,6 +191,10 @@ jobs:
     name: verify
     if: ${{ inputs.lane == '' || inputs.lane == 'all' }}
     uses: ./.github/workflows/pr.yml
+    # Direct agy and journey calls above own every OS, including the fake
+    # model. The internal Windows agy, Linux stand-in and Windows forms skip.
+    with:
+      nightly-agent-checks: true
     # pr.yml's jobs file a flaky test, and its `plan` reads the earlier runs
     # it may reuse; a called workflow gets no permission its caller does not
     # grant, and GitHub refuses to start the whole nightly without it.
@@ -207,7 +213,7 @@ jobs:
   report:
     name: nightly report
     needs: [web-e2e-macos, web-e2e-windows, remote-mailbox-macos, agy-contract-all, agent-trust-contract-all, agent-journey, desktop-e2e, perf, verify, package]
-    if: ${{ always() && github.ref == 'refs/heads/main' }}
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -218,7 +224,13 @@ jobs:
       pull-requests: read
     steps:
       - uses: actions/checkout@v7
+      - name: Require every selected job to succeed and every other job to skip
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          LANE_INPUT: ${{ inputs.lane }}
+        run: python3 scripts/ci-plan.py nightly-aggregate --lane "$LANE_INPUT"
       - name: Open, comment on and close the nightly-failure issues
+        if: ${{ always() && github.ref == 'refs/heads/main' }}
         env:
           GH_TOKEN: ${{ github.token }}
           LANE_INPUT: ${{ inputs.lane }}
