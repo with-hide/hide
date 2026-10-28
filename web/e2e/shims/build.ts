@@ -3,10 +3,16 @@
 // `globalSetup`, into `web/.e2e-shims` (ignored by git), each named with a
 // hash of its source: a test only copies a finished program, so no test
 // holds a compiler and a stale program cannot be mistaken for the current one.
+// A vitest file builds the programs it runs in its `beforeAll` instead; the
+// compiler runs as a child the build awaits, so the worker that runs that file
+// keeps answering vitest while clang runs: a synchronous build of every program
+// on a Windows runner held one for 81 s, and vitest failed the suite on the
+// worker's missed report (with-hide/hide-private#48).
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { promisify } from "node:util";
 
 const windows = process.platform === "win32";
 const ext = windows ? ".exe" : "";
@@ -27,27 +33,32 @@ const hashed = (source: string, name: FixtureShim): string => {
   return `${name}-${digest.digest("hex").slice(0, 12)}${ext}`;
 };
 
+const compile = promisify(execFile);
+
 /**
- * Compiles every program whose current source has no finished build, removes
- * older builds of it, and records the finished programs for the tests.
- * `packageDir` is the folder of the Playwright config that is running (`web`
- * or `desktop`, siblings): the sources and the build folder are found from
- * it, not from the working directory.
+ * Compiles each of `programs` (every program this system builds unless
+ * named) whose current source has no finished build, removes older builds of
+ * it, and records the finished programs for the tests. `packageDir` is the
+ * folder of the config that is running (`web` or `desktop`, siblings): the
+ * sources and the build folder are found from it, not from the working
+ * directory.
  */
-export function buildFixtureShims(packageDir: string): void {
+export async function buildFixtureShims(packageDir: string, programs: readonly FixtureShim[] = BUILT): Promise<void> {
+  const unbuilt = programs.filter((name) => !BUILT.includes(name));
+  if (unbuilt.length > 0) throw new Error(`fixture programs ${unbuilt.join(", ")} are not built on ${process.platform}`);
   const sourceDir = path.resolve(packageDir, "..", "web", "e2e", "shims");
   const outputDir = path.resolve(packageDir, "..", "web", ".e2e-shims");
   fs.mkdirSync(outputDir, { recursive: true });
   const compiler = windows ? "clang.exe" : "cc";
   const built: Record<string, string> = {};
-  for (const name of BUILT) {
+  for (const name of programs) {
     const source = path.join(sourceDir, `${name}.c`);
     const program = path.join(outputDir, hashed(source, name));
     built[name] = program;
     if (fs.existsSync(program)) continue;
     const partial = `${program.slice(0, program.length - ext.length)}.${process.pid}.partial${ext}`;
     try {
-      execFileSync(compiler, ["-O1", "-o", partial, source], { encoding: "utf8", stdio: "pipe" });
+      await compile(compiler, ["-O1", "-o", partial, source], { encoding: "utf8" });
     } catch (error) {
       const failed = error as { stdout?: string; stderr?: string };
       fs.rmSync(partial, { force: true });
