@@ -293,8 +293,14 @@ impl RotatingLog {
                 .open(self.directory.join("core.jsonl"))?;
             self.size = 0;
         }
-        writeln!(self.file, "{line}")?;
-        self.size += line.len() as u64 + 1;
+        // One write per record: a refusal's `record_now` and the writer
+        // thread append to the same file, and `writeln!` would send the line
+        // and its newline as two writes another record can land between.
+        let mut record = String::with_capacity(line.len() + 1);
+        record.push_str(line);
+        record.push('\n');
+        self.file.write_all(record.as_bytes())?;
+        self.size += record.len() as u64;
         Ok(())
     }
 }
@@ -324,6 +330,34 @@ mod tests {
                 .unwrap()
                 .contains("99")
         );
+    }
+
+    /// A refusal written with `record_now` while the writer thread appends
+    /// (issue hide-private#119): each record stays one line of its own.
+    #[test]
+    fn two_writers_of_one_log_never_split_each_others_records() {
+        let folder = tempfile::tempdir().unwrap();
+        let writers: Vec<_> = ["thread", "record_now"]
+            .into_iter()
+            .map(|writer| {
+                let mut log = RotatingLog::open(folder.path().to_path_buf(), FILE_LIMIT).unwrap();
+                std::thread::spawn(move || {
+                    for n in 0..2000 {
+                        log.append(&serde_json::json!({"writer": writer, "n": n}).to_string())
+                            .unwrap();
+                    }
+                })
+            })
+            .collect();
+        for writer in writers {
+            writer.join().unwrap();
+        }
+        let text = fs::read_to_string(folder.path().join("core.jsonl")).unwrap();
+        let records: Vec<serde_json::Value> = text
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap_or_else(|_| panic!("split: {line}")))
+            .collect();
+        assert_eq!(records.len(), 4000);
     }
 
     #[test]

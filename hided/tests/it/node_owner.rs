@@ -106,7 +106,6 @@ fn hide_connect_names_the_file_a_refused_start_stopped_on() {
     )
     .unwrap();
 
-    let started = std::time::Instant::now();
     let output = Command::new(env!("CARGO_BIN_EXE_hide"))
         .env_clear()
         .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
@@ -118,12 +117,11 @@ fn hide_connect_names_the_file_a_refused_start_stopped_on() {
         .output()
         .expect("hide connect runs");
     assert!(!output.status.success());
-    assert!(
-        started.elapsed() < Duration::from_secs(5),
-        "the refusal waited for the health bound: {:?}",
-        started.elapsed()
-    );
     let line: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    // At once, not after the health wait: `hide connect` looks for the
+    // daemon's exit before each timeout decision, and a wait that ran out
+    // answers `no_response` instead. A wall-clock bound here measured the
+    // daemon's start under load (11.7 s at a load average of 30).
     assert_eq!(line["reason"], "state_refused", "{line}");
     assert!(
         line["file"].as_str().unwrap().ends_with("node.json"),
