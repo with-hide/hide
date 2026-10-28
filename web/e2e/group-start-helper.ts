@@ -5,6 +5,7 @@ import type { Daemon } from "./hided-fixture";
 import { sendEvent } from "./wire";
 import { paneCommandLine, type HerdrFixture } from "./herdr-fixture";
 import { fixtureProgram } from "./platform-fixture";
+import { herdrTabs } from "./failure-dump";
 
 /** Proves typed input executes in the node's normal shell, independently of its prompt. */
 export async function executeTerminalCheck(page: Page, herdr: HerdrFixture, pane: string, timeout = 5_000): Promise<void> {
@@ -22,16 +23,28 @@ export async function executeTerminalCheck(page: Page, herdr: HerdrFixture, pane
   await expect.poll(() => execFileSync(herdr.bin, ["pane", "read", pane, "--source", "visible", "--format", "text"], { env: herdr.env, encoding: "utf8", timeout: 10_000 }), { timeout }).toContain(marker);
 }
 
-/** Observes a newly created terminal after the caller has awaited its tab. */
-export async function waitForTerminal(page: Page | Locator, expectedTab?: string): Promise<string> {
+/** Every tab id the fixture's Herdr holds now, across its workspaces. */
+export function herdrTabIds(herdr: HerdrFixture): string[] {
+  return herdrTabs(herdr).flatMap((workspace) => workspace.tabs);
+}
+
+/** The `count` tabs Herdr created since `before` was read, in Herdr's order, once it holds them all. */
+export async function createdTabs(herdr: HerdrFixture, before: readonly string[], count = 1): Promise<string[]> {
+  const created = () => herdrTabIds(herdr).filter((id) => !before.includes(id));
+  await expect.poll(() => created().length, { timeout: 20_000 }).toBe(count);
+  return created();
+}
+
+/**
+ * Waits for the page to select and draw `tab`, a tab Herdr created
+ * (`createdTabs`). The page's own selection is never the expectation: the
+ * canvas can draw the new tab while the strip still selects the one before.
+ */
+export async function waitForTerminal(page: Page | Locator, tab: string): Promise<void> {
   await expect(page.locator("[data-agent-tab-start]")).toHaveCount(0);
-  const selected = page.locator('[data-agent-tab-bar] [role=tab][aria-selected=true]').last();
-  await expect(selected).not.toHaveAttribute("data-tab", /^draft:/);
-  if (expectedTab) await expect(selected).toHaveAttribute("data-tab", expectedTab);
-  const tab = (await selected.getAttribute("data-tab"))!;
+  await expect(page.locator('[data-agent-tab-bar] [role=tab][aria-selected=true]').last()).toHaveAttribute("data-tab", tab);
   await expect(page.locator("[data-canvas]").last()).toHaveAttribute("data-canvas", tab);
   await expect(page.locator("[data-pane-view]").last()).toBeVisible();
-  return tab;
 }
 
 /** Compatibility fixture: an older client created a saved, unstarted draft. */
