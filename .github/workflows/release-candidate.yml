@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       public_sha:
-        description: Full public main commit whose verify push run passed.
+        description: Full public main commit whose verify push run is running or passed.
         required: true
         type: string
       tag:
@@ -80,6 +80,7 @@ jobs:
       version: ${{ inputs.tag }}
       source-sha: ${{ inputs.public_sha }}
       build-order: ${{ inputs.build_order }}
+      web-typechecked: true
       include-macos: false
       macos-signing: adhoc
 

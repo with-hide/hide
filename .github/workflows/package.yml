@@ -56,6 +56,10 @@ on:
         description: Explicit positive build order, or main history order when omitted.
         type: string
         default: ''
+      web-typechecked:
+        description: Caller requires this source's verify web build before accepting or publishing these packages.
+        type: boolean
+        default: false
       include-macos:
         description: Also build the macOS dmg and zip and test their packaged app.
         type: boolean
@@ -191,6 +195,8 @@ jobs:
         # fetches the pinned Herdr and refuses when any of them cannot run;
         # electron-builder then wraps the app in desktop/out/release.
         timeout-minutes: 50
+        env:
+          HIDE_WEB_TYPECHECKED_SHA: ${{ inputs.web-typechecked && (inputs.source-sha || github.sha) || '' }}
         run: bash scripts/verify-web.sh desktop package | tee "$RUNNER_TEMP/package.out"
       - name: Check each installer against its checksum
         working-directory: desktop/out/release
@@ -379,6 +385,8 @@ jobs:
         run: bash scripts/verify-web.sh install
       - name: Build the web shell and the release binaries
         timeout-minutes: 50
+        env:
+          HIDE_WEB_TYPECHECKED_SHA: ${{ inputs.web-typechecked && (inputs.source-sha || github.sha) || '' }}
         run: bash scripts/verify-web.sh desktop package compile
       - name: Keep the release binaries for the package job
         uses: actions/upload-artifact@v7
