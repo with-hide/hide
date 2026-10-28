@@ -33,6 +33,7 @@ use crate::model::{
     BrowserOpenReceiptSnapshot, ViewAreaSnapshot, ViewDisplaySnapshot, ViewDisplayState,
     ViewLayoutSnapshot, ViewLimitsSnapshot, ViewNodeSnapshot, ViewSplitSnapshot,
 };
+use crate::view_feedback::SessionScope;
 use crate::view_layout::{
     Display, DisplayKind, Edge, ExternalFile, ExternalKind, Layout, LayoutError, MAX_SPLIT_DEPTH,
     MAX_VIEW_AREAS, MAX_VIEW_DISPLAYS, Node, browser_address, browser_title, is_file_address,
@@ -60,12 +61,15 @@ const BESIDE_ORDER: [Edge; 4] = [Edge::Right, Edge::Left, Edge::Down, Edge::Up];
 const _: () = assert!(MAX_VIEW_AREAS <= hide_node_link::git::MAX_DIFFS);
 
 /// Open to the side for a page (`hide browser open --beside`), as for a
-/// file: the area next to the active one, where a page of `url` already
-/// there is focused rather than opened again, else a new area to the right of
-/// the active one; an empty active area takes the page itself.
+/// file: the area next to the active one, else a new area to the right of
+/// the active one; an empty active area takes the page itself. A page of
+/// `url` the calling session already opened, in any area, or one already in
+/// that neighbouring area, is focused and loaded again rather than opened a
+/// second time.
 pub(super) fn place_page_beside(
     layout: &mut Layout,
     url: &str,
+    caller: Option<&SessionScope>,
     load: u64,
     stamp: u64,
 ) -> Result<String, LayoutError> {
@@ -73,23 +77,31 @@ pub(super) fn place_page_beside(
     let neighbour = BESIDE_ORDER
         .iter()
         .find_map(|edge| layout.neighbour(&base, *edge));
-    if let Some(target) = &neighbour {
-        let shown = layout.area(target).and_then(|area| {
-            area.displays
-                .iter()
-                .filter(|display| {
-                    display.kind == DisplayKind::Browser && display.url.as_deref() == Some(url)
-                })
-                .max_by_key(|display| display.last_focused_unix_ms)
-                .map(|display| display.id.clone())
-        });
-        if let Some(id) = shown {
-            layout.focus(&id, stamp)?;
-            if let Some(display) = layout.display_mut(&id) {
-                display.load = load;
-            }
-            return Ok(id);
+    let is_page = |display: &&Display| {
+        display.kind == DisplayKind::Browser && display.url.as_deref() == Some(url)
+    };
+    let own = caller.and_then(|scope| {
+        layout
+            .displays()
+            .filter(is_page)
+            .filter(|display| display.openers.iter().any(|o| o.of_session(scope)))
+            .max_by_key(|display| display.last_focused_unix_ms)
+            .map(|display| display.id.clone())
+    });
+    let shown = own.or_else(|| {
+        let area = layout.area(neighbour.as_deref()?)?;
+        area.displays
+            .iter()
+            .filter(is_page)
+            .max_by_key(|display| display.last_focused_unix_ms)
+            .map(|display| display.id.clone())
+    });
+    if let Some(id) = shown {
+        layout.focus(&id, stamp)?;
+        if let Some(display) = layout.display_mut(&id) {
+            display.load = load;
         }
+        return Ok(id);
     }
     let display = layout.new_browser_display(url, load);
     let id = display.id.clone();
