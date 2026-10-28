@@ -14,7 +14,6 @@ use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use hide_node_link::device::{
@@ -955,29 +954,66 @@ fn a_published_guardrail_policy_is_what_the_devices_hooks_read() {
 #[test]
 fn a_device_s_channels_share_its_one_connection() {
     let device = Device::start();
-    // The link, the install's reads and its SFTP made one connection.
+    // The link and the install's reads made one connection.
     assert_eq!(device.ssh.accepted(), 1);
-    // A Herdr channel, a status read and an attachment's SFTP open on it.
+    // A Herdr channel opens on it, and an attachment rides the node's link.
     device.transport.herdr_api_connector().connect().unwrap();
     let request = "8a6e0e4c-3f0b-4d2c-9a51-0c6f2b9d7e10";
-    let files = [hide_node_link::attachments::AttachmentFile {
-        path: "attached.txt".to_owned(),
-        name: "attached.txt".to_owned(),
-        bytes: b"attached\n".to_vec(),
-    }];
-    let staged = device
-        .transport
-        .stage_attachments(request, &files, &AtomicBool::new(false))
-        .unwrap();
-    assert_eq!(staged.len(), 1);
-    assert_eq!(fs::read(&staged[0]).unwrap(), b"attached\n");
-    device.transport.remove_attachments(request, &files);
-    assert!(!Path::new(&staged[0]).exists());
+    let staged = stage(&device, request, 0, 1, "attached.txt").unwrap();
+    assert!(
+        Path::new(&staged).starts_with(device.state.join("terminal-attachments")),
+        "staged at {staged}"
+    );
+    assert_eq!(fs::read(&staged).unwrap(), b"attached\n");
+    let _: Value = call_as(
+        &*device.link,
+        Call::RemoveAttachments {
+            request: request.to_owned(),
+        },
+        TIMEOUT,
+    )
+    .unwrap();
+    assert!(!Path::new(&staged).exists());
     assert_eq!(device.ssh.accepted(), 1);
     // Closing the link ends its node and leaves the connection to the rest.
     device.link.close("contract");
     device.transport.herdr_api_connector().connect().unwrap();
     assert_eq!(device.ssh.accepted(), 1);
+}
+
+/// B10: a request the link ends part way leaves nothing behind.
+#[test]
+fn a_link_ending_mid_request_removes_what_it_staged() {
+    let device = Device::start();
+    let request = "0d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
+    let first = stage(&device, request, 0, 2, "first.txt").unwrap();
+    assert!(Path::new(&first).exists());
+    // A retried file is the same answer, and an index past its count is refused.
+    assert_eq!(stage(&device, request, 0, 2, "first.txt").unwrap(), first);
+    assert!(stage(&device, request, 2, 2, "second.txt").is_err());
+    device.link.close("contract");
+    gone_within(Path::new(&first), TIMEOUT);
+    assert!(!Path::new(&first).exists(), "the ended link left {first}");
+}
+
+/// Stages one file of `count` through the device's node link.
+fn stage(
+    device: &Device,
+    request: &str,
+    index: usize,
+    count: usize,
+    name: &str,
+) -> Result<String, hide_node_link::LinkError> {
+    call_as(
+        &*device.link,
+        Call::StageAttachment {
+            request: request.to_owned(),
+            index,
+            count,
+            file: hide_node_link::feedback::File::new(name, b"attached\n"),
+        },
+        TIMEOUT,
+    )
 }
 
 /// What a device's terminals sent up its link: each pane's reports.

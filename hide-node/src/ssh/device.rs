@@ -5,7 +5,6 @@
 use super::host::{self, HelperPackages, PaneEventsSlot, PaneHook, TerminalHook};
 use super::hosts::{Resolve, ssh_g};
 use super::*;
-use hide_node_link::attachments::AttachmentFile;
 use hide_node_link::device::{
     DeviceConnector, DeviceTransport, DialedTransport, EstablishError, Established, HostConsent,
     OnClose, SshHostListing,
@@ -293,22 +292,6 @@ impl DialedTransport for SshDevice {
         )
     }
 
-    fn stage_attachments(
-        &self,
-        request_id: &str,
-        files: &[AttachmentFile],
-        cancelled: &AtomicBool,
-    ) -> Result<Vec<String>, String> {
-        self.client
-            .resolve()?
-            .stage_attachments(request_id, files, cancelled)
-    }
-
-    fn remove_attachments(&self, request_id: &str, files: &[AttachmentFile]) {
-        if let Some(client) = self.client() {
-            client.remove_attachments(request_id, files);
-        }
-    }
 }
 
 #[cfg(test)]

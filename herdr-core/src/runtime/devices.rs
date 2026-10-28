@@ -32,35 +32,6 @@ impl DeviceReach {
         }
     }
 
-    /// Stages `files` on the device for a pane there. Files reach a node
-    /// that dials in from its own screen (D-06); a window on another machine
-    /// stages nothing there.
-    pub(crate) fn stage_attachments(
-        &self,
-        request_id: &str,
-        files: &[hide_node_link::attachments::AttachmentFile],
-        cancelled: &std::sync::atomic::AtomicBool,
-    ) -> Result<Vec<String>, String> {
-        match self {
-            Self::Dialed(transport) => transport.stage_attachments(request_id, files, cancelled),
-            Self::Inbound(_) => Err(
-                "A file reaches a pane of this machine from a window on this machine only"
-                    .to_owned(),
-            ),
-        }
-    }
-
-    /// Removes what `request_id` staged; nothing was staged on a node that
-    /// dials in.
-    pub(crate) fn remove_attachments(
-        &self,
-        request_id: &str,
-        files: &[hide_node_link::attachments::AttachmentFile],
-    ) {
-        if let Self::Dialed(transport) = self {
-            transport.remove_attachments(request_id, files);
-        }
-    }
 }
 
 /// Why a device's connection is retired. A removed device keeps nothing of

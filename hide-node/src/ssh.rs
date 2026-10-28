@@ -5,7 +5,7 @@
 //! testable without a network. The russh adapter is the only production
 //! transport; no OpenSSH subprocess is used by this path.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::fmt;
 use std::io::{self, Read, Write};
@@ -34,7 +34,6 @@ use tokio::sync::{Semaphore, oneshot};
 
 use hide_herdr_client::{ApiConnector, ApiError, ApiStream, ConnectionShutdown};
 
-mod attachments;
 mod device;
 pub mod host;
 pub mod hosts;

@@ -1,10 +1,12 @@
-//! What a core reaches on the machine of a node that dialed it, through the
-//! node's link (PRD core-host-node-remote-core D-18, D-19, B15): each stream
-//! the core opens with `link_open` is one local connection to the end it
-//! names, its bytes carried by the link both ways. The node's own Herdr
-//! socket is one end; the browser relay of the node's daemon, which carries
-//! a caller's CDP to this machine's desktop window, is the other. Nothing
-//! on the core's machine listens for either; the link is the only way in,
+//! What a core reaches on a node's machine through the node's link (PRD
+//! core-host-node-remote-core D-18, D-19, B15; PRD wsl-device B9): each
+//! stream the core opens with `link_open` is one local connection to the end
+//! it names, its bytes carried by the link both ways. On a node that dialed
+//! its core, the node's own Herdr socket is one end and the browser relay of
+//! the node's daemon, which carries a caller's CDP to this machine's desktop
+//! window, another. On every node, a server on this machine's loopback is
+//! the third, which a Browser View of the core's machine shows. Nothing on
+//! the core's machine listens for any of them; the link is the only way in,
 //! and it ends every stream when it ends.
 //!
 //! A stream is a byte pipe and nothing here reads what it carries. Each end
@@ -31,7 +33,8 @@ use crate::panes::write_event;
 /// How long one chunk's write to a stream's end may take before the stream
 /// is ended.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
-/// How long the node's daemon has to take a browser relay connection.
+/// How long the node's daemon has to take a browser relay connection, and
+/// a loopback server a page stream.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The browser gateway of the desktop window on a node that dialed its
@@ -161,6 +164,24 @@ impl<'a> LinkBridge<'a> {
                     )?;
                 Ok(Connection::Tcp(connection))
             }
+            LinkEnd::Loopback { address } => {
+                // A page stream reaches this machine's own loopback and
+                // nothing past it, whatever the core asked.
+                if !address.ip().is_loopback() || address.port() == 0 {
+                    return Err(HostError::new(
+                        ErrorCode::InvalidRequest,
+                        "A page stream reaches only a port on this machine's loopback",
+                    ));
+                }
+                let connection = TcpStream::connect_timeout(&address, CONNECT_TIMEOUT)
+                    .map_err(|error| {
+                        HostError::new(
+                            ErrorCode::Io,
+                            format!("The page server on this machine did not answer: {error}"),
+                        )
+                    })?;
+                Ok(Connection::Tcp(connection))
+            }
         }
     }
 
@@ -181,7 +202,7 @@ impl<'a> LinkBridge<'a> {
                 ));
             }
             let cap = end.cap();
-            if streams.values().filter(|open| open.end == end).count() >= cap {
+            if streams.values().filter(|open| open.end.shares_cap(end)).count() >= cap {
                 return Err(HostError::new(
                     ErrorCode::Busy,
                     format!("The node already has {cap} {} streams open", name(end)),
@@ -320,18 +341,21 @@ fn name(end: LinkEnd) -> &'static str {
     match end {
         LinkEnd::Herdr => "Herdr",
         LinkEnd::BrowserRelay => "browser relay",
+        LinkEnd::Loopback { .. } => "page",
     }
 }
 
 /// Why a node refuses a stream to an end it does not bridge: a device its
-/// core dialed is reached over SSH, never through the link, and a node with
-/// no desktop window registered has no browser relay.
+/// core dialed is reached over SSH, never through the link, a node with no
+/// desktop window registered has no browser relay, and a node answered in
+/// its core's own process holds no link to carry a page.
 pub fn unreached(end: LinkEnd) -> HostError {
     HostError::new(
         ErrorCode::Unsupported,
         match end {
             LinkEnd::Herdr => "This node's Herdr is not reached through its link",
             LinkEnd::BrowserRelay => "This node has no browser relay",
+            LinkEnd::Loopback { .. } => "This node holds no link to carry a page",
         },
     )
 }

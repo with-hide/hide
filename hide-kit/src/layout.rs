@@ -239,6 +239,20 @@ pub fn letter_attachments(state_dir: &Path) -> PathBuf {
     state_dir.join("letter-attachments")
 }
 
+/// Files the operator attached to a terminal of this machine's panes from a
+/// window on another machine, one owner-only file each, kept 24 hours (PRD
+/// wsl-device B10); its owner is that node's `hide_host::attachments`.
+pub fn terminal_attachments(state_dir: &Path) -> PathBuf {
+    state_dir.join("terminal-attachments")
+}
+
+/// Where a device's terminal attachments were staged over SSH before its
+/// link carried them. Its node only removes the files there that have
+/// outlived their 24 hours, and the folder once it is empty.
+pub fn legacy_terminal_attachments(home: &Path) -> PathBuf {
+    home.join(".hide-terminal-attachments")
+}
+
 /// The Software Factory store: Factories, Tasks, questions, records and
 /// events; its owner is the core's Factory engine thread.
 pub fn factory_store(state_dir: &Path) -> PathBuf {

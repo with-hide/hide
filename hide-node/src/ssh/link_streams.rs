@@ -1,12 +1,14 @@
-//! What the core reaches on the machine of a node that dialed it, through
-//! the node's link (PRD core-host-node-remote-core D-18, D-19, B15): every
+//! What the core reaches on a node's machine through the node's link (PRD
+//! core-host-node-remote-core D-18, D-19, B15; PRD wsl-device B9): every
 //! connection is one stream inside the link, which the node bridges to the
-//! end the core names (`hide_host::link_bridge`). The node's Herdr is one
-//! end, taken as an [`ApiConnector`] by the session sync, controls,
-//! doorbell, find, phone reply and agent sleep where they take a local
-//! socket or an SSH device's channel; the browser relay of the node's
-//! daemon is the other, which carries a caller's CDP to the node's desktop
-//! window ([`RemoteHost::browser_relay_stream`]).
+//! end the core names (`hide_host::link_bridge`). The Herdr of a node that
+//! dialed its core is one end, taken as an [`ApiConnector`] by the session
+//! sync, controls, doorbell, find, phone reply and agent sleep where they
+//! take a local socket or an SSH device's channel; the browser relay of that
+//! node's daemon is another, which carries a caller's CDP to the node's
+//! desktop window ([`RemoteHost::browser_relay_stream`]); and a server on
+//! any device's loopback is the third, which a Browser View of the core's
+//! machine shows ([`RemoteHost::page_stream`]).
 //!
 //! A stream reads what the node sent, in order, from a bounded queue: one
 //! the reader leaves past [`MAX_HERDR_PENDING`] chunks is ended as stalled,
@@ -35,18 +37,22 @@ pub const MAX_HERDR_PENDING: usize = 64;
 /// message may be, so a large answer to a caller that is slow to read is
 /// held whole rather than ending the relay.
 pub const MAX_BROWSER_PENDING: usize = 128;
+/// Chunks one page stream holds for the browser reading it.
+pub const MAX_PAGE_PENDING: usize = 64;
 /// How long an open, a write or a close may take on the link.
 const CALL_TIMEOUT: Duration = Duration::from_secs(5);
 /// Close notices waiting for the link's close worker: every stream a link
 /// can hold at once. A notice past it is dropped and logged; the node's
 /// end of that stream closes with the link.
-pub const MAX_CLOSE_NOTICES: usize =
-    hide_node_link::panes::MAX_HERDR_STREAMS + hide_node_link::panes::MAX_BROWSER_STREAMS;
+pub const MAX_CLOSE_NOTICES: usize = hide_node_link::panes::MAX_HERDR_STREAMS
+    + hide_node_link::panes::MAX_BROWSER_STREAMS
+    + hide_node_link::panes::MAX_PAGE_STREAMS;
 
 fn pending(end: LinkEnd) -> usize {
     match end {
         LinkEnd::Herdr => MAX_HERDR_PENDING,
         LinkEnd::BrowserRelay => MAX_BROWSER_PENDING,
+        LinkEnd::Loopback { .. } => MAX_PAGE_PENDING,
     }
 }
 
@@ -278,6 +284,13 @@ impl RemoteHost {
         self.open_stream(LinkEnd::BrowserRelay)
     }
 
+    /// A stream to `address` on the loopback of the node's machine, for a
+    /// Browser View of the core's machine that shows a page served there
+    /// (PRD wsl-device B9). The node refuses any other address.
+    pub fn page_stream(&self, address: std::net::SocketAddr) -> Result<LinkStream, OpenError> {
+        self.open_stream(LinkEnd::Loopback { address })
+    }
+
     fn open_stream(&self, end: LinkEnd) -> Result<LinkStream, OpenError> {
         let streams = &self.inner.streams;
         if let Some(reason) = self.closed_reason() {
@@ -288,7 +301,7 @@ impl RemoteHost {
         {
             let mut open = lock_recover(&streams.open);
             let cap = end.cap();
-            if open.values().filter(|entry| entry.end == end).count() >= cap {
+            if open.values().filter(|entry| entry.end.shares_cap(end)).count() >= cap {
                 drop(open);
                 crate::diagnostic!(json!({
                     "component": "remote_host",
