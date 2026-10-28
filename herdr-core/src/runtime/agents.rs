@@ -993,6 +993,28 @@ impl Runtime {
                 })
             })
             .collect();
+        // The sessions a device close ends, by the scoped pane ids this core
+        // knows them by (PRD session-files D-14).
+        let closing_panes: Vec<String> = session
+            .workspaces
+            .iter()
+            .flat_map(|workspace| &workspace.checkouts)
+            .flat_map(|checkout| &checkout.tabs)
+            .flat_map(|tab| tab.panes.iter().map(move |pane| (tab, pane)))
+            .filter(|(tab, pane)| match &action {
+                RemoteControlAction::Pane(PaneControlAction::Close { pane_id }) => {
+                    remote_pane_source_id(&target_id, &pane.id) == Some(pane_id.as_str())
+                }
+                RemoteControlAction::CloseTab { tab_id } => {
+                    tab.id
+                        .as_deref()
+                        .and_then(|id| remote_tab_source_id(&target_id, id))
+                        == Some(tab_id.as_str())
+                }
+                _ => false,
+            })
+            .map(|(_, pane)| pane.id.clone())
+            .collect();
         if let Err(message) = live::spawn_remote_control_checked(
             context,
             request_id,
@@ -1040,6 +1062,9 @@ impl Runtime {
                 );
             }
             return false;
+        }
+        if !closing_panes.is_empty() {
+            self.expect_device_session_close(&target_id, &dispatched_request_id, closing_panes);
         }
         if chooses_focus {
             self.supersede_start_navigation();
@@ -3228,6 +3253,7 @@ impl Runtime {
                 // Its navigation is stale; a definite terminal creation still owns
                 // an admission and a group placement that must be settled.
                 self.drop_pending_choice(target_id, request_id);
+                self.settle_device_session_close(target_id, request_id, false);
                 let settled = if matches!(
                     &action,
                     RemoteControlAction::CreateTab {
@@ -3273,6 +3299,7 @@ impl Runtime {
             let message =
                 "Remote result arrived after its deadline; no mutation was resent".to_owned();
             self.drop_pending_choice(target_id, request_id);
+            self.settle_device_session_close(target_id, request_id, false);
             self.fail_remote_operation_reported(
                 report,
                 &remote_operation_key,
@@ -3288,6 +3315,7 @@ impl Runtime {
             self.remote_tab_creations_in_flight.remove(&key);
         }
         self.settle_remote_terminal_creation(target_id, &action, &result);
+        self.settle_device_session_close(target_id, request_id, result.is_ok());
         if result.is_err() {
             self.drop_pending_choice(target_id, request_id);
         }

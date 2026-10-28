@@ -82,7 +82,9 @@ struct PendingOpener {
     key: WorkspaceKey,
     path: String,
     kind: DisplayKind,
-    opener: Opener,
+    /// The agent whose terminal the link was in; `None` for the operator's
+    /// own open, which makes the View the operator's (PRD session-files D-10).
+    opener: Option<Opener>,
     at: u64,
 }
 
@@ -295,16 +297,30 @@ impl Runtime {
         }
     }
 
-    /// Marks the View `view_id` of `key` as opened by `opener` (D-03).
-    pub(super) fn stamp_view_opener(&mut self, key: &WorkspaceKey, view_id: &str, opener: Opener) {
+    /// Marks the View `view_id` of `key` as opened by `opener` (D-03), and
+    /// puts it in that session's Files strip (PRD session-files D-26); with
+    /// no opener the operator opened it, and it is in every strip (D-10).
+    pub(super) fn stamp_view_opener(
+        &mut self,
+        key: &WorkspaceKey,
+        view_id: &str,
+        opener: Option<Opener>,
+    ) {
         let stamped = self.change_view_layout(key, |layout, _| {
             let display = layout
                 .display_mut(view_id)
                 .ok_or_else(|| crate::view_layout::LayoutError::UnknownDisplay(view_id.into()))?;
-            let changed = display.opener.as_ref() != Some(&opener);
-            if changed {
-                display.opener = Some(opener);
-            }
+            let changed = match opener {
+                Some(opener) => {
+                    let changed = display.opener.as_ref() != Some(&opener)
+                        || display.openers.last() != Some(&opener);
+                    if changed {
+                        display.opened_by(opener);
+                    }
+                    changed
+                }
+                None => !std::mem::replace(&mut display.operator, true),
+            };
             Ok(((), changed))
         });
         if let Err(error) = stamped {
@@ -319,7 +335,8 @@ impl Runtime {
     }
 
     /// A pane caller's `hide file open` or `hide diff open` marks the View
-    /// it landed in. A checkout caller is nobody (D-19).
+    /// it landed in. A checkout caller, and a pane with no agent, is nobody
+    /// (D-19), and the View is the operator's (PRD session-files D-28).
     pub(super) fn stamp_control_opener(
         &mut self,
         key: &WorkspaceKey,
@@ -334,17 +351,18 @@ impl Runtime {
         ) {
             return;
         }
-        let Caller::Pane(pane) = Caller::parse(caller_id) else {
-            return;
+        let opener = match Caller::parse(caller_id) {
+            Caller::Pane(pane) => self.opener_of_pane(pane),
+            Caller::Checkout { .. } => None,
         };
-        if let Some(opener) = self.opener_of_pane(pane) {
-            self.stamp_view_opener(key, view_id, opener);
-        }
+        self.stamp_view_opener(key, view_id, opener);
     }
 
     /// A terminal link the operator clicked in an agent's pane names the
     /// pane; the View the file lands in, now or once it is read, is that
-    /// agent's (D-02, B2).
+    /// agent's (D-02, B2). Any other open of the operator's, from the
+    /// Explorer, ⌘K or a plain shell's link, makes it the operator's (PRD
+    /// session-files D-10, D-28).
     pub(super) fn expect_view_opener(
         &mut self,
         key: &WorkspaceKey,
@@ -352,9 +370,7 @@ impl Runtime {
         kind: DisplayKind,
         pane: Option<&str>,
     ) {
-        let Some(opener) = pane.and_then(|pane| self.opener_of_pane(pane)) else {
-            return;
-        };
+        let opener = pane.and_then(|pane| self.opener_of_pane(pane));
         let pending = &mut self.view_feedback.pending_openers;
         pending.retain(|old| !(old.key == *key && old.path == path && old.kind == kind));
         if pending.len() >= PENDING_OPENERS {

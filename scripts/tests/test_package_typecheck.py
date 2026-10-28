@@ -27,7 +27,7 @@ class PackageTypecheck(unittest.TestCase):
         self.repo = Path(self.temp.name)
         scripts = self.repo / "desktop/scripts"
         scripts.mkdir(parents=True)
-        for name in ("package", "build-identity", "device-helpers", "fuses", "installers", "macos-signing"):
+        for name in ("package", "build-identity", "device-helpers", "fuses", "installers", "macos-signing", "release-binaries"):
             shutil.copyfile(ROOT / f"desktop/scripts/{name}.mjs", scripts / f"{name}.mjs")
         (self.repo / "scripts").mkdir()
         shutil.copyfile(ROOT / "scripts/check-release-assets.mjs", self.repo / "scripts/check-release-assets.mjs")
@@ -78,24 +78,27 @@ class PackageTypecheck(unittest.TestCase):
         return subprocess.run(["git", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", *args], cwd=self.repo, env=self.env,
                               check=True, capture_output=True, text=True, timeout=10).stdout.strip()
 
-    def package(self, **env):
-        result = subprocess.run(["node", "desktop/scripts/package.mjs"], cwd=self.repo,
+    def package(self, *args, **env):
+        result = subprocess.run(["node", "desktop/scripts/package.mjs", *args], cwd=self.repo,
                                 env={**self.env, **env}, capture_output=True, text=True, timeout=15)
         self.assertNotEqual(result.returncode, 0, "fixture must stop before native compilation")
         return result.stdout + result.stderr
 
     def test_standalone_and_ci_without_a_verify_dependency_keep_typechecking(self):
-        for env in ({}, {"GITHUB_ACTIONS": "true"}):
-            with self.subTest(env=env):
-                output = self.package(**env)
-                self.assertIn("compiler required", output)
-                self.assertNotIn("bundle without compiler", output)
+        for args in ((), ("compile",)):
+            for env in ({}, {"GITHUB_ACTIONS": "true"}):
+                with self.subTest(args=args, env=env):
+                    output = self.package(*args, **env)
+                    self.assertIn("compiler required", output)
+                    self.assertNotIn("bundle without compiler", output)
 
     def test_exact_source_ci_delegates_typecheck_and_propagates_bundle_failure(self):
-        output = self.package(GITHUB_ACTIONS="true", HIDE_WEB_TYPECHECKED_SHA=self.commit)
-        self.assertIn("bundle without compiler", output)
-        self.assertIn(f"Web typecheck delegated to verify for {self.commit}", output)
-        self.assertNotIn("compiler required", output)
+        for args in ((), ("compile",)):
+            with self.subTest(args=args):
+                output = self.package(*args, GITHUB_ACTIONS="true", HIDE_WEB_TYPECHECKED_SHA=self.commit)
+                self.assertIn("bundle without compiler", output)
+                self.assertIn(f"Web typecheck delegated to verify for {self.commit}", output)
+                self.assertNotIn("compiler required", output)
 
     def test_local_override_and_other_or_malformed_sources_are_refused(self):
         for env in (
@@ -136,13 +139,17 @@ class PackageTypecheckWorkflow(unittest.TestCase):
         self.assertEqual(option["type"], "boolean")
         self.assertIs(option["default"], False)
         expected = "${{ inputs.web-typechecked && (inputs.source-sha || github.sha) || '' }}"
-        for name in ("package", "macos-package"):
+        for name in ("package", "macos-compile"):
             job = package["jobs"][name]
             self.assertNotIn("HIDE_WEB_TYPECHECKED_SHA", job.get("env", {}))
             delegated = [step for step in job["steps"] if "HIDE_WEB_TYPECHECKED_SHA" in step.get("env", {})]
             self.assertEqual(len(delegated), 1)
             self.assertEqual(delegated[0]["env"]["HIDE_WEB_TYPECHECKED_SHA"], expected)
             self.assertIn("bash scripts/verify-web.sh desktop package", delegated[0]["run"])
+        assembly = package["jobs"]["macos-package"]
+        self.assertNotIn("HIDE_WEB_TYPECHECKED_SHA", assembly.get("env", {}))
+        for step in assembly["steps"]:
+            self.assertNotIn("HIDE_WEB_TYPECHECKED_SHA", step.get("env", {}))
 
     def test_pr_delegates_only_to_a_required_check_of_the_same_source_and_toolchain(self):
         verify = yaml.safe_load((WORKFLOWS / "pr.yml").read_text())["jobs"]
@@ -155,11 +162,23 @@ class PackageTypecheckWorkflow(unittest.TestCase):
         self.assertIn("bash scripts/verify-web.sh web build", commands)
         self.assertIn("bash scripts/verify-web.sh install", commands)
         package = yaml.safe_load((WORKFLOWS / "package.yml").read_text())["jobs"]
-        for job in (verify["checks"], package["package"], package["macos-package"]):
+        for job in (verify["checks"], package["package"], package["macos-compile"]):
             for action, key, expected in (("actions/setup-node@", "node-version", 22),
                                           ("pnpm/action-setup@", "version", 10)):
                 step = next(step for step in job["steps"] if step.get("uses", "").startswith(action))
                 self.assertEqual(step["with"][key], expected)
+
+    def test_candidate_delegates_to_the_verify_run_bound_into_its_receipt(self):
+        jobs = yaml.safe_load((WORKFLOWS / "release-candidate.yml").read_text())["jobs"]
+        self.assertIs(jobs["packages"]["with"]["web-typechecked"], True)
+        self.assertEqual(jobs["packages"]["with"]["source-sha"], "${{ inputs.public_sha }}")
+        self.assertEqual(jobs["packages"]["needs"], "validate")
+        source = next(step for step in jobs["validate"]["steps"] if step.get("id") == "source")
+        self.assertEqual(source["env"]["VERIFICATION_RUN"], "${{ inputs.verification_run_id }}")
+        self.assertEqual(source["env"]["PUBLIC_SHA"], "${{ inputs.public_sha }}")
+        self.assertIn("node scripts/release-candidate.mjs source", source["run"])
+        receipt = next(step for step in jobs["receipt"]["steps"] if "RECEIPT" in step.get("env", {}))
+        self.assertEqual(receipt["env"]["RECEIPT"], "${{ needs.validate.outputs.receipt }}")
 
 
 if __name__ == "__main__":

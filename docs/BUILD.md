@@ -148,7 +148,8 @@ It passes that source as `HIDE_WEB_TYPECHECKED_SHA`; `package.mjs` requires GitH
 The `GITHUB_ACTIONS=true` check guards against mistakes, not a security boundary; a caller that sets the environment still owns the verify dependency contract.
 The same source pins `pnpm-lock.yaml`, and both verify and packaging install it frozen with Node 22 and pnpm 10.
 The PR/main caller opts in only when its plan requires the `checks` lane, and the existing aggregate refuses a failed, cancelled or skipped planned check.
-Once `release-candidate.yml` opts in, a release candidate may build in parallel with verify, but its receipt and final publication must require a successful verify run of its exact public source.
+`release-candidate.yml` also opts in and may build in parallel with verify; its receipt names that exact source's verify run, whose success the final publication requires.
+For macOS, the override reaches only `compile`, where the web shell is built; `assemble` uses the compiled binaries without another web build.
 Until that gate passes, a built package is unverified; the opt-in is a dependency contract, not independent proof of success.
 Other callers leave the input false, and setting the source override outside GitHub Actions or for another commit fails packaging.
 `web e2e` through this wrapper runs Playwright against the web output already built; `desktop e2e` always rebuilds the desktop host before Playwright, including a direct local invocation.
@@ -157,6 +158,8 @@ Both forward the test arguments and their exit status, so a missing test filter 
 The desktop CI job uses it for the complete and filtered shard lists, then uses `desktop e2e` for execution: one fresh host build per job instead of one for each list and another for execution.
 There is no skip-build flag, freshness marker or reuse of a previous job's desktop output.
 `playwright-install` installs Chromium for web or desktop; `desktop package` packages this runner's app.
+`desktop package compile` builds only the web shell and the release binaries and records them in `desktop/out/release-binaries.json` (commit, version, build order and each binary's SHA-256); `desktop package assemble` builds the host and packages exactly those binaries, refusing a record of another commit, version or order and any binary that is missing, linked or changed.
+`package.yml`'s macOS lane runs the two halves as two jobs of one run at one identity (see [Device helper release bundles](#device-helper-release-bundles)), the one place a release binary crosses a job; nothing reuses a release binary from another run or source.
 An invalid package/action pair or more than 128 trailing arguments exits 2; the no-argument gate retains both packages' typecheck, lint, unit tests and build coverage.
 `test_ci_verification_entrypoints.py` checks this external command boundary without building or installing; it complements the real build tests below.
 
@@ -245,13 +248,14 @@ Never redirect a release target directory.
 | `hide-device-helper-linux-aarch64` | `desktop/out/device-helpers/linux-aarch64/` | same four files |
 
 Each producer manifest records platform, source commit, version, build order and each helper's SHA-256.
-`package.yml` resolves one identity with `desktop/scripts/build-identity.mjs`, calls the producer and downloads these artifacts from that run.
+`package.yml` resolves one identity with `desktop/scripts/build-identity.mjs` and calls the producer on every call, beside the Windows and Linux packages; a [release candidate](#unsigned-release-candidates) keeps both artifacts for the private publisher.
+Its macOS lane does not wait for them to compile: `compile (macos)` runs `desktop package compile` while the helpers build, and `package (macos)` needs both jobs, downloads the binaries and these artifacts from that run and runs `desktop package assemble`, so a failed helper skips the Mac app and fails the run.
 A local Mac package needs the same two directories at its exact identity; the identity command prints the values to give the producer.
 `desktop/scripts/device-helpers.mjs build <platform> <version> <source-sha> <build-order>` is the producer command on its matching runner after dependency installation and `rustup target add <triple>`.
 Packaging refuses missing members, a different source/version/order, digest mismatches, links, files above 256 MiB and incorrect executable headers.
 Downloaded artifacts need not retain executable mode bits.
 
-Before building the native app, `prepareDeviceBundles` copies the helpers and pinned Herdr into private worktree staging.
+Before building the native app, or before assembling it from compiled binaries, `prepareDeviceBundles` copies the helpers and pinned Herdr into private worktree staging.
 Linux bytes remain unchanged; only the native Mac app follows the existing Developer ID signing and notarization path.
 It hashes the final files and builds one gzip-compressed USTAR archive per platform, containing exactly four regular entries at its root: `hided`, `hide`, `hide-agent-hooks`, `herdr`.
 No paths, links, extended attributes or PAX records belong in an archive.
@@ -264,7 +268,7 @@ Hashes are lowercase SHA-256 hex.
 The app ships this small manifest; `desktop/out/release/` receives a copy and both archives alongside the installers and updater files.
 `desktop/out/device-bundles/` keeps the intermediate output, never anything under `/tmp`.
 
-The private publisher must call this producer at its reviewed public workflow revision, pass the approved public source/version/order, download the two artifacts into the paths above, then run `pnpm --dir desktop package` with its Developer ID settings.
+The private publisher must take the two artifacts from the release candidate run it selected, as it takes the Linux and Windows packages, require every helper's SHA-256 to equal the receipt's `device_helpers`, download them into the paths above, then run `pnpm --dir desktop package` with its Developer ID settings; it builds no helper itself.
 It must publish both `hide-device-<platform>-<app-version>.tar.gz` assets and `device-bundles.json` on the **same public `v<app-version>` release** as the Mac app.
 Do not re-sign or repack an archive after the manifest is made, and do not substitute output from another source or run.
 The public release validator and draft writer require 18 assets in total: the existing 15 installers, checksums, updater files and blockmaps, plus both Linux bundles and their manifest.
@@ -312,12 +316,13 @@ The command installs nothing; [The Installed App Is The Operator's](../AGENTS.md
 
 `release-candidate.yml` is a manual preparation workflow on protected `main`.
 It creates no tag or release and reads no signing credential.
-Its four required string inputs are `public_sha` (a full lowercase commit SHA), `tag` (`vX.Y.Z` or `vX.Y.Z-rc.N`), `verification_run_id` (the successful `pr.yml` push/main run of that exact source), and `build_order` (a positive decimal integer no larger than 9007199254740991).
-The source must already be an ancestor of main; a branch, fork, PR run, incomplete run or different source is refused before building.
+Its four required string inputs are `public_sha` (a full lowercase commit SHA), `tag` (`vX.Y.Z` or `vX.Y.Z-rc.N`), `verification_run_id` (the `pr.yml` push/main run of that exact source, queued, running or passed), and `build_order` (a positive decimal integer no larger than 9007199254740991).
+The source must already be an ancestor of main; a branch, fork, PR run or different source is refused before building, and so is a verify run that failed or still waits behind another main run (`pending`), which the next push to main replaces.
+The candidate does not wait for that verify run: it may start while the source's push verify runs, and the publish, not the candidate, requires that the run it names concluded success.
 The workflow revision is main's dispatch revision and may differ from the source revision it builds.
-`package.yml` and `agent-journey.yml` run their steps from that dispatch revision on the source's checkout, so the workflow refuses a source at which either file differs from main; choose a newer verified source instead.
+`package.yml`, `device-helpers.yml` and `agent-journey.yml` run their steps from that dispatch revision on the source's checkout, so the workflow refuses a source at which any of them differs from main; choose a newer source instead.
 
-The workflow reuses `package.yml` for unsigned Linux and Windows installers, including their installation, packaged-window and update checks.
+The workflow reuses `package.yml` for unsigned Linux and Windows installers, including their installation, packaged-window and update checks, and for both [Linux device helpers](#device-helper-release-bundles), built beside them on public runners.
 It runs the existing `agent-journey.yml` on the same source, with stand-ins on Linux and macOS, Windows form checks, and fake-model lanes on all three systems.
 It signs no agent in: since 2026-10-27, by the operator's decision, a real login is measured only by the release's local run on the Mac ([CONTRIBUTING.md: Releases](../CONTRIBUTING.md#releases)), so the workflow summary records signed-in providers as **not measured**; package, stand-in and fake-model failures block the receipt.
 A successful candidate does not establish that any provider answered.
@@ -326,17 +331,19 @@ The reusable workflows' optional `source-sha` defaults to the caller commit, and
 An explicit order allows separately prepared packages of one numeric version to share one build identity.
 The operator assigns a strictly increasing order within that numeric version, including release-candidate to stable transitions; a private-only change takes a new patch version.
 
-Only after packaging and the selected journey succeed does the workflow upload `hide-release-candidate`, containing only `candidate.json`:
+Only after packaging, both helpers and the selected journey succeed does the workflow upload `hide-release-candidate`, containing only `candidate.json`:
 
 ```json
-{"schema":2,"repository":"with-hide/hide","public_sha":"<source SHA>","tag":"vX.Y.Z","build_order":"<decimal>","verification_run_id":"<decimal>","workflow_sha":"<workflow SHA>","run_id":"<decimal>","run_attempt":1,"live_agents":false}
+{"schema":3,"repository":"with-hide/hide","public_sha":"<source SHA>","tag":"vX.Y.Z","build_order":"<decimal>","verification_run_id":"<decimal>","workflow_sha":"<workflow SHA>","run_id":"<decimal>","run_attempt":1,"live_agents":false,
+ "device_helpers":{"linux-aarch64":{"hide":"<sha256>","hide-agent-hooks":"<sha256>","hided":"<sha256>"},"linux-x86_64":{"hide":"<sha256>","hide-agent-hooks":"<sha256>","hided":"<sha256>"}}}
 ```
 
-The installer artifacts keep the names `hide-package-linux` and `hide-package-windows`; candidate artifacts expire after seven days.
+The installer artifacts keep the names `hide-package-linux` and `hide-package-windows`, and the helper artifacts `hide-device-helper-linux-x86_64` and `hide-device-helper-linux-aarch64`; candidate artifacts expire after seven days.
 All receipt fields describe public facts, with IDs and order as decimal strings and `schema` and `run_attempt` as integers.
 Schema 2 adds the boolean `live_agents`, which records whether provider checks were requested, not their per-cell verdicts; since 2026-10-27 it is always `false`, kept so the private consumer that requires it reads the receipt unchanged.
+Schema 3 adds `device_helpers`, each Linux platform's helper digests, recorded by the receipt job only after it checked both artifacts' manifests, executable headers and digests against `public_sha`, the tag's version and `build_order` (`withDeviceHelpers` in `scripts/release-candidate.mjs`); from schema 3, `verification_run_id` names the verify run without proving it passed.
 Consumers retaining schema 1 support must treat its missing selection as the original live-enabled workflow, never as evidence that all providers passed.
-A consumer verifies the successful manual main run, its trusted workflow revision, current attempt, matching receipt and artifact inventory before consuming it; a receipt alone proves neither GitHub origin nor that a package is signed.
+A consumer verifies the successful manual main run, its trusted workflow revision, current attempt, matching receipt and artifact inventory, and that the verify run the receipt names and its `verify` job concluded success, before consuming it; a receipt alone proves neither GitHub origin nor that a package is signed.
 Run evidence and reports remain workflow artifacts, separate from distributable files.
 Release approval must disclose unmeasured provider coverage; it does not waive signing, installation, update checks or version approval.
 Candidate preparation creates no public tag or Release; only the official publisher creates the approved release tag and publishes the final assets.

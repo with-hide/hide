@@ -85,7 +85,11 @@ pub enum CommandKind {
     ObservationHook {
         start: bool,
     },
-    ViewList,
+    /// `hide view list [--session <id|here>]`: the checkout's Views, or
+    /// the ones one session opened (PRD session-files D-31).
+    ViewList {
+        session: Option<String>,
+    },
     ViewStatus {
         view_id: String,
     },
@@ -110,7 +114,7 @@ const FILE_USAGE: &str = "usage: hide file open <path> [--beside] [--request-id 
 
 const DIFF_USAGE: &str = "usage: hide diff open <path> [--beside] [--request-id <id>]";
 
-const VIEW_USAGE: &str = "usage: hide view list | status <view-id> | select <view-id> [--request-id <id>] | close <view-id> [--request-id <id>] | split <view-id> --area <area-id> --edge left|right|up|down [--request-id <id>] | move <view-id> --area <area-id> --index <n> [--request-id <id>]";
+const VIEW_USAGE: &str = "usage: hide view list [--session <id|here>] | status <view-id> | select <view-id> [--request-id <id>] | close <view-id> [--request-id <id>] | split <view-id> --area <area-id> --edge left|right|up|down [--request-id <id>] | move <view-id> --area <area-id> --index <n> [--request-id <id>]";
 
 /// A topic's command lines as a wrong command or `--help` prints them: one
 /// `usage:` line, then each form indented under it.
@@ -181,7 +185,7 @@ fn help_text() -> String {
         FILE_USAGE.trim_start_matches("usage: "),
         DIFF_USAGE.trim_start_matches("usage: "),
         "hide browser open <url-or-path> [--beside] [--wait] [--request-id <id>]\nhide browser connect [--display <id>]\nhide browser snapshot|click|fill|type|press|hover|drag|scroll|wait|screenshot|eval|console|network <display> ...\nhide browser help",
-        "hide view list\nhide view status <view-id>\nhide view select <view-id> [--request-id <id>]\nhide view close <view-id> [--request-id <id>]\nhide view split <view-id> --area <area-id> --edge left|right|up|down [--request-id <id>]\nhide view move <view-id> --area <area-id> --index <n> [--request-id <id>]",
+        "hide view list [--session <id|here>]\nhide view status <view-id>\nhide view select <view-id> [--request-id <id>]\nhide view close <view-id> [--request-id <id>]\nhide view split <view-id> --area <area-id> --edge left|right|up|down [--request-id <id>]\nhide view move <view-id> --area <area-id> --index <n> [--request-id <id>]",
         LINKS_USAGE.trim_start_matches("usage: "),
         MEMORY_USAGE.trim_start_matches("usage: "),
     ] {
@@ -516,10 +520,16 @@ fn parse_view<'a>(mut iter: impl Iterator<Item = &'a String>) -> Result<CommandK
     let usage = VIEW_USAGE;
     let verb = iter.next().map(String::as_str).ok_or(usage)?;
     if verb == "list" {
-        return if iter.next().is_none() {
-            Ok(CommandKind::ViewList)
-        } else {
-            Err(usage.to_owned())
+        return match (iter.next().map(String::as_str), iter.next(), iter.next()) {
+            (None, _, _) => Ok(CommandKind::ViewList { session: None }),
+            (Some("--session"), Some(session), None)
+                if !session.is_empty() && !session.starts_with('-') =>
+            {
+                Ok(CommandKind::ViewList {
+                    session: Some(session.clone()),
+                })
+            }
+            _ => Err(usage.to_owned()),
         };
     }
     if verb == "status" {
@@ -706,7 +716,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
                     | CommandKind::WorkspaceInfo
                     | CommandKind::WorkspaceHookInfo
                     | CommandKind::ObservationHook { .. }
-                    | CommandKind::ViewList
+                    | CommandKind::ViewList { .. }
                     | CommandKind::ViewStatus { .. }
                     | CommandKind::BrowserOpen { .. }
                     | CommandKind::BrowserConnect { .. }
@@ -859,7 +869,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
                     .to_owned())
             }
         }
-        CommandKind::ViewList => workspace_query(&env, "view_list"),
+        CommandKind::ViewList { session } => view_list(&env, session.as_deref()),
         CommandKind::ViewStatus { view_id } => view_status(&env, &view_id),
         CommandKind::WorkspaceAction { action, request_id } => {
             workspace_action(&env, action, request_id.as_deref())
@@ -1326,6 +1336,30 @@ fn workspace_action_refusal<T>(request_id: &str, reason: &str) -> Result<T, Stri
         })
     );
     Err(reason.to_owned())
+}
+
+/// `hide view list`, with `--session` keeping the Views that session opened:
+/// `here` is the caller's own, anything else a native session id or the pane
+/// the session is in now. The core lists every View; the filter is the CLI's,
+/// so a core of an earlier build still answers.
+fn view_list(env: &Env, session: Option<&str>) -> Result<(), String> {
+    let mut answer = workspace_query_value(env, "view_list", true)?;
+    if let Some(session) = session
+        && let Some(views) = answer["result"]["views"].as_array_mut()
+    {
+        views.retain(|view| view_opened_by(view, session));
+    }
+    println!("{answer}");
+    Ok(())
+}
+
+fn view_opened_by(view: &serde_json::Value, session: &str) -> bool {
+    view["openers"].as_array().is_some_and(|openers| {
+        openers.iter().any(|opener| match session {
+            "here" => opener["here"] == true,
+            id => opener["session"] == id || opener["pane_id"] == id,
+        })
+    })
 }
 
 fn workspace_query(env: &Env, query: &str) -> Result<(), String> {
@@ -3519,6 +3553,42 @@ mod tests {
             ])
             .is_err()
         );
+    }
+
+    /// PRD session-files D-31: `--session here` keeps the caller's own
+    /// Views, an id the Views of the session it names, now or by its pane.
+    #[test]
+    fn view_list_session_keeps_the_views_one_session_opened() {
+        let parse = |line: &[&str]| {
+            parse_args(&line.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>())
+        };
+        assert_eq!(
+            parse(&["hide", "view", "list"]),
+            Ok(CommandKind::ViewList { session: None })
+        );
+        assert_eq!(
+            parse(&["hide", "view", "list", "--session", "here"]),
+            Ok(CommandKind::ViewList {
+                session: Some("here".into())
+            })
+        );
+        for bad in [
+            &["hide", "view", "list", "--session"][..],
+            &["hide", "view", "list", "--session", "--here"],
+            &["hide", "view", "list", "--session", "a", "b"],
+            &["hide", "view", "list", "--all"],
+        ] {
+            assert_eq!(parse(bad), Err(VIEW_USAGE.to_owned()), "{bad:?}");
+        }
+        let view = serde_json::json!({"openers": [
+            {"name": "A", "provider": "codex", "session": "native-a", "pane_id": "w1:p1", "here": false},
+            {"name": "B", "provider": "claude", "here": true},
+        ]});
+        assert!(view_opened_by(&view, "here"));
+        assert!(view_opened_by(&view, "native-a"));
+        assert!(view_opened_by(&view, "w1:p1"));
+        assert!(!view_opened_by(&view, "native-b"));
+        assert!(!view_opened_by(&serde_json::json!({"openers": []}), "here"));
     }
 
     #[test]

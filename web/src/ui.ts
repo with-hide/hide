@@ -41,6 +41,20 @@ export type PendingClose = {
 };
 
 /**
+ * A close that would close a session's Views of unsaved documents, asked
+ * before it is sent (PRD session-files D-14): Save and close, Close without
+ * saving or Cancel. `then` is the close itself, sent once the documents are.
+ */
+export type PendingViewsClose = {
+  workspace: import("./viewLayout").ViewWorkspace;
+  views: { display_id: string; tab_id: string }[];
+  then:
+    | { kind: "close"; close: PendingClose; confirmed: boolean }
+    | { kind: "tree"; close: PendingClose; ids: string[] }
+    | { kind: "archive"; paneId: string; confirmed: boolean };
+};
+
+/**
  * The scope the center shows, picked in the sidebar (PRD S6 D-02): All
  * projects (`main`) lists every Project, `overview` is one Project, and
  * Workspace is the front checkout. It is this page's own navigation, like
@@ -269,6 +283,7 @@ type UiStore = {
   pendingClose: PendingClose | null;
   /** The working session whose Archive session waits for Stop work and archive (PRD session-archive B6). */
   pendingArchive: { paneId: string } | null;
+  pendingViewsClose: PendingViewsClose | null;
   /** The archived session whose delete waits for its confirmation (B28). */
   pendingArchiveDelete: { id: string } | null;
   cycle: Cycle | null;
@@ -349,6 +364,7 @@ type UiStore = {
   clearMoveGiveUpRequest: () => void;
   setPendingClose: (pending: PendingClose | null) => void;
   setPendingArchive: (pending: { paneId: string } | null) => void;
+  setPendingViewsClose: (pending: PendingViewsClose | null) => void;
   setPendingArchiveDelete: (pending: { id: string } | null) => void;
   setCycle: (cycle: Cycle | null) => void;
   setNotice: (notice: Notice | null) => void;
@@ -423,6 +439,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
   moveGiveUpRequested: false,
   pendingClose: null,
   pendingArchive: null,
+  pendingViewsClose: null,
   pendingArchiveDelete: null,
   cycle: null,
   notice: null,
@@ -501,6 +518,7 @@ export const useUiStore = create<UiStore>((set, get) => ({
   clearMoveGiveUpRequest: () => set({ moveGiveUpRequested: false }),
   setPendingClose: (pendingClose) => set({ pendingClose }),
   setPendingArchive: (pendingArchive) => set({ pendingArchive }),
+  setPendingViewsClose: (pendingViewsClose) => set({ pendingViewsClose }),
   setPendingArchiveDelete: (pendingArchiveDelete) => set({ pendingArchiveDelete }),
   setCycle: (cycle) => set({ cycle }),
   setNotice: (notice) => set({ notice }),

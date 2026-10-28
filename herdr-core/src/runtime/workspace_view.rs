@@ -1034,6 +1034,9 @@ impl Runtime {
             }
         }
         self.restore_front_when_ready();
+        // The strip follows the session whose pane has the keyboard before
+        // the editor's active tab is derived from it (PRD session-files).
+        self.settle_view_sessions();
         self.reconcile_view_displays();
         self.sync_agent_selection();
         if let Some(store) = &self.workspace_views {
@@ -1291,7 +1294,13 @@ impl Runtime {
                     .map_or(LaneCallSide::View, |(_, side)| *side),
                 lane_calls: store.lane_calls,
                 resumed: Some(key) == store.resumable.as_ref(),
-                feedback: self.view_feedback_snapshot(key, &layout),
+                // A pane's `N views` lists what its session opened, drawn in
+                // the strip or not (B8).
+                feedback: self.view_feedback_snapshot(
+                    key,
+                    &self.view_layout_projection(key, &view.layout, false),
+                ),
+                session_drafts: self.session_drafts(key, &view.layout),
                 layout,
                 agent_layout: self
                     .arranges_agent_areas(&key.0)

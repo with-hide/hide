@@ -81,8 +81,8 @@ Use [docs/README.md](docs/README.md) to find current guides and distinguish hist
 Run the same required lanes CI runs.
 These are the local equivalents; the remote `verify` result still depends on the actual CI run.
 CI's `plan` job picks the lanes a pull request needs from the paths it changes, and `verify` requires exactly those; a push to main and the nightly run every lane, and [docs/TESTING.md](docs/TESTING.md#which-lanes-a-pull-request-runs) owns the rules.
-Across its lanes CI runs the Rust suite, the unit suites, the invariant checks, the whole web end-to-end (five shards, dealt by recorded durations: `scripts/e2e-shard.py`) and the remote mailbox lane on Linux, where the Herdr schema comparison, the web end-to-end and the mailbox lane use the pinned release's Linux asset; on macOS, the platform hide ships on, only the Electron end-to-end (`desktop e2e`, two shards dealt the same way by the suite's macOS durations, for a change to what the app runs: the desktop host, the web shell or a crate) and the OS contract's macOS leg (for a change to `hide-platform` or `hide-herdr-client`), while the nightly runs the web end-to-end, the remote mailbox lane and the rest of the OS contract there; and on Windows `windows check` (compile, daemon and unit suites), `windows e2e` (the browser `@platform` tests) and `windows desktop` (the Electron app's `@platform` tests).
-`.github/workflows/pr.yml` says why; `nightly.yml` configures the `@platform` web tests on macOS and Windows, the full desktop suite on macOS, the desktop `@platform` tests on Linux and Windows, the remote mailbox lane on macOS, the performance lane on macOS and package checks on all three, and calls `verify` with every lane, where a test fails the nightly only when it fails its retry too.
+Across its lanes CI runs the Rust suite, the unit suites, the invariant checks, the whole web end-to-end (six shards, dealt by recorded durations: `scripts/e2e-shard.py`) and the remote mailbox lane on Linux, where the Herdr schema comparison, the web end-to-end and the mailbox lane use the pinned release's Linux asset; on macOS, the platform hide ships on, only the Electron end-to-end (`desktop e2e`, two shards dealt the same way by the suite's macOS durations, for a change to what the app runs: the desktop host, the web shell or a crate) and the OS contract's macOS leg (for a change to `hide-platform` or `hide-herdr-client`), while the nightly runs the web end-to-end, the remote mailbox lane and the rest of the OS contract there; and on Windows `windows check` (compile, daemon and unit suites), `windows e2e` (the browser `@platform` tests) and `windows desktop` (the Electron app's `@platform` tests).
+`.github/workflows/pr.yml` says why; `nightly.yml` configures the `@platform` web tests on macOS and Windows, the full desktop suite on macOS, the desktop `@platform` tests on Linux and Windows, the remote mailbox lane on macOS, the performance lane on macOS and package checks on all three, and calls `verify` with its other lanes (agy and the journey run directly once per system), where a test fails the nightly only when it fails its retry too.
 Read the executed jobs and their skips before claiming an OS is verified; a configured matrix is not execution evidence.
 
 ```sh
@@ -92,7 +92,7 @@ bash scripts/verify-cargo.sh test                # herdr-core (labels included),
 bash scripts/verify-web.sh                       # web and desktop typecheck, lint, test and build
 bash scripts/verify-cargo.sh build -p hided
 bash scripts/verify-web.sh web build
-bash scripts/verify-web.sh web e2e       # Playwright against a local hided: missing Herdr, and an isolated pinned Herdr (HIDE_E2E_HERDR_BIN, HERDR_BIN_PATH or PATH) for the S2 flows and the S3 Explorer, editor, viewers, attach, watch and reconnect flows (one worker, because each spec starts its own Herdr, hided and browser; CI deals the same tests out to five Linux shards by their recorded durations, `scripts/e2e-shard.py`, docs/TESTING.md "Balancing the e2e shards")
+bash scripts/verify-web.sh web e2e       # Playwright against a local hided: missing Herdr, and an isolated pinned Herdr (HIDE_E2E_HERDR_BIN, HERDR_BIN_PATH or PATH) for the S2 flows and the S3 Explorer, editor, viewers, attach, watch and reconnect flows (one worker, because each spec starts its own Herdr, hided and browser; CI deals the same tests out to six Linux shards by their recorded durations, `scripts/e2e-shard.py`, docs/TESTING.md "Balancing the e2e shards")
 bash scripts/verify-cargo.sh cli
 bash scripts/verify-web.sh desktop e2e            # Playwright `_electron` against a private hided and the pinned Herdr; windows never activate the app except in `@needs-focus` specs, which `--grep-invert @needs-focus` skips; CI deals the macOS suite out to two shards by `desktop/e2e/shard-durations.json`
 MEASURE_SCENARIO=multi HIDE_MEASURE_RUN_DIR=agents/runs/<slug>/measure/<attempt> bash scripts/web-shell-measure/run.sh   # echo and frame gates with four splits and five attached tabs; review-required evidence, not a CI check
@@ -348,14 +348,15 @@ Pushing a tag by hand does not start official publication; the former public `re
 Signing credentials and the maintainer's publication procedure are managed outside this public repository.
 Existing releases and downloads remain available.
 
-The public [unsigned release candidate](docs/BUILD.md#unsigned-release-candidates) prepares Linux and Windows packages and runs the agent journey's CI lanes on an exact verified source.
-It creates no tag or Release, and produces its candidate receipt only after both gates pass.
+The public [unsigned release candidate](docs/BUILD.md#unsigned-release-candidates) prepares Linux and Windows packages and the two Linux device helpers the Mac app's device bundles are made from, and runs the agent journey's CI lanes on an exact main source.
+It may start while that source's own `verify` push run is still running, so the publish, not the candidate, requires that run to have passed.
+It creates no tag or Release, and produces its candidate receipt, which records the helpers' digests, only after its packages, helpers and journey pass.
 It runs the Linux/macOS stand-ins, the Windows form checks and the fake-model checks on all three systems, and signs no agent in: since 2026-10-27, by the operator's decision, a real login is measured only on the Mac, because what only a login proves (the provider's sign-in, quota and billed usage) is the provider's, not Hide's code.
 Public CI keeps the source, installation and update checks; official macOS signing and final publication run privately.
 
 An official release requires:
 
-- The source commit's own `verify` push run on main passed, including its full Rust, web, desktop and package lanes.
+- The source commit's own `verify` push run on main passed, including its full Rust, web, desktop and package lanes; the publish checks this run, which the candidate's receipt names.
 - The [agent journey](docs/VERIFICATION.md#agent-journey) ran on the source locally on the Mac, the fake model first and then with the agents signed in there ([A release's run on the Mac](docs/VERIFICATION.md#local-mode-macos)), which is a release's only evidence of a real login, and in the public candidate's stand-in and fake-model CI lanes.
   A failed local journey cell stops the release unless the operator explicitly approves and records that exception for this version; every unmeasured cell and its reason is shown in the version approval.
   The public candidate and the source's main `verify` run must succeed; operator approval cannot bypass either failed CI gate.
@@ -363,7 +364,7 @@ An official release requires:
 - The candidate's Linux and Windows installers pass their installation, packaged-app and local-feed update checks.
   The official macOS app and dmg pass Developer ID signing, notarization, mounting and isolated packaged-app checks, including the app expanded from its update zip.
   Those macOS checks do not measure an installed app replacing itself through its updater.
-- The [release asset gate](docs/BUILD.md#release-asset-gate) accepts exactly fifteen files and their matching checksums and update digests.
+- The [release asset gate](docs/BUILD.md#release-asset-gate) accepts exactly eighteen files and their matching checksums and update digests.
 - The operator approves that version after reviewing the evidence and its limits.
 
 The publisher creates the public source tag and adds the verified files to its matching draft without deleting or overwriting assets.

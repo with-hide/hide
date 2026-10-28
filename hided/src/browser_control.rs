@@ -866,6 +866,8 @@ mod tests {
                 selected: true,
                 active_area: true,
                 page: None,
+                openers: Vec::new(),
+                operator: true,
             }]),
         }
     }

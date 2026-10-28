@@ -1805,6 +1805,8 @@ mod tests {
             selected: true,
             active_area: true,
             page: None,
+            openers: Vec::new(),
+            operator: true,
         }];
         // The daemon's relay answer, as the CLI reads it.
         let facts = crate::server::relay_facts(&views, "browser-1").unwrap();

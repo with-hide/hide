@@ -61,8 +61,15 @@ if (( $# > 0 )); then
             exec pnpm --dir desktop exec install-electron --no
             ;;
         package)
-            [[ "$package" == desktop && $# == 0 ]] || { printf 'package requires desktop and no arguments\n' >&2; exit 2; }
-            exec pnpm --dir desktop package
+            # `compile` and `assemble` split one package in two (package.yml's
+            # macOS lane): the release binaries, then the app from them. The
+            # host's own build is part of the assembly.
+            [[ "$package" == desktop && ( $# == 0 || ( $# == 1 && ( "$1" == compile || "$1" == assemble ) ) ) ]] \
+                || { printf 'package requires desktop and nothing, compile or assemble\n' >&2; exit 2; }
+            if [[ "${1:-}" == compile ]]; then
+                exec pnpm --dir desktop exec node scripts/package.mjs compile
+            fi
+            exec pnpm --dir desktop package "$@"
             ;;
         *) printf 'unknown verification action: %s\n' "$action" >&2; exit 2 ;;
     esac

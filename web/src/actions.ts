@@ -79,7 +79,7 @@ import { homeOpening } from "./hideAiOrigin";
 import { agentsByPane, allAgents as allPaneAgents } from "./paneAgents";
 import { archiveWorking } from "./archive";
 import { useShellStore } from "./store";
-import { useUiStore, type MainView, type OverviewPlace, type PendingClose } from "./ui";
+import { useUiStore, type MainView, type OverviewPlace, type PendingClose, type PendingViewsClose } from "./ui";
 import { browserClipboard, type Clipboard, type ClipboardContent } from "./clipboard";
 import type { DispatchFn } from "./ws";
 import { closeShortcutPolicy, drawnViews, keyboardCommandOwner, keyboardInputRevision, keyboardOwner, newTabPolicy } from "./viewFocus";
@@ -347,7 +347,44 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
   /** Every current agent row, this machine's and each connected device's, as the lists draw them. */
   const everyAgent = (): AgentRow[] => allAgents(rest()?.status?.remote, useShellStore.getState().agents, rest()?.navigator?.agent_scope, rest()?.navigator?.devices).map((row) => row.agent);
 
+  /**
+   * The session Views of unsaved documents a close of `paneIds` would close
+   * with them, as the core listed them for the Workspace in front (PRD
+   * session-files D-14); null when there are none.
+   */
+  const draftsClosingWith = (paneIds: string[]) => {
+    const view = workspaceViewOf(rest());
+    const views = (view?.session_drafts ?? []).filter((row) => paneIds.includes(row.pane_id)).flatMap((row) => row.views);
+    return view && views.length > 0 ? { workspace: { device_id: view.device_id, path: view.path }, views } : null;
+  };
+
+  /** Sends a close now, or first asks about the unsaved documents of the session Views it closes. */
+  const closeAfterDrafts = (paneIds: string[], then: PendingViewsClose["then"]) => {
+    const drafts = draftsClosingWith(paneIds);
+    if (drafts) return ui().setPendingViewsClose({ ...drafts, then });
+    runClose(then);
+  };
+
+  const runClose = (then: PendingViewsClose["then"]) => {
+    if (then.kind === "close") return sendCloseNow(then.close.kind, then.close.id, then.close.targetId, then.confirmed);
+    if (then.kind === "archive") return void dispatch({ schema_version: 2, kind: "archive_session", payload: { pane_id: then.paneId, confirmed: then.confirmed } });
+    dispatch({
+      schema_version: 2,
+      kind: "close_tree",
+      payload: {
+        target: then.close.kind === "pane" ? { kind: "pane", pane_id: then.close.id } : { kind: "tab", tab_id: then.close.id },
+        pane_ids: then.ids,
+        confirmed: true,
+      },
+    });
+  };
+
   const sendClose = (kind: "pane" | "tab", id: string, targetId: string | null, confirmed: boolean) => {
+    const panes = closeTarget({ kind, id, targetId })?.panes.map((pane) => pane.id) ?? [];
+    closeAfterDrafts(panes, { kind: "close", close: { kind, id, targetId }, confirmed });
+  };
+
+  const sendCloseNow = (kind: "pane" | "tab", id: string, targetId: string | null, confirmed: boolean) => {
     if (targetId) {
       sendRemote(targetId, kind === "pane" ? { action: "close_pane", pane_id: id, confirmed } : { action: "close_tab", tab_id: id, confirmed });
       return;
@@ -1157,14 +1194,14 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const byPane = agentsByPane(allPaneAgents(useShellStore.getState().agents, rest()?.status?.remote));
       const root = byPane.get(paneId);
       if (root && archiveWorking(root, byPane).length > 0) return ui().setPendingArchive({ paneId });
-      dispatch({ schema_version: 2, kind: "archive_session", payload: { pane_id: paneId, confirmed: false } });
+      closeAfterDrafts([paneId], { kind: "archive", paneId, confirmed: false });
     },
     /** 작업 멈추고 보관: the confirmation the working session asked for (B6). */
     confirmArchive() {
       const pending = ui().pendingArchive;
       if (!pending) return;
       ui().setPendingArchive(null);
-      dispatch({ schema_version: 2, kind: "archive_session", payload: { pane_id: pending.paneId, confirmed: true } });
+      closeAfterDrafts([pending.paneId], { kind: "archive", paneId: pending.paneId, confirmed: true });
     },
     cancelArchive() {
       ui().setPendingArchive(null);
@@ -2473,15 +2510,50 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       const pending = ui().pendingClose;
       if (!pending) return;
       ui().setPendingClose(null);
-      dispatch({
-        schema_version: 2,
-        kind: "close_tree",
-        payload: {
-          target: pending.kind === "pane" ? { kind: "pane", pane_id: pending.id } : { kind: "tab", tab_id: pending.id },
-          pane_ids: ids,
-          confirmed: true,
-        },
-      });
+      const target = closeTarget(pending)?.panes.map((pane) => pane.id) ?? [];
+      closeAfterDrafts([...target, ...ids], { kind: "tree", close: pending, ids });
+    },
+
+    /**
+     * Save and close (PRD session-files D-14): each unsaved document the
+     * closing session's Views alone show is saved and its View closed, then
+     * the close goes. One this page holds no text for stays open, as the
+     * operator's View, for the operator to settle.
+     */
+    saveViewsAndClose() {
+      const pending = ui().pendingViewsClose;
+      if (!pending) return;
+      ui().setPendingViewsClose(null);
+      const state = useShellStore.getState();
+      for (const view of pending.views) {
+        const tab = editorTabFor(state.editor, view.tab_id);
+        if (!tab) continue;
+        const document = state.documents[tab.id] ?? null;
+        const carries = documentCloseCarries({ draft: latestDraft(tab.id), document, dirty: tab.dirty });
+        if (carries.kind !== "save") {
+          diagnostic(`session close: ${tab.path} has unsaved work this page does not hold; its view stays open`);
+          continue;
+        }
+        const save = { tab_id: tab.id, path: tab.path, contents_utf8: carries.contents };
+        watchDocumentClose(tab, { workspace: pending.workspace, displayId: view.display_id }, save, document);
+        dispatch({ schema_version: 2, kind: "view_layout", payload: viewLayoutPayload(pending.workspace, { action: "close", display_id: view.display_id, pending_save: save }) });
+      }
+      runClose(pending.then);
+    },
+
+    /** Close without saving: the session's Views of unsaved documents close with their text dropped, then the close goes. */
+    closeViewsWithoutSaving() {
+      const pending = ui().pendingViewsClose;
+      if (!pending) return;
+      ui().setPendingViewsClose(null);
+      for (const view of pending.views) {
+        dispatch({ schema_version: 2, kind: "view_layout", payload: viewLayoutPayload(pending.workspace, { action: "close", display_id: view.display_id, discard: true }) });
+      }
+      runClose(pending.then);
+    },
+
+    cancelViewsClose() {
+      ui().setPendingViewsClose(null);
     },
 
     /** Every current agent row the close lists read, this machine's and each connected device's. */
