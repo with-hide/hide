@@ -24,6 +24,11 @@ on:
         description: Positive safe integer used by every package of this candidate.
         required: true
         type: string
+      macos_runner:
+        description: Where the Mac binaries compile; hosted is GitHub's macos-15, for when the Mac mini does not answer.
+        type: choice
+        options: [mini, hosted]
+        default: mini
 
 permissions:
   contents: read
@@ -84,6 +89,56 @@ jobs:
       include-macos: false
       macos-signing: adhoc
 
+  # The Mac release binaries the private publisher assembles, signs and
+  # notarizes (docs/BUILD.md, The candidate's Mac build). The Mac mini runs
+  # them under an account of its own, and its job-started hook refuses every
+  # job but this workflow's dispatched on main, so no pull request, fork or
+  # branch reaches it; nothing else names its label. Either runner builds the
+  # same binaries, which the receipt checks the same way.
+  macos-binaries:
+    name: compile (macos)
+    needs: validate
+    runs-on: ${{ inputs.macos_runner == 'hosted' && fromJSON('["macos-15"]') || fromJSON('["self-hosted","macOS","ARM64","hide-candidate"]') }}
+    timeout-minutes: 60
+    env:
+      HIDE_POSTHOG_PROJECT_TOKEN: ${{ vars.HIDE_POSTHOG_PROJECT_TOKEN }}
+      HIDE_VERSION: ${{ inputs.tag }}
+      HIDE_BUILD_ORDER: ${{ inputs.build_order }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.public_sha }}
+          persist-credentials: false
+      # Node first: the Mac mini's account has no Node of its own, and
+      # pnpm/action-setup installs pnpm with npm.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+          # pnpm keeps its store beside itself (PNPM_HOME), so both stay in
+          # the work folder the Mac mini empties after every job.
+          dest: ${{ runner.tool_cache }}/setup-pnpm
+      - name: Install dependencies
+        timeout-minutes: 5
+        run: |
+          echo "pnpm store: $(pnpm store path)"
+          bash scripts/verify-web.sh install
+      - name: Build the web shell and the release binaries
+        timeout-minutes: 50
+        run: bash scripts/verify-web.sh desktop package compile
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hide-macos-release-binaries
+          path: |
+            target/release/hided
+            target/release/hide
+            target/release/hide-agent-hooks
+            desktop/out/release-binaries.json
+          if-no-files-found: error
+          retention-days: 7
+
   agent-journey:
     needs: validate
     uses: ./.github/workflows/agent-journey.yml
@@ -95,7 +150,7 @@ jobs:
       fake: true
 
   receipt:
-    needs: [validate, packages, agent-journey]
+    needs: [validate, packages, macos-binaries, agent-journey]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -117,12 +172,17 @@ jobs:
           name: hide-device-helper-linux-aarch64
           path: agents/runs/release-candidate/device-helpers/linux-aarch64
           digest-mismatch: error
-      - name: Record the successful candidate and its device helpers
+      - uses: actions/download-artifact@v8
+        with:
+          name: hide-macos-release-binaries
+          path: agents/runs/release-candidate/macos-binaries
+          digest-mismatch: error
+      - name: Record the successful candidate, its device helpers and its Mac binaries
         env:
           RECEIPT: ${{ needs.validate.outputs.receipt }}
         run: |
           printf '%s\n' "$RECEIPT" > "$RUNNER_TEMP/source.json"
-          node scripts/release-candidate.mjs device-helpers "$RUNNER_TEMP/source.json" agents/runs/release-candidate/device-helpers > agents/runs/release-candidate/candidate.json
+          node scripts/release-candidate.mjs builds "$RUNNER_TEMP/source.json" agents/runs/release-candidate/device-helpers agents/runs/release-candidate/macos-binaries > agents/runs/release-candidate/candidate.json
           echo 'Signed-in providers: not measured on CI; the release measures them on the Mac. Fixture and fake-model checks passed.' >> "$GITHUB_STEP_SUMMARY"
           echo 'The verify run this receipt names was not awaited; the publish requires that it concluded success.' >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v7

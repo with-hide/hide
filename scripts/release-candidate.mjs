@@ -4,7 +4,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { releaseKind } from "./check-release-assets.mjs";
-import { deviceHelperDigests } from "../desktop/scripts/device-helpers.mjs";
+import { deviceHelperDigests, HELPER_PROGRAMS } from "../desktop/scripts/device-helpers.mjs";
+import { checkReleaseBinaries } from "../desktop/scripts/release-binaries.mjs";
 
 const REPOSITORY = "with-hide/hide";
 const SHA = /^[a-f0-9]{40}$/;
@@ -43,7 +44,7 @@ export function candidateReceipt(inputs, context, verification) {
       + "dispatch while it runs or after it passed, never while it waits behind another main run or after it failed");
   }
   return {
-    schema: 3, repository: REPOSITORY, public_sha: inputs.public_sha, tag: inputs.tag,
+    schema: 4, repository: REPOSITORY, public_sha: inputs.public_sha, tag: inputs.tag,
     build_order: inputs.build_order, verification_run_id: inputs.verification_run_id,
     workflow_sha: context.workflowSha, run_id: context.runId, run_attempt: Number(context.runAttempt),
     // No candidate calls a signed-in provider since 2026-10-27 (docs/BUILD.md,
@@ -52,11 +53,25 @@ export function candidateReceipt(inputs, context, verification) {
   };
 }
 
+const identityOf = (receipt) => ({ commit: receipt.public_sha, version: receipt.tag.replace(/^v/, ""), order: receipt.build_order });
+
 /** The receipt with the digests of both device helpers this run built, checked against its identity. */
 export function withDeviceHelpers(receipt, directory) {
-  if (receipt.schema !== 3 || "device_helpers" in receipt) throw new Error("device helpers complete a schema 3 receipt once");
-  const identity = { commit: receipt.public_sha, version: receipt.tag.replace(/^v/, ""), order: receipt.build_order };
-  return { ...receipt, device_helpers: deviceHelperDigests(directory, identity) };
+  if (receipt.schema !== 4 || "device_helpers" in receipt) throw new Error("device helpers complete a schema 4 receipt once");
+  return { ...receipt, device_helpers: deviceHelperDigests(directory, identityOf(receipt)) };
+}
+
+/**
+ * The receipt with the digests of the Mac release binaries this run compiled,
+ * which the private publisher assembles, signs and notarizes without building
+ * them again. `directory` holds the compile artifact as uploaded: the binaries
+ * under target/release and their record under desktop/out.
+ */
+export function withMacosBinaries(receipt, directory) {
+  if (receipt.schema !== 4 || "macos_binaries" in receipt) throw new Error("the Mac binaries complete a schema 4 receipt once");
+  const record = path.join(directory, "desktop", "out", "release-binaries.json");
+  checkReleaseBinaries(record, path.join(directory, "target", "release"), HELPER_PROGRAMS, identityOf(receipt));
+  return { ...receipt, macos_binaries: JSON.parse(fs.readFileSync(record, "utf8")).files };
 }
 
 // Only GitHub's runtime-injected variables are read here. Candidate inputs
@@ -74,10 +89,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.ar
         workflowSha: process.env.GITHUB_WORKFLOW_SHA, runId: process.env.GITHUB_RUN_ID,
         runAttempt: process.env.GITHUB_RUN_ATTEMPT,
       }, verification);
-    } else if (action === "device-helpers" && files.length === 2) {
-      receipt = withDeviceHelpers(JSON.parse(fs.readFileSync(files[0], "utf8")), files[1]);
+    } else if (action === "builds" && files.length === 3) {
+      receipt = withMacosBinaries(withDeviceHelpers(JSON.parse(fs.readFileSync(files[0], "utf8")), files[1]), files[2]);
     } else {
-      throw new Error("usage: node scripts/release-candidate.mjs source verification-run.json | device-helpers receipt.json device-helpers-folder");
+      throw new Error("usage: node scripts/release-candidate.mjs source verification-run.json | builds receipt.json device-helpers-folder macos-binaries-folder");
     }
     console.log(JSON.stringify(receipt));
   } catch (error) {

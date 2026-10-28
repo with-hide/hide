@@ -4,7 +4,8 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { candidateReceipt, withDeviceHelpers } from "../release-candidate.mjs";
+import { candidateReceipt, withDeviceHelpers, withMacosBinaries } from "../release-candidate.mjs";
+import { recordReleaseBinaries } from "../../desktop/scripts/release-binaries.mjs";
 
 // The producer/consumer contract: public dispatch inputs, one receipt,
 // the exact push/main verification it names, never private revision metadata.
@@ -21,7 +22,7 @@ const verification = {
   status: "completed", conclusion: "success", pull_requests: [],
 };
 const receipt = {
-  schema: 3, repository: "with-hide/hide", public_sha: publicSha, tag: "v1.2.3-rc.1",
+  schema: 4, repository: "with-hide/hide", public_sha: publicSha, tag: "v1.2.3-rc.1",
   build_order: "501", verification_run_id: "71", workflow_sha: workflowSha, run_id: "81", run_attempt: 2,
   live_agents: false,
 };
@@ -116,9 +117,57 @@ test("helpers of another source, version or order, or a changed helper, complete
   assert.throws(() => withDeviceHelpers(receipt, root));
 });
 
-test("device helpers complete only a fresh schema 3 receipt", (t) => {
+test("device helpers complete only a fresh schema 4 receipt", (t) => {
   const { root } = helperArtifacts(t, helperIdentity);
   const complete = withDeviceHelpers(receipt, root);
   assert.throws(() => withDeviceHelpers(complete, root), /once/);
-  assert.throws(() => withDeviceHelpers({ ...receipt, schema: 2 }, root), /once/);
+  assert.throws(() => withDeviceHelpers({ ...receipt, schema: 3 }, root), /once/);
+});
+
+// The compile artifact as release-candidate.yml uploads it, recorded by the
+// packager's own `recordReleaseBinaries`.
+function macosArtifact(t, identity) {
+  fs.mkdirSync(runs, { recursive: true });
+  const root = fs.mkdtempSync(path.join(runs, "macos-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const binaries = path.join(root, "target", "release");
+  fs.mkdirSync(binaries, { recursive: true });
+  fs.mkdirSync(path.join(root, "desktop", "out"), { recursive: true });
+  const names = ["hided", "hide", "hide-agent-hooks"];
+  for (const name of names) fs.writeFileSync(path.join(binaries, name), `mach-o ${name}`);
+  recordReleaseBinaries(path.join(root, "desktop", "out", "release-binaries.json"), binaries, names, identity);
+  const digests = Object.fromEntries(names.map((name) => [name, createHash("sha256").update(`mach-o ${name}`).digest("hex")]));
+  return { root, binaries, digests };
+}
+
+test("the receipt records the digests of the Mac binaries compiled for its source, version and order", (t) => {
+  const { root, digests } = macosArtifact(t, helperIdentity);
+  assert.deepEqual(withMacosBinaries(receipt, root), { ...receipt, macos_binaries: digests });
+});
+
+test("Mac binaries of another source, version or order, or a changed, missing or linked one, complete no receipt", (t) => {
+  for (const patch of [{ commit: workflowSha }, { version: "1.2.3" }, { order: "500" }]) {
+    const { root } = macosArtifact(t, { ...helperIdentity, ...patch });
+    assert.throws(() => withMacosBinaries(receipt, root), /built for/);
+  }
+  const changed = macosArtifact(t, helperIdentity);
+  fs.appendFileSync(path.join(changed.binaries, "hided"), "changed");
+  assert.throws(() => withMacosBinaries(receipt, changed.root), /differs/);
+  const missing = macosArtifact(t, helperIdentity);
+  fs.rmSync(path.join(missing.binaries, "hide-agent-hooks"));
+  assert.throws(() => withMacosBinaries(receipt, missing.root));
+  const linked = macosArtifact(t, helperIdentity);
+  fs.renameSync(path.join(linked.binaries, "hide"), path.join(linked.root, "hide"));
+  fs.symlinkSync(path.join(linked.root, "hide"), path.join(linked.binaries, "hide"));
+  assert.throws(() => withMacosBinaries(receipt, linked.root), /differs/);
+  assert.throws(() => withMacosBinaries(receipt, path.join(linked.root, "nothing")));
+});
+
+test("Mac binaries complete only a fresh schema 4 receipt, beside its device helpers", (t) => {
+  const { root, digests } = macosArtifact(t, helperIdentity);
+  const helpers = helperArtifacts(t, helperIdentity);
+  const complete = withMacosBinaries(withDeviceHelpers(receipt, helpers.root), root);
+  assert.deepEqual(complete, { ...receipt, device_helpers: helpers.digests, macos_binaries: digests });
+  assert.throws(() => withMacosBinaries(complete, root), /once/);
+  assert.throws(() => withMacosBinaries({ ...receipt, schema: 3 }, root), /once/);
 });
