@@ -168,7 +168,7 @@ An open of a View that is already looked at in the same event is never unseen, s
 The View's last opener's row carries it (D-19): an operator-owned row with an unseen View is in Needs You, whatever its own axes say, and draws the `look` mark (The mark).
 Seeing the View does not read the pane, and reading the pane does not see the View (D-20); when the last unseen View is seen or closed the row goes back to the group its own axes give it (B4, B13).
 The row carries `look` on the wire: the newest unseen View's id and name, how many there are, the checkout it sits in and the group the row would be in with nothing to look at.
-Its line is `볼 것 · <newest View>`, with ` 외 N` for the rest (`lineParts` in `web/src/agentRow.ts`); a question, approval, block or native question or plan on the same row takes the mark and the line, which then ends with `볼 것 N` (D-14, D-18).
+Its line is `볼 것 · <newest View>`, ending with ` · 외 N` for the rest, a tail a narrow row never cuts (`lineParts` in `web/src/agentRow.ts`); a question, approval, block or native question or plan on the same row takes the mark and the line, which then ends with `볼 것 N` (D-14, D-18).
 Pressing the row focuses its pane and brings the newest unseen View forward in the same event (`focus_pane` with `reveal_unseen`), which sees it; a device's row focuses its pane on the device and the View through the checkout's focus.
 A pane's `N views` list marks each View the operator has not looked at with the same mark (B10).
 A View to look at is counted with the operator's turns on every badge and in the rail, and sends no phone push, desktop notice or sound: those follow `look.group`, the row's group without it (D-13, B12).
