@@ -483,6 +483,35 @@ fn kit_herdr_socket(named: Option<String>, bridged: Option<&Path>) -> Option<Str
 
 /// Why a node asked for the label lock of no named server refuses: its
 /// pane service has not started, so it serves no Herdr server yet.
+/// Where this machine shows the Windows PC's drives, for `Hello`: none on a
+/// machine that is not a WSL distribution, and none, logged, on one whose
+/// `/etc/wsl.conf` cannot be read or names no usable root, so a pasted
+/// Windows path stays as typed rather than becoming a guess.
+fn windows_drives() -> Option<String> {
+    match hide_platform::host::windows_drives() {
+        Ok(root) => Some(root),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::Unsupported
+            ) =>
+        {
+            None
+        }
+        Err(error) => {
+            eprintln!(
+                "{}",
+                serde_json::json!({
+                    "component": "node",
+                    "kind": "windows_drives.unreadable",
+                    "error": error.to_string(),
+                })
+            );
+            None
+        }
+    }
+}
+
 fn no_labeled_server() -> HostError {
     HostError::new(
         ErrorCode::Unsupported,
@@ -971,7 +1000,7 @@ pub fn handle_with_progress(
                 },
             },
             reader_features: Some(hide_node_link::sessions::ReaderFeatures::implemented()),
-            windows_drives: hide_platform::host::windows_drives().ok(),
+            windows_drives: windows_drives(),
         }),
         Call::LabelLock {
             herdr_socket,
