@@ -150,8 +150,12 @@ That covers every child, the availability and model-list probes and the Weekly U
 A backend's config can carry a `search_path` of its own, which is how a test gives a stand-in script an interpreter only that value reaches without starting the developer's login shell (`hide-ai/tests/it/search_path.rs`); a CLI named by file with no `search_path` is run with the process's `PATH`, since nothing searched for it.
 The tests that need a missing CLI name an absolute path that does not exist, because a bare name is looked up on the account's search, which asks the login shell.
 A new agent is one registry entry and one backend; the router, the settings and the core iterate `PROVIDERS` and name no provider.
-The backends run on the core's own node, never inside the core: the core's routers hold a `NodeBackend` per provider (`herdr-core/src/ai.rs`), which carries each probe, model list, request and measurement to the node as a call and reads the answer back.
-The node keeps one real backend per core instance in a registry capped at 64 (a few routers, each with one backend per registered provider) (`hide-host/src/ai.rs`), refuses the next, and drops an instance when the core's `NodeBackend` is dropped, so a router rebuilt for a changed model choice ends the old child.
+The backends run on a node, never inside the core: the core's routers hold a `NodeBackend` per provider (`herdr-core/src/ai.rs`), which carries each probe, model list, request and measurement to the node of the machine the agent runs on as a call and reads the answer back.
+That machine is the core's own unless the operator placed the agent on a connected device (`AiMachines`, PRD wsl-device B11), whose node answers the same calls with the device's own logins, so no credential is copied between machines and usage counts on the device's account.
+A device's link is looked up each time its agent is asked (`Runtime::linked_node`, which never wakes a device): a device that is not connected answers `Unavailable` and is not woken, and once it connects again the same backend asks it there with nothing rebuilt (B13).
+The release goes to the link the backend last asked, without a lookup, because a router can be dropped under the runtime's lock.
+The node keeps one real backend per core instance in a registry capped at 64 per link (a few routers, each with one backend per registered provider) (`hide-host/src/ai.rs`), refuses the next, and drops an instance when the core's `NodeBackend` is dropped or the link that asked for it ends, so a router rebuilt for a changed model choice ends the old child.
+GitHub reads stay on the core's own node: a device still refuses `Gh` and the usage reads (PRD wsl-device D-18).
 A request reports progress once a second while it runs, and a cancel in the core stops the node's request through that report.
 
 - `codex`: `codex app-server --listen stdio://`, the official JSON-RPC surface of the Codex CLI, driven with an ephemeral read-only thread, the feature's system prompt as the base instructions, every optional feature disabled, and the feature's output schema attached to the turn as `outputSchema` in `Schema` mode or named in the base instructions in `PlainJson` mode (see the answer modes below).
@@ -348,7 +352,7 @@ The core reads the file once, when this Mac's session-sync coordinator starts, a
 The core's label analyzer reads the runtime's choice before each analysis, so a choice made in Settings reaches the next label without restarting anything, and an analysis already running finishes on the choice it started with.
 A changed choice rebuilds the router, because a backend is constructed with its model; an unchanged one leaves the router and its sticky failover state alone.
 
-The file names a provider, a model per provider, whether Hide AI is on, an ordered fallback list, and whether agent labels are made at all:
+The file names a provider, a model per provider, whether Hide AI is on, an ordered fallback list, the device each agent placed on one runs on, and whether agent labels are made at all:
 
 ```json
 {
@@ -362,6 +366,11 @@ The file names a provider, a model per provider, whether Hide AI is on, an order
 ```
 
 `usage_limit` is a percent from 1 to 100 or `"none"`, written only when it is not the default 90; a file without it reads 90, and any other value makes the file malformed, which is reported and not guessed around.
+
+`machines` maps an agent's id to the connected device it runs on, such as `{ "claude": "wsl-ubuntu" }` (PRD wsl-device B11); an agent with no entry runs on the core's own machine, and the field is written only when an agent runs on a device, so an older file runs everything on the core's machine.
+One agent runs on one machine, so Runs on and a fallback entry never name the same agent twice; `set_provider` keeps the place of an agent that moves from the fallback list to Runs on, and `place` sets or clears it.
+`routes_like` compares the places too, so moving an agent to another machine rebuilds a held router.
+An agent placed on a device is left out of the move's Hide AI check (`hide_ai_asks`), since it answers on the device's logins wherever the core runs.
 
 `enabled` is the Settings › Hide AI switch and is on when the field is absent.
 Off, `AiRouter::execute` returns `AiError::Disabled` at once and asks no provider anything, and a feature treats it as nothing to do, never as a failure.
@@ -379,6 +388,7 @@ The defaults are the registry's own constants: `claude` with `sonnet`, `codex` w
 `provider` is in the file only once it was chosen (`AiSettings.chosen`), so a file that only turned a switch makes no choice for the operator, and a settings value with nothing chosen asks no model anything (`router_config().enabled` is `enabled && chosen`).
 `AiSettings::provider_for_first_run(availability)` is the one rule for what a first run chooses: the first provider in the fixed order that is `Ready`, and none when none is, which leaves the feature off until the operator chooses.
 The core applies it, not the settings crate: while nothing is chosen and Use Hide AI is on, the coordinator asks only the agents that are switched on in this Mac's kit and installed whether they are signed in (`AiRequest.selecting`, availability only, no model list, every five minutes while the tab is closed and at once while it is open), and the first of the fixed order that answers `ready` is chosen with its default model and the choice is stored (D-18, D-27).
+Each connected device's switched-on agents are asked the same way (`AiRequest.devices`), and only once every agent switched on here has answered and none is signed in is the first agent signed in on a device chosen, in the devices' registered order, and stored with its device (PRD wsl-device B11).
 A stored choice is never replaced by that rule, an agent that is not switched on in the kit is never chosen by it, and with none signed in nothing is chosen and Hide features run without a model; signing in later is noticed without any setting being touched (B45, B47, B48).
 A file Hide wrote before this default changed names `haiku` for claude like any other choice, so it keeps haiku until the operator picks a model in Settings.
 A file that is not there means nobody has chosen, so the defaults stand and nothing is reported.
@@ -391,9 +401,10 @@ A session with no home directory to write to reports that on the tab for the sam
 Choosing a provider changes which provider is asked first and nothing else.
 Every feature, Project Memory included, asks the chosen provider and then the fallback list under the policy below, while the router's retry, cooldown, cancellation, duplicate-suppression, process, and budget rules apply to all of them.
 
-The Hide AI tab reads `status.background_ai`, one section the core publishes (`herdr-core/src/model.rs`, `BackgroundAiSnapshot`): `enabled`, `provider` (null until one is chosen), `chosen`, `agent_summary`, one `providers` row per registered agent in the fixed order (`agent` is the shared agent adapter id; `state` one of `ready`, `needs_login`, `usage_limited`, `not_installed`, `unavailable`, `unsupported`, `unread`, `installed`, `login_checked`, `selectable`, `retry_at_ms`, `model`, `models`, `models_fixed`, `cli_default`, and `models_unavailable_reason`), the ordered `fallback` list, and `refusal`.
+The Hide AI tab reads `status.background_ai`, one section the core publishes (`herdr-core/src/model.rs`, `BackgroundAiSnapshot`): `enabled`, `provider` (null until one is chosen) and its `device` (null on the core's own machine), `chosen`, `agent_summary`, one `providers` row per registered agent in the fixed order (`agent` is the shared agent adapter id; `state` one of `ready`, `needs_login`, `usage_limited`, `not_installed`, `unavailable`, `unsupported`, `unread`, `installed`, `login_checked`, `selectable`, `retry_at_ms`, `model`, `models`, `models_fixed`, `cli_default`, and `models_unavailable_reason`), then the rows of each connected device's agents with its `device_id`, the ordered `fallback` list with each entry's `device`, and `refusal`.
+An agent placed on a device that is not connected keeps a row whose state is `unavailable` with the code `device_not_connected`, and is not selectable until its device is back; a device's rows carry no weekly figure, since the usage reads are this machine's accounts.
 Every reason in it is a code the shell turns into words, never prose, an account, a path or a conversation, and the cause of a failed model-list read stays in the diagnostic log (B68) as an `ai.models.unavailable` record with the agent and a `reason=` code, written when the reason first appears or changes and not on every read.
-`ai_settings` carries `enabled`, `provider` (Runs on), `model` (for Runs on, or for an agent in the fallback list, which keeps its own), `fallback_add`, `fallback_remove`, `agent_summary` and the two observation hints; the core refuses an agent that the last read did not find selectable (`ai_settings.provider_not_selectable`), an unknown one (`ai_settings.unknown_provider`), the Runs on agent as its own fallback (`ai_settings.fallback_is_runs_on`) and a listed one twice (`ai_settings.fallback_listed`).
+`ai_settings` carries `enabled`, `provider` (Runs on), `model` (for Runs on, or for an agent in the fallback list, which keeps its own), `fallback_add`, `fallback_remove`, `device` (the connected device the `provider` or `fallback_add` agent runs on, absent or null for the core's own machine), `agent_summary` and the two observation hints; the core refuses an agent that the last read did not find selectable on that machine, or on a device that is not connected (`ai_settings.provider_not_selectable`), an unknown one (`ai_settings.unknown_provider`), a device Hide does not know (`ai_settings.unknown_device`), the Runs on agent as its own fallback (`ai_settings.fallback_is_runs_on`) and a listed one twice (`ai_settings.fallback_listed`).
 `refusal` is how the label analyzer last found the chosen agent (`AiStanding`, written on the analyzer's thread after each job): its reason class, the end of a usage limit when the agent said, and the listed agent a request made now would run on (`using`), or none when no listed agent can answer, which is the Runs on row's reason (B41, B42).
 It is absent while the chosen agent answers and while Hide AI is off.
 
@@ -690,6 +701,7 @@ The routers for what the operator waits on (worktree names, issue intake review)
 `statuses()` and `availability()` stay ungated, so Settings still lists a past-limit agent as signed in; only `active` in `provider_state()` skips it.
 
 The figures are the weekly rows the toolbar's usage read already produces (`usage` through `weekly_reading()`, the seven-day account window with a percent and a future reset); no new read command exists.
+Those rows are the core machine's accounts, so an agent placed on a device has no figure and is never held back by them: its usage counts on the device's account (PRD wsl-device B12).
 With no window attached the same reader also runs while a limit is set and Hide AI is on and either the order is paused (only a fresh figure can lift it) or an agent worked in the last 30 minutes, so labels are not judged by a figure that is days old; that is at most one read per agent every five minutes and none while nothing runs.
 Until the first read lands (one second after launch) an agent has no figure and is not limited.
 An agent with no figure, or whose reading belongs to a window that has already reset, is never past the limit, and No limit judges nothing.

@@ -2020,6 +2020,8 @@ export type CoreDiagnostic = { kind: string; message: string; occurred_at: numbe
 
 export type AiProvider = {
   id: string;
+  /** The connected device this row's agent runs on; null or absent is the core's own machine. */
+  device_id?: string | null;
   label: string;
   /** The id the logos key the same agent by: the install kit's adapter id (`claude-code`, `codex`, `grok`, `opencode`, `pi`, `antigravity`). */
   agent: string;
@@ -2055,7 +2057,12 @@ export type AiProvider = {
 export type AiWeekly = { used_percent: number; resets_at_ms: number | null };
 
 /** The agents tried, in this order, when Runs on cannot answer. */
-export type AiFallback = { provider: string; model: string };
+export type AiFallback = {
+  provider: string;
+  /** The connected device it runs on; null or absent is the core's own machine. */
+  device?: string | null;
+  model: string;
+};
 
 /** Why Runs on is not answering, and who answers instead; absent while it answers. */
 export type AiRefusal = {
@@ -2094,6 +2101,8 @@ export type BackgroundAi = {
   enabled?: boolean;
   /** Runs on; null when nobody chose and none can be chosen yet. */
   provider: string | null;
+  /** The connected device Runs on's agent runs on; null or absent is the core's own machine. */
+  device?: string | null;
   chosen: boolean;
   /** The `에이전트 요약` switch; absent from an older daemon, which always summarizes. */
   agent_summary?: boolean;

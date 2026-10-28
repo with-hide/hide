@@ -249,6 +249,25 @@ it("sends the limit as a percent or none, one event for one choice", () => {
   ]);
 });
 
+// PRD wsl-device B11, B13: a device's agent is a Runs on row named with its device, chosen with its device,
+// and while its device is away it keeps its place with the existing unavailable state.
+it("names a device's agent with its device, chooses it with its device, and shows it unavailable while the device is away", async () => {
+  const wsl = [{ id: "wsl-ubuntu", kind: "remote", label: "WSL Ubuntu" }];
+  const rows = [provider("claude", "Claude Code"), provider("codex", "Codex"), provider("claude", "Claude Code", { device_id: "wsl-ubuntu" })];
+  const listed = await mount(snapshot({ providers: rows }, [], wsl));
+  expect(listed.q("[data-ai-provider]")?.textContent).toBe("Claude Code");
+  listed.events.length = 0;
+  createActions((event) => { listed.events.push(event); return true; }).chooseAi("claude", undefined, "wsl-ubuntu");
+  expect(listed.events).toEqual([{ schema_version: 2, kind: "ai_settings", payload: { provider: "claude", device: "wsl-ubuntu" } }]);
+  await listed.unmount();
+
+  const away = rows.map((row) => (row.device_id ? { ...row, state: "unavailable", message: "device_not_connected", selectable: false } : row));
+  const chosen = await mount(snapshot({ device: "wsl-ubuntu", providers: away }, [], wsl));
+  expect(chosen.q("[data-ai-provider]")?.textContent).toBe("Claude Code · WSL Ubuntu");
+  expect(chosen.q("[data-ai-state='claude:unavailable']")?.textContent).toContain("Unavailable");
+  await chosen.unmount();
+});
+
 // The explanation follows the configured list, including its empty state (issue 1035).
 it("shows the waiting guidance only for an empty fallback list", async () => {
   for (const fallback of [[], [{ provider: "codex", model: "" }]]) {
