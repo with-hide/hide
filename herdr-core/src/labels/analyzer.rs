@@ -366,6 +366,9 @@ mod tests {
     /// while the device is not connected.
     type Slot = Arc<Mutex<Option<crate::ai::DeviceLink>>>;
 
+    /// The line of the label a device's agent makes.
+    const DEVICE_LINE: &str = "Made on the device";
+
     /// A device's node that answers its agent as signed in and counts the
     /// requests it ran.
     #[derive(Default)]
@@ -413,7 +416,12 @@ mod tests {
                         .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     serde_json::to_value(hide_node_link::ai::Logged {
                         value: Ok::<AiResponse, AiError>(AiResponse {
-                            value: serde_json::json!({}),
+                            value: serde_json::json!({
+                                "goal": "Device label", "goal_update": "replace",
+                                "closed_result": "", "requests": [], "line": DEVICE_LINE,
+                                "end": "done",
+                                "work": {"missed": [], "resolved": [], "artifacts": []},
+                            }),
                             usage: hide_ai::AiUsage::default(),
                         }),
                         log: Vec::new(),
@@ -449,8 +457,9 @@ mod tests {
         (analyzer, own)
     }
 
-    /// Runs one label job of `analyzer` to its outcome.
-    fn run_job(analyzer: &LabelAnalyzer) {
+    /// Runs one label job of `analyzer` and answers the agent that made
+    /// its label and the label's line, or why none was made.
+    fn run_job(analyzer: &LabelAnalyzer) -> Result<(ProviderId, String), String> {
         let (done, outcome) = channel();
         analyzer.submit(AnalysisJob {
             phase: AnalysisPhase::TurnEnd,
@@ -462,12 +471,16 @@ mod tests {
                 "context",
             ),
             done: Box::new(move |result| {
-                let _ = done.send(result.is_err());
+                let _ = done.send(
+                    result
+                        .map(|(provider, analysis)| (provider, analysis.line))
+                        .map_err(|failure| format!("{failure:?}")),
+                );
             }),
         });
         outcome
             .recv_timeout(Duration::from_secs(30))
-            .expect("the job is answered");
+            .expect("the job is answered")
     }
 
     /// PRD wsl-device B13: a label job that found the device its agent runs
@@ -479,11 +492,15 @@ mod tests {
     fn a_label_job_runs_on_its_device_at_the_next_job_once_the_device_is_back() {
         let slot = Slot::default();
         let (analyzer, own) = device_analyzer(&slot);
-        run_job(&analyzer);
+        assert!(run_job(&analyzer).is_err(), "away: no label is made");
         let device = Arc::new(DeviceNode::default());
         device.connect(&slot, 1);
-        run_job(&analyzer);
-        assert_eq!(device.executed(), 1, "the next job ran on the device");
+        assert_eq!(
+            run_job(&analyzer),
+            Ok((ProviderId::CODEX, DEVICE_LINE.to_owned())),
+            "the next job's label is made on the device"
+        );
+        assert_eq!(device.executed(), 1);
         assert_eq!(own.executed(), 0, "nothing ran on the core's machine");
     }
 
@@ -498,13 +515,17 @@ mod tests {
         *lock(&first.drops) = Some(Arc::clone(&slot));
         first.connect(&slot, 1);
         let (analyzer, own) = device_analyzer(&slot);
-        run_job(&analyzer);
+        assert!(run_job(&analyzer).is_err(), "the dropped job made no label");
         assert!(lock(&slot).is_none(), "the link dropped during the job");
         assert_eq!(first.executed(), 0);
         let next = Arc::new(DeviceNode::default());
         next.connect(&slot, 2);
-        run_job(&analyzer);
-        assert_eq!(next.executed(), 1, "the next job ran on the new link");
+        assert_eq!(
+            run_job(&analyzer),
+            Ok((ProviderId::CODEX, DEVICE_LINE.to_owned())),
+            "the next job's label is made on the new link"
+        );
+        assert_eq!(next.executed(), 1);
         assert_eq!(own.executed(), 0, "nothing ran on the core's machine");
     }
 
