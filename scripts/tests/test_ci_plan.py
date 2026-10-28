@@ -785,7 +785,7 @@ def runner_jobs(block):
         return len([system for system in systems if system != "windows"]) + ("windows" in systems)
     if "uses: ./.github/workflows/package.yml" in block:
         package = (ROOT / ".github/workflows/package.yml").read_text()
-        return len(re.findall(r"\n          - system: ", package)) + ("include-macos: true" in block)
+        return len(re.findall(r"\n    name: package \((?:linux|windows)\)\n", package)) + ("include-macos: true" in block)
     return 1
 
 

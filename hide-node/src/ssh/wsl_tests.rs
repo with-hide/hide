@@ -61,7 +61,6 @@ fn distribution() -> Distribution {
         name: "Ubuntu".to_owned(),
         id: "25622596-db24-4e3a-9a3e-6b3f0d2e1c11".to_owned(),
         wsl_version: 2,
-        default_uid: 1000,
         installed: true,
         first_run_pending: false,
         default: true,

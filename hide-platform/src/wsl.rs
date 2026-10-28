@@ -3,12 +3,12 @@
 //!
 //! What a distribution is comes from WSL's own per-account registry
 //! (`HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss`): its name, the id
-//! WSL gave it when it was installed, whether it runs as WSL 2, its default
-//! Linux user and whether its first-run setup has run. Reading it starts no
+//! WSL gave it when it was installed, whether it runs as WSL 2 and whether
+//! its first-run setup has run. Reading it starts no
 //! process, so it can neither hang nor start a distribution that is off.
 //! Which distributions run is `wsl.exe --list --running --quiet`, the one
 //! process this module starts, bounded by its caller's deadline: a slow or
-//! silent `wsl.exe` is a failure, never an empty answer. `wsl.exe` writes
+//! failing `wsl.exe` is a failure, never an empty answer. `wsl.exe` writes
 //! UTF-16 without a byte order mark; [`decode`] reads that and UTF-8 alike.
 //!
 //! Only Windows has these; every other system answers `Unsupported`, except
@@ -25,7 +25,8 @@ use std::time::{Duration, Instant};
 /// a failure (engineering rule 15).
 pub const MAX_LISTING_BYTES: usize = 64 * 1024;
 
-/// The most distributions one account's registry is read for.
+/// The most distributions one account's registry is read for; an account
+/// with more is a failure, never a shorter list (engineering rule 15).
 pub const MAX_DISTRIBUTIONS: usize = 64;
 
 /// One installed distribution, as WSL records it for this account.
@@ -39,8 +40,6 @@ pub struct Distribution {
     pub id: String,
     /// 1 or 2.
     pub wsl_version: u32,
-    /// The Linux user `wsl.exe -d` runs as when no user is named.
-    pub default_uid: u32,
     /// WSL finished installing it: no install, conversion or removal is
     /// under way.
     pub installed: bool,
@@ -181,7 +180,6 @@ pub fn distribution_of(
     key: &str,
     name: Option<String>,
     flags: Option<u32>,
-    default_uid: Option<u32>,
     state: Option<u32>,
     run_oobe: Option<u32>,
     default_key: Option<&str>,
@@ -195,7 +193,6 @@ pub fn distribution_of(
         } else {
             1
         },
-        default_uid: default_uid.unwrap_or(0),
         installed: state == Some(STATE_INSTALLED),
         first_run_pending: run_oobe.unwrap_or(0) != 0,
         default: default_key.and_then(id_of_key).as_deref() == Some(id.as_str()),
@@ -337,9 +334,6 @@ mod sys {
         let default_key = text(root.0, "DefaultDistribution")?;
         let mut found = Vec::new();
         for index in 0u32.. {
-            if index as usize >= super::MAX_DISTRIBUTIONS {
-                break;
-            }
             let mut name = vec![0u16; 256];
             let mut length = name.len() as u32;
             // SAFETY: `name` holds `length` writable units; the class and
@@ -362,6 +356,12 @@ mod sys {
             if status != ERROR_SUCCESS {
                 return Err(io::Error::from_raw_os_error(status as i32));
             }
+            if index as usize >= super::MAX_DISTRIBUTIONS {
+                return Err(io::Error::other(format!(
+                    "this account has more than {} WSL distributions, more than Hide reads",
+                    super::MAX_DISTRIBUTIONS
+                )));
+            }
             let key_name = OsString::from_wide(&name[..length as usize])
                 .to_string_lossy()
                 .into_owned();
@@ -372,7 +372,6 @@ mod sys {
                 &key_name,
                 text(key.0, "DistributionName")?,
                 number(key.0, "Flags")?,
-                number(key.0, "DefaultUid")?,
                 number(key.0, "State")?,
                 number(key.0, "RunOOBE")?,
                 default_key.as_deref(),
@@ -473,7 +472,6 @@ mod tests {
             "{25622596-DB24-4761-8039-E647093F5F7C}",
             Some("Ubuntu-24.04".to_owned()),
             Some(15),
-            Some(0),
             Some(1),
             Some(1),
             Some("{25622596-db24-4761-8039-e647093f5f7c}"),
@@ -485,7 +483,6 @@ mod tests {
                 name: "Ubuntu-24.04".to_owned(),
                 id: "25622596-db24-4761-8039-e647093f5f7c".to_owned(),
                 wsl_version: 2,
-                default_uid: 0,
                 installed: true,
                 first_run_pending: true,
                 default: true,
@@ -495,7 +492,6 @@ mod tests {
             "{00000000-0000-0000-0000-000000000001}",
             Some("Legacy".to_owned()),
             Some(7),
-            Some(1000),
             Some(3),
             None,
             None,
@@ -511,22 +507,12 @@ mod tests {
             (1, false, false, false)
         );
         assert!(
-            distribution_of(
-                "not-an-id",
-                Some("x".to_owned()),
-                None,
-                None,
-                None,
-                None,
-                None
-            )
-            .is_none()
+            distribution_of("not-an-id", Some("x".to_owned()), None, None, None, None).is_none()
         );
         assert!(
             distribution_of(
                 "{00000000-0000-0000-0000-000000000002}",
                 Some("two words".to_owned()),
-                None,
                 None,
                 None,
                 None,

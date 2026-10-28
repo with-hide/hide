@@ -716,19 +716,33 @@ pub(super) fn wsl_device_label(distro: &str) -> String {
 
 /// The device id of the WSL distribution `distro`: `wsl-` and its name in
 /// lowercase, any letter that is not a digit, an ASCII letter or `-` written
-/// as `-`, so the id is one plain word whatever the name.
+/// as `-`, so the id is one plain word whatever the name. A name that
+/// needed such a letter written also carries the first eight hex digits of
+/// its SHA-256, so `우분투` and `데비안`, or `Ubuntu_22.04` and
+/// `Ubuntu-22.04`, are two devices; WSL compares names without case, so
+/// lowercase alone changes nothing.
 pub(super) fn wsl_device_id(distro: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let plain = |c: char| c.is_ascii_alphanumeric() || c == '-';
     let name: String = distro
         .chars()
         .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' {
+            if plain(c) {
                 c.to_ascii_lowercase()
             } else {
                 '-'
             }
         })
         .collect();
-    format!("wsl-{name}")
+    if distro.chars().all(plain) {
+        return format!("wsl-{name}");
+    }
+    let digest = Sha256::digest(distro.as_bytes());
+    let short: String = digest[..4]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("wsl-{name}-{short}")
 }
 
 impl DeviceRefusal {

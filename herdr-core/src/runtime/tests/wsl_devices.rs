@@ -301,6 +301,55 @@ fn the_app_opening_during_an_attempt_without_leave_is_taken_by_the_next() {
     assert_eq!(wakes(&attempts), [Wake::NotAllowed, Wake::Allowed]);
 }
 
+/// B3, D-15: the app opening while the core's own attempt runs is not lost
+/// when that attempt fails without saying whether the distribution runs:
+/// the retry it schedules takes the app's leave.
+#[test]
+fn the_app_opening_during_an_attempt_that_fails_is_taken_by_its_retry() {
+    let (shared, attempts) = wsl_runtime();
+    attempts
+        .undetermined
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let (release, held) = mpsc::channel();
+    *attempts.held.lock().unwrap() = Some(held);
+    {
+        let mut runtime = shared.lock().unwrap();
+        let consent = runtime.new_host_consent();
+        runtime
+            .snapshot
+            .ui_state
+            .device_registrations
+            .push(crate::model::DeviceRegistration {
+                id: "wsl-ubuntu".to_owned(),
+                label: "WSL Ubuntu".to_owned(),
+                origin: crate::model::LinkOrigin::Wsl {
+                    distro: "Ubuntu".to_owned(),
+                },
+                herdr_socket_path: None,
+                herdr_session: None,
+                host_consent: Some(consent),
+            });
+        runtime.rebuild_device_rows();
+        runtime.connect_registered_devices();
+        assert!(runtime.device_host_connecting("wsl-ubuntu"));
+    }
+    let app_open = event("hide_ai_wake", serde_json::json!({"cause": "app_open"}));
+    shared.lock().unwrap().dispatch_json(&app_open);
+    release.send(()).unwrap();
+    wait_for_attempts(&attempts, 1);
+    host_settled(&shared);
+    {
+        let mut runtime = shared.lock().unwrap();
+        let at = runtime.device_host_retries["wsl-ubuntu"]
+            .at_unix_ms
+            .expect("the failed attempt is tried again");
+        runtime.tick_device_hosts(at);
+    }
+    wait_for_attempts(&attempts, 2);
+    host_settled(&shared);
+    assert_eq!(wakes(&attempts), [Wake::NotAllowed, Wake::Allowed]);
+}
+
 /// B4, B28: Add device lists each distribution beside the SSH aliases,
 /// says which cannot connect and why, and names the device that already is
 /// one.
@@ -389,4 +438,22 @@ fn a_distribution_whose_state_cannot_be_read_is_retried_without_leave() {
     wait_for_attempts(&attempts, 4);
     host_settled(&shared);
     assert_eq!(wakes(&attempts), [Wake::NotAllowed; 4]);
+}
+
+/// D-20: each distribution is its own device whatever its name: a name of
+/// plain letters keeps its plain id, and names that differ only in letters
+/// an id cannot carry still get two ids.
+#[test]
+fn every_distribution_name_gets_an_id_of_its_own() {
+    let id = crate::runtime::devices::wsl_device_id;
+    assert_eq!(id("Ubuntu"), "wsl-ubuntu");
+    assert_eq!(id("kali-linux"), "wsl-kali-linux");
+    assert_ne!(id("우분투"), id("데비안"));
+    assert_ne!(id("Ubuntu_22.04"), id("Ubuntu-22.04"));
+    assert_eq!(
+        id("Ubuntu-24.04"),
+        id("Ubuntu-24.04"),
+        "the same name, the same id"
+    );
+    assert!(id("Ubuntu-24.04").starts_with("wsl-ubuntu-24-04-"));
 }

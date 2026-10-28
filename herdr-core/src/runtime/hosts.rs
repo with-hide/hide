@@ -447,7 +447,13 @@ impl Runtime {
             return self.refresh_device_snapshots();
         };
         let retirement_projects = self.retirement_projects(device_id);
-        self.device_wake_pending.remove(device_id);
+        // Leave the app gave while another attempt ran is this attempt's,
+        // whatever started it: it is taken only by an attempt that runs.
+        let wake = if self.device_wake_pending.remove(device_id) {
+            Wake::Allowed
+        } else {
+            attempt.wake()
+        };
         self.spawn_host_start(
             device_id,
             generation,
@@ -455,7 +461,7 @@ impl Runtime {
                 client,
                 consent,
                 retirement_projects,
-                wake: attempt.wake(),
+                wake,
             },
         )
     }
@@ -850,6 +856,9 @@ impl Runtime {
                     helper_path = Some(path);
                 }
                 self.device_host_retries.remove(device_id);
+                // Connected: leave the app gave meanwhile has nothing left to
+                // start, and must not start the distribution after a later end.
+                self.device_wake_pending.remove(device_id);
                 self.set_host_phase(
                     device_id,
                     HostPhase::Ready {
@@ -948,11 +957,19 @@ impl Runtime {
                     .or_default()
                     .unavailable = Some(message.clone());
                 // A changed identity or an unsupported device waits for the
-                // operator, and a WSL distribution that is off for an attempt
-                // that may wake it; anything else may pass, so it is tried
-                // again.
-                let wake_next = self.device_wake_pending.remove(device_id)
-                    && matches!(error, EstablishError::Stopped(_));
+                // operator, and drops leave the app gave meanwhile; a WSL
+                // distribution that is off waits for an attempt that may
+                // wake it, at once when the app gave that leave meanwhile;
+                // anything else may pass, so it is tried again, and the
+                // retry takes the app's leave.
+                let wake_next = matches!(error, EstablishError::Stopped(_))
+                    && self.device_wake_pending.contains(device_id);
+                if matches!(
+                    error,
+                    EstablishError::IdentityChanged { .. } | EstablishError::Unsupported(_)
+                ) {
+                    self.device_wake_pending.remove(device_id);
+                }
                 let phase = match error {
                     EstablishError::IdentityChanged { .. } => HostPhase::IdentityChanged(message),
                     EstablishError::Unsupported(_) => HostPhase::Unsupported(message),
@@ -1093,6 +1110,7 @@ impl Runtime {
         );
         self.device_hosts.remove(device_id);
         self.device_host_retries.remove(device_id);
+        self.device_wake_pending.remove(device_id);
         // A row on this device no longer waits for its helper's answer.
         self.row_registrations
             .retain(|_, pending| pending.device_id != device_id);

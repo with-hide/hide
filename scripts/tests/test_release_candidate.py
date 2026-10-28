@@ -127,7 +127,9 @@ class ReleaseCandidate(unittest.TestCase):
         self.assertEqual(set(jobs["device-bundles"]["needs"]), {"helper-identity", "device-helpers"})
         self.assertEqual(jobs["macos-compile"]["needs"], "helper-identity")
         self.assertEqual(set(jobs["macos-package"]["needs"]), {"helper-identity", "device-bundles", "macos-compile"})
-        self.assertIn("device-bundles", jobs["package"]["needs"])
+        self.assertEqual(set(jobs["windows-package"]["needs"]), {"helper-identity", "device-bundles", "windows-compile"})
+        # The Linux app carries no device kit, so its package waits for nothing.
+        self.assertNotIn("needs", jobs["package"])
         for name in ("macos-compile", "macos-package"):
             self.assertEqual(jobs[name]["if"], "${{ inputs.include-macos }}")
         receipt = yaml.safe_load((WORKFLOWS / "release-candidate.yml").read_text())["jobs"]["receipt"]
