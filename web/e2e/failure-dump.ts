@@ -39,3 +39,31 @@ export function pageTabs(page: Page): Promise<unknown> {
 export async function tabsBothSides(herdr: HerdrFixture, page: Page): Promise<unknown> {
   return { herdr: herdrTabs(herdr), page: await pageTabs(page) };
 }
+
+/**
+ * How far the page got toward the shell: its load state, whether the app
+ * mounted and which screen it shows, the projects its sidebar lists, and each
+ * request it made with the status it got (0 for one that never answered), so
+ * a shell that never drew says whether an asset, the socket or the snapshot
+ * stopped it. Paths only: the address's hash carries the daemon's token.
+ */
+export function pageSide(page: Page): Promise<unknown> {
+  return page.evaluate(() => {
+    const requests = performance.getEntriesByType("resource").map((entry) => {
+      const timing = entry as PerformanceResourceTiming;
+      return { path: new URL(timing.name).pathname, status: timing.responseStatus, ms: Math.round(timing.duration) };
+    });
+    const navigation = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
+    return {
+      path: location.pathname,
+      readyState: document.readyState,
+      document: navigation?.responseStatus ?? null,
+      mounted: (document.getElementById("root")?.childElementCount ?? 0) > 0,
+      center: document.querySelector("[data-center-screen]")?.getAttribute("data-center-screen") ?? null,
+      main: document.querySelector("[data-main-screen]") !== null,
+      connection: document.querySelector("[data-connection]")?.getAttribute("data-connection") ?? null,
+      projects: [...document.querySelectorAll("nav[data-sidebar] [data-project] [data-row-name]")].map((row) => row.textContent?.trim() ?? ""),
+      requests,
+    };
+  });
+}
