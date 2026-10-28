@@ -50,7 +50,10 @@ pub mod tools;
 pub mod turns;
 pub mod usage;
 
-pub use envelope::{envelope_from_operator, envelope_header, envelope_names, envelope_sender};
+pub use envelope::{
+    BELL_INBOX, BELL_MARK, envelope_from_operator, envelope_header, envelope_names,
+    envelope_sender, is_letter, is_letter_bell,
+};
 pub use named_prs::NamedPr;
 pub use refusal::ReadRefusal;
 pub use sightings::{
@@ -489,6 +492,14 @@ impl ConversationEvent {
             images: 0,
             part: None,
         }
+    }
+
+    /// Whether this is the operator's own words: a person's message that is
+    /// no Hide letter ([`is_letter`]). A letter keeps `EventKind::Human`, the
+    /// role it was typed in, so a turn and the session record still start
+    /// and name it; what weighs the operator's words asks this instead.
+    pub fn from_operator(&self) -> bool {
+        self.kind == EventKind::Human && !is_letter(&self.text)
     }
 
     fn with_context_reset(mut self, reset: bool) -> Self {

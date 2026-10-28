@@ -2144,9 +2144,11 @@ fn analyze_session(
         })
         .map(|(event, offset, text)| {
             // What another agent sent a session it started is that agent's
-            // instruction, not the operator's word (D-04).
+            // instruction, not the operator's word (D-04), and a Hide letter
+            // (its envelope, or the doorbell's line) is its sender's.
             let kind = match event.kind {
                 EventKind::Human if delegated => "parent_agent",
+                EventKind::Human if !event.from_operator() => "letter",
                 other => other.as_str(),
             };
             json!({
@@ -4270,9 +4272,9 @@ mod tests {
         assert_eq!((fixture.calls(), analyzed_to()), (0, None));
 
         // Its pane closed: one call carries the operator's request, the
-        // letter and the image (message 0, 3 and 4) and the answer
-        // (message 5), never the text OpenCode or Hide's plugin added, and
-        // the cursor stands after the sixth and last message.
+        // letter as its sender's and the image (message 0, 3 and 4) and the
+        // answer (message 5), never the text OpenCode or Hide's plugin added,
+        // and the cursor stands after the sixth and last message.
         fixture.answer(&[]);
         assert_eq!(
             fixture.pass_for(key.clone(), false, true).0,
@@ -4284,7 +4286,7 @@ mod tests {
             events(&first),
             [
                 (0, "human".to_owned()),
-                (3, "human".to_owned()),
+                (3, "letter".to_owned()),
                 (4, "human".to_owned()),
                 (5, "assistant".to_owned()),
             ]
@@ -4512,9 +4514,9 @@ mod tests {
         assert_eq!((fixture.calls(), analyzed_to()), (0, None));
 
         // Its pane closed: one call carries the operator's request, the
-        // letter, the image and the answer (messages 0, 3, 4 and 5), never the
-        // text OpenCode or Hide's plugin added, and the cursor stands after
-        // the eighth and last message.
+        // letter as its sender's, the image and the answer (messages 0, 3, 4
+        // and 5), never the text OpenCode or Hide's plugin added, and the
+        // cursor stands after the eighth and last message.
         fixture.answer(&[]);
         assert_eq!(
             fixture.pass_for(key.clone(), false, true).0,
@@ -4537,7 +4539,7 @@ mod tests {
             events,
             [
                 (0, "human".to_owned()),
-                (3, "human".to_owned()),
+                (3, "letter".to_owned()),
                 (4, "human".to_owned()),
                 (5, "assistant".to_owned()),
             ]

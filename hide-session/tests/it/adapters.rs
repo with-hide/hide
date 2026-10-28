@@ -1140,6 +1140,82 @@ pub(crate) fn assert_same_facts(agent: &str, transcript: &LabelTranscript) {
     );
 }
 
+/// The fixtures' Hide letter from `ci-lead`, as every format writes its JSON
+/// string.
+const LETTER_JSON: &str = r"\nHide letter letter-1 from ci-lead (claude) [request]\nCI 다시 봐줘\nFull letter: hide request show letter-1\n";
+
+/// The doorbell's line that wakes a pane for that letter, which carries no
+/// envelope (`herdr-core/src/delivery/bell.rs`).
+const BELL: &str = "🦉 ci-lead 요청: CI 다시 봐줘 · hide inbox";
+
+/// The person's messages a conversation holds, and whether each is the
+/// operator's own words, which Project Memory weighs (`from_operator`).
+fn operator_words(events: &[hide_session::ConversationEvent]) -> Vec<(&str, bool)> {
+    events
+        .iter()
+        .filter(|event| event.kind == hide_session::EventKind::Human)
+        .filter(|event| !event.text.trim().is_empty())
+        .map(|event| (event.text.trim(), event.from_operator()))
+        .collect()
+}
+
+/// Each fixture's conversation with its letter replaced by the doorbell's
+/// line: a typed request and a wake prompt Hide typed.
+#[test]
+fn the_doorbells_line_keeps_its_turn_but_is_never_the_operators_words() {
+    let typed = "요청 보기를 만들어줘\n긴 요청의 둘째 줄";
+    for (agent, file) in [
+        (
+            Agent::Claude,
+            "claude-2.1.288/projects/-work-app/a1b2c3d4-0000-4000-8000-000000000001.jsonl",
+        ),
+        (
+            Agent::Codex,
+            "codex-0.160.0/sessions/2026/10/03/rollout-2026-10-03T01-00-00-0199a000-0000-7000-8000-000000000002.jsonl",
+        ),
+        (Agent::Grok, "grok-1.0.46/updates.jsonl"),
+        (Agent::Pi, "pi-1.0.4/session.jsonl"),
+        (Agent::Omp, "omp-18.7.0/session.jsonl"),
+    ] {
+        let contents = std::fs::read_to_string(fixtures().join(file)).unwrap();
+        assert!(contents.contains(LETTER_JSON), "{agent:?}");
+        let parsed = hide_session::parse_events(agent, &contents.replace(LETTER_JSON, BELL));
+        assert_eq!(
+            operator_words(&parsed.events),
+            [(typed, true), (BELL, false)],
+            "{agent:?}"
+        );
+        let requests: Vec<_> = parsed
+            .links
+            .requests
+            .iter()
+            .map(|request| request.text.as_str())
+            .collect();
+        assert_eq!(requests, [typed], "{agent:?}: the bell names no request");
+    }
+    for version in ["opencode-1.18.30", "opencode-2.0.29"] {
+        let home = tempfile::tempdir().unwrap();
+        let folder = home.path().join(".local/share/opencode");
+        std::fs::create_dir_all(&folder).unwrap();
+        let sql = std::fs::read_to_string(fixtures().join(version).join("opencode.sql")).unwrap();
+        assert!(sql.contains(LETTER_JSON), "{version}");
+        rusqlite::Connection::open(folder.join("opencode.db"))
+            .unwrap()
+            .execute_batch(&sql.replace(LETTER_JSON, BELL))
+            .unwrap();
+        let scope = hide_session::SessionReadScope {
+            id: OPENCODE_ROOT.to_owned(),
+            cwd: "/work/app".to_owned(),
+        };
+        let read = hide_session::opencode::read_conversation(home.path(), &scope, None).unwrap();
+        assert_eq!(
+            operator_words(&read.events),
+            [(typed, true), (BELL, false)],
+            "{version}"
+        );
+    }
+}
+
 /// A conversation page reaches the core as JSON over the node link
 /// (`Call::SessionConversation`), and the core reads every event back. Codex
 /// writes the instructions it adds to a turn as `developer` records, and a

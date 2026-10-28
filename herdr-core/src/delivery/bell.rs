@@ -38,8 +38,11 @@ pub(crate) struct Ring<'a> {
 /// (` · 외 N통`) when other letters wait for the same recipient and
 /// ` · hide inbox` when the ring asks for it.
 pub(crate) fn line(ring: &Ring) -> String {
+    // The mark and the inbox suffix are hide_session's, whose transcript
+    // reader tells this line from the operator's words by them.
     let mut line = format!(
-        "🦉 {} {}",
+        "{} {} {}",
+        hide_session::BELL_MARK,
         inert(ring.sender, NAME_CHARS),
         word(ring.kind, ring.language)
     );
@@ -57,7 +60,7 @@ pub(crate) fn line(ring: &Ring) -> String {
         line.push_str(&more(ring.others, ring.language));
     }
     if ring.inbox {
-        line.push_str(" · hide inbox");
+        line.push_str(hide_session::BELL_INBOX);
     }
     line
 }
@@ -243,6 +246,39 @@ mod tests {
         assert_eq!(ring("a", "block", "x", 0), "🦉 a 막힘: x");
         assert_eq!(ring("a", "reply", "x", 0), "🦉 a 답장: x");
         assert_eq!(ring("a", "watch", "x", 2), "🦉 a 감시: x · 외 2통");
+    }
+
+    #[test]
+    fn every_line_the_bell_types_reads_as_a_letter_and_not_the_operators_words() {
+        let languages = [
+            InterfaceLanguage::English,
+            InterfaceLanguage::Korean,
+            InterfaceLanguage::SimplifiedChinese,
+            InterfaceLanguage::Japanese,
+        ];
+        for language in languages {
+            for kind in [
+                "request", "block", "report", "progress", "reply", "watch", "new",
+            ] {
+                for (others, inbox) in [(0, false), (2, false), (0, true), (1, true)] {
+                    let typed = line(&Ring {
+                        sender: "Codex",
+                        kind,
+                        body: "레이어 2도 1.0.1에 포함🐈\nmore",
+                        others,
+                        inbox,
+                        language,
+                    });
+                    assert!(hide_session::is_letter(&typed), "{typed}");
+                    if inbox {
+                        // Codex CLI on Windows drops what is above U+FFFF.
+                        let received: String =
+                            typed.chars().filter(|c| u32::from(*c) <= 0xFFFF).collect();
+                        assert!(hide_session::is_letter(&received), "{received}");
+                    }
+                }
+            }
+        }
     }
 
     #[test]

@@ -275,6 +275,7 @@ Both are looked up in memory when the bell rings, on the doorbell's thread, neve
 The first line is the body's first line that has anything to show, cut to 60 characters with `…`, and the writer is cut to 32; a body with no such line leaves the colon and summary out.
 Agents learn from their session guidance that this first line is the letter's one-line summary, and that a prompt beginning with `🦉` brings a letter that `hide inbox` shows if the prompt did not.
 The mark is U+1F989 without a variation selector; Codex CLI on Windows may show the line without the owl.
+The mark and the closing ` · hide inbox` are named once in `hide-session/src/envelope.rs` (`BELL_MARK`, `BELL_INBOX`), whose transcript readers tell the line from the operator's own words by that shape (`is_letter_bell`), so Project Memory and a session's link facts never take a letter's wake for the operator's request ([ARCHITECTURE.md](ARCHITECTURE.md), Project sessions and Memory).
 
 Whether the line names `hide inbox` is decided per runtime (`bell::names_inbox`), by whether its bell turn can arrive without Hide's hooks having run in the pane.
 Claude Code runs every user-level hook it is given, so its prompt hook hands the turn the letter and its session guidance has already said what `🦉` means; its line ends at the summary.
