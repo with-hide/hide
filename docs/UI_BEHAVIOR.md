@@ -365,6 +365,7 @@ A session is its terminal or its native session, so a session found again in ano
 The same rule holds for a file, a diff, a page, an image and a PDF (D-30); there is no folded list of other sessions' Views, which show when their session has the keyboard (D-15).
 Switching Agent tab or pane, through the strip, sidebar, search, cycling or a confirmed local or device switch, switches the strip and the shown View together: each session shows again the View it last showed, the first time its first View, and with none of its own the operator's; the previous View does not stay behind as a dimmed tab (D-12).
 Plain shells, and agents that have opened nothing in the checkout, share the operator's strip, so moving the keyboard among them leaves the View in front where it is.
+A View named from elsewhere, a pane's `N views` row, Recent Panels or a session record's gallery tile, that the strip does not show brings the session that opened it to the keyboard first, so it shows in that session's strip.
 An area that holds none of the strip's Views is not drawn, and its neighbour takes the space; a dragged tab lands among the Views the strip draws.
 The lane, its tool, pin, tree and widths, and document editing and saving remain shared by the Workspace.
 A session's Views close when Hide closes its pane, its tab or its subtree, or archives it (`세션 보관`), and only then; a View another session also opened, and the operator's, stay (D-14, D-27).
@@ -1482,7 +1483,7 @@ In the 보기 slot the head says `계획 n/m · <N분 전 갱신>` (`계획 N단
 While the plan waits for review a band says `검토 기다림 · 대화에서 답하세요` with one button, `대화로`, which goes to the pane; there is no button that approves, and the band goes once the agent runs `hide plan approve`.
 A finished plan's band says `끝남`; a plan whose session is gone draws one line saying so.
 While a plan runs, the pane's second row shows the current step and its line, `<단계> · <line>`, in the progress place; while it waits for review the row is the ask band, `Plan review · N steps` (`계획 검토 · N단계` in Korean) worded by the shell from the subject the core sends, and the sidebar's second line says the same ([status-model.md](status-model.md#a-plan-waiting-for-review-is-a-question)).
-The session record has a `계획` section with the count, `끝남` once finished, and the checklist, kept after the session ends; while the session works its `지금` box says the current step and its line as the second row does.
+The session record has a `계획` section with the count, `끝남` once finished, and the checklist, kept after the session ends; while its pane works or asks, a running plan moves into the record's `지금` block ([The session record](#the-session-record)) and the section is not drawn.
 Settings › Agents lists the three skills Hide installs, `hide`, `hide-conductor` (waypoints) and `hide-plan` (list-checks), each with one line on what it is for and the help it points at; they come and go with each agent's switch.
 
 ### The session record
@@ -1493,6 +1494,11 @@ The record starts with its title and agent logo, then `<device> · <agent produc
 The title is the flow the operator asked the most in, the later one on a tie, while the pane and the sidebar keep the current flow's name; with Hide AI off it is the session's own title (PRD session-record-fact-status D-06, B9, B10).
 Its native status and elapsed time share a quiet row with a `터미널 열림` or `터미널 닫힘` chip; there is no coloured action box.
 An open pane offers `터미널로 이동` even after its work ends, or `답하러 가기` while asking.
+While that pane works or asks, a `지금` block stands right under the status row and above `나를 기다리는 것` (PRD session-docs-and-assistant D-41), drawn alike in the lane's 보기 slot and the Overview's panel.
+Its first line is the turn in the pane's own words, `<request> → <now>`: who sent the request and its line as the second row and the turn card show it (the label's summary, else the request's own first line), then the second row's progress place, an ask's words in the warning colour while it asks, else a running plan's `<단계> · <line>`, else the agent's own sentence.
+Under it, `맡긴 일 N · 끝남 k` counts the pane's direct children as the plan popover does, only when it has some; Hide keeps no count of the files a turn read or changed, so the block draws none.
+Last comes a running plan, `계획 n/m` over its checklist with done, current and later marks, which the `계획` section then leaves out; with no plan there is no plan part.
+A part Hide does not hold is not drawn, and the block is absent while the pane neither works nor asks and for a closed pane; while it asks, the question is said in the block and not again under the status row.
 A closed pane offers `세션 복구하기`, using the existing native-session resume in a new pane in the registered checkout containing its original working folder on its device.
 A missing conversation path, unsupported agent, disconnected device or missing checkout disables restore and states why beside the action.
 A restore in flight shows `복구하는 중…` and accepts no second click; a failed start shows an inline reason with Retry, and a successful start focuses the resumed pane.
@@ -1501,7 +1507,7 @@ Archived sessions keep their existing tree-aware `이어가기` action.
 While the agent neither works nor asks, the status row reads the record's last real turn: its end word and line, with a turn its provider refused for a usage limit or an API error (`한도`) skipped and its line shown as a small badge beside the word, such as `한도 소진 · 10-22 13:00 풀림`; when every turn hit the limit the word is `막힘` with the badge (PRD session-record-goal-flow D-10, B10).
 When every pull request first printed in that turn's flow, a child's among them, that had not settled by that turn's end has merged or closed since, the row reads `머지됨` (or `닫힘` when none merged) with `#n`, or `PR n개` for several, and the time since the last one settled, in place of the line; a turn that asked, was blocked or hit a limit keeps its own word (fact-status D-01, B2, B3).
 A pane at work or asking is the state now, and a pane drawing a limit as a block defers to the record's word and badge.
-There is no `요청한 작업` checklist, no checkbox and no tab row (D-01, B2); below the status come, in this order, `나를 기다리는 것`, the goal flows, the PRs and outputs, and `함께 진행한 세션`.
+There is no `요청한 작업` checklist, no checkbox and no tab row (D-01, B2); below the status come, in this order, the `지금` block, `나를 기다리는 것`, the goal flows, the PRs and outputs, and `함께 진행한 세션`.
 `나를 기다리는 것` lists the questions and decisions the agent asked the operator in the current flow and that no later turn answered (moving on to the next flow answers the ones before it, and asking one again later in the new flow lists it again, fact-status D-03, B6), one line each with `넘기기`; a line put away keeps its place with `되돌리기` while the record stays open and turns open again if the agent asks it again after it was gone; the operator's next request, or a delegated session's parent's reply, removes the lines asked before it, the agent's still-open question staying listed, and with none open the section is absent (D-12, B11, B12).
 The goal flows follow in the order the goal changed, each with its name, when it began and its request count (`지금` for the current one); the current flow is open, and a past flow is folded to its result and opens on a click (D-03, D-11, B3, B13).
 The result is, newest knowledge first: `머지됨` or `닫힘` with `#n` or `PR n개` and the time, when every pull request first printed in the flow settled after its line (fact-status B1, B3); the line the label gave as the flow closed, with no word (B4); `넘어감` with the line of its last turn when that turn asked or waited and the operator went on (B5); else the line of its last `끝` turn with the `끝` word, else its last real turn's end word and line, else its last turn's, so a flow with a judged turn always has a result (B7).
@@ -1516,13 +1522,20 @@ When the record has dropped its oldest requests past its cap, `오래된 요청 
 `PR` lists this session's pull requests, then one group per direct child, under that child's name, holding the pull requests of the child and all its descendants (D-14, B18).
 Open and failing pull requests show as rows with a state mark, number and title; merged and closed ones fold into one `끝난 PR n개` line that opens them all, and the head reads `전부 머지됨` when every pull request merged (B19).
 Every output opens the existing PR card or issue action, and a GitHub value that cannot be refreshed stays dimmed with its last-read time.
-`결과물` lists, once each, the outputs other than pull requests (a board, a document, an issue, a release) this session and its descendants made, and is absent with none (D-16, B22).
+`결과물` is a two-column gallery of tiles (PRD session-docs-and-assistant D-40): the Views this session and its descendants opened, in every checkout, the one looked at last first, then the outputs other than pull requests its turns named (a board, a document, an issue, a release, D-16), each once; pull requests stay in `PR`, and the section is absent with none (B22).
+A View belongs to the record when one of its openers is a session of the record's tree, found by its native session on its own machine as `hide view list --session` finds it ([File Views per checkout](#file-views-per-checkout)); a drilled child's record shows its own subtree's Views, and closing a View takes its tile away.
+A tile's picture is only what Hide already holds: an image is itself, read through the file read its viewer uses (past 8 MiB it draws its mark instead); a document whose editor tab is open shows its first six lines; a page shows the still this window already took of it, else its title over its address, and no page is loaded or captured for a tile; a PDF, a diff, an outside file, a document not open and a named output draw their kind's mark and name.
+Under the picture are the View's kind mark and its tab's name.
+Pressing a View's tile brings that View to the front of its checkout's documents: in the Workspace on screen as a pane's `N views` row does, and from the Overview or another checkout by bringing that checkout forward with the View, the session that opened it taking the keyboard when its strip does not show the View; a device's View brings its Workspace forward only, and nothing opens in a popup.
+A named output's tile opens nothing.
+The gallery shows up to six tiles, and past six five tiles and `+N` for the rest, which shows them all; the core sends at most 64 Views and counts the rest, said once as `오래된 View n개는 보이지 않음` under the open gallery.
+The Views do not depend on Hide AI; with summaries Off the gallery keeps them and leaves out the named outputs.
 `함께 진행한 세션` is a flat list, five initially with a way to show more.
 Each row shows its state now, from its live pane, else from its last real turn (`머지됨` or `닫힘` when that turn's flow's pull requests settled after it, as on the top state, fact-status B2), the agent logo and product name, the name of the work it was given (never an envelope's words), and its PR count (B20, B26).
 Pressing a child expands its flows and pull requests in place, one child at a time, while the current session stays on screen.
 An explicit `기록 열기` opens that child's record as the next slot item with the existing back action; a live child also offers its terminal action.
 A History hit opens the flow holding the request, with its words shown and the query marked; a request the record no longer keeps says so (B32).
-With summaries Off, the record is the native or manual title, native status, every request in time order as sent with `AI 요약 꺼짐` said once, the pull requests and the child sessions, with no flow names, results, summaries or `나를 기다리는 것` (D-20, B28).
+With summaries Off, the record is the native or manual title, native status, the `지금` block from what the pane shows, every request in time order as sent with `AI 요약 꺼짐` said once, the pull requests, the opened Views and the child sessions, with no flow names, results, summaries, named outputs or `나를 기다리는 것` (D-20, B28).
 A record written before flows keeps its stored goals as flows, its requests with no summary as their first words and its past flows' results as their end words only (B27).
 The problems and follow-ups a turn found leave the record and stay in the Overview backlog's missed group ([백로그](#백로그)).
 Loading, failure, retry, disconnection, archive and resume continue to use their existing runtime policies.
@@ -1531,7 +1544,8 @@ An archived session's record keeps every part above, and its `지금` box reads 
 A live root whose archive left members closed lists them under its `지금` box, each with its state and its own `이어가기` (B24).
 A first record read uses a small skeleton; a failed read shows Retry, and a disconnected device retains the last read dimmed until reconnection refreshes it.
 GitHub values that cannot be refreshed stay dimmed with their last-read time in the tooltip; failure is never a false zero.
-Web owners: `web/src/SessionRecord.tsx`, `web/src/DetailPanel.tsx`, and `web/e2e/session-panel.spec.ts`.
+Web owners: `web/src/SessionRecord.tsx`, `web/src/RecordGallery.tsx` and `web/src/galleryTiles.ts` (the gallery), `web/src/DetailPanel.tsx`, and `web/e2e/session-panel.spec.ts`.
+Core owner of the record's Views: `herdr-core/src/runtime/view_sessions.rs` (`settle_record_views`), held by `runtime/tests/view_bookmarks.rs`.
 
 
 ### The PR list and the PR card
