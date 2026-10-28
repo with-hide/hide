@@ -174,7 +174,6 @@ impl DeviceTransport for InboundTransport {
     fn cached_herdr_version(&self) -> Option<String> {
         None
     }
-
 }
 
 impl Drop for InboundTransport {

@@ -249,7 +249,6 @@ impl DeviceTransport for SshDevice {
         self.client()
             .and_then(|client| client.cached_herdr_version())
     }
-
 }
 
 impl DialedTransport for SshDevice {
@@ -288,7 +287,6 @@ impl DialedTransport for SshDevice {
             on_close,
         )
     }
-
 }
 
 #[cfg(test)]

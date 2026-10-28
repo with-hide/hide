@@ -173,8 +173,8 @@ impl<'a> LinkBridge<'a> {
                         "A page stream reaches only a port on this machine's loopback",
                     ));
                 }
-                let connection = TcpStream::connect_timeout(&address, CONNECT_TIMEOUT)
-                    .map_err(|error| {
+                let connection =
+                    TcpStream::connect_timeout(&address, CONNECT_TIMEOUT).map_err(|error| {
                         HostError::new(
                             ErrorCode::Io,
                             format!("The page server on this machine did not answer: {error}"),
@@ -202,7 +202,12 @@ impl<'a> LinkBridge<'a> {
                 ));
             }
             let cap = end.cap();
-            if streams.values().filter(|open| open.end.shares_cap(end)).count() >= cap {
+            if streams
+                .values()
+                .filter(|open| open.end.shares_cap(end))
+                .count()
+                >= cap
+            {
                 return Err(HostError::new(
                     ErrorCode::Busy,
                     format!("The node already has {cap} {} streams open", name(end)),

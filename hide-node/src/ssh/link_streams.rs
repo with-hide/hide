@@ -301,7 +301,12 @@ impl RemoteHost {
         {
             let mut open = lock_recover(&streams.open);
             let cap = end.cap();
-            if open.values().filter(|entry| entry.end.shares_cap(end)).count() >= cap {
+            if open
+                .values()
+                .filter(|entry| entry.end.shares_cap(end))
+                .count()
+                >= cap
+            {
                 drop(open);
                 crate::diagnostic!(json!({
                     "component": "remote_host",

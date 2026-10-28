@@ -31,7 +31,6 @@ impl DeviceReach {
             Self::Inbound(transport) => &**transport,
         }
     }
-
 }
 
 /// Why a device's connection is retired. A removed device keeps nothing of

@@ -200,7 +200,11 @@ impl Staging {
             }
         } else {
             if kept.len() >= MAX_STAGED_FILES
-                || kept.values().sum::<u64>().saturating_add(bytes.len() as u64) > MAX_STAGED_BYTES
+                || kept
+                    .values()
+                    .sum::<u64>()
+                    .saturating_add(bytes.len() as u64)
+                    > MAX_STAGED_BYTES
             {
                 return Err("This machine's attachment storage is full (128 files or 256 MiB). Files expire after 24 hours; retry later.".to_owned());
             }
@@ -249,7 +253,10 @@ impl Staging {
 
     /// The link ended: every request staged in part goes with it.
     pub fn end(&self) {
-        let open: Vec<String> = lock(&self.open).drain().map(|(request, _)| request).collect();
+        let open: Vec<String> = lock(&self.open)
+            .drain()
+            .map(|(request, _)| request)
+            .collect();
         for request in open {
             if let Err(reason) = self.remove(&request) {
                 eprintln!(
@@ -329,7 +336,10 @@ fn inspect_staging(folder: &Path) -> Result<std::collections::BTreeMap<String, u
     let mut kept = std::collections::BTreeMap::new();
     for (visited, entry) in entries.enumerate() {
         if visited >= MAX_STAGED_FILES * 2 {
-            return Err("The attachment folder holds too many entries. Remove old attachments and retry.".to_owned());
+            return Err(
+                "The attachment folder holds too many entries. Remove old attachments and retry."
+                    .to_owned(),
+            );
         }
         let entry =
             entry.map_err(|error| format!("The attachment folder could not be read: {error}"))?;
@@ -430,7 +440,9 @@ mod tests {
                 .contains("differs")
         );
         let other = "0f8fad5b-d9cb-469f-a165-70867728950e";
-        let kept = staging.stage(other, 0, 1, &File::new("a.txt", b"keep")).unwrap();
+        let kept = staging
+            .stage(other, 0, 1, &File::new("a.txt", b"keep"))
+            .unwrap();
         staging.remove(REQUEST).unwrap();
         assert!(!staged.exists());
         assert!(Path::new(&kept).exists());
@@ -442,9 +454,13 @@ mod tests {
     #[test]
     fn the_link_ending_mid_request_removes_what_it_staged() {
         let (_folder, staging) = staging();
-        let partial = staging.stage(REQUEST, 0, 2, &File::new("a.txt", b"a")).unwrap();
+        let partial = staging
+            .stage(REQUEST, 0, 2, &File::new("a.txt", b"a"))
+            .unwrap();
         let whole_id = "0f8fad5b-d9cb-469f-a165-70867728950e";
-        let whole = staging.stage(whole_id, 0, 1, &File::new("b.txt", b"b")).unwrap();
+        let whole = staging
+            .stage(whole_id, 0, 1, &File::new("b.txt", b"b"))
+            .unwrap();
         staging.end();
         assert!(!Path::new(&partial).exists());
         assert!(Path::new(&whole).exists());
@@ -455,7 +471,9 @@ mod tests {
     #[test]
     fn staging_refuses_a_folder_holding_what_hide_did_not_stage_and_past_its_cap() {
         let (folder, staging) = staging();
-        let path = staging.stage(REQUEST, 0, 1, &File::new("a.txt", b"a")).unwrap();
+        let path = staging
+            .stage(REQUEST, 0, 1, &File::new("a.txt", b"a"))
+            .unwrap();
         let root = PathBuf::from(&path).parent().unwrap().to_path_buf();
         fs::write(root.join("notes.txt"), b"mine").unwrap();
         let other = "0f8fad5b-d9cb-469f-a165-70867728950e";
@@ -467,7 +485,11 @@ mod tests {
         );
         fs::remove_file(root.join("notes.txt")).unwrap();
         assert!(staging.stage(REQUEST, 1, 1, &File::new("a", b"a")).is_err());
-        assert!(staging.stage("not-a-request", 0, 1, &File::new("a", b"a")).is_err());
+        assert!(
+            staging
+                .stage("not-a-request", 0, 1, &File::new("a", b"a"))
+                .is_err()
+        );
         drop(folder);
     }
 
