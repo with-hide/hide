@@ -74,9 +74,10 @@ jobs:
     name: web e2e (macOS @platform)
     if: ${{ inputs.lane != 'linux' && inputs.lane != 'windows' && inputs.lane != 'agy' }}
     uses: ./.github/workflows/web-e2e.yml
+    secrets:
+      HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
     permissions:
       contents: read
-      issues: write
     with:
       lane: nightly-macos
       runner: macos-15
@@ -88,9 +89,10 @@ jobs:
     name: web e2e (Windows @platform)
     if: ${{ inputs.lane == 'windows' }}
     uses: ./.github/workflows/web-e2e.yml
+    secrets:
+      HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
     permissions:
       contents: read
-      issues: write
     with:
       lane: nightly-windows
       runner: windows-latest
@@ -105,9 +107,10 @@ jobs:
     name: remote mailbox (macOS)
     if: ${{ inputs.lane != 'linux' && inputs.lane != 'windows' && inputs.lane != 'agy' }}
     uses: ./.github/workflows/remote-mailbox.yml
+    secrets:
+      HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
     permissions:
       contents: read
-      issues: write
     with:
       runner: macos-15
       herdr-platform: macos-aarch64
@@ -117,9 +120,10 @@ jobs:
   agy-contract-all:
     name: agy contract
     uses: ./.github/workflows/agy-contract.yml
+    secrets:
+      HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
     permissions:
       contents: read
-      issues: write
     with:
       systems: ${{ inputs.lane == 'linux' && '["linux"]' || inputs.lane == 'macos' && '["macos"]' || inputs.lane == 'windows' && '["windows"]' || '["linux","macos","windows"]' }}
 
@@ -143,9 +147,10 @@ jobs:
   agent-trust-contract-all:
     name: agent trust contract
     uses: ./.github/workflows/agent-trust-contract.yml
+    secrets:
+      HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
     permissions:
       contents: read
-      issues: write
     with:
       systems: ${{ inputs.lane == 'linux' && '["linux"]' || inputs.lane == 'macos' && '["macos"]' || inputs.lane == 'windows' && '["windows"]' || '["linux","macos","windows"]' }}
 
@@ -166,9 +171,10 @@ jobs:
         # dispatch still runs its one system directly, without `verify`.
         system: ${{ fromJSON(inputs.lane == 'macos' && '["macos"]' || inputs.lane == 'windows' && '["windows"]' || '["linux"]') }}
     uses: ./.github/workflows/desktop-e2e.yml
+    secrets:
+      HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
     permissions:
       contents: read
-      issues: write
     with:
       lane: nightly-${{ matrix.system }}
       runner: ${{ fromJSON('{"linux":"ubuntu-latest","macos":"macos-15","windows":"windows-latest"}')[matrix.system] }}
@@ -191,21 +197,25 @@ jobs:
     name: verify
     if: ${{ inputs.lane == '' || inputs.lane == 'all' }}
     uses: ./.github/workflows/pr.yml
+    secrets:
+      HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
     # Direct agy and journey calls above own every OS, including the fake
     # model. The internal Windows agy, Linux stand-in and Windows forms skip.
     with:
       nightly-agent-checks: true
-    # pr.yml's jobs file a flaky test, and its `plan` reads the earlier runs
-    # it may reuse; a called workflow gets no permission its caller does not
-    # grant, and GitHub refuses to start the whole nightly without it.
+    # pr.yml's `plan` reads the earlier runs it may reuse; a called workflow
+    # gets no permission its caller does not grant, and GitHub refuses to
+    # start the whole nightly without it. Its jobs file a flaky test with the
+    # development issues App's token, not this one.
     permissions:
       contents: read
-      issues: write
       actions: read
   package:
     name: package
     if: ${{ inputs.lane == '' || inputs.lane == 'all' }}
     uses: ./.github/workflows/package.yml
+    secrets:
+      HIDE_ISSUES_APP_KEY: ${{ secrets.HIDE_ISSUES_APP_KEY }}
     with:
       version: 0.0.0-nightly.${{ github.run_number }}
       include-macos: true
@@ -216,12 +226,11 @@ jobs:
     if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # The issue step reads this run with the development issues App's token
+    # and files in with-hide/hide-private (docs/TESTING.md, Nightly failures),
+    # so this job's own token reads only the checkout.
     permissions:
-      actions: read
-      checks: read
       contents: read
-      issues: write
-      pull-requests: read
     steps:
       - uses: actions/checkout@v7
       - name: Require every selected job to succeed and every other job to skip
@@ -229,9 +238,21 @@ jobs:
           NEEDS: ${{ toJSON(needs) }}
           LANE_INPUT: ${{ inputs.lane }}
         run: python3 scripts/ci-plan.py nightly-aggregate --lane "$LANE_INPUT"
+      # Unlike a lane's, a token this job cannot mint is its red: the run's
+      # failures would otherwise go unfiled in silence.
+      - name: Mint the development issues token
+        id: issues-token
+        if: ${{ always() && github.ref == 'refs/heads/main' }}
+        timeout-minutes: 2
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
+          private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
+          owner: with-hide
+          repositories: hide,hide-private
       - name: Open, comment on and close the nightly-failure issues
         if: ${{ always() && github.ref == 'refs/heads/main' }}
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.issues-token.outputs.token }}
           LANE_INPUT: ${{ inputs.lane }}
         run: python3 scripts/ci-flaky-report.py --nightly --lane-input "$LANE_INPUT"

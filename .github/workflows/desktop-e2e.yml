@@ -48,10 +48,14 @@ on:
         type: boolean
         required: false
         default: false
+    # The development issues App's key (docs/TESTING.md, Flaky tests). A run
+    # without it, such as a fork's, files no issue and passes as before.
+    secrets:
+      HIDE_ISSUES_APP_KEY:
+        required: false
 
 permissions:
   contents: read
-  issues: write
 
 jobs:
   e2e:
@@ -169,6 +173,20 @@ jobs:
           else
             bash scripts/verify-web.sh desktop e2e "${args[@]}"
           fi
+      - name: Mint the development issues token
+        # Development issues live in with-hide/hide-private (docs/TESTING.md,
+        # Flaky tests); one App token reads this run here and files there. A run
+        # without the App's key, such as a fork's, files nothing and stays green.
+        id: issues-token
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
+          private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
+          owner: with-hide
+          repositories: hide,hide-private
       - name: Report flaky and failed tests
         # A failed test is retried once; see web-e2e.yml. One report per
         # step: the step's annotations are its failed tests, and GitHub keeps
@@ -178,7 +196,7 @@ jobs:
         continue-on-error: true
         timeout-minutes: 5
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.issues-token.outputs.token }}
         run: |
           python3 scripts/ci-flaky-report.py --suite desktop --playwright desktop/e2e-report.json \
             --history-record agents/runs/ci-test-history \

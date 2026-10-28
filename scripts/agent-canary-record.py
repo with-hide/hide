@@ -14,7 +14,9 @@ agent from the fake model lane's reports, one per system under `<dir>`, and
 rewrites the record issue's table; an agent that fails gets its own issue, or
 a comment on the open one, and an agent that passes again closes its issue.
 The record's state rides in the issue body as one JSON comment, so the next
-run reads what this one measured without a commit to main.
+run reads what this one measured without a commit to main. Every issue lives in
+the private development repository (`ISSUE_REPOSITORY`), not the public one,
+whose issues are user bug reports; `--run-url` names the run where it ran.
 """
 
 import argparse
@@ -29,6 +31,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from agent_journey.cells import CELLS  # noqa: E402
 from agent_journey.contract import active_rows, load_contract  # noqa: E402
 
+# Where the record and every failure issue live.
+ISSUE_REPOSITORY = "with-hide/hide-private"
 LABEL = "agent-canary"
 RECORD_TITLE = "Agent CLI support record"
 STATE = "<!-- agent-canary-state "
@@ -152,7 +156,7 @@ def failure_body(agent, row, run_url):
 
 
 def gh(*args, run=subprocess.run):
-    done = run(["gh", *args], capture_output=True, text=True, timeout=120)
+    done = run(["gh", *args, "--repo", ISSUE_REPOSITORY], capture_output=True, text=True, timeout=120)
     if done.returncode:
         raise SystemExit(f"gh {' '.join(args[:2])} exited {done.returncode}: {done.stderr.strip()[:300]}")
     return done.stdout

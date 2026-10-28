@@ -16,8 +16,8 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  # The preview watch below opens an issue; the contribution gate lets
-  # github-actions[bot] through.
+  # The proposal labels its pull request `herdr-protocol`, and a label is the
+  # issues API's.
   issues: write
 
 concurrency:
@@ -209,6 +209,10 @@ jobs:
   # screen. Nothing is pinned or proposed here.
   watch-preview:
     runs-on: macos-15
+    # Its issue goes to with-hide/hide-private with the development issues
+    # App's token (docs/TESTING.md), so this job's own token only reads.
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v7
 
@@ -229,10 +233,23 @@ jobs:
           echo "herdr.preview.protocol tag=$tag protocol=$protocol pinned_protocol=$pinned_protocol" >&2
           echo "Newest Herdr preview $tag speaks protocol $protocol; the pin speaks $pinned_protocol." >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Mint the development issues token
+        id: issues-token
+        if: steps.preview.outputs.protocol != steps.preview.outputs.pinned_protocol
+        timeout-minutes: 2
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
+          private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
+          owner: with-hide
+          repositories: hide-private
+
       - name: Open one issue for a preview on another protocol
         if: steps.preview.outputs.protocol != steps.preview.outputs.pinned_protocol
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.issues-token.outputs.token }}
+          # Development issues live there, not in the public repository.
+          GH_REPO: with-hide/hide-private
         run: |
           set -euo pipefail
           protocol="${{ steps.preview.outputs.protocol }}"

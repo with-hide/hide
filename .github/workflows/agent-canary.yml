@@ -11,7 +11,9 @@
 # each agent's latest version checked and the last one that passed, and opens
 # an issue for an agent whose latest release fails, comments on it when a
 # later release still fails, and closes it when one passes
-# (scripts/agent-canary-record.py). A fix moves the pin in its own pull
+# (scripts/agent-canary-record.py). These issues live in
+# with-hide/hide-private with the development issues, read and written with
+# that App's token (docs/TESTING.md). A fix moves the pin in its own pull
 # request, whose CI proves it on that version.
 name: agent canary
 
@@ -43,7 +45,6 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      issues: read
     outputs:
       table: ${{ steps.latest.outputs.table }}
       versions: ${{ steps.latest.outputs.versions }}
@@ -65,12 +66,21 @@ jobs:
             cat "$RUNNER_TEMP/agent-clis.json"
             echo 'TABLE_END'
           } >> "$GITHUB_OUTPUT"
+      - name: Mint the development issues token
+        id: issues-token
+        if: ${{ inputs.force != true }}
+        timeout-minutes: 2
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
+          private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
+          owner: with-hide
+          repositories: hide-private
       - name: Whether a version moved since the record's last run
         id: decide
         timeout-minutes: 2
         env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ steps.issues-token.outputs.token }}
           FORCE: ${{ inputs.force == true }}
           VERSIONS: ${{ steps.latest.outputs.versions }}
         run: |
@@ -104,7 +114,6 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      issues: write
     steps:
       - uses: actions/checkout@v7
         timeout-minutes: 5
@@ -115,11 +124,19 @@ jobs:
         with:
           pattern: agent-journey-fake-*
           path: ${{ runner.temp }}/reports
+      - name: Mint the development issues token
+        id: issues-token
+        timeout-minutes: 2
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
+          private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
+          owner: with-hide
+          repositories: hide-private
       - name: Rewrite the support record and each failing agent's issue
         timeout-minutes: 2
         env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ steps.issues-token.outputs.token }}
           VERSIONS: ${{ needs.latest.outputs.versions }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |

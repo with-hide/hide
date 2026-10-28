@@ -574,6 +574,13 @@ A failure on a different SHA is not evidence of flakiness by itself, and the sam
 A flaky test never blocks a pull request's required gate or a merge, and it does not stay: it is isolated as an issue rather than moved out of its lane, and its cause is removed by that issue's deadline.
 CI retries a failed test once, for classification and for the report, and for nothing else.
 
+Every issue CI files lives in the private repository with-hide/hide-private: the flaky `quarantine` issues, the `nightly-failure` issues, the `agent-canary` record and its failures, and the Herdr preview notice.
+The public repository with-hide/hide takes only user bug reports, through the bug form.
+`ISSUE_REPOSITORY` in `scripts/ci-flaky-report.py` and `scripts/agent-canary-record.py` names the private repository; the runs, jobs, logs, artifacts and pull requests they read stay the public repository's.
+Each job that files or reads these issues mints a token from the development issues GitHub App (its Client ID in `vars.HIDE_ISSUES_APP_CLIENT_ID`, and `secrets.HIDE_ISSUES_APP_KEY` in both the Actions and the Dependabot secret stores) with `actions/create-github-app-token`, for both repositories, and that one token reads the run here and writes the issue there.
+A reusable workflow receives the key from each caller by name.
+A lane whose run has no key, such as a fork's, files nothing and still passes.
+
 - Playwright runs with `retries: 1` when `CI` is set (`web/playwright.config.ts`, `desktop/playwright.config.ts`), and the Rust workspace runs under `cargo nextest` with the `ci` profile's `retries = 1` (`.config/nextest.toml`, `scripts/verify-cargo.sh nextest`).
   Neither retries locally: a flaky test fails where it is written.
 - A test that fails and passes its retry is flaky: the lane passes, the log marks it, and `scripts/ci-flaky-report.py` reads the tool's own report (Playwright's JSON, nextest's JUnit) and files it as an issue labelled `quarantine`, or comments on the open issue that already tracks it.
@@ -589,7 +596,7 @@ CI retries a failed test once, for classification and for the report, and for no
 - A job rerun can reveal a flake that neither job's retry classified: a test fails both tries in attempt 1 (`unexpected`), then passes its first try in attempt 2 (`expected`).
   The same reporter's `--history-record` mode preserves each reusable web/desktop job's original Playwright JSON and provenance for seven days, including successful jobs, under `ci-test-history-<suite>-<lane>-<shard>-attempt-<n>`.
   The actual tested commit comes from `git rev-parse HEAD` in that checkout; neither the PR head nor the jobs API's `head_sha` substitutes for a tested merge commit.
-  The existing final `verify` job calls `--retry-history`, with `actions: read` and `issues: write`, even after a planned lane failed; it reads only this workflow run's attempts and files through the same `quarantine` issue, deadline, matching and comment contract.
+  The existing final `verify` job calls `--retry-history`, with the development issues App's token, even after a planned lane failed; it reads only this workflow run's attempts and files through the same `quarantine` issue, deadline, matching and comment contract.
   The nightly's full `verify` call uses this path too; OS-only nightly calls retain their reports but have no final `verify` collector and do not link reruns.
   A link requires equal checkout SHA, OS, calling workflow ref/SHA, suite, test file, complete describe/title path and Playwright project ID/name, plus one unambiguous completed job with the recorded runner, run and attempt.
   Failure evidence requires explicit failed/timed-out results on both tries, each with a located standard `expect(...)` matcher diagnostic in both `error` and every entry of `errors`, followed by an error-free explicit first-try pass in a successful test job.
@@ -612,7 +619,7 @@ CI retries a failed test once, for classification and for the report, and for no
 - A green lane is not proof that a flaky test passed on that commit: its first attempt failed.
   Read the `Report flaky and failed tests` step and the `quarantine` issues before claiming a flow verified.
 - The report step cannot fail a lane: the run already passed.
-  If it cannot file (a GitHub error, a read-only token), it leaves the unfiled tests in a warning annotation and in the job summary under "Flaky tests that were not filed", and the next flaky run files them; a filed run lists its issues in the same summary.
+  If it cannot file (a GitHub error, a run without the App's key), it leaves the unfiled tests in a warning annotation and in the job summary under "Flaky tests that were not filed", and the next flaky run files them; a filed run lists its issues in the same summary.
 - GitHub keeps 10 error annotations per step, so one report step runs the script once and annotates at most 8 failed tests; past that it writes one more annotation, `Failed tests not annotated`, whose message is the count it left out.
 - `cargo nextest` runs no doc test.
   The workspace has none that runs (its three doc blocks are `ignore`, `text` and `sh`); a runnable doc test needs its own `cargo test --doc` step.
@@ -640,15 +647,15 @@ The nightly's `report` job (`scripts/ci-flaky-report.py --nightly`) is the one w
 - A failure is one issue: a test a lane annotated as `Failed test`, a check the performance lane annotated as `Failed measurement`, or, for a failed job that annotated none (its report step died, wrote nothing or never ran), the lane and its failed step.
   The lane is the job's name without its shard, so a test is the same failure in whichever shard ran it; `verify`'s gate, which fails whenever a lane it waits for did, is not a lane.
   A step that only prepares the runner (checking out, installing, fetching Herdr, a lost runner) adds the label `infra`; any other step, a build included, does not.
-- The issue names the test, measurement or step, the lane and its runner, an excerpt of the error (run through the same cleaning as a flaky issue's, since the page is public), the run and its commit, the lane's last green nightly within 14 runs, the pull requests merged since then that touched the failing test's file (for a step, the lane's workflows and the scripts they call; for a measurement, every one of them, since a measurement moves with any change) as candidates, and an expiry two days out.
+- The issue names the test, measurement or step, the lane and its runner, an excerpt of the error (run through the same cleaning as a flaky issue's), the run and its commit, the lane's last green nightly within 14 runs, the pull requests merged since then that touched the failing test's file (for a step, the lane's workflows and the scripts they call; for a measurement, every one of them, since a measurement moves with any change) as candidates, and an expiry two days out.
   It is ended by fixing the cause or reverting the candidate; a longer timeout, more retries or a skip does not end it.
 - The same failure again (a hidden `nightly-failure:<lane>:<test or step>` marker) is one comment per run attempt on the open issue, never a second issue.
   Windows web/build and Windows/macOS desktop calls that moved under `verify` resolve their former lane names to the same suite, so existing issues and green history remain connected; OS-only hand runs keep their direct names and use the same mapping.
 - A scheduled run on main, or a hand run of `all`, that passes a lane closes that lane's issues with a comment naming the commit and the run; a skipped or cancelled lane closes nothing.
 - One run opens at most 10 issues; the rest, with the count of failed tests a lane had no annotation room for, go into one issue, `nightly: N more failures in run <id>`, which the next scheduled run closes as it files its own.
 - A run of any other branch writes no issue.
-- The report fails its job when GitHub does, so a failure it could not file shows as a red report job rather than a silence.
-  `--dry-run` with `--repo` and `--run` prints what it would write for any finished run and writes nothing.
+- The report fails its job when GitHub does, and when it cannot mint the App's token, so a failure it could not file shows as a red report job rather than a silence.
+  `--dry-run` with `--runs-repo` and `--run` prints what it would write for any finished run and writes nothing; `--issues-repo` reads another issue repository than with-hide/hide-private.
 - The report reads a failed job's log through `gh api`, which from gh 2.97 hands over a body carrying a terminal escape only when told `--allow-escape-sequences`, and every job log carries one (the runner colors each step's command), so the report and its `--dry-run` need gh 2.97 or later.
   An older gh does not know that flag, so the report reads `gh --version` before the first log and stops with one line naming the minimum, the version it found and the fix (`upgrade gh`) instead of gh's `unknown flag` and usage.
   It decodes whatever bytes the log holds, reads a carriage return as a line break and removes every terminal control before it parses or quotes the text, and every excerpt a lane writes into an annotation or the report quotes into an issue goes through the same removal; on 2026-10-10 and 2026-10-16 the report died on the first log it read and opened no issue.

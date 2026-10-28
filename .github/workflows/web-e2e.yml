@@ -45,11 +45,14 @@ on:
         type: string
         required: false
         default: ""
+    # The development issues App's key (docs/TESTING.md, Flaky tests). A run
+    # without it, such as a fork's, files no issue and passes as before.
+    secrets:
+      HIDE_ISSUES_APP_KEY:
+        required: false
 
-# `issues: write` is for filing a flaky test; a caller must grant it.
 permissions:
   contents: read
-  issues: write
 
 jobs:
   # One cargo build for the whole lane. The debug `hided` reads `web/dist` from
@@ -320,6 +323,20 @@ jobs:
             args+=(--test-list "$shard_file")
           fi
           bash scripts/verify-web.sh web e2e "${args[@]}"
+      - name: Mint the development issues token
+        # Development issues live in with-hide/hide-private (docs/TESTING.md,
+        # Flaky tests); one App token reads this run here and files there. A run
+        # without the App's key, such as a fork's, files nothing and stays green.
+        id: issues-token
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
+          private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
+          owner: with-hide
+          repositories: hide,hide-private
       - name: Report flaky and failed tests
         # A test that failed and passed its retry becomes an issue with a
         # seven-day deadline, or a comment on the issue that tracks it. A
@@ -329,7 +346,7 @@ jobs:
         continue-on-error: true
         timeout-minutes: 5
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.issues-token.outputs.token }}
         run: |
           python3 scripts/ci-flaky-report.py --suite web --playwright web/e2e-report.json \
             --history-record agents/runs/ci-test-history \

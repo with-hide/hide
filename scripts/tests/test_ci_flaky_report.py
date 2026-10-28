@@ -83,6 +83,7 @@ class Filing(unittest.TestCase):
         def call(args, body=None):
             self.calls.append((args, body))
             path = args[0]
+            self.assertTrue(path.startswith("repos/o/i/issues"), f"an issue call outside the issue repository: {path}")
             page = int(parse_qs(urlsplit(path).query).get("page", [1])[0])
             start = (page - 1) * 100
             if "/issues?labels=" in path:
@@ -96,24 +97,24 @@ class Filing(unittest.TestCase):
 
     def test_a_new_flaky_test_is_filed_with_run_pull_request_and_a_week(self):
         test = {"file": "web/e2e/a.spec.ts", "name": "wobbles", "error": "\x1b[31mboom\x1b[0m"}
-        r.report([test], "Linux", ENV, self.call(), TODAY)
+        r.report([test], "Linux", ENV, self.call(), TODAY, "o/i")
         (args, body), = [c for c in self.calls if c[0][0].endswith("/issues")]
         self.assertEqual(body["labels"], ["quarantine", "bug"])
-        for text in ("actions/runs/77", "pull request #9", "abcdef012345", "Expires: 2026-10-12", "boom", "Linux"):
+        for text in ("actions/runs/77", "pull request o/r#9", "abcdef012345", "Expires: 2026-10-12", "boom", "Linux"):
             self.assertIn(text, body["body"])
         self.assertNotIn("\x1b", body["body"])
 
     def test_a_tracked_test_gets_a_comment_and_no_second_issue(self):
         test = {"file": "web/e2e/a.spec.ts", "name": "wobbles", "error": "boom"}
         issue = {"number": 5, "body": '`web/e2e/a.spec.ts` "wobbles"'}
-        r.report([test], "Linux", ENV, self.call([issue]), TODAY)
+        r.report([test], "Linux", ENV, self.call([issue]), TODAY, "o/i")
         posts = [c for c in self.calls if c[1] is not None]
-        self.assertEqual([c[0][0] for c in posts], ["repos/o/r/issues/5/comments"])
+        self.assertEqual([c[0][0] for c in posts], ["repos/o/i/issues/5/comments"])
 
     def test_the_same_run_is_not_added_twice(self):
         test = {"file": "web/e2e/a.spec.ts", "name": "wobbles", "error": "boom"}
         issue = {"number": 5, "body": '`web/e2e/a.spec.ts` "wobbles"'}
-        r.report([test], "Linux", ENV, self.call([issue], [{"body": "<!-- flaky-run:77:1 -->"}]), TODAY)
+        r.report([test], "Linux", ENV, self.call([issue], [{"body": "<!-- flaky-run:77:1 -->"}]), TODAY, "o/i")
         self.assertEqual([c for c in self.calls if c[1] is not None], [])
 
     def test_a_tracked_test_beyond_the_first_issue_page_gets_no_duplicate_issue(self):
@@ -123,9 +124,9 @@ class Filing(unittest.TestCase):
                 self.calls.clear()
                 existing = [{"number": n + 1, "body": "another test"} for n in range(count - 1)]
                 existing.append({"number": 500, "body": '`web/e2e/a.spec.ts` "wobbles"'})
-                r.report([test], "Linux", ENV, self.call(existing), TODAY)
+                r.report([test], "Linux", ENV, self.call(existing), TODAY, "o/i")
                 posts = [(args[0], body) for args, body in self.calls if body is not None]
-                self.assertEqual([path for path, _ in posts], ["repos/o/r/issues/500/comments"])
+                self.assertEqual([path for path, _ in posts], ["repos/o/i/issues/500/comments"])
 
     def test_the_same_run_beyond_the_first_comment_page_is_not_added_twice(self):
         test = {"file": "web/e2e/a.spec.ts", "name": "wobbles", "error": "boom"}
@@ -135,7 +136,7 @@ class Filing(unittest.TestCase):
                 self.calls.clear()
                 comments = [{"body": "an older run"} for _ in range(count - 1)]
                 comments.append({"body": "<!-- flaky-run:77:1 -->"})
-                r.report([test], "Linux", ENV, self.call([issue], comments), TODAY)
+                r.report([test], "Linux", ENV, self.call([issue], comments), TODAY, "o/i")
                 self.assertEqual([c for c in self.calls if c[1] is not None], [])
 
     def test_an_incomplete_issue_listing_makes_no_new_issue(self):
@@ -151,7 +152,7 @@ class Filing(unittest.TestCase):
                         raise RuntimeError("GitHub unavailable")
                     return [{"number": n, "body": "another test"} for n in range(100)]
                 with self.assertRaises(RuntimeError):
-                    r.report([test], "Linux", ENV, call, TODAY)
+                    r.report([test], "Linux", ENV, call, TODAY, "o/i")
                 self.assertEqual([c for c in self.calls if c[1] is not None], [])
 
     def test_an_incomplete_comment_listing_makes_no_duplicate_comment(self):
@@ -162,18 +163,18 @@ class Filing(unittest.TestCase):
                 return [{"number": 5, "body": "`wobbles`"}]
             return [{"body": "an older run"} for _ in range(100)]
         with self.assertRaises(RuntimeError):
-            r.report([test], "Linux", ENV, call, TODAY)
+            r.report([test], "Linux", ENV, call, TODAY, "o/i")
         self.assertEqual([c for c in self.calls if c[1] is not None], [])
 
     def test_a_flake_past_its_expiry_says_so(self):
         test = {"file": "web/e2e/a.spec.ts", "name": "wobbles", "error": "boom"}
         issue = {"number": 5, "body": '`web/e2e/a.spec.ts` "wobbles"\n- Expires: 2026-10-01\n'}
-        r.report([test], "Linux", ENV, self.call([issue]), TODAY)
+        r.report([test], "Linux", ENV, self.call([issue]), TODAY, "o/i")
         self.assertIn("past its expiry", [c for c in self.calls if c[1] is not None][0][1]["body"])
 
     def test_a_run_files_at_most_a_cap(self):
         tests = [{"file": None, "name": f"t{n}", "error": ""} for n in range(r.MAX_PER_RUN + 5)]
-        r.report(tests, "Linux", ENV, self.call(), TODAY)
+        r.report(tests, "Linux", ENV, self.call(), TODAY, "o/i")
         self.assertEqual(len([c for c in self.calls if c[0][0].endswith("/issues")]), r.MAX_PER_RUN)
 
     def test_a_failed_filing_leaves_the_tests_in_the_job_summary(self):
@@ -385,7 +386,7 @@ class FakeGitHub:
         path = args[0]
         if body is not None:
             self.writes.append((path, args[1:], body))
-            if path == "repos/o/r/issues":
+            if path == "repos/o/i/issues":
                 return {"number": 900 + len(self.writes), "html_url": f"https://example/{900 + len(self.writes)}"}
             return {}
         first_page = not re.search(r"[?&]page=(?!1(&|$))", path)
@@ -397,9 +398,9 @@ class FakeGitHub:
             return {"jobs": self.jobs[int(match.group(1))] if first_page else []}
         if match := re.match(r"repos/o/r/check-runs/(\d+)/annotations", path):
             return self.annotations.get(int(match.group(1)), []) if first_page else []
-        if path.startswith("repos/o/r/issues?labels=nightly-failure"):
+        if path.startswith("repos/o/i/issues?labels=nightly-failure"):
             return self.issues if first_page else []
-        if match := re.match(r"repos/o/r/issues/(\d+)/comments", path):
+        if match := re.match(r"repos/o/i/issues/(\d+)/comments", path):
             return self.comments.get(int(match.group(1)), []) if first_page else []
         if path.startswith("repos/o/r/actions/workflows/9/runs"):
             return {"workflow_runs": sorted(self.earlier, key=lambda run: run["created_at"], reverse=True)}
@@ -415,7 +416,7 @@ class FakeGitHub:
         raise AssertionError(f"unexpected call {args}")
 
     def opened(self):
-        return [body for path, _, body in self.writes if path == "repos/o/r/issues"]
+        return [body for path, _, body in self.writes if path == "repos/o/i/issues"]
 
     def commented(self):
         return [int(re.search(r"issues/(\d+)/comments", path).group(1)) for path, _, _ in self.writes if path.endswith("/comments")]
@@ -428,7 +429,7 @@ PACKAGE = "package / package (macos)"
 
 
 def nightly(github, lane_input=""):
-    report_run = r.Nightly("o/r", RUN, None, lane_input, github, SCRIPT.parents[1], TODAY)
+    report_run = r.Nightly("o/r", "o/i", RUN, None, lane_input, github, SCRIPT.parents[1], TODAY)
     report_run.apply(report_run.plan())
     return github
 
@@ -485,7 +486,7 @@ class NightlyFailures(unittest.TestCase):
         body = issue["body"]
         for text in ("<!-- nightly-failure:package / package (macos):desktop/e2e/s.spec.ts > server picker -->",
                      "`desktop/e2e/s.spec.ts:29` \"server picker\"", "actions/runs/100", HEAD[:12], GREEN[:12],
-                     "#668", "Expires: 2026-10-07", "revert the candidate"):
+                     "o/r#668", "Expires: 2026-10-07", "revert the candidate"):
             self.assertIn(text, body)
         self.assertNotIn("#670", body, "it touched another file")
         self.assertNotIn("#600", body, "it merged outside the range")
@@ -509,7 +510,7 @@ class NightlyFailures(unittest.TestCase):
         self.assertEqual(issue["title"], f"Nightly failure ({lane}): {check}")
         body = issue["body"]
         for text in (f"<!-- nightly-failure:{lane}:measurement {check} -->", f"- Measurement: \"{check}\"",
-                     "touching any path, since a measurement moves with any change): #668, #670",
+                     "touching any path, since a measurement moves with any change): o/r#668, o/r#670",
                      "trial did not complete successfully"):
             self.assertIn(text, body)
         self.assertNotIn("#600", body, "it merged outside the range")
@@ -539,7 +540,7 @@ class NightlyFailures(unittest.TestCase):
         again = nightly(self.package_failed(issues=[{"number": 5, "body": marker}], comments=seen))
         self.assertEqual(again.writes, [])
         rerun = self.package_failed(issues=[{"number": 5, "body": marker}], comments=seen)
-        attempt = r.Nightly("o/r", RUN, 2, "", rerun, SCRIPT.parents[1], TODAY)
+        attempt = r.Nightly("o/r", "o/i", RUN, 2, "", rerun, SCRIPT.parents[1], TODAY)
         attempt.apply(attempt.plan())
         self.assertEqual(rerun.commented(), [5])
         self.assertIn("<!-- nightly-run:100:2 -->", rerun.writes[0][2]["body"])
@@ -610,15 +611,15 @@ class NightlyFailures(unittest.TestCase):
 
     def test_a_run_off_main_writes_nothing(self):
         github = FakeGitHub([job(1, PACKAGE, "failure")], branch="topic")
-        self.assertEqual(r.Nightly("o/r", RUN, None, "", github, SCRIPT.parents[1], TODAY).plan(), [])
-        args = r.argparse.Namespace(repo="o/r", run=None, attempt=None, lane_input="", dry_run=False)
+        self.assertEqual(r.Nightly("o/r", "o/i", RUN, None, "", github, SCRIPT.parents[1], TODAY).plan(), [])
+        args = r.argparse.Namespace(runs_repo="o/r", issues_repo="o/i", run=None, attempt=None, lane_input="", dry_run=False)
         calls = []
         self.assertEqual(r.nightly(args, {**ENV, "GITHUB_REF": "refs/heads/topic"}, lambda *a, **k: calls.append(a)), 0)
         self.assertEqual(calls, [])
 
     def test_a_dry_run_reads_and_writes_nothing(self):
         github = self.package_failed()
-        args = r.argparse.Namespace(repo="o/r", run=str(RUN), attempt=None, lane_input="", dry_run=True)
+        args = r.argparse.Namespace(runs_repo="o/r", issues_repo="o/i", run=str(RUN), attempt=None, lane_input="", dry_run=True)
         saved, r.date = r.date, type("D", (), {"today": staticmethod(lambda: TODAY), "fromisoformat": date.fromisoformat})
         self.addCleanup(setattr, r, "date", saved)
         self.assertEqual(r.nightly(args, {}, github), 0)
@@ -627,7 +628,7 @@ class NightlyFailures(unittest.TestCase):
     def test_candidates_come_from_every_page_of_a_long_range(self):
         github = self.package_failed()
         github.commits = [f"x{n}" for n in range(250)] + ["m1"]
-        self.assertIn("): #668", nightly(github).opened()[0]["body"])
+        self.assertIn("): o/r#668", nightly(github).opened()[0]["body"])
 
     def test_a_range_longer_than_is_read_says_the_candidates_are_unknown(self):
         github = self.package_failed()
@@ -803,6 +804,7 @@ class RetryGitHub:
     def __call__(self, args, body=None):
         path = args[0]
         self.reads.append(path)
+        assert path.startswith("repos/o/i/issues" if "/issues" in path else "repos/o/r/"), path
         page = int(parse_qs(urlsplit(path).query).get("page", [1])[0])
         if body is not None:
             self.writes.append((path, body))
@@ -848,7 +850,7 @@ class RetryHistory(unittest.TestCase):
 
     def collect(self, github, env=HISTORY_ENV):
         with contextlib.redirect_stdout(io.StringIO()):
-            r.retry_history(env, github, github.download)
+            r.retry_history(env, github, github.download, "o/i")
 
     def test_unexpected_then_expected_files_first_failure_at_actual_merge_checkout(self):
         github = RetryGitHub()
@@ -1087,7 +1089,7 @@ class RetryHistory(unittest.TestCase):
                 return {"jobs": github.jobs[1] * 100}
             return original(args, body)
         with self.assertRaisesRegex(RuntimeError, "more than 1000"):
-            r.retry_history(HISTORY_ENV, infinite, github.download)
+            r.retry_history(HISTORY_ENV, infinite, github.download, "o/i")
         self.assertEqual(github.writes, [])
 
     def test_archive_with_extra_files_or_excess_expansion_is_refused(self):
@@ -1098,7 +1100,7 @@ class RetryHistory(unittest.TestCase):
                 archive.writestr(extra, content)
             github = RetryGitHub()
             with self.assertRaises(RuntimeError):
-                r.retry_history(HISTORY_ENV, github, lambda args: data.getvalue())
+                r.retry_history(HISTORY_ENV, github, lambda args: data.getvalue(), "o/i")
             self.assertEqual(github.writes, [])
 
     def test_artifact_and_test_count_caps_stop_before_filing(self):
@@ -1116,7 +1118,7 @@ class RetryHistory(unittest.TestCase):
                 specs.extend({**template, "title": f"test {n}"} for n in range(10001))
                 call = github
             with self.subTest(kind=kind), self.assertRaisesRegex(RuntimeError, "exceeds"):
-                r.retry_history(HISTORY_ENV, call, github.download)
+                r.retry_history(HISTORY_ENV, call, github.download, "o/i")
             self.assertEqual(github.writes, [])
 
     def test_artifact_download_refuses_oversized_stdout_and_stderr(self):

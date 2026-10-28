@@ -23,11 +23,14 @@ on:
         description: The pinned Herdr asset to run, as `fetch-herdr-runtime.sh --platform` names it.
         type: string
         required: true
+    # The development issues App's key (docs/TESTING.md, Flaky tests). A run
+    # without it, such as a fork's, files no issue and passes as before.
+    secrets:
+      HIDE_ISSUES_APP_KEY:
+        required: false
 
-# `issues: write` is for filing a flaky test; a caller must grant it.
 permissions:
   contents: read
-  issues: write
 
 jobs:
   mailbox:
@@ -163,12 +166,26 @@ jobs:
           HIDE_E2E_HERDR_OLDER_BIN: ${{ steps.older-herdr.outputs.bin }}
           HIDE_E2E_HERDR_OLDER_PROTOCOL_BIN: ${{ steps.older-protocol-herdr.outputs.bin }}
         run: bash scripts/verify-cargo.sh nextest --profile ci -p hided --test it -E 'test(/^herdr_handoff::/)' --run-ignored only
+      - name: Mint the development issues token
+        # Development issues live in with-hide/hide-private (docs/TESTING.md,
+        # Flaky tests); one App token reads this run here and files there. A run
+        # without the App's key, such as a fork's, files nothing and stays green.
+        id: issues-token
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
+          private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
+          owner: with-hide
+          repositories: hide,hide-private
       - name: Report flaky and failed tests
         if: ${{ !cancelled() }}
         continue-on-error: true
         timeout-minutes: 5
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.issues-token.outputs.token }}
         run: python3 scripts/ci-flaky-report.py --suite rust --junit target/nextest/ci/junit*.xml
       - name: Keep the lane's run directory
         # The daemon's and both Herdr servers' logs behind a failed run, without
