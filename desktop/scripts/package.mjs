@@ -143,14 +143,18 @@ if (!/^[0-9]+$/.test(order)) throw new Error(`the package's build order could no
 // the app is assembled from compiled binaries. No partial Mac or Windows app
 // may silently leave a Linux device, or a WSL distribution, without its kit.
 // The bundles a run's `device-bundles` job made, downloaded here, are used as
-// they are, so the Mac and Windows apps ship one manifest; a local Mac build
-// without them makes its own from the helpers.
+// they are, so the Mac and Windows apps ship one manifest. A release (one
+// that names HIDE_VERSION) and every Windows app refuse to start without
+// them, since bundles made again here would not match the digests the other
+// app embeds; a local Mac build without them makes its own from the helpers.
 const deviceBundles = path.join(out, "device-bundles");
 const carriesDeviceKit = (platform === "darwin" || platform === "win32") && phase !== "compile";
 const identity = { version, commit, order };
 const madeBundles = fs.existsSync(path.join(deviceBundles, DEVICE_BUNDLE_MANIFEST));
-if (carriesDeviceKit && !madeBundles && platform === "win32") {
-  throw new Error(`the Windows app needs this run's device bundles in ${deviceBundles} (desktop/scripts/device-helpers.mjs bundle)`);
+const releasing = Boolean(process.env.HIDE_VERSION);
+if (carriesDeviceKit && !madeBundles && (releasing || platform === "win32")) {
+  const app = releasing ? `the ${version} release` : "the Windows app";
+  throw new Error(`${app} needs this run's device bundles in ${deviceBundles} (the hide-device-bundles artifact, made by desktop/scripts/device-helpers.mjs bundle)`);
 }
 const deviceManifest = !carriesDeviceKit
   ? null

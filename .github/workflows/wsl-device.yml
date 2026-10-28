@@ -120,7 +120,7 @@ jobs:
           HIDE_E2E_WSL_DISTRO: Ubuntu-24.04
           HIDE_E2E_WSL_PACKAGES: ${{ runner.temp }}/wsl-kit
         # The test prints the WSL version and install counts it saw.
-        run: bash scripts/verify-cargo.sh nextest --profile ci -p hided --test it -E 'test(/^wsl_device::/)' --run-ignored only --success-output immediate
+        run: bash scripts/verify-cargo.sh nextest --profile ci -p hided --test it -E 'test(=wsl_device::a_wsl_distribution_connects_works_and_ends_with_its_link)' --run-ignored only --success-output immediate
       - name: Mint the development issues token
         # Development issues live in with-hide/hide-private (docs/TESTING.md,
         # Flaky tests); one App token reads this run here and files there. A run

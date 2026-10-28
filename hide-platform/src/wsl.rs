@@ -66,8 +66,8 @@ pub fn program() -> io::Result<PathBuf> {
 
 /// The distributions that run now, as `program --list --running --quiet`
 /// answers within `deadline`; one that is installed but not running is not
-/// named. `TimedOut` when the program did not answer in time, which says
-/// nothing about which run.
+/// named. `TimedOut` when the program did not answer in time, and an error
+/// when it failed, each of which says nothing about which run (D-15).
 pub fn running_from(program: &Path, deadline: Duration) -> io::Result<BTreeSet<String>> {
     let mut command = Command::new(program);
     command
@@ -88,9 +88,21 @@ pub fn running_from(program: &Path, deadline: Duration) -> io::Result<BTreeSet<S
             )),
         })?;
     // A list with no running distribution exits nonzero on some WSL
-    // releases and says so in the account's language; the names are what
-    // counts, so the code is not read.
-    Ok(running_names(&decode(&output.stdout)))
+    // releases and says so in the account's language. A failing service
+    // exits nonzero too, silently or naming a `Wsl/` error code, so only an
+    // exit that says something and names no error code reads as none.
+    let stdout = decode(&output.stdout);
+    if !output.status.success() {
+        let stderr = decode(&output.stderr);
+        let said = format!("{stdout}{stderr}");
+        if said.trim().is_empty() || said.contains("Wsl/") {
+            return Err(io::Error::other(format!(
+                "wsl.exe could not list the running distributions ({})",
+                output.status
+            )));
+        }
+    }
+    Ok(running_names(&stdout))
 }
 
 /// The names in a `--list --running --quiet` answer: one per line, and any
@@ -428,6 +440,38 @@ mod tests {
             BTreeSet::from(["Ubuntu-24.04".to_owned(), "우분투".to_owned()])
         );
         assert!(running_names("").is_empty());
+    }
+
+    /// D-15: a `wsl.exe` that fails is never read as nothing running.
+    #[cfg(unix)]
+    #[test]
+    fn a_failing_wsl_exe_says_nothing_about_which_distributions_run() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let program = dir.path().join("wsl.exe");
+        let answer = |script: &str| {
+            std::fs::write(&program, format!("#!/bin/sh\n{script}\n")).unwrap();
+            std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+            running_from(&program, Duration::from_secs(10))
+        };
+        assert!(answer("exit 1").is_err(), "silent and failing");
+        assert!(
+            answer("echo 'Error code: Wsl/Service/E_UNEXPECTED'; exit 1").is_err(),
+            "a service error"
+        );
+        assert!(
+            answer("echo 'Wsl/Service/E_UNEXPECTED' >&2; exit 1").is_err(),
+            "a service error on standard error"
+        );
+        assert_eq!(
+            answer("echo 'There are no running distributions.'; exit 1").unwrap(),
+            BTreeSet::new()
+        );
+        assert_eq!(answer("exit 0").unwrap(), BTreeSet::new());
+        assert_eq!(
+            answer("echo Ubuntu; exit 0").unwrap(),
+            BTreeSet::from(["Ubuntu".to_owned()])
+        );
     }
 
     #[test]

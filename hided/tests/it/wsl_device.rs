@@ -11,8 +11,9 @@
 //! `hide-agent-hooks-linux-x86_64` and `herdr-linux-x86_64`.
 #![cfg(windows)]
 
+use std::io::BufRead;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
@@ -28,6 +29,9 @@ use serde_json::{Value, json};
 
 const TIMEOUT: Duration = Duration::from_secs(120);
 const USER: &str = "hidetest";
+/// Set for the owner process the crash step starts: the distribution it
+/// connects to.
+const OWNER: &str = "HIDE_E2E_WSL_OWNER";
 
 #[derive(Default)]
 struct Sink {
@@ -144,6 +148,44 @@ fn establish(
     (result, closed)
 }
 
+fn connector(sink: Arc<Sink>) -> hide_node::ssh::Connector {
+    let packages = PathBuf::from(
+        std::env::var_os("HIDE_E2E_WSL_PACKAGES").expect("set HIDE_E2E_WSL_PACKAGES"),
+    );
+    hide_node::ssh::Connector::new(Some(packages))
+        .with_helper_root("~/.hide/host-helper".to_owned())
+        .with_terminals(sink)
+        .with_pane_events(Arc::default())
+        .with_wsl(WslAccess::of_this_pc().expect("this runner has WSL"))
+}
+
+fn distribution_id(distro: &str) -> String {
+    hide_platform::wsl::distributions()
+        .unwrap()
+        .into_iter()
+        .find(|found| found.name == distro)
+        .unwrap()
+        .id
+}
+
+/// The consent the first connection bound to the lane's account.
+fn bound(distro: &str) -> HostConsent {
+    consent(Some(hide_node_link::device::HostIdentity {
+        user: USER.to_owned(),
+        hostname: distro.to_owned(),
+        port: 0,
+        host_key_sha256: format!("wsl:{}", distribution_id(distro)),
+    }))
+}
+
+fn helper_running(distro: &str) -> bool {
+    as_root(
+        distro,
+        "pgrep -f '[n]ode serve' >/dev/null && echo alive || echo gone",
+    )
+    .contains("alive")
+}
+
 fn herdr(transport: &dyn DialedTransport, method: &str, params: Value) -> Value {
     hide_herdr_client::request_with_connector(
         &*transport.herdr_api_connector(),
@@ -169,16 +211,8 @@ fn pane_of(value: &Value) -> Option<&str> {
 #[ignore = "a real WSL 2 distribution of the runner's own; the windows wsl lane sets it up"]
 fn a_wsl_distribution_connects_works_and_ends_with_its_link() {
     let distro = std::env::var("HIDE_E2E_WSL_DISTRO").expect("set HIDE_E2E_WSL_DISTRO");
-    let packages = PathBuf::from(
-        std::env::var_os("HIDE_E2E_WSL_PACKAGES").expect("set HIDE_E2E_WSL_PACKAGES"),
-    );
-    let access = WslAccess::of_this_pc().expect("this runner has WSL");
     let sink = Arc::new(Sink::default());
-    let connector = hide_node::ssh::Connector::new(Some(packages))
-        .with_helper_root("~/.hide/host-helper".to_owned())
-        .with_terminals(sink.clone())
-        .with_pane_events(Arc::default())
-        .with_wsl(access);
+    let connector = connector(sink.clone());
 
     // D-16: which WSL the runner gives, read without starting anything.
     let listed = connector.wsl_distributions().expect("the registry reads");
@@ -191,12 +225,7 @@ fn a_wsl_distribution_connects_works_and_ends_with_its_link() {
         row.wsl_version, row.setup_unfinished
     );
     assert_eq!(row.wsl_version, 2, "the lane runs WSL 2");
-    let id = hide_platform::wsl::distributions()
-        .unwrap()
-        .into_iter()
-        .find(|found| found.name == distro)
-        .unwrap()
-        .id;
+    let id = distribution_id(&distro);
     let transport = connector.wsl_transport("wsl-test", &distro).unwrap();
 
     // B28: a distribution whose first-run setup has not run is refused
@@ -345,12 +374,7 @@ fn a_wsl_distribution_connects_works_and_ends_with_its_link() {
         .expect("the link's end is heard");
     println!("link ended: {reason}");
     wait_for("the helper to end inside WSL", || {
-        as_root(
-            &distro,
-            "pgrep -f '[n]ode serve' >/dev/null && echo alive || echo gone",
-        )
-        .contains("gone")
-        .then_some(())
+        (!helper_running(&distro)).then_some(())
     });
     assert!(
         as_root(
@@ -364,12 +388,7 @@ fn a_wsl_distribution_connects_works_and_ends_with_its_link() {
 
     // B26: the next connection reuses the install whole and finds the pane
     // it left; B23: a running distribution reconnects without leave to wake.
-    let bound = consent(Some(hide_node_link::device::HostIdentity {
-        user: USER.to_owned(),
-        hostname: distro.clone(),
-        port: 0,
-        host_key_sha256: format!("wsl:{id}"),
-    }));
+    let bound = bound(&distro);
     let (again, _closed) = establish(&*transport, &bound, Wake::NotAllowed);
     let again = again.unwrap_or_else(|error| panic!("reconnection: {error}"));
     assert!(!again.installed);
@@ -381,6 +400,51 @@ fn a_wsl_distribution_connects_works_and_ends_with_its_link() {
     );
     again.node.host.close("the test ends the second link");
     drop(again);
+    wait_for("the second helper to end inside WSL", || {
+        (!helper_running(&distro)).then_some(())
+    });
+
+    // B27: a process that owns a link and dies with no destructor run, as
+    // a crashed hided does, still ends the helper inside WSL: its
+    // `wsl.exe` sits in a job object that ends with the process, and the
+    // helper reads the end of its input. The same Herdr keeps running.
+    let herdr_pids = as_root(&distro, "pgrep -x herdr");
+    let mut owner = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "wsl_device::a_link_owner_that_is_killed",
+            "--ignored",
+            "--nocapture",
+        ])
+        .env(OWNER, &distro)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("the owner process starts");
+    let (connected, owner_connected) = mpsc::channel();
+    let lines = std::io::BufReader::new(owner.stdout.take().unwrap());
+    std::thread::spawn(move || {
+        for line in lines.lines().map_while(Result::ok) {
+            if line.contains("owner connected") {
+                let _ = connected.send(());
+            }
+        }
+    });
+    owner_connected
+        .recv_timeout(TIMEOUT)
+        .expect("the owner process connects");
+    assert!(helper_running(&distro), "the owner's helper runs");
+    owner.kill().expect("the owner process is ended");
+    let _ = owner.wait();
+    wait_for("the killed owner's helper to end inside WSL", || {
+        (!helper_running(&distro)).then_some(())
+    });
+    assert_eq!(
+        as_root(&distro, "pgrep -x herdr"),
+        herdr_pids,
+        "the same Herdr outlives its owner's crash"
+    );
+    println!("killed owner: helper gone, herdr {}", herdr_pids.trim());
 
     // B30: the Windows account's agent settings are not the WSL device's.
     assert_eq!(
@@ -413,4 +477,19 @@ fn a_wsl_distribution_connects_works_and_ends_with_its_link() {
     let woken = woken.unwrap_or_else(|error| panic!("woken connection: {error}"));
     assert!(running(&distro));
     woken.node.host.close("the test is done");
+}
+
+/// The link owner the crash step kills: it connects as the lane's account
+/// and waits on its input, so nothing of its own runs at its end.
+#[test]
+#[ignore = "started and killed by a_wsl_distribution_connects_works_and_ends_with_its_link"]
+fn a_link_owner_that_is_killed() {
+    let distro = std::env::var(OWNER).expect("started by the crash step");
+    let connector = connector(Arc::default());
+    let transport = connector.wsl_transport("wsl-owner", &distro).unwrap();
+    let (owned, _closed) = establish(&*transport, &bound(&distro), Wake::NotAllowed);
+    let _owned = owned.unwrap_or_else(|error| panic!("the owner's connection: {error}"));
+    println!("owner connected");
+    let _ = std::io::stdin().read_line(&mut String::new());
+    panic!("the owner is killed, never let go");
 }
