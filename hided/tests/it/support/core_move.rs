@@ -202,201 +202,219 @@ impl Fixture {
             .tempdir_in("/tmp")?
             .keep();
         let root = hide_platform::fs::identity::canonical(&root)?;
-        let (mut source_env, source_socket, source_state) =
-            machine_env(&root.join("m"), &bin, SOURCE_NODE)?;
-        let (mut target_env, target_socket, mut target_state) =
-            machine_env(&root.join("c"), &bin, TARGET_NODE)?;
-        match reach {
-            Reach::Direct => {}
-            Reach::ThroughLink => {
-                std::os::unix::fs::symlink(root.join("c"), root.join("via"))?;
-                target_state = root.join("via/s");
-                target_env.set("HIDE_STATE_DIR", target_state.as_os_str());
+        // A start that fails before the fixture exists keeps its root with
+        // no `finish` or drop to shed it (`support::run::shed_programs`).
+        let started = (|| -> Result<Self> {
+            let (mut source_env, source_socket, source_state) =
+                machine_env(&root.join("m"), &bin, SOURCE_NODE)?;
+            let (mut target_env, target_socket, mut target_state) =
+                machine_env(&root.join("c"), &bin, TARGET_NODE)?;
+            match reach {
+                Reach::Direct => {}
+                Reach::ThroughLink => {
+                    std::os::unix::fs::symlink(root.join("c"), root.join("via"))?;
+                    target_state = root.join("via/s");
+                    target_env.set("HIDE_STATE_DIR", target_state.as_os_str());
+                }
+                Reach::LinkedFolder => {
+                    std::os::unix::fs::symlink(&target_state, root.join("c/linked"))?;
+                    target_state = root.join("c/linked");
+                    target_env.set("HIDE_STATE_DIR", target_state.as_os_str());
+                }
             }
-            Reach::LinkedFolder => {
-                std::os::unix::fs::symlink(&target_state, root.join("c/linked"))?;
-                target_state = root.join("c/linked");
-                target_env.set("HIDE_STATE_DIR", target_state.as_os_str());
+            target_env.set("HIDE_CORE_STARTER", "fixture");
+            // The target's reads find `herdr` where a real install puts it.
+            fs::create_dir_all(target_env.home.join(".local/bin"))?;
+            std::os::unix::fs::symlink(&bin, target_env.home.join(".local/bin/herdr"))?;
+            // The move's checks on the target run stand-ins for the machine's
+            // own `gh`, session and power settings, and the agent Hide AI asks
+            // answers there as signed in; `fail_checks` turns each against the
+            // move.
+            let preflight = root.join("c/preflight");
+            fs::create_dir(&preflight)?;
+            for (name, script) in STAND_INS {
+                stand_in(&preflight.join(name), script)?;
             }
-        }
-        target_env.set("HIDE_CORE_STARTER", "fixture");
-        // The target's reads find `herdr` where a real install puts it.
-        fs::create_dir_all(target_env.home.join(".local/bin"))?;
-        std::os::unix::fs::symlink(&bin, target_env.home.join(".local/bin/herdr"))?;
-        // The move's checks on the target run stand-ins for the machine's
-        // own `gh`, session and power settings, and the agent Hide AI asks
-        // answers there as signed in; `fail_checks` turns each against the
-        // move.
-        let preflight = root.join("c/preflight");
-        fs::create_dir(&preflight)?;
-        for (name, script) in STAND_INS {
-            stand_in(&preflight.join(name), script)?;
-        }
-        // The agent answers as signed in on both machines: the target's for
-        // a move there, this machine's for a move back.
-        for environment in [&source_env, &target_env] {
-            fs::create_dir_all(environment.home.join(".local/bin"))?;
-            stand_in(&environment.home.join(".local/bin/claude"), CLAUDE)?;
-            fs::create_dir_all(environment.home.join("bin"))?;
-            stand_in(&environment.home.join("bin/gh"), GH)?;
-        }
-        // Each runs once here, so the system's first look at a new program
-        // (macOS checks each one once, machine-wide in turn) is not inside a
-        // check's bound.
-        for (environment, program) in [&source_env, &target_env]
-            .into_iter()
-            .map(|environment| (environment, environment.home.join("bin/gh")))
-        {
-            let mut command = environment.command(&program);
+            // The agent answers as signed in on both machines: the target's for
+            // a move there, this machine's for a move back.
+            for environment in [&source_env, &target_env] {
+                fs::create_dir_all(environment.home.join(".local/bin"))?;
+                stand_in(&environment.home.join(".local/bin/claude"), CLAUDE)?;
+                fs::create_dir_all(environment.home.join("bin"))?;
+                stand_in(&environment.home.join("bin/gh"), GH)?;
+            }
+            // Each runs once here, so the system's first look at a new program
+            // (macOS checks each one once, machine-wide in turn) is not inside a
+            // check's bound.
+            for (environment, program) in [&source_env, &target_env]
+                .into_iter()
+                .map(|environment| (environment, environment.home.join("bin/gh")))
+            {
+                let mut command = environment.command(&program);
+                command.args(["auth", "status"]);
+                successful(command)?;
+            }
+            for (program, args) in [
+                (preflight.join("gh"), &[][..]),
+                (preflight.join("launchctl"), &[]),
+                (preflight.join("pmset"), &[]),
+                (
+                    target_env.home.join(".local/bin/claude"),
+                    &["auth", "status"],
+                ),
+            ] {
+                let mut command = target_env.command(&program);
+                command.args(args);
+                successful(command)?;
+            }
+            let mut command = source_env.command(source_env.home.join(".local/bin/claude"));
             command.args(["auth", "status"]);
             successful(command)?;
-        }
-        for (program, args) in [
-            (preflight.join("gh"), &[][..]),
-            (preflight.join("launchctl"), &[]),
-            (preflight.join("pmset"), &[]),
-            (
-                target_env.home.join(".local/bin/claude"),
-                &["auth", "status"],
-            ),
-        ] {
-            let mut command = target_env.command(&program);
-            command.args(args);
-            successful(command)?;
-        }
-        let mut command = source_env.command(source_env.home.join(".local/bin/claude"));
-        command.args(["auth", "status"]);
-        successful(command)?;
-        target_env.set("HIDE_PREFLIGHT_PROGRAMS", preflight.into_os_string());
-        let settings = hide_platform::host::state_dir_under(&source_env.home).join("hide/ai.json");
-        fs::create_dir_all(settings.parent().context("settings folder")?)?;
-        fs::write(&settings, r#"{"provider":"claude"}"#)?;
-        // A shipped build carries no debug data; the helper upload stays
-        // inside its bound with a copy of the same kind.
-        let cli = root.join("cli");
-        fs::create_dir(&cli)?;
-        for name in ["hide", "hided", "hide-agent-hooks"] {
-            let staged = cli.join(name);
-            fs::copy(source_cli.join(name), &staged)?;
-            hide_platform::fs::private::restrict_to_owner(&staged)?;
-            let mut strip = source_env.command("/usr/bin/strip");
-            strip.arg(&staged);
-            successful(strip)?;
-            #[cfg(target_os = "macos")]
-            {
-                let mut sign = source_env.command("/usr/bin/codesign");
-                sign.args(["--force", "--sign", "-"]).arg(&staged);
-                successful(sign)?;
+            target_env.set("HIDE_PREFLIGHT_PROGRAMS", preflight.into_os_string());
+            let settings =
+                hide_platform::host::state_dir_under(&source_env.home).join("hide/ai.json");
+            fs::create_dir_all(settings.parent().context("settings folder")?)?;
+            fs::write(&settings, r#"{"provider":"claude"}"#)?;
+            // A shipped build carries no debug data; the helper upload stays
+            // inside its bound with a copy of the same kind.
+            let cli = root.join("cli");
+            fs::create_dir(&cli)?;
+            for name in ["hide", "hided", "hide-agent-hooks"] {
+                let staged = cli.join(name);
+                fs::copy(source_cli.join(name), &staged)?;
+                hide_platform::fs::private::restrict_to_owner(&staged)?;
+                let mut strip = source_env.command("/usr/bin/strip");
+                strip.arg(&staged);
+                successful(strip)?;
+                #[cfg(target_os = "macos")]
+                {
+                    let mut sign = source_env.command("/usr/bin/codesign");
+                    sign.args(["--force", "--sign", "-"]).arg(&staged);
+                    successful(sign)?;
+                }
             }
-        }
-        // The target already holds this build, as a device that connected
-        // before does, so its helper is ready within `READY_BOUND`: sending
-        // it took 18 to 29 s of the 30 s on GitHub's Linux runner, writing
-        // and reading back each of `hided` and `hide` (about 140 MB each in a
-        // debug build), against about 1 s for the rest of the connection. The
-        // connection still checks the helper's bytes before it starts it, and
-        // a test's other build is still sent. The device install itself is
-        // `remote_delivery`'s and `device_bootstrap`'s to prove.
-        hide_node::ssh::host::HelperPackages::new(Some(cli.clone()))
-            .install_here(&target_env.home.join("helper"))
-            .map_err(anyhow::Error::msg)?;
-        let ssh_dir = source_env.home.join(".ssh");
-        fs::create_dir_all(&ssh_dir)?;
-        for name in ["host", "client"] {
-            let mut command = source_env.command("/usr/bin/ssh-keygen");
-            command
-                .args(["-q", "-t", "ed25519", "-N", "", "-f"])
-                .arg(ssh_dir.join(name));
-            successful(command)?;
-        }
-        let source_herdr = Herdr::start(
-            &root.join("m"),
-            source_env.clone(),
-            source_socket.clone(),
-            &bin,
-        )?;
-        let target_herdr = Herdr::start(
-            &root.join("c"),
-            target_env.clone(),
-            target_socket.clone(),
-            &bin,
-        )?;
-        let ssh = Ssh::start(
-            target_env.clone(),
-            target_socket.clone(),
-            &ssh_dir.join("host"),
-            &ssh_dir.join("client"),
-        )?;
-        let public = fs::read_to_string(ssh_dir.join("host.pub"))?;
-        fs::write(
-            ssh_dir.join("known_hosts"),
-            format!("[127.0.0.1]:{} {}\n", ssh.port, public.trim()),
-        )?;
-        fs::write(
-            ssh_dir.join("config"),
-            format!(
-                "Host {ALIAS}\n  HostName 127.0.0.1\n  Port {}\n  User fixture\n  IdentityFile {}\n  IdentityAgent none\n",
-                ssh.port,
-                ssh_dir.join("client").display(),
-            ),
-        )?;
-        source_env.set(
-            "HIDE_HOST_HELPER_ROOT",
-            target_env.home.join("helper").into_os_string(),
-        );
-        source_env.set(
-            "HIDE_HOST_CLI_DIR",
-            target_env.home.join("bin").into_os_string(),
-        );
-        let mut fixture = Self {
-            source: Machine {
-                herdr: source_herdr,
-                state: source_state,
-            },
-            target: Machine {
-                herdr: target_herdr,
-                state: target_state,
-            },
-            ssh,
-            cli,
-            root,
-            removed: false,
-            daemon: None,
-            port: 0,
-            token: String::new(),
-        };
-        fixture.source.herdr.environment = source_env;
-        fixture.start_source()?;
-        fixture.event(
+            // The target already holds this build, as a device that connected
+            // before does, so its helper is ready within `READY_BOUND`: sending
+            // it took 18 to 29 s of the 30 s on GitHub's Linux runner, writing
+            // and reading back each of `hided` and `hide` (about 140 MB each in a
+            // debug build), against about 1 s for the rest of the connection. The
+            // connection still checks the helper's bytes before it starts it, and
+            // a test's other build is still sent. The device install itself is
+            // `remote_delivery`'s and `device_bootstrap`'s to prove.
+            hide_node::ssh::host::HelperPackages::new(Some(cli.clone()))
+                .install_here(&target_env.home.join("helper"))
+                .map_err(anyhow::Error::msg)?;
+            let ssh_dir = source_env.home.join(".ssh");
+            fs::create_dir_all(&ssh_dir)?;
+            for name in ["host", "client"] {
+                let mut command = source_env.command("/usr/bin/ssh-keygen");
+                command
+                    .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+                    .arg(ssh_dir.join(name));
+                successful(command)?;
+            }
+            let source_herdr = Herdr::start(
+                &root.join("m"),
+                source_env.clone(),
+                source_socket.clone(),
+                &bin,
+            )?;
+            let target_herdr = Herdr::start(
+                &root.join("c"),
+                target_env.clone(),
+                target_socket.clone(),
+                &bin,
+            )?;
+            let ssh = Ssh::start(
+                target_env.clone(),
+                target_socket.clone(),
+                &ssh_dir.join("host"),
+                &ssh_dir.join("client"),
+            )?;
+            let public = fs::read_to_string(ssh_dir.join("host.pub"))?;
+            fs::write(
+                ssh_dir.join("known_hosts"),
+                format!("[127.0.0.1]:{} {}\n", ssh.port, public.trim()),
+            )?;
+            fs::write(
+                ssh_dir.join("config"),
+                format!(
+                    "Host {ALIAS}\n  HostName 127.0.0.1\n  Port {}\n  User fixture\n  IdentityFile {}\n  IdentityAgent none\n",
+                    ssh.port,
+                    ssh_dir.join("client").display(),
+                ),
+            )?;
+            source_env.set(
+                "HIDE_HOST_HELPER_ROOT",
+                target_env.home.join("helper").into_os_string(),
+            );
+            source_env.set(
+                "HIDE_HOST_CLI_DIR",
+                target_env.home.join("bin").into_os_string(),
+            );
+            let mut fixture = Self {
+                source: Machine {
+                    herdr: source_herdr,
+                    state: source_state,
+                },
+                target: Machine {
+                    herdr: target_herdr,
+                    state: target_state,
+                },
+                ssh,
+                cli,
+                root: root.clone(),
+                removed: false,
+                daemon: None,
+                port: 0,
+                token: String::new(),
+            };
+            fixture.source.herdr.environment = source_env;
+            fixture.start_source()?;
+            fixture.event(
             "create_workspace",
             json!({"path": fixture.source.project(), "label": "Source fixture", "initialize_git": false}),
         )?;
-        fixture.event(
+            fixture.event(
             "register_device",
             json!({"id": DEVICE_ID, "label": "Target fixture", "ssh_alias": ALIAS, "herdr_socket_path": target_socket, "host_consent": true}),
         )?;
-        fixture.device_ready()?;
-        fixture.event(
+            fixture.device_ready()?;
+            fixture.event(
             "create_workspace",
             json!({"device_id": DEVICE_ID, "path": fixture.target.project(), "label": "Target fixture", "initialize_git": false}),
         )?;
-        wait_for("both machines' projects registered", || {
-            let projects = fixture.projects()?;
-            Ok((projects.len() == 2).then_some(()))
-        })?;
-        // Saved too: a journey that kills the source gives its save thread
-        // no last write.
-        let saved = fixture.source.state.join("core-state.json");
-        wait_for("both machines' projects saved", || {
-            let state: Value = serde_json::from_slice(&read(&saved)?)?;
-            Ok((state
-                .pointer("/workspace_registrations")
-                .and_then(Value::as_array)
-                .map(Vec::len)
-                == Some(2))
-            .then_some(()))
-        })?;
-        Ok(fixture)
+            wait_for("both machines' projects registered", || {
+                let projects = fixture.projects()?;
+                Ok((projects.len() == 2).then_some(()))
+            })?;
+            // Saved too: a journey that kills the source gives its save thread
+            // no last write.
+            let saved = fixture.source.state.join("core-state.json");
+            wait_for("both machines' projects saved", || {
+                let state: Value = serde_json::from_slice(&read(&saved)?)?;
+                Ok((state
+                    .pointer("/workspace_registrations")
+                    .and_then(Value::as_array)
+                    .map(Vec::len)
+                    == Some(2))
+                .then_some(()))
+            })?;
+            Ok(fixture)
+        })();
+        if let Err(error) = &started {
+            if let Err(shed) = super::run::shed_programs(&root) {
+                eprintln!(
+                    "the kept run {} still holds programs: {shed:#}",
+                    root.display()
+                );
+            }
+            eprintln!(
+                "core move fixture start failed, evidence kept at {}: {error:#}",
+                root.display()
+            );
+        }
+        started
     }
 
     /// Makes every stand-in check on the target fail: `gh` signed out, no
@@ -631,6 +649,18 @@ impl Fixture {
             }
             Ok(journal.filter(|journal| journal["phase"]["phase"] == phase))
         })
+    }
+
+    /// Waits until the forward move is done for the window too: the
+    /// supervisor writes the journal's `done` before the move's view leaves
+    /// `linking`, and a request in between is refused as `move_busy`. A
+    /// window hears the current view when it connects.
+    pub fn forward_done(&self) -> Result<Value> {
+        let journal = self.journal_until("done")?;
+        self.held_window()?
+            .core_move_until(READY_BOUND, |view| view["state"] == "done")
+            .context("the window's move view at done")?;
+        Ok(journal)
     }
 
     /// Ends the source's hided at once, as a crash or a power cut would.

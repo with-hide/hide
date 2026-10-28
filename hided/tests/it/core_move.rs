@@ -1811,7 +1811,7 @@ fn the_core_moves_back_and_the_window_shows_what_it_showed_before() -> Result<()
         let settings = std::fs::read_to_string(fixture.source.ai_settings())?;
         let window = fixture.window();
         fixture.event("core_move", json!({"action": "start", "device": DEVICE_ID}))?;
-        let forward = fixture.journal_until("done")?;
+        let forward = fixture.forward_done()?;
         wait_for("the projects through the new core", || {
             Ok((fixture.projects()?.len() == 2).then_some(()))
         })?;
@@ -2071,7 +2071,7 @@ fn held_pane_records(fixture: &Fixture) -> Vec<String> {
 /// machines' projects through it.
 fn moved_forward(fixture: &Fixture) -> Result<Value> {
     fixture.event("core_move", json!({"action": "start", "device": DEVICE_ID}))?;
-    let journal = fixture.journal_until("done")?;
+    let journal = fixture.forward_done()?;
     wait_for("the projects through the new core", || {
         Ok((fixture.projects()?.len() == 2).then_some(()))
     })?;
@@ -2872,7 +2872,7 @@ fn a_moved_machine_s_project_keeps_its_issues_through_the_move_and_back() -> Res
         ensure!(before["linked"] == before["tasks"][0][0], "{before}");
 
         fixture.event("core_move", json!({"action": "start", "device": DEVICE_ID}))?;
-        fixture.journal_until("done")?;
+        fixture.forward_done()?;
         let node_app_id = wait_for("the same issues and link through the new core", || {
             let snapshot = fixture.snapshot()?;
             Ok(app_project(&snapshot, Some(SOURCE_NODE), &app)
