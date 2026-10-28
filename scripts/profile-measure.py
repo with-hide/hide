@@ -14,7 +14,7 @@ import psutil
 
 SAMPLE = 0.1
 TIME_LIMIT = 3600
-MIN_FREE = 2 * 1024**3
+MIN_FREE = 5 * 1024**3
 LINKERS = {'ld', 'ld64', 'ld.lld', 'lld', 'rust-lld', 'link', 'lld-link', 'collect2'}
 
 
@@ -52,7 +52,7 @@ def main():
             result = dict(metadata, profile=label, repeat=repeat, command=command,
                           clean_target=not target.exists(), free_before_bytes=shutil.disk_usage(source).free)
             if result['free_before_bytes'] < MIN_FREE:
-                raise RuntimeError('Less than 2 GiB free before build')
+                raise RuntimeError('Less than 5 GiB free before build')
             processes, linkers, defender = {}, {}, {}
             peak, link_active_seconds = 0, 0.0
             started = time.monotonic()
@@ -65,7 +65,7 @@ def main():
                     while child.poll() is None:
                         now = time.monotonic()
                         if now-started > TIME_LIMIT or shutil.disk_usage(source).free < MIN_FREE:
-                            raise RuntimeError('Build exceeded one hour or 2 GiB free-disk floor')
+                            raise RuntimeError('Build exceeded one hour or 5 GiB free-disk floor')
                         rss, linking = 0, False
                         for proc in [root] + root.children(recursive=True):
                             try:
