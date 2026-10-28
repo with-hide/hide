@@ -1687,14 +1687,17 @@ fn a_session_record_lists_the_views_its_session_tree_opened() {
         pane.terminal_id = Some(format!("term-{}", pane.pane_id));
     }
     payload.agents = serde_json::from_value(serde_json::json!(
-        [("w-order:t1:p", "native-parent"), ("w-order:t2:p", "native-child")]
-            .iter()
-            .map(|(pane, session)| serde_json::json!({
-                "pane_id": pane, "agent": "codex", "agent_status": "working",
-                "state_change_seq": 1,
-                "lineage_session": crate::wire::session_digest(session),
-            }))
-            .collect::<Vec<_>>()
+        [
+            ("w-order:t1:p", "native-parent"),
+            ("w-order:t2:p", "native-child")
+        ]
+        .iter()
+        .map(|(pane, session)| serde_json::json!({
+            "pane_id": pane, "agent": "codex", "agent_status": "working",
+            "state_change_seq": 1,
+            "lineage_session": crate::wire::session_digest(session),
+        }))
+        .collect::<Vec<_>>()
     ))
     .expect("agent rows");
     runtime.ingest_session(Ok(payload));
@@ -1715,7 +1718,10 @@ fn a_session_record_lists_the_views_its_session_tree_opened() {
     };
     runtime.snapshot.session_record = Some(Arc::new(SessionRecordSnapshot {
         session: Some(session("native-parent")),
-        record: Some(record("native-parent", vec![record("native-child", Vec::new())])),
+        record: Some(record(
+            "native-parent",
+            vec![record("native-child", Vec::new())],
+        )),
         ..Default::default()
     }));
     runtime.sync_workspace_view();
@@ -1724,7 +1730,13 @@ fn a_session_record_lists_the_views_its_session_tree_opened() {
         let mut views: Vec<_> = held
             .views
             .iter()
-            .map(|view| (view.label.clone(), view.session.session_id.clone(), view.lines.clone()))
+            .map(|view| {
+                (
+                    view.label.clone(),
+                    view.session.session_id.clone(),
+                    view.lines.clone(),
+                )
+            })
             .collect();
         views.sort();
         (views, held.views_omitted)
