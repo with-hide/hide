@@ -21,7 +21,10 @@ resolver = "3"
 
 [profile.release]
 lto = "thin"
-codegen-units = 1
+# Sixteen units, not one: a clean release build is 15-30% faster on every
+# system for 6-17% larger binaries and no slower app. See `The release
+# profile` in docs/BUILD.md for the measurements.
+codegen-units = 16
 strip = "symbols"
 
 [profile.dev]
