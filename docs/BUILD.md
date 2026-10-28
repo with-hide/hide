@@ -127,14 +127,11 @@ Each set is saved by one job per system, the one that builds the most of it, bec
 A reader builds what the saver did not, which on macOS is the extra dependencies of the nightly lanes that test more than the daemon.
 rust-cache's environment hash stays in the key; it hashes every installed toolchain, so the action first removes every toolchain but the one `rust-toolchain.toml` names, and the hash then depends on the pin and not on the runner.
 rust-cache ends each key with its own 8-digit hash of `Cargo.lock`, every member's `Cargo.toml` and `rust-toolchain.toml`, and when that hash changes it restores the newest entry of the same set and system and builds only the dependencies that changed; it leaves out the root `Cargo.toml`, whose `[profile]` sections change every dependency's build, so the action puts that file's hash in the key before the system, and a change there misses once.
-A changed lockfile thus saves a new key beside the old one, which would stay until the 10 GB limit evicts something.
-`.github/workflows/rust-cache-prune.yml` runs `scripts/prune-rust-caches.py` after each verify run of a push to main and each nightly, the runs that build main's head and save its sets.
-From the head's checkout it computes the root manifest's hash the way the action does and rust-cache's lockfile hash with its own copy of rust-cache's algorithm (`lockfile_hash`, which gives the hashes CI's keys carried for main's commits of 2026-10-24 to 28), and per set and system deletes the entries of any other hashes once the head's own entry is saved there.
-A set whose entry is not saved yet, such as the release set before the next nightly, keeps what it has, and so would every set if rust-cache ever hashed differently from that copy: the prune then finds no head entry and deletes nothing.
-It deletes nothing when main has moved past that head, because a newer head's entry carries other hashes, and a release candidate never triggers it, because it may build an older commit; which run read an entry, or when, decides nothing.
-The keys from before the sets (`v0-rust-<job>-...`) are left to a one-time deletion by hand once each set has saved, and to GitHub's seven-day expiry.
-The prune runs only for this repository's own runs on main, holds `actions: write` in that one job, and logs a delete it could not make as a warning without failing, since the next run on main tries again.
-`scripts/tests/test_rust_cache.py` fixes the action's key, its dependency-only save and the toolchain step, each saver's exact `save` condition, the prune's choice of entries, its trigger, guard and permission, and fails when a job uses rust-cache directly or names another set.
+A changed lockfile thus saves a new key beside the old one, and nothing deletes the old one: GitHub deletes an entry no run has read for seven days, and past the repository's 10 GB it evicts the least recently read first.
+Main's runs read the current entry of every set every day, so what ages out or is evicted first is a replaced one; one entry per set and system is about 3 GB, and a week of replaced sets beside it stays under the limit unless the lockfile changes several times that week, when eviction takes the oldest replaced sets.
+Nothing in the repository prunes them: deciding which entry is current means computing rust-cache's own key, which changes whenever rust-cache does, and a copy of that computation that drifted would delete the current entries.
+The keys from before the sets (`v0-rust-<job>-...`) are deleted by hand once, after each set's first entry is saved.
+`scripts/tests/test_rust_cache.py` fixes the action's key, its dependency-only save and the toolchain step, and each saver's exact `save` condition, and fails when a job uses rust-cache directly or names another set.
 
 ### What a cached release dependency can change
 

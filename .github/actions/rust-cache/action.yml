@@ -35,8 +35,7 @@ runs:
         # its hash of the lockfile, the members' manifests and the pinned
         # toolchain, and restores the newest entry before it when that changed;
         # the root manifest, whose profiles change every dependency's build, it
-        # leaves out, so it goes in here. rust-cache-prune.yml computes both
-        # hashes for main's head to name that head's entries.
+        # leaves out, so it goes in here.
         shared-key: ${{ inputs.set }}-${{ hashFiles('Cargo.toml') }}
         # Dependencies only: the workspace's own crates are removed before a save.
         cache-workspace-crates: false
