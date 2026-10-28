@@ -6,9 +6,14 @@ while a key per job kept the same dependencies four or five times over and
 pushed main's own entries out of the 10 GB limit (2026-10-28). docs/BUILD.md,
 "CI's Rust caches", owns the sets, the savers and the release argument.
 """
+import contextlib
 import importlib.util
+import io
+import subprocess
+import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import yaml
 
@@ -94,6 +99,19 @@ class Prune(unittest.TestCase):
             entry(4, f'v0-rust-platform-{MANIFEST}-Darwin-arm64-f8d01195-de5473c3', '2026-10-28T04:34:00Z'),
         ]
         self.assertEqual([gone['id'] for gone in prune.doomed(entries)], [1])
+
+    def test_a_failed_delete_is_a_warning_and_the_run_passes(self):
+        stale = entry(1, 'v0-rust-rust-Linux-x64-e3a6d410-de5473c3', '2026-10-28T04:39:00Z')
+        refused = subprocess.CompletedProcess([], 1, '', 'HTTP 403: Resource not accessible by integration')
+        output = io.StringIO()
+        with mock.patch.object(prune, 'listed', return_value=[stale]), \
+                mock.patch.object(prune.subprocess, 'run', return_value=refused), \
+                mock.patch.object(sys, 'argv', ['prune', '--repo', 'owner/repo']), \
+                contextlib.redirect_stdout(output):
+            self.assertEqual(prune.main(), 0)
+        self.assertIn('::warning title=rust cache prune::deleting v0-rust-rust-Linux-x64-e3a6d410-de5473c3 failed: HTTP 403',
+                      output.getvalue())
+        self.assertIn('1 of 1 Rust entries on main kept', output.getvalue())
 
 
 if __name__ == '__main__':

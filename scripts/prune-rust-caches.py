@@ -10,7 +10,13 @@ sets and the key shape (`.github/actions/rust-cache`).
 Of main's `v0-rust-` entries this keeps the newest per set, system and
 architecture, and deletes every older one and every key that is not one of the
 sets (a key from before the sets). Other refs' entries are left alone: a pull
-request saves none, and GitHub scopes any it holds to that pull request.
+request saves none, and GitHub scopes any it holds to that pull request. The
+newest entry of a group is never deleted, and an entry saved after the listing
+is not in it, so a save racing this run is kept.
+
+A cache that could not be listed or deleted is a warning in the run's log and
+the run still passes: the next run on main tries again, and pruning is no
+build's result.
 
     python3 scripts/prune-rust-caches.py --repo with-hide/hide [--dry-run]
 """
@@ -60,11 +66,16 @@ def listed(repo):
 
 
 def delete(repo, entry):
-    """Deletes one entry; one already gone counts as deleted, so a rerun converges."""
+    """Why deleting one entry failed, or None; one already gone counts as deleted."""
     result = subprocess.run(['gh', 'api', '-X', 'DELETE', f'repos/{repo}/actions/caches/{entry["id"]}'],
                             capture_output=True, text=True)
     if result.returncode != 0 and 'HTTP 404' not in result.stderr:
-        raise RuntimeError(f'deleting cache {entry["id"]} ({entry["key"]}) failed: {result.stderr.strip()}')
+        return result.stderr.strip()
+    return None
+
+
+def warn(message):
+    print(f'::warning title=rust cache prune::{message}')
 
 
 def main():
@@ -72,17 +83,26 @@ def main():
     parser.add_argument('--repo', required=True)
     parser.add_argument('--dry-run', action='store_true')
     args = parser.parse_args()
-    entries = listed(args.repo)
+    try:
+        entries = listed(args.repo)
+    except subprocess.CalledProcessError as error:
+        warn(f'listing main\'s Rust caches failed: {error.stderr.strip()}')
+        return 0
     gone = doomed(entries)
+    failed = []
     for entry in gone:
         print(f'{"would delete" if args.dry_run else "delete"} {entry["key"]} '
               f'({entry["size_in_bytes"] // 2**20} MB, created {entry["created_at"]})')
-        if not args.dry_run:
-            delete(args.repo, entry)
+        reason = None if args.dry_run else delete(args.repo, entry)
+        if reason is not None:
+            warn(f'deleting {entry["key"]} failed: {reason}')
+            failed.append(entry)
+    gone = [entry for entry in gone if entry not in failed]
     total = sum(entry['size_in_bytes'] for entry in entries)
     freed = sum(entry['size_in_bytes'] for entry in gone)
     print(f'{len(entries) - len(gone)} of {len(entries)} Rust entries on main kept, '
           f'{(total - freed) // 2**20} MB of {total // 2**20} MB')
+    return 0
 
 
 if __name__ == '__main__':

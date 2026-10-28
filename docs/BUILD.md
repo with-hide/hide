@@ -128,6 +128,7 @@ A reader builds what the saver did not, which on macOS is the extra dependencies
 The action removes every installed toolchain but the one `rust-toolchain.toml` names before rust-cache hashes them, so the key changes with the pin and not with the runner.
 rust-cache hashes the lockfile, every member's manifest and `rust-toolchain.toml` but not the root `Cargo.toml`, so the action puts that file's hash in the key: a change to a `[profile]` misses once and is saved under the new key.
 A changed lockfile restores the newest entry of its set and system and saves a new one; `.github/workflows/rust-cache-prune.yml` then runs `scripts/prune-rust-caches.py`, which keeps main's newest entry per set and system and deletes the rest.
+It runs only after a run on main, holds `actions: write` in that one job, never deletes a group's newest entry, so a save racing it is kept, and logs a delete it could not make as a warning without failing, since the next run on main tries again.
 `scripts/tests/test_rust_cache.py` fails when a job uses rust-cache directly, names another set, saves off main, or saves a set its row above does not list.
 
 ### What a cached release dependency can change
