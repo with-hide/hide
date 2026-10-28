@@ -125,6 +125,19 @@ fn unseen(runtime: &Runtime, view: &str) -> bool {
         .is_some_and(|display| display.unseen.is_some())
 }
 
+/// The recipient's prompt blocked on the operator, or answered.
+fn blocked(runtime: &mut Runtime, blocked: bool) {
+    let recipient = runtime
+        .snapshot
+        .navigator
+        .agents
+        .iter_mut()
+        .find(|agent| agent.pane_id == "recipient")
+        .unwrap();
+    recipient.blocked = blocked;
+    runtime.refresh_agent_lineage();
+}
+
 /// The View comes forward as the operator's press on it does.
 fn look_at(runtime: &mut Runtime, view: &str) {
     runtime
@@ -241,10 +254,15 @@ fn several_unseen_views_name_the_newest_and_count_down_as_each_is_seen() {
     let look = row(&guard, "recipient").look.clone().unwrap();
     // B9, D-14: the newest leads, and the rest are counted.
     assert_eq!((look.count, look.view_id.as_str()), (3, c.as_str()));
+    // The keyboard reaches their pane while the window is away, so only
+    // the View brought forward below is looked at.
+    guard.set_window_focused(false);
     keyboard(&mut guard, Some("recipient"));
-    look_at(&mut guard, &c);
-    assert_eq!(row(&guard, "recipient").look.as_ref().unwrap().count, 2);
     look_at(&mut guard, &a);
+    guard.set_window_focused(true);
+    let look = row(&guard, "recipient").look.clone().unwrap();
+    assert_eq!((look.count, look.view_id.as_str()), (2, c.as_str()));
+    look_at(&mut guard, &c);
     let look = row(&guard, "recipient").look.clone().unwrap();
     assert_eq!((look.count, look.view_id.as_str()), (1, b.as_str()));
     look_at(&mut guard, &b);
@@ -338,14 +356,12 @@ fn a_question_takes_the_mark_and_the_view_keeps_the_row_in_needs_you_after_it() 
     keyboard(&mut guard, Some("sender"));
     open(&mut guard, "recipient", "src/login.ts");
     // B11, D-18: a block outranks the View for the mark.
-    guard.snapshot.navigator.agents[1].blocked = true;
-    guard.refresh_agent_lineage();
+    blocked(&mut guard, true);
     let recipient = row(&guard, "recipient");
     assert_eq!(recipient.mark, RowMark::Turn);
     assert!(recipient.look.is_some());
     assert_eq!(recipient.look.as_ref().unwrap().group, "needs_you");
-    guard.snapshot.navigator.agents[1].blocked = false;
-    guard.refresh_agent_lineage();
+    blocked(&mut guard, false);
     let recipient = row(&guard, "recipient");
     assert_eq!(recipient.group, "needs_you");
     assert_eq!(recipient.mark, RowMark::Look);
@@ -371,8 +387,7 @@ fn a_view_to_look_at_sends_no_phone_or_desktop_notice() {
     ));
     assert!(notices.is_empty(), "{notices:?}");
     // A block on the same row still calls the operator.
-    guard.snapshot.navigator.agents[1].blocked = true;
-    guard.refresh_agent_lineage();
+    blocked(&mut guard, true);
     let (notices, _) = transitions.observe(&crate::agent_state::phone::project(
         &rows(&guard),
         crate::node::TEST_NODE,
@@ -473,7 +488,7 @@ fn a_row_pressed_in_a_list_brings_its_newest_unseen_view_forward_and_sees_it() {
     }
     // B3: the View comes forward on its pane, and is seen once in front.
     keyboard(&mut guard, Some("recipient"));
-    assert!(guard.reveal_unseen_view("recipient"));
+    guard.reveal_unseen_view("recipient");
     guard.sync_workspace_view();
     assert!(!unseen(&guard, &view));
     assert!(row(&guard, "recipient").look.is_none());

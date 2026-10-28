@@ -133,8 +133,8 @@ mod tree_reopen;
 mod ui_state_focus;
 #[path = "tests/usage_limit.rs"]
 mod usage_limit;
-#[path = "tests/view_areas.rs"]
 mod unseen_views;
+#[path = "tests/view_areas.rs"]
 mod view_areas;
 mod view_bookmarks;
 #[path = "tests/workspace_control.rs"]

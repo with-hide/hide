@@ -318,7 +318,7 @@ impl Runtime {
 
     /// A row the operator pressed in a list that has a View to look at:
     /// that View comes forward in its Workspace, after the pane (B3, D-14).
-    pub(super) fn reveal_unseen_view(&mut self, pane_id: &str) -> bool {
+    pub(super) fn reveal_unseen_view(&mut self, pane_id: &str) {
         let Some(look) = self
             .snapshot
             .navigator
@@ -327,12 +327,12 @@ impl Runtime {
             .find(|agent| agent.pane_id == pane_id)
             .and_then(|agent| agent.look.clone())
         else {
-            return false;
+            return;
         };
         let (Some(workspace), Some(checkout)) = (look.workspace_id, look.checkout_id) else {
-            return false;
+            return;
         };
-        self.focus_view_display_of(&workspace, &checkout, &look.view_id)
+        self.focus_view_display_of(&workspace, &checkout, &look.view_id);
     }
 }
 
