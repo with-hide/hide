@@ -556,7 +556,7 @@ A press while the lane already draws that record turns the lane back to its tool
 Whether the lane draws that record is read from the slot's front item and the lane's tool, both of which the core keeps.
 A plain shell, and an agent pane whose session is not known yet, keeps the plain head with nothing to press; the head becomes the button in place once the session is known, on a device's pane as on this Mac's (B24).
 Over a narrow window the record shows in the lane floating over the panes (`web/src/PaneHeaderBand.tsx`, `PaneRecordButton`).
-The provider logo is drawn on a pane's own header, and in the heads and places that are about the agent or its provider itself: the start picker, Settings, the footer's usage chips and the Usage pages, the session record's head, the tree popover's head, the last-words popover's head, the phone's detail head, the Memory tool's Hide AI chip, the first-run tiles, and the selected View's toolbar ([View openers and comments](#view-openers-and-comments)).
+The provider logo is drawn on a pane's own header, and in the heads and places that are about the agent or its provider itself: the start picker, Settings, the footer's usage chips and the Usage pages, the session record's head, the tree popover's head, the last-words popover's head, the phone's detail head, the Hide AI tool's ⚙ chip, the first-run tiles, and the selected View's toolbar ([View openers and comments](#view-openers-and-comments)).
 The sidebar's 프로젝트 and 태스크 rows and the Agent tabs draw it only by the operator's choice or while ⌥ is held ([Agent logo view mode](#agent-logo-view-mode)); ⌘K and the recent-pane list and the phone's list lead with the status mark alone in both modes (PRD agent-mark-quiet); a session record's children, the PR card's session rows and the child tree popover's rows draw the logo after the status mark in both modes (PRD record-card-readability D-06, D-09).
 A pane header draws exactly one logo, the pane's own agent, for each of the seven supported agents: Claude Code, Codex, Grok, OpenCode, Pi, omp and Antigravity, the same logo Settings and the first-run choice draw.
 A row without a logo names its agent by product name (`Claude Code`, `Codex`, the adapter's label, never the raw kind) in its hover hint and its accessible name, and the pane header's logo and title say it the same way.
@@ -899,8 +899,9 @@ The core counts both: 제안's number is its new suggestions and its rows that a
 The lane keeps the tool's id `memory`, so a saved lane, a chord and `Toggle Hide AI tool` (`toggle_lane_memory`) reach it as before; ⇧⌘L, a Memory card number under a conversation and Project Settings' `Open project Memory` open it on the Memory tab, and a Needs You row on 제안.
 The tab shown and the 제안 row open are this window's, not the core's.
 
-Its head reads `Hide AI · <project>` beside the brain, then the Hide AI chip (the agent Hide AI asks now with its logo, the listed agent standing in while Runs on is past the usage limit), the switch for all of Hide AI in this Project, ⚙ and `✕`, which closes the tool column.
-The switch is on from the start; turned off, neither 제안 nor Memory reads anything, Hide AI makes no call for the Project, the rail and the tabs count nothing, and the tool says `Hide AI가 꺼져 있어요` with one line on what turning it on reads (B3).
+Its head reads `Hide AI · <project>` beside the brain, then the switch for all of Hide AI in this Project, ⚙ and `✕`, which closes the tool column; the agent Hide AI asks now is named in ⚙, not in the head.
+The switch is on from the start; turned off, neither 제안 nor Memory reads anything, Hide AI makes no call for the Project, the rail and the tabs count nothing, and the reading owl says `Hide AI가 꺼져 있어요` with one line on what turning it on reads (B3).
+Where a tab has nothing to show yet, the same owl explains it: its state is the title and the tab's work follows in three short steps, each with its mark (`HideAiExplainer`).
 Turning it on gives each of the two back as it was.
 The first time the tool opens with Hide AI on, two lines above the tabs say that investigating uses the operator's own subscription and what is sent; they stay while the tool stays open and are not shown again (B3, D-36).
 While the Project is still being read the tool says so; a Project that is not registered, or whose Hide AI could not be read, says that in one line, the second with `다시 읽기`.
@@ -909,7 +910,7 @@ While the Project is still being read the tool says so; a Project that is not re
 
 The 제안 tab lists what Hide AI suggests fixing, the fixes under way and the ones applied (D-05 to D-07).
 The core decides every group, mark, hold and count; the screen draws them and every press is one `suggestion_action` (`apply`, `dismiss`, `restore`, `retry`) naming the row by its id (`s12` for a suggestion, `m72` for a memory on its way into the documents).
-The tab has one line for its state and no more (D-44): `다음에 Hide를 열 때 첫 조사` before the first investigation, `오늘은 제안 없음` when today's run left nothing open, and `제안이 꺼져 있어요` with `켜기` when ⚙ turned suggestions off; while a run goes, `조사 중` sits small in the head and the rows stay as they were, and after a run that could not investigate `조사 못 함` sits there the same way until a run investigates, nothing new having risen from it (D-35).
+The tab has one line for its state and no more (D-44): `다음에 Hide를 열 때 첫 조사` before the first investigation, `오늘은 제안 없음` when today's run left nothing open, each of these two as the owl's title over `세션 기록과 PR의 CI·리뷰를 읽어요`, `되풀이되는 문제를 하나로 묶어요` and `고칠 방법을 제안하고, 고르면 PR을 열어요`, and `제안이 꺼져 있어요` with `켜기` when ⚙ turned suggestions off; while a run goes, `조사 중` sits small in the head and the rows stay as they were, and after a run that could not investigate `조사 못 함` sits there the same way until a run investigates, nothing new having risen from it (D-35).
 A failure the operator cannot act on, such as a run that hit its turn or time limit or the usage limit, goes to the diagnostic log and draws nothing.
 
 The rows fall into `고를 것`, `반영 중` and the folded `반영됨`, each head with its count, and a row's mark says whose move it is (D-37): a green open circle for a new suggestion, a yellow dot for the operator's turn, a blue turning ring with dimmed text while Hide AI works; a row under 반영됨 has no mark.
@@ -929,14 +930,14 @@ An open issue reads `이슈 열림` with the issue.
 A merged row folds under `반영됨 N · 효과 있었음 M`; while the watch runs its line is the quiet `지켜보는 중 · 세션 2/5`, a row whose problem did not come back reads `효과 있었음`, and nothing else is said (B15).
 A row being applied whose agent lives is also one row in the sidebar's and the 태스크 list's Needs You while it is the operator's turn (see Work Hide AI does for a home), and choosing that row opens this tool on 제안 with the row open (B11); a memory on its way into the documents is one of these rows from its first offer, named by its memory with its number (`m72`) before the title, and so is a promotion already under way before this change (D-02, B2).
 
-⚙ opens a sheet under the head (D-26, B19).
-At its top `조사하는 AI` and the chip of the agent Settings › Hide AI chose, which opens that page, and under it one line, `설정 › Hide AI의 순서를 따라요. 한도에 걸리면 다음 AI로` (D-53); when that agent cannot promise to only read (OpenCode), `이 AI로는 조사할 수 없음` stands under it and no investigation runs.
-The 제안 group has its own switch, `제안 양` (`적게`, `보통`, `많이`, each with what it means and how many a week), `반영 방식` (`확인하고 반영`, `버튼을 누르면 PR이나 이슈를 열어요`, or `자동으로 PR 열기`), `읽을 곳`, and `넘어간 제안 N개`, which unfolds to each one with `되살리기` and a quiet line saying whether it can still rise once (`다시 쌓이면 한 번 올라와요`) or not (`다시 올라오지 않아요`); restoring one lets the core judge it again on what piled up.
+⚙ opens a sheet under the head in three areas (D-26, B19): what 제안 and Memory share, then 제안, then Memory.
+The shared area is a tinted box: `사용하는 AI` and the chip of the agent Settings › Hide AI chose (the listed agent standing in while Runs on is past the usage limit), which opens that page, then `설정 › Hide AI의 순서를 따라요. 한도에 걸리면 다음 AI로` (D-53) and the line on what is sent; when that agent cannot promise to only read (OpenCode), `이 AI로는 조사할 수 없음` stands under the chip and no investigation runs.
+제안 and Memory each open with a head of their own, a mark, the name, what it does and its own switch, and their settings sit under the name.
+제안 holds `제안 양` (`적게`, `보통`, `많이`, one segmented choice with what the chosen one means and how many a week under it), `반영 방식` (`확인하고 반영`, `버튼을 누르면 PR이나 이슈를 열어요`, or `자동으로 PR 열기`, the same way), `읽을 곳`, and `넘어간 제안 N개`, which unfolds to each one with `되살리기` and a quiet line saying whether it can still rise once (`다시 쌓이면 한 번 올라와요`) or not (`다시 올라오지 않아요`); restoring one lets the core judge it again on what piled up.
 `읽을 곳` has two switches (D-52): `세션 기록` (`실패한 명령 · 에이전트 막힘 · 내 정정 · 세션에 남은 문제 · 개선할 점`) and `GitHub` (`CI 실패 · 리뷰 지적`).
 The core keeps seven signals; a switch shows on while any signal of its group that can be read is on, and one press is one `suggestion_settings` with `signal_group`, which turns the whole group (B5).
 `GitHub` is off with `GitHub 저장소가 아니에요` under it when the repository is not on GitHub; with Memory off, `Memory가 꺼져 있어 내 정정은 읽지 않아요` stands under `세션 기록`, and with Hide AI or the turn-end analysis (Settings › Hide AI's agent summaries) off, `개선할 점은 턴 끝 분석이 켜져야 기록돼요` stands there the same way (B27, D-57).
-The Memory group has Memory's own switch and `이 프로젝트의 기억 지우기`, which asks first, naming the Project and the number of memories.
-Last, one line on what is sent.
+Memory holds `이 프로젝트의 기억 지우기` in the destructive colour, which asks first, naming the Project and the number of memories.
 With the head switch off every switch in the sheet is dimmed.
 
 ### The Memory tab

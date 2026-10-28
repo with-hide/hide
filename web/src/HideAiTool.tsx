@@ -1,7 +1,7 @@
 import { BrainIcon, SettingsIcon, XIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { Actions } from "./actions";
-import { AgentLogo } from "./components/agent-logo";
+import { HideAiExplainer } from "./components/hide-ai-explainer";
 import { Button } from "./components/ui/button";
 import { Switch } from "./components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/tabs";
@@ -49,16 +49,11 @@ export function HideAiTool({ actions }: { actions: Actions }) {
   );
 }
 
-/** The head (B3, B17, B19): the brain icon, `Hide AI · <project>`, `조사 중` while a run goes or `조사 못 함` after one could not investigate, the AI chip, the switch, ⚙ and ×. */
+/** The head (B3, B17, B19): the brain icon, `Hide AI · <project>`, `조사 중` while a run goes or `조사 못 함` after one could not investigate, the switch, ⚙ and ×; the AI it uses is named in ⚙. */
 function Head({ projectId, project, actions }: { projectId: string; project: ProjectSuggestions | null; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const label = useShellStore((state) => catalogWorkspaces(state.rest).find((row) => row.id === projectId)?.label ?? projectId);
-  const ai = useShellStore((state) => state.rest?.status?.background_ai ?? null);
-  const answering = ai?.refusal?.using ?? ai?.provider ?? null;
-  const provider = answering ? ai?.providers.find((row) => row.id === answering) ?? null : null;
   const ready = project !== null && !project.loading && project.unavailable === null;
-  // Hide AI asks nothing while it cannot investigate or every agent is past the usage limit (D-06): the chip stays, dimmed.
-  const asksNothing = ready && (project.ai !== "ready" || (ai?.refusal?.reason === "past_limit" && !ai.refusal.using));
   const switchId = `hide-ai-switch-${projectId}`;
   return (
     <div className="flex h-(--size-tab-strip) shrink-0 items-center gap-xs border-b border-border pl-md pr-xs text-caption" data-lane-header="true">
@@ -74,12 +69,6 @@ function Head({ projectId, project, actions }: { projectId: string; project: Pro
           <span role="status" className="shrink-0 text-micro text-subtle-foreground" data-hide-ai-not-investigated="true">{t("hideAiTool.notInvestigated")}</span>
         ) : null}
       </span>
-      {ready && project.enabled && provider ? (
-        <span className={cn("flex min-w-0 max-w-1/3 shrink items-center gap-xxs rounded-sm bg-secondary px-xs text-micro text-subtle-foreground", asksNothing && "opacity-(--opacity-dimmed)")} data-hide-ai-chip={provider.agent} data-hide-ai-chip-dimmed={asksNothing ? "true" : undefined}>
-          <AgentLogo agent={provider.agent} label={provider.label} />
-          <span className="truncate">{provider.label}</span>
-        </span>
-      ) : null}
       <label htmlFor={switchId} className="sr-only">{t("hideAiTool.switch")}</label>
       <Switch id={switchId} checked={ready && project.enabled} disabled={!ready} onCheckedChange={(on) => actions.hideAiSwitch(projectId, on)} data-hide-ai-switch={ready ? (project.enabled ? "on" : "off") : "loading"} />
       {ready ? <HideAiSettings project={project} actions={actions} /> : (
@@ -96,13 +85,14 @@ function Head({ projectId, project, actions }: { projectId: string; project: Pro
   );
 }
 
-/** With the switch off nothing is read and nothing is counted (B3): one line says so and what turning it on reads. */
+/** With the switch off nothing is read and nothing is counted (B3): the owl says so and what turning it on reads. */
 function Off() {
   const { t } = useInterfaceTranslation();
   return (
-    <div className="flex flex-col gap-xs px-md py-lg" data-hide-ai-off="true">
-      <span className="text-body text-foreground">{t("hideAiTool.off.title")}</span>
-      <p className="break-keep text-caption text-muted-foreground">{t("hideAiTool.off.body")}</p>
+    <div className="px-md py-sm" data-hide-ai-off="true">
+      <HideAiExplainer title={t("hideAiTool.off.title")}>
+        <p className="break-keep text-caption text-muted-foreground">{t("hideAiTool.off.body")}</p>
+      </HideAiExplainer>
     </div>
   );
 }

@@ -1,8 +1,9 @@
-import { ChevronRightIcon } from "lucide-react";
+import { ChevronRightIcon, Layers2Icon, ScrollTextIcon, WrenchIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { Actions } from "./actions";
 import { AgentLogo } from "./components/agent-logo";
 import { Elapsed } from "./components/elapsed";
+import { HideAiExplainer } from "./components/hide-ai-explainer";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { useInterfaceTranslation } from "./i18n/client";
@@ -30,7 +31,13 @@ export function SuggestionsTab({ project, actions }: { project: ProjectSuggestio
   const line = statusLine(project, groups.choose.length + groups.applying.length);
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-auto px-md pb-lg" data-suggestions={project.status}>
-      {line ? (
+      {line && line !== "suggestions.status.off" ? (
+        <HideAiExplainer title={t(line)} steps={[
+          { icon: ScrollTextIcon, text: t("hideAiTool.explain.suggestions.read") },
+          { icon: Layers2Icon, text: t("hideAiTool.explain.suggestions.group") },
+          { icon: WrenchIcon, text: t("hideAiTool.explain.suggestions.fix") },
+        ]} data-suggestions-status={project.status} />
+      ) : line ? (
         <div className="flex items-center gap-sm py-md" data-suggestions-status={project.status}>
           <p className="min-w-0 flex-1 break-keep text-caption text-muted-foreground">{t(line)}</p>
           {project.status === "off" ? (
@@ -60,7 +67,7 @@ export function SuggestionsTab({ project, actions }: { project: ProjectSuggestio
   );
 }
 
-/** The tab's one line (D-44); `조사 중` and `조사 못 함` sit in the head, and the rows stay as they were. */
+/** The tab's one line (D-44), which the owl explains under while nothing is open; `조사 중` and `조사 못 함` sit in the head, and the rows stay as they were. */
 function statusLine(project: ProjectSuggestions, open: number): "suggestions.status.firstRun" | "suggestions.status.noneToday" | "suggestions.status.off" | null {
   switch (project.status) {
     case "first_run_pending": return "suggestions.status.firstRun";

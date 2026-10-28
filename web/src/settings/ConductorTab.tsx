@@ -82,17 +82,20 @@ export function ConductorTab({ actions }: { actions: Actions }) {
         data-conductor-candidates={String(settings.candidates.length)}
       >
         {settings.candidates.length > 0 ? (
-          <div className="grid grid-cols-[minmax(0,1.2fr)_minmax(0,1.3fr)_minmax(0,1.3fr)_minmax(0,1.4fr)_auto] items-center gap-x-sm px-md py-xs text-caption text-muted-foreground">
-            <span>{t("conductor.column.agent")}</span>
-            <span>{t("conductor.column.model")}</span>
-            <span>{t("conductor.column.effort")}</span>
-            <span>{t("conductor.column.purpose")}</span>
-            <span />
+          // One grid for the head and every row, so the effort column is as wide as its widest row and every row's columns line up.
+          <div className="grid grid-cols-[minmax(0,1.2fr)_minmax(0,1.3fr)_auto_minmax(0,1.4fr)_auto] gap-x-sm">
+            <div className="col-span-full grid grid-cols-subgrid items-center px-md py-xs text-caption text-muted-foreground">
+              <span>{t("conductor.column.agent")}</span>
+              <span>{t("conductor.column.model")}</span>
+              <span>{t("conductor.column.effort")}</span>
+              <span>{t("conductor.column.purpose")}</span>
+              <span />
+            </div>
+            {settings.candidates.map((candidate, index) => (
+              <CandidateRow key={index} candidate={candidate} onChange={(next) => send({ candidates: replaceCandidate(settings, index, next).candidates })} />
+            ))}
           </div>
         ) : null}
-        {settings.candidates.map((candidate, index) => (
-          <CandidateRow key={index} candidate={candidate} onChange={(next) => send({ candidates: replaceCandidate(settings, index, next).candidates })} />
-        ))}
       </Group>
       <Group title={t("conductor.verification")} note={t("conductor.verification.footer")} data-conductor-verification={settings.default_strength}>
         <Row label={t("conductor.strength")} detail={<StrengthTerms strength={settings.default_strength} />}>
@@ -133,7 +136,7 @@ function CandidateRow({ candidate, onChange }: { candidate: ConductorCandidate; 
   const catalog = modelCatalog(ai, kind, t);
   const label = kind ? providerLabel(kind) : candidate.agent;
   return (
-    <div className={cn("grid grid-cols-[minmax(0,1.2fr)_minmax(0,1.3fr)_minmax(0,1.3fr)_minmax(0,1.4fr)_auto] items-center gap-x-sm px-md py-xs", installed === false && "opacity-(--opacity-dimmed)")} data-conductor-candidate={candidate.agent} data-candidate-installed={installed === false ? "false" : undefined}>
+    <div className={cn("col-span-full grid grid-cols-subgrid items-center border-t border-border px-md py-xs", installed === false && "opacity-(--opacity-dimmed)")} data-conductor-candidate={candidate.agent} data-candidate-installed={installed === false ? "false" : undefined}>
       <Select value={kind ?? candidate.agent} onValueChange={(value) => onChange({ agent: value, purpose: candidate.purpose })}>
         <SelectTrigger aria-label={t("conductor.column.agent")} className="w-full min-w-0">
           <SelectValue>
@@ -210,7 +213,7 @@ function EffortChoice({ efforts, value, onChange, ...data }: { efforts: readonly
       </ToggleGroup>
       {value ? (
         <Select value={value} onValueChange={onChange}>
-          <SelectTrigger aria-label={t("conductor.column.effort")} className="w-auto min-w-0" size="sm"><SelectValue /></SelectTrigger>
+          <SelectTrigger aria-label={t("conductor.column.effort")} className="w-auto shrink-0" size="sm"><SelectValue /></SelectTrigger>
           <SelectContent>{efforts.map((effort) => <SelectItem key={effort} value={effort}>{effort}</SelectItem>)}</SelectContent>
         </Select>
       ) : null}

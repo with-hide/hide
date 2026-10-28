@@ -1,8 +1,9 @@
-import { ChevronDownIcon, ChevronRightIcon, FileIcon, LoaderCircleIcon, MoreHorizontalIcon, SettingsIcon, SparklesIcon, Trash2Icon, Undo2Icon, UserIcon } from "lucide-react";
+import { BookmarkIcon, BotIcon, ChevronDownIcon, ChevronRightIcon, FileIcon, LoaderCircleIcon, MessagesSquareIcon, MoreHorizontalIcon, SettingsIcon, SparklesIcon, Trash2Icon, Undo2Icon, UserIcon } from "lucide-react";
 import { useUiStore } from "./ui";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentLogo } from "./components/agent-logo";
+import { HideAiExplainer } from "./components/hide-ai-explainer";
 import { PrMark } from "./components/pr-mark";
 import {
   AlertDialog,
@@ -440,11 +441,23 @@ function Cards({ project, actions, busy, onDelete }: { project: ProjectMemory; a
 
 function MemoryEmpty({ project }: { project: ProjectMemory }) {
   const { t } = useInterfaceTranslation();
+  // No memory yet: the owl says what Memory does and when it first reads.
+  if (project.rows.length === 0) {
+    return (
+      <HideAiExplainer title={t("memory.empty.title")} steps={[
+        { icon: MessagesSquareIcon, text: t("hideAiTool.explain.memory.find") },
+        { icon: BookmarkIcon, text: t("hideAiTool.explain.memory.keep") },
+        { icon: BotIcon, text: t("hideAiTool.explain.memory.give") },
+      ]} data-memory-empty="true">
+        <MemoryExplanation project={project} />
+      </HideAiExplainer>
+    );
+  }
   return (
     <div className="flex flex-col gap-xs" data-memory-empty="true">
       <span className="flex items-center gap-xs text-body text-foreground">
         <SparklesIcon aria-hidden="true" className="size-(--size-icon-sm) text-muted-foreground" />
-        {t(project.rows.length > 0 ? "memory.unusable.title" : "memory.empty.title")}
+        {t("memory.unusable.title")}
       </span>
       <MemoryExplanation project={project} />
     </div>
