@@ -2199,6 +2199,9 @@ impl SleepingChild {
             .unwrap();
         record.closed = true;
         record.phase = crate::agent_sleep::DormantPhase::Sleeping;
+        // The folder it sleeps in stands, so the watch on it waits for the
+        // wake rather than ending as for a deleted checkout.
+        record.cwd = root.path().to_str().unwrap().to_owned();
         runtime.refresh_dormant_rows();
         assert_eq!(runtime.snapshot.navigator.sleeping_sessions.len(), 1);
 

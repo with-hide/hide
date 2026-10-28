@@ -472,6 +472,9 @@ That status must still be attributable to the watch's original native binding.
 An uncertain acquisition or loss of native identity preserves the original watch and clocks without rebinding or accepting new file metadata.
 Its digest reports `projection_unavailable` and an unavailable current status; two missing references do not prove an unchanged execution.
 Proven original-target absence or a different positive native identity ends the watch.
+So does a deleted folder: when the target cannot be read, the tick asks the target's machine whether the folder it runs in still exists (`Call::PathFacts`), or, for a target a sleeping or archived session holds, the folder that session would open again, and a machine that answers that it does not ends the watch and logs `watch.target_folder_gone`.
+Such a target can neither be read nor opened there again, so its watch would only fail every tick; a machine that does not answer proves nothing, and the watch stays.
+A target that is read, and one away with no session holding it, costs no extra call.
 There is no cached response or retry during the same tick.
 Three consecutive read failures produce a rate-limited diagnostic.
 The ledger counts failures only up to those three (`watch::READ_FAILURES_REPORTED`): a read that keeps failing is still reported every ten minutes, and changes nothing the file holds, where counting every tick rewrote the whole file every minute while one watched target could not be read.
@@ -485,7 +488,7 @@ The early warning is the episode's first warning, and only its first line differ
 The second warning, the unanswered-parent human notice and the escalation to the operator follow from its time exactly as from a 20-minute warning, and new activity of the target starts a new episode, so one question gives at most one early warning.
 The runtime reads the row it already holds when it hands each watch to the tick, under the lock that builds the tick's work; nothing is added to the tick's reads, threads or timers.
 
-The minute tick admits at most one read per watched target, at most four remote reads at once, each with a five-second deadline.
+The minute tick admits at most one read per watched target, and the folder question after a failed one, at most four targets at once, each call with a five-second deadline.
 Different parents watching one exact target share that tick's activity sample while keeping independent warning clocks and intent keys.
 A warning rejected by capacity leaves other targets' exits and activity resets intact.
 Session discovery, ownership reads and helper I/O run outside `Mutex<Runtime>`.

@@ -171,14 +171,17 @@ class PrivateHome(unittest.TestCase):
         (folder / 'kept').write_bytes(b'x' * 10)
         (folder / 'replaced').write_bytes(b'x' * 50)
         lstat = Path.lstat
+        # A folder's own size is the filesystem's (4096 on ext4), so the cap is
+        # measured: exact for the kept file, and the replaced one would pass it.
+        cap = folder.lstat().st_size + 10
 
         def gone(path):
             if path.name == 'replaced':
                 raise FileNotFoundError(path)
             return lstat(path)
         with patch.object(Path, 'lstat', gone):
-            total = cli_cache.size(folder, 1000)
-        self.assertEqual(total, folder.lstat().st_size + 10)
+            total = cli_cache.size(folder, cap)
+        self.assertEqual(total, cap)
         with self.assertRaises(FileNotFoundError):
             cli_cache.size(self.root / 'missing', 1000)
 

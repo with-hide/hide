@@ -273,6 +273,9 @@ pub(crate) struct WatchWork {
     pub state_change_seq: Option<u64>,
     pub status_changed_at_unix_ms: u64,
     pub source: ActivitySource,
+    /// The folder the target runs in on its machine, or the one its sleeping
+    /// or archived session would open again.
+    pub folder: Option<String>,
     /// The observer's own inactivity window, when it set one.
     pub inactivity_ms: Option<u64>,
     /// The target's own row says it stopped on a question.
@@ -308,6 +311,7 @@ fn read_activity(work: WatchWork) -> watch::Reading {
     }
     let Some(observation) = work.observation else {
         reading.failure = Some("projection_unavailable".into());
+        reading.gone = folder_gone(&reading.id, work.folder, work.source.link.as_deref());
         return reading;
     };
     reading.status = observation.status;
@@ -315,7 +319,7 @@ fn read_activity(work: WatchWork) -> watch::Reading {
     reading.status_changed_at_unix_ms = observation.status_changed_at_unix_ms;
     let result = (|| {
         let request = observation.session.ok_or("session_reference_missing")?;
-        let link = work.source.link.ok_or("helper_unavailable")?;
+        let link = work.source.link.as_ref().ok_or("helper_unavailable")?;
         // The failure words a watch warning carries stay those of the machine
         // that answered: the core's own files, or a device's helper.
         let own = link.in_process();
@@ -339,9 +343,40 @@ fn read_activity(work: WatchWork) -> watch::Reading {
     })();
     match result {
         Ok(activity) => reading.session_modified_at_unix_ms = Some(activity.modified_at_unix_ms),
-        Err(code) => reading.failure = Some(code.into()),
+        Err(code) => {
+            reading.failure = Some(code.into());
+            reading.gone = folder_gone(&reading.id, work.folder, work.source.link.as_deref());
+        }
     }
     reading
+}
+
+/// Whether the machine that holds an unreadable target says its folder no
+/// longer exists: a checkout deleted under it, so the target can neither be
+/// read nor opened there again, and its watch ends. A machine that does not
+/// answer proves nothing, and the watch stays.
+fn folder_gone(
+    watch: &str,
+    folder: Option<String>,
+    link: Option<&dyn crate::node_access::NodeLink>,
+) -> bool {
+    let (Some(folder), Some(link)) = (folder, link) else {
+        return false;
+    };
+    let answer = crate::node_access::call_as::<hide_node_link::catalog::PathFacts>(
+        link,
+        hide_node_link::protocol::Call::PathFacts {
+            paths: vec![folder.clone()],
+        },
+        Duration::from_secs(5),
+    );
+    let gone = answer.is_ok_and(|facts| facts.paths.get(&folder).is_some_and(|fact| !fact.exists));
+    if gone {
+        crate::diagnostic!(
+            json!({"component":"delivery","kind":"watch.target_folder_gone","watch_id":watch})
+        );
+    }
+    gone
 }
 
 fn same_target(left: &WatchWork, right: &WatchWork) -> bool {
@@ -1356,6 +1391,7 @@ mod tests {
                     source: ActivitySource {
                         link: Some(channel.clone()),
                     },
+                    folder: None,
                     inactivity_ms: None,
                     asking: false,
                     blocked: false,
@@ -1488,6 +1524,60 @@ mod tests {
             )
             .unwrap();
             assert!(candidate.watches.is_empty());
+        }
+    }
+
+    /// docs/delivery.md, Watch activity and completion: a target that cannot
+    /// be read keeps its watch while its folder stands, and loses it once the
+    /// folder is deleted, whether it still runs there or an archived session
+    /// holds it to resume there.
+    #[test]
+    fn a_watch_ends_when_its_unreadable_targets_folder_is_deleted() {
+        for archived in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let (runtime, parent, observed, _) = fixture(root.path());
+            let folder = root.path().join("checkout");
+            std::fs::create_dir(&folder).unwrap();
+            let folder_text = folder.to_str().unwrap();
+            let mut ledger = Ledger::default();
+            watch::start(&mut ledger, &parent, &observed.actor, 1).unwrap();
+            let agents = if archived {
+                json!([])
+            } else {
+                // A session the reader cannot find, in the target's folder.
+                json!([{"id":"recipient","pane_id":"recipient","agent":"codex","agent_status":"idle",
+                    "state_change_seq":1,"lineage_session":"recipient-session","cwd":folder_text,
+                    "agent_session":{"kind":"id","value":"recipient-session"}}])
+            };
+            let payload: SessionSnapshotPayload =
+                serde_json::from_value(json!({ "agents": agents })).unwrap();
+            let mut guard = runtime.lock().unwrap();
+            guard.observe_delivery(crate::node::TEST_NODE, &payload, None, None);
+            if archived {
+                crate::runtime::delivery::tests::archive_holding(
+                    &mut guard,
+                    &observed.actor,
+                    folder_text,
+                );
+            }
+            drop(guard);
+            for deleted in [false, true] {
+                if deleted {
+                    std::fs::remove_dir(&folder).unwrap();
+                }
+                let mut guard = runtime.lock().unwrap();
+                guard.publish_delivery(Arc::new(ledger.clone()), false);
+                let work = guard.delivery_watch_work();
+                drop(guard);
+                let sample = read_activity(work.into_iter().next().unwrap());
+                assert!(sample.failure.is_some(), "archived {archived}");
+                watch::tick(&mut ledger, &[sample], 100).unwrap();
+                assert_eq!(
+                    ledger.watches.len(),
+                    usize::from(!deleted),
+                    "archived {archived}, deleted {deleted}"
+                );
+            }
         }
     }
 

@@ -518,6 +518,37 @@ impl Runtime {
             })
     }
 
+    /// The folder a sleeping or archived session holding `actor`'s
+    /// registration runs in, which its wake or resume opens again.
+    fn held_actor_folder(&self, actor: &Actor) -> Option<String> {
+        let ui = &self.snapshot.ui_state;
+        let dormant = ui.agent_sleep.dormant.values().find(|record| {
+            record
+                .registration
+                .as_ref()
+                .is_some_and(|registration| registration.actor.same_identity(actor))
+        });
+        if let Some(record) = dormant {
+            return Some(record.cwd.clone());
+        }
+        ui.session_archive
+            .records
+            .values()
+            .flat_map(|record| &record.members)
+            .find(|member| {
+                member
+                    .registration
+                    .as_ref()
+                    .is_some_and(|registration| registration.actor.same_identity(actor))
+            })
+            .map(|member| {
+                member
+                    .cwd
+                    .clone()
+                    .unwrap_or_else(|| member.checkout_path.clone())
+            })
+    }
+
     /// Whether a sleeping session holds `actor`'s registration for its wake.
     fn dormant_holds_actor(&self, actor: &Actor) -> bool {
         self.snapshot
@@ -1591,12 +1622,22 @@ impl Runtime {
                         agent.actor.same_identity(&watch.target)
                             && self.registration_rebinds.contains_key(&agent.id)
                     });
+                // The folder the target runs in, or the one its sleeping or
+                // archived session would open again, which the tick asks its
+                // machine about when the target cannot be read.
+                let folder = match &observation {
+                    Some(observation) => observation
+                        .session
+                        .as_ref()
+                        .and_then(|session| session.cwd.clone()),
+                    None if gone => None,
+                    None => self.held_actor_folder(&watch.target),
+                };
                 let source = crate::delivery::worker::ActivitySource {
                     link: if self.node == watch.target.device_id {
                         Some(Arc::clone(&self.own_node))
                     } else {
-                        observation
-                            .is_some()
+                        (observation.is_some() || folder.is_some())
                             .then(|| self.node_link(&watch.target.device_id).ok())
                             .flatten()
                     },
@@ -1622,6 +1663,7 @@ impl Runtime {
                     state_change_seq: watch.last_state_change_seq,
                     status_changed_at_unix_ms: watch.status_changed_at_unix_ms,
                     source,
+                    folder,
                     inactivity_ms: None,
                     asking,
                     blocked,
@@ -1991,6 +2033,26 @@ pub(crate) mod tests {
     /// The agent rows the sidebar shows on this machine.
     pub(crate) fn show_agents(runtime: &mut Runtime, payload: SessionSnapshotPayload) {
         runtime.snapshot.navigator.agents = crate::sidebar::project_agents(payload).agents;
+    }
+
+    /// An archived session whose one member holds `actor`'s registration and
+    /// would resume in `folder`.
+    pub(crate) fn archive_holding(runtime: &mut Runtime, actor: &Actor, folder: &str) {
+        let record = serde_json::from_value(json!({
+            "phase":"archived","revision":1,"archived_at_unix_ms":1,
+            "project_root":folder,"project_label":"fixture",
+            "members":[{"machine":actor.device_id,"pane_id":actor.pane_id,"kind":actor.kind,
+                "native_session_id":"recipient-session","cwd":folder,"checkout_path":folder,
+                "title":"recipient","registration":{"id":"agent-1","actor":actor},
+                "depth":0,"closed":true,"resume":{"state":"idle"}}],
+        }))
+        .unwrap();
+        runtime
+            .snapshot
+            .ui_state
+            .session_archive
+            .records
+            .insert(crate::session_archive::ArchiveId::new().unwrap(), record);
     }
 
     pub(crate) fn recipient_at_rest(
