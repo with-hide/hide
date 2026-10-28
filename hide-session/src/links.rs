@@ -178,8 +178,13 @@ impl LinkAccumulator {
     /// The parser judged one record an event; an operator request is kept
     /// for the span it was made in.
     pub(crate) fn event(&mut self, kind: EventKind, at: u64, text: &str, offset: u64) {
-        // A Hide letter is another agent's message, not the operator's.
-        if kind != EventKind::Human || self.sidechain_line || text.trim().is_empty() {
+        // A Hide letter is another agent's message, not the operator's; the
+        // doorbell's line that wakes the pane for one names no request.
+        if kind != EventKind::Human
+            || self.sidechain_line
+            || text.trim().is_empty()
+            || crate::is_bell_line(text)
+        {
             return;
         }
         let envelope = crate::envelope_header(text);

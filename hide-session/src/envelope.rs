@@ -4,6 +4,9 @@
 //! [<kind>]`. A batch keeps that first letter's attribution; body text and
 //! later headers never select a different sender. The independent examples
 //! in `contracts/delivery-envelope.json` bind this reader and mailbox::pull.
+//!
+//! The doorbell's line that wakes a pane for a letter carries no envelope;
+//! [`crate::bell_line`] reads it.
 
 /// The most characters of a sender's name a message's facts keep.
 const MAX_SENDER_CHARS: usize = 128;
@@ -65,6 +68,13 @@ pub fn envelope_header(text: &str) -> Option<(String, String)> {
             kind.to_owned(),
         )
     })
+}
+
+/// Whether a person's message in a transcript is a Hide letter rather than
+/// the operator's own words: another agent's envelope or the doorbell's line.
+/// A letter the operator's Send made is the operator's.
+pub fn is_letter(text: &str) -> bool {
+    crate::is_bell_line(text) || (envelope_header(text).is_some() && !envelope_from_operator(text))
 }
 
 #[cfg(test)]
@@ -137,5 +147,17 @@ mod tests {
         ] {
             assert_eq!(envelope_sender(text), None, "{text}");
         }
+    }
+
+    #[test]
+    fn another_agents_envelope_is_a_letter_and_the_operators_send_is_not() {
+        assert!(is_letter(
+            "Hide letter letter-1 from ci-lead (claude) [report]\nDone"
+        ));
+        assert!(!is_letter(
+            "Hide letter letter-1 from operator (operator) [request]\nLook here"
+        ));
+        assert!(!is_letter("레이어 2도 1.0.1에 포함"));
+        assert!(is_letter("🦉 ci-lead 보고: 레이어 2도 1.0.1에 포함"));
     }
 }

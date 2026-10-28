@@ -275,6 +275,7 @@ Both are looked up in memory when the bell rings, on the doorbell's thread, neve
 The first line is the body's first line that has anything to show, cut to 60 characters with `…`, and the writer is cut to 32; a body with no such line leaves the colon and summary out.
 Agents learn from their session guidance that this first line is the letter's one-line summary, and that a prompt beginning with `🦉` brings a letter that `hide inbox` shows if the prompt did not.
 The mark is U+1F989 without a variation selector; Codex CLI on Windows may show the line without the owl.
+The line's parts (the mark, each language's kind words and waiting-letter phrase, the inbox tail and the name and summary limits) are named once in `hide-session/src/bell_line.rs`, which the bell writes from and whose transcript readers tell the line from the operator's own words by its whole shape (`is_bell_line`), so Project Memory and a session's link facts never take a letter's wake for the operator's request ([ARCHITECTURE.md](ARCHITECTURE.md), Project sessions and Memory).
 
 Whether the line names `hide inbox` is decided per runtime (`bell::names_inbox`), by whether its bell turn can arrive without Hide's hooks having run in the pane.
 Claude Code runs every user-level hook it is given, so its prompt hook hands the turn the letter and its session guidance has already said what `🦉` means; its line ends at the summary.
@@ -295,6 +296,8 @@ The existing draft, identity and readiness checks, three-attempt limit and retry
 The line carries nothing a composer acts on while it is typed.
 Control characters become spaces, characters that draw nothing or reorder text are dropped (`display_text::one_line`), and runs of whitespace become one space.
 `@` opens the file picker in Claude Code and Codex and `$` opens Codex's skill picker, and Enter would accept the picker's choice instead of submitting, so both are typed as their full-width forms `＠` and `＄`; a backslash before Enter continues the line in Claude Code, so `\` is typed as `＼`.
+The sender and the summary carry no character above U+FFFF and no `·`: Codex CLI on Windows drops the former as it receives the line, so they are left out before the spaces are folded and its transcript holds the typed line less only the owl, and `·` is typed as `∙`, so the line's own ` · ` only ever opens the waiting-letter or inbox tail; a sender with nothing left to show is written as `…`.
+This makes the line's shape unambiguous for the transcript readers (`hide-session/src/bell_line.rs`) rather than leaving them to guess; a line an earlier build typed can still carry either, and one whose summary was only an emoji or began with `· ` may read as the operator's.
 `/`, `!` and `#` act only as a prompt's first character, and the line begins with `🦉`.
 
 ### Recognizing the bell

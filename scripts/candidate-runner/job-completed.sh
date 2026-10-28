@@ -26,6 +26,9 @@ pin="${GITHUB_WORKSPACE:-}/rust-toolchain.toml"
 if [[ -n "${GITHUB_WORKSPACE:-}" && -f "$pin" ]]; then
   channel="$(sed -n 's/^channel *= *"\(.*\)"$/\1/p' "$pin")"
 fi
+# The runner starts this hook in the job's checkout, which goes next, and
+# rustup will not start in a folder that no longer exists.
+cd /
 
 # Every entry, whatever its name (`..x` too) and whether or not it is a link,
 # broken or not; rm removes a link itself and never follows one. _temp is the

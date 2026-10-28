@@ -7,10 +7,11 @@ step: a planned lane must have succeeded and an unplanned one must have been
 skipped, so a lane whose `if:` is wrong fails `verify` instead of passing it.
 
 A push to main, a comparison that cannot be computed and a path no rule
-claims plan every lane but `package`, which only a change to
-what goes into a package plans. No lane takes a macOS runner for anything but
-what only macOS proves (`os-contract-macos`, `desktop-e2e`, and `package`'s
-packaged app); the rest of the macOS checks are jobs of `nightly.yml`.
+claims use the existing full plan (without `package` or `agent-clis`).
+CI definition changes on a pull request exercise every lane, including those two.
+No lane takes a macOS runner for anything but what only macOS proves
+(`os-contract-macos`, `desktop-e2e`, `omp-contract`'s SDK boundary, and
+`package`'s packaged app); the rest of the macOS checks are jobs of `nightly.yml`.
 Nightly explicitly owns agy and the journey in its direct calls and removes
 those two internal lanes from its verify plan.
 
@@ -60,7 +61,7 @@ LANES = (
 # on their runners, so it runs for a change to what goes into one (PACKAGE_PATHS) and
 # nothing else: main's push runs leave it out, the nightly calls
 # `package.yml` itself and a release builds its own. `agent-clis` installs
-# every pinned agent CLI on three runners, macOS's among them, for a change to
+# every pinned agent CLI on Linux and Windows for a change to
 # the pin table or its installer and nothing else, since no other path
 # reaches what it installs; the nightly's and a release's journey install
 # every CLI too.
@@ -78,9 +79,6 @@ OS_CRATES = {
     "hide-kit",
     "hide-platform",
 }
-# The OS contract's macOS leg tests only these two, so only a change to one of
-# them plans it; the others reach it through the nightly.
-OS_CONTRACT_CRATES = {"hide-herdr-client", "hide-platform"}
 # The crates whose agy tests the agy contract runs on Linux and Windows: the
 # agent table, the hook and trust writer, the install kit, the conversation
 # readers and the Hide AI backend (`agy-contract.yml`).
@@ -172,7 +170,7 @@ READERS = (
     ("contracts/snapshot-wire-enums.json", {"rust", "checks"}, {"herdr-core"}),
     # hide-agent-adapter's contract test; web/src/agentAdapters.ts imports it
     # into the shell, which plans what a web shell file plans.
-    ("contracts/agent-adapters.json", {"rust", "checks", "web-e2e", "desktop-e2e"}, {"hide-agent-adapter"}),
+    ("contracts/agent-adapters.json", {"rust", "checks", "web-e2e"}, {"hide-agent-adapter"}),
     # hided's `cli_contract` test.
     ("contracts/hide-cli.json", {"rust"}, {"hided"}),
     # policy's test_agent_journey_cells shares the hook's prompt identity examples.
@@ -188,20 +186,53 @@ def reader_entries(name):
             if name == entry[0] or (entry[0].endswith("/") and name.startswith(entry[0]))]
 
 
-# The paths that change what goes into a package: the package scripts and
-# resources, the Herdr pin and its fetch, the build entrypoints, the web shell
-# `hided/build.rs` embeds, the daemon replacement in `hided/src/cli.rs`, the
-# install kit and hooks a packaged daemon runs, and the workflows that build
-# them. This is the only list: `package.yml` has no trigger of its own.
-PACKAGE_PATHS = (
-    "desktop/scripts/*", "desktop/package.json", "desktop/resources/*", "desktop/native/*",
-    "contracts/herdr-bundle.json", "scripts/fetch-herdr-runtime.*",
-    "scripts/verify-cargo.sh", "scripts/verify-web.sh", "scripts/toolchain-env.sh",
-    "hided/build.rs", "hided/src/cli.rs", "hide-kit/*", "hide-agent-hooks/*",
-    ".github/workflows/package.yml", ".github/workflows/device-helpers.yml", ".github/workflows/release.yml",
-    # The updater and the release files it reads, and the specs only this lane runs.
-    "desktop/src/main/updater*", "scripts/check-release-assets.mjs", "desktop/e2e/packaged-*",
-)
+# Each macOS lane's inputs, from the reusable workflow it runs. A glob's `*`
+# includes descendants. Desktop's two shards share one lane and one decision.
+# Crate-only desktop coverage stays on main/nightly (the accepted #1147 risk).
+# OMP keeps whole crates: its public SDK contract uses hide-ai and hide-platform.
+# A new/unknown input still takes the full fallback below, never a silent skip.
+MACOS_LANE_INPUTS = {
+    "desktop-e2e": {
+        "paths": (
+            "desktop/src/*", "desktop/static/*", "desktop/e2e/*",
+            "desktop/playwright.config.ts", "desktop/vitest.config.ts", "desktop/scripts/build.mjs",
+            # global-setup.ts -> fused-electron.ts applies the shipped fuses.
+            "desktop/scripts/fuses.mjs", "desktop/scripts/fuses.d.mts",
+            "web/src/*", "web/public/*", "web/index.html", "web/e2e/*", "web/vite.config.ts",
+            "contracts/agent-adapters.json",
+        ),
+        # The app never loads the phone page; web specs run only in web-e2e.
+        # Desktop fixtures import the other web/e2e helpers and C shims.
+        "exclude": ("web/public/m/*", "web/e2e/*.spec.ts", "web/e2e/*.md", "desktop/e2e/*.md"),
+    },
+    "os-contract-macos": {"paths": ("hide-platform/*", "hide-herdr-client/*")},
+    "omp-contract": {"paths": ("hide-ai/*", "hide-platform/*")},
+    "package": {
+        # compile (macos) and package (macos) are one dependency chain. Keep
+        # both for the package's scripts, resources, kit, hooks and updater.
+        "paths": (
+            "desktop/scripts/*", "desktop/package.json", "desktop/resources/*", "desktop/native/*",
+            "contracts/herdr-bundle.json", "scripts/fetch-herdr-runtime.*",
+            "scripts/verify-cargo.sh", "scripts/verify-web.sh", "scripts/toolchain-env.sh",
+            "hided/build.rs", "hided/src/cli.rs", "hide-kit/*", "hide-agent-hooks/*",
+            "desktop/src/main/updater*", "scripts/check-release-assets.mjs", "desktop/e2e/packaged-*",
+        ),
+    },
+}
+# Used by green-run reuse too: package inputs are never policy-only changes.
+PACKAGE_PATHS = MACOS_LANE_INPUTS["package"]["paths"]
+# A change to CI's own decisions must exercise every lane, including packaging
+# and pinned CLI installation, even when a workflow is normally nightly-only.
+ALL_LANE_PATHS = (".github/workflows/*", ".github/actions/*", "scripts/ci-plan.py")
+
+
+def macos_lanes(name):
+    """The macOS checks that read this input; registered unit tests run elsewhere."""
+    if is_unit_test(name):
+        return set()
+    return {lane for lane, inputs in MACOS_LANE_INPUTS.items()
+            if any(fnmatchcase(name, pattern) for pattern in inputs["paths"])
+            and not any(fnmatchcase(name, pattern) for pattern in inputs.get("exclude", ()))}
 
 
 # Paths named here and in READERS are the only ones narrower than "every
@@ -218,12 +249,6 @@ POLICY_ONLY = (
     ".github/pull_request_template.md", ".github/dependabot.yml",
     # The contribution intake: forms, the approved list and the gate that reads it.
     ".github/ISSUE_TEMPLATE/*", ".github/DISCUSSION_TEMPLATE/*", ".github/APPROVED_CONTRIBUTORS",
-    ".github/workflows/contribution-gate.yml",
-    # Workflows no `pr.yml` job calls; `design-contract.yml` has its own pull
-    # request trigger, and the nightly calls `perf.yml` and
-    # `agent-trust-contract.yml`.
-    ".github/workflows/nightly.yml", ".github/workflows/herdr-update.yml", ".github/workflows/design-contract.yml",
-    ".github/workflows/perf.yml", ".github/workflows/agent-trust-contract.yml",
     "scripts/tests/*",
     # Scripts only `policy`, another workflow or nobody runs.
     "scripts/check-agent-asset-committed.sh", "scripts/check-capability-readers-off-lock.sh",
@@ -246,8 +271,8 @@ POLICY_ONLY = (
 # Paths whose readers are a known set of lanes. `web/e2e` helpers are imported
 # by the desktop suites too, and `desktop/e2e` unit tests run in `windows
 # check`, so neither is web-only or desktop-only.
-WEB_E2E_LANES = {"checks", "web-e2e", "windows-e2e", "desktop-e2e", "windows-desktop", "windows-check"}
-DESKTOP_E2E_LANES = {"checks", "desktop-e2e", "windows-desktop", "windows-check"}
+WEB_E2E_LANES = {"checks", "web-e2e", "windows-e2e", "windows-desktop", "windows-check"}
+DESKTOP_E2E_LANES = {"checks", "windows-desktop", "windows-check"}
 # Desktop Vitest inputs, outside the app's explicit esbuild entry graphs:
 # `checks` and `windows-check` run them. Web tests are deliberately absent:
 # sidebar.rs scans every web/src TypeScript file, and Tailwind's web-root
@@ -310,32 +335,26 @@ NAMED_LANES = (
     # `vite build` in `checks` and in the web and desktop e2e builds (Linux,
     # Windows, macOS), and its `test` block is vitest's in `checks` and
     # `windows check`.
-    ("web/vite.config.ts", {"checks", "web-e2e", "windows-e2e", "desktop-e2e", "windows-desktop", "windows-check"}),
+    ("web/vite.config.ts", {"checks", "web-e2e", "windows-e2e", "windows-desktop", "windows-check"}),
     ("desktop/eslint.config.mjs", {"checks"}),
     ("desktop/eslint.globals.mjs", {"checks"}),
     # `build.mjs` is the e2e's build; `package.mjs` and `smoke-package.mjs` run
     # in the `package` lane, which PACKAGE_PATHS plans for this folder.
-    ("desktop/scripts/build.mjs", {"checks", "desktop-e2e", "windows-desktop"}),
+    ("desktop/scripts/build.mjs", {"checks", "windows-desktop"}),
     ("desktop/scripts/package.mjs", {"checks"}),
     ("desktop/scripts/smoke-package.mjs", {"checks"}),
-    # The workflows `pr.yml` lanes call: each plans the lanes that call it
-    # (the nightly calls them too). The `package` lane's workflow and the
-    # release that calls it plan `package` through PACKAGE_PATHS.
-    (".github/workflows/web-e2e.yml", {"web-e2e", "windows-e2e"}),
-    (".github/workflows/desktop-e2e.yml", {"desktop-e2e", "windows-desktop"}),
-    (".github/workflows/os-contract.yml", {"os-contract", "os-contract-macos"}),
-    (".github/workflows/agy-contract.yml", {"agy-contract"}),
-    (".github/workflows/omp-contract.yml", {"omp-contract"}),
-    (".github/workflows/agent-journey.yml", JOURNEY_LANES),
-    (".github/workflows/agent-clis.yml", AGENT_CLI_LANES),
+    # The packager imports these helpers; package covers their native effects.
+    ("desktop/scripts/build-identity.mjs", {"checks"}),
+    ("desktop/scripts/device-helpers.mjs", {"checks"}),
+    ("desktop/scripts/fuses.mjs", {"checks", "windows-desktop"}),
+    ("desktop/scripts/fuses.d.mts", {"checks", "windows-desktop"}),
+    ("desktop/scripts/installers.mjs", {"checks"}),
+    ("desktop/scripts/macos-signing.mjs", {"checks"}),
+    ("desktop/scripts/release-binaries.mjs", {"checks"}),
+    ("desktop/scripts/smoke-windows-installer.mjs", {"checks"}),
     # The agy contract installs the pinned agy with the same script.
     ("contracts/agent-clis.json", {"agy-contract"} | AGENT_CLI_LANES),
     ("scripts/install-agent-clis.py", {"agy-contract"} | AGENT_CLI_LANES),
-    (".github/workflows/remote-mailbox.yml", {"remote-mailbox"}),
-    (".github/workflows/wsl-device.yml", {"windows-wsl"}),
-    (".github/workflows/package.yml", set()),
-    (".github/workflows/device-helpers.yml", set()),
-    (".github/workflows/release.yml", set()),
 )
 
 
@@ -409,6 +428,8 @@ def classify(path, status, crates, root):
     parts = path.parts
     if status not in ("A", "M", "D"):
         return None, f"{status} change: {path}", set()
+    if any(fnmatchcase(path.as_posix(), pattern) for pattern in ALL_LANE_PATHS):
+        return None, f"CI definition: {path}", set()
     if is_docs(path):
         return set(), f"documentation: {path}", set()
     if parts[0] == "design":
@@ -431,12 +452,8 @@ def classify(path, status, crates, root):
             lanes.add("windows-wsl")
         if crate["name"] in OS_CRATES:
             lanes.update(OS_LANES)
-        if crate["name"] in OS_CONTRACT_CRATES:
-            lanes.add("os-contract-macos")
         if crate["name"] in AGY_CRATES:
             lanes.add("agy-contract")
-        if crate["name"] in {"hide-ai", "hide-platform"}:
-            lanes.add("omp-contract")
         if path.as_posix() in JOURNEY_CRATE_FILES:
             lanes.update(JOURNEY_LANES)
         return lanes, f"crate {crate['name']}: {path}", packages
@@ -453,21 +470,21 @@ def classify(path, status, crates, root):
             # the app never loads them.
             return {"checks", "web-e2e"}, f"phone page: {path}", set()
         if parts[1] in ("src", "public") or path.as_posix() == "web/index.html":
-            lanes = {"checks", "web-e2e", "desktop-e2e"}
+            lanes = {"checks", "web-e2e"}
             if path.as_posix() in SHARED_WEB:
                 lanes.update(SHARED_WEB_LANES)
                 return lanes, f"web shared with the desktop host: {path}", set()
             return lanes, f"web shell: {path}", set()
     if parts[0] == "desktop" and len(parts) > 1:
         if parts[1] == "e2e" and len(parts) == 3 and path.name.endswith(".spec.ts"):
-            lanes = {"checks", "desktop-e2e"}
+            lanes = {"checks"}
             spec = root / path
             # A deleted spec cannot be read; keep the Windows lane for it.
             if status == "D" or "@platform" in spec.read_text(encoding="utf-8"):
                 lanes.add("windows-desktop")
             return lanes, f"desktop e2e spec: {path}", set()
         if parts[1] in ("src", "static"):
-            lanes = {"checks", "desktop-e2e", "windows-desktop"}
+            lanes = {"checks", "windows-desktop"}
             if parts[1:3] == ("src", "main"):
                 # The main process owns paths, child processes and the daemon
                 # start; its unit suite runs on Windows in `windows check`.
@@ -492,6 +509,7 @@ def select(entries, crates, root=ROOT, full_reason=None):
     reasons = {lane: [] for lane in LANES}
     packages = set()
     full = []
+    all_lanes = any(fnmatchcase(name, pattern) for _, name in entries for pattern in ALL_LANE_PATHS)
     if full_reason:
         full.append(full_reason)
     elif not entries:
@@ -500,14 +518,14 @@ def select(entries, crates, root=ROOT, full_reason=None):
         path = PurePosixPath(name)
         if not name or path.is_absolute() or ".." in path.parts:
             raise ValueError(f"invalid changed path: {name!r}")
-        # A broad package input (updater*) can name its unit test too, but a
-        # registered desktop unit test is not built into the package.
-        if not is_unit_test(name) and any(fnmatchcase(name, pattern) for pattern in PACKAGE_PATHS):
+        covered = macos_lanes(name)
+        if "package" in covered:
             reasons["package"].append(f"package input: {name}")
         lanes, reason, reached = classify(path, status, crates, root)
         if lanes is None:
             full.append(reason)
             continue
+        lanes |= covered
         for _, extra_lanes, extra_packages in reader_entries(name):
             lanes |= extra_lanes
             reached = reached | extra_packages
@@ -516,7 +534,8 @@ def select(entries, crates, root=ROOT, full_reason=None):
         for lane in lanes:
             reasons[lane].append(reason)
     if full:
-        for lane in FULL_LANES:
+        # Preserve main/nightly defaults; a PR editing CI exercises everything.
+        for lane in LANES if all_lanes else FULL_LANES:
             reasons[lane] = list(full)
         packages = {crate["name"] for crate in crates.values()}
     planned = [lane for lane in LANES if reasons[lane]]
@@ -535,7 +554,7 @@ def reads_no_lane(status, name, crates, root=ROOT):
     # The status decides only whether a spec is read for its tag, never
     # whether a path has a lane, so the answer comes from the name alone.
     lanes, _, _ = classify(PurePosixPath(name), "D", crates, root)
-    return lanes == set()
+    return lanes == set() and not macos_lanes(name)
 
 
 def changed_entries(base, head, root=ROOT):
