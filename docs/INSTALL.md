@@ -199,7 +199,7 @@ These are real CLIs with Hide's kit and Herdr's integration against a keyless fa
 
 Unverified on Windows and Linux (the macOS assumptions below are left as they are, and no check on those systems has proved them):
 
-- Paths outside the `$HOME` boundary, and drive letters and UNC paths on Windows.
+- Adding a folder outside home after its confirmation (PRD wsl-device B15, B21), and drive letters on Windows: the boundary's tests run on the macOS and Linux lanes, and on Windows only the Rust lane's `hide-host` tests and a network path's refusal as `outside_home` are run; no Windows desktop check has added a folder on another drive.
 - Opening a path in the system's file manager (Reveal), and opening a file or link in the default app.
 - Move to Trash through the system's trash.
 - Terminal programs that expect macOS text-editing keys; Windows and Linux send `Ctrl+U`, `Home` and `End` as typed.

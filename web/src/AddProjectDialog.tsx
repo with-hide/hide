@@ -6,13 +6,14 @@
 // (Clone from URL, Create new project), each its own view of this dialog, sit
 // on the core's machine, the one a new project is made on (`hostWays`). Every
 // way sends one `create_workspace` and reads its answer through
-// `useRegistration`.
+// `useRegistration`; a folder outside home is asked about once and sent again
+// with the operator's confirmation of that path (PRD wsl-device B15).
 
 import { CornerDownLeftIcon, FolderOpenIcon, FolderPlusIcon, LinkIcon, type LucideIcon } from "lucide-react";
 import type { TFunction } from "i18next";
 import { useEffect, useRef, useState } from "react";
 import type { Actions } from "./actions";
-import { addProjectHosts, alreadyRegistered, folderLabel, hostWays, initialHost, trimFolder } from "./addProject";
+import { addProjectHosts, alreadyRegistered, folderLabel, hostWays, initialHost, trimFolder, wslDrivePath } from "./addProject";
 import { CloneFromUrl, cloneRunning } from "./CloneFromUrl";
 import { CreateProjectView } from "./CreateProjectView";
 import { Button } from "./components/ui/button";
@@ -96,6 +97,8 @@ export function AddProjectViews({
   const [chosen, setChosen] = useState(() => initialHost(hosts, draft?.device ?? focused));
   const host = hosts.find((row) => row.id === chosen) ?? hosts[0]!;
   const ways = hostWays(host.id, devices, hostBridge() !== null);
+  // Where a WSL device shows its PC's drives, as its helper reports it; null on any other machine.
+  const drives = devices?.find((row) => row.id === host.id)?.host?.windows_drives ?? null;
   // A clone still running when the dialog opens is shown where it started.
   const [view, setView] = useState<"add" | OtherWay["id"]>(() => (cloneRunning(useShellStore.getState().rest?.repository_clone) ? "clone" : draft?.form?.view || "add"));
   const [form, setForm] = useState<FirstRunProjectForm>(draft?.form ?? {});
@@ -113,12 +116,12 @@ export function AddProjectViews({
   // The way Back returns from, whose row takes the keyboard again.
   const returnTo = useRef<OtherWay["id"] | null>(null);
 
-  const add = (path: string) => {
+  const add = (path: string, confirmed = false) => {
     if (alreadyRegistered(path, host.id, registrations)) {
       registration.refuse(path, "already_registered");
       return;
     }
-    registration.send(host.id, path, () => actions.createWorkspace(path, folderLabel(path), host.id));
+    registration.send(host.id, path, () => actions.createWorkspace(path, folderLabel(path), host.id, confirmed));
   };
 
   const open = (next: typeof view) => {
@@ -136,8 +139,9 @@ export function AddProjectViews({
   };
 
   const submitField = () => {
-    const path = trimFolder(text);
+    const path = trimFolder(wslDrivePath(text, drives));
     if (pending || !path || path === "~") return;
+    setText(path);
     add(path);
   };
 
@@ -236,6 +240,15 @@ export function AddProjectViews({
                       aria-label={t("addProject.folderOn", { host: host.label })}
                       data-add-project-path="true"
                       onChange={(event) => { setText(event.target.value); onDraft?.({ project_path: event.target.value }); }}
+                      onPaste={(event) => {
+                        // A Windows path pasted on a WSL device is shown as that device's own path (PRD wsl-device B16).
+                        const pasted = event.clipboardData.getData("text");
+                        const spelled = wslDrivePath(pasted, drives);
+                        if (spelled === pasted) return;
+                        event.preventDefault();
+                        setText(spelled);
+                        onDraft?.({ project_path: spelled });
+                      }}
                       onKeyDown={(event) => {
                         if (event.nativeEvent.isComposing || event.key !== "Enter") return;
                         event.preventDefault();
@@ -249,7 +262,7 @@ export function AddProjectViews({
                   <p className="text-body text-muted-foreground">{ways.own ? t("addProject.homeNoteOwn") : t("addProject.homeNote", { host: host.label })}</p>
                 </div>
               )}
-              <RegistrationStatus registration={registration} />
+              <RegistrationStatus registration={registration} drives={drives} onConfirm={(path) => add(path, true)} />
               {ways.otherWays ? (
                 <div className="flex flex-col gap-xs" data-add-project-other-ways="true">
                   <span className="text-caption text-muted-foreground">{t("addProject.otherWays")}</span>

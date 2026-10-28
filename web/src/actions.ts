@@ -3013,9 +3013,14 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       openInFront(path, false, "file_open", true);
     },
 
-    /** Registers a folder on `deviceId`; a device's own helper judges it against that device's home. */
-    createWorkspace(path: string, label: string, deviceId = localDeviceId(rest())) {
-      dispatch({ schema_version: 2, kind: "create_workspace", payload: { ...deviceField(deviceId, localDeviceId(rest())), path, label, initialize_git: false } });
+    /**
+     * Registers a folder on `deviceId`; a device's own helper judges it against that device's home.
+     * `confirmed` carries the operator's answer to the question a folder outside home asks: it names
+     * that same path, and the boundary takes it for no other (PRD wsl-device B15).
+     */
+    createWorkspace(path: string, label: string, deviceId = localDeviceId(rest()), confirmed = false) {
+      const confirmation = confirmed ? { confirmed_outside_home: path } : {};
+      dispatch({ schema_version: 2, kind: "create_workspace", payload: { ...deviceField(deviceId, localDeviceId(rest())), path, label, initialize_git: false, ...confirmation } });
     },
 
     /** Asks hided whether a clone could land at `parent/name`; answered as a `clone_target` frame. */

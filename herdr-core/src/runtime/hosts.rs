@@ -46,6 +46,9 @@ pub(super) enum HostPhase {
         /// The core's helper on a device it dialed; a node that dials in
         /// runs its own Hide, so it has none.
         helper_path: Option<String>,
+        /// Where the node shows its Windows PC's drives when it is a WSL
+        /// distribution (`Hello::windows_drives`).
+        windows_drives: Option<String>,
     },
     IdentityChanged(String),
     Unsupported(String),
@@ -799,6 +802,7 @@ impl Runtime {
                         host: node.host,
                         platform,
                         helper_path,
+                        windows_drives: node.hello.windows_drives.clone(),
                     },
                 );
                 match node.terminals {
@@ -1253,6 +1257,7 @@ impl Runtime {
             message: None,
             platform: None,
             helper_path: None,
+            windows_drives: None,
         };
         let phase = self.device_hosts.get(device_id).map(|host| &host.phase);
         let (state, message) = match (consent, current, phase) {
@@ -1264,9 +1269,10 @@ impl Runtime {
                 "not_allowed",
                 Some("This version of Hide needs a wider permission on this device; review and allow it again in Settings".to_owned()),
             ),
-            (Some(_), true, Some(HostPhase::Ready { host, platform, helper_path })) => {
+            (Some(_), true, Some(HostPhase::Ready { host, platform, helper_path, windows_drives })) => {
                 snapshot.platform = Some(platform.clone());
                 snapshot.helper_path = helper_path.clone();
+                snapshot.windows_drives = windows_drives.clone();
                 match host.closed_reason() {
                     None => ("ready", None),
                     Some(reason) => ("unavailable", Some(format!("The device helper disconnected: {reason}"))),
@@ -1289,32 +1295,36 @@ impl Runtime {
     /// The host row of a node that dials this core: its link's state, with
     /// the operator's SSH login as its consent and no helper of the core's.
     fn inbound_host_snapshot(&self, device_id: &str) -> DeviceHostSnapshot {
-        let (state, message, platform) =
-            match self.device_hosts.get(device_id).map(|host| &host.phase) {
-                Some(HostPhase::Ready { host, platform, .. }) => match host.closed_reason() {
-                    None => ("ready", None, Some(platform.clone())),
-                    Some(reason) => (
-                        "unavailable",
-                        Some(format!("The machine's link ended: {reason}")),
-                        Some(platform.clone()),
-                    ),
-                },
-                Some(HostPhase::Connecting) => (
-                    "connecting",
-                    Some("Connecting to the machine…".to_owned()),
-                    None,
-                ),
-                Some(
-                    HostPhase::Unavailable(message)
-                    | HostPhase::IdentityChanged(message)
-                    | HostPhase::Unsupported(message),
-                ) => ("unavailable", Some(message.clone()), None),
-                Some(HostPhase::NotAllowed) | None => (
+        let phase = self.device_hosts.get(device_id).map(|host| &host.phase);
+        let windows_drives = match phase {
+            Some(HostPhase::Ready { windows_drives, .. }) => windows_drives.clone(),
+            _ => None,
+        };
+        let (state, message, platform) = match phase {
+            Some(HostPhase::Ready { host, platform, .. }) => match host.closed_reason() {
+                None => ("ready", None, Some(platform.clone())),
+                Some(reason) => (
                     "unavailable",
-                    Some("The machine has not connected to this core yet".to_owned()),
-                    None,
+                    Some(format!("The machine's link ended: {reason}")),
+                    Some(platform.clone()),
                 ),
-            };
+            },
+            Some(HostPhase::Connecting) => (
+                "connecting",
+                Some("Connecting to the machine…".to_owned()),
+                None,
+            ),
+            Some(
+                HostPhase::Unavailable(message)
+                | HostPhase::IdentityChanged(message)
+                | HostPhase::Unsupported(message),
+            ) => ("unavailable", Some(message.clone()), None),
+            Some(HostPhase::NotAllowed) | None => (
+                "unavailable",
+                Some("The machine has not connected to this core yet".to_owned()),
+                None,
+            ),
+        };
         DeviceHostSnapshot {
             consent: "granted".to_owned(),
             helper_root: None,
@@ -1326,6 +1336,7 @@ impl Runtime {
             message,
             platform,
             helper_path: None,
+            windows_drives,
         }
     }
 

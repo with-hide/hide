@@ -971,6 +971,7 @@ pub fn handle_with_progress(
                 },
             },
             reader_features: Some(hide_node_link::sessions::ReaderFeatures::implemented()),
+            windows_drives: hide_platform::host::windows_drives().ok(),
         }),
         Call::LabelLock {
             herdr_socket,
@@ -1056,16 +1057,23 @@ pub fn handle_with_progress(
             to_value(())
         }
         Call::Directory { path } => to_value(worktrees::directory(&absolute(&path)?)),
-        Call::Registrable { path } => {
+        Call::Registrable {
+            path,
+            confirmed_outside_home,
+        } => {
             let home = env.home("HOME is not set, so no folder can be judged against it")?;
-            // `~` is this host's home, as a shell on it would read it.
-            let path = match path.strip_prefix('~') {
-                Some(rest) if rest.is_empty() || rest.starts_with('/') => {
-                    format!("{}{rest}", home.to_string_lossy())
-                }
-                _ => path,
-            };
-            to_value(crate::register::check(&absolute(&path)?, Path::new(&home))?)
+            let home_text = home.to_string_lossy();
+            // `~` is this host's home, as a shell on it would read it, in the
+            // path and in the confirmation alike.
+            let path = crate::register::expand_home(&path, &home_text);
+            let confirmed = confirmed_outside_home
+                .as_deref()
+                .map(|confirmed| crate::register::expand_home(confirmed, &home_text));
+            to_value(crate::register::check(
+                &path,
+                confirmed.as_deref(),
+                Path::new(&home),
+            )?)
         }
         Call::HomeSync { projects } => {
             let home = env.home("HOME is not set, so Hide's Home folder has no place to live")?;

@@ -222,6 +222,7 @@ mod tests {
                 home: None,
                 machine_identity: MachineIdentity::Available { id: machine },
                 reader_features: None,
+                windows_drives: None,
             };
             let response = Response {
                 id: request.id,

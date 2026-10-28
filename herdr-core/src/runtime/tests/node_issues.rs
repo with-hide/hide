@@ -237,6 +237,7 @@ fn node_runtime_with(
                 host: node,
                 platform: "macos aarch64".to_owned(),
                 helper_path: Some("/fake/hided".to_owned()),
+                windows_drives: None,
             },
             generation: 1,
         },

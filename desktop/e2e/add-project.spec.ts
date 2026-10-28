@@ -1,6 +1,7 @@
 // Add a project in the desktop app: the dialog's Browse folder asks the main
 // process for macOS's folder picker, which this spec replaces with a queue of
-// answers, so a pick, a cancel and a refused folder run with no native sheet.
+// answers, so a pick, a cancel, a folder outside home and a refused folder run
+// with no native sheet.
 // Clone from URL clones a local bare repository through the same dialog.
 
 import { expect, type ElectronApplication, type Page } from "@playwright/test";
@@ -75,16 +76,23 @@ test("Add a project picks a folder with the native picker, and a cancel or a ref
     await expect(alert).toHaveCount(0);
     await expect(dialog.locator("[data-registration-pending]")).toHaveCount(0);
 
-    // A folder outside home is refused by hided; the alert names it and the dialog stays for another pick.
+    // A folder outside home is asked about once (PRD wsl-device B15); Add sends it again with the
+    // confirmation of that path, and the project appears.
     await stubPicker(app, [{ canceled: false, filePaths: [outside] }]);
     await browse.click();
-    await expect(alert).toHaveAttribute("data-registration-reason", "outside_home");
-    await expect(alert).toHaveAttribute("data-registration-path", toPage(outside));
-    await expect(alert).toContainText(toPage(outside));
-    await expect(browse).toBeEnabled();
-    await captureWindow(app, page, "add-project-refused");
+    const question = dialog.locator("[data-registration-confirm]");
+    await expect(question).toHaveAttribute("data-registration-confirm", toPage(outside));
+    await expect(question).toContainText("This folder is outside your home folder. Add it as a project?");
+    await expect(alert).toHaveCount(0);
+    await expect(question.locator("[data-registration-confirm-add]")).toBeFocused();
+    await captureWindow(app, page, "add-project-outside-home");
+    await page.keyboard.press("Enter");
+    await expect(dialog).toHaveCount(0, { timeout: 20_000 });
+    await expect(page.locator("[data-project-list]")).toContainText("outside", { timeout: 20_000 });
 
-    // A folder under home registers: the dialog closes and the project appears.
+    // A folder under home registers without a question: the dialog closes and the project appears.
+    await add.click();
+    await expect(browse).toBeFocused();
     await stubPicker(app, [{ canceled: false, filePaths: [alpha] }]);
     await browse.click();
     await expect(dialog).toHaveCount(0, { timeout: 20_000 });

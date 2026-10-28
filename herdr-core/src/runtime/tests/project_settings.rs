@@ -870,6 +870,7 @@ fn acknowledged_remote_repository_edits_invalidate_native_intake_before_returnin
                 host: super::documents::FakeDevice::new(),
                 platform: "macos aarch64".into(),
                 helper_path: Some("/fake/hided".into()),
+                windows_drives: None,
             },
             generation: 1,
         },

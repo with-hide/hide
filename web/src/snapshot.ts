@@ -1718,6 +1718,8 @@ export type DeviceHost = {
   message: string | null;
   platform: string | null;
   helper_path: string | null;
+  /** Where a WSL device shows its Windows PC's drives (`/mnt`); absent on any other machine (`DeviceHostSnapshot::windows_drives`). */
+  windows_drives?: string | null;
 };
 
 export type Device = {

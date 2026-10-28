@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { initializeInterfaceI18n } from "./i18n/instance";
-import { addProjectHosts, alreadyRegistered, cloneUrlDraft, defaultProjectParent, hostWays, initialHost, parseCloneUrl, projectNameProblem, projectPath, refusalText, trimFolder } from "./addProject";
+import { addProjectHosts, alreadyRegistered, cloneUrlDraft, defaultProjectParent, hostWays, initialHost, onCDrive, parseCloneUrl, projectNameProblem, projectPath, refusalText, trimFolder, wslDrivePath } from "./addProject";
 import type { Device, WorkspaceRegistration } from "./snapshot";
 
 const { t } = initializeInterfaceI18n("en");
@@ -116,13 +116,49 @@ describe("Add a project", () => {
   });
 
   it("words a refusal in the operator's language, and a code it does not know with that code", () => {
-    expect(refusalText("outside_home", t)).toBe("Only a folder inside your home folder can be added.");
-    expect(refusalText("outside_home", ko)).toBe("홈 폴더 안에 있는 폴더만 추가할 수 있어요.");
+    expect(refusalText("outside_home", t)).toBe("Only a folder inside your home folder can be used here.");
+    expect(refusalText("outside_home", ko)).toBe("여기서는 홈 폴더 안에 있는 폴더만 쓸 수 있어요.");
     expect(refusalText("quota", ko)).toBe("폴더를 추가하지 못했어요 (quota).");
   });
 
   it("previews the full path as the name is typed", () => {
     expect(projectPath("/home/me/work", "")).toBe("/home/me/work/project-name");
     expect(projectPath("/home/me/work", "app")).toBe("/home/me/work/app");
+  });
+
+  describe("a Windows path on a WSL device (PRD wsl-device B16)", () => {
+    it("spells a pasted drive path as the device names it, under where it shows the PC's drives", () => {
+      for (const pasted of ["C:\\work\\app", "C:/work/app", "c:\\work\\app\\", "\"C:\\work\\app\"", "  C:\\work\\\\app  "]) {
+        expect(wslDrivePath(pasted, "/mnt"), pasted).toBe("/mnt/c/work/app");
+      }
+      expect(wslDrivePath("D:\\", "/mnt")).toBe("/mnt/d");
+      expect(wslDrivePath("C:", "/mnt")).toBe("/mnt/c");
+      expect(wslDrivePath("C:\\work", "/win/")).toBe("/win/c/work");
+      expect(wslDrivePath("C:\\work", "/")).toBe("/c/work");
+    });
+
+    it("leaves every other path, and every path on a device that is not WSL, as written", () => {
+      for (const path of ["~/work/app", "/mnt/c/work/app", "relative\\path", "CC:\\work", "\\\\server\\share"]) {
+        expect(wslDrivePath(path, "/mnt"), path).toBe(path);
+      }
+      // An ordinary Linux server reports no drives, so a Windows path stays the text it is.
+      expect(wslDrivePath("C:\\work\\app", null)).toBe("C:\\work\\app");
+      expect(wslDrivePath("C:\\work\\app", undefined)).toBe("C:\\work\\app");
+    });
+
+    it("says a folder is on the C drive only under the C drive's own folder", () => {
+      expect(onCDrive("/mnt/c", "/mnt")).toBe(true);
+      expect(onCDrive("/mnt/c/work/app", "/mnt")).toBe(true);
+      expect(onCDrive("/mnt/c/work/app", null)).toBe(true);
+      expect(onCDrive("/win/c/app", "/win")).toBe(true);
+      for (const path of ["/mnt/d/app", "/mnt/cache/app", "/home/me/mnt/c", "/opt/app"]) {
+        expect(onCDrive(path, "/mnt"), path).toBe(false);
+      }
+    });
+
+    it("asks rather than refuses a folder outside home, in each language", () => {
+      expect(refusalText("needs_confirmation", t)).toBe("This folder is outside your home folder. Add it as a project?");
+      expect(refusalText("needs_confirmation", ko)).toBe("홈 밖 폴더예요. 이 폴더를 프로젝트로 추가할까요?");
+    });
   });
 });

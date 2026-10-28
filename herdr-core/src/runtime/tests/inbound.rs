@@ -42,6 +42,7 @@ fn dialed_link(runtime: &mut Runtime, device: &str, host: Arc<dyn crate::node_ac
                 host,
                 platform: "linux".to_owned(),
                 helper_path: Some("/fixture/hided".to_owned()),
+                windows_drives: None,
             },
         },
     );

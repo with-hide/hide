@@ -1326,6 +1326,11 @@ pub struct DeviceHostSnapshot {
     /// `macos aarch64` as the helper reported it.
     pub platform: Option<String>,
     pub helper_path: Option<String>,
+    /// Where the device shows the drives of the Windows PC it runs on, when
+    /// it is a WSL distribution (`/mnt`), as its helper reported it; Add a
+    /// project spells a pasted `C:\` path under it (PRD wsl-device B16).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub windows_drives: Option<String>,
 }
 
 /// One staged connection test of an SSH device: SSH, authentication, Herdr,

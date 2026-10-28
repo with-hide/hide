@@ -216,7 +216,12 @@ use crate::error::HostError;
 /// --log-failed`, answered cut to its end) on the node that holds the
 /// Project (PRD hide-ai-suggestions B7). A helper on 53 would refuse them
 /// as unknown, so it is refused at Hello and upgraded.
-pub const PROTOCOL_VERSION: u32 = 54;
+/// 55: `Call::Registrable` carries the operator's confirmation of a folder
+/// outside the host's home (`confirmed_outside_home`), and the helper answers
+/// `needs_confirmation` for such a folder without one (PRD wsl-device D-02,
+/// D-10). A helper on 54 would drop the confirmation and refuse every folder
+/// outside its home, so it is refused at Hello and upgraded.
+pub const PROTOCOL_VERSION: u32 = 55;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).
@@ -457,9 +462,13 @@ pub enum Call {
         path: String,
     },
     /// The project a folder would be registered as, judged against the
-    /// host's own home folder (`hide_host::register::check`).
+    /// host's own home folder (`hide_host::register::check`); a folder
+    /// written outside it is judged only when `confirmed_outside_home` names
+    /// it, the operator's confirmation of that one path.
     Registrable {
         path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        confirmed_outside_home: Option<String>,
     },
     /// Makes this host's Hide Home folder (`~/hide`) hold one link per
     /// project in `projects` and nothing Hide did not make
@@ -1140,6 +1149,11 @@ pub struct Hello {
     /// remain available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reader_features: Option<crate::sessions::ReaderFeatures>,
+    /// Where the node shows the drives of the Windows PC it runs on, when it
+    /// is a WSL distribution (`hide_platform::host::windows_drives`), so Add
+    /// a project can spell a pasted `C:\` path as that node's own path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub windows_drives: Option<String>,
 }
 
 impl Hello {

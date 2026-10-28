@@ -62,11 +62,35 @@ export function alreadyRegistered(path: string, device: string, registrations: r
   return registrations.some((row) => row.device_id === device && trimFolder(row.path) === path);
 }
 
+/**
+ * A path pasted into a WSL device's field, spelled as that device names it: the device reports where it
+ * shows the PC's drives (`windows_drives`, `/mnt`), so `C:\work\app`, `C:/work/app` and Explorer's quoted
+ * Copy as path turn into `/mnt/c/work/app` (PRD wsl-device B16). Any other text, and any path on a device
+ * that reports no drives, an ordinary Linux server's included, is left as written.
+ */
+export function wslDrivePath(raw: string, drives: string | null | undefined): string {
+  if (!drives) return raw;
+  const match = /^"?([A-Za-z]):(?:[\\/]([^"]*))?"?$/.exec(raw.trim());
+  if (!match) return raw;
+  const [, letter, rest = ""] = match as unknown as [string, string, string | undefined];
+  const tail = rest.trim().split(/[\\/]+/).filter(Boolean).join("/");
+  const root = drives.replace(/\/+$/, "");
+  return `${root}/${letter.toLowerCase()}${tail ? `/${tail}` : ""}`;
+}
+
+/** Whether `path` is on the PC's C drive as WSL shows it (`/mnt/c`), which a confirmation says may be slow (PRD wsl-device D-15). */
+export function onCDrive(path: string, drives: string | null | undefined): boolean {
+  const drive = `${(drives || "/mnt").replace(/\/+$/, "")}/c`;
+  return path === drive || path.startsWith(`${drive}/`);
+}
+
 /** A refusal as one line, for a reason code hided answered or the shell's own `already_registered`. */
 export function refusalText(reason: string, t: TFunction<"translation">): string {
   switch (reason) {
     case "already_registered":
       return t("addProject.refusal.alreadyRegistered");
+    case "needs_confirmation":
+      return t("addProject.confirmOutside");
     case "outside_home":
       return t("addProject.refusal.outsideHome");
     case "home_root":

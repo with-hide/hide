@@ -213,6 +213,8 @@ impl Runtime {
             initialize_git: false,
             // The clone made the folder; the registration only adds it.
             new_folder: false,
+            // hided judged the clone's parent inside home.
+            confirmed_outside_home: None,
         }));
         true
     }

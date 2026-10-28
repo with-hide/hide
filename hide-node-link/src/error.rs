@@ -40,6 +40,9 @@ pub enum ErrorCode {
     /// `~/hide` exists and is not a Home Hide made, or its marker cannot be
     /// read; nothing was written.
     HomeConflict,
+    /// A folder outside the host's home was named without the operator's
+    /// confirmation of it; nothing there was read.
+    NeedsConfirmation,
     Cancelled,
     Io,
 }
@@ -62,6 +65,7 @@ impl ErrorCode {
             Self::Unsupported => "unsupported",
             Self::Busy => "busy",
             Self::HomeConflict => "home_conflict",
+            Self::NeedsConfirmation => "needs_confirmation",
             Self::Cancelled => "cancelled",
             Self::Io => "io",
         }
