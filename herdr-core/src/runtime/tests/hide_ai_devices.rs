@@ -219,7 +219,7 @@ fn a_chosen_device_that_is_not_connected_is_unavailable_and_answers_again_once_b
         );
     }
     let machines = shared.lock().unwrap().ai_machines();
-    assert!((machines.devices)(DEVICE).is_some(), "asked over its link");
+    let first = (machines.devices)(DEVICE).expect("asked over its link");
 
     drop(release);
     wait(&shared, "the device's link ending", |runtime| {
@@ -273,7 +273,11 @@ fn a_chosen_device_that_is_not_connected_is_unavailable_and_answers_again_once_b
     });
     let current = shared.lock().unwrap().linked_node(DEVICE).unwrap().1;
     let asked = (machines.devices)(DEVICE).expect("asked again once back");
-    assert!(Arc::ptr_eq(&asked, &current), "through its next link");
+    assert!(Arc::ptr_eq(&asked.link, &current), "through its next link");
+    assert!(
+        asked.generation > first.generation,
+        "a new link of the device is told from the one before"
+    );
     {
         let mut runtime = shared.lock().unwrap();
         assert_eq!(runtime.ai_request().devices.len(), 1);

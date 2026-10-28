@@ -39,9 +39,9 @@ pub(crate) struct AnalysisJob {
 
 pub(crate) type SettingsSource = Box<dyn Fn() -> AiSettings + Send>;
 pub(crate) type RouterFactory = Box<dyn Fn(&AiSettings) -> Arc<AiRouter> + Send>;
-/// Whether each device the settings place an agent on is connected now
+/// The link generation of each device the settings place an agent on
 /// (`crate::ai::AiMachines::reach`).
-pub(crate) type Reach = Box<dyn Fn(&AiSettings) -> Vec<bool> + Send>;
+pub(crate) type Reach = Box<dyn Fn(&AiSettings) -> Vec<Option<u64>> + Send>;
 
 pub(crate) struct LabelAnalyzer {
     queue: Mutex<Option<Sender<AnalysisJob>>>,
@@ -162,7 +162,7 @@ fn run(
     standing: Arc<crate::ai::AiStanding>,
     running: Running,
 ) {
-    let mut router: Option<(AiSettings, Vec<bool>, Arc<AiRouter>)> = None;
+    let mut router: Option<(AiSettings, Vec<Option<u64>>, Arc<AiRouter>)> = None;
     while let Ok(job) = receiver.recv() {
         let current = settings();
         if running.stopping.is_cancelled()
@@ -178,12 +178,13 @@ fn run(
         // order (Runs on, then the fallback list), and the model each is
         // asked for. A removed fallback agent must stop receiving
         // conversation text on the next job, and an added one must be tried.
-        // So is the reach of the devices its agents run on: a router keeps
+        // So is the link of each device its agents run on: a router keeps
         // what it was told of a device that was away for its availability
-        // window, so a device that is back is asked at the next job rather
-        // than after that window.
+        // window, so a device on a new link, even one that dropped and came
+        // back between two jobs, is asked at the next job rather than after
+        // that window.
         let reached = reach(&current);
-        let same_router = |built_for: &AiSettings, built_reach: &[bool]| {
+        let same_router = |built_for: &AiSettings, built_reach: &[Option<u64>]| {
             built_for.routes_like(&current) && built_reach == reached.as_slice()
         };
         let active = match router.as_ref() {
@@ -361,16 +362,31 @@ mod tests {
         }
     }
 
+    /// Where a test's device link is found, with its generation; `None`
+    /// while the device is not connected.
+    type Slot = Arc<Mutex<Option<crate::ai::DeviceLink>>>;
+
     /// A device's node that answers its agent as signed in and counts the
     /// requests it ran.
     #[derive(Default)]
     struct DeviceNode {
         executed: std::sync::atomic::AtomicUsize,
+        /// When set, the link drops while it runs a request: its slot
+        /// empties and the request ends unanswered.
+        drops: Mutex<Option<Slot>>,
     }
 
     impl DeviceNode {
         fn executed(&self) -> usize {
             self.executed.load(std::sync::atomic::Ordering::SeqCst)
+        }
+
+        /// Puts this node in `slot` as the device's link `generation`.
+        fn connect(self: &Arc<Self>, slot: &Slot, generation: u64) {
+            *lock(slot) = Some(crate::ai::DeviceLink {
+                generation,
+                link: Arc::clone(self) as Arc<dyn crate::node_access::NodeLink>,
+            });
         }
     }
 
@@ -387,6 +403,12 @@ mod tests {
                     log: Vec::new(),
                 }),
                 Call::AiExecute { .. } => {
+                    if let Some(slot) = lock(&self.drops).take() {
+                        lock(&slot).take();
+                        return Err(crate::node_access::LinkError::NotConnected(
+                            "the device's link dropped".to_owned(),
+                        ));
+                    }
                     self.executed
                         .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     serde_json::to_value(hide_node_link::ai::Logged {
@@ -401,6 +423,30 @@ mod tests {
             };
             Ok(hide_node_link::link::LinkAnswer::Parsed(value.unwrap()))
         }
+    }
+
+    /// A label analyzer whose agent runs on the device found in `slot`, and
+    /// the core's own node, which no test expects to be asked.
+    fn device_analyzer(slot: &Slot) -> (LabelAnalyzer, Arc<DeviceNode>) {
+        let own = Arc::new(DeviceNode::default());
+        let links = Arc::clone(slot);
+        let machines = crate::ai::AiMachines {
+            own: Arc::clone(&own) as Arc<dyn crate::node_access::NodeLink>,
+            devices: Arc::new(move |_| lock(&links).clone()),
+        };
+        let mut settings = AiSettings::default();
+        settings.set_provider(ProviderId::CODEX);
+        settings.place(ProviderId::CODEX, Some("wsl-ubuntu".to_owned()));
+        settings.chosen = true;
+        let analyzer = LabelAnalyzer::spawn(
+            Box::new(move || settings.clone()),
+            Arc::new(crate::ai::AiStanding::default()),
+            machines,
+            Arc::new(hide_ai::UsageLimits::new()),
+            crate::usage_ledger::ai_usage::AiUsageQueue::new() as Arc<dyn hide_ai::AiUsageSink>,
+        )
+        .unwrap();
+        (analyzer, own)
     }
 
     /// Runs one label job of `analyzer` to its outcome.
@@ -427,35 +473,38 @@ mod tests {
     /// PRD wsl-device B13: a label job that found the device its agent runs
     /// on away runs there at the next job once the device is back, with
     /// nothing chosen again. The router built while it was away keeps that
-    /// answer for its availability window; the device coming back builds
-    /// it again.
+    /// answer for its availability window; the device's new link builds it
+    /// again.
     #[test]
     fn a_label_job_runs_on_its_device_at_the_next_job_once_the_device_is_back() {
-        let device = Arc::new(DeviceNode::default());
-        let own = Arc::new(DeviceNode::default());
-        let link: Arc<Mutex<Option<Arc<dyn crate::node_access::NodeLink>>>> = Arc::default();
-        let links = Arc::clone(&link);
-        let machines = crate::ai::AiMachines {
-            own: Arc::clone(&own) as Arc<dyn crate::node_access::NodeLink>,
-            devices: Arc::new(move |_| lock(&links).clone()),
-        };
-        let mut settings = AiSettings::default();
-        settings.set_provider(ProviderId::CODEX);
-        settings.place(ProviderId::CODEX, Some("wsl-ubuntu".to_owned()));
-        settings.chosen = true;
-        let analyzer = LabelAnalyzer::spawn(
-            Box::new(move || settings.clone()),
-            Arc::new(crate::ai::AiStanding::default()),
-            machines,
-            Arc::new(hide_ai::UsageLimits::new()),
-            crate::usage_ledger::ai_usage::AiUsageQueue::new() as Arc<dyn hide_ai::AiUsageSink>,
-        )
-        .unwrap();
+        let slot = Slot::default();
+        let (analyzer, own) = device_analyzer(&slot);
         run_job(&analyzer);
-        assert_eq!(device.executed(), 0, "away: nothing reached the device");
-        *lock(&link) = Some(Arc::clone(&device) as Arc<dyn crate::node_access::NodeLink>);
+        let device = Arc::new(DeviceNode::default());
+        device.connect(&slot, 1);
         run_job(&analyzer);
         assert_eq!(device.executed(), 1, "the next job ran on the device");
+        assert_eq!(own.executed(), 0, "nothing ran on the core's machine");
+    }
+
+    /// PRD wsl-device B13: a device's link that drops while a label job runs
+    /// on it, and is back before the next job, is asked at that next job on
+    /// its new link. The analyzer found the device connected at both jobs;
+    /// what tells the two links apart is their generation.
+    #[test]
+    fn a_label_job_runs_on_a_device_that_dropped_mid_job_and_came_back_before_the_next() {
+        let slot = Slot::default();
+        let first = Arc::new(DeviceNode::default());
+        *lock(&first.drops) = Some(Arc::clone(&slot));
+        first.connect(&slot, 1);
+        let (analyzer, own) = device_analyzer(&slot);
+        run_job(&analyzer);
+        assert!(lock(&slot).is_none(), "the link dropped during the job");
+        assert_eq!(first.executed(), 0);
+        let next = Arc::new(DeviceNode::default());
+        next.connect(&slot, 2);
+        run_job(&analyzer);
+        assert_eq!(next.executed(), 1, "the next job ran on the new link");
         assert_eq!(own.executed(), 0, "nothing ran on the core's machine");
     }
 

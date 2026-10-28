@@ -1364,13 +1364,18 @@ fn now_unix_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// A device's link as [`Runtime::linked_node`] answers it, looked up under a
+/// A device's link as [`Runtime::linked_node`] answers it, with the host
+/// generation every new link of the device advances, looked up under a
 /// brief lock of `runtime`; `None` for a device that is not connected or a
 /// runtime that is gone. Never called under that lock.
 pub(crate) fn device_links(runtime: Weak<Mutex<Runtime>>) -> crate::ai::DeviceLinks {
     Arc::new(move |device: &str| {
         let runtime = runtime.upgrade()?;
         let guard = runtime.lock().ok()?;
-        guard.linked_node(device).ok().map(|(_, link)| link)
+        let (_, link) = guard.linked_node(device).ok()?;
+        Some(crate::ai::DeviceLink {
+            generation: guard.device_host_generation(device),
+            link,
+        })
     })
 }

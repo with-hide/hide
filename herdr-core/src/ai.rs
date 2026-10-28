@@ -396,7 +396,15 @@ pub(crate) fn hide_ai_settings_at(
 
 /// Looks up a connected device's link, `None` while it is not connected.
 /// It never wakes a device.
-pub(crate) type DeviceLinks = Arc<dyn Fn(&str) -> Option<Arc<dyn NodeLink>> + Send + Sync>;
+pub(crate) type DeviceLinks = Arc<dyn Fn(&str) -> Option<DeviceLink> + Send + Sync>;
+
+/// A connected device's link, and the generation that tells this link of
+/// the device from the one before and the one after it.
+#[derive(Clone)]
+pub(crate) struct DeviceLink {
+    pub(crate) generation: u64,
+    pub(crate) link: Arc<dyn NodeLink>,
+}
 
 /// Where Hide AI's agents run (PRD wsl-device B11, B13): the core's own
 /// node, and the connected devices an agent may be placed on. A device's
@@ -410,15 +418,17 @@ pub(crate) struct AiMachines {
 }
 
 impl AiMachines {
-    /// Whether each device `settings` places an agent on is connected now,
-    /// in device order. A router holds what it was told of an agent for its
-    /// availability window, so a router kept across jobs is built again
-    /// when this changes, and a device that is back is asked at once.
-    pub(crate) fn reach(&self, settings: &AiSettings) -> Vec<bool> {
+    /// The link generation of each device `settings` places an agent on,
+    /// `None` while it is not connected, in device order. A router holds
+    /// what it was told of an agent for its availability window, so a
+    /// router kept across jobs is built again when this changes: a device
+    /// that dropped and came back, even between two looks, is asked at once
+    /// on its new link.
+    pub(crate) fn reach(&self, settings: &AiSettings) -> Vec<Option<u64>> {
         let devices: BTreeSet<String> = settings.machines_by_provider().into_values().collect();
         devices
             .iter()
-            .map(|device| (self.devices)(device).is_some())
+            .map(|device| (self.devices)(device).map(|found| found.generation))
             .collect()
     }
 
@@ -490,9 +500,13 @@ impl NodeBackend {
     fn node(&self) -> Result<Arc<dyn NodeLink>, LinkError> {
         let node = match &self.machine {
             Machine::Own(node) => Arc::clone(node),
-            Machine::Device { id, links } => links(id).ok_or_else(|| {
-                LinkError::NotConnected(format!("the device {id} is not connected"))
-            })?,
+            Machine::Device { id, links } => {
+                links(id)
+                    .ok_or_else(|| {
+                        LinkError::NotConnected(format!("the device {id} is not connected"))
+                    })?
+                    .link
+            }
         };
         *self.asked.lock().unwrap_or_else(|error| error.into_inner()) = Some(Arc::clone(&node));
         Ok(node)
@@ -1017,7 +1031,12 @@ mod tests {
         let link = Arc::clone(&device) as Arc<dyn NodeLink>;
         let machines = AiMachines {
             own: Arc::clone(&own) as Arc<dyn NodeLink>,
-            devices: Arc::new(move |_| Some(Arc::clone(&link))),
+            devices: Arc::new(move |_| {
+                Some(DeviceLink {
+                    generation: 1,
+                    link: Arc::clone(&link),
+                })
+            }),
         };
         let mut settings = AiSettings::default();
         settings.set_provider(ProviderId::CODEX);
@@ -1077,7 +1096,10 @@ mod tests {
             own: Arc::clone(&own) as Arc<dyn NodeLink>,
             devices: Arc::new(move |id| {
                 assert_eq!(id, "wsl-ubuntu");
-                links.lock().unwrap().clone()
+                links.lock().unwrap().clone().map(|link| DeviceLink {
+                    generation: 1,
+                    link,
+                })
             }),
         };
         let mut settings = AiSettings::default();
