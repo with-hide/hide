@@ -368,10 +368,11 @@ fn a_device_agent_chosen_before_a_restart_is_chosen_after_it() {
 /// B13: Hide AI's work for an agent on a device whose link is down never
 /// starts that link. Labels, suggestions and Memory (which suggestions ask
 /// through), and a worktree name each answer unavailable, and no attempt is
-/// made: every attempt to start a device's link advances its host
-/// generation before it reaches the device's transport, and the generation
-/// stays where it was. A read that does start links starts this one at
-/// once, so the count would show a wake.
+/// made: every attempt to start any device's link takes the next number of
+/// the core's one host generation sequence before it reaches the device's
+/// transport, and the sequence stays where it was. A read that does start
+/// links takes exactly one number, for this device, so the count would show
+/// a wake.
 #[test]
 fn hide_ai_work_never_starts_the_link_of_a_chosen_device_that_is_down() {
     let ssh = super::device_kit::DEVICE;
@@ -400,7 +401,7 @@ fn hide_ai_work_never_starts_the_link_of_a_chosen_device_that_is_down() {
     };
     let (machines, before) = {
         let runtime = shared.lock().unwrap();
-        (runtime.ai_machines(), runtime.device_host_generation(ssh))
+        (runtime.ai_machines(), runtime.last_host_generation)
     };
     let usage = crate::usage_ledger::ai_usage::AiUsageQueue::new() as Arc<dyn hide_ai::AiUsageSink>;
     let gate = Arc::new(hide_ai::UsageLimits::new());
@@ -432,16 +433,21 @@ fn hide_ai_work_never_starts_the_link_of_a_chosen_device_that_is_down() {
     {
         let runtime = shared.lock().unwrap();
         assert_eq!(
-            runtime.device_host_generation(ssh),
-            before,
-            "Hide AI started the device's link"
+            runtime.last_host_generation, before,
+            "Hide AI started a device's link"
         );
         assert!(!runtime.device_host_connecting(ssh));
     }
     let _ = shared.lock().unwrap().node_link(ssh);
+    let runtime = shared.lock().unwrap();
     assert_eq!(
-        shared.lock().unwrap().device_host_generation(ssh),
+        runtime.last_host_generation,
         before + 1,
-        "a read that starts links moves the count"
+        "a read that starts links makes one attempt"
+    );
+    assert_eq!(
+        runtime.device_host_generation(ssh),
+        before + 1,
+        "and it is this device's"
     );
 }
