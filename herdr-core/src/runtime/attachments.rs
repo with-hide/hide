@@ -580,13 +580,18 @@ impl Runtime {
         };
         let request_id = pending.operation.id.clone();
         let clipboard = pending.clipboard;
-        let files = pending.prepared.take();
-        let transport = pending
+        let staged = pending.prepared.take().is_some();
+        let target = pending
             .remote
             .as_ref()
             .filter(|_| !pending.on_pane_machine)
-            .and_then(|(target, _)| self.remote_file_transports.get(target))
-            .cloned();
+            .map(|(target, _)| target.clone());
+        let link = target
+            .and_then(|target| self.staging_link(&target).ok())
+            .filter(|_| staged);
+        let Some(pending) = self.attachment.as_mut() else {
+            return;
+        };
         let state_path = self.state_path.clone();
         pending.operation.stage = "cancelling".to_owned();
         let intent = request_id.clone();
@@ -602,8 +607,8 @@ impl Runtime {
                 if clipboard {
                     ingress::remove_clipboard(node.as_ref(), &state_path, &request_id);
                 }
-                if let (Some(transport), Some(files)) = (transport, files) {
-                    transport.remove_attachments(&request_id, &files);
+                if let Some(link) = link {
+                    ingress::remove_staged(link.as_ref(), &request_id);
                 }
                 let Some(runtime) = context.runtime.upgrade() else {
                     return;
@@ -663,13 +668,16 @@ impl Runtime {
         let paths = pending.paths.clone();
         let prepared = pending.prepared.clone();
         let on_pane_machine = pending.on_pane_machine;
-        let transport = pending
+        let target = pending
             .remote
             .as_ref()
             .filter(|_| !pending.on_pane_machine)
-            .and_then(|(target, _)| self.remote_file_transports.get(target))
-            .cloned();
+            .map(|(target, _)| target.clone());
         let clipboard = pending.clipboard;
+        // Resolved now, under the lock, and never woken: a device whose link
+        // is down fails the transfer with a reason, and a retry resolves it
+        // again.
+        let link = target.map(|target| self.staging_link(&target));
         let state_path = self.state_path.clone();
         // The picked files are on the core's own machine until a screen can
         // attach from another node.
@@ -690,21 +698,22 @@ impl Runtime {
                     prepared
                         .as_ref()
                         .map_err(Clone::clone)
-                        .and_then(|files| match &transport {
-                            Some(transport) => {
-                                transport.stage_attachments(&request_id, files, &cancelled)
+                        .and_then(|files| match &link {
+                            Some(Ok(link)) => {
+                                ingress::stage(link.as_ref(), &request_id, files, &cancelled)
                             }
+                            Some(Err(reason)) => Err(reason.clone()),
                             None => Ok(files.iter().map(|file| file.path.clone()).collect()),
                         })
                 };
-                let remote_uploaded = transport.is_some() && result.is_ok();
-                let cleanup_files = prepared.as_ref().ok().cloned();
+                let remote_uploaded = link.is_some() && result.is_ok();
+                let staged_on = link.and_then(Result::ok);
                 let Some(runtime) = context.runtime.upgrade() else {
                     if clipboard {
                         ingress::remove_clipboard(node.as_ref(), &state_path, &request_id);
                     }
-                    if let (Some(transport), Some(files)) = (transport, cleanup_files) {
-                        transport.remove_attachments(&request_id, &files);
+                    if let Some(link) = staged_on {
+                        ingress::remove_staged(link.as_ref(), &request_id);
                     }
                     return;
                 };
@@ -718,10 +727,8 @@ impl Runtime {
                 if clipboard && (cleaned_cancellation || remote_uploaded) {
                     ingress::remove_clipboard(node.as_ref(), &state_path, &request_id);
                 }
-                if cleaned_cancellation
-                    && let (Some(transport), Some(files)) = (&transport, &cleanup_files)
-                {
-                    transport.remove_attachments(&request_id, files);
+                if cleaned_cancellation && let Some(link) = &staged_on {
+                    ingress::remove_staged(link.as_ref(), &request_id);
                 }
                 // All I/O is finished before releasing worker ownership. An immediate
                 // retry is either admitted now or handed off here, even without a live tick.
@@ -735,8 +742,8 @@ impl Runtime {
                     if clipboard {
                         ingress::remove_clipboard(node.as_ref(), &state_path, &request_id);
                     }
-                    if let (Some(transport), Some(files)) = (&transport, &cleanup_files) {
-                        transport.remove_attachments(&request_id, files);
+                    if let Some(link) = &staged_on {
+                        ingress::remove_staged(link.as_ref(), &request_id);
                     }
                 }
                 if changed {
@@ -749,6 +756,25 @@ impl Runtime {
             }
         }
         self.sync_async_operations();
+    }
+
+    /// The link a device pane's files are staged through (PRD wsl-device
+    /// B10): the device's own node link, whichever way it opened, asked as
+    /// it stands and never woken. A node that dials in takes files from its
+    /// own screen only (PRD core-host-node-remote-core D-06).
+    fn staging_link(&self, target: &str) -> Result<Arc<dyn crate::node_access::NodeLink>, String> {
+        if matches!(
+            self.remote_file_transports.get(target),
+            Some(super::devices::DeviceReach::Inbound(_))
+        ) {
+            return Err(
+                "A file reaches a pane of this machine from a window on this machine only"
+                    .to_owned(),
+            );
+        }
+        self.linked_node(target)
+            .map(|(_, link)| link)
+            .map_err(|_| "The device is not connected. Reconnect it, then retry.".to_owned())
     }
 
     fn complete_attachment_worker(&mut self, cleaned_cancellation: bool) -> bool {

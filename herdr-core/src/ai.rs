@@ -10,8 +10,10 @@
 //! runtime mutex is never held across any of it.
 //!
 //! Every provider backend here is a [`NodeBackend`]: the router stays in
-//! the core and each backend call is answered by the core's own node, which
-//! runs the provider processes with its logins (`hide_host::ai`).
+//! the core and each backend call is answered by the node of the machine the
+//! agent runs on, the core's own unless the operator placed the agent on a
+//! connected device ([`AiMachines`], PRD wsl-device B11), which runs the
+//! provider processes with that machine's logins (`hide_host::ai`).
 //!
 //! It also reads nothing at all while nobody is looking. `observing` is false
 //! unless the Background AI group is on screen, and an unobserved request
@@ -73,78 +75,121 @@ pub struct AiRequest {
     /// AI cannot use yet is listed as not installed from this, not from a
     /// program table of its own.
     pub cli_found: Option<BTreeSet<ProviderId>>,
+    /// The connected devices whose agents are asked too, so Runs on can
+    /// offer an agent signed in on one (PRD wsl-device B11). A device that
+    /// is not connected is not listed, so asking never wakes one.
+    pub devices: Vec<DeviceAsk>,
+}
+
+/// What the read asks of one connected device: the same as of the core's
+/// own machine, with that device's kit.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct DeviceAsk {
+    pub id: String,
+    /// The agents switched on and installed in the device's kit, asked
+    /// while nobody has chosen and the screen is not open.
+    pub selecting: BTreeSet<ProviderId>,
+    /// The agents the device's kit found, `None` while it has not answered.
+    pub cli_found: Option<BTreeSet<ProviderId>>,
 }
 
 impl AiRequest {
     /// Whether anything is asked at all.
     fn asks(&self) -> bool {
-        self.observing || !self.selecting.is_empty()
+        self.observing
+            || !self.selecting.is_empty()
+            || self
+                .devices
+                .iter()
+                .any(|device| !device.selecting.is_empty())
     }
 
-    /// The agents the router is built with: every registered one while the
-    /// screen is open, only the ones being selected from otherwise.
-    fn only(&self) -> Option<&BTreeSet<ProviderId>> {
-        (!self.observing).then_some(&self.selecting)
+    /// The agents a machine's router is built with: every registered one
+    /// while the screen is open, only the ones being selected from
+    /// otherwise.
+    fn only<'a>(&self, selecting: &'a BTreeSet<ProviderId>) -> Option<&'a BTreeSet<ProviderId>> {
+        (!self.observing).then_some(selecting)
     }
 }
 
-/// The router one screen reuses, and what it was built for. Rebuilding is
+/// A router one screen reuses, and what it was built for. Rebuilding is
 /// what a changed model costs, because a backend is constructed with one.
-type CachedRouter = Arc<
-    Mutex<
-        Option<(
-            BTreeMap<ProviderId, String>,
-            Option<BTreeSet<ProviderId>>,
-            Arc<AiRouter>,
-        )>,
-    >,
->;
+struct Cached {
+    models: BTreeMap<ProviderId, String>,
+    only: Option<BTreeSet<ProviderId>>,
+    router: Arc<AiRouter>,
+}
+
+/// The routers of the core's own machine (`None`) and each asked device.
+type CachedRouters = Arc<Mutex<BTreeMap<Option<String>, Cached>>>;
 
 pub struct AiReader {
     inner: BackgroundRead<AiRequest, BackgroundAiSnapshot>,
 }
 
 impl AiReader {
-    /// A reader whose providers run on `node`, the core's own machine.
-    pub fn new(node: Arc<dyn NodeLink>) -> Self {
-        // One router outlives the reads that use it, so a Codex app-server
-        // child is started once for a screen rather than once per read. It is
-        // rebuilt only when the configured models change, because the model
-        // is what the backend was constructed with.
-        let cached: CachedRouter = Arc::new(Mutex::new(None));
+    /// A reader whose agents run on the core's own machine and on the
+    /// connected devices each request lists.
+    pub(crate) fn new(machines: AiMachines) -> Self {
+        // One router per machine outlives the reads that use it, so a Codex
+        // app-server child is started once for a screen rather than once per
+        // read. It is rebuilt only when the configured models change, because
+        // the model is what the backend was constructed with.
+        let cached: CachedRouters = Arc::default();
         Self {
             inner: BackgroundRead::new(REFRESH_INTERVAL, SPACING, move |request: &AiRequest| {
                 let mut guard = cached.lock().unwrap_or_else(|error| error.into_inner());
                 if !request.asks() {
-                    // Drop the router with the screen: its Codex child is a
+                    // Drop the routers with the screen: a Codex child is a
                     // process, and nothing is reading its answers.
-                    *guard = None;
+                    guard.clear();
                     return BackgroundAiSnapshot::unread();
                 }
-                let only = request.only().cloned();
-                let router = match guard.as_ref() {
-                    Some((models, built_for, router))
-                        if *models == request.models && *built_for == only =>
-                    {
-                        Arc::clone(router)
-                    }
-                    _ => {
-                        let router = Arc::new(AiRouter::new(
-                            backends(&node, &request.models, only.as_ref()),
-                            hide_ai::RouterConfig::default(),
-                            Arc::new(DiagnosticLogSink),
-                        ));
-                        *guard = Some((request.models.clone(), only, Arc::clone(&router)));
-                        router
-                    }
-                };
+                // A device no longer asked releases its agents' backends.
+                guard.retain(|machine, _| {
+                    machine
+                        .as_ref()
+                        .is_none_or(|id| request.devices.iter().any(|device| device.id == *id))
+                });
+                let own = router_for(&mut guard, &machines, None, request, &request.selecting);
+                let devices: Vec<_> = request
+                    .devices
+                    .iter()
+                    .filter(|device| request.observing || !device.selecting.is_empty())
+                    .map(|device| {
+                        let router = router_for(
+                            &mut guard,
+                            &machines,
+                            Some(&device.id),
+                            request,
+                            &device.selecting,
+                        );
+                        (device, router)
+                    })
+                    .collect();
                 drop(guard);
-                read(
-                    &router,
+                let mut snapshot = read(
+                    &own,
                     &request.models,
                     request.observing,
                     request.cli_found.as_ref(),
-                )
+                );
+                for (device, router) in devices {
+                    let rows = read(
+                        &router,
+                        &request.models,
+                        request.observing,
+                        device.cli_found.as_ref(),
+                    )
+                    .providers
+                    .into_iter()
+                    .map(|mut row| {
+                        row.device_id = Some(device.id.clone());
+                        row
+                    });
+                    snapshot.providers.extend(rows);
+                }
+                snapshot
             }),
         }
     }
@@ -157,6 +202,46 @@ impl AiReader {
         });
         self.inner.poll(request)
     }
+}
+
+/// The cached router of one machine, rebuilt when the models or the agents
+/// asked changed.
+fn router_for(
+    cached: &mut BTreeMap<Option<String>, Cached>,
+    machines: &AiMachines,
+    device: Option<&str>,
+    request: &AiRequest,
+    selecting: &BTreeSet<ProviderId>,
+) -> Arc<AiRouter> {
+    let only = request.only(selecting).cloned();
+    let key = device.map(str::to_owned);
+    if let Some(entry) = cached.get(&key)
+        && entry.models == request.models
+        && entry.only == only
+    {
+        return Arc::clone(&entry.router);
+    }
+    // Every agent of this router runs on `device`.
+    let placed = device.map_or_else(BTreeMap::new, |device| {
+        hide_ai::PROVIDERS
+            .iter()
+            .map(|provider| (*provider, device.to_owned()))
+            .collect()
+    });
+    let router = Arc::new(AiRouter::new(
+        backends(machines, &request.models, &placed, only.as_ref()),
+        hide_ai::RouterConfig::default(),
+        Arc::new(DiagnosticLogSink),
+    ));
+    cached.insert(
+        key,
+        Cached {
+            models: request.models.clone(),
+            only,
+            router: Arc::clone(&router),
+        },
+    );
+    router
 }
 
 /// Writes the provider boundary's events to the core's diagnostic log, so a
@@ -184,9 +269,12 @@ fn diagnostic_record(event: &AiLogEvent) -> serde_json::Value {
     record
 }
 
+/// One backend per registered agent, each on the machine `placed` puts it
+/// on: a device's id, or the core's own machine for an agent with none.
 fn backends(
-    node: &Arc<dyn NodeLink>,
+    machines: &AiMachines,
     models: &BTreeMap<ProviderId, String>,
+    placed: &BTreeMap<ProviderId, String>,
     only: Option<&BTreeSet<ProviderId>>,
 ) -> Vec<Arc<dyn AiBackend>> {
     hide_ai::PROVIDERS
@@ -197,9 +285,20 @@ fn backends(
                 .get(provider)
                 .cloned()
                 .unwrap_or_else(|| hide_ai::settings::default_model(*provider).to_owned());
-            Arc::new(NodeBackend::new(Arc::clone(node), *provider, model)) as Arc<dyn AiBackend>
+            let machine = machines.machine(placed.get(provider).map(String::as_str));
+            Arc::new(NodeBackend::new(machine, *provider, model)) as Arc<dyn AiBackend>
         })
         .collect()
+}
+
+/// The backends one settings value's router asks.
+fn routed(machines: &AiMachines, settings: &AiSettings) -> Vec<Arc<dyn AiBackend>> {
+    backends(
+        machines,
+        &settings.models_by_provider(),
+        &settings.machines_by_provider(),
+        None,
+    )
 }
 
 /// The agents Hide AI as stored in `home` asks, in its order, with the
@@ -231,10 +330,13 @@ fn asks_of(
         return Err("Hide AI is off".to_owned());
     }
     let models = settings.models_by_provider();
+    // An agent placed on a device answers on that device's logins wherever
+    // the core runs (PRD wsl-device B11), so a move asks nothing of it.
     Ok(settings
         .router_config()
         .priority
         .into_iter()
+        .filter(|provider| settings.machine(*provider).is_none())
         .map(|provider| {
             let model = models
                 .get(&provider)
@@ -292,6 +394,70 @@ pub(crate) fn hide_ai_settings_at(
         .transpose()
 }
 
+/// Looks up a connected device's link, `None` while it is not connected.
+/// It never wakes a device.
+pub(crate) type DeviceLinks = Arc<dyn Fn(&str) -> Option<DeviceLink> + Send + Sync>;
+
+/// A connected device's link, and the generation that tells this link of
+/// the device from the one before and the one after it.
+#[derive(Clone)]
+pub(crate) struct DeviceLink {
+    pub(crate) generation: u64,
+    pub(crate) link: Arc<dyn NodeLink>,
+}
+
+/// Where Hide AI's agents run (PRD wsl-device B11, B13): the core's own
+/// node, and the connected devices an agent may be placed on. A device's
+/// link is looked up each time its agent is asked, so a device that is not
+/// connected answers unavailable without being woken, and one that connects
+/// again answers through its next link.
+#[derive(Clone)]
+pub(crate) struct AiMachines {
+    pub(crate) own: Arc<dyn NodeLink>,
+    pub(crate) devices: DeviceLinks,
+}
+
+impl AiMachines {
+    /// The link generation of each device `settings` places an agent on,
+    /// `None` while it is not connected, in device order. A router holds
+    /// what it was told of an agent for its availability window, so a
+    /// router kept across jobs is built again when this changes: a device
+    /// that dropped and came back, even between two looks, is asked at once
+    /// on its new link.
+    pub(crate) fn reach(&self, settings: &AiSettings) -> Vec<Option<u64>> {
+        let devices: BTreeSet<String> = settings.machines_by_provider().into_values().collect();
+        devices
+            .iter()
+            .map(|device| (self.devices)(device).map(|found| found.generation))
+            .collect()
+    }
+
+    /// Only the core's own node, for a core that reaches no device.
+    #[cfg(test)]
+    pub(crate) fn own(node: Arc<dyn NodeLink>) -> Self {
+        Self {
+            own: node,
+            devices: Arc::new(|_| None),
+        }
+    }
+
+    fn machine(&self, device: Option<&str>) -> Machine {
+        match device {
+            None => Machine::Own(Arc::clone(&self.own)),
+            Some(id) => Machine::Device {
+                id: id.to_owned(),
+                links: Arc::clone(&self.devices),
+            },
+        }
+    }
+}
+
+/// The machine one backend's agent runs on.
+enum Machine {
+    Own(Arc<dyn NodeLink>),
+    Device { id: String, links: DeviceLinks },
+}
+
 /// Numbers each backend the core builds; its node keeps one real backend
 /// per number.
 static NEXT_BACKEND: AtomicU64 = AtomicU64::new(1);
@@ -305,28 +471,51 @@ const NODE_RELEASE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A provider backend answered by a node. The router in the core picks,
 /// retries and budgets; the node runs the provider. Dropping it releases the
-/// node's backend, which ends its resident process.
+/// node's backend, which ends its resident process; a link that ends ends
+/// the backends its node kept for it.
 struct NodeBackend {
-    node: Arc<dyn NodeLink>,
+    machine: Machine,
     spec: BackendSpec,
+    /// The link last asked, which the release goes to: a device's link is
+    /// looked up per call, and a backend dropped under the runtime's lock
+    /// must not look one up.
+    asked: Mutex<Option<Arc<dyn NodeLink>>>,
 }
 
 impl NodeBackend {
-    fn new(node: Arc<dyn NodeLink>, provider: ProviderId, model: String) -> Self {
+    fn new(machine: Machine, provider: ProviderId, model: String) -> Self {
         Self {
-            node,
+            machine,
             spec: BackendSpec {
                 instance: NEXT_BACKEND.fetch_add(1, Ordering::Relaxed),
                 provider,
                 model,
             },
+            asked: Mutex::new(None),
         }
+    }
+
+    /// The node the agent runs on now: a device that is not connected is
+    /// not asked and not woken.
+    fn node(&self) -> Result<Arc<dyn NodeLink>, LinkError> {
+        let node = match &self.machine {
+            Machine::Own(node) => Arc::clone(node),
+            Machine::Device { id, links } => {
+                links(id)
+                    .ok_or_else(|| {
+                        LinkError::NotConnected(format!("the device {id} is not connected"))
+                    })?
+                    .link
+            }
+        };
+        *self.asked.lock().unwrap_or_else(|error| error.into_inner()) = Some(Arc::clone(&node));
+        Ok(node)
     }
 
     /// One call whose answer carries the backend's log events, which go to
     /// the diagnostic log here.
     fn logged<T: serde::de::DeserializeOwned>(&self, call: Call) -> Result<T, LinkError> {
-        let answer: Logged<T> = call_as(self.node.as_ref(), call, NODE_PROBE_TIMEOUT)?;
+        let answer: Logged<T> = call_as(self.node()?.as_ref(), call, NODE_PROBE_TIMEOUT)?;
         write_log(answer.log);
         Ok(answer.value)
     }
@@ -370,12 +559,14 @@ impl AiBackend for NodeBackend {
             backend: self.spec.clone(),
             request: request.clone(),
         };
-        let answer = call_as_with_progress::<Logged<Result<AiResponse, AiError>>, serde_json::Value>(
-            self.node.as_ref(),
-            call,
-            request.deadline + NODE_EXECUTE_MARGIN,
-            |_| !cancel.is_cancelled(),
-        );
+        let answer = self.node().and_then(|node| {
+            call_as_with_progress::<Logged<Result<AiResponse, AiError>>, serde_json::Value>(
+                node.as_ref(),
+                call,
+                request.deadline + NODE_EXECUTE_MARGIN,
+                |_| !cancel.is_cancelled(),
+            )
+        });
         match answer {
             Ok(answer) => {
                 write_log(answer.log);
@@ -390,24 +581,29 @@ impl AiBackend for NodeBackend {
     }
 
     fn last_measurement(&self) -> ProcessMeasurement {
-        call_as(
-            self.node.as_ref(),
-            Call::AiMeasurement {
-                backend: self.spec.clone(),
-            },
-            NODE_RELEASE_TIMEOUT,
-        )
-        .unwrap_or(ProcessMeasurement::Unavailable)
+        self.node()
+            .and_then(|node| {
+                call_as(
+                    node.as_ref(),
+                    Call::AiMeasurement {
+                        backend: self.spec.clone(),
+                    },
+                    NODE_RELEASE_TIMEOUT,
+                )
+            })
+            .unwrap_or(ProcessMeasurement::Unavailable)
     }
 
     fn restart(&self) {
-        let restarted = call_as::<()>(
-            self.node.as_ref(),
-            Call::AiRestart {
-                backend: self.spec.clone(),
-            },
-            NODE_RELEASE_TIMEOUT,
-        );
+        let restarted = self.node().and_then(|node| {
+            call_as::<()>(
+                node.as_ref(),
+                Call::AiRestart {
+                    backend: self.spec.clone(),
+                },
+                NODE_RELEASE_TIMEOUT,
+            )
+        });
         if let Err(error) = restarted {
             crate::diagnostic!(serde_json::json!({
                 "component": "ai", "kind": "backend.restart_failed",
@@ -419,8 +615,20 @@ impl AiBackend for NodeBackend {
 
 impl Drop for NodeBackend {
     fn drop(&mut self) {
+        // A backend never asked holds nothing on any node.
+        let Some(node) = self
+            .asked
+            .get_mut()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+        else {
+            return;
+        };
+        if node.closed_reason().is_some() {
+            return;
+        }
         let released = call_as::<()>(
-            self.node.as_ref(),
+            node.as_ref(),
             Call::AiRelease {
                 instance: self.spec.instance,
             },
@@ -439,7 +647,7 @@ impl Drop for NodeBackend {
 /// probe describes. The feature owns its prompt and parsing; this retains the
 /// shared provider selection, process, retry, cancellation, and budget caps.
 pub(crate) fn memory_router(
-    node: &Arc<dyn NodeLink>,
+    machines: &AiMachines,
     settings: &AiSettings,
     gate: &Arc<UsageLimits>,
     usage: &Arc<dyn AiUsageSink>,
@@ -448,7 +656,7 @@ pub(crate) fn memory_router(
     config.usage_gate = Some(Arc::clone(gate));
     config.usage_sink = Some(Arc::clone(usage));
     AiRouter::new(
-        backends(node, &settings.models_by_provider(), None),
+        routed(machines, settings),
         config,
         Arc::new(DiagnosticLogSink),
     )
@@ -457,7 +665,7 @@ pub(crate) fn memory_router(
 /// The router one `hide memory add` asks, whose every try ends before the
 /// caller stops waiting (PRD project-memory-v2 B8).
 pub(crate) fn memory_add_router(
-    node: &Arc<dyn NodeLink>,
+    machines: &AiMachines,
     settings: &AiSettings,
     usage: &Arc<dyn AiUsageSink>,
 ) -> AiRouter {
@@ -465,7 +673,7 @@ pub(crate) fn memory_add_router(
     config.overall_deadline_cap = crate::memory_command::ADD_PROVIDER_DEADLINE;
     config.usage_sink = Some(Arc::clone(usage));
     AiRouter::new(
-        backends(node, &settings.models_by_provider(), None),
+        routed(machines, settings),
         config,
         Arc::new(DiagnosticLogSink),
     )
@@ -475,14 +683,14 @@ pub(crate) fn memory_add_router(
 /// worktree name: the provider order with no usage limit, so it answers
 /// however much of the week is spent (PRD hide-ai-usage-limit D-03, B6).
 pub(crate) fn waited_router(
-    node: &Arc<dyn NodeLink>,
+    machines: &AiMachines,
     settings: &AiSettings,
     usage: &Arc<dyn AiUsageSink>,
 ) -> AiRouter {
     let mut config = settings.router_config();
     config.usage_sink = Some(Arc::clone(usage));
     AiRouter::new(
-        backends(node, &settings.models_by_provider(), None),
+        routed(machines, settings),
         config,
         Arc::new(DiagnosticLogSink),
     )
@@ -492,7 +700,7 @@ pub(crate) fn waited_router(
 /// the operator's provider and model choice, and the router's own retry,
 /// cooldown and budget rules, judged by the usage limit.
 pub(crate) fn labels_router(
-    node: &Arc<dyn NodeLink>,
+    machines: &AiMachines,
     settings: &AiSettings,
     gate: &Arc<UsageLimits>,
     usage: &Arc<dyn AiUsageSink>,
@@ -501,7 +709,7 @@ pub(crate) fn labels_router(
     config.usage_gate = Some(Arc::clone(gate));
     config.usage_sink = Some(Arc::clone(usage));
     AiRouter::new(
-        backends(node, &settings.models_by_provider(), None),
+        routed(machines, settings),
         config,
         Arc::new(DiagnosticLogSink),
     )
@@ -716,7 +924,7 @@ pub(crate) fn branch_slug(text: &str) -> String {
 /// Asks the operator's background AI for a worktree name. Runs on a worker
 /// thread; the router starts and stops its own provider process.
 pub(crate) fn suggest_worktree_name(
-    node: &Arc<dyn NodeLink>,
+    machines: &AiMachines,
     settings: &AiSettings,
     usage: &Arc<dyn AiUsageSink>,
     subject: &str,
@@ -745,7 +953,7 @@ pub(crate) fn suggest_worktree_name(
         answer: hide_ai::AnswerMode::PlainJson,
         provider_efforts: Vec::new(),
     };
-    let router = waited_router(node, settings, usage);
+    let router = waited_router(machines, settings, usage);
     let answer = router
         .execute(&request, &hide_ai::CancelToken::new())
         .map_err(|error| format!("{error:?}"))?;
@@ -770,6 +978,151 @@ mod tests {
 
     fn models() -> BTreeMap<ProviderId, String> {
         AiSettings::default().models_by_provider()
+    }
+
+    /// A node that answers every agent as signed in, and counts what it was
+    /// asked.
+    #[derive(Default)]
+    struct AnsweringNode {
+        calls: Mutex<Vec<&'static str>>,
+    }
+
+    impl NodeLink for AnsweringNode {
+        fn call(
+            &self,
+            call: Call,
+            _timeout: Duration,
+        ) -> Result<hide_node_link::link::LinkAnswer, LinkError> {
+            let (name, value) = match call {
+                Call::AiAvailability { .. } => (
+                    "availability",
+                    serde_json::to_value(Logged {
+                        value: Availability::Ready,
+                        log: Vec::new(),
+                    })
+                    .unwrap(),
+                ),
+                Call::AiExecute { .. } => (
+                    "execute",
+                    serde_json::to_value(Logged {
+                        value: Ok::<AiResponse, AiError>(AiResponse {
+                            value: serde_json::json!({ "slug": "device-login" }),
+                            usage: hide_ai::AiUsage::default(),
+                        }),
+                        log: Vec::new(),
+                    })
+                    .unwrap(),
+                ),
+                Call::AiRelease { .. } => ("release", serde_json::Value::Null),
+                _ => ("other", serde_json::Value::Null),
+            };
+            self.calls.lock().unwrap().push(name);
+            Ok(hide_node_link::link::LinkAnswer::Parsed(value))
+        }
+    }
+
+    /// PRD wsl-device B12: with Runs on placed on a device, a worktree name,
+    /// a label and a Memory analysis are each answered there, on the
+    /// device's own login, and nothing is asked of the core's machine.
+    #[test]
+    fn every_hide_ai_feature_runs_on_the_device_its_agent_is_placed_on() {
+        let own = Arc::new(AnsweringNode::default());
+        let device = Arc::new(AnsweringNode::default());
+        let link = Arc::clone(&device) as Arc<dyn NodeLink>;
+        let machines = AiMachines {
+            own: Arc::clone(&own) as Arc<dyn NodeLink>,
+            devices: Arc::new(move |_| {
+                Some(DeviceLink {
+                    generation: 1,
+                    link: Arc::clone(&link),
+                })
+            }),
+        };
+        let mut settings = AiSettings::default();
+        settings.set_provider(ProviderId::CODEX);
+        settings.place(ProviderId::CODEX, Some("wsl-ubuntu".to_owned()));
+        let usage = crate::usage_ledger::ai_usage::AiUsageQueue::new() as Arc<dyn AiUsageSink>;
+        let gate = Arc::new(UsageLimits::new());
+
+        let name = suggest_worktree_name(&machines, &settings, &usage, "7", "", "Title", "")
+            .expect("the device answers the worktree name");
+        assert!(name.contains("device-login"), "{name}");
+        let request = |feature: &'static str| hide_ai::AiRequest {
+            feature_id: feature.into(),
+            request_id: hide_ai::RequestId(format!("{feature}-1")),
+            subject_id: "1".to_owned(),
+            system: String::new(),
+            input: String::new(),
+            output_schema: serde_json::json!({ "type": "object" }),
+            deadline: Duration::from_secs(5),
+            schema_version: "1".into(),
+            pick: None,
+            output_language: None,
+            answer: hide_ai::AnswerMode::PlainJson,
+            provider_efforts: Vec::new(),
+        };
+        for (feature, router) in [
+            ("label", labels_router(&machines, &settings, &gate, &usage)),
+            ("memory", memory_router(&machines, &settings, &gate, &usage)),
+        ] {
+            let answer = router
+                .execute(&request(feature), &CancelToken::new())
+                .unwrap_or_else(|error| panic!("{feature}: {error:?}"));
+            assert_eq!(answer.provider, ProviderId::CODEX, "{feature}");
+        }
+        let asked = device.calls.lock().unwrap().clone();
+        assert_eq!(
+            asked.iter().filter(|call| **call == "execute").count(),
+            3,
+            "{asked:?}"
+        );
+        assert!(
+            own.calls.lock().unwrap().is_empty(),
+            "nothing ran on the core's machine"
+        );
+    }
+
+    /// PRD wsl-device B13: an agent placed on a device that is not connected
+    /// answers unavailable and nothing is asked of any machine; once the
+    /// device connects, the same backend asks it there and is released
+    /// there, and the core's own machine was never asked.
+    #[test]
+    fn an_agent_on_a_device_that_is_not_connected_is_unavailable_until_it_connects() {
+        let own = Arc::new(AnsweringNode::default());
+        let device = Arc::new(AnsweringNode::default());
+        let connected: Arc<Mutex<Option<Arc<dyn NodeLink>>>> = Arc::default();
+        let links = Arc::clone(&connected);
+        let machines = AiMachines {
+            own: Arc::clone(&own) as Arc<dyn NodeLink>,
+            devices: Arc::new(move |id| {
+                assert_eq!(id, "wsl-ubuntu");
+                links.lock().unwrap().clone().map(|link| DeviceLink {
+                    generation: 1,
+                    link,
+                })
+            }),
+        };
+        let mut settings = AiSettings::default();
+        settings.set_provider(ProviderId::CLAUDE);
+        settings.place(ProviderId::CLAUDE, Some("wsl-ubuntu".to_owned()));
+        let backends = routed(&machines, &settings);
+        let claude = backends
+            .iter()
+            .find(|backend| backend.id() == ProviderId::CLAUDE)
+            .unwrap();
+        assert!(matches!(
+            claude.availability(),
+            Availability::Unavailable { .. }
+        ));
+        assert!(device.calls.lock().unwrap().is_empty());
+        *connected.lock().unwrap() = Some(Arc::clone(&device) as Arc<dyn NodeLink>);
+        assert!(matches!(claude.availability(), Availability::Ready));
+        drop(backends);
+        assert_eq!(*device.calls.lock().unwrap(), ["availability", "release"]);
+        assert!(
+            own.calls.lock().unwrap().is_empty(),
+            "nothing ran on the core's machine"
+        );
     }
 
     #[test]
@@ -807,7 +1160,7 @@ mod tests {
             ..AiSettings::default()
         };
         let router = memory_router(
-            &node(),
+            &AiMachines::own(node()),
             &settings,
             &Arc::new(UsageLimits::new()),
             &(crate::usage_ledger::ai_usage::AiUsageQueue::new() as Arc<dyn AiUsageSink>),
@@ -833,12 +1186,13 @@ mod tests {
 
     #[test]
     fn an_unobserved_request_asks_no_provider_anything() {
-        let mut reader = AiReader::new(node());
+        let mut reader = AiReader::new(AiMachines::own(node()));
         let request = AiRequest {
             observing: false,
             models: models(),
             selecting: BTreeSet::new(),
             cli_found: None,
+            devices: Vec::new(),
         };
         // The first read starts the worker; once it has ended, the next read
         // hands its answer back.
@@ -869,14 +1223,19 @@ mod tests {
             models: models(),
             selecting: only.clone(),
             cli_found: None,
+            devices: Vec::new(),
         };
         assert!(request.asks());
-        assert_eq!(request.only(), Some(&only));
+        assert_eq!(request.only(&request.selecting), Some(&only));
         let watching = AiRequest {
             observing: true,
             ..request
         };
-        assert_eq!(watching.only(), None, "an open tab asks every agent");
+        assert_eq!(
+            watching.only(&watching.selecting),
+            None,
+            "an open tab asks every agent"
+        );
         assert!(!AiRequest::default().asks());
     }
 

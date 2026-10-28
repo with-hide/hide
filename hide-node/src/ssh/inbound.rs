@@ -174,10 +174,6 @@ impl DeviceTransport for InboundTransport {
     fn cached_herdr_version(&self) -> Option<String> {
         None
     }
-
-    fn into_any(self: Arc<Self>) -> Arc<dyn std::any::Any + Send + Sync> {
-        self
-    }
 }
 
 impl Drop for InboundTransport {

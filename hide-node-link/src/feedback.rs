@@ -72,9 +72,17 @@ impl File {
             .map_err(|_| format!("{} is not valid base64", self.name))
     }
 
-    /// The bytes this file holds, without decoding it.
+    /// The bytes this file holds, without decoding it: the padding that
+    /// ends the encoding carries none.
     pub fn len(&self) -> u64 {
-        (self.data.len() as u64 / 4) * 3
+        let padding = self
+            .data
+            .bytes()
+            .rev()
+            .take(2)
+            .take_while(|&byte| byte == b'=')
+            .count() as u64;
+        (self.data.len() as u64 / 4 * 3).saturating_sub(padding)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -135,5 +143,12 @@ mod tests {
     fn a_file_carries_its_bytes_unchanged() {
         let file = File::new("feedback.md", b"\x00\x01hello");
         assert_eq!(file.bytes().unwrap(), b"\x00\x01hello");
+    }
+
+    #[test]
+    fn a_file_s_length_is_its_bytes_whatever_its_padding() {
+        for size in 0..=7 {
+            assert_eq!(File::new("a", &vec![7; size]).len(), size as u64);
+        }
     }
 }

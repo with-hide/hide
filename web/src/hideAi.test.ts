@@ -8,8 +8,11 @@ import {
   modelChoices,
   modelsFailed,
   nobodySignedIn,
+  parseRowKey,
+  providerById,
   providerReason,
   resetTime,
+  rowKey,
   runsOnChoices,
   unusableProviders,
   usageLimitChoices,
@@ -106,6 +109,36 @@ describe("who can be chosen (B34, B35, B38)", () => {
     expect(nobodySignedIn(ai(none, { provider: null, chosen: false }))).toBe(true);
     expect(nobodySignedIn(ai([provider("claude", { state: "unread", selectable: false })]))).toBe(false);
     expect(nobodySignedIn(ai(rows))).toBe(false);
+  });
+});
+
+describe("an agent on a connected device (PRD wsl-device B11)", () => {
+  const rows = [provider("claude"), provider("codex", { state: "needs_login", selectable: false }), provider("codex", { device_id: "wsl" }), provider("claude", { device_id: "wsl" })];
+
+  it("finds the row on the machine the order runs each agent on", () => {
+    const placed = ai(rows, { provider: "codex", device: "wsl", fallback: [{ provider: "claude", model: "" }] });
+    expect(providerById(placed, "codex")?.device_id).toBe("wsl");
+    expect(providerById(placed, "claude")?.device_id ?? null).toBeNull();
+  });
+
+  it("offers each machine's signed-in agent in Runs on and keeps the chosen row even when it cannot answer", () => {
+    expect(runsOnChoices(ai(rows)).map(rowKey)).toEqual(["claude", "codex@wsl", "claude@wsl"]);
+    const away = ai([provider("claude"), provider("codex", { device_id: "wsl", state: "unavailable", selectable: false })], { provider: "codex", device: "wsl" });
+    expect(runsOnChoices(away).map(rowKey)).toEqual(["claude", "codex@wsl"]);
+  });
+
+  it("adds no other machine's row of an agent already in the order", () => {
+    expect(addableProviders(ai(rows)).map(rowKey)).toEqual(["codex@wsl"]);
+  });
+
+  it("round-trips a row's select value", () => {
+    expect(parseRowKey(rowKey(provider("codex", { device_id: "wsl" })))).toEqual({ provider: "codex", device: "wsl" });
+    expect(parseRowKey("codex")).toEqual({ provider: "codex", device: null });
+  });
+
+  it("answers the first-run rule from this machine's rows only", () => {
+    const deviceOnly = [provider("codex", { state: "needs_login", selectable: false }), provider("codex", { device_id: "wsl" })];
+    expect(firstRunAgent(ai(deviceOnly), new Set(["codex"]))).toBeNull();
   });
 });
 

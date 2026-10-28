@@ -222,7 +222,7 @@ pub struct PreparedMemory {
     pub(crate) node: NodeId,
     pub(crate) sessions_node: Arc<dyn NodeLink>,
     /// The core's own node, which asks the provider for an `add`.
-    pub(crate) ai_node: Arc<dyn NodeLink>,
+    pub(crate) ai_machines: crate::ai::AiMachines,
     /// Where the provider boundary tells what an `add` spent.
     pub(crate) ai_usage: Arc<dyn hide_ai::AiUsageSink>,
     pub(crate) database: PathBuf,
@@ -248,9 +248,9 @@ impl PreparedMemory {
     /// Runs the command: the answer's `result`, or a refusal code
     /// [`next_action`] explains.
     pub fn run(self) -> Result<Value, String> {
-        let node = Arc::clone(&self.ai_node);
+        let machines = self.ai_machines.clone();
         let usage = Arc::clone(&self.ai_usage);
-        self.run_with(|settings| crate::ai::memory_add_router(&node, settings, &usage))
+        self.run_with(|settings| crate::ai::memory_add_router(&machines, settings, &usage))
     }
 
     fn run_with(self, router: impl FnOnce(&AiSettings) -> AiRouter) -> Result<Value, String> {
@@ -1085,7 +1085,7 @@ mod tests {
                 command,
                 node: crate::node::test_node(),
                 sessions_node: Arc::clone(&self.node),
-                ai_node: Arc::clone(&self.node),
+                ai_machines: crate::ai::AiMachines::own(Arc::clone(&self.node)),
                 ai_usage: crate::usage_ledger::ai_usage::AiUsageQueue::new(),
                 database: self.database.clone(),
                 checkout_path: self.root.clone(),

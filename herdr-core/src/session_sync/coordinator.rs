@@ -174,9 +174,12 @@ fn run_coordinator(
     let mut ai_reader = context
         .is_local()
         .then(|| {
-            context
-                .node()
-                .map(|node| crate::ai::AiReader::new(Arc::clone(node)))
+            context.node().map(|node| {
+                crate::ai::AiReader::new(crate::ai::AiMachines {
+                    own: Arc::clone(node),
+                    devices: crate::runtime::device_links(context.runtime.clone()),
+                })
+            })
         })
         .flatten();
     if let Some(home) = hook_home.as_deref() {

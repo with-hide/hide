@@ -26,14 +26,14 @@ use crate::remote::{
 /// A node and the link that reads its files.
 pub(crate) type LinkedNode = (crate::node::NodeId, Arc<dyn NodeLink>);
 
-/// The daemon may open a pane-scoped return route only while the same
-/// consented helper and SSH device connection are live. All fields are owned
-/// handles, so no network work is done under the runtime lock.
+/// A connected device's node link, which the daemon's Browser View routes
+/// ride to the device's loopback and files, over whichever link the device
+/// has. All fields are owned handles, so no network work is done under the
+/// runtime lock.
 #[derive(Clone)]
 pub struct WorkspaceRemoteRoute {
     pub device_id: String,
     pub generation: u64,
-    pub transport: Arc<dyn crate::remote::DialedTransport>,
     pub channel: Arc<dyn NodeLink>,
 }
 
@@ -146,16 +146,9 @@ impl Runtime {
                 {
                     return None;
                 }
-                // A return route is an SSH forward of the core's own dial.
-                let DeviceReach::Dialed(transport) =
-                    &self.remote_connections.get(device_id)?.transport
-                else {
-                    return None;
-                };
                 Some(WorkspaceRemoteRoute {
                     device_id: device_id.clone(),
                     generation: host.generation,
-                    transport: Arc::clone(transport),
                     channel: Arc::clone(channel),
                 })
             })
@@ -621,11 +614,16 @@ impl Runtime {
 
     fn set_host_phase(&mut self, device_id: &str, phase: HostPhase) {
         let waiting = self.helper_link_wait(device_id);
+        let linked = self.linked_node(device_id).is_ok();
         self.device_host_entry(device_id).phase = phase;
         // A pane of the device says what its link waits for, so its notice
         // follows the phase.
         if waiting != self.helper_link_wait(device_id) {
             self.refresh_pane_headers();
+        }
+        // Hide AI's rows of the device's agents follow its link (B13).
+        if linked != self.linked_node(device_id).is_ok() {
+            self.refresh_background_ai();
         }
     }
 
@@ -1016,6 +1014,7 @@ impl Runtime {
         self.device_hosts.remove(device_id);
         self.device_host_retries.remove(device_id);
         self.codex_daemon_off_running.remove(device_id);
+        self.refresh_background_ai();
         self.forget_guardrails_device(device_id);
         match why {
             Retiring::Removed => {
@@ -1033,6 +1032,20 @@ impl Runtime {
     /// The link to the machine this core runs on.
     pub(crate) fn own_node(&self) -> Arc<dyn NodeLink> {
         Arc::clone(&self.own_node)
+    }
+
+    /// Where Hide AI's agents run: this node, and each connected device,
+    /// looked up when its agent is asked and never woken (PRD wsl-device
+    /// B13). Asked off the runtime's lock, as every provider call is.
+    pub(crate) fn ai_machines(&self) -> crate::ai::AiMachines {
+        crate::ai::AiMachines {
+            own: self.own_node(),
+            devices: device_links(
+                self.worker_context
+                    .as_ref()
+                    .map_or_else(Weak::new, |context| context.runtime.clone()),
+            ),
+        }
     }
 
     /// The link to the node `device_id` names, or the sentence that says why
@@ -1349,4 +1362,20 @@ fn now_unix_ms() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
         .unwrap_or(0)
+}
+
+/// A device's link as [`Runtime::linked_node`] answers it, with the host
+/// generation every new link of the device advances, looked up under a
+/// brief lock of `runtime`; `None` for a device that is not connected or a
+/// runtime that is gone. Never called under that lock.
+pub(crate) fn device_links(runtime: Weak<Mutex<Runtime>>) -> crate::ai::DeviceLinks {
+    Arc::new(move |device: &str| {
+        let runtime = runtime.upgrade()?;
+        let guard = runtime.lock().ok()?;
+        let (_, link) = guard.linked_node(device).ok()?;
+        Some(crate::ai::DeviceLink {
+            generation: guard.device_host_generation(device),
+            link,
+        })
+    })
 }
