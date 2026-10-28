@@ -434,13 +434,26 @@ fn retired_cursor_install_is_refused_and_removal_keeps_the_operators_hooks() {
 /// The command starts Windows PowerShell. Its first start in a CI job, beside
 /// the other tests starting theirs, took from 2 s to past the 15 s these runs
 /// allow (issue 1497), so it is paid here, before a deadline starts.
+///
+/// The first start includes the first `Test-Path` the command calls: Windows
+/// PowerShell loads that cmdlet's module on first use, and on a fresh runner
+/// it first builds its cache of every installed module ("Preparing modules
+/// for first use", the `#< CLIXML` progress record a timed-out run left on
+/// stderr). A start that only ran `exit 0` left that to the command: four
+/// tests paying it together took 38 to 48 s, and the two that paid it inside
+/// their 15 s failed (issues 198 and 199).
 fn agy_shell(command: &str) -> Command {
     use std::os::windows::process::CommandExt;
 
     crate::stand_ins::ready_with_args(
         &Path::new(&std::env::var_os("SystemRoot").unwrap())
             .join(r"System32\WindowsPowerShell\v1.0\powershell.exe"),
-        &["-NoProfile", "-NonInteractive", "-Command", "exit 0"],
+        &[
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$null = Test-Path -LiteralPath $env:SystemRoot -PathType Leaf; exit 0",
+        ],
     );
     let mut shell = Command::new("cmd.exe");
     shell

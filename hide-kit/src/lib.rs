@@ -1214,3 +1214,8 @@ pub(crate) fn write_atomically(
 // Windows kit is tested with the device helper that installs it there.
 #[cfg(all(test, unix))]
 mod tests;
+// The Windows tests of `process` start a program the job has not started yet.
+#[cfg(all(test, windows))]
+#[path = "../../hide-platform/tests/it/stand_ins.rs"]
+#[allow(dead_code)] // only `ready_with_args` is used on Windows
+mod stand_ins;
