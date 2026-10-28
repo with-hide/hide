@@ -1002,6 +1002,36 @@ mod tests {
         assert!(layout.repair().is_empty(), "a repaired tree needs nothing");
     }
 
+    /// PRD unseen-agent-views B18, B33: a stored seen record that does not
+    /// read leaves its View unseen and the repair says so; a View stored
+    /// before the record was kept reads as seen.
+    #[test]
+    fn a_seen_record_that_does_not_read_is_unseen_and_a_missing_one_is_seen() {
+        let mut layout = with_files(&["broken", "kept", "older"]);
+        layout.display_mut(&id(&layout, "kept")).unwrap().unseen =
+            Some(crate::view_feedback::Unseen::opened(7, None));
+        let broken = id(&layout, "broken");
+        layout.display_mut(&broken).unwrap().unseen =
+            Some(crate::view_feedback::Unseen::opened(5, None));
+        let stored = serde_json::to_string(&layout)
+            .unwrap()
+            .replace(r#"{"opened_unix_ms":5}"#, r#""not a record""#);
+        let mut read: Layout = serde_json::from_str(&stored).unwrap();
+
+        let notes = read.repair();
+        assert_eq!(
+            notes,
+            ["1 views had a seen record that did not read and are unseen"]
+        );
+        assert!(read.display(&broken).unwrap().unseen.is_some());
+        assert_eq!(
+            read.display(&id(&read, "kept")).unwrap().unseen,
+            Some(crate::view_feedback::Unseen::opened(7, None))
+        );
+        assert_eq!(read.display(&id(&read, "older")).unwrap().unseen, None);
+        assert!(read.repair().is_empty(), "a repaired tree needs nothing");
+    }
+
     /// PRD session-files D-29: a View stored before Views belonged to
     /// sessions goes to the session its mark names, else to the operator,
     /// silently and once.

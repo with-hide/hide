@@ -127,7 +127,6 @@ pub struct PsAgent {
 #[serde(rename_all = "snake_case")]
 pub enum PsState {
     Turn,
-    /// The operator has a View this agent opened to look at.
     Look,
     Going,
     Waiting,
