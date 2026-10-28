@@ -103,14 +103,15 @@ describe("the Hide AI tool", () => {
 
   it("turns all of Hide AI off from the head, and with it off shows one line and nothing to count (B3)", async () => {
     await render(suggestionsProject());
-    expect(q("[data-hide-ai-chip]")?.getAttribute("data-hide-ai-chip")).toBe("claude-code");
     await click("[data-hide-ai-switch]");
     expect(sent("hide_ai_switch")).toEqual([{ workspace_id: "p", on: false }]);
     await render(suggestionsProject({ enabled: false, status: "off", rows: [suggestionRow("s1")] }));
     expect(q("[data-hide-ai-off]")?.textContent).toContain("Hide AI is off");
+    // Off, the owl says what each tab gives once it is on.
+    expect([...document.querySelectorAll("[data-hide-ai-explainer-group]")].map((group) => group.getAttribute("data-hide-ai-explainer-group"))).toEqual(["Suggestions", "Memory"]);
+    expect(q('[data-hide-ai-explainer-group="Memory"]')?.textContent).toContain("Every agent uses the same memories");
     expect(q('[role="tablist"]')).toBeNull();
     expect(q("[data-suggestion]")).toBeNull();
-    expect(q("[data-hide-ai-chip]")).toBeNull();
     await click("[data-hide-ai-switch]");
     expect(sent("hide_ai_switch").at(-1)).toEqual({ workspace_id: "p", on: true });
   });
@@ -131,7 +132,13 @@ describe("the Hide AI tool", () => {
 
   it("draws the tab's state in one line, and 조사 중 or 조사 못 함 in the head with the rows as they were (B17, D-35)", async () => {
     await render(suggestionsProject({ status: "first_run_pending" }));
-    expect(q("[data-suggestions-status]")?.textContent).toBe("First investigation the next time you open Hide");
+    expect(q("[data-suggestions-status] [data-hide-ai-explainer-title]")?.textContent).toBe("First investigation the next time you open Hide");
+    // With nothing open, the owl says what the tab does in three steps.
+    expect([...document.querySelectorAll("[data-suggestions-status] li")].map((step) => step.textContent)).toEqual([
+      "Finds where agents keep getting stuck in sessions and PR reviews",
+      "Suggests how to stop the same mistakes",
+      "Pick one and it lands as a PR, so agents get smarter on their own",
+    ]);
     await render(suggestionsProject({ status: "investigating", rows: [suggestionRow("s1")] }));
     expect(q("[data-hide-ai-investigating]")?.textContent).toBe("Investigating");
     expect(q("[data-suggestions-status]")).toBeNull();
@@ -144,9 +151,12 @@ describe("the Hide AI tool", () => {
     expect(q('[data-suggestion="s1"]')).not.toBeNull();
     await render(suggestionsProject({ status: "none_today" }));
     expect(q("[data-hide-ai-not-investigated]")).toBeNull();
-    expect(q("[data-suggestions-status]")?.textContent).toBe("No suggestions today");
+    expect(q("[data-suggestions-status] [data-hide-ai-explainer-title]")?.textContent).toBe("No suggestions today");
     await render(suggestionsProject({ status: "off", rows: [suggestionRow("s1")] }));
     expect(q("[data-suggestion]")).toBeNull();
+    // Suggestions off: the owl says what they give, with 켜기 under it.
+    expect(q("[data-suggestions-status] [data-hide-ai-explainer-title]")?.textContent).toBe("Suggestions are off");
+    expect(q("[data-suggestions-status]")?.textContent).toContain("Suggests how to stop the same mistakes");
     await click("[data-suggestions-turn-on]");
     expect(sent("suggestion_settings")).toEqual([{ workspace_id: "p", suggestions_enabled: true }]);
   });
@@ -346,8 +356,10 @@ describe("the Hide AI tool", () => {
     expect(useUiStore.getState()).toMatchObject({ overlay: "settings", settingsTab: "hideAi" });
   });
 
-  it("names the agent standing in on the head chip while Runs on is past the limit", async () => {
+  it("names the agent standing in under ⚙ while Runs on is past the limit, and nothing in the head", async () => {
     await render(suggestionsProject(), { ...rest.status!.background_ai!, refusal: { provider: "claude", reason: "past_limit", retry_at_ms: null, using: "codex", used_percent: 93, limit: 90 } });
-    expect(q("[data-hide-ai-chip]")?.textContent).toBe("Codex");
+    expect(q("[data-lane-header]")?.textContent).not.toContain("Codex");
+    await press("[data-hide-ai-settings-open]");
+    expect(q("[data-hide-ai-provider-chip]")?.textContent).toBe("Codex");
   });
 });
