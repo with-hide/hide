@@ -5,7 +5,7 @@ import { useShallow } from "zustand/react/shallow";
 import type { Actions } from "./actions";
 import { deviceScope } from "./agentScope";
 import { deviceConnected, frontDeviceId, tileCounts, tileHint, tileMonogram } from "./devices";
-import { machineName, windowDeviceId, windowFirst } from "./screenMachine";
+import { machineName, windowDeviceId, windowFirst, wslPlace } from "./screenMachine";
 import { useShellStore } from "./store";
 import { overviewDeviceOf } from "./overviewTasks";
 import { useUiStore } from "./ui";
@@ -77,7 +77,7 @@ function DeviceSwitch({ selected }: { selected: string }) {
   const devices = useShellStore((s) => s.rest?.navigator?.devices);
   const rows = useMemo(() => {
     const own = windowDeviceId(devices);
-    return windowFirst(devices).map((device) => ({ id: device.id, own: device.id === own, label: machineName(devices, device.id, t) }));
+    return windowFirst(devices).map((device) => ({ id: device.id, own: device.id === own, label: machineName(devices, device.id, t), place: wslPlace(devices, device.id, t) }));
   }, [devices, t]);
   if (rows.length === 0) return null;
   const current = rows.find((row) => row.id === selected) ?? rows[0]!;
@@ -93,7 +93,7 @@ function DeviceSwitch({ selected }: { selected: string }) {
   </div>;
 }
 
-function DeviceLabel({ id, own, label }: { id: string; own: boolean; label: string }) {
+function DeviceLabel({ id, own, label }: { id: string; own: boolean; label: string; place?: string | null }) {
   const { t } = useInterfaceTranslation();
   const connected = useShellStore((s) => deviceConnected(s.rest, id));
   return <span className="flex min-w-0 items-center gap-xs">
@@ -103,13 +103,13 @@ function DeviceLabel({ id, own, label }: { id: string; own: boolean; label: stri
   </span>;
 }
 
-const DeviceChoice = memo(function DeviceChoice({ id, own, label }: { id: string; own: boolean; label: string }) {
+const DeviceChoice = memo(function DeviceChoice({ id, own, label, place }: { id: string; own: boolean; label: string; place: string | null }) {
   const { t } = useInterfaceTranslation();
   const counts = useShellStore(useShallow((s) => tileCounts(s.rest, s.agents, id)));
   const connected = useShellStore((s) => deviceConnected(s.rest, id));
   return <DropdownMenuRadioItem
       value={id}
-      title={tileHint(label, connected, counts, t)}
+      title={tileHint(place ? `${label} · ${place}` : label, connected, counts, t)}
       data-overview-device-choice={id}
       data-connected={connected ? "true" : "false"}
     >

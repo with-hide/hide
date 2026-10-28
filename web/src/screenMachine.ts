@@ -96,6 +96,15 @@ export function awayDevice(rest: SnapshotRest | null): Device | null {
   return devices?.find((device) => device.id === front) ?? null;
 }
 
+/**
+ * Where a WSL distribution's device is, said beside its name (PRD wsl-device
+ * B5, D-12): on the core's machine, which its own window calls This PC
+ * (`WSL Ubuntu · This PC`); never Remote. Null for any other device.
+ */
+export function wslPlace(devices: readonly Device[] | undefined, deviceId: string, t: TFunction<"translation">): string | null {
+  return devices?.find((row) => row.id === deviceId)?.wsl_distro ? coreMachineName(devices, t) : null;
+}
+
 /** The core's machine as this window names it. */
 export function coreMachineName(devices: readonly Device[] | undefined, t: TFunction<"translation">): string {
   return machineName(devices, coreRowId(devices), t);

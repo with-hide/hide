@@ -1,8 +1,13 @@
 import { emptyScope, legacyRest } from "../test/legacyAgentScope";
 import { legacyAgentRow } from "../test/legacyAgentRow";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { badgeText, deviceConnected, frontTitle as frontTitleIn, homeOf, railShown, readsHere, tileCounts as drawTileCounts, tileHint as tileHintIn, tileMonogram, tileName as tileNameIn } from "./devices";
+import { deviceScope } from "./agentScope";
+import { badgeText, deviceConnected, frontDeviceId, frontTitle as frontTitleIn, homeOf, railShown, readsHere, sidebarBody, tileCounts as drawTileCounts, tileHint as tileHintIn, tileMonogram, tileName as tileNameIn } from "./devices";
 import { initializeInterfaceI18n } from "./i18n/instance";
+import { numberedDevices } from "./numbering";
+import { contextAgents, contextWorkspaces } from "./remote";
+import { searchEntries } from "./search";
+import { wslPlace } from "./screenMachine";
 import type { AgentRow, Device, SnapshotRest, Workspace } from "./snapshot";
 
 const t = initializeInterfaceI18n("en").getFixedT(null, "translation");
@@ -103,6 +108,68 @@ describe("the device rail's facts (quick device-rail-badges)", () => {
     const devices = rest().navigator!.devices;
     expect(frontTitle(devices, "local")).toEqual({ name: "This Mac", note: null });
     expect(frontTitle(devices, "mini")).toEqual({ name: "mini", note: "Remote" });
+  });
+});
+
+// PRD wsl-device B5, B6: this PC's WSL distribution is a device like any other: named where it is, never
+// Remote, and choosing its tile scopes the lists to its own items by the same device rules as an SSH device.
+describe("this PC's WSL distribution as a device (PRD wsl-device B5, B6)", () => {
+  beforeEach(() => vi.stubGlobal("navigator", { platform: "Win32", userAgent: "" }));
+  afterEach(() => vi.unstubAllGlobals());
+  const WSL = "wsl-ubuntu-1a2b3c4d";
+  function windows(focused: string): SnapshotRest {
+    const project = (id: string, device: string) => ({ agent_scope: emptyScope(), id, label: id, path: `/${id}`, device_id: device, remote_target_id: device === "local" ? null : device, checkouts: [] });
+    return {
+      navigator: {
+        focused_device_id: focused,
+        devices: [
+          { id: "local", label: null, kind: "local", state: "local", message: null },
+          { id: WSL, label: "WSL Ubuntu", kind: "remote", state: "ready", message: null, ssh_alias: null, wsl_distro: "Ubuntu" },
+          { id: "mini", label: "mini", kind: "remote", state: "ready", message: null, ssh_alias: "mini" },
+        ],
+        workspaces: [project("pc-project", "local")],
+      },
+      status: {
+        remote: [
+          { target_id: WSL, state: "connected", session: { agents: [agent("remote:wsl:pane:1", "needs_you")], workspaces: [project("remote:wsl:workspace:app", WSL)] } },
+          { target_id: "mini", state: "connected", session: { agents: [agent("remote:mini:pane:1", "done")], workspaces: [project("remote:mini:workspace:m", "mini")] } },
+        ],
+      },
+    } as unknown as SnapshotRest;
+  }
+
+  it("names it `WSL Ubuntu · This PC` on the rail, the sidebar title and in search, and never Remote (B5)", () => {
+    const devices = windows("local").navigator!.devices;
+    expect(frontTitle(devices, WSL)).toEqual({ name: "WSL Ubuntu", note: "This PC" });
+    expect(frontTitleIn(devices, WSL, korean)).toEqual({ name: "WSL Ubuntu", note: "이 PC" });
+    // An SSH device keeps its word.
+    expect(frontTitle(devices, "mini")).toEqual({ name: "mini", note: "Remote" });
+    expect(tileMonogram("WSL Ubuntu")).toBe("WU");
+    expect(wslPlace(devices, WSL, korean)).toBe("이 PC");
+    expect(wslPlace(devices, "mini", korean)).toBeNull();
+    expect(tileHintIn(`WSL Ubuntu · ${wslPlace(devices, WSL, korean)}`, true, { needs_you: 1, done: 0 }, korean)).toBe("WSL Ubuntu · 이 PC · 내 차례 1");
+    const row = searchEntries(windows("local"), korean).find((entry) => entry.id === `device:${WSL}`);
+    expect(row?.subtitle).toBe("이 PC");
+  });
+
+  it("scopes the sidebar, tasks, Overview, tile counts and numbers to its own items when its tile is chosen (B6)", () => {
+    const local = [agent("l1", "needs_you")];
+    const front = legacyRest(windows(WSL), local);
+    expect(frontDeviceId(front)).toBe(WSL);
+    expect(sidebarBody(front)).toBe("projects");
+    expect(contextWorkspaces(front).map((row) => row.id)).toEqual(["remote:wsl:workspace:app"]);
+    expect(contextAgents(front, local).map((row) => row.pane_id)).toEqual(["remote:wsl:pane:1"]);
+    // Tasks and Overview read the front device's scope, the core's count of that device alone.
+    expect(deviceScope(front, frontDeviceId(front))).toBe(front.navigator!.devices!.find((device) => device.id === WSL)!.agent_scope);
+    expect(tileCounts(windows(WSL), local, WSL)).toEqual({ needs_you: 1, done: 0 });
+    expect(tileCounts(windows(WSL), local, "local")).toEqual({ needs_you: 1, done: 0 });
+    // ⌥⌘n numbers the tiles in the rail's order: this PC, then each device as the core lists it.
+    expect([...numberedDevices(front.navigator!.devices)]).toEqual([[1, "local"], [2, WSL], [3, "mini"]]);
+    // A stopped distribution reads as any device that is not connected: no count, the reconnect body.
+    const off = windows(WSL);
+    off.status!.remote![0]!.state = "not_connected";
+    expect(sidebarBody(legacyRest(off, local))).toBe("disconnected");
+    expect(tileCounts(off, local, WSL)).toEqual({ needs_you: 0, done: 0 });
   });
 });
 
