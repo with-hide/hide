@@ -7,51 +7,92 @@ limit evicts something, which it did to main's newest entries while copies
 nobody read stayed (2026-10-28). docs/BUILD.md, "CI's Rust caches", owns the
 sets and the key shape (`.github/actions/rust-cache`).
 
-A key names the dependencies it holds: `v0-rust-<set>-<deps>-<os>-<arch>-...`,
-where <deps> hashes the lockfile, the manifests and the pinned toolchain of the
-commit that saved it. This is given main's head and that head's <deps>, and per
-set, system and architecture it deletes every entry of another <deps>, but only
-when the head's own entry is already saved there, so a set whose save has not
-happened yet keeps what it has. It deletes nothing when main has moved past the
-given head, since a newer head's entry would carry another <deps>. Which run
-read an entry, or when, decides nothing.
+A key names the dependencies it holds:
+`v0-rust-<set>-<manifest>-<os>-<arch>-<environment>-<lockfile>`, where
+<manifest> hashes the root `Cargo.toml` and <lockfile> is rust-cache's hash of
+the lockfile, the members' manifests and `rust-toolchain.toml`, recomputed
+here (`lockfile_hash`). This is given main's head, run from its checkout, and
+per set, system and architecture it deletes every entry of another manifest or
+lockfile hash, but only when the head's own entry is already saved there, so a
+set whose save has not happened yet keeps what it has, and so does every set
+should rust-cache ever hash differently from `lockfile_hash`. It deletes nothing
+when main has moved past the given head, since a newer head's entry carries
+other hashes. Which run read an entry, or when, decides nothing.
 
 Keys from before the sets (`v0-rust-<job>-...`) are not touched: they are
 deleted by hand once, after each set's new entry is saved, and GitHub drops
-what is left after seven days unread.
-Other refs' entries are left alone: a pull request saves none, and GitHub
-scopes any it holds to that pull request.
+what is left after seven days unread. Other refs' entries are left alone: a
+pull request saves none, and GitHub scopes any it holds to that pull request.
 
 A cache that could not be listed or deleted is a warning in the run's log and
 the run still passes: the next run on main tries again, and pruning is no
 build's result.
 
-    python3 scripts/prune-rust-caches.py --repo with-hide/hide --head <sha> --deps <hash> [--dry-run]
+    python3 scripts/prune-rust-caches.py --repo with-hide/hide --head <sha> --manifest <hash> [--dry-run]
 """
 import argparse
+import hashlib
 import json
+from pathlib import Path
 import re
 import subprocess
 import sys
+import tomllib
 
 MAIN = 'refs/heads/main'
 PREFIX = 'v0-rust-'
 SETS = ('workspace', 'platform', 'release')
-KEY = re.compile(rf'^{PREFIX}(?P<set>{"|".join(SETS)})-(?P<deps>[0-9a-f]{{64}})'
-                 r'-(?P<os>Linux|Darwin|Windows_NT)-(?P<arch>x64|arm64)-[0-9a-f]+-[0-9a-f]+$')
+KEY = re.compile(rf'^{PREFIX}(?P<set>{"|".join(SETS)})-(?P<manifest>[0-9a-f]{{64}})'
+                 r'-(?P<os>Linux|Darwin|Windows_NT)-(?P<arch>x64|arm64)-[0-9a-f]+-(?P<lockfile>[0-9a-f]{8})$')
 
 
-def doomed(entries, deps):
+def javascript_json(value):
+    """`JSON.stringify(value)`, which rust-cache hashes."""
+    return json.dumps(value, ensure_ascii=False, separators=(',', ':')).encode()
+
+
+def lockfile_hash(root):
+    """rust-cache v2's lockfile hash of the workspace at `root` (`src/config.ts`).
+
+    Each member's manifest with its own and its path dependencies' versions and
+    paths blanked, then the lockfile's registry and git packages, then
+    `rust-toolchain.toml`, through one SHA-1, of which it keeps 8 digits. It
+    reproduces the hashes CI's logs show for main's commits of 2026-10-24 to 28.
+    """
+    members = tomllib.loads((root / 'Cargo.toml').read_text())['workspace']['members']
+    hasher = hashlib.sha1()
+    if any(character in member for member in members for character in '*?['):
+        raise ValueError(f'a workspace member is a glob, which cargo metadata would expand: {members}')
+    # Sorted as manifest paths: `hide-node-link/` comes before `hide-node/`.
+    for manifest_path in sorted(f'{member}/Cargo.toml' for member in members):
+        manifest = tomllib.loads((root / manifest_path).read_text())
+        if 'version' in manifest.get('package', {}):
+            manifest['package']['version'] = '0.0.0'
+        for section in ('dependencies', 'build-dependencies', 'dev-dependencies'):
+            for dependency in manifest.get(section, {}).values():
+                if isinstance(dependency, dict) and 'path' in dependency:
+                    dependency['version'] = '0.0.0'
+                    dependency['path'] = ''
+        hasher.update(javascript_json(manifest))
+    lock = tomllib.loads((root / 'Cargo.lock').read_text())
+    hasher.update(javascript_json([package for package in lock['package']
+                                   if 'source' in package or 'checksum' in package]))
+    hasher.update((root / 'rust-toolchain.toml').read_bytes())
+    return hasher.hexdigest()[:8]
+
+
+def doomed(entries, manifest, lockfile):
     """The entries to delete, oldest first; `entries` are GitHub's cache objects."""
     groups = {}
     for entry in entries:
         match = KEY.match(entry['key']) if entry['ref'] == MAIN else None
         if match:
-            groups.setdefault((match['set'], match['os'], match['arch']), []).append((match['deps'], entry))
+            head = (match['manifest'], match['lockfile']) == (manifest, lockfile)
+            groups.setdefault((match['set'], match['os'], match['arch']), []).append((head, entry))
     gone = []
     for group in groups.values():
-        if any(saved == deps for saved, _ in group):
-            gone += [entry for saved, entry in group if saved != deps]
+        if any(head for head, _ in group):
+            gone += [entry for head, entry in group if not head]
     return sorted(gone, key=lambda entry: (entry['created_at'], entry['id']))
 
 
@@ -84,15 +125,17 @@ def warn(message):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.split('\n', 1)[0])
     parser.add_argument('--repo', required=True)
-    parser.add_argument('--head', required=True, help="the main commit whose run just ended")
-    parser.add_argument('--deps', required=True, help="that commit's dependency hash, as the key carries it")
+    parser.add_argument('--head', required=True, help='the main commit whose run just ended, checked out here')
+    parser.add_argument('--manifest', required=True, help="the root Cargo.toml's hashFiles, as the key carries it")
     parser.add_argument('--dry-run', action='store_true')
     args = parser.parse_args()
-    if not re.fullmatch(r'[0-9a-f]{64}', args.deps):
-        parser.error(f'--deps is not a 64-digit hash: {args.deps!r}')
+    if not re.fullmatch(r'[0-9a-f]{64}', args.manifest):
+        parser.error(f'--manifest is not a 64-digit hash: {args.manifest!r}')
+    lockfile = lockfile_hash(Path.cwd())
+    print(f'main {args.head}: manifest {args.manifest[:8]}, lockfile {lockfile}')
     try:
         entries = listed(args.repo)
-        # Last, right before deleting: a newer head's entry carries other deps.
+        # Last, right before deleting: a newer head's entry carries other hashes.
         head = main_head(args.repo)
     except subprocess.CalledProcessError as error:
         warn(f'reading main\'s Rust caches or head failed: {error.stderr.strip()}')
@@ -101,7 +144,7 @@ def main():
         print(f'main moved from {args.head} to {head}; nothing deleted')
         return 0
     gone = []
-    for entry in doomed(entries, args.deps):
+    for entry in doomed(entries, args.manifest, lockfile):
         print(f'{"would delete" if args.dry_run else "delete"} {entry["key"]} '
               f'({entry["size_in_bytes"] // 2**20} MB, created {entry["created_at"]})')
         reason = None if args.dry_run else delete(args.repo, entry)

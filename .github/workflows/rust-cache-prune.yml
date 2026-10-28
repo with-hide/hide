@@ -41,6 +41,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-          # The dependency hash `.github/actions/rust-cache` puts in the key.
-          DEPS: ${{ hashFiles('Cargo.lock', 'Cargo.toml', '*/Cargo.toml', 'rust-toolchain.toml') }}
-        run: python3 scripts/prune-rust-caches.py --repo "$GITHUB_REPOSITORY" --head "$HEAD_SHA" --deps "$DEPS"
+          # The root manifest's hash `.github/actions/rust-cache` puts in the
+          # key; the script computes rust-cache's lockfile hash itself.
+          MANIFEST: ${{ hashFiles('Cargo.toml') }}
+        run: python3 scripts/prune-rust-caches.py --repo "$GITHUB_REPOSITORY" --head "$HEAD_SHA" --manifest "$MANIFEST"
