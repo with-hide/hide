@@ -481,8 +481,6 @@ fn kit_herdr_socket(named: Option<String>, bridged: Option<&Path>) -> Option<Str
     named.or_else(|| bridged.map(|own| own.to_string_lossy().into_owned()))
 }
 
-/// Why a node asked for the label lock of no named server refuses: its
-/// pane service has not started, so it serves no Herdr server yet.
 /// Where this machine shows the Windows PC's drives, for `Hello`: none on a
 /// machine that is not a WSL distribution, and none, logged, on one whose
 /// `/etc/wsl.conf` cannot be read or names no usable root, so a pasted
@@ -512,6 +510,8 @@ fn windows_drives() -> Option<String> {
     }
 }
 
+/// Why a node asked for the label lock of no named server refuses: its
+/// pane service has not started, so it serves no Herdr server yet.
 fn no_labeled_server() -> HostError {
     HostError::new(
         ErrorCode::Unsupported,
