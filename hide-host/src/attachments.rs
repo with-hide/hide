@@ -134,17 +134,34 @@ const MAX_OPEN_REQUESTS: usize = 8;
 /// files, written one call at a time into the account's own folder
 /// (`hide_kit::layout::terminal_attachments`), with generated names only,
 /// owner-only, kept 24 hours past their last use and at most 128 files and
-/// 256 MiB. A request whose files did not all arrive when the link ends is
-/// removed with it, so a link lost mid-transfer leaves nothing behind.
+/// 256 MiB. A request whose files did not all arrive when the link ends, or
+/// that its core cancels, is removed, so a link lost mid-transfer leaves
+/// nothing behind; a file being written then is removed when its write
+/// finishes, whichever comes first.
 pub struct Staging {
     folder: Option<PathBuf>,
     legacy: Option<PathBuf>,
     legacy_swept: AtomicBool,
-    /// The link ended: no file is staged any more.
-    closed: AtomicBool,
-    /// Requests staged in part on this link: how many files each carries
-    /// and which arrived.
-    open: Mutex<HashMap<String, (usize, BTreeSet<usize>)>>,
+    open: Mutex<Open>,
+}
+
+/// The requests this link staged in part, and whether it ended.
+#[derive(Default)]
+struct Open {
+    /// The link ended: no file is begun any more.
+    ended: bool,
+    requests: HashMap<String, Partial>,
+}
+
+/// A request staged in part.
+struct Partial {
+    count: usize,
+    arrived: BTreeSet<usize>,
+    /// Its files being written now.
+    writing: usize,
+    /// Cancelled, or its link ended, while a file was being written: the
+    /// last write to finish removes the request's files.
+    dropped: bool,
 }
 
 impl Staging {
@@ -155,8 +172,7 @@ impl Staging {
             folder: state.map(hide_kit::layout::terminal_attachments),
             legacy: home.map(hide_kit::layout::legacy_terminal_attachments),
             legacy_swept: AtomicBool::new(false),
-            closed: AtomicBool::new(false),
-            open: Mutex::new(HashMap::new()),
+            open: Mutex::new(Open::default()),
         }
     }
 
@@ -177,25 +193,55 @@ impl Staging {
             return Err("A file exceeds the 20 MiB attachment limit.".to_owned());
         }
         let bytes = file.bytes()?;
+        self.begin(request, count)?;
+        let written = self.write(request, index, &file.name, &bytes);
+        self.finish(request, index, written)
+    }
+
+    /// Enters a write of `request`, which its link ending or its cancel
+    /// cannot overtake: the request stays until the write finishes.
+    fn begin(&self, request: &str, count: usize) -> Result<(), String> {
+        let mut open = lock(&self.open);
+        if open.ended {
+            return Err("The link to this machine ended. Paste again.".to_owned());
+        }
+        if !open.requests.contains_key(request) && open.requests.len() >= MAX_OPEN_REQUESTS {
+            return Err("Too many attachments are being staged at once. Retry.".to_owned());
+        }
+        let partial = open
+            .requests
+            .entry(request.to_owned())
+            .or_insert_with(|| Partial {
+                count,
+                arrived: BTreeSet::new(),
+                writing: 0,
+                dropped: false,
+            });
+        if partial.dropped {
+            return Err("This attachment was cancelled. Paste again.".to_owned());
+        }
+        partial.writing += 1;
+        Ok(())
+    }
+
+    /// Writes the file at its place, or finds the same bytes already there.
+    fn write(
+        &self,
+        request: &str,
+        index: usize,
+        original: &str,
+        bytes: &[u8],
+    ) -> Result<PathBuf, String> {
         let folder = self
             .folder
             .as_deref()
             .ok_or("This machine has no state folder for attachments.")?;
-        {
-            let open = lock(&self.open);
-            if self.closed.load(Ordering::Acquire) {
-                return Err("The link to this machine ended. Paste again.".to_owned());
-            }
-            if !open.contains_key(request) && open.len() >= MAX_OPEN_REQUESTS {
-                return Err("Too many attachments are being staged at once. Retry.".to_owned());
-            }
-        }
         self.sweep_legacy();
         private::own_dir(folder).map_err(|error| {
             format!("The attachment folder must be this account's private folder: {error}")
         })?;
         let kept = inspect_staging(folder)?;
-        let name = attachment_name(request, index, &file.name);
+        let name = attachment_name(request, index, original);
         let path = folder.join(&name);
         if kept.contains_key(&name) {
             if read_owned(&path)? != bytes {
@@ -214,27 +260,70 @@ impl Staging {
             {
                 return Err("This machine's attachment storage is full (128 files or 256 MiB). Files expire after 24 hours; retry later.".to_owned());
             }
-            write_new(&path, &bytes)?;
+            write_new(&path, bytes)?;
         }
-        let mut open = lock(&self.open);
-        let (expected, arrived) = open
-            .entry(request.to_owned())
-            .or_insert_with(|| (count, BTreeSet::new()));
-        arrived.insert(index);
-        if arrived.len() >= *expected {
-            open.remove(request);
-        }
-        drop(open);
-        hide_platform::path::to_wire(&path).map_err(|error| error.to_string())
+        Ok(path)
     }
 
-    /// Removes every file `request` staged; one already gone is not an
-    /// error, and only a file with a name this staging generates is touched.
+    /// Leaves the write [`Staging::begin`] entered. A request dropped while
+    /// it ran is refused, and its last write removes its files; a request
+    /// whose files all arrived, or that holds none, is no longer open.
+    fn finish(
+        &self,
+        request: &str,
+        index: usize,
+        written: Result<PathBuf, String>,
+    ) -> Result<String, String> {
+        let mut open = lock(&self.open);
+        let partial = open
+            .requests
+            .get_mut(request)
+            .ok_or("The attachment's request was lost while it was written.")?;
+        partial.writing -= 1;
+        if partial.dropped {
+            let last = partial.writing == 0;
+            if last {
+                open.requests.remove(request);
+            }
+            drop(open);
+            if last {
+                self.remove_files(request)?;
+            }
+            return Err("This attachment was cancelled or its link ended. Paste again.".to_owned());
+        }
+        if written.is_ok() {
+            partial.arrived.insert(index);
+        }
+        if partial.writing == 0
+            && (partial.arrived.len() >= partial.count || partial.arrived.is_empty())
+        {
+            open.requests.remove(request);
+        }
+        drop(open);
+        hide_platform::path::to_wire(&written?).map_err(|error| error.to_string())
+    }
+
+    /// The core cancelled `request`: removes every file it staged, and a
+    /// file being written once its write finishes. One already gone is not
+    /// an error, and only a file with a name this staging generates is
+    /// touched.
     pub fn remove(&self, request: &str) -> Result<(), String> {
         if !valid_request_id(request) {
             return Err("Invalid attachment request.".to_owned());
         }
-        lock(&self.open).remove(request);
+        {
+            let mut open = lock(&self.open);
+            match open.requests.get_mut(request) {
+                Some(partial) if partial.writing > 0 => partial.dropped = true,
+                _ => {
+                    open.requests.remove(request);
+                }
+            }
+        }
+        self.remove_files(request)
+    }
+
+    fn remove_files(&self, request: &str) -> Result<(), String> {
         let Some(folder) = self.folder.as_deref() else {
             return Ok(());
         };
@@ -257,23 +346,25 @@ impl Staging {
         Ok(())
     }
 
-    /// The link ended: a file not yet begun is refused. A file being
-    /// written finishes, so [`Staging::end`] waits for the calls under way.
-    pub fn close(&self) {
-        let _open = lock(&self.open);
-        self.closed.store(true, Ordering::Release);
-    }
-
-    /// Every call on the ended link is done: each request staged in part
-    /// goes with it, the file written last included.
+    /// The link ended: no file is begun any more, and each request staged
+    /// in part goes with it, a file being written once its write finishes.
     pub fn end(&self) {
-        self.close();
-        let open: Vec<String> = lock(&self.open)
-            .drain()
-            .map(|(request, _)| request)
-            .collect();
-        for request in open {
-            if let Err(reason) = self.remove(&request) {
+        let gone: Vec<String> = {
+            let mut open = lock(&self.open);
+            open.ended = true;
+            let mut gone = Vec::new();
+            open.requests.retain(|request, partial| {
+                if partial.writing > 0 {
+                    partial.dropped = true;
+                    return true;
+                }
+                gone.push(request.clone());
+                false
+            });
+            gone
+        };
+        for request in gone {
+            if let Err(reason) = self.remove_files(&request) {
                 eprintln!(
                     "{}",
                     serde_json::json!({"component":"node","kind":"terminal.attachment.cleanup_failed","request_id":request,"reason":reason})
@@ -481,24 +572,67 @@ mod tests {
         assert!(Path::new(&whole).exists());
     }
 
-    /// Once the link ended no file is begun, and the request's files go
-    /// when its calls are done.
+    /// The link ends between a write's start and its file appearing: the
+    /// end cannot remove what is not there yet, so it leaves the request to
+    /// that write, which removes its file as it finishes. Each step is the
+    /// test's to order, as the node's workers would interleave them.
     #[test]
-    fn a_closed_staging_begins_no_file() {
+    fn a_write_the_link_s_end_overtook_removes_its_own_file() {
         let (_folder, staging) = staging();
-        let first = staging
-            .stage(REQUEST, 0, 3, &File::new("a.txt", b"a"))
-            .unwrap();
-        staging.close();
+        staging.begin(REQUEST, 2).unwrap();
+        staging.end();
+        // The end saw the write under way and left the request to it.
+        assert!(lock(&staging.open).requests[REQUEST].dropped);
+        let written = staging.write(REQUEST, 0, "a.txt", b"a");
+        let path = written.clone().unwrap();
+        assert!(path.exists());
         assert!(
             staging
-                .stage(REQUEST, 1, 3, &File::new("b.txt", b"b"))
+                .finish(REQUEST, 0, written)
+                .unwrap_err()
+                .contains("link ended")
+        );
+        assert!(
+            !path.exists(),
+            "the overtaken write left {}",
+            path.display()
+        );
+        assert!(lock(&staging.open).requests.is_empty());
+        let other = "0f8fad5b-d9cb-469f-a165-70867728950e";
+        assert!(
+            staging
+                .stage(other, 0, 1, &File::new("b.txt", b"b"))
                 .unwrap_err()
                 .contains("ended")
         );
-        assert!(Path::new(&first).exists());
-        staging.end();
-        assert!(!Path::new(&first).exists());
+    }
+
+    /// The core cancels a request between a write's start and its file
+    /// appearing: the write removes its file as it finishes, and the next
+    /// request stages as before.
+    #[test]
+    fn a_write_its_cancel_overtook_removes_its_own_file() {
+        let (_folder, staging) = staging();
+        staging.begin(REQUEST, 1).unwrap();
+        staging.remove(REQUEST).unwrap();
+        let written = staging.write(REQUEST, 0, "a.txt", b"a");
+        let path = written.clone().unwrap();
+        assert!(
+            staging
+                .finish(REQUEST, 0, written)
+                .unwrap_err()
+                .contains("cancelled")
+        );
+        assert!(
+            !path.exists(),
+            "the cancelled write left {}",
+            path.display()
+        );
+        let other = "0f8fad5b-d9cb-469f-a165-70867728950e";
+        let kept = staging
+            .stage(other, 0, 1, &File::new("b.txt", b"b"))
+            .unwrap();
+        assert!(Path::new(&kept).exists());
     }
 
     /// A file of exactly the cap is staged; one byte more is refused.

@@ -480,10 +480,10 @@ fn serve_in(
         if let Some(terminals) = terminals {
             terminals.stop();
         }
-        // Each link stream's reader ends with its connection, and staging
-        // takes no new file; a file being written finishes in its worker.
+        // Each link stream's reader ends with its connection, and a request
+        // staged in part goes with it, a file being written once it is.
         link.stop();
-        staging.close();
+        staging.end();
         // The connection is gone: a kit step still running ends its child
         // rather than keep the helper alive after it, and the pane service
         // ends its listener and streams so the scope can close.
@@ -491,9 +491,6 @@ fn serve_in(
         panes.stop();
         result
     });
-    // Every worker is done, so no write is under way: a request staged in
-    // part goes with the link, the file written last included.
-    staging.end();
     panes.remove_folder();
     result
 }

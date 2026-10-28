@@ -996,9 +996,9 @@ fn a_link_ending_mid_request_removes_what_it_staged() {
     assert!(!Path::new(&first).exists(), "the ended link left {first}");
 }
 
-/// B10: a link that ends while the device writes a request's first file
-/// still takes that file: the write finishes before the request's files
-/// are removed, so its late arrival leaves nothing behind.
+/// B10, the journey: a link that ends while the device writes a request's
+/// first file leaves nothing behind. Which comes first, the end or the
+/// file, is ordered step by step in `hide-host`'s staging tests.
 #[test]
 fn a_link_ending_during_a_write_leaves_no_file() {
     let device = Device::start();
