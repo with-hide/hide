@@ -498,6 +498,7 @@ impl AgentGroup {
 /// (sidebar-agent-status D-01). Its own unread demand or a blocked prompt
 /// still wins, because the flag is only ever set on a row with no demand of
 /// its own.
+#[allow(clippy::too_many_arguments)] // one row's axes, each its own input to the group
 pub fn agent_group_for(
     demand: AgentDemand,
     activity: AgentActivity,

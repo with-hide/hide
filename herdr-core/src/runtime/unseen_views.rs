@@ -257,7 +257,7 @@ impl Runtime {
         }
         for agent in agents.iter_mut() {
             if let Some(mut views) = by_pane.remove(&agent.pane_id) {
-                views.sort_by(|left, right| right.opened_unix_ms.cmp(&left.opened_unix_ms));
+                views.sort_by_key(|view| std::cmp::Reverse(view.opened_unix_ms));
                 agent.unseen_views = views;
             }
         }
