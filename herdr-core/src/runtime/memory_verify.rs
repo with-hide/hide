@@ -1082,6 +1082,7 @@ mod tests {
                     source_offsets: vec![1],
                     human_offsets: vec![1],
                     source_times: Default::default(),
+                    source_words: Default::default(),
                     cited_paths: Vec::new(),
                     relation: hide_memory::CandidateRelation::New,
                 }],

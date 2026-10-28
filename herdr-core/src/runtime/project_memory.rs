@@ -1495,6 +1495,7 @@ mod tests {
                     source_offsets: vec![4],
                     human_offsets: vec![4],
                     source_times: [(4, 77)].into(),
+                    source_words: Default::default(),
                     cited_paths: vec!["docs/TESTING.md".to_owned()],
                     relation: CandidateRelation::New,
                 }],
@@ -1613,6 +1614,7 @@ mod tests {
             source_offsets: human.clone(),
             human_offsets: human,
             source_times: Default::default(),
+            source_words: Default::default(),
             cited_paths: Vec::new(),
             relation: CandidateRelation::New,
         };
@@ -1722,6 +1724,7 @@ DROP TABLE analysis_progress; DROP TABLE analysis_queue; DROP TABLE analysis_pro
 DROP TABLE correction_checks; DROP TABLE memory_contexts; DROP TABLE receipt_contexts;
 DROP TABLE memory_projection_state; DROP TABLE analysis_schedule; DROP TABLE input_failures;
 ALTER TABLE projects DROP COLUMN evictions_seen_at_ms; ALTER TABLE projects DROP COLUMN answered_at_ms;
+ALTER TABLE memory_sources DROP COLUMN words;
 PRAGMA user_version=16;",
                 )
                 .unwrap();
@@ -2115,6 +2118,7 @@ PRAGMA user_version=16;",
             source_offsets: vec![offset],
             human_offsets: vec![offset],
             source_times: Default::default(),
+            source_words: Default::default(),
             cited_paths: Vec::new(),
             relation: CandidateRelation::New,
         };

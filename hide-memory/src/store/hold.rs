@@ -25,7 +25,7 @@ BEGIN DELETE FROM card_holds WHERE item_id=NEW.id; END;
 
 /// What a test runs to take a current store back to schema 15's tables.
 #[cfg(test)]
-pub(crate) const DROP_TABLES: &str = "DROP TRIGGER IF EXISTS memory_projection_memory_items_insert; DROP TRIGGER IF EXISTS memory_projection_memory_items_update; DROP TRIGGER IF EXISTS memory_projection_memory_items_delete; DROP TRIGGER IF EXISTS memory_projection_memory_revisions_insert; DROP TRIGGER IF EXISTS memory_projection_memory_revisions_update; DROP TRIGGER IF EXISTS memory_projection_memory_revisions_delete; DROP TRIGGER IF EXISTS memory_projection_memory_fts_content_insert;
+pub(crate) const DROP_TABLES: &str = "ALTER TABLE memory_sources DROP COLUMN words; DROP TRIGGER IF EXISTS memory_projection_memory_items_insert; DROP TRIGGER IF EXISTS memory_projection_memory_items_update; DROP TRIGGER IF EXISTS memory_projection_memory_items_delete; DROP TRIGGER IF EXISTS memory_projection_memory_revisions_insert; DROP TRIGGER IF EXISTS memory_projection_memory_revisions_update; DROP TRIGGER IF EXISTS memory_projection_memory_revisions_delete; DROP TRIGGER IF EXISTS memory_projection_memory_fts_content_insert;
 DROP TRIGGER IF EXISTS memory_projection_memory_fts_content_update;
 DROP TRIGGER IF EXISTS memory_projection_memory_fts_content_delete;
 DROP TABLE IF EXISTS receipt_contexts;
@@ -522,6 +522,7 @@ mod tests {
                         source_offsets: vec![7],
                         human_offsets: vec![7],
                         source_times: BTreeMap::from([(7, 90)]),
+                        source_words: Default::default(),
                         cited_paths: Vec::new(),
                         relation: CandidateRelation::New,
                     }],
@@ -1020,6 +1021,7 @@ mod tests {
                     source_offsets: vec![120],
                     human_offsets: vec![120],
                     source_times: BTreeMap::from([(120, 300)]),
+                    source_words: Default::default(),
                     cited_paths: Vec::new(),
                     relation: CandidateRelation::Supersedes {
                         target_id: card.id.clone(),
