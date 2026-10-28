@@ -39,3 +39,59 @@ export function pageTabs(page: Page): Promise<unknown> {
 export async function tabsBothSides(herdr: HerdrFixture, page: Page): Promise<unknown> {
   return { herdr: herdrTabs(herdr), page: await pageTabs(page) };
 }
+
+/** Failed requests one page keeps for its dump; past it only the count grows. */
+export const FAILED_REQUESTS_KEPT = 32;
+
+type FailedRequests = { kept: string[]; past: number };
+const failedRequests = new WeakMap<Page, FailedRequests>();
+
+/**
+ * Keeps the requests `page` makes that end without an answer, the first
+ * `FAILED_REQUESTS_KEPT` of them with Chromium's reason, for `pageSide` to
+ * report when a wait gives up. A lost request raises no page error, and an
+ * asset lost this way leaves the shell unmounted; a passing test prints
+ * nothing, and the record goes with the page when it closes. Paths only: the
+ * page address's hash carries the daemon's token.
+ */
+export function keepFailedRequests(page: Page): void {
+  if (failedRequests.has(page)) return;
+  const record: FailedRequests = { kept: [], past: 0 };
+  failedRequests.set(page, record);
+  page.on("requestfailed", (request) => {
+    if (record.kept.length < FAILED_REQUESTS_KEPT) record.kept.push(`${new URL(request.url()).pathname} ${request.failure()?.errorText ?? ""}`);
+    else record.past += 1;
+  });
+  page.once("close", () => failedRequests.delete(page));
+}
+
+/**
+ * How far the page got toward the shell: its load state, whether the app
+ * mounted and which screen it shows, the projects its sidebar lists, each
+ * request it made with the status it got (0 for one that never answered) and
+ * the failed requests `keepFailedRequests` kept, so a shell that never drew
+ * says whether an asset, the socket or the snapshot stopped it. Paths only:
+ * the address's hash carries the daemon's token.
+ */
+export async function pageSide(page: Page): Promise<unknown> {
+  const failed = failedRequests.get(page) ?? null;
+  const drawn = await page.evaluate(() => {
+    const requests = performance.getEntriesByType("resource").map((entry) => {
+      const timing = entry as PerformanceResourceTiming;
+      return { path: new URL(timing.name).pathname, status: timing.responseStatus, ms: Math.round(timing.duration) };
+    });
+    const navigation = performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming | undefined;
+    return {
+      path: location.pathname,
+      readyState: document.readyState,
+      document: navigation?.responseStatus ?? null,
+      mounted: (document.getElementById("root")?.childElementCount ?? 0) > 0,
+      center: document.querySelector("[data-center-screen]")?.getAttribute("data-center-screen") ?? null,
+      main: document.querySelector("[data-main-screen]") !== null,
+      connection: document.querySelector("[data-connection]")?.getAttribute("data-connection") ?? null,
+      projects: [...document.querySelectorAll("nav[data-sidebar] [data-project] [data-row-name]")].map((row) => row.textContent?.trim() ?? ""),
+      requests,
+    };
+  });
+  return { ...drawn, failed: failed && { kept: [...failed.kept], past: failed.past } };
+}

@@ -5,6 +5,7 @@
 import { expect, type Locator, type Page, type WebSocket } from "@playwright/test";
 import path from "node:path";
 import { chord } from "./chords";
+import { dumpOnFailure, keepFailedRequests, pageSide } from "./failure-dump";
 import { animationsFinished } from "./wait";
 
 /** What the English shell names the core's own machine on the system the fixture runs on (`systemMachineKey` in `web/src/screenMachine.ts`). */
@@ -22,6 +23,7 @@ export function countSent(page: Page, last: Map<string, Record<string, unknown>>
   // flow shows which side moved and when; Playwright prints it for a failure.
   const trace = process.env.HIDE_E2E_TRACE ? (line: string) => console.log(`[${Date.now()}] ${line}`) : null;
   page.on("pageerror", (error) => console.log(`[pageerror] ${error.message}`));
+  keepFailedRequests(page);
   page.on("websocket", (ws: WebSocket) => {
     ws.on("socketerror", (error) => console.log(`[ws error] ${error}`));
     ws.on("close", () => trace?.("ws closed"));
@@ -66,12 +68,12 @@ export function countSent(page: Page, last: Map<string, Record<string, unknown>>
 export async function enterWorkspace(page: Page, project?: string): Promise<void> {
   const main = page.locator("[data-main-screen]");
   const workspace = page.locator("[data-workspace-screen]");
-  await expect(main.or(workspace)).toBeVisible({ timeout: 20_000 });
+  await dumpOnFailure("shell start", () => pageSide(page), () => expect(main.or(workspace)).toBeVisible({ timeout: 20_000 }));
   if ((await workspace.count()) > 0) return;
   // A repository's row is `data-project-row`; a plain folder's is its one checkout's open button.
   const named = project ? { has: page.locator("[data-row-name]", { hasText: new RegExp(`^${project}$`) }) } : {};
   const row = page.locator("nav[data-sidebar] [data-project]", named).first().locator("[data-project-row], button[data-checkout]").first();
-  await (await showProjectRow(page, row)).click();
+  await (await dumpOnFailure("project row", () => pageSide(page), () => showProjectRow(page, row))).click();
   await expect(workspace).toBeVisible();
 }
 
