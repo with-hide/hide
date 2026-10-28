@@ -48,6 +48,9 @@ pub enum ErrorCode {
     /// A folder outside the host's home was named without the operator's
     /// confirmation of it; nothing there was read.
     NeedsConfirmation,
+    /// The folder belongs to a Git repository that holds the host's home, so
+    /// its project would be home; nothing was registered.
+    ProjectHoldsHome,
     Cancelled,
     Io,
 }
@@ -71,6 +74,7 @@ impl ErrorCode {
             Self::Busy => "busy",
             Self::HomeConflict => "home_conflict",
             Self::NeedsConfirmation => "needs_confirmation",
+            Self::ProjectHoldsHome => "project_holds_home",
             Self::Cancelled => "cancelled",
             Self::Io => "io",
         }

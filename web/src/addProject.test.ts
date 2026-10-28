@@ -160,5 +160,10 @@ describe("Add a project", () => {
       expect(refusalText("needs_confirmation", t)).toBe("This folder is outside your home folder. Add it as a project?");
       expect(refusalText("needs_confirmation", ko)).toBe("홈 밖 폴더예요. 이 폴더를 프로젝트로 추가할까요?");
     });
+
+    it("tells a folder in a repository holding home apart from home itself", () => {
+      expect(refusalText("project_holds_home", ko)).toBe("홈 폴더 전체를 담은 Git 저장소 안의 폴더라 프로젝트로 추가할 수 없어요.");
+      expect(refusalText("project_holds_home", ko)).not.toBe(refusalText("home_root", ko));
+    });
   });
 });

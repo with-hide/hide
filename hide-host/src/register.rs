@@ -11,7 +11,8 @@
 //!
 //! A folder under home is registered when it resolves to a directory still
 //! under home: a symlink under home that leads out of it is refused, even
-//! confirmed. Home and any folder holding it are never a project, and a
+//! confirmed. Home and any folder holding it are never a project, nor is a
+//! folder of a repository that holds home (dotfiles kept in `~/.git`), and a
 //! network share is no project's identity, whether it is written or a link
 //! leads there. A registration adds the project the folder belongs to (the
 //! repository's root, its main checkout's for a linked worktree), so a
@@ -48,6 +49,9 @@ pub enum Unregistrable {
     InvalidPath,
     /// Home itself, or a folder holding it.
     HomeRoot,
+    /// A folder in a Git repository that holds home (dotfiles kept in
+    /// `~/.git`): its project would be that repository, named here.
+    ProjectHoldsHome(PathBuf),
     /// Written under home and leads out of it, or a network share.
     OutsideHome,
     /// Outside home without the operator's confirmation: of the folder
@@ -122,7 +126,7 @@ pub fn judge_with(
         return Err(Unregistrable::OutsideHome);
     }
     if identity::holds(&root, home) {
-        return Err(Unregistrable::HomeRoot);
+        return Err(Unregistrable::ProjectHoldsHome(root));
     }
     // The operator confirms the project a registration adds: a confirmation
     // of anything else would add more than they were asked about.
@@ -149,6 +153,13 @@ pub fn check(path: &Path, confirmed: Option<&Path>, home: &Path) -> HostResult<R
             Unregistrable::HomeRoot => HostError::new(
                 ErrorCode::OutsideRoot,
                 format!("{shown} is the home folder {home} or holds it, so it cannot be a project; choose a folder inside it"),
+            ),
+            Unregistrable::ProjectHoldsHome(root) => HostError::new(
+                ErrorCode::ProjectHoldsHome,
+                format!(
+                    "{shown} is inside the Git repository {}, which holds the home folder {home}, so it cannot be a project; make the folder its own repository to add it",
+                    root.display()
+                ),
             ),
             Unregistrable::OutsideHome => HostError::new(
                 ErrorCode::OutsideRoot,

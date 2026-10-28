@@ -50,6 +50,41 @@ fn home_itself_a_folder_outside_it_and_a_file_are_refused() {
     assert_eq!(code(&dotdot), ErrorCode::InvalidPath);
 }
 
+/// A home kept as a Git repository (dotfiles in `~/.git`): a folder in it
+/// would add home as its project, which is refused with its own reason,
+/// while a folder that is its own repository there is still a project.
+#[test]
+fn a_folder_in_a_repository_holding_home_is_refused_as_that_repository() {
+    let home = tempfile::tempdir().unwrap();
+    let home = home.path().canonicalize().unwrap();
+    let init = |path: &Path| {
+        assert!(
+            Command::new("git")
+                .args(["init", "-q"])
+                .arg(path)
+                .status()
+                .unwrap()
+                .success()
+        );
+    };
+    init(&home);
+    let app = home.join("projects/app");
+    std::fs::create_dir_all(&app).unwrap();
+    let own = home.join("projects/own");
+    std::fs::create_dir_all(&own).unwrap();
+    init(&own);
+
+    let refused = check(&app, None, &home).unwrap_err();
+    assert_eq!(refused.code, ErrorCode::ProjectHoldsHome);
+    assert!(refused.message.contains("Git repository"), "{}", refused.message);
+    assert_eq!(
+        check(&app, Some(&app), &home).unwrap_err().code,
+        ErrorCode::ProjectHoldsHome
+    );
+    assert_eq!(check(&home, None, &home).unwrap_err().code, ErrorCode::OutsideRoot);
+    assert_eq!(check(&own, None, &home).unwrap().root, own.to_string_lossy());
+}
+
 /// PRD wsl-device B15, B18, B20: a folder outside the host's home is
 /// registered only with the operator's confirmation of that same path, which
 /// nothing remembers; it is not read before then.

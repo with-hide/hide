@@ -103,6 +103,9 @@ pub enum Refusal {
     /// The path is the home directory itself, or a folder holding it; a
     /// workspace is a subdirectory.
     HomeRoot,
+    /// The path is in a Git repository that holds home (dotfiles kept in
+    /// `~/.git`), so its project would be home.
+    ProjectHoldsHome,
     /// The path is written outside home and the request did not carry the
     /// operator's confirmation of it; nothing about it was read.
     NeedsConfirmation,
@@ -125,6 +128,7 @@ impl Refusal {
             Self::OutsideHome => "outside_home",
             Self::OutsideCheckout => "outside_checkout",
             Self::HomeRoot => "home_root",
+            Self::ProjectHoldsHome => "project_holds_home",
             Self::NeedsConfirmation => "needs_confirmation",
             Self::NotFound => "not_found",
             Self::NotADirectory => "not_a_directory",
@@ -886,7 +890,8 @@ impl Boundary {
     /// that one path as the request spells it, and whose project is that
     /// folder. A folder in a project outside home is answered with the
     /// question about the project's root (`Unregistrable::ConfirmProject`).
-    /// Home and a folder holding it are never a workspace (`home_root`), and
+    /// Home and a folder holding it are never a workspace (`home_root`), nor
+    /// is a folder of a repository that holds home (`project_holds_home`), and
     /// a network share, written or reached through a link, is no project's
     /// identity (PRD wsl-device D-15).
     pub fn resolve_registration(
@@ -925,6 +930,7 @@ impl Boundary {
             Judged::NeedsConfirmation(None) => Refusal::NeedsConfirmation.into(),
             Judged::InvalidPath => Refusal::InvalidPath.into(),
             Judged::HomeRoot => Refusal::HomeRoot.into(),
+            Judged::ProjectHoldsHome(_) => Refusal::ProjectHoldsHome.into(),
             Judged::OutsideHome => Refusal::OutsideHome.into(),
             Judged::NotFound => Refusal::NotFound.into(),
             Judged::NotADirectory => Refusal::NotADirectory.into(),
@@ -1638,6 +1644,28 @@ mod tests {
             f.boundary.resolve_registration(&written, Some(&written)),
             Ok(bundle.canonicalize().unwrap())
         );
+    }
+
+    #[test]
+    fn a_folder_in_a_repository_holding_home_is_refused_with_its_own_reason() {
+        let f = fixture();
+        assert!(
+            std::process::Command::new("git")
+                .args(["init", "-q"])
+                .arg(&f.home)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let alpha = s(&f.home.join("projects/alpha"));
+        for confirmed in [None, Some(alpha.as_str())] {
+            assert_eq!(
+                workspace(&f.boundary, &alpha, confirmed),
+                Err(Refusal::ProjectHoldsHome)
+            );
+        }
+        assert_eq!(Refusal::ProjectHoldsHome.code(), "project_holds_home");
+        assert_eq!(workspace(&f.boundary, "~", None), Err(Refusal::HomeRoot));
     }
 
     #[test]

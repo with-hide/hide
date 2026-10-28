@@ -1371,6 +1371,9 @@ pub(super) fn registration_refusal_kind(error: &LinkError) -> &'static str {
             hide_node_link::ErrorCode::NeedsConfirmation => {
                 "workspace.create_refused.needs_confirmation"
             }
+            hide_node_link::ErrorCode::ProjectHoldsHome => {
+                "workspace.create_refused.project_holds_home"
+            }
             _ => "workspace.create_refused",
         },
         LinkError::NotConnected(_) => "workspace.create_unavailable",

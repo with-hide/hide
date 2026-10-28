@@ -20,6 +20,7 @@ const KEYS = new Map<string, MessageKey>([
   ["workspace.create_refused.not_a_directory", "addProject.refusal.notADirectory"],
   ["workspace.create_refused.already_exists", "addProject.refusal.alreadyExists"],
   ["workspace.create_refused.outside_root", "coreError.project.outsideRoot"],
+  ["workspace.create_refused.project_holds_home", "addProject.refusal.projectHoldsHome"],
   ["workspace.pin_refused.needs_confirmation", "coreError.project.pinNeedsConfirmation"],
   ["workspace.create_local_only", "coreError.project.localOnly"],
   ["workspace.create_unconfirmed", "coreError.project.addUnconfirmed"],

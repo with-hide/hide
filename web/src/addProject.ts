@@ -95,6 +95,8 @@ export function refusalText(reason: string, t: TFunction<"translation">): string
       return t("addProject.refusal.outsideHome");
     case "home_root":
       return t("addProject.refusal.homeRoot");
+    case "project_holds_home":
+      return t("addProject.refusal.projectHoldsHome");
     case "invalid_path":
       return t("addProject.refusal.invalidPath");
     case "not_found":
