@@ -31,6 +31,10 @@
 # included, with the secrets of the `release` environment, which only a `v*`
 # tag can use (docs/BUILD.md). Pull requests and the nightly keep the ad-hoc
 # signature and reach no secret.
+#
+# Every call also builds the two Linux device helpers (`device-helpers.yml`),
+# which the Mac app's device bundles are made from and which a release
+# candidate hands the private publisher (docs/BUILD.md).
 name: package
 
 on:
@@ -80,7 +84,6 @@ permissions:
 
 jobs:
   helper-identity:
-    if: ${{ inputs.include-macos }}
     runs-on: ubuntu-latest
     outputs:
       source-sha: ${{ steps.identity.outputs.commit }}
@@ -106,7 +109,6 @@ jobs:
 
   device-helpers:
     needs: helper-identity
-    if: ${{ inputs.include-macos }}
     uses: ./.github/workflows/device-helpers.yml
     with:
       source-sha: ${{ needs.helper-identity.outputs.source-sha }}
