@@ -712,6 +712,14 @@ pub struct SessionRecordSnapshot {
     pub loading: bool,
     pub failure: Option<String>,
     pub record: Option<SessionRecord>,
+    /// The Views the record's session and its descendants opened, the one
+    /// looked at last first, at most `RECORD_VIEWS` (PRD
+    /// session-docs-and-assistant D-40). The runtime keeps them with the
+    /// View lists; the ledger never reads them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub views: Vec<crate::model::RecordViewSnapshot>,
+    /// The Views past that cap, counted so the gallery's `+N` stays exact.
+    pub views_omitted: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]

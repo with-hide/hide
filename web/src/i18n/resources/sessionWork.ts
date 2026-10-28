@@ -59,6 +59,8 @@ const words = {
   "record.repeated": ["Sent {{count}} times", "{{count}}번 보냄", "{{count}}回送信", "发送了 {{count}} 次"],
   "record.goalCommand": ["Set with /goal", "/goal로 정함", "/goal で設定", "用 /goal 设定"],
   "record.artifacts": ["Outputs", "결과물", "成果物", "产出"],
+  "record.galleryMore": ["Show {{count}} more", "{{count}}개 더 보기", "あと{{count}}件を表示", "再显示 {{count}} 个"],
+  "record.viewsOmitted": ["{{count}} older Views are not shown", "오래된 View {{count}}개는 보이지 않음", "古いビュー {{count}}件は表示されません", "更早的 {{count}} 个视图未显示"],
   "record.thisSession": ["This session", "이 세션", "このセッション", "本会话"],
   "record.settledPrs": ["{{count}} merged or closed", "끝난 PR {{count}}개", "終わったPR {{count}}件", "已结束的 PR {{count}} 个"],
   "record.allMerged": ["all merged", "전부 머지됨", "すべてマージ済み", "全部已合并"],
