@@ -168,6 +168,17 @@ export async function taskRow(page: Page, pane: string, goal: string): Promise<L
   return row;
 }
 
+/**
+ * The boxes of a dependency graph's cards under `scope`, once the layout
+ * worker has placed them: until then the cards stand in plain layers, and the
+ * placed drawing mounts them anew, so a box read in between is of a card
+ * already gone.
+ */
+export async function placedBoxes(scope: Locator, ...cards: string[]): Promise<{ x: number; y: number; width: number; height: number }[]> {
+  await expect(scope.locator("[data-dependency-graph]")).toHaveAttribute("data-dependency-layout", "layered");
+  return Promise.all(cards.map(async (card) => (await scope.locator(card).boundingBox())!));
+}
+
 /** Expands the lane over the agents, or brings it back, from the rail's `…` menu (PRD lane-two-columns B20). */
 export async function chooseExpand(page: Page): Promise<void> {
   await page.locator("[data-lane-more]").click();

@@ -12,7 +12,7 @@ import path from "node:path";
 import { agentPane, type HideAnswer } from "./agent-pane";
 import { startHerdr } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { enterWorkspace, screenshot } from "./wire";
+import { enterWorkspace, placedBoxes, screenshot } from "./wire";
 
 test.describe.configure({ timeout: 120_000 });
 
@@ -97,8 +97,7 @@ test("a plan put up for review asks on the pane, the agent's approval clears it,
     await expect(map.locator('[data-plan-graph="large"] [data-plan-step]')).toHaveCount(4);
     await expect(map.locator("[data-plan-banner]")).toHaveCount(0);
     // The step that waits on another is drawn below it (down flow).
-    const core = (await map.locator('[data-plan-step="core"]').boundingBox())!;
-    const web = (await map.locator('[data-plan-step="web"]').boundingBox())!;
+    const [core, web] = await placedBoxes(map, '[data-plan-step="core"]', '[data-plan-step="web"]');
     expect(web.y).toBeGreaterThan(core.y + core.height);
     await screenshot(page, "plan-map-slot");
 

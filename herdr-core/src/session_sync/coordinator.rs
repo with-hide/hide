@@ -1505,10 +1505,12 @@ fn publish_replica(
         .as_ref()
         .map(|cache| cache.built_at)
         .unwrap_or_else(Instant::now);
-    let previous = catalog_cache
-        .as_ref()
-        .map(|cache| Arc::clone(&cache.paths))
-        .unwrap_or(runtime_paths);
+    let previous = paths_to_build_from(
+        catalog_cache.as_ref().map(|cache| Arc::clone(&cache.paths)),
+        runtime_paths,
+        &node,
+        &registrations,
+    );
     let paths = match answer {
         Some(Ok(paths)) => {
             built_at = Instant::now();
@@ -1648,6 +1650,30 @@ fn publish_replica(
         }
     }
     true
+}
+
+/// The path answers a catalog is built from while the node's answer to this
+/// round's paths is pending: the coordinator's last ones, unless they cannot
+/// place a registration of this machine that the runtime's can. A creation
+/// installs its own catalog and paths (`ingest_workspace_creation`); building
+/// from older answers would draw the new project at its bare path, without
+/// the tabs of the repository around it, until the node answered (issue 270).
+fn paths_to_build_from(
+    cached: Option<Arc<workspace::PathIndex>>,
+    runtime: Arc<workspace::PathIndex>,
+    node: &crate::node::NodeId,
+    registrations: &[crate::model::WorkspaceRegistration],
+) -> Arc<workspace::PathIndex> {
+    let answers = |paths: &workspace::PathIndex| {
+        registrations
+            .iter()
+            .filter(|registration| *node == registration.device_id)
+            .all(|registration| paths.knows(&registration.path))
+    };
+    match cached {
+        Some(cached) if answers(&cached) || !answers(&runtime) => cached,
+        _ => runtime,
+    }
 }
 
 /// The worker that reads Herdr's focus for a stream move, outside the runtime
@@ -3980,3 +4006,49 @@ mod window_reads_tests {
 #[cfg(test)]
 #[path = "coordinator_fence_tests.rs"]
 mod coordinator_fence_tests;
+
+#[cfg(test)]
+mod catalog_path_tests {
+    use super::*;
+    use crate::node::test_node;
+
+    #[test]
+    fn a_pending_answer_builds_from_the_paths_that_place_every_registration() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("fixture");
+        let registered = repo.join("registered");
+        std::fs::create_dir_all(&registered).unwrap();
+        let repo = repo.to_string_lossy().into_owned();
+        let registered = registered.to_string_lossy().into_owned();
+        let node = test_node();
+        let registrations =
+            vec![workspace::registration(&registered, "registered", node.as_str()).unwrap()];
+        let before = Arc::new(workspace::paths_here([repo.clone()]));
+        let created = Arc::new(workspace::paths_here([repo.clone(), registered.clone()]));
+
+        // The creation installed answers for its project; the coordinator's last ones predate it.
+        let chosen = paths_to_build_from(
+            Some(Arc::clone(&before)),
+            Arc::clone(&created),
+            &node,
+            &registrations,
+        );
+        assert!(Arc::ptr_eq(&chosen, &created));
+        // Answers that already place every registration stay the coordinator's own.
+        let chosen = paths_to_build_from(
+            Some(Arc::clone(&created)),
+            Arc::clone(&before),
+            &node,
+            &registrations,
+        );
+        assert!(Arc::ptr_eq(&chosen, &created));
+        // When neither places it, nothing newer exists: the last answers stand.
+        let chosen = paths_to_build_from(
+            Some(Arc::clone(&before)),
+            Arc::new(workspace::paths_here([repo])),
+            &node,
+            &registrations,
+        );
+        assert!(Arc::ptr_eq(&chosen, &before));
+    }
+}

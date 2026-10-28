@@ -20,7 +20,7 @@ export async function dumpOnFailure<T>(label: string, read: () => unknown | Prom
 }
 
 /** Every Herdr workspace with the ids of its tabs, as the fixture's Herdr answers now. */
-export function herdrTabs(herdr: HerdrFixture): unknown {
+export function herdrTabs(herdr: HerdrFixture): { workspace_id: string; label: string; tabs: string[] }[] {
   const listed = herdr.run(["workspace", "list"]) as { result: { workspaces: { workspace_id: string; label: string }[] } };
   return listed.result.workspaces.map(({ workspace_id, label }) => {
     const tabs = herdr.run(["tab", "list", "--workspace", workspace_id]) as { result: { tabs: { tab_id: string }[] } };
