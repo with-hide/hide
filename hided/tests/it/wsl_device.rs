@@ -196,6 +196,27 @@ fn herdr(transport: &dyn DialedTransport, method: &str, params: Value) -> Value 
     .unwrap_or_else(|error| panic!("{method} through the link: {error}"))
 }
 
+/// Every pane id a Herdr answer names, in order.
+fn panes(value: &Value) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut stack = vec![value];
+    while let Some(value) = stack.pop() {
+        match value {
+            Value::Object(map) => {
+                if let Some(pane) = map.get("pane_id").and_then(Value::as_str) {
+                    found.push(pane.to_owned());
+                }
+                stack.extend(map.values());
+            }
+            Value::Array(values) => stack.extend(values),
+            _ => {}
+        }
+    }
+    found.sort();
+    found.dedup();
+    found
+}
+
 fn pane_of(value: &Value) -> Option<&str> {
     match value {
         Value::Object(map) => map
@@ -314,6 +335,33 @@ fn a_wsl_distribution_connects_works_and_ends_with_its_link() {
     )
     .unwrap();
     assert_eq!(bytes["data"], "aGVsbG8KbW9yZQo=", "{bytes}");
+    // A file saved through the link is on the distribution's own disk.
+    let document: hide_node_link::document::Document = call_as(
+        &*link,
+        Call::OpenDocument {
+            root: root.clone(),
+            path: "a.txt".to_owned(),
+        },
+        TIMEOUT,
+    )
+    .unwrap();
+    let revision = document.revision.expect("an editable revision");
+    let saved: hide_node_link::save::Saved = call_as(
+        &*link,
+        Call::Save {
+            root: root.clone(),
+            path: "a.txt".to_owned(),
+            contents: "saved through the link\n".to_owned(),
+            expected_revision: revision.clone(),
+        },
+        TIMEOUT,
+    )
+    .unwrap();
+    assert_ne!(saved.revision, revision);
+    assert_eq!(
+        as_root(&distro, &format!("cat '{project}/a.txt'")),
+        "saved through the link\n"
+    );
     let changes: Value = call_as(
         &*link,
         Call::Changes {
@@ -367,6 +415,7 @@ fn a_wsl_distribution_connects_works_and_ends_with_its_link() {
             .then_some(())
     });
 
+    let panes_before = herdr(&*transport, "session.snapshot", json!({}));
     // B27: the link's end ends its helper inside WSL; Herdr and the pane stay.
     link.close("the test ends the link");
     let reason = closed
@@ -397,6 +446,65 @@ fn a_wsl_distribution_connects_works_and_ends_with_its_link() {
     assert!(
         snapshot.to_string().contains(&pane),
         "the pane outlived the link"
+    );
+    assert_eq!(
+        panes(&snapshot),
+        panes(&panes_before),
+        "the reconnection made no pane"
+    );
+    // B26: the reconnection replays no input: the line typed once over the
+    // first link ran once, and a line typed over this link runs once.
+    let pane_text = || {
+        herdr(
+            &*transport,
+            "pane.read",
+            json!({"pane_id": pane, "source": "recent", "lines": 200}),
+        )["read"]["text"]
+            .as_str()
+            .expect("the pane's text")
+            .to_owned()
+    };
+    assert_eq!(
+        pane_text().matches("wsl_answered").count(),
+        1,
+        "{}",
+        pane_text()
+    );
+    sink.reports.lock().unwrap().clear();
+    let terminals = again
+        .node
+        .terminals
+        .as_ref()
+        .expect("terminals ride the new link");
+    terminals.control(TerminalControl::Attach {
+        pane: pane.clone(),
+        size: Some(GridSize { rows: 24, cols: 80 }),
+        manual: false,
+    });
+    wait_for("the pane's terminal over the new link", || {
+        sink.reports
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|report| matches!(report, TerminalReport::State { pane: reported, state } if reported == &pane && state.state == "controlling"))
+            .then_some(())
+    });
+    terminals.key(
+        KeyTarget::Pane(pane.clone()),
+        b"printf 'wsl_%s\\n' again\r".to_vec(),
+        2,
+    );
+    wait_for("the new link's command output", || {
+        pane_text().contains("wsl_again").then_some(())
+    });
+    let text = pane_text();
+    assert_eq!(
+        (
+            text.matches("wsl_answered").count(),
+            text.matches("wsl_again").count()
+        ),
+        (1, 1),
+        "{text}"
     );
     again.node.host.close("the test ends the second link");
     drop(again);
