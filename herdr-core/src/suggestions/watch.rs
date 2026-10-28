@@ -317,6 +317,7 @@ mod tests {
                 always: false,
                 head: None,
                 improvement: None,
+                said: None,
             },
         }
     }
@@ -338,6 +339,7 @@ mod tests {
                 always: false,
                 head: Some(head.into()),
                 improvement: None,
+                said: None,
             },
         }
     }

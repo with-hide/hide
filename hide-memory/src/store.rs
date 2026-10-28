@@ -252,6 +252,9 @@ pub struct ApplySummary {
     pub merges_refused: Vec<&'static str>,
     /// Repeated-request sources left out at a cap (B33).
     pub repeats_left_out: usize,
+    /// The meanings this batch kept a repeated request under, for the
+    /// 제안 tab to be told (D-14).
+    pub repeated: Vec<String>,
 }
 
 /// What a write of analyzed cards adds to the candidates themselves.
@@ -2067,7 +2070,8 @@ impl MemoryStore {
                 Err(reason) => summary.merges_refused.push(reason),
             }
         }
-        summary.repeats_left_out = repeats::record(&transaction, batch, &options.repeats)?;
+        (summary.repeats_left_out, summary.repeated) =
+            repeats::record(&transaction, batch, &options.repeats)?;
         if !summary.evicted.is_empty() {
             summary.evictions_purged =
                 purge_evicted(&transaction, &batch.project_id, evicted_limit)?;

@@ -37,6 +37,35 @@ pub struct ProjectSuggestionsSnapshot {
     /// then the folded 반영됨.
     pub rows: Vec<SuggestionRowSnapshot>,
     pub counts: SuggestionCountsSnapshot,
+    /// The Hide global instruction every Hide pane session is given (PRD
+    /// memory-self-improve B5); none until the worker read it.
+    pub global: Option<SuggestionGlobalSnapshot>,
+}
+
+/// The Hide global instruction, as the 제안 tab shows it: its file, which
+/// `파일 열기` opens, and why sessions are not given it when they are not.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SuggestionGlobalSnapshot {
+    pub path: String,
+    pub unusable: Option<crate::global_instruction::Unusable>,
+}
+
+/// A row whose fix is a line of the Hide global instruction (outcome
+/// `local`, D-07): the line, the preview its press is checked against, and
+/// what the last press did.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SuggestionLocalSnapshot {
+    pub line: String,
+    /// What `apply` sends back as `preview`, so a file changed since is
+    /// refused with a new one (B8); none when the line cannot be written
+    /// now (`failure` says why) or is already in the file.
+    pub preview: Option<String>,
+    /// The file already has the line, by an earlier fix or by hand.
+    pub present: bool,
+    pub applied_at_unix_ms: Option<u64>,
+    /// Said again in a session that was given it, so offered again (B11).
+    pub recurred: bool,
+    pub failure: Option<crate::suggestions::lifecycle::LocalFailure>,
 }
 
 /// Why a Project's suggestions cannot be read; the reason is in the
@@ -220,6 +249,11 @@ pub struct SuggestionRowSnapshot {
     pub evidence: Vec<SuggestionEvidenceSnapshot>,
     pub attempt: Option<SuggestionAttemptSnapshot>,
     pub watch: Option<SuggestionWatchSnapshot>,
+    /// A global instruction line's own state; none for other rows.
+    pub local: Option<SuggestionLocalSnapshot>,
+    /// The row's evidence was opened and none of its words could be read,
+    /// so it cannot be applied (B7).
+    pub evidence_unconfirmed: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -263,6 +297,15 @@ pub struct SuggestionEvidenceSnapshot {
     pub url: Option<String>,
     pub at_unix_ms: u64,
     pub gone: bool,
+    /// Where the operator's words are in the session, which an excerpt
+    /// reads; the shell never sees it.
+    #[serde(skip)]
+    pub offset: Option<u64>,
+    /// The words, masked and cut, once the row's evidence was opened (PRD
+    /// memory-self-improve B7).
+    pub excerpt: Option<String>,
+    /// They could not be read again (`근거 확인 불가`).
+    pub unreadable: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]

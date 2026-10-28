@@ -922,7 +922,7 @@ fn original_words(
 
 /// The conversation event a card's source names, read again from the
 /// session the node holds, or none when it cannot be read.
-fn source_event(
+pub(super) fn source_event(
     store: &MemoryStore,
     node: &dyn NodeLink,
     project_id: &str,

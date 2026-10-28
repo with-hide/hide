@@ -102,6 +102,8 @@ fn the_tab_shows_the_workers_read_with_hide_ai_and_github_laid_on_it() {
         evidence: Vec::new(),
         attempt: None,
         watch: None,
+        local: None,
+        evidence_unconfirmed: false,
     };
     runtime.ingest_suggestions_read(
         workspace.clone(),
@@ -182,6 +184,8 @@ fn the_tab_shows_the_workers_read_with_hide_ai_and_github_laid_on_it() {
             (Signal::Improvement, None),
             (Signal::CheckFailed, Some(SignalUnavailable::NoGithub)),
             (Signal::ChangeRequest, Some(SignalUnavailable::NoGithub)),
+            (Signal::RepeatedRequest, Some(SignalUnavailable::MemoryOff)),
+            (Signal::MemoryIgnored, Some(SignalUnavailable::MemoryOff)),
         ]
     );
 

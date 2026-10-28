@@ -15,7 +15,7 @@ use super::analysis::{
 };
 use super::apply::{self as applying, ApplyOrder, FollowedAttempt};
 use super::ledger::{Observation, RecordIndex, SessionRef, SignalGroup};
-use super::lifecycle::{AttemptMove, AttemptPhase};
+use super::lifecycle::{AttemptMove, AttemptPhase, LocalFailure};
 use super::notebook::{Line, LineId, Notebook, NotebookEdit, Outcome, Stage, Strike, StruckBy};
 use super::policy::{self, Quantity};
 use super::read::{self, ReadInput};
@@ -23,12 +23,13 @@ use super::scoring;
 use super::settings::ApplyMode;
 use super::store::{ProjectLocation, SuggestionStore};
 use super::watch::{self as watching, WatchedLine};
+use crate::global_instruction;
 use crate::model::ProjectSuggestionsSnapshot;
 use crate::node::NodeId;
 use crate::node_access::NodeLink;
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::thread;
@@ -114,6 +115,9 @@ pub(crate) enum LineAction {
     Apply,
     /// `다시 시도` on an attempt that failed (B12).
     Retry,
+    /// `되돌리기` on a line Hide wrote into its global instruction: only that
+    /// line comes out (PRD memory-self-improve D-30, B9).
+    Revert,
 }
 
 pub(crate) enum Command {
@@ -140,6 +144,9 @@ pub(crate) enum Command {
         project: ProjectRef,
         line: LineId,
         action: LineAction,
+        /// The global instruction preview the operator pressed on, which the
+        /// file must still match (B8).
+        seen: Option<String>,
     },
     IntroSeen,
     /// The app opened, the device woke or the screen unlocked (B6).
@@ -495,7 +502,15 @@ impl Worker {
                 }
             }
             Command::ObserveProject { project_id, facts } => {
-                self.observe(&project_id, facts, sink);
+                let memory = facts.iter().any(|fact| fact.signal.tag_grouped());
+                if self.observe(&project_id, facts, sink) && memory {
+                    // Memory named what was said: it is lined now, and a
+                    // line Hide wrote that was said again is offered again.
+                    self.group_by_tag(&project_id, true);
+                    self.recur(&project_id);
+                    self.raise(&project_id);
+                    self.publish_if_opened(&project_id, sink);
+                }
             }
             Command::Settings { project, change } => {
                 let Some(id) = self.resolve(&project, sink) else {
@@ -511,15 +526,20 @@ impl Worker {
                 project,
                 line,
                 action,
+                seen,
             } => {
                 let Some(id) = self.resolve(&project, sink) else {
                     return;
                 };
                 self.locate(&id, &project);
                 match action {
+                    LineAction::Apply | LineAction::Retry if self.is_local(&id, line) => {
+                        self.apply_local(&id, line, seen.as_deref());
+                    }
                     LineAction::Apply | LineAction::Retry => {
                         self.apply_line(&id, line, action == LineAction::Retry, false, sink);
                     }
+                    LineAction::Revert => self.revert_local(&id, line),
                     LineAction::Dismiss | LineAction::Restore => self.act(&id, line, action),
                 }
                 self.raise(&id);
@@ -734,7 +754,7 @@ impl Worker {
         crate::diagnostic!(json!({
             "component": "suggestions", "kind": "apply.started",
             "project_id": project, "line": line_id.0, "auto": auto, "retry": retry,
-            "outcome": match outcome { Outcome::Pr => "pr", Outcome::Issue => "issue" },
+            "outcome": match outcome { Outcome::Pr => "pr", Outcome::Issue => "issue", Outcome::Local => "local" },
         }));
         sink.apply(ApplyOrder {
             project_id: project.to_owned(),
@@ -1124,8 +1144,8 @@ impl Worker {
                 }
                 line.struck = None;
             }
-            // Begun by `apply_line`, never here.
-            LineAction::Apply | LineAction::Retry => return,
+            // Begun by `apply_line` or `apply_local`, never here.
+            LineAction::Apply | LineAction::Retry | LineAction::Revert => return,
         }
         line.updated_at_unix_ms = now;
         if let Err(code) = store.save_line(project, &line, &life) {
@@ -1436,7 +1456,7 @@ impl Worker {
             AnalysisEnd::Partial(reason) => reason.as_str(),
         };
         if failed && edits == 0 {
-            self.group_by_tag(project);
+            self.group_by_tag(project, false);
             ended = "not_investigated";
         }
         crate::diagnostic!(json!({
@@ -1462,8 +1482,9 @@ impl Worker {
     }
 
     /// The deterministic grouping over the store directly, for a run that
-    /// could not write.
-    fn group_by_tag(&mut self, project: &str) {
+    /// could not write, or, with `memory_only`, for the records Memory named
+    /// (PRD memory-self-improve D-37), which no investigation regroups.
+    fn group_by_tag(&mut self, project: &str, memory_only: bool) {
         let now = self.now();
         let Ok(store) = self.store.as_mut() else {
             return;
@@ -1472,10 +1493,15 @@ impl Worker {
             let index = store.index(project, &notebook)?;
             Ok((notebook, index))
         });
-        let (notebook, index) = match loaded {
+        let (notebook, mut index) = match loaded {
             Ok(loaded) => loaded,
             Err(code) => return log_store("fallback", &code),
         };
+        if memory_only {
+            for entry in &mut index.entries {
+                entry.fresh &= entry.signal.tag_grouped();
+            }
+        }
         let input = AnalysisInput {
             project_id: project.to_owned(),
             records: index,
@@ -1494,6 +1520,212 @@ impl Worker {
             now,
         };
         TagGrouping.run(&input, &mut pen);
+    }
+
+    /// The core's state folder, where the Hide global instruction is.
+    fn state_dir(&self) -> PathBuf {
+        self.options
+            .store
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_default()
+    }
+
+    /// Whether `line` is fixed in the Hide global instruction.
+    fn is_local(&mut self, project: &str, line: LineId) -> bool {
+        let Ok(store) = self.store.as_mut() else {
+            return false;
+        };
+        store.notebook(project).is_ok_and(|(notebook, _)| {
+            notebook
+                .line(line)
+                .is_some_and(|line| line.outcome == Some(Outcome::Local))
+        })
+    }
+
+    /// Writes a new suggestion's line into the Hide global instruction on the
+    /// operator's press, whatever the apply mode, with no GitHub (PRD
+    /// memory-self-improve D-07, D-33, B8, B10, B29). The same press twice,
+    /// or again after a write whose answer was lost, writes it once; a line
+    /// already in the file is not written again.
+    fn apply_local(&mut self, project: &str, line_id: LineId, seen: Option<&str>) {
+        let now = self.now();
+        let state_dir = self.state_dir();
+        let Ok(store) = self.store.as_mut() else {
+            return;
+        };
+        let loaded = store.notebook(project).and_then(|(notebook, lives)| {
+            let index = store.index(project, &notebook)?;
+            Ok((notebook, lives, index))
+        });
+        let (notebook, lives, index) = match loaded {
+            Ok(loaded) => loaded,
+            Err(code) => return log_store("apply_local", &code),
+        };
+        let Some(mut line) = notebook.line(line_id).cloned() else {
+            return;
+        };
+        if line.stage != Stage::Suggested || line.struck.is_some() {
+            return;
+        }
+        let mut life = lives.get(&line_id).cloned().unwrap_or_default();
+        let Some(text) = read::local_line(&line, &index) else {
+            return;
+        };
+        let local = life.local.get_or_insert_with(Default::default);
+        let written = match global_instruction::holds(&state_dir, &text) {
+            Ok(true) => Ok(()),
+            Ok(false) => {
+                global_instruction::preview(&state_dir, &text).and_then(|preview| match seen {
+                    Some(seen) if seen != preview.before => {
+                        Err(global_instruction::Refusal::Changed { preview })
+                    }
+                    _ => global_instruction::apply(&state_dir, &preview),
+                })
+            }
+            Err(unusable) => Err(global_instruction::Refusal::Unusable { unusable }),
+        };
+        let outcome = match written {
+            Ok(()) => {
+                local.line = Some(text);
+                local.applied_at_unix_ms = Some(now);
+                local.recurred_at_unix_ms = None;
+                local.failure = None;
+                line.stage = Stage::Settled;
+                "applied"
+            }
+            Err(refusal) => {
+                let failure = LocalFailure::of(&refusal);
+                local.failure = Some(failure);
+                match failure {
+                    LocalFailure::NoRoom => "no_room",
+                    LocalFailure::TooLarge => "too_large",
+                    LocalFailure::Unreadable => "unreadable",
+                    LocalFailure::Changed => "changed",
+                    LocalFailure::Edited => "edited",
+                    LocalFailure::WriteFailed => "write_failed",
+                    LocalFailure::EvidenceUnconfirmed => "evidence_unconfirmed",
+                }
+            }
+        };
+        line.updated_at_unix_ms = now;
+        if let Err(code) = store.save_line(project, &line, &life) {
+            return log_store("apply_local", &code);
+        }
+        crate::diagnostic!(json!({
+            "component": "suggestions", "kind": "global_instruction.applied",
+            "project_id": project, "line": line_id.0, "outcome": outcome,
+        }));
+    }
+
+    /// Takes the line Hide wrote back out of its global instruction, and only
+    /// it (D-30, B9): the row returns to 고를 것. A line the operator edited
+    /// or removed is left as it is and the row says so; a second press
+    /// changes nothing.
+    fn revert_local(&mut self, project: &str, line_id: LineId) {
+        let now = self.now();
+        let state_dir = self.state_dir();
+        let Ok(store) = self.store.as_mut() else {
+            return;
+        };
+        let (notebook, lives) = match store.notebook(project) {
+            Ok(loaded) => loaded,
+            Err(code) => return log_store("revert_local", &code),
+        };
+        let Some(mut line) = notebook.line(line_id).cloned() else {
+            return;
+        };
+        let mut life = lives.get(&line_id).cloned().unwrap_or_default();
+        let Some(local) = life.local.as_mut() else {
+            return;
+        };
+        let Some(text) = local.line.clone().filter(|_| line.stage == Stage::Settled) else {
+            return;
+        };
+        let outcome = match global_instruction::revert(&state_dir, &text) {
+            Ok(()) => {
+                local.line = None;
+                local.applied_at_unix_ms = None;
+                local.recurred_at_unix_ms = None;
+                local.failure = None;
+                line.stage = Stage::Suggested;
+                "reverted"
+            }
+            Err(refusal) => {
+                local.failure = Some(LocalFailure::of(&refusal));
+                "refused"
+            }
+        };
+        line.updated_at_unix_ms = now;
+        if let Err(code) = store.save_line(project, &line, &life) {
+            return log_store("revert_local", &code);
+        }
+        crate::diagnostic!(json!({
+            "component": "suggestions", "kind": "global_instruction.reverted",
+            "project_id": project, "line": line_id.0, "outcome": outcome,
+        }));
+    }
+
+    /// Offers a global instruction line again when the operator said it in a
+    /// session that began after Hide wrote it, so was given it (D-33, B11).
+    /// Nothing climbs to a check or a hook by itself.
+    fn recur(&mut self, project: &str) {
+        let now = self.now();
+        let Ok(store) = self.store.as_mut() else {
+            return;
+        };
+        let loaded = store.notebook(project).and_then(|(notebook, lives)| {
+            let index = store.index(project, &notebook)?;
+            Ok((notebook, lives, index))
+        });
+        let (notebook, lives, index) = match loaded {
+            Ok(loaded) => loaded,
+            Err(code) => return log_store("recur", &code),
+        };
+        for line in &notebook.lines {
+            if line.stage != Stage::Settled || line.outcome != Some(Outcome::Local) {
+                continue;
+            }
+            let Some(mut life) = lives.get(&line.id).cloned() else {
+                continue;
+            };
+            let Some(applied) = life
+                .local
+                .as_ref()
+                .and_then(|local| local.applied_at_unix_ms)
+            else {
+                continue;
+            };
+            let given = line
+                .records
+                .iter()
+                .filter_map(|id| index.get(*id))
+                .any(|record| {
+                    record.signal.tag_grouped()
+                        && record.at_unix_ms > applied
+                        && record
+                            .said
+                            .as_ref()
+                            .and_then(|said| said.session_started_at_unix_ms)
+                            .is_some_and(|started| started > applied)
+                });
+            if !given {
+                continue;
+            }
+            let mut line = line.clone();
+            line.stage = Stage::Suggested;
+            line.updated_at_unix_ms = now;
+            if let Some(local) = life.local.as_mut() {
+                local.recurred_at_unix_ms = Some(now);
+            }
+            if let Err(code) = store.save_line(project, &line, &life) {
+                return log_store("recur", &code);
+            }
+            crate::diagnostic!(json!({
+                "component": "suggestions", "kind": "global_instruction.recurred",
+                "project_id": project, "line": line.id.0,
+            }));
+        }
     }
 
     fn publish_if_opened(&mut self, project: &str, sink: &impl Sink) {
@@ -1523,7 +1755,9 @@ impl Worker {
                 let intro_seen = store.meta(INTRO_SEEN)?.is_some();
                 let sources =
                     evidence_sources(store, project, &state, &notebook, &lives, &index, sink)?;
+                let global = read::GlobalRead::of(&self.state_dir());
                 Ok::<_, String>(read::project(&ReadInput {
+                    global: &global,
                     workspace_id: &workspace_id,
                     state: &state,
                     notebook: &notebook,
@@ -1879,6 +2113,7 @@ mod tests {
                         always: false,
                         head: None,
                         improvement: None,
+                        said: None,
                     })
                     .collect(),
             });
@@ -1905,6 +2140,7 @@ mod tests {
                         always: false,
                         head: None,
                         improvement: Some(*kind),
+                        said: None,
                     })
                     .collect(),
             });
@@ -1922,6 +2158,105 @@ mod tests {
                 .fetch_add(policy::WAKE_DELAY_MS + 1, Ordering::SeqCst);
             self.send(Command::IntroSeen);
         }
+    }
+
+    /// The operator saying `meaning` at `offset` in `session`, begun at
+    /// `started`, as Memory's analysis hands it.
+    fn said(session: &str, offset: u64, at: u64, started: u64) -> Observation {
+        Observation {
+            signal: crate::suggestions::ledger::Signal::RepeatedRequest,
+            tag: "답은 한국어로".into(),
+            session: Some(SessionRef {
+                agent: "claude".into(),
+                id: session.into(),
+            }),
+            pr: None,
+            checkout: Some("/repo".into()),
+            at_unix_ms: at,
+            always: false,
+            head: None,
+            improvement: None,
+            said: Some(crate::suggestions::ledger::Said {
+                personal: true,
+                procedure: false,
+                line: "Answer the operator in Korean.".into(),
+                offset,
+                words: Some(format!("{session}-{offset}")),
+                session_started_at_unix_ms: Some(started),
+            }),
+        }
+    }
+
+    /// PRD memory-self-improve B6, B8, B9, B11, B13: a personal request said
+    /// in two sessions with one more rises at once as a global instruction
+    /// line with no GitHub; the press writes it once, Undo takes only it out
+    /// and returns the row, and saying it again in a session begun after it
+    /// was written offers it again.
+    #[test]
+    fn a_repeated_personal_request_is_written_into_the_global_instruction_and_offered_again() {
+        let fixture = Fixture::new();
+        let state_dir = fixture.store.parent().unwrap().to_owned();
+        std::fs::write(
+            hide_kit::layout::global_instruction(&state_dir),
+            "My own line.\n",
+        )
+        .unwrap();
+        fixture.open();
+        let observe = |facts| {
+            fixture.send(Command::ObserveProject {
+                project_id: "project/repo".into(),
+                facts,
+            })
+        };
+        observe(vec![said("a", 1, START - 3, START - 10)]);
+        observe(vec![
+            said("a", 4, START - 2, START - 10),
+            said("b", 2, START - 1, START - 5),
+            // A re-read of the same words is the same thing said.
+            said("b", 2, START - 1, START - 5),
+        ]);
+        let read = fixture.read_until(|read| !chosen(read).is_empty());
+        let row = &read.rows[0];
+        assert_eq!(row.outcome, Outcome::Local);
+        assert_eq!(row.hold, None, "no GitHub is needed");
+        let local = row.local.as_ref().unwrap();
+        assert_eq!(local.line, "Answer the operator in Korean.");
+        let preview = local.preview.clone().unwrap();
+        let line = read::line_of_row(&row.id).unwrap();
+        let act = |action, seen: Option<String>| {
+            fixture.send(Command::Action {
+                project: project(),
+                line,
+                action,
+                seen,
+            })
+        };
+        act(LineAction::Apply, Some(preview.clone()));
+        act(LineAction::Apply, Some(preview));
+        let read = fixture.read_until(|read| read.rows[0].group == SuggestionGroup::Applied);
+        assert!(read.rows[0].local.as_ref().unwrap().present);
+        let file = || std::fs::read_to_string(hide_kit::layout::global_instruction(&state_dir));
+        assert_eq!(
+            file().unwrap(),
+            "My own line.\nAnswer the operator in Korean.\n",
+            "two presses write it once, and the operator's line stays"
+        );
+        act(LineAction::Revert, None);
+        act(LineAction::Revert, None);
+        fixture.read_until(|read| read.rows[0].group == SuggestionGroup::Choose);
+        assert_eq!(file().unwrap(), "My own line.\n");
+
+        let read = fixture.next_read();
+        let preview = read.rows[0].local.as_ref().unwrap().preview.clone();
+        act(LineAction::Apply, preview);
+        fixture.read_until(|read| read.rows[0].group == SuggestionGroup::Applied);
+        fixture.clock.fetch_add(policy::DAY_MS, Ordering::SeqCst);
+        // A session begun before it was written was not given it.
+        observe(vec![said("c", 3, START + 10, START - 1)]);
+        observe(vec![said("d", 3, START + 20, START + 15)]);
+        let read = fixture.read_until(|read| read.rows[0].group == SuggestionGroup::Choose);
+        assert!(read.rows[0].local.as_ref().unwrap().recurred);
+        assert!(read.rows[0].local.as_ref().unwrap().present);
     }
 
     fn project() -> ProjectRef {
@@ -1993,6 +2328,7 @@ mod tests {
                     always: false,
                     head: None,
                     improvement: None,
+                    said: None,
                 })
                 .collect(),
         });
@@ -2127,6 +2463,7 @@ mod tests {
             project: project(),
             line: LineId(1),
             action: LineAction::Dismiss,
+            seen: None,
         });
         let read = fixture.read_until(|read| chosen(read).is_empty());
         assert!(
@@ -2234,6 +2571,7 @@ mod tests {
             project: project(),
             line: LineId(1),
             action: LineAction::Apply,
+            seen: None,
         });
         let order = fixture.handed.orders.recv_timeout(WAIT).expect("an order");
         assert_eq!(order.line, LineId(1));
@@ -2303,6 +2641,7 @@ mod tests {
             project: project(),
             line: LineId(1),
             action: LineAction::Apply,
+            seen: None,
         });
         let order = fixture.handed.orders.recv_timeout(WAIT).expect("an order");
         let merged_at = fixture.clock.load(Ordering::SeqCst);
@@ -2367,6 +2706,7 @@ mod tests {
                 project: project(),
                 line: LineId(1),
                 action: LineAction::Dismiss,
+                seen: None,
             });
             fixture.read_until(|read| chosen(read).is_empty())
         };
@@ -2411,6 +2751,7 @@ mod tests {
             project: project(),
             line: LineId(1),
             action: LineAction::Restore,
+            seen: None,
         });
         let read = fixture.read_until(|read| read.settings.dismissed.is_empty());
         assert_eq!(chosen(&read), ["s1"], "restored and judged again");
@@ -2433,6 +2774,7 @@ mod tests {
             project: project(),
             line: LineId(1),
             action: LineAction::Dismiss,
+            seen: None,
         });
         fixture.read_until(|read| chosen(read).is_empty());
 
@@ -2469,6 +2811,7 @@ mod tests {
             project: project(),
             line: LineId(1),
             action: LineAction::Dismiss,
+            seen: None,
         });
         fixture.read_until(|read| chosen(read).is_empty());
 
@@ -2509,6 +2852,7 @@ mod tests {
             project: project(),
             line: LineId(1),
             action: LineAction::Restore,
+            seen: None,
         });
         let read = fixture.read_until(|read| read.settings.dismissed.is_empty());
         assert_eq!(chosen(&read), ["s1"], "restored and judged again");
@@ -2679,6 +3023,7 @@ mod tests {
                     always: false,
                     head: None,
                     improvement: None,
+                    said: None,
                 })
                 .collect(),
         };
@@ -2793,6 +3138,7 @@ mod tests {
                 always: false,
                 head: None,
                 improvement: None,
+                said: None,
             }],
         });
         client.send(Command::Wake);

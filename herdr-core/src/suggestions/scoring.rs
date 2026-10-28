@@ -17,6 +17,12 @@ pub struct Score {
     pub prs: usize,
     /// One of its corrections said "from now on" (D-11).
     pub always: bool,
+    /// Its records are the operator's repeated requests, which rise at
+    /// their own threshold (PRD memory-self-improve D-37).
+    pub repeat: bool,
+    /// Sessions given a card that the operator still had to say again
+    /// (D-08); two raise the line whatever the quantity (B18).
+    pub ignored: usize,
 }
 
 /// Counts `line` over its records at `now` (D-12): a distinct session one
@@ -33,8 +39,25 @@ pub fn score(line: &Line, index: &RecordIndex, now: u64) -> Score {
 pub(crate) fn score_records<'a>(records: impl Iterator<Item = &'a RecordEntry>, now: u64) -> Score {
     let mut sessions: BTreeMap<(&str, &str), Vec<&RecordEntry>> = BTreeMap::new();
     let mut prs: BTreeMap<u32, u64> = BTreeMap::new();
+    let mut repeats = Vec::new();
+    let mut ignored = std::collections::BTreeSet::new();
     let mut always = false;
     for record in records {
+        // Memory's two signals are counted by their own rules, never as a
+        // session's pain (D-37: a turn in a repeat adds no correction).
+        match record.signal {
+            Signal::RepeatedRequest => {
+                repeats.push(record);
+                continue;
+            }
+            Signal::MemoryIgnored => {
+                if let Some(session) = &record.session {
+                    ignored.insert((session.agent.as_str(), session.id.as_str()));
+                }
+                continue;
+            }
+            _ => {}
+        }
         always |= record.always && record.signal == Signal::Correction;
         if let Some(session) = &record.session {
             sessions
@@ -68,12 +91,46 @@ pub(crate) fn score_records<'a>(records: impl Iterator<Item = &'a RecordEntry>, 
             counted_prs += 1;
         }
     }
+    let repeat = !repeats.is_empty();
+    if repeat {
+        points += repeat_points(&mut repeats, now);
+    }
     Score {
         points,
         sessions: sessions.len(),
         prs: counted_prs,
         always,
+        repeat,
+        ignored: ignored.len(),
     }
+}
+
+/// A repeated request's points (PRD memory-self-improve D-37): in the order
+/// it was said, the first time none, again in a session that said it before
+/// one, in another session two, each weighed by its own age. The ledger
+/// already keeps the same words once.
+fn repeat_points(repeats: &mut [&RecordEntry], now: u64) -> f64 {
+    repeats.sort_by(|a, b| {
+        a.at_unix_ms
+            .cmp(&b.at_unix_ms)
+            .then(a.session.cmp(&b.session))
+            .then(a.id.cmp(&b.id))
+    });
+    let mut said_in = std::collections::BTreeSet::new();
+    let mut points = 0.0;
+    for (index, record) in repeats.iter().enumerate() {
+        let again = !said_in.insert(record.session.as_ref());
+        if index == 0 {
+            continue;
+        }
+        let unit = if again {
+            policy::REPEAT_SAME_SESSION_POINTS
+        } else {
+            policy::REPEAT_OTHER_SESSION_POINTS
+        };
+        points += unit * policy::decay(now.saturating_sub(record.at_unix_ms));
+    }
+    points
 }
 
 /// The sessions and pull requests behind `line` among the records `keep`
@@ -119,13 +176,22 @@ pub(crate) fn outgrew_skip(
 /// cause, it actually hurt (something counted), and it is one pull request
 /// or one issue.
 pub fn answers_the_questions(line: &Line, score: &Score) -> bool {
-    line.struck.is_none() && line.has_cause() && line.outcome.is_some() && score.points > 0.0
+    line.struck.is_none()
+        && line.has_cause()
+        && line.outcome.is_some()
+        && (score.points > 0.0 || score.ignored > 0)
 }
 
 /// Whether a line has risen to a suggestion at `quantity`: the questions
 /// answered and the threshold reached, or one "from now on" correction.
 pub fn rises(line: &Line, score: &Score, quantity: Quantity) -> bool {
-    answers_the_questions(line, score) && (score.always || score.points >= quantity.threshold())
+    let threshold = if score.repeat {
+        quantity.repeat_threshold()
+    } else {
+        quantity.threshold()
+    };
+    answers_the_questions(line, score)
+        && (score.always || score.points >= threshold || score.ignored >= policy::IGNORED_SESSIONS)
 }
 
 /// The lines to raise now (D-10, D-42), strongest first: as many as the open
@@ -209,6 +275,7 @@ mod tests {
             at_unix_ms: at,
             always: false,
             improvement: None,
+            said: None,
             line: None,
             fresh: true,
         }
@@ -229,6 +296,76 @@ mod tests {
             )
             .unwrap();
         notebook.line(applied.created.unwrap()).unwrap().clone()
+    }
+
+    /// PRD memory-self-improve D-37, B13, B14: four times in one session is
+    /// three, once in each of two sessions two, two sessions with one more
+    /// three; the threshold is four, three or two by quantity.
+    #[test]
+    fn a_repeated_request_scores_by_where_it_was_said_again_and_rises_at_its_own_threshold() {
+        let said = |sessions: &[&str]| {
+            let index = RecordIndex {
+                entries: sessions
+                    .iter()
+                    .enumerate()
+                    .map(|(n, session)| {
+                        entry(
+                            n as u64 + 1,
+                            Signal::RepeatedRequest,
+                            Some(session),
+                            None,
+                            NOW - 10 + n as u64,
+                        )
+                    })
+                    .collect(),
+            };
+            let line = line_of(&index);
+            let score = score(&line, &index, NOW);
+            (line, score)
+        };
+        assert_eq!(said(&["a", "a", "a", "a"]).1.points, 3.0);
+        assert_eq!(said(&["a", "b"]).1.points, 2.0);
+        assert_eq!(said(&["a", "a", "b"]).1.points, 3.0);
+        assert_eq!(said(&["a", "b", "a"]).1.points, 3.0);
+        assert_eq!(said(&["a"]).1.points, 0.0, "said once is not a repeat");
+        let (line, three) = said(&["a", "a", "b"]);
+        assert!(three.repeat && three.sessions == 0);
+        assert!(!rises(&line, &three, Quantity::Few));
+        assert!(rises(&line, &three, Quantity::Normal));
+        let (line, two) = said(&["a", "b"]);
+        assert!(!rises(&line, &two, Quantity::Normal));
+        assert!(rises(&line, &two, Quantity::Many));
+    }
+
+    /// B18, D-08: a card ignored in two sessions rises whatever the quantity;
+    /// one session never does, and one session ignoring it twice is one.
+    #[test]
+    fn a_card_ignored_in_two_sessions_rises_and_in_one_does_not() {
+        let ignored = |sessions: &[&str]| {
+            let index = RecordIndex {
+                entries: sessions
+                    .iter()
+                    .enumerate()
+                    .map(|(n, session)| {
+                        entry(
+                            n as u64 + 1,
+                            Signal::MemoryIgnored,
+                            Some(session),
+                            None,
+                            NOW,
+                        )
+                    })
+                    .collect(),
+            };
+            let line = line_of(&index);
+            let score = score(&line, &index, NOW);
+            (line, score)
+        };
+        let (line, once) = ignored(&["a", "a"]);
+        assert_eq!(once.ignored, 1);
+        assert!(!rises(&line, &once, Quantity::Many));
+        let (line, twice) = ignored(&["a", "b"]);
+        assert!(rises(&line, &twice, Quantity::Few));
     }
 
     /// B25: improvements alone take as many sessions as any other session
@@ -440,6 +577,8 @@ mod tests {
                 sessions: 1,
                 prs: 0,
                 always: false,
+                repeat: false,
+                ignored: 0,
             },
         )
     }

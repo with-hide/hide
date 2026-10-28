@@ -267,6 +267,8 @@ fn row(
         evidence: Vec::new(),
         attempt: None,
         watch: None,
+        local: None,
+        evidence_unconfirmed: false,
     }
 }
 

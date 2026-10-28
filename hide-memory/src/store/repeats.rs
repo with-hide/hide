@@ -93,13 +93,14 @@ fn clean(text: &str, limit: usize) -> Option<String> {
 }
 
 /// Writes the batch's repeated requests in its transaction; answers how many
-/// sources were left out at a cap.
+/// sources were left out at a cap, and the meanings it kept any under.
 pub(super) fn record(
     transaction: &Transaction<'_>,
     batch: &AnalysisBatch,
     repeats: &[RepeatRequest],
-) -> Result<usize, MemoryError> {
+) -> Result<(usize, Vec<String>), MemoryError> {
     let mut left_out = 0;
+    let mut kept = Vec::new();
     for repeat in repeats.iter().take(REPEATS_PER_ANSWER) {
         let (Some(meaning), Some(line)) = (
             clean(&repeat.meaning, MEANING_CHARS),
@@ -145,9 +146,12 @@ pub(super) fn record(
                     at
                 ],
             )?;
+            if !kept.contains(&meaning) {
+                kept.push(meaning.clone());
+            }
         }
     }
-    Ok(left_out)
+    Ok((left_out, kept))
 }
 
 impl MemoryStore {

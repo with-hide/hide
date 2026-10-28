@@ -27,6 +27,18 @@ pub(crate) const IMPROVEMENTS_PER_SESSION: usize = 6;
 /// each at most this many characters.
 pub(crate) const IMPROVEMENTS_PER_TURN: usize = 3;
 pub(crate) const IMPROVEMENT_CHARS: usize = 200;
+/// A repeated request said again in a session that said it before counts
+/// one point, in another session two; the first time counts none (PRD
+/// memory-self-improve D-37).
+pub(crate) const REPEAT_SAME_SESSION_POINTS: f64 = 1.0;
+pub(crate) const REPEAT_OTHER_SESSION_POINTS: f64 = 2.0;
+/// Sessions that were given a card and still had the operator say it again
+/// before its line rises (D-08, B18).
+pub(crate) const IGNORED_SESSIONS: usize = 2;
+/// The excerpts a row reads when its evidence opens, each this many
+/// characters (D-43, B7).
+pub(crate) const EXCERPTS: usize = 5;
+pub(crate) const EXCERPT_CHARS: usize = 300;
 /// A distinct pull request counts one point while it is this recent.
 pub(crate) const PR_POINTS: f64 = 1.0;
 pub(crate) const PR_WINDOW_MS: u64 = 14 * DAY_MS;
@@ -55,6 +67,17 @@ impl Quantity {
         match self {
             Self::Many => 2.0,
             Self::Normal | Self::Few => 3.0,
+        }
+    }
+
+    /// The score a repeated request reaches to become a suggestion (PRD
+    /// memory-self-improve D-14, D-37): a request said four times in one
+    /// session, or in two sessions with one more, is three.
+    pub(crate) fn repeat_threshold(self) -> f64 {
+        match self {
+            Self::Few => 4.0,
+            Self::Normal => 3.0,
+            Self::Many => 2.0,
         }
     }
 
@@ -230,6 +253,11 @@ mod tests {
         assert_eq!(Quantity::Many.threshold(), 2.0);
         assert_eq!(Quantity::Normal.threshold(), 3.0);
         assert_eq!(Quantity::Few.threshold(), 3.0);
+        assert_eq!(
+            Quantity::ALL.map(Quantity::repeat_threshold),
+            [4.0, 3.0, 2.0],
+            "memory-self-improve D-37: few, normal, many"
+        );
         assert_eq!(
             Quantity::ALL.map(Quantity::open_cap),
             [1, 3, 5],

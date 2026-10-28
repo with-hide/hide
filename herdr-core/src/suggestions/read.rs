@@ -31,6 +31,17 @@ pub fn line_of_row(id: &str) -> Option<LineId> {
         .flatten()
 }
 
+/// The one line a global instruction fix writes: what the operator's newest
+/// words behind the line say it should be (PRD memory-self-improve D-07).
+pub fn local_line(line: &Line, index: &RecordIndex) -> Option<String> {
+    line.records
+        .iter()
+        .filter_map(|id| index.get(*id))
+        .filter_map(|record| Some((record.at_unix_ms, record.id, record.said.as_ref()?)))
+        .max_by_key(|(at, id, _)| (*at, *id))
+        .map(|(_, _, said)| said.line.clone())
+}
+
 /// Everything one read needs.
 pub struct ReadInput<'a> {
     pub workspace_id: &'a str,
@@ -44,6 +55,63 @@ pub struct ReadInput<'a> {
     /// Today's local date, `YYYY-MM-DD`.
     pub today: &'a str,
     pub sources: &'a EvidenceSources,
+    /// The Hide global instruction as the worker read it, with its file.
+    pub global: &'a GlobalRead,
+}
+
+/// The Hide global instruction file and what a read of it found.
+pub struct GlobalRead {
+    pub path: std::path::PathBuf,
+    pub read: Result<crate::global_instruction::Instruction, crate::global_instruction::Unusable>,
+}
+
+impl GlobalRead {
+    pub fn of(state_dir: &std::path::Path) -> Self {
+        Self {
+            path: hide_kit::layout::global_instruction(state_dir),
+            read: crate::global_instruction::read(state_dir),
+        }
+    }
+}
+
+/// A global instruction row's state: its line, the preview a press is
+/// checked against and the last press's failure (PRD memory-self-improve
+/// B6-B11).
+fn local(
+    line: &Line,
+    life: &LineLife,
+    index: &RecordIndex,
+    global: &GlobalRead,
+) -> Option<crate::model::SuggestionLocalSnapshot> {
+    if line.outcome != Some(Outcome::Local) {
+        return None;
+    }
+    let applied = life.local.as_ref();
+    let text = applied
+        .and_then(|local| local.line.clone())
+        .filter(|_| line.stage == Stage::Settled)
+        .or_else(|| local_line(line, index))?;
+    let present = global.read.as_ref().is_ok_and(|current| {
+        current
+            .text
+            .lines()
+            .any(|candidate| candidate.trim() == text.trim())
+    });
+    let preview = match &global.read {
+        Ok(current) if !present => crate::global_instruction::preview_against(current, &text)
+            .ok()
+            .map(|preview| preview.before),
+        _ => None,
+    };
+    Some(crate::model::SuggestionLocalSnapshot {
+        line: text,
+        preview,
+        present,
+        applied_at_unix_ms: applied.and_then(|local| local.applied_at_unix_ms),
+        recurred: applied.is_some_and(|local| local.recurred_at_unix_ms.is_some())
+            && line.stage == Stage::Suggested,
+        failure: applied.and_then(|local| local.failure),
+    })
 }
 
 /// What the store's index lacks about the evidence a read shows (B10).
@@ -173,6 +241,9 @@ fn evidence(line: &Line, input: &ReadInput<'_>) -> Vec<SuggestionEvidenceSnapsho
                     .as_ref()
                     .is_some_and(|kept| !kept.contains(session))
             }),
+            offset: record.said.as_ref().map(|said| said.offset),
+            excerpt: None,
+            unreadable: false,
         })
         .collect()
 }
@@ -280,6 +351,8 @@ pub fn project(input: &ReadInput<'_>) -> ProjectSuggestionsSnapshot {
                         sessions_seen: watch.sessions.len().min(policy::WATCH_SESSIONS),
                         sessions_needed: policy::WATCH_SESSIONS,
                     }),
+                local: local(line, life, input.index, input.global),
+                evidence_unconfirmed: false,
             })
         })
         .collect::<Vec<_>>();
@@ -332,6 +405,10 @@ pub fn project(input: &ReadInput<'_>) -> ProjectSuggestionsSnapshot {
         status,
         settings: settings(&input.state.settings, input.notebook, input.lives),
         rows,
+        global: Some(crate::model::SuggestionGlobalSnapshot {
+            path: input.global.path.to_string_lossy().into_owned(),
+            unusable: input.global.read.as_ref().err().copied(),
+        }),
         ..ProjectSuggestionsSnapshot::default()
     }
 }

@@ -1641,6 +1641,7 @@ pub(super) enum Event {
     MemoryAction(MemoryActionPayload),
     MemoryOpen(MemoryOpenPayload),
     SuggestionAction(super::suggestions::SuggestionActionPayload),
+    SuggestionEvidence(super::suggestion_evidence::SuggestionEvidencePayload),
     SuggestionSettings(super::suggestions::SuggestionSettingsPayload),
     HideAiSwitch(super::suggestions::HideAiSwitchPayload),
     SuggestionsIntroSeen,
@@ -1939,6 +1940,10 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
             super::suggestions::SuggestionActionPayload,
             SuggestionAction
         ),
+        "suggestion_evidence" => decode!(
+            super::suggestion_evidence::SuggestionEvidencePayload,
+            SuggestionEvidence
+        ),
         "suggestion_settings" => decode!(
             super::suggestions::SuggestionSettingsPayload,
             SuggestionSettings
@@ -2209,6 +2214,7 @@ impl Runtime {
                 self.open_suggestions(payload.workspace_id) | memory
             }
             Event::SuggestionAction(payload) => self.apply_suggestion_action(payload),
+            Event::SuggestionEvidence(payload) => self.open_suggestion_evidence(payload),
             Event::SuggestionSettings(payload) => self.apply_suggestion_settings(payload),
             Event::HideAiSwitch(payload) => self.apply_hide_ai_switch(payload),
             Event::SuggestionsIntroSeen => self.note_suggestions_intro_seen(),

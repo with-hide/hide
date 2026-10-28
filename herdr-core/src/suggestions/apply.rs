@@ -71,6 +71,8 @@ pub(crate) struct FollowedAttempt {
 pub(crate) enum NotReady {
     /// Apply needs a new suggestion; retry needs a failed attempt.
     Stage,
+    /// A global instruction line is written by the worker, not an agent.
+    Local,
 }
 
 /// Begins an attempt on `line`: a new suggestion on a press or by itself, or
@@ -106,9 +108,12 @@ pub(crate) fn begin(
     let pr = continues.and_then(|attempt| attempt.pr.clone());
     let repository = continues.and_then(|attempt| attempt.repository.clone());
     let outcome = line.outcome.unwrap_or(Outcome::Pr);
+    if outcome == Outcome::Local {
+        return Err(NotReady::Local);
+    }
     let brief = brief(line, index, pr.clone());
     let (issue_title, issue_since) = match outcome {
-        Outcome::Pr => (None, None),
+        Outcome::Pr | Outcome::Local => (None, None),
         Outcome::Issue => (
             continues
                 .and_then(|attempt| attempt.issue_title.clone())
@@ -185,13 +190,32 @@ fn brief(line: &Line, index: &RecordIndex, pr: Option<PrRef>) -> ApplyBrief {
     ApplyBrief {
         discomfort: line.discomfort.clone(),
         cause: line.cause.clone(),
-        fix: line.fix.clone(),
+        fix: line.fix.clone().or_else(|| said_fix(line, index)),
         basis: line.basis.clone(),
         level: line.level,
         prs,
         records: line.records.len(),
         pr,
     }
+}
+
+/// What a line of the operator's repeated request or ignored card asks the
+/// repository for: the line Memory named, as a skill when it is a procedure
+/// (PRD memory-self-improve D-20).
+fn said_fix(line: &Line, index: &RecordIndex) -> Option<String> {
+    let text = super::read::local_line(line, index)?;
+    let procedure = line
+        .records
+        .iter()
+        .filter_map(|id| index.get(*id))
+        .any(|entry| entry.said.as_ref().is_some_and(|said| said.procedure));
+    Some(if procedure {
+        format!(
+            "a skill the agents can follow for this procedure the operator keeps asking for: {text}"
+        )
+    } else {
+        format!("a rule the agents always follow, which the operator keeps asking for: {text}")
+    })
 }
 
 /// Saves a move onto the attempt it names; answers whether anything

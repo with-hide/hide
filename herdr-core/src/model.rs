@@ -8993,7 +8993,9 @@ mod wire_enum_tests {
                     | Signal::LabelMissed
                     | Signal::Improvement
                     | Signal::CheckFailed
-                    | Signal::ChangeRequest => {}
+                    | Signal::ChangeRequest
+                    | Signal::RepeatedRequest
+                    | Signal::MemoryIgnored => {}
                 }
             }
             assert_wire(&contract, "suggestion_signal", &signals);
@@ -9029,14 +9031,48 @@ mod wire_enum_tests {
             assert_wire(&contract, "suggestion_apply_mode", &modes);
             checked.insert("suggestion_apply_mode");
 
-            let outcomes = [Outcome::Pr, Outcome::Issue];
+            let outcomes = [Outcome::Pr, Outcome::Issue, Outcome::Local];
             for variant in outcomes {
                 match variant {
-                    Outcome::Pr | Outcome::Issue => {}
+                    Outcome::Pr | Outcome::Issue | Outcome::Local => {}
                 }
             }
             assert_wire(&contract, "suggestion_outcome", &outcomes);
             checked.insert("suggestion_outcome");
+
+            use crate::suggestions::lifecycle::LocalFailure;
+            let failures = [
+                LocalFailure::NoRoom,
+                LocalFailure::TooLarge,
+                LocalFailure::Unreadable,
+                LocalFailure::Changed,
+                LocalFailure::Edited,
+                LocalFailure::WriteFailed,
+                LocalFailure::EvidenceUnconfirmed,
+            ];
+            for variant in failures {
+                match variant {
+                    LocalFailure::NoRoom
+                    | LocalFailure::TooLarge
+                    | LocalFailure::Unreadable
+                    | LocalFailure::Changed
+                    | LocalFailure::Edited
+                    | LocalFailure::WriteFailed
+                    | LocalFailure::EvidenceUnconfirmed => {}
+                }
+            }
+            assert_wire(&contract, "suggestion_local_failure", &failures);
+            checked.insert("suggestion_local_failure");
+
+            use crate::global_instruction::Unusable;
+            let unusable = [Unusable::TooLarge, Unusable::Unreadable];
+            for variant in unusable {
+                match variant {
+                    Unusable::TooLarge | Unusable::Unreadable => {}
+                }
+            }
+            assert_wire(&contract, "global_instruction_unusable", &unusable);
+            checked.insert("global_instruction_unusable");
         }
 
         let unavailable = [

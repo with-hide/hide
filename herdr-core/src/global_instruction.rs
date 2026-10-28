@@ -167,11 +167,27 @@ fn clean_line(line: &str) -> Result<String, Refusal> {
     Ok(line.to_owned())
 }
 
+/// Whether the file already has `line` as one of its lines, so an apply
+/// would only repeat it.
+pub fn holds(state_dir: &Path, line: &str) -> Result<bool, Unusable> {
+    let current = read(state_dir)?;
+    let line = line.trim();
+    Ok(current
+        .text
+        .lines()
+        .any(|candidate| candidate.trim() == line))
+}
+
 /// What applying `line` to the file as it is now would write.
 pub fn preview(state_dir: &Path, line: &str) -> Result<Preview, Refusal> {
     let line = clean_line(line)?;
     let current = read(state_dir).map_err(|unusable| Refusal::Unusable { unusable })?;
     preview_of(&current.text, line)
+}
+
+/// What applying `line` to `current`, a read of the file, would write.
+pub fn preview_against(current: &Instruction, line: &str) -> Result<Preview, Refusal> {
+    preview_of(&current.text, clean_line(line)?)
 }
 
 fn preview_of(text: &str, line: String) -> Result<Preview, Refusal> {
