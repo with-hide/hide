@@ -166,13 +166,6 @@ jobs:
           HIDE_E2E_HERDR_OLDER_BIN: ${{ steps.older-herdr.outputs.bin }}
           HIDE_E2E_HERDR_OLDER_PROTOCOL_BIN: ${{ steps.older-protocol-herdr.outputs.bin }}
         run: bash scripts/verify-cargo.sh nextest --profile ci -p hided --test it -E 'test(/^herdr_handoff::/)' --run-ignored only
-      - name: Temporary remote core stress for issue 189 evidence
-        # Reverted in the same pull request once one run has kept the logs.
-        if: runner.os == 'Linux'
-        timeout-minutes: 15
-        env:
-          HIDE_E2E_HERDR_BIN: ${{ steps.herdr.outputs.bin }}
-        run: bash scripts/verify-cargo.sh nextest --profile ci -p hided --test it -E 'test(/^remote_core::/)' --run-ignored only --stress-count 8 --no-fail-fast
       - name: Mint the development issues token
         # Development issues live in with-hide/hide-private (docs/TESTING.md,
         # Flaky tests); one App token reads this run here and files there. A run
