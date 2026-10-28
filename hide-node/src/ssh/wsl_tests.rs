@@ -352,3 +352,45 @@ fn a_call_past_the_cap_waits_until_its_deadline_and_one_that_ends_frees_a_slot()
     held.pop();
     assert!(gate.admit(Instant::now()).is_some());
 }
+
+#[test]
+fn a_write_blocked_on_a_child_that_stopped_reading_does_not_hold_its_end() {
+    let mut command = std::process::Command::new("sh");
+    command
+        .args(["-c", "exec sleep 30"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    let mut child = hide_platform::process::OwnedChild::spawn(&mut command).unwrap();
+    let pid = child.id();
+    let stdin = child.take_stdin().unwrap();
+    let input: Arc<Mutex<Option<Box<dyn std::io::Write + Send>>>> =
+        Arc::new(Mutex::new(Some(Box::new(stdin))));
+    let (holding, held) = std::sync::mpsc::channel();
+    let writer = {
+        let input = Arc::clone(&input);
+        std::thread::spawn(move || {
+            let mut stream = input.lock().unwrap();
+            holding.send(()).unwrap();
+            // More than any pipe holds, to a child that never reads.
+            std::io::Write::write_all(stream.as_mut().unwrap(), &vec![0u8; 8 * 1024 * 1024])
+        })
+    };
+    held.recv().unwrap();
+    let told = Instant::now();
+    super::super::ChildEnding::start("wsl:test", child, input)
+        .unwrap()
+        .end();
+    let deadline = told + super::super::CHILD_EXIT_GRACE + Duration::from_secs(5);
+    while hide_platform::process::is_alive(pid) {
+        assert!(
+            Instant::now() < deadline,
+            "the child outlived its link's end"
+        );
+        std::thread::yield_now();
+    }
+    assert!(
+        writer.join().unwrap().is_err(),
+        "the blocked write ends with the child"
+    );
+}

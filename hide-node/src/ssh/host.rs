@@ -2537,9 +2537,11 @@ pub fn over_child(
 }
 
 /// What ends the child of an [`over_child`] link: told once, from the
-/// link's end or its drop, it closes the child's input and hands the child
-/// to a thread that waits out [`CHILD_EXIT_GRACE`] for it before ending its
-/// tree.
+/// link's end or its drop, a thread closes the child's input and waits out
+/// [`CHILD_EXIT_GRACE`] for it before ending its tree. The clock starts when
+/// it is told: a write blocked on a child that stopped reading holds the
+/// input until the child ends, so the input closes once no write holds it,
+/// and ending the tree is what frees such a write.
 struct ChildEnding {
     told: Option<mpsc::SyncSender<()>>,
 }
@@ -2557,11 +2559,14 @@ impl ChildEnding {
             .spawn(move || {
                 // Told, or every sender gone: either way the link is over.
                 let _ = heard.recv();
-                lock_recover(&input).take();
                 let pid = child.id();
                 let since = Instant::now();
+                let mut input_open = true;
                 let mut status = None;
                 while since.elapsed() < CHILD_EXIT_GRACE {
+                    if input_open {
+                        input_open = !close_unless_writing(&input);
+                    }
                     match child.try_wait() {
                         Ok(Some(exited)) => {
                             status = Some(exited);
@@ -2575,6 +2580,9 @@ impl ChildEnding {
                 if killed {
                     let _ = child.kill_tree();
                     status = child.wait().ok();
+                }
+                if input_open {
+                    close_unless_writing(&input);
                 }
                 crate::diagnostic!(json!({
                     "component": "remote_host",
@@ -2593,6 +2601,22 @@ impl ChildEnding {
         if let Some(told) = self.told.take() {
             let _ = told.try_send(());
         }
+    }
+}
+
+/// Closes a child link's input unless a write holds it; answers whether it
+/// is closed.
+fn close_unless_writing(input: &Mutex<Option<Box<dyn std::io::Write + Send>>>) -> bool {
+    match input.try_lock() {
+        Ok(mut held) => {
+            held.take();
+            true
+        }
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => {
+            poisoned.into_inner().take();
+            true
+        }
+        Err(std::sync::TryLockError::WouldBlock) => false,
     }
 }
 
