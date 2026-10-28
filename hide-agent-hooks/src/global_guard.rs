@@ -23,12 +23,21 @@ const FILE_NAME: &str = "global-instruction.md";
 
 const REFUSAL: &str = "Not run: this call writes the Hide global instruction, which every agent session in Hide takes as the operator's own instruction. Only the operator edits it, by hand or with a suggestion's apply in Hide's Hide AI tool; tell the operator what you would add instead.";
 
-/// Whether a raw hook payload can name the file at all; a payload that
-/// does not is let through without being parsed.
-pub fn may_name(payload: &[u8]) -> bool {
-    payload
-        .windows(FILE_NAME.len())
-        .any(|window| window.eq_ignore_ascii_case(FILE_NAME.as_bytes()))
+/// Whether a raw hook payload can name the file, or the file a link there
+/// points to, at all; a payload that names neither is let through without
+/// being parsed.
+pub fn may_name(home: &Path, payload: &[u8]) -> bool {
+    let names = files(home);
+    let mut names = names
+        .iter()
+        .filter_map(|file| file.file_name())
+        .map(|name| name.as_encoded_bytes());
+    names.any(|name| {
+        !name.is_empty()
+            && payload
+                .windows(name.len())
+                .any(|window| window.eq_ignore_ascii_case(name))
+    })
 }
 
 /// The reason to refuse `call`, run in `cwd` by an agent of the account whose
@@ -263,10 +272,17 @@ mod tests {
         std::os::unix::fs::symlink(&target, state.join(FILE_NAME)).unwrap();
         let write = Action::Write(vec![target.to_string_lossy().into_owned()]);
         assert!(refusal(home.path(), &call(write, home.path())).is_some());
+        // A payload naming only the target is read, not passed unparsed.
+        assert!(may_name(
+            home.path(),
+            br#"{"file_path":"/x/dotfiles/Agents.md"}"#
+        ));
     }
 
     #[test]
     fn a_payload_that_does_not_name_the_file_is_not_read() {
+        let home = tempfile::tempdir().unwrap();
+        let may_name = |payload: &[u8]| may_name(home.path(), payload);
         assert!(may_name(
             br#"{"command":"cat ~/.hide/state/global-instruction.md"}"#
         ));

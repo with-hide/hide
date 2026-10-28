@@ -9,7 +9,7 @@
 // HIDE_OPENCODE_HELPER_ANSWERS set.
 
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -138,6 +138,27 @@ test("outside a Herdr pane the plugin only guards a protected project's tools", 
     assert.equal(shell.input.command, write.command);
     assert.deepEqual(file.input.args, { filePath: "/h/.hide/state/global-instruction.md" });
     rmSync(LOG, { force: true });
+  }
+  // So does a write to the file a link at the global instruction points to, though it never names the instruction.
+  {
+    const state = path.join(homedir(), ".hide", "state");
+    const target = path.join(homedir(), "dotfiles", "agents.md");
+    mkdirSync(state, { recursive: true });
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, "x\n");
+    symlinkSync(target, path.join(state, "global-instruction.md"));
+    try {
+      const hooks = await plugin({});
+      await assert.rejects(
+        hooks["tool.execute.before"]({ tool: "write", sessionID: "ses_a" }, { args: { filePath: target, content: "x" } }),
+        /Not run: guarded/,
+      );
+      const [file] = await until("tool");
+      assert.deepEqual(file.input.args, { filePath: target });
+      rmSync(LOG, { force: true });
+    } finally {
+      rmSync(path.join(state, "global-instruction.md"), { force: true });
+    }
   }
   policy({ files: true, paths: [".env"] });
   try {

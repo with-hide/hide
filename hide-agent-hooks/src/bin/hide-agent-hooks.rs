@@ -836,9 +836,10 @@ fn guard_refusal(
         .filter(|value| !value.is_empty());
     let home = home_directory();
     // No agent writes the Hide global instruction, in any session or project
-    // (PRD memory-self-improve D-07); only a payload naming it is read.
+    // (PRD memory-self-improve D-07); only a payload naming it, or the file a
+    // link there points to, is read.
     if let Some(home) = &home
-        && hide_agent_hooks::global_guard::may_name(payload)
+        && hide_agent_hooks::global_guard::may_name(home, payload)
     {
         use hide_agent_hooks::global_guard;
         let call = hide_agent_hooks::guardrails::payload::read_hook(payload, truncated, dialect);

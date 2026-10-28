@@ -5,7 +5,7 @@
 
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, readlinkSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -48,13 +48,35 @@ const FILE_TOOLS = new Set(["read", "edit", "write", "apply_patch", "multiedit"]
 const PATH_ARGS = ["filePath", "path", "file_path"];
 const policy = { mtimeMs: -1, size: -1, on: null };
 
-/** Whether a tool call asks the helper for the guardrails. A policy that is missing or unreadable (`on` is null)
- * does in a Herdr pane, where the helper records why; a session outside one starts no helper for it. */
-/** Whether `text` can name the Hide global instruction. */
+// The state folders the helper's guard knows: the one Hide installed this file for, `HIDE_STATE_DIR`,
+// `$XDG_STATE_HOME/hide` and `~/.hide/state`.
+const STATE_DIRS = [
+  ROUTE[0] === "--state-dir-b64" ? Buffer.from(ROUTE[1], "base64url").toString() : "",
+  process.env.HIDE_STATE_DIR ?? "",
+  process.env.XDG_STATE_HOME ? path.join(process.env.XDG_STATE_HOME, "hide") : "",
+  path.join(homedir(), ".hide", "state"),
+].filter(Boolean);
+
+/** Whether `text` can name the Hide global instruction, or the file a link at it points to, which is the one every
+ * session is given; names are matched as the helper's guard matches them. */
 function namesGlobal(text) {
-  return typeof text === "string" && text.toLowerCase().includes(GLOBAL_INSTRUCTION);
+  if (typeof text !== "string") return false;
+  const lower = text.toLowerCase();
+  if (lower.includes(GLOBAL_INSTRUCTION)) return true;
+  return STATE_DIRS.some((dir) => {
+    let target;
+    try {
+      target = readlinkSync(path.join(dir, GLOBAL_INSTRUCTION));
+    } catch {
+      return false;
+    }
+    const name = path.basename(target).toLowerCase();
+    return name !== "" && lower.includes(name);
+  });
 }
 
+/** Whether a tool call asks the helper for the guardrails. A policy that is missing or unreadable (`on` is null)
+ * does in a Herdr pane, where the helper records why; a session outside one starts no helper for it. */
 function guardrailsOn(state) {
   const on = policyOn();
   return on ?? !state.guardOnly;

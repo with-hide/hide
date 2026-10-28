@@ -1,4 +1,4 @@
-// hide-extension@11 sha256=1e3fd2166666f48311c64b32adfd7d168d8403f690422f18a3bd6fdb111c2252
+// hide-extension@11 sha256=e26cd7837254ee38c5d4dd1fb8e34bad5d71bffda0924300a2ed251a9f85f656
 // Hide's extension for Pi and omp, written by Hide's install kit (hide-agent-hooks).
 // An edit is kept and shown as edited in Settings; Reinstall puts Hide's back.
 // Outside a Herdr pane, in an agent started from another Pi's or omp's shell, or when its helper is gone, it does
@@ -7,7 +7,7 @@
 
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, readlinkSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -49,13 +49,35 @@ const FILE_TOOLS = new Set(["read", "edit", "write"]);
 const PATH_ARGS = ["filePath", "path", "file_path"];
 const policy = { mtimeMs: -1, size: -1, on: null };
 
-/** Whether a tool call asks the helper for the guardrails. A policy that is missing or unreadable (`on` is null)
- * does in a Herdr pane, where the helper records why; a session outside one starts no helper for it. */
-/** Whether `text` can name the Hide global instruction. */
+// The state folders the helper's guard knows: the one Hide installed this file for, `HIDE_STATE_DIR`,
+// `$XDG_STATE_HOME/hide` and `~/.hide/state`.
+const STATE_DIRS = [
+  ROUTE[0] === "--state-dir-b64" ? Buffer.from(ROUTE[1], "base64url").toString() : "",
+  process.env.HIDE_STATE_DIR ?? "",
+  process.env.XDG_STATE_HOME ? path.join(process.env.XDG_STATE_HOME, "hide") : "",
+  path.join(homedir(), ".hide", "state"),
+].filter(Boolean);
+
+/** Whether `text` can name the Hide global instruction, or the file a link at it points to, which is the one every
+ * session is given; names are matched as the helper's guard matches them. */
 function namesGlobal(text) {
-  return typeof text === "string" && text.toLowerCase().includes(GLOBAL_INSTRUCTION);
+  if (typeof text !== "string") return false;
+  const lower = text.toLowerCase();
+  if (lower.includes(GLOBAL_INSTRUCTION)) return true;
+  return STATE_DIRS.some((dir) => {
+    let target;
+    try {
+      target = readlinkSync(path.join(dir, GLOBAL_INSTRUCTION));
+    } catch {
+      return false;
+    }
+    const name = path.basename(target).toLowerCase();
+    return name !== "" && lower.includes(name);
+  });
 }
 
+/** Whether a tool call asks the helper for the guardrails. A policy that is missing or unreadable (`on` is null)
+ * does in a Herdr pane, where the helper records why; a session outside one starts no helper for it. */
 function guardrailsOn(state) {
   const on = policyOn();
   return on ?? !state.guardOnly;

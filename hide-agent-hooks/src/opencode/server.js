@@ -6,7 +6,7 @@
 
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, readlinkSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -65,13 +65,35 @@ const FILE_TOOLS = new Set(["read", "edit", "write", "patch"]);
 const PATH_ARGS = ["path", "filePath"];
 const policy = { mtimeMs: -1, size: -1, on: null };
 
-/** Whether some project has a protection on: null when the policy is missing or unreadable. */
-export /** Whether `text` can name the Hide global instruction, matched as the helper's guard matches it. */
+// The state folders the helper's guard knows: the one Hide installed this file for, `HIDE_STATE_DIR`,
+// `$XDG_STATE_HOME/hide` and `~/.hide/state`.
+const STATE_DIRS = [
+  ROUTE[0] === "--state-dir-b64" ? Buffer.from(ROUTE[1], "base64url").toString() : "",
+  process.env.HIDE_STATE_DIR ?? "",
+  process.env.XDG_STATE_HOME ? path.join(process.env.XDG_STATE_HOME, "hide") : "",
+  path.join(homedir(), ".hide", "state"),
+].filter(Boolean);
+
+/** Whether `text` can name the Hide global instruction, or the file a link at it points to, which is the one every
+ * session is given; names are matched as the helper's guard matches them. */
 function namesGlobal(text) {
-  return typeof text === "string" && text.toLowerCase().includes(GLOBAL_INSTRUCTION);
+  if (typeof text !== "string") return false;
+  const lower = text.toLowerCase();
+  if (lower.includes(GLOBAL_INSTRUCTION)) return true;
+  return STATE_DIRS.some((dir) => {
+    let target;
+    try {
+      target = readlinkSync(path.join(dir, GLOBAL_INSTRUCTION));
+    } catch {
+      return false;
+    }
+    const name = path.basename(target).toLowerCase();
+    return name !== "" && lower.includes(name);
+  });
 }
 
-function policyOn() {
+/** Whether some project has a protection on: null when the policy is missing or unreadable. */
+export function policyOn() {
   let stat;
   try {
     stat = statSync(POLICY);
