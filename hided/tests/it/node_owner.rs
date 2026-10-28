@@ -86,11 +86,10 @@ fn a_folder_owned_by_another_node_stops_the_daemon_and_logs_why() {
     );
 }
 
-/// What the desktop host shows (B2): `hide connect` answers at once, not
-/// after its health wait, with the file the daemon refused. Unix only: the
-/// cleared environment and the `/usr/bin:/bin` PATH it starts the daemon with
-/// are a Unix process's; the refusal itself is covered on every system by
-/// the test above.
+/// What the desktop host shows (B2): `hide connect` answers with the file
+/// the daemon refused and why. Unix only: the cleared environment and the
+/// `/usr/bin:/bin` PATH it starts the daemon with are a Unix process's; the
+/// refusal itself is covered on every system by the test above.
 #[cfg(unix)]
 #[test]
 #[allow(clippy::disallowed_methods)] // env_clear: nothing inherited may name a live Herdr, daemon or pane (Unix only)
@@ -118,10 +117,10 @@ fn hide_connect_names_the_file_a_refused_start_stopped_on() {
         .expect("hide connect runs");
     assert!(!output.status.success());
     let line: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    // At once, not after the health wait: `hide connect` looks for the
-    // daemon's exit before each timeout decision, and a wait that ran out
-    // answers `no_response` instead. A wall-clock bound here measured the
-    // daemon's start under load (11.7 s at a load average of 30).
+    // That the wait ends at the look after the exit is proved on a fake
+    // clock (`a_daemon_that_exits_ends_the_wait_at_the_next_look` in
+    // src/cli.rs); a wall-clock bound here measured the daemon's start under
+    // load instead (11.7 s at a load average of 30).
     assert_eq!(line["reason"], "state_refused", "{line}");
     assert!(
         line["file"].as_str().unwrap().ends_with("node.json"),

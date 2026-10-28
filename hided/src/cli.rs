@@ -2556,18 +2556,19 @@ fn start_of(state_dir: &Path, pid: u32, timeout: Duration) -> Option<StartStep> 
     })
 }
 
-/// Looks at the started daemon until it answers or `within` has passed on
-/// `now`'s clock. No request may outlast the time left, so the wait ends at
-/// the bound it names, and the error says what was last seen, so a slow
-/// start names its stage.
+/// Looks at the started daemon until it answers, `exited` reports it gone,
+/// or `within` has passed on `now`'s clock. No request may outlast the time
+/// left, so the wait ends at the bound it names, and the error says what was
+/// last seen, so a slow start names its stage.
 #[cfg(test)]
 fn wait_healthy_within<T>(
     within: Duration,
     now: impl Fn() -> std::time::Instant,
     pause: impl FnMut(Duration),
+    exited: impl FnMut() -> Option<std::process::ExitStatus>,
     probe: impl FnMut(Duration) -> Result<T, Unready>,
 ) -> Result<T, String> {
-    wait_started(within, now, pause, || None, probe).map_err(|waited| match waited {
+    wait_started(within, now, pause, exited, probe).map_err(|waited| match waited {
         Waited::Timeout(detail) => detail,
         Waited::Exited(status) => format!("exited with {status}"),
     })
@@ -2776,6 +2777,7 @@ mod tests {
             HEALTHY_WITHIN,
             || clock.get(),
             |pause| clock.set(clock.get() + pause),
+            || None,
             // A `/health` that times out takes all the time it is given.
             |timeout| {
                 let left = (start + HEALTHY_WITHIN).saturating_duration_since(clock.get());
@@ -2819,6 +2821,7 @@ mod tests {
             HEALTHY_WITHIN,
             || clock.get(),
             |pause| clock.set(clock.get() + pause),
+            || None,
             |timeout| {
                 clock.set(clock.get() + timeout);
                 let step = (clock.get() - start).as_secs() / step_every.as_secs();
@@ -2851,6 +2854,7 @@ mod tests {
             HEALTHY_WITHIN,
             || clock.get(),
             |pause| clock.set(clock.get() + pause),
+            || None,
             |timeout| -> Result<(), Unready> {
                 clock.set(clock.get() + timeout);
                 let step = if clock.get() - start < stuck_from {
@@ -2878,6 +2882,47 @@ mod tests {
         assert_eq!(
             error,
             "hided made no progress for 10s; last waited on step 3 (core.owner) of its start"
+        );
+    }
+
+    /// A daemon that refuses its state folder exits before it answers
+    /// (PRD core-host-node B2): the look after its exit ends the wait, with
+    /// no further pause and long before the health bound.
+    #[test]
+    fn a_daemon_that_exits_ends_the_wait_at_the_next_look() {
+        #[cfg(unix)]
+        use std::os::unix::process::ExitStatusExt;
+        #[cfg(windows)]
+        use std::os::windows::process::ExitStatusExt;
+        let start = std::time::Instant::now();
+        let clock = std::cell::Cell::new(start);
+        let exits_at = start + Duration::from_millis(350);
+        let refused = Duration::from_millis(5);
+        let paused_after_exit = std::cell::Cell::new(false);
+        let error = wait_healthy_within::<()>(
+            HEALTHY_WITHIN,
+            || clock.get(),
+            |pause| {
+                paused_after_exit.set(paused_after_exit.get() || clock.get() >= exits_at);
+                clock.set(clock.get() + pause);
+            },
+            || (clock.get() >= exits_at).then(|| std::process::ExitStatus::from_raw(256)),
+            // No state is written yet, so each look is answered at once.
+            |_| {
+                clock.set(clock.get() + refused);
+                Err(Unready {
+                    detail: "the daemon to write its state".to_owned(),
+                    start: None,
+                })
+            },
+        )
+        .unwrap_err();
+        assert!(error.starts_with("exited with"), "{error}");
+        assert!(!paused_after_exit.get(), "the wait paused after the exit");
+        let ended = clock.get() - start;
+        assert!(
+            ended <= Duration::from_millis(350) + HEALTH_PAUSE + refused,
+            "ended {ended:?} after the start, not at the look after the exit"
         );
     }
 

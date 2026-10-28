@@ -262,6 +262,9 @@ struct RotatingLog {
     file: File,
     size: u64,
     limit: u64,
+    /// The record being written, kept between appends so a record costs a
+    /// copy into it and no allocation once it fits the longest record seen.
+    record: Vec<u8>,
 }
 
 impl RotatingLog {
@@ -277,6 +280,7 @@ impl RotatingLog {
             file,
             size,
             limit,
+            record: Vec::new(),
         })
     }
 
@@ -293,14 +297,16 @@ impl RotatingLog {
                 .open(self.directory.join("core.jsonl"))?;
             self.size = 0;
         }
-        // One write per record: a refusal's `record_now` and the writer
-        // thread append to the same file, and `writeln!` would send the line
-        // and its newline as two writes another record can land between.
-        let mut record = String::with_capacity(line.len() + 1);
-        record.push_str(line);
-        record.push('\n');
-        self.file.write_all(record.as_bytes())?;
-        self.size += record.len() as u64;
+        // The line and its newline go to the file in one `write_all`: a
+        // refusal's `record_now` and the writer thread append to the same
+        // file, and `writeln!` sends them as two writes another record can
+        // land between. An append to a regular file takes the whole buffer;
+        // `write_all` writes again only after a short write.
+        self.record.clear();
+        self.record.extend_from_slice(line.as_bytes());
+        self.record.push(b'\n');
+        self.file.write_all(&self.record)?;
+        self.size += self.record.len() as u64;
         Ok(())
     }
 }

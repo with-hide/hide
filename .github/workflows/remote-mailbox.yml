@@ -193,8 +193,10 @@ jobs:
         # the staged binaries, the copies of them the install places in each
         # account's helper and bin folders, and the fixture's SSH keys. A
         # flaky run is kept too: its first attempt's logs are the evidence its
-        # issue needs (docs/TESTING.md, Flaky tests). The remote core
-        # journeys' runs (rc-*) are kept the same way.
+        # issue needs (docs/TESTING.md, Flaky tests). Of the remote core
+        # journeys' runs (rc-*) only the logs are kept: each daemon's and
+        # Herdr server's output and the Logs folders' records, which name the
+        # runner's fixture paths and nothing of its state, keys or binaries.
         if: ${{ failure() || steps.flaky.outputs.flaky == 'true' }}
         uses: actions/upload-artifact@v7
         with:
@@ -206,10 +208,8 @@ jobs:
             !agents/runs/rd-*/*/*/.ssh/**
             !agents/runs/rd-*/*/*/helper/**
             !agents/runs/rd-*/*/*/bin/**
-            agents/runs/rc-*
-            !agents/runs/rc-*/*/*/.ssh/**
-            !agents/runs/rc-*/*/*/helper/**
-            !agents/runs/rc-*/*/*/bin/**
+            agents/runs/rc-*/**/*.log
+            agents/runs/rc-*/**/Logs/*.jsonl
           if-no-files-found: ignore
       - name: Keep core move failure logs
         # Core-move fixtures use short /tmp paths for Unix sockets, outside
