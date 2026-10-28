@@ -16,6 +16,9 @@ import { requireInterfaceLanguage } from "./i18n/locale";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
 import { holdsRequest, orderedOutputs, requestRuns, outputPrState, recordTitle, recordTree, requestPreview, sessionOfAgentOn, sessionPlace, settledOutput, workKey } from "./sessionWork";
+import { galleryTiles } from "./galleryTiles";
+import { RecordGallery } from "./RecordGallery";
+import { requestWords, senderName, turnResponse } from "./PaneTurnCard";
 import { boardProjects } from "./navigation";
 import { cardLine, cardOfPane, cardQuestion, everyAgent } from "./overviewTasks";
 import { destinationOf } from "./overviewBacklog";
@@ -170,6 +173,13 @@ function RecordPlace({ record, actions }: { record: RecordValue; actions: Action
   </>;
 }
 
+/** The agent whose pane holds the record's session now, or null while none does. */
+function useRecordAgent(record: RecordValue): AgentRow | null {
+  const rest = useShellStore((state) => state.rest);
+  const agents = useShellStore((state) => state.agents);
+  return useMemo(() => sessionPlace(boardProjects(rest, agents), record.session, record.cwd, rest)?.agent ?? null, [rest, agents, record.session, record.cwd]);
+}
+
 /** Uses the same device, checkout and native resume boundary as a PR's session line. */
 function RestoreSession({ record, checkout: original, actions }: { record: RecordValue; checkout: Checkout | null; actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -221,9 +231,9 @@ function NowBox({ record, summaries, checkout, agent, line, question, actions }:
   const settled = recorded?.settled ?? null;
   const since = settled ? settled.at_unix_ms : recorded ? recorded.at_unix_ms : kind === "ended" ? record.ended_at_unix_ms ?? agent?.changed_at_unix_ms ?? null : agent?.changed_at_unix_ms ?? null;
   const word = settled ? t(settled.state === "merged" ? "record.merged" : "record.closed") : recorded ? t(`requests.end.${recorded.end}`) : kind === "working" ? t("agents.status.working") : kind === "question" ? t("agents.status.question") : kind === "blocked" ? t("agents.status.error") : agent && agent.status_code !== "done" ? statusText(t, agent.status_code) : t("sessionWork.done");
-  // While it works on a plan, the line is its step, as on the pane's second row (B7).
   const livePlan = useShellStore((s) => planOfSession(s.rest, record.session)) ?? record.plan ?? null;
-  const step = kind === "working" && !settled && livePlan ? planWorkLine(livePlan) : null;
+  // While its pane works or asks, the 지금 block carries the turn (D-41), its question among it.
+  const doing = agent ? liveTurn(agent) : null;
   const said = settled ? settledPrs(t, settled) : recorded ? recorded.line || null : kind === "question" ? question ?? (agent?.state.ask?.subject ? askSubjectText(t, agent.state.ask.subject) : agent?.state.ask?.what) ?? null : kind === "blocked" ? (line?.kind === "blocked" ? line.what : null) ?? lastWords(agent) : lastWords(agent);
   const pane = agent?.pane_id ?? null;
   const button = pane === null ? <RestoreSession record={record} checkout={checkout} actions={actions} /> : kind === "question" ? (
@@ -241,9 +251,52 @@ function NowBox({ record, summaries, checkout, agent, line, question, actions }:
       </p>
       {button}
     </div>
-    {step ? <p className="whitespace-normal text-caption text-agent-working [overflow-wrap:anywhere]" title={step} data-record-now-step="true">{step}</p> : null}
-    {said && kind !== "working" ? <p className={cn("whitespace-normal text-caption [overflow-wrap:anywhere]", kind === "question" ? "text-warning" : kind === "blocked" ? "text-destructive" : "text-subtle-foreground")} title={said} data-record-now-words="true">{said}</p> : null}
+    {doing && agent ? <NowWork agent={agent} plan={livePlan} /> : null}
+    {said && kind !== "working" && !doing ? <p className={cn("whitespace-normal text-caption [overflow-wrap:anywhere]", kind === "question" ? "text-warning" : kind === "blocked" ? "text-destructive" : "text-subtle-foreground")} title={said} data-record-now-words="true">{said}</p> : null}
   </div>;
+}
+
+/** Whether the pane's agent works or asks now: the turn the 지금 block shows (D-41). */
+function liveTurn(agent: AgentRow): "working" | "question" | null {
+  return agent.status_code === "working" ? "working" : agent.status_code === "question" || agent.status_code === "approval" ? "question" : null;
+}
+
+/** A running plan, which the 지금 block draws in place of the 계획 section. */
+function runningPlan(plan: PlanView | null): PlanView | null {
+  return plan && !plan.progress.finished ? plan : null;
+}
+
+/**
+ * The 지금 block (PRD session-docs-and-assistant D-41): while the pane works
+ * or asks, the request and what the agent does about it in its second row's
+ * words, `<request> → <now>`, and its running plan with `n/m`; the work it
+ * delegated is 함께 진행한 세션's to say. Each part is drawn only when Hide holds it,
+ * so with Hide AI off the request is its own first line and no part is made
+ * up.
+ */
+function NowWork({ agent, plan }: { agent: AgentRow; plan: PlanView | null }) {
+  const { t } = useInterfaceTranslation();
+  const rest = useShellStore((state) => state.rest);
+  const header = rest?.terminal?.headers?.[agent.pane_id];
+  const raw = agent.request?.request ?? null;
+  const request = header?.request ? requestWords(t, header.request) : raw ? requestWords(t, { text: agent.request?.request_summary ?? raw.text.split(/\r?\n/, 1)[0] ?? null, images: raw.images }) : null;
+  const response = turnResponse(t, header, agent);
+  const running = runningPlan(plan);
+  // The second row's progress place: an ask's words, else a running plan's step, else the agent's own sentence.
+  const now = response?.asks ? response.text ?? response.verb : (running ? planWorkLine(running) : null) ?? header?.progress ?? null;
+  const asks = response?.asks ?? false;
+  if (!request && !now && !running) return null;
+  return <section className="mt-xs flex min-w-0 flex-col gap-sm rounded-md border border-border px-sm py-sm" aria-label={t("sessionWork.now")} data-record-now-work={asks ? "question" : "working"}>
+    {request || now ? <p className="min-w-0 whitespace-normal [overflow-wrap:anywhere]" data-record-now-turn="true">
+      {request ? <span className="text-subtle-foreground" data-record-now-request="true">{raw ? <span className="mr-xs text-micro text-muted-foreground">{senderName(t, raw.sender)}</span> : null}{request}</span> : null}
+      {request && now ? <span aria-hidden="true" className="mx-xs text-muted-foreground">→</span> : null}
+      {now ? <span className={cn("font-semibold", asks ? "text-warning" : "text-foreground")} data-record-now-doing="true">{now}</span> : null}
+    </p> : null}
+    {running ? <div className="min-w-0" data-record-now-plan={planCount(running)}>
+      <SectionHead label={t("plan.title")} count={planCount(running)} className="mb-xxs" />
+      <PlanChecklist plan={running} />
+    </div> : null}
+  </section>;
 }
 
 /**
@@ -352,16 +405,22 @@ function RecordPlan({ plan }: { plan: PlanView }) {
  */
 function Work({ record, summaries, onOpen, actions, locator }: { record: RecordValue; summaries: boolean; onOpen: (child: RecordValue) => void; actions: Actions; locator?: RequestLocator }) {
   const { t } = useInterfaceTranslation();
+  const agent = useRecordAgent(record);
+  const livePlan = useShellStore((s) => planOfSession(s.rest, record.session)) ?? record.plan ?? null;
+  // A running plan of a pane at work is the 지금 block's; the section keeps every other plan.
+  const planAbove = agent && liveTurn(agent) ? runningPlan(livePlan) : null;
+  const section = useShellStore((state) => state.sessionRecord);
+  const tiles = useMemo(() => galleryTiles(section?.views ?? [], recordTree(record).map((one) => one.session), summaries ? record.artifacts : []), [section?.views, record, summaries]);
+  // The core counts the Views past its cap for the whole tree it was asked for.
+  const omitted = workKey(record.session) === (section?.session ? workKey(section.session) : null) ? section?.views_omitted ?? 0 : 0;
   return <>
     {summaries ? <Asks record={record} actions={actions} /> : null}
     {summaries ? <Flows record={record} locator={locator} /> : <RawRequests record={record} locator={locator} />}
-    {record.plan ? <RecordPlan plan={record.plan} /> : null}
+    {record.plan && !planAbove ? <RecordPlan plan={record.plan} /> : null}
     <Prs record={record} actions={actions} />
-    {summaries && record.artifacts.length ? <section className="mt-lg min-w-0" data-record-artifacts={record.artifacts.length}>
-      <SectionHead label={t("record.artifacts")} count={record.artifacts.length} />
-      <ul className="flex min-w-0 flex-wrap gap-xs">
-        {record.artifacts.map((name) => <li key={name} className="min-w-0 max-w-full truncate rounded-xs border border-border px-xs py-xxs text-micro text-subtle-foreground" title={name} data-record-artifact={name}>{name}</li>)}
-      </ul>
+    {tiles.length || omitted ? <section className="mt-lg min-w-0" data-record-artifacts={tiles.length + omitted}>
+      <SectionHead label={t("record.artifacts")} count={tiles.length + omitted} />
+      <RecordGallery tiles={tiles} omitted={omitted} actions={actions} />
     </section> : null}
     {record.children.length ? <section className="mt-lg min-w-0" data-record-delegated={record.children.length}>
       <SectionHead label={t("recordCard.children")} count={record.children.length} />

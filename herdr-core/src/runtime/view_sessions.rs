@@ -546,6 +546,191 @@ impl Runtime {
             None => drawn.last().map_or(rest.len(), |last| last + 1),
         }
     }
+
+    /// Keeps the open record's Views (its 결과물 gallery, PRD
+    /// session-docs-and-assistant D-40) in step with every checkout's View
+    /// list. Runs with each Workspace view sync and when a record arrives;
+    /// while no record is shown it reads nothing, and an unchanged list
+    /// leaves the record's snapshot as it was.
+    pub(super) fn settle_record_views(&mut self) {
+        let Some(held) = self.snapshot.session_record.as_ref() else {
+            return;
+        };
+        let Some(record) = held.record.as_ref() else {
+            return;
+        };
+        let (views, omitted) = self.record_views(record);
+        if held.views == views && held.views_omitted == omitted {
+            return;
+        }
+        let mut next = crate::links::ledger::SessionRecordSnapshot::clone(held);
+        next.views = views;
+        next.views_omitted = omitted;
+        self.snapshot.session_record = Some(Arc::new(next));
+    }
+
+    /// The outputs among the Views `record`'s session and its descendants
+    /// opened (`is_output`), in every checkout's list, the one looked at last
+    /// first, each once; past `RECORD_VIEWS` only counted. A session is found by its native session,
+    /// as `hide view list --session` finds it, on its own machine.
+    fn record_views(
+        &self,
+        record: &crate::links::ledger::SessionRecord,
+    ) -> (Vec<crate::model::RecordViewSnapshot>, usize) {
+        use crate::links::ledger::{SessionIdentity, SessionRecord};
+        fn tree<'a>(record: &'a SessionRecord, into: &mut Vec<&'a SessionIdentity>) {
+            into.push(&record.session);
+            for child in &record.children {
+                tree(child, into);
+            }
+        }
+        let mut sessions = Vec::new();
+        tree(record, &mut sessions);
+        let sessions: Vec<(&SessionIdentity, Option<String>)> = sessions
+            .into_iter()
+            .map(|session| (session, crate::wire::session_digest(&session.session_id)))
+            .collect();
+        let whose = |display: &Display| {
+            sessions.iter().find_map(|(session, digest)| {
+                display
+                    .openers
+                    .iter()
+                    .any(|opener| {
+                        opener.device_id == session.device_id
+                            && (opener.resume.as_deref() == Some(session.session_id.as_str())
+                                || (digest.is_some() && opener.session == *digest))
+                    })
+                    .then_some(*session)
+            })
+        };
+        let mut found: Vec<(&WorkspaceKey, &Display, &SessionIdentity)> = Vec::new();
+        let layouts: Vec<(WorkspaceKey, &Layout)> = self.every_view_layout().collect();
+        for (key, layout) in &layouts {
+            for display in layout.displays() {
+                if !is_output(display) {
+                    continue;
+                }
+                let Some(session) = whose(display) else {
+                    continue;
+                };
+                // The same file, diff or page in one checkout is one tile.
+                if found.iter().any(|(other, seen, _)| {
+                    *other == key
+                        && seen.kind == display.kind
+                        && seen.path == display.path
+                        && seen.committed == display.committed
+                        && seen.url == display.url
+                }) {
+                    continue;
+                }
+                found.push((key, display, session));
+            }
+        }
+        found.sort_by_key(|(_, display, _)| std::cmp::Reverse(display.last_focused_unix_ms));
+        let omitted = found.len().saturating_sub(RECORD_VIEWS);
+        let views = found
+            .into_iter()
+            .take(RECORD_VIEWS)
+            .map(|(key, display, session)| {
+                let document = display
+                    .tab_id
+                    .as_deref()
+                    .and_then(|tab| self.editor_documents.get(tab));
+                let text = display.kind == crate::view_layout::DisplayKind::File;
+                crate::model::RecordViewSnapshot {
+                    device_id: key.0.clone(),
+                    checkout_path: key.1.clone(),
+                    display_id: display.id.clone(),
+                    kind: display.kind,
+                    label: match display.kind {
+                        crate::view_layout::DisplayKind::Browser => {
+                            super::view_areas::browser_label(display)
+                        }
+                        crate::view_layout::DisplayKind::External => display
+                            .external
+                            .as_ref()
+                            .map_or_else(String::new, |file| file.name.clone()),
+                        crate::view_layout::DisplayKind::File => {
+                            super::workspace_view::file_label(&display.path)
+                        }
+                        crate::view_layout::DisplayKind::Diff => super::editor::diff_label(
+                            &display.path,
+                            display.committed.unwrap_or(false),
+                        ),
+                    },
+                    path: display.path.clone(),
+                    url: display.url.clone(),
+                    document_kind: document
+                        .filter(|_| text)
+                        .map(|document| document.document_kind),
+                    lines: document
+                        .filter(|document| text && document.document_kind.is_editable())
+                        .and_then(|document| document.contents_utf8.as_deref())
+                        .map(first_lines)
+                        .unwrap_or_default(),
+                    session: session.clone(),
+                }
+            })
+            .collect();
+        (views, omitted)
+    }
+}
+
+/// Whether a View is a 결과물, something made for a person to look at, by
+/// its kind and, for a file, its extension: a page always, a diff never, a
+/// file when `OUTPUT_EXTENSIONS` names its extension. A source file, a log or
+/// a configuration file the agent only opened is not one. Interim until the
+/// agent names its outputs itself (`hide output add`, Desk phase 2).
+fn is_output(display: &Display) -> bool {
+    use crate::view_layout::DisplayKind;
+    let name = match display.kind {
+        DisplayKind::Browser => return true,
+        DisplayKind::Diff => return false,
+        DisplayKind::File => hide_platform::path::wire_name(&display.path),
+        DisplayKind::External => match &display.external {
+            Some(file) => file.name.as_str(),
+            None => return false,
+        },
+    };
+    name.rsplit_once('.').is_some_and(|(stem, extension)| {
+        !stem.is_empty()
+            && OUTPUT_EXTENSIONS
+                .iter()
+                .flat_map(|(_, extensions)| extensions.iter())
+                .any(|output| output.eq_ignore_ascii_case(extension))
+    })
+}
+
+/// The files that are a 결과물, by extension: each row a kind of output.
+const OUTPUT_EXTENSIONS: &[(&str, &[&str])] = &[
+    (
+        "image",
+        &["png", "jpg", "jpeg", "gif", "webp", "bmp", "avif", "svg"],
+    ),
+    ("pdf", &["pdf"]),
+    ("video", &["mp4", "webm", "mov"]),
+    ("board", &["pen", "excalidraw", "tldraw", "drawio"]),
+    (
+        "document",
+        &["md", "markdown", "mdx", "html", "htm", "txt", "rst", "adoc"],
+    ),
+];
+
+/// Views one record lists; the rest are counted, not sent.
+const RECORD_VIEWS: usize = 64;
+/// Lines of an open document a record's tile shows, and the characters
+/// kept of each.
+const PREVIEW_LINES: usize = 6;
+const PREVIEW_CHARS: usize = 120;
+
+/// A document's first lines for its tile: from its first line with words,
+/// each cut to `PREVIEW_CHARS`.
+fn first_lines(text: &str) -> Vec<String> {
+    text.lines()
+        .skip_while(|line| line.trim().is_empty())
+        .take(PREVIEW_LINES)
+        .map(|line| line.trim_end().chars().take(PREVIEW_CHARS).collect())
+        .collect()
 }
 
 #[cfg(test)]

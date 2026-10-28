@@ -608,6 +608,14 @@ impl Runtime {
         let Some(key) = self.workspace_key(workspace_id, checkout_id) else {
             return false;
         };
+        // Another session's View, a recent surface's or a session record's
+        // tile, brings that session's pane to the keyboard first, so the View
+        // shows in its own strip, as a pane's `N views` row does (PRD
+        // session-files D-12).
+        if let Some(pane) = self.hidden_view_pane(&key, display_id) {
+            self.focus_pane(pane, super::events::PaneFocusOrigin::Operator, None);
+            self.settle_view_sessions();
+        }
         self.apply_area_intent_to(&key, AreaIntent::Documents);
         match self.change_view_layout(&key, |layout, stamp| {
             layout
@@ -3174,7 +3182,7 @@ fn first_snapshot_area(node: &ViewNodeSnapshot) -> &str {
 
 /// A page's name on its tab: its title once it has one, else its host (for
 /// a file, its file name), else its address.
-fn browser_label(display: &Display) -> String {
+pub(super) fn browser_label(display: &Display) -> String {
     if display.is_new_tab() {
         return "New tab".to_owned();
     }

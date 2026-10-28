@@ -578,6 +578,34 @@ pub struct OpenedViewSnapshot {
     pub comments: usize,
 }
 
+/// A View a session record's session, or one of its descendants, opened:
+/// one tile of the record's 결과물 gallery (PRD session-docs-and-assistant
+/// D-40). It names the View by the checkout that holds it, and carries only
+/// what Hide already holds about it: an open document's first lines, never
+/// a read or a capture made for the tile.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct RecordViewSnapshot {
+    pub device_id: String,
+    /// The checkout whose View list holds it.
+    pub checkout_path: String,
+    pub display_id: String,
+    pub kind: crate::view_layout::DisplayKind,
+    /// Its name as its tab says it.
+    pub label: String,
+    pub path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// The kind of the file its editor tab holds; absent while none does.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub document_kind: Option<DocumentKind>,
+    /// The first lines of the text document its editor tab holds, each cut
+    /// to a bounded length; empty for anything else.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub lines: Vec<String>,
+    /// The session of the record's tree that opened it.
+    pub session: crate::links::ledger::SessionIdentity,
+}
+
 /// Where a Send stands (B21, B27, B28, B20).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ViewFeedbackSendSnapshot {

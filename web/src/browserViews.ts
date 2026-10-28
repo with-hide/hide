@@ -337,6 +337,12 @@ class BrowserSyncLoop {
     this.schedule();
   }
 
+  /** The still last taken of page `id` at `url`, if one was. */
+  stillOf(id: string, url: string): string | null {
+    const cached = this.cache.get(id);
+    return cached?.url === url ? cached.still : null;
+  }
+
   register(id: string, element: HTMLElement, device: BrowserDevicePlacement | null): () => void {
     const slot = { element, device };
     this.slots.set(id, slot);
@@ -573,6 +579,15 @@ export function registerBrowserSlot(id: string, element: HTMLElement, device: Br
 }
 
 /** One focus intent, delivered after the host has the current visible slots. */
+/**
+ * The still this window already took of a front Workspace's page at `url`,
+ * for a session record's tile (PRD session-docs-and-assistant D-40); null
+ * when it took none. It never asks for one.
+ */
+export function browserStillOf(id: string, url: string): string | null {
+  return loop?.stillOf(id, url) ?? null;
+}
+
 export function focusBrowserDisplay(workspace: string, id: string): void {
   syncLoop()?.requestFocus(workspace, id);
 }

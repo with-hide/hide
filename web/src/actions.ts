@@ -2895,6 +2895,32 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       if (output.kind === "pr") this.openSessionPullRequest({ workspace_id: null, number: output.number, url: output.url });
       else this.openRecordedIssue(output.source, output.repository, output.number);
     },
+    /**
+     * A tile of the record's 결과물 gallery (PRD session-docs-and-assistant
+     * D-40): its View in front of its checkout's documents. In the
+     * Workspace on screen it is a pane's `N views` row; anywhere else the
+     * checkout comes forward naming the View, which brings the session that
+     * opened it to the keyboard when its strip does not show it. A device's
+     * View needs its device's Workspace in front first, so there only the
+     * Workspace comes forward.
+     */
+    openRecordView(view: import("./snapshot").RecordView) {
+      const front = frontViewWorkspace();
+      const state = ui();
+      if (!state.overviewOpen && state.screen?.kind !== "main" && front?.device_id === view.device_id && front.path === view.checkout_path) {
+        showDocuments();
+        focusView(view.display_id, true);
+        return;
+      }
+      const project = catalogWorkspaces(rest()).find((row) => row.device_id === view.device_id && row.checkouts.some((checkout) => checkout.path === view.checkout_path));
+      const checkout = project?.checkouts.find((row) => row.path === view.checkout_path);
+      if (!project || !checkout) return diagnostic(`record view: ${view.checkout_path} is no longer open on ${view.device_id}`);
+      const node = localDeviceId(rest());
+      if (view.device_id !== node) return this.openWorkspace(view.device_id, project.id, checkout.id);
+      beginOpening({ checkoutId: checkout.id, deviceId: node, path: checkout.path, workspaceId: project.id });
+      ui().setViewFocusRequest({ workspace: workspaceKey({ device_id: node, path: checkout.path }), displayId: view.display_id, from: null });
+      dispatch({ schema_version: 2, kind: "focus_checkout", payload: { workspace_id: project.id, checkout_id: checkout.id, display_id: view.display_id, ...(frontDeviceId(rest()) !== node ? { focus_device: true } : {}) } });
+    },
 
     toggleTool,
     closeTool,

@@ -1673,3 +1673,125 @@ fn a_pane_close_takes_its_sessions_views_once_it_completes() {
     runtime.promote_close_reservations();
     assert_eq!(strip(&runtime, &directory), ["c.md"]);
 }
+
+/// PRD session-docs-and-assistant D-40: an open session record lists the
+/// Views its session and its descendants opened, an open document with its
+/// first lines, and follows the View list as one closes; a plain shell's and
+/// the operator's Views, and another session's, are not the record's.
+#[test]
+fn a_session_record_lists_the_outputs_its_session_tree_opened() {
+    use crate::links::ledger::{SessionIdentity, SessionRecord, SessionRecordSnapshot};
+    let (mut runtime, checkout, directory) = setup("record-views");
+    let mut payload = tab_order_payload(&directory.to_string_lossy(), &TABS, &TABS, TABS[0]);
+    for pane in &mut payload.panes {
+        pane.terminal_id = Some(format!("term-{}", pane.pane_id));
+    }
+    payload.agents = serde_json::from_value(serde_json::json!(
+        [
+            ("w-order:t1:p", "native-parent"),
+            ("w-order:t2:p", "native-child")
+        ]
+        .iter()
+        .map(|(pane, session)| serde_json::json!({
+            "pane_id": pane, "agent": "codex", "agent_status": "working",
+            "state_change_seq": 1,
+            "lineage_session": crate::wire::session_digest(session),
+        }))
+        .collect::<Vec<_>>()
+    ))
+    .expect("agent rows");
+    runtime.ingest_session(Ok(payload));
+    runtime.sync_workspace_view();
+    control_file(&mut runtime, "w-order:t1:p", &directory, "a.md", false, "a");
+    control_file(&mut runtime, "w-order:t2:p", &directory, "b.md", false, "b");
+    control_file(&mut runtime, "w-order:t3:p", &directory, "c.md", false, "c");
+    // Source code and a log the session only opened are not its outputs.
+    for (file, suffix) in [("main.rs", "rs"), ("build.log", "log")] {
+        std::fs::write(directory.join(file), "fn main() {}\n").expect("fixture");
+        control_file(
+            &mut runtime,
+            "w-order:t1:p",
+            &directory,
+            file,
+            false,
+            suffix,
+        );
+    }
+    open(&mut runtime, &checkout, &directory, "d.md");
+    let session = |id: &str| SessionIdentity {
+        device_id: crate::node::TEST_NODE.into(),
+        agent: "codex".into(),
+        session_id: id.into(),
+    };
+    let record = |id: &str, children| SessionRecord {
+        session: session(id),
+        children,
+        ..Default::default()
+    };
+    runtime.snapshot.session_record = Some(Arc::new(SessionRecordSnapshot {
+        session: Some(session("native-parent")),
+        record: Some(record(
+            "native-parent",
+            vec![record("native-child", Vec::new())],
+        )),
+        ..Default::default()
+    }));
+    runtime.sync_workspace_view();
+    let listed = |runtime: &Runtime| {
+        let held = runtime.snapshot.session_record.as_ref().expect("a record");
+        let mut views: Vec<_> = held
+            .views
+            .iter()
+            .map(|view| {
+                (
+                    view.label.clone(),
+                    view.session.session_id.clone(),
+                    view.lines.clone(),
+                )
+            })
+            .collect();
+        views.sort();
+        (views, held.views_omitted)
+    };
+    assert_eq!(
+        listed(&runtime),
+        (
+            vec![
+                ("a.md".into(), "native-parent".into(), vec!["a.md".into()]),
+                ("b.md".into(), "native-child".into(), vec!["b.md".into()]),
+            ],
+            0
+        )
+    );
+
+    let a = display_id(&runtime, &directory, "a.md");
+    view_act(
+        &mut runtime,
+        &directory,
+        serde_json::json!({"action": "close", "display_id": a}),
+    );
+    runtime.sync_workspace_view();
+    assert_eq!(
+        listed(&runtime).0,
+        [("b.md".into(), "native-child".into(), vec!["b.md".into()])],
+        "a closed View leaves the record"
+    );
+
+    // Pressing the child's tile names its View in its checkout: the child's
+    // pane takes the keyboard, so the View shows in the child's own strip.
+    let b = display_id(&runtime, &directory, "b.md");
+    runtime.dispatch_json(&explorer_event(
+        "focus_checkout",
+        serde_json::json!({
+            "workspace_id": "workspace:order",
+            "checkout_id": checkout,
+            "display_id": b,
+        }),
+    ));
+    assert_eq!(runtime.snapshot.status.last_error, None);
+    assert_eq!(
+        runtime.snapshot.terminal.pane_id.as_deref(),
+        Some("w-order:t2:p")
+    );
+    assert_eq!(drawn(&runtime).1, ["b.md"]);
+}

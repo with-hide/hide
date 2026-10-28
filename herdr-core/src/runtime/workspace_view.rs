@@ -1038,6 +1038,8 @@ impl Runtime {
         // the editor's active tab is derived from it (PRD session-files).
         self.settle_view_sessions();
         self.reconcile_view_displays();
+        // The open record's gallery follows the View lists (D-40).
+        self.settle_record_views();
         self.sync_agent_selection();
         if let Some(store) = &self.workspace_views {
             for workspace in &mut self.snapshot.navigator.workspaces {

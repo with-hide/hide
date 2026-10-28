@@ -146,7 +146,7 @@ export function requestWords(t: TFunction<"translation">, request: PaneTurnReque
 }
 
 /** Who sent a request, in the row's words. */
-function senderName(t: TFunction<"translation">, sender: RequestSender): string {
+export function senderName(t: TFunction<"translation">, sender: RequestSender): string {
   return sender.kind === "named" ? sender.name : t(sender.kind === "operator" ? "requests.sender.operator" : "requests.sender.agent");
 }
 
