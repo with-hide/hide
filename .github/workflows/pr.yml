@@ -684,6 +684,7 @@ jobs:
       # A pull request's package reports a version no release uses.
       version: 0.0.0-ci.${{ github.run_number }}
       include-macos: true
+      web-typechecked: ${{ contains(fromJSON(needs.plan.outputs.lanes), 'checks') }}
 
   verify:
     name: verify
