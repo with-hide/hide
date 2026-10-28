@@ -711,7 +711,7 @@ fn antigravity_memory(
         home,
         deadline,
     )
-    .context
+    .joined()
 }
 
 /// The count a Grok or Cursor event makes. Grok's `Stop` names the

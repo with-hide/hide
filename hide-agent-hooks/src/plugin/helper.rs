@@ -314,6 +314,9 @@ fn prompt_memory(
     };
     let mut start = false;
     let mut context = String::new();
+    // The Hide global instruction comes with the session-start ask, in its
+    // own slot outside Memory's quota (PRD memory-self-improve D-31).
+    let mut global = None;
     if input.memory_first.unwrap_or(input.first) {
         let index = memory_context_until(request(HookEvent::SessionStart), home, deadline);
         start = matches!(
@@ -321,10 +324,17 @@ fn prompt_memory(
             HookMemoryOutcome::Provided { .. } | HookMemoryOutcome::Empty
         );
         context.push_str(index.context.as_deref().unwrap_or_default());
+        // Once a session, with the start guidance: the index may be asked
+        // again on later prompts, the global instruction is not.
+        global = index.global.filter(|_| input.first);
     }
     let prompt = memory_context_until(request(HookEvent::UserPromptSubmit), home, deadline);
     let body = prompt.context.as_deref().unwrap_or_default();
     let (context, index_kept) = bounded_memory_capsule(&context, body);
+    let context = match (global, context) {
+        (Some(global), Some(context)) => Some(format!("{global}{context}")),
+        (global, context) => global.or(context),
+    };
     (context, start && index_kept)
 }
 

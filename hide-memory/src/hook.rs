@@ -114,6 +114,11 @@ pub struct HookContext {
     pub context: Option<String>,
     #[serde(flatten)]
     pub outcome: HookOutcome,
+    /// The Hide global instruction, in its own slot beside Memory's and under
+    /// its own cap (PRD memory-self-improve D-31): a session start carries it
+    /// whether or not Memory answered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub global: Option<String>,
 }
 
 impl HookContext {
@@ -121,6 +126,7 @@ impl HookContext {
         Self {
             context: None,
             outcome,
+            global: None,
         }
     }
 }
@@ -310,6 +316,7 @@ fn render(
     HookContext {
         context: Some(context),
         outcome,
+        global: None,
     }
 }
 

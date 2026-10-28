@@ -242,6 +242,18 @@ A `Stop` that lists nothing (an input cut off, or a Claude Code that sends no `b
 The running ids are capped at 256 per session, the remembered finished ids at 256 (the oldest go first, and the done count keeps them); crossing the running cap fails the event and is written down as the pane's last report failure.
 Codex and the runtimes whose input carries no subagent id keep the older rule: a start adds one, a stop moves one to done, and the turn's `Stop` sets `working` to what the runtime lists, none for Codex.
 
+### The Hide global instruction
+
+A session start also carries the Hide global instruction (PRD memory-self-improve D-23, D-29, D-31): `global-instruction.md` in the core's state folder (`hide_kit::layout::global_instruction`), Hide's own file of instructions the operator approved for every Project and every agent, never one of an agent's own global files.
+The core reads it on the same `workspace memory --event SessionStart` answer as Memory, in its own `global` field, whether Memory is on, off, unresolved for the checkout or unreachable, so a session in any Project and on any connected device gets it (`herdr_core::global_instruction`, `hided/src/hook_request.rs`).
+It goes in Hide's own `<hide-global-instruction trust="operator-approved">` block, before Memory's untrusted block, and under its own cap of 4 KiB and 1,600 estimated tokens, kept apart from Memory's 1,200, so it never shortens Memory's index or bodies (B4).
+A file over the cap or not UTF-8 is given to no session, never cut, and each start it would have reached leaves a `global_instruction.not_given` diagnostic (B5); an empty file gives nothing.
+The read is one bounded file read on hided's request task, outside Memory's one-second deadline, and the hook's own 1,250 ms Memory wait is unchanged (B31).
+Claude Code, Codex and Antigravity get it at `SessionStart`; OpenCode, Pi and omp get it with their session's first prompt, beside the start guidance, once a session.
+Grok's `SessionStart` cannot add context and an Antigravity session's own child sessions run no Hide hook, so neither gets it ([INSTALL.md](INSTALL.md#what-each-system-supports)).
+A session on a device whose link is down gets no answer from the core, so it starts without the instruction and the hook records `memory.unavailable`, as it does for Memory; the next session after the link returns gets it (B3).
+A session started outside a Hide pane has no Hide hook identity and gets nothing.
+
 ### What a hook records when it fails
 
 A hook that cannot get its answer goes on without it and records why in `~/.hide/agent-hooks/delivery-diagnostics.json`, private to the account, at most once per cause every ten minutes, with one JSON line on its standard error when it records.
