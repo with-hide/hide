@@ -261,3 +261,70 @@ fn home_in_another_letter_case_is_home_where_case_is_ignored() {
         ErrorCode::OutsideRoot
     );
 }
+
+/// A folder whose `.git` names a git directory with no `commondir` (a
+/// submodule's `.git/modules/<name>`, `git init --separate-git-dir`, a bare
+/// bundle's `gitdir: ./.bare`) is its own project, inside home or, once
+/// confirmed, outside it; a linked worktree of a bare bundle asks about the
+/// bundle, which then registers.
+#[test]
+fn a_folder_whose_git_directory_lives_elsewhere_is_its_own_project() {
+    let home = tempfile::tempdir().unwrap();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let canonical = |path: &Path| {
+        hide_platform::fs::identity::canonical(path)
+            .unwrap()
+            .to_string_lossy()
+            .into_owned()
+    };
+    let submodule = |folder: &Path, git_dir: &Path| {
+        std::fs::create_dir_all(git_dir).unwrap();
+        std::fs::write(git_dir.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::create_dir_all(folder).unwrap();
+        std::fs::write(
+            folder.join(".git"),
+            format!("gitdir: {}\n", git_dir.display()),
+        )
+        .unwrap();
+    };
+
+    let inside = home.path().join("parent/lib");
+    submodule(&inside, &home.path().join("parent/.git/modules/lib"));
+    assert_eq!(
+        check(&inside, None, home.path()).unwrap().root,
+        canonical(&inside)
+    );
+
+    let bundle = elsewhere.path().join("bundle");
+    submodule(&bundle, &bundle.join(".bare"));
+    std::fs::write(bundle.join(".git"), "gitdir: ./.bare\n").unwrap();
+    assert_eq!(
+        check(&bundle, Some(&bundle), home.path()).unwrap().root,
+        canonical(&bundle)
+    );
+    let admin = bundle.join(".bare/worktrees/feature");
+    std::fs::create_dir_all(&admin).unwrap();
+    let feature = bundle.join("feature");
+    std::fs::create_dir_all(&feature).unwrap();
+    std::fs::write(
+        feature.join(".git"),
+        format!("gitdir: {}\n", admin.display()),
+    )
+    .unwrap();
+    std::fs::write(admin.join("HEAD"), "ref: refs/heads/feature\n").unwrap();
+    std::fs::write(admin.join("commondir"), "../..\n").unwrap();
+    std::fs::write(
+        admin.join("gitdir"),
+        format!("{}\n", feature.join(".git").display()),
+    )
+    .unwrap();
+    let asked = check(&feature, Some(&feature), home.path()).unwrap_err();
+    assert_eq!(asked.code, ErrorCode::NeedsConfirmation);
+    assert_eq!(asked.confirm, Some(canonical(&bundle)));
+    assert_eq!(
+        check(&feature, Some(Path::new(&canonical(&bundle))), home.path())
+            .unwrap()
+            .root,
+        canonical(&bundle)
+    );
+}

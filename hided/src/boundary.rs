@@ -1614,6 +1614,32 @@ mod tests {
         );
     }
 
+    /// A folder whose `.git` names a git directory with no `commondir` (a
+    /// submodule's, a separate git directory, a bare bundle's
+    /// `gitdir: ./.bare`) is registered as its own project, as main did.
+    #[test]
+    fn a_folder_whose_git_directory_lives_elsewhere_is_its_own_project() {
+        let f = fixture();
+        let pointed = |folder: &Path, git_dir: &Path, written: &str| {
+            fs::create_dir_all(git_dir).unwrap();
+            fs::write(git_dir.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+            fs::create_dir_all(folder).unwrap();
+            fs::write(folder.join(".git"), format!("gitdir: {written}\n")).unwrap();
+        };
+        let lib = f.home.join("projects/parent/lib");
+        let modules = f.home.join("projects/parent/.git/modules/lib");
+        pointed(&lib, &modules, &s(&modules));
+        assert_eq!(f.boundary.resolve_registration(&s(&lib), None), Ok(lib));
+
+        let bundle = f.outside.join("bundle");
+        pointed(&bundle, &bundle.join(".bare"), "./.bare");
+        let written = s(&bundle);
+        assert_eq!(
+            f.boundary.resolve_registration(&written, Some(&written)),
+            Ok(bundle.canonicalize().unwrap())
+        );
+    }
+
     #[test]
     fn home_spelled_as_given_resolves_when_home_is_a_symlink() {
         let outer = tempfile::tempdir().unwrap();

@@ -192,14 +192,20 @@ fn look_up(path: &Path) -> Result<PathBuf, Unregistrable> {
 /// The project a registration of the folder at `real` adds, as the system
 /// spells it, and whether it is a Git repository: the root of the repository
 /// the folder is in (its main checkout's, for a linked worktree), or the
-/// folder itself.
+/// folder itself. A `.git` this reader does not follow (a submodule's, a
+/// separate git directory, a bare bundle's `gitdir: ./.bare`) leaves the
+/// folder its own project, as the catalog shows it (`hide_host::catalog`).
 fn project_root(real: &Path) -> Result<(PathBuf, bool), Unregistrable> {
-    let facts =
-        hide_project::facts(real).map_err(|error| Unregistrable::Unreadable(error.to_string()))?;
-    let root = identity::canonical(&facts.root).map_err(|error| {
-        Unregistrable::Unreadable(format!("{} cannot be read: {error}", facts.root.display()))
+    let (root, is_git) = match hide_project::facts(real) {
+        Ok(facts) => (facts.root, facts.kind == hide_project::ProjectKind::Git),
+        Err(hide_project::ResolveError::InvalidGitLink { .. }) => (real.to_path_buf(), false),
+        Err(hide_project::ResolveError::MissingPath(_)) => return Err(Unregistrable::NotFound),
+        Err(error) => return Err(Unregistrable::Unreadable(error.to_string())),
+    };
+    let root = identity::canonical(&root).map_err(|error| {
+        Unregistrable::Unreadable(format!("{} cannot be read: {error}", root.display()))
     })?;
-    Ok((root, facts.kind == hide_project::ProjectKind::Git))
+    Ok((root, is_git))
 }
 
 /// An absolute path with no `.` or `..` component, which would otherwise
