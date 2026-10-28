@@ -1,9 +1,10 @@
-import { BookmarkIcon, BotIcon, ChevronDownIcon, ChevronRightIcon, FileIcon, LoaderCircleIcon, MessagesSquareIcon, MoreHorizontalIcon, SettingsIcon, SparklesIcon, Trash2Icon, Undo2Icon, UserIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon, FileIcon, LoaderCircleIcon, MoreHorizontalIcon, SettingsIcon, SparklesIcon, Trash2Icon, Undo2Icon, UserIcon } from "lucide-react";
 import { useUiStore } from "./ui";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { Actions } from "./actions";
 import { AgentLogo } from "./components/agent-logo";
 import { HideAiExplainer } from "./components/hide-ai-explainer";
+import { memorySteps } from "./hideAiSteps";
 import { PrMark } from "./components/pr-mark";
 import {
   AlertDialog,
@@ -444,11 +445,7 @@ function MemoryEmpty({ project }: { project: ProjectMemory }) {
   // No memory yet: the owl says what Memory does and when it first reads.
   if (project.rows.length === 0) {
     return (
-      <HideAiExplainer title={t("memory.empty.title")} steps={[
-        { icon: MessagesSquareIcon, text: t("hideAiTool.explain.memory.remember") },
-        { icon: BotIcon, text: t("hideAiTool.explain.memory.shared") },
-        { icon: BookmarkIcon, text: t("hideAiTool.explain.memory.once") },
-      ]} data-memory-empty="true">
+      <HideAiExplainer title={t("memory.empty.title")} steps={memorySteps(t)} data-memory-empty="true">
         <MemoryExplanation project={project} />
       </HideAiExplainer>
     );

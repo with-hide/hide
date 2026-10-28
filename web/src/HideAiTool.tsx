@@ -7,6 +7,7 @@ import { Switch } from "./components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./components/ui/tabs";
 import { Hint } from "./components/ui/tooltip";
 import { HideAiSettings } from "./HideAiSettings";
+import { memorySteps, suggestionSteps } from "./hideAiSteps";
 import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
 import { MemoryTab } from "./MemoryTab";
@@ -85,14 +86,15 @@ function Head({ projectId, project, actions }: { projectId: string; project: Pro
   );
 }
 
-/** With the switch off nothing is read and nothing is counted (B3): the owl says so and what turning it on reads. */
+/** With the switch off nothing is read and nothing is counted (B3): the owl says so and what 제안 and Memory each give once it is on. */
 function Off() {
   const { t } = useInterfaceTranslation();
   return (
     <div className="px-md py-sm" data-hide-ai-off="true">
-      <HideAiExplainer title={t("hideAiTool.off.title")}>
-        <p className="break-keep text-caption text-muted-foreground">{t("hideAiTool.off.body")}</p>
-      </HideAiExplainer>
+      <HideAiExplainer title={t("hideAiTool.off.title")} groups={[
+        { name: t("hideAiTool.tab.suggestions"), steps: suggestionSteps(t) },
+        { name: t("hideAiTool.tab.memory"), steps: memorySteps(t) },
+      ]} />
     </div>
   );
 }

@@ -13,7 +13,7 @@ import { useUiStore } from "../ui";
 import type { LaneFrame, LaneSizes, WorkspaceView } from "../workspace";
 import { memorySceneProject } from "./MemoryScene";
 
-export const HIDE_AI_SCENE_STATES = ["new", "improvement", "applying", "applied", "settings", "settings_unread", "off", "first_run", "not_investigated", "memory", "empty", "memory_empty"] as const;
+export const HIDE_AI_SCENE_STATES = ["new", "improvement", "applying", "applied", "settings", "settings_unread", "off", "first_run", "not_investigated", "memory", "empty", "memory_empty", "suggestions_off"] as const;
 export type HideAiSceneState = (typeof HIDE_AI_SCENE_STATES)[number];
 export type HideAiSceneLanguage = "en" | "ko" | "zh-CN" | "ja";
 export type HideAiSceneParams = { theme: "light" | "dark"; state: HideAiSceneState; width: number; language: HideAiSceneLanguage };
@@ -123,6 +123,7 @@ export function hideAiSceneProject(state: HideAiSceneState, workspaceId = "herdr
     case "first_run": return { ...base, intro_seen: false, status: "first_run_pending", rows: [], counts: { suggestions: 0, rail: 1 } };
     case "empty":
     case "memory_empty": return { ...base, status: "none_today", rows: [], counts: { suggestions: 0, rail: 0 } };
+    case "suggestions_off": return { ...base, status: "off", settings: { ...base.settings, suggestions_enabled: false }, counts: { suggestions: 0, rail: 0 } };
   }
 }
 

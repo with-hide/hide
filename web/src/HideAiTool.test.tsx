@@ -107,6 +107,9 @@ describe("the Hide AI tool", () => {
     expect(sent("hide_ai_switch")).toEqual([{ workspace_id: "p", on: false }]);
     await render(suggestionsProject({ enabled: false, status: "off", rows: [suggestionRow("s1")] }));
     expect(q("[data-hide-ai-off]")?.textContent).toContain("Hide AI is off");
+    // Off, the owl says what each tab gives once it is on.
+    expect([...document.querySelectorAll("[data-hide-ai-explainer-group]")].map((group) => group.getAttribute("data-hide-ai-explainer-group"))).toEqual(["Suggestions", "Memory"]);
+    expect(q('[data-hide-ai-explainer-group="Memory"]')?.textContent).toContain("Every agent uses the same memories");
     expect(q('[role="tablist"]')).toBeNull();
     expect(q("[data-suggestion]")).toBeNull();
     await click("[data-hide-ai-switch]");
@@ -151,6 +154,9 @@ describe("the Hide AI tool", () => {
     expect(q("[data-suggestions-status] [data-hide-ai-explainer-title]")?.textContent).toBe("No suggestions today");
     await render(suggestionsProject({ status: "off", rows: [suggestionRow("s1")] }));
     expect(q("[data-suggestion]")).toBeNull();
+    // Suggestions off: the owl says what they give, with 켜기 under it.
+    expect(q("[data-suggestions-status] [data-hide-ai-explainer-title]")?.textContent).toBe("Suggestions are off");
+    expect(q("[data-suggestions-status]")?.textContent).toContain("Suggests how to stop the same mistakes");
     await click("[data-suggestions-turn-on]");
     expect(sent("suggestion_settings")).toEqual([{ workspace_id: "p", suggestions_enabled: true }]);
   });
