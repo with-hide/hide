@@ -118,7 +118,8 @@ export function HideAiTab({ actions }: { actions: Actions }) {
                 actions.chooseAi(provider, undefined, device);
               }}
             >
-              <SelectTrigger aria-label={t("hideAi.agentAria")} data-ai-provider="true">
+              {/* A device agent's name carries its machine (B11), longer than the control's width: the trigger grows to show it whole. */}
+              <SelectTrigger className="w-auto min-w-(--size-settings-control-w)" aria-label={t("hideAi.agentAria")} data-ai-provider="true">
                 <SelectValue placeholder={t("hideAi.choose")} />
               </SelectTrigger>
               <SelectContent>
