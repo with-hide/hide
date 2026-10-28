@@ -20,6 +20,7 @@ LINKERS = {'ld', 'ld64', 'ld.lld', 'lld', 'rust-lld', 'link', 'lld-link', 'colle
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument('--bash', default='bash')
     ap.add_argument('--source', required=True, type=Path)
     ap.add_argument('--output', required=True, type=Path)
     ap.add_argument('--repeat', type=int, choices=[1, 2, 3])
@@ -48,7 +49,7 @@ def main():
             env.update(CARGO_PROFILE_RELEASE_LTO=lto, CARGO_PROFILE_RELEASE_CODEGEN_UNITS=units,
                        LC_ALL='C', LANG='C', HIDE_VERSION='0.0.0-profile-measure',
                        HIDE_COMMIT=sha, HIDE_BUILD_ORDER='0')
-            command = ['bash', 'scripts/verify-cargo.sh', 'build', '--release', '--timings', '-p', 'hided', '--bins', '-p', 'hide-agent-hooks', '--bin', 'hide-agent-hooks']
+            command = [args.bash, 'scripts/verify-cargo.sh', 'build', '--release', '--timings', '-p', 'hided', '--bins', '-p', 'hide-agent-hooks', '--bin', 'hide-agent-hooks']
             result = dict(metadata, profile=label, repeat=repeat, command=command,
                           clean_target=not target.exists(), free_before_bytes=shutil.disk_usage(source).free)
             if result['free_before_bytes'] < MIN_FREE:
@@ -127,7 +128,8 @@ def main():
             (run / 'processes.json').write_text(json.dumps(list(processes.values()), indent=2))
             (run / 'result.json').write_text(json.dumps(result, indent=2))
             print(json.dumps({key: result[key] for key in ('profile', 'repeat', 'exit_code', 'total_seconds', 'peak_tree_rss_bytes', 'sampled_link_active_seconds', 'binaries')}), flush=True)
-            shutil.rmtree(target)
+            if target.exists():
+                shutil.rmtree(target)
             if result['exit_code']:
                 raise RuntimeError(f'Build failed: {label} repeat {repeat}')
 

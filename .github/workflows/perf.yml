@@ -12,7 +12,7 @@ jobs:
       fail-fast: false
       max-parallel: 6
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [windows-latest]
         repeat: [1, 2, 3]
     defaults:
       run:
@@ -54,7 +54,9 @@ jobs:
           source scripts/toolchain-env.sh
           rustc --version
           cargo --version
-          python ../harness/scripts/profile-measure.py --source . --output ../results --repeat "$REPEAT"
+          bash_path="$BASH"
+          if [ "$RUNNER_OS" = Windows ]; then bash_path="$(cygpath -w "$BASH")"; fi
+          python ../harness/scripts/profile-measure.py --bash "$bash_path" --source . --output ../results --repeat "$REPEAT"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
