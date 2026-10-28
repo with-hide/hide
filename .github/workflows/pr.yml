@@ -203,12 +203,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - uses: Swatinem/rust-cache@v2
+      # Linux's one saver of the workspace set: it builds every member's tests,
+      # the most of any Linux job (docs/BUILD.md, "CI's Rust caches").
+      - uses: ./.github/actions/rust-cache
         with:
-          workspaces: ". -> target"
-          # A cache per pull request ref pushed the repository past the 10 GB
-          # cache limit and evicted main's; main's is the one every run reads.
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          set: workspace
+          save: ${{ github.ref == 'refs/heads/main' }}
       # rustfmt and Clippy come with the version `rust-toolchain.toml` names,
       # which rustup installs on the job's first `rustc` or `cargo` call; the
       # image's own toolchain is never used. A full plan covers the whole
@@ -358,10 +358,11 @@ jobs:
         # suites report line endings instead of code.
         run: git config --global core.autocrlf false
       - uses: actions/checkout@v7
-      - uses: Swatinem/rust-cache@v2
+      # Windows's one saver of the workspace set, the most any Windows job builds.
+      - uses: ./.github/actions/rust-cache
         with:
-          workspaces: ". -> target"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          set: workspace
+          save: ${{ github.ref == 'refs/heads/main' }}
       - name: Install cargo-nextest
         # The Rust tests below run under nextest's `ci` profile (one retry).
         timeout-minutes: 3

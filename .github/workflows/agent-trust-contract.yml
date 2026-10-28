@@ -53,10 +53,11 @@ jobs:
       - name: Keep line endings as committed
         run: git config --global core.autocrlf false
       - uses: actions/checkout@v7
-      - uses: Swatinem/rust-cache@v2
+      # Reads the workspace set another lane saves (docs/BUILD.md, "CI's Rust caches").
+      - uses: ./.github/actions/rust-cache
         with:
-          workspaces: ". -> target"
-          save-if: false
+          set: workspace
+          save: false
       - name: Install zsh on Linux
         # The Herdr fetch script is zsh; the Linux image has none.
         if: ${{ matrix.system == 'linux' }}

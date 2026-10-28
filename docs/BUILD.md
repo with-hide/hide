@@ -130,6 +130,38 @@ A verification run under its own HOME still sources `scripts/toolchain-env.sh`, 
 Moving to a new version is a pull request that changes the file together with whatever the new compiler and Clippy ask of the code, proven by that pull request's CI; a finding is fixed, not silenced with `allow`.
 Dependabot proposes that pull request (`.github/dependabot.yml`), checking every Monday for a newer stable release; whoever takes it up pushes the fixes to it.
 
+## CI's Rust caches
+
+Every CI job that builds Rust restores its compiled third-party dependencies through `.github/actions/rust-cache`, which wraps [rust-cache](https://github.com/Swatinem/rust-cache) with one key per dependency set and system rather than one per job.
+The repository has 10 GB of Actions cache, and on 2026-10-28 main's entries filled 9.8 GB with the same dependencies kept four or five times over, so GitHub evicted entries within a day of their last use.
+Three things made the copies: a key named after the job, so the rust lane, the web end-to-end build, the mailbox lane and the journey each kept their own copy of one build; the installed toolchains in the key, where some Linux runners of the same image carried another stable beside the pinned version and each Linux job kept a copy per variant; and a changed lockfile, which saves a new key beside the old one.
+
+| Set | What it holds | Saved by, on main only | Read by |
+| --- | --- | --- | --- |
+| `workspace` | The debug build of the dependencies, one feature set for every member (`workspace-hack`) | `rust workspace` on Linux, `windows check` on Windows, `desktop e2e` shard 1 on macOS | Every other lane that builds Rust, and a release tag's tests |
+| `platform` | `hide-platform` and `hide-herdr-client` built alone, outside that feature set | `os contract` on each system | Nothing else |
+| `release` | The release profile's dependencies | `package.yml`'s Windows and Linux package jobs and its macOS compile | The packages of a pull request and a release tag, and the nightly measurement |
+
+Each set is saved by one job per system, the one that builds the most of it, because a key that exists is never saved again: two savers would race and the loser's extra build would be lost every run.
+A reader builds what the saver did not, which on macOS is the extra dependencies of the nightly lanes that test more than the daemon.
+rust-cache's environment hash stays in the key; it hashes every installed toolchain, so the action first removes every toolchain but the one `rust-toolchain.toml` names, and the hash then depends on the pin and not on the runner.
+rust-cache ends each key with its own 8-digit hash of `Cargo.lock`, every member's `Cargo.toml` and `rust-toolchain.toml`, and when that hash changes it restores the newest entry of the same set and system and builds only the dependencies that changed; it leaves out the root `Cargo.toml`, whose `[profile]` sections change every dependency's build, so the action puts that file's hash in the key before the system, and a change there misses once.
+A changed lockfile thus saves a new key beside the old one, and nothing deletes the old one: GitHub deletes an entry no run has read for seven days, and past the repository's 10 GB it evicts the least recently read first.
+Main's runs read the current entry of every set every day, so what ages out or is evicted first is a replaced one; one entry per set and system is about 3 GB, and a week of replaced sets beside it stays under the limit unless the lockfile changes several times that week, when eviction takes the oldest replaced sets.
+Nothing in the repository prunes them: deciding which entry is current means computing rust-cache's own key, which changes whenever rust-cache does, and a copy of that computation that drifted would delete the current entries.
+The keys from before the sets (`v0-rust-<job>-...`) are deleted by hand once, after each set's first entry is saved.
+`scripts/tests/test_rust_cache.py` fixes the action's key, its dependency-only save and the toolchain step, and each saver's exact `save` condition, and fails when a job uses rust-cache directly or names another set.
+
+### What a cached release dependency can change
+
+The packages a candidate builds are what ships on Windows and Linux, and their release dependencies now come from the `release` set rather than from a cold build.
+What a release build takes from the cache is limited to third-party dependencies, so every hide crate, `hided`'s build script (the embedded web shell, version, commit and build order) and the final link are compiled from the checkout in every run.
+Two steps hold that: the action keeps rust-cache's `cache-workspace-crates: false`, whose normal cleanup deletes the workspace's own crates from `target/` before a save, and since that cleanup swallows its own errors and saves anyway, a release job also runs `cargo clean --release --workspace` right after the restore, which removes any workspace crate an entry still held and leaves the dependencies.
+Cargo reuses a cached dependency only when its fingerprint matches what this checkout asks for: the same package and version, which `Cargo.lock` pins with the registry checksum it was downloaded against, the same features, profile, target and compiler; anything else is rebuilt from source.
+A run reads entries saved by its own ref and by main, so the only entries a candidate or a release tag can read are those saved by runs on main, where a pull request's code arrives only through a reviewed merge; a pull request never saves (`save` is false off main), and an entry is never overwritten once saved.
+The argument stops at the artifact itself: cargo does not hash a compiled dependency against its source, so a release dependency is as trustworthy as the jobs that run on main, since any of them can save an entry under a key that does not exist yet.
+The macOS app the private publisher signs is built on the Mac mini from its own checkout and reads none of these caches, and the Linux device helpers (`device-helpers.yml`) still build cold.
+
 ## Two entrypoints
 
 `scripts/verify-cargo.sh` and `scripts/verify-web.sh` are the only way a check script or the PRD harness builds this repository.

@@ -55,14 +55,13 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
-      - uses: Swatinem/rust-cache@v2
+      # The release set `package.yml`'s macOS compile saves, so a nightly
+      # compiles only the workspace's own crates.
+      - uses: ./.github/actions/rust-cache
         timeout-minutes: 5
         with:
-          workspaces: ". -> target"
-          # The release dependencies, which no other lane builds. Main's run
-          # saves them, so a nightly compiles only the workspace's own crates.
-          shared-key: perf-release
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          set: release
+          save: false
       - name: Name the run
         id: run
         run: |

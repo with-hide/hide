@@ -132,8 +132,10 @@ jobs:
     env:
       HIDE_POSTHOG_PROJECT_TOKEN: ${{ vars.HIDE_POSTHOG_PROJECT_TOKEN }}
     runs-on: ${{ matrix.runner }}
-    # Nothing is cached: release artifacts share nothing with the debug
-    # caches main keeps, so every run is a cold release build.
+    # The third-party dependencies come from the release set main keeps, and
+    # nothing else does: every hide crate and the link are built from this
+    # checkout. docs/BUILD.md, "CI's Rust caches", says why a restored
+    # dependency cannot change what ships, and where that argument stops.
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -153,6 +155,13 @@ jobs:
         with:
           repository: with-hide/hide
           ref: ${{ inputs.source-sha || github.sha }}
+      # Saved by a run on main (the nightly, a candidate dispatched from main);
+      # a pull request and a release tag read it and never write it.
+      - uses: ./.github/actions/rust-cache
+        timeout-minutes: 10
+        with:
+          set: release
+          save: ${{ github.ref == 'refs/heads/main' }}
       - uses: pnpm/action-setup@v6
         with:
           version: 10
@@ -374,6 +383,13 @@ jobs:
         with:
           repository: with-hide/hide
           ref: ${{ inputs.source-sha || github.sha }}
+      # Saved by a run on main (the nightly, a candidate dispatched from main);
+      # a pull request and a release tag read it and never write it.
+      - uses: ./.github/actions/rust-cache
+        timeout-minutes: 10
+        with:
+          set: release
+          save: ${{ github.ref == 'refs/heads/main' }}
       - uses: pnpm/action-setup@v6
         with:
           version: 10

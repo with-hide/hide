@@ -84,11 +84,14 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
-      - uses: Swatinem/rust-cache@v2
+      # macOS's one saver of the workspace set: the one macOS lane of every main
+      # push that builds the daemon (docs/BUILD.md, "CI's Rust caches"). The
+      # shards build the same thing; the first saves it. Windows's saver is
+      # `windows check`.
+      - uses: ./.github/actions/rust-cache
         with:
-          workspaces: ". -> target"
-          # The shards build the same thing; one of them saves it.
-          save-if: ${{ github.ref == 'refs/heads/main' && matrix.shard == 1 }}
+          set: workspace
+          save: ${{ github.ref == 'refs/heads/main' && matrix.shard == 1 && runner.os == 'macOS' }}
       - name: Install zsh and the virtual display on Linux
         if: runner.os == 'Linux'
         timeout-minutes: 5

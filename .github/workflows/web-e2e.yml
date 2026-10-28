@@ -80,12 +80,12 @@ jobs:
         run: git config --global core.autocrlf false
       - uses: actions/checkout@v7
         timeout-minutes: 5
-      - uses: Swatinem/rust-cache@v2
+      # Reads the workspace set another lane saves (docs/BUILD.md, "CI's Rust caches").
+      - uses: ./.github/actions/rust-cache
         timeout-minutes: 5
         with:
-          workspaces: ". -> target"
-          shared-key: web-e2e
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          set: workspace
+          save: false
       - name: Name the runner image for the zsh cache
         id: image
         if: runner.os == 'Linux'
@@ -205,13 +205,12 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
-      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/rust-cache
         timeout-minutes: 5
         if: ${{ inputs.shards == 1 }}
         with:
-          workspaces: ". -> target"
-          shared-key: web-e2e
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          set: workspace
+          save: false
       - name: Build hided for Playwright
         if: ${{ inputs.shards == 1 }}
         timeout-minutes: 20

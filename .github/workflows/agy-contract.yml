@@ -57,10 +57,11 @@ jobs:
         timeout-minutes: 5
         with:
           python-version: "3.12"
-      - uses: Swatinem/rust-cache@v2
+      # Reads the workspace set another lane saves (docs/BUILD.md, "CI's Rust caches").
+      - uses: ./.github/actions/rust-cache
         with:
-          workspaces: ". -> target"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          set: workspace
+          save: false
       - name: Install cargo-nextest
         timeout-minutes: 3
         run: bash scripts/install-nextest.sh

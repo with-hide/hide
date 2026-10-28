@@ -1,0 +1,51 @@
+# Every CI job's Rust dependency cache. docs/BUILD.md, "CI's Rust caches", owns
+# the sets, which job saves each, and why a restored release dependency cannot
+# change what ships; scripts/tests/test_rust_cache.py holds every job to this.
+name: Rust dependency cache
+description: Restore, and on main save, one dependency set's cache for this system.
+
+inputs:
+  set:
+    description: The dependency set, `workspace`, `platform` or `release`.
+    required: true
+  save:
+    description: Whether this job saves the set; true only for the set's one builder on main.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Keep only the pinned Rust toolchain
+      # rust-cache hashes every installed toolchain into its key, and runners of
+      # one image carry different stables beside the pinned one (on 2026-10-28
+      # some Linux runners had an extra stable, which made each Linux job keep
+      # two copies). With the pinned toolchain alone the hash is stable and
+      # still changes when the pin does. Nothing here builds with the image's.
+      shell: bash
+      run: |
+        rustc --version >/dev/null
+        pinned=$(rustup show active-toolchain | cut -d' ' -f1)
+        for toolchain in $(rustup toolchain list --quiet); do
+          [ "$toolchain" = "$pinned" ] || rustup toolchain uninstall "$toolchain"
+        done
+    - uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: ". -> target"
+        # One key per set and system, not per job. rust-cache ends the key with
+        # its hash of the lockfile, the members' manifests and the pinned
+        # toolchain, and restores the newest entry before it when that changed;
+        # the root manifest, whose profiles change every dependency's build, it
+        # leaves out, so it goes in here.
+        shared-key: ${{ inputs.set }}-${{ hashFiles('Cargo.toml') }}
+        # Dependencies only: the workspace's own crates are removed before a save.
+        cache-workspace-crates: false
+        save-if: ${{ inputs.save }}
+    - name: Build every hide crate of a release from this checkout
+      # rust-cache's removal of the workspace's crates before a save swallows
+      # its own errors and saves anyway, so a release removes them again from
+      # what it restored; only third-party dependencies stay.
+      if: inputs.set == 'release'
+      shell: bash
+      run: |
+        . scripts/toolchain-env.sh
+        cargo clean --release --workspace
