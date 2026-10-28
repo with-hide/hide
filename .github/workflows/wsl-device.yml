@@ -108,19 +108,20 @@ jobs:
         with:
           distribution: Ubuntu-24.04
           wsl-version: 2
-          additional-packages: git
+          additional-packages: git python3
       - uses: actions/download-artifact@v8
         timeout-minutes: 5
         with:
           name: hide-wsl-kit
           path: ${{ runner.temp }}/wsl-kit
       - name: This PC's WSL distribution as a device
-        timeout-minutes: 15
+        timeout-minutes: 25
         env:
           HIDE_E2E_WSL_DISTRO: Ubuntu-24.04
           HIDE_E2E_WSL_PACKAGES: ${{ runner.temp }}/wsl-kit
-        # The test prints the WSL version and install counts it saw.
-        run: bash scripts/verify-cargo.sh nextest --profile ci -p hided --test it -E 'test(=wsl_device::a_wsl_distribution_connects_works_and_ends_with_its_link)' --run-ignored only --success-output immediate
+        # The test prints the WSL version and install counts it saw. Both
+        # walks own the one distribution, so they run one after the other.
+        run: bash scripts/verify-cargo.sh nextest --profile ci -p hided --test it -E 'test(=wsl_device::a_wsl_distribution_connects_works_and_ends_with_its_link) | test(=wsl_device::a_wsl_device_keeps_a_windows_drive_project_its_page_and_hide_ai_across_a_reconnect)' --run-ignored only --test-threads 1 --success-output immediate
       - name: Mint the development issues token
         # Development issues live in with-hide/hide-private (docs/TESTING.md,
         # Flaky tests); one App token reads this run here and files there. A run
