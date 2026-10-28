@@ -208,6 +208,12 @@ impl Runtime {
                 next_action: "Run hide view list and start a new request with a fresh ID",
             });
         }
+        // A read changes no View, so its retry repeats nothing: it keeps no
+        // receipt, and so never takes a place among the kept results or
+        // waits for one (PRD unseen-agent-views D-22).
+        if !keeps_receipt(action) {
+            return Ok((context, None));
+        }
         self.workspace_actions
             .retain(|record| now.saturating_sub(record.at) <= ACTION_RETRY_WINDOW_MS);
         if let Some(record) = self.workspace_actions.iter().find(|record| {
@@ -248,11 +254,13 @@ impl Runtime {
     ) -> Result<ActionPreparation, Refusal> {
         let preparation =
             self.prepare_view_action(device_id, pane_id, expected, request_id, action)?;
-        if !self.workspace_actions.iter().any(|record| {
-            record.device_id == device_id
-                && record.pane_id == pane_id
-                && record.request_id == request_id
-        }) {
+        if keeps_receipt(action)
+            && !self.workspace_actions.iter().any(|record| {
+                record.device_id == device_id
+                    && record.pane_id == pane_id
+                    && record.request_id == request_id
+            })
+        {
             self.workspace_actions.push_back(RecordedAction {
                 device_id: device_id.to_owned(),
                 pane_id: pane_id.to_owned(),
@@ -391,17 +399,23 @@ impl Runtime {
                 && lane_call(&action);
             let mut applied =
                 self.apply_workspace_action(&key, &context, pane_id, request_id, &action, material);
-            if let Ok(done) = &mut applied {
-                self.stamp_control_opener(&key, pane_id, &action, &done.view_id);
-                if calls_lane {
-                    self.apply_area_intent_to(&key, AreaIntent::Documents);
-                    // A view already in front still calls the lane, which
-                    // the page sees only if the change is announced.
-                    done.changed = true;
-                }
+            if let Ok(done) = &mut applied
+                && calls_lane
+            {
+                self.apply_area_intent_to(&key, AreaIntent::Documents);
+                // A view already in front still calls the lane, which the
+                // page sees only if the change is announced.
+                done.changed = true;
             }
             if let Some(kept) = kept {
                 self.restore_front(kept);
+            }
+            // Stamped on the screen the action leaves, so an open the
+            // operator is looking at once it lands is seen in this same
+            // event, and one put back behind is not (PRD unseen-agent-views
+            // B5, B14).
+            if let Ok(done) = &applied {
+                self.stamp_control_opener(&key, pane_id, &action, &done.view_id);
             }
             applied
         })();
@@ -409,6 +423,9 @@ impl Runtime {
             && let (Some(before), Some(store)) = (browser_load, self.workspace_views.as_mut())
         {
             store.browser_load = before;
+        }
+        if !keeps_receipt(&action) {
+            return result;
         }
         if let Some(record) = self.workspace_actions.iter_mut().find(|record| {
             record.device_id == device_id
@@ -445,7 +462,6 @@ impl Runtime {
             url,
             area_id,
             new_target,
-            beside,
         } = action
         {
             if !crate::view_layout::browser_address(url) {
@@ -461,26 +477,7 @@ impl Runtime {
                 });
             }
             let load = self.next_browser_load();
-            let view_id = if *beside && area_id.is_none() {
-                let caller = self.session_scope_of_pane(pane_id);
-                self.change_view_layout(key, |layout, stamp| {
-                    super::view_areas::place_page_beside(layout, url, caller.as_ref(), load, stamp)
-                        .map(|id| (id, true))
-                })
-                .map_err(|error| Refusal {
-                    reason: error.kind(),
-                    next_action: match error {
-                        crate::view_layout::LayoutError::AreaLimit
-                        | crate::view_layout::LayoutError::DepthLimit => {
-                            "There is no room for another View area beside this one; close an area's last View with hide view close <view-id>, or open without --beside, and retry"
-                        }
-                        crate::view_layout::LayoutError::DisplayLimit => {
-                            "The Workspace holds as many Views as it can; close one with hide view close <view-id> and retry"
-                        }
-                        _ => "Run hide view list, choose an available View or area, and retry",
-                    },
-                })?
-            } else {
+            let view_id = {
                 self.change_view_layout(key, |layout, stamp| {
                     let existing = if *new_target {
                         None
@@ -524,8 +521,7 @@ impl Runtime {
                 load: Some(load),
             });
         }
-        if let Action::OpenFile { path: _, beside } | Action::OpenDiff { path: _, beside } = action
-        {
+        if let Action::OpenFile { .. } | Action::OpenDiff { .. } = action {
             let Some(material) = material else {
                 return Err(Refusal {
                     reason: "read_missing",
@@ -544,7 +540,7 @@ impl Runtime {
                 },
                 if is_file { None } else { Some(false) },
                 false,
-                *beside,
+                false,
             ) {
                 return Err(Refusal {
                     reason: "view_limit",
@@ -605,7 +601,7 @@ impl Runtime {
                 }
                 tab_id
             };
-            self.place_document(key, &tab_id, false, *beside, None, None);
+            self.place_document(key, &tab_id, false, false, None, None);
             let view_id = self
                 .view_layout_of(key)
                 .and_then(|layout| layout.active_area().active.clone())
@@ -690,6 +686,20 @@ impl Runtime {
                     })
                     .map_err(layout_refusal)?;
                 (view_id.clone(), changed, Some(area_id.clone()))
+            }
+            Action::Read { view_id } => {
+                if self
+                    .view_layout_of(key)
+                    .and_then(|layout| layout.display(view_id))
+                    .is_none()
+                {
+                    return Err(Refusal {
+                        reason: "view_unknown",
+                        next_action: "Run hide view list to choose a current View and retry",
+                    });
+                }
+                self.note_ancestor_read(key, view_id, pane_id);
+                (view_id.clone(), false, None)
             }
             Action::Close { view_id, .. } => {
                 let Some(display) = self
@@ -929,6 +939,7 @@ impl Runtime {
                             })
                             .collect(),
                         operator: display.operator || display.openers.is_empty(),
+                        unseen: display.unseen.is_some(),
                     })
                 })
                 .collect()
@@ -1008,7 +1019,7 @@ fn layout_refusal(error: crate::view_layout::LayoutError) -> Refusal {
 /// Whether an action opens or selects a view for the operator to look at. A
 /// browser page's own target, bound to its area, calls nothing: the page is
 /// where it already was.
-fn lane_call(action: &Action) -> bool {
+pub(super) fn lane_call(action: &Action) -> bool {
     match action {
         Action::OpenFile { .. } | Action::OpenDiff { .. } => true,
         Action::OpenBrowser { area_id, .. } => area_id.is_none(),
@@ -1016,6 +1027,13 @@ fn lane_call(action: &Action) -> bool {
             expected_browser_area,
             ..
         } => expected_browser_area.is_none(),
-        Action::Split { .. } | Action::Move { .. } | Action::Close { .. } => false,
+        Action::Split { .. } | Action::Move { .. } | Action::Close { .. } | Action::Read { .. } => {
+            false
+        }
     }
+}
+
+/// Whether an action keeps a receipt for its retry: everything but a read.
+fn keeps_receipt(action: &Action) -> bool {
+    !matches!(action, Action::Read { .. })
 }

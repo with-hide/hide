@@ -552,7 +552,7 @@ fn descendant_state(agent: &SidebarAgentSnapshot, own_wait: Option<AgentWait>) -
 /// finished child does not read as a fresh completion (PRD B5, B6).
 fn descendant_signals_of(agent: &SidebarAgentSnapshot) -> Vec<crate::model::DescendantSignal> {
     let (demand, activity, _) = axes_of(agent);
-    let mut signals = Vec::with_capacity(2);
+    let mut signals = Vec::with_capacity(2 + agent.unseen_views.len());
     if demand != AgentDemand::None {
         signals.push(crate::model::DescendantSignal {
             pane_id: agent.pane_id.clone(),
@@ -563,6 +563,19 @@ fn descendant_signals_of(agent: &SidebarAgentSnapshot) -> Vec<crate::model::Desc
         signals.push(crate::model::DescendantSignal {
             pane_id: agent.pane_id.clone(),
             kind: "completed".to_owned(),
+        });
+    }
+    // Each View it opened that nobody has looked at, by its open's
+    // generation, so an open again is news again and an ancestor's read or
+    // the operator's look takes it away (PRD unseen-agent-views D-10, D-23).
+    for view in agent
+        .unseen_views
+        .iter()
+        .filter(|view| !view.ancestors_read)
+    {
+        signals.push(crate::model::DescendantSignal {
+            pane_id: agent.pane_id.clone(),
+            kind: format!("view:{}@{}", view.view_id, view.opened_unix_ms),
         });
     }
     signals

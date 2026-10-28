@@ -540,11 +540,24 @@ pub fn run(env: &Env, command: Command) -> Result<(), String> {
         .build()
         .map_err(|_| "runtime_unavailable".to_owned())?;
     let display = display_of(&command).to_owned();
+    // A read of the page, unlike an action on it, is how an ancestor takes
+    // in what its child opened (PRD unseen-agent-views D-22).
+    let read = matches!(
+        command,
+        Command::Snapshot { .. }
+            | Command::Screenshot { .. }
+            | Command::Eval { .. }
+            | Command::Console { .. }
+            | Command::Network { .. }
+    );
     let outcome = runtime.block_on(async {
         tokio::time::timeout(COMMAND_DEADLINE, execute(env, command))
             .await
             .unwrap_or_else(|_| Err(Failure::new("page_unresponsive", None)))
     });
+    if read && outcome.is_ok() {
+        crate::workspace_cli::note_view_read(env, &display);
+    }
     match outcome {
         Ok(Output::Text(text)) => {
             let text = printable(&text);

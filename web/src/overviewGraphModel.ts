@@ -14,7 +14,7 @@ export const GRAPH_FOCUS_DEFAULTS: GraphFocusOptions = { focus: "all", includeRe
 /** Seen demands and sleeping raised asks still carry turn; bucket is not activity. */
 export function graphActivity(agent: AgentRow): GraphActivity {
   switch (agent.mark) {
-    case "turn": return "turn";
+    case "turn": case "look": return "turn";
     case "going": case "waiting": return "working";
     case "done": case "unread": return "results";
     case "quiet": return "idle";

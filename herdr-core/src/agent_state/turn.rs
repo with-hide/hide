@@ -188,7 +188,7 @@ pub(crate) fn row_state(agent: &SidebarAgentSnapshot) -> RowState {
     // mark of the operator's (B24) but its line keeps the warning colour,
     // dimmed like a read one.
     let chip_kind = match agent.mark {
-        RowMark::Turn => "warning",
+        RowMark::Turn | RowMark::Look => "warning",
         RowMark::Going | RowMark::Waiting => "working",
         RowMark::Done => "success",
         RowMark::Unread => "news",
@@ -498,6 +498,7 @@ impl AgentGroup {
 /// (sidebar-agent-status D-01). Its own unread demand or a blocked prompt
 /// still wins, because the flag is only ever set on a row with no demand of
 /// its own.
+#[allow(clippy::too_many_arguments)] // one row's axes, each its own input to the group
 pub fn agent_group_for(
     demand: AgentDemand,
     activity: AgentActivity,
@@ -506,6 +507,7 @@ pub fn agent_group_for(
     blocked: bool,
     ownership: Ownership,
     waiting: bool,
+    look: bool,
 ) -> AgentGroup {
     if ownership == Ownership::Delegated {
         // The row keeps its own mark and status word; only its claim on the
@@ -526,7 +528,9 @@ pub fn agent_group_for(
             AgentGroup::Seen
         };
     }
-    if blocked || (demand != AgentDemand::None && unread) {
+    // An agent's open the operator has not looked at is theirs to look at
+    // (PRD unseen-agent-views D-05, D-08), whatever the agent does meanwhile.
+    if blocked || (demand != AgentDemand::None && unread) || look {
         AgentGroup::NeedsYou
     } else if waiting {
         AgentGroup::Working
@@ -553,6 +557,7 @@ pub(crate) fn dormant_group() -> AgentGroup {
         false,
         false,
         Ownership::Operator,
+        false,
         false,
     )
 }
@@ -735,6 +740,7 @@ pub fn group_of(agent: &SidebarAgentSnapshot) -> AgentGroup {
         agent.blocked,
         ownership_of(agent),
         agent.wait.is_some(),
+        !agent.unseen_views.is_empty(),
     )
 }
 
@@ -753,6 +759,7 @@ pub(crate) fn derive_from_axes(agent: &mut SidebarAgentSnapshot) {
         agent.blocked,
         ownership_of(agent),
         waiting,
+        !agent.unseen_views.is_empty(),
     );
     let group = if !agent.raised.is_empty() {
         AgentGroup::NeedsYou
@@ -760,6 +767,24 @@ pub(crate) fn derive_from_axes(agent: &mut SidebarAgentSnapshot) {
         group
     };
     agent.group = group.name().to_owned();
+    agent.look = look_of(agent, |agent| {
+        // Where the row would stand with nothing to look at: what a phone or
+        // desktop notification follows, which a View never sends (PRD
+        // unseen-agent-views D-13, B12).
+        if !agent.raised.is_empty() {
+            return AgentGroup::NeedsYou;
+        }
+        agent_group_for(
+            demand,
+            activity,
+            agent.completed,
+            unread,
+            agent.blocked,
+            ownership_of(agent),
+            waiting,
+            false,
+        )
+    });
     agent.mark = RowMark::of(agent);
     // A row the operator still has to deal with is drawn bright; everything
     // already read or merely running is subdued.
@@ -817,6 +842,27 @@ pub(crate) fn derive_from_axes(agent: &mut SidebarAgentSnapshot) {
         agent.status_code = crate::agent_sleep::status_code(sleep);
     }
     agent.state = row_state(agent);
+}
+
+/// What an operator's own row says about the Views it opened that they have
+/// not seen (PRD unseen-agent-views D-05, D-14). A delegated row's go up as
+/// its ancestors' signals instead (D-10), and a home's row has none (D-18).
+fn look_of(
+    agent: &SidebarAgentSnapshot,
+    otherwise: impl FnOnce(&SidebarAgentSnapshot) -> AgentGroup,
+) -> Option<crate::model::LookSnapshot> {
+    if ownership_of(agent) != Ownership::Operator {
+        return None;
+    }
+    let newest = agent.unseen_views.first()?;
+    Some(crate::model::LookSnapshot {
+        group: otherwise(agent).name().to_owned(),
+        count: u32::try_from(agent.unseen_views.len()).unwrap_or(u32::MAX),
+        view_id: newest.view_id.clone(),
+        label: newest.label.clone(),
+        workspace_id: newest.workspace_id.clone(),
+        checkout_id: newest.checkout_id.clone(),
+    })
 }
 
 /// Re-derives every drawn value of a row whose sleep mark was just set.

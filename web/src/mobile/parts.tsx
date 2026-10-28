@@ -17,7 +17,7 @@ export function AgentHead({ agent, large }: { agent: PhoneAgent; large: boolean 
   return (
     <span className="flex min-w-0 items-center gap-sm">
       {/* The desktop row's mark; a read turn is dimmed as it is there. */}
-      <StatusMark mark={agent.mark} className={agent.mark === "turn" && !agent.emphasized ? "opacity-(--opacity-read-status)" : undefined} data-phone-mark={agent.mark} />
+      <StatusMark mark={agent.mark} className={(agent.mark === "turn" || agent.mark === "look") && !agent.emphasized ? "opacity-(--opacity-read-status)" : undefined} data-phone-mark={agent.mark} />
       {large ? <AgentMark kind={agent.agent_kind} /> : null}
       <span
         className={`min-w-0 truncate ${large ? "text-headline font-semibold" : "text-title font-medium"} ${

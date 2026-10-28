@@ -11,8 +11,8 @@ import type { AgentLogoMode, PaneTurnRowMode, UsagePreferences } from "./generat
 /** The status codes the core sends in `status_code`; the catalogs name one word for each (agents.status.*). */
 export type AgentStatusCode = "error" | "question" | "approval" | "working" | "done" | "idle" | "unknown" | "starting" | "waiting" | "unfinished" | "stopped" | "attached" | "sleeping" | "waking" | "sleep_failed";
 
-/** Whose move is next (`RowMark`): the operator's, in progress (the agent works, or `waiting` on proven work, D-25), unread as finished, unread otherwise, nothing (resting), a state Hide cannot read, or asleep (status-marks D-21). */
-export type RowMark = "turn" | "going" | "waiting" | "done" | "unread" | "quiet" | "unknown" | "asleep";
+/** Whose move is next (`RowMark`): the operator's, the operator's to look at a View the agent opened (PRD unseen-agent-views D-05), in progress (the agent works, or `waiting` on proven work, D-25), unread as finished, unread otherwise, nothing (resting), a state Hide cannot read, or asleep (status-marks D-21). */
+export type RowMark = "turn" | "look" | "going" | "waiting" | "done" | "unread" | "quiet" | "unknown" | "asleep";
 
 /** What a quiet row waits on (`AgentWait`): its descendants, a background job its session proves is running, the reply to a Hide request it sent, or its pull request's checks. */
 export type AgentWait = "children" | "background" | "reply" | "checks";
@@ -126,6 +126,8 @@ export type AgentRow = {
   device_label?: string;
   mark: RowMark;
   group: string;
+  /** The Views this agent opened that the operator has not looked at (PRD unseen-agent-views D-14); absent when none. */
+  look?: LookAt;
   status_code: AgentStatusCode;
   detail?: string | null;
   /** Everything the agent last said through its hooks, uncut: the request, then the progress, one per line; absent when it said nothing. */
@@ -1623,7 +1625,17 @@ export type OpenedView = {
   path: string;
   url?: string;
   comments: number;
+  /** The operator has not looked at it since the agent opened it (PRD unseen-agent-views B10); absent when they have. */
+  unseen?: boolean;
 };
+
+/**
+ * What a row says about the Views its agent opened that the operator has not
+ * looked at (`LookSnapshot`): the newest, which a press brings forward, and
+ * how many there are. `group` is the row's group with nothing to look at,
+ * which notices follow (D-13).
+ */
+export type LookAt = { group: string; count: number; view_id: string; label: string; workspace_id: string | null; checkout_id: string | null };
 
 /** Where a Send stands (`contracts/snapshot-wire-enums.json`: `view_feedback_send_state`). */
 export type ViewFeedbackSendState = "sending" | "sent" | "waiting" | "reopening" | "failed";

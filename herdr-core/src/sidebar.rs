@@ -885,6 +885,8 @@ fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSnapshot, Str
         awaited_replies: Vec::new(),
         hide_ai: None,
         request: None,
+        unseen_views: Vec::new(),
+        look: None,
     };
     Ok(projected)
 }
@@ -1521,6 +1523,7 @@ mod tests {
                 false,
                 true,
                 Ownership::Operator,
+                false,
                 false
             ),
             AgentGroup::NeedsYou
@@ -1533,6 +1536,7 @@ mod tests {
                 false,
                 false,
                 Ownership::Operator,
+                false,
                 false
             ),
             AgentGroup::Seen
@@ -1610,6 +1614,7 @@ mod tests {
                 unread,
                 blocked,
                 Ownership::Operator,
+                false,
                 false,
             );
             assert_eq!(

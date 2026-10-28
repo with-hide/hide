@@ -1038,6 +1038,9 @@ impl Runtime {
         // the editor's active tab is derived from it (PRD session-files).
         self.settle_view_sessions();
         self.reconcile_view_displays();
+        // What is in front of the operator now is seen, and the rows follow
+        // whatever the View lists did (PRD unseen-agent-views D-07, D-09).
+        self.settle_unseen_views();
         // The open record's gallery follows the View lists (D-40).
         self.settle_record_views();
         self.sync_agent_selection();

@@ -1516,6 +1516,7 @@ impl Runtime {
             ReadRecordScope::Remote(&prefix),
             Some(&live_pane_ids),
         );
+        self.lay_unseen_views(&mut session.agents);
         crate::agent_state::apply_lineage(
             &mut session.agents,
             &session.workspaces,
@@ -3772,6 +3773,7 @@ impl Runtime {
         self.lay_awaited_replies(&mut agents, &unreachable);
         self.lay_checks(&mut agents);
         self.lay_hide_ai(&mut agents);
+        self.lay_unseen_views(&mut agents);
         crate::agent_state::apply_lineage(
             &mut agents,
             &workspaces,

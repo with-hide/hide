@@ -3110,6 +3110,9 @@ impl Runtime {
             // A pull request's checks are a wait the lineage decides and an
             // end the read axis compares, so they are laid before both.
             self.lay_checks(&mut agents);
+            // Views to look at go to Needs You or up to the ancestors, which
+            // the lineage and the read axis decide.
+            self.lay_unseen_views(&mut agents);
             self.lay_start_prompts(&mut agents, ReadRecordScope::Local, live_pane_ids.as_ref());
             crate::agent_state::apply_lineage(
                 &mut agents,

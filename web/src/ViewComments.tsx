@@ -126,7 +126,7 @@ export function CommentCount({ display }: { display: Pick<ViewDisplaySnapshot, "
 
 // --- a pane's views (B8) ---------------------------------------------------------
 
-/** `N views` after a pane's PR chip: the Views its agent opened that the layout shows. */
+/** `N views` after a pane's PR chip: the Views its agent opened that the layout shows, those the operator has not looked at marked. */
 export function PaneViews({ paneId, name, actions }: { paneId: string; name: string; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const opened = useShellStore((s) => workspaceViewOf(s.rest)?.feedback?.opened);
@@ -157,6 +157,8 @@ export function PaneViews({ paneId, name, actions }: { paneId: string; name: str
               <span className="truncate font-mono text-micro text-muted-foreground">{row.url ?? row.path}</span>
             </span>
             {row.comments > 0 ? <span className="shrink-0 text-micro text-muted-foreground">{t("feedback.views.comments", { count: row.comments })}</span> : null}
+            {/* A View the operator has not looked at yet wears the row's 볼 것 mark (PRD unseen-agent-views B10). */}
+            {row.unseen ? <StatusMark mark="look" label={t("agents.mark.look")} data-pane-view-unseen={row.view_id} /> : null}
           </DropdownMenuItem>
         ))}
       </DropdownMenuContent>

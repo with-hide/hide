@@ -153,6 +153,33 @@ The one way a descendant moves its root between groups is the waiting state belo
 
 Regression owners: `a_descendants_demand_or_completion_turns_every_ancestor_unread_and_nothing_else_does`, `an_ancestors_group_comes_from_its_own_axes_and_a_child_never_makes_it_needs_you`.
 
+## A View to look at
+
+An agent that opens a View with `hide file open`, `hide diff open` or `hide browser open` opens it to show the operator, so the View is unseen until the operator looks at it (PRD unseen-agent-views D-05, D-06).
+A View the operator opened, from the Explorer, ⌘P, a new tab's address field or a path or address clicked in a terminal, is never unseen, and an agent's `hide browser snapshot`, `click` or other command on a page leaves the View as it was.
+A new target a page opens on its own (a link to a new tab) is the page's, not a new open.
+The record is the View's own (`Display::unseen` in `view_layout.rs`, `Unseen` in `view_feedback.rs`): when the open happened, as a generation that moves on each open, and whether an ancestor has read it; it is stored with the checkout's View layout, so it survives a restart, and it goes with the View, so there are never more records than open Views (D-09, D-12).
+A stored record that does not read leaves the View unseen and the load's repair says so in the diagnostic log; a View stored before the record existed reads as seen (D-27, B18, B33).
+
+A View is seen when, in one window, all of these hold (D-07): the window holds the keyboard on the Workspace screen (the shell's `window_focus`, which hided aggregates across windows and lets go with a connection), the View's checkout is in front, the lane shows the documents and not Sessions or the 보기 slot, the View is the selected tab of the active View area, and the Files strip of the session in front shows it.
+The core decides it on every snapshot (`settle_unseen_views` in `runtime/unseen_views.rs`), from state it already holds; the shell sends only the window's focus, and only when it changes.
+An open of a View that is already looked at in the same event is never unseen, so nothing flickers (B5, B14), and an open again of a seen View is news again (D-11).
+
+The View's last opener's row carries it (D-19): an operator-owned row with an unseen View is in Needs You, whatever its own axes say, and draws the `look` mark (The mark).
+Seeing the View does not read the pane, and reading the pane does not see the View (D-20); when the last unseen View is seen or closed the row goes back to the group its own axes give it (B4, B13).
+The row carries `look` on the wire: the newest unseen View's id and name, how many there are, the checkout it sits in and the group the row would be in with nothing to look at.
+Its line is `볼 것 · <newest View>`, with ` 외 N` for the rest (`lineParts` in `web/src/agentRow.ts`); a question, approval, block or native question or plan on the same row takes the mark and the line, which then ends with `볼 것 N` (D-14, D-18).
+Pressing the row focuses its pane and brings the newest unseen View forward in the same event (`focus_pane` with `reveal_unseen`), which sees it; a device's row focuses its pane on the device and the View through the checkout's focus.
+A pane's `N views` list marks each View the operator has not looked at with the same mark (B10).
+A View to look at is counted with the operator's turns on every badge and in the rail, and sends no phone push, desktop notice or sound: those follow `look.group`, the row's group without it (D-13, B12).
+
+A delegated child's unseen View never puts a row in Needs You (D-10): the child stays in Working or Seen, and the View is a descendant signal (`view:<id>@<generation>`) that turns every ancestor unread, as A descendant's change turns its ancestors unread above.
+An ancestor that reads the View through its own pane, with `hide view status <view-id>` or a `hide browser snapshot`, `screenshot`, `eval`, `console` or `network` on it, turns that signal off for every ancestor, and the View stays unseen in the child's `N views` (D-22, D-23); the child itself, an unrelated agent, the operator's shell and `hide view list` do not.
+An ancestor that opens the View again from its own pane becomes its opener, so its own row has it to look at (D-21, B24).
+`hide view list` says which Views the operator has not looked at (`unseen`), and a report letter lists the Views its sender opened and whether each was seen.
+
+Regression owners: `herdr-core/src/runtime/tests/unseen_views.rs`, `a_seen_record_that_does_not_read_is_unseen_and_a_missing_one_is_seen` in `view_layout.rs`, and the look line in `web/src/agentRow.test.ts`.
+
 ## A quiet row that waits
 
 A row with no demand of its own, not blocked and stopped (idle or done) waits when something in progress will wake it: work that is still running, or an answer someone is still making for it.
@@ -286,12 +313,12 @@ The sections are named for whose move is next: Needs You (`내 차례`) and Unre
 
 | Group | Membership |
 | --- | --- |
-| Needs You | An unread demand - question, approval or block - or a pane Herdr reports as blocked, or whose native question or plan waits for the operator, right now |
+| Needs You | An unread demand - question, approval or block - or a pane Herdr reports as blocked, or whose native question or plan waits for the operator, right now, or an operator-owned row with a View to look at |
 | Done (Unread) | No demand, stopped, completion reported, and unread |
 | Working | Running, or a quiet row waiting on a working descendant, a proven background task or a reply still being made |
 | Seen | Everything else: ready idle, read demands, read completions, unknown |
 
-A blocked pane, or one whose native question or plan waits for the operator, stays in Needs You whether or not it has been read.
+A blocked pane, or one whose native question or plan waits for the operator, stays in Needs You whether or not it has been read, and so does a row with a View to look at until the operator looks at it (A View to look at).
 The prompt is still waiting, so it leaves the group when answered rather than when looked at.
 
 A delegated row sits only in Working or Seen, and a Hide AI row for a home only in Needs You or Seen.
@@ -307,13 +334,15 @@ While a member is archived, its delivery registration and the watches on it are 
 
 ## The mark
 
-Every row draws one of eight marks, decided once in the core (`RowMark::of` in `agent_state/tally.rs`) and carried on the wire as `mark` (`turn`, `going`, `waiting`, `done`, `unread`, `quiet`, `unknown`, `asleep`); no surface derives a mark of its own (status-marks D-01, D-12), the dimming of an unknown row included (`rowDimmed` reads `mark`, never `status_code`; sidebar-quiet-mark-indent D-04).
+Every row draws one of nine marks, decided once in the core (`RowMark::of` in `agent_state/tally.rs`) and carried on the wire as `mark` (`turn`, `look`, `going`, `waiting`, `done`, `unread`, `quiet`, `unknown`, `asleep`); no surface derives a mark of its own (status-marks D-01, D-12), the dimming of an unknown row included (`rowDimmed` reads `mark`, never `status_code`; sidebar-quiet-mark-indent D-04).
 `going` and `waiting` are the one in-progress mark in two shapes (D-25): every count and precedence takes them as one, and only the ring is drawn apart.
+`turn` and `look` are the operator's turn in two shapes: every count takes them as one, and only the badge's glyph is drawn apart.
 Four say whose move is next, and their shapes alone tell them apart; `unknown` says Hide cannot tell, and `asleep` is an agent Hide stopped that wakes when opened (D-21):
 
 | Mark | Shape | When |
 | --- | --- | --- |
 | `turn` | A `!` in a 12 px warning badge | The operator's turn: the row is in Needs You or carries an escalation, or it is an own question, approval or block the operator has read (drawn at `--opacity-read-status`) |
+| `look` | An eye in the same 12 px warning badge | The operator's turn to look at a View the agent opened, with nothing else asked of them on the row (A View to look at); its hover and name read `볼 것 · <View>` |
 | `going` | A static three-quarter ring in the working colour | In progress: the agent works |
 | `waiting` | The same ring dashed, also static (`2.2 2` over a path length of 19) | In progress while the agent waits (`wait`) on children, a background task, its pull request's checks or a reply; its hover and name read `진행 중 · 대기` |
 | `done` | A 7 px green dot | Unread, and the label read the turn as finished |
@@ -515,7 +544,7 @@ A read block in Seen cannot outrank an unread question in Needs You.
 The Workspace draws the representative agent's exact mark, color, and emphasis through the shared presentation.
 
 The web shell draws no representative chip; it draws a status badge in its place.
-The same pass counts each agent under the mark its own row draws (`RowMark`): `turn`, `going` (a `waiting` row counted here too, D-25), `done` and `unread`.
+The same pass counts each agent under the mark its own row draws (`RowMark`): `turn` (a `look` row counted here too), `going` (a `waiting` row counted here too, D-25), `done` and `unread`.
 A quiet row is counted in none of them, so the badge claims nothing but whose move is next.
 The counts ride the summary as `marks`; the web sidebar draws them on a checkout's row only, and a project or folder row draws none.
 The badge draws one mark and count per mark, in the order whose move is next (turn, in progress, finished to read, to read), zero ones left out, in the shapes and colors the rows use, so it says what opening the rows would show (B19).

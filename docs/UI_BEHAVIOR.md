@@ -195,7 +195,9 @@ An unavailable or retired keyboard target never falls through to closing a diffe
 When a connected pane selects, splits, moves, or closes a View through `hide view`, the same View layout rules apply to that pane's Workspace even while another Workspace is in front.
 These commands do not move the keyboard target; a close that would lose the last View of an unsaved document reports the refusal and keeps the draft.
 `hide file open` and `hide diff open` put the calling pane's file or changed-file diff into its own Workspace and never select that Workspace or another tab.
-With `--beside` each of them, and `hide browser open --beside` for a page, places its View by the Open to the side rule below; a page of the same address the calling session already opened, in any area, or one already in that neighbouring area, comes forward instead of opening again, and a Workspace with no room for another area refuses the page with the next action to close a View or open without `--beside`.
+Each of them, and `hide browser open` for a page, opens its View as a tab of the active View area, or brings the same file, diff or address forward where it already is; an agent never splits the View areas, which only the operator does (PRD unseen-agent-views D-24).
+An open with `--beside` opens nothing and is refused with the next action to run it again without `--beside`.
+What an agent opens is unseen until the operator looks at it, and waits in Needs You as `볼 것` (To look at) on its row ([status-model.md](status-model.md#a-view-to-look-at)).
 Only an agent in the pane the operator is in, the selected pane of the front Workspace, changes what the operator sees: its open or `hide view select` brings the View to the front and shows the documents as a click does, the tool column staying as it was.
 Another pane of that Workspace, of the same tab or another, adds its View to the checkout's list and leaves the selection, the active area, the keyboard, the lane and the tab on screen as they were, and the documents button's badge counts the new view (see File Views per checkout).
 A Workspace not on screen is not what the operator sees: there, an agent in its active tab brings its View to that Workspace's front, so a page it opens loads and can be driven, and an agent in another tab adds its View behind.
@@ -501,6 +503,7 @@ Its hint, above the toolbar mark, says the agent's name, `Opened this · <produc
 Opening, waiting and unavailable Views retain a path toolbar with the same opener, and a missing or unknown opener creates no invented identity.
 Pressing it brings the agent's pane forward with the keyboard, leaving the View selected; an agent whose pane closed is found again by its session in another pane, and one found nowhere draws its mark dimmed with `(closed)` in the hint and goes nowhere.
 A pane whose agent opened Views that are open shows `N views` after its PR mark, a list of each View's kind mark, name, address or path and unsent comment count, counted once however many tabs show it; a row brings that View forward.
+A View the operator has not looked at since the agent opened it ends its row with the `볼 것` mark, an eye in the warning badge, whose hover says `볼 것` (PRD unseen-agent-views B10).
 
 Comments: a page's toolbar Comment button turns Comment mode on, with `Click an element or drag an area · Esc` over the page, an outline on the element under the pointer, and the page's clicks taken as comment targets until Comment or Esc turns it off.
 The button shows on only once the page is held for Comment; until then the page still takes its own clicks, and a second press takes the turn-on back.
@@ -680,6 +683,9 @@ Web owners: `web/src/components/sleeping-session-row.tsx`, `web/src/sleeping-ses
 
 The sidebar is one list of operator-owned roots under projects and checkouts, with Needs You (`내 차례`) and Unread (`읽을 것`) raised above it.
 A root whose descendant is raised enters Needs You itself, at any depth, and the raised descendant never appears there on its own row; its second line is the verb and what to do, with no name, count, PR or path.
+A root whose agent opened a View the operator has not looked at is in Needs You with the `볼 것` mark, an eye in the warning badge, and the line `볼 것 · <newest View>`, with ` 외 N` for the others; pressing it brings its pane and that View forward, the lane showing the documents, and the mark goes once the operator looks at every such View, or each is closed (PRD unseen-agent-views B1-B3, B9, B13).
+A question, approval or block on the same row keeps its mark and line, which ends with `볼 것 N`, and the row stays in Needs You after it is answered while a View is still to look at (B11).
+`볼 것` counts with the operator's turns on badges and the rail and sends no push, notice or sound (B12).
 What to do is the core's `detail`: the label's reply, else the first line of a native question waiting now in the agent's own words (up to 40 characters, `…` when cut), else the label's line, else the verb's own words (`답을 기다림`); a native question therefore reads as itself with Hide AI off and while the label still describes the turn's work ([status-model.md](status-model.md#the-second-line)).
 An idle or done parent still owns its children, and a closed pane or ended parent agent makes them orphan roots.
 A parent waiting on a working descendant stays Working; a descendant that asks waits on its parent, so the parent keeps its own state, unread because the ask is news to it ([status-model.md](status-model.md#a-quiet-row-that-waits)).
