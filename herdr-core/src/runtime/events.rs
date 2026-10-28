@@ -777,6 +777,9 @@ pub(super) struct MemoryActionPayload {
     /// The card a forget or an undo names.
     #[serde(default)]
     pub(super) number: Option<u64>,
+    /// The history row an `undo_change` takes back.
+    #[serde(default)]
+    pub(super) change: Option<u64>,
 }
 
 /// Opens a catalog Project's Memory for a screen; none closes it.

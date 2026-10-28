@@ -18,7 +18,7 @@
 
 use super::memory::{
     MemoryReceipt, SESSION_CALL_TIMEOUT, digest, now_ms, project_identity, project_sessions,
-    session_conversation, session_stat, trusted_memory_receipt,
+    session_conversation, session_stat, trusted_memory_receipts,
 };
 use super::memory_evidence::{CheckoutFacts, check_evidence};
 use super::memory_verify::{CheckProgress, check_before_suggestion, reverify_pending};
@@ -1363,6 +1363,40 @@ fn walk_project(
     {
         log_ended_hold(project_id, &ended, "expired");
     }
+    // Memory keeps itself with no model: cards no one was given or said
+    // age, and a recheck that ran out gives its card back (PRD
+    // memory-self-improve B22, B28).
+    match store.age_cards(project_id, now_ms()) {
+        Ok(aged) if !aged.skipped => {
+            tally.checked |= !(aged.staled.is_empty()
+                && aged.archived.is_empty()
+                && aged.recheck_expired.is_empty());
+            if !aged.staled.is_empty() || !aged.archived.is_empty() {
+                crate::diagnostic!(json!({
+                    "component": "memory",
+                    "kind": "cards.aged",
+                    "project_id": project_id,
+                    "staled": aged.staled,
+                    "archived": aged.archived,
+                }));
+            }
+            for card in aged.recheck_expired {
+                crate::diagnostic!(json!({
+                    "component": "memory",
+                    "kind": "recheck.expired",
+                    "project_id": project_id,
+                    "card": card,
+                }));
+            }
+        }
+        Ok(_) => {}
+        Err(error) => crate::diagnostic!(json!({
+            "component": "memory",
+            "kind": "cards.aging_failed",
+            "project_id": project_id,
+            "message": error.to_string(),
+        })),
+    }
     // Memory walks and analyzes the sessions of agents the node holding them
     // reads for Memory, through their conversation reader: a JSONL file's
     // (Claude Code, Codex, Grok, Pi, omp, agy) by byte offset, and OpenCode's
@@ -1383,6 +1417,15 @@ fn walk_project(
         .collect::<Vec<_>>();
     // What a card rests on is compared with the repository first: it needs
     // no model, so it runs whether Hide AI is on or off (D-06).
+    match super::memory_verify::read_recheck_sources(store, sessions_node, project_id) {
+        Ok(changed) => tally.checked |= changed,
+        Err(message) => crate::diagnostic!(json!({
+            "component": "memory",
+            "kind": "recheck.read_failed",
+            "project_id": project_id,
+            "message": message,
+        })),
+    }
     let mut facts = CheckoutFacts::new(sessions_node, root);
     match check_evidence(store, &mut facts, project_id, now_ms()) {
         Ok(moved) => tally.checked |= moved > 0,
@@ -1961,21 +2004,44 @@ fn record_receipt(
     text: &str,
     offset: u64,
 ) -> Result<bool, String> {
-    let Some(receipt) = trusted_memory_receipt(
+    let receipts = trusted_memory_receipts(
         store,
         project_id,
         provider,
         session_id,
         provider_injected,
         text,
-    ) else {
+    );
+    if receipts.is_empty() {
         return Ok(false);
-    };
+    }
+    for receipt in receipts {
+        record_one_receipt(store, project_id, provider, session_id, &receipt, offset)?;
+    }
+    Ok(true)
+}
+
+/// Records one signed receipt line: an index's as an index (PRD
+/// memory-self-improve D-35), a prompt's bodies as before.
+fn record_one_receipt(
+    store: &mut MemoryStore,
+    project_id: &str,
+    provider: &str,
+    session_id: &str,
+    receipt: &MemoryReceipt,
+    offset: u64,
+) -> Result<(), String> {
     // A receipt naming no card records nothing.
     if receipt.item_key().is_empty() {
-        return Ok(true);
+        return Ok(());
     }
-    match store.record_receipt(
+    let record = if receipt.is_index() {
+        MemoryStore::record_index_receipt
+    } else {
+        MemoryStore::record_receipt
+    };
+    match record(
+        store,
         project_id,
         provider,
         session_id,
@@ -2021,7 +2087,7 @@ fn record_receipt(
             return Err(error.to_string());
         }
     }
-    Ok(true)
+    Ok(())
 }
 
 /// Records the receipts the label reads of live panes found, each against
@@ -2474,6 +2540,9 @@ pub(crate) fn write_cards(
         source.session_id,
         &content_hash,
     ]);
+    let known_meanings = store
+        .known_meanings(source.project_id, KNOWN_MEANINGS)
+        .map_err(|error| local(error.to_string()))?;
     let request = analyzer
         .request(
             request_id,
@@ -2481,6 +2550,7 @@ pub(crate) fn write_cards(
             source.session_id,
             &serialized,
             &similar,
+            &known_meanings,
             language,
         )
         .map_err(|error| local(error.to_string()))?;
@@ -2712,6 +2782,8 @@ pub(crate) fn write_cards(
                 evidence,
                 document_comparisons,
                 reverify_superseded: !documents.is_empty(),
+                repeats: operator_repeats(&output.repeats, group),
+                merges: output.merges.clone(),
             };
             store
                 .prepare_analysis(&batch_id, &candidates, &options)
@@ -2745,6 +2817,31 @@ pub(crate) fn write_cards(
         crate::diagnostic!(
             json!({"component":"memory", "kind":"card.evicted", "project_id":source.project_id, "batch_id":batch_id, "card":number, "reason":"card_capacity"})
         );
+    }
+    // What Memory did on its own beside the cards (PRD memory-self-improve
+    // B15-B17, B20, B24, B33): counts and card numbers, never words.
+    if !summary.misses.is_empty()
+        || !summary.aliases_added.is_empty()
+        || !summary.revived.is_empty()
+        || !summary.merged.is_empty()
+        || !summary.merges_refused.is_empty()
+        || summary.repeats_left_out > 0
+        || !summary.misses_full.is_empty()
+    {
+        crate::diagnostic!(json!({
+            "component": "memory",
+            "kind": "analysis.upkeep",
+            "project_id": source.project_id,
+            "batch_id": batch_id,
+            "ignored": summary.misses.iter().filter(|(_, miss)| *miss == hide_memory::Miss::Ignored).map(|(number, _)| number).collect::<Vec<_>>(),
+            "missed": summary.misses.iter().filter(|(_, miss)| *miss == hide_memory::Miss::Missed).map(|(number, _)| number).collect::<Vec<_>>(),
+            "aliases_added": summary.aliases_added,
+            "revived": summary.revived,
+            "merged": summary.merged,
+            "merges_refused": summary.merges_refused,
+            "repeats_left_out": summary.repeats_left_out,
+            "misses_full": summary.misses_full,
+        }));
     }
     for number in &summary.sources_full {
         crate::diagnostic!(
@@ -2946,6 +3043,55 @@ pub(super) fn validate_candidates(candidates: &mut Vec<Candidate>, events: &[Val
             .collect();
     }
     before - candidates.len()
+}
+
+/// The meanings an analysis is shown, so it names a request the same way.
+const KNOWN_MEANINGS: usize = 20;
+
+/// The repeated requests the answer named, each with only the operator's
+/// own events (`human`, never a delegating agent's or a letter) and when and
+/// what each said; one with none left is dropped (PRD memory-self-improve
+/// D-14, B13).
+fn operator_repeats(
+    repeats: &[hide_memory::RepeatRequest],
+    group: &[Value],
+) -> Vec<hide_memory::RepeatRequest> {
+    let human = group
+        .iter()
+        .filter(|event| event.get("kind").and_then(Value::as_str) == Some("human"))
+        .filter_map(|event| {
+            Some((
+                event.get("offset")?.as_u64()?,
+                (
+                    event
+                        .get("at_unix_ms")
+                        .and_then(Value::as_u64)
+                        .unwrap_or_else(now_ms),
+                    event
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .map(hide_memory::words_digest),
+                ),
+            ))
+        })
+        .collect::<HashMap<_, _>>();
+    repeats
+        .iter()
+        .filter_map(|repeat| {
+            let sources = repeat
+                .sources
+                .iter()
+                .filter_map(|(offset, _, _)| {
+                    let (at, words) = human.get(offset)?;
+                    Some((*offset, *at, words.clone()))
+                })
+                .collect::<Vec<_>>();
+            (!sources.is_empty()).then(|| hide_memory::RepeatRequest {
+                sources,
+                ..repeat.clone()
+            })
+        })
+        .collect()
 }
 
 /// Keeps only the cited paths that name a file or folder inside the
@@ -3219,7 +3365,9 @@ mod tests {
                         analysis_provider: "codex".to_owned(),
                         session_id: "seed".to_owned(),
                         content_hash: "seed".to_owned(),
-                        created_at_unix_ms: 1,
+                        // Old enough to rank below what a test learns, young enough not
+                        // to age on the first walk.
+                        created_at_unix_ms: now_ms() - 29 * 86_400_000,
                     },
                     &[Candidate {
                         text: "Keep the hook under 100 ms".to_owned(),
@@ -3313,6 +3461,8 @@ mod tests {
                     "target_id": null,
                 }],
                 "alias_backfill": [],
+            "repeats": [],
+            "merges": [],
             }));
         }
 
@@ -3841,6 +3991,8 @@ mod tests {
                 "target_id": null,
             }],
             "alias_backfill": [],
+        "repeats": [],
+        "merges": [],
         }));
         assert_eq!(fixture.pass(false, true), ["analyzing", "learned one"]);
         let sent: Value = serde_json::from_str(&fixture.backend.inputs.lock().unwrap()[0]).unwrap();
@@ -4587,7 +4739,7 @@ mod tests {
             .answers
             .lock()
             .unwrap()
-            .push(json!({"candidates": [], "alias_backfill": []}));
+            .push(json!({"candidates": [], "alias_backfill": [], "repeats": [], "merges": []}));
         assert_eq!(
             fixture.pass_for(key.clone(), false, true).0,
             ["analyzing", "analyzed"]
@@ -4923,7 +5075,7 @@ mod tests {
                 .answers
                 .lock()
                 .unwrap()
-                .push(json!({"candidates":[],"alias_backfill":[]}));
+                .push(json!({"candidates":[],"alias_backfill":[],"repeats":[],"merges":[]}));
         }
         let (_, first) = fixture.pass_for(key.clone(), false, true);
         assert_eq!(fixture.calls(), 4);
@@ -4963,7 +5115,7 @@ mod tests {
                 .answers
                 .lock()
                 .unwrap()
-                .push(json!({"candidates":[],"alias_backfill":[]}));
+                .push(json!({"candidates":[],"alias_backfill":[],"repeats":[],"merges":[]}));
         }
         for _ in 0..10 {
             let before = fixture.calls();
@@ -5432,7 +5584,7 @@ mod tests {
                     analysis_provider: "codex".into(),
                     session_id: "peer-seed".into(),
                     content_hash: "peer-seed".into(),
-                    created_at_unix_ms: 1,
+                    created_at_unix_ms: now_ms(),
                 },
                 &[Candidate {
                     text: "Keep the peer hook under 100 ms".into(),
@@ -6680,6 +6832,8 @@ mod tests {
                 "target_id": "m2",
             }],
             "alias_backfill": [],
+        "repeats": [],
+        "merges": [],
         }));
         assert_eq!(
             fixture
@@ -6786,6 +6940,8 @@ mod tests {
                     "target_id": target,
                 }],
                 "alias_backfill": [],
+            "repeats": [],
+            "merges": [],
             }));
         };
         answer(&parent, "new", Value::Null);

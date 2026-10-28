@@ -97,6 +97,7 @@ pub(super) struct OpenedMemoryLoad {
     suggestions: Vec<hide_memory::PromotionSuggestion>,
     expanded: Option<MemoryCardSnapshot>,
     search: Option<MemorySearchSnapshot>,
+    archived: Vec<crate::model::MemoryArchivedSnapshot>,
 }
 
 impl Runtime {
@@ -752,6 +753,7 @@ impl Runtime {
         project.questions = questions;
         project.expanded = load.expanded;
         project.search = load.search;
+        project.archived = load.archived;
         self.sync_project_memory();
         true
     }
@@ -1132,6 +1134,7 @@ impl Runtime {
                 action: MemoryAction::Enable,
                 number: None,
                 numbers: Vec::new(),
+                change: None,
             });
             return;
         }
@@ -1146,6 +1149,7 @@ impl Runtime {
             action: MemoryAction::Enable,
             number: None,
             numbers: Vec::new(),
+            change: None,
         });
     }
 }
@@ -1271,6 +1275,37 @@ fn mutate_memory(
             super::memory_promotion::dismiss_promotion(&mut store, &identity.id, named()?)?;
             Ok(outcome())
         }
+        MemoryAction::Revive => {
+            store
+                .revive_card(&identity.id, named()?, super::memory::now_ms())
+                .map_err(|error| error.to_string())?;
+            Ok(outcome())
+        }
+        MemoryAction::Recheck => {
+            let number = named()?;
+            store
+                .recheck(
+                    &identity.id,
+                    number,
+                    hide_memory::Requester::Operator,
+                    super::memory::now_ms(),
+                )
+                .map_err(|error| match error {
+                    hide_memory::MemoryError::Refused("recheck_full") => format!(
+                        "m{number} cannot be rechecked while {} cards wait on one",
+                        hide_memory::RECHECK_LIMIT
+                    ),
+                    error => error.to_string(),
+                })?;
+            Ok(outcome())
+        }
+        MemoryAction::UndoChange => {
+            let change = payload.change.ok_or("The undo names no change")?;
+            store
+                .undo_change(&identity.id, change, super::memory::now_ms())
+                .map_err(|error| error.to_string())?;
+            Ok(outcome())
+        }
     }
 }
 
@@ -1294,6 +1329,7 @@ fn load_opened_memory(
         suggestions: Vec::new(),
         expanded: None,
         search: None,
+        archived: Vec::new(),
     };
     if !MemoryStore::exists(database) {
         return Ok(empty(identity.id));
@@ -1324,6 +1360,7 @@ fn load_opened_memory(
         .list_memories(&identity.id)
         .map_err(|error| error.to_string())?
         .into_iter()
+        .filter(|item| item.aging != hide_memory::Aging::Archived)
         .map(|item| {
             let comparison = store
                 .document_comparison(&identity.id, item.number)
@@ -1367,6 +1404,12 @@ fn load_opened_memory(
                         body: previous.body,
                         changed_at_unix_ms: previous.changed_at_unix_ms,
                     }),
+                    changes: store
+                        .card_changes(&identity.id, number)
+                        .map_err(|error| error.to_string())?
+                        .into_iter()
+                        .map(change_snapshot)
+                        .collect(),
                 })
             }
             None => None,
@@ -1394,6 +1437,18 @@ fn load_opened_memory(
             crate::suggestions::policy::STORED_NEW_CAP,
         )
         .map_err(|error| error.to_string())?;
+    let archived = store
+        .archived_cards(&identity.id)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .map(
+            |(number, title, archived_at_unix_ms)| crate::model::MemoryArchivedSnapshot {
+                number,
+                title,
+                archived_at_unix_ms,
+            },
+        )
+        .collect();
     Ok(OpenedMemoryLoad {
         project_id: identity.id,
         state: Some(state),
@@ -1403,7 +1458,54 @@ fn load_opened_memory(
         suggestions,
         expanded,
         search,
+        archived,
     })
+}
+
+/// A history row as the tab draws it: the change's own words, never its
+/// stored data.
+fn change_snapshot(change: hide_memory::CardChange) -> crate::model::MemoryChangeSnapshot {
+    use crate::model::{MemoryChange, MemoryUndoBlocked};
+    let data = &change.data;
+    let count = |key: &str| data[key].as_u64();
+    crate::model::MemoryChangeSnapshot {
+        id: change.id,
+        change: match change.kind {
+            hide_memory::ChangeKind::Stale => MemoryChange::Stale,
+            hide_memory::ChangeKind::Archive => MemoryChange::Archive,
+            hide_memory::ChangeKind::Revive => MemoryChange::Revive,
+            hide_memory::ChangeKind::Alias => MemoryChange::Alias {
+                aliases: data["added"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|alias| alias.as_str().map(str::to_owned))
+                    .collect(),
+            },
+            hide_memory::ChangeKind::Merge => MemoryChange::Merge {
+                cards: data["absorbed"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|card| card["number"].as_u64())
+                    .collect(),
+            },
+            hide_memory::ChangeKind::Recheck => MemoryChange::Recheck {
+                by_agent: data["by"] == "agent",
+                letters: count("letters"),
+                unreadable: count("unreadable"),
+            },
+        },
+        at_unix_ms: change.at_unix_ms,
+        undone: change.undone_at_unix_ms.is_some(),
+        undo_blocked: match change.undo_blocked {
+            Some("superseded_by_later_change") => Some(MemoryUndoBlocked::LaterChange),
+            Some("merged_card_changed") => Some(MemoryUndoBlocked::MergedCardChanged),
+            Some("merged_card_gone") => Some(MemoryUndoBlocked::MergedCardGone),
+            Some("recheck_finished") => Some(MemoryUndoBlocked::RecheckFinished),
+            _ => None,
+        },
+    }
 }
 
 fn memory_row(item: hide_memory::MemoryItem, preview: bool) -> MemoryRowSnapshot {
@@ -1417,6 +1519,7 @@ fn memory_row(item: hide_memory::MemoryItem, preview: bool) -> MemoryRowSnapshot
         pull_count: item.pull_count,
         updated_at_unix_ms: item.updated_at_unix_ms,
         verifying: item.verifying,
+        stale: item.aging == hide_memory::Aging::Stale,
         promotion: None,
         document_comparison: None,
     }
@@ -1531,6 +1634,7 @@ mod tests {
                     human: true,
                 }],
                 previous: None,
+                changes: Vec::new(),
             })
         );
         assert_eq!(
@@ -1559,6 +1663,7 @@ mod tests {
                 action,
                 number: None,
                 numbers: Vec::new(),
+                change: None,
             };
             assert!(
                 mutate_memory(
@@ -1711,7 +1816,12 @@ mod tests {
             let connection = rusqlite::Connection::open(&database).unwrap();
             connection
                 .execute_batch(
-                    "DROP TRIGGER memory_projection_memory_items_insert;
+                    "DROP TRIGGER recheck_ends_on_check; DROP TRIGGER recheck_ends_on_change;
+DROP TABLE card_changes; DROP TABLE card_misses; DROP TABLE repeat_requests; DROP TABLE split_pairs;
+ALTER TABLE memory_items DROP COLUMN aging; ALTER TABLE memory_items DROP COLUMN aging_clock_ms;
+ALTER TABLE memory_items DROP COLUMN last_given_at_ms; ALTER TABLE memory_items DROP COLUMN recheck_at_ms;
+ALTER TABLE projects DROP COLUMN aged_at_ms; ALTER TABLE injection_receipts DROP COLUMN kind;
+DROP TRIGGER memory_projection_memory_items_insert;
 DROP TRIGGER memory_projection_memory_items_update;
 DROP TRIGGER memory_projection_memory_items_delete;
 DROP TRIGGER memory_projection_memory_revisions_insert;

@@ -46,6 +46,7 @@ fn action(workspace: &str, action: MemoryAction) -> crate::runtime::events::Memo
         action,
         number: None,
         numbers: Vec::new(),
+        change: None,
     }
 }
 
@@ -512,6 +513,7 @@ fn the_largest_comparison_set_and_event_group_fit_one_request() {
             "session",
             &serde_json::to_string(&group).unwrap(),
             &similar,
+            &[],
             hide_ai::OutputLanguage::English,
         )
         .unwrap();

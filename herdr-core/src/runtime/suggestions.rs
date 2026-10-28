@@ -327,6 +327,7 @@ impl Runtime {
                 crate::model::MemoryAction::Disable
             },
             number: None,
+            change: None,
         })
     }
 

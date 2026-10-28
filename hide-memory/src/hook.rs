@@ -8,7 +8,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Injection, InjectionKind, InjectionOutcome, MemoryStore, RetrievalQuery};
+use crate::{Injection, InjectionOutcome, MemoryStore, RetrievalQuery};
 
 /// The most of a prompt a hook sends the core to rank Memory by: its start,
 /// which names the task, and few enough bytes that the request stays one
@@ -235,8 +235,7 @@ where
         let preview = render(
             request.event,
             injection.clone(),
-            (injection.kind == InjectionKind::Bodies)
-                .then_some("0000000000000000000000000000000000000000000000000000000000000000"),
+            Some("0000000000000000000000000000000000000000000000000000000000000000"),
             generation,
             &expired,
         );
@@ -252,11 +251,13 @@ where
     if injection.items.is_empty() && injection.outcome == InjectionOutcome::Provided {
         injection.outcome = InjectionOutcome::Empty;
     }
-    // The index is not a delivery and leaves no receipt; only cards given in
-    // full are recorded, so a session's prompts do not repeat them (B12).
-    let receipt_auth = match injection.kind {
-        InjectionKind::Index => None,
-        InjectionKind::Bodies => match store.receipt_auth_tag(
+    // Both carry a receipt, signed over the event, so an index's can never
+    // pass for bodies: the index's is recorded only as given, for a card's
+    // age and an ignore, while bodies keep a session's prompts from
+    // repeating them (B12; PRD memory-self-improve D-35).
+    let receipt_auth = match injection.items.is_empty() {
+        true => None,
+        false => match store.receipt_auth_tag(
             &project.id,
             request.runtime_id,
             request.session_id,
@@ -323,6 +324,7 @@ fn render(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::InjectionKind;
     // Policy checks own a logical invocation clock. The real SQL interruption
     // test below explicitly exercises the public wall-clock entry instead.
     use super::context_until as context_for;
@@ -590,7 +592,7 @@ mod tests {
         assert!(start.contains("m1 Race rule 0 about durable hooks"));
         assert!(!start.contains("A fact about"));
         assert!(!start.contains("Race rule 21 "));
-        assert!(!start.contains("hide-memory-receipt"));
+        assert!(start.contains("<hide-memory-receipt event=\"SessionStart\" count=\"20\""));
 
         let prompt = context_for(
             &path,
