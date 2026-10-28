@@ -81,7 +81,7 @@ const HELD_SCRIPT: &str = "set -u; root=$1; shift; held() { [ -f \"$1\" ] && [ !
 /// final name in a folder only the account can enter, checked against the
 /// digest `$3`, and renamed into place, so the final name only ever holds a
 /// whole, verified copy and an interrupted upload leaves nothing in use.
-const PLACE_SCRIPT: &str = "set -eu; umask 077; root=$1; final=$1/$2; digest=$3; mode=$4; dir=${final%/*}; mkdir -p -- \"$dir\"; chmod 700 -- \"$root\"; tmp=$dir/.upload-${final##*/}-$$; trap 'rm -f -- \"$tmp\"' EXIT; cat > \"$tmp\"; set -- $(sha256sum < \"$tmp\"); [ \"$1\" = \"$digest\" ] || { echo 'the uploaded file did not match the package' >&2; exit 66; }; chmod \"$mode\" -- \"$tmp\"; mv -f -- \"$tmp\" \"$final\"; trap - EXIT";
+const PLACE_SCRIPT: &str = "set -eu; umask 077; root=$1; final=$1/$2; digest=$3; mode=$4; dir=${final%/*}; mkdir -p -- \"$dir\"; chmod -- 700 \"$root\"; tmp=$dir/.upload-${final##*/}-$$; trap 'rm -f -- \"$tmp\"' EXIT; cat > \"$tmp\"; set -- $(sha256sum < \"$tmp\"); [ \"$1\" = \"$digest\" ] || { echo 'the uploaded file did not match the package' >&2; exit 66; }; chmod -- \"$mode\" \"$tmp\"; mv -f -- \"$tmp\" \"$final\"; trap - EXIT";
 
 /// How this process reaches WSL: the `wsl.exe` it runs and where it reads
 /// the distributions; a test's stand-in for both on a system without WSL.
