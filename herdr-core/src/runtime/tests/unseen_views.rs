@@ -201,7 +201,10 @@ fn a_view_stays_unseen_while_no_window_holds_the_keyboard_or_the_lane_shows_some
     // B7: the lane shows no documents.
     {
         let store = guard.workspace_views.as_mut().unwrap();
-        store.views.entry(crate::node::TEST_NODE, CHECKOUT).documents = false;
+        store
+            .views
+            .entry(crate::node::TEST_NODE, CHECKOUT)
+            .documents = false;
     }
     guard.set_window_focused(true);
     guard.sync_workspace_view();
@@ -209,7 +212,10 @@ fn a_view_stays_unseen_while_no_window_holds_the_keyboard_or_the_lane_shows_some
     // Back on the documents, with a window holding the keyboard, it is seen.
     {
         let store = guard.workspace_views.as_mut().unwrap();
-        store.views.entry(crate::node::TEST_NODE, CHECKOUT).documents = true;
+        store
+            .views
+            .entry(crate::node::TEST_NODE, CHECKOUT)
+            .documents = true;
     }
     guard.sync_workspace_view();
     assert!(!unseen(&guard, &view));
@@ -372,9 +378,7 @@ fn a_view_to_look_at_sends_no_phone_or_desktop_notice() {
     let (_root, runtime) = fixture(false);
     let mut guard = runtime.lock().unwrap();
     keyboard(&mut guard, Some("sender"));
-    let rows = |runtime: &Runtime| {
-        json!({"navigator": {"agents": serde_json::to_value(&runtime.snapshot.navigator.agents).unwrap()}})
-    };
+    let rows = |runtime: &Runtime| json!({"navigator": {"agents": serde_json::to_value(&runtime.snapshot.navigator.agents).unwrap()}});
     let mut transitions = crate::agent_state::push::Transitions::default();
     let seeded = crate::agent_state::phone::project(&rows(&guard), crate::node::TEST_NODE);
     transitions.observe(&seeded);
@@ -465,9 +469,14 @@ fn a_report_names_the_views_its_sender_opened_and_whether_they_were_seen() {
     let view = open(&mut guard, "recipient", "src/report.md");
     let mut body = "Done.".to_owned();
     guard.list_opened_views("recipient", &mut body);
-    assert!(body.starts_with("Done.\n\nViews this agent opened"), "{body}");
     assert!(
-        body.contains(&format!("- {view} src/report.md (not seen by the operator)")),
+        body.starts_with("Done.\n\nViews this agent opened"),
+        "{body}"
+    );
+    assert!(
+        body.contains(&format!(
+            "- {view} src/report.md (not seen by the operator)"
+        )),
         "{body}"
     );
     // An agent that opened nothing adds nothing.
@@ -484,7 +493,10 @@ fn a_row_pressed_in_a_list_brings_its_newest_unseen_view_forward_and_sees_it() {
     let view = open(&mut guard, "recipient", "src/login.ts");
     {
         let store = guard.workspace_views.as_mut().unwrap();
-        store.views.entry(crate::node::TEST_NODE, CHECKOUT).documents = false;
+        store
+            .views
+            .entry(crate::node::TEST_NODE, CHECKOUT)
+            .documents = false;
     }
     // B3: the View comes forward on its pane, and is seen once in front.
     keyboard(&mut guard, Some("recipient"));

@@ -175,7 +175,12 @@ impl Runtime {
             .machine_agents(&opener.device_id)
             .iter()
             .find(|agent| agent.pane_id == opener_pane)
-            .is_some_and(|agent| agent.lineage_path_pane_ids.iter().any(|pane| pane == caller));
+            .is_some_and(|agent| {
+                agent
+                    .lineage_path_pane_ids
+                    .iter()
+                    .any(|pane| pane == caller)
+            });
         if !ancestor {
             return;
         }
@@ -280,7 +285,12 @@ impl Runtime {
         let lines = self
             .every_view_layout()
             .flat_map(|(_, layout)| layout.displays())
-            .filter(|display| display.openers.iter().any(|opener| opener.of_session(&scope)))
+            .filter(|display| {
+                display
+                    .openers
+                    .iter()
+                    .any(|opener| opener.of_session(&scope))
+            })
             .map(|display| {
                 let target = display.url.as_deref().unwrap_or(&display.path);
                 let seen = if display.unseen.is_some() {
@@ -363,7 +373,9 @@ fn opener_pane_among(
         .flat_map(|tab| &tab.panes)
         .find(|pane| pane.terminal_id.as_deref() == Some(opener.terminal_id.as_str()))
         .and_then(|pane| mine().find(|agent| agent.pane_id == pane.id))
-        .filter(|agent| agent.agent_kind == opener.provider && agent.lineage_session == opener.session);
+        .filter(|agent| {
+            agent.agent_kind == opener.provider && agent.lineage_session == opener.session
+        });
     in_terminal
         .or_else(|| {
             let session = opener.session.as_ref()?;

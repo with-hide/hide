@@ -504,8 +504,7 @@ impl Runtime {
                 load: Some(load),
             });
         }
-        if let Action::OpenFile { .. } | Action::OpenDiff { .. } = action
-        {
+        if let Action::OpenFile { .. } | Action::OpenDiff { .. } = action {
             let Some(material) = material else {
                 return Err(Refusal {
                     reason: "read_missing",

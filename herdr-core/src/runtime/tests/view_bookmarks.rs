@@ -298,13 +298,7 @@ fn control(
 
 /// `hide file open <name>` from `caller`, with the host read the
 /// daemon does off the lock.
-fn control_file(
-    runtime: &mut Runtime,
-    caller: &str,
-    directory: &Path,
-    name: &str,
-    suffix: &str,
-) {
+fn control_file(runtime: &mut Runtime, caller: &str, directory: &Path, name: &str, suffix: &str) {
     let action = Action::OpenFile {
         path: directory.join(name).to_string_lossy().into_owned(),
     };
@@ -644,13 +638,7 @@ fn only_the_operators_pane_brings_its_open_forward() {
     assert_eq!(calls(&runtime), before, "no lane call");
 
     let shell = checkout_caller_id("fixture", &directory.to_string_lossy());
-    control_file(
-        &mut runtime,
-        &shell,
-        &directory,
-        "c.md",
-        "shell-open",
-    );
+    control_file(&mut runtime, &shell, &directory, "c.md", "shell-open");
     runtime.sync_workspace_view();
     assert_eq!(strip(&runtime, &directory), ["a.md", "b.md", "c.md"]);
     assert_eq!(
@@ -688,13 +676,7 @@ fn only_the_operators_pane_brings_its_open_forward() {
 
     // The same pane is another pane once the operator leaves its tab.
     focus_tab(&mut runtime, &checkout, &directory, TABS[1]);
-    control_file(
-        &mut runtime,
-        "w-order:t1:p",
-        &directory,
-        "d.md",
-        "left-tab",
-    );
+    control_file(&mut runtime, "w-order:t1:p", &directory, "d.md", "left-tab");
     runtime.sync_workspace_view();
     assert_eq!(fronts(&runtime, &directory), ["https://example.test/mine"]);
     assert_eq!(
@@ -745,13 +727,7 @@ fn closing_an_agent_tab_keeps_its_views() {
     let (mut runtime, checkout, directory) = setup("tab-close");
     open(&mut runtime, &checkout, &directory, "a.md");
     focus_tab(&mut runtime, &checkout, &directory, TABS[2]);
-    control_file(
-        &mut runtime,
-        "w-order:t3:p",
-        &directory,
-        "c.md",
-        "front-c",
-    );
+    control_file(&mut runtime, "w-order:t3:p", &directory, "c.md", "front-c");
     runtime.sync_workspace_view();
     runtime.ingest_session(Ok(tab_order_payload(
         &directory.to_string_lossy(),
@@ -1212,13 +1188,7 @@ fn a_delegated_tabs_pane_manages_views_in_the_checkouts_list() {
         .unwrap();
     runtime.sync_workspace_view();
     let caller = "w-order:t2:p";
-    control_file(
-        &mut runtime,
-        caller,
-        &directory,
-        "c.md",
-        "delegated-file",
-    );
+    control_file(&mut runtime, caller, &directory, "c.md", "delegated-file");
     let page = control(
         &mut runtime,
         caller,
@@ -1559,20 +1529,8 @@ fn a_closed_sessions_views_close_and_shared_or_unsaved_ones_stay() {
     let (mut runtime, checkout, directory) = setup("session-close");
     sessions_focus(&mut runtime, &directory, TABS[0]);
     control_file(&mut runtime, "w-order:t2:p", &directory, "b.md", "b");
-    control_file(
-        &mut runtime,
-        "w-order:t2:p",
-        &directory,
-        "d.md",
-        "d2",
-    );
-    control_file(
-        &mut runtime,
-        "w-order:t1:p",
-        &directory,
-        "d.md",
-        "d1",
-    );
+    control_file(&mut runtime, "w-order:t2:p", &directory, "d.md", "d2");
+    control_file(&mut runtime, "w-order:t1:p", &directory, "d.md", "d1");
     open(&mut runtime, &checkout, &directory, "c.md");
     control_file(&mut runtime, "w-order:t2:p", &directory, "a.md", "a");
 
@@ -1691,13 +1649,7 @@ fn a_session_record_lists_the_outputs_its_session_tree_opened() {
     // Source code and a log the session only opened are not its outputs.
     for (file, suffix) in [("main.rs", "rs"), ("build.log", "log")] {
         std::fs::write(directory.join(file), "fn main() {}\n").expect("fixture");
-        control_file(
-            &mut runtime,
-            "w-order:t1:p",
-            &directory,
-            file,
-            suffix,
-        );
+        control_file(&mut runtime, "w-order:t1:p", &directory, file, suffix);
     }
     open(&mut runtime, &checkout, &directory, "d.md");
     let session = |id: &str| SessionIdentity {

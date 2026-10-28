@@ -2130,9 +2130,7 @@ mod tests {
                 Ok((id, true))
             })
             .unwrap();
-        let open = crate::workspace_control::Action::OpenFile {
-            path: path.into(),
-        };
+        let open = crate::workspace_control::Action::OpenFile { path: path.into() };
         runtime.stamp_control_opener(&key, "recipient", &open, &view);
         view
     }

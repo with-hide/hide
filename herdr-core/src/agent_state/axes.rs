@@ -568,7 +568,11 @@ fn descendant_signals_of(agent: &SidebarAgentSnapshot) -> Vec<crate::model::Desc
     // Each View it opened that nobody has looked at, by its open's
     // generation, so an open again is news again and an ancestor's read or
     // the operator's look takes it away (PRD unseen-agent-views D-10, D-23).
-    for view in agent.unseen_views.iter().filter(|view| !view.ancestors_read) {
+    for view in agent
+        .unseen_views
+        .iter()
+        .filter(|view| !view.ancestors_read)
+    {
         signals.push(crate::model::DescendantSignal {
             pane_id: agent.pane_id.clone(),
             kind: format!("view:{}@{}", view.view_id, view.opened_unix_ms),

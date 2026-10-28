@@ -131,9 +131,9 @@ mod tree_close;
 #[path = "tests/tree_reopen.rs"]
 mod tree_reopen;
 mod ui_state_focus;
+mod unseen_views;
 #[path = "tests/usage_limit.rs"]
 mod usage_limit;
-mod unseen_views;
 #[path = "tests/view_areas.rs"]
 mod view_areas;
 mod view_bookmarks;

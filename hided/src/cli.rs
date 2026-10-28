@@ -3605,7 +3605,11 @@ mod tests {
             &["hide", "file", "open", "src/lib.rs", "--beside"][..],
             &["hide", "diff", "open", "src/lib.rs", "--beside"],
         ] {
-            assert_eq!(parse(removed), Err(BESIDE_REMOVED.to_owned()), "{removed:?}");
+            assert_eq!(
+                parse(removed),
+                Err(BESIDE_REMOVED.to_owned()),
+                "{removed:?}"
+            );
         }
         assert_eq!(
             parse(&["hide", "diff", "open", "src/lib.rs"]),
