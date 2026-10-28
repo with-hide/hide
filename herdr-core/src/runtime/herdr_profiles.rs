@@ -490,7 +490,7 @@ mod tests {
         runtime
     }
 
-    fn distro(name: &str, wsl_version: u32, default: bool) -> WslDistribution {
+    fn distro(name: &str, wsl_version: u8, default: bool) -> WslDistribution {
         WslDistribution {
             name: name.to_owned(),
             wsl_version,
@@ -634,7 +634,8 @@ mod tests {
     /// exactly as before.
     #[test]
     fn without_wsl_the_step_is_the_saved_profiles_alone() {
-        let rows = discovered().snapshot.status.herdr_profiles.profiles;
+        let runtime = discovered();
+        let rows = &runtime.snapshot.status.herdr_profiles.profiles;
         assert_eq!(
             rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
             ["first", "alias", "second", "disabled"]
