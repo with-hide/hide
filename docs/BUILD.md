@@ -147,6 +147,8 @@ Both forward the test arguments and their exit status, so a missing test filter 
 The desktop CI job uses it for the complete and filtered shard lists, then uses `desktop e2e` for execution: one fresh host build per job instead of one for each list and another for execution.
 There is no skip-build flag, freshness marker or reuse of a previous job's desktop output.
 `playwright-install` installs Chromium for web or desktop; `desktop package` packages this runner's app.
+`desktop package compile` builds only the web shell and the release binaries and records them in `desktop/out/release-binaries.json` (commit, version, build order and each binary's SHA-256); `desktop package assemble` builds the host and packages exactly those binaries, refusing a record of another commit, version or order and any binary that is missing, linked or changed.
+`package.yml`'s macOS lane runs the two halves as two jobs of one run at one identity (see [Device helper release bundles](#device-helper-release-bundles)), the one place a release binary crosses a job; nothing reuses a release binary from another run or source.
 An invalid package/action pair or more than 128 trailing arguments exits 2; the no-argument gate retains both packages' typecheck, lint, unit tests and build coverage.
 `test_ci_verification_entrypoints.py` checks this external command boundary without building or installing; it complements the real build tests below.
 
@@ -236,13 +238,13 @@ Never redirect a release target directory.
 
 Each producer manifest records platform, source commit, version, build order and each helper's SHA-256.
 `package.yml` resolves one identity with `desktop/scripts/build-identity.mjs` and calls the producer on every call, beside the Windows and Linux packages; a [release candidate](#unsigned-release-candidates) keeps both artifacts for the private publisher.
-Its macOS package job downloads these artifacts from that run.
+Its macOS lane does not wait for them to compile: `compile (macos)` runs `desktop package compile` while the helpers build, and `package (macos)` needs both jobs, downloads the binaries and these artifacts from that run and runs `desktop package assemble`, so a failed helper skips the Mac app and fails the run.
 A local Mac package needs the same two directories at its exact identity; the identity command prints the values to give the producer.
 `desktop/scripts/device-helpers.mjs build <platform> <version> <source-sha> <build-order>` is the producer command on its matching runner after dependency installation and `rustup target add <triple>`.
 Packaging refuses missing members, a different source/version/order, digest mismatches, links, files above 256 MiB and incorrect executable headers.
 Downloaded artifacts need not retain executable mode bits.
 
-Before building the native app, `prepareDeviceBundles` copies the helpers and pinned Herdr into private worktree staging.
+Before building the native app, or before assembling it from compiled binaries, `prepareDeviceBundles` copies the helpers and pinned Herdr into private worktree staging.
 Linux bytes remain unchanged; only the native Mac app follows the existing Developer ID signing and notarization path.
 It hashes the final files and builds one gzip-compressed USTAR archive per platform, containing exactly four regular entries at its root: `hided`, `hide`, `hide-agent-hooks`, `herdr`.
 No paths, links, extended attributes or PAX records belong in an archive.

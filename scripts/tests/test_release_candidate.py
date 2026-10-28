@@ -116,12 +116,16 @@ class ReleaseCandidate(unittest.TestCase):
                         self.assertEqual(step["with"]["ref"], "${{ inputs.source-sha || github.sha }}")
 
     def test_no_receipt_or_mac_app_exists_without_both_device_helpers(self):
-        # A failed helper must skip what needs it: the Mac app and, through
-        # `packages`, the candidate's receipt.
+        # A failed helper must skip what needs it: the Mac app's assembly and,
+        # through `packages`, the candidate's receipt. The Mac compile alone
+        # starts beside the helpers.
         jobs = yaml.safe_load((WORKFLOWS / "package.yml").read_text())["jobs"]
         self.assertNotIn("if", jobs["device-helpers"])
         self.assertNotIn("if", jobs["helper-identity"])
-        self.assertIn("device-helpers", jobs["macos-package"]["needs"])
+        self.assertEqual(jobs["macos-compile"]["needs"], "helper-identity")
+        self.assertEqual(set(jobs["macos-package"]["needs"]), {"helper-identity", "device-helpers", "macos-compile"})
+        for name in ("macos-compile", "macos-package"):
+            self.assertEqual(jobs[name]["if"], "${{ inputs.include-macos }}")
         receipt = yaml.safe_load((WORKFLOWS / "release-candidate.yml").read_text())["jobs"]["receipt"]
         downloads = [step["with"]["name"] for step in receipt["steps"] if step.get("uses", "").startswith("actions/download-artifact@")]
         self.assertEqual(downloads, ["hide-device-helper-linux-x86_64", "hide-device-helper-linux-aarch64"])
