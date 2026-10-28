@@ -67,10 +67,30 @@ class JobStarted(unittest.TestCase):
         self.assertFalse(self.ran.exists())
         self.assertEqual(list(self.work.iterdir()), [])
 
-    def test_a_hook_whose_parent_is_not_the_worker_says_it_could_not_stop_the_job(self):
-        result = hook("job-started.sh", {"HOME": str(self.home)})
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("could not be stopped", result.stdout)
+    def test_where_the_parent_is_not_the_worker_the_whole_runner_stops_until_restored(self):
+        # As if an update put another process between the worker and its
+        # hooks: the hook's parent is a wrapper, not the worker.
+        runner = self.home / "actions-runner"
+        (runner / "bin").mkdir()
+        (runner / ".runner").write_text("{}\n")
+        listener = runner / "bin/Runner.Listener"
+        listener.write_text("#!/bin/bash\nwhile :; do sleep 1; done\n")
+        listener.chmod(0o755)
+        wrapper = self.home / "wrapper"
+        wrapper.write_text(f"#!/bin/bash\nbash --noprofile --norc -e -o pipefail {RUNNER / 'job-started.sh'}\necho wrapped\n")
+        wrapper.chmod(0o755)
+        worker = runner / "bin/Runner.Worker"
+        worker.write_text(f"#!/bin/bash\n{wrapper}\necho ran > {self.ran}\n")
+        worker.chmod(0o755)
+        env = {"PATH": "/usr/bin:/bin", "HOME": str(self.home), "GITHUB_EVENT_NAME": "pull_request"}
+        running = subprocess.Popen([str(listener), "run", "--startuptype", "service"], env=env)
+        self.addCleanup(running.kill)
+        result = subprocess.run([str(worker), "spawnclient", "1", "2"], env=env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, -9)
+        self.assertEqual(running.wait(timeout=10), -9)
+        self.assertIn("the runner stops taking jobs", result.stdout)
+        self.assertFalse(self.ran.exists())
+        self.assertEqual(sorted(path.name for path in runner.iterdir() if path.name.startswith(".runner")), [".runner.stopped"])
 
     def test_refuses_every_other_job_before_its_steps(self):
         workflow = "with-hide/hide/.github/workflows/{}@{}"
@@ -89,12 +109,12 @@ class JobStarted(unittest.TestCase):
             {"GITHUB_REPOSITORY": ""},
         ]:
             with self.subTest(patch=patch):
-                result = hook("job-started.sh", {**CANDIDATE, **patch})
+                result = hook("job-started.sh", {**CANDIDATE, **patch, "HOME": str(self.home)})
                 self.assertEqual(result.returncode, 1)
                 self.assertIn("::error::this runner builds only", result.stdout)
-        result = hook("job-started.sh", {})
+        result = hook("job-started.sh", {"HOME": str(self.home)})
         self.assertEqual(result.returncode, 1)
-        self.assertIn("could not be stopped", result.stdout)
+        self.assertIn("the runner stops taking jobs", result.stdout)
 
 
 class JobCompleted(unittest.TestCase):

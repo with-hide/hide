@@ -15,7 +15,8 @@
 # `if: always()` and `if: failure()` steps and its actions' `pre` steps, and a
 # cancel runs `always()` steps too. So a refused job's worker, this hook's
 # parent, is killed outright; the listener then completes the job as failed
-# and waits for the next one.
+# and waits for the next one. Where the parent is not the worker, the whole
+# runner stops instead.
 set -euo pipefail
 allowed="with-hide/hide/.github/workflows/release-candidate.yml@refs/heads/main"
 if [[ "${GITHUB_REPOSITORY:-}" == with-hide/hide && "${GITHUB_EVENT_NAME:-}" == workflow_dispatch
@@ -37,8 +38,20 @@ case "$(ps -o command= -p "$worker")" in
     kill -KILL "$worker"
     ;;
   *)
-    echo "::error::the hook's parent $worker is not the runner's worker, so the refused job could not be stopped"
-    logger -t hide-candidate-runner "could not stop the refused job: parent $worker is not Runner.Worker" || true
+    # The parent is not the worker, as after an update that changed how the
+    # worker starts hooks, so the refused job's later steps cannot be stopped
+    # alone: the runner stops taking jobs until its administrator has looked
+    # (docs/BUILD.md). Its registration is set aside first, so the listener
+    # the runner service starts again finds none, and the LaunchDaemon, which
+    # has no KeepAlive, starts nothing more; then every worker and listener
+    # of this runner is killed.
+    runner="$HOME/actions-runner"
+    echo "::error::the hook's parent $worker is not the runner's worker; the runner stops taking jobs until its administrator restores $runner/.runner"
+    logger -t hide-candidate-runner "parent $worker is not Runner.Worker; stopping the runner" || true
+    if [[ -f "$runner/.runner" ]]; then mv -f "$runner/.runner" "$runner/.runner.stopped"; fi
+    # By pid from ps: pkill on macOS leaves out its own ancestors, the worker among them.
+    pids="$(ps -U "$(id -u)" -o pid=,command= | grep -E "$runner/bin[^/]*/Runner\.(Worker|Listener)( |$)" | awk '{ print $1 }' || true)"
+    if [[ -n "$pids" ]]; then kill -KILL $pids || true; fi
     ;;
 esac
 exit 1
