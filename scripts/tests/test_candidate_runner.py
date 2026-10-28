@@ -66,7 +66,7 @@ class JobCompleted(unittest.TestCase):
                      "_cache/cargo/registry/crate", "_tool/setup-pnpm/node_modules/.bin/store/package", ".hidden"]:
             (self.work / name).parent.mkdir(parents=True, exist_ok=True)
             (self.work / name).write_text("left by a job\n")
-        (self.workspace / "rust-toolchain.toml").write_text('[toolchain]\nchannel = "1.99.1"\nprofile = "minimal"\n')
+        (self.workspace / "rust-toolchain.toml").write_text('[toolchain]\nchannel = "2.0.0"\nprofile = "minimal"\n')
         (self.home / "kept").write_text("not the job's\n")
         # rustup as the account has it: two pins installed, one the source names.
         bin = self.home / "bin"
@@ -74,7 +74,7 @@ class JobCompleted(unittest.TestCase):
         (bin / "rustup").write_text(
             "#!/bin/bash\n"
             'if [[ "$*" == "toolchain list" ]]; then\n'
-            '  printf "1.99.1-aarch64-apple-darwin (active)\\n1.98.0-aarch64-apple-darwin\\n"\n'
+            '  printf "2.0.0-aarch64-apple-darwin (active)\\n1.0.0-aarch64-apple-darwin\\n"\n'
             f'else echo "$*" >> "{self.home}/rustup.log"; fi\n')
         (bin / "rustup").chmod(0o755)
         self.env = {"HOME": str(self.home), "PATH": f"{bin}:/usr/bin:/bin", "GITHUB_WORKSPACE": str(self.workspace)}
@@ -84,7 +84,7 @@ class JobCompleted(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(sorted(path.name for path in self.work.iterdir()), ["_temp"])
         self.assertTrue((self.home / "kept").exists())
-        self.assertEqual((self.home / "rustup.log").read_text(), "toolchain uninstall 1.98.0-aarch64-apple-darwin\n")
+        self.assertEqual((self.home / "rustup.log").read_text(), "toolchain uninstall 1.0.0-aarch64-apple-darwin\n")
 
     def test_without_a_checkout_it_still_empties_the_work_folder(self):
         result = hook("job-completed.sh", {**self.env, "GITHUB_WORKSPACE": ""})
