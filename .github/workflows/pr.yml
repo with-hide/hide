@@ -425,6 +425,16 @@ jobs:
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 5
         run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hide-host::it) & test(=worktrees::a_public_read_spends_one_deadline_on_discovery_metadata_and_measurement)'
+      - name: Registration takes a confirmed drive folder and never a network share
+        # A folder on a drive outside home is registered once confirmed, and a
+        # network share never, written or reached through a link on a drive,
+        # by hided and by a device's helper alike (PRD wsl-device B19, D-15).
+        # Both forms exist only here, so the Linux rust lane compiles them out.
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        timeout-minutes: 5
+        run: |
+          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(hided) & kind(lib) & test(/^boundary::windows_tests::/)'
+          bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hide-host::it) & test(=register::a_confirmed_link_to_a_network_share_is_refused_like_the_share)'
       - name: Install kit and its Windows command shim
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 10
