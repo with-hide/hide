@@ -14,7 +14,7 @@ const distro = (name: string, over: Partial<WslDistribution> = {}): WslDistribut
 const HOSTS: SshHosts = {
   state: "ready",
   truncated: false,
-  hosts: [{ alias: "studio", address: "you@studio.local:22", added_as: null, problem: null }],
+  hosts: [{ alias: "studio", address: "you@studio.example:22", added_as: null, problem: null }],
   wsl: [
     distro("Ubuntu-24.04", { default: true }),
     distro("Debian", { added_as: "WSL Debian" }),
