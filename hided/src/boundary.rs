@@ -1646,6 +1646,49 @@ mod tests {
         );
     }
 
+    /// PRD wsl-device B18: a folder behind one the operator cannot read is
+    /// answered `invalid_path`, as a walk under home answers it today, and
+    /// one outside home is asked about first and answered so once confirmed;
+    /// a folder that is itself closed registers as it does today, since
+    /// nothing inside it is read to add it.
+    #[test]
+    fn a_folder_behind_one_the_operator_cannot_read_is_refused_as_today() {
+        use std::os::unix::fs::PermissionsExt;
+        let f = fixture();
+        let closed = f.home.join("projects/closed");
+        let locked = f.home.join("projects/locked");
+        let outside = f.outside.join("closed");
+        for folder in [closed.join("app"), locked.clone(), outside.join("app")] {
+            fs::create_dir_all(folder).unwrap();
+        }
+        let deny = |mode| {
+            for folder in [&closed, &locked, &outside] {
+                fs::set_permissions(folder, fs::Permissions::from_mode(mode)).unwrap();
+            }
+        };
+        deny(0o000);
+        let inside = s(&closed.join("app"));
+        let beyond = s(&outside.join("app"));
+        let answers = [
+            workspace(&f.boundary, &inside, None),
+            workspace(&f.boundary, &beyond, None),
+            workspace(&f.boundary, &beyond, Some(&beyond)),
+            workspace(&f.boundary, &s(&locked), None),
+        ];
+        // Access comes back before the fixture is dropped, or it could not
+        // be removed.
+        deny(0o755);
+        assert_eq!(
+            answers,
+            [
+                Err(Refusal::InvalidPath),
+                Err(Refusal::NeedsConfirmation),
+                Err(Refusal::InvalidPath),
+                Ok(locked.canonicalize().unwrap()),
+            ]
+        );
+    }
+
     #[test]
     fn a_folder_in_a_repository_holding_home_is_refused_with_its_own_reason() {
         let f = fixture();

@@ -91,6 +91,11 @@ it("asks once about a folder outside home and sends it again with the confirmati
   await refuse(picked, "not_found");
   expect(find("[data-registration-reason]")?.getAttribute("data-registration-reason")).toBe("not_found");
   expect(find("[data-add-project]")).not.toBeNull();
+  // A folder behind one the operator cannot read is hided's `invalid_path`, as today.
+  await refuse(picked, "invalid_path");
+  expect(find("[data-registration-reason]")?.getAttribute("data-registration-reason")).toBe("invalid_path");
+  expect(find("[role=alert]")?.textContent).toContain("The path has to be absolute, without `..`.");
+  expect(find("[data-add-project]")).not.toBeNull();
   await unmount();
 
   // The dialog remembers no confirmation: opening it again sends the folder without one (B20).
