@@ -323,7 +323,7 @@ class Selection(unittest.TestCase):
 
     def test_package_helpers_need_only_checks_and_the_package_chain(self):
         for status in ("A", "M", "D"):
-            for name in ("build-identity.mjs", "device-helpers.mjs", "fuses.mjs", "fuses.d.mts", "installers.mjs",
+            for name in ("build-identity.mjs", "device-helpers.mjs", "installers.mjs",
                          "macos-signing.mjs", "release-binaries.mjs", "smoke-windows-installer.mjs"):
                 with self.subTest(status=status, helper=name):
                     result = plan("desktop/scripts/" + name, status=status)
@@ -338,6 +338,20 @@ class Selection(unittest.TestCase):
         self.assertEqual(plan("desktop/scripts/installers.mjs", "herdr-core/src/lib.rs")["lanes"],
                          ["policy", "rust", "checks", "os-contract", "windows-check", "windows-e2e",
                           "windows-desktop", "web-e2e", "remote-mailbox", "package"])
+
+    def test_fuses_keep_the_desktop_suites_that_apply_them_in_global_setup(self):
+        for status in ("A", "M", "D"):
+            for name in ("fuses.mjs", "fuses.d.mts"):
+                with self.subTest(status=status, name=name):
+                    self.assertEqual(plan("desktop/scripts/" + name, status=status)["lanes"],
+                                     ["policy", "checks", "windows-desktop", "desktop-e2e", "package"])
+
+    def test_e2e_documentation_planning_and_green_reuse_agree(self):
+        for status in ("A", "M", "D"):
+            for name in ("desktop/e2e/README.md", "web/e2e/README.md", "web/e2e/shims/notes.md"):
+                with self.subTest(status=status, name=name):
+                    self.assertEqual(plan(name, status=status)["lanes"], ["policy"])
+                    self.assertTrue(ci.reads_no_lane(status, name, CRATES, ROOT))
 
     def test_the_desktop_lane_follows_what_the_app_runs(self):
         for path in (
@@ -773,7 +787,18 @@ class Workflows(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/pr.yml").read_text()
         concurrency = workflow[workflow.index("\nconcurrency:\n"):workflow.index("\njobs:\n")]
         self.assertIn("group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}", concurrency)
-        self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action != 'edited' }}", concurrency)
+        condition = re.search(r"cancel-in-progress: \$\{\{(.+?)\}\}", concurrency).group(1)
+        # The same expression-boundary adapter as test_nightly_routing: evaluate
+        # the committed condition for real event kinds, without freezing its text.
+        for event, action, expected in (("pull_request", "synchronize", True),
+                                        ("pull_request", "edited", False),
+                                        ("pull_request", "opened", True),
+                                        ("push", "", False), ("schedule", "", False),
+                                        ("workflow_dispatch", "", False)):
+            with self.subTest(event=event, action=action):
+                code = condition.replace("github.event_name", repr(event)).replace("github.event.action", repr(action))
+                code = code.replace("&&", " and ").replace("||", " or ")
+                self.assertEqual(eval(code, {"__builtins__": {}}), expected)
         self.assertRegex(workflow, r"types: \[[^\]]*\bsynchronize\b[^\]]*\]")
 
     def test_the_package_lane_is_the_only_way_a_pull_request_reaches_package_yml(self):

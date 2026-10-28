@@ -187,12 +187,14 @@ MACOS_LANE_INPUTS = {
         "paths": (
             "desktop/src/*", "desktop/static/*", "desktop/e2e/*",
             "desktop/playwright.config.ts", "desktop/vitest.config.ts", "desktop/scripts/build.mjs",
+            # global-setup.ts -> fused-electron.ts applies the shipped fuses.
+            "desktop/scripts/fuses.mjs", "desktop/scripts/fuses.d.mts",
             "web/src/*", "web/public/*", "web/index.html", "web/e2e/*", "web/vite.config.ts",
             "contracts/agent-adapters.json",
         ),
         # The app never loads the phone page; web specs run only in web-e2e.
         # Desktop fixtures import the other web/e2e helpers and C shims.
-        "exclude": ("web/public/m/*", "web/e2e/*.spec.ts"),
+        "exclude": ("web/public/m/*", "web/e2e/*.spec.ts", "web/e2e/*.md", "desktop/e2e/*.md"),
     },
     "os-contract-macos": {"paths": ("hide-platform/*", "hide-herdr-client/*")},
     "omp-contract": {"paths": ("hide-ai/*", "hide-platform/*")},
@@ -335,8 +337,8 @@ NAMED_LANES = (
     # The packager imports these helpers; package covers their native effects.
     ("desktop/scripts/build-identity.mjs", {"checks"}),
     ("desktop/scripts/device-helpers.mjs", {"checks"}),
-    ("desktop/scripts/fuses.mjs", {"checks"}),
-    ("desktop/scripts/fuses.d.mts", {"checks"}),
+    ("desktop/scripts/fuses.mjs", {"checks", "windows-desktop"}),
+    ("desktop/scripts/fuses.d.mts", {"checks", "windows-desktop"}),
     ("desktop/scripts/installers.mjs", {"checks"}),
     ("desktop/scripts/macos-signing.mjs", {"checks"}),
     ("desktop/scripts/release-binaries.mjs", {"checks"}),
@@ -541,7 +543,7 @@ def reads_no_lane(status, name, crates, root=ROOT):
     # The status decides only whether a spec is read for its tag, never
     # whether a path has a lane, so the answer comes from the name alone.
     lanes, _, _ = classify(PurePosixPath(name), "D", crates, root)
-    return lanes == set()
+    return lanes == set() and not macos_lanes(name)
 
 
 def changed_entries(base, head, root=ROOT):

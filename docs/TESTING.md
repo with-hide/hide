@@ -401,12 +401,13 @@ A planned lane that was skipped, failed or cancelled fails `verify`, so a wrong 
 
 The macOS choices below are data in `MACOS_LANE_INPUTS`, rather than additional job conditions.
 Registered desktop unit tests keep `checks` and `windows-check`; they do not select a macOS lane even when their names overlap an updater or package glob.
+Markdown under web/desktop e2e is policy-only in both planning and green-run reuse.
 Added, modified and deleted paths use the same coverage rules; unknown inputs and unsafe comparisons still broaden the plan.
 
 | macOS jobs | PR inputs and coverage |
 | --- | --- |
-| `desktop e2e (macos 1/2)` and `2/2` | One `desktop-e2e` decision for both shards: desktop host/static files, desktop specs/helpers/configuration, the host build script, web shell source/assets/index/Vite configuration, shared web e2e helpers/shims, and the adapter contract imported by the shell. Phone assets and standalone web specs do not reach the app. Rust-only changes retain the accepted main/nightly coverage described below. |
-| `compile (macos)` and `package (macos)` | One `package` dependency chain: the existing package scripts/resources/native inputs, updater and packaged specs, Herdr pin/fetch, build entrypoints, daemon embedding/replacement, kit and hooks. Known package helpers such as signing, installers, fuses, identity and release-binary validation request only `checks` and `package`; an unknown helper still takes the broad fallback. |
+| `desktop e2e (macos 1/2)` and `2/2` | One `desktop-e2e` decision for both shards: desktop host/static files, desktop specs/helpers/configuration, the host build script, web shell source/assets/index/Vite configuration, shared web e2e helpers/shims, shipped fuse files, and the adapter contract imported by the shell. Phone assets and standalone web specs do not reach the app. Rust-only changes retain the accepted main/nightly coverage described below. |
+| `compile (macos)` and `package (macos)` | One `package` dependency chain: the existing package scripts/resources/native inputs, updater and packaged specs, Herdr pin/fetch, build entrypoints, daemon embedding/replacement, kit and hooks. Known package helpers such as signing, installers, identity and release-binary validation request only `checks` and `package`; fuses also keep both desktop suites because their global setup applies those fuses, and an unknown helper still takes the broad fallback. |
 | `omp SDK (macos)` | `hide-ai` and `hide-platform` in their entirety, conservatively including their manifests/tests; the same `omp-contract` decision retains Linux and Windows. |
 | `os contract (macos)` | `hide-platform` and `hide-herdr-client`, the two crates it tests against the pinned runtime. |
 | Web e2e on macOS | No PR job: the existing nightly macOS `@platform` job stays unchanged. |
