@@ -180,17 +180,18 @@ fn a_registered_distribution_is_named_for_it_and_its_first_attempt_may_start_it(
     wait_for_attempts(&attempts, 1);
     assert_eq!(wakes(&attempts), [Wake::Allowed]);
     let runtime = shared.lock().unwrap();
+    let id = crate::runtime::devices::wsl_device_id("Ubuntu");
     let registration = &runtime.snapshot().ui_state.device_registrations[0];
     assert_eq!(
         (registration.id.as_str(), registration.label.as_str()),
-        ("wsl-ubuntu", "WSL Ubuntu")
+        (id.as_str(), "WSL Ubuntu")
     );
     let device = runtime
         .snapshot()
         .navigator
         .devices
         .iter()
-        .find(|device| device.id == "wsl-ubuntu")
+        .find(|device| device.id == id)
         .expect("the device row");
     assert_eq!(device.wsl_distro.as_deref(), Some("Ubuntu"));
     drop(runtime);
@@ -446,8 +447,11 @@ fn a_distribution_whose_state_cannot_be_read_is_retried_without_leave() {
 #[test]
 fn every_distribution_name_gets_an_id_of_its_own() {
     let id = crate::runtime::devices::wsl_device_id;
-    assert_eq!(id("Ubuntu"), "wsl-ubuntu");
-    assert_eq!(id("kali-linux"), "wsl-kali-linux");
+    // The digests are SHA-256's of each exact name, worked out apart from
+    // the code.
+    assert_eq!(id("Ubuntu"), "wsl-ubuntu-710eb4f4");
+    assert_eq!(id("Ubuntu.24"), "wsl-ubuntu-24-6d166a5b");
+    assert_eq!(id("Ubuntu-24-6d166a5b"), "wsl-ubuntu-24-6d166a5b-8bfa2cb6");
     assert_ne!(id("우분투"), id("데비안"));
     assert_ne!(id("Ubuntu_22.04"), id("Ubuntu-22.04"));
     assert_eq!(
@@ -455,5 +459,4 @@ fn every_distribution_name_gets_an_id_of_its_own() {
         id("Ubuntu-24.04"),
         "the same name, the same id"
     );
-    assert!(id("Ubuntu-24.04").starts_with("wsl-ubuntu-24-04-"));
 }

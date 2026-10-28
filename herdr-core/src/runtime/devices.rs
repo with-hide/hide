@@ -714,29 +714,23 @@ pub(super) fn wsl_device_label(distro: &str) -> String {
     format!("WSL {distro}")
 }
 
-/// The device id of the WSL distribution `distro`: `wsl-` and its name in
-/// lowercase, any letter that is not a digit, an ASCII letter or `-` written
-/// as `-`, so the id is one plain word whatever the name. A name that
-/// needed such a letter written also carries the first eight hex digits of
-/// its SHA-256, so `우분투` and `데비안`, or `Ubuntu_22.04` and
-/// `Ubuntu-22.04`, are two devices; WSL compares names without case, so
-/// lowercase alone changes nothing.
+/// The device id of the WSL distribution `distro`: `wsl-`, its name in
+/// lowercase with any letter but a digit, an ASCII letter or `-` written as
+/// `-`, and the first eight hex digits of the SHA-256 of the exact name. The
+/// readable part only shows which distribution it is; the digest is what
+/// tells two names apart, so no name's id can be written by another.
 pub(super) fn wsl_device_id(distro: &str) -> String {
     use sha2::{Digest, Sha256};
-    let plain = |c: char| c.is_ascii_alphanumeric() || c == '-';
     let name: String = distro
         .chars()
         .map(|c| {
-            if plain(c) {
+            if c.is_ascii_alphanumeric() || c == '-' {
                 c.to_ascii_lowercase()
             } else {
                 '-'
             }
         })
         .collect();
-    if distro.chars().all(plain) {
-        return format!("wsl-{name}");
-    }
     let digest = Sha256::digest(distro.as_bytes());
     let short: String = digest[..4]
         .iter()
@@ -859,7 +853,7 @@ impl Runtime {
     }
 
     /// Registers this PC's WSL distribution `distro` as the device
-    /// `wsl-<distro>` named `WSL <distro>` (PRD wsl-device D-20) and starts
+    /// `wsl-<distro>-<digest>` named `WSL <distro>` (PRD wsl-device D-20) and starts
     /// its connection, which installs Hide's helper there only when
     /// `consent` is given (B2, B4). One device per distribution.
     fn register_wsl_device(
