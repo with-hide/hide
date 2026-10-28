@@ -77,6 +77,7 @@ function viewsFor(checkout: string): RecordView[] {
   const view = (id: string, patch: Partial<RecordView>): RecordView => ({ device_id: "local", checkout_path: checkout, display_id: id, kind: "file", label: id, path: `${checkout}/${id}`, session: SESSION, ...patch });
   return [
     view("menu-after.svg", { label: "menu-after.svg", path: `${checkout}/agents/runs/menu/menu-after.svg`, document_kind: "image" }),
+    view("menu-before.svg", { label: "menu-before.svg", path: `${checkout}/agents/runs/menu/menu-before.svg`, document_kind: "image" }),
     view("page", { kind: "browser", path: "", label: "메뉴 미리보기", url: "http://localhost:5173/menu" }),
     view("prd.md", { label: "prd.md", path: `${checkout}/docs/menu/prd.md`, document_kind: "markdown", lines: ["# 메뉴 개편 PRD", "", "## 목표", "- 자주 쓰는 세 항목을 앞으로", "## 결정", "| D-01 | ⌘K 순서 |"] }),
     view("diff", { kind: "diff", label: "Menu.tsx (working diff)", path: `${checkout}/web/src/Menu.tsx`, session: { ...CHILD_SESSION, session_id: "child-2" } }),

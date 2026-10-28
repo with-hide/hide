@@ -18,8 +18,6 @@ import { cn } from "./lib/utils";
 import { holdsRequest, orderedOutputs, requestRuns, outputPrState, recordTitle, recordTree, requestPreview, sessionOfAgentOn, sessionPlace, settledOutput, workKey } from "./sessionWork";
 import { galleryTiles } from "./galleryTiles";
 import { RecordGallery } from "./RecordGallery";
-import { paneChildren } from "./paneChildren";
-import { usePaneAgents } from "./PaneHeaderBand";
 import { requestWords, senderName, turnResponse } from "./PaneTurnCard";
 import { boardProjects } from "./navigation";
 import { cardLine, cardOfPane, cardQuestion, everyAgent } from "./overviewTasks";
@@ -271,8 +269,8 @@ function runningPlan(plan: PlanView | null): PlanView | null {
 /**
  * The 지금 block (PRD session-docs-and-assistant D-41): while the pane works
  * or asks, the request and what the agent does about it in its second row's
- * words, `<request> → <now>`; the work it delegated by the core's counts; and
- * its running plan with `n/m`. Each part is drawn only when Hide holds it,
+ * words, `<request> → <now>`, and its running plan with `n/m`; the work it
+ * delegated is 함께 진행한 세션's to say. Each part is drawn only when Hide holds it,
  * so with Hide AI off the request is its own first line and no part is made
  * up.
  */
@@ -280,8 +278,6 @@ function NowWork({ agent, plan }: { agent: AgentRow; plan: PlanView | null }) {
   const { t } = useInterfaceTranslation();
   const rest = useShellStore((state) => state.rest);
   const header = rest?.terminal?.headers?.[agent.pane_id];
-  const agents = usePaneAgents();
-  const children = useMemo(() => paneChildren(agent.pane_id, agents, rest), [agent.pane_id, agents, rest]);
   const raw = agent.request?.request ?? null;
   const request = header?.request ? requestWords(t, header.request) : raw ? requestWords(t, { text: agent.request?.request_summary ?? raw.text.split(/\r?\n/, 1)[0] ?? null, images: raw.images }) : null;
   const response = turnResponse(t, header, agent);
@@ -289,17 +285,12 @@ function NowWork({ agent, plan }: { agent: AgentRow; plan: PlanView | null }) {
   // The second row's progress place: an ask's words, else a running plan's step, else the agent's own sentence.
   const now = response?.asks ? response.text ?? response.verb : (running ? planWorkLine(running) : null) ?? header?.progress ?? null;
   const asks = response?.asks ?? false;
-  const done = children?.parts.find((part) => part.kind === "result")?.count ?? 0;
-  if (!request && !now && !children && !running) return null;
+  if (!request && !now && !running) return null;
   return <section className="mt-xs flex min-w-0 flex-col gap-sm rounded-md border border-border px-sm py-sm" aria-label={t("sessionWork.now")} data-record-now-work={asks ? "question" : "working"}>
     {request || now ? <p className="min-w-0 whitespace-normal [overflow-wrap:anywhere]" data-record-now-turn="true">
       {request ? <span className="text-subtle-foreground" data-record-now-request="true">{raw ? <span className="mr-xs text-micro text-muted-foreground">{senderName(t, raw.sender)}</span> : null}{request}</span> : null}
       {request && now ? <span aria-hidden="true" className="mx-xs text-muted-foreground">→</span> : null}
       {now ? <span className={cn("font-semibold", asks ? "text-warning" : "text-foreground")} data-record-now-doing="true">{now}</span> : null}
-    </p> : null}
-    {children ? <p className="flex min-w-0 flex-wrap items-baseline gap-x-xs text-micro text-muted-foreground" data-record-now-activity={children.children.length}>
-      <span>{t("sessionWork.delegatedCount", { count: children.children.length })}</span>
-      {done > 0 ? <span>· {t("plan.childrenDone", { count: done })}</span> : null}
     </p> : null}
     {running ? <div className="min-w-0" data-record-now-plan={planCount(running)}>
       <SectionHead label={t("plan.title")} count={planCount(running)} className="mb-xxs" />
