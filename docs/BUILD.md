@@ -353,10 +353,11 @@ A self-hosted runner of a public repository would run whatever a pull request's 
 - **Nothing kept.** The job-completed hook (`scripts/candidate-runner/job-completed.sh`) empties the runner's work folder after every job, whatever its result: the checkout and its release build, the cargo registry (the daemon points `CARGO_HOME` there), setup-node's Node and pnpm with its store. The account keeps only rustup and the toolchain the source pins; the hook removes any other.
 
 `scripts/candidate-runner/setup.sh` sets the Mac mini up; its administrator runs `sudo bash setup.sh` from a copy of that folder once and pastes the registration token GitHub shows under the repository's Settings, Actions, Runners, New self-hosted runner.
-A second run keeps the account and the registration and replaces only what differs; each run fails unless the administrator's own launchd services, runner configuration and Rust toolchain are as it found them.
+A second run keeps the account and the registration, installs the hooks again and replaces the LaunchDaemon only when it differs; each run fails unless the administrator's own launchd services, runner configuration and Rust toolchain are as it found them.
 To retire it, `sudo launchctl bootout system/dev.withhide.candidate-runner`, remove the runner from the repository's settings, then delete the account.
 
 When the Mac mini does not answer (a queued `compile (macos)` waits up to a day for it), cancel the candidate and dispatch it again with `macos_runner: hosted`, which compiles the same binaries on GitHub's `macos-15`, free for this public repository, and the receipt checks them the same way.
+The private publisher's signing job has the same choice, but a hosted macOS minute of a private repository counts ten times against the plan and the organization's Actions budget is $0, so it starts only after the operator raises that budget.
 
 ## Release asset gate
 

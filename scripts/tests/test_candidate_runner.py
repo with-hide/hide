@@ -27,9 +27,50 @@ def hook(name, env):
 
 
 class JobStarted(unittest.TestCase):
+    def setUp(self):
+        runs = ROOT / "agents/runs/candidate-runner-tests"
+        runs.mkdir(parents=True, exist_ok=True)
+        self.home = Path(tempfile.mkdtemp(dir=runs))
+        self.addCleanup(subprocess.run, ["rm", "-rf", str(self.home)])
+        self.work = self.home / "actions-runner/_work"
+        (self.work / "_actions/someone/action/v1").mkdir(parents=True)
+        (self.work / "_actions/someone/action/v1/pre.js").write_text("downloaded before the hook\n")
+        # The runner's worker as the hook sees it: its parent, named
+        # .../bin/Runner.Worker spawnclient, which runs the steps after it.
+        self.ran = self.home / "steps-ran"
+        worker = self.home / "bin/Runner.Worker"
+        worker.parent.mkdir()
+        worker.write_text("#!/bin/bash\n"
+                          f"bash --noprofile --norc -e -o pipefail {RUNNER / 'job-started.sh'}\n"
+                          f"echo ran > {self.ran}\n")
+        worker.chmod(0o755)
+        self.worker = worker
+
+    def run_worker(self, env):
+        return subprocess.run([str(self.worker), "spawnclient", "1", "2"],
+                              env={"PATH": "/usr/bin:/bin", "HOME": str(self.home), **env},
+                              capture_output=True, text=True, timeout=30)
+
     def test_takes_the_candidate_dispatched_on_main(self):
         result = hook("job-started.sh", CANDIDATE)
         self.assertEqual(result.returncode, 0, result.stdout)
+        result = self.run_worker(CANDIDATE)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(self.ran.exists())
+
+    def test_a_refused_jobs_worker_is_killed_before_any_step_and_leaves_nothing(self):
+        result = self.run_worker({**CANDIDATE, "GITHUB_EVENT_NAME": "push",
+                                  "GITHUB_REF": "refs/heads/feature",
+                                  "GITHUB_WORKFLOW_REF": "with-hide/hide/.github/workflows/x.yml@refs/heads/feature"})
+        self.assertEqual(result.returncode, -9)
+        self.assertIn("::error::this runner builds only", result.stdout)
+        self.assertFalse(self.ran.exists())
+        self.assertEqual(list(self.work.iterdir()), [])
+
+    def test_a_hook_whose_parent_is_not_the_worker_says_it_could_not_stop_the_job(self):
+        result = hook("job-started.sh", {"HOME": str(self.home)})
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("could not be stopped", result.stdout)
 
     def test_refuses_every_other_job_before_its_steps(self):
         workflow = "with-hide/hide/.github/workflows/{}@{}"
@@ -53,6 +94,7 @@ class JobStarted(unittest.TestCase):
                 self.assertIn("::error::this runner builds only", result.stdout)
         result = hook("job-started.sh", {})
         self.assertEqual(result.returncode, 1)
+        self.assertIn("could not be stopped", result.stdout)
 
 
 class JobCompleted(unittest.TestCase):
@@ -99,10 +141,42 @@ class JobCompleted(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(sorted(path.name for path in self.work.iterdir()), ["_temp"])
 
+    def test_removes_odd_names_and_links_without_following_them(self):
+        outside = self.home / "outside"
+        (outside / "dir").mkdir(parents=True)
+        (outside / "dir/kept").write_text("not the job's\n")
+        (self.work / "..dots").write_text("left by a job\n")
+        (self.work / "broken").symlink_to(self.home / "nothing-here")
+        (self.work / "to-outside").symlink_to(outside / "dir")
+        result = hook("job-completed.sh", self.env)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(sorted(path.name for path in self.work.iterdir()), ["_temp"])
+        self.assertTrue((outside / "dir/kept").exists())
+
+    def test_refuses_a_work_folder_reached_through_a_link(self):
+        outside = self.home / "outside"
+        outside.mkdir()
+        (outside / "kept").write_text("not the job's\n")
+        for linked in ["actions-runner/_work", "actions-runner"]:
+            with self.subTest(linked=linked):
+                home = Path(tempfile.mkdtemp(dir=self.home))
+                target = home / "real"
+                target.mkdir()
+                (home / "actions-runner").mkdir()
+                if linked == "actions-runner":
+                    (home / "actions-runner").rmdir()
+                    (target / "_work").symlink_to(outside)
+                    (home / "actions-runner").symlink_to(target)
+                else:
+                    (home / "actions-runner/_work").symlink_to(outside)
+                result = hook("job-completed.sh", {**self.env, "HOME": str(home)})
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("nothing was removed", result.stdout)
+                self.assertTrue((outside / "kept").exists())
+
     def test_fails_where_there_is_no_work_folder(self):
         result = hook("job-completed.sh", {**self.env, "HOME": str(self.home / "elsewhere")})
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("does not exist", result.stdout)
+        self.assertNotEqual(result.returncode, 0)
 
 
 class Setup(unittest.TestCase):

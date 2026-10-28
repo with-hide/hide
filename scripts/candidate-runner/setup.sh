@@ -104,10 +104,11 @@ if [[ ! -x "$home/.cargo/bin/rustup" ]]; then
     "$staging/rustup-init" -y --no-modify-path --profile minimal --default-toolchain none
 fi
 
-# Root's, so no job of the account can change what refuses or cleans a job.
+# Root's, so no job of the account can change what refuses or cleans a job;
+# installed on every run, so an owner or mode changed since is set back too.
 install -d -o root -g wheel -m 755 "$hooks"
 for hook in job-started.sh job-completed.sh; do
-  cmp -s "$here/$hook" "$hooks/$hook" || install -o root -g wheel -m 755 "$here/$hook" "$hooks/$hook"
+  install -o root -g wheel -m 755 "$here/$hook" "$hooks/$hook"
 done
 
 if [[ ! -f "$runner/.runner" ]]; then
