@@ -27,7 +27,11 @@ SAVERS = {
             "${{ github.ref == 'refs/heads/main' && matrix.shard == 1 && runner.os == 'macOS' }}",
     },
     'platform': {('os-contract.yml', 'contract'): ON_MAIN},
-    'release': {('package.yml', 'package'): ON_MAIN, ('package.yml', 'macos-compile'): ON_MAIN},
+    # The Windows app's binaries compile in their own job, beside the device
+    # helpers, so it saves Windows's release set and the package matrix only
+    # Linux's.
+    'release': {('package.yml', 'package'): ON_MAIN, ('package.yml', 'macos-compile'): ON_MAIN,
+                ('package.yml', 'windows-compile'): ON_MAIN},
 }
 
 

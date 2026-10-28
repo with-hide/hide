@@ -139,7 +139,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           repository: with-hide/hide
-          ref: ${{ needs.helper-identity.outputs.source-sha }}
+          ref: ${{ inputs.source-sha || github.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
