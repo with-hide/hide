@@ -1231,6 +1231,77 @@ fn a_device_folder_outside_its_home_is_registered_only_with_its_confirmation() {
     assert_eq!(registrations[0].path, t.other);
 }
 
+/// wsl-device B20: removing a project outside the device's home removes its
+/// permission, so adding the same folder again asks again and registers
+/// nothing until that request confirms it.
+#[test]
+fn a_removed_device_project_outside_its_home_is_asked_about_again() {
+    let t = tree();
+    let mut runtime = runtime();
+    runtime.device_hosts.insert(
+        TARGET.to_owned(),
+        hosts::DeviceHost {
+            phase: hosts::HostPhase::Ready {
+                host: FakeDevice::new(),
+                platform: "macos aarch64".to_owned(),
+                helper_path: Some("/fake/hided".to_owned()),
+                windows_drives: None,
+            },
+            generation: 1,
+        },
+    );
+    assert!(!Path::new(&t.other).starts_with(std::env::var("HOME").unwrap()));
+    let add = |runtime: &mut Runtime, confirmed: bool| {
+        let mut event = serde_json::json!({"device_id": TARGET, "path": t.other, "label": "Other", "initialize_git": false});
+        if confirmed {
+            event["confirmed_outside_home"] = serde_json::json!(t.other);
+        }
+        runtime.snapshot.status.last_error = None;
+        dispatch(runtime, "create_workspace", event);
+    };
+    let asked = |runtime: &Runtime| {
+        runtime
+            .snapshot
+            .status
+            .last_error
+            .as_ref()
+            .map(|error| error.kind.clone())
+    };
+
+    add(&mut runtime, true);
+    assert_eq!(runtime.snapshot.ui_state.workspace_registrations.len(), 1);
+    let id = runtime.snapshot.ui_state.workspace_registrations[0]
+        .id
+        .clone();
+    assert_eq!(id, device_catalog::project_id(TARGET, Path::new(&t.other)));
+
+    dispatch(
+        &mut runtime,
+        "remove_workspace",
+        serde_json::json!({"workspace_id": id}),
+    );
+    assert!(runtime.snapshot.ui_state.workspace_registrations.is_empty());
+    assert!(
+        Path::new(&t.other).is_dir(),
+        "removal never touches the folder"
+    );
+
+    add(&mut runtime, false);
+    assert_eq!(
+        asked(&runtime).as_deref(),
+        Some("workspace.create_refused.needs_confirmation"),
+        "the earlier confirmation does not outlive the project"
+    );
+    assert!(runtime.snapshot.ui_state.workspace_registrations.is_empty());
+
+    add(&mut runtime, true);
+    assert_eq!(runtime.snapshot.ui_state.workspace_registrations.len(), 1);
+    assert_eq!(
+        runtime.snapshot.ui_state.workspace_registrations[0].path,
+        t.other
+    );
+}
+
 /// Create new project is this Mac's: a device's helper registers folders
 /// but makes none, so a new folder named on a device is refused, not sent.
 #[test]
