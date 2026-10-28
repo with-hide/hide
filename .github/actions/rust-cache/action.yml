@@ -19,7 +19,8 @@ runs:
       # rust-cache hashes every installed toolchain into its key, and runners of
       # one image carry different stables beside the pinned one (on 2026-10-28
       # some Linux runners had an extra stable, which made each Linux job keep
-      # two copies). Nothing here builds with the image's own toolchain.
+      # two copies). With the pinned toolchain alone the hash is stable and
+      # still changes when the pin does. Nothing here builds with the image's.
       shell: bash
       run: |
         rustc --version >/dev/null
@@ -37,3 +38,12 @@ runs:
         # Dependencies only: the workspace's own crates are removed before a save.
         cache-workspace-crates: false
         save-if: ${{ inputs.save }}
+    - name: Build every hide crate of a release from this checkout
+      # rust-cache's removal of the workspace's crates before a save swallows
+      # its own errors and saves anyway, so a release removes them again from
+      # what it restored; only third-party dependencies stay.
+      if: inputs.set == 'release'
+      shell: bash
+      run: |
+        . scripts/toolchain-env.sh
+        cargo clean --release --workspace

@@ -1,18 +1,17 @@
-# After each run on main that can save a Rust dependency cache, keeps main's
-# newest entry per set and system and deletes the older ones
-# (scripts/prune-rust-caches.py; docs/BUILD.md, "CI's Rust caches"). GitHub
-# keeps every saved key until the 10 GB limit evicts one, and it evicted the
-# entries main's runs read while older copies stayed.
+# After a run of main's head, deletes main's Rust dependency caches that run
+# replaced (scripts/prune-rust-caches.py; docs/BUILD.md, "CI's Rust caches").
+# GitHub keeps every saved key until the 10 GB limit evicts one, and it evicted
+# the entries main's runs read while older copies stayed.
 name: rust cache prune
 
 on:
   workflow_run:
-    # The runs whose jobs save a set: main's push run and the nightly save the
-    # debug sets, the nightly and a candidate the release set.
-    workflows: [verify, nightly, release candidate]
+    # The runs that build main's head: a push's verify run and the nightly,
+    # which between them restore or save every set. A release candidate may
+    # build an older commit, so what it touched says nothing about the head.
+    workflows: [verify, nightly]
     types: [completed]
     branches: [main]
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -23,12 +22,12 @@ concurrency:
 
 jobs:
   prune:
-    # Main's runs only: `branches` matches a branch name, which a fork's pull
-    # request can also call main.
+    # `branches` matches a branch name, which a fork's pull request can also
+    # call main; only this repository's own push, schedule or hand run on main.
     if: >-
-      github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.event != 'pull_request' &&
-      github.event.workflow_run.head_repository.full_name == github.repository))
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      contains(fromJSON('["push", "schedule", "workflow_dispatch"]'), github.event.workflow_run.event)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -37,7 +36,8 @@ jobs:
       actions: write
     steps:
       - uses: actions/checkout@v7
-      - name: Delete main's superseded Rust caches
+      - name: Delete main's replaced Rust caches
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 scripts/prune-rust-caches.py --repo "$GITHUB_REPOSITORY"
+          SINCE: ${{ github.event.workflow_run.run_started_at }}
+        run: python3 scripts/prune-rust-caches.py --repo "$GITHUB_REPOSITORY" --since "$SINCE"
