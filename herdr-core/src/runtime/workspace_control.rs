@@ -390,7 +390,7 @@ impl Runtime {
                 && self.front_workspace_key().as_ref() == Some(&key)
                 && lane_call(&action);
             let mut applied =
-                self.apply_workspace_action(&key, &context, request_id, &action, material);
+                self.apply_workspace_action(&key, &context, pane_id, request_id, &action, material);
             if let Ok(done) = &mut applied {
                 self.stamp_control_opener(&key, pane_id, &action, &done.view_id);
                 if calls_lane {
@@ -436,6 +436,7 @@ impl Runtime {
         &mut self,
         key: &(String, String),
         context: &Context,
+        pane_id: &str,
         request_id: &str,
         action: &Action,
         material: Option<ActionMaterial>,
@@ -461,8 +462,9 @@ impl Runtime {
             }
             let load = self.next_browser_load();
             let view_id = if *beside && area_id.is_none() {
+                let caller = self.session_scope_of_pane(pane_id);
                 self.change_view_layout(key, |layout, stamp| {
-                    super::view_areas::place_page_beside(layout, url, load, stamp)
+                    super::view_areas::place_page_beside(layout, url, caller.as_ref(), load, stamp)
                         .map(|id| (id, true))
                 })
                 .map_err(|error| Refusal {

@@ -959,6 +959,31 @@ fn the_same_address_from_two_tabs_is_one_page() {
     assert_eq!(runtime.snapshot.browser_views.len(), 1);
 }
 
+/// A session that opens its page beside it again gets that page back,
+/// loaded again, wherever it now stands, rather than a second copy in the
+/// area beside the one in use.
+#[test]
+fn a_session_opening_its_page_beside_again_gets_that_page_back() {
+    let (mut runtime, _checkout, directory) = setup("beside-again");
+    sessions_focus(&mut runtime, &directory, TABS[0]);
+    let url = "https://example.test/review";
+    let beside = |url: &str| Action::OpenBrowser {
+        url: url.to_owned(),
+        area_id: None,
+        new_target: false,
+        beside: true,
+    };
+    let first = control(&mut runtime, "w-order:t1:p", beside(url), "first");
+    let again = control(&mut runtime, "w-order:t1:p", beside(url), "again");
+    assert_eq!(again.view_id, first.view_id);
+    assert!(again.load > first.load, "the page is loaded again");
+    let pages = layout(&runtime, &directory)
+        .displays()
+        .filter(|display| display.url.as_deref() == Some(url))
+        .count();
+    assert_eq!(pages, 1);
+}
+
 /// B14: the list, the selection and every tab's bookmark come back after a
 /// restart.
 #[test]
