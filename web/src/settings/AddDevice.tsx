@@ -73,7 +73,7 @@ export function AddDevice({ actions, devices, helperRoot, cliDir }: { actions: A
   if (choices.length === 0 && distributions.length === 0) return <>{unreadable}<NoHosts /></>;
   return (
     <div className="space-y-md" data-add-device-form="true">
-      <p className="break-keep text-body text-muted-foreground">{t("devices.addDescription")}</p>
+      <p className="break-keep text-body text-muted-foreground">{t(distributions.length > 0 ? "devices.addDescriptionWsl" : "devices.addDescription")}</p>
       <RadioGroup
         value={chosen ?? ""}
         onValueChange={choose}
@@ -174,11 +174,12 @@ function WslRow({ choice, disabled }: { choice: WslChoice; disabled: boolean }) 
       <span className="flex min-w-0 flex-1 flex-col gap-xxs">
         <span className={cn("break-all text-subhead", unavailable ? "text-muted-foreground" : "text-foreground")}>{choice.deviceName}</span>
         <span className="break-keep text-body text-muted-foreground">{t("devices.wsl.thisPc")}</span>
-        {command ? <span className="break-all font-mono text-body text-subtle-foreground" data-wsl-command={choice.distro}>{command}</span> : null}
       </span>
       {reason ? (
-        <span id={note} className="max-w-1/2 shrink-0 break-words break-keep text-right text-body text-muted-foreground" data-wsl-distro-note={choice.distro}>
-          {reason}
+        <span id={note} className="flex max-w-1/2 shrink-0 flex-col gap-xxs text-right text-body text-muted-foreground">
+          <span className="break-words break-keep" data-wsl-distro-note={choice.distro}>{reason}</span>
+          {/* The command the reason ends on, under it, wrapping only between its words. */}
+          {command ? <span className="break-words font-mono text-subtle-foreground" data-wsl-command={choice.distro}>{command}</span> : null}
         </span>
       ) : null}
     </label>
