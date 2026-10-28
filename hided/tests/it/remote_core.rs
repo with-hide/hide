@@ -1218,7 +1218,9 @@ fn an_agent_on_either_machine_reads_the_one_memory_the_core_owns() -> Result<()>
                         .as_str()
                         .is_some_and(|context| context.contains("<hide-memory-index ")
                             && context.contains("m1 The node's checkout keeps its rule")
-                            && !context.contains("hide-memory-receipt")
+                            // The index's receipt records only that the
+                            // lines were shown (PRD memory-self-improve B16).
+                            && context.contains("<hide-memory-receipt event=\"SessionStart\"")
                             && !context.contains("The core's checkout")),
                 "the node's agent did not get its Project's Memory: {answer}"
             );
