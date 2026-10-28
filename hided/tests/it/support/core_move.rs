@@ -859,5 +859,13 @@ impl Drop for Fixture {
                 self.root.display()
             );
         }
+        // A start that failed keeps its run without `finish`, so its
+        // programs go here (`support::run::shed_programs`).
+        if let Err(error) = super::run::shed_programs(&self.root) {
+            eprintln!(
+                "the kept run {} still holds programs: {error:#}",
+                self.root.display()
+            );
+        }
     }
 }

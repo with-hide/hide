@@ -8,6 +8,8 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail, ensure};
 use serde_json::{Value, json};
 
+use super::READY_BOUND;
+
 pub struct Renderer {
     stream: BufReader<TcpStream>,
     snapshot: Value,
@@ -31,7 +33,9 @@ impl Renderer {
     fn drawn(port: u16, handshake: Value) -> Result<Self> {
         let mut renderer = Self::held(port, &handshake)?;
         for _ in 0..8 {
-            let frame = renderer.read()?;
+            let frame = renderer
+                .read()
+                .context("private renderer's initial snapshot")?;
             if frame["type"] == "snapshot" {
                 renderer.snapshot = frame["payload"]["rest"].clone();
                 return Ok(renderer);
@@ -48,7 +52,11 @@ impl Renderer {
 
     fn held(port: u16, handshake: &Value) -> Result<Self> {
         let mut socket = TcpStream::connect(("127.0.0.1", port))?;
-        socket.set_read_timeout(Some(Duration::from_secs(2)))?;
+        // Only a hang guard: the daemon answers when its state is ready, and
+        // right after a move that is the new core's answer through the link.
+        // A two-second bound failed the caller's own wait at once, as a bare
+        // `os error 11` (issue hide-private#281).
+        socket.set_read_timeout(Some(READY_BOUND))?;
         socket.set_write_timeout(Some(Duration::from_secs(2)))?;
         write!(
             socket,
@@ -56,7 +64,9 @@ impl Renderer {
         )?;
         let mut stream = BufReader::new(socket);
         let mut line = String::new();
-        stream.read_line(&mut line)?;
+        stream
+            .read_line(&mut line)
+            .context("private renderer upgrade answer")?;
         ensure!(
             line.starts_with("HTTP/1.1 101"),
             "private renderer upgrade refused"

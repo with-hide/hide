@@ -2087,6 +2087,17 @@ fn back_journal_until(fixture: &Fixture, phase: &str) -> Result<Value> {
     })
 }
 
+/// The source's move back once it rolled back and its window is a node
+/// again: the journal says rolled back before the node role starts (#962),
+/// so the journal alone is not the window's state.
+fn back_rolled_back(fixture: &Fixture) -> Result<Value> {
+    let journal = back_journal_until(fixture, "rolled_back")?;
+    wait_for("the window a node again", || {
+        Ok((fixture.role()? == "node").then_some(()))
+    })?;
+    Ok(journal)
+}
+
 /// A move back whose commit cannot remove this machine's placement (a
 /// folder is in its way) stays at Retiring and shows the failure, rather
 /// than recording a move it cannot finish; once the way is clear the move
@@ -2247,10 +2258,7 @@ fi"#,
             "a core runs on the target"
         );
         std::fs::remove_file(&refuse)?;
-        back_journal_until(&fixture, "rolled_back")?;
-        wait_for("the window a node again", || {
-            Ok((fixture.role()? == "node").then_some(()))
-        })?;
+        back_rolled_back(&fixture)?;
         ensure!(fixture.target_core()?.is_some(), "no core on the target");
         ensure!(
             !fixture.source.state.join("core-state.json").exists(),
@@ -2381,12 +2389,8 @@ fn a_failed_pull_restarts_the_source_unchanged() -> Result<()> {
         }
         std::fs::write(&staging, b"")?;
         fixture.event("core_move", json!({"action": "back"}))?;
-        let journal = back_journal_until(&fixture, "rolled_back")?;
+        let journal = back_rolled_back(&fixture)?;
         ensure!(journal["phase"]["failed"] == "copy", "{journal}");
-        // The journal says rolled back before the node role starts (#962).
-        wait_for("the window a node again", || {
-            Ok((fixture.role()? == "node").then_some(()))
-        })?;
         // Nothing of the move is left to remove: the staging folder it
         // could not make holds nothing.
         ensure!(
@@ -2468,7 +2472,7 @@ fi"#,
             ),
         )?;
         fixture.event("core_move", json!({"action": "back"}))?;
-        let journal = back_journal_until(&fixture, "rolled_back")?;
+        let journal = back_rolled_back(&fixture)?;
         let cause = &journal["phase"]["cause"];
         ensure!(
             journal["phase"]["failed"] == "copy"
@@ -2483,7 +2487,6 @@ fi"#,
             !planted.exists(),
             "the core's machine wrote outside the copy"
         );
-        ensure!(fixture.role()? == "node");
         let after = wait_for("the projects through the restarted core", || {
             let projects = fixture.projects()?;
             Ok((projects.len() == 2).then_some(projects))
@@ -2541,10 +2544,7 @@ fn a_source_unreachable_after_its_stop_is_waited_for() -> Result<()> {
         );
         ensure!(!fixture.source.state.join("core-state.json").exists());
         fixture.ssh.online(true)?;
-        back_journal_until(&fixture, "rolled_back")?;
-        wait_for("the window a node again", || {
-            Ok((fixture.role()? == "node").then_some(()))
-        })?;
+        back_rolled_back(&fixture)?;
         ensure!(fixture.target_core()?.is_some(), "no core on the target");
         wait_for("the projects through the restarted core", || {
             Ok((fixture.projects()?.len() == 2).then_some(()))
