@@ -217,6 +217,7 @@ fn spawner() -> Spawner {
                     host: Arc::new(Node),
                     platform: "macos aarch64".to_owned(),
                     helper_path: Some("/fake/hided".to_owned()),
+                    windows_drives: None,
                 },
                 generation: 1,
             },

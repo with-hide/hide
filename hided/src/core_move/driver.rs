@@ -281,7 +281,10 @@ pub fn project_roots(
             if project.device_id != own_node {
                 return PathBuf::from(&project.path);
             }
-            match hide_host::register::check(Path::new(&project.path), home) {
+            // A registered project is the operator's confirmation of its
+            // folder, outside home too (PRD wsl-device D-10).
+            let path = Path::new(&project.path);
+            match hide_host::register::check(path, Some(path), home) {
                 Ok(registrable) => PathBuf::from(registrable.root),
                 // A folder that is gone is grouped by its own path, as this
                 // machine's node answers for it.

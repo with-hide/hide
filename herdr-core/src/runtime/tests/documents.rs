@@ -224,6 +224,7 @@ impl Fixture {
                     host: device.clone(),
                     platform: "macos aarch64".to_owned(),
                     helper_path: Some("/fake/hided".to_owned()),
+                    windows_drives: None,
                 },
                 generation: 1,
             },
@@ -887,6 +888,7 @@ impl Fixture {
             host: self.device.clone(),
             platform: "macos aarch64".to_owned(),
             helper_path: Some("/fake/hided".to_owned()),
+            windows_drives: None,
         }
     }
 
@@ -1580,6 +1582,7 @@ fn helper_ready(runtime: &mut Runtime, device: &Arc<FakeDevice>) {
         host: device.clone(),
         platform: "macos aarch64".to_owned(),
         helper_path: Some("/fake/hided".to_owned()),
+        windows_drives: None,
     };
 }
 

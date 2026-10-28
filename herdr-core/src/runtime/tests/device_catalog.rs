@@ -418,6 +418,7 @@ fn a_device_checkout_recorded_before_grouping_is_the_same_record_after_it() {
                 host: device.clone(),
                 platform: "macos aarch64".to_owned(),
                 helper_path: Some("/fake/hided".to_owned()),
+                windows_drives: None,
             },
             generation: 1,
         },
@@ -487,6 +488,7 @@ fn a_device_session_is_grouped_when_its_helper_answers() {
                 host: device.clone(),
                 platform: "macos aarch64".to_owned(),
                 helper_path: Some("/fake/hided".to_owned()),
+                windows_drives: None,
             },
             generation: 1,
         },
@@ -599,6 +601,7 @@ fn a_reconnected_device_keeps_its_panes_in_their_checkouts_until_its_helper_answ
                 host: device.clone(),
                 platform: "macos aarch64".to_owned(),
                 helper_path: Some("/fake/hided".to_owned()),
+                windows_drives: None,
             },
             generation: 1,
         },
@@ -716,6 +719,7 @@ fn retrying_a_device_keeps_its_panes_in_their_checkouts() {
                 host: CatalogDevice::new(),
                 platform: "macos aarch64".to_owned(),
                 helper_path: Some("/fake/hided".to_owned()),
+                windows_drives: None,
             },
             generation: 1,
         },
@@ -782,6 +786,7 @@ fn catalog_device_runtime(workspaces: Vec<WorkspaceSnapshot>) -> (Runtime, tempf
                 host: CatalogDevice::new(),
                 platform: "macos aarch64".to_owned(),
                 helper_path: Some("/fake/hided".to_owned()),
+                windows_drives: None,
             },
             generation: 1,
         },
@@ -1012,6 +1017,7 @@ fn a_helper_attempt_from_before_a_removal_cannot_settle_the_new_connection() {
         host: device,
         platform: "macos aarch64".to_owned(),
         helper_path: Some("/fake/hided".to_owned()),
+        windows_drives: None,
     };
     runtime.ingest_device_machine_id(TARGET, Ok("machine-device".to_owned()));
 
@@ -1066,6 +1072,7 @@ fn a_device_registration_is_listed_without_panes_pinned_and_removed_on_that_devi
                 host: FakeDevice::new(),
                 platform: "macos aarch64".to_owned(),
                 helper_path: Some("/fake/hided".to_owned()),
+                windows_drives: None,
             },
             generation: 1,
         },
@@ -1153,10 +1160,11 @@ fn a_device_registration_is_listed_without_panes_pinned_and_removed_on_that_devi
     );
 }
 
-/// B24: a device's helper judges a folder against that device's home, so a
-/// folder outside it is refused with the reason and nothing is registered.
+/// B24, wsl-device B15/B21: a device's helper judges a folder against that
+/// device's home, so a folder outside it is asked about and nothing is
+/// registered until the request confirms that same folder.
 #[test]
-fn a_device_folder_outside_its_home_is_refused_by_its_helper() {
+fn a_device_folder_outside_its_home_is_registered_only_with_its_confirmation() {
     let t = tree();
     let mut runtime = runtime();
     runtime.device_hosts.insert(
@@ -1166,6 +1174,7 @@ fn a_device_folder_outside_its_home_is_refused_by_its_helper() {
                 host: FakeDevice::new(),
                 platform: "macos aarch64".to_owned(),
                 helper_path: Some("/fake/hided".to_owned()),
+                windows_drives: None,
             },
             generation: 1,
         },
@@ -1183,13 +1192,114 @@ fn a_device_folder_outside_its_home_is_refused_by_its_helper() {
     // Named by the helper's code, so the shell words it as it words this
     // Mac's refusal; the helper's sentence stays for the diagnostic log.
     let error = runtime.snapshot.status.last_error.clone().unwrap();
-    assert_eq!(error.kind, "workspace.create_refused.outside_root");
-    assert!(
-        error.message.contains("inside the home folder"),
-        "{}",
-        error.message
+    assert_eq!(error.kind, "workspace.create_refused.needs_confirmation");
+    assert!(error.message.contains("confirmation"), "{}", error.message);
+    assert!(runtime.snapshot.ui_state.workspace_registrations.is_empty());
+
+    // A confirmation of another folder is not this folder's.
+    dispatch(
+        &mut runtime,
+        "create_workspace",
+        serde_json::json!({"device_id": TARGET, "path": t.other, "label": "Other", "initialize_git": false, "confirmed_outside_home": t.main}),
+    );
+    let error = runtime.snapshot.status.last_error.clone().unwrap();
+    assert_eq!(error.kind, "workspace.create_refused.needs_confirmation");
+    assert!(runtime.snapshot.ui_state.workspace_registrations.is_empty());
+
+    // A folder inside a repository there asks about the repository, which is
+    // what registering it would add.
+    let inner = format!("{}/src", t.main);
+    std::fs::create_dir_all(&inner).unwrap();
+    dispatch(
+        &mut runtime,
+        "create_workspace",
+        serde_json::json!({"device_id": TARGET, "path": inner, "label": "src", "initialize_git": false, "confirmed_outside_home": inner}),
+    );
+    let error = runtime.snapshot.status.last_error.clone().unwrap();
+    assert_eq!(error.kind, "workspace.create_refused.needs_confirmation");
+    assert_eq!(error.confirm.as_deref(), Some(t.main.as_str()));
+    assert!(runtime.snapshot.ui_state.workspace_registrations.is_empty());
+
+    dispatch(
+        &mut runtime,
+        "create_workspace",
+        serde_json::json!({"device_id": TARGET, "path": t.other, "label": "Other", "initialize_git": false, "confirmed_outside_home": t.other}),
+    );
+    let registrations = &runtime.snapshot.ui_state.workspace_registrations;
+    assert_eq!(registrations.len(), 1);
+    assert_eq!(registrations[0].device_id, TARGET);
+    assert_eq!(registrations[0].path, t.other);
+}
+
+/// wsl-device B20: removing a project outside the device's home removes its
+/// permission, so adding the same folder again asks again and registers
+/// nothing until that request confirms it.
+#[test]
+fn a_removed_device_project_outside_its_home_is_asked_about_again() {
+    let t = tree();
+    let mut runtime = runtime();
+    runtime.device_hosts.insert(
+        TARGET.to_owned(),
+        hosts::DeviceHost {
+            phase: hosts::HostPhase::Ready {
+                host: FakeDevice::new(),
+                platform: "macos aarch64".to_owned(),
+                helper_path: Some("/fake/hided".to_owned()),
+                windows_drives: None,
+            },
+            generation: 1,
+        },
+    );
+    assert!(!Path::new(&t.other).starts_with(std::env::var("HOME").unwrap()));
+    let add = |runtime: &mut Runtime, confirmed: bool| {
+        let mut event = serde_json::json!({"device_id": TARGET, "path": t.other, "label": "Other", "initialize_git": false});
+        if confirmed {
+            event["confirmed_outside_home"] = serde_json::json!(t.other);
+        }
+        runtime.snapshot.status.last_error = None;
+        dispatch(runtime, "create_workspace", event);
+    };
+    let asked = |runtime: &Runtime| {
+        runtime
+            .snapshot
+            .status
+            .last_error
+            .as_ref()
+            .map(|error| error.kind.clone())
+    };
+
+    add(&mut runtime, true);
+    assert_eq!(runtime.snapshot.ui_state.workspace_registrations.len(), 1);
+    let id = runtime.snapshot.ui_state.workspace_registrations[0]
+        .id
+        .clone();
+    assert_eq!(id, device_catalog::project_id(TARGET, Path::new(&t.other)));
+
+    dispatch(
+        &mut runtime,
+        "remove_workspace",
+        serde_json::json!({"workspace_id": id}),
     );
     assert!(runtime.snapshot.ui_state.workspace_registrations.is_empty());
+    assert!(
+        Path::new(&t.other).is_dir(),
+        "removal never touches the folder"
+    );
+
+    add(&mut runtime, false);
+    assert_eq!(
+        asked(&runtime).as_deref(),
+        Some("workspace.create_refused.needs_confirmation"),
+        "the earlier confirmation does not outlive the project"
+    );
+    assert!(runtime.snapshot.ui_state.workspace_registrations.is_empty());
+
+    add(&mut runtime, true);
+    assert_eq!(runtime.snapshot.ui_state.workspace_registrations.len(), 1);
+    assert_eq!(
+        runtime.snapshot.ui_state.workspace_registrations[0].path,
+        t.other
+    );
 }
 
 /// Create new project is this Mac's: a device's helper registers folders
@@ -1234,6 +1344,7 @@ fn a_tab_in_a_device_registration_without_a_workspace_creates_one_there() {
                 host: FakeDevice::new(),
                 platform: "macos aarch64".to_owned(),
                 helper_path: Some("/fake/hided".to_owned()),
+                windows_drives: None,
             },
             generation: 1,
         },
@@ -1335,6 +1446,7 @@ fn registering_device(runtime: &mut Runtime, sessions: Vec<WorkspaceSnapshot>) {
                 host: FakeDevice::new(),
                 platform: "macos aarch64".to_owned(),
                 helper_path: Some("/fake/hided".to_owned()),
+                windows_drives: None,
             },
             generation: 1,
         },

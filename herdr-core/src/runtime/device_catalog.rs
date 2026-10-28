@@ -1035,18 +1035,21 @@ fn ask_facts(
     (answers, None)
 }
 
-const REGISTRABLE_TIMEOUT: Duration = Duration::from_secs(15);
+pub(super) const REGISTRABLE_TIMEOUT: Duration = Duration::from_secs(15);
 
 impl Runtime {
     /// `create_workspace` on a device (B23, B24): the device's helper judges
-    /// the folder against that device's home and names the project it
-    /// belongs to; the registration is that project, and it is listed with
-    /// or without a Herdr workspace there. Nothing is created on the device.
+    /// the folder against that device's home, and a folder outside it against
+    /// the operator's confirmation of that path (PRD wsl-device D-10), and
+    /// names the project it belongs to; the registration is that project, and
+    /// it is listed with or without a Herdr workspace there. Nothing is
+    /// created on the device.
     pub(super) fn create_device_registration(
         &mut self,
         device: &str,
         path: String,
         label: String,
+        confirmed_outside_home: Option<String>,
     ) -> bool {
         let channel = match self.node_link(device) {
             Ok(channel) => channel,
@@ -1062,10 +1065,23 @@ impl Runtime {
         let ask = move || {
             call_as::<hide_node_link::register::Registrable>(
                 channel.as_ref(),
-                hide_node_link::protocol::Call::Registrable { path: path.clone() },
+                hide_node_link::protocol::Call::Registrable {
+                    path: path.clone(),
+                    confirmed_outside_home: confirmed_outside_home.clone(),
+                },
                 REGISTRABLE_TIMEOUT,
             )
-            .map_err(|error| (registration_refusal_kind(&error), error.to_string()))
+            .map_err(|error| {
+                let confirm = match &error {
+                    LinkError::Refused(refused) => refused.confirm.clone(),
+                    _ => None,
+                };
+                (
+                    registration_refusal_kind(&error),
+                    error.to_string(),
+                    confirm,
+                )
+            })
         };
         let Some(context) = self.worker_context.clone() else {
             let answer = ask();
@@ -1102,7 +1118,7 @@ impl Runtime {
         &mut self,
         device: &str,
         label: String,
-        answer: Result<hide_node_link::register::Registrable, (&'static str, String)>,
+        answer: Result<hide_node_link::register::Registrable, RegistrationRefusal>,
     ) -> bool {
         // A device removed while its helper judged the folder takes no
         // registration from that late answer.
@@ -1116,12 +1132,15 @@ impl Runtime {
         }
         let registrable = match answer {
             Ok(registrable) => registrable,
-            Err((kind, message)) => {
+            Err((kind, message, confirm)) => {
                 crate::diagnostic!(serde_json::json!({
                     "component": "registration", "kind": "create.refused",
                     "target": device, "message": message,
                 }));
                 self.set_error(kind, message, false);
+                if let Some(error) = self.snapshot.status.last_error.as_mut() {
+                    error.confirm = confirm;
+                }
                 return true;
             }
         };
@@ -1338,12 +1357,23 @@ const REGISTRATION_TERMINAL_REPORT: FailureReport = FailureReport::Log {
 /// outside the home folder as the same sentences this Mac's refusals use
 /// (`create_workspace`'s `path_refused`), and the helper's sentence, with the
 /// device's paths in it, is the diagnostic log's.
-fn registration_refusal_kind(error: &LinkError) -> &'static str {
+/// A device helper's refusal of a registration: the core's kind for it, the
+/// helper's sentence for the diagnostic log, and the folder the helper asks
+/// the operator about instead of the one sent (`HostError::confirm`).
+type RegistrationRefusal = (&'static str, String, Option<String>);
+
+pub(super) fn registration_refusal_kind(error: &LinkError) -> &'static str {
     match error {
         LinkError::Refused(refused) => match refused.code {
             hide_node_link::ErrorCode::NotFound => "workspace.create_refused.not_found",
             hide_node_link::ErrorCode::NotADirectory => "workspace.create_refused.not_a_directory",
             hide_node_link::ErrorCode::OutsideRoot => "workspace.create_refused.outside_root",
+            hide_node_link::ErrorCode::NeedsConfirmation => {
+                "workspace.create_refused.needs_confirmation"
+            }
+            hide_node_link::ErrorCode::ProjectHoldsHome => {
+                "workspace.create_refused.project_holds_home"
+            }
             _ => "workspace.create_refused",
         },
         LinkError::NotConnected(_) => "workspace.create_unavailable",

@@ -93,6 +93,23 @@ pub struct WorkspaceCreationFailure {
     pub message: String,
 }
 
+/// The node's answer to `ProjectCreate`, when it is the folder hided judged:
+/// the event carries the real path the boundary checked, so another answer
+/// means a link changed under it since, and that folder is not registered.
+fn the_folder_checked(
+    created: ProjectCreated,
+    path: &str,
+) -> Result<ProjectCreated, WorkspaceCreationFailure> {
+    // Compared as paths, so `/` and `\` spell one folder on Windows.
+    if std::path::Path::new(&created.path) == std::path::Path::new(path) {
+        return Ok(created);
+    }
+    Err(WorkspaceCreationFailure::failed(format!(
+        "{path} now leads to {}, which is not the folder that was checked; add it again",
+        created.path
+    )))
+}
+
 impl WorkspaceCreationFailure {
     /// A failure the operator meets as "the project could not be added".
     pub fn failed(message: impl Into<String>) -> Self {
@@ -189,7 +206,10 @@ pub fn spawn_workspace_creation(
                 })
                 .unwrap_or_default();
             // The node makes the folder and the repository, and answers the
-            // real path the project is registered by.
+            // real path the project is registered by. hided judged the path
+            // this event carries as already real, so an answer that differs
+            // means a link changed under it since: that folder was never
+            // judged, and is not registered.
             let made: Result<ProjectCreated, WorkspaceCreationFailure> = call_as(
                 context.node.as_ref(),
                 Call::ProjectCreate {
@@ -199,7 +219,8 @@ pub fn spawn_workspace_creation(
                 },
                 PROJECT_CREATE_TIMEOUT,
             )
-            .map_err(WorkspaceCreationFailure::from_project_create);
+            .map_err(WorkspaceCreationFailure::from_project_create)
+            .and_then(|created| the_folder_checked(created, &path));
             let result = made
                 .and_then(|created| {
                     workspace::registration(&created.path, &label, node.as_str())
@@ -4579,6 +4600,21 @@ mod tests {
 
     use super::*;
     use crate::fake_herdr::FakeHerdr;
+
+    /// PRD wsl-device B15, B17: the folder registered is the one hided
+    /// judged; a link swapped under the path between the check and the
+    /// node's answer registers nothing.
+    #[test]
+    fn a_folder_that_moved_since_its_check_is_not_registered() {
+        let created = |path: &str| ProjectCreated {
+            path: path.to_owned(),
+            git_error: None,
+        };
+        assert!(the_folder_checked(created("/srv/app"), "/srv/app").is_ok());
+        let moved = the_folder_checked(created("/etc"), "/srv/app").unwrap_err();
+        assert_eq!(moved.kind, "workspace.create_failed");
+        assert!(moved.message.contains("/etc"), "{}", moved.message);
+    }
 
     #[test]
     fn a_failed_registration_is_named_by_what_the_operator_can_do_about_it() {

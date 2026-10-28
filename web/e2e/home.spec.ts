@@ -104,7 +104,10 @@ async function inOpenedHome(page: Page, check: (home: string, herdr: HerdrFixtur
   let daemon: Daemon | null = null;
   try {
     if (registeredFirst) gate = await herdrGate(herdr);
-    daemon = await startHided(herdr, "home", undefined, gate ? { HERDR_SOCKET_PATH: gate.socket } : undefined);
+    // The fixture's folders are in the daemon's home, as an operator's projects
+    // are, so a pin registers them and a project outliving its last pane stays
+    // listed without asking about a folder outside home (PRD wsl-device B15).
+    daemon = await startHided(herdr, "home", herdr.root, gate ? { HERDR_SOCKET_PATH: gate.socket } : undefined);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await enterWorkspace(page, "fixture");
     await pinFixture(page);

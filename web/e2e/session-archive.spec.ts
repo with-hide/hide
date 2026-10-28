@@ -63,7 +63,10 @@ test("세션 보관 asks over running work, closes the tree into 보관됨, resu
     const childSession = labelAgent(herdr, child, { task: "루트가 맡긴 하위 작업" });
     declareParent(herdr, child, root);
     await setFixtureLifecycle(herdr, child, "working");
-    daemon = await startHided(herdr, "session-archive");
+    // The fixture's folders are in the daemon's home, as an operator's projects
+    // are, so a pin registers them and a project outliving its last pane stays
+    // listed without asking about a folder outside home (PRD wsl-device B15).
+    daemon = await startHided(herdr, "session-archive", herdr.root);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     const tasks = await showTasks(page);
     const row = tasks.locator(`[data-task-row="${root}"]`);

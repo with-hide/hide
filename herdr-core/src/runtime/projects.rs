@@ -2416,10 +2416,23 @@ impl Runtime {
             && let Some(registration) = self.unregistered_row_registration(&payload.workspace_id)
         {
             if !payload.pinned {
-                // Nothing is pinned without a registration: already the target state.
+                // Nothing is pinned without a registration: already the target
+                // state, and a pin still waiting for its answer is withdrawn.
+                let Some(pending) = self.row_registrations.get_mut(&payload.workspace_id) else {
+                    return false;
+                };
+                pending.pin = false;
+                if !pending.retain {
+                    self.row_registrations.remove(&payload.workspace_id);
+                }
                 return false;
             }
-            return self.register_pinned(registration);
+            return match registration {
+                Ok(registration) => {
+                    self.register_row_once_judged(registration, RowRegistration::Pin)
+                }
+                Err(device) => self.register_pinned(Err(device)),
+            };
         }
         let Some(registration) = self
             .snapshot
@@ -2595,6 +2608,9 @@ impl Runtime {
     /// sidebar-context-menus D-14) has only its panes to close; the row then
     /// leaves with Herdr's workspace.
     pub(super) fn remove_workspace(&mut self, payload: RemoveWorkspacePayload) -> bool {
+        // A pin or a closing pane still waiting to register this row is
+        // superseded: its answer finds nothing to apply.
+        self.row_registrations.remove(&payload.workspace_id);
         let registered = self
             .snapshot
             .ui_state
@@ -4807,6 +4823,223 @@ impl Runtime {
         {
             return;
         }
+        self.register_row_once_judged(registration, RowRegistration::Retain);
+    }
+
+    /// Registers `registration`, a row Herdr shows without one, once the
+    /// row's machine has judged its folder by the registration rule with no
+    /// confirmation (`Call::Registrable`, `hide_host::register`), off the
+    /// runtime lock. A folder outside that machine's home, or one whose
+    /// project is another folder, is not registered by a pin or by its last
+    /// pane closing (PRD wsl-device B18): Add a project asks about it.
+    fn register_row_once_judged(
+        &mut self,
+        registration: crate::model::WorkspaceRegistration,
+        why: RowRegistration,
+    ) -> bool {
+        // One check per row: a repeat while it runs joins it.
+        if let Some(pending) = self.row_registrations.get_mut(&registration.id) {
+            match why {
+                RowRegistration::Pin => pending.pin = true,
+                RowRegistration::Retain => pending.retain = true,
+            }
+            return false;
+        }
+        if self.row_registrations.len() >= ROW_REGISTRATIONS_CAP {
+            self.push_diagnostic(
+                "workspace.row_registrations_full",
+                format!(
+                    "{ROW_REGISTRATIONS_CAP} rows are already waiting for their machine's answer, so {} was not registered",
+                    registration.path
+                ),
+            );
+            return true;
+        }
+        let channel = match self.node_link(&registration.device_id) {
+            Ok(channel) => channel,
+            Err(message) => {
+                return self.refuse_row_registration(
+                    &registration,
+                    why,
+                    "workspace.create_unavailable",
+                    message,
+                );
+            }
+        };
+        self.row_registration_generation += 1;
+        let generation = self.row_registration_generation;
+        self.row_registrations.insert(
+            registration.id.clone(),
+            RowPending {
+                generation,
+                device_id: registration.device_id.clone(),
+                pin: matches!(why, RowRegistration::Pin),
+                retain: matches!(why, RowRegistration::Retain),
+            },
+        );
+        let path = registration.path.clone();
+        let ask = move || {
+            crate::node_access::call_as::<hide_node_link::register::Registrable>(
+                channel.as_ref(),
+                hide_node_link::protocol::Call::Registrable {
+                    path,
+                    confirmed_outside_home: None,
+                },
+                super::device_catalog::REGISTRABLE_TIMEOUT,
+            )
+        };
+        let Some(context) = self.worker_context.clone() else {
+            let answer = ask();
+            return self.ingest_row_registration(registration, generation, answer);
+        };
+        let id = registration.id.clone();
+        let spawned = thread::Builder::new()
+            .name("herdr-core-row-registration".to_owned())
+            .spawn(move || {
+                let answer = ask();
+                let Some(runtime) = context.runtime.upgrade() else {
+                    return;
+                };
+                let changed = match runtime.lock() {
+                    Ok(mut guard) => {
+                        guard.ingest_row_registration(registration, generation, answer)
+                    }
+                    Err(_) => return,
+                };
+                drop(runtime);
+                if changed {
+                    context.notifier.notify();
+                }
+            });
+        if let Err(error) = spawned {
+            self.row_registrations.remove(&id);
+            self.push_diagnostic(
+                "workspace.row_registration_unstarted",
+                format!("The registration check could not be started: {error}"),
+            );
+        }
+        true
+    }
+
+    /// The row's machine answered the check started as `generation`. An
+    /// answer the row no longer waits for (a remove, an unpin or the device's
+    /// removal came first, or a newer check replaced it) changes nothing;
+    /// otherwise the row is registered once, as the project it is, for every
+    /// request that joined the check, unless it was registered meanwhile.
+    /// A refusal is reported to a pin and only logged for a closing pane,
+    /// since the operator asked to close a pane.
+    fn ingest_row_registration(
+        &mut self,
+        mut registration: crate::model::WorkspaceRegistration,
+        generation: u64,
+        answer: Result<hide_node_link::register::Registrable, crate::node_access::LinkError>,
+    ) -> bool {
+        if self
+            .row_registrations
+            .get(&registration.id)
+            .is_none_or(|pending| pending.generation != generation)
+        {
+            self.push_diagnostic(
+                "workspace.row_registration_stale",
+                format!(
+                    "The answer for {} came after the row stopped waiting for it",
+                    registration.path
+                ),
+            );
+            return true;
+        }
+        let pending = self
+            .row_registrations
+            .remove(&registration.id)
+            .expect("checked above");
+        let why = if pending.pin {
+            RowRegistration::Pin
+        } else {
+            RowRegistration::Retain
+        };
+        match answer {
+            Ok(judged) if Path::new(&judged.root) == Path::new(&registration.path) => {}
+            Ok(judged) => {
+                let message = format!(
+                    "{} belongs to the project {}, so it is not registered as a project of its own",
+                    registration.path, judged.root
+                );
+                return self.refuse_row_registration(
+                    &registration,
+                    why,
+                    "workspace.create_refused",
+                    message,
+                );
+            }
+            Err(error) => {
+                let asks = matches!(
+                    &error,
+                    crate::node_access::LinkError::Refused(refused)
+                        if refused.code == hide_node_link::ErrorCode::NeedsConfirmation
+                );
+                let kind = if asks && matches!(why, RowRegistration::Pin) {
+                    "workspace.pin_refused.needs_confirmation"
+                } else {
+                    super::device_catalog::registration_refusal_kind(&error)
+                };
+                return self.refuse_row_registration(&registration, why, kind, error.to_string());
+            }
+        }
+        let registered = self
+            .snapshot
+            .ui_state
+            .workspace_registrations
+            .iter()
+            .any(|existing| existing.id == registration.id);
+        if registered {
+            // Registered meanwhile (Add a project, another pin): a pin still
+            // owed is the registered row's pin.
+            return pending.pin
+                && self.set_workspace_pinned(WorkspacePinSetPayload {
+                    workspace_id: registration.id,
+                    pinned: true,
+                });
+        }
+        registration.pinned = pending.pin;
+        match why {
+            RowRegistration::Pin => self.register_pinned(Ok(registration)),
+            RowRegistration::Retain => self.retain_registration(registration),
+        }
+    }
+
+    /// A row its machine did not accept stays unregistered: a pin says why,
+    /// a closing pane only logs it.
+    fn refuse_row_registration(
+        &mut self,
+        registration: &crate::model::WorkspaceRegistration,
+        why: RowRegistration,
+        kind: &str,
+        message: String,
+    ) -> bool {
+        crate::diagnostic!(serde_json::json!({
+            "component": "registration", "kind": "row.unregistered",
+            "target": registration.device_id, "workspace_id": registration.id,
+            "reason": kind, "message": message,
+        }));
+        if matches!(why, RowRegistration::Pin) {
+            self.set_error(kind, message, false);
+            return true;
+        }
+        false
+    }
+
+    /// A row whose last pane is closing, registered so the project stays
+    /// listed once Herdr's workspace is gone.
+    fn retain_registration(&mut self, registration: crate::model::WorkspaceRegistration) -> bool {
+        if self
+            .snapshot
+            .ui_state
+            .workspace_registrations
+            .iter()
+            .any(|existing| existing.id == registration.id)
+        {
+            return false;
+        }
         self.push_diagnostic(
             "workspace.retained",
             format!(
@@ -4814,16 +5047,51 @@ impl Runtime {
                 registration.label, registration.path
             ),
         );
+        let registration_id = registration.id.clone();
         self.snapshot
             .ui_state
             .workspace_registrations
             .push(registration);
         // The project id is path-keyed, so registering changes nothing the
-        // sidebar shows right now; the sync that follows Herdr's
-        // workspace_closed rebuilds the catalog off the runtime lock.
+        // sidebar shows while the row is drawn; the sync that follows Herdr's
+        // workspace_closed rebuilds the catalog off the runtime lock. An
+        // answer that lands after that sync finds the row gone, and asks the
+        // coordinator to read the session again so the rebuild includes it.
+        let drawn = self
+            .snapshot
+            .navigator
+            .workspaces
+            .iter()
+            .any(|row| row.id == registration_id);
         self.persist_current_ui_state();
+        if !drawn {
+            self.request_republish();
+        }
+        true
     }
 }
+
+/// Why a row Herdr shows without a registration is being registered.
+#[derive(Clone, Copy, Debug)]
+enum RowRegistration {
+    /// The operator pinned it.
+    Pin,
+    /// Its last pane is closing.
+    Retain,
+}
+
+/// A row waiting for its machine's answer: the check it waits for, and every
+/// request that joined it.
+pub(super) struct RowPending {
+    generation: u64,
+    pub(super) device_id: String,
+    pin: bool,
+    retain: bool,
+}
+
+/// Rows that may wait for their machine's answer at once; a pin past it is
+/// logged and not started, since each waits on a worker thread.
+const ROW_REGISTRATIONS_CAP: usize = 16;
 
 /// Where a new tab in `checkout` of `project` on `device_id` goes: the owner
 /// the session names, else the owner to open.

@@ -502,6 +502,35 @@ fn kit_herdr_socket(named: Option<String>, bridged: Option<&Path>) -> Option<Str
     named.or_else(|| bridged.map(|own| own.to_string_lossy().into_owned()))
 }
 
+/// Where this machine shows the Windows PC's drives, for `Hello`: none on a
+/// machine that is not a WSL distribution, and none, logged, on one whose
+/// `/etc/wsl.conf` cannot be read or names no usable root, so a pasted
+/// Windows path stays as typed rather than becoming a guess.
+fn windows_drives() -> Option<String> {
+    match hide_platform::host::windows_drives() {
+        Ok(root) => Some(root),
+        Err(error)
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::Unsupported
+            ) =>
+        {
+            None
+        }
+        Err(error) => {
+            eprintln!(
+                "{}",
+                serde_json::json!({
+                    "component": "node",
+                    "kind": "windows_drives.unreadable",
+                    "error": error.to_string(),
+                })
+            );
+            None
+        }
+    }
+}
+
 /// Why a node asked for the label lock of no named server refuses: its
 /// pane service has not started, so it serves no Herdr server yet.
 fn no_labeled_server() -> HostError {
@@ -992,6 +1021,7 @@ pub fn handle_with_progress(
                 },
             },
             reader_features: Some(hide_node_link::sessions::ReaderFeatures::implemented()),
+            windows_drives: windows_drives(),
         }),
         Call::LabelLock {
             herdr_socket,
@@ -1077,16 +1107,23 @@ pub fn handle_with_progress(
             to_value(())
         }
         Call::Directory { path } => to_value(worktrees::directory(&absolute(&path)?)),
-        Call::Registrable { path } => {
+        Call::Registrable {
+            path,
+            confirmed_outside_home,
+        } => {
             let home = env.home("HOME is not set, so no folder can be judged against it")?;
-            // `~` is this host's home, as a shell on it would read it.
-            let path = match path.strip_prefix('~') {
-                Some(rest) if rest.is_empty() || rest.starts_with('/') => {
-                    format!("{}{rest}", home.to_string_lossy())
-                }
-                _ => path,
-            };
-            to_value(crate::register::check(&absolute(&path)?, Path::new(&home))?)
+            let home_text = home.to_string_lossy();
+            // `~` is this host's home, as a shell on it would read it, in the
+            // path and in the confirmation alike.
+            let path = crate::register::expand_home(&path, &home_text);
+            let confirmed = confirmed_outside_home
+                .as_deref()
+                .map(|confirmed| crate::register::expand_home(confirmed, &home_text));
+            to_value(crate::register::check(
+                &path,
+                confirmed.as_deref(),
+                Path::new(&home),
+            )?)
         }
         Call::HomeSync { projects } => {
             let home = env.home("HOME is not set, so Hide's Home folder has no place to live")?;

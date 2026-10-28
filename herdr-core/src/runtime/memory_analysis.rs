@@ -4197,6 +4197,7 @@ mod tests {
                         host: Arc::clone(&fixture.node),
                         platform: "linux".to_owned(),
                         helper_path: None,
+                        windows_drives: None,
                     },
                 },
             );

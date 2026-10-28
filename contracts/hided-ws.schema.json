@@ -821,9 +821,9 @@
       "enum": [4001, 4002, 4003, 4004]
     },
     "pathRefusalReason": {
-      "description": "outside_home: the real path is not under $HOME (a symlink target counts). home_root: $HOME itself cannot be a workspace. outside_checkout: the path is not under any registered checkout root, which is the reason an explorer event gets for a path under $HOME that no checkout covers. not_found: nothing exists there. not_a_directory: a file where a directory was needed. not_a_file: a directory where a file's bytes were needed. invalid_path: empty, relative, contains `..` or NUL, or an item name that is empty, `.`, `..`, or holds a `/`. already_exists: a `create_workspace` with `new_folder` names a folder where something other than an empty folder (or one holding only `.git` and `.DS_Store`) already stands.",
+      "description": "outside_home: the real path is not under $HOME (a symlink target counts) where only a folder inside home may be named: a symlink under home that leads out of it, a parent for Create new project or Clone from URL, or a network share. needs_confirmation: a `create_workspace` names a folder written outside $HOME, or a folder whose project is outside it, and does not carry `confirmed_outside_home` naming the project a registration would add: that project's root, or the folder itself when it is the root. The unconfirmed request is read only as far as naming that root, which the frame carries as `confirm` when it is not the folder as written; a folder that is missing or is not a folder is asked about as written, and only the event that confirmed it is answered with why it cannot be added. home_root: $HOME itself, or a folder holding it, cannot be a workspace. project_holds_home: a `create_workspace` names a folder in a Git repository whose root holds $HOME (dotfiles kept in `~/.git`), so the project it would add is home. outside_checkout: the path is not under any registered checkout root, which is the reason an explorer event gets for a path under $HOME that no checkout covers. not_found: nothing exists there. not_a_directory: a file where a directory was needed. not_a_file: a directory where a file's bytes were needed. invalid_path: empty, relative, contains `..` or NUL, or an item name that is empty, `.`, `..`, or holds a `/`. already_exists: a `create_workspace` with `new_folder` names a folder where something other than an empty folder (or one holding only `.git` and `.DS_Store`) already stands.",
       "type": "string",
-      "enum": ["outside_home", "home_root", "outside_checkout", "not_found", "not_a_directory", "not_a_file", "invalid_path", "already_exists"]
+      "enum": ["outside_home", "needs_confirmation", "home_root", "project_holds_home", "outside_checkout", "not_found", "not_a_directory", "not_a_file", "invalid_path", "already_exists"]
     },
     "directoryList": {
       "description": "Payload of a directory_list frame. kind names the event that asked: a `file_list` lists the children of a folder under a registered checkout root - files and directories, hidden names included, `.git` and a symlink that leaves the root absent, directories first and then the natural name order the macOS Explorer uses. root_path is the real path that was listed. is_directory is what the Explorer draws and opens by. truncated is true past the listing cap. device_id names the machine the listing came from: absent for this daemon's own machine, and an SSH device's id for a `file_list` that named that device, whose paths are that device's and are never read here.",
@@ -895,7 +895,8 @@
           ]
         },
         "path": { "type": "string" },
-        "reason": { "$ref": "#/$defs/pathRefusalReason" }
+        "reason": { "$ref": "#/$defs/pathRefusalReason" },
+        "confirm": { "type": "string", "description": "Only on a `create_workspace` answered `needs_confirmation` whose folder belongs to a project outside home that is not that folder (inside a repository there, or a linked worktree of one): that project's root, the folder the operator is asked about and confirms instead, because a registration adds the project." }
       }
     },
     "cloneTarget": {

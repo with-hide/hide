@@ -1541,6 +1541,11 @@ pub struct Runtime {
     birth_clock: session::BirthClock,
     next_async_operation_id: u64,
     workspace_creations_in_flight: HashSet<String>,
+    /// Rows Herdr shows without a registration whose machine is judging
+    /// their folder for a pin or a closing last pane, by row id
+    /// (`projects::RowPending`).
+    row_registrations: HashMap<String, projects::RowPending>,
+    row_registration_generation: u64,
     /// Each open file tab's document, edited under a number so a snapshot
     /// read re-sends a View document only when it moved.
     editor_documents: HashMap<String, Edited<EditorDocumentSnapshot>>,
@@ -2346,6 +2351,8 @@ impl Runtime {
             birth_clock: Arc::new(Instant::now),
             next_async_operation_id: 0,
             workspace_creations_in_flight: HashSet::new(),
+            row_registrations: HashMap::new(),
+            row_registration_generation: 0,
             editor_documents: HashMap::new(),
             archive_documents: HashMap::new(),
             session_catalog_rows: Vec::new(),
@@ -2721,6 +2728,7 @@ impl Runtime {
             retryable,
             occurred_at: unix_milliseconds(),
             request_id: None,
+            confirm: None,
         });
     }
 

@@ -3111,6 +3111,7 @@ mod tests {
                 reason: "fixture identity is unavailable".to_owned(),
             },
             reader_features: None,
+            windows_drives: None,
         };
         let refusal = helper_protocol_refusal(&hello(23)).expect("refused");
         assert_eq!(

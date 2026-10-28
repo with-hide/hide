@@ -30,6 +30,7 @@
 //! | `ProgramFiles` | Windows | no Tailscale location |
 //! | `HIDE_MACHINE_ID` | all | the machine id the system reports |
 //! | `LC_ALL`, `LC_MESSAGES`, `LANG` | Linux, read in that order | no primary language |
+//! | `WSL_DISTRO_NAME` | Linux | a WSL distribution is told by its kernel release alone |
 
 use std::ffi::{OsStr, OsString};
 use std::io;
@@ -57,6 +58,7 @@ pub const VARIABLES: &[&str] = &[
     "LC_ALL",
     "LC_MESSAGES",
     "LANG",
+    "WSL_DISTRO_NAME",
 ];
 
 /// Names this process's machine for [`machine_id`] in place of the one the
@@ -451,6 +453,83 @@ pub fn primary_language_from(variables: Variables) -> io::Result<String> {
         ));
     }
     Ok(name.replace('_', "-"))
+}
+
+/// Where this machine shows the drives of the Windows PC it runs on, when it
+/// is a WSL distribution (PRD wsl-device B16): `/mnt` unless the
+/// distribution's `/etc/wsl.conf` moves them (`[automount]` `root`).
+/// `NotFound` on a machine that is not one, `Unsupported` off Linux.
+pub fn windows_drives() -> io::Result<String> {
+    if !cfg!(target_os = "linux") {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "only a Linux machine can be a WSL distribution",
+        ));
+    }
+    let release = std::fs::read_to_string("/proc/sys/kernel/osrelease")?;
+    let config = match std::fs::read_to_string("/etc/wsl.conf") {
+        Ok(config) => Some(config),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
+    windows_drives_from(&release, &process, config.as_deref())
+}
+
+/// [`windows_drives`] from a kernel release, the variables and the text of
+/// `/etc/wsl.conf` (`None` when there is none). A WSL kernel names itself
+/// `microsoft` in its release (`5.15.153.1-microsoft-standard-WSL2`, WSL1's
+/// `4.4.0-19041-Microsoft`), and a shell `wsl.exe` started has
+/// `WSL_DISTRO_NAME` set; either says the machine is one. A `root` that is
+/// not an absolute path is refused as `InvalidData` rather than guessed past.
+pub fn windows_drives_from(
+    kernel_release: &str,
+    variables: Variables,
+    wsl_conf: Option<&str>,
+) -> io::Result<String> {
+    let wsl = kernel_release.to_ascii_lowercase().contains("microsoft")
+        || nonempty_variable(variables, "WSL_DISTRO_NAME").is_some();
+    if !wsl {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "this machine is not a WSL distribution",
+        ));
+    }
+    let Some(root) = wsl_conf.and_then(automount_root) else {
+        return Ok("/mnt".to_owned());
+    };
+    let trimmed = root.trim_end_matches('/');
+    if !root.starts_with('/') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("/etc/wsl.conf names automount root {root:?}, which is not an absolute path"),
+        ));
+    }
+    Ok(if trimmed.is_empty() {
+        "/".to_owned()
+    } else {
+        trimmed.to_owned()
+    })
+}
+
+/// The `root` key of `wsl.conf`'s `[automount]` section, without quotes.
+fn automount_root(config: &str) -> Option<String> {
+    let mut section = String::new();
+    let mut root = None;
+    for line in config.lines() {
+        let line = line.split(['#', ';']).next().unwrap_or_default().trim();
+        if let Some(name) = line
+            .strip_prefix('[')
+            .and_then(|rest| rest.strip_suffix(']'))
+        {
+            section = name.trim().to_ascii_lowercase();
+        } else if section == "automount"
+            && let Some((key, value)) = line.split_once('=')
+            && key.trim().eq_ignore_ascii_case("root")
+        {
+            root = Some(value.trim().trim_matches('"').to_owned());
+        }
+    }
+    root.filter(|root| !root.is_empty())
 }
 
 fn nonempty_variable(variables: Variables, name: &str) -> Option<OsString> {

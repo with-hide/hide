@@ -152,6 +152,11 @@ pub(super) struct CreateWorkspacePayload {
     /// again, because the check and the make are not one step.
     #[serde(default)]
     pub(super) new_folder: bool,
+    /// The folder outside home the operator confirmed adding, as the request
+    /// spells it (PRD wsl-device D-10). hided has judged this machine's; a
+    /// device's helper judges its own with it (`Call::Registrable`).
+    #[serde(default)]
+    pub(super) confirmed_outside_home: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2388,7 +2393,12 @@ impl Runtime {
                         );
                         return true;
                     }
-                    return self.create_device_registration(&device, payload.path, payload.label);
+                    return self.create_device_registration(
+                        &device,
+                        payload.path,
+                        payload.label,
+                        payload.confirmed_outside_home,
+                    );
                 }
                 if let Some(context) = self.live.as_ref().cloned() {
                     // A folder whose removal is still closing panes keeps the
