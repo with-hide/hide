@@ -50,6 +50,7 @@ LANES = (
     "windows-check",
     "windows-e2e",
     "windows-desktop",
+    "windows-wsl",
     "web-e2e",
     "remote-mailbox",
     "desktop-e2e",
@@ -93,6 +94,14 @@ OS_LANES = ("os-contract", "windows-check", "windows-e2e", "windows-desktop")
 # change to any crate they link, or to the tests, can change its result, and
 # nothing else can. Web code and web specs do not reach it.
 MAILBOX_CRATES = {"herdr-core", "hided", "hide-agent-hooks", "hide-host"}
+# The WSL device lane (`wsl-device.yml`) connects a real WSL 2 distribution
+# through `wsl.exe`: the crates the link crosses (the platform layer's WSL
+# listing, the connector and its pipe, the link's protocol, the helper's
+# serve) and the node command the helper runs as. The core's decisions about
+# a WSL device have their own unit tests, so a change to a crate that only
+# consumes these does not plan it.
+WSL_CRATES = {"hide-host", "hide-node", "hide-node-link", "hide-platform"}
+WSL_CRATE_FILES = ("hided/src/node_cli.rs", "hided/tests/it/wsl_device.rs")
 
 # The desktop suite drives the web shell and the daemon inside the app, so
 # every web shell file plans `desktop-e2e` beside `web-e2e`: a desktop spec
@@ -323,6 +332,7 @@ NAMED_LANES = (
     ("contracts/agent-clis.json", {"agy-contract"} | AGENT_CLI_LANES),
     ("scripts/install-agent-clis.py", {"agy-contract"} | AGENT_CLI_LANES),
     (".github/workflows/remote-mailbox.yml", {"remote-mailbox"}),
+    (".github/workflows/wsl-device.yml", {"windows-wsl"}),
     (".github/workflows/package.yml", set()),
     (".github/workflows/device-helpers.yml", set()),
     (".github/workflows/release.yml", set()),
@@ -417,6 +427,8 @@ def classify(path, status, crates, root):
             lanes.add("web-e2e")
         if packages & MAILBOX_CRATES:
             lanes.add("remote-mailbox")
+        if crate["name"] in WSL_CRATES or path.as_posix() in WSL_CRATE_FILES:
+            lanes.add("windows-wsl")
         if crate["name"] in OS_CRATES:
             lanes.update(OS_LANES)
         if crate["name"] in OS_CONTRACT_CRATES:
