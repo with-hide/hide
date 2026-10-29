@@ -506,6 +506,88 @@ pub fn request_device(
     })
 }
 
+/// How long `hide <path>` waits for its answer: past the daemon's own wait
+/// for the registration, so the daemon's reason arrives rather than a local
+/// timeout.
+const PROJECT_OPEN_TIMEOUT: Duration = Duration::from_secs(40);
+
+/// `hide <path>` from a pane, a device's included: the folder is on the
+/// credential's machine. Running it again only brings the project forward.
+pub fn request_project_open(credential: &mut Credential, path: &str) -> Result<Value, String> {
+    credential.run(|reference_path, after| {
+        let reference = read_reference(reference_path)?;
+        let request_id = fresh_request_id()?;
+        run_exchange_within(
+            reference_path,
+            &reference,
+            json!({"type":"project_open","request_id":request_id,"path":path}),
+            &request_id,
+            true,
+            PROJECT_OPEN_TIMEOUT,
+            after,
+        )
+    })
+}
+
+/// `hide <path>` on the core's own machine, with the daemon's token from the
+/// state file this account owns: one `/ws` connection whose handshake names
+/// `client_kind: "cli"` carries one request and its answer, and is never a
+/// screen (`hided/src/project_open.rs`).
+pub fn request_project_open_with_token(
+    port: u16,
+    token: &str,
+    path: &str,
+) -> Result<Value, String> {
+    let reference = Reference {
+        token: token.to_owned(),
+        route: Route::Daemon {
+            port,
+            origin_port: port,
+        },
+    };
+    let request_id = fresh_request_id()?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|_| "request_unavailable".to_owned())?;
+    runtime.block_on(async {
+        tokio::time::timeout(PROJECT_OPEN_TIMEOUT, async {
+            let mut socket = connect(&reference).await.map_err(reported)?;
+            socket
+                .send(Message::Text(
+                    json!({"token":token,"schema_version":SCHEMA_VERSION,"client_kind":"cli"})
+                        .to_string()
+                        .into(),
+                ))
+                .await
+                .map_err(|_| "hide_unavailable".to_owned())?;
+            socket
+                .send(Message::Text(
+                    json!({"type":"project_open","request_id":request_id,"path":path})
+                        .to_string()
+                        .into(),
+                ))
+                .await
+                .map_err(|_| "hide_unavailable".to_owned())?;
+            match socket.next().await {
+                Some(Ok(Message::Text(text))) => {
+                    let value: Value =
+                        serde_json::from_str(&text).map_err(|_| "invalid_response".to_owned())?;
+                    if value["type"] != "workspace_result" || value["request_id"] != request_id {
+                        return Err("invalid_response".to_owned());
+                    }
+                    Ok(value)
+                }
+                // The state file named a daemon that holds another token.
+                Some(Ok(Message::Close(_))) => Err("credential_rejected".to_owned()),
+                _ => Err("hide_unavailable".to_owned()),
+            }
+        })
+        .await
+        .map_err(|_| "request_timeout".to_owned())?
+    })
+}
+
 /// `hide ps`: read from what the core holds.
 pub fn request_ps(credential: &mut Credential, all: bool) -> Result<Value, String> {
     credential.run(|path, after| {

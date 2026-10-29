@@ -10,6 +10,12 @@ use std::thread::{self, JoinHandle};
 const CATALOG_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 /// How often the catalog asks the core again while a read is on its way.
 const CATALOG_POLL: std::time::Duration = std::time::Duration::from_millis(250);
+/// How long `hide <path>` waits for its registration: a device's helper
+/// judges the folder within 15 s (`REGISTRABLE_TIMEOUT`), and this machine's
+/// opens a Herdr workspace, which answers in seconds.
+pub(crate) const PROJECT_OPEN_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+/// How often `hide <path>` reads its receipt again while it waits.
+const PROJECT_OPEN_POLL: std::time::Duration = std::time::Duration::from_millis(100);
 
 use herdr_core::node_access::NodeLink;
 use herdr_core::workspace_control::{
@@ -100,6 +106,16 @@ enum Command {
         device_id: String,
         command: herdr_core::device_command::DeviceCommand,
         reply: Sender<Result<serde_json::Value, String>>,
+    },
+    ProjectOpen {
+        device_id: String,
+        path: String,
+        request_id: String,
+        reply: Sender<Result<(), String>>,
+    },
+    ProjectOpenReceipt {
+        request_id: String,
+        reply: Sender<Option<herdr_core::project_open::ProjectOpenReceipt>>,
     },
     SetFileRoots {
         roots: Vec<(std::path::PathBuf, std::fs::File)>,
@@ -446,6 +462,57 @@ impl CoreHandle {
             })
             .map_err(|_| "ps_unavailable".to_owned())?;
         result.recv().map_err(|_| "ps_unavailable".to_owned())?
+    }
+
+    /// `hide <path>` for a caller on `device`: started on the owner thread,
+    /// then its receipt read again every `PROJECT_OPEN_POLL`, off the owner
+    /// thread and the runtime lock, until it settles or `PROJECT_OPEN_WAIT`
+    /// is over (`project_open_unconfirmed`). The same request id asked
+    /// again joins its first receipt.
+    #[allow(clippy::disallowed_methods)] // a production wait for the registration, bounded by PROJECT_OPEN_WAIT
+    pub fn project_open(
+        &self,
+        device: &str,
+        path: &str,
+        request_id: &str,
+    ) -> Result<herdr_core::project_open::ProjectOpenReceipt, String> {
+        use herdr_core::project_open::ProjectOpenReceipt;
+        let (reply, result) = mpsc::channel();
+        self.commands
+            .send(Command::ProjectOpen {
+                device_id: device.to_owned(),
+                path: path.to_owned(),
+                request_id: request_id.to_owned(),
+                reply,
+            })
+            .map_err(|_| "project_open_unavailable".to_owned())?;
+        result
+            .recv()
+            .map_err(|_| "project_open_unavailable".to_owned())??;
+        let deadline = std::time::Instant::now() + PROJECT_OPEN_WAIT;
+        loop {
+            let (reply, result) = mpsc::channel();
+            self.commands
+                .send(Command::ProjectOpenReceipt {
+                    request_id: request_id.to_owned(),
+                    reply,
+                })
+                .map_err(|_| "project_open_unavailable".to_owned())?;
+            match result
+                .recv()
+                .map_err(|_| "project_open_unavailable".to_owned())?
+            {
+                Some(ProjectOpenReceipt::Pending) => {}
+                Some(receipt) => return Ok(receipt),
+                // Displaced by 32 newer requests while it waited.
+                None => return Err("project_open_unconfirmed".to_owned()),
+            }
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            if left.is_zero() {
+                return Err("project_open_unconfirmed".to_owned());
+            }
+            std::thread::sleep(PROJECT_OPEN_POLL.min(left));
+        }
     }
 
     /// `hide device`, run on the owner thread.
@@ -1085,6 +1152,19 @@ fn owner_loop(
                 reply,
             } => {
                 let _ = reply.send(core.device_command(&device_id, command));
+            }
+
+            Command::ProjectOpen {
+                device_id,
+                path,
+                request_id,
+                reply,
+            } => {
+                let _ = reply.send(core.project_open(&device_id, &path, &request_id));
+            }
+
+            Command::ProjectOpenReceipt { request_id, reply } => {
+                let _ = reply.send(core.project_open_receipt(&request_id));
             }
 
             Command::DeliveryPrepare {

@@ -40,6 +40,11 @@ pub enum CommandKind {
     /// `hide contract --json`: the contract of the commands tools call.
     Contract,
     Open,
+    /// `hide <path>`, `hide .` or `hide open <path>`: the folder at `path`,
+    /// as typed, opened as a project (`open_path`).
+    OpenPath {
+        path: String,
+    },
     /// `hide connect`: `open` without the browser, answered as one JSON line
     /// for a host that loads the shell itself (the desktop app).
     Connect,
@@ -118,6 +123,8 @@ const FILE_USAGE: &str = "usage: hide file open <path> [--request-id <id>]";
 
 const DIFF_USAGE: &str = "usage: hide diff open <path> [--request-id <id>]";
 
+const OPEN_USAGE: &str = "usage: hide [open] [<path>]";
+
 const VIEW_USAGE: &str = "usage: hide view list [--session <id|here>] | status <view-id> | select <view-id> [--request-id <id>] | close <view-id> [--request-id <id>] | split <view-id> --area <area-id> --edge left|right|up|down [--request-id <id>] | move <view-id> --area <area-id> --index <n> [--request-id <id>]";
 
 /// A topic's command lines as a wrong command or `--help` prints them: one
@@ -160,7 +167,7 @@ fn topic_usage(topic: &str) -> Option<String> {
         "workspace" => "usage: hide workspace info".to_owned(),
         "status" => "usage: hide status [--json]".to_owned(),
         "stop" => "usage: hide stop".to_owned(),
-        "open" => "usage: hide [open]".to_owned(),
+        "open" => OPEN_USAGE.to_owned(),
         "version" => "usage: hide version [--json]".to_owned(),
         "guide" => "usage: hide guide".to_owned(),
         "contract" => "usage: hide contract --json".to_owned(),
@@ -176,7 +183,7 @@ fn help_text() -> String {
     let indent =
         |lines: &str| -> String { lines.lines().map(|line| format!("  {line}\n")).collect() };
     let mut text = String::from(
-        "usage: hide [command]\n\nFor you\n  hide                      open Hide\n  hide status [--json]      show whether Hide is running\n  hide stop                 stop Hide's background service\n  hide version [--json]     show this build's version\n\nFor agents in a Hide pane\n  hide guide                the agent guide to everything below\n  hide contract --json      the commands tools call, as JSON\n",
+        "usage: hide [command]\n\nFor you\n  hide                      open Hide\n  hide <path>, hide .       open a folder as a project in Hide, adding it if it is not one yet\n  hide status [--json]      show whether Hide is running\n  hide stop                 stop Hide's background service\n  hide version [--json]     show this build's version\n\nFor agents in a Hide pane\n  hide guide                the agent guide to everything below\n  hide contract --json      the commands tools call, as JSON\n",
     );
     for lines in [
         crate::delivery_cli::USAGE,
@@ -196,7 +203,7 @@ fn help_text() -> String {
         text.push_str(&indent(lines));
     }
     text.push_str(
-        "\nCommands that act on the operator's screen (workspace, file, diff, view, browser) need Hide's window open and a pane or shell inside a registered checkout.\nThey never start Hide.\nhide links needs only that pane or shell and a running Hide, and reads the project it is in unless --all-projects is given.\nhide memory reads, adds to and forgets from that project's Project Memory, which Hide keeps for the projects of its own device and of every linked device with a Memory reader.\nhide memory release ends a hold that an agent's stale report put on a card.\nhide memory recheck has a card checked again, out of every hook until the check ends; an agent may ask only for a card its conversation was given.\nRun in a Hide shell pane with no agent, it also lets that card's text be reported stale once more.\n",
+        "\nA command's name wins over a folder of the same name: hide status is the command, hide ./status opens the folder status.\nOn a connected device, hide <path> works in a Hide pane there and brings Hide's window to that device's folder.\n\nCommands that act on the operator's screen (workspace, file, diff, view, browser) need Hide's window open and a pane or shell inside a registered checkout.\nThey never start Hide.\nhide links needs only that pane or shell and a running Hide, and reads the project it is in unless --all-projects is given.\nhide memory reads, adds to and forgets from that project's Project Memory, which Hide keeps for the projects of its own device and of every linked device with a Memory reader.\nhide memory release ends a hold that an agent's stale report put on a card.\nhide memory recheck has a card checked again, out of every hook until the check ends; an agent may ask only for a card its conversation was given.\nRun in a Hide shell pane with no agent, it also lets that card's text be reported stale once more.\n",
     );
     text
 }
@@ -257,7 +264,14 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
             (Some("--json"), None) => Ok(CommandKind::Contract),
             _ => Err("usage: hide contract --json".to_owned()),
         },
-        None | Some("open") => Ok(CommandKind::Open),
+        None => Ok(CommandKind::Open),
+        Some("open") => match (iter.next(), iter.next()) {
+            (None, _) => Ok(CommandKind::Open),
+            (Some(path), None) if !path.is_empty() && !path.starts_with('-') => {
+                Ok(CommandKind::OpenPath { path: path.clone() })
+            }
+            _ => Err(OPEN_USAGE.to_owned()),
+        },
         Some("connect") => Ok(CommandKind::Connect),
         Some("status") => {
             let json = iter.any(|arg| arg == "--json");
@@ -359,6 +373,13 @@ pub fn parse_args(args: &[String]) -> Result<CommandKind, String> {
         Some("view") => parse_view(iter),
         Some("links") => parse_links(iter),
         Some("memory") => parse_memory(iter),
+        // Every command's name is matched above, so a word that names none
+        // is a folder (`hide ./status` reaches a folder named like one).
+        Some(path) if !path.is_empty() && !path.starts_with('-') && iter.next().is_none() => {
+            Ok(CommandKind::OpenPath {
+                path: path.to_owned(),
+            })
+        }
         Some(other) => Err(format!(
             "unknown command: hide {other} (run hide --help for the commands)"
         )),
@@ -763,6 +784,7 @@ pub fn run(kind: CommandKind) -> Result<(), String> {
         | CommandKind::Version { .. }
         | CommandKind::Contract => unreachable!("handled above"),
         CommandKind::Open => open(&env),
+        CommandKind::OpenPath { path } => open_path(&env, &path),
         CommandKind::Connect => connect_json(&env),
         CommandKind::Status { json: true } => status_json(&env.state_dir),
         CommandKind::Status { json: false } => status(&env.state_dir, env.idle_secs),
@@ -2055,6 +2077,135 @@ fn open(env: &Env) -> Result<(), String> {
     open_browser(&state, &health)
 }
 
+/// `hide <path>`: the folder is read on this machine, then opened as a
+/// project of the machine's Hide (`hided/src/project_open.rs`). On the
+/// core's own machine the command finds or starts the daemon as bare `hide`
+/// does and asks with the daemon's token; with no window open there it then
+/// opens Hide as bare `hide` does. On a connected device, or a machine whose
+/// Hide is a window of a core elsewhere, it asks with its pane's credential,
+/// which only a Hide pane there can prove.
+fn open_path(env: &Env, raw: &str) -> Result<(), String> {
+    let folder = local_folder(raw)?;
+    let wire = hide_platform::path::to_wire(&folder)
+        .map_err(|_| format!("{raw}: Hide cannot spell this folder's path; rename it and retry"))?;
+    let local = match healthy_daemon(env) {
+        Some((_, health)) => health["role"] != "node",
+        None => !runs_from_helper_kit(env),
+    };
+    if !local {
+        let answer = crate::workspace_cli::Credential::acquire(env)
+            .and_then(|mut credential| {
+                crate::workspace_cli::request_project_open(&mut credential, &wire)
+            })
+            .map_err(|reason| open_path_refusal(&reason, open_path_next_action(&reason)))?;
+        let result = open_path_result(&answer)?;
+        if result["window"] != true {
+            println!(
+                "Hide's window is not open on the machine that runs Hide; the project is in front when it opens."
+            );
+        }
+        return Ok(());
+    }
+    let (state, health) = connect(env).map_err(|error| error.detail())?;
+    let answer =
+        crate::workspace_cli::request_project_open_with_token(state.port, &state.token, &wire)
+            .map_err(|reason| open_path_refusal(&reason, open_path_next_action(&reason)))?;
+    let result = open_path_result(&answer)?;
+    if result["window"] != true {
+        open_browser(&state, &health)?;
+    }
+    Ok(())
+}
+
+/// The folder `raw` names on this machine, resolved from the working
+/// directory without following its links (the `$HOME` line or the device's
+/// helper judges those), or why it is not one.
+fn local_folder(raw: &str) -> Result<std::path::PathBuf, String> {
+    let path = std::path::absolute(raw).map_err(|_| {
+        open_path_refusal(
+            "invalid_path",
+            "Run it from a folder that still exists, or give an absolute path",
+        )
+    })?;
+    match std::fs::metadata(&path) {
+        Ok(metadata) if metadata.is_dir() => Ok(path),
+        Ok(_) => Err(format!(
+            "{raw} is a file, not a folder: give the folder to open as a project"
+        )),
+        // A bare word that names no folder may be a mistyped command.
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Err(
+            if raw.contains(['/', '\\']) || raw.starts_with('.') || raw.starts_with('~') {
+                format!("{raw}: no folder is there; check the path")
+            } else {
+                format!(
+                    "{raw} is neither a folder here nor a hide command: check the path, or run hide --help for the commands"
+                )
+            },
+        ),
+        Err(_) => Err(format!(
+            "{raw}: Hide cannot read this folder; check its permissions"
+        )),
+    }
+}
+
+/// Whether this `hide` is a build Hide placed in the account's helper root:
+/// the command a connected device's kit installs, which never starts a
+/// daemon of its own for `hide <path>`.
+fn runs_from_helper_kit(env: &Env) -> bool {
+    let root = hide_kit::layout::helper_root(&env.home);
+    let (Ok(exe), Ok(root)) = (
+        std::env::current_exe().and_then(|exe| exe.canonicalize()),
+        root.canonicalize(),
+    ) else {
+        return false;
+    };
+    exe.starts_with(root)
+}
+
+/// The answer of a `hide <path>` request, said to the person who typed it.
+fn open_path_result(answer: &serde_json::Value) -> Result<serde_json::Value, String> {
+    if answer["ok"] != true {
+        let reason = answer["reason"].as_str().unwrap_or("project_open_failed");
+        let next = answer["next_action"]
+            .as_str()
+            .unwrap_or_else(|| herdr_core::project_open::next_action(reason));
+        return Err(open_path_refusal(reason, next));
+    }
+    let result = answer["result"].clone();
+    let (label, path) = (
+        result["label"].as_str().unwrap_or_default(),
+        result["path"].as_str().unwrap_or_default(),
+    );
+    if result["added"] == true {
+        println!("Added {label} ({path}) as a project and brought it forward in Hide.");
+    } else {
+        println!("Brought {label} ({path}) forward in Hide.");
+    }
+    Ok(result)
+}
+
+/// A refusal as `hide <path>` prints it: the reason, then what to do.
+fn open_path_refusal(reason: &str, next_action: &str) -> String {
+    format!("hide could not open the folder ({reason}): {next_action}")
+}
+
+/// What to do about a refusal the transport, rather than the core, gave.
+fn open_path_next_action(reason: &str) -> &'static str {
+    match reason {
+        "caller_not_in_pane" => {
+            "On a connected device, run it in a Hide pane there: Hide takes a device's commands only from the panes it runs, and this shell is not one"
+        }
+        "hide_unavailable" | "bridge_unavailable" => {
+            "Hide is not running or this device is not connected to it; open Hide on its machine and retry"
+        }
+        "credential_rejected" => "Run hide status, then retry",
+        "request_timeout" => {
+            "Run it again: a folder already added is only brought forward, never added twice"
+        }
+        other => herdr_core::project_open::next_action(other),
+    }
+}
+
 fn connect_json(env: &Env) -> Result<(), String> {
     let (line, result) =
         match connect(env).map(|(state, health)| attached_json(&state, &health, "ok")) {
@@ -2652,12 +2803,12 @@ fn loopback_json(port: u16, path: &str, timeout: Duration) -> Result<serde_json:
     serde_json::from_str(&body).map_err(|error| error.to_string())
 }
 
+/// Opens the shell in this machine's default browser, as bare `hide` does
+/// on every system.
 fn open_browser(state: &DaemonState, health: &serde_json::Value) -> Result<(), String> {
     let url = daemon_url(state, health)?;
-    Command::new("/usr/bin/open")
-        .arg(&url)
-        .status()
-        .map_err(|error| error.to_string())?;
+    hide_node::opener::hand_to_system(std::ffi::OsStr::new(&url))
+        .map_err(|error| format!("the browser could not be opened: {error}"))?;
     println!("{url}");
     Ok(())
 }
@@ -3028,7 +3179,11 @@ mod tests {
                 .starts_with("unknown command: hide device rename\nusage:\n  hide device list")
         );
         assert_eq!(
-            parse(&["hide", "foo"]).unwrap_err(),
+            parse(&["hide", "--foo"]).unwrap_err(),
+            "unknown command: hide --foo (run hide --help for the commands)"
+        );
+        assert_eq!(
+            parse(&["hide", "foo", "bar"]).unwrap_err(),
             "unknown command: hide foo (run hide --help for the commands)"
         );
         assert_eq!(
@@ -3681,5 +3836,65 @@ mod tests {
     fn parse_open_default() {
         let args = ["hide"].into_iter().map(String::from).collect::<Vec<_>>();
         assert_eq!(parse_args(&args).unwrap(), CommandKind::Open);
+    }
+
+    /// `hide <path>`: a word that names no command is a folder, a command's
+    /// name stays the command, and `./` reaches a folder named like one.
+    #[test]
+    fn a_word_that_names_no_command_opens_that_folder() {
+        let parse = |args: &[&str]| {
+            parse_args(&args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>())
+        };
+        let folder = |path: &str| CommandKind::OpenPath {
+            path: path.to_owned(),
+        };
+        assert_eq!(parse(&["hide", "."]).unwrap(), folder("."));
+        assert_eq!(parse(&["hide", "../app"]).unwrap(), folder("../app"));
+        assert_eq!(parse(&["hide", "open", "."]).unwrap(), folder("."));
+        assert_eq!(parse(&["hide", "open"]).unwrap(), CommandKind::Open);
+        assert_eq!(
+            parse(&["hide", "status"]).unwrap(),
+            CommandKind::Status { json: false }
+        );
+        assert_eq!(parse(&["hide", "./status"]).unwrap(), folder("./status"));
+        assert_eq!(
+            parse(&["hide", "open", "status"]).unwrap(),
+            folder("status")
+        );
+        assert_eq!(
+            parse(&["hide", "open", "a", "b"]).unwrap_err(),
+            "usage: hide [open] [<path>]"
+        );
+        assert_eq!(
+            parse(&["hide", "open", "--json"]).unwrap_err(),
+            "usage: hide [open] [<path>]"
+        );
+        assert!(help_text().contains("hide ./status opens the folder status"));
+    }
+
+    #[test]
+    fn a_path_that_is_no_folder_is_refused_with_what_to_do() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("notes.txt");
+        std::fs::write(&file, "x").unwrap();
+        assert_eq!(
+            local_folder(dir.path().to_str().unwrap()).unwrap(),
+            dir.path()
+        );
+        let file = file.to_str().unwrap();
+        assert_eq!(
+            local_folder(file).unwrap_err(),
+            format!("{file} is a file, not a folder: give the folder to open as a project")
+        );
+        let missing = dir.path().join("gone");
+        let missing = missing.to_str().unwrap();
+        assert_eq!(
+            local_folder(missing).unwrap_err(),
+            format!("{missing}: no folder is there; check the path")
+        );
+        assert_eq!(
+            local_folder("stauts-not-a-folder").unwrap_err(),
+            "stauts-not-a-folder is neither a folder here nor a hide command: check the path, or run hide --help for the commands"
+        );
     }
 }

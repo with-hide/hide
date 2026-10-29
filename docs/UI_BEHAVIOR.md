@@ -2147,6 +2147,20 @@ hided answers a `project_target` probe for every name and folder on the same `$H
 `Create project` (or Enter) sends one `create_workspace` with `new_folder`; the core makes the folder, runs `git init` in it and registers it, and the dialog closes when the project appears or keeps the failure with its reason.
 A folder holding nothing, or only `.git` and a Finder `.DS_Store`, is what a create that failed after making its folder leaves, so it is not `already_exists`: the view says the project is made in it, and a retry continues there rather than being refused or making a second folder; a failed create never deletes the folder it made.
 
+### Opening a folder from a terminal
+
+CLI owner: `open_path` in `hided/src/cli.rs`; daemon owner: `hided/src/project_open.rs`; core owner: `herdr-core/src/runtime/project_open.rs`; page owner: `showProjectOpened` in `web/src/opening.ts`; desktop owner: the `hide:come-forward` channel in `desktop/src/main/host.ts`.
+`hide .`, `hide <path>` and `hide open <path>` open a folder as a project from any terminal, the way `code .` opens VS Code.
+The path is read on the machine the command runs on, from that shell's working directory.
+A folder a registered checkout holds, the checkout itself or a folder inside it, brings that checkout in front, the deepest one when worktrees nest, and registers nothing.
+Any other folder is registered by the same `create_workspace` Browse folder sends, so it is judged by the same rules and opens on the first terminal tab its registration starts; a folder outside home is refused with the advice to add it from Add a project, since only the dialog asks that question.
+Then every Hide window of the core's machine shows that project in place of All projects or an Overview, as a click on its sidebar row does, and the desktop window comes forward; a browser tab shows it too but cannot raise itself.
+With no window open the command opens Hide as bare `hide` does, already on that project, and with no Hide running it starts Hide first.
+A path that is not a folder, or one that cannot be registered, is answered with the reason and what to do next, and the command exits non-zero; nothing else opens.
+A command's name wins over a folder of the same name: `hide status` is the command, `hide ./status` opens the folder `status`, and a word that is neither is answered as neither.
+On a connected device the command works in a Hide pane there: the device's helper judges the folder against that device's home, the device comes forward on the project, and its first terminal opens there once the helper has confirmed the folder.
+A plain SSH shell on the device is refused with the reason, because Hide takes a device's commands only from the panes it runs ([INSTALL.md](INSTALL.md#what-each-system-supports)).
+
 ### Removing a project's registration
 
 `Remove project…` removes only Hide's registration and never deletes files, worktrees, sessions, or Herdr workspaces.

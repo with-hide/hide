@@ -36,6 +36,7 @@ pub mod node_pages;
 pub mod node_uploads;
 pub mod page_forward;
 pub mod plan_cli;
+mod project_open;
 
 mod hook_request;
 pub mod node_panes;
@@ -562,6 +563,7 @@ pub async fn start_core_role(env: Env, seat: seat::SeatParts) -> Result<RunningD
         relay_grants: Arc::clone(&relay_grants),
         own_screens: Arc::new(Mutex::new(0)),
         pane_sizes: core.outputs.pane_sizes(),
+        window_calls: tokio::sync::broadcast::channel(4).0,
     };
     seat.starting("core.roots");
     node_panes.serve(app.clone());
