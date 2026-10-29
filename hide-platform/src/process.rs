@@ -1038,6 +1038,37 @@ pub fn cwd_of(pid: u32) -> io::Result<PathBuf> {
     sys::cwd_of(pid)
 }
 
+/// Every process of this account working in `folder` or a folder inside it,
+/// from one look at the system's process table, judged by identity rather
+/// than by text, so a link to the folder or another letter case of it on a
+/// volume that ignores case still counts. A process that ends during the
+/// look, or that the system will not describe (another account's), is left
+/// out. `Unsupported` on Windows, which reports no other process's working
+/// folder; there a process working in a folder holds it open, so the folder
+/// cannot be renamed or deleted while it does.
+pub fn working_in(folder: &Path) -> io::Result<Vec<u32>> {
+    let folder = crate::fs::identity::file_id(folder)?;
+    let mut working = Vec::new();
+    for pid in sys::all_pids()? {
+        match cwd_of(pid) {
+            Ok(cwd) => {
+                if cwd.ancestors().any(|ancestor| {
+                    crate::fs::identity::file_id(ancestor).is_ok_and(|id| id == folder)
+                }) {
+                    working.push(pid);
+                }
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied
+                ) => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(working)
+}
+
 /// The name of the program `pid` runs, as the system lists it: the file name
 /// of its image on Windows, the command name elsewhere, which Linux keeps to
 /// its first 15 bytes. `NotFound` when the process is gone.

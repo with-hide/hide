@@ -2181,6 +2181,23 @@ fn remove_worktree_stopping(
     checkout: &Path,
     force: bool,
 ) -> Result<String, Stopped> {
+    remove_worktree_guarded(repository_root, checkout, force, None)
+}
+
+/// What judges a folder moved aside before Git is asked to remove it.
+type AsideCheck<'a> = &'a dyn Fn(&Path) -> Result<(), Stopped>;
+
+/// [`remove_worktree_stopping`], and with `aside_check` the removal of a
+/// folder nothing works in: the folder must be moved aside, so nothing can
+/// enter it at its path from then on, and `aside_check` judges the moved
+/// folder before Git is asked; a folder that cannot be moved aside, or that
+/// the check refuses, is kept where it was.
+fn remove_worktree_guarded(
+    repository_root: &Path,
+    checkout: &Path,
+    force: bool,
+    aside_check: Option<AsideCheck>,
+) -> Result<String, Stopped> {
     let common = git(
         repository_root,
         &["rev-parse", "--path-format=absolute", "--git-common-dir"],
@@ -2190,6 +2207,29 @@ fn remove_worktree_stopping(
     let set_aside = common
         .as_deref()
         .and_then(|common| set_aside(repository_root, common, checkout, force));
+    if let Some(check) = aside_check {
+        let Some(aside) = set_aside.as_ref() else {
+            return Err(Stopped {
+                stop: RemovalStop::StateUnreadable,
+                message: "the folder could not be moved aside, so nothing proves it unused"
+                    .to_owned(),
+            });
+        };
+        if let Err(stopped) = check(&aside.entry) {
+            std::fs::rename(&aside.entry, checkout).map_err(|error| Stopped {
+                stop: RemovalStop::NotMovedBack {
+                    path: aside.entry.display().to_string(),
+                },
+                message: format!(
+                    "{} and its folder could not be moved back from {} ({error}). Move it back to {} before retrying.",
+                    stopped.message,
+                    aside.entry.display(),
+                    checkout.display()
+                ),
+            })?;
+            return Err(stopped);
+        }
+    }
     let checkout_arg = checkout.to_string_lossy();
     let mut arguments = vec!["worktree", "remove"];
     if force {
@@ -2809,12 +2849,19 @@ fn check_confirmed_removal(request: &ConfirmedRemoval, panes_closed: bool) -> Re
 }
 
 /// Repeats the preflight after pane closure, then applies the existing
-/// guarded removal and only the branch policy the operator accepted.
+/// guarded removal and only the branch policy the operator accepted. A
+/// removal of a folder nothing works in (`unused_only`) is never forced and
+/// is judged again once the folder is moved aside ([`unused`]).
 pub fn remove_confirmed(request: &ConfirmedRemoval) -> Result<Removed, Stopped> {
     check_confirmed_removal(request, true)?;
     let root = Path::new(&request.repository_root);
     let target = Path::new(&request.checkout_path);
-    remove_worktree_stopping(root, target, request.discard_changes).map_err(|stopped| Stopped {
+    let removed = if request.unused_only {
+        remove_worktree_guarded(root, target, false, Some(&unused))
+    } else {
+        remove_worktree_stopping(root, target, request.discard_changes)
+    };
+    removed.map_err(|stopped| Stopped {
         message: format!(
             "git worktree remove failed: {}. The worktree remains; panes already closed stay closed.",
             stopped.message
@@ -2842,6 +2889,48 @@ pub fn remove_confirmed(request: &ConfirmedRemoval) -> Result<Removed, Stopped> 
     )
 }
 
+/// Whether nothing works in the worktree folder moved aside to `entry`: Git
+/// sees no change or untracked file in it, and then no process of this
+/// account works in it. A process that entered it before the move works in
+/// it now under the new path, and none can enter it at the old one; on
+/// Windows the move itself was refused for a folder a process works in.
+/// What cannot be read is not taken for unused.
+fn unused(entry: &Path) -> Result<(), Stopped> {
+    let unread = |what: &str, error: String| Stopped {
+        stop: RemovalStop::StateUnreadable,
+        message: format!("{what} could not be read ({error})"),
+    };
+    let status = git(
+        entry,
+        &["status", "--porcelain=v1", "--untracked-files=all"],
+    )
+    .map_err(|error| unread("the folder's status", error))?;
+    let files = status
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .count();
+    if files > 0 {
+        return Err(Stopped {
+            stop: RemovalStop::Changed {
+                files: u32::try_from(files).unwrap_or(u32::MAX),
+            },
+            message: format!("{files} files changed in the folder"),
+        });
+    }
+    match hide_platform::process::working_in(entry) {
+        Ok(working) if working.is_empty() => Ok(()),
+        Ok(working) => Err(Stopped {
+            stop: RemovalStop::StateUnreadable,
+            message: format!("processes {working:?} work in the folder"),
+        }),
+        Err(error) if cfg!(windows) && error.kind() == std::io::ErrorKind::Unsupported => Ok(()),
+        Err(error) => Err(unread(
+            "the processes working in the folder",
+            error.to_string(),
+        )),
+    }
+}
+
 fn delete_branch(root: &Path, branch: &str, force: bool) -> Result<String, String> {
     let flag = if force { "-D" } else { "-d" };
     git(root, &["branch", flag, "--", branch])
@@ -2849,6 +2938,82 @@ fn delete_branch(root: &Path, branch: &str, force: bool) -> Result<String, Strin
 
 fn io_error(message: String) -> HostError {
     HostError::new(ErrorCode::Io, message)
+}
+
+/// The removal of a folder nothing works in, judged once the folder is
+/// moved aside: what got in before the move works in it under its new path.
+#[cfg(test)]
+#[cfg(unix)]
+mod unused_removal_tests {
+    use super::*;
+
+    fn git_ok(cwd: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .args([
+                "-c",
+                "user.name=fixture",
+                "-c",
+                "user.email=fixture@example.invalid",
+            ])
+            .args(["-c", "commit.gpgsign=false"])
+            .arg("-C")
+            .arg(cwd)
+            .args(args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+        assert!(status.success(), "git {args:?}");
+    }
+
+    /// A pane that opens in the folder while its removal runs is the case
+    /// the move aside closes: once the folder is moved, its path leads
+    /// nowhere, and a process that got in works in the moved folder, where
+    /// the check finds it and the folder goes back.
+    #[test]
+    fn a_process_that_got_in_while_the_folder_was_moved_aside_keeps_it() {
+        let folder = tempfile::tempdir().unwrap();
+        let base = hide_platform::fs::identity::canonical(folder.path()).unwrap();
+        let (root, checkout) = (base.join("repo"), base.join("made"));
+        std::fs::create_dir(&root).unwrap();
+        git_ok(&root, &["init", "-q", "-b", "main"]);
+        std::fs::write(root.join("README"), "fixture\n").unwrap();
+        git_ok(&root, &["add", "README"]);
+        git_ok(&root, &["commit", "-q", "-m", "first"]);
+        git_ok(
+            &root,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "made",
+                checkout.to_str().unwrap(),
+            ],
+        );
+        std::fs::create_dir(checkout.join("src")).unwrap();
+        let entered = std::sync::Mutex::new(None);
+        let check = |entry: &Path| {
+            assert!(
+                !checkout.exists(),
+                "nothing can enter the folder at its path"
+            );
+            let mut shell = Command::new("sleep");
+            shell.arg("120").current_dir(entry.join("src"));
+            *entered.lock().unwrap() =
+                Some(hide_platform::process::OwnedChild::spawn(&mut shell).unwrap());
+            unused(entry)
+        };
+        let kept = remove_worktree_guarded(&root, &checkout, false, Some(&check)).unwrap_err();
+        assert!(
+            kept.message.contains("work in the folder"),
+            "{}",
+            kept.message
+        );
+        assert!(checkout.join("src").is_dir());
+        assert_eq!(registered(&root).unwrap().len(), 2);
+        drop(entered);
+    }
 }
 
 #[cfg(test)]

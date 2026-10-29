@@ -135,6 +135,15 @@ pub struct ConfirmedRemoval {
     /// The exact measured names shown in the destructive confirmation.
     #[serde(default)]
     pub expected_ignored_repositories: Vec<String>,
+    /// Remove only a folder nothing works in, for a worktree Hide made and
+    /// gave up before anything ran there, never the operator's confirmed
+    /// deletion: the folder is moved aside first, so nothing can enter it at
+    /// its path afterwards, and is moved back when a process of this account
+    /// works in it or Git sees a change in it by then; a folder that cannot
+    /// be moved aside is kept. Absent from an older sender, which means
+    /// false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unused_only: bool,
 }
 
 /// What a confirmed removal did, as the helper answers it: a stopped

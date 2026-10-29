@@ -399,18 +399,20 @@ pub(crate) struct WorktreeKept {
 /// Removes the folder of a worktree a start made, and with its last pane
 /// the workspace Herdr opened for it, through the operator's own deletion
 /// path, so a start that keeps being refused leaves no folder behind
-/// (with-hide/hide-private#56). Anything that could be the operator's keeps
-/// it: a pane other than the start's working anywhere in the folder, before
-/// the start's pane closes or after, a HEAD that moved from the commit it was
-/// made at, and any change or untracked file, which the host's recheck and
-/// Git's own unforced removal both refuse. The branch always stays: Herdr
-/// checks out a branch that already exists instead of making one, so its
-/// answer does not prove the start made the branch, and a branch at its base
-/// commit costs nothing and is the one the same start takes again.
+/// (with-hide/hide-private#56). The start's pane is closed and its
+/// processes waited out first; the repository's host then decides, as a
+/// removal of a folder nothing works in (`ConfirmedRemoval::unused_only`):
+/// it moves the folder aside, so nothing can enter it at its path from then
+/// on, and keeps it where it was when its HEAD moved from the commit it was
+/// made at, Git sees a change or untracked file in it, or any process of
+/// that machine's account works in it, another pane's shell included. The
+/// branch always stays: Herdr checks out a branch that already exists
+/// instead of making one, so its answer does not prove the start made the
+/// branch, and a branch at its base commit is the one the same start takes
+/// again.
 pub(crate) fn discard_made_worktree(
     connector: &dyn ApiConnector,
     host: &dyn crate::node_access::NodeLink,
-    local: bool,
     made: &MadeWorktree,
 ) -> Result<(), WorktreeKept> {
     let kept = |pane_closed: bool| {
@@ -419,10 +421,6 @@ pub(crate) fn discard_made_worktree(
             reason,
         }
     };
-    let panes = panes_in(connector, made.checkout).map_err(kept(false))?;
-    if panes.iter().any(|pane| Some(pane.as_str()) != made.pane) {
-        return Err(kept(false)("another pane works in the worktree".into()));
-    }
     let removal = hide_node_link::worktrees::ConfirmedRemoval {
         repository_root: made.repository_root.to_owned(),
         checkout_path: made.checkout.to_owned(),
@@ -433,7 +431,10 @@ pub(crate) fn discard_made_worktree(
         force_delete_branch: false,
         discard_changes: false,
         expected_ignored_repositories: Vec::new(),
+        unused_only: true,
     };
+    // The host's check before the pane closes: a worktree that holds work
+    // keeps its pane too.
     match crate::node_access::call_as::<Option<hide_node_link::worktrees::Stopped>>(
         host,
         Call::WorktreeRemovalCheck {
@@ -445,66 +446,20 @@ pub(crate) fn discard_made_worktree(
         Ok(Some(stopped)) => return Err(kept(false)(stopped.message)),
         Err(error) => return Err(kept(false)(error.to_string())),
     }
+    let panes = made.pane.into_iter().map(str::to_owned).collect::<Vec<_>>();
+    // Its shell ends before the host looks for processes in the folder.
     close_checkout_panes_for_removal(
         connector,
         host,
-        &[made.checkout.to_owned()],
+        &[],
         &panes,
-        ProcessWait::for_folder_removal(local),
+        ProcessWait::ForEnd,
         CONFIRM_TIMEOUT,
     )
     .map_err(|failure| kept(!panes.is_empty())(failure.message))?;
-    // A pane opened in the folder while the start's closed is the
-    // operator's, and keeps it.
-    let arrived = panes_in(connector, made.checkout).map_err(kept(!panes.is_empty()))?;
-    if !arrived.is_empty() {
-        return Err(kept(!panes.is_empty())(
-            "a pane opened in the worktree while it was being removed".into(),
-        ));
-    }
     remove_on_host(host, removal)
         .map(drop)
         .map_err(|failure| kept(!panes.is_empty())(failure.detail))
-}
-
-/// The panes Herdr runs anywhere in the folder `checkout`, by their working
-/// or foreground folder.
-fn panes_in(connector: &dyn ApiConnector, checkout: &str) -> Result<Vec<String>, String> {
-    let snapshot = control_request(connector, "session.snapshot", json!({}))?;
-    let panes = snapshot
-        .pointer("/snapshot/panes")
-        .and_then(Value::as_array)
-        .ok_or("session.snapshot is missing snapshot.panes")?;
-    panes
-        .iter()
-        .filter(|pane| {
-            ["cwd", "foreground_cwd"].into_iter().any(|key| {
-                pane.get(key)
-                    .and_then(Value::as_str)
-                    .is_some_and(|cwd| within(checkout, cwd))
-            })
-        })
-        .map(|pane| {
-            pane.get("pane_id")
-                .and_then(Value::as_str)
-                .filter(|id| !id.is_empty())
-                .map(str::to_owned)
-                .ok_or_else(|| "session.snapshot has an invalid pane_id".to_owned())
-        })
-        .collect()
-}
-
-/// Whether `path` is the folder `root` or inside it, `/` and `\` both
-/// separating names and a trailing one ignored.
-fn within(root: &str, path: &str) -> bool {
-    let names = |path: &str| {
-        path.split(['/', '\\'])
-            .filter(|name| !name.is_empty() && *name != ".")
-            .map(str::to_owned)
-            .collect::<Vec<_>>()
-    };
-    let (root, path) = (names(root), names(path));
-    !root.is_empty() && path.starts_with(&root)
 }
 
 /// Asks the repository's host whether `branch` may be created; nothing is
@@ -3095,6 +3050,24 @@ pub(crate) mod test_worktree {
                 .is_empty()
         }
     }
+    /// A process standing for a pane's shell, working in `cwd` until it is
+    /// dropped.
+    pub(crate) fn shell_in(cwd: &str) -> hide_platform::process::OwnedChild {
+        let mut command = if cfg!(windows) {
+            let mut command = std::process::Command::new("cmd");
+            command.args(["/C", "ping -n 120 127.0.0.1 >NUL"]);
+            command
+        } else {
+            let mut command = std::process::Command::new("sleep");
+            command.arg("120");
+            command
+        };
+        command
+            .current_dir(cwd)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null());
+        hide_platform::process::OwnedChild::spawn(&mut command).unwrap()
+    }
 }
 
 #[cfg(test)]
@@ -4350,31 +4323,41 @@ mod tests {
         assert_eq!(outcome.shell, crate::agent_start::ShellStart::Plain);
     }
 
-    /// A Herdr whose snapshot lists `panes` (id and folder) and that closes
-    /// what it is asked to; once a pane closes, `arriving` opens.
-    fn panes_herdr(
+    /// A Herdr running the start's pane `w2:p1`, whose shell is a real
+    /// process working in `checkout` that ends when the pane is closed; on
+    /// that close, `arriving` names a folder where another process starts
+    /// working, as a pane another session opened there would.
+    #[allow(clippy::type_complexity)] // the fake and the processes it started
+    fn pane_herdr(
         name: &str,
-        panes: Vec<(&'static str, String)>,
-        arriving: Option<(&'static str, String)>,
-    ) -> crate::fake_herdr::FakeHerdr {
-        let panes = Mutex::new(panes);
+        checkout: &str,
+        arriving: Option<String>,
+    ) -> (
+        crate::fake_herdr::FakeHerdr,
+        Arc<Mutex<Vec<hide_platform::process::OwnedChild>>>,
+    ) {
+        let shell = Mutex::new(Some(test_worktree::shell_in(checkout)));
+        let pid = shell.lock().unwrap().as_ref().unwrap().id();
+        let others = Arc::new(Mutex::new(Vec::new()));
+        let started = others.clone();
         let mut arriving = arriving;
-        crate::fake_herdr::FakeHerdr::start(name, move |method, params| match method {
-            "session.snapshot" => json!({"type": "session_snapshot", "snapshot": {
-                "version": "fixture", "protocol": hide_herdr_client::HERDR_PROTOCOL_REVISION,
-                "workspaces": [], "tabs": [], "layouts": [], "agents": [],
-                "panes": panes.lock().unwrap().iter().map(|(pane, cwd)| json!({
-                    "pane_id": pane, "workspace_id": "w2", "tab_id": "w2:t1",
-                    "terminal_id": format!("terminal-{pane}"), "focused": false,
-                    "agent_status": "idle", "revision": 1, "cwd": cwd})).collect::<Vec<_>>()}}),
+        let herdr = crate::fake_herdr::FakeHerdr::start(name, move |method, _| match method {
+            "pane.process_info" => json!({"type": "pane_process_info", "process_info": {
+                "pane_id": "w2:p1", "shell_pid": pid, "foreground_process_group_id": pid,
+                "foreground_processes": [{"pid": pid, "name": "sh"}]}}),
             "pane.close" => {
-                let mut panes = panes.lock().unwrap();
-                panes.retain(|(pane, _)| params["pane_id"] != *pane);
-                panes.extend(arriving.take());
+                shell.lock().unwrap().take();
+                if let Some(cwd) = arriving.take() {
+                    started.lock().unwrap().push(test_worktree::shell_in(&cwd));
+                }
                 json!({"type": "ok"})
             }
+            "session.snapshot" => json!({"type": "session_snapshot", "snapshot": {
+                "version": "fixture", "protocol": hide_herdr_client::HERDR_PROTOCOL_REVISION,
+                "workspaces": [], "tabs": [], "layouts": [], "agents": [], "panes": []}}),
             other => panic!("unexpected {other}"),
-        })
+        });
+        (herdr, others)
     }
 
     fn discard(
@@ -4384,7 +4367,6 @@ mod tests {
         discard_made_worktree(
             &herdr.connector(),
             &hide_node::Local::of_process(),
-            false,
             &MadeWorktree {
                 repository_root: &made.repo,
                 checkout: &made.checkout,
@@ -4411,11 +4393,7 @@ mod tests {
     fn a_made_worktree_goes_with_its_pane_and_keeps_its_branch() {
         for existing in [false, true] {
             let made = test_worktree::MadeFixture::new("topic", existing);
-            let herdr = panes_herdr(
-                "made-worktree-removed",
-                vec![("w2:p1", made.checkout.clone())],
-                None,
-            );
+            let (herdr, _) = pane_herdr("made-worktree-removed", &made.checkout, None);
             discard(&herdr, &made).unwrap();
             assert!(!made.present(), "existing branch: {existing}");
             assert!(made.has_branch(), "existing branch: {existing}");
@@ -4443,11 +4421,7 @@ mod tests {
         for (name, make) in work {
             let made = test_worktree::MadeFixture::new("topic", false);
             make(&made.checkout);
-            let herdr = panes_herdr(
-                "made-worktree-work",
-                vec![("w2:p1", made.checkout.clone())],
-                None,
-            );
+            let (herdr, _) = pane_herdr("made-worktree-work", &made.checkout, None);
             let kept = discard(&herdr, &made).expect_err(name);
             assert!(!kept.pane_closed, "{name}");
             assert!(made.present() && made.has_branch(), "{name}");
@@ -4455,41 +4429,30 @@ mod tests {
         }
     }
 
-    /// Another pane anywhere in the folder, a subfolder included, keeps the
-    /// worktree, whether it was there first or opened while the start's
-    /// own pane was closing.
+    /// Another pane working in the folder keeps the worktree where it was,
+    /// whether it was there before the removal or opened while the start's
+    /// own pane was closing, and in a subfolder too; the host finds its
+    /// process once the folder is moved aside (on Windows, its process
+    /// refuses the move).
     #[test]
     fn a_made_worktree_another_pane_works_in_is_kept() {
         let made = test_worktree::MadeFixture::new("topic", false);
-        let inside = format!("{}/src/", made.checkout);
-        let herdr = panes_herdr(
-            "made-worktree-other-pane",
-            vec![("w2:p1", made.checkout.clone()), ("w2:p9", inside.clone())],
-            None,
-        );
+        let inside = Path::new(&made.checkout).join("src");
+        std::fs::create_dir(&inside).unwrap();
+        let inside = inside.to_string_lossy().into_owned();
+        let other = test_worktree::shell_in(&inside);
+        let (herdr, _) = pane_herdr("made-worktree-other-pane", &made.checkout, None);
         let kept = discard(&herdr, &made).expect_err("another pane");
-        assert!(!kept.pane_closed);
-        assert!(closed(&herdr).is_empty());
+        assert!(kept.pane_closed, "the start's own pane closes");
         assert!(made.present());
+        drop(other);
 
-        let herdr = panes_herdr(
-            "made-worktree-arriving-pane",
-            vec![("w2:p1", made.checkout.clone())],
-            Some(("w2:p9", inside)),
-        );
+        let (herdr, arrived) =
+            pane_herdr("made-worktree-arriving-pane", &made.checkout, Some(inside));
         let kept = discard(&herdr, &made).expect_err("a pane arrived");
         assert!(kept.pane_closed);
-        assert_eq!(closed(&herdr), ["w2:p1"]);
+        assert_eq!(arrived.lock().unwrap().len(), 1);
         assert!(made.present());
-    }
-
-    #[test]
-    fn a_folder_is_within_itself_and_its_subfolders_only() {
-        assert!(within("/r/wt", "/r/wt"));
-        assert!(within("/r/wt/", "/r/wt/src"));
-        assert!(within("C:\\r\\wt", "C:/r/wt/src"));
-        assert!(!within("/r/wt", "/r/wt-2"));
-        assert!(!within("/r/wt", "/r"));
     }
 
     #[test]

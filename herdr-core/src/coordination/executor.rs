@@ -984,7 +984,6 @@ fn spawn(
                         discard_attempt_worktree(
                             connector.as_ref(),
                             node.as_deref(),
-                            on_node,
                             &reserved,
                             &checkout,
                             head,
@@ -1077,7 +1076,6 @@ fn spawn(
             close_unstarted_attempts(
                 connector.as_ref(),
                 node.as_deref(),
-                on_node,
                 &*state(client)?,
                 &reserved,
                 &observed,
@@ -1396,7 +1394,6 @@ fn pane_terminal(connector: &dyn ApiConnector, pane: &str) -> Result<String, Str
 fn close_unstarted_attempts(
     connector: &dyn ApiConnector,
     node: Option<&dyn crate::node_access::NodeLink>,
-    on_node: bool,
     ledger: &crate::delivery::ledger::Ledger,
     reserved: &SpawnRecord,
     observed: &[ProjectedAgent],
@@ -1431,7 +1428,6 @@ fn close_unstarted_attempts(
                 discard_attempt_worktree(
                     connector,
                     node,
-                    on_node,
                     record,
                     checkout,
                     head,
@@ -1465,7 +1461,6 @@ fn close_unstarted_attempts(
 fn discard_attempt_worktree(
     connector: &dyn ApiConnector,
     node: Option<&dyn crate::node_access::NodeLink>,
-    on_node: bool,
     attempt: &SpawnRecord,
     checkout: &str,
     head: &str,
@@ -1481,7 +1476,6 @@ fn discard_attempt_worktree(
             crate::live::discard_made_worktree(
                 connector,
                 node,
-                on_node,
                 &crate::live::MadeWorktree {
                     repository_root: &attempt.repo,
                     checkout,
@@ -2160,9 +2154,13 @@ mod tests {
     /// its shell alone, until it is closed; `gone` makes it a pane Herdr no
     /// longer has.
     fn attempt_worktree_herdr(name: &str, checkout: String, gone: bool) -> FakeHerdr {
-        let closed = std::sync::atomic::AtomicBool::new(gone);
+        // The pane's shell is a real process working in the folder, which
+        // ends when the pane closes.
+        let shell =
+            std::sync::Mutex::new((!gone).then(|| crate::live::test_worktree::shell_in(&checkout)));
+        let pid = shell.lock().unwrap().as_ref().map_or(0, |shell| shell.id());
         FakeHerdr::start_with_errors(name, move |method, params| {
-            let open = !closed.load(Ordering::SeqCst);
+            let open = shell.lock().unwrap().is_some();
             Ok(match method {
                 "session.snapshot" => json!({"type": "session_snapshot", "snapshot": {
                     "version": "fixture", "protocol": hide_herdr_client::HERDR_PROTOCOL_REVISION,
@@ -2178,11 +2176,11 @@ mod tests {
                     "terminal_id": "t1", "workspace_id": "w2", "tab_id": "w2:t1",
                     "focused": false, "agent_status": "idle", "revision": 1}}),
                 "pane.process_info" => json!({"type": "pane_process_info", "process_info": {
-                    "pane_id": params["pane_id"], "shell_pid": 4100,
-                    "foreground_process_group_id": 4100,
-                    "foreground_processes": [{"pid": 4100, "name": "zsh"}]}}),
+                    "pane_id": params["pane_id"], "shell_pid": pid,
+                    "foreground_process_group_id": pid,
+                    "foreground_processes": [{"pid": pid, "name": "zsh"}]}}),
                 "pane.close" => {
-                    closed.store(true, Ordering::SeqCst);
+                    shell.lock().unwrap().take();
                     json!({"type": "ok"})
                 }
                 other => panic!("unexpected {other}"),
@@ -2223,7 +2221,6 @@ mod tests {
             close_unstarted_attempts(
                 &herdr.connector(),
                 Some(&host),
-                false,
                 &attempts.ledger,
                 &current,
                 &[],
@@ -2301,7 +2298,6 @@ mod tests {
         close_unstarted_attempts(
             &herdr.connector(),
             None,
-            true,
             &attempts.ledger,
             &current,
             &observed,
@@ -2328,14 +2324,7 @@ mod tests {
             &[],
         );
         let ((), records) = crate::diagnostics::capture(|| {
-            close_unstarted_attempts(
-                &herdr.connector(),
-                None,
-                true,
-                &attempts.ledger,
-                &current,
-                &[],
-            );
+            close_unstarted_attempts(&herdr.connector(), None, &attempts.ledger, &current, &[]);
         });
         assert_eq!(closed_panes(&herdr), ["w2:p1"]);
         let outcome = |attempt: &SpawnRecord| {

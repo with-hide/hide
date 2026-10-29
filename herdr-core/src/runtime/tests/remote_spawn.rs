@@ -81,12 +81,22 @@ impl NodeLink for Node {
                 Value::Null
             }
             // The removal of a worktree the spawn made, which the host
-            // rechecks first and runs without force.
+            // rechecks first and runs without force; what the host keeps is
+            // its own removal's, which `hide-host`'s tests run on a
+            // repository.
             Call::Git {
                 command: hide_node_link::git::GitCommand::RefCommit { .. },
                 ..
             } => json!("c0ffee\n"),
             Call::WorktreeRemovalCheck { .. } => Value::Null,
+            // The device's pane processes, read so its shell ends before the
+            // removal: the shell is gone once the pane closes.
+            Call::ProcessDescendants { .. } => json!([]),
+            Call::ProcessStarts { pids } => json!(
+                pids.iter()
+                    .map(|_| json!({"state": "gone"}))
+                    .collect::<Vec<_>>()
+            ),
             Call::WorktreeRemove { removal } => {
                 let mut worktree = self.worktree.lock().unwrap();
                 worktree.exists = false;
@@ -123,15 +133,14 @@ fn agent_row(session: Option<&str>, shows: bool) -> Value {
 }
 
 /// The device's worktree, as the tests that `follow` it see it: whether it
-/// exists, whether the spawn's pane is open in it and whether another pane
-/// works there, how many times it was made and each removal the node ran.
+/// exists, whether the spawn's pane is open in it, how many times it was
+/// made and each removal the node ran.
 /// Other tests leave Herdr's worktree list empty and its snapshot unanswered.
 #[derive(Default)]
 struct Worktree {
     follow: bool,
     exists: bool,
     pane_open: bool,
-    other_pane: bool,
     created: usize,
     removed: Vec<hide_node_link::worktrees::ConfirmedRemoval>,
 }
@@ -246,10 +255,7 @@ fn device_herdr(
                     "tab_id": "w2:t2", "terminal_id": format!("terminal-{pane}"),
                     "focused": false, "agent_status": "idle", "revision": 1, "cwd": WORKTREE})
                 };
-                let panes = [
-                    worktree.pane_open.then(|| pane("w2:p1")),
-                    worktree.other_pane.then(|| pane("w2:p9")),
-                ];
+                let panes = [worktree.pane_open.then(|| pane("w2:p1"))];
                 json!({"type": "session_snapshot", "snapshot": {
                     "version": "fixture", "protocol": hide_herdr_client::HERDR_PROTOCOL_REVISION,
                     "workspaces": [], "tabs": [], "layouts": [], "agents": [],
@@ -792,25 +798,6 @@ fn a_spawn_refused_after_making_its_worktree_leaves_none_behind() {
         .collect::<Vec<_>>();
     assert_eq!(removed, [(WORKTREE, Some("c0ffee"), None, false); 2]);
     assert_eq!(spawner.count("agent.start"), 0);
-}
-
-/// A refused spawn's worktree that another pane works in is the operator's
-/// now: it is kept with its branch, and no pane of it is closed.
-#[test]
-fn a_refused_spawns_worktree_another_pane_works_in_is_kept() {
-    let spawner = spawner();
-    {
-        let mut worktree = spawner.node.worktree.lock().unwrap();
-        worktree.follow = true;
-        worktree.other_pane = true;
-    }
-    spawner.node.trust_fails.store(1, Ordering::SeqCst);
-    spawner
-        .spawn(Some("here"), Some(DEVICE), "untrusted")
-        .expect_err("refused");
-    let worktree = spawner.node.worktree.lock().unwrap();
-    assert!(worktree.exists && worktree.pane_open && worktree.removed.is_empty());
-    assert_eq!(spawner.count("pane.close"), 0);
 }
 
 /// B4: without `--parent` the device's agent is the operator's, unwatched,
