@@ -6,6 +6,7 @@ import { DependencyGraphView, type EdgeLook, type OverlayEdge } from "./Dependen
 import type { GraphEdge } from "./dependencyLayout";
 import { formatElapsed, useElapsed, useMinuteClock } from "./components/elapsed";
 import { MissionNodeMark } from "./components/mission-node-mark";
+import { PrMark } from "./components/pr-mark";
 import { HEAD_FILL, ProgressCells } from "./components/mission-tone";
 import { Hint } from "./components/ui/tooltip";
 import { useInterfaceTranslation } from "./i18n/client";
@@ -311,7 +312,7 @@ function NodeCard({ mission, node, selected, dimmed, onSelect, events, end }: { 
   const moving = look === "working" || look === "review";
   // The worker's own plan says where it is, else the Conductor's `--line` (PRD hide-plan B16, D-18).
   const line = cardLine(mission, node, moving && node.plan ? planNowLine(node.plan, t) : null, t);
-  const result = cardResult(node, t);
+  const result = cardResult(node, mission.github_stale, t);
   const tally = criteriaTally(mission, node);
   const landing = landingLeft(mission, node);
   const times = useNodeTimes(mission, node, events, end);
@@ -389,8 +390,8 @@ function NodeCard({ mission, node, selected, dimmed, onSelect, events, end }: { 
   );
 }
 
-/** What a card names as its result (B28): its pull request's number, its branch, or its commit on main, whichever the record holds. */
-function cardResult(node: MissionNode, t: TFunction<"translation">): ReactNode {
+/** What a card names as its result (B28): its pull request's mark, its branch, or its commit on main, whichever the record holds. */
+function cardResult(node: MissionNode, stale: boolean, t: TFunction<"translation">): ReactNode {
   const result = nodeResult(node);
   // An outside node's pull request or branch carries `↗` in every state (B19).
   if (node.kind === "external" && node.external) {
@@ -405,9 +406,11 @@ function cardResult(node: MissionNode, t: TFunction<"translation">): ReactNode {
   }
   if (!result) return null;
   switch (result.kind) {
-    // A card's number is plain: the PR state's own colours belong to the panel, so the card's colour says only its state (D-02).
+    // A pull request Hide read carries the one PR mark, its state's icon and colour, as the panel does; one it never read is a plain number.
     case "pr":
-      return <span className="shrink-0 font-mono text-caption text-muted-foreground" data-node-pr={result.number}>#{result.number}</span>;
+      return result.state
+        ? <PrMark state={result.state} number={result.number} stale={stale} data-node-pr={result.number} />
+        : <span className="shrink-0 font-mono text-caption text-muted-foreground" data-node-pr={result.number}>#{result.number}</span>;
     case "commit":
       return <span className="shrink-0 font-mono text-caption text-muted-foreground" title={result.commit} data-node-commit={result.commit}>{t("mission.result.main", { commit: shortCommit(result.commit) })}</span>;
     case "branch":
