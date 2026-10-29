@@ -302,7 +302,13 @@ pub(super) fn sign_in(
                             .then_some(Refusal::NotAllowed)
                     }),
                 proxied: dial.resolved.proxied(),
-                prompts_unavailable: !version.asks_through_askpass(),
+                asking: if !version.asks_through_askpass() {
+                    openssh::Asking::OldSsh
+                } else if pipe.desk.is_some() {
+                    openssh::Asking::Desk
+                } else {
+                    openssh::Asking::Nobody
+                },
                 browser_waited: pipe.browser_expired,
             });
             if failure.problem == SshProblem::Unclassified && stderr.is_empty() {
