@@ -16,7 +16,7 @@ import { RowLetterMark } from "./letter-mark";
 import { cn } from "../lib/utils";
 import type { AgentRow } from "../snapshot";
 import type { AgentMenuItem } from "../workspaceManage";
-import { AskLine, DescendantMark, TreeChevron, TreeRails, type TreePlace } from "./agent-tree";
+import { AskLine, TreeChevron, TreeRails, type TreePlace } from "./agent-tree";
 import { AgentPrHover, PrHoverCard, useAgentStaleness } from "./pr-mark";
 import { ownPulls, type SessionPull } from "../prMark";
 import { AgentTreePopover } from "./agent-tree-popover";
@@ -74,12 +74,13 @@ export type SidebarTreeSlot = {
  * sidebar-readability D-2..D-6; agent-hierarchy-screens D-12, D-37 to D-40,
  * B10 to B17). Line one is the status mark, the provider mark, the stable
  * task name, a branch chip when a delegated row's checkout differs from its
- * parent's, the device chip, the row's own PR icon, the descendant mark
- * while folded, and the elapsed time. In a drawn tree (`tree`) the rails and
+ * parent's, the device chip, the row's own PR icon, the mission chip, and
+ * the elapsed time; a raised descendant shows on the root's line, not as a
+ * count (needs-you-cleanup B7). In a drawn tree (`tree`) the rails and
  * the chevron lane stand left of the marks, and a tree row is one line but
  * for a child on another device, whose second line names that device. A
- * Needs You row (`ask`) has no PR or mark: its second line is the verb and
- * what to do. Elsewhere a request or news takes the second line; a quiet
+ * Needs You row (`ask`) has no PR icon, and a mission chip only when its ask
+ * is that mission's decision: its second line is the verb and what to do. Elsewhere a request or news takes the second line; a quiet
  * sentence is only in the tooltip. `place` is the Agents list's context
  * line; Projects passes none because the rows above say it.
  *
@@ -156,7 +157,6 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
   const resting = tree && depth === 0 && agent.resolved;
   const hint = [resting ? t("sidebar.resolvedHint", { label: title }) : title, agentProductName(agent.agent_kind), recordWords(t, agent), agent.record_summary, offline ?? markWords(t, agent), offline ? null : rowSentence(t, agent), place].filter(Boolean).join("\n");
   const staleness = ask ? undefined : agentPrStaleness;
-  const folded = tree ? tree.open !== true : true;
   const onKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
     if (!tree || tree.open === null || event.metaKey || event.ctrlKey || event.altKey) return;
     if (tree.popover) {
@@ -235,9 +235,9 @@ export const SidebarAgentRow = memo(function SidebarAgentRow({
               <DeviceChip label={device} className="pointer-events-none max-w-2/5" />
             ) : null}
             {ask ? null : <AgentPrHover agent={agent} family={family} staleness={staleness} card={(icon) => <PrHoverCard agent={agent} pulls={family ?? ownPulls(agent)} staleness={staleness} onOpenPullRequest={onOpenPullRequest}>{icon}</PrHoverCard>} />}
-            {ask || !folded ? null : <span className="pointer-events-none flex shrink-0"><DescendantMark agent={agent} /></span>}
             {agent.letters_waiting ? <RowLetterMark /> : null}
-            {onOpenMission && !ask ? <MissionChip agent={agent} onOpen={onOpenMission} /> : null}
+            {/* The row whose question is its mission's decision keeps the chip that says which mission (needs-you-cleanup D-12). */}
+            {onOpenMission && (!ask || agent.state.ask?.subject?.cause === "mission_decision") ? <MissionChip agent={agent} onOpen={onOpenMission} /> : null}
             {/* A time the core never measured draws nothing, and nothing stands in for it. */}
             <Elapsed since={agent.last_prompt_at_unix_ms} aria-hidden="true" className="pointer-events-none shrink-0 font-mono text-caption text-muted-foreground" data-agent-elapsed="true" />
             {/* Every row ends in the fold slot, so every time ends on one column (sidebar-readability D-3). */}

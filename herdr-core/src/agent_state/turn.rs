@@ -152,25 +152,56 @@ pub(crate) fn demand_verb(agent: &SidebarAgentSnapshot) -> Option<super::escalat
     }
 }
 
+/// When the row's own ask began: the core's question laid on it, else the
+/// request the label read.
+fn own_ask_since(agent: &SidebarAgentSnapshot) -> Option<u64> {
+    agent.laid_since_unix_ms.or_else(|| {
+        agent
+            .request
+            .as_ref()
+            .map(|request| request.verb_since_unix_ms)
+    })
+}
+
+/// Whether a root's lead raised descendant waited longer than the row's own
+/// ask, so the row leads with it (needs-you-cleanup D-13). Without its own
+/// ask the raise leads; an undated one never outranks a dated own ask.
+fn raised_leads(agent: &SidebarAgentSnapshot) -> bool {
+    let Some(lead) = agent.raised.first() else {
+        return false;
+    };
+    if demand_verb(agent).is_none() {
+        return true;
+    }
+    match (lead.since_unix_ms, own_ask_since(agent)) {
+        (Some(raised), Some(own)) => raised < own,
+        _ => false,
+    }
+}
+
 fn ask_of(agent: &SidebarAgentSnapshot, needs_you: bool) -> Option<Ask> {
     // A block is not asked of the operator in a verb: its row draws the
     // cause instead (agent-blocked-state B1).
     if !needs_you || (agent.demand == "error" && agent.unread) {
         return None;
     }
-    if let Some(verb) = demand_verb(agent) {
+    let own = demand_verb(agent);
+    // Everything else that waits on the operator under this root is counted
+    // behind the lead, `외 N건` (D-13).
+    let total = agent.raised.len() + usize::from(own.is_some()) + agent.laid_more;
+    if let Some(verb) = own.filter(|_| !raised_leads(agent)) {
         return Some(Ask {
             verb,
             what: agent.detail.clone(),
-            more: agent.raised.len(),
-            subject: agent.ask_subject,
+            more: total - 1,
+            subject: agent.ask_subject.clone(),
         });
     }
     agent.raised.first().map(|lead| Ask {
         verb: lead.verb,
         what: lead.what.clone(),
-        more: agent.raised.len() - 1,
-        subject: lead.subject,
+        more: total - 1,
+        subject: lead.subject.clone(),
     })
 }
 
@@ -240,7 +271,7 @@ pub(crate) fn row_state(agent: &SidebarAgentSnapshot) -> RowState {
                 RowLine::new(text, "quiet", subtle)
             }
         });
-    if let Some(subject) = agent.ask_subject.filter(|_| asking) {
+    if let Some(subject) = agent.ask_subject.clone().filter(|_| asking) {
         // The core's own question: the shell words it (hide-plan B14).
         line = Some(RowLine {
             subject: Some(subject),
@@ -376,10 +407,12 @@ pub(crate) fn row_state(agent: &SidebarAgentSnapshot) -> RowState {
         request_todo,
         descendant_asking: agent.descendant_counts.question + agent.descendant_counts.approval,
         request_since: if needs_you
-            && demand_verb(agent).is_none()
+            && raised_leads(agent)
             && let Some(lead) = agent.raised.first()
         {
             lead.since_unix_ms
+        } else if needs_you && agent.laid_since_unix_ms.is_some() {
+            agent.laid_since_unix_ms
         } else if request_todo {
             agent
                 .request
@@ -692,12 +725,15 @@ pub(crate) fn agent_second_line(
 pub(crate) fn native_question_line(
     turn: Option<&hide_session::turns::UserTurnFact>,
 ) -> Option<String> {
-    use crate::sidebar::MAX_EXPECTED_REPLY_CHARS;
     let turn = turn.filter(|turn| turn.kind == hide_session::turns::UserTurnKind::Question)?;
-    let line = turn
-        .content
-        .as_ref()?
-        .text()
+    first_line_cut(&turn.content.as_ref()?.text())
+}
+
+/// The first line of `text`, one line and cut on a character boundary to
+/// the width of an `expected_reply`, ending in `…` when cut.
+fn first_line_cut(text: &str) -> Option<String> {
+    use crate::sidebar::MAX_EXPECTED_REPLY_CHARS;
+    let line = text
         .lines()
         .find_map(|line| crate::display_text::one_line(line, MAX_EXPECTED_REPLY_CHARS + 1))?;
     if line.chars().count() <= MAX_EXPECTED_REPLY_CHARS {
@@ -812,8 +848,14 @@ pub(crate) fn derive_from_axes(agent: &mut SidebarAgentSnapshot) {
     let question = native_question_line(agent.user_turn.as_ref());
     // A question the core asks for the agent is said by its subject, never
     // by the label's sentence about the work around it.
-    let (status_word_visible, detail) = if agent.ask_subject.is_some() {
-        (true, None)
+    let (status_word_visible, detail) = if let Some(subject) = &agent.ask_subject {
+        // A mission decision's line is also its sentence, which a surface
+        // that does not know the subject draws instead (D-12).
+        let line = match subject {
+            crate::model::AskSubject::MissionDecision { line } => first_line_cut(line),
+            crate::model::AskSubject::PlanReview { .. } => None,
+        };
+        (true, line)
     } else {
         agent_second_line(
             group,
@@ -1121,7 +1163,7 @@ pub mod push {
                         state: announced,
                         status_code: Some(agent.status_code.clone()),
                         detail: agent.detail.clone(),
-                        subject: agent.subject,
+                        subject: agent.subject.clone(),
                         place: agent
                             .place
                             .as_deref()

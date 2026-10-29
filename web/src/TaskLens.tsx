@@ -10,7 +10,7 @@ import { agentProductName } from "./agentAdapters";
 import { backgroundTail, recordWords, forkLabel, leadWord, lineParts, markTone, markWords, rowDimmed, rowLine, rowSentence, stateLine, type LineParts } from "./agentRow";
 import { AgentForkMark } from "./components/fork-mark";
 import { RevisitStar, starred } from "./components/revisit-mark";
-import { askParts, DescendantMark, TreeChevron, TreeRails, type TreePlace } from "./components/agent-tree";
+import { askParts, TreeChevron, TreeRails, type TreePlace } from "./components/agent-tree";
 import { childrenOf } from "./components/agent-tree-popover";
 import { Elapsed } from "./components/elapsed";
 import { AgentPrMark, useAgentStaleness } from "./components/pr-mark";
@@ -396,7 +396,6 @@ function TaskRow({ entry, family, open, selected, number, showProject, disabled,
             <AgentForkMark agent={agent} />
             {starred(agent) && !starMark ? <RevisitStar className="group-hover/task:hidden group-focus-within/task:hidden hoverless:hidden" /> : null}
           </button>
-          {open ? null : <DescendantMark agent={agent} />}
           <AgentPrMark agent={agent} family={family} staleness={staleness} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: project?.id ?? null, url: pull.url, number: pull.number })} onExternal={(pull) => actions.openLink(pull.url, true)} />
           <MissionChip agent={agent} onOpen={(id) => actions.openMission(id)} />
           <TimeSlot agent={agent} record={record} menu={menu} revisit={{ on: starred(agent), disabled, actions }} />
@@ -668,7 +667,6 @@ function ChildRow({ parent, child, depth, place, open, selected, disabled, actio
             <AgentForkMark agent={child} />
           </button>
           {device ? <span className="flex shrink-0 items-center gap-xxs rounded-xs border border-border px-xxs text-micro text-muted-foreground" data-task-device={device}><ServerIcon aria-hidden="true" className="size-(--size-icon-sm)" />{device}</span> : null}
-          {open ? null : <DescendantMark agent={child} />}
           <AgentPrMark agent={child} staleness={staleness} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: workspace, url: pull.url, number: pull.number })} onExternal={(pull) => actions.openLink(pull.url, true)} />
           <TimeSlot agent={child} record={record} menu={menu} />
         </div>

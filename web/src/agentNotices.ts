@@ -10,7 +10,7 @@
 import { useEffect } from "react";
 import type { Actions } from "./actions";
 import { statusText } from "./agentStatus";
-import { askSubjectText } from "./askSubject";
+import { askSubjectLead, askSubjectText } from "./askSubject";
 import { AGENT_NOTICE_PREFIX } from "./firstRun";
 import type { AgentNotice } from "./generated/hided-ws";
 import { hostBridge } from "./host";
@@ -85,7 +85,7 @@ export function useAgentNotifications(actions: Actions) {
       for (const notice of notices) {
         if (!(notice.state === "needs_you" ? needsYouEnabled : doneEnabled)) continue;
         // The row's own word leads, as on its line (status-marks B23); the section name only when the core sent none.
-        const word = notice.status_code ? statusText(t, notice.status_code) : t(notice.state === "needs_you" ? "firstRun.notice.needsYou" : "firstRun.notice.done");
+        const word = askSubjectLead(t, notice.subject) ?? (notice.status_code ? statusText(t, notice.status_code) : t(notice.state === "needs_you" ? "firstRun.notice.needsYou" : "firstRun.notice.done"));
         const detail = notice.subject ? askSubjectText(t, notice.subject) : notice.detail;
         const state = detail ? `${word} · ${detail}` : word;
         const body = notice.place ? t("firstRun.notice.body", { state, project: notice.place }) : state;

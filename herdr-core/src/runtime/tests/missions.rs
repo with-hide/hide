@@ -3587,3 +3587,109 @@ fn a_node_followed_while_a_read_is_out_is_read_once_that_read_answers() {
             .expect("the node planned during the read was read before the deadline");
     }
 }
+
+/// The `sender` pane's row at rest, a Codex session `sender-session`.
+fn conductor_row() -> crate::model::SidebarAgentSnapshot {
+    let payload: SessionSnapshotPayload = serde_json::from_value(json!({"agents": [
+        {"pane_id": "sender", "workspace_id": "w1", "tab_id": "w1:t1", "terminal_id": "t-sender",
+         "revision": 1, "focused": false, "agent_status": "idle", "agent": "codex",
+         "name": "sender", "cwd": PROJECT, "state_change_seq": 1},
+    ]}))
+    .unwrap();
+    let mut row = crate::sidebar::project_agents(payload).agents.remove(0);
+    row.session_id = Some("sender-session".into());
+    row
+}
+
+fn conductor_shown(runtime: &mut Runtime) -> crate::model::SidebarAgentSnapshot {
+    runtime.snapshot_delta_payload(0);
+    runtime.snapshot.navigator.agents[0].clone()
+}
+
+#[test]
+fn a_missions_open_decision_waits_on_the_operator_on_its_resting_conductors_row() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    runtime.snapshot.navigator.agents = vec![conductor_row()];
+    running(&mut runtime);
+    let resting = conductor_shown(&mut runtime);
+    assert_ne!(resting.group, "needs_you");
+
+    // B1: the decision stands on the row as a question it carries the line of.
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Skip the check line?"}),
+    )
+    .unwrap();
+    let asking = conductor_shown(&mut runtime);
+    let decision = crate::model::AskSubject::MissionDecision {
+        line: "Skip the check line?".into(),
+    };
+    assert_eq!(
+        (
+            asking.group.as_str(),
+            asking.ask_subject.clone(),
+            asking.detail.as_deref()
+        ),
+        (
+            "needs_you",
+            Some(decision.clone()),
+            Some("Skip the check line?")
+        )
+    );
+    let wire = serde_json::to_value(&asking).unwrap();
+    assert_eq!(
+        wire["state"]["ask"]["subject"],
+        json!({"cause": "mission_decision", "line": "Skip the check line?"})
+    );
+
+    // B3: a new decision replaces the line.
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Which base?"}),
+    )
+    .unwrap();
+    assert_eq!(
+        conductor_shown(&mut runtime).ask_subject,
+        Some(crate::model::AskSubject::MissionDecision {
+            line: "Which base?".into()
+        })
+    );
+
+    // B3: cleared, the row shows its own state again at once.
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": null}),
+    )
+    .unwrap();
+    let cleared = conductor_shown(&mut runtime);
+    assert_eq!(
+        (cleared.ask_subject, cleared.user_turn, cleared.group),
+        (None, None, resting.group.clone())
+    );
+
+    // B2: a working Conductor shows its work; the decision waits for it to stop.
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Ship it?"}),
+    )
+    .unwrap();
+    let mut working = vec![conductor_row()];
+    working[0].activity = "working".into();
+    runtime.lay_plan_reviews(crate::node::TEST_NODE, &mut working);
+    assert!(working[0].ask_subject.is_none());
+
+    // B3: a closed mission takes its decision off the row.
+    without_gate(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "close", "end": "cancelled"}),
+    )
+    .unwrap();
+    assert_eq!(conductor_shown(&mut runtime).ask_subject, None);
+}

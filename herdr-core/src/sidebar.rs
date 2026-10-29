@@ -809,6 +809,8 @@ fn project_agent(agent: SessionAgentPayload) -> Result<SidebarAgentSnapshot, Str
             .as_ref()
             .and_then(|facts| facts.user_turn.clone()),
         ask_subject: None,
+        laid_since_unix_ms: None,
+        laid_more: 0,
         status_word_visible: true,
         changed_at_unix_ms: agent.changed_at_unix_ms,
         last_prompt_at_unix_ms: agent.facts.as_ref().and_then(|facts| {

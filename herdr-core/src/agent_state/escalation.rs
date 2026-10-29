@@ -312,6 +312,7 @@ pub(crate) fn lift(
             what,
             subject: row
                 .ask_subject
+                .clone()
                 .filter(|_| verb == Verb::Answer && escalation.cause == Cause::ChildBlocked),
             raised_pane_id: row.pane_id.clone(),
             origin_title: row.identity_label.clone(),
@@ -501,12 +502,12 @@ mod tests {
             content: None,
         });
         let subject = crate::model::AskSubject::PlanReview { steps: 4 };
-        rows[2].ask_subject = Some(subject);
+        rows[2].ask_subject = Some(subject.clone());
         lift(&mut rows, |_| None);
         let ask = &rows[0].raised[0];
         assert_eq!(
-            (ask.verb, ask.what.as_deref(), ask.subject),
-            (Verb::Answer, None, Some(subject))
+            (ask.verb, ask.what.as_deref(), ask.subject.clone()),
+            (Verb::Answer, None, Some(subject.clone()))
         );
         rows[0].group = "needs_you".into();
         let state = super::super::turn::row_state(&rows[0]);

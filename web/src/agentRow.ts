@@ -9,7 +9,7 @@ import { hideAiWords } from "./hideAiOrigin";
 import type { TFunction } from "i18next";
 import { statusText } from "./agentStatus";
 import { toneClass } from "./lineage";
-import { askSubjectText } from "./askSubject";
+import { askSubjectLead, askSubjectText } from "./askSubject";
 import type { AgentRow, AgentStatusCode, AskSubject, AgentWait, LineMode, MarkCounts, RowMark, TabAgent } from "./snapshot";
 
 /**
@@ -137,7 +137,7 @@ export function lineParts(t: TFunction<"translation">, agent: LineAgent, line: R
       return parts(word ?? statusText(t, agent.status_code), line.text);
     case "request":
       if (line.look !== undefined) return parts(t("agents.mark.look"), line.text);
-      return parts(word, line.subject ? askSubjectText(t, line.subject) : line.text);
+      return parts(askSubjectLead(t, line.subject) ?? word, line.subject ? askSubjectText(t, line.subject) : line.text);
     case "news":
       return parts(word, line.text);
     case "quiet":

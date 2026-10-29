@@ -58,6 +58,19 @@ it("words a question the core asks for the agent from its subject, in the words 
   expect(phone.shown.map(({ body }) => body)).toEqual(["Question · Plan review · 5 steps · project", "질문 · project"]);
 });
 
+it("words a mission decision as 판단 and its line, and an unknown cause as the payload's sentence (needs-you-cleanup B4)", async () => {
+  const phone = phoneWorker();
+  const decision = { cause: "mission_decision", line: "Skip the check line?" };
+  await phone.words({ needs_you: "내 차례", done: "읽을 것", status_question: "질문", subject_mission_decision: "판단" });
+  await phone.push({ title: "task", state: "needs_you", status_code: "question", detail: "Skip the check…", subject: decision, place: "project" });
+  // Words cached by a page from before the cause keep the row's own word.
+  await phone.words({ needs_you: "내 차례", done: "읽을 것", status_question: "질문" });
+  await phone.push({ title: "task", state: "needs_you", status_code: "question", detail: "Skip the check…", subject: decision, place: "project" });
+  // A cause this worker does not know draws the row's plain sentence.
+  await phone.push({ title: "task", state: "needs_you", status_code: "question", detail: "Plain sentence", subject: { cause: "later_cause" }, place: "project" });
+  expect(phone.shown.map(({ body }) => body)).toEqual(["판단 · Skip the check line? · project", "질문 · Skip the check line? · project", "질문 · Plain sentence · project"]);
+});
+
 it("leads with the status word with no detail too, and works with older payloads and cached page words", async () => {
   const phone = phoneWorker();
   await phone.words({ needs_you: "내 차례", done: "읽을 것", status_done: "끝남", status_question: "질문", status_stopped: "멈춤" });

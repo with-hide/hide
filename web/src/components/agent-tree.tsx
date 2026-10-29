@@ -4,7 +4,7 @@ import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
 import type { AgentRow, AskSubject, RaiseVerb } from "../snapshot";
 import type { LineParts } from "../agentRow";
-import { askSubjectText } from "../askSubject";
+import { askSubjectLead, askSubjectText } from "../askSubject";
 
 // The parts every agent tree draws the same way (PRD agent-hierarchy-screens
 // D-37 to D-43): the verb a Needs You row starts with, the one descendant
@@ -12,14 +12,19 @@ import { askSubjectText } from "../askSubject";
 // elbow rails and the chevron lane of a tree row, and the tree button. The
 // core decides every value; these only draw it.
 
-/** 승인 · 질문 · 확인 · 초안: colored text, no box (D-37); a row's turn word (status-marks B5). */
-export function VerbText({ verb }: { verb: RaiseVerb }) {
+/** 승인 · 질문 · 확인 · 초안: colored text, no box (D-37); a row's turn word (status-marks B5), or a mission decision's 판단 (needs-you-cleanup D-01). */
+export function VerbText({ verb, subject }: { verb: RaiseVerb; subject?: AskSubject | null }) {
   const { t } = useInterfaceTranslation();
   return (
     <span className="shrink-0 font-semibold text-warning" data-verb={verb}>
-      {t(`agentSessions.verb.${verb}`)}
+      {askVerb(t, verb, subject)}
     </span>
   );
+}
+
+/** The word an ask leads with: its verb's, or the subject's own (`판단`). */
+export function askVerb(t: TFunction<"translation">, verb: RaiseVerb, subject?: AskSubject | null): string {
+  return askSubjectLead(t, subject) ?? t(`agentSessions.verb.${verb}`);
 }
 
 /** What to do, or the verb's own words when no label line or letter says it (B3). */
@@ -30,29 +35,37 @@ export function askWhat(t: TFunction<"translation">, verb: RaiseVerb, what: stri
 
 /** An ask as a line's parts, the verb leading, so a list cuts only what to do (status-marks B5, B33). */
 export function askParts(t: TFunction<"translation">, ask: NonNullable<AgentRow["state"]["ask"]>): LineParts {
-  return { lead: t(`agentSessions.verb.${ask.verb}`), text: askWhat(t, ask.verb, ask.what, ask.subject), tail: null };
+  return { lead: askVerb(t, ask.verb, ask.subject), text: askWhat(t, ask.verb, ask.what, ask.subject), tail: moreTail(t, ask.more) };
 }
 
-/** A Needs You row's second line: the verb and what to do, nothing else (B2). */
+/** The count of the other asks under one root, `외 N건`, or null with none (needs-you-cleanup D-13). */
+export function moreTail(t: TFunction<"translation">, more: number): string | null {
+  return more > 0 ? t("agentSessions.moreAsks", { count: more }) : null;
+}
+
+/** A Needs You row's second line: the verb and what to do, and the count of the other asks waiting under the same root (B2, needs-you-cleanup B9). */
 export function AskLine({ ask, className }: { ask: NonNullable<AgentRow["state"]["ask"]>; className?: string }) {
   const { t } = useInterfaceTranslation();
   const what = askWhat(t, ask.verb, ask.what, ask.subject);
+  const more = moreTail(t, ask.more);
   return (
-    <span className={cn("flex min-w-0 items-baseline gap-xs text-caption", className)} data-ask-line={ask.verb}>
-      <VerbText verb={ask.verb} />
+    <span className={cn("flex min-w-0 items-baseline gap-xs text-caption", className)} data-ask-line={ask.verb} data-ask-subject={ask.subject?.cause}>
+      <VerbText verb={ask.verb} subject={ask.subject} />
       <span aria-hidden="true" className="shrink-0 text-warning">·</span>
       <span className="min-w-0 truncate text-warning" title={what}>
         {what}
       </span>
+      {more ? <span className="shrink-0 text-muted-foreground" data-ask-more={ask.more}>· {more}</span> : null}
     </span>
   );
 }
 
 /**
- * The one mark a folded parent wears for its descendants (B17): `! N` while
- * they raise something. A descendant that is only working draws nothing: the
- * operator did not read a ring count, and a waiting parent already shows its ring
- * and the working child's line. The core still computes the working mark.
+ * The one mark a folded parent wears for its descendants in the tree popover
+ * (B17): `! N` while they raise something. A sidebar or 태스크 row draws none:
+ * its root already stands in 내 차례 with the raised ask on its line
+ * (needs-you-cleanup B7). A descendant that is only working draws nothing;
+ * the core still computes the working mark.
  */
 export function DescendantMark({ agent }: { agent: AgentRow }) {
   const { t } = useInterfaceTranslation();

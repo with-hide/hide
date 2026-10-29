@@ -42,12 +42,13 @@ pub(crate) struct PlanRuntime {
     /// that moved is lifted from those rows without waiting for Herdr to
     /// send them again. Bounded by the rows shown.
     laid: BTreeMap<String, Laid>,
-    /// The book's edit the rows shown were last laid at.
-    laid_at: u64,
+    /// The plan book's and the mission book's edit the rows shown were
+    /// last laid at: a mission decision is laid by the same pass.
+    laid_at: (u64, u64),
 }
 
-/// What laying a review changed on a row: the question it put there, what
-/// it asks, and the demand the row had before.
+/// What laying a core question changed on a row: the question it put
+/// there, what it asks, and the demand the row had before.
 struct Laid {
     turn: hide_session::turns::UserTurnFact,
     subject: AskSubject,
@@ -606,14 +607,16 @@ impl Runtime {
         self.lay_reviews_on(device, agents);
     }
 
-    /// Lays the reviews again on the rows already shown once the book moved,
-    /// lifting first what an earlier pass laid, and rebuilds what reads the
-    /// rows: the lineage raises the question, the read axis compares it.
+    /// Lays the reviews again on the rows already shown once the plan book
+    /// or the mission book moved, lifting first what an earlier pass laid,
+    /// and rebuilds what reads the rows: the lineage raises the question,
+    /// the read axis compares it.
     pub(super) fn refresh_plan_reviews(&mut self) -> bool {
-        if self.plans.laid_at == self.plans.edit {
+        let edit = (self.plans.edit, self.missions.book_edit);
+        if self.plans.laid_at == edit {
             return false;
         }
-        self.plans.laid_at = self.plans.edit;
+        self.plans.laid_at = edit;
         let node = self.node.as_str().to_owned();
         let mut agents = std::mem::take(&mut self.snapshot.navigator.agents);
         let mut moved = self.relay_reviews(&node, &mut agents);
@@ -665,10 +668,12 @@ impl Runtime {
             };
             // A question the agent asked since is its own, and stays.
             if agent.user_turn.as_ref() == Some(&laid.turn)
-                && agent.ask_subject == Some(laid.subject)
+                && agent.ask_subject.as_ref() == Some(&laid.subject)
             {
                 agent.user_turn = None;
                 agent.ask_subject = None;
+                agent.laid_since_unix_ms = None;
+                agent.laid_more = 0;
                 agent.demand = laid.demand;
                 crate::agent_state::derive_from_axes(agent);
             }
@@ -677,13 +682,23 @@ impl Runtime {
         before != agents
     }
 
+    /// Lays on each resting row the core's questions for its session: its
+    /// plan waiting for review, and the open decision of the mission it
+    /// conducts (needs-you-cleanup D-12). One question holds the row, the
+    /// one asked first; the others are counted behind it (D-13).
     fn lay_reviews_on(&mut self, device: &str, agents: &mut [SidebarAgentSnapshot]) {
-        if !self
+        let reviews = self
             .plans
             .book
             .values()
-            .any(|plan| plan.review == Review::Proposed)
-        {
+            .any(|plan| plan.review == Review::Proposed);
+        let decisions = self
+            .missions
+            .book
+            .missions
+            .iter()
+            .any(|mission| mission.status.open() && mission.decision.is_some());
+        if !reviews && !decisions {
             return;
         }
         for agent in agents.iter_mut() {
@@ -693,31 +708,62 @@ impl Runtime {
             {
                 continue;
             }
-            let Some(plan) = row_session(device, agent)
-                .and_then(|session| self.plans.book.get(&session))
-                .filter(|plan| plan.review == Review::Proposed && !plans::finished(plan))
-            else {
+            let Some(session) = row_session(device, agent) else {
                 continue;
             };
+            let mut asks = self.core_asks(&session);
+            if asks.is_empty() {
+                continue;
+            }
+            asks.sort_by_key(|(since, _)| *since);
+            let more = asks.len() - 1;
+            let (since, subject) = asks.swap_remove(0);
             // The question holds the row as a native one does; it carries
             // no words, only its subject.
             let turn = hide_session::turns::UserTurnFact {
                 kind: hide_session::turns::UserTurnKind::Question,
                 content: None,
             };
-            let subject = review_subject(plan);
             self.plans.laid.insert(
                 agent.pane_id.clone(),
                 Laid {
                     turn: turn.clone(),
-                    subject,
+                    subject: subject.clone(),
                     demand: std::mem::replace(&mut agent.demand, "question".to_owned()),
                 },
             );
             agent.user_turn = Some(turn);
             agent.ask_subject = Some(subject);
+            agent.laid_since_unix_ms = Some(since);
+            agent.laid_more = more;
             crate::agent_state::derive_from_axes(agent);
         }
+    }
+
+    /// The core's questions for `session`, each with when it was asked: its
+    /// plan waiting for review and the open decision of each mission it
+    /// conducts.
+    fn core_asks(&self, session: &SessionIdentity) -> Vec<(u64, AskSubject)> {
+        let review = self
+            .plans
+            .book
+            .get(session)
+            .filter(|plan| plan.review == Review::Proposed && !plans::finished(plan))
+            .map(|plan| (plan.updated_at_unix_ms, review_subject(plan)));
+        let decisions = self.missions.book.missions.iter().filter_map(|mission| {
+            let line = mission.decision.as_ref()?;
+            if !mission.status.open() || mission.conductor.session.as_ref() != Some(session) {
+                return None;
+            }
+            let since = mission
+                .question
+                .as_ref()
+                .map_or(mission.updated_at_unix_ms, |question| {
+                    question.asked_at_unix_ms
+                });
+            Some((since, AskSubject::MissionDecision { line: line.clone() }))
+        });
+        review.into_iter().chain(decisions).collect()
     }
 
     /// Drops the plans of sessions that were deleted or pruned; their rows
