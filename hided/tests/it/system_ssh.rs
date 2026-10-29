@@ -15,10 +15,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use hide_node_link::device::{
-    Answer, Attempt, DeviceConnector, EstablishError, HOST_CONSENT_CONTRACT, HostConsent, Refusal,
-    Secret, SignIn, SignInWait, SshProblem, Wake,
-};
+use hide_node_link::device::{Answer, Refusal, Secret, SignIn, SignInWait};
 
 /// The row's side of an attempt: answers its questions in order and keeps
 /// what it was asked and shown.
@@ -63,6 +60,10 @@ fn text(answer: &str) -> Answer {
 mod unix {
     use super::*;
     use crate::support::sshd::{Sshd, account};
+    use hide_node_link::device::{
+        Attempt, DeviceConnector, EstablishError, HOST_CONSENT_CONTRACT, HostConsent, SshProblem,
+        Wake,
+    };
 
     struct Fixture {
         _root: tempfile::TempDir,

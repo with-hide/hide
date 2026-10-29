@@ -28,7 +28,7 @@ use std::time::{Duration, Instant};
 use hide_node::ssh::host::wsl::WslAccess;
 use hide_node_link::ai::{AiError, AiRequest, AiResponse, BackendSpec, Logged, ProviderId};
 use hide_node_link::device::{
-    DeviceConnector, DialedTransport, EstablishError, Established, HOST_CONSENT_CONTRACT,
+    Attempt, DeviceConnector, DialedTransport, EstablishError, Established, HOST_CONSENT_CONTRACT,
     HostConsent, Wake,
 };
 use hide_node_link::protocol::{Call, RootOpened, RootRef};
@@ -163,10 +163,12 @@ fn establish(
     let result = transport.establish(
         consent,
         &[],
-        wake,
-        Box::new(move |reason| {
-            let _ = heard.send(reason);
-        }),
+        Attempt::unattended(
+            wake,
+            Box::new(move |reason| {
+                let _ = heard.send(reason);
+            }),
+        ),
     );
     (result, closed)
 }
@@ -176,7 +178,6 @@ fn connector(sink: Arc<Sink>) -> hide_node::ssh::Connector {
         std::env::var_os("HIDE_E2E_WSL_PACKAGES").expect("set HIDE_E2E_WSL_PACKAGES"),
     );
     hide_node::ssh::Connector::new(Some(packages))
-        .with_helper_root("~/.hide/host-helper".to_owned())
         .with_terminals(sink)
         .with_pane_events(Arc::default())
         .with_wsl(WslAccess::of_this_pc().expect("this runner has WSL"))
@@ -197,7 +198,8 @@ fn bound(distro: &str) -> HostConsent {
         user: USER.to_owned(),
         hostname: distro.to_owned(),
         port: 0,
-        host_key_sha256: format!("wsl:{}", distribution_id(distro)),
+        machine_id: Some(format!("wsl:{}", distribution_id(distro))),
+        host_key_sha256: String::new(),
     }))
 }
 
@@ -306,7 +308,7 @@ fn a_wsl_distribution_connects_works_and_ends_with_its_link() {
     assert!(first.installed, "the first connection installs the helper");
     assert_eq!(first.node.hello.os, "linux");
     assert_eq!(first.identity.user, USER);
-    assert_eq!(first.identity.host_key_sha256, format!("wsl:{id}"));
+    assert_eq!(first.identity.machine_id, Some(format!("wsl:{id}")));
     println!("upload={:?}", first.upload);
     // A fresh distribution has no Herdr answering, so the kit ran before
     // the terminals and started the pinned one inside WSL.
