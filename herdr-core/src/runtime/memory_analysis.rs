@@ -4037,12 +4037,17 @@ mod tests {
                 "Run tests with the ordinary runner before a merge.\n",
             )
             .unwrap();
-            fixture.backend.answers.lock().unwrap().push(json!({"results":[{
-                "candidate":0,"verdict":"correction",
-                "quote":"Run tests with the ordinary runner before a merge.",
-                "document_sentence":sentence,
-                "replacement":"Run tests with nextest before a merge."
-            }]}));
+            fixture
+                .backend
+                .answers
+                .lock()
+                .unwrap()
+                .push(json!({"results":[{
+                    "candidate":0,"verdict":"correction",
+                    "quote":"Run tests with the ordinary runner before a merge.",
+                    "document_sentence":sentence,
+                    "replacement":"Run tests with nextest before a merge."
+                }]}));
             fixture.answer(&[]);
             fixture.backend.answers.lock().unwrap().last_mut().unwrap()["candidates"][0]["kind"] =
                 json!("decision");
@@ -5781,7 +5786,10 @@ mod tests {
             .document_comparison(&fixture.project_id, 1)
             .unwrap()
             .unwrap();
-        assert_eq!(comparison.authority, hide_memory::DocumentAuthority::CardNewer);
+        assert_eq!(
+            comparison.authority,
+            hide_memory::DocumentAuthority::CardNewer
+        );
         assert_eq!(
             (comparison.document_sentence, comparison.replacement),
             (
@@ -5791,7 +5799,11 @@ mod tests {
         );
         let calls = fixture.calls();
         fixture.maintain(&mut 0);
-        assert_eq!(fixture.calls(), calls, "a stored pair settles the unchanged document");
+        assert_eq!(
+            fixture.calls(),
+            calls,
+            "a stored pair settles the unchanged document"
+        );
     }
 
     #[test]
@@ -5807,11 +5819,21 @@ mod tests {
             .document_comparison(&fixture.project_id, 1)
             .unwrap()
             .unwrap();
-        assert_eq!(comparison.authority, hide_memory::DocumentAuthority::CardNewer);
-        assert_eq!((comparison.document_sentence, comparison.replacement), (None, None));
+        assert_eq!(
+            comparison.authority,
+            hide_memory::DocumentAuthority::CardNewer
+        );
+        assert_eq!(
+            (comparison.document_sentence, comparison.replacement),
+            (None, None)
+        );
         let calls = fixture.calls();
         fixture.maintain(&mut 0);
-        assert_eq!(fixture.calls(), calls, "a card without a pair is asked again the next day, not the next pass");
+        assert_eq!(
+            fixture.calls(),
+            calls,
+            "a card without a pair is asked again the next day, not the next pass"
+        );
     }
 
     #[test]

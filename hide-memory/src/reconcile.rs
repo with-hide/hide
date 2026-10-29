@@ -59,7 +59,11 @@ mod tests {
     #[test]
     fn a_sentence_inside_the_excerpt_is_accepted_with_its_whitespace_squashed() {
         assert_eq!(
-            accepted_sentence_pair(EXCERPT, "Run the suite with the ordinary runner.", " Use  the repository script. "),
+            accepted_sentence_pair(
+                EXCERPT,
+                "Run the suite with the ordinary runner.",
+                " Use  the repository script. "
+            ),
             Some((
                 "Run the suite with the ordinary runner.".into(),
                 "Use the repository script.".into()
@@ -69,11 +73,17 @@ mod tests {
 
     #[test]
     fn a_sentence_outside_the_excerpt_or_past_the_cap_is_dropped() {
-        assert_eq!(accepted_sentence_pair(EXCERPT, "Run it nightly.", "Use the script."), None);
+        assert_eq!(
+            accepted_sentence_pair(EXCERPT, "Run it nightly.", "Use the script."),
+            None
+        );
         assert_eq!(accepted_sentence_pair(EXCERPT, "Keep it fast.", ""), None);
         assert_eq!(accepted_sentence_pair(EXCERPT, "", "Use the script."), None);
         let long = "x".repeat(COMPARISON_SENTENCE_CHARS + 1);
-        assert_eq!(accepted_sentence_pair(&long, &long, "Use the script."), None);
+        assert_eq!(
+            accepted_sentence_pair(&long, &long, "Use the script."),
+            None
+        );
     }
 
     #[test]

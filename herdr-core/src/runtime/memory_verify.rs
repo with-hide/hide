@@ -691,7 +691,11 @@ pub(super) fn reconcile_corrections(
             };
             let sent_excerpt = serde_json::from_str::<Value>(&request.input)
                 .ok()
-                .and_then(|input| input["candidates"][0]["excerpt"].as_str().map(str::to_owned))
+                .and_then(|input| {
+                    input["candidates"][0]["excerpt"]
+                        .as_str()
+                        .map(str::to_owned)
+                })
                 .unwrap_or_default();
             admit(store)?;
             // A failed attempt rotates this card without certifying an unseen
@@ -746,13 +750,7 @@ pub(super) fn reconcile_corrections(
                         .map_err(AnalysisFailure::Local)?
                     {
                         store
-                            .record_correction_check(
-                                project,
-                                number,
-                                revision,
-                                &wanted,
-                                now_ms(),
-                            )
+                            .record_correction_check(project, number, revision, &wanted, now_ms())
                             .map_err(local)?;
                     }
                     if FailureScope::of(&error) != FailureScope::Input {

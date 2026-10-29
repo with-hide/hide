@@ -165,10 +165,7 @@ fn the_tab_shows_the_workers_read_with_hide_ai_and_github_laid_on_it() {
         .collect::<Vec<_>>();
     assert_eq!(
         holds,
-        [
-            ("s1", None),
-            ("s2", Some(SuggestionHold::GithubNeeded)),
-        ],
+        [("s1", None), ("s2", Some(SuggestionHold::GithubNeeded)),],
         "a document fix lands on a local branch, so only an issue needs GitHub"
     );
     let unavailable = read
@@ -826,11 +823,22 @@ fn a_ready_branch_is_read_from_git_and_merged_into_its_base() {
         let output = std::process::Command::new("git")
             .arg("-C")
             .arg(&repo)
-            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"])
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "commit.gpgsign=false",
+            ])
             .args(args)
             .output()
             .unwrap();
-        assert!(output.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&output.stderr));
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         String::from_utf8_lossy(&output.stdout).trim().to_owned()
     };
     git(&["init", "-q", "-b", "main"]);
@@ -930,6 +938,14 @@ fn a_ready_branch_is_read_from_git_and_merged_into_its_base() {
         other => panic!("merged, not {other:?}"),
     }
     assert_eq!(git(&["rev-parse", "main"]), tip, "main holds the fix");
-    assert_eq!(std::fs::read_to_string(repo.join("AGENTS.md")).unwrap(), "one\ntwo\n", "and so does its folder");
-    assert_eq!(git(&["rev-parse", "hide-suggestion-s2-x"]), tip, "the branch stays");
+    assert_eq!(
+        std::fs::read_to_string(repo.join("AGENTS.md")).unwrap(),
+        "one\ntwo\n",
+        "and so does its folder"
+    );
+    assert_eq!(
+        git(&["rev-parse", "hide-suggestion-s2-x"]),
+        tip,
+        "the branch stays"
+    );
 }

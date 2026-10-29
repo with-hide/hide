@@ -400,15 +400,17 @@ impl Runtime {
             MemoryPromotionState::Building => {
                 self.building_agent(promotion.building_branch.as_deref())
             }
-            MemoryPromotionState::Running | MemoryPromotionState::Ready => promotion.agent_id.as_deref().and_then(|id| {
-                let ledger = self.delivery_state().ok()?;
-                let record = ledger.agents.iter().find(|record| record.id == id)?;
-                Some(MemoryPromotionAgentSnapshot {
-                    name: record.wire_name().to_owned(),
-                    pane_id: (!record.ended).then(|| record.pane.clone()),
-                    agent_id: Some(record.id.clone()),
+            MemoryPromotionState::Running | MemoryPromotionState::Ready => {
+                promotion.agent_id.as_deref().and_then(|id| {
+                    let ledger = self.delivery_state().ok()?;
+                    let record = ledger.agents.iter().find(|record| record.id == id)?;
+                    Some(MemoryPromotionAgentSnapshot {
+                        name: record.wire_name().to_owned(),
+                        pane_id: (!record.ended).then(|| record.pane.clone()),
+                        agent_id: Some(record.id.clone()),
+                    })
                 })
-            }),
+            }
             _ => None,
         };
         Some(MemoryPromotionSnapshot {
@@ -885,7 +887,10 @@ struct TrackOutcome {
     /// What each followed batch's agent was asked, and what each batch
     /// branch read holds (PRD hide-ai-branch-first-apply).
     purposes: Vec<((String, String), Option<hide_memory::BatchPurpose>)>,
-    branches: Vec<((String, String), crate::suggestions::lifecycle::BranchSummary)>,
+    branches: Vec<(
+        (String, String),
+        crate::suggestions::lifecycle::BranchSummary,
+    )>,
 }
 
 /// One check of every followed promotion (see `track_memory_promotions`).
@@ -1096,11 +1101,9 @@ fn track_promotions(
                     }
                     verdict == CatalogVerdict::NoPullRequest
                 };
-                if promotion
-                    .branch
-                    .as_ref()
-                    .is_some_and(|branch| batches.contains_key(&(project_id.clone(), branch.clone())))
-                    && promotion.target_path.is_none()
+                if promotion.branch.as_ref().is_some_and(|branch| {
+                    batches.contains_key(&(project_id.clone(), branch.clone()))
+                }) && promotion.target_path.is_none()
                 {
                     if ended == Some(true) && pull.is_some() {
                         Some((PromotionState::Failed, pull.map(|pull| pull.number)))
@@ -1202,28 +1205,29 @@ fn track_promotions(
         });
         (moves, asks, reach, held, carried, panes)
     };
-    let mut store = match (moves.iter().any(Option::is_some) || !asks.is_empty() || !checks.is_empty())
-        .then(|| super::memory::open_memory_store(database))
-        .transpose()
-    {
-        Ok(store) => store,
-        Err(error) => {
-            crate::diagnostic!(json!({
-                "component": "memory",
-                "kind": "promotions.store_unavailable",
-                "message": error.to_string(),
-            }));
-            // Nothing moved: the rows stay followed, and the starts taken to
-            // ask again go back for the next check.
-            outcome.followed = true;
-            outcome.running = true;
-            outcome.unseen = asks
-                .into_iter()
-                .map(|(key, _, start)| (key, start))
-                .collect();
-            return Ok(outcome);
-        }
-    };
+    let mut store =
+        match (moves.iter().any(Option::is_some) || !asks.is_empty() || !checks.is_empty())
+            .then(|| super::memory::open_memory_store(database))
+            .transpose()
+        {
+            Ok(store) => store,
+            Err(error) => {
+                crate::diagnostic!(json!({
+                    "component": "memory",
+                    "kind": "promotions.store_unavailable",
+                    "message": error.to_string(),
+                }));
+                // Nothing moved: the rows stay followed, and the starts taken to
+                // ask again go back for the next check.
+                outcome.followed = true;
+                outcome.running = true;
+                outcome.unseen = asks
+                    .into_iter()
+                    .map(|(key, _, start)| (key, start))
+                    .collect();
+                return Ok(outcome);
+            }
+        };
     let mut released = HashSet::new();
     let mut settled = Vec::new();
     for ((project_id, root, number, promotion, node), next) in followed.iter().zip(moves) {
@@ -1323,15 +1327,15 @@ fn track_promotions(
     // The batches whose agent stopped or whose branch is ready, read on
     // their machine now that the lock is released.
     if let Some(store) = store.as_mut() {
-        let read = super::memory_branch::read_batches(
-            checks.into_values().collect(),
-            &reach,
-            store,
-            now,
-        );
+        let read =
+            super::memory_branch::read_batches(checks.into_values().collect(), &reach, store, now);
         outcome.moved_projects.extend(read.moved_projects);
         outcome.branches = read.facts;
-        settled.extend(read.merged.into_iter().map(|(retire, agents)| (retire, agents, false)));
+        settled.extend(
+            read.merged
+                .into_iter()
+                .map(|(retire, agents)| (retire, agents, false)),
+        );
     }
     let mut retiring = retire_plan(carried, settled.into_iter().chain(converging), &held);
     let due = retire_due(&mut retiring, &held, |node| reach.contains_key(node));
@@ -2244,7 +2248,9 @@ pub(super) fn spawn_restarted(
         }
         Err(reason) => {
             for (number, promotion) in &running {
-                if let Err(message) = fail_start(store, project_id, *number, promotion, &start, &reason) {
+                if let Err(message) =
+                    fail_start(store, project_id, *number, promotion, &start, &reason)
+                {
                     crate::diagnostic!(json!({
                         "component": "memory", "kind": "promotion.move_failed",
                         "project_id": project_id, "card": hide_memory::card_name(*number),
@@ -4092,7 +4098,13 @@ mod tests {
     #[test]
     fn the_fixed_prompt_names_the_card_and_the_steps_and_passes_as_one_argument() {
         use hide_memory::BatchPurpose;
-        let prompt = prompt(&[7], &[], hide_ai::OutputLanguage::Korean, BatchPurpose::Branch, None);
+        let prompt = prompt(
+            &[7],
+            &[],
+            hide_ai::OutputLanguage::Korean,
+            BatchPurpose::Branch,
+            None,
+        );
         for step in [
             "hide memory show m7",
             "AGENTS.md, CLAUDE.md, docs/README.md",
@@ -4110,12 +4122,24 @@ mod tests {
         assert!(!prompt.contains("open one PR"), "a batch commits and stops");
         assert!(crate::live::prompt_argument(&prompt).is_ok());
         assert!(
-            super::prompt(&[7], &[], hide_ai::OutputLanguage::English, BatchPurpose::Branch, None)
-                .contains("Write every reason in English.")
+            super::prompt(
+                &[7],
+                &[],
+                hide_ai::OutputLanguage::English,
+                BatchPurpose::Branch,
+                None
+            )
+            .contains("Write every reason in English.")
         );
         // D-06, B12: only `PR 올리기` asks for a push and one pull request,
         // and `다시 맞추기` names the base it makes the branch again on.
-        let pr = super::prompt(&[7], &[], hide_ai::OutputLanguage::Korean, BatchPurpose::Pr, None);
+        let pr = super::prompt(
+            &[7],
+            &[],
+            hide_ai::OutputLanguage::Korean,
+            BatchPurpose::Pr,
+            None,
+        );
         assert!(pr.contains("Push this branch and open one PR") && pr.contains("Do not merge"));
         let rebase = super::prompt(
             &[7],

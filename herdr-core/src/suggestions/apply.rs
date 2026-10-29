@@ -556,7 +556,14 @@ mod tests {
             "already applying"
         );
         assert_eq!(
-            begin(&mut suggested, &mut life, &index, Begin::Retry, false, 2_000),
+            begin(
+                &mut suggested,
+                &mut life,
+                &index,
+                Begin::Retry,
+                false,
+                2_000
+            ),
             Err(NotReady::Stage),
             "nothing failed"
         );
@@ -568,8 +575,15 @@ mod tests {
             AttemptMove::CiFailed(pr(9)),
             3_000
         ));
-        let (_, again, _, brief, _) =
-            begin(&mut suggested, &mut life, &index, Begin::Retry, false, 4_000).unwrap();
+        let (_, again, _, brief, _) = begin(
+            &mut suggested,
+            &mut life,
+            &index,
+            Begin::Retry,
+            false,
+            4_000,
+        )
+        .unwrap();
         assert_eq!(again, branch);
         assert_eq!(brief.pr, Some(pr(9)));
         let attempt = life.attempt.as_ref().unwrap();
@@ -697,7 +711,15 @@ mod tests {
         assert_eq!(next_auto(&notebook, &lives), Some(LineId(2)));
         let index = RecordIndex::default();
         let life = lives.get_mut(&LineId(2)).unwrap();
-        begin(&mut notebook.lines[1], life, &index, Begin::New, true, 1_000).unwrap();
+        begin(
+            &mut notebook.lines[1],
+            life,
+            &index,
+            Begin::New,
+            true,
+            1_000,
+        )
+        .unwrap();
         assert_eq!(next_auto(&notebook, &lives), None);
         let life = lives.get_mut(&LineId(2)).unwrap();
         moved(
