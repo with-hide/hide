@@ -15,32 +15,51 @@
 //! Both ends run the same frames from the line after the core's acceptance
 //! on, so the attach role between them stays a byte pipe of any build.
 //! Each frame is a kind, a stream and a length, then that many bytes, at
-//! most [`MAX_FRAME`]. A stream's bytes wait for its socket in a queue of
-//! [`MAX_PENDING`] frames; one whose socket does not take them is closed
-//! rather than hold up every other stream, as a link stream is.
+//! most [`MAX_FRAME`]. One thread writes the connection's input from a
+//! bounded outbox whose answers and opens go ahead of data; a stream or the
+//! link that would add data past it waits, so a slow connection slows its
+//! writers and holds nothing more.
+//!
+//! A stream owns its socket from its open to its end, and its slot among
+//! [`MAX_STREAMS`] stays taken until every thread of it ended. Its bytes from
+//! the other end wait for its socket in a queue of [`MAX_PENDING`] frames;
+//! one whose socket does not take them is aborted rather than hold up every
+//! other stream: its queue is dropped and its socket shut both ways, which
+//! wakes a write stuck on a peer that stopped reading. A stream the other
+//! end closed writes what is already queued, each write within
+//! [`WRITE_WITHIN`], then shuts its socket. The connection's end aborts
+//! every stream.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{self, BufReader, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
-use std::time::Duration;
+use std::sync::{Arc, Condvar, Mutex, mpsc};
+use std::time::{Duration, Instant};
 
 use hide_platform::ipc::LocalStream;
 use serde_json::json;
 
 /// The most bytes one frame carries.
 pub const MAX_FRAME: usize = 64 * 1024;
-/// Frames one stream holds for its socket; past it the stream is closed.
+/// Frames one stream holds for its socket; past it the stream is aborted.
 pub const MAX_PENDING: usize = 64;
-/// Streams besides the link open at once on one connection; one past it is
-/// refused.
+/// Streams besides the link on one connection, counted until each has
+/// ended; one past it is refused.
 pub const MAX_STREAMS: usize = 64;
-/// Answers the frame reader leaves for the control thread.
+/// Data frames waiting for the connection's input; a writer that would add
+/// one past it waits.
+const MAX_OUT: usize = 64;
+/// Answers and opens waiting for the connection's input; one past it ends
+/// the connection, since only a peer that asks faster than the connection
+/// carries fills it.
 const MAX_CONTROL: usize = 256;
 /// How long the core's end waits for a loopback address to take a
 /// connection.
 const CONNECT_WITHIN: Duration = Duration::from_secs(5);
+/// How long one write to a stream's socket may wait for its peer to take
+/// the bytes; a peer that stopped reading longer ends its stream.
+pub const WRITE_WITHIN: Duration = Duration::from_secs(30);
 
 const DATA: u8 = 0;
 const OPEN: u8 = 1;
@@ -57,6 +76,23 @@ fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+fn frame(kind: u8, stream: u32, payload: &[u8]) -> Vec<u8> {
+    debug_assert!(payload.len() <= MAX_FRAME);
+    let mut frame = Vec::with_capacity(9 + payload.len());
+    frame.push(kind);
+    frame.extend_from_slice(&stream.to_be_bytes());
+    frame.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    frame.extend_from_slice(payload);
+    frame
+}
+
+fn ended_error() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::NotConnected,
+        "the connection to the core ended",
+    )
+}
+
 /// Which end of the connection this is.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Side {
@@ -66,58 +102,167 @@ enum Side {
     Core,
 }
 
+/// What waits for the connection's input, written by one thread.
+#[derive(Default)]
+struct Outbox {
+    state: Mutex<Out>,
+    changed: Condvar,
+}
+
+#[derive(Default)]
+struct Out {
+    control: VecDeque<Vec<u8>>,
+    data: VecDeque<Vec<u8>>,
+    ended: bool,
+}
+
+impl Outbox {
+    /// Adds a data frame, waiting while [`MAX_OUT`] wait already.
+    fn data(&self, frame: Vec<u8>) -> io::Result<()> {
+        let mut out = lock(&self.state);
+        while out.data.len() >= MAX_OUT && !out.ended {
+            out = self
+                .changed
+                .wait(out)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+        }
+        if out.ended {
+            return Err(ended_error());
+        }
+        out.data.push_back(frame);
+        self.changed.notify_all();
+        Ok(())
+    }
+
+    /// Adds an answer or an open ahead of data, without waiting; refused
+    /// once [`MAX_CONTROL`] wait or the connection ended.
+    fn control(&self, frame: Vec<u8>) -> io::Result<()> {
+        let mut out = lock(&self.state);
+        if out.ended {
+            return Err(ended_error());
+        }
+        if out.control.len() >= MAX_CONTROL {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "the connection's answers are full",
+            ));
+        }
+        out.control.push_back(frame);
+        self.changed.notify_all();
+        Ok(())
+    }
+
+    /// The next frame to write, answers first; none once the connection
+    /// ended.
+    fn next(&self) -> Option<Vec<u8>> {
+        let mut out = lock(&self.state);
+        loop {
+            if out.ended {
+                return None;
+            }
+            if let Some(frame) = out.control.pop_front().or_else(|| out.data.pop_front()) {
+                self.changed.notify_all();
+                return Some(frame);
+            }
+            out = self
+                .changed
+                .wait(out)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+        }
+    }
+
+    /// Drops what waits and wakes every waiter.
+    fn end(&self) {
+        let mut out = lock(&self.state);
+        out.ended = true;
+        out.control.clear();
+        out.data.clear();
+        self.changed.notify_all();
+    }
+}
+
+/// One stream, from its open to the end of its last thread.
+struct Stream {
+    /// The other end's bytes for the socket; dropped when the stream closes,
+    /// which lets its writer finish.
+    queue: Option<mpsc::SyncSender<Vec<u8>>>,
+    /// The socket, shut both ways when the stream is aborted; none until it
+    /// is connected.
+    socket: Option<TcpStream>,
+    closed: bool,
+    /// The stream's threads still running (its connect, its reader, its
+    /// writer); its slot is free once none is.
+    running: usize,
+    /// Told when the slot is free.
+    ended: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
 struct Shared {
     side: Side,
-    /// The connection's input: one frame at a time.
-    out: Mutex<LocalStream>,
+    outbox: Outbox,
     carrier: hide_platform::ipc::ShutdownHandle,
     link: hide_platform::ipc::ShutdownHandle,
-    streams: Mutex<HashMap<u32, mpsc::SyncSender<Vec<u8>>>>,
+    streams: Mutex<HashMap<u32, Stream>>,
     pings: Mutex<HashMap<u32, mpsc::SyncSender<()>>>,
-    /// Frames the frame reader answers with, sent by a thread of their own:
-    /// the reader never waits on the connection's input, so two ends whose
-    /// inputs are both full still read each other's frames.
-    control: Mutex<Option<mpsc::SyncSender<(u8, u32)>>>,
     next: AtomicU32,
     ended: AtomicBool,
 }
 
+/// Frees `id`'s slot once it is closed and none of its threads runs.
+fn release(streams: &mut HashMap<u32, Stream>, id: u32) {
+    if streams
+        .get(&id)
+        .is_some_and(|stream| stream.closed && stream.running == 0)
+        && let Some(ended) = streams.remove(&id).and_then(|stream| stream.ended)
+    {
+        let _ = ended.send(());
+    }
+}
+
+/// Closes `stream`: its queue is dropped, and when `abort` its socket is
+/// shut both ways at once.
+fn shut(stream: &mut Stream, abort: bool) {
+    stream.closed = true;
+    stream.queue.take();
+    if abort && let Some(socket) = &stream.socket {
+        let _ = socket.shutdown(Shutdown::Both);
+    }
+}
+
 impl Shared {
-    fn send(&self, kind: u8, stream: u32, payload: &[u8]) -> io::Result<()> {
-        debug_assert!(payload.len() <= MAX_FRAME);
-        let mut frame = Vec::with_capacity(9 + payload.len());
-        frame.push(kind);
-        frame.extend_from_slice(&stream.to_be_bytes());
-        frame.extend_from_slice(&(payload.len() as u32).to_be_bytes());
-        frame.extend_from_slice(payload);
-        let mut out = lock(&self.out);
-        out.write_all(&frame).and_then(|()| out.flush())
+    /// Sends a data frame, waiting for room.
+    fn data(&self, kind: u8, stream: u32, payload: &[u8]) -> io::Result<()> {
+        self.outbox.data(frame(kind, stream, payload))
     }
 
-    /// Queues a frame with no payload for the control thread; one past its
-    /// queue is dropped, and the stream it closed ends with its own socket.
+    /// Sends an answer ahead of data; a connection whose answers are full
+    /// ends.
     fn tell(&self, kind: u8, stream: u32) {
-        if let Some(control) = lock(&self.control).as_ref()
-            && control.try_send((kind, stream)).is_err()
+        if let Err(error) = self.outbox.control(frame(kind, stream, &[]))
+            && error.kind() == io::ErrorKind::WouldBlock
         {
-            herdr_core::diagnostic!(json!({
-                "component": "link_mux",
-                "kind": "control.dropped",
-                "frame": kind,
-                "stream": stream,
-            }));
+            self.end("answers_full");
         }
     }
 
-    /// Ends the connection and every stream on it.
+    /// Ends the connection and aborts every stream on it.
     fn end(&self, reason: &str) {
         if self.ended.swap(true, Ordering::SeqCst) {
             return;
         }
+        self.outbox.end();
         self.carrier.shutdown();
         self.link.shutdown();
-        lock(&self.control).take();
-        lock(&self.streams).clear();
+        {
+            let mut streams = lock(&self.streams);
+            let ids: Vec<u32> = streams.keys().copied().collect();
+            for id in ids {
+                if let Some(stream) = streams.get_mut(&id) {
+                    shut(stream, true);
+                }
+                release(&mut streams, id);
+            }
+        }
         lock(&self.pings).clear();
         herdr_core::diagnostic!(json!({
             "component": "link_mux",
@@ -127,58 +272,124 @@ impl Shared {
         }));
     }
 
-    /// Takes `stream` out, so its socket closes, and tells the other end.
-    fn close(&self, stream: u32) {
-        if lock(&self.streams).remove(&stream).is_some() {
-            let _ = self.send(CLOSE, stream, &[]);
+    /// Closes `id`, and answers whether this call closed it; an `abort`
+    /// shuts its socket at once, a close the other end asked for lets its
+    /// writer finish what is queued.
+    fn close(&self, id: u32, abort: bool) -> bool {
+        let mut streams = lock(&self.streams);
+        let Some(stream) = streams.get_mut(&id) else {
+            return false;
+        };
+        let first = !stream.closed;
+        if first || abort {
+            shut(stream, abort);
+        }
+        release(&mut streams, id);
+        first
+    }
+
+    /// One of `id`'s threads ended.
+    fn finished(&self, id: u32) {
+        let mut streams = lock(&self.streams);
+        if let Some(stream) = streams.get_mut(&id) {
+            stream.running = stream.running.saturating_sub(1);
+        }
+        release(&mut streams, id);
+    }
+
+    /// Aborts `id` and tells the other end.
+    fn abort(&self, id: u32) {
+        if self.close(id, true) {
+            self.tell(CLOSE, id);
         }
     }
 
-    /// Starts carrying `socket` as `stream`, whose bytes from the other end
-    /// already wait in `queue`.
-    fn carry(self: &Arc<Self>, stream: u32, socket: TcpStream, queue: mpsc::Receiver<Vec<u8>>) {
-        let Ok(mut reading) = socket.try_clone() else {
-            self.close(stream);
-            return;
+    /// Carries `socket` as `id`, whose bytes from the other end already
+    /// wait in `queued`: a reader and a writer, each counted in the slot. A
+    /// stream closed meanwhile shuts the socket instead.
+    fn attach(self: &Arc<Self>, id: u32, socket: TcpStream, queued: mpsc::Receiver<Vec<u8>>) {
+        let _ = socket.set_write_timeout(Some(WRITE_WITHIN));
+        let handles = socket
+            .try_clone()
+            .and_then(|reading| socket.try_clone().map(|held| (reading, held)));
+        let reading = {
+            let mut streams = lock(&self.streams);
+            match (streams.get_mut(&id), handles) {
+                (Some(stream), Ok((reading, held))) if !stream.closed => {
+                    stream.socket = Some(held);
+                    stream.running += 2;
+                    reading
+                }
+                (stream, _) => {
+                    let _ = socket.shutdown(Shutdown::Both);
+                    if let Some(stream) = stream {
+                        shut(stream, true);
+                    }
+                    release(&mut streams, id);
+                    drop(streams);
+                    self.tell(CLOSE, id);
+                    return;
+                }
+            }
         };
         let shared = Arc::clone(self);
-        let started = std::thread::Builder::new()
+        let reader = std::thread::Builder::new()
             .name("link-mux-read".to_owned())
-            .spawn(move || {
-                let mut buffer = vec![0_u8; MAX_FRAME];
-                loop {
-                    match reading.read(&mut buffer) {
-                        Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
-                        Ok(0) | Err(_) => break,
-                        Ok(read) => {
-                            if !lock(&shared.streams).contains_key(&stream)
-                                || shared.send(DATA, stream, &buffer[..read]).is_err()
-                            {
-                                break;
-                            }
-                        }
+            .spawn(move || shared.read_stream(id, reading));
+        if reader.is_err() {
+            self.abort(id);
+            self.finished(id);
+        }
+        let shared = Arc::clone(self);
+        let writer = std::thread::Builder::new()
+            .name("link-mux-write".to_owned())
+            .spawn(move || shared.write_stream(id, socket, queued));
+        if writer.is_err() {
+            self.abort(id);
+            self.finished(id);
+        }
+    }
+
+    /// The socket's bytes to the other end, then a close in order after
+    /// them.
+    fn read_stream(&self, id: u32, mut socket: TcpStream) {
+        let mut buffer = vec![0_u8; MAX_FRAME];
+        loop {
+            match socket.read(&mut buffer) {
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Ok(0) | Err(_) => break,
+                Ok(read) => {
+                    if self.data(DATA, id, &buffer[..read]).is_err() {
+                        break;
                     }
                 }
-                shared.close(stream);
-                let _ = reading.shutdown(Shutdown::Both);
-            });
-        if started.is_err() {
-            self.close(stream);
-            return;
+            }
         }
-        write_queue(socket, queue);
+        if self.close(id, false) {
+            let _ = self.data(CLOSE, id, &[]);
+        }
+        self.finished(id);
     }
-}
 
-/// Writes what the other end sent for one stream until the stream is
-/// taken out, then closes its socket both ways.
-fn write_queue(mut socket: TcpStream, queue: mpsc::Receiver<Vec<u8>>) {
-    while let Ok(bytes) = queue.recv() {
-        if socket.write_all(&bytes).is_err() {
-            break;
+    /// The other end's bytes to the socket, until the stream closes or a
+    /// write fails or waits past [`WRITE_WITHIN`], which aborts it.
+    fn write_stream(&self, id: u32, mut socket: TcpStream, queued: mpsc::Receiver<Vec<u8>>) {
+        let mut failed = false;
+        while let Ok(bytes) = queued.recv() {
+            if socket.write_all(&bytes).is_err() {
+                failed = true;
+                break;
+            }
         }
+        drop(queued);
+        let _ = socket.shutdown(Shutdown::Both);
+        if failed {
+            self.abort(id);
+        } else {
+            self.close(id, true);
+        }
+        self.finished(id);
     }
-    let _ = socket.shutdown(Shutdown::Both);
 }
 
 /// Starts both ends' threads on `carrier`, whose first bytes the handshake
@@ -190,28 +401,29 @@ fn start(
     pending: Vec<u8>,
 ) -> io::Result<(Arc<Shared>, LocalStream)> {
     let (ours, link) = LocalStream::pair()?;
-    let (control, told) = mpsc::sync_channel::<(u8, u32)>(MAX_CONTROL);
     let shared = Arc::new(Shared {
         side,
-        out: Mutex::new(carrier.duplicate()),
+        outbox: Outbox::default(),
         carrier: carrier.shutdown_handle(),
         link: ours.shutdown_handle(),
         streams: Mutex::new(HashMap::new()),
         pings: Mutex::new(HashMap::new()),
-        control: Mutex::new(Some(control)),
         next: AtomicU32::new(1),
         ended: AtomicBool::new(false),
     });
+    // The connection's input, from the outbox.
     {
         let shared = Arc::clone(&shared);
+        let mut out = carrier.duplicate();
         std::thread::Builder::new()
-            .name("link-mux-control".to_owned())
+            .name("link-mux-out".to_owned())
             .spawn(move || {
-                while let Ok((kind, stream)) = told.recv() {
-                    if shared.send(kind, stream, &[]).is_err() {
+                while let Some(frame) = shared.outbox.next() {
+                    if out.write_all(&frame).and_then(|()| out.flush()).is_err() {
                         break;
                     }
                 }
+                shared.end("connection_failed");
             })?;
     }
     // The link's bytes, as frames.
@@ -227,7 +439,7 @@ fn start(
                         Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
                         Ok(0) | Err(_) => break "link_closed",
                         Ok(read) => {
-                            if shared.send(DATA, LINK, &buffer[..read]).is_err() {
+                            if shared.data(DATA, LINK, &buffer[..read]).is_err() {
                                 break "connection_closed";
                             }
                         }
@@ -250,7 +462,9 @@ fn start(
     Ok((shared, link))
 }
 
-/// Reads frames until the connection ends; answers why it did.
+/// Reads frames until the connection ends; answers why it did. It never
+/// waits on the connection's input, so two ends whose inputs are both full
+/// still read each other's frames.
 fn demux(shared: &Arc<Shared>, mut reader: impl Read, mut to_link: LocalStream) -> String {
     let mut header = [0_u8; 9];
     loop {
@@ -278,16 +492,15 @@ fn demux(shared: &Arc<Shared>, mut reader: impl Read, mut to_link: LocalStream) 
                 }
             }
             (DATA, _) => {
-                let mut streams = lock(&shared.streams);
-                let Some(queue) = streams.get(&stream) else {
-                    continue;
+                let sent = {
+                    let streams = lock(&shared.streams);
+                    match streams.get(&stream).and_then(|found| found.queue.as_ref()) {
+                        Some(queue) => queue.try_send(payload),
+                        None => continue,
+                    }
                 };
-                match queue.try_send(payload) {
-                    Ok(()) => {}
-                    Err(mpsc::TrySendError::Full(_)) => {
-                        streams.remove(&stream);
-                        drop(streams);
-                        shared.tell(CLOSE, stream);
+                if let Err(error) = sent {
+                    if matches!(error, mpsc::TrySendError::Full(_)) {
                         herdr_core::diagnostic!(json!({
                             "component": "link_mux",
                             "kind": "stream.fell_behind",
@@ -295,13 +508,11 @@ fn demux(shared: &Arc<Shared>, mut reader: impl Read, mut to_link: LocalStream) 
                             "stream": stream,
                         }));
                     }
-                    Err(mpsc::TrySendError::Disconnected(_)) => {
-                        streams.remove(&stream);
-                    }
+                    shared.abort(stream);
                 }
             }
             (CLOSE, _) => {
-                lock(&shared.streams).remove(&stream);
+                shared.close(stream, false);
             }
             (OPEN, Side::Core) if stream != LINK => open(shared, stream, &payload),
             (PING, Side::Core) => shared.tell(PONG, stream),
@@ -331,7 +542,9 @@ fn addresses(payload: &[u8]) -> Option<Vec<SocketAddr>> {
 
 /// The core's end of an open: the stream's queue first, so bytes the node
 /// sends before the connection is made wait for it, then the connection on
-/// a thread of its own, to the first address that takes it.
+/// a thread of its own, counted in the slot, to the first address that
+/// takes it. A stream closed while it connects drops the connection when
+/// it lands.
 fn open(shared: &Arc<Shared>, stream: u32, payload: &[u8]) {
     let refuse = |reason: &str| {
         herdr_core::diagnostic!(json!({
@@ -354,22 +567,41 @@ fn open(shared: &Arc<Shared>, stream: u32, payload: &[u8]) {
             refuse("streams_full");
             return;
         }
-        streams.insert(stream, queue);
+        streams.insert(
+            stream,
+            Stream {
+                queue: Some(queue),
+                socket: None,
+                closed: false,
+                running: 1,
+                ended: None,
+            },
+        );
     }
     let connecting = Arc::clone(shared);
     let started = std::thread::Builder::new()
         .name("link-mux-open".to_owned())
         .spawn(move || {
-            let socket = to
-                .iter()
-                .find_map(|address| TcpStream::connect_timeout(address, CONNECT_WITHIN).ok());
+            let closed = || {
+                lock(&connecting.streams)
+                    .get(&stream)
+                    .is_none_or(|found| found.closed)
+            };
+            let socket = to.iter().find_map(|address| {
+                if closed() {
+                    return None;
+                }
+                TcpStream::connect_timeout(address, CONNECT_WITHIN).ok()
+            });
             match socket {
-                Some(socket) => connecting.carry(stream, socket, queued),
-                None => connecting.close(stream),
+                Some(socket) => connecting.attach(stream, socket, queued),
+                None => connecting.abort(stream),
             }
+            connecting.finished(stream);
         });
     if started.is_err() {
-        shared.close(stream);
+        shared.abort(stream);
+        shared.finished(stream);
     }
 }
 
@@ -397,16 +629,14 @@ impl Mux {
 
     /// Carries `local`, a connection on this machine, to the first of `to`
     /// on the core machine's loopback that takes it, until either end
-    /// closes. Refused once [`MAX_STREAMS`] streams are open or the
-    /// connection ended; the core's end closes the stream when no address
-    /// takes it.
-    pub fn carry(&self, local: TcpStream, to: &[SocketAddr]) -> io::Result<()> {
+    /// closes; the answer hears when the stream's slot is free. It never
+    /// waits on the connection. Refused once [`MAX_STREAMS`] streams hold a
+    /// slot, the connection's answers are full, or the connection ended;
+    /// the core's end closes the stream when no address takes it.
+    pub fn carry(&self, local: TcpStream, to: &[SocketAddr]) -> io::Result<Carried> {
         let shared = &self.shared;
         if shared.ended.load(Ordering::SeqCst) {
-            return Err(io::Error::new(
-                io::ErrorKind::NotConnected,
-                "the connection to the core ended",
-            ));
+            return Err(ended_error());
         }
         if to.is_empty() || !to.iter().all(|address| address.ip().is_loopback()) {
             return Err(io::Error::new(
@@ -414,8 +644,9 @@ impl Mux {
                 "a stream goes only to the core machine's loopback",
             ));
         }
-        let stream = shared.next.fetch_add(1, Ordering::SeqCst);
+        let id = shared.next.fetch_add(1, Ordering::SeqCst);
         let (queue, queued) = mpsc::sync_channel(MAX_PENDING);
+        let (ended, freed) = tokio::sync::oneshot::channel();
         {
             let mut streams = lock(&shared.streams);
             if streams.len() >= MAX_STREAMS {
@@ -424,23 +655,28 @@ impl Mux {
                     "the connection to the core carries as many streams as it may",
                 ));
             }
-            streams.insert(stream, queue);
+            streams.insert(
+                id,
+                Stream {
+                    queue: Some(queue),
+                    socket: None,
+                    closed: false,
+                    running: 0,
+                    ended: Some(ended),
+                },
+            );
         }
         let named = to
             .iter()
             .map(SocketAddr::to_string)
             .collect::<Vec<_>>()
             .join(" ");
-        if let Err(error) = shared.send(OPEN, stream, named.as_bytes()) {
-            lock(&shared.streams).remove(&stream);
+        if let Err(error) = shared.outbox.control(frame(OPEN, id, named.as_bytes())) {
+            lock(&shared.streams).remove(&id);
             return Err(error);
         }
-        let carrying = Arc::clone(shared);
-        std::thread::Builder::new()
-            .name("link-mux-write".to_owned())
-            .spawn(move || carrying.carry(stream, local, queued))
-            .map(|_| ())
-            .inspect_err(|_| shared.close(stream))
+        shared.attach(id, local, queued);
+        Ok(Carried { freed })
     }
 
     /// A listener on this machine's loopback whose every connection is
@@ -480,9 +716,12 @@ impl Mux {
     }
 
     /// Whether the core's end still answers: a ping answered within
-    /// `within`. Asked after this machine slept or its network changed,
-    /// when a connection that looks up may lead nowhere.
+    /// `within`, which covers its wait to be written as well as the answer.
+    /// One not answered in time ends the connection, which also wakes a
+    /// write stuck on it. Asked after this machine slept or its network
+    /// changed, when a connection that looks up may lead nowhere.
     pub fn alive(&self, within: Duration) -> bool {
+        let deadline = Instant::now() + within;
         let shared = &self.shared;
         if shared.ended.load(Ordering::SeqCst) {
             return false;
@@ -490,8 +729,14 @@ impl Mux {
         let ping = shared.next.fetch_add(1, Ordering::SeqCst);
         let (heard, answer) = mpsc::sync_channel(1);
         lock(&shared.pings).insert(ping, heard);
-        let answered = shared.send(PING, ping, &[]).is_ok() && answer.recv_timeout(within).is_ok();
+        let answered = shared.outbox.control(frame(PING, ping, &[])).is_ok()
+            && answer
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .is_ok();
         lock(&shared.pings).remove(&ping);
+        if !answered {
+            shared.end("ping_unanswered");
+        }
         answered
     }
 
@@ -503,6 +748,18 @@ impl Mux {
     /// Ends the connection and every stream on it.
     pub fn close(&self) {
         self.shared.end("closed");
+    }
+}
+
+/// A stream [`Mux::carry`] started.
+pub struct Carried {
+    freed: tokio::sync::oneshot::Receiver<()>,
+}
+
+impl Carried {
+    /// Returns once the stream ended and its slot is free.
+    pub async fn ended(self) {
+        let _ = self.freed.await;
     }
 }
 
@@ -588,6 +845,141 @@ mod tests {
             mux.carry(socket, &["192.0.2.1:80".parse().unwrap()])
                 .is_err()
         );
+    }
+
+    /// A node and a core joined by a local pair, with the core's state.
+    fn joined_with_core() -> (Arc<Mux>, Arc<Shared>, LocalStream, LocalStream) {
+        let (node_end, core_end) = LocalStream::pair().unwrap();
+        let (core, core_link) = start(Side::Core, core_end, Vec::new()).unwrap();
+        let (mux, node_link) = Mux::start(node_end, Vec::new()).unwrap();
+        (Arc::new(mux), core, node_link, core_link)
+    }
+
+    fn slots(shared: &Shared) -> usize {
+        lock(&shared.streams).len()
+    }
+
+    fn until(what: &str, done: impl Fn() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while !done() {
+            assert!(Instant::now() < deadline, "{what}");
+            std::thread::yield_now();
+        }
+    }
+
+    /// Reads what reached `socket` until its end, which must come.
+    fn drained(mut socket: TcpStream) {
+        socket
+            .set_read_timeout(Some(Duration::from_secs(15)))
+            .unwrap();
+        let mut buffer = vec![0_u8; MAX_FRAME];
+        loop {
+            match socket.read(&mut buffer) {
+                Ok(0) => return,
+                Ok(_) => {}
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    panic!("the stream never ended at the server")
+                }
+                Err(_) => return,
+            }
+        }
+    }
+
+    /// A server on the core machine that never reads: the stream falls
+    /// behind, is aborted, and its slot is free on both ends once its
+    /// threads ended, round after round; the server sees its end.
+    #[test]
+    fn a_stream_whose_peer_stopped_reading_ends_and_frees_its_slot() {
+        let (mux, core, _node_link, _core_link) = joined_with_core();
+        let server = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let forward = mux.forward(server.local_addr().unwrap().port()).unwrap();
+        let chunk = vec![7_u8; MAX_FRAME];
+        for _ in 0..3 {
+            let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, forward.port())).unwrap();
+            client
+                .set_write_timeout(Some(Duration::from_secs(15)))
+                .unwrap();
+            let (held, _) = server.accept().unwrap();
+            let mut ended = false;
+            for _ in 0..4096 {
+                if client.write_all(&chunk).is_err() {
+                    ended = true;
+                    break;
+                }
+            }
+            assert!(ended, "the stream was never aborted");
+            until("the slots were never freed", || {
+                slots(&core) == 0 && slots(&mux.shared) == 0
+            });
+            drained(held);
+        }
+        assert!(mux.alive(Duration::from_secs(5)));
+    }
+
+    /// The connection's end frees every stream, a stream whose peer stopped
+    /// reading included.
+    #[test]
+    fn the_connection_ending_frees_every_stream() {
+        let (mux, core, node_link, _core_link) = joined_with_core();
+        let server = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let forward = mux.forward(server.local_addr().unwrap().port()).unwrap();
+        let chunk = vec![7_u8; MAX_FRAME];
+        let mut held = Vec::new();
+        for _ in 0..3 {
+            let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, forward.port())).unwrap();
+            client
+                .set_write_timeout(Some(Duration::from_secs(15)))
+                .unwrap();
+            for _ in 0..16 {
+                client.write_all(&chunk).unwrap();
+            }
+            held.push((client, server.accept().unwrap().0));
+        }
+        node_link.shutdown_handle().shutdown();
+        until("the slots outlived the connection", || {
+            !mux.live() && slots(&core) == 0 && slots(&mux.shared) == 0
+        });
+        for (_client, socket) in held {
+            drained(socket);
+        }
+    }
+
+    /// A ping on a connection whose other end takes nothing answers within
+    /// its bound, whatever waits to be written, and ends the connection,
+    /// which wakes the writers stuck on it.
+    #[test]
+    fn a_ping_on_a_connection_that_takes_nothing_ends_it_in_time() {
+        let (node_end, _never_read) = LocalStream::pair().unwrap();
+        let (mux, node_link) = Mux::start(node_end, Vec::new()).unwrap();
+        let mut reading = node_link.duplicate();
+        let mut writing = node_link;
+        std::thread::spawn(move || {
+            let chunk = vec![0_u8; MAX_FRAME];
+            while writing.write_all(&chunk).is_ok() {}
+        });
+        let (asked, answer) = mpsc::channel();
+        let pinging = Arc::new(mux);
+        let ping = Arc::clone(&pinging);
+        let started = Instant::now();
+        std::thread::spawn(move || {
+            let _ = asked.send(ping.alive(Duration::from_millis(300)));
+        });
+        let answered = answer
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the ping outlived its bound");
+        assert!(!answered);
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(!pinging.live());
+        // The link's user hears the end.
+        let (read, heard) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut buffer = [0_u8; 1];
+            let _ = read.send(reading.read(&mut buffer).map_err(|error| error.kind()));
+        });
+        assert!(matches!(
+            heard.recv_timeout(Duration::from_secs(10)),
+            Ok(Ok(0) | Err(_))
+        ));
     }
 
     /// The link's end ends the whole connection, and with it every stream

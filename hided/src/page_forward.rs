@@ -198,19 +198,25 @@ async fn carry(
     let link = match link {
         PageLink::Device(link) => link,
         PageLink::Core(mux) => {
-            // The core's end tries each address in turn.
+            // The core's end tries each address in turn. The carry never
+            // waits on the connection, and the page's permit is held until
+            // the stream's slot is free, so one page holds at most
+            // MAX_CONNECTIONS of the connection's streams.
             let to: Vec<SocketAddr> = std::iter::once(remote).chain(alternate).collect();
             let carried = local
                 .into_std()
                 .and_then(|local| local.set_nonblocking(false).map(|()| local))
                 .and_then(|local| mux.carry(local, &to));
-            if let Err(error) = carried
-                && !reported.swap(true, Ordering::Relaxed)
-            {
-                eprintln!(
-                    "{}",
-                    serde_json::json!({"component":"page_forward","kind":"stream.refused","node":target,"reason":error.to_string()})
-                );
+            match carried {
+                Ok(carried) => carried.ended().await,
+                Err(error) => {
+                    if !reported.swap(true, Ordering::Relaxed) {
+                        eprintln!(
+                            "{}",
+                            serde_json::json!({"component":"page_forward","kind":"stream.refused","node":target,"reason":error.to_string()})
+                        );
+                    }
+                }
             }
             return;
         }
