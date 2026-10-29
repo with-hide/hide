@@ -2716,6 +2716,26 @@ impl LabelWorker {
                     // A late summary still reaches the header it names.
                     return goal_changed || turns_changed;
                 }
+                // A reply that answers the question ending a turn this
+                // label read as finished: a missed question, kept as a
+                // signal for checking the verdict, with ids only
+                // (needs-you-cleanup D-06, D-15).
+                if record.end == Some(LabelEnd::Done) {
+                    for request in analysis
+                        .requests
+                        .iter()
+                        .filter(|request| request.answers.is_some())
+                    {
+                        crate::diagnostic!(json!({
+                            "component": "labels",
+                            "kind": "verdict.answer_after_done",
+                            "target": self.target,
+                            "pane_id": pane_id,
+                            "turn": format!("{:016x}", outcome.turn),
+                            "request_id": request.id,
+                        }));
+                    }
+                }
                 record.line = analysis.line.clone();
                 record.end = Some(analysis.end);
                 record.task_input_cursor = outcome.task_input_cursor.or(record.task_input_cursor);

@@ -772,3 +772,32 @@ fn a_star_on_an_unread_question_reads_it_and_puts_it_off_to_revisit() {
     assert_ne!(row.group, "needs_you");
     assert!(row.revisit.is_some_and(|r| r.starred && r.read_ask));
 }
+
+#[test]
+fn putting_away_a_read_question_records_one_signal_with_ids_only() {
+    // needs-you-cleanup B23: 치우기 on an unanswered ask is a sign the
+    // question verdict may have been wrong; nothing on screen says so.
+    let mut runtime = with_read_question();
+    let _dirs = hold_dirs(&mut runtime);
+    let (put_away, events) = crate::diagnostics::capture(|| runtime.finish_revisit("session"));
+    assert!(put_away);
+    let signals: Vec<_> = events
+        .iter()
+        .filter(|event| event["kind"] == "verdict.ask_put_away")
+        .collect();
+    assert_eq!(signals.len(), 1);
+    assert_eq!(
+        (
+            &signals[0]["pane_id"],
+            &signals[0]["turn"],
+            &signals[0]["ask"]
+        ),
+        (&json!("session"), &json!(5), &json!("question"))
+    );
+    let (_, again) = crate::diagnostics::capture(|| runtime.finish_revisit("session"));
+    assert!(
+        !again
+            .iter()
+            .any(|event| event["kind"] == "verdict.ask_put_away")
+    );
+}

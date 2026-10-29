@@ -366,6 +366,31 @@ impl Runtime {
         let Some(client) = self.links_work.client.as_ref() else {
             return false;
         };
+        // An unanswered ask put away from the record (넘기기): a sign the
+        // question verdict may have been wrong, with ids only
+        // (needs-you-cleanup D-06, D-15).
+        if payload.status == MissedStatus::Dismissed
+            && let Some(item) = self
+                .snapshot
+                .session_record
+                .as_ref()
+                .and_then(|held| held.record.as_ref())
+                .and_then(|record| record.missed.iter().find(|item| item.id == payload.id))
+                .filter(|item| {
+                    item.kind == crate::links::ledger::MissedKind::Ask
+                        && item.status == MissedStatus::Open
+                })
+        {
+            crate::diagnostic!(serde_json::json!({
+                "component": "session",
+                "kind": "verdict.ask_put_away",
+                "source": "record",
+                "session_id": payload.session.session_id,
+                "missed_id": payload.id,
+                "turn": item.turn_offset,
+                "ask": "ask",
+            }));
+        }
         if let Err(code) = client.ledger(LedgerUpdate::MissedStatus {
             session: payload.session.clone(),
             id: payload.id,

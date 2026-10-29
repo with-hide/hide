@@ -267,6 +267,23 @@ impl Runtime {
         if next == current || (next.is_none() && current.is_none()) {
             return false;
         }
+        if let Some(since) = ask
+            && current.as_ref().and_then(|m| m.dismissed_ask_since) != Some(since)
+        {
+            // An unanswered ask put away: a sign the question verdict may
+            // have been wrong, with ids only (needs-you-cleanup D-06, D-15).
+            crate::diagnostic!(serde_json::json!({
+                "component": "session",
+                "kind": "verdict.ask_put_away",
+                "source": "revisit",
+                "pane_id": pane,
+                "turn": since,
+                "ask": row.ask_subject.as_ref().map_or(row.demand.as_str(), |subject| match subject {
+                    crate::model::AskSubject::PlanReview { .. } => "plan_review",
+                    crate::model::AskSubject::MissionDecision { .. } => "mission_decision",
+                }),
+            }));
+        }
         self.save_revisit(pane, next)
     }
 
