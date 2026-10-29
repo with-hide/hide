@@ -84,13 +84,15 @@ fn the_host_list_names_each_alias_its_address_and_the_device_that_holds_it() {
         shared.lock().unwrap().snapshot().status.ssh_hosts.state,
         "idle"
     );
-    assert!(shared.lock().unwrap().dispatch_json(&list_event()));
-    assert_eq!(
-        shared.lock().unwrap().snapshot().status.ssh_hosts.state,
-        "loading"
-    );
-    // A request while one runs is the same listing, not a second one.
-    assert!(!shared.lock().unwrap().dispatch_json(&list_event()));
+    {
+        // Under the event's own lock: the listing's answers come at once, so
+        // after a release it may already have ended.
+        let mut runtime = shared.lock().unwrap();
+        assert!(runtime.dispatch_json(&list_event()));
+        assert_eq!(runtime.snapshot().status.ssh_hosts.state, "loading");
+        // A request while one runs is the same listing, not a second one.
+        assert!(!runtime.dispatch_json(&list_event()));
+    }
     wait(&shared, "the host list", |runtime| {
         runtime.snapshot().status.ssh_hosts.state == "ready"
     });
