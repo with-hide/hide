@@ -1218,13 +1218,16 @@ mod sys {
     /// down; the watch closing without one is this process's death, and the
     /// watcher kills the child and every process under it, found by walking
     /// the process table before the first signal as `kill_tree_of` does (a
-    /// `setsid` proxy command leaves the group), and then the group. The
-    /// supervisor exits with the child's status and takes its watcher with
-    /// it. The child gets the supervisor's standard streams: an asynchronous
-    /// list's input is `/dev/null` unless redirected, so it is passed on
-    /// through descriptor 4.
+    /// `setsid` proxy command leaves the group), and then the group. A
+    /// keeper it also starts ends what the child leaves behind when the
+    /// child exits first ([`KEEPER`]). The supervisor exits with the child's
+    /// status once the keeper is done, and takes its watcher with it. The
+    /// child gets the supervisor's standard streams: an asynchronous list's
+    /// input is `/dev/null` unless redirected, so it is passed on through
+    /// descriptor 4.
     const SUPERVISOR: &str = r#"watcher=$HIDE_TIED_WATCHER
-unset HIDE_TIED_WATCHER
+keeper=$HIDE_TIED_KEEPER
+unset HIDE_TIED_WATCHER HIDE_TIED_KEEPER
 exec 4<&0
 "$@" <&4 3<&- 4<&- &
 child=$!
@@ -1232,10 +1235,68 @@ exec 4<&-
 /bin/sh -c "$watcher" hide-tied-watch "$child" "$$" <&3 >/dev/null 2>&1 3<&- &
 watcher=$!
 exec 3<&-
+/bin/sh -c "$keeper" hide-tied-keep "$child" "$$" </dev/null >/dev/null 2>&1 &
+keeper=$!
 wait "$child"
 status=$?
 kill "$watcher" 2>/dev/null
+kill -s TERM "$keeper" 2>/dev/null
+wait "$keeper"
 exit "$status"
+"#;
+
+    /// The keeper [`SUPERVISOR`] starts: `$1` the child, `$2` the
+    /// supervisor. A process the child started and that left its group
+    /// (`setsid`) is found under the child only while the child lives, so
+    /// the keeper writes down the child's tree, each process by its id and
+    /// start time, soon after the child starts and then less and less often
+    /// (0.05 s doubling to 30 s), keeping the last tree it saw. Told the
+    /// child exited, it kills each process of that tree that is still the
+    /// same process, and everything under them. A process that leaves the
+    /// group and outlives the child between two looks escapes it; the
+    /// watcher still ends it if this process dies while the child runs.
+    const KEEPER: &str = r#"child=$1 super=$2 known= sleeper=
+tree() {
+  ps -A -o pid= -o ppid= -o lstart= 2>/dev/null | awk -v root="$child" -v super="$super" '
+{ p = $1; parent[p] = $2; kids[$2] = kids[$2] " " p; $1 = ""; $2 = ""; start[p] = $0 }
+END {
+  if (parent[root] != super) exit
+  n = 1; queue[1] = root
+  for (i = 1; i <= n; i++) {
+    m = split(kids[queue[i]], k, " ")
+    for (j = 1; j <= m; j++) if (!(k[j] in seen)) { seen[k[j]] = 1; printf "%s|%s;", k[j], start[k[j]]; queue[++n] = k[j] }
+  }
+}'
+}
+end() {
+  [ -n "$sleeper" ] && kill "$sleeper" 2>/dev/null
+  pids=$(ps -A -o pid= -o ppid= -o lstart= 2>/dev/null | KNOWN=$known awk '
+BEGIN { r = split(ENVIRON["KNOWN"], rows, ";"); for (i = 1; i <= r; i++) if (split(rows[i], f, "|") == 2) want[f[1]] = f[2] }
+{ p = $1; kids[$2] = kids[$2] " " p; $1 = ""; $2 = ""; if ((p in want) && want[p] == $0) { seen[p] = 1; queue[++n] = p } }
+END {
+  for (i = 1; i <= n; i++) {
+    print queue[i]
+    m = split(kids[queue[i]], k, " ")
+    for (j = 1; j <= m; j++) if (!(k[j] in seen)) { seen[k[j]] = 1; queue[++n] = k[j] }
+  }
+}')
+  [ -n "$pids" ] && kill -s KILL $pids 2>/dev/null
+  exit 0
+}
+trap end TERM
+step=0.05
+while :; do
+  sleep "$step" &
+  sleeper=$!
+  wait "$sleeper"
+  sleeper=
+  now=$(tree)
+  [ -n "$now" ] && known=$now
+  case $step in
+    0.05) step=0.1 ;; 0.1) step=0.2 ;; 0.2) step=0.5 ;; 0.5) step=1 ;;
+    1) step=2 ;; 2) step=4 ;; 4) step=8 ;; 8) step=15 ;; *) step=30 ;;
+  esac
+done
 "#;
 
     /// The watcher [`SUPERVISOR`] starts: `$1` the child, `$2` the
@@ -1296,10 +1357,12 @@ kill -s KILL -- "-$2" 2>/dev/null
                 Ok(())
             });
         }
-        // The supervisor's arguments are the child's, so the watcher's script
-        // travels in the environment, which the supervisor takes back out
+        // The supervisor's arguments are the child's, so the watcher's and
+        // the keeper's scripts travel in the environment, which the supervisor takes back out
         // before the child starts.
-        supervisor.env("HIDE_TIED_WATCHER", WATCHER);
+        supervisor
+            .env("HIDE_TIED_WATCHER", WATCHER)
+            .env("HIDE_TIED_KEEPER", KEEPER);
         let (child, mut tie) = spawn(&mut supervisor, None)?;
         drop(reader);
         tie.watch = Some(watch);

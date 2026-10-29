@@ -177,6 +177,38 @@ fn child_role() {
             println!("READY {}", grandchild.id());
             let _ = grandchild.wait();
         }
+        // An `ssh` whose proxy command left with `setsid` and that then
+        // exits first: its child outlives it in a session of its own.
+        #[cfg(unix)]
+        "leaves_setsid" => {
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "process::child_role",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(ROLE, "sleep")
+                .env_remove(OWNER_LAUNCH_KEYS[0])
+                .env_remove(OWNER_LAUNCH_KEYS[1])
+                .stdout(Stdio::null());
+            // SAFETY: setsid is async-signal-safe.
+            unsafe {
+                std::os::unix::process::CommandExt::pre_exec(&mut command, || {
+                    if libc::setsid() < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+            let grandchild = command.spawn().unwrap();
+            println!("READY {}", grandchild.id());
+            // Long enough for the keeper to have looked, as an `ssh` that
+            // failed after its proxy started.
+            thread::sleep(Duration::from_secs(2));
+            std::process::exit(0);
+        }
         // Two levels below it: a child that has a `tree` child.
         "deep" => {
             let mut child = Command::new(std::env::current_exe().unwrap())
@@ -694,6 +726,22 @@ fn a_tied_child_ends_with_its_owner_and_leaves_no_watcher() {
         .filter(|left| before.contains(left))
         .collect();
     assert!(left.is_empty(), "{left:?}");
+}
+
+/// A tied child that exits first takes with it what it left in a session
+/// of its own, while its owner lives on.
+#[cfg(unix)]
+#[test]
+fn a_tied_child_that_exits_first_leaves_no_setsid_descendant() {
+    let _serial = serial();
+    let mut child = OwnedChild::spawn_tied(&mut role_command("leaves_setsid")).unwrap();
+    let left = ready_number(child.take_stdout().unwrap());
+    let _identity = FixtureProcess::live(left);
+    assert!(child.wait().unwrap().success());
+    assert!(
+        gone_within(left, Duration::from_secs(5)),
+        "{left}, which the tied child left in a session of its own, survived it"
+    );
 }
 
 #[test]
