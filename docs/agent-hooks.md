@@ -153,7 +153,8 @@ Native hooks have no continuation flag, so a prompt ranks by its own text first;
 The combined ranking input is capped at 8 KiB on a UTF-8 boundary after composition.
 
 The lookup performs no provider or embedding call, transcript scan, child-process launch, or database write, and runs off the core's runtime lock.
-Missing, locked, corrupt, stale, over-limit, unresolved-Project, and over-deadline stores return no Memory context, and the hook still exits zero.
+Missing, corrupt, corrupt, stale, over-limit, unresolved-Project, and over-deadline stores return no Memory context, and the hook still exits zero.
+A Memory write never blocks the read, because the store is in WAL mode; what can is another connection opening alone (rebuilding the WAL index) or closing last (checkpointing), which each short-lived writer process does, so the read waits for that lock until its invocation expires and a lock that outlasts it ends as over-deadline (`MemoryStore::open_hook_read_only_with_expiry`).
 Memory waits for its answer until 1,250 ms after the inner hook starts; the 1,650 ms intake budget reserves its last 400 ms for letter confirmation after a successful stdout flush.
 The prompt supervisor bounds the inner helper at 1,850 ms from the outer helper's start, so the Memory read budget is not the entire prompt hook duration.
 SessionStart has the same Memory read budget, a separate two-second Workspace CLI probe asked beside it when its thread starts, and later count-report calls with their own two-second timeouts; its installed runtime entry has an eight-second timeout.
