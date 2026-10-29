@@ -822,11 +822,13 @@ fn a_windows_powershell_startup_question_is_never_answered_by_a_start_and_each_t
 
 /// Codex CLI 0.165.0 as a sleep meets it: it turns the kitty keyboard
 /// protocol on, quits on the first Ctrl+C into its empty composer and reads
-/// no input while it shuts down; then it hands the terminal back with the
-/// protocol off and the line settings it found put back without discarding
-/// what it never read, so a key sent meanwhile is left for the shell,
-/// encoded in the protocol. It hands back only once the test opens the
-/// `codex-release` FIFO in its home (`Release`); the alarm is its hang guard.
+/// no input while it shuts down. It reads one byte at a time up to that
+/// Ctrl+C, so a second press queued with it stays unread. Then it hands the
+/// terminal back with the protocol off and the line settings it found put
+/// back without discarding what it never read, so a key sent meanwhile is
+/// left for the shell, encoded in the protocol. It hands back only once
+/// the test opens the `codex-release` FIFO in its home (`Release`); the
+/// alarm is its hang guard.
 #[cfg(unix)]
 const CODEX: &str = r#"#define _GNU_SOURCE
 #include <fcntl.h>
@@ -849,14 +851,14 @@ int main(int argc, char **argv) {
     cfmakeraw(&raw);
     tcsetattr(0, TCSANOW, &raw);
     say("\033[>7u\xe2\x80\xba \033[2mAsk Codex to do anything\033[0m\r\n");
-    char held[64];
-    size_t count = 0;
+    const char press[] = "\033[99;5u";
+    size_t matched = 0;
     for (;;) {
-        ssize_t got = read(0, held + count, sizeof held - count);
-        if (got <= 0) return 1;
-        count += (size_t)got;
-        if (memchr(held, 3, count) || memmem(held, count, "\033[99;5u", 7)) break;
-        if (count > 32) count = 0;
+        char byte;
+        if (read(0, &byte, 1) != 1) return 1;
+        if (byte == 3) break;
+        matched = byte == press[matched] ? matched + 1 : byte == press[0];
+        if (matched == sizeof press - 1) break;
     }
     say("Shutting down...\r\n");
     alarm(60);
@@ -876,8 +878,8 @@ const QUITTING: &str = "Shutting down...";
 /// Lets the stand-in Codex CLI hand its terminal back at what the sleep has
 /// observed, never at a time: a screen read after the first press that
 /// shows it quitting, which the sleep acts on, or a second press answered,
-/// whose key Herdr has then written to the terminal the stand-in no longer
-/// reads.
+/// whose key Herdr has then encoded and queued for the terminal the
+/// stand-in no longer reads.
 #[cfg(unix)]
 struct Release {
     fifo: PathBuf,
