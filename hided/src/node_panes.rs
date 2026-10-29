@@ -136,6 +136,75 @@ impl NodePanes {
         });
     }
 
+    /// `hide <path>` from a plain shell of `node`'s own account, which the
+    /// node proved with its kernel and vouches for over `link`: accepted at
+    /// once, so a node whose link is gone answers its caller quickly, then
+    /// run as `hide <path>` from a pane of that device would be, on that
+    /// device's folder and nothing else. No credential is issued for it.
+    fn project_open(
+        self: &Arc<Self>,
+        node: &str,
+        link: &RemoteHost,
+        request: u64,
+        path: String,
+        request_id: String,
+    ) {
+        let refuse = |reason: &str| {
+            record_refusal(node, None, reason, "core");
+            self.control_reply(
+                node,
+                link,
+                Call::PaneProofAnswer {
+                    request,
+                    answer: refused(reason),
+                },
+            );
+        };
+        if !crate::workspace_cli::valid_request_id(&request_id) {
+            return refuse("invalid_request");
+        }
+        let Some(state) = self.state.get().cloned() else {
+            return refuse("hide_unavailable");
+        };
+        let Ok(permit) = Arc::clone(&self.proofs).try_acquire_owned() else {
+            return refuse("bridge_busy");
+        };
+        let node = node.to_owned();
+        let link = link.clone();
+        self.runtime.spawn_blocking(move || {
+            let _permit = permit;
+            let accepted = Call::PaneProofAnswer {
+                request,
+                answer: ProofAnswer::ProjectOpenAccepted,
+            };
+            if !send_reply(&node, &link, accepted) {
+                return;
+            }
+            let windows = state.renderers.load(std::sync::atomic::Ordering::SeqCst);
+            let outcome = crate::project_open::run(
+                &state.core,
+                &state.boundary,
+                &state.window_calls,
+                windows,
+                &node,
+                &path,
+                &request_id,
+            );
+            if let Err((reason, _)) = &outcome {
+                record_refusal(&node, None, reason, "core");
+            }
+            let answer = crate::project_open::answer(&request_id, outcome);
+            send_reply(
+                &node,
+                &link,
+                Call::PaneProofAnswer {
+                    request,
+                    answer: ProofAnswer::ProjectOpen { answer },
+                },
+            );
+        });
+    }
+
     /// Every callback response waits on the link off its reader, with a
     /// permit retained while queued and running. Closing a saturated link
     /// marks its credentials dead immediately and wakes normal reader cleanup.
@@ -278,6 +347,11 @@ impl PaneEvents for Events {
                 one_shot,
                 hook,
             ),
+            NodeEvent::ProjectOpen {
+                request,
+                path,
+                request_id,
+            } => panes.project_open(node, link, request, path, request_id),
             NodeEvent::Revoke { token } => {
                 if let Some(state) = panes.state.get() {
                     state.pane_capabilities.revoke_vouched(node, link, &token);

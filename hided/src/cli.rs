@@ -203,7 +203,7 @@ fn help_text() -> String {
         text.push_str(&indent(lines));
     }
     text.push_str(
-        "\nA command's name wins over a folder of the same name: hide status is the command, hide ./status opens the folder status.\nOn a connected device, hide <path> works in a Hide pane there and brings Hide's window to that device's folder.\n\nCommands that act on the operator's screen (workspace, file, diff, view, browser) need Hide's window open and a pane or shell inside a registered checkout.\nThey never start Hide.\nhide links needs only that pane or shell and a running Hide, and reads the project it is in unless --all-projects is given.\nhide memory reads, adds to and forgets from that project's Project Memory, which Hide keeps for the projects of its own device and of every linked device with a Memory reader.\nhide memory release ends a hold that an agent's stale report put on a card.\nhide memory recheck has a card checked again, out of every hook until the check ends; an agent may ask only for a card its conversation was given.\nRun in a Hide shell pane with no agent, it also lets that card's text be reported stale once more.\n",
+        "\nA command's name wins over a folder of the same name: hide status is the command, hide ./status opens the folder status.\nOn a connected device, hide <path> works in a Hide pane there or in a plain ssh shell as the account Hide connects with, and brings Hide's window to that device's folder.\n\nCommands that act on the operator's screen (workspace, file, diff, view, browser) need Hide's window open and a pane or shell inside a registered checkout.\nThey never start Hide.\nhide links needs only that pane or shell and a running Hide, and reads the project it is in unless --all-projects is given.\nhide memory reads, adds to and forgets from that project's Project Memory, which Hide keeps for the projects of its own device and of every linked device with a Memory reader.\nhide memory release ends a hold that an agent's stale report put on a card.\nhide memory recheck has a card checked again, out of every hook until the check ends; an agent may ask only for a card its conversation was given.\nRun in a Hide shell pane with no agent, it also lets that card's text be reported stale once more.\n",
     );
     text
 }
@@ -2082,8 +2082,8 @@ fn open(env: &Env) -> Result<(), String> {
 /// core's own machine the command finds or starts the daemon as bare `hide`
 /// does and asks with the daemon's token; with no window open there it then
 /// opens Hide as bare `hide` does. On a connected device, or a machine whose
-/// Hide is a window of a core elsewhere, it asks with its pane's credential,
-/// which only a Hide pane there can prove.
+/// Hide is a window of a core elsewhere, a pane asks with its credential and
+/// a plain shell asks the machine's node link as a process of its account.
 fn open_path(env: &Env, raw: &str) -> Result<(), String> {
     let folder = local_folder(raw)?;
     let wire = hide_platform::path::to_wire(&folder)
@@ -2093,11 +2093,17 @@ fn open_path(env: &Env, raw: &str) -> Result<(), String> {
         None => !runs_from_helper_kit(env),
     };
     if !local {
-        let answer = crate::workspace_cli::Credential::acquire(env)
-            .and_then(|mut credential| {
+        // A pane's command proves its pane; a plain shell (an ssh login to
+        // the device) asks the device's link as a process of its account.
+        let in_pane = std::env::var_os(crate::env::HIDE_CAP_REF).is_some() || env.pane_id.is_some();
+        let answer = if in_pane {
+            crate::workspace_cli::Credential::acquire(env).and_then(|mut credential| {
                 crate::workspace_cli::request_project_open(&mut credential, &wire)
             })
-            .map_err(|reason| open_path_refusal(&reason, open_path_next_action(&reason)))?;
+        } else {
+            crate::workspace_cli::request_project_open_on_bridge(env, &wire)
+        }
+        .map_err(|reason| open_path_refusal(&reason, open_path_next_action(&reason)))?;
         let result = open_path_result(&answer)?;
         if result["window"] != true {
             println!(
@@ -2196,7 +2202,10 @@ fn open_path_next_action(reason: &str) -> &'static str {
             "On a connected device, run it in a Hide pane there: Hide takes a device's commands only from the panes it runs, and this shell is not one"
         }
         "hide_unavailable" | "bridge_unavailable" => {
-            "Hide is not running or this device is not connected to it; open Hide on its machine and retry"
+            "This device is not connected to Hide: connect it in Hide first, then run it again"
+        }
+        "bridge_ambiguous" => {
+            "More than one Hide has this device open; run it in a Hide pane of the one you mean"
         }
         "credential_rejected" => "Run hide status, then retry",
         "request_timeout" => {

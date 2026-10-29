@@ -28,7 +28,8 @@ use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use hide_node_link::panes::{
-    MAX_CHUNK, MAX_STREAMS, NodeEvent, PaneIdentity, PanesStarted, ProofAnswer, StreamCaller,
+    MAX_CHUNK, MAX_STREAMS, NodeEvent, PROJECT_OPEN_ACCEPT, PROJECT_OPEN_ANSWER,
+    PROJECT_OPENS_PER_MINUTE, PaneIdentity, PanesStarted, ProofAnswer, StreamCaller,
 };
 use hide_platform::fs::private;
 use hide_platform::ipc::{ListenerCloser, LocalListener, LocalStream, ShutdownHandle};
@@ -105,6 +106,32 @@ pub struct Panes {
     clients: AtomicUsize,
     next: AtomicU64,
     checkout_callers: bool,
+    opens: Mutex<Opens>,
+}
+
+/// The plain shells' `hide <path>` on this link: one in flight, and when
+/// the last [`PROJECT_OPENS_PER_MINUTE`] started.
+#[derive(Default)]
+struct Opens {
+    in_flight: bool,
+    started: std::collections::VecDeque<Instant>,
+}
+
+/// An open in flight, until it is dropped.
+struct OpenSlot<'a>(&'a Mutex<Opens>);
+
+impl Drop for OpenSlot<'_> {
+    fn drop(&mut self) {
+        lock(self.0).in_flight = false;
+    }
+}
+
+/// A `hide <path>` from a plain shell, as its `hide` sends it.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProjectOpenRequest {
+    path: String,
+    request_id: String,
 }
 
 struct StreamEnd {
@@ -130,6 +157,7 @@ impl Panes {
             clients: AtomicUsize::new(0),
             next: AtomicU64::new(1),
             checkout_callers: false,
+            opens: Mutex::new(Opens::default()),
         }
     }
 
@@ -248,9 +276,15 @@ impl Panes {
     /// waits for any more (its caller left, or it timed out) is dropped.
     pub fn answer_proof(&self, request: u64, answer: ProofAnswer) -> HostResult<Value> {
         let persistent_info = matches!(answer, ProofAnswer::WorkspaceInfo { .. });
-        let accepted = lock(&self.proofs)
-            .remove(&request)
-            .is_some_and(|waiting| waiting.try_send(answer).is_ok());
+        let mut proofs = lock(&self.proofs);
+        // An accepted open waits on for its outcome under the same request.
+        let waiting = if answer == ProofAnswer::ProjectOpenAccepted {
+            proofs.get(&request).cloned()
+        } else {
+            proofs.remove(&request)
+        };
+        drop(proofs);
+        let accepted = waiting.is_some_and(|waiting| waiting.try_send(answer).is_ok());
         // A late guidance answer must not claim a reference no caller got.
         Ok(if persistent_info {
             json!(accepted)
@@ -384,6 +418,9 @@ impl Panes {
             Ok(request) if request.get("stream") == Some(&Value::Bool(true)) => {
                 self.serve_stream(stream, request.get("token").and_then(Value::as_str), output)
             }
+            Ok(request) if request.get("project_open").is_some() => {
+                self.serve_project_open(stream, request, output)
+            }
             Ok(request) => self.serve_bootstrap(stream, request, output),
             Err(reason) => {
                 let _ = answer_client(&mut stream, Err(reason.to_owned()));
@@ -514,6 +551,10 @@ impl Panes {
                     core_refused = true;
                     return Err(reason);
                 }
+                // An open's answers never pair a credential request.
+                ProofAnswer::ProjectOpenAccepted | ProofAnswer::ProjectOpen { .. } => {
+                    return Err("invalid_response".to_owned());
+                }
                 ProofAnswer::Issued { token, issued_new } => {
                     if token.len() != 64 || !token.bytes().all(|byte| byte.is_ascii_hexdigit()) {
                         return Err("invalid_response".to_owned());
@@ -599,6 +640,105 @@ impl Panes {
                 let _ = write_event(output, &NodeEvent::Revoke { token });
             }
         }
+    }
+
+    /// `hide <path>` from a shell in no pane: proved only as a process of
+    /// this node's own account, which the system names for the stream's
+    /// other end, and answered with nothing but what the core's open says.
+    /// No credential is issued and no stream opened, so the caller gains no
+    /// other command.
+    fn serve_project_open(
+        &self,
+        mut stream: LocalStream,
+        request: Value,
+        output: &Mutex<impl Write>,
+    ) {
+        let result = self.project_open(&stream, request, output);
+        let answer = match result {
+            Ok(answer) => answer,
+            Err(reason) => {
+                report_refusal(output, None, &reason);
+                json!({
+                    "type": "workspace_result", "ok": false, "reason": reason,
+                    "next_action": hide_node_link::panes::project_open_next_action(&reason),
+                })
+            }
+        };
+        let _ = writeln!(stream, "{answer}");
+    }
+
+    fn project_open(
+        &self,
+        stream: &LocalStream,
+        request: Value,
+        output: &Mutex<impl Write>,
+    ) -> Result<Value, String> {
+        if !stream.peer_is_this_account().unwrap_or(false) {
+            return Err("caller_not_this_account".to_owned());
+        }
+        let open: ProjectOpenRequest = request
+            .get("project_open")
+            .cloned()
+            .and_then(|open| serde_json::from_value(open).ok())
+            .ok_or("invalid_request")?;
+        let printable = |text: &str, limit: usize| {
+            !text.is_empty() && text.len() <= limit && !text.chars().any(char::is_control)
+        };
+        if !printable(&open.path, 4096)
+            || !hide_platform::path::is_wire_absolute(&open.path)
+            || !printable(&open.request_id, 128)
+        {
+            return Err("invalid_request".to_owned());
+        }
+        if self.started.get().is_none() || self.stopped.load(Ordering::Acquire) {
+            return Err("bridge_unavailable".to_owned());
+        }
+        let _slot = self.claim_open()?;
+        let id = self.next.fetch_add(1, Ordering::Relaxed);
+        // Room for the acceptance and the outcome.
+        let (waiting, answers) = mpsc::sync_channel(2);
+        lock(&self.proofs).insert(id, waiting);
+        let event = NodeEvent::ProjectOpen {
+            request: id,
+            path: open.path,
+            request_id: open.request_id,
+        };
+        let outcome = write_event(output, &event)
+            .ok()
+            .and_then(|()| answers.recv_timeout(PROJECT_OPEN_ACCEPT).ok())
+            .and_then(|first| match first {
+                ProofAnswer::ProjectOpenAccepted => answers.recv_timeout(PROJECT_OPEN_ANSWER).ok(),
+                other => Some(other),
+            });
+        lock(&self.proofs).remove(&id);
+        match outcome.ok_or("bridge_unavailable")? {
+            ProofAnswer::ProjectOpen { answer } => Ok(answer),
+            ProofAnswer::Refused { reason, .. } => Err(reason),
+            _ => Err("invalid_response".to_owned()),
+        }
+    }
+
+    /// Takes the one open this link runs at a time, within the minute's
+    /// bound.
+    fn claim_open(&self) -> Result<OpenSlot<'_>, String> {
+        let mut opens = lock(&self.opens);
+        if opens.in_flight {
+            return Err("project_open_busy".to_owned());
+        }
+        let now = Instant::now();
+        while opens
+            .started
+            .front()
+            .is_some_and(|started| now.duration_since(*started) >= Duration::from_secs(60))
+        {
+            opens.started.pop_front();
+        }
+        if opens.started.len() >= PROJECT_OPENS_PER_MINUTE {
+            return Err("project_open_rate_limited".to_owned());
+        }
+        opens.started.push_back(now);
+        opens.in_flight = true;
+        Ok(OpenSlot(&self.opens))
     }
 
     fn serve_stream(&self, stream: LocalStream, token: Option<&str>, output: &Mutex<impl Write>) {
@@ -873,6 +1013,224 @@ mod tests {
                 json!({"ok":false,"reason":reason,"next_action":advice})
             );
         }
+    }
+
+    /// A link's output as the core reads it: one event per line, handed to
+    /// the test as it is written.
+    struct Events(mpsc::Sender<Value>);
+
+    impl Write for Events {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            for line in bytes
+                .split(|byte| *byte == b'\n')
+                .filter(|line| !line.is_empty())
+            {
+                let _ = self
+                    .0
+                    .send(serde_json::from_slice(line).map_err(io::Error::other)?);
+            }
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A started pane service in a short `/tmp` folder (a socket path has a
+    /// length bound), its events, and the socket a plain shell connects to.
+    fn with_service(body: impl FnOnce(&Panes, &mpsc::Receiver<Value>, &Path)) {
+        let root = tempfile::Builder::new()
+            .prefix("hp")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let bridges = root.path().join("b");
+        let (sender, events) = mpsc::channel();
+        let output = Mutex::new(Events(sender));
+        let panes = Panes::new();
+        std::thread::scope(|scope| {
+            let started = panes
+                .start(scope, &output, &bridges, "/tmp/hide-test-herdr.sock")
+                .unwrap();
+            let socket = hide_platform::path::from_wire(&started.socket).unwrap();
+            body(&panes, &events, &socket);
+            panes.stop();
+        });
+        panes.remove_folder();
+    }
+
+    /// What a plain shell's `hide <path>` reads back for `request`.
+    fn ask(socket: &Path, request: Value) -> std::thread::JoinHandle<Value> {
+        let socket = socket.to_path_buf();
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            let mut stream = LocalStream::connect(&socket).unwrap();
+            writeln!(stream, "{request}").unwrap();
+            let mut line = String::new();
+            std::io::BufReader::new(stream)
+                .read_line(&mut line)
+                .unwrap();
+            serde_json::from_str(&line).unwrap()
+        })
+    }
+
+    fn open(path: &str) -> Value {
+        json!({"project_open": {"path": path, "request_id": "1-open"}})
+    }
+
+    /// The next event of `kind`, past the refusals and pings beside it.
+    fn next_event(events: &mpsc::Receiver<Value>, kind: &str) -> Value {
+        loop {
+            let event = events.recv_timeout(Duration::from_secs(10)).unwrap();
+            if event["event"] == kind {
+                return event;
+            }
+        }
+    }
+
+    /// A shell of the node's own account, in no pane, gets exactly the
+    /// core's answer to one open, and the node vouches for nothing else.
+    #[test]
+    fn a_plain_shell_open_goes_up_once_and_reads_the_core_s_answer() {
+        with_service(|panes, events, socket| {
+            let caller = ask(socket, open("/home/me/app"));
+            let event = next_event(events, "project_open");
+            assert_eq!(event["path"], "/home/me/app");
+            assert_eq!(event["request_id"], "1-open");
+            let request = event["request"].as_u64().unwrap();
+            panes
+                .answer_proof(request, ProofAnswer::ProjectOpenAccepted)
+                .unwrap();
+            let answer =
+                json!({"type": "workspace_result", "ok": true, "result": {"label": "app"}});
+            panes
+                .answer_proof(
+                    request,
+                    ProofAnswer::ProjectOpen {
+                        answer: answer.clone(),
+                    },
+                )
+                .unwrap();
+            assert_eq!(caller.join().unwrap(), answer);
+            assert!(
+                lock(&panes.issued).is_empty(),
+                "no credential is issued for an open"
+            );
+        });
+    }
+
+    /// A link that ended without the node noticing never takes the open:
+    /// the caller hears to connect the device within the acceptance bound.
+    #[test]
+    fn an_open_no_core_takes_answers_connect_first_within_its_bound() {
+        with_service(|_, events, socket| {
+            let asked = Instant::now();
+            let caller = ask(socket, open("/home/me/app"));
+            next_event(events, "project_open");
+            let answer = caller.join().unwrap();
+            assert_eq!(answer["ok"], false);
+            assert_eq!(answer["reason"], "bridge_unavailable");
+            assert_eq!(
+                answer["next_action"],
+                "Connect this device in Hide first, then run it again"
+            );
+            assert!(asked.elapsed() < PROJECT_OPEN_ACCEPT + Duration::from_secs(3));
+        });
+    }
+
+    /// A relative or oversized path, or an unknown field, is refused by the
+    /// node before anything goes up.
+    #[test]
+    fn a_malformed_open_never_reaches_the_core() {
+        with_service(|_, events, socket| {
+            for request in [
+                open("app"),
+                open(&format!("/{}", "a".repeat(4096))),
+                json!({"project_open": {"path": "/home/me/app", "request_id": "1", "pane_id": "p"}}),
+            ] {
+                let answer = ask(socket, request).join().unwrap();
+                assert_eq!(answer["reason"], "invalid_request", "{answer}");
+            }
+            let refusal = next_event(events, "refused");
+            assert_eq!(refusal["reason"], "invalid_request");
+            assert!(
+                events
+                    .try_iter()
+                    .all(|event| event["event"] != "project_open"),
+                "nothing went up"
+            );
+        });
+    }
+
+    /// One open runs at a time, and six start in a minute at most.
+    #[test]
+    fn opens_run_one_at_a_time_and_six_a_minute() {
+        let panes = Panes::new();
+        let running = panes.claim_open().unwrap();
+        assert_eq!(panes.claim_open().err().unwrap(), "project_open_busy");
+        drop(running);
+        for _ in 1..PROJECT_OPENS_PER_MINUTE {
+            drop(panes.claim_open().unwrap());
+        }
+        assert_eq!(
+            panes.claim_open().err().unwrap(),
+            "project_open_rate_limited"
+        );
+        // A minute later the oldest has left the window.
+        if let Some(started) = lock(&panes.opens).started.front_mut() {
+            *started -= Duration::from_secs(61);
+        }
+        drop(panes.claim_open().unwrap());
+    }
+
+    /// A process of another account is refused by the kernel's own answer
+    /// about the stream's other end, never by a field it sent. The bridge
+    /// folder is private, so the test opens its own folder and socket to
+    /// that account first; `nobody` connects with the system's Python.
+    #[test]
+    #[ignore = "needs passwordless sudo to run a process as another account; the remote mailbox lane runs it"]
+    fn another_account_s_open_is_refused_by_the_kernel_s_peer_check() {
+        use std::os::unix::fs::PermissionsExt;
+        with_service(|_, events, socket| {
+            for (path, mode) in [
+                (
+                    socket.parent().unwrap().parent().unwrap().parent().unwrap(),
+                    0o711,
+                ),
+                (socket.parent().unwrap().parent().unwrap(), 0o711),
+                (socket.parent().unwrap(), 0o711),
+                (socket, 0o777),
+            ] {
+                fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+            }
+            let script = "import socket, sys\n\
+                s = socket.socket(socket.AF_UNIX)\n\
+                s.connect(sys.argv[1])\n\
+                s.sendall(sys.argv[2].encode() + b'\\n')\n\
+                sys.stdout.write(s.makefile().readline())\n";
+            let output = std::process::Command::new("sudo")
+                .args(["-n", "-u", "nobody", "python3", "-c", script])
+                .arg(socket)
+                .arg(open("/home/me/app").to_string())
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let answer: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(answer["reason"], "caller_not_this_account", "{answer}");
+            assert_eq!(
+                next_event(events, "refused")["reason"],
+                "caller_not_this_account"
+            );
+            assert!(
+                events
+                    .try_iter()
+                    .all(|event| event["event"] != "project_open")
+            );
+        });
     }
 
     /// A starting service removes what a killed node or an older Hide's
