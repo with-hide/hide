@@ -4,7 +4,8 @@ import type { CellRow } from "./selection";
 import { useShellStore } from "./store";
 import { linkCandidates, TOKEN_CANDIDATES } from "./terminalLinks";
 import type { SnapshotRest } from "./snapshot";
-import { PROBE_CACHE_CAP, PROBE_NEW_LIMIT, PROBE_TTL_MS, clearProbeCache, osc8Handler, owningCheckout, paneContext, pathLookups, probePaths, resolveGroups } from "./terminalLinkProvider";
+import type { ILink, ILinkProvider, Terminal } from "@xterm/xterm";
+import { PROBE_CACHE_CAP, PROBE_NEW_LIMIT, PROBE_TTL_MS, clearProbeCache, osc8Handler, owningCheckout, paneContext, pathLookups, probePaths, registerTerminalLinks, resolveGroups } from "./terminalLinkProvider";
 
 function row(text: string, width: number): CellRow {
   const cells: CellRow = [];
@@ -295,6 +296,42 @@ it("a retained terminal link opens under its current address after a native move
   const actions = { openLink: vi.fn(), openTerminalPath: vi.fn() };
   const handler = osc8Handler(() => pane, { hovered: false }, () => actions, () => false);
   pane = "w2:p2";
-  handler.activate({ metaKey: false, ctrlKey: false } as MouseEvent, "https://example.test/moved", { start: { x: 1, y: 1 }, end: { x: 27, y: 1 } });
+  handler.activate({ button: 0, metaKey: false, ctrlKey: false } as MouseEvent, "https://example.test/moved", { start: { x: 1, y: 1 }, end: { x: 27, y: 1 } });
   expect(actions.openLink).toHaveBeenCalledWith("https://example.test/moved", false, "w2:p2");
+});
+
+/** A one-row terminal showing `text`, with the link provider it was given. */
+function terminalShowing(text: string): { term: Terminal; links: () => Promise<ILink[]> } {
+  let provider: ILinkProvider | undefined;
+  const cells = [...text];
+  const line = { getCell: (x: number) => ({ getWidth: () => 1, getChars: () => cells[x] ?? "" }) };
+  const term = {
+    cols: text.length,
+    buffer: { active: { length: 1, getLine: (y: number) => (y === 0 ? line : undefined) } },
+    hasSelection: () => false,
+    registerLinkProvider: (given: ILinkProvider) => {
+      provider = given;
+      return { dispose() {} };
+    },
+  } as unknown as Terminal;
+  return { term, links: () => new Promise((resolve) => provider!.provideLinks(1, (links) => resolve(links ?? []))) };
+}
+
+// xterm activates a link on the release of any button, and on Windows the
+// right-click menu opens after that release, so a right-click on a link
+// opened it beside the menu (with-hide/hide-private#252).
+it("only the primary button's release opens a link, never a right-click's or a middle-click's", async () => {
+  const actions = { openLink: vi.fn(), openTerminalPath: vi.fn() };
+  const { term, links } = terminalShowing("see https://example.test/a");
+  registerTerminalLinks(term, "w1:p1", { hovered: false }, () => actions);
+  const [link] = await links();
+  const osc8 = osc8Handler("w1:p1", { hovered: false }, () => actions, () => false);
+  for (const button of [2, 1]) {
+    link!.activate({ button, metaKey: false, ctrlKey: false } as MouseEvent, link!.text);
+    osc8.activate({ button, metaKey: false, ctrlKey: false } as MouseEvent, "https://example.test/b", link!.range);
+  }
+  expect(actions.openLink).not.toHaveBeenCalled();
+  link!.activate({ button: 0, metaKey: false, ctrlKey: false } as MouseEvent, link!.text);
+  osc8.activate({ button: 0, metaKey: false, ctrlKey: false } as MouseEvent, "https://example.test/b", link!.range);
+  expect(actions.openLink.mock.calls).toEqual([["https://example.test/a", false, "w1:p1"], ["https://example.test/b", false, "w1:p1"]]);
 });

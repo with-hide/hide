@@ -12,6 +12,8 @@
 //
 // A click opens a URL or HTML as a page, or another file in View.
 // ⌘-click (Ctrl off macOS) hands it to the operating system.
+// Only the primary button opens: xterm activates a link on any button's
+// release, and on Windows the right-click menu comes after that release.
 // A program's own OSC 8 links take the same routes through xterm's link
 // handler, which replaces xterm's confirm dialog.
 
@@ -221,9 +223,14 @@ export async function resolveGroups(
 /** Per-terminal link state: whether the pointer is over a link, so a click on one is not also the program's. */
 export type LinkState = { hovered: boolean; link?: { range: IBufferRange; resolved: TerminalContextLink } | null };
 
+/** Whether a link's release is a click that opens it: the primary button's, not a right-click's or a middle-click's. */
+function opens(event: MouseEvent): boolean {
+  return event.button === 0;
+}
+
 function open(actions: TerminalLinkActions, resolved: TerminalContextLink, event: MouseEvent, selecting: boolean, paneId: string): void {
   // A press that dragged across the link selected its text; the release is not a click.
-  if (selecting) return;
+  if (selecting || !opens(event)) return;
   const external = holdsCommandKey(event);
   const { target, found } = resolved;
   if (target.kind === "url") actions.openLink(target.url, external, paneId);
@@ -315,7 +322,7 @@ export function osc8Handler(pane: string | (() => string), state: LinkState, act
     allowNonHttpProtocols: true,
     activate(event, uri) {
       const paneId = typeof pane === "string" ? pane : pane();
-      if (hasSelection()) return;
+      if (hasSelection() || !opens(event)) return;
       const target = osc8Target(uri);
       const diagnostic = useShellStore.getState().noteDiagnostic;
       if (!target) {

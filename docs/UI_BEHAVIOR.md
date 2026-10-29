@@ -858,6 +858,7 @@ Right-clicking an existing path offers Open, Open in default application, the ho
 Open source opens that HTML file in View at the line its link names.
 These choices use the exact target under the pointer, including an OSC 8 label, and keep that target after the pointer leaves it; Copy path copies its physical path without the line suffix.
 Opening or dismissing the menu moves no checkout, opens nothing and sends no click to the terminal program; a late path check cannot reopen a dismissed menu or replace a newer one.
+Only the primary button opens a link: a right-click or middle-click opens nothing, also on Windows, where the menu comes after the button is released.
 ⌘-click (Ctrl off macOS) hands the link to the operating system: a URL to the default browser, a path to its default application or, for a folder, a Finder window, within the limits below.
 A file outside every registered checkout, such as `/tmp/shot.png`, opens on a plain click in the desktop app's own window on the core's machine as a read-only tab of the front Workspace, with an External (외부) badge beside its name (PRD outside-path-in-hide).
 An image, a PDF and a video open in the viewers a checkout file uses, an HTML file as a browser display, and any other text, a script such as `.sh` or `.py` included, as read-only text at the link's line that saves nothing.
