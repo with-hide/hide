@@ -82,12 +82,8 @@ type Page = {
   emulated: string | null;
   report: NodeJS.Timeout | null;
   route: ResolvedPage | null;
-  /**
-   * The load the core asked for that has not stopped yet: its stamp, when it
-   * was asked and whether its document committed. Each stage is one log line,
-   * so a load that never ends names the stage it stopped at.
-   */
-  loading: { load: number; at: number; committed: boolean } | null;
+  /** The load the core asked for that has not settled yet; a newer one replaces it. */
+  loading: CoreLoad | null;
   partition: string;
   /** Native file reads are forbidden before the first load of a web/blank
    * generation. Only a separately created manual-file partition permits them. */
@@ -114,6 +110,15 @@ type Page = {
   /** What each public name a local file page asked for resolved to, bounded. */
   readonly hostVerdicts: Map<string, boolean>;
 };
+/**
+ * One load the core asked of a page, so its stages are logged against it
+ * alone: `native` once its own `loadURL` was called, since until then a
+ * commit or stop belongs to the load before it, and `committed` after its
+ * first document commit. Each stage is one log line, so a load that never
+ * ends names the stage it stopped at.
+ */
+type CoreLoad = { readonly load: number; readonly at: number; native: boolean; committed: boolean };
+
 /** Names a local file page may have resolved at once; past it a name is resolved on every request. */
 const MAX_HOST_VERDICTS = 64;
 
@@ -745,7 +750,8 @@ export class BrowserViews {
       return;
     }
     const stamp = page.applied;
-    page.loading = { load: stamp, at: this.idle.now(), committed: false };
+    const owned: CoreLoad = { load: stamp, at: this.idle.now(), native: false, committed: false };
+    page.loading = owned;
     this.update(page, { url, loading: true, failure: null });
     // An outside file's route is its own file, which no daemon may name.
     const resolved = page.grant ? Promise.resolve<ResolvedPage>({ url, source_url: url, load: stamp }) : this.resolve(page.workspace, page.id, stamp);
@@ -757,38 +763,51 @@ export class BrowserViews {
       if (!loadable(route.url)) throw new Error("Resolved page address cannot be loaded");
       if (!page.grant && browserPartition(page.workspace, route.source_url, this.node) !== page.partition) throw new Error("Resolved page requires a different browser partition");
       page.route = route;
-      this.loadStage(page, "browser.load_routed");
-      return page.view.webContents.loadURL(route.url).catch((error: unknown) => {
-        // did-fail-load reports it; a load a newer one replaced is not a failure.
-        const code = (error as { errno?: number }).errno;
-        if (code !== ERR_ABORTED) this.log.event("browser.load_failed", { code });
+      this.loadStage(page, owned, "browser.load_routed");
+      owned.native = true;
+      // The call's own promise settles with this load alone, where the page's
+      // stop events would also end an earlier load or one the page began.
+      return page.view.webContents.loadURL(route.url).then(
+        () => this.loadStage(page, owned, "browser.load_stopped", { outcome: "loaded" }),
+        (error: unknown) => {
+          // did-fail-load reports it; a load a newer one replaced is not a failure.
+          const code = (error as { errno?: number }).errno;
+          if (code !== ERR_ABORTED) this.log.event("browser.load_failed", { code });
+          this.loadStage(page, owned, "browser.load_stopped", code === ERR_ABORTED ? { outcome: "aborted" } : { outcome: "failed", code: code ?? null });
+        },
+      ).finally(() => {
+        if (page.loading === owned) page.loading = null;
       });
     }).catch((error: unknown) => {
+      if (page.loading === owned) page.loading = null;
       if (this.pages.get(page.key) !== page || page.applied !== stamp) return;
       this.log.event("browser.route_failed", { detail: String(error) });
       this.update(page, { url, loading: false, failure: this.words()("native.browser.routeUnavailable") });
     });
   }
 
-  /** One stage of the load the core asked of `page`, with the time since it asked; nothing for a load the page began itself. */
-  private loadStage(page: Page, event: "browser.load_routed" | "browser.load_committed" | "browser.load_stopped"): void {
-    if (!page.loading || page.loading.load !== page.applied) return;
-    this.log.event(event, { id: page.id, load: page.loading.load, ms: this.idle.now() - page.loading.at });
+  /**
+   * One stage of `owned`, with the time since it was asked, while it is the
+   * page's current load. The display id repeats across checkouts, so the
+   * page's contents id names the native page, the one a failure dump reads.
+   */
+  private loadStage(page: Page, owned: CoreLoad, event: "browser.load_routed" | "browser.load_committed" | "browser.load_stopped", fields: Record<string, string | number | null> = {}): void {
+    if (page.loading !== owned) return;
+    this.log.event(event, { id: page.id, contents: page.view.webContents.id, load: owned.load, ms: this.idle.now() - owned.at, ...fields });
   }
 
   private watch(page: Page): void {
     const contents = page.view.webContents;
     const history = () => ({ canGoBack: contents.navigationHistory.canGoBack(), canGoForward: contents.navigationHistory.canGoForward() });
     contents.on("did-start-loading", () => this.update(page, { loading: true, failure: null }));
-    contents.on("did-stop-loading", () => {
-      this.loadStage(page, "browser.load_stopped");
-      page.loading = null;
-      this.update(page, { loading: false, ...history() });
-    });
+    contents.on("did-stop-loading", () => this.update(page, { loading: false, ...history() }));
     contents.on("did-navigate", (_event, url) => {
-      if (page.loading && !page.loading.committed) {
-        this.loadStage(page, "browser.load_committed");
-        page.loading.committed = true;
+      // Electron emits this as the navigation finishes, so a commit before
+      // the current load's own `loadURL` is the load before it.
+      const owned = page.loading;
+      if (owned?.native && !owned.committed) {
+        this.loadStage(page, owned, "browser.load_committed");
+        owned.committed = true;
       }
       // A new document plays nothing yet.
       page.playing = false;
