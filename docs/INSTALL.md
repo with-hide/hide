@@ -450,7 +450,7 @@ hide hands the answer to that ssh and keeps it nowhere, so a later connection as
 A reconnect hide starts on its own asks nothing and stops at Sign in on the row until you press it; a server whose key no longer matches `known_hosts` is refused without asking, with the `ssh <alias>` to check it in a terminal.
 
 An agent you ask to add a machine does it with `hide device add <alias> [--name <name>] [--socket <path>]`, run on the machine that runs Hide; `hide device list` shows each machine's id, state and helper, and `hide device remove <id>` removes one as Settings does.
-The command registers the machine without Hide's helper, and its answer tells the agent to ask you to choose Allow and install on the machine's row in Settings › Devices: installing writes that account's hook files, which only you agree to, and until then the machine's files, Git and terminals wait.
+The command registers the machine without Hide's helper, and its answer tells the agent to ask you to choose Allow and install on the machine's row in Settings › Devices: installing writes that account's hook files, which only you agree to, and until then the machine's Herdr, files, Git and terminals wait.
 A remove is refused while a file tab of that machine is open, because Settings stores the tab's draft first and the command cannot; a command run on a connected machine is refused with `machine_not_permitted`.
 
 The remote machine does not need Herdr installed or a server running first.
@@ -479,8 +479,8 @@ Its agent panes show labels and Workspace guidance as panes on this Mac do, with
 A device's session gets its Project's Memory from this Mac's store through the device's helper: the index of cards when the session starts and the cards that fit each prompt, while the device is connected and Hide's hook is installed there.
 `hide memory` in a device's pane asks that same store, so its answers are this Mac's: `memory_off` until you turn Memory on for the Project in Hide.
 The store stays on this Mac and is never copied to the device.
-A machine allowed by an earlier version of Hide gets the whole kit on its next connection without asking again; a machine added without the helper installs nothing until you press Allow and install on its row.
-Only supported device platforms get the kit; another platform shows why on its row and is only viewed and driven.
+A machine allowed by an earlier version of Hide gets the whole kit on its next connection without asking again; a machine added without the helper installs nothing and does not connect until you press Allow and install on its row, because its Herdr, files and terminals all travel through the helper's link.
+Only supported device platforms get the kit; another platform shows why on its row and does not connect.
 Removing a machine never stops its Herdr server, including one Hide started.
 Removing a machine while it is connected takes Hide's hook entries, the `hide` link and the helper folder `~/.hide/host-helper` off it, and leaves `~/.hide/kit` and `~/.hide/agent-hooks`; removing it while it is not connected leaves them there, where they do no harm, and adding it again replaces them.
 When a Herdr server on that machine still runs the Herdr copy Hide moved it to, the helper folder stays with that copy and the removal says so; delete `~/.hide/host-helper` there once that server has stopped.
