@@ -4,6 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { runBounded } from "./bounded-child";
 import { endWindowsTree, listWindowsTree, type WindowsProcess } from "./process-tree";
 import { copyFixtureShim, fixtureShimPath } from "./shims/build";
 
@@ -184,6 +185,56 @@ export function endVctip(): number[] {
     ConvertTo-Json -Compress -InputObject @($found | ForEach-Object { $_.Id })
   `);
   return JSON.parse(ended) as number[];
+}
+
+/**
+ * The longest a program's first start may take before the first test: a cold
+ * runner took 46 s, and a start that outlasts this has stopped, not slowed.
+ */
+const FIRST_START_MS = 120_000;
+
+/**
+ * What a Windows run settles once, after its last compile and before its
+ * first test, for both e2e entry points (`web/e2e/global-setup.ts`,
+ * `desktop/e2e/global-setup.ts`); returns the lines to print.
+ *
+ * First it pays the job's first Windows PowerShell start the way the pinned
+ * Herdr starts an agent from a cmd.exe pane: `powershell.exe -NoLogo
+ * -NoProfile -EncodedCommand` of `& '<name>'`, a program found by its bare
+ * name on `PATH` (Herdr's `interactive_shell_command`). That first start reads
+ * PowerShell from a cold runner disk: the desktop lane ran no PowerShell
+ * before its first test, whose two `agent start`s then took 46 s against
+ * their 30 s bound while every later start in the job took 0.35 s
+ * (with-hide/hide-private#256). It pays the first start of the debug
+ * `hided` both fixtures start (the desktop bundle links it) the same way
+ * (docs/TESTING.md, Writing a Rust test, rule 8): the desktop lane's first
+ * test, the job's first start of that new build, saw its start take 24 s,
+ * past `hide connect`'s 10 s for a step, where a later start takes under a
+ * second. `packageDir` is the running config's folder (`web` or `desktop`).
+ * Then it ends the compilers' `vctip.exe` (`endVctip`).
+ */
+export async function prepareWindowsRun(packageDir: string): Promise<string[]> {
+  const noop = fixtureShimPath("noop");
+  const encoded = Buffer.from(`& '${path.basename(noop)}'`, "utf16le").toString("base64");
+  const started = Date.now();
+  const launched = await runBounded("powershell.exe", ["-NoLogo", "-NoProfile", "-EncodedCommand", encoded], {
+    timeoutMs: FIRST_START_MS,
+    outputBytes: 1024 * 1024,
+    processTool: fixtureShimPath("hide-processes"),
+    env: { ...process.env, PATH: [path.dirname(noop), process.env.PATH].filter(Boolean).join(path.delimiter) },
+  });
+  if (launched.status !== 0) throw new Error(`the first agent-shaped PowerShell launch exited ${launched.status}: ${launched.stderr || launched.stdout}`);
+  const lines = [`paid the first agent-shaped PowerShell launch in ${((Date.now() - started) / 1000).toFixed(1)} s before the first test`];
+  const hided = path.resolve(packageDir, "..", "target", "debug", fixtureExecutable("hided"));
+  if (fs.existsSync(hided)) {
+    const begun = Date.now();
+    const first = await runBounded(hided, ["node", "--version"], { timeoutMs: FIRST_START_MS, outputBytes: 1024 * 1024, processTool: fixtureShimPath("hide-processes") });
+    if (first.status !== 0) throw new Error(`the debug hided's first start exited ${first.status}: ${first.stderr || first.stdout}`);
+    lines.push(`paid the debug hided's first start in ${((Date.now() - begun) / 1000).toFixed(1)} s before the first test`);
+  } else lines.push(`no debug hided at ${hided} to start first`);
+  const ended = endVctip();
+  if (ended.length > 0) lines.push(`ended vctip.exe ${ended.join(", ")} before the first test`);
+  return lines;
 }
 
 /** Ends `owned` and what they started, and given `root` what runs from under it, with the fixtures' `hide-processes` (`endWindowsTree`). */
