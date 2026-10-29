@@ -480,6 +480,14 @@ jobs:
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 5
         run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(=system_ssh::windows_inbox_openssh_asks_through_hides_askpass)' --run-ignored only --no-capture
+      - name: A core's stop and a device's removal end a dial through Windows' own ssh
+        # herdr-core/src/handle.rs (with-hide/hide-private#75): ssh.exe dials a
+        # loopback listener that never sends the SSH greeting, and the core
+        # ends that ssh, which a job object owns on Windows, when it stops or
+        # the device is removed.
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        timeout-minutes: 5
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & (test(=handle::tests::a_stopping_core_ends_a_dial_to_a_device_that_never_greets) | test(=handle::tests::removing_a_device_ends_its_dial_that_waits_for_a_greeting))' --no-capture
       - name: Attribute a native listening port to its working directory
         # Cleanup must refuse an unreadable in-use check. This unchanged core
         # contract exposes the native read reason that a browser error lacks.

@@ -1091,3 +1091,196 @@ impl Core {
         self.notifier.set_callback(None);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io::Read;
+    use std::net::{TcpListener, TcpStream};
+    use std::time::{Duration, Instant};
+
+    use serde_json::json;
+
+    /// A hang guard, not a speed bound: the device's alias lets `ssh` wait
+    /// ten minutes for the greeting and an attempt's sign-in is bounded at
+    /// 90 s, so within this guard only the core ends the dial
+    /// (with-hide/hide-private#75).
+    const ONLY_THE_CORE_ENDS_THE_DIAL: Duration = Duration::from_secs(30);
+
+    /// The listener that stands for the device: its one accept runs on a
+    /// thread this value owns, which its drop wakes and joins, so a setup
+    /// that fails before the core dials leaves no thread or socket behind.
+    struct SilentListener {
+        address: std::net::SocketAddr,
+        accepted: std::sync::mpsc::Receiver<std::io::Result<TcpStream>>,
+        accepting: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl SilentListener {
+        fn bind() -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let (sender, accepted) = std::sync::mpsc::channel();
+            let accepting = std::thread::spawn(move || {
+                let _ = sender.send(listener.accept().map(|(peer, _)| peer));
+            });
+            Self {
+                address,
+                accepted,
+                accepting: Some(accepting),
+            }
+        }
+
+        /// The connection the core's attempt made, which then waits for the
+        /// greeting.
+        fn dialed(&self) -> TcpStream {
+            self.accepted
+                .recv_timeout(ONLY_THE_CORE_ENDS_THE_DIAL)
+                .expect("the core never dialed the device")
+                .expect("the listener accepts the dial")
+        }
+    }
+
+    impl Drop for SilentListener {
+        fn drop(&mut self) {
+            let Some(accepting) = self.accepting.take() else {
+                return;
+            };
+            // An accept still waiting takes this connection and returns.
+            if !accepting.is_finished() {
+                let _ = TcpStream::connect(self.address);
+            }
+            if accepting.join().is_err() && !std::thread::panicking() {
+                panic!("the listener's accept thread panicked");
+            }
+        }
+    }
+
+    /// A core whose one device is an alias for a listener that takes the
+    /// TCP connection and never sends the SSH greeting, and that connection
+    /// as the device holds it once the core's attempt dialed it.
+    struct SilentDevice {
+        core: Option<Box<super::Core>>,
+        peer: TcpStream,
+        _listener: SilentListener,
+        _home: tempfile::TempDir,
+        _state: tempfile::TempDir,
+    }
+
+    impl SilentDevice {
+        fn dialed() -> Self {
+            let home = tempfile::tempdir().unwrap();
+            let state = tempfile::tempdir().unwrap();
+            let listener = SilentListener::bind();
+            let ssh = home.path().join(".ssh");
+            std::fs::create_dir_all(&ssh).unwrap();
+            // `-F` and `HOME` do not move what `ssh` reads from the account's
+            // own home, so every key and host file is named here: the dial
+            // reads none of the account's (`/` reads on Windows too).
+            let private = |name: &str| ssh.join(name).to_string_lossy().replace('\\', "/");
+            std::fs::write(
+                ssh.join("config"),
+                format!(
+                    "Host silent\n  HostName 127.0.0.1\n  Port {}\n  User fixture\n  IdentityFile none\n  IdentitiesOnly yes\n  IdentityAgent none\n  UserKnownHostsFile \"{}\"\n  GlobalKnownHostsFile \"{}\"\n  ConnectTimeout 600\n",
+                    listener.address.port(),
+                    private("known_hosts"),
+                    private("known_hosts_global"),
+                ),
+            )
+            .unwrap();
+            let core = super::Core::create(
+                crate::CoreOptions {
+                    schema_version: crate::SCHEMA_VERSION,
+                    home: Some(home.path().display().to_string()),
+                    node_id: crate::node::test_node(),
+                    herdr_socket_path: None,
+                    herdr_bin_path: None,
+                    app_state_path: state.path().join("core-state.json").display().to_string(),
+                    host_helper_root: None,
+                    host_cli_dir: None,
+                    workspace_views_path: None,
+                    shortcut_import_path: None,
+                    local_issues_path: None,
+                    effects_held: false,
+                    machine_name: None,
+                    account_state_folder: false,
+                },
+                std::sync::Arc::new(hide_node::Local::new(Some(home.path().to_path_buf()))),
+                None,
+                crate::node::test_devices(),
+                crate::node::test_terminals().0,
+                crate::node::test_terminals().1,
+            )
+            .expect("a core starts");
+            assert!(core.dispatch_bytes(&event(
+                "register_device",
+                json!({"id": "silent", "label": "Silent", "ssh_alias": "silent", "host_consent": true}),
+            )));
+            // The accept is the barrier: the attempt's `ssh` is connected and
+            // waits for the greeting.
+            let peer = listener.dialed();
+            Self {
+                core: Some(core),
+                peer,
+                _listener: listener,
+                _home: home,
+                _state: state,
+            }
+        }
+
+        /// The device sees its connection closed: the dial's `ssh` ended.
+        /// One still waiting for the greeting would hold it open.
+        fn assert_dial_ended(&mut self) {
+            self.peer
+                .set_read_timeout(Some(ONLY_THE_CORE_ENDS_THE_DIAL))
+                .unwrap();
+            let mut bytes = [0_u8; 256];
+            loop {
+                match self.peer.read(&mut bytes) {
+                    Ok(0) => return,
+                    // The client's own greeting, sent before it waits.
+                    Ok(_) => continue,
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::ConnectionReset
+                                | std::io::ErrorKind::ConnectionAborted
+                        ) =>
+                    {
+                        return;
+                    }
+                    Err(error) => panic!("the dial still holds the device's connection: {error}"),
+                }
+            }
+        }
+    }
+
+    fn event(kind: &str, payload: serde_json::Value) -> Vec<u8> {
+        serde_json::to_vec(&json!({
+            "schema_version": crate::SCHEMA_VERSION,
+            "kind": kind,
+            "payload": payload,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_stopping_core_ends_a_dial_to_a_device_that_never_greets() {
+        let mut device = SilentDevice::dialed();
+        let started = Instant::now();
+        drop(device.core.take());
+        let stopped = started.elapsed();
+        assert!(
+            stopped < ONLY_THE_CORE_ENDS_THE_DIAL,
+            "the core's stop waited {stopped:?} for the device's dial"
+        );
+        device.assert_dial_ended();
+    }
+
+    #[test]
+    fn removing_a_device_ends_its_dial_that_waits_for_a_greeting() {
+        let mut device = SilentDevice::dialed();
+        let core = device.core.as_ref().unwrap();
+        assert!(core.dispatch_bytes(&event("remove_device", json!({"device_id": "silent"}))));
+        device.assert_dial_ended();
+    }
+}
