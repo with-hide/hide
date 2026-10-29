@@ -514,7 +514,6 @@ fn shell_reads_keys(
 /// a shell Herdr has only just started can fail one. `None` once
 /// `still_waiting` says nothing waits for it any more (a pane that closed
 /// discards its request).
-#[allow(clippy::disallowed_methods)] // a production wait, not test code
 fn wait_for_shell_reading(
     connector: &dyn ApiConnector,
     node: &dyn NodeLink,
@@ -522,21 +521,58 @@ fn wait_for_shell_reading(
     deadline: Instant,
     still_waiting: impl Fn() -> bool,
 ) -> Option<ShellWait> {
+    wait_with(&SystemClock, deadline, still_waiting, || {
+        shell_reads_keys(connector, node, pane_id, deadline)
+    })
+}
+
+/// What a shell wait reads the time from and waits on.
+trait WaitClock {
+    fn now(&self) -> Instant;
+    fn pause(&self, duration: Duration);
+}
+
+struct SystemClock;
+
+impl WaitClock for SystemClock {
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
+
+    #[allow(clippy::disallowed_methods)] // a production wait, not test code
+    fn pause(&self, duration: Duration) {
+        thread::sleep(duration);
+    }
+}
+
+/// [`wait_for_shell_reading`] with its clock and its one read given: the
+/// order of reads, failures and the bound, apart from how a read is made.
+/// A read that ends at or past the deadline was cut by it and says nothing
+/// about the shell, so the last finished read's answer stands and a shell
+/// that could never be read ends unreadable; a read that saw the shell
+/// reading ends the wait whenever it lands.
+fn wait_with(
+    clock: &impl WaitClock,
+    deadline: Instant,
+    still_waiting: impl Fn() -> bool,
+    mut read: impl FnMut() -> Result<bool, String>,
+) -> Option<ShellWait> {
     let mut failure = None;
     loop {
         if !still_waiting() {
             return None;
         }
-        let left = deadline.saturating_duration_since(Instant::now());
+        let left = deadline.saturating_duration_since(clock.now());
         if left.is_zero() {
             return Some(failure.map_or(ShellWait::Timeout, ShellWait::Unreadable));
         }
-        match shell_reads_keys(connector, node, pane_id, deadline) {
+        match read() {
             Ok(true) => return Some(ShellWait::Reading),
+            _ if clock.now() >= deadline => {}
             Ok(false) => failure = None,
             Err(message) => failure = Some(message),
         }
-        thread::sleep(SHELL_READING_POLL.min(deadline.saturating_duration_since(Instant::now())));
+        clock.pause(SHELL_READING_POLL.min(deadline.saturating_duration_since(clock.now())));
     }
 }
 
@@ -1008,20 +1044,91 @@ mod tests {
         assert!(node.reads() >= 2);
     }
 
+    /// A clock the test moves: a pause passes at once, and a read takes as
+    /// long as the test makes it.
+    struct TestClock {
+        start: Instant,
+        elapsed: std::sync::Mutex<Duration>,
+    }
+
+    impl TestClock {
+        fn new() -> Self {
+            Self {
+                start: Instant::now(),
+                elapsed: std::sync::Mutex::new(Duration::ZERO),
+            }
+        }
+
+        fn advance(&self, by: Duration) {
+            *self.elapsed.lock().unwrap() += by;
+        }
+    }
+
+    impl WaitClock for TestClock {
+        fn now(&self) -> Instant {
+            self.start + *self.elapsed.lock().unwrap()
+        }
+
+        fn pause(&self, duration: Duration) {
+            self.advance(duration);
+        }
+    }
+
     #[test]
     fn a_terminal_that_is_never_read_ends_the_wait_at_its_bound_with_its_reason() {
-        let herdr = shell_pane("shell-wait-unreadable");
-        let node = Terminal::answering(vec![Err("link down".to_owned())]);
-        let Some(ShellWait::Unreadable(reason)) = wait_for_shell_reading(
-            &herdr.connector(),
-            &node,
-            "w1:p2",
-            Instant::now() + Duration::from_millis(150),
+        let clock = TestClock::new();
+        let mut reads = 0;
+        let outcome = wait_with(
+            &clock,
+            clock.now() + Duration::from_millis(150),
             || true,
-        ) else {
-            panic!("an unreadable terminal ends the wait as unreadable");
-        };
-        assert!(reason.contains("link down"), "{reason}");
+            || {
+                reads += 1;
+                Err("the shell's terminal could not be read: link down".to_owned())
+            },
+        );
+        assert_eq!(
+            outcome,
+            Some(ShellWait::Unreadable(
+                "the shell's terminal could not be read: link down".to_owned()
+            ))
+        );
+        assert_eq!(reads, 3, "one read a poll inside the bound");
+    }
+
+    /// The bound falling inside a read cuts it, whatever that read answers
+    /// (a read given no time answers not reading, and a request the bound
+    /// ended answers its own error): the wait ends with the failure of the
+    /// last read that finished.
+    #[test]
+    fn a_read_the_bound_cuts_short_leaves_the_last_failure_as_the_reason() {
+        for cut in [
+            Ok(false),
+            Err("pane.process_info failed: timed out".to_owned()),
+        ] {
+            let clock = TestClock::new();
+            let deadline = clock.now() + Duration::from_millis(150);
+            let mut reads = 0;
+            let outcome = wait_with(
+                &clock,
+                deadline,
+                || true,
+                || {
+                    reads += 1;
+                    if reads == 1 {
+                        return Err("link down".to_owned());
+                    }
+                    clock.advance(deadline - clock.now());
+                    cut.clone()
+                },
+            );
+            assert_eq!(
+                outcome,
+                Some(ShellWait::Unreadable("link down".to_owned())),
+                "{cut:?}"
+            );
+            assert_eq!(reads, 2, "{cut:?}");
+        }
     }
 
     #[test]
