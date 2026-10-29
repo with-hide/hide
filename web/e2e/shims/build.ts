@@ -60,16 +60,21 @@ export async function buildFixtureShims(packageDir: string, programs: readonly F
   // compile's tree; its own compile has nothing to follow it with, so a
   // failure there that is not the compiler's own exit keeps its partial file.
   const order: FixtureShim[] = windows ? ["hide-processes", ...programs.filter((name) => name !== "hide-processes")] : [...programs];
+  // The finished `hide-processes`, once there is one to run.
+  let processTool: string | undefined;
   for (const name of order) {
     const source = path.join(sourceDir, `${name}.c`);
     const program = path.join(outputDir, hashed(source, name));
     built[name] = program;
-    if (fs.existsSync(program)) continue;
+    if (fs.existsSync(program)) {
+      if (name === "hide-processes") processTool = program;
+      continue;
+    }
     const partial = `${program.slice(0, program.length - ext.length)}.${process.pid}.partial${ext}`;
     let failure: unknown;
     let output = "";
     try {
-      const done = await runBounded(compiler, ["-O1", "-o", partial, source], { ...COMPILE, processTool: built["hide-processes"] });
+      const done = await runBounded(compiler, ["-O1", "-o", partial, source], { ...COMPILE, processTool });
       if (done.status !== 0) failure = new Error(`exit status ${done.status}, signal ${done.signal}`);
       output = done.stdout + done.stderr;
     } catch (error) {
@@ -87,9 +92,11 @@ export async function buildFixtureShims(packageDir: string, programs: readonly F
     // Another build of the same source may have finished first; keep its program.
     if (fs.existsSync(program)) {
       fs.rmSync(partial, { force: true });
+      if (name === "hide-processes") processTool = program;
       continue;
     }
     fs.renameSync(partial, program);
+    if (name === "hide-processes") processTool = program;
     // Older finished builds of this program; another process's partial file is not one.
     const finished = new RegExp(`^${name}-[0-9a-f]{12}${windows ? "\\.exe" : ""}$`);
     for (const old of fs.readdirSync(outputDir)) {
