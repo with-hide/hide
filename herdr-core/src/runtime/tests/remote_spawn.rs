@@ -1065,6 +1065,12 @@ fn a_child_that_reports_its_session_late_is_bound_by_the_core_and_its_intent_ans
     // At rest: the agent is listed under the spawn's name with no session.
     spawner.refresh(&mut writer);
     assert_eq!(spawner.published().spawns[0].child, None);
+    // The session sync observes again at its next agent refresh; this test
+    // observes once more, which plans only after the writer's worker took
+    // the at-rest batch.
+    wait_for("the writer's worker takes the at-rest batch", || {
+        writer.taken()
+    });
     *spawner.session.lock().unwrap() = Some("device-child-session".into());
     spawner.refresh(&mut writer);
     wait_for("the core binds the late child", || {

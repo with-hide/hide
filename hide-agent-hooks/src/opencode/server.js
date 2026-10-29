@@ -6,7 +6,7 @@
 
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, readlinkSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -59,10 +59,38 @@ export const RPC = {
 // call reaches the helper for them only while some project has a protection on, read again when the file changes,
 // so a machine with none starts no helper for a file tool (PRD agent-guardrails B27).
 const POLICY = path.join(homedir(), ".hide", "agent-hooks", "guardrails.json");
+const GLOBAL_INSTRUCTION = "global-instruction.md";
 const FILE_TOOLS = new Set(["read", "edit", "write", "patch"]);
 // The arguments that name a file; the rest of a write (its content) is not sent.
 const PATH_ARGS = ["path", "filePath"];
 const policy = { mtimeMs: -1, size: -1, on: null };
+
+// The state folders the helper's guard knows: the one Hide installed this file for, `HIDE_STATE_DIR`,
+// `$XDG_STATE_HOME/hide` and `~/.hide/state`.
+const STATE_DIRS = [
+  ROUTE[0] === "--state-dir-b64" ? Buffer.from(ROUTE[1], "base64url").toString() : "",
+  process.env.HIDE_STATE_DIR ?? "",
+  process.env.XDG_STATE_HOME ? path.join(process.env.XDG_STATE_HOME, "hide") : "",
+  path.join(homedir(), ".hide", "state"),
+].filter(Boolean);
+
+/** Whether `text` can name the Hide global instruction, or the file a link at it points to, which is the one every
+ * session is given; names are matched as the helper's guard matches them. */
+function namesGlobal(text) {
+  if (typeof text !== "string") return false;
+  const lower = text.toLowerCase();
+  if (lower.includes(GLOBAL_INSTRUCTION)) return true;
+  return STATE_DIRS.some((dir) => {
+    let target;
+    try {
+      target = readlinkSync(path.join(dir, GLOBAL_INSTRUCTION));
+    } catch {
+      return false;
+    }
+    const name = path.basename(target).toLowerCase();
+    return name !== "" && lower.includes(name);
+  });
+}
 
 /** Whether some project has a protection on: null when the policy is missing or unreadable. */
 export function policyOn() {
@@ -434,7 +462,9 @@ async function onTool(state, ctx, registration, event) {
   // terminal showing that session's root is then asked.
   const known = await rootOf(state, ctx, event.sessionID);
   const root = known ?? event.sessionID;
-  const guarded = policyOn();
+  // A call naming the Hide global instruction is judged as a guarded one: the helper refuses its write whatever the
+  // guardrails say (PRD memory-self-improve D-07).
+  const guarded = namesGlobal(tool === "shell" ? request.command : JSON.stringify(input ?? {})) || policyOn();
   // A shell call that can start an agent through Herdr is the spawn guard's.
   const launch = tool === "shell" && (request.command.includes("herdr") || request.command.includes("HERDR_BIN_PATH"));
   // The terminal is asked for what only a pane can judge, and then judges the guardrails too; a missing or

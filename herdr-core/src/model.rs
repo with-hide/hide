@@ -3130,7 +3130,10 @@ impl FirstRunStep {
 #[serde(default)]
 pub struct FirstRunChoices {
     pub agents: Option<Vec<String>>,
-    pub devices: Vec<String>,
+    /// The checked device rows; none until the operator checks or unchecks
+    /// one, so the step can start with this PC's default WSL distribution
+    /// checked (PRD wsl-device B1) and keep it unchecked once they say so.
+    pub devices: Option<Vec<String>>,
     pub project_device: Option<String>,
     pub project_path: String,
     pub project_form: FirstRunProjectForm,
@@ -3400,6 +3403,17 @@ pub struct ProjectMemorySnapshot {
     pub expanded: Option<MemoryCardSnapshot>,
     /// The matcher's answer to the shell's `memory_search`.
     pub search: Option<MemorySearchSnapshot>,
+    /// Cards out of the hooks after 60 quiet days, newest archive first,
+    /// each with its 되살리기 (PRD memory-self-improve B22).
+    pub archived: Vec<MemoryArchivedSnapshot>,
+}
+
+/// One archived card of the Memory tab's archive list.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct MemoryArchivedSnapshot {
+    pub number: u64,
+    pub title: String,
+    pub archived_at_unix_ms: u64,
 }
 
 /// Why a Project's Memory cannot be read.
@@ -3433,6 +3447,8 @@ pub struct MemoryRowSnapshot {
     /// The card waits to be checked against the repository again and is not
     /// given to agents meanwhile (`확인 중`).
     pub verifying: bool,
+    /// Neither given nor said for 30 days (`낡음`, B22); still given.
+    pub stale: bool,
     /// The card's way into the repository's own files while it is on one;
     /// absent for a card that is not, was dismissed or whose pull request
     /// closed unmerged (B30-B32).
@@ -3634,6 +3650,85 @@ pub struct MemoryCardSnapshot {
     pub sources: Vec<MemorySourceSnapshot>,
     /// The text the current one replaced, which the card's Undo restores.
     pub previous: Option<MemoryPreviousSnapshot>,
+    /// What Hide changed on the card by itself or on a recheck, newest
+    /// first, each with its 되돌리기 (B34).
+    pub changes: Vec<MemoryChangeSnapshot>,
+}
+
+/// One row of a card's change history (B21, B34).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct MemoryChangeSnapshot {
+    /// What `memory_action` `undo_change` names.
+    pub id: u64,
+    #[serde(flatten)]
+    pub change: MemoryChange,
+    pub at_unix_ms: u64,
+    /// Already taken back.
+    pub undone: bool,
+    /// Why it cannot be taken back; absent when it can, or was.
+    pub undo_blocked: Option<MemoryUndoBlocked>,
+}
+
+/// What one change did (`memory_change_kind`).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MemoryChange {
+    Stale,
+    Archive,
+    Revive,
+    /// The operator's own words added after the card was missed twice (B17).
+    Alias {
+        aliases: Vec<String>,
+    },
+    /// Cards of the same meaning folded into this one (B20, B21).
+    Merge {
+        cards: Vec<u64>,
+    },
+    /// A recheck: who asked, and once its sources were read again, how many
+    /// were a letter and how many could not be read (근거 확인 불가, B27).
+    Recheck {
+        by_agent: bool,
+        letters: Option<u64>,
+        unreadable: Option<u64>,
+    },
+}
+
+impl MemoryChange {
+    pub fn kind_str(&self) -> &'static str {
+        match self {
+            Self::Stale => "stale",
+            Self::Archive => "archive",
+            Self::Revive => "revive",
+            Self::Alias { .. } => "alias",
+            Self::Merge { .. } => "merge",
+            Self::Recheck { .. } => "recheck",
+        }
+    }
+}
+
+/// Why a change cannot be taken back (`memory_undo_blocked`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryUndoBlocked {
+    /// A later aging move replaced it; that one is taken back instead.
+    LaterChange,
+    /// A merged-in card changed since, so splitting would lose its text.
+    MergedCardChanged,
+    /// A merged-in card is gone for good.
+    MergedCardGone,
+    /// The recheck already ended; its result has its own Undo.
+    RecheckFinished,
+}
+
+impl MemoryUndoBlocked {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::LaterChange => "later_change",
+            Self::MergedCardChanged => "merged_card_changed",
+            Self::MergedCardGone => "merged_card_gone",
+            Self::RecheckFinished => "recheck_finished",
+        }
+    }
 }
 
 /// Where a card came from: one event of one session.
@@ -3692,6 +3787,12 @@ pub enum MemoryAction {
     Dismiss,
     CardRight,
     DocRight,
+    /// Bring an archived card back (B22).
+    Revive,
+    /// Hold the card out of the hooks until it is checked again (B27).
+    Recheck,
+    /// Take back one change of the card's history (B34).
+    UndoChange,
 }
 
 impl MemoryAction {
@@ -3706,6 +3807,9 @@ impl MemoryAction {
             Self::Dismiss => "dismiss",
             Self::CardRight => "card_right",
             Self::DocRight => "doc_right",
+            Self::Revive => "revive",
+            Self::Recheck => "recheck",
+            Self::UndoChange => "undo_change",
         }
     }
 }
@@ -6462,8 +6566,14 @@ impl Default for HerdrProfilesSnapshot {
 pub struct HerdrProfileSnapshot {
     pub id: String,
     pub label: String,
+    /// The SSH target, or the distribution of a WSL row.
     pub target: String,
     pub session: String,
+    /// Set on the one row that is not a saved Herdr profile: this PC's
+    /// default WSL distribution (PRD wsl-device B1), which connects as a
+    /// WSL device.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wsl_distro: Option<String>,
     pub enabled: bool,
     pub added_as: Option<String>,
     pub problem: Option<String>,
@@ -7965,6 +8075,9 @@ mod wire_enum_tests {
             MemoryAction::Dismiss,
             MemoryAction::CardRight,
             MemoryAction::DocRight,
+            MemoryAction::Revive,
+            MemoryAction::Recheck,
+            MemoryAction::UndoChange,
         ];
         for variant in actions {
             match variant {
@@ -7976,12 +8089,68 @@ mod wire_enum_tests {
                 | MemoryAction::Promote
                 | MemoryAction::Dismiss
                 | MemoryAction::CardRight
-                | MemoryAction::DocRight => {}
+                | MemoryAction::DocRight
+                | MemoryAction::Revive
+                | MemoryAction::Recheck
+                | MemoryAction::UndoChange => {}
             }
             assert_eq!(serde_json::to_value(variant).unwrap(), variant.as_str());
         }
         assert_wire(&contract, "memory_action", &actions);
         checked.insert("memory_action");
+
+        let changes = [
+            MemoryChange::Stale,
+            MemoryChange::Archive,
+            MemoryChange::Revive,
+            MemoryChange::Alias {
+                aliases: Vec::new(),
+            },
+            MemoryChange::Merge { cards: Vec::new() },
+            MemoryChange::Recheck {
+                by_agent: false,
+                letters: None,
+                unreadable: None,
+            },
+        ];
+        for change in &changes {
+            match change {
+                MemoryChange::Stale
+                | MemoryChange::Archive
+                | MemoryChange::Revive
+                | MemoryChange::Alias { .. }
+                | MemoryChange::Merge { .. }
+                | MemoryChange::Recheck { .. } => {}
+            }
+            assert_eq!(
+                serde_json::to_value(change).unwrap()["kind"],
+                change.kind_str()
+            );
+        }
+        let kinds = changes
+            .iter()
+            .map(MemoryChange::kind_str)
+            .collect::<Vec<_>>();
+        assert_eq!(contract["memory_change_kind"], serde_json::json!(kinds));
+        checked.insert("memory_change_kind");
+
+        let blocked = [
+            MemoryUndoBlocked::LaterChange,
+            MemoryUndoBlocked::MergedCardChanged,
+            MemoryUndoBlocked::MergedCardGone,
+            MemoryUndoBlocked::RecheckFinished,
+        ];
+        for variant in blocked {
+            match variant {
+                MemoryUndoBlocked::LaterChange
+                | MemoryUndoBlocked::MergedCardChanged
+                | MemoryUndoBlocked::MergedCardGone
+                | MemoryUndoBlocked::RecheckFinished => {}
+            }
+            assert_eq!(serde_json::to_value(variant).unwrap(), variant.as_str());
+        }
+        assert_wire(&contract, "memory_undo_blocked", &blocked);
+        checked.insert("memory_undo_blocked");
 
         let send_states = [
             ViewFeedbackSendState::Sending,
@@ -8889,7 +9058,9 @@ mod wire_enum_tests {
                     | Signal::LabelMissed
                     | Signal::Improvement
                     | Signal::CheckFailed
-                    | Signal::ChangeRequest => {}
+                    | Signal::ChangeRequest
+                    | Signal::RepeatedRequest
+                    | Signal::MemoryIgnored => {}
                 }
             }
             assert_wire(&contract, "suggestion_signal", &signals);
@@ -8925,14 +9096,60 @@ mod wire_enum_tests {
             assert_wire(&contract, "suggestion_apply_mode", &modes);
             checked.insert("suggestion_apply_mode");
 
-            let outcomes = [Outcome::Pr, Outcome::Issue];
+            let outcomes = [Outcome::Pr, Outcome::Issue, Outcome::Local];
             for variant in outcomes {
                 match variant {
-                    Outcome::Pr | Outcome::Issue => {}
+                    Outcome::Pr | Outcome::Issue | Outcome::Local => {}
                 }
             }
             assert_wire(&contract, "suggestion_outcome", &outcomes);
             checked.insert("suggestion_outcome");
+
+            use crate::suggestions::lifecycle::LocalFailure;
+            let failures = [
+                LocalFailure::NoRoom,
+                LocalFailure::TooLarge,
+                LocalFailure::Unreadable,
+                LocalFailure::Changed,
+                LocalFailure::Edited,
+                LocalFailure::WriteFailed,
+                LocalFailure::EvidenceUnconfirmed,
+                LocalFailure::BadLine,
+            ];
+            for variant in failures {
+                match variant {
+                    LocalFailure::NoRoom
+                    | LocalFailure::TooLarge
+                    | LocalFailure::Unreadable
+                    | LocalFailure::Changed
+                    | LocalFailure::Edited
+                    | LocalFailure::WriteFailed
+                    | LocalFailure::EvidenceUnconfirmed
+                    | LocalFailure::BadLine => {}
+                }
+            }
+            assert_wire(&contract, "suggestion_local_failure", &failures);
+            checked.insert("suggestion_local_failure");
+
+            use crate::global_instruction::Unusable;
+            let unusable = [Unusable::TooLarge, Unusable::Unreadable];
+            for variant in unusable {
+                match variant {
+                    Unusable::TooLarge | Unusable::Unreadable => {}
+                }
+            }
+            assert_wire(&contract, "global_instruction_unusable", &unusable);
+            checked.insert("global_instruction_unusable");
+
+            use crate::suggestions::ledger::Given;
+            let given = [Given::Index, Given::Body];
+            for variant in given {
+                match variant {
+                    Given::Index | Given::Body => {}
+                }
+            }
+            assert_wire(&contract, "suggestion_given", &given);
+            checked.insert("suggestion_given");
         }
 
         let unavailable = [

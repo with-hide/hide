@@ -403,6 +403,7 @@ mod tests {
                 at_unix_ms: 1,
                 always: false,
                 improvement: None,
+                said: None,
                 line: None,
                 fresh: true,
             }],

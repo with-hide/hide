@@ -8,7 +8,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Injection, InjectionKind, InjectionOutcome, MemoryStore, RetrievalQuery};
+use crate::{Injection, InjectionOutcome, MemoryStore, RetrievalQuery};
 
 /// The most of a prompt a hook sends the core to rank Memory by: its start,
 /// which names the task, and few enough bytes that the request stays one
@@ -114,6 +114,11 @@ pub struct HookContext {
     pub context: Option<String>,
     #[serde(flatten)]
     pub outcome: HookOutcome,
+    /// The Hide global instruction, in its own slot beside Memory's and under
+    /// its own cap (PRD memory-self-improve D-31): a session start carries it
+    /// whether or not Memory answered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub global: Option<String>,
 }
 
 impl HookContext {
@@ -121,6 +126,7 @@ impl HookContext {
         Self {
             context: None,
             outcome,
+            global: None,
         }
     }
 }
@@ -229,8 +235,7 @@ where
         let preview = render(
             request.event,
             injection.clone(),
-            (injection.kind == InjectionKind::Bodies)
-                .then_some("0000000000000000000000000000000000000000000000000000000000000000"),
+            Some("0000000000000000000000000000000000000000000000000000000000000000"),
             generation,
             &expired,
         );
@@ -246,11 +251,13 @@ where
     if injection.items.is_empty() && injection.outcome == InjectionOutcome::Provided {
         injection.outcome = InjectionOutcome::Empty;
     }
-    // The index is not a delivery and leaves no receipt; only cards given in
-    // full are recorded, so a session's prompts do not repeat them (B12).
-    let receipt_auth = match injection.kind {
-        InjectionKind::Index => None,
-        InjectionKind::Bodies => match store.receipt_auth_tag(
+    // Both carry a receipt, signed over the event, so an index's can never
+    // pass for bodies: the index's is recorded only as given, for a card's
+    // age and an ignore, while bodies keep a session's prompts from
+    // repeating them (B12; PRD memory-self-improve D-35).
+    let receipt_auth = match injection.items.is_empty() {
+        true => None,
+        false => match store.receipt_auth_tag(
             &project.id,
             request.runtime_id,
             request.session_id,
@@ -310,12 +317,14 @@ fn render(
     HookContext {
         context: Some(context),
         outcome,
+        global: None,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::InjectionKind;
     // Policy checks own a logical invocation clock. The real SQL interruption
     // test below explicitly exercises the public wall-clock entry instead.
     use super::context_until as context_for;
@@ -583,7 +592,7 @@ mod tests {
         assert!(start.contains("m1 Race rule 0 about durable hooks"));
         assert!(!start.contains("A fact about"));
         assert!(!start.contains("Race rule 21 "));
-        assert!(!start.contains("hide-memory-receipt"));
+        assert!(start.contains("<hide-memory-receipt event=\"SessionStart\" count=\"20\""));
 
         let prompt = context_for(
             &path,
@@ -966,28 +975,79 @@ mod tests {
         assert!(corrupt.context.is_none());
     }
 
-    #[test]
-    fn a_locked_store_answers_unavailable_without_waiting_for_the_writer() {
-        let temp = tempfile::tempdir().unwrap();
-        let (path, project) = enabled_store(temp.path(), &temp.path().join("project"), &[]);
-
-        let lock = rusqlite::Connection::open(&path).unwrap();
-        lock.pragma_update(None, "journal_mode", "DELETE").unwrap();
+    /// Holds the lock a WAL reader waits for, as a connection does while it
+    /// opens alone or closes last: an exclusive-mode connection that has
+    /// written holds the database file until it is dropped.
+    fn hold_store(path: &Path) -> rusqlite::Connection {
+        let lock = rusqlite::Connection::open(path).unwrap();
         lock.pragma_update(None, "locking_mode", "EXCLUSIVE")
             .unwrap();
-        lock.execute_batch("BEGIN EXCLUSIVE").unwrap();
+        lock.execute_batch("BEGIN IMMEDIATE; UPDATE memory_projection_state SET generation=generation WHERE id=1; COMMIT;")
+            .unwrap();
+        lock
+    }
+
+    #[test]
+    fn a_prompt_during_another_connections_lock_waits_for_it_and_gets_its_memory() {
+        let temp = tempfile::tempdir().unwrap();
+        let (path, project) = enabled_store(
+            temp.path(),
+            &temp.path().join("project"),
+            &[rule(
+                "Project Memory provider work uses a bounded queue",
+                0.9,
+            )],
+        );
+        let held = Arc::new(std::sync::Mutex::new(Some(hold_store(&path))));
+        // The lock ends the first time the reader asks whether it may keep
+        // waiting, so the test waits on the reader, not on a clock.
+        let expired = {
+            let held = Arc::clone(&held);
+            let clock = frozen();
+            move || {
+                drop(held.lock().unwrap().take());
+                clock()
+            }
+        };
+        let result = context_for(
+            &path,
+            &project,
+            ask(
+                HookEvent::UserPromptSubmit,
+                "s",
+                Some("the provider queue is stuck"),
+            ),
+            expired,
+        );
+        assert!(
+            held.lock().unwrap().is_none(),
+            "the reader never met the lock"
+        );
+        assert_eq!(result.outcome, HookOutcome::Provided { count: 1 });
+        assert!(result.context.is_some());
+    }
+
+    #[test]
+    fn a_lock_held_past_the_budget_answers_deadline_when_the_budget_ends() {
+        let temp = tempfile::tempdir().unwrap();
+        let (path, project) = enabled_store(temp.path(), &temp.path().join("project"), &[]);
+        let _lock = hold_store(&path);
+        let (elapsed, clock) = invocation_clock();
+        // Each question from the waiting reader moves the clock 10 ms, so the
+        // budget ends after ten waits whatever the machine's speed.
+        let expired = move || {
+            elapsed.fetch_add(10, Ordering::SeqCst);
+            clock()
+        };
         let started = Instant::now();
-        // The lock decides the outcome; the frozen clock never expires, and
-        // the elapsed bound below catches a wait for the writer.
         let result = context_for(
             &path,
             &project,
             ask(HookEvent::UserPromptSubmit, "s", Some("keep going")),
-            frozen(),
+            expired,
         );
-        assert_eq!(result.outcome, HookOutcome::Unavailable);
+        assert_eq!(result.outcome, HookOutcome::Deadline);
         assert!(result.context.is_none());
         assert!(started.elapsed() < Duration::from_millis(crate::HOOK_DEADLINE_MS));
-        lock.execute_batch("ROLLBACK").unwrap();
     }
 }

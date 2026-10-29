@@ -1,4 +1,4 @@
-// hide-opencode-plugin@9 sha256=e77b53ad20d267cdc9f17e259e456ddef63d4d02784177cce800772f74c775e2
+// hide-opencode-plugin@10 sha256=48e9cd6dce0711b6cf7ce999c26f4dfcab32dddd72fb4d92d47966930a5d3b13
 // Hide's OpenCode 1.x plugin, written by Hide's install kit (hide-agent-hooks).
 // An edit is kept and shown as edited in Settings; Reinstall puts Hide's back.
 // Outside a Herdr pane Hide manages, or when its helper is gone, it does nothing.
@@ -6,7 +6,7 @@
 
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, readlinkSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -41,10 +41,40 @@ const PENDING_AGE_MS = 10 * 60 * 1000;
 // call reaches the helper for them only while some project has a protection on, read again when the file changes,
 // so a machine with none starts no helper for a file tool (PRD agent-guardrails B27).
 const POLICY = path.join(homedir(), ".hide", "agent-hooks", "guardrails.json");
+// A call naming the Hide global instruction always asks the helper, which refuses its write whatever the guardrails
+// say (PRD memory-self-improve D-07); the name is matched as the helper's guard matches it.
+const GLOBAL_INSTRUCTION = "global-instruction.md";
 const FILE_TOOLS = new Set(["read", "edit", "write", "apply_patch", "multiedit"]);
 // The arguments that name a file; the rest of a write (its content) is not sent.
 const PATH_ARGS = ["filePath", "path", "file_path"];
 const policy = { mtimeMs: -1, size: -1, on: null };
+
+// The state folders the helper's guard knows: the one Hide installed this file for, `HIDE_STATE_DIR`,
+// `$XDG_STATE_HOME/hide` and `~/.hide/state`.
+const STATE_DIRS = [
+  ROUTE[0] === "--state-dir-b64" ? Buffer.from(ROUTE[1], "base64url").toString() : "",
+  process.env.HIDE_STATE_DIR ?? "",
+  process.env.XDG_STATE_HOME ? path.join(process.env.XDG_STATE_HOME, "hide") : "",
+  path.join(homedir(), ".hide", "state"),
+].filter(Boolean);
+
+/** Whether `text` can name the Hide global instruction, or the file a link at it points to, which is the one every
+ * session is given; names are matched as the helper's guard matches them. */
+function namesGlobal(text) {
+  if (typeof text !== "string") return false;
+  const lower = text.toLowerCase();
+  if (lower.includes(GLOBAL_INSTRUCTION)) return true;
+  return STATE_DIRS.some((dir) => {
+    let target;
+    try {
+      target = readlinkSync(path.join(dir, GLOBAL_INSTRUCTION));
+    } catch {
+      return false;
+    }
+    const name = path.basename(target).toLowerCase();
+    return name !== "" && lower.includes(name);
+  });
+}
 
 /** Whether a tool call asks the helper for the guardrails. A policy that is missing or unreadable (`on` is null)
  * does in a Herdr pane, where the helper records why; a session outside one starts no helper for it. */
@@ -485,13 +515,13 @@ async function onTool(state, sessionID, directory, input, output) {
     // start an agent through Herdr.
     if (typeof command !== "string") return null;
     const launch = !state.guardOnly && (command.includes("herdr") || command.includes("HERDR_BIN_PATH"));
-    if (!launch && !guardrailsOn(state)) return null;
+    if (!launch && !namesGlobal(command) && !guardrailsOn(state)) return null;
     // OpenCode runs a relative `workdir` in the session's folder, not where this process started.
     const workdir = output.args.workdir;
     const cwd = typeof workdir === "string" && workdir ? (typeof directory === "string" ? path.resolve(directory, workdir) : workdir) : directory;
     request = { session_id: sessionID, tool, command, cwd };
   } else if (FILE_TOOLS.has(tool)) {
-    if (!guardrailsOn(state)) return null;
+    if (!namesGlobal(JSON.stringify(output?.args ?? {})) && !guardrailsOn(state)) return null;
     request = { session_id: sessionID, tool, args: fileArgs(output?.args), cwd: directory };
   } else {
     return null;

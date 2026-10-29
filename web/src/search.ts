@@ -14,7 +14,7 @@ import type { MessageKey } from "./i18n/catalogs";
 import { translate } from "./i18n/client";
 import { herdrPaneId, projectsOf } from "./remote";
 import { PR_LOOK } from "./prMark";
-import { machineName, windowDeviceId, windowFirst } from "./screenMachine";
+import { machineName, windowDeviceId, windowFirst, wslPlace } from "./screenMachine";
 import type { AgentRow, Checkout, Device, GithubSearchResult, PrState, PullRequest, SessionWorkSearch, SnapshotRest, Task, WorkSession, Workspace } from "./snapshot";
 import { workKey } from "./sessionWork";
 import { askSubjectText } from "./askSubject";
@@ -405,7 +405,7 @@ export function searchEntries(rest: SnapshotRest | null, t: TFunction<"translati
     entries.push({
       id: `device:${device.id}`,
       title: name,
-      subtitle: own ? t("common.thisDevice") : t("search.remoteDevice"),
+      subtitle: own ? t("common.thisDevice") : (wslPlace(rest.navigator?.devices, device.id, t) ?? t("search.remoteDevice")),
       kind: "device",
       group: DEVICES_GROUP,
       deviceId: device.id,

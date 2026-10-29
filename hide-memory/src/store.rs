@@ -18,12 +18,28 @@ use crate::{
 };
 
 pub(crate) mod hold;
+mod merges;
+mod misses;
 mod progress;
+mod recheck;
 mod reinforcement;
+mod repeats;
+pub(crate) mod upkeep;
+pub use merges::Merge;
+pub(crate) mod merges_limits {
+    pub use super::merges::{ABSORBED_PER_MERGE, MERGES_PER_ANSWER};
+}
+pub(crate) mod repeats_limits {
+    pub use super::repeats::{LINE_CHARS, MEANING_CHARS, REPEATS_PER_ANSWER};
+}
+pub use misses::{CardMiss, Miss};
 pub use progress::{CorrectionCheck, InputFailure};
+pub use recheck::{RECHECK_LIMIT, Requester, SourceRef, SourceVerdicts, SourcesOutcome};
 pub use reinforcement::words_digest;
+pub use repeats::{RepeatRequest, RepeatScope, RepeatSource, instruction_line};
+pub use upkeep::{Aging, AgingReport, CHANGE_LIMIT, CardChange, ChangeKind};
 
-const SCHEMA_VERSION: i64 = 21;
+const SCHEMA_VERSION: i64 = 22;
 /// Version 2 names where analysis can go: the agent Hide AI runs on and any
 /// agent the operator added under its fallback list (PRD settings-cleanup
 /// D-26), which now includes vendors other than the two it was limited to.
@@ -220,6 +236,25 @@ pub struct ApplySummary {
     pub duplicate_batch: bool,
     /// One per candidate, in order; empty for a duplicate batch.
     pub outcomes: Vec<CandidateOutcome>,
+    /// Cards the operator said again in a session that had been given them,
+    /// or could have been and was not, by number (PRD memory-self-improve
+    /// B15, B17).
+    pub misses: Vec<(u64, Miss)>,
+    /// Cards that took the operator's words as aliases after two misses.
+    pub aliases_added: Vec<u64>,
+    /// Cards at their miss limit, which recorded nothing more (B33).
+    pub misses_full: Vec<u64>,
+    /// Archived cards the operator said again, back in the hooks (B24).
+    pub revived: Vec<u64>,
+    /// Cards that took other cards in, by number (B20).
+    pub merged: Vec<u64>,
+    /// Merges left undone, with why.
+    pub merges_refused: Vec<&'static str>,
+    /// Repeated-request sources left out at a cap (B33).
+    pub repeats_left_out: usize,
+    /// The meanings this batch kept a repeated request under, for the
+    /// 제안 tab to be told (D-14).
+    pub repeated: Vec<String>,
 }
 
 /// What a write of analyzed cards adds to the candidates themselves.
@@ -236,6 +271,30 @@ pub struct ApplyOptions {
     pub document_comparisons: Vec<Option<crate::DocumentComparison>>,
     /// A changed existing claim uses the established re-verification queue.
     pub reverify_superseded: bool,
+    /// The operator's repeated requests the same answer named (PRD
+    /// memory-self-improve D-14).
+    #[serde(default)]
+    pub repeats: Vec<RepeatRequest>,
+    /// The same-meaning cards it proposed to fold together (D-16).
+    #[serde(default)]
+    pub merges: Vec<Merge>,
+}
+
+/// Which delivery a receipt records: the bodies a prompt gave, or the
+/// session-start index (PRD memory-self-improve D-35).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReceiptKind {
+    Body,
+    Index,
+}
+
+impl ReceiptKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Body => "body",
+            Self::Index => "index",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -295,6 +354,13 @@ pub struct MemoryItem {
     /// that moved (`확인 중`): hooks leave it out of the index and the prompt
     /// match, and it is shown with that mark (D-06).
     pub verifying: bool,
+    /// Where the card is in its life (PRD memory-self-improve B22): an
+    /// archived card is out of the hooks until it is revived.
+    #[serde(default)]
+    pub aging: Aging,
+    /// The card waits on a recheck someone asked for (B27).
+    #[serde(default)]
+    pub rechecking: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -947,6 +1013,8 @@ pub enum MemoryError {
     /// Bringing a forgotten card back would take the Project past its card
     /// limit; another card has to be forgotten first.
     Full,
+    /// The operation is refused for the named reason, and changed nothing.
+    Refused(&'static str),
 }
 
 impl Display for MemoryError {
@@ -964,6 +1032,7 @@ impl Display for MemoryError {
             Self::Integrity(value) => write!(formatter, "memory_integrity:{value}"),
             Self::Disabled => formatter.write_str("memory_project_disabled"),
             Self::Full => formatter.write_str("memory_project_full"),
+            Self::Refused(reason) => formatter.write_str(reason),
         }
     }
 }
@@ -987,6 +1056,35 @@ pub struct MemoryStore {
     connection: Connection,
     mode: StoreMode,
     path: PathBuf,
+    /// A hook reader's invocation expiry, which its busy handler reads; it is
+    /// declared after `connection` so it outlives the handler's last call.
+    _busy_wait: Option<Box<HookExpiry>>,
+}
+
+/// Whether a hook invocation's budget has run out.
+type HookExpiry = Box<dyn Fn() -> bool + Send>;
+
+/// The busy handler of a hook reader: SQLite calls it while another
+/// connection holds the lock the reader needs, and the reader waits for that
+/// lock until its invocation expires, a millisecond at a time.
+///
+/// # Safety
+///
+/// `expiry` is the `HookExpiry` the reader's `MemoryStore` owns, which lives
+/// longer than its connection.
+#[allow(clippy::disallowed_methods)] // a production wait: SQLite retries the lock when this returns
+unsafe extern "C" fn wait_within_hook_budget(
+    expiry: *mut std::ffi::c_void,
+    _attempt: std::ffi::c_int,
+) -> std::ffi::c_int {
+    // SAFETY: the pointer was registered from a live `Box<HookExpiry>` that
+    // the store drops only after its connection is closed.
+    let expired = unsafe { &*expiry.cast::<HookExpiry>() };
+    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(expired)).unwrap_or(true) {
+        return 0;
+    }
+    std::thread::sleep(Duration::from_millis(1));
+    1
 }
 
 impl MemoryStore {
@@ -1012,6 +1110,7 @@ impl MemoryStore {
             connection,
             mode: StoreMode::Writer,
             path: path.to_path_buf(),
+            _busy_wait: None,
         };
         store.check_integrity()?;
         check_projection_integrity(&store.connection)?;
@@ -1041,6 +1140,7 @@ impl MemoryStore {
             connection,
             mode: StoreMode::ReadOnly,
             path: path.to_path_buf(),
+            _busy_wait: None,
         };
         store.check_integrity()?;
         Ok(store)
@@ -1067,20 +1167,52 @@ impl MemoryStore {
     /// Once true, the predicate must remain true for this connection's lifetime.
     pub fn open_hook_read_only_with_expiry<E>(path: &Path, expired: E) -> Result<Self, MemoryError>
     where
-        E: Fn() -> bool + Send + 'static,
+        E: Fn() -> bool + Clone + Send + 'static,
     {
         Self::open_hook_read_only_until(path, Some(expired))
     }
 
+    /// A write transaction never blocks this reader: in WAL mode a reader
+    /// sees the last commit while a writer works. What does block it is the
+    /// moment a connection opens with no other open (it rebuilds the WAL
+    /// index) or closes as the last one (it checkpoints and removes the WAL),
+    /// which every short-lived writer process goes through. Each is bounded by
+    /// the WAL, which autocheckpoint keeps near 1,000 pages, so the reader
+    /// waits it out within its invocation's expiry rather than answering
+    /// unavailable. Without an expiry it does not wait.
     fn open_hook_read_only_until<E>(path: &Path, expired: Option<E>) -> Result<Self, MemoryError>
     where
-        E: Fn() -> bool + Send + 'static,
+        E: Fn() -> bool + Clone + Send + 'static,
     {
+        let busy_wait = expired
+            .clone()
+            .map(|expired| Box::new(Box::new(expired) as HookExpiry));
         let connection = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
         )?;
         connection.busy_timeout(Duration::ZERO)?;
+        if let Some(expiry) = &busy_wait {
+            let expiry: *const HookExpiry = &**expiry;
+            // SAFETY: `busy_wait` moves into the store beside `connection`
+            // and is dropped after it, so the pointer outlives every call;
+            // on an early return the local `busy_wait`, declared first, is
+            // dropped last.
+            let status = unsafe {
+                rusqlite::ffi::sqlite3_busy_handler(
+                    connection.handle(),
+                    Some(wait_within_hook_budget),
+                    expiry.cast_mut().cast(),
+                )
+            };
+            if status != rusqlite::ffi::SQLITE_OK {
+                return Err(rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(status),
+                    None,
+                )
+                .into());
+            }
+        }
         if let Some(expired) = expired {
             connection.progress_handler(250, Some(expired));
         }
@@ -1090,6 +1222,7 @@ impl MemoryStore {
             connection,
             mode: StoreMode::ReadOnly,
             path: path.to_path_buf(),
+            _busy_wait: busy_wait,
         };
         let ready: bool = store.connection.query_row(
             "SELECT generation=validated FROM memory_projection_state WHERE id=1",
@@ -1524,7 +1657,7 @@ impl MemoryStore {
         limit: usize,
     ) -> Result<Option<Vec<String>>, MemoryError> {
         let mut statement = self.connection.prepare(
-            "SELECT DISTINCT CASE WHEN i.current_revision=rii.revision THEN rii.item_id END FROM injection_receipts ir LEFT JOIN injection_receipt_items rii ON ir.id=rii.receipt_id LEFT JOIN memory_items i ON i.id=rii.item_id WHERE ir.project_id=?1 AND ir.runtime=?2 AND ir.session_id=?3 AND COALESCE((SELECT generation FROM receipt_contexts rc WHERE rc.receipt_id=ir.id),0)=?4",
+            "SELECT DISTINCT CASE WHEN i.current_revision=rii.revision THEN rii.item_id END FROM injection_receipts ir LEFT JOIN injection_receipt_items rii ON ir.id=rii.receipt_id LEFT JOIN memory_items i ON i.id=rii.item_id WHERE ir.project_id=?1 AND ir.runtime=?2 AND ir.session_id=?3 AND ir.kind='body' AND COALESCE((SELECT generation FROM receipt_contexts rc WHERE rc.receipt_id=ir.id),0)=?4",
         )?;
         let generation = self.context_generation(project_id, runtime, session_id)?;
         let rows = statement
@@ -1549,7 +1682,7 @@ impl MemoryStore {
         session_id: &str,
     ) -> Result<Vec<(u64, String)>, MemoryError> {
         let mut statement = self.connection.prepare(
-            "SELECT DISTINCT i.number,r.title FROM injection_receipts ir JOIN injection_receipt_items rii ON rii.receipt_id=ir.id JOIN memory_items i ON i.id=rii.item_id JOIN memory_revisions r ON r.item_id=i.id AND r.revision=i.current_revision WHERE ir.runtime=?1 AND ir.session_id=?2 AND i.lifecycle='active' ORDER BY i.number",
+            "SELECT DISTINCT i.number,r.title FROM injection_receipts ir JOIN injection_receipt_items rii ON rii.receipt_id=ir.id JOIN memory_items i ON i.id=rii.item_id JOIN memory_revisions r ON r.item_id=i.id AND r.revision=i.current_revision WHERE ir.runtime=?1 AND ir.session_id=?2 AND ir.kind='body' AND i.lifecycle='active' ORDER BY i.number",
         )?;
         Ok(statement
             .query_map(params![runtime, session_id], |row| {
@@ -1890,6 +2023,42 @@ impl MemoryStore {
                 }
                 CandidateRelation::Same { target_id } => {
                     require_active_target(&transaction, &batch.project_id, target_id)?;
+                    let number = item_number(&transaction, target_id)?;
+                    // An archived card the operator says again comes back,
+                    // and counts as said again rather than missed (D-22).
+                    let aging: String = transaction.query_row(
+                        "SELECT aging FROM memory_items WHERE id=?1",
+                        [target_id],
+                        |row| row.get(0),
+                    )?;
+                    if aging == "archived" {
+                        upkeep::revive(
+                            &transaction,
+                            &batch.project_id,
+                            target_id,
+                            Aging::Archived,
+                            "said_again",
+                            batch.created_at_unix_ms,
+                        )?;
+                        summary.revived.push(number);
+                    } else if let Some(offset) = candidate.human_offsets.iter().min() {
+                        let judged = misses::judge(
+                            &transaction,
+                            batch,
+                            target_id,
+                            *offset,
+                            &candidate.aliases,
+                        )?;
+                        if let Some(miss) = judged.miss {
+                            summary.misses.push((number, miss));
+                        }
+                        if !judged.aliases_added.is_empty() {
+                            summary.aliases_added.push(number);
+                        }
+                        if judged.full {
+                            summary.misses_full.push(number);
+                        }
+                    }
                     if attach_sources(
                         &transaction,
                         batch,
@@ -1988,6 +2157,14 @@ impl MemoryStore {
             };
             summary.outcomes.push(outcome);
         }
+        for merge in options.merges.iter().take(merges::MERGES_PER_ANSWER) {
+            match merges::apply(&transaction, batch, merge)? {
+                Ok(number) => summary.merged.push(number),
+                Err(reason) => summary.merges_refused.push(reason),
+            }
+        }
+        (summary.repeats_left_out, summary.repeated) =
+            repeats::record(&transaction, batch, &options.repeats)?;
         if !summary.evicted.is_empty() {
             summary.evictions_purged =
                 purge_evicted(&transaction, &batch.project_id, evicted_limit)?;
@@ -2091,16 +2268,41 @@ impl MemoryStore {
         maximum_bytes: usize,
     ) -> Result<Vec<ComparisonCard>, MemoryError> {
         let query = Query::salient(text, crate::matcher::COMPARISON_TERM_LIMIT);
-        let candidates = self.matching_active(project_id, &query, HOOK_CANDIDATE_LIMIT, false)?;
+        // Below the hooks' bar, so a same-meaning card the operator words
+        // differently is still compared: active cards up to `maximum_items`
+        // and archived ones up to their own few, which a `same` answer
+        // brings back (PRD memory-self-improve D-38, B24). What does not fit
+        // waits for a later analysis.
+        let candidates = self.matching_above(
+            project_id,
+            &query,
+            HOOK_CANDIDATE_LIMIT,
+            false,
+            crate::matcher::COMPARISON_MINIMUM_SCORE,
+        )?;
+        let archived = self.archived_ids(project_id)?;
         let mut selected = Vec::new();
+        let mut archived_selected = 0;
+        let mut active_selected = 0;
         let mut bytes = 0;
         for candidate in candidates {
+            let is_archived = archived.contains(&candidate.id);
+            if is_archived && archived_selected >= crate::ARCHIVED_COMPARISON_LIMIT
+                || !is_archived && active_selected >= maximum_items
+            {
+                continue;
+            }
             // The card's text and line, as the request carries them.
             let item_bytes = candidate.body.len() + candidate.title.len() + 64;
             if bytes + item_bytes > maximum_bytes {
                 continue;
             }
             bytes += item_bytes;
+            if is_archived {
+                archived_selected += 1;
+            } else {
+                active_selected += 1;
+            }
             selected.push(ComparisonCard {
                 needs_aliases: candidate.aliases.is_empty(),
                 reported: false,
@@ -2110,11 +2312,22 @@ impl MemoryStore {
                 title: candidate.title,
                 body: candidate.body,
             });
-            if selected.len() >= maximum_items {
+            if active_selected >= maximum_items
+                && archived_selected >= crate::ARCHIVED_COMPARISON_LIMIT
+            {
                 break;
             }
         }
         Ok(selected)
+    }
+
+    fn archived_ids(&self, project_id: &str) -> Result<HashSet<String>, MemoryError> {
+        let mut statement = self.connection.prepare(
+            "SELECT id FROM memory_items WHERE project_id=?1 AND lifecycle='active' AND aging='archived'",
+        )?;
+        Ok(statement
+            .query_map([project_id], |row| row.get(0))?
+            .collect::<rusqlite::Result<HashSet<_>>>()?)
     }
 
     /// Active cards of any kind that match `text`, best first, at most
@@ -3447,7 +3660,7 @@ impl MemoryStore {
         let mut statement = self.connection.prepare(&format!(
             "SELECT i.id,i.number,r.revision,r.title,p.target_path,p.pr_number,p.repository,i.salience,i.confidence,i.updated_at_ms,r.created_at_ms FROM memory_items i JOIN memory_revisions r ON r.item_id=i.id AND r.revision=i.current_revision \
              LEFT JOIN card_promotions p ON p.item_id=i.id AND p.revision=i.current_revision AND p.state='merged' \
-             WHERE i.project_id=?1 AND i.lifecycle='active' AND r.kind IN ('rule','decision','lesson','preference') AND NOT {} AND NOT EXISTS(SELECT 1 FROM card_comparisons c WHERE c.item_id=i.id AND c.revision=i.current_revision AND p.item_id IS NULL AND json_extract(c.data,'$.authority')!='card_newer') AND (r.verified_at_ms IS NOT NULL OR p.item_id IS NOT NULL)",
+             WHERE i.project_id=?1 AND i.lifecycle='active' AND i.aging!='archived' AND r.kind IN ('rule','decision','lesson','preference') AND NOT {} AND NOT EXISTS(SELECT 1 FROM card_comparisons c WHERE c.item_id=i.id AND c.revision=i.current_revision AND p.item_id IS NULL AND json_extract(c.data,'$.authority')!='card_newer') AND (r.verified_at_ms IS NOT NULL OR p.item_id IS NOT NULL)",
             hold::held(2)
         ))?;
         let Some(support) = reinforcement::support(&self.connection, project_id, None, expired)?
@@ -3523,6 +3736,31 @@ impl MemoryStore {
         )
     }
 
+    /// Records the session-start index a session's conversation kept (PRD
+    /// memory-self-improve D-24, D-35, B16): the cards it listed count as
+    /// given for their age and for an ignore, never for which bodies the
+    /// session still gets, a card's use or a stale report.
+    pub fn record_index_receipt(
+        &mut self,
+        project_id: &str,
+        runtime: &str,
+        session_id: &str,
+        turn_id: &str,
+        item_key: &str,
+        now_unix_ms: u64,
+    ) -> Result<ReceiptRecord, MemoryError> {
+        self.record_receipt_of_kind(
+            project_id,
+            runtime,
+            session_id,
+            turn_id,
+            item_key,
+            now_unix_ms,
+            RECEIPT_LIMIT,
+            ReceiptKind::Index,
+        )
+    }
+
     /// Frees a Project's receipt rows at the cap, the sessions quiet for 30
     /// days first, so a new session's prompts get Memory again (B26); the
     /// Memory pass asks it once a pass, since a capped Project's hooks record
@@ -3550,6 +3788,7 @@ impl MemoryStore {
     }
 
     #[allow(clippy::too_many_arguments)] // one receipt's identity, its time and the cap
+    #[allow(clippy::too_many_arguments)]
     fn record_receipt_with_limit(
         &mut self,
         project_id: &str,
@@ -3560,11 +3799,41 @@ impl MemoryStore {
         now_unix_ms: u64,
         limit: usize,
     ) -> Result<ReceiptRecord, MemoryError> {
+        self.record_receipt_of_kind(
+            project_id,
+            runtime,
+            session_id,
+            turn_id,
+            item_key,
+            now_unix_ms,
+            limit,
+            ReceiptKind::Body,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn record_receipt_of_kind(
+        &mut self,
+        project_id: &str,
+        runtime: &str,
+        session_id: &str,
+        turn_id: &str,
+        item_key: &str,
+        now_unix_ms: u64,
+        limit: usize,
+        kind: ReceiptKind,
+    ) -> Result<ReceiptRecord, MemoryError> {
         self.require_writer()?;
-        let receipt_id = stable_id(
-            "receipt",
-            &[project_id, runtime, session_id, turn_id, item_key],
-        );
+        let receipt_id = match kind {
+            ReceiptKind::Body => stable_id(
+                "receipt",
+                &[project_id, runtime, session_id, turn_id, item_key],
+            ),
+            ReceiptKind::Index => stable_id(
+                "receipt",
+                &[project_id, runtime, session_id, turn_id, item_key, "index"],
+            ),
+        };
         let transaction = self.connection.transaction()?;
         let known: bool = transaction.query_row(
             "SELECT EXISTS(SELECT 1 FROM injection_receipts WHERE id=?1)",
@@ -3608,7 +3877,7 @@ impl MemoryStore {
         } else {
             "provided"
         };
-        transaction.execute("INSERT INTO injection_receipts(id,project_id,runtime,session_id,turn_id,outcome,created_at_ms) VALUES(?1,?2,?3,?4,?5,?6,?7)", params![receipt_id,project_id,runtime,session_id,turn_id,outcome,now_unix_ms])?;
+        transaction.execute("INSERT INTO injection_receipts(id,project_id,runtime,session_id,turn_id,outcome,created_at_ms,kind) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)", params![receipt_id,project_id,runtime,session_id,turn_id,outcome,now_unix_ms,kind.as_str()])?;
         for (item_id, revision) in &items {
             let inserted = transaction.execute(
                 "INSERT OR IGNORE INTO injection_receipt_items(receipt_id,item_id,revision) SELECT ?1,r.item_id,r.revision FROM memory_revisions r WHERE r.item_id=?2 AND r.revision=?3",
@@ -3617,10 +3886,18 @@ impl MemoryStore {
             if inserted == 0 {
                 return Err(MemoryError::CrossProjectTarget);
             }
+            // Listed or given in full, the card was given: its age starts
+            // over (B22). Only a body is a use that keeps it from eviction.
             transaction.execute(
-                "UPDATE memory_items SET last_used_at_ms=MAX(COALESCE(last_used_at_ms,0),?2) WHERE id=?1",
+                "UPDATE memory_items SET last_given_at_ms=MAX(COALESCE(last_given_at_ms,0),?2) WHERE id=?1",
                 params![item_id, now_unix_ms],
             )?;
+            if kind == ReceiptKind::Body {
+                transaction.execute(
+                    "UPDATE memory_items SET last_used_at_ms=MAX(COALESCE(last_used_at_ms,0),?2) WHERE id=?1",
+                    params![item_id, now_unix_ms],
+                )?;
+            }
         }
         transaction.commit()?;
         certify_projection(&self.connection)?;
@@ -3682,10 +3959,22 @@ impl MemoryStore {
         limit: usize,
         given: bool,
     ) -> Result<Vec<RetrievalCandidate>, MemoryError> {
+        self.matching_above(project_id, query, limit, given, MINIMUM_SCORE)
+    }
+
+    /// As [`Self::matching_active`], keeping cards at or above `minimum`.
+    fn matching_above(
+        &self,
+        project_id: &str,
+        query: &Query,
+        limit: usize,
+        given: bool,
+        minimum: f64,
+    ) -> Result<Vec<RetrievalCandidate>, MemoryError> {
         if query.is_empty() {
             return Ok(Vec::new());
         }
-        let mut statement = self.connection.prepare(&format!("SELECT i.id,i.number,r.revision,r.title,r.aliases,r.body||COALESCE((SELECT '\nPending document update: '||json_extract(c.data,'$.document') FROM card_comparisons c WHERE c.item_id=i.id AND c.revision=i.current_revision AND json_extract(c.data,'$.authority')='card_newer'),''),COALESCE((SELECT s.provider||':'||s.session_id FROM memory_sources s WHERE s.item_id=i.id ORDER BY s.provider,s.session_id,s.event_offset LIMIT 1),''),i.confidence,i.salience,i.updated_at_ms,r.kind,r.created_at_ms FROM memory_fts f JOIN memory_items i ON i.id=f.item_id JOIN memory_revisions r ON r.item_id=i.id AND r.revision=i.current_revision WHERE f.project_id=?1 AND i.lifecycle='active' AND memory_fts MATCH ?2 AND (?4=0 OR (r.verified_at_ms IS NOT NULL AND NOT {} AND NOT EXISTS(SELECT 1 FROM card_comparisons c WHERE c.item_id=i.id AND c.revision=i.current_revision AND json_extract(c.data,'$.authority')!='card_newer') AND NOT EXISTS(SELECT 1 FROM card_promotions p WHERE p.item_id=i.id AND p.revision=i.current_revision AND p.state='merged'))) ORDER BY bm25(memory_fts),i.updated_at_ms DESC,i.id LIMIT ?3", hold::held(5)))?;
+        let mut statement = self.connection.prepare(&format!("SELECT i.id,i.number,r.revision,r.title,r.aliases,r.body||COALESCE((SELECT '\nPending document update: '||json_extract(c.data,'$.document') FROM card_comparisons c WHERE c.item_id=i.id AND c.revision=i.current_revision AND json_extract(c.data,'$.authority')='card_newer'),''),COALESCE((SELECT s.provider||':'||s.session_id FROM memory_sources s WHERE s.item_id=i.id ORDER BY s.provider,s.session_id,s.event_offset LIMIT 1),''),i.confidence,i.salience,i.updated_at_ms,r.kind,r.created_at_ms FROM memory_fts f JOIN memory_items i ON i.id=f.item_id JOIN memory_revisions r ON r.item_id=i.id AND r.revision=i.current_revision WHERE f.project_id=?1 AND i.lifecycle='active' AND memory_fts MATCH ?2 AND (?4=0 OR (r.verified_at_ms IS NOT NULL AND i.aging!='archived' AND NOT {} AND NOT EXISTS(SELECT 1 FROM card_comparisons c WHERE c.item_id=i.id AND c.revision=i.current_revision AND json_extract(c.data,'$.authority')!='card_newer') AND NOT EXISTS(SELECT 1 FROM card_promotions p WHERE p.item_id=i.id AND p.revision=i.current_revision AND p.state='merged'))) ORDER BY bm25(memory_fts),i.updated_at_ms DESC,i.id LIMIT ?3", hold::held(5)))?;
         let mut candidates = statement
             .query_map(
                 params![
@@ -3721,7 +4010,7 @@ impl MemoryStore {
             candidate.rank = rank;
             candidate.score = query.score(&CardTerms::new(&candidate.body, &matched));
         }
-        candidates.retain(|candidate| candidate.score >= MINIMUM_SCORE);
+        candidates.retain(|candidate| candidate.score >= minimum);
         candidates.sort_by(|left, right| {
             right
                 .score
@@ -3870,6 +4159,9 @@ fn migrate(
             .and_then(|_| connection.execute_batch(progress::TABLES))
             .and_then(|_| connection.execute_batch(progress::FAILURE_TABLES))
             .and_then(|_| progress::install_projection_tracking(connection))
+            .and_then(|_| connection.execute_batch(upkeep::COLUMNS))
+            .and_then(|_| connection.execute_batch(upkeep::TABLES))
+            .and_then(|_| connection.execute_batch(recheck::TRIGGERS))
             .and_then(|_| enable_fts_secure_delete(connection))
             .and_then(|_| connection.pragma_update(None, "user_version", SCHEMA_VERSION))
         {
@@ -4001,6 +4293,15 @@ COMMIT;"#,
             "ALTER TABLE memory_sources ADD COLUMN words TEXT; PRAGMA user_version=21;",
         )?;
         transaction.commit()?;
+        version = 21;
+    }
+    // Version 22 lets Memory keep itself (PRD memory-self-improve): each
+    // card's age and recheck, the repeated requests, misses and the changes
+    // a card's history can take back. Every card's clock starts now, so no
+    // card goes stale the day the store is upgraded (D-40, B22).
+    if version == 21 {
+        back_up(connection, path, version)?;
+        upkeep::migrate_version_twenty_one(connection, now_ms())?;
         version = SCHEMA_VERSION;
     }
     if version != SCHEMA_VERSION {
@@ -4526,7 +4827,7 @@ fn backup_path(path: &Path, version: i64) -> std::path::PathBuf {
 }
 
 /// The schema versions a migration keeps a backup of.
-const BACKUP_VERSIONS: [i64; 5] = [7, 8, 15, 16, 20];
+const BACKUP_VERSIONS: [i64; 6] = [7, 8, 15, 16, 20, 21];
 
 /// Removes a deleted Project from every backup copy, so its cards do not
 /// outlive the delete there.
@@ -4731,10 +5032,11 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
 const ITEM_SELECT: &str = "SELECT i.id,i.project_id,i.number,r.title,r.aliases,r.body,r.kind,i.lifecycle,r.revision,\
 (SELECT COUNT(*) FROM memory_sources s WHERE s.item_id=i.id),\
 (SELECT COUNT(*) FROM memory_sources s WHERE s.item_id=i.id AND s.human=1),\
-(SELECT COUNT(DISTINCT ir.runtime||':'||ir.session_id) FROM injection_receipt_items rii JOIN injection_receipts ir ON ir.id=rii.receipt_id WHERE rii.item_id=i.id),\
+(SELECT COUNT(DISTINCT ir.runtime||':'||ir.session_id) FROM injection_receipt_items rii JOIN injection_receipts ir ON ir.id=rii.receipt_id WHERE rii.item_id=i.id AND ir.kind='body'),\
 i.pull_count,i.last_used_at_ms,\
 i.confidence,i.salience,i.created_at_ms,i.updated_at_ms,r.cited_paths,\
 (r.verified_at_ms IS NULL AND NOT EXISTS(SELECT 1 FROM card_promotions p WHERE p.item_id=i.id AND p.revision=i.current_revision AND p.state='merged') AND NOT EXISTS(SELECT 1 FROM card_comparisons d WHERE d.item_id=i.id AND d.revision=i.current_revision)) \
+,i.aging,i.recheck_at_ms IS NOT NULL \
 FROM memory_items i JOIN memory_revisions r ON r.item_id=i.id AND r.revision=i.current_revision";
 
 /// A card's text as stored: body, index line and aliases, each checked.
@@ -5318,7 +5620,7 @@ fn evictable(
          AND NOT EXISTS(SELECT 1 FROM card_promotions p WHERE p.item_id=i.id AND p.state NOT IN({unsettled})) \
          AND NOT EXISTS(SELECT 1 FROM memory_sources s WHERE s.item_id=i.id AND s.provider=?4) \
          AND NOT EXISTS(SELECT 1 FROM memory_revisions r WHERE r.item_id=i.id AND r.batch_id=?2) \
-         ORDER BY i.last_used_at_ms IS NOT NULL,i.last_used_at_ms,i.created_at_ms,i.number LIMIT ?3",
+         ORDER BY i.aging!='archived',i.last_used_at_ms IS NOT NULL,i.last_used_at_ms,i.created_at_ms,i.number LIMIT ?3",
     ))?;
     let rows = statement
         .query_map(
@@ -5388,6 +5690,8 @@ fn map_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<MemoryItem> {
         updated_at_unix_ms: row.get(17)?,
         cited_paths: parse_aliases(&row.get::<_, String>(18)?),
         verifying: row.get(19)?,
+        aging: Aging::parse(&row.get::<_, String>(20)?),
+        rechecking: row.get(21)?,
     })
 }
 
@@ -6600,6 +6904,7 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
                 .execute_batch(&format!("DROP TRIGGER {trigger};"))
                 .unwrap();
         }
+        connection.execute_batch(upkeep::DROP).unwrap();
         connection
             .execute_batch(
                 "ALTER TABLE memory_sources DROP COLUMN words; DROP TABLE input_failures; DROP TABLE analysis_progress; DROP TABLE analysis_queue; DROP TABLE analysis_proposals; DROP TABLE memory_projection_state; DROP TABLE correction_checks; DROP TABLE memory_contexts; DROP TABLE receipt_contexts; DROP TABLE analysis_schedule; ALTER TABLE projects DROP COLUMN evictions_seen_at_ms; ALTER TABLE projects DROP COLUMN answered_at_ms; PRAGMA user_version=16;",
@@ -9161,7 +9466,10 @@ PRAGMA user_version=14;"#,
         say_again(&mut store, &project, 1, "s1", 90);
         store
             .connection
-            .execute_batch("ALTER TABLE memory_sources DROP COLUMN words; PRAGMA user_version=20;")
+            .execute_batch(&format!(
+                "{} ALTER TABLE memory_sources DROP COLUMN words; PRAGMA user_version=20;",
+                upkeep::DROP
+            ))
             .unwrap();
         drop(store);
         let path = temp.path().join("memory.sqlite3");
@@ -9529,6 +9837,8 @@ PRAGMA user_version=14;"#,
                 title: secret.into(),
                 aliases: vec![secret.into()],
             }],
+            repeats: vec![],
+            merges: vec![],
             secret_rejected: 0,
         };
         store
@@ -10979,6 +11289,7 @@ PRAGMA user_version=14;"#,
             connection,
             mode: StoreMode::Writer,
             path: PathBuf::new(),
+            _busy_wait: None,
         };
         assert!(
             store
@@ -11111,6 +11422,7 @@ PRAGMA user_version=14;"#,
             connection,
             mode: StoreMode::Writer,
             path: PathBuf::new(),
+            _busy_wait: None,
         };
         let state = store.project_state("p").unwrap();
         assert!(

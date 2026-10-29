@@ -25,6 +25,14 @@ fn patterns() -> &'static [Regex] {
     })
 }
 
+/// Whether `character` changes how text reads without being seen: a
+/// zero-width, joiner, direction, variation or tag character. Text an agent
+/// will be given as someone's words keeps none of them, so what a person
+/// read is what the agent gets.
+pub fn is_invisible(character: char) -> bool {
+    matches!(character, '\u{00AD}' | '\u{034F}' | '\u{061C}' | '\u{180E}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{206F}' | '\u{FE00}'..='\u{FE0F}' | '\u{FEFF}' | '\u{E0000}'..='\u{E007F}')
+}
+
 pub fn redact(input: &str) -> RedactedText {
     let mut text = input.to_owned();
     let mut redactions = 0;

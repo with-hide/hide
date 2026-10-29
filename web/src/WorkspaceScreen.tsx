@@ -8,7 +8,7 @@ import { RemotePaneCanvas } from "./PaneGrid";
 import { remoteTabView, remoteView } from "./remote";
 import { canRetryDevice, deviceAwayLine, deviceLine } from "./settings";
 import { catalogWorkspaces, focusedRemoteDevice, frontCheckout, type Checkout } from "./snapshot";
-import { awayDevice, machineName, windowDeviceId } from "./screenMachine";
+import { awayDevice, machineName, windowDeviceId, wslPlace } from "./screenMachine";
 import { useShellStore } from "./store";
 import { focusTerminal } from "./terminals";
 import { AgentAreas } from "./AgentAreas";
@@ -405,6 +405,8 @@ function RemoteAgentArea({ actions }: { actions: Actions }) {
   const device = useShellStore((s) => focusedRemoteDevice(s.rest));
   const status = useShellStore((s) => (device ? (s.rest?.status?.remote?.find((row) => row.target_id === device.id) ?? null) : null));
   const name = useShellStore((s) => (device ? machineName(s.rest?.navigator?.devices, device.id, t) : ""));
+  // Beside the name, the SSH alias it is reached by, or where a WSL distribution is (PRD wsl-device B5).
+  const where = useShellStore((s) => (device ? (wslPlace(s.rest?.navigator?.devices, device.id, t) ?? device.ssh_alias) : null));
   // The machine this window runs on, which "Show this device" brings forward; on a node it is not the core's.
   const own = useShellStore((s) => windowDeviceId(s.rest?.navigator?.devices));
   const session = status?.session ?? null;
@@ -418,7 +420,7 @@ function RemoteAgentArea({ actions }: { actions: Actions }) {
     return (
       <div className="flex min-h-0 flex-1 flex-col items-start justify-center gap-sm p-xl text-body text-subtle-foreground" data-remote-device-surface={device.id} data-remote-state={status?.state ?? "none"}>
         <h2 className="text-title font-semibold text-foreground">
-          {name} <span className="font-mono text-caption text-muted-foreground">{device.ssh_alias}</span>
+          {name} <span className="font-mono text-caption text-muted-foreground">{where}</span>
         </h2>
         <p>{connected ? t("panes.workspace.connectedEmpty", { device: name }) : t("panes.workspace.remoteState", { device: name, state: line.text })}</p>
         {away.hint ? <p className="text-caption text-muted-foreground">{away.hint}</p> : null}

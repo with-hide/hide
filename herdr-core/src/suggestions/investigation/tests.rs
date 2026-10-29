@@ -123,6 +123,7 @@ fn entry(id: u64, signal: Signal, tag: &str, session: &str) -> RecordEntry {
         at_unix_ms: 1,
         always: false,
         improvement: None,
+        said: None,
         line: None,
         fresh: true,
     }
@@ -618,6 +619,7 @@ fn an_investigation_that_gets_no_answer_raises_nothing_and_says_so() {
                 pr: None,
                 head: None,
                 improvement: None,
+                said: None,
                 checkout: Some("/repo".into()),
                 at_unix_ms: START,
                 always: false,

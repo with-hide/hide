@@ -32,10 +32,17 @@ pub enum Signal {
     CheckFailed,
     /// A review asked for changes and the pull request was merged after.
     ChangeRequest,
+    /// The operator asked again for what they want every time, as Memory's
+    /// analysis named it (PRD memory-self-improve D-14, D-37): one record
+    /// per time it was said, tagged by its meaning.
+    RepeatedRequest,
+    /// A rule or preference card a session was given and the operator still
+    /// had to say again (D-08): one record per session, tagged by its card.
+    MemoryIgnored,
 }
 
 impl Signal {
-    pub(crate) const ALL: [Self; 7] = [
+    pub(crate) const ALL: [Self; 9] = [
         Self::FailedTool,
         Self::AgentWait,
         Self::Correction,
@@ -43,6 +50,8 @@ impl Signal {
         Self::Improvement,
         Self::CheckFailed,
         Self::ChangeRequest,
+        Self::RepeatedRequest,
+        Self::MemoryIgnored,
     ];
 
     pub(crate) fn as_str(self) -> &'static str {
@@ -54,7 +63,24 @@ impl Signal {
             Self::Improvement => "improvement",
             Self::CheckFailed => "check_failed",
             Self::ChangeRequest => "change_request",
+            Self::RepeatedRequest => "repeated_request",
+            Self::MemoryIgnored => "memory_ignored",
         }
+    }
+
+    /// Whether Memory's analysis finds it, so it needs Memory on (B5).
+    pub(crate) fn learned_by_memory(self) -> bool {
+        matches!(
+            self,
+            Self::Correction | Self::RepeatedRequest | Self::MemoryIgnored
+        )
+    }
+
+    /// Whether its lines are grouped by their tag alone, never by an
+    /// investigation: Memory already named what was said, and a line of it
+    /// is scored by its own rule (D-37).
+    pub(crate) fn tag_grouped(self) -> bool {
+        matches!(self, Self::RepeatedRequest | Self::MemoryIgnored)
     }
 
     /// Whether the record is read from GitHub, which rests while no GitHub
@@ -143,6 +169,48 @@ pub struct Observation {
     /// An improvement's kind; its text is the tag.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub improvement: Option<ImprovementKind>,
+    /// What the operator said, for a repeated request or an ignored card.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub said: Option<Said>,
+}
+
+/// The operator's words behind a [`Signal::RepeatedRequest`] or a
+/// [`Signal::MemoryIgnored`] record, by place and digest, never the words
+/// (PRD memory-self-improve D-43).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Said {
+    /// The operator's personal way, whose fix is the Hide global instruction,
+    /// rather than this Project's, whose fix is in the repository (D-06).
+    pub personal: bool,
+    /// A procedure, which a skill holds, rather than a rule (D-20).
+    #[serde(default)]
+    pub procedure: bool,
+    /// The one line a fix writes.
+    pub line: String,
+    /// The event the words are at, which the row's excerpt reads (B7).
+    pub offset: u64,
+    /// The words' digest: the same words said again, read again or copied
+    /// by a fork count once wherever they recur (D-37).
+    #[serde(default)]
+    pub words: Option<String>,
+    /// When the session began, which tells a session that was given the
+    /// Hide global instruction a fix wrote from one that was not (D-33).
+    #[serde(default)]
+    pub session_started_at_unix_ms: Option<u64>,
+    /// How an ignored memory had been given, in the session's start list or
+    /// in full (B15); none for a repeated request.
+    #[serde(default)]
+    pub given: Option<Given>,
+}
+
+/// How a memory reached the session that ignored it (B15).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Given {
+    /// Its line in the session's start list.
+    Index,
+    /// Its whole text with a prompt.
+    Body,
 }
 
 /// A pull request a record names.
@@ -165,11 +233,22 @@ impl Observation {
     /// per pull request for a GitHub record). `None` for a fact missing the
     /// session or pull request its signal is counted by, which is refused.
     pub(crate) fn key(&self) -> Option<String> {
+        let unit = self.unit()?;
+        // Each time a request was said is its own record; the same words
+        // are one wherever they recur (D-37).
+        let unit = match (&self.said, self.signal) {
+            (Some(said), Signal::RepeatedRequest) => match &said.words {
+                Some(words) => format!("w:{words}"),
+                None => format!("{unit}:o:{}", said.offset),
+            },
+            (None, Signal::RepeatedRequest) => return None,
+            _ => unit,
+        };
         Some(format!(
             "{}\u{1f}{}\u{1f}{}",
             self.signal.as_str(),
             self.tag,
-            self.unit()?
+            unit
         ))
     }
 
@@ -216,6 +295,7 @@ pub struct RecordEntry {
     pub at_unix_ms: u64,
     pub always: bool,
     pub improvement: Option<ImprovementKind>,
+    pub said: Option<Said>,
     /// The line it is on, if any.
     pub line: Option<super::notebook::LineId>,
     /// No run has attached or passed it yet.
@@ -259,6 +339,7 @@ mod tests {
             always: false,
             head: None,
             improvement: None,
+            said: None,
         }
     }
 
@@ -289,12 +370,40 @@ mod tests {
             always: false,
             head: None,
             improvement: None,
+            said: None,
         };
         assert_eq!(check(3).key(), check(3).key());
         assert_ne!(check(3).key(), check(4).key());
         let mut missing = failed("cargo test", "a");
         missing.session = None;
         assert_eq!(missing.key(), None, "a session signal names its session");
+    }
+
+    #[test]
+    fn each_time_a_request_was_said_is_one_record_and_the_same_words_are_one() {
+        let said = |session: &str, offset, words: Option<&str>| Observation {
+            signal: Signal::RepeatedRequest,
+            tag: "답은 한국어로".into(),
+            said: Some(Said {
+                personal: true,
+                procedure: false,
+                line: "Answer in Korean.".into(),
+                offset,
+                words: words.map(str::to_owned),
+                session_started_at_unix_ms: None,
+                given: None,
+            }),
+            ..failed("x", session)
+        };
+        assert_ne!(said("a", 1, None).key(), said("a", 2, None).key());
+        assert_eq!(
+            said("a", 1, Some("w")).key(),
+            said("fork", 9, Some("w")).key(),
+            "a fork's copy of the same words is the same thing said"
+        );
+        let mut unsaid = said("a", 1, None);
+        unsaid.said = None;
+        assert_eq!(unsaid.key(), None);
     }
 
     #[test]

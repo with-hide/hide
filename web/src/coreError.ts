@@ -31,6 +31,8 @@ const KEYS = new Map<string, MessageKey>([
   ["workspace.remove_cancelled", "coreError.project.removeCancelled"],
   ["workspace.control_unavailable", "coreError.herdrNotConnected"],
 
+  ["memory.recheck_ai_off", "memory.recheckNeedsAi"],
+
   ["repository.clone_busy", "coreError.clone.busy"],
   ["repository.clone_invalid", "coreError.clone.invalid"],
 

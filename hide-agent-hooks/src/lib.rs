@@ -27,6 +27,7 @@ pub mod counters;
 pub mod delivery;
 pub mod diagnosis;
 pub mod folder_trust;
+pub mod global_guard;
 pub mod guardrails;
 pub mod guidance;
 pub mod install;

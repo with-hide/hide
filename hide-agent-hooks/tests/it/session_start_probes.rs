@@ -28,7 +28,7 @@ case "$1 $2" in
       i=$((i+1)); [ "$i" -gt 500 ] && exit 1
       sleep 0.01
     done
-    printf '%s\n' '{"type":"workspace_result","ok":true,"result":{"context":"MEMORY-FOR-THIS-SESSION\n","outcome":"provided","count":1}}' ;;
+    printf '%s\n' '{"type":"workspace_result","ok":true,"result":{"context":"MEMORY-FOR-THIS-SESSION\n","outcome":"provided","count":1,"global":"GLOBAL-FOR-EVERY-SESSION\n"}}' ;;
   "workspace info")
     [ "$3" = "--hook" ] || exit 1
     : > "$dir/workspace-asked"
@@ -119,6 +119,13 @@ fn session_start_asks_memory_and_the_workspace_probe_at_once() {
         .find("checkout `/srv/fixture-checkout`")
         .unwrap_or_else(|| panic!("{answer}"));
     assert!(context.find("MEMORY-FOR-THIS-SESSION").unwrap() < guidance);
+    // The Hide global instruction rides in its own slot, before Memory
+    // (PRD memory-self-improve B1).
+    assert!(
+        context.find("GLOBAL-FOR-EVERY-SESSION").unwrap()
+            < context.find("MEMORY-FOR-THIS-SESSION").unwrap(),
+        "{answer}"
+    );
     let mut calls: Vec<String> = std::fs::read_to_string(&machine.calls)
         .unwrap()
         .lines()

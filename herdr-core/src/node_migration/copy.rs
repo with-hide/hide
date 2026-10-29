@@ -118,6 +118,26 @@ pub fn stage(state_dir: &Path, staging: &Path, ai_settings: &Path) -> Result<Man
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => return Err(refuse(&from, error)),
         };
+        // A global instruction kept elsewhere through a link moves as the
+        // text the core reads through it (capped, UTF-8, opened without
+        // following a further link), since the link would point nowhere on
+        // the receiving machine; one the core reads as unusable stays
+        // behind. Any other link is refused below.
+        if metadata.is_symlink() && *name == hide_kit::layout::GLOBAL_INSTRUCTION {
+            match crate::global_instruction::read(state_dir) {
+                Ok(instruction) => {
+                    std::fs::write(&to, instruction.text).map_err(|error| refuse(&to, error))?;
+                    hide_platform::fs::private::restrict_to_owner(&to)
+                        .map_err(|error| refuse(&to, error))?;
+                }
+                Err(unusable) => crate::diagnostic!(serde_json::json!({
+                    "component": "core_move",
+                    "kind": "global_instruction.link_left",
+                    "reason": unusable.as_str(),
+                })),
+            }
+            continue;
+        }
         if *name == SESSION_SEARCH && metadata.is_file() {
             stage_retention(&from, &to)?;
         } else if metadata.is_dir() {
@@ -723,6 +743,49 @@ mod tests {
         );
         assert!(state.path().join("mobile.json/kept").is_file());
         assert!(!settings(state.path()).exists());
+    }
+
+    /// A global instruction kept in the operator's dotfiles through a link
+    /// moves as the text the core reads, a regular file on the receiving
+    /// machine; a link the core reads as unusable stays behind and the move
+    /// goes on.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_global_instruction_moves_as_its_text_and_an_unusable_one_stays_behind() {
+        let name = hide_kit::layout::GLOBAL_INSTRUCTION;
+        let source = folder();
+        let dotfiles = tempfile::tempdir().unwrap();
+        let text = dotfiles.path().join("agents.md");
+        std::fs::write(&text, "Answer in Korean.\n").unwrap();
+        std::os::unix::fs::symlink(&text, source.path().join(name)).unwrap();
+        let staging = source.path().join("move-staging/i1");
+        let manifest = stage(source.path(), &staging, &settings(source.path())).unwrap();
+        let moved = staging.join(name);
+        assert!(std::fs::symlink_metadata(&moved).unwrap().is_file());
+        assert_eq!(
+            std::fs::read_to_string(&moved).unwrap(),
+            "Answer in Korean.\n"
+        );
+        assert!(manifest.files.contains_key(name));
+
+        // A file the core would not read, of another kind or over the cap.
+        let image = dotfiles.path().join("agents.png");
+        std::fs::write(&image, "not text").unwrap();
+        let large = dotfiles.path().join("large.md");
+        std::fs::write(
+            &large,
+            "x".repeat(crate::global_instruction::LIMIT_BYTES + 1),
+        )
+        .unwrap();
+        for target in [image, large] {
+            let source = folder();
+            std::os::unix::fs::symlink(&target, source.path().join(name)).unwrap();
+            let staging = source.path().join("move-staging/i1");
+            let manifest = stage(source.path(), &staging, &settings(source.path())).unwrap();
+            assert!(!staging.join(name).exists());
+            assert!(!manifest.files.contains_key(name));
+            assert!(manifest.files.contains_key("labels.json"));
+        }
     }
 
     /// A manifest's paths become paths on the machine that reads it, so one

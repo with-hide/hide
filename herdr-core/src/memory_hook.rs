@@ -12,13 +12,25 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use hide_memory::hook::{HookContext, HookEvent, HookOutcome, HookRequest};
+pub use hide_memory::hook::HookContext;
+use hide_memory::hook::{HookEvent, HookOutcome, HookRequest};
 use hide_node_link::protocol::Call;
 use serde_json::Value;
 #[cfg(test)]
 use serde_json::json;
 
 pub use hide_memory::hook::{PROMPT_LIMIT_BYTES, prefix};
+
+/// The answer for a hook whose Memory cannot be read, carrying only the Hide
+/// global instruction a session start still gets (PRD memory-self-improve
+/// D-31).
+pub fn global_only(global: String) -> HookContext {
+    HookContext {
+        context: None,
+        outcome: HookOutcome::Unavailable,
+        global: Some(global),
+    }
+}
 
 use crate::node::NodeId;
 use crate::node_access::{NodeLink, call_as};
@@ -43,6 +55,12 @@ pub struct Ask {
 }
 
 impl Ask {
+    /// Whether this ask starts a session, which carries the Hide global
+    /// instruction beside Memory (PRD memory-self-improve D-29).
+    pub fn starts_session(&self) -> bool {
+        self.event == HookEvent::SessionStart
+    }
+
     /// The ask a `memory_hook` request carries: an event Memory answers, the
     /// runtime as Memory names its sessions, the agent's own session id, and
     /// the prompt when the hook has one.
@@ -91,6 +109,7 @@ pub fn answer(scope: &Scope, ask: &Ask, deadline: Instant) -> HookContext {
     let without = |outcome| HookContext {
         context: None,
         outcome,
+        global: None,
     };
     // A store that does not exist yet costs no node call.
     if !scope.store.is_file() {

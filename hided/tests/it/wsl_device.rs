@@ -6,25 +6,35 @@
 //! runs this alone; it owns the distribution, so the test may stop it and
 //! change its default user.
 //!
+//! The second walk is the operator's journey over the same link (PRD
+//! wsl-device B8, B9, B12, B26): a project on the Windows drive added with
+//! the operator's confirmation, the page its server answers inside WSL,
+//! Hide AI answered by a CLI inside WSL, and all three again after a
+//! reconnection. The core's own first run that sends these calls is the
+//! operator's check on a real PC.
+//!
 //! `HIDE_E2E_WSL_DISTRO` names the distribution and `HIDE_E2E_WSL_PACKAGES`
 //! the folder holding `hided-linux-x86_64`, `hide-linux-x86_64`,
 //! `hide-agent-hooks-linux-x86_64` and `herdr-linux-x86_64`.
 #![cfg(windows)]
 
-use std::io::BufRead;
-use std::path::PathBuf;
+use std::io::{BufRead, Read, Write};
+use std::net::{SocketAddr, TcpStream};
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use hide_node::ssh::host::wsl::WslAccess;
+use hide_node_link::ai::{AiError, AiRequest, AiResponse, BackendSpec, Logged, ProviderId};
 use hide_node_link::device::{
     DeviceConnector, DialedTransport, EstablishError, Established, HOST_CONSENT_CONTRACT,
     HostConsent, Wake,
 };
 use hide_node_link::protocol::{Call, RootOpened, RootRef};
+use hide_node_link::register::Registrable;
 use hide_node_link::terminal::{GridSize, KeyTarget, TerminalControl, TerminalReport};
-use hide_node_link::{NodeLink, call_as};
+use hide_node_link::{ErrorCode, LinkError, NodeLink, call_as, call_as_with_progress};
 use serde_json::{Value, json};
 
 const TIMEOUT: Duration = Duration::from_secs(120);
@@ -32,6 +42,19 @@ const USER: &str = "hidetest";
 /// Set for the owner process the crash step starts: the distribution it
 /// connects to.
 const OWNER: &str = "HIDE_E2E_WSL_OWNER";
+/// The journey's folder on the Windows drive, and the same folder as WSL
+/// reaches it.
+const SCENARIO_WINDOWS: &str = r"C:\hide-wsl-scenario";
+const SCENARIO_WSL: &str = "/mnt/c/hide-wsl-scenario";
+/// The project's page, served inside WSL on this port.
+const PAGE: &str = "hide-wsl-page";
+const PAGE_BASE64: &str = "aGlkZS13c2wtcGFnZQ==";
+const PAGE_PORT: u16 = 47613;
+/// A stand-in for the Pi CLI: it answers where it ran and as whom.
+const PI: &str = r#"#!/bin/sh
+cat >/dev/null
+printf '{"summary":"%s %s"}\n' "$(uname -s)" "$(id -un)"
+"#;
 
 #[derive(Default)]
 struct Sink {
@@ -585,6 +608,236 @@ fn a_wsl_distribution_connects_works_and_ends_with_its_link() {
     let woken = woken.unwrap_or_else(|error| panic!("woken connection: {error}"));
     assert!(running(&distro));
     woken.node.host.close("the test is done");
+}
+
+#[test]
+#[ignore = "a real WSL 2 distribution of the runner's own; the windows wsl lane sets it up"]
+fn a_wsl_device_keeps_a_windows_drive_project_its_page_and_hide_ai_across_a_reconnect() {
+    let distro = std::env::var("HIDE_E2E_WSL_DISTRO").expect("set HIDE_E2E_WSL_DISTRO");
+    let sink = Arc::new(Sink::default());
+    let connector = connector(sink.clone());
+    let transport = connector.wsl_transport("wsl-journey", &distro).unwrap();
+    // The account the first-run setup would make, unless the other walk
+    // already made it.
+    as_root(
+        &distro,
+        &format!("id -u {USER} >/dev/null 2>&1 || useradd -m -s /bin/bash {USER}"),
+    );
+    set_registry(&distribution_id(&distro), "RunOOBE", 0);
+    set_default_user(&distro, USER);
+
+    // A project on the Windows drive holding the page, and the stand-in CLI
+    // beside it.
+    let windows = Path::new(SCENARIO_WINDOWS);
+    let _ = std::fs::remove_dir_all(windows);
+    std::fs::create_dir_all(windows.join("app")).unwrap();
+    std::fs::write(windows.join("app").join("index.html"), PAGE).unwrap();
+    std::fs::write(windows.join("pi"), PI).unwrap();
+    let project = format!("{SCENARIO_WSL}/app");
+
+    // B2: consent, install, connect.
+    let (first, closed) = establish(&*transport, &consent(None), Wake::Allowed);
+    let first = first.unwrap_or_else(|error| panic!("connection: {error}"));
+    assert_eq!(first.node.hello.os, "linux");
+    let home = first
+        .node
+        .hello
+        .home
+        .clone()
+        .expect("the helper names its home");
+    as_root(
+        &distro,
+        &format!(
+            "su - {USER} -c 'mkdir -p .local/bin' && install -m 755 -o {USER} -g {USER} {SCENARIO_WSL}/pi {home}/.local/bin/pi"
+        ),
+    );
+    let link = Arc::clone(&first.node.host);
+
+    // B8, D-02: a folder outside the distribution's home is a project only
+    // with the operator's confirmation of it, and its files read through
+    // the link.
+    let unconfirmed = call_as::<Registrable>(
+        &*link,
+        Call::Registrable {
+            path: project.clone(),
+            confirmed_outside_home: None,
+        },
+        TIMEOUT,
+    );
+    assert!(
+        matches!(&unconfirmed, Err(LinkError::Refused(refused)) if matches!(refused.code, ErrorCode::NeedsConfirmation)),
+        "{unconfirmed:?}"
+    );
+    assert_eq!(
+        registrable(&*link, &project),
+        Registrable {
+            root: project.clone(),
+            is_git: false
+        }
+    );
+    let opened: RootOpened = call_as(
+        &*link,
+        Call::RootOpen {
+            root: project.clone(),
+        },
+        TIMEOUT,
+    )
+    .unwrap();
+    let bytes: Value = call_as(
+        &*link,
+        Call::Bytes {
+            root: RootRef {
+                path: project.clone(),
+                identity: opened.identity,
+            },
+            path: "index.html".to_owned(),
+            offset: 0,
+            length: 64,
+        },
+        TIMEOUT,
+    )
+    .unwrap();
+    assert_eq!(bytes["data"], PAGE_BASE64, "{bytes}");
+
+    // B9: the project's own server, started in its pane inside WSL, is
+    // previewed through a forward on the link.
+    let created = herdr(
+        &*transport,
+        "workspace.create",
+        json!({"cwd": project, "label": "journey"}),
+    );
+    let pane = pane_of(&created)
+        .expect("the new workspace's pane")
+        .to_owned();
+    let terminals = first
+        .node
+        .terminals
+        .as_ref()
+        .expect("terminals ride the link");
+    terminals.control(TerminalControl::Attach {
+        pane: pane.clone(),
+        size: Some(GridSize { rows: 24, cols: 80 }),
+        manual: false,
+    });
+    wait_for("the pane's terminal", || controlling(&sink, &pane));
+    terminals.key(
+        KeyTarget::Pane(pane.clone()),
+        format!("python3 -m http.server {PAGE_PORT} --bind 127.0.0.1\r").into_bytes(),
+        1,
+    );
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    page_over(&runtime, &link);
+
+    // B12: Hide AI answered by a CLI inside WSL, as the distribution's user.
+    let answer = json!({"summary": format!("Linux {USER}")});
+    assert_eq!(ask_ai(&*link, 1), answer);
+
+    // B26: after a reconnection the same server still answers in its pane,
+    // the project is still registrable and Hide AI answers again.
+    link.close("the journey reconnects");
+    closed
+        .recv_timeout(TIMEOUT)
+        .expect("the link's end is heard");
+    wait_for("the helper to end inside WSL", || {
+        (!helper_running(&distro)).then_some(())
+    });
+    drop(link);
+    drop(first);
+    let (again, _closed) = establish(&*transport, &bound(&distro), Wake::NotAllowed);
+    let again = again.unwrap_or_else(|error| panic!("reconnection: {error}"));
+    assert!(!again.installed);
+    let link = Arc::clone(&again.node.host);
+    assert_eq!(registrable(&*link, &project).root, project);
+    page_over(&runtime, &link);
+    assert_eq!(ask_ai(&*link, 2), answer);
+    link.close("the journey is done");
+}
+
+/// `path` judged with the operator's confirmation of it.
+fn registrable(link: &dyn NodeLink, path: &str) -> Registrable {
+    call_as(
+        link,
+        Call::Registrable {
+            path: path.to_owned(),
+            confirmed_outside_home: Some(path.to_owned()),
+        },
+        TIMEOUT,
+    )
+    .unwrap_or_else(|error| panic!("{path} with the operator's confirmation: {error}"))
+}
+
+fn controlling(sink: &Sink, pane: &str) -> Option<()> {
+    sink.reports
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|report| matches!(report, TerminalReport::State { pane: reported, state } if reported == pane && state.state == "controlling"))
+        .then_some(())
+}
+
+/// The journey's page through a forward on `link`, as a browser display
+/// previews a device's localhost page; waits for its server to answer.
+fn page_over(runtime: &tokio::runtime::Runtime, link: &Arc<dyn NodeLink>) {
+    use hided::page_forward::PageForward;
+    let link = link
+        .as_any()
+        .and_then(|link| link.downcast_ref::<hide_node::ssh::RemoteHost>())
+        .expect("a WSL link carries streams")
+        .clone();
+    let forward = runtime
+        .block_on(PageForward::start(
+            link,
+            SocketAddr::from(([127, 0, 0, 1], PAGE_PORT)),
+            None,
+            false,
+        ))
+        .unwrap();
+    wait_for("the page through the link", || {
+        let mut page = TcpStream::connect(forward.local_addr()).ok()?;
+        page.set_read_timeout(Some(Duration::from_secs(10))).ok()?;
+        page.write_all(b"GET /index.html HTTP/1.0\r\nHost: localhost\r\n\r\n")
+            .ok()?;
+        let mut answer = Vec::new();
+        let _ = page.read_to_end(&mut answer);
+        String::from_utf8_lossy(&answer)
+            .contains(PAGE)
+            .then_some(())
+    });
+}
+
+/// One Hide AI request to the device's Pi backend `instance`, which runs
+/// the stand-in.
+fn ask_ai(link: &dyn NodeLink, instance: u64) -> Value {
+    let request: AiRequest = serde_json::from_value(json!({
+        "feature_id": "wsl_journey",
+        "request_id": format!("wsl-journey-{instance}"),
+        "subject_id": "wsl",
+        "system": "Say where you run.",
+        "input": "where",
+        "output_schema": {"type": "object", "required": ["summary"], "properties": {"summary": {"type": "string"}}},
+        "deadline": {"secs": 60, "nanos": 0},
+        "schema_version": "wsl_journey.v1",
+        "output_language": null,
+    }))
+    .expect("a Hide AI request");
+    let answer: Logged<Result<AiResponse, AiError>> = call_as_with_progress::<_, Value>(
+        link,
+        Call::AiExecute {
+            backend: BackendSpec {
+                instance,
+                provider: ProviderId::PI,
+                model: String::new(),
+            },
+            request,
+        },
+        TIMEOUT,
+        |_| true,
+    )
+    .expect("the device answers Hide AI");
+    answer
+        .value
+        .unwrap_or_else(|error| panic!("the stand-in's answer: {error:?}"))
+        .value
 }
 
 /// The link owner the crash step kills: it connects as the lane's account

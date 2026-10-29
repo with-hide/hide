@@ -7,7 +7,7 @@
 
 import type { TFunction } from "i18next";
 import { deviceScope } from "./agentScope";
-import { machineName, windowDeviceId, windowFirst } from "./screenMachine";
+import { machineName, windowDeviceId, windowFirst, wslPlace } from "./screenMachine";
 import { localDeviceId, type AgentRow, type Device, type SnapshotRest, type Workspace } from "./snapshot";
 
 export { thisMachineKey } from "./screenMachine";
@@ -120,11 +120,16 @@ export function homeOf(rest: SnapshotRest | null, deviceId: string): Workspace |
   return workspaces?.find((row) => row.is_home) ?? null;
 }
 
-/** The name on the sidebar's top line and the smaller word after it: the device in front, named as this window calls it. */
+/**
+ * The name on the sidebar's top line and the smaller word after it: the
+ * device in front, named as this window calls it, then Remote for another
+ * machine, or where a WSL distribution is (`WSL Ubuntu This PC`, PRD
+ * wsl-device B5).
+ */
 export function frontTitle(devices: readonly Device[] | undefined, frontId: string | null | undefined, t: TFunction<"translation">): { name: string; note: string | null } {
   const own = windowDeviceId(devices);
   const id = (frontId ? devices?.find((row) => row.id === frontId)?.id : undefined) ?? devices?.find((row) => row.kind !== "remote")?.id ?? own;
-  return { name: machineName(devices, id, t), note: id !== own ? t("devices.remote") : null };
+  return { name: machineName(devices, id, t), note: id === own ? null : (wslPlace(devices, id, t) ?? t("devices.remote")) };
 }
 
 /** What the sidebar's list shows: the front device's Projects, or the way to reconnect a device that cannot be read. */

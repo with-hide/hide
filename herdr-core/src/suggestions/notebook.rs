@@ -26,6 +26,10 @@ pub struct LineId(pub u64);
 pub enum Outcome {
     Pr,
     Issue,
+    /// A line Hide adds to its own global instruction on the operator's
+    /// press, with no pull request and no GitHub (PRD memory-self-improve
+    /// D-07, D-33): the operator's personal way of working.
+    Local,
 }
 
 /// Where a line stands for the operator; only the lifecycle moves it, an
@@ -509,6 +513,7 @@ mod tests {
                     at_unix_ms: 1,
                     always: false,
                     improvement: None,
+                    said: None,
                     line: None,
                     fresh: true,
                 })

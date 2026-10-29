@@ -31,6 +31,8 @@ Such values are interpolation data, rendered as text.
 Numeric identifiers, including Memory's PR numbers, are passed to translation as digit strings so locale grouping never changes their spelling; quantities retain locale number formatting.
 Diagnostic payloads and copied diagnostic records remain technical source data.
 Missing keys and missing interpolation values fail explicitly; English is a locale-resolution fallback, never a missing-key fallback.
+`i18next.d.ts` types each message by its `{{name}}` placeholders only, not by its English text, so a call with an unknown key, a wrong placeholder name or a `null` or object value fails the typecheck.
+The whole sentence is never the type: i18next parses every message's text once for each translator type it meets, and with whole sentences the web typecheck grew with the catalog until it took 4m26s of the nightly performance lane's 5-minute build step (with-hide/hide-private#115).
 
 ## Current integration coverage
 

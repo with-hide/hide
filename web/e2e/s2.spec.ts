@@ -14,7 +14,7 @@ import path from "node:path";
 import { toPage } from "../../desktop/src/main/wirePath";
 import { altScreenProgram, bytesReceived } from "./alt-screen-program";
 import { startHerdr, type HerdrFixture } from "./herdr-fixture";
-import { executeTerminalCheck, waitForTerminal } from "./group-start-helper";
+import { createdTabs, executeTerminalCheck, herdrTabIds, waitForTerminal } from "./group-start-helper";
 import { startHided, type Daemon } from "./hided-fixture";
 import { projectRow } from "./overview-entry";
 import { countSent, screenshot, showProjectRow } from "./wire";
@@ -240,12 +240,14 @@ test("a tab switch mounts the new tab, ⌥T opens a terminal directly, and recen
     await expect.poll(() => screen(page), { timeout: 15_000 }).toContain("fixture %");
 
     // New tab opens a terminal directly in the marked checkout owner.
+    const tabsBefore = herdrTabIds(herdr);
     await page.keyboard.press(chord("new_tab"));
     await expect(page.locator("[data-tab]")).toHaveCount(4);
     await expect.poll(() => sent.get("agent_group.new_tab")).toBe(1);
     expect(sent.get("create_tab") ?? 0).toBe(0);
-    expect((herdr.run(["tab", "list", "--workspace", herdr.workspace]) as { result: { tabs: unknown[] } }).result.tabs).toHaveLength(4);
-    const startedTab = await waitForTerminal(page);
+    const [startedTab] = await createdTabs(herdr, tabsBefore);
+    expect((herdr.run(["tab", "list", "--workspace", herdr.workspace]) as { result: { tabs: { tab_id: string }[] } }).result.tabs.map((tab) => tab.tab_id)).toContain(startedTab);
+    await waitForTerminal(page, startedTab!);
     await expect.poll(() => (herdr.run(["tab", "list", "--workspace", herdr.workspace]) as { result: { tabs: unknown[] } }).result.tabs.length).toBe(4);
     // The native tab has Herdr's label, independent of the old
     // New tab caption and the old numbered new-tab button label.
@@ -703,13 +705,14 @@ test("starting a terminal in a sixth tab keeps the four retained tabs, and two r
     // panes keep their entries, marked released.
     const retained = shown.slice(1).flatMap((tab) => tabPanes.get(tab)!);
     const before = flow.terminalLists.length;
+    const tabsBefore = herdrTabIds(flow.herdr);
     await page.locator("[data-new-agent-tab]").first().click();
     await expect(page.locator("[data-tab]")).toHaveCount(6);
-    await waitForTerminal(page);
+    const sixth = (await createdTabs(flow.herdr, tabsBefore))[0]!;
+    await waitForTerminal(page, sixth);
     await expect(page.locator("[data-pane-view]")).not.toHaveAttribute("data-pane-view", warmPane);
     await expect(page.locator("[data-pane-view]")).toHaveAttribute("data-transport", "controlling");
     await executeTerminalCheck(page, flow.herdr, (await page.locator("[data-pane-view]").getAttribute("data-pane-view"))!);
-    const sixth = (await page.locator("[data-canvas]").getAttribute("data-canvas"))!;
     tabPanes.set(sixth, [(await page.locator("[data-pane-view]").getAttribute("data-pane-view"))!]);
     await mark(tabPanes.get(sixth)![0], "keep-sixth");
     const order = [...flow.tabs, sixth];

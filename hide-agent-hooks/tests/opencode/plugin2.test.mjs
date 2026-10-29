@@ -430,6 +430,11 @@ test("with no terminal for the session the server half only guards a protected p
   assert.equal(await host.tool("ses_a", "shell", { command: "herdr agent start --kind claude" }), null);
   await sleep(100);
   assert.deepEqual(calls(), []);
+  // With no protection on, a call naming the Hide global instruction still asks the helper (D-07).
+  assert.equal(await host.tool("ses_a", "shell", { command: "echo x >> ~/.hide/state/global-instruction.md" }), "Not run: guarded");
+  const [global] = await until("tool");
+  assert.equal(global.input.guard_only, true);
+  rmSync(LOG, { force: true });
 
   policy({ files: true, paths: [".env"] });
   t.after(() => policy({}));

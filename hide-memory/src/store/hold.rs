@@ -24,8 +24,9 @@ BEGIN DELETE FROM card_holds WHERE item_id=NEW.id; END;
 "#;
 
 /// What a test runs to take a current store back to schema 15's tables.
+/// It starts with what schema 22 added ([`super::upkeep::DROP`]).
 #[cfg(test)]
-pub(crate) const DROP_TABLES: &str = "ALTER TABLE memory_sources DROP COLUMN words; DROP TRIGGER IF EXISTS memory_projection_memory_items_insert; DROP TRIGGER IF EXISTS memory_projection_memory_items_update; DROP TRIGGER IF EXISTS memory_projection_memory_items_delete; DROP TRIGGER IF EXISTS memory_projection_memory_revisions_insert; DROP TRIGGER IF EXISTS memory_projection_memory_revisions_update; DROP TRIGGER IF EXISTS memory_projection_memory_revisions_delete; DROP TRIGGER IF EXISTS memory_projection_memory_fts_content_insert;
+pub(crate) const DROP_TABLES: &str = "DROP TRIGGER recheck_ends_on_check; DROP TRIGGER recheck_ends_on_change; DROP TABLE card_changes; DROP TABLE card_misses; DROP TABLE repeat_requests; DROP TABLE split_pairs; ALTER TABLE memory_items DROP COLUMN aging; ALTER TABLE memory_items DROP COLUMN aging_clock_ms; ALTER TABLE memory_items DROP COLUMN last_given_at_ms; ALTER TABLE memory_items DROP COLUMN recheck_at_ms; ALTER TABLE projects DROP COLUMN aged_at_ms; ALTER TABLE injection_receipts DROP COLUMN kind; ALTER TABLE memory_sources DROP COLUMN words; DROP TRIGGER IF EXISTS memory_projection_memory_items_insert; DROP TRIGGER IF EXISTS memory_projection_memory_items_update; DROP TRIGGER IF EXISTS memory_projection_memory_items_delete; DROP TRIGGER IF EXISTS memory_projection_memory_revisions_insert; DROP TRIGGER IF EXISTS memory_projection_memory_revisions_update; DROP TRIGGER IF EXISTS memory_projection_memory_revisions_delete; DROP TRIGGER IF EXISTS memory_projection_memory_fts_content_insert;
 DROP TRIGGER IF EXISTS memory_projection_memory_fts_content_update;
 DROP TRIGGER IF EXISTS memory_projection_memory_fts_content_delete;
 DROP TABLE IF EXISTS receipt_contexts;
@@ -95,6 +96,9 @@ pub enum StaleRefusal {
     NotReceived,
     /// The session read it with `hide memory show` only.
     ShownOnly,
+    /// The session saw it only as a line of the session-start index, which
+    /// gives no authority to report it (PRD memory-self-improve D-35, B16).
+    IndexOnly,
     /// The Project's receipts are at their cap and recorded none for this
     /// session, so whether it was given cannot be known (B26).
     ReceiptsFull,
@@ -110,6 +114,7 @@ impl StaleRefusal {
             Self::AlreadyReported => "memory_stale_already_reported",
             Self::NotReceived => "memory_stale_not_received",
             Self::ShownOnly => "memory_stale_shown_only",
+            Self::IndexOnly => "memory_stale_index_only",
             Self::ReceiptsFull => "memory_stale_receipts_full",
             Self::SessionLimit => "memory_stale_session_limit",
             Self::ProjectLimit => "memory_stale_project_limit",
@@ -209,18 +214,21 @@ impl MemoryStore {
         // Only an authenticated prompt delivery of this very revision counts:
         // a `show` is the agent's own read, and an older revision's receipt
         // was a different text (D-04).
-        let receipt = |shown: bool| -> rusqlite::Result<bool> {
+        let receipt = |shown: bool, kind: &str| -> rusqlite::Result<bool> {
             transaction.query_row(
                 "SELECT EXISTS(SELECT 1 FROM injection_receipts ir JOIN injection_receipt_items rii ON rii.receipt_id=ir.id \
                  WHERE ir.project_id=?1 AND ir.runtime=?2 AND ir.session_id=?3 AND rii.item_id=?4 AND rii.revision=?5 \
-                 AND (COALESCE(ir.turn_id,'')='show')=?6)",
-                params![project_id, reporter.runtime, reporter.session_id, item_id, revision, shown],
+                 AND (COALESCE(ir.turn_id,'')='show')=?6 AND ir.kind=?7)",
+                params![project_id, reporter.runtime, reporter.session_id, item_id, revision, shown, kind],
                 |row| row.get(0),
             )
         };
-        if !receipt(false)? {
-            if receipt(true)? {
+        if !receipt(false, "body")? {
+            if receipt(true, "body")? {
                 return refuse(StaleRefusal::ShownOnly);
+            }
+            if receipt(false, "index")? {
+                return refuse(StaleRefusal::IndexOnly);
             }
             let session_receipts: bool = transaction.query_row(
                 "SELECT EXISTS(SELECT 1 FROM injection_receipts WHERE project_id=?1 AND runtime=?2 AND session_id=?3)",
@@ -396,9 +404,7 @@ impl MemoryStore {
 fn stored_reason(reason: &str) -> String {
     let visible = reason
         .chars()
-        .filter(|character| {
-            !matches!(character, '\u{00AD}' | '\u{034F}' | '\u{061C}' | '\u{180E}' | '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{206F}' | '\u{FE00}'..='\u{FE0F}' | '\u{FEFF}' | '\u{E0000}'..='\u{E007F}')
-        })
+        .filter(|character| !crate::is_invisible(*character))
         .collect::<String>();
     let line = visible
         .split(|character: char| character.is_control() || character.is_whitespace())

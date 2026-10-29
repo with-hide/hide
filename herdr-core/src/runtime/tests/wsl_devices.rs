@@ -45,6 +45,15 @@ impl DeviceConnector for Distributions {
         SshHostListing::default()
     }
 
+    fn herdr_profiles(
+        &self,
+        _home: &std::path::Path,
+        _registered: &[String],
+        _stop: &std::sync::atomic::AtomicBool,
+    ) -> Result<hide_node_link::device::HerdrProfileListing, String> {
+        Ok(hide_node_link::device::HerdrProfileListing::default())
+    }
+
     fn wsl_transport(&self, _node: &str, distro: &str) -> Result<Arc<dyn DialedTransport>, String> {
         assert_eq!(distro, "Ubuntu");
         Ok(Arc::new(OffDistribution(Arc::clone(&self.0))))
@@ -458,5 +467,49 @@ fn every_distribution_name_gets_an_id_of_its_own() {
         id("Ubuntu-24.04"),
         id("Ubuntu-24.04"),
         "the same name, the same id"
+    );
+}
+
+/// B1, B2, D-08: the first-run step lists the default distribution from the
+/// registry alone, so no attempt reaches it and nothing is registered or
+/// installed until the step's connect is pressed; the press is the
+/// operator's own attempt, which may start it.
+#[test]
+fn the_first_run_row_reaches_the_distribution_only_once_connect_is_pressed() {
+    let (shared, attempts) = wsl_runtime();
+    assert!(
+        shared
+            .lock()
+            .unwrap()
+            .dispatch_json(&event("herdr_profiles_list", serde_json::json!({})))
+    );
+    super::wait(&shared, "the device listing", |runtime| {
+        runtime.snapshot().status.herdr_profiles.state == "ready"
+    });
+    {
+        let runtime = shared.lock().unwrap();
+        let rows = &runtime.snapshot().status.herdr_profiles.profiles;
+        assert_eq!(
+            rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
+            ["wsl:Ubuntu"],
+            "the default distribution alone, beside no saved profile"
+        );
+        assert!(runtime.snapshot().ui_state.device_registrations.is_empty());
+    }
+    assert!(
+        wakes(&attempts).is_empty(),
+        "the listing reached the distribution"
+    );
+    assert!(shared.lock().unwrap().dispatch_json(&event(
+        "herdr_profile_connect",
+        serde_json::json!({"profile_id": "wsl:Ubuntu", "host_consent": true}),
+    )));
+    wait_for_attempts(&attempts, 1);
+    assert_eq!(wakes(&attempts), [Wake::Allowed]);
+    let runtime = shared.lock().unwrap();
+    let id = crate::runtime::devices::wsl_device_id("Ubuntu");
+    assert_eq!(
+        runtime.snapshot().navigator.focused_device_id.as_deref(),
+        Some(id.as_str())
     );
 }

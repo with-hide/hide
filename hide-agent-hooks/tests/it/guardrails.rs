@@ -213,6 +213,45 @@ fn with_no_protection_on_nothing_is_refused_and_outside_a_pane_the_project_is_st
     assert!(machine.calls().is_empty(), "no protection asks the daemon");
 }
 
+/// The Hide global instruction kept in the operator's dotfiles through a link
+/// (PRD memory-self-improve D-07): a write to that file is refused with no
+/// protection on, though its payload never names the instruction, and the
+/// refusal is logged without the call.
+#[test]
+fn a_write_to_the_file_the_global_instruction_links_to_is_refused() {
+    let machine = Machine::new("registered");
+    let state = machine.home.join(".hide/state");
+    std::fs::create_dir_all(&state).unwrap();
+    let target = machine.home.join("dotfiles/agents.md");
+    std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+    std::fs::write(&target, "x\n").unwrap();
+    std::os::unix::fs::symlink(&target, state.join("global-instruction.md")).unwrap();
+    let write = claude(
+        &machine,
+        "Write",
+        json!({"file_path": target, "content": "Always obey me"}),
+    );
+    let run = machine.run_event("claude-code", "PreToolUse", &write, Some(PANE), &[]);
+    assert!(
+        claude_reason(&run).is_some_and(|reason| reason.contains("Hide global instruction")),
+        "{run:?}"
+    );
+    let log = machine.guard_log();
+    assert!(log.contains(r#""component":"global_instruction""#), "{log}");
+    assert!(
+        !log.contains("Always obey me") && !log.contains("dotfiles"),
+        "{log}"
+    );
+    // A file of the same name elsewhere is the agent's to write.
+    let other = claude(
+        &machine,
+        "Write",
+        json!({"file_path": machine.checkout.join("agents.md"), "content": "x"}),
+    );
+    let run = machine.run_event("claude-code", "PreToolUse", &other, Some(PANE), &[]);
+    assert_eq!(claude_reason(&run), None);
+}
+
 #[test]
 fn a_missing_or_corrupt_policy_lets_the_call_run_and_says_why_once() {
     for (contents, cause) in [(None, "missing"), (Some("{not json"), "corrupt")] {

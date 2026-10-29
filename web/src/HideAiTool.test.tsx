@@ -304,6 +304,59 @@ describe("the Hide AI tool", () => {
     expect(q('[data-suggestion="s2"] [data-suggestion-effective]')?.textContent).toBe("Worked");
   });
 
+  it("writes a personal line into the Hide global instruction with the preview it showed, and takes it back alone (memory-self-improve B6-B10)", async () => {
+    const openPath = vi.fn();
+    window.hideHost = { kind: "electron", platform: "darwin", openPath } as never;
+    const local = { line: "Answer in Korean when asked in Korean.", preview: "before", present: false, applied_at_unix_ms: null, recurred: false, failure: null };
+    const said = { kind: "session" as const, signal: "repeated_request" as const, improvement: null, agent: "claude", session_id: "r1", pr_number: null, url: null, at_unix_ms: 1, gone: false };
+    await render(suggestionsProject({ global: { path: "/state/global-instruction.md", unusable: null }, rows: [
+      suggestionRow("s1", { outcome: "local", basis: { signal: "repeated_request", tag: "korean" }, local, evidence: [said] }),
+      suggestionRow("s2", { outcome: "local", local: { ...local, line: "No em dash.", recurred: true } }),
+      suggestionRow("s3", { outcome: "local", local: { ...local, preview: null, failure: "no_room" } }),
+      suggestionRow("s4", { outcome: "local", group: "applied", state: "applied", local: { ...local, present: true, preview: null } }),
+      suggestionRow("s5", { outcome: "local", group: "applied", state: "applied", local: { ...local, preview: null, failure: "edited" } }),
+    ] }));
+    expect(q("[data-suggestions-global]")).toBeNull();
+    expect(q('[data-suggestion="s1"] [data-suggestion-local-line]')?.textContent).toContain("Answer in Korean when asked in Korean.");
+    expect(q('[data-suggestion="s2"] [data-suggestion-local]')?.textContent).toBe("Said again after it went inOpen file");
+    // No room for the line: held, with the file to make room in.
+    expect(q('[data-suggestion="s3"] [data-suggestion-local]')?.textContent).toContain("No room");
+    expect(q('[data-suggestion="s3"] [data-suggestion-apply]')?.hasAttribute("disabled")).toBe(true);
+    await click('[data-suggestion="s3"] [data-suggestion-open-file]');
+    expect(openPath).toHaveBeenCalledWith("/state/global-instruction.md");
+    await click('[data-suggestion="s1"] [data-suggestion-apply="local"]');
+    // Opening the row reads its words again; folding it stops that.
+    await click('[data-suggestion-toggle="s1"]');
+    await click('[data-suggestion-toggle="s1"]');
+    expect(sent("suggestion_evidence")).toEqual([{ workspace_id: "p", id: "s1" }, { workspace_id: "p", id: null }]);
+    await click("[data-suggestions-fold]");
+    await click('[data-suggestion-revert="s4"]');
+    expect(q('[data-suggestion-revert="s5"]')).toBeNull();
+    expect(q('[data-suggestion="s5"] [data-suggestion-local]')?.textContent).toContain("changed by hand");
+    expect(sent("suggestion_action")).toEqual([
+      { workspace_id: "p", id: "s1", action: "apply", preview: "before" },
+      { workspace_id: "p", id: "s4", action: "revert" },
+    ]);
+  });
+
+  it("holds a line whose evidence cannot be read again, and says once when the file cannot be given to sessions (memory-self-improve B5, B7)", async () => {
+    const local = { line: "Answer in Korean.", preview: "before", present: false, applied_at_unix_ms: null, recurred: false, failure: null };
+    const said = (session_id: string, excerpt: string | null) => ({ kind: "session" as const, signal: "repeated_request" as const, improvement: null, agent: "claude", session_id, pr_number: null, url: null, at_unix_ms: 1, gone: false, excerpt, unreadable: excerpt === null });
+    await act(async () => useUiStore.getState().showHideAiTab("suggestions", "s1"));
+    await render(suggestionsProject({ global: { path: "/state/global-instruction.md", unusable: null }, rows: [
+      suggestionRow("s1", { outcome: "local", local, evidence: [said("a", "answer in korean please"), said("b", null)] }),
+    ] }));
+    expect(q('[data-suggestion="s1"] [data-suggestion-excerpt]')?.textContent).toBe("answer in korean please");
+    expect(q('[data-suggestion="s1"] [data-suggestion-excerpt-unreadable]')?.textContent).toBe("Can't confirm the evidence");
+    expect(q('[data-suggestion-apply="local"]')).not.toBeNull();
+    await render(suggestionsProject({ global: { path: "/state/global-instruction.md", unusable: "too_large" }, rows: [
+      suggestionRow("s1", { outcome: "local", local: { ...local, preview: null }, evidence_unconfirmed: true, evidence: [said("a", null)] }),
+    ] }));
+    expect(q("[data-suggestions-global]")?.textContent).toContain("Too large, so sessions aren't given it");
+    expect(q('[data-suggestion="s1"] [data-suggestion-local]')?.textContent).toContain("Can't confirm the evidence");
+    expect(q('[data-suggestion-apply="local_held"]')?.hasAttribute("disabled")).toBe(true);
+  });
+
   it("opens on the row a Needs You row named, in 제안 (B11)", async () => {
     await act(async () => useUiStore.getState().showHideAiTab("memory"));
     await act(async () => useUiStore.getState().showHideAiTab("suggestions", "m72"));
@@ -333,8 +386,8 @@ describe("the Hide AI tool", () => {
     await click("#hide-ai-apply_mode-auto_pr");
     expect([...sheet!.querySelectorAll("[data-hide-ai-signal-group]")].map((row) => row.getAttribute("data-hide-ai-signal-group"))).toEqual(["session", "github"]);
     const session = sheet?.querySelector('[data-hide-ai-signal-group="session"]');
-    expect(session?.textContent).toContain("Failed commands · agents stuck · my corrections · problems left over in sessions · things to improve");
-    expect(session?.querySelector("[data-hide-ai-correction-off]")?.textContent).toBe("Memory is off, so my corrections aren't read");
+    expect(session?.textContent).toContain("Failed commands · agents stuck · my corrections · requests I repeat · memories not followed · problems left over in sessions · things to improve");
+    expect(session?.querySelector("[data-hide-ai-correction-off]")?.textContent).toBe("Memory is off, so my corrections and repeated requests aren't read");
     expect(session?.querySelector("[data-hide-ai-analysis-off]")?.textContent).toBe("Things to improve are recorded only while the turn-end analysis is on");
     expect(session?.querySelector("button")?.getAttribute("aria-checked")).toBe("true");
     const github = sheet?.querySelector('[data-hide-ai-signal-group="github"]');
