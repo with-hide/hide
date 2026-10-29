@@ -10,6 +10,9 @@
 //! so they are ignored by default. On Windows the question is in Windows
 //! PowerShell's profile under the test's own home.
 //!
+//! A second scenario sleeps a stand-in Codex CLI in its pane and wakes it
+//! there, as `agent_sleep_herdr` does (`sleep_and_wake`).
+//!
 //! The server is private: its own socket, session, config and home.
 
 #[cfg(windows)]
@@ -399,25 +402,32 @@ fn pane_path(herdr: &PrivateHerdr) -> String {
     .unwrap()
 }
 
-/// `claude` on unix: records the folder it started in and its arguments,
-/// then runs as a long-lived process of that name, which Herdr reads as the
-/// agent. Linux names a process after its file, macOS after its first
+/// `claude` on unix: a long-lived process (`native_agent`).
+#[cfg(unix)]
+fn unix_agent(herdr: &PrivateHerdr) {
+    native_agent(
+        herdr,
+        "claude",
+        "#include <unistd.h>\nint main(int argc, char **argv) { (void)argv; if (argc > 1) sleep(600); return 0; }\n",
+    );
+}
+
+/// The agent `name` on unix: records the folder it started in and its
+/// arguments in `<name>-args`, then runs `source`, compiled, as a process of
+/// that name with one argument, which Herdr reads as the agent; with none
+/// it exits. Linux names a process after its file, macOS after its first
 /// argument. Build a native stand-in: a system sleep may be a multicall
 /// binary that refuses to run under the agent's name.
 #[cfg(unix)]
-fn unix_agent(herdr: &PrivateHerdr) {
+fn native_agent(herdr: &PrivateHerdr, name: &str, source: &str) {
     let agent = herdr.home.join("agent");
     std::fs::create_dir_all(&agent).unwrap();
-    let source = agent.join("agent.c");
-    std::fs::write(
-        &source,
-        "#include <unistd.h>\nint main(int argc, char **argv) { (void)argv; if (argc > 1) sleep(600); return 0; }\n",
-    )
-    .unwrap();
+    let file = agent.join(format!("{name}.c"));
+    std::fs::write(&file, source).unwrap();
     let compiled = Command::new("cc")
-        .arg(&source)
+        .arg(&file)
         .arg("-o")
-        .arg(agent.join("claude"))
+        .arg(agent.join(name))
         .output()
         .expect("the native agent fixture needs a C compiler");
     assert!(
@@ -427,15 +437,17 @@ fn unix_agent(herdr: &PrivateHerdr) {
     );
     // Validate this file before a start's deadline; no arguments exits.
     assert!(
-        Command::new(agent.join("claude"))
+        Command::new(agent.join(name))
             .status()
             .expect("start the native agent fixture")
             .success()
     );
-    let script = herdr.home.join("bin/claude");
+    let script = herdr.home.join("bin").join(name);
     std::fs::write(
         &script,
-        "#!/bin/bash\nprintf '%s\\n' \"${PWD##*/} $*\" >> \"$HOME/claude-args\"\nexec -a claude \"$HOME/agent/claude\" 600\n",
+        format!(
+            "#!/bin/bash\nprintf '%s\\n' \"${{PWD##*/}} $*\" >> \"$HOME/{name}-args\"\nexec -a {name} \"$HOME/agent/{name}\" run\n"
+        ),
     )
     .unwrap();
     std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
@@ -482,31 +494,40 @@ fn windows_agent(herdr: &PrivateHerdr) {
 /// the answer recorded with the folder it was asked in.
 #[cfg(unix)]
 fn user_files(herdr: &PrivateHerdr, shell: &str) {
+    let question = match shell {
+        "zsh" => format!(
+            "read -k 1 'answer?{QUESTION} '\nprint -r -- \"${{PWD:t}} answered [$answer]\" >> ~/answers\n"
+        ),
+        "bash" => format!(
+            "read -n 1 -p '{QUESTION} ' answer; echo\nprintf '%s\\n' \"${{PWD##*/}} answered [$answer]\" >> ~/answers\n"
+        ),
+        "fish" => format!(
+            "read -n 1 -P '{QUESTION} ' answer\necho (basename $PWD)\" answered [$answer]\" >> ~/answers\n"
+        ),
+        _ => unreachable!(),
+    };
+    let path = prompt_files(herdr, shell);
+    let prompt = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(path, prompt + &question).unwrap();
+}
+
+/// The user's own startup files for `shell` with its prompt alone; returns
+/// the file the prompt is in.
+#[cfg(unix)]
+fn prompt_files(herdr: &PrivateHerdr, shell: &str) -> PathBuf {
     let (file, text) = match shell {
-        "zsh" => (
-            ".zshrc",
-            format!(
-                "PS1='fixture %# '\nread -k 1 'answer?{QUESTION} '\nprint -r -- \"${{PWD:t}} answered [$answer]\" >> ~/answers\n"
-            ),
-        ),
-        "bash" => (
-            ".bashrc",
-            format!(
-                "PS1='fixture$ '\nread -n 1 -p '{QUESTION} ' answer; echo\nprintf '%s\\n' \"${{PWD##*/}} answered [$answer]\" >> ~/answers\n"
-            ),
-        ),
+        "zsh" => (".zshrc", "PS1='fixture %# '\n"),
+        "bash" => (".bashrc", "PS1='fixture$ '\n"),
+        // Herdr gives its panes its own XDG_CONFIG_HOME.
         "fish" => (
-            // Herdr gives its panes its own XDG_CONFIG_HOME.
             "xdg-config/fish/config.fish",
-            format!(
-                "function fish_prompt; echo -n 'fixture> '; end\nread -n 1 -P '{QUESTION} ' answer\necho (basename $PWD)\" answered [$answer]\" >> ~/answers\n"
-            ),
+            "function fish_prompt; echo -n 'fixture> '; end\n",
         ),
         _ => unreachable!(),
     };
     let path = herdr.home.join(file);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, text).unwrap();
+    std::fs::write(&path, text).unwrap();
     // Ubuntu's /etc/zsh/zshrc runs compinit, which asks a question of its
     // own about folders a CI runner leaves group-writable; Ubuntu's own
     // setting skips it, so only this test's question is asked.
@@ -519,8 +540,11 @@ fn user_files(herdr: &PrivateHerdr, shell: &str) {
     .unwrap();
     // fish generates completions from man pages in the background, in the
     // shell's own foreground group, the first time it reads input unless
-    // this folder exists.
+    // this folder exists: in its data folder up to fish 3, in its cache
+    // folder from fish 4 (4.9.3 ran it for about 3 s after its first prompt).
     std::fs::create_dir_all(herdr.home.join(".local/share/fish/generated_completions")).unwrap();
+    std::fs::create_dir_all(herdr.home.join(".cache/fish/generated_completions")).unwrap();
+    path
 }
 
 /// The Windows PowerShell profile asks the question. The profile lives in
@@ -820,4 +844,345 @@ fn a_fish_startup_question_is_never_answered_by_a_start_and_each_tab_runs_its_ow
 fn a_windows_powershell_startup_question_is_never_answered_by_a_start_and_each_tab_runs_its_own_prompt()
  {
     startup_question("powershell", "HIDE_TEST_POWERSHELL_BIN");
+}
+
+/// Codex CLI 0.165.0 as a sleep meets it: it turns the kitty keyboard
+/// protocol on, quits on the first Ctrl+C into its empty composer and reads
+/// no input while it shuts down. It reads one byte at a time up to that
+/// Ctrl+C, so a second press queued with it stays unread. Then it hands the
+/// terminal back with the protocol off and the line settings it found put
+/// back without discarding what it never read, so a key sent meanwhile is
+/// left for the shell, encoded in the protocol. It hands back only once
+/// the test opens the `codex-release` FIFO in its home (`Release`); the
+/// alarm is its hang guard.
+#[cfg(unix)]
+const CODEX: &str = r#"#define _GNU_SOURCE
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <termios.h>
+#include <unistd.h>
+
+static void say(const char *text) { (void)!write(1, text, strlen(text)); }
+
+int main(int argc, char **argv) {
+    (void)argv;
+    if (argc < 2) return 0;
+    char release[4096];
+    snprintf(release, sizeof release, "%s/codex-release", getenv("HOME"));
+    struct termios found, raw;
+    tcgetattr(0, &found);
+    raw = found;
+    cfmakeraw(&raw);
+    tcsetattr(0, TCSANOW, &raw);
+    say("\033[>7u\xe2\x80\xba \033[2mAsk Codex to do anything\033[0m\r\n");
+    const char press[] = "\033[99;5u";
+    size_t matched = 0;
+    for (;;) {
+        char byte;
+        if (read(0, &byte, 1) != 1) return 1;
+        if (byte == 3) break;
+        matched = byte == press[matched] ? matched + 1 : byte == press[0];
+        if (matched == sizeof press - 1) break;
+    }
+    say("Shutting down...\r\n");
+    alarm(60);
+    char byte;
+    int gate = open(release, O_RDONLY);
+    if (gate < 0 || read(gate, &byte, 1) != 1) return 1;
+    say("\033[<u");
+    tcsetattr(0, TCSANOW, &found);
+    return 0;
+}
+"#;
+
+/// What the stand-in Codex CLI shows while it shuts down.
+#[cfg(unix)]
+const QUITTING: &str = "Shutting down...";
+
+/// Lets the stand-in Codex CLI hand its terminal back at what the sleep has
+/// observed, never at a time: a screen read after the first press that
+/// shows it quitting, which the sleep acts on, or a second press answered,
+/// whose key Herdr has then encoded and queued for the terminal the
+/// stand-in no longer reads.
+#[cfg(unix)]
+struct Release {
+    fifo: PathBuf,
+    presses: std::sync::atomic::AtomicUsize,
+    released: std::sync::atomic::AtomicBool,
+}
+
+#[cfg(unix)]
+impl Release {
+    /// Herdr answered `method` with `answer`; called before the sleep reads
+    /// the answer.
+    fn answered(&self, method: &str, answer: &str) {
+        use std::sync::atomic::Ordering;
+        let observed = match method {
+            "pane.send_keys" => self.presses.fetch_add(1, Ordering::SeqCst) == 1,
+            "pane.read" => self.presses.load(Ordering::SeqCst) >= 1 && answer.contains(QUITTING),
+            _ => false,
+        };
+        if observed && !self.released.swap(true, Ordering::SeqCst) {
+            self.open();
+        }
+    }
+
+    /// Opens the FIFO for writing, which ends the stand-in's wait, once it
+    /// is waiting there; it is by the time either boundary is reached, and
+    /// the deadline is the hang guard.
+    #[allow(clippy::disallowed_methods)] // a polling helper: it sleeps between observations of a state, bounded by a deadline
+    fn open(&self) {
+        use std::os::unix::fs::OpenOptionsExt;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&self.fifo)
+            {
+                Ok(mut fifo) => {
+                    std::io::Write::write_all(&mut fifo, b"r").unwrap();
+                    return;
+                }
+                // No reader yet.
+                Err(error) if error.raw_os_error() == Some(libc::ENXIO) => {}
+                Err(error) => panic!("open the stand-in's release: {error}"),
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the stand-in never waited for its release"
+            );
+            thread::sleep(POLL_INTERVAL);
+        }
+    }
+}
+
+/// Herdr's socket, with each answer shown to `Release` before the caller
+/// reads it.
+#[cfg(unix)]
+struct Watched {
+    socket: LocalSocketConnector,
+    release: std::sync::Arc<Release>,
+}
+
+#[cfg(unix)]
+impl ApiConnector for Watched {
+    fn connect(&self) -> Result<Box<dyn hide_herdr_client::ApiStream>, ApiError> {
+        Ok(Box::new(WatchedStream {
+            stream: self.socket.connect()?,
+            release: std::sync::Arc::clone(&self.release),
+            request: Vec::new(),
+            answer: Vec::new(),
+            told: false,
+        }))
+    }
+}
+
+/// One request's stream: Herdr answers one line and closes it.
+#[cfg(unix)]
+struct WatchedStream {
+    stream: Box<dyn hide_herdr_client::ApiStream>,
+    release: std::sync::Arc<Release>,
+    request: Vec<u8>,
+    answer: Vec<u8>,
+    told: bool,
+}
+
+#[cfg(unix)]
+impl WatchedStream {
+    fn tell(&mut self) {
+        if self.told {
+            return;
+        }
+        self.told = true;
+        let request: Value = serde_json::from_slice(&self.request).unwrap_or_default();
+        self.release.answered(
+            request["method"].as_str().unwrap_or_default(),
+            &String::from_utf8_lossy(&self.answer),
+        );
+    }
+}
+
+#[cfg(unix)]
+impl std::io::Write for WatchedStream {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let written = self.stream.write(bytes)?;
+        self.request.extend_from_slice(&bytes[..written]);
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.stream.flush()
+    }
+}
+
+#[cfg(unix)]
+impl std::io::Read for WatchedStream {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let read = self.stream.read(buffer)?;
+        self.answer.extend_from_slice(&buffer[..read]);
+        if self.answer.contains(&b'\n') || read == 0 {
+            self.tell();
+        }
+        Ok(read)
+    }
+}
+
+#[cfg(unix)]
+impl hide_herdr_client::ApiStream for WatchedStream {
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> Result<(), ApiError> {
+        self.stream.set_read_timeout(timeout)
+    }
+
+    fn set_write_timeout(&self, timeout: Option<Duration>) -> Result<(), ApiError> {
+        self.stream.set_write_timeout(timeout)
+    }
+
+    fn read_line_with_timeout(&mut self, timeout: Duration) -> Result<String, ApiError> {
+        let line = self.stream.read_line_with_timeout(timeout)?;
+        self.answer.extend_from_slice(line.as_bytes());
+        self.tell();
+        Ok(line)
+    }
+
+    fn shutdown_handle(&self) -> Result<Box<dyn hide_herdr_client::ConnectionShutdown>, ApiError> {
+        self.stream.shutdown_handle()
+    }
+}
+
+/// The scenario every Unix shell runs: Hide sleeps an idle Codex CLI in its
+/// pane (`agent_sleep_herdr::end_agent`) and wakes it there, and the resume
+/// line runs with its own arguments and nothing before them. The sleep's
+/// second Ctrl+C, sent at a fixed 150 ms, reached the shell as `ESC[99;5u`,
+/// and the wake ran `9;5ucodex resume <id>` (with-hide/hide-private#37).
+#[cfg(unix)]
+fn sleep_and_wake(shell: &str, variable: &str) {
+    let herdr = PrivateHerdr::new(std::env::var(variable).ok());
+    native_agent(&herdr, "codex", CODEX);
+    prompt_files(&herdr, shell);
+    let fifo = herdr.home.join("codex-release");
+    assert!(
+        Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .expect("mkfifo runs")
+            .success()
+    );
+    let created = herdr.request(
+        "workspace.create",
+        json!({"cwd": herdr.home, "label": "agents", "focus": false}),
+    );
+    let workspace = created["workspace"]["workspace_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let pane = herdr.tab(&workspace, "slept", None);
+    start_within(
+        &herdr.connector(),
+        None,
+        "slept",
+        &pane,
+        ShellStart::Plain,
+        wire::agent_start_params(
+            &pane,
+            "slept",
+            "codex",
+            Vec::new(),
+            crate::codex_launch::CodexDaemon::Unsupported,
+        )
+        .unwrap(),
+        Duration::from_secs(10),
+        Duration::from_secs(30),
+        Duration::ZERO,
+        &|| Ok(()),
+    )
+    .unwrap_or_else(|error| panic!("the agent starts: {error:?}"));
+    herdr.wait_on(
+        &pane,
+        Duration::from_secs(30),
+        "Herdr reads the agent idle",
+        || {
+            request_with_connector(
+                &herdr.connector(),
+                "agent.get",
+                wire::agent_target_params(&pane).unwrap(),
+                READ_TIMEOUT,
+            )
+            .ok()
+            .and_then(|answer| wire::agent_state(answer).ok())
+            .is_some_and(|state| state.status == "idle")
+        },
+    );
+    // The node ends an agent only when its own quit failed, which fails
+    // here (`Node` answers nothing else).
+    let node = Node {
+        home: herdr.home.clone(),
+        shell: None,
+    };
+    let release = std::sync::Arc::new(Release {
+        fifo,
+        presses: Default::default(),
+        released: Default::default(),
+    });
+    let watched = Watched {
+        socket: herdr.connector(),
+        release: std::sync::Arc::clone(&release),
+    };
+    assert!(
+        crate::agent_sleep_herdr::end_agent(&watched, &node, &pane, "codex").is_ok(),
+        "the agent quit; pane shows:\n{}",
+        herdr.screen(&pane)
+    );
+    assert!(
+        release.released.load(std::sync::atomic::Ordering::SeqCst),
+        "the stand-in quit only on its release"
+    );
+    let woke = crate::agent_sleep_herdr::start_agent(
+        &herdr.connector(),
+        &node,
+        &crate::agent_sleep_herdr::WakeRequest {
+            pane_id: pane.clone(),
+            kind: "codex".into(),
+            name: "slept".into(),
+            mode: crate::agent_sleep::WakeMode::Resume,
+            args: vec!["resume".into(), "slept-session".into()],
+            cwd: None,
+            session_id: Some("slept-session".into()),
+            codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
+        },
+    );
+    assert_eq!(woke, crate::agent_sleep_herdr::WakeOutcome::Started);
+    herdr.wait_on(
+        &pane,
+        Duration::from_secs(30),
+        "the resume line runs",
+        || herdr.file("codex-args").lines().count() == 2,
+    );
+    assert_eq!(
+        herdr.file("codex-args"),
+        "slept \nslept resume slept-session\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "needs the pinned Herdr and zsh: HIDE_E2E_HERDR_BIN, HIDE_TEST_ZSH_BIN"]
+fn a_codex_slept_and_woken_in_zsh_runs_its_resume_line_with_nothing_before_it() {
+    sleep_and_wake("zsh", "HIDE_TEST_ZSH_BIN");
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "needs the pinned Herdr and bash: HIDE_E2E_HERDR_BIN, HIDE_TEST_BASH_BIN"]
+fn a_codex_slept_and_woken_in_bash_runs_its_resume_line_with_nothing_before_it() {
+    sleep_and_wake("bash", "HIDE_TEST_BASH_BIN");
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "needs the pinned Herdr and fish: HIDE_E2E_HERDR_BIN, HIDE_TEST_FISH_BIN"]
+fn a_codex_slept_and_woken_in_fish_runs_its_resume_line_with_nothing_before_it() {
+    sleep_and_wake("fish", "HIDE_TEST_FISH_BIN");
 }

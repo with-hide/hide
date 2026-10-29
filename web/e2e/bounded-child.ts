@@ -27,6 +27,8 @@ export type Bounds = {
    * says nothing of the processes it started.
    */
   processTool?: string;
+  /** The child's environment; this process's own unless given. */
+  env?: NodeJS.ProcessEnv;
 };
 
 /** A run that did not end by itself. Its tree is gone when `treeEnded`; only then may its caller remove the files the child used. */
@@ -40,7 +42,7 @@ export class BoundedChildError extends Error {
 export function runBounded(executable: string, args: readonly string[], bounds: Bounds): Promise<BoundedResult> {
   const windows = process.platform === "win32";
   // A private process group on Unix, so ending it ends what the child started.
-  const child = spawn(executable, args, { detached: !windows, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(executable, args, { detached: !windows, windowsHide: true, env: bounds.env, stdio: ["ignore", "pipe", "pipe"] });
   const pid = child.pid;
   if (!windows) return supervise(executable, child, bounds, () => endProcessGroup(pid!));
   // Listed while Node still holds the child's handle, so its id is not yet

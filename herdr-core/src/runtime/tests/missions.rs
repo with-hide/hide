@@ -1792,7 +1792,7 @@ fn closing_a_mission_ends_its_decision_and_records_an_answer_never_typed() {
 
 #[test]
 fn an_answer_herdr_may_have_typed_is_typed_again_only_when_the_operator_sends_it_again() {
-    use crate::runtime::mission_events::AnswerSendFailure;
+    use crate::runtime::mission_events::SendFailure;
     use crate::runtime::missions::AnswerState;
     let fixture = conducting();
     let mut runtime = fixture.runtime.lock().unwrap();
@@ -1841,7 +1841,7 @@ fn an_answer_herdr_may_have_typed_is_typed_again_only_when_the_operator_sends_it
     runtime.mission_answer_sent(
         "mission-1",
         1,
-        Err(AnswerSendFailure::MaybeTyped("herdr_call_failed")),
+        Err(SendFailure::MaybeTyped("herdr_call_failed")),
     );
     assert!(
         runtime.mission_answers_due().is_empty(),
@@ -1864,11 +1864,7 @@ fn an_answer_herdr_may_have_typed_is_typed_again_only_when_the_operator_sends_it
     runtime.mission_answer_typing("mission-1", 1);
     runtime.mission_answer_sent("mission-1", 1, Ok(()));
     // A late second report for the same prompt changes nothing.
-    runtime.mission_answer_sent(
-        "mission-1",
-        1,
-        Err(AnswerSendFailure::MaybeTyped("herdr_format")),
-    );
+    runtime.mission_answer_sent("mission-1", 1, Err(SendFailure::MaybeTyped("herdr_format")));
     assert!(
         runtime.missions.book.missions[0]
             .answer
@@ -1899,7 +1895,7 @@ fn an_answer_herdr_may_have_typed_is_typed_again_only_when_the_operator_sends_it
     runtime.mission_answer_sent(
         "mission-1",
         2,
-        Err(AnswerSendFailure::NotTyped("herdr_parameters")),
+        Err(SendFailure::NotTyped("herdr_parameters")),
     );
     let mission = &runtime.missions.book.missions[0];
     assert_eq!(

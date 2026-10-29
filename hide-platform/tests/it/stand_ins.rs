@@ -1,6 +1,6 @@
 //! Programs a test runs against a product deadline, ready before the
 //! deadline starts (issues 813 and 824). Built only into tests: hide-platform's
-//! integration tests, and by `#[path]` hided's integration tests,
+//! integration tests, and by `#[path]` hided's and hide-ai's integration tests,
 //! hide-agent-hooks' unit and integration tests and hide-kit's unit tests, so
 //! a change here plans every crate that runs it.
 //!

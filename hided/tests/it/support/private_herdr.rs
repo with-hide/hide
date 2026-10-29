@@ -3,9 +3,10 @@
 //! run hided against the pinned Herdr.
 
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use hide_platform::process::OwnedChild;
 use serde_json::{Value, json};
 
 pub fn pinned_version() -> String {
@@ -34,6 +35,9 @@ pub fn herdr_command(bin: &Path, home: &Path, socket: &Path, config: &Path) -> C
     command
 }
 
+/// How long a stopped server and its panes may take to end.
+const SERVER_STOP: Duration = Duration::from_secs(30);
+
 /// A Herdr server of the test's own, stopped on drop.
 pub struct PrivateHerdr {
     pub bin: PathBuf,
@@ -41,7 +45,7 @@ pub struct PrivateHerdr {
     pub socket: PathBuf,
     pub config: PathBuf,
     pub log: PathBuf,
-    server: Option<Child>,
+    server: Option<OwnedChild>,
 }
 
 impl PrivateHerdr {
@@ -77,13 +81,16 @@ impl PrivateHerdr {
         let socket = root.join("herdr.sock");
         let log = root.join("server.log");
         let output = std::fs::File::create(&log).unwrap();
-        let server = herdr_command(&bin, &home, &socket, &config)
-            .arg("server")
-            .stdin(Stdio::null())
-            .stdout(output.try_clone().unwrap())
-            .stderr(output)
-            .spawn()
-            .expect("herdr server starts");
+        // Owned with what it starts: on Windows the pane shells outlive the
+        // server and keep their folder, inside `root`, locked.
+        let server = OwnedChild::spawn(
+            herdr_command(&bin, &home, &socket, &config)
+                .arg("server")
+                .stdin(Stdio::null())
+                .stdout(output.try_clone().unwrap())
+                .stderr(output),
+        )
+        .expect("herdr server starts");
         let herdr = Self {
             bin,
             home,
@@ -118,18 +125,22 @@ impl PrivateHerdr {
         }
     }
 
+    /// Stops the server and returns once it and everything it started have
+    /// ended: on Windows a pane's shell outlived the server it belonged to,
+    /// and removing the fixture's folder then failed with a sharing violation
+    /// (with-hide/hide-private#282).
     pub fn stop(&mut self) -> std::io::Result<()> {
-        if self.server.is_none() {
+        let Some(mut server) = self.server.take() else {
             return Ok(());
-        }
+        };
         let _ = herdr_command(&self.bin, &self.home, &self.socket, &self.config)
             .args(["server", "stop"])
             .output();
-        let server = self.server.as_mut().expect("the private server is owned");
-        let _ = server.kill();
-        server.wait()?;
-        self.server = None;
-        Ok(())
+        // A server that did not stop by then is ended with its tree.
+        server
+            .capture_until(Instant::now() + SERVER_STOP, 1)
+            .map(|_| ())
+            .map_err(std::io::Error::other)
     }
 }
 

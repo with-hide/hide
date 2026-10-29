@@ -4,7 +4,7 @@
 //! Herdr has no hibernate: the pinned release ends nothing on request and
 //! forgets an agent whose process ended. So sleeping is Hide ending the
 //! agent, which returns the pane to its shell: first with the agent's own
-//! quit keys, then, for an agent still running, by the pane's node ending
+//! quit key, then, for an agent still running, by the pane's node ending
 //! its foreground job (SIGTERM to its process group on Unix, the agent's
 //! process tree at once on Windows). Waking is Herdr's own `agent.start` in
 //! that same pane with the provider's resume arguments.
@@ -46,13 +46,16 @@ const END_TIMEOUT: Duration = Duration::from_secs(10);
 /// write has its own request timeout (`REQUEST_TIMEOUT`), so this is the hang guard.
 const WRITE_DRAIN_LIMIT: Duration = Duration::from_secs(6);
 const END_POLL_INTERVAL: Duration = Duration::from_millis(200);
-/// How long an agent asked to quit with its own keys has to hand the
+/// How long an agent asked to quit with its own key has to hand the
 /// terminal back before it is ended instead.
 const EXIT_GRACE: Duration = Duration::from_secs(5);
-/// The time between two presses of the agent's quit keys: each is read as a
-/// press of its own, well inside the shortest double-press window declared
-/// (Claude Code's 800 ms, `LaunchDialect::exit_keys`).
-const EXIT_KEY_GAP: Duration = Duration::from_millis(150);
+/// The most presses of the quit key one end makes: one that clears a draft,
+/// then the quit and the press that confirms it.
+const QUIT_PRESSES: usize = 3;
+/// How often a quit reads the pane while it waits: the agent's next press
+/// follows its hint inside the shortest double-press window declared (Claude
+/// Code's 800 ms, `LaunchDialect::quit_again`).
+const QUIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// `agent.start` waits this long for the agent to be ready; the read waits a
 /// little longer so a slow start is not reported as an unanswered one.
 const AGENT_START_TIMEOUT_MS: u64 = 120_000;
@@ -86,13 +89,15 @@ impl std::fmt::Display for EndError {
 /// names the agent's process as the group) end, the shell and every other
 /// pane stay (B7).
 ///
-/// The agent is first asked to quit with its own keys, as the operator quits
+/// The agent is first asked to quit with its own key, as the operator quits
 /// it, so it puts back the terminal modes it set: Herdr wraps the wake's
 /// start line in bracketed paste while the pane's terminal says the mode is
 /// on, and a PowerShell prompt reads that wrapping as keys, so an agent ended
 /// without its own quit left a Windows pane whose next start never ran
 /// (herdrdev/herdr#5371; the Windows reason goes once it is closed and the
-/// pin moves past it). Only an agent still running after `EXIT_GRACE` is
+/// pin moves past it), and an agent ended by a signal leaves its keyboard
+/// protocol, alternate screen and mouse reports on for the shell
+/// (`quit_on_key`). Only an agent still running after `EXIT_GRACE` is
 /// ended by the node.
 pub(crate) fn end_agent(
     connector: &dyn ApiConnector,
@@ -140,27 +145,20 @@ pub(crate) fn end_agent(
             "the pane's shell already holds the terminal".into(),
         ));
     }
-    let exit_keys = hide_agent_adapter::adapter(kind)
-        .and_then(|adapter| adapter.sleep)
-        .map_or(&[][..], hide_agent_adapter::LaunchDialect::exit_keys);
-    if !exit_keys.is_empty() {
-        let unanswered = match press_exit_keys(connector, pane_id, exit_keys) {
-            Ok(()) if shell_takes_terminal_within(connector, pane_id, shell, EXIT_GRACE)? => {
-                return Ok(state.state_change_seq);
+    if let Some(quit) = Quit::of(kind) {
+        match quit.run(connector, pane_id, shell)? {
+            Quitting::Quit => return Ok(state.state_change_seq),
+            Quitting::Unanswered { reason, presses } => {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "agent_sleep",
+                    "kind": "agent_sleep.exit_keys_unanswered",
+                    "pane_id": pane_id,
+                    "provider": kind,
+                    "reason": reason,
+                    "presses": presses,
+                }));
             }
-            Ok(()) => format!(
-                "still running {} s after its quit keys",
-                EXIT_GRACE.as_secs()
-            ),
-            Err(error) => error,
-        };
-        crate::diagnostic!(serde_json::json!({
-            "component": "agent_sleep",
-            "kind": "agent_sleep.exit_keys_unanswered",
-            "pane_id": pane_id,
-            "provider": kind,
-            "reason": unanswered,
-        }));
+        }
     }
     // The job Herdr reported as the pane's foreground ends. One that ended on
     // its own since is gone, and the shell is waited for all the same.
@@ -196,27 +194,143 @@ pub(crate) fn end_agent(
     )))
 }
 
-/// Presses the agent's quit keys, one request per key and `EXIT_KEY_GAP`
-/// apart, so the agent reads each as a press of its own.
-#[allow(clippy::disallowed_methods)] // the gap between two presses is the subject
-fn press_exit_keys(
-    connector: &dyn ApiConnector,
-    pane_id: &str,
-    keys: &[&str],
-) -> Result<(), String> {
-    for (index, key) in keys.iter().enumerate() {
-        if index > 0 {
-            thread::sleep(EXIT_KEY_GAP);
-        }
-        request_with_connector(
-            connector,
-            "pane.send_keys",
-            wire::pane_send_keys_params(pane_id, &[key])?,
-            REQUEST_TIMEOUT,
-        )
-        .map_err(|error| format!("pane.send_keys failed: {error}"))?;
+/// An agent's own quit, as its sleep dialect declares it.
+struct Quit {
+    key: &'static str,
+    again: Option<&'static str>,
+    composer: Option<hide_agent_adapter::composer::Composer>,
+}
+
+/// How a quit ended.
+enum Quitting {
+    /// The shell holds the terminal again.
+    Quit,
+    /// The agent still runs: why, and how many presses it was sent.
+    Unanswered { reason: String, presses: usize },
+}
+
+impl Quit {
+    fn of(kind: &str) -> Option<Self> {
+        let adapter = hide_agent_adapter::adapter(kind)?;
+        let dialect = adapter.sleep?;
+        Some(Self {
+            key: dialect.quit_key()?,
+            again: dialect.quit_again(),
+            composer: adapter.composer.supported(),
+        })
     }
-    Ok(())
+
+    /// Presses the quit key once, and again only on what the agent shows
+    /// after a press: the hint that it waits for the key a second time, or a
+    /// composer the press emptied of a draft. A press sent to an agent that
+    /// had already begun to quit reaches its shell instead, encoded in the
+    /// keyboard protocol the agent turned on: Codex CLI 0.165.0 quits on the
+    /// first press, and the second one, sent at a fixed 150 ms, left
+    /// `ESC[99;5u` in zsh's line as `9;5u` in three runs of four
+    /// (with-hide/hide-private#37). An agent that shows neither, a quit in
+    /// progress included, is given until `EXIT_GRACE` to hand the terminal
+    /// back. A read or a press Herdr refuses is an unanswered quit, which the
+    /// node's end follows.
+    #[allow(clippy::disallowed_methods)] // a production wait, not test code
+    fn run(
+        &self,
+        connector: &dyn ApiConnector,
+        pane_id: &str,
+        shell: u32,
+    ) -> Result<Quitting, EndError> {
+        let deadline = Instant::now() + EXIT_GRACE;
+        let mut presses = 0;
+        let unanswered = |reason: String, presses: usize| Quitting::Unanswered { reason, presses };
+        let mut before = match screen(connector, pane_id) {
+            Ok(screen) => screen,
+            Err(reason) => return Ok(unanswered(reason, presses)),
+        };
+        loop {
+            if presses == QUIT_PRESSES {
+                return Ok(
+                    if shell_takes_terminal_within(
+                        connector,
+                        pane_id,
+                        shell,
+                        deadline.saturating_duration_since(Instant::now()),
+                    )? {
+                        Quitting::Quit
+                    } else {
+                        unanswered(
+                            format!("still running after {presses} presses of its quit key"),
+                            presses,
+                        )
+                    },
+                );
+            }
+            if let Err(reason) = request_with_connector(
+                connector,
+                "pane.send_keys",
+                wire::pane_send_keys_params(pane_id, &[self.key]).map_err(EndError::Failed)?,
+                REQUEST_TIMEOUT,
+            ) {
+                return Ok(unanswered(
+                    format!("pane.send_keys failed: {reason}"),
+                    presses,
+                ));
+            }
+            presses += 1;
+            loop {
+                thread::sleep(QUIT_POLL_INTERVAL);
+                if process_group(connector, pane_id)
+                    .map_err(EndError::Failed)?
+                    .foreground_process_group_id
+                    == Some(shell)
+                {
+                    return Ok(Quitting::Quit);
+                }
+                let now = match screen(connector, pane_id) {
+                    Ok(screen) => screen,
+                    Err(reason) => return Ok(unanswered(reason, presses)),
+                };
+                if self.asks_again(&before, &now) {
+                    before = now;
+                    break;
+                }
+                if Instant::now() >= deadline {
+                    return Ok(unanswered(
+                        format!(
+                            "still running {} s after its quit key",
+                            EXIT_GRACE.as_secs()
+                        ),
+                        presses,
+                    ));
+                }
+            }
+        }
+    }
+
+    /// Whether the screen after a press says the agent waits for another:
+    /// its hint shows where it did not before the press, or its composer
+    /// held a draft before the press and reads empty after it.
+    fn asks_again(&self, before: &str, now: &str) -> bool {
+        use hide_agent_adapter::composer::{Verdict, screen_shows};
+        let hinted = self
+            .again
+            .is_some_and(|hint| screen_shows(now, hint) && !screen_shows(before, hint));
+        let cleared = self.composer.is_some_and(|composer| {
+            composer.judge(before) == Verdict::Holds && composer.judge(now) == Verdict::Empty
+        });
+        hinted || cleared
+    }
+}
+
+/// The pane's visible screen with its styling, as a composer is judged.
+fn screen(connector: &dyn ApiConnector, pane_id: &str) -> Result<String, String> {
+    request_with_connector(
+        connector,
+        "pane.read",
+        wire::composer_screen_params(pane_id)?,
+        REQUEST_TIMEOUT,
+    )
+    .map_err(|error| format!("pane.read failed: {error}"))
+    .and_then(wire::pane_text)
+    .map(|screen| screen.text)
 }
 
 /// Whether the pane's shell holds the terminal again within `within`.
@@ -757,43 +871,134 @@ mod tests {
         }
     }
 
-    /// An agent that quits on its own keys, as Claude Code does on a second
-    /// Ctrl+C, puts its terminal back itself: each key reaches Herdr as a
-    /// press of its own, and the node is never asked to end anything.
-    #[test]
-    fn an_agent_that_quits_on_its_keys_is_never_ended_by_the_node() {
+    /// The pane's visible screen as `pane.read` answers it, rows `text`.
+    fn screen(text: &str) -> Value {
+        json!({"type": "pane_read", "read": {"pane_id": "w1:p1", "workspace_id": "w1",
+            "tab_id": "w1:t1", "source": "visible", "format": "ansi", "revision": 1,
+            "truncated": false, "text": text}})
+    }
+
+    /// A composer as Codex CLI draws it: its marker and what follows, dim
+    /// when it is the placeholder.
+    const CODEX_EMPTY: &str = "\u{203a} \u{1b}[2mAsk Codex to do anything\u{1b}[0m\n";
+    const CODEX_DRAFT: &str = "\u{203a} half a thought\n";
+    const CODEX_QUITTING: &str = "\u{203a} Shutting down...\n";
+
+    /// Ends the stand-in agent of `kind` that answers each press of its quit
+    /// key by `press` (the presses before it, the agent's pid), shows the
+    /// screen `shown` returns for the presses so far and answers each read
+    /// of it by `read` (the same count, the pid); returns the keys the pane
+    /// was sent. The node is never asked to end anything.
+    fn quit_by_keys(
+        kind: &'static str,
+        shown: fn(usize) -> &'static str,
+        press: fn(usize, u32),
+        read: fn(usize, u32),
+    ) -> Vec<Value> {
         let mut agent =
             process::OwnedChild::spawn(&mut agent_tree_command("tool")).expect("the agent starts");
         let pid = agent.id();
         let presses = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let pressed = Arc::clone(&presses);
         let herdr = FakeHerdr::start("agent-sleep-quit", move |method, _| match method {
-            "agent.get" => agent_info("idle", 7),
+            "agent.get" => {
+                let mut info = agent_info("idle", 7);
+                info["agent"]["agent"] = json!(kind);
+                info
+            }
             "pane.process_info" => {
                 let shell = std::process::id();
                 process_info(shell, if process::is_alive(pid) { pid } else { shell })
             }
+            "pane.read" => {
+                let presses = pressed.load(Ordering::SeqCst);
+                read(presses, pid);
+                screen(shown(presses))
+            }
             "pane.send_keys" => {
-                // The agent quits on the second press.
-                if pressed.fetch_add(1, Ordering::SeqCst) == 1 {
-                    process::terminate(pid).expect("the agent quits");
-                }
+                press(pressed.fetch_add(1, Ordering::SeqCst), pid);
                 json!({"type": "ok"})
             }
             other => panic!("unexpected {other}"),
         });
-        assert_eq!(
-            end_agent(&herdr.connector(), &NoNode, "w1:p1", "claude"),
-            Ok(7)
-        );
-        let keys: Vec<Value> = herdr
+        assert_eq!(end_agent(&herdr.connector(), &NoNode, "w1:p1", kind), Ok(7));
+        agent.wait().expect("the agent is reaped");
+        herdr
             .calls()
             .into_iter()
             .filter(|(method, _)| method == "pane.send_keys")
             .map(|(_, params)| params["keys"].clone())
-            .collect();
+            .collect()
+    }
+
+    /// An agent that quits on its own key, as Claude Code does on a second
+    /// Ctrl+C, puts its terminal back itself: the second press follows the
+    /// hint it shows after the first, and the node is never asked to end
+    /// anything.
+    #[test]
+    fn an_agent_that_asks_for_its_quit_key_again_gets_a_second_press() {
+        let keys = quit_by_keys(
+            "claude",
+            |presses| match presses {
+                0 => "\u{276f} \n",
+                _ => "\u{276f} \nPress Ctrl-C again to exit\n",
+            },
+            |before, pid| {
+                if before == 1 {
+                    process::terminate(pid).expect("the agent quits");
+                }
+            },
+            |_, _| {},
+        );
         assert_eq!(keys, [json!(["ctrl+c"]), json!(["ctrl+c"])]);
-        agent.wait().expect("the agent is reaped");
+    }
+
+    /// Codex CLI 0.165.0 quits on the first Ctrl+C into an empty composer
+    /// and takes a moment to hand the terminal back: a second press then
+    /// reaches the shell, in the keyboard protocol Codex had turned on, and
+    /// the wake typed behind it (with-hide/hide-private#37). The first press
+    /// is the only one: the agent ends only after the sleep has read it
+    /// quitting, so the sleep saw that state and did not press again.
+    #[test]
+    fn an_agent_quitting_on_its_first_press_is_sent_no_second_one() {
+        let keys = quit_by_keys(
+            "codex",
+            |presses| {
+                if presses == 0 {
+                    CODEX_EMPTY
+                } else {
+                    CODEX_QUITTING
+                }
+            },
+            |_, _| {},
+            |presses, pid| {
+                if presses == 1 {
+                    let _ = process::terminate(pid);
+                }
+            },
+        );
+        assert_eq!(keys, [json!(["ctrl+c"])]);
+    }
+
+    /// A press into a composer that holds a draft clears it instead of
+    /// quitting; the composer reads empty after it, and the next press quits.
+    #[test]
+    fn a_press_that_clears_a_draft_is_followed_by_the_quit() {
+        let keys = quit_by_keys(
+            "codex",
+            |presses| match presses {
+                0 => CODEX_DRAFT,
+                1 => CODEX_EMPTY,
+                _ => CODEX_QUITTING,
+            },
+            |before, pid| {
+                if before == 1 {
+                    process::terminate(pid).expect("the agent quits");
+                }
+            },
+            |_, _| {},
+        );
+        assert_eq!(keys, [json!(["ctrl+c"]), json!(["ctrl+c"])]);
     }
 
     /// Sleep ends the pane's foreground job on every system when the agent
@@ -826,9 +1031,10 @@ mod tests {
                 let shell = std::process::id();
                 process_info(shell, if process::is_alive(pid) { pid } else { shell })
             }
-            // The stand-in reads no keys, as an agent with a draft does not
-            // quit on two presses.
+            // The stand-in reads no keys and shows nothing that asks for
+            // another, as an agent in a dialog does not quit.
             "pane.send_keys" => json!({"type": "ok"}),
+            "pane.read" => screen("A dialog the quit key does not close\n"),
             other => panic!("unexpected {other}"),
         });
         assert_eq!(
@@ -886,6 +1092,7 @@ mod tests {
                     "pane.process_info" => Ok(process_info(42, 9)),
                     // Refused keys go to the node at once, so no grace is
                     // waited out here.
+                    "pane.read" => Ok(screen("\u{276f} \n")),
                     "pane.send_keys" => Err(("pane_send_failed".into(), "refused".into())),
                     other => panic!("unexpected {other}"),
                 }

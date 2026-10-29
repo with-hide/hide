@@ -58,7 +58,7 @@ def measure(journey, card):
     turn, read, record["activities"] = journey.wait_turn(since, card["token"], lambda _events: events)
     record["turn"] = turn
     record["read"] = {**read, "events": read.get("events", [])[events:]} if "events" in read else read
-    status, reason = cells.with_turn(cells.reply_verdict(read, journey.session, card["token"], events), turn)
-    if status == cells.PASS:
-        reason = f"the start gave card {card['card']}: " + reason
-    journey.settle(CELL, (status, reason), journey.evidence("guidance-memory", record))
+    verdict = cells.with_turn(cells.reply_verdict(read, journey.session, card["token"], events), turn)
+    if verdict[0] == cells.PASS:
+        verdict = cells.PASS, f"the start gave card {card['card']}: " + verdict[1]
+    journey.settle(CELL, verdict, journey.evidence("guidance-memory", record))

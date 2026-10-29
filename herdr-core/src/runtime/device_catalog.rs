@@ -1037,6 +1037,8 @@ fn ask_facts(
 
 pub(super) const REGISTRABLE_TIMEOUT: Duration = Duration::from_secs(15);
 
+use super::project_open::Forward;
+
 impl Runtime {
     /// `create_workspace` on a device (B23, B24): the device's helper judges
     /// the folder against that device's home, and a folder outside it against
@@ -1059,9 +1061,16 @@ impl Runtime {
                     format!("Adding a project on this device needs its connection: {message}"),
                     true,
                 );
+                self.settle_project_open(
+                    device,
+                    &path,
+                    Err("workspace.create_unavailable"),
+                    Forward::No,
+                );
                 return true;
             }
         };
+        let requested = path.clone();
         let ask = move || {
             call_as::<hide_node_link::register::Registrable>(
                 channel.as_ref(),
@@ -1085,9 +1094,9 @@ impl Runtime {
         };
         let Some(context) = self.worker_context.clone() else {
             let answer = ask();
-            return self.ingest_device_registration(device, label, answer);
+            return self.ingest_device_registration(device, &requested, label, answer);
         };
-        let device = device.to_owned();
+        let (target, folder) = (device.to_owned(), requested.clone());
         let spawned = thread::Builder::new()
             .name("herdr-core-device-registration".to_owned())
             .spawn(move || {
@@ -1096,7 +1105,9 @@ impl Runtime {
                     return;
                 };
                 let changed = match runtime.lock() {
-                    Ok(mut guard) => guard.ingest_device_registration(&device, label, answer),
+                    Ok(mut guard) => {
+                        guard.ingest_device_registration(&target, &folder, label, answer)
+                    }
                     Err(_) => return,
                 };
                 drop(runtime);
@@ -1110,13 +1121,22 @@ impl Runtime {
                 format!("The registration worker could not be started: {error}"),
                 true,
             );
+            self.settle_project_open(
+                device,
+                &requested,
+                Err("workspace.create_worker_failed"),
+                Forward::No,
+            );
         }
         true
     }
 
+    /// `requested` is the folder as the request named it, which a
+    /// `hide <path>` waiting on it is found by (`settle_project_open`).
     pub(super) fn ingest_device_registration(
         &mut self,
         device: &str,
+        requested: &str,
         label: String,
         answer: Result<hide_node_link::register::Registrable, RegistrationRefusal>,
     ) -> bool {
@@ -1128,6 +1148,7 @@ impl Runtime {
                 "component": "registration", "kind": "create.device_gone",
                 "target": device,
             }));
+            self.settle_project_open(device, requested, Err("device_unknown"), Forward::No);
             return false;
         }
         let registrable = match answer {
@@ -1141,6 +1162,7 @@ impl Runtime {
                 if let Some(error) = self.snapshot.status.last_error.as_mut() {
                     error.confirm = confirm;
                 }
+                self.settle_project_open(device, requested, Err(kind), Forward::No);
                 return true;
             }
         };
@@ -1154,6 +1176,7 @@ impl Runtime {
             .any(|registration| registration.id == id)
         {
             // Registering the same project again reaches the same state.
+            self.settle_project_open(device, requested, Ok(()), Forward::Checkout);
             return false;
         }
         let label = Some(label.trim())
@@ -1186,6 +1209,9 @@ impl Runtime {
         self.request_device_facts(device);
         self.refresh_device_catalog(device);
         self.open_registration_terminals(device);
+        // Its checkout waits for the helper's facts before a tab can open
+        // there, so only the device comes forward now.
+        self.settle_project_open(device, requested, Ok(()), Forward::Device);
         true
     }
 

@@ -234,14 +234,20 @@ use crate::error::HostError;
 /// (`Hello::herdr_socket`), which is how the core reaches a WSL
 /// distribution's Herdr (PRD wsl-device D-07). A helper on 56 has no such
 /// flag, so it is refused at Hello and upgraded.
-/// 58: a node reads a branch against its base (`Call::BranchFacts`) and merges
+/// 58: a node takes `hide <path>` from a plain shell of its own account on
+/// its bridge socket and sends it up as `NodeEvent::ProjectOpen`, answered
+/// by `ProofAnswer::ProjectOpenAccepted` and `ProofAnswer::ProjectOpen`. A
+/// helper on 57 would end on the new answers, so it is refused at Hello and
+/// upgraded.
+/// 59: a node reads a branch against its base (`Call::BranchFacts`) and merges
 /// it into the base on the machine that owns the checkout, never pushing and
 /// changing nothing it cannot merge cleanly (`Call::BranchMerge`,
 /// [`crate::branch::MergeOutcome`]), reads one file's committed diff against
 /// the merge base (`Call::BranchDiff`), and deletes a branch ref that no
 /// worktree has checked out (`Call::BranchDiscard`; PRD
-/// hide-ai-branch-first-apply). A helper on 57 would refuse all four, so it is refused at Hello and upgraded.
-pub const PROTOCOL_VERSION: u32 = 58;
+/// hide-ai-branch-first-apply). A helper on 58 would refuse all four, so it is
+/// refused at Hello and upgraded.
+pub const PROTOCOL_VERSION: u32 = 59;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).

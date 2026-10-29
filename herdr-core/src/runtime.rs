@@ -64,6 +64,7 @@ mod pane_prediction;
 mod pane_reopen;
 pub(crate) mod plans;
 pub(crate) mod project_memory;
+mod project_open;
 mod project_settings;
 mod projects;
 mod ps;
@@ -1549,6 +1550,9 @@ pub struct Runtime {
     birth_clock: session::BirthClock,
     next_async_operation_id: u64,
     workspace_creations_in_flight: HashSet<String>,
+    /// `hide <path>` requests by id, each waiting on or settled by the
+    /// registration it started (`project_open`).
+    project_opens: project_open::ProjectOpens,
     /// Rows Herdr shows without a registration whose machine is judging
     /// their folder for a pin or a closing last pane, by row id
     /// (`projects::RowPending`).
@@ -2360,6 +2364,7 @@ impl Runtime {
             birth_clock: Arc::new(Instant::now),
             next_async_operation_id: 0,
             workspace_creations_in_flight: HashSet::new(),
+            project_opens: project_open::ProjectOpens::default(),
             row_registrations: HashMap::new(),
             row_registration_generation: 0,
             editor_documents: HashMap::new(),

@@ -63,8 +63,9 @@ test("attach: the app starts hided, shows the shell, and runs the native chords 
   // channel, the pane-chord report, the file manager reveal, Add a project's folder
   // picker, the browser displays' views (issue 155), the Factory's and the
   // agents' system notifications with their click back and withdrawal, and
-  // macOS's notification permission with its settings page, and the restart of
-  // the operator's older Herdr server (PRD herdr-takeover B12).
+  // macOS's notification permission with its settings page, the restart of
+  // the operator's older Herdr server (PRD herdr-takeover B12), and the window
+  // coming forward after `hide <path>`.
   expect(
     await page.evaluate(() => ({
       require: typeof (globalThis as { require?: unknown }).require,
@@ -72,7 +73,7 @@ test("attach: the app starts hided, shows the shell, and runs the native chords 
       bridge: Object.keys(window.hideHost ?? {}).sort(),
       kind: window.hideHost?.kind,
     })),
-  ).toEqual({ require: "undefined", process: "undefined", bridge: ["browser", "editorAvailable", "external", "kind", "notificationPermission", "notify", "onCommand", "onNotificationOpen", "onWindowChrome", "openInEditor", "openNotificationSettings", "openPath", "openPractice", "pickFolder", "platform", "probePaths", "quit", "reportBadge", "reportBindings", "reportLanguage", "restartHerdr", "revealPath", "updates", "withdrawNotifications"], kind: "electron" });
+  ).toEqual({ require: "undefined", process: "undefined", bridge: ["browser", "comeForward", "editorAvailable", "external", "kind", "notificationPermission", "notify", "onCommand", "onNotificationOpen", "onWindowChrome", "openInEditor", "openNotificationSettings", "openPath", "openPractice", "pickFolder", "platform", "probePaths", "quit", "reportBadge", "reportBindings", "reportLanguage", "restartHerdr", "revealPath", "updates", "withdrawNotifications"], kind: "electron" });
   // sidebar-titlebar-refresh B17, B23: the host says what its frame takes of the shell's top row, traffic lights on macOS only, and the row keeps their room.
   const chrome = await page.evaluate(() => new Promise((resolve) => window.hideHost!.onWindowChrome(resolve)));
   expect(chrome).toEqual({ trafficLights: process.platform === "darwin", fullscreen: false });
@@ -142,11 +143,15 @@ test("New tab: the native chord and menu each open one terminal directly", { tag
   };
 
   // New tab opens a shell in the keyboard's Agent area without a start form.
+  const selected = area.locator('[data-agent-tab-bar] [role=tab][aria-selected="true"]');
+  // The new tab is drawn before it is selected, so the tab selected until now
+  // is what the selection has to leave (with-hide/hide-private#141).
+  const initial = await selected.getAttribute("data-tab");
   await page.locator("[data-pane-view] .xterm-helper-textarea").first().focus();
   await page.keyboard.press(chord("new_tab", "electron"));
   await expect(tabs).toHaveCount(before + 1);
   await expect(start).toHaveCount(0);
-  const selected = area.locator('[data-agent-tab-bar] [role=tab][aria-selected="true"]');
+  await expect(selected).not.toHaveAttribute("data-tab", initial!);
   await expect(selected).not.toHaveAttribute("data-tab", /^draft:/);
   const first = await selected.getAttribute("data-tab");
   await expect(page.locator("[data-canvas]")).toHaveAttribute("data-canvas", first!);

@@ -17,6 +17,16 @@ use serde_json::Value;
 /// `hide` with the account's places moved under `home`; on Windows the home
 /// and the folders Herdr's default pipe and the folder locks resolve from.
 fn isolated(home: &Path, state: &Path) -> Command {
+    // The daemon `hide connect` starts is the `hided` beside it, and its start
+    // has 10 s to show progress. A Windows job's first starts of that new
+    // debug build took 6 to 18 s before its seat answered, three tests
+    // starting it together, where a later start takes under a second
+    // (with-hide/hide-private#264, #265, #212); it starts once first
+    // (docs/TESTING.md, Writing a Rust test, rule 8).
+    crate::stand_ins::ready_with_args(
+        Path::new(env!("CARGO_BIN_EXE_hided")),
+        &["node", "--version"],
+    );
     let mut command = Command::new(env!("CARGO_BIN_EXE_hide"));
     for (key, _) in std::env::vars_os() {
         let upper = key.to_string_lossy().to_uppercase();

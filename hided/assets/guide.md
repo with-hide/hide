@@ -78,6 +78,7 @@ hide view move <view-id> --area <area-id> --index <n>
 - While the operator looks at this checkout from another pane, what you open waits in your session's Files list instead of taking the screen.
 - The `view` commands arrange the Views that are already open; `view list` gives their ids, areas and the sessions that opened each, whether the operator has seen each (`unseen`), and `--session here` keeps only yours.
 - What a delegated child opens does not wait for the operator: it marks your row to read, and the child's report letter lists it. You answer for it: read it with `view status <view-id>` or `browser snapshot|screenshot|eval|console|network <display>` from your own pane, which clears that mark, and when the operator should see it, open it again from your own pane so it waits for them as yours.
+- `hide <path>` (or `hide .`) is the operator's own command: it adds a folder of your machine as a project when it is not one yet, then brings Hide's window to it, moving the operator's screen. Run it only when the operator asks you to open a folder in Hide, and say what came forward.
 
 ## Project Memory
 

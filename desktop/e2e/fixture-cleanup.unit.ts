@@ -152,15 +152,43 @@ test("a rejected close after confirmed candidate exit still cleans home and repo
   expectOpenerCopied(run);
 });
 
-test("a successful close must confirm exit before home deletion", async () => {
-  const child = candidate(async () => {});
-  const run = privateHome("unconfirmed-exit");
+/** The exit Node reports for `child`: its exit code, then the `exit` event. */
+function exitLater(child: ChildProcess): void {
+  setImmediate(() => {
+    reportExit(child);
+    child.emit("exit", 0, null);
+  });
+}
+
+// Playwright's close returns once the app's debugging pipe closes, and on
+// Windows the recorded process (the cmd.exe Playwright starts the app under)
+// exits after that (with-hide/hide-private#244).
+test("a close that returns before its candidate exits waits for that exit, then the home goes", async () => {
+  candidate(async (child) => { exitLater(child); });
+  const run = privateHome("late-exit");
   const error = await teardown(async () => { await launch(run.env); });
-  expect(error?.errors.some((item: Error) => item.message.includes(run.root))).toBe(true);
-  expect(fs.existsSync(run.env.HOME!)).toBe(true);
-  reportExit(child, "SIGTERM");
-  run.cleanup();
+  expect(error).toBeUndefined();
   expect(fs.existsSync(run.root)).toBe(false);
+});
+
+test("a candidate that never exits after a successful close fails the close by its pid and keeps the home", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    const child = candidate(async () => {});
+    Object.assign(child, { pid: 4242 });
+    const run = privateHome("unconfirmed-exit");
+    const ended = teardown(async () => { await launch(run.env); });
+    await vi.advanceTimersByTimeAsync(10_000);
+    const error = await ended;
+    expect(error?.errors.some((item: Error) => item.message === "child 4242 did not exit within 10000 ms after app.close() returned")).toBe(true);
+    expect(error?.errors.some((item: Error) => item.message.includes(run.root))).toBe(true);
+    expect(fs.existsSync(run.env.HOME!)).toBe(true);
+    reportExit(child, "SIGTERM");
+    run.cleanup();
+    expect(fs.existsSync(run.root)).toBe(false);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("manual cleanup rejects a live candidate before stopping any private service", async () => {

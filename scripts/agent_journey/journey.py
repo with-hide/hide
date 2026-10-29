@@ -18,7 +18,7 @@ from agent_live_check.processes import ProcessError
 from agent_live_check.protection import write_private
 from agent_live_check.system import git, same_path
 
-from . import cells, composer, fork, kit, memory, title, usage
+from . import cells, composer, fork, kit, memory, provider_limit, title, usage
 from .requests import model_requests
 
 SPAWN_SECONDS = 150
@@ -95,6 +95,10 @@ class Journey:
         # Every pane this journey's spawns and fork opened, which close() ends.
         self.opened = []
         self.model = model
+        # Where the agent's provider log stood when the running step began:
+        # what was logged before it is another step's, and never settles
+        # this one's cell (provider_limit.cursor).
+        self.provider_mark = None
 
     # Evidence -----------------------------------------------------------
 
@@ -122,13 +126,51 @@ class Journey:
 
     def settle(self, name, verdict, evidence=None, pane=None):
         """`pane` the pane the cell measured when it is not the agent's own,
-        as a fork's is."""
+        as a fork's is. A cell whose turn the agent never answered, while its
+        provider still refused that conversation's request, is not measured,
+        and so is every cell of the agent still open: the provider answers
+        its next turns the same way, and a retry spends the requests again.
+        Any other failure stays one."""
         status, reason = verdict
+        refused = self.provider_refusal() if cells.kind(verdict) == cells.NO_ANSWER else None
+        if refused:
+            self.record["provider_limit"] = {"cell": name, "reason": refused, "failure": reason}
+            cells.settle(self.table, self.id, name, cells.NOT_MEASURED, refused, evidence)
+            cells.settle_agent(self.table, self.id, refused)
+            return False
         if status == cells.FAIL:
             screen = self.capture(name, pane)
             evidence = ", ".join(value for value in (evidence, screen) if value) or None
         cells.settle(self.table, self.id, name, status, reason, evidence)
         return status == cells.PASS
+
+    def provider_refusal(self):
+        """Why the agent's provider refused its conversation's request in
+        the running step, read where the agent itself records it
+        (provider_limit.py), or None."""
+        if self.kind != "codex" or self.provider_mark is None or not self.session:
+            return None
+        try:
+            return provider_limit.codex_refusal(self.codex_home(), self.provider_mark, self.session)
+        except provider_limit.Unreadable as error:
+            self.record.setdefault("provider_limit_unread", []).append(str(error))
+            return None
+
+    def codex_home(self):
+        """Codex's CODEX_HOME: `.codex` in the HOME it writes its sessions
+        under in every mode (local.ROUTES, ci.AGENT_ENV)."""
+        return self.sessions / ".codex"
+
+    def mark_provider(self):
+        """Where the agent's provider log stands as a step begins; None when
+        the agent keeps none or it cannot be read, which reads no refusal."""
+        if self.kind != "codex":
+            return None
+        try:
+            return provider_limit.cursor(self.codex_home())
+        except provider_limit.Unreadable as error:
+            self.record.setdefault("provider_limit_unread", []).append(str(error))
+            return None
 
     # Facts Hide reports ---------------------------------------------------
 
@@ -191,6 +233,7 @@ class Journey:
     def step(self, name, *args):
         """Runs one step; a transport failure or a bound it reached fails the
         step's open cell with that reason, and cancellation stops the run."""
+        self.provider_mark = self.mark_provider()
         try:
             if name in MEASURES:
                 MEASURES[name](self, *args)

@@ -55,6 +55,9 @@ export const NOTIFY_SETTINGS_CHANNEL = "hide:notify-settings";
  */
 export const NOTIFY_BADGE_CHANNEL = "hide:notify-badge";
 
+/** `hide <path>` brought a project in front: the window comes forward (renderer -> main). */
+export const COME_FORWARD_CHANNEL = "hide:come-forward";
+
 /** Add a project's Browse folder: the native folder picker, answered with the chosen folder or null (invoke). */
 export const PICK_FOLDER_CHANNEL = "hide:pick-folder";
 

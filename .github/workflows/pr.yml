@@ -415,10 +415,11 @@ jobs:
         # pane's foreground job through the node, which Windows refused as
         # unsupported until hide-platform ended the agent's process tree
         # there: a real agent and the tool it started end, and the end waits
-        # for the shell to hold the terminal.
+        # for the shell to hold the terminal. Before that the quit key is
+        # pressed again only on what the agent shows (with-hide/hide-private#37).
         if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
         timeout-minutes: 5
-        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & test(=agent_sleep_herdr::tests::an_agent_that_does_not_quit_on_its_keys_is_ended_with_what_it_started)'
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'package(herdr-core) & kind(lib) & (test(=agent_sleep_herdr::tests::an_agent_that_does_not_quit_on_its_keys_is_ended_with_what_it_started) | test(=agent_sleep_herdr::tests::an_agent_that_asks_for_its_quit_key_again_gets_a_second_press) | test(=agent_sleep_herdr::tests::an_agent_quitting_on_its_first_press_is_sent_no_second_one) | test(=agent_sleep_herdr::tests::a_press_that_clears_a_draft_is_followed_by_the_quit))'
       - name: Public repository read deadline
         # Execute the delayed native Git fixture, including Windows child
         # cleanup; compiling the public-boundary regression is not proof.
