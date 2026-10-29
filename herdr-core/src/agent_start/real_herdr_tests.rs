@@ -24,9 +24,12 @@ use serde_json::json;
 use super::*;
 
 const QUESTION: &str = "Update the framework now? [Y/n]";
-/// The start of the prompt the user's files give a Unix shell.
+/// The start of the prompt the user's files give a Unix shell, and of
+/// PowerShell's own.
 #[cfg(unix)]
 const PROMPT: &str = "fixture";
+#[cfg(windows)]
+const PROMPT: &str = "PS ";
 
 /// B8: the seed tab must remain discoverable when shell integration is absent.
 #[test]
@@ -836,9 +839,8 @@ fn wake_after_stray_text(shell: &str, variable: &str) {
     // Herdr's own shell, the server's `SHELL` on unix, as an agent's pane is
     // once the agent has ended.
     let pane = herdr.tab(&workspace, "woken", None);
-    let prompt = if cfg!(windows) { "PS " } else { PROMPT };
     herdr.wait_on(&pane, Duration::from_secs(30), "the prompt shows", || {
-        herdr.screen(&pane).contains(prompt)
+        herdr.screen(&pane).contains(PROMPT)
     });
     herdr.request(
         "pane.send_text",
