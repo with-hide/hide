@@ -113,6 +113,15 @@ fn child_role() {
             println!("OWNED {} {helper}", child.id());
             thread::sleep(Duration::from_secs(60));
         }
+        // An uncooperative child, as an `ssh` still signing in is: it reads
+        // nothing that would tell it its owner died.
+        "tied_owner" => {
+            let mut command = role_command("sleep");
+            command.stdout(Stdio::null());
+            let child = OwnedChild::spawn_tied(&mut command).unwrap();
+            println!("OWNED {}", child.id());
+            thread::sleep(Duration::from_secs(60));
+        }
         "sleep" => {
             println!("READY {}", std::process::id());
             if let Some(path) = std::env::var_os(READY_FILE) {
@@ -596,6 +605,59 @@ fn abrupt_owner_death_ends_guarded_child_and_helper_outside_its_group() {
         "helper outside child group survived"
     );
     drop(identities);
+}
+
+#[test]
+fn abrupt_owner_death_ends_a_tied_child_that_watches_nothing() {
+    let _serial = serial();
+    let mut owner = role_command("tied_owner").spawn().unwrap();
+    let stdout = owner.stdout.take().unwrap();
+    let (send, recv) = mpsc::channel();
+    let reader = thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if let Some((_, pid)) = line.split_once("OWNED ") {
+                send.send(pid.trim().parse::<u32>().unwrap()).unwrap();
+                return;
+            }
+        }
+    });
+    let ready = recv.recv_timeout(Duration::from_secs(5));
+    let identity = ready
+        .as_ref()
+        .ok()
+        .map(|child| FixtureProcess::live(*child));
+    owner.kill().unwrap();
+    owner.wait().unwrap();
+    reader.join().unwrap();
+    let child = ready.expect("tied owner did not announce its child");
+    assert!(
+        gone_within(child, Duration::from_secs(5)),
+        "tied child survived owner SIGKILL"
+    );
+    drop(identity);
+}
+
+#[test]
+fn a_tied_child_ends_with_its_owner_and_leaves_no_watcher() {
+    let _serial = serial();
+    let mut command = role_command("sleep");
+    command.stdout(Stdio::null());
+    let mut child = OwnedChild::spawn_tied(&mut command).unwrap();
+    let pid = child.id();
+    let before = descendants(std::process::id()).unwrap();
+    assert!(before.contains(&pid));
+    assert!(child.kill_tree().unwrap());
+    child.wait().unwrap();
+    drop(child);
+    assert!(gone_within(pid, Duration::from_secs(5)));
+    // The watcher stood down and was reaped: nothing of the tie is left
+    // under this process.
+    let left: Vec<u32> = descendants(std::process::id())
+        .unwrap()
+        .into_iter()
+        .filter(|left| before.contains(left))
+        .collect();
+    assert!(left.is_empty(), "{left:?}");
 }
 
 #[test]

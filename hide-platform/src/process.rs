@@ -16,6 +16,8 @@
 //!   process it started, including ones that already left its direct line
 //!   (while the child has not been waited for; a finished child's leftovers
 //!   are ended by `kill_tree` at the moment it exits).
+//! - [`OwnedChild::spawn_tied`] ends the child's tree when this process dies
+//!   without running a destructor, for a child that watches nothing itself.
 //! - [`kill_tree`] ends a process and its descendants by pid.
 //! - [`is_alive`], [`parent_of`], [`descends_from`] and [`start_time`] describe a pid; a pid that
 //!   does not exist is `false` or `NotFound`, never a default. A start time is
@@ -390,6 +392,25 @@ impl OwnedChild {
         })
     }
 
+    /// [`Self::spawn`] for a child that is not cooperative and must still
+    /// end with this process when it dies without running a destructor,
+    /// such as an `ssh` still signing in, which reads nothing that would tell
+    /// it. On Unix a small `sh` in a group of its own holds the read end of a
+    /// pipe only this process writes; the pipe closing without a stand-down
+    /// line ends the child's group. Reaping, releasing or dropping the owner
+    /// stands it down. On Windows the job already ends the tree.
+    pub fn spawn_tied(command: &mut Command) -> io::Result<Self> {
+        let (child, tie) = sys::spawn_tied(command)?;
+        Ok(Self {
+            child,
+            tie,
+            ended: false,
+            reaped: false,
+            released: false,
+            bounded_drop: false,
+        })
+    }
+
     /// Starts a cooperative child with an abrupt-owner-death boundary.
     /// Unix children call [`OwnerWatch::from_launch`] before other work and
     /// hold the watch for their full lifetime; the constructor waits for its
@@ -533,13 +554,17 @@ impl OwnedChild {
     /// `Ok(None)` while the child runs.
     pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
         let status = self.child.try_wait()?;
-        self.reaped |= status.is_some();
+        if status.is_some() {
+            self.reaped = true;
+            sys::reaped(&mut self.tie);
+        }
         Ok(status)
     }
 
     pub fn wait(&mut self) -> io::Result<ExitStatus> {
         let status = self.child.wait()?;
         self.reaped = true;
+        sys::reaped(&mut self.tie);
         Ok(status)
     }
 
@@ -550,7 +575,7 @@ impl OwnedChild {
         // A cooperative watch requires its owner until the guarded child
         // finishes. Releasing a still-live guarded child closes that channel,
         // and it exits; detached daemons must use the legacy spawn path.
-        sys::release(&self.tie);
+        sys::release(&mut self.tie);
         self.released = true;
     }
 
@@ -1175,6 +1200,75 @@ mod sys {
     pub(super) struct Tie {
         // The child's dedicated reader gets EOF if the owner crashes.
         _owner: Option<UnixStream>,
+        /// The watcher a tied child's group has ([`spawn_tied`]).
+        warden: Option<Warden>,
+    }
+
+    /// Ends a group when the pipe it reads closes before a line arrives:
+    /// only the owner holds the pipe's other end (close-on-exec), so its
+    /// death closes it, and a stand-down line lets the watcher exit with the
+    /// group untouched.
+    const WARDEN: &str = "read -r _ || kill -s KILL -- \"-$1\"";
+
+    struct Warden {
+        child: Child,
+        stand_down: Option<ChildStdin>,
+    }
+
+    impl Warden {
+        /// Starts the watcher of the group `leader` leads, in a group of its
+        /// own so a signal to the owner's group or the child's spares it.
+        fn watch(leader: u32) -> io::Result<Self> {
+            let mut command = Command::new("/bin/sh");
+            command
+                .args(["-c", WARDEN, "hide-warden", &leader.to_string()])
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .process_group(0);
+            let mut child = command.spawn()?;
+            let stand_down = child.stdin.take();
+            Ok(Self { child, stand_down })
+        }
+
+        /// The owner answers for the group itself again: the watcher exits
+        /// without signalling it, and is reaped.
+        fn stand_down(&mut self) {
+            use std::io::Write;
+            if let Some(mut pipe) = self.stand_down.take() {
+                let _ = pipe.write_all(b"\n");
+            }
+            let _ = self.child.wait();
+        }
+    }
+
+    impl Drop for Warden {
+        fn drop(&mut self) {
+            self.stand_down();
+        }
+    }
+
+    pub(super) fn spawn_tied(command: &mut Command) -> io::Result<(Child, Tie)> {
+        let (mut child, mut tie) = spawn(command, None)?;
+        match Warden::watch(child.id()) {
+            Ok(warden) => {
+                tie.warden = Some(warden);
+                Ok((child, tie))
+            }
+            Err(error) => {
+                let _ = signal(-(child.id() as libc::pid_t), libc::SIGKILL);
+                let _ = child.wait();
+                Err(error)
+            }
+        }
+    }
+
+    /// The child was waited for: its id may name another process from now
+    /// on, so nothing may signal its group any more.
+    pub(super) fn reaped(tie: &mut Tie) {
+        if let Some(mut warden) = tie.warden.take() {
+            warden.stand_down();
+        }
     }
 
     pub(super) fn spawn(
@@ -1186,7 +1280,15 @@ mod sys {
         }
         command.process_group(0);
         let Some(deadline) = deadline else {
-            return command.spawn().map(|child| (child, Tie { _owner: None }));
+            return command.spawn().map(|child| {
+                (
+                    child,
+                    Tie {
+                        _owner: None,
+                        warden: None,
+                    },
+                )
+            });
         };
         deadline
             .checked_duration_since(Instant::now())
@@ -1233,6 +1335,7 @@ mod sys {
         if let Err(source) = acknowledged {
             let tie = Tie {
                 _owner: Some(owner),
+                warden: None,
             };
             let owned = OwnedChild {
                 child,
@@ -1248,6 +1351,7 @@ mod sys {
             child,
             Tie {
                 _owner: Some(owner),
+                warden: None,
             },
         ))
     }
@@ -1559,7 +1663,9 @@ mod sys {
         }
     }
 
-    pub(super) fn release(_: &Tie) {}
+    pub(super) fn release(tie: &mut Tie) {
+        reaped(tie);
+    }
 
     pub(super) fn kill_tree_of(child: &mut Child, _: &Tie, reaped: bool) -> io::Result<bool> {
         let leader = child.id();
@@ -2865,7 +2971,14 @@ mod sys {
         Ok(())
     }
 
-    pub(super) fn release(tie: &Tie) {
+    /// The job already ends the tree when this process dies.
+    pub(super) fn spawn_tied(command: &mut Command) -> io::Result<(Child, Tie)> {
+        spawn(command, None)
+    }
+
+    pub(super) fn reaped(_: &mut Tie) {}
+
+    pub(super) fn release(tie: &mut Tie) {
         // SAFETY: an all-zero limit structure is a valid value: no flags.
         let limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
         // SAFETY: the job handle is open and `limits` is valid for the size
