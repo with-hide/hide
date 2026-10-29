@@ -488,7 +488,7 @@ Only supported device platforms get the kit; another platform shows why on its r
 Removing a machine never stops its Herdr server, including one Hide started.
 Removing a machine while it is connected takes Hide's hook entries, the `hide` link and the helper folder `~/.hide/host-helper` off it, and leaves `~/.hide/kit` and `~/.hide/agent-hooks`; removing it while it is not connected leaves them there, where they do no harm, and adding it again replaces them.
 When a Herdr server on that machine still runs the Herdr copy Hide moved it to, the helper folder stays with that copy and the removal says so; delete `~/.hide/host-helper` there once that server has stopped.
-Each device row in Settings shows whether the remote session is connected and, when it is not, why in one line with what to do (the name was not found, the machine did not answer, the sign-in was refused, an access policy refused it, its server key changed, its proxy command failed, `ssh` is missing or too old), and for any other failure ssh's last line; ssh's full output goes to the diagnostic log.
+Each device row in Settings shows whether the remote session is connected and, when it is not, why in one of three states with its one action: a sign-in is needed or was refused (Sign in), its server key changed (the `ssh <alias>` to check it in a terminal), or it could not connect (ssh's last line, or a plain sentence when `ssh` is missing or too old, and Retry); ssh's full output goes to the diagnostic log.
 `Test` runs the SSH, authentication, protocol, Herdr, PTY and Git stages one after another and lists the first one that needs attention on that host.
 
 ## Move the core to another Mac
@@ -635,5 +635,5 @@ Confirm the SSH host works outside hide first, with the same alias the device wa
 ssh <host-alias> true
 ```
 
-hide runs that same `ssh`, so what fails there fails in hide too; the device row in Settings names the class of the failure with what to do, the diagnostic log keeps ssh's own words, and `Test` names the stage that failed.
+hide runs that same `ssh`, so what fails there fails in hide too; the device row in Settings says whether to sign in, check the server key or retry, with ssh's last line when it could not connect, the diagnostic log keeps ssh's own words, and `Test` names the stage that failed.
 What ssh asks is answered on the device row; hide does not store, log or copy an answer.

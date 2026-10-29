@@ -435,7 +435,7 @@ it("opens a sign-in page in the default browser and says it waits for it (B4)", 
   }
 });
 
-it("says a failure by its class and keeps ssh's words in the log, except an unclassified one's last line (B13, B18, B19)", async () => {
+it("draws a changed server key with its terminal check and a connection that could not be made over ssh's last line, with Retry (B13; operator decision 2026-10-30)", async () => {
   const unavailable = { ...host, state: "unavailable" as const, message: "Host key verification failed." };
   const changed = await mount(state([remote("mini", { state: "unavailable", problem: "host_key_changed", message: "Host key verification failed.", host: unavailable })]));
   try {
@@ -447,12 +447,34 @@ it("says a failure by its class and keeps ssh's words in the log, except an uncl
   } finally {
     await changed.unmount();
   }
-  const odd = await mount(state([remote("mini", { state: "unavailable", problem: "unclassified", message: "kex_exchange_identification: read: Connection reset by peer", host: { ...unavailable, message: "kex_exchange_identification: read: Connection reset by peer" } })]));
+  const policy = "tailscale: tailnet policy does not permit you to SSH to this node";
+  const lost = await mount(state([remote("mini", { state: "unavailable", problem: "cannot_connect", message: policy, host: { ...unavailable, message: policy } })]));
   try {
-    expect(odd.q('[data-device-problem="mini:unclassified"]')?.textContent).toBe("!ssh could not connect");
-    expect(odd.q('[data-device-message="mini"]')?.textContent).toBe("kex_exchange_identification: read: Connection reset by peer");
+    const line = lost.q('[data-device-problem="mini:cannot_connect"]');
+    expect(line?.querySelector('[data-device-message="mini"]')?.textContent).toBe(policy);
+    expect(line?.textContent).toBe(`!Couldn't connect${policy}`);
+    expect(lost.q('[data-device-retry="mini"]')?.textContent).toBe("Retry");
   } finally {
-    await odd.unmount();
+    await lost.unmount();
+  }
+  // Without ssh there is no line of ssh's to show, so Hide's sentence stands in it.
+  const missing = await mount(state([remote("mini", { state: "unavailable", problem: "ssh_missing", message: "/usr/bin/ssh was not found on this computer", host: unavailable })]));
+  try {
+    expect(missing.q('[data-device-problem="mini:ssh_missing"]')?.textContent).toBe("!Couldn't connectThis computer has no ssh. Install the OpenSSH client.");
+    expect(missing.row("mini")?.textContent).not.toContain("was not found");
+  } finally {
+    await missing.unmount();
+  }
+});
+
+it("reads a refused sign-in with the same Sign in as a needed one", async () => {
+  const view = await mount(state([remote("mini", { state: "unavailable", problem: "sign_in_refused", message: "Permission denied (publickey,password).", host: { ...host, state: "unavailable", message: "Permission denied (publickey,password)." } })]));
+  try {
+    expect(view.q('[data-device-problem="mini:sign_in_refused"]')?.textContent).toBe("!Sign-in refused");
+    expect(view.q('[data-device-retry="mini"]')?.textContent).toBe("Sign in");
+    expect(view.row("mini")?.textContent).not.toContain("Permission denied");
+  } finally {
+    await view.unmount();
   }
 });
 

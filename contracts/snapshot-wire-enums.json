@@ -102,6 +102,6 @@
   "suggestion_evidence_kind": ["session", "pr"],
   "suggestion_attempt_phase": ["starting", "working", "ready", "merging", "pr_open", "ci_failed", "failed", "issue_open", "merged"],
   "suggestion_attempt_purpose": ["branch", "pr", "rebase"],
-  "device_problem": ["sign_in_needed", "browser_timeout", "sign_in_refused", "policy_refused", "host_key_changed", "name_not_found", "unreachable", "proxy_failed", "unsupported", "ssh_missing", "openssh_old", "unclassified"],
-  "device_sign_in_kind": ["queued", "secret", "host_key", "confirm", "touch", "browser"]
+  "device_problem": ["sign_in_needed", "sign_in_refused", "host_key_changed", "cannot_connect", "ssh_missing", "openssh_old", "unsupported"],
+  "device_sign_in_kind": ["secret", "host_key", "confirm", "touch", "browser"]
 }

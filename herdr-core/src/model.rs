@@ -912,13 +912,8 @@ pub struct DeviceSnapshot {
     /// Why an SSH device is not `ready`, in the words its remote status
     /// carries; `None` while it is.
     pub message: Option<String>,
-    /// Why an SSH device's last attempt did not connect, by class, each
-    /// with its own line and action on the row (PRD system-ssh-device-link
-    /// B5, B7, B8, B13, B14, B18-B21): `sign_in_needed`, `browser_timeout`,
-    /// `sign_in_refused`, `policy_refused`, `host_key_changed`,
-    /// `name_not_found`, `unreachable`, `proxy_failed`, `unsupported`,
-    /// `ssh_missing`, `openssh_old` or `unclassified`; `None` while it is
-    /// ready or connecting.
+    /// Why an SSH device's last attempt did not connect, as its row draws
+    /// it ([`DeviceProblem`]); `None` while it is ready or connecting.
     pub problem: Option<String>,
     /// What the device's connection attempt waits on from the operator now
     /// (B4, B6, B9, B11, B12, B27); `None` when it waits on nothing.
@@ -1347,6 +1342,54 @@ pub struct DeviceHostSnapshot {
     /// project spells a pasted `C:\` path under it (PRD wsl-device B16).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub windows_drives: Option<String>,
+}
+
+/// Why a device's ssh did not connect, as its row draws it: one of three
+/// states by what the operator does ([`SshProblem::action`]), sign in, check
+/// the server key in a terminal, or retry. A retry over ssh's last line is
+/// `cannot_connect`; the three retries ssh has no line for carry their own
+/// value, which the row words in the operator's language. The finer
+/// [`SshProblem`] stays in the diagnostic log (PRD system-ssh-device-link
+/// D-13, superseded on the row by the operator's 2026-10-30 decision).
+///
+/// [`SshProblem::action`]: hide_node_link::device::SshProblem::action
+/// [`SshProblem`]: hide_node_link::device::SshProblem
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeviceProblem {
+    SignInNeeded,
+    SignInRefused,
+    HostKeyChanged,
+    CannotConnect,
+    SshMissing,
+    OpenSshOld,
+    Unsupported,
+}
+
+impl DeviceProblem {
+    pub fn of(problem: hide_node_link::device::SshProblem) -> Self {
+        use hide_node_link::device::{FailureAction, SshProblem};
+        match (problem.action(), problem) {
+            (FailureAction::SignIn, SshProblem::SignInRefused) => Self::SignInRefused,
+            (FailureAction::SignIn, _) => Self::SignInNeeded,
+            (FailureAction::CheckHostKey, _) => Self::HostKeyChanged,
+            (FailureAction::Retry, SshProblem::SshMissing) => Self::SshMissing,
+            (FailureAction::Retry, SshProblem::OpenSshOld) => Self::OpenSshOld,
+            (FailureAction::Retry, SshProblem::Unsupported) => Self::Unsupported,
+            (FailureAction::Retry, _) => Self::CannotConnect,
+        }
+    }
+
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::SignInNeeded => "sign_in_needed",
+            Self::SignInRefused => "sign_in_refused",
+            Self::HostKeyChanged => "host_key_changed",
+            Self::CannotConnect => "cannot_connect",
+            Self::SshMissing => "ssh_missing",
+            Self::OpenSshOld => "openssh_old",
+            Self::Unsupported => "unsupported",
+        }
+    }
 }
 
 /// What a device's connection attempt waits on, as its row shows it.
@@ -9451,43 +9494,36 @@ mod wire_enum_tests {
         assert_wire(&contract, "suggestion_attempt_purpose", &purposes);
         checked.insert("suggestion_attempt_purpose");
 
-        use hide_node_link::device::{SignInWait, SshProblem};
+        use hide_node_link::device::SignInWait;
         let problems = [
-            SshProblem::SignInNeeded,
-            SshProblem::BrowserTimeout,
-            SshProblem::SignInRefused,
-            SshProblem::PolicyRefused,
-            SshProblem::HostKeyChanged,
-            SshProblem::NameNotFound,
-            SshProblem::Unreachable,
-            SshProblem::ProxyFailed,
-            SshProblem::Unsupported,
-            SshProblem::SshMissing,
-            SshProblem::OpenSshOld,
-            SshProblem::Unclassified,
+            DeviceProblem::SignInNeeded,
+            DeviceProblem::SignInRefused,
+            DeviceProblem::HostKeyChanged,
+            DeviceProblem::CannotConnect,
+            DeviceProblem::SshMissing,
+            DeviceProblem::OpenSshOld,
+            DeviceProblem::Unsupported,
         ];
         for variant in problems {
             match variant {
-                SshProblem::SignInNeeded
-                | SshProblem::BrowserTimeout
-                | SshProblem::SignInRefused
-                | SshProblem::PolicyRefused
-                | SshProblem::HostKeyChanged
-                | SshProblem::NameNotFound
-                | SshProblem::Unreachable
-                | SshProblem::ProxyFailed
-                | SshProblem::Unsupported
-                | SshProblem::SshMissing
-                | SshProblem::OpenSshOld
-                | SshProblem::Unclassified => {}
+                DeviceProblem::SignInNeeded
+                | DeviceProblem::SignInRefused
+                | DeviceProblem::HostKeyChanged
+                | DeviceProblem::CannotConnect
+                | DeviceProblem::SshMissing
+                | DeviceProblem::OpenSshOld
+                | DeviceProblem::Unsupported => {}
             }
         }
-        assert_wire(&contract, "device_problem", &problems.map(SshProblem::code));
+        assert_wire(
+            &contract,
+            "device_problem",
+            &problems.map(DeviceProblem::code),
+        );
         checked.insert("device_problem");
 
         let text = String::new;
         let waits = [
-            SignInWait::Queued,
             SignInWait::Secret {
                 prompt: text(),
                 key_file: None,
@@ -9502,8 +9538,7 @@ mod wire_enum_tests {
         ];
         for variant in &waits {
             match variant {
-                SignInWait::Queued
-                | SignInWait::Secret { .. }
+                SignInWait::Secret { .. }
                 | SignInWait::HostKey { .. }
                 | SignInWait::Confirm { .. }
                 | SignInWait::Touch { .. }
@@ -9525,5 +9560,30 @@ mod wire_enum_tests {
             unchecked.is_empty(),
             "contract lists enums this test does not pin: {unchecked:?}"
         );
+    }
+
+    /// The operator's three row states (2026-10-30): every ssh class lands
+    /// on sign in, the server key or a retry, and only the retries ssh has
+    /// no line for keep a value of their own.
+    #[test]
+    fn a_device_row_draws_every_ssh_failure_as_one_of_three_states() {
+        use hide_node_link::device::SshProblem;
+        let row = |problem| DeviceProblem::of(problem).code();
+        assert_eq!(row(SshProblem::SignInNeeded), "sign_in_needed");
+        assert_eq!(row(SshProblem::BrowserTimeout), "sign_in_needed");
+        assert_eq!(row(SshProblem::SignInRefused), "sign_in_refused");
+        assert_eq!(row(SshProblem::HostKeyChanged), "host_key_changed");
+        for problem in [
+            SshProblem::PolicyRefused,
+            SshProblem::NameNotFound,
+            SshProblem::Unreachable,
+            SshProblem::ProxyFailed,
+            SshProblem::Unclassified,
+        ] {
+            assert_eq!(row(problem), "cannot_connect", "{problem:?}");
+        }
+        assert_eq!(row(SshProblem::SshMissing), "ssh_missing");
+        assert_eq!(row(SshProblem::OpenSshOld), "openssh_old");
+        assert_eq!(row(SshProblem::Unsupported), "unsupported");
     }
 }

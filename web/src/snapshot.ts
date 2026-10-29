@@ -1754,7 +1754,7 @@ export type Device = {
   /** `local`, or for an SSH device `ready`, `unavailable` or `disabled`. */
   state: string;
   message: string | null;
-  /** Why the last attempt did not connect, by class (PRD system-ssh-device-link B18); null while ready or connecting. */
+  /** Why the last attempt did not connect, as the row draws it; null while ready or connecting. */
   problem?: DeviceProblem | null;
   /** What the connection attempt waits on from the operator now (B4-B12); null when it waits on nothing. */
   sign_in?: DeviceSignIn | null;
@@ -1779,29 +1779,22 @@ export type Device = {
   herdr_behind?: HerdrBehind | null;
 };
 
-/** Why a device's SSH connection did not come up (`contracts/snapshot-wire-enums.json`: `device_problem`). */
-export type DeviceProblem =
-  | "sign_in_needed"
-  | "browser_timeout"
-  | "sign_in_refused"
-  | "policy_refused"
-  | "host_key_changed"
-  | "name_not_found"
-  | "unreachable"
-  | "proxy_failed"
-  | "unsupported"
-  | "ssh_missing"
-  | "openssh_old"
-  | "unclassified";
+/**
+ * Why a device's SSH connection did not come up, by what the operator does
+ * about it (`contracts/snapshot-wire-enums.json`: `device_problem`): sign in
+ * (needed or refused), check the changed server key in a terminal, or retry.
+ * A retry over ssh's last line, in `message`, is `cannot_connect`; the
+ * retries ssh says nothing useful for carry their own value, for a sentence.
+ */
+export type DeviceProblem = "sign_in_needed" | "sign_in_refused" | "host_key_changed" | "cannot_connect" | "ssh_missing" | "openssh_old" | "unsupported";
 
 /**
  * What a device's connection waits on (`contracts/snapshot-wire-enums.json`:
- * `device_sign_in_kind`): its turn, a masked answer, trust in a server the
+ * `device_sign_in_kind`): a masked answer, trust in a server the
  * operator has not met, a yes or no, a security key's touch or a page in the
  * browser. The words are ssh's own; an answer is never part of it.
  */
 export type DeviceSignIn = { question: number; key_command: string | null } & (
-  | { kind: "queued" }
   | { kind: "secret"; prompt: string; key_file?: string }
   | { kind: "host_key"; host: string; fingerprint: string }
   | { kind: "confirm"; prompt: string }
