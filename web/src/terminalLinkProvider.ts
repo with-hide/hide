@@ -12,7 +12,7 @@
 //
 // A click opens a URL or HTML as a page, or another file in View.
 // ⌘-click (Ctrl off macOS) hands it to the operating system.
-// Only the primary button opens: xterm activates a link on any button's
+// A right-click never opens: xterm activates a link on any button's
 // release, and on Windows the right-click menu comes after that release.
 // A program's own OSC 8 links take the same routes through xterm's link
 // handler, which replaces xterm's confirm dialog.
@@ -35,6 +35,9 @@ export type TerminalLinkActions = {
   openLink(url: string, external: boolean, pane?: string): void;
   openTerminalPath(found: FoundPath, line: number | null, column: number | null, external: boolean, mode?: "auto" | "source", pane?: string): void;
 };
+
+/** `MouseEvent.button` of the right button. */
+const RIGHT_BUTTON = 2;
 
 /** Paths whose answer is kept; the oldest goes first. */
 export const PROBE_CACHE_CAP = 512;
@@ -223,9 +226,9 @@ export async function resolveGroups(
 /** Per-terminal link state: whether the pointer is over a link, so a click on one is not also the program's. */
 export type LinkState = { hovered: boolean; link?: { range: IBufferRange; resolved: TerminalContextLink } | null };
 
-/** Whether a link's release is a click that opens it: the primary button's, not a right-click's or a middle-click's. */
+/** Whether a link's release is a click that opens it: any but the right button's, which opens the link's menu. */
 function opens(event: MouseEvent): boolean {
-  return event.button === 0;
+  return event.button !== RIGHT_BUTTON;
 }
 
 function open(actions: TerminalLinkActions, resolved: TerminalContextLink, event: MouseEvent, selecting: boolean, paneId: string): void {

@@ -320,20 +320,23 @@ function terminalShowing(text: string): { term: Terminal; links: () => Promise<I
 // xterm activates a link on the release of any button, and on Windows the
 // right-click menu opens after that release, so a right-click on a link
 // opened it beside the menu (with-hide/hide-private#252).
-it("only the primary button's release opens a link, never a right-click's or a middle-click's", async () => {
+it("a right-click's release opens no link, and the primary and middle buttons' still open it", async () => {
   const actions = { openLink: vi.fn(), openTerminalPath: vi.fn() };
   const { term, links } = terminalShowing("see https://example.test/a");
   registerTerminalLinks(term, "w1:p1", { hovered: false }, () => actions);
   const [link] = await links();
   const osc8 = osc8Handler("w1:p1", { hovered: false }, () => actions, () => false);
-  for (const button of [2, 1]) {
+  link!.activate({ button: 2, metaKey: false, ctrlKey: false } as MouseEvent, link!.text);
+  osc8.activate({ button: 2, metaKey: false, ctrlKey: false } as MouseEvent, "https://example.test/b", link!.range);
+  expect(actions.openLink).not.toHaveBeenCalled();
+  for (const button of [0, 1]) {
     link!.activate({ button, metaKey: false, ctrlKey: false } as MouseEvent, link!.text);
     osc8.activate({ button, metaKey: false, ctrlKey: false } as MouseEvent, "https://example.test/b", link!.range);
   }
-  expect(actions.openLink).not.toHaveBeenCalled();
-  link!.activate({ button: 0, metaKey: false, ctrlKey: false } as MouseEvent, link!.text);
-  osc8.activate({ button: 0, metaKey: false, ctrlKey: false } as MouseEvent, "https://example.test/b", link!.range);
-  expect(actions.openLink.mock.calls).toEqual([["https://example.test/a", false, "w1:p1"], ["https://example.test/b", false, "w1:p1"]]);
+  expect(actions.openLink.mock.calls).toEqual([
+    ["https://example.test/a", false, "w1:p1"], ["https://example.test/b", false, "w1:p1"],
+    ["https://example.test/a", false, "w1:p1"], ["https://example.test/b", false, "w1:p1"],
+  ]);
 });
 
 it("a ⌘-click on macOS and a Ctrl-click elsewhere still hand a link to the operating system, and a modified right-click opens nothing", async () => {
