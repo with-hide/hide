@@ -635,8 +635,10 @@ fn take_link(stream: LocalStream, service: &AttachService) {
     drop(reader);
     drop(writer);
     let _ = stream.set_read_timeout(None);
-    let stream = match crate::link_mux::serve(stream) {
-        Ok(link) => link,
+    // The connection ends when `served` drops: on a failure below, or once
+    // the core is done with the link.
+    let (served, stream) = match crate::link_mux::serve(stream) {
+        Ok(served) => served,
         Err(error) => {
             service.grants.revoke(&relay_token);
             attach_failed(&node.node, &error.to_string());
@@ -668,8 +670,8 @@ fn take_link(stream: LocalStream, service: &AttachService) {
         }
     };
     service.grants.bind(&relay_token, link.clone());
-    // The grant goes with its link, so a link that ended holds nothing of
-    // its connection in the table.
+    // The grant and the connection go with their link, so a link that
+    // ended holds nothing of its connection in the table or on the wire.
     {
         let grants = Arc::clone(&service.grants);
         let closed = link.closed();
@@ -677,6 +679,7 @@ fn take_link(stream: LocalStream, service: &AttachService) {
         tokio::runtime::Handle::current().spawn(async move {
             closed.await;
             grants.revoke(&token);
+            drop(served);
         });
     }
     let link = link.identity();

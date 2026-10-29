@@ -20,8 +20,7 @@ use super::*;
 use hide_node_link::call_as;
 use hide_node_link::device::{
     Attempt, Cancel, DeviceConnector, DeviceTransport, DialedTransport, EstablishError,
-    Established, HostConsent, HostIdentity, NodeReady, SignIn, SignInWait, SshFailure,
-    SshHostListing, SshProblem,
+    Established, HostConsent, HostIdentity, NodeReady, SshFailure, SshHostListing, SshProblem,
 };
 use hide_node_link::protocol::{Call, Hello, KitAction};
 

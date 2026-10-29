@@ -35,6 +35,7 @@ use std::io::{self, BufReader, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use hide_platform::ipc::LocalStream;
@@ -117,10 +118,13 @@ struct Out {
 }
 
 impl Outbox {
-    /// Adds a data frame, waiting while [`MAX_OUT`] wait already.
-    fn data(&self, frame: Vec<u8>) -> io::Result<()> {
+    /// Adds a data frame, waiting while [`MAX_OUT`] wait already; refused
+    /// once the connection ended or `cancel`, its stream's, is set, which
+    /// ends the wait too.
+    fn data(&self, frame: Vec<u8>, cancel: Option<&AtomicBool>) -> io::Result<()> {
+        let cancelled = || cancel.is_some_and(|cancel| cancel.load(Ordering::SeqCst));
         let mut out = lock(&self.state);
-        while out.data.len() >= MAX_OUT && !out.ended {
+        while out.data.len() >= MAX_OUT && !out.ended && !cancelled() {
             out = self
                 .changed
                 .wait(out)
@@ -129,9 +133,23 @@ impl Outbox {
         if out.ended {
             return Err(ended_error());
         }
+        if cancelled() {
+            return Err(io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "the stream closed",
+            ));
+        }
         out.data.push_back(frame);
         self.changed.notify_all();
         Ok(())
+    }
+
+    /// Wakes every waiter, after a stream's cancel was set: taken under the
+    /// outbox's lock, so a waiter that read the flag before it was set is
+    /// already waiting and hears this.
+    fn wake(&self) {
+        let _out = lock(&self.state);
+        self.changed.notify_all();
     }
 
     /// Adds an answer or an open ahead of data, without waiting; refused
@@ -190,6 +208,9 @@ struct Stream {
     /// is connected.
     socket: Option<TcpStream>,
     closed: bool,
+    /// Set when anything but its own reader's end closes the stream: its
+    /// reader stops sending, a wait for room in the outbox included.
+    cancel: Arc<AtomicBool>,
     /// The stream's threads still running (its connect, its reader, its
     /// writer); its slot is free once none is.
     running: usize,
@@ -219,20 +240,30 @@ fn release(streams: &mut HashMap<u32, Stream>, id: u32) {
     }
 }
 
-/// Closes `stream`: its queue is dropped, and when `abort` its socket is
-/// shut both ways at once.
+/// Closes `stream`: its queue is dropped, and when `abort` its reader is
+/// cancelled and its socket shut both ways at once.
 fn shut(stream: &mut Stream, abort: bool) {
     stream.closed = true;
     stream.queue.take();
-    if abort && let Some(socket) = &stream.socket {
-        let _ = socket.shutdown(Shutdown::Both);
+    if abort {
+        stream.cancel.store(true, Ordering::SeqCst);
+        if let Some(socket) = &stream.socket {
+            let _ = socket.shutdown(Shutdown::Both);
+        }
     }
 }
 
 impl Shared {
-    /// Sends a data frame, waiting for room.
-    fn data(&self, kind: u8, stream: u32, payload: &[u8]) -> io::Result<()> {
-        self.outbox.data(frame(kind, stream, payload))
+    /// Sends a data frame, waiting for room until the connection ends or
+    /// `cancel` is set.
+    fn data(
+        &self,
+        kind: u8,
+        stream: u32,
+        payload: &[u8],
+        cancel: Option<&AtomicBool>,
+    ) -> io::Result<()> {
+        self.outbox.data(frame(kind, stream, payload), cancel)
     }
 
     /// Sends an answer ahead of data; a connection whose answers are full
@@ -274,17 +305,32 @@ impl Shared {
 
     /// Closes `id`, and answers whether this call closed it; an `abort`
     /// shuts its socket at once, a close the other end asked for lets its
-    /// writer finish what is queued.
+    /// writer finish what is queued. Either cancels its reader.
     fn close(&self, id: u32, abort: bool) -> bool {
-        let mut streams = lock(&self.streams);
-        let Some(stream) = streams.get_mut(&id) else {
-            return false;
+        self.close_by(id, abort, true)
+    }
+
+    /// [`Shared::close`]; `cancel` is false only for the stream's own
+    /// reader at its socket's end, which still sends its close in order.
+    fn close_by(&self, id: u32, abort: bool, cancel: bool) -> bool {
+        let first = {
+            let mut streams = lock(&self.streams);
+            let Some(stream) = streams.get_mut(&id) else {
+                return false;
+            };
+            let first = !stream.closed;
+            if cancel {
+                stream.cancel.store(true, Ordering::SeqCst);
+            }
+            if first || abort {
+                shut(stream, abort);
+            }
+            release(&mut streams, id);
+            first
         };
-        let first = !stream.closed;
-        if first || abort {
-            shut(stream, abort);
+        if cancel {
+            self.outbox.wake();
         }
-        release(&mut streams, id);
         first
     }
 
@@ -312,13 +358,13 @@ impl Shared {
         let handles = socket
             .try_clone()
             .and_then(|reading| socket.try_clone().map(|held| (reading, held)));
-        let reading = {
+        let (reading, cancel) = {
             let mut streams = lock(&self.streams);
             match (streams.get_mut(&id), handles) {
                 (Some(stream), Ok((reading, held))) if !stream.closed => {
                     stream.socket = Some(held);
                     stream.running += 2;
-                    reading
+                    (reading, Arc::clone(&stream.cancel))
                 }
                 (stream, _) => {
                     let _ = socket.shutdown(Shutdown::Both);
@@ -335,7 +381,7 @@ impl Shared {
         let shared = Arc::clone(self);
         let reader = std::thread::Builder::new()
             .name("link-mux-read".to_owned())
-            .spawn(move || shared.read_stream(id, reading));
+            .spawn(move || shared.read_stream(id, reading, &cancel));
         if reader.is_err() {
             self.abort(id);
             self.finished(id);
@@ -351,22 +397,23 @@ impl Shared {
     }
 
     /// The socket's bytes to the other end, then a close in order after
-    /// them.
-    fn read_stream(&self, id: u32, mut socket: TcpStream) {
+    /// them, until the stream is cancelled; a close that could not wait its
+    /// turn goes ahead of data instead.
+    fn read_stream(&self, id: u32, mut socket: TcpStream, cancel: &AtomicBool) {
         let mut buffer = vec![0_u8; MAX_FRAME];
         loop {
             match socket.read(&mut buffer) {
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
                 Ok(0) | Err(_) => break,
                 Ok(read) => {
-                    if self.data(DATA, id, &buffer[..read]).is_err() {
+                    if self.data(DATA, id, &buffer[..read], Some(cancel)).is_err() {
                         break;
                     }
                 }
             }
         }
-        if self.close(id, false) {
-            let _ = self.data(CLOSE, id, &[]);
+        if self.close_by(id, false, false) && self.data(CLOSE, id, &[], Some(cancel)).is_err() {
+            self.tell(CLOSE, id);
         }
         self.finished(id);
     }
@@ -392,6 +439,36 @@ impl Shared {
     }
 }
 
+/// Starts a thread of the connection: `name` running `work`.
+type Spawn<'a> = &'a dyn Fn(&str, Box<dyn FnOnce() + Send>) -> io::Result<JoinHandle<()>>;
+
+fn spawn_thread(name: &str, work: Box<dyn FnOnce() + Send>) -> io::Result<JoinHandle<()>> {
+    std::thread::Builder::new()
+        .name(name.to_owned())
+        .spawn(work)
+}
+
+/// A start in progress: a thread that fails to start ends the connection,
+/// and the threads already started are waited for, so nothing holds the
+/// carrier or the shared state past a failed start.
+struct Starting {
+    shared: Arc<Shared>,
+    started: Vec<JoinHandle<()>>,
+    done: bool,
+}
+
+impl Drop for Starting {
+    fn drop(&mut self) {
+        if self.done {
+            return;
+        }
+        self.shared.end("start_failed");
+        for thread in self.started.drain(..) {
+            let _ = thread.join();
+        }
+    }
+}
+
 /// Starts both ends' threads on `carrier`, whose first bytes the handshake
 /// may already have read (`pending`); answers the shared state and the
 /// link's own end.
@@ -399,6 +476,15 @@ fn start(
     side: Side,
     carrier: LocalStream,
     pending: Vec<u8>,
+) -> io::Result<(Arc<Shared>, LocalStream)> {
+    start_with(side, carrier, pending, &spawn_thread)
+}
+
+fn start_with(
+    side: Side,
+    carrier: LocalStream,
+    pending: Vec<u8>,
+    spawn: Spawn<'_>,
 ) -> io::Result<(Arc<Shared>, LocalStream)> {
     let (ours, link) = LocalStream::pair()?;
     let shared = Arc::new(Shared {
@@ -411,54 +497,64 @@ fn start(
         next: AtomicU32::new(1),
         ended: AtomicBool::new(false),
     });
+    let mut starting = Starting {
+        shared: Arc::clone(&shared),
+        started: Vec::new(),
+        done: false,
+    };
     // The connection's input, from the outbox.
     {
         let shared = Arc::clone(&shared);
         let mut out = carrier.duplicate();
-        std::thread::Builder::new()
-            .name("link-mux-out".to_owned())
-            .spawn(move || {
+        starting.started.push(spawn(
+            "link-mux-out",
+            Box::new(move || {
                 while let Some(frame) = shared.outbox.next() {
                     if out.write_all(&frame).and_then(|()| out.flush()).is_err() {
                         break;
                     }
                 }
                 shared.end("connection_failed");
-            })?;
+            }),
+        )?);
     }
     // The link's bytes, as frames.
     {
         let shared = Arc::clone(&shared);
         let mut from_link = ours.duplicate();
-        std::thread::Builder::new()
-            .name("link-mux-link".to_owned())
-            .spawn(move || {
+        starting.started.push(spawn(
+            "link-mux-link",
+            Box::new(move || {
                 let mut buffer = vec![0_u8; MAX_FRAME];
                 let reason = loop {
                     match from_link.read(&mut buffer) {
                         Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
                         Ok(0) | Err(_) => break "link_closed",
                         Ok(read) => {
-                            if shared.data(DATA, LINK, &buffer[..read]).is_err() {
+                            if shared.data(DATA, LINK, &buffer[..read], None).is_err() {
                                 break "connection_closed";
                             }
                         }
                     }
                 };
                 shared.end(reason);
-            })?;
+            }),
+        )?);
     }
     // The connection's frames, to the link and each stream.
     {
         let shared = Arc::clone(&shared);
         let reader = io::Cursor::new(pending).chain(carrier);
-        std::thread::Builder::new()
-            .name("link-mux-frames".to_owned())
-            .spawn(move || {
+        starting.started.push(spawn(
+            "link-mux-frames",
+            Box::new(move || {
                 let reason = demux(&shared, BufReader::new(reader), ours);
                 shared.end(&reason);
-            })?;
+            }),
+        )?);
     }
+    // Started: the threads end with the connection, not with the start.
+    starting.done = true;
     Ok((shared, link))
 }
 
@@ -573,6 +669,7 @@ fn open(shared: &Arc<Shared>, stream: u32, payload: &[u8]) {
                 queue: Some(queue),
                 socket: None,
                 closed: false,
+                cancel: Arc::new(AtomicBool::new(false)),
                 running: 1,
                 ended: None,
             },
@@ -606,10 +703,24 @@ fn open(shared: &Arc<Shared>, stream: u32, payload: &[u8]) {
 }
 
 /// The core's end of a node's connection, started once the core accepted
-/// the node: answers the link's own end, which the core reads as the node's
-/// link; the connection ends when the link does.
-pub fn serve(carrier: LocalStream) -> io::Result<LocalStream> {
-    start(Side::Core, carrier, Vec::new()).map(|(_, link)| link)
+/// the node: answers its owner and the link's own end, which the core reads
+/// as the node's link. The connection ends when the link's other end does,
+/// or when the owner is dropped, which the core does once it is done with
+/// the link, whatever the connection's threads are waiting on.
+pub fn serve(carrier: LocalStream) -> io::Result<(Served, LocalStream)> {
+    start(Side::Core, carrier, Vec::new()).map(|(shared, link)| (Served { shared }, link))
+}
+
+/// The core's hold on a node's connection: dropping it ends the
+/// connection and every stream on it.
+pub struct Served {
+    shared: Arc<Shared>,
+}
+
+impl Drop for Served {
+    fn drop(&mut self) {
+        self.shared.end("link_owner_ended");
+    }
 }
 
 /// The node's end of its connection to its core.
@@ -661,6 +772,7 @@ impl Mux {
                     queue: Some(queue),
                     socket: None,
                     closed: false,
+                    cancel: Arc::new(AtomicBool::new(false)),
                     running: 0,
                     ended: Some(ended),
                 },
@@ -751,6 +863,12 @@ impl Mux {
     }
 }
 
+impl Drop for Mux {
+    fn drop(&mut self) {
+        self.shared.end("closed");
+    }
+}
+
 /// A stream [`Mux::carry`] started.
 pub struct Carried {
     freed: tokio::sync::oneshot::Receiver<()>,
@@ -790,16 +908,16 @@ mod tests {
 
     /// A node and a core joined by a local pair, as the attach role joins
     /// them.
-    fn joined() -> (Arc<Mux>, LocalStream, LocalStream) {
+    fn joined() -> (Arc<Mux>, LocalStream, LocalStream, Served) {
         let (node_end, core_end) = LocalStream::pair().unwrap();
-        let core_link = serve(core_end).unwrap();
+        let (served, core_link) = serve(core_end).unwrap();
         let (mux, node_link) = Mux::start(node_end, Vec::new()).unwrap();
-        (Arc::new(mux), node_link, core_link)
+        (Arc::new(mux), node_link, core_link, served)
     }
 
     #[test]
     fn the_link_and_a_loopback_stream_cross_the_one_connection() {
-        let (mux, mut node_link, mut core_link) = joined();
+        let (mux, mut node_link, mut core_link, _served) = joined();
         node_link.write_all(b"call\n").unwrap();
         let mut heard = [0_u8; 5];
         core_link.read_exact(&mut heard).unwrap();
@@ -838,7 +956,7 @@ mod tests {
             addresses(b"127.0.0.1:80 [::1]:80").map(|found| found.len()),
             Some(2)
         );
-        let (mux, _node_link, _core_link) = joined();
+        let (mux, _node_link, _core_link, _served) = joined();
         let local = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let socket = TcpStream::connect(local.local_addr().unwrap()).unwrap();
         assert!(
@@ -982,11 +1100,117 @@ mod tests {
         ));
     }
 
+    /// Writes `chunk` to `into` until a write fails, on a thread of its own.
+    fn flood(mut into: impl Write + Send + 'static) {
+        std::thread::spawn(move || {
+            let chunk = vec![7_u8; MAX_FRAME];
+            while into.write_all(&chunk).is_ok() {}
+        });
+    }
+
+    fn data_full(shared: &Shared) -> bool {
+        lock(&shared.outbox.state).data.len() >= MAX_OUT
+    }
+
+    /// A stream whose reader waits for room in a full outbox hears its
+    /// stream close: the close the other end sends wakes it, and the slot
+    /// and its carrier's hold are free while the connection takes nothing.
+    #[test]
+    fn a_reader_waiting_for_room_hears_its_stream_close() {
+        let (node_end, mut peer) = LocalStream::pair().unwrap();
+        let (mux, _node_link) = Mux::start(node_end, Vec::new()).unwrap();
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (local, _) = listener.accept().unwrap();
+        let carried = mux
+            .carry(local, &[SocketAddr::from((Ipv4Addr::LOCALHOST, 9))])
+            .unwrap();
+        flood(client);
+        until("the outbox never filled", || data_full(&mux.shared));
+        // The reader is the one waiting: the stream is still open.
+        assert_eq!(slots(&mux.shared), 1);
+        peer.write_all(&frame(CLOSE, 1, &[])).unwrap();
+        until("the slot outlived its stream", || slots(&mux.shared) == 0);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        runtime
+            .block_on(async {
+                tokio::time::timeout(Duration::from_secs(15), carried.ended()).await
+            })
+            .expect("the carrier's hold outlived its stream");
+        assert!(mux.live());
+    }
+
+    /// The core's owner ends the connection while the link's reader waits
+    /// for room and the connection takes nothing: every thread of it ends
+    /// and both the link and the connection see their end.
+    #[test]
+    fn the_cores_owner_ends_a_connection_whose_link_reader_waits() {
+        let (core_end, mut peer) = LocalStream::pair().unwrap();
+        let (served, mut core_link) = serve(core_end).unwrap();
+        let shared = Arc::downgrade(&served.shared);
+        flood(core_link.duplicate());
+        until("the outbox never filled", || {
+            shared.upgrade().is_some_and(|shared| data_full(&shared))
+        });
+        drop(served);
+        until("the connection's threads outlived its owner", || {
+            shared.strong_count() == 0
+        });
+        let mut buffer = [0_u8; 1];
+        core_link
+            .set_read_timeout(Some(Duration::from_secs(15)))
+            .unwrap();
+        assert!(matches!(core_link.read(&mut buffer), Ok(0) | Err(_)));
+        peer.set_read_timeout(Some(Duration::from_secs(15)))
+            .unwrap();
+        let mut drained = vec![0_u8; MAX_FRAME];
+        loop {
+            match peer.read(&mut drained) {
+                Ok(0) => break,
+                Ok(_) => {}
+                Err(error) => panic!("the connection never ended: {error}"),
+            }
+        }
+    }
+
+    /// A thread that fails to start ends the connection and waits for the
+    /// ones that started, whichever one failed.
+    #[test]
+    fn a_start_that_fails_partway_ends_what_it_started() {
+        for fail_at in [2, 3] {
+            let (carrier, mut peer) = LocalStream::pair().unwrap();
+            let calls = AtomicU32::new(0);
+            let finished = Arc::new(AtomicU32::new(0));
+            let spawn = |name: &str, work: Box<dyn FnOnce() + Send>| {
+                if calls.fetch_add(1, Ordering::SeqCst) + 1 == fail_at {
+                    return Err(io::Error::other("injected"));
+                }
+                let finished = Arc::clone(&finished);
+                spawn_thread(
+                    name,
+                    Box::new(move || {
+                        work();
+                        finished.fetch_add(1, Ordering::SeqCst);
+                    }),
+                )
+            };
+            assert!(start_with(Side::Core, carrier, Vec::new(), &spawn).is_err());
+            assert_eq!(finished.load(Ordering::SeqCst), fail_at - 1);
+            peer.set_read_timeout(Some(Duration::from_secs(15)))
+                .unwrap();
+            let mut buffer = [0_u8; 1];
+            assert!(matches!(peer.read(&mut buffer), Ok(0)), "{fail_at}");
+        }
+    }
+
     /// The link's end ends the whole connection, and with it every stream
     /// and the next ping.
     #[test]
     fn the_link_ending_ends_the_connection() {
-        let (mux, node_link, mut core_link) = joined();
+        let (mux, node_link, mut core_link, _served) = joined();
         node_link.shutdown_handle().shutdown();
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut buffer = [0_u8; 1];
