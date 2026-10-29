@@ -10,6 +10,9 @@
 //! so they are ignored by default. On Windows the question is in Windows
 //! PowerShell's profile under the test's own home.
 //!
+//! A second scenario sleeps a stand-in Codex CLI in its pane and wakes it
+//! there, as `agent_sleep_herdr` does (`sleep_and_wake`).
+//!
 //! The server is private: its own socket, session, config and home.
 
 #[cfg(windows)]
@@ -24,9 +27,6 @@ use serde_json::json;
 use super::*;
 
 const QUESTION: &str = "Update the framework now? [Y/n]";
-/// The start of the prompt the user's files give a Unix shell.
-#[cfg(unix)]
-const PROMPT: &str = "fixture";
 
 /// B8: the seed tab must remain discoverable when shell integration is absent.
 #[test]
@@ -99,8 +99,7 @@ fn a_new_worktrees_seed_tab_is_named_from_creation_proof_without_shell_replaceme
 }
 
 /// The pane's node: it writes the integration for `shell` as the product's
-/// node does, and reads how a process's terminal takes input from this
-/// machine, where the private server's shells run.
+/// node does.
 struct Node {
     home: PathBuf,
     shell: Option<String>,
@@ -110,11 +109,8 @@ impl NodeLink for Node {
     fn call(
         &self,
         call: Call,
-        timeout: Duration,
+        _timeout: Duration,
     ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
-        if let Call::LineInput { .. } = call {
-            return hide_node::Local::of_process().call(call, timeout);
-        }
         let Call::ShellIntegration = call else {
             panic!("unexpected {call:?}");
         };
@@ -390,25 +386,32 @@ fn pane_path(herdr: &PrivateHerdr) -> String {
     .unwrap()
 }
 
-/// `claude` on unix: records the folder it started in and its arguments,
-/// then runs as a long-lived process of that name, which Herdr reads as the
-/// agent. Linux names a process after its file, macOS after its first
+/// `claude` on unix: a long-lived process (`native_agent`).
+#[cfg(unix)]
+fn unix_agent(herdr: &PrivateHerdr) {
+    native_agent(
+        herdr,
+        "claude",
+        "#include <unistd.h>\nint main(int argc, char **argv) { (void)argv; if (argc > 1) sleep(600); return 0; }\n",
+    );
+}
+
+/// The agent `name` on unix: records the folder it started in and its
+/// arguments in `<name>-args`, then runs `source`, compiled, as a process of
+/// that name with one argument, which Herdr reads as the agent; with none
+/// it exits. Linux names a process after its file, macOS after its first
 /// argument. Build a native stand-in: a system sleep may be a multicall
 /// binary that refuses to run under the agent's name.
 #[cfg(unix)]
-fn unix_agent(herdr: &PrivateHerdr) {
+fn native_agent(herdr: &PrivateHerdr, name: &str, source: &str) {
     let agent = herdr.home.join("agent");
     std::fs::create_dir_all(&agent).unwrap();
-    let source = agent.join("agent.c");
-    std::fs::write(
-        &source,
-        "#include <unistd.h>\nint main(int argc, char **argv) { (void)argv; if (argc > 1) sleep(600); return 0; }\n",
-    )
-    .unwrap();
+    let file = agent.join(format!("{name}.c"));
+    std::fs::write(&file, source).unwrap();
     let compiled = Command::new("cc")
-        .arg(&source)
+        .arg(&file)
         .arg("-o")
-        .arg(agent.join("claude"))
+        .arg(agent.join(name))
         .output()
         .expect("the native agent fixture needs a C compiler");
     assert!(
@@ -418,15 +421,17 @@ fn unix_agent(herdr: &PrivateHerdr) {
     );
     // Validate this file before a start's deadline; no arguments exits.
     assert!(
-        Command::new(agent.join("claude"))
+        Command::new(agent.join(name))
             .status()
             .expect("start the native agent fixture")
             .success()
     );
-    let script = herdr.home.join("bin/claude");
+    let script = herdr.home.join("bin").join(name);
     std::fs::write(
         &script,
-        "#!/bin/bash\nprintf '%s\\n' \"${PWD##*/} $*\" >> \"$HOME/claude-args\"\nexec -a claude \"$HOME/agent/claude\" 600\n",
+        format!(
+            "#!/bin/bash\nprintf '%s\\n' \"${{PWD##*/}} $*\" >> \"$HOME/{name}-args\"\nexec -a {name} \"$HOME/agent/{name}\" run\n"
+        ),
     )
     .unwrap();
     std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
@@ -460,40 +465,44 @@ fn windows_agent(herdr: &PrivateHerdr) {
     .unwrap();
 }
 
-/// What the user's own startup files hold for `shell`: the prompt, then,
-/// when `ask`, the question and the answer recorded with the folder it was
-/// asked in.
+/// What the user's own startup files hold for `shell`: the question, and
+/// the answer recorded with the folder it was asked in.
 #[cfg(unix)]
-fn user_files(herdr: &PrivateHerdr, shell: &str, ask: bool) {
-    let (file, prompt, question) = match shell {
-        "zsh" => (
-            ".zshrc",
-            format!("PS1='{PROMPT} %# '\n"),
-            format!(
-                "read -k 1 'answer?{QUESTION} '\nprint -r -- \"${{PWD:t}} answered [$answer]\" >> ~/answers\n"
-            ),
+fn user_files(herdr: &PrivateHerdr, shell: &str) {
+    let question = match shell {
+        "zsh" => format!(
+            "read -k 1 'answer?{QUESTION} '\nprint -r -- \"${{PWD:t}} answered [$answer]\" >> ~/answers\n"
         ),
-        "bash" => (
-            ".bashrc",
-            format!("PS1='{PROMPT}$ '\n"),
-            format!(
-                "read -n 1 -p '{QUESTION} ' answer; echo\nprintf '%s\\n' \"${{PWD##*/}} answered [$answer]\" >> ~/answers\n"
-            ),
+        "bash" => format!(
+            "read -n 1 -p '{QUESTION} ' answer; echo\nprintf '%s\\n' \"${{PWD##*/}} answered [$answer]\" >> ~/answers\n"
         ),
-        "fish" => (
-            // Herdr gives its panes its own XDG_CONFIG_HOME.
-            "xdg-config/fish/config.fish",
-            format!("function fish_prompt; echo -n '{PROMPT}> '; end\n"),
-            format!(
-                "read -n 1 -P '{QUESTION} ' answer\necho (basename $PWD)\" answered [$answer]\" >> ~/answers\n"
-            ),
+        "fish" => format!(
+            "read -n 1 -P '{QUESTION} ' answer\necho (basename $PWD)\" answered [$answer]\" >> ~/answers\n"
         ),
         _ => unreachable!(),
     };
-    let text = if ask { prompt + &question } else { prompt };
+    let path = prompt_files(herdr, shell);
+    let prompt = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(path, prompt + &question).unwrap();
+}
+
+/// The user's own startup files for `shell` with its prompt alone; returns
+/// the file the prompt is in.
+#[cfg(unix)]
+fn prompt_files(herdr: &PrivateHerdr, shell: &str) -> PathBuf {
+    let (file, text) = match shell {
+        "zsh" => (".zshrc", "PS1='fixture %# '\n"),
+        "bash" => (".bashrc", "PS1='fixture$ '\n"),
+        // Herdr gives its panes its own XDG_CONFIG_HOME.
+        "fish" => (
+            "xdg-config/fish/config.fish",
+            "function fish_prompt; echo -n 'fixture> '; end\n",
+        ),
+        _ => unreachable!(),
+    };
     let path = herdr.home.join(file);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, text).unwrap();
+    std::fs::write(&path, text).unwrap();
     // Ubuntu's /etc/zsh/zshrc runs compinit, which asks a question of its
     // own about folders a CI runner leaves group-writable; Ubuntu's own
     // setting skips it, so only this test's question is asked.
@@ -508,18 +517,15 @@ fn user_files(herdr: &PrivateHerdr, shell: &str, ask: bool) {
     // shell's own foreground group, the first time it reads input unless
     // this folder exists.
     std::fs::create_dir_all(herdr.home.join(".local/share/fish/generated_completions")).unwrap();
+    path
 }
 
-/// The Windows PowerShell profile asks the question when `ask`; with none,
-/// PowerShell's own prompt shows. The profile lives in the Documents folder,
-/// which follows `USERPROFILE`, so with the server's home it is the test's
-/// own file, not the account's. Windows names no Documents folder that does
-/// not exist, and PowerShell then has no profile.
+/// The Windows PowerShell profile asks the question. The profile lives in
+/// the Documents folder, which follows `USERPROFILE`, so with the server's
+/// home it is the test's own file, not the account's. Windows names no
+/// Documents folder that does not exist, and PowerShell then has no profile.
 #[cfg(windows)]
-fn user_files(herdr: &PrivateHerdr, _shell: &str, ask: bool) {
-    if !ask {
-        return;
-    }
+fn user_files(herdr: &PrivateHerdr, _shell: &str) {
     std::fs::create_dir_all(herdr.home.join("Documents")).unwrap();
     let profile = Command::new("powershell.exe")
         .args(["-NoProfile", "-Command", "$PROFILE.CurrentUserCurrentHost"])
@@ -568,7 +574,6 @@ fn start(
         Duration::from_secs(10),
         wait,
         Duration::ZERO,
-        PaneLine::Fresh,
         &|| Ok(()),
     )
 }
@@ -603,7 +608,7 @@ fn startup_question(shell: &str, variable: &str) {
     unix_agent(&herdr);
     #[cfg(windows)]
     windows_agent(&herdr);
-    user_files(&herdr, shell, true);
+    user_files(&herdr, shell);
     let node = Node {
         home: herdr.home.clone(),
         shell: std::env::var(variable).ok(),
@@ -813,24 +818,58 @@ fn a_windows_powershell_startup_question_is_never_answered_by_a_start_and_each_t
     startup_question("powershell", "HIDE_TEST_POWERSHELL_BIN");
 }
 
-/// What zsh showed in a sleeping Codex's shell line (with-hide/hide-private#37):
-/// the tail of the sleep's second Ctrl+C, which Codex had quit before reading
-/// and which Herdr had encoded in the keyboard protocol Codex turned on
-/// (`ESC[99;5u`). Typed behind it, the wake ran `9;5ucodex ... resume <id>`.
+/// Codex CLI 0.165.0 as a sleep meets it: it turns the kitty keyboard
+/// protocol on, quits on the first Ctrl+C into its empty composer, reads no
+/// input while it shuts down and hands the terminal back 600 ms later, with
+/// the protocol off and the line settings it found put back without
+/// discarding what it never read. A key sent in that time is left for the
+/// shell, encoded in the protocol.
 #[cfg(unix)]
-const STRAY: &str = "9;5u";
+const CODEX: &str = r#"#define _GNU_SOURCE
+#include <string.h>
+#include <termios.h>
+#include <time.h>
+#include <unistd.h>
 
-/// The scenario every Unix shell runs: text an ended agent left in its
-/// shell's line is there when the wake types into that pane, and the resume
-/// line still runs, with its own arguments, as the agent the wake names. A
-/// Windows console has no state that proves the shell reads at its prompt,
-/// so a wake there keeps the line (`docs/INSTALL.md`, What each system
-/// supports).
+static void say(const char *text) { (void)!write(1, text, strlen(text)); }
+
+int main(int argc, char **argv) {
+    (void)argv;
+    if (argc < 2) return 0;
+    struct termios found, raw;
+    tcgetattr(0, &found);
+    raw = found;
+    cfmakeraw(&raw);
+    tcsetattr(0, TCSANOW, &raw);
+    say("\033[>7u\xe2\x80\xba \033[2mAsk Codex to do anything\033[0m\r\n");
+    char held[64];
+    size_t count = 0;
+    for (;;) {
+        ssize_t got = read(0, held + count, sizeof held - count);
+        if (got <= 0) return 1;
+        count += (size_t)got;
+        if (memchr(held, 3, count) || memmem(held, count, "\033[99;5u", 7)) break;
+        if (count > 32) count = 0;
+    }
+    say("Shutting down...\r\n");
+    struct timespec shutdown = {0, 600000000};
+    nanosleep(&shutdown, NULL);
+    say("\033[<u");
+    tcsetattr(0, TCSANOW, &found);
+    return 0;
+}
+"#;
+
+/// The scenario every Unix shell runs: Hide sleeps an idle Codex CLI in its
+/// pane (`agent_sleep_herdr::end_agent`) and wakes it there, and the resume
+/// line runs with its own arguments and nothing before them. The sleep's
+/// second Ctrl+C, sent at a fixed 150 ms, reached the shell as `ESC[99;5u`,
+/// and the wake ran `9;5ucodex resume <id>` (with-hide/hide-private#37).
 #[cfg(unix)]
-fn wake_after_stray_text(shell: &str, variable: &str) {
+fn sleep_and_wake(shell: &str, variable: &str) {
     let herdr = PrivateHerdr::new(std::env::var(variable).ok());
-    unix_agent(&herdr);
-    user_files(&herdr, shell, false);
+    native_agent(&herdr, "codex", CODEX);
+    prompt_files(&herdr, shell);
     let created = herdr.request(
         "workspace.create",
         json!({"cwd": herdr.home, "label": "agents", "focus": false}),
@@ -839,68 +878,92 @@ fn wake_after_stray_text(shell: &str, variable: &str) {
         .as_str()
         .unwrap()
         .to_owned();
-    // Herdr's own shell, the server's `SHELL` on unix, as an agent's pane is
-    // once the agent has ended.
-    let pane = herdr.tab(&workspace, "woken", None);
+    let pane = herdr.tab(&workspace, "slept", None);
     herdr.wait_on(&pane, Duration::from_secs(30), "the prompt shows", || {
-        herdr.screen(&pane).contains(PROMPT)
+        herdr.screen(&pane).contains("fixture")
     });
     herdr.request(
-        "pane.send_text",
-        wire::pane_send_text_params(&pane, STRAY).unwrap(),
+        "agent.start",
+        wire::agent_start_params(
+            &pane,
+            "slept",
+            "codex",
+            Vec::new(),
+            crate::codex_launch::CodexDaemon::Unsupported,
+        )
+        .unwrap(),
     );
     herdr.wait_on(
         &pane,
         Duration::from_secs(30),
-        "the shell's line holds the stray text",
-        || herdr.screen(&pane).contains(STRAY),
+        "Herdr reads the agent idle",
+        || {
+            request_with_connector(
+                &herdr.connector(),
+                "agent.get",
+                wire::agent_target_params(&pane).unwrap(),
+                READ_TIMEOUT,
+            )
+            .ok()
+            .and_then(|answer| wire::agent_state(answer).ok())
+            .is_some_and(|state| state.status == "idle")
+        },
     );
-
+    // The node ends an agent only when its own quit failed, which fails
+    // here (`Node` answers nothing else).
+    let node = Node {
+        home: herdr.home.clone(),
+        shell: None,
+    };
+    assert!(
+        crate::agent_sleep_herdr::end_agent(&herdr.connector(), &node, &pane, "codex").is_ok(),
+        "the agent quit; pane shows:\n{}",
+        herdr.screen(&pane)
+    );
     let woke = crate::agent_sleep_herdr::start_agent(
         &herdr.connector(),
-        &Node {
-            home: herdr.home.clone(),
-            shell: None,
-        },
+        &node,
         &crate::agent_sleep_herdr::WakeRequest {
             pane_id: pane.clone(),
-            kind: "claude".into(),
-            name: "woken".into(),
+            kind: "codex".into(),
+            name: "slept".into(),
             mode: crate::agent_sleep::WakeMode::Resume,
-            args: vec!["--resume".into(), "slept-session".into()],
+            args: vec!["resume".into(), "slept-session".into()],
             cwd: None,
             session_id: Some("slept-session".into()),
-            codex_daemon: crate::codex_launch::CodexDaemon::Unknown,
+            codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
         },
-        PaneLine::AfterAgent,
     );
     assert_eq!(woke, crate::agent_sleep_herdr::WakeOutcome::Started);
     herdr.wait_on(
         &pane,
         Duration::from_secs(30),
-        "the woken agent shows",
-        || agent_pane(&herdr, "woken").as_deref() == Some(pane.as_str()),
+        "the resume line runs",
+        || herdr.file("codex-args").lines().count() == 2,
     );
-    assert_eq!(herdr.file("claude-args"), "woken --resume slept-session\n");
+    assert_eq!(
+        herdr.file("codex-args"),
+        "slept \nslept resume slept-session\n"
+    );
 }
 
 #[cfg(unix)]
 #[test]
 #[ignore = "needs the pinned Herdr and zsh: HIDE_E2E_HERDR_BIN, HIDE_TEST_ZSH_BIN"]
-fn a_zsh_wake_runs_its_resume_line_past_text_the_ended_agent_left_in_the_shell() {
-    wake_after_stray_text("zsh", "HIDE_TEST_ZSH_BIN");
+fn a_codex_slept_and_woken_in_zsh_runs_its_resume_line_with_nothing_before_it() {
+    sleep_and_wake("zsh", "HIDE_TEST_ZSH_BIN");
 }
 
 #[cfg(unix)]
 #[test]
 #[ignore = "needs the pinned Herdr and bash: HIDE_E2E_HERDR_BIN, HIDE_TEST_BASH_BIN"]
-fn a_bash_wake_runs_its_resume_line_past_text_the_ended_agent_left_in_the_shell() {
-    wake_after_stray_text("bash", "HIDE_TEST_BASH_BIN");
+fn a_codex_slept_and_woken_in_bash_runs_its_resume_line_with_nothing_before_it() {
+    sleep_and_wake("bash", "HIDE_TEST_BASH_BIN");
 }
 
 #[cfg(unix)]
 #[test]
 #[ignore = "needs the pinned Herdr and fish: HIDE_E2E_HERDR_BIN, HIDE_TEST_FISH_BIN"]
-fn a_fish_wake_runs_its_resume_line_past_text_the_ended_agent_left_in_the_shell() {
-    wake_after_stray_text("fish", "HIDE_TEST_FISH_BIN");
+fn a_codex_slept_and_woken_in_fish_runs_its_resume_line_with_nothing_before_it() {
+    sleep_and_wake("fish", "HIDE_TEST_FISH_BIN");
 }

@@ -120,9 +120,6 @@ pub(crate) fn reopen(
             session_id: Some(request.session_id.clone()),
             codex_daemon: request.codex_daemon,
         },
-        // A reopen leaves the pane's input gate open, so the operator may
-        // have typed into the line: it is kept.
-        crate::agent_start::PaneLine::Fresh,
     ) {
         WakeOutcome::Started => Ok(()),
         WakeOutcome::Failed { detail, .. } => Err(ReopenFailure {
@@ -292,7 +289,6 @@ mod tests {
                     }
                     json!({"type": "ok"})
                 }
-                "pane.send_text" => json!({"type": "ok"}),
                 "agent.start" => json!({"type": "agent_started", "argv": [], "agent": {
                     "pane_id": "w1:p1", "tab_id": "w1:t1", "workspace_id": "w1",
                     "terminal_id": "term_1", "agent_status": "idle", "focused": false,
@@ -372,7 +368,6 @@ mod tests {
                         let _ = process::terminate(pid);
                         Ok(json!({"type": "ok"}))
                     }
-                    "pane.send_text" => Ok(json!({"type": "ok"})),
                     "agent.start" => Err(("agent_name_taken".into(), "name is used".into())),
                     other => panic!("unexpected {other}"),
                 },
@@ -435,7 +430,6 @@ mod tests {
                     let _ = process::terminate(pid);
                     Ok(json!({"type": "ok"}))
                 }
-                "pane.send_text" => Ok(json!({"type": "ok"})),
                 "agent.start" if attempts.fetch_add(1, Ordering::SeqCst) < 2 => Err((
                     "agent_name_taken".into(),
                     "agent name reviewer is already used".into(),

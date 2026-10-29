@@ -442,13 +442,10 @@ pub(crate) enum WakeOutcome {
 /// once the pane's shell holds its terminal (`agent_start`); Herdr answers
 /// when it has taken the start, and the session sync settles the start once
 /// the agent rests (`session_sync/launch_settle.rs`, herdrdev/herdr#3853).
-/// `line` is [`PaneLine::AfterAgent`](crate::agent_start::PaneLine) only for
-/// a wake, whose pane takes no input from Hide until the agent is back.
 pub(crate) fn start_agent(
     connector: &dyn ApiConnector,
     node: &dyn NodeLink,
     request: &WakeRequest,
-    line: crate::agent_start::PaneLine,
 ) -> WakeOutcome {
     if let Some(cwd) = request.cwd.as_deref()
         && !crate::node_access::is_directory(node, cwd)
@@ -483,7 +480,6 @@ pub(crate) fn start_agent(
         crate::agent_start::ShellStart::Plain,
         params,
         Duration::from_millis(AGENT_START_TIMEOUT_MS + 5_000),
-        line,
         &|| Ok(()),
     ) {
         Ok(value) => match wire::started_agent(value) {
@@ -621,7 +617,6 @@ pub(crate) fn spawn_wake(context: SleepTarget, request: WakeRequest) -> Result<(
                     pane_id: context.herdr_pane_id.clone(),
                     ..request.clone()
                 },
-                crate::agent_start::PaneLine::AfterAgent,
             );
             let Some(runtime) = context.runtime.upgrade() else {
                 return;
@@ -701,18 +696,12 @@ mod tests {
                         cwd: None,
                         session_id: None,
                         codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
-                    },
-                    crate::agent_start::PaneLine::AfterAgent,
+                    }
                 ),
                 WakeOutcome::Started,
                 "{kind}"
             );
-            // Pid 42 is no terminal this machine can read, so the wake keeps
-            // the line rather than interrupt what it cannot see.
-            assert_eq!(
-                herdr.methods(),
-                ["pane.process_info", "pane.process_info", "agent.start"]
-            );
+            assert_eq!(herdr.methods(), ["pane.process_info", "agent.start"]);
         }
     }
 
@@ -1191,7 +1180,6 @@ mod tests {
                 cwd: None,
                 session_id: None,
             },
-            crate::agent_start::PaneLine::AfterAgent,
         );
         let WakeOutcome::Failed { reason, .. } = outcome else {
             panic!("wake started")
@@ -1205,7 +1193,6 @@ mod tests {
     fn a_refused_wake_names_a_plain_reason_and_keeps_herdrs_words_for_the_log() {
         let herdr = FakeHerdr::start_with_errors("agent-wake-refused", |method, _| match method {
             "pane.process_info" => Ok(process_info(42, 42)),
-            "pane.send_text" => Ok(json!({"type": "ok"})),
             "agent.start" => Err((
                 "agent_name_taken".into(),
                 "agent name one is already used".into(),
@@ -1230,7 +1217,6 @@ mod tests {
                 cwd: None,
                 session_id: None,
             },
-            crate::agent_start::PaneLine::AfterAgent,
         );
         assert_eq!(
             outcome,
@@ -1257,7 +1243,6 @@ mod tests {
                 cwd: Some("/nonexistent/agent-sleep-test".into()),
                 session_id: None,
             },
-            crate::agent_start::PaneLine::AfterAgent,
         );
         assert!(matches!(
             outcome,
