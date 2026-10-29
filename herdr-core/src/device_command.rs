@@ -206,7 +206,6 @@ fn connection(
     }
     if let Some(sign_in) = &device.sign_in {
         return match &sign_in.wait {
-            SignInWait::Queued => connecting,
             SignInWait::Secret { key_file, .. } => turn(
                 json!({"kind": "sign_in", "input": "secret"}),
                 if key_file.is_some() {
