@@ -14,4 +14,7 @@ mod codex_app_server;
 mod omp_sdk;
 mod process_ownership;
 mod search_path;
+#[allow(dead_code)] // The fakes need readiness only, not stand-in placement.
+#[path = "../../../hide-platform/tests/it/stand_ins.rs"]
+mod stand_ins;
 mod text_clis;
