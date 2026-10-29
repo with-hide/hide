@@ -31,6 +31,7 @@ import { setTimeout as pause } from "node:timers/promises";
 import path from "node:path";
 import { afterCleanup, ownUntilWorkerExit } from "./worker-owned";
 import { endWindowsProcesses, fixtureExecutable, fixtureHomeEnv, fixtureToolPath, inheritedFixtureEnv, localEndpoint, windowsProcessTree, type WindowsProcess } from "./platform-fixture";
+import { endProcessGroup } from "./process-tree";
 import { copyFixtureShim } from "./shims/build";
 
 /** What `pane process-info` answers about a pane's shell, as far as the fixture reads it. */
@@ -187,28 +188,6 @@ function herdr(env: NodeJS.ProcessEnv, bin: string, args: string[], timeout = 30
 
 type PendingStart = { stop: () => void };
 
-/** Stop the private Unix process group, including a CLI wrapper's children. */
-export function endStartGroup(pid: number): void {
-  try { process.kill(-pid, "SIGKILL"); } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-  }
-  const deadline = Date.now() + 5_000;
-  for (;;) {
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) throw new Error(`fixture CLI process group ${pid} did not exit`);
-    const listed = spawnSync("/bin/ps", ["-A", "-o", "pgid=,stat="], { encoding: "utf8", timeout: remaining });
-    if (listed.error || listed.status !== 0) throw new Error(`cannot confirm fixture CLI group ${pid} exit: ${listed.error ?? listed.stderr}`);
-    // A zombie has exited and cannot use the root; Node reaps it after this
-    // synchronous teardown, or the OS does when the worker itself exits.
-    const live = listed.stdout.trim().split(/\r?\n/).some((line) => {
-      const [group, state] = line.trim().split(/\s+/);
-      return Number(group) === pid && !state?.startsWith("Z");
-    });
-    if (!live) return;
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Math.min(25, remaining));
-  }
-}
-
 /** The fixture owns at most two starts until close, or confirmed tree teardown. */
 function herdrAsync(env: NodeJS.ProcessEnv, bin: string, args: string[], pending: Set<PendingStart>): Promise<unknown> {
   if (pending.size >= 2) return Promise.reject(new Error("fixture already owns two pending CLI starts"));
@@ -226,7 +205,7 @@ function herdrAsync(env: NodeJS.ProcessEnv, bin: string, args: string[], pending
         if (process.platform === "win32") {
           if (windowsOwned === undefined) throw new Error(`fixture CLI ${child.pid} has no confirmed process identity`);
           endWindowsProcesses(windowsOwned);
-        } else endStartGroup(child.pid);
+        } else endProcessGroup(child.pid);
       }
       confirmed = true;
       pending.delete(command);

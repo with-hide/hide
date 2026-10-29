@@ -38,10 +38,15 @@ export async function createInterfaceI18n(selected: InterfaceLanguage): Promise<
   return initializeInterfaceI18n(selected);
 }
 
+// The embedded catalogs are constants of this bundle, so they are checked once,
+// as it loads, rather than on every instance: about 4,000 keys in four languages
+// took a Windows runner up to 200 ms each time, which every test that mounts a
+// screen paid inside its own time limit (hide-private issue 114).
+validateCatalogs(english, catalogs);
+
 /** Embedded resources initialize synchronously, before the first render. */
 export function initializeInterfaceI18n(selected: InterfaceLanguage): i18n {
   const language = requireInterfaceLanguage(selected);
-  validateCatalogs(english, catalogs);
   const instance = createInstance().use(interfaceFormatter);
   // Also guard callers of the library's public language-changing API.
   instance.on("languageChanging", requireInterfaceLanguage);
