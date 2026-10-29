@@ -11,7 +11,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { runBounded } from "../bounded-child";
+import { BoundedChildError, runBounded } from "../bounded-child";
 
 const windows = process.platform === "win32";
 const ext = windows ? ".exe" : "";
@@ -33,9 +33,10 @@ const hashed = (source: string, name: FixtureShim): string => {
 };
 
 /**
- * One compile's bounds: inside the 120 s a vitest `beforeAll` gives its build,
- * so a compiler that hangs is ended and its partial file removed before the
- * hook is abandoned; the output cap is `execFileSync`'s default.
+ * One compile's bounds: with the 30 s the tree's end may take, inside the
+ * 120 s a vitest `beforeAll` gives its build, so a compiler that hangs is
+ * ended before the hook is abandoned; the output cap is `execFileSync`'s
+ * default.
  */
 const COMPILE = { timeoutMs: 60_000, outputBytes: 1024 * 1024 };
 
@@ -55,7 +56,11 @@ export async function buildFixtureShims(packageDir: string, programs: readonly F
   fs.mkdirSync(outputDir, { recursive: true });
   const compiler = windows ? "clang.exe" : "cc";
   const built: Record<string, string> = {};
-  for (const name of programs) {
+  // On Windows `hide-processes` is built first and follows every later
+  // compile's tree; its own compile has nothing to follow it with, so a
+  // failure there that is not the compiler's own exit keeps its partial file.
+  const order: FixtureShim[] = windows ? ["hide-processes", ...programs.filter((name) => name !== "hide-processes")] : [...programs];
+  for (const name of order) {
     const source = path.join(sourceDir, `${name}.c`);
     const program = path.join(outputDir, hashed(source, name));
     built[name] = program;
@@ -64,14 +69,16 @@ export async function buildFixtureShims(packageDir: string, programs: readonly F
     let failure: unknown;
     let output = "";
     try {
-      const done = await runBounded(compiler, ["-O1", "-o", partial, source], COMPILE);
+      const done = await runBounded(compiler, ["-O1", "-o", partial, source], { ...COMPILE, processTool: built["hide-processes"] });
       if (done.status !== 0) failure = new Error(`exit status ${done.status}, signal ${done.signal}`);
       output = done.stdout + done.stderr;
     } catch (error) {
-      // The compiler's tree is gone by now; a compiler that cannot start has no output.
+      if (!(error instanceof BoundedChildError)) throw error;
+      // A compiler whose tree may still run may still write the partial file.
+      if (!error.treeEnded) throw new Error(`fixture C compiler ${compiler} failed on ${source}, and ${partial} is left in place: ${error.message}`, { cause: error });
+      // A compiler that cannot start has no output.
       failure = error;
-      const failed = error as { stdout?: string; stderr?: string };
-      output = `${failed.stdout ?? ""}${failed.stderr ?? ""}`;
+      output = error.stdout + error.stderr;
     }
     if (failure) {
       fs.rmSync(partial, { force: true });

@@ -1,10 +1,14 @@
 // A child a vitest file awaits instead of waiting for it synchronously, so the
 // worker keeps answering vitest (with-hide/hide-private#48). It is bounded the
-// way the synchronous call was, in time and in output, and on every way out
+// way the synchronous call was, in time and in output. On every other way out
 // (its deadline, too much output, a start error, the caller's abort) its whole
-// tree is ended and its pipes closed before the promise settles, so a caller's
-// `finally` removes its files only once nothing it started can still use them.
-import { execFile, spawn } from "node:child_process";
+// tree is ended before the promise settles, and a tree whose end could not be
+// confirmed is reported as such at once, so its caller keeps the files it may
+// still hold. The tree belongs to the worker until then: a worker that exits
+// first ends it too (`ownUntilWorkerExit`).
+import { spawn, type ChildProcess } from "node:child_process";
+import { endProcessGroup, endWindowsTree, listWindowsTree, type WindowsProcess } from "./process-tree";
+import { ownUntilWorkerExit } from "./worker-owned";
 
 export type BoundedResult = { status: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string };
 
@@ -15,30 +19,91 @@ export type Bounds = {
   outputBytes: number;
   /** Ends the child's tree when the caller gives up first, as a test that timed out does. */
   signal?: AbortSignal;
+  /**
+   * `hide-processes`, which follows a Windows tree by identity. Without it a
+   * Windows tree's end cannot be confirmed: that its first process is gone
+   * says nothing of the processes it started.
+   */
+  processTool?: string;
 };
 
-/** Runs `executable` to its end within `bounds`; any other ending rejects, with the output so far, after the tree is gone. */
+/** A run that did not end by itself. Its tree is gone when `treeEnded`; only then may its caller remove the files the child used. */
+export class BoundedChildError extends Error {
+  constructor(message: string, readonly treeEnded: boolean, readonly stdout: string, readonly stderr: string, options?: ErrorOptions) {
+    super(message, options);
+  }
+}
+
+/** Runs `executable` to its end within `bounds`; any other ending rejects with a `BoundedChildError`. */
 export function runBounded(executable: string, args: readonly string[], bounds: Bounds): Promise<BoundedResult> {
+  const windows = process.platform === "win32";
+  // A private process group on Unix, so ending it ends what the child started.
+  const child = spawn(executable, args, { detached: !windows, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
+  const pid = child.pid;
+  if (!windows) return supervise(executable, child, bounds, () => endProcessGroup(pid!));
+  // Listed while Node still holds the child's handle, so its id is not yet
+  // anyone else's; what it starts later is found from this identity.
+  let owned: WindowsProcess[] | undefined;
+  let unlisted: unknown;
+  if (pid !== undefined && bounds.processTool) {
+    try {
+      owned = listWindowsTree(bounds.processTool, pid).filter((item) => item.id === pid);
+      if (owned.length === 0) unlisted = new Error(`${pid} was not listed while it ran`);
+    } catch (error) {
+      unlisted = error;
+    }
+  }
+  const tool = bounds.processTool;
+  return supervise(executable, child, bounds, () => {
+    if (!tool) throw new Error("no hide-processes to follow the tree with");
+    if (unlisted !== undefined || !owned?.length) throw new Error(`the tree of ${pid} has no identity to follow`, { cause: unlisted });
+    endWindowsTree(tool, owned);
+  });
+}
+
+/**
+ * Watches `child` within `bounds`, and on any ending but its own runs
+ * `endTree`, which returns once the tree is gone and throws when it cannot
+ * say so. Exported for the tests that give it an `endTree` that fails.
+ */
+export function supervise(executable: string, child: ChildProcess, bounds: Bounds, endTree: () => void): Promise<BoundedResult> {
   return new Promise((resolve, reject) => {
-    // A private process group on Unix, so ending it ends what the child started.
-    const child = spawn(executable, args, { detached: process.platform !== "win32", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
     const output = { stdout: "", stderr: "" };
-    let failure: Error | undefined;
-    let ending: Promise<void> = Promise.resolve();
+    let settled = false;
+    let owned = child.pid === undefined ? undefined : ownUntilWorkerExit(endTree);
+    const finish = () => {
+      settled = true;
+      clearTimeout(timer);
+      bounds.signal?.removeEventListener("abort", abort);
+    };
     const fail = (error: Error) => {
-      if (failure) return;
-      failure = error;
-      if (child.pid !== undefined) ending = endTree(child.pid);
-      // A grandchild that inherited a pipe would hold `close` open after the tree is gone.
-      child.stdout.destroy();
-      child.stderr.destroy();
+      if (settled) return;
+      finish();
+      // A child that never started has no tree.
+      let treeEnded = true;
+      let reason = error.message;
+      if (owned) {
+        try {
+          owned.stop();
+          owned = undefined;
+        } catch (cleanup) {
+          treeEnded = false;
+          reason += `; its tree was not confirmed ended: ${cleanup instanceof Error ? cleanup.message : String(cleanup)}`;
+          // Still the worker's to end when it exits.
+          owned = ownUntilWorkerExit(endTree);
+        }
+      }
+      // A process outside the tree that inherited a pipe would hold `close` open.
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      reject(new BoundedChildError(reason, treeEnded, output.stdout, output.stderr, { cause: error }));
     };
     const timer = setTimeout(() => fail(new Error(`${executable} did not end within ${bounds.timeoutMs} ms`)), bounds.timeoutMs);
     const abort = () => fail(new Error(`${executable} was abandoned by its caller`, { cause: bounds.signal?.reason }));
     if (bounds.signal?.aborted) abort();
     else bounds.signal?.addEventListener("abort", abort, { once: true });
     for (const name of ["stdout", "stderr"] as const) {
-      child[name].setEncoding("utf8").on("data", (chunk: string) => {
+      child[name]?.setEncoding("utf8").on("data", (chunk: string) => {
         if (Buffer.byteLength(output[name]) + Buffer.byteLength(chunk) > bounds.outputBytes) {
           fail(new Error(`${executable} wrote more than ${bounds.outputBytes} bytes to ${name}`));
           return;
@@ -48,31 +113,11 @@ export function runBounded(executable: string, args: readonly string[], bounds: 
     }
     child.once("error", fail);
     child.once("close", (status, signal) => {
-      clearTimeout(timer);
-      bounds.signal?.removeEventListener("abort", abort);
-      ending.then(
-        () => (failure ? reject(Object.assign(failure, output)) : resolve({ status, signal, ...output })),
-        (cleanup: unknown) => reject(new AggregateError([failure, cleanup], `${executable}'s tree could not be ended`)),
-      );
-    });
-  });
-}
-
-/** Ends the tree `pid` leads: its Unix process group, or on Windows the process and every descendant it started. */
-function endTree(pid: number): Promise<void> {
-  if (process.platform !== "win32") {
-    try {
-      process.kill(-pid, "SIGKILL");
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ESRCH") return Promise.reject(error);
-    }
-    return Promise.resolve();
-  }
-  return new Promise((resolve, reject) => {
-    execFile("taskkill.exe", ["/T", "/F", "/PID", String(pid)], { timeout: 10_000, windowsHide: true }, (error, _stdout, stderr) => {
-      // 128: the process had already ended.
-      if (!error || error.code === 128) resolve();
-      else reject(new Error(`taskkill could not end ${pid}: ${stderr || error.message}`, { cause: error }));
+      if (settled) return;
+      finish();
+      // It ended by itself and every pipe it held is closed.
+      owned?.disown();
+      resolve({ status, signal, ...output });
     });
   });
 }

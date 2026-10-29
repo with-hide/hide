@@ -7,20 +7,24 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { runBounded } from "./bounded-child";
+import { BoundedChildError, runBounded, type Bounds } from "./bounded-child";
 import { fixtureProgram } from "./platform-fixture";
-import { buildFixtureShims } from "./shims/build";
-
-beforeAll(async () => {
-  if (process.platform === "win32") await buildFixtureShims(fileURLToPath(new URL("..", import.meta.url)), ["launcher"]);
-}, 120_000);
+import { buildFixtureShims, fixtureShimPath } from "./shims/build";
 
 /** Each run's bounds: the 10 s the synchronous calls had, and far more output than the program writes. */
-const RUN = { timeoutMs: 10_000, outputBytes: 64 * 1024 };
+const RUN: Bounds = { timeoutMs: 10_000, outputBytes: 64 * 1024 };
 
-// The test's limit holds both runs at their bound and the teardown of the second.
-test("fixture programs preserve Unicode paths, arguments, quoting and the child exit status", { timeout: 25_000 }, async ({ signal }) => {
+beforeAll(async () => {
+  if (process.platform !== "win32") return;
+  await buildFixtureShims(fileURLToPath(new URL("..", import.meta.url)), ["launcher", "hide-processes"]);
+  RUN.processTool = fixtureShimPath("hide-processes");
+}, 120_000);
+
+// Each run keeps its 10 s; the limit adds the 10 s an ended tree's teardown may take.
+test("fixture programs preserve Unicode paths, arguments, quoting and the child exit status", { timeout: 30_000 }, async ({ signal }) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "hide-program-"));
+  // A program whose tree was not confirmed ended may still hold its folder.
+  let held = false;
   try {
     const executable = fixtureProgram(path.join(root, "한국어 폴더 🙂"), "echo-arguments", `
 const args = process.argv.slice(2);
@@ -34,7 +38,10 @@ process.stdout.write(JSON.stringify(args));
     expect(JSON.parse(answer.stdout)).toEqual(args);
     const refused = await runBounded(executable, ["exit", "37"], { ...RUN, signal });
     expect(refused.status).toBe(37);
+  } catch (error) {
+    held = error instanceof BoundedChildError && !error.treeEnded;
+    throw error;
   } finally {
-    fs.rmSync(root, { recursive: true, force: true });
+    if (!held) fs.rmSync(root, { recursive: true, force: true });
   }
 });
