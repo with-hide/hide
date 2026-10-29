@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 
 use crate::runtime::Runtime;
 use crate::runtime::delivery::Observation;
-use crate::runtime::mission_events::AnswerSendFailure;
+use crate::runtime::mission_events::SendFailure;
 use crate::wire::{self, Readiness};
 
 use super::ledger::{Ledger, Letter, State};
@@ -36,11 +36,12 @@ const RPC_TIMEOUT: Duration = Duration::from_millis(500);
 /// Prompt submission acknowledges ordered PTY writes, including Herdr's
 /// input-reader boundary. It needs more time than a state read, not a turn wait.
 const PROMPT_TIMEOUT: Duration = Duration::from_secs(5);
-/// A letter refused between its verdict and the input is tried again in the
-/// same pane episode after this long, doubling up to `RETRY_LIMIT_MS`. The
-/// refusal can come from a fact the episode does not carry, such as Herdr's
-/// readiness or the letter itself, so waiting for the episode to move could
-/// wait until the letter expires.
+/// A letter refused between its verdict and the input, or whose bell failed
+/// before anything was typed, is tried again in the same pane episode after
+/// this long, doubling up to `RETRY_LIMIT_MS`. The refusal or failure can
+/// come from a fact the episode does not carry, such as Herdr's readiness,
+/// the letter itself or the delivery store's answer, so waiting for the
+/// episode to move could wait until the letter expires.
 const RETRY_FIRST_MS: u64 = 5_000;
 const RETRY_LIMIT_MS: u64 = 120_000;
 /// How long a pane whose letters wait on a possible draft rests, with no
@@ -288,6 +289,8 @@ struct Tried {
     episode: Episode,
     retry_at: u64,
     delay: u64,
+    /// The bell failed rather than was refused.
+    failed: bool,
 }
 
 /// A pane's last bell: the episode it was typed in and the letter it rang
@@ -483,23 +486,38 @@ impl Doorbell {
                             episode,
                             retry_at: now.saturating_add(delay),
                             delay,
+                            failed: false,
                         },
                     );
                 }
                 Ok(Outcome::Stopped) => break,
-                Err(code) => {
+                Err(failure) => {
+                    let (code, typed) = match failure {
+                        SendFailure::NotTyped(code) => (code, false),
+                        SendFailure::MaybeTyped(code) => (code, true),
+                    };
                     crate::diagnostic!(json!({"component":"delivery","kind":"doorbell.failed",
-                        "letter_id":letter.id,"pane_id":pane,"code":code}));
+                        "letter_id":letter.id,"pane_id":pane,"code":code,"maybe_typed":typed}));
                     record(client, &letter.id, &observed, false);
-                    // A failed Herdr call may still have typed the bell, so
-                    // a failure waits for the pane to move rather than for a
-                    // timer that could type it twice.
+                    // A failed prompt may still have typed the bell, so it
+                    // waits for the pane to move rather than for a timer
+                    // that could type it twice. A failure before the prompt
+                    // typed nothing, and a pane at rest has no reason to
+                    // move, so it is tried again on the timer; each try
+                    // spends one of the letter's three bells
+                    // (with-hide/hide-private#307).
+                    let retry_at = if typed {
+                        u64::MAX
+                    } else {
+                        now.saturating_add(delay)
+                    };
                     self.tried.insert(
                         letter.id.clone(),
                         Tried {
                             episode,
-                            retry_at: u64::MAX,
+                            retry_at,
                             delay,
+                            failed: true,
                         },
                     );
                 }
@@ -581,6 +599,7 @@ impl Doorbell {
                             episode,
                             retry_at: now.saturating_add(RETRY_FIRST_MS),
                             delay: RETRY_FIRST_MS,
+                            failed: false,
                         },
                     );
                 }
@@ -634,17 +653,14 @@ impl Doorbell {
         self.tried.retain(|id, _| ids.contains(id.as_str()));
     }
 
-    /// The pane or its device's link went away after a failed Herdr call.
-    /// The failure waits for the pane to move because the bell may have been
-    /// typed; a link that comes back to an idle pane at the same state
-    /// sequence shows no turn ever started, so the letter is tried again
-    /// rather than waiting for a pane that has no reason to move.
+    /// The pane or its device's link went away after a failed bell. A
+    /// failure after the prompt waits for the pane to move because the bell
+    /// may have been typed; a link that comes back to an idle pane at the
+    /// same state sequence shows no turn ever started, so the letter is
+    /// tried again rather than waiting for a pane that has no reason to
+    /// move, as one that failed before the prompt is.
     fn link_lost(&mut self, id: &str) {
-        if self
-            .tried
-            .get(id)
-            .is_some_and(|tried| tried.retry_at == u64::MAX)
-        {
+        if self.tried.get(id).is_some_and(|tried| tried.failed) {
             self.tried.remove(id);
         }
     }
@@ -769,6 +785,8 @@ fn native_current(
 
 /// All delivery pane writes go through this function. The last memory check
 /// cannot eliminate an external socket/TUI input race (the approved D-18 limit).
+/// A failure before `agent.prompt` is asked typed nothing; one after it may
+/// have typed the bell.
 fn deliver(
     owner: &Mutex<Runtime>,
     client: &Client,
@@ -777,11 +795,11 @@ fn deliver(
     observed: &Observation,
     (line, sender, kind): (&str, &str, &str),
     stop: &AtomicBool,
-) -> Result<Outcome, &'static str> {
+) -> Result<Outcome, SendFailure> {
     if stop.load(Ordering::Acquire) {
         return Ok(Outcome::Stopped);
     }
-    if let Err(reason) = native_current(connector, observed)? {
+    if let Err(reason) = native_current(connector, observed).map_err(SendFailure::NotTyped)? {
         return Ok(Outcome::Held(reason));
     }
     let reservation = client
@@ -793,17 +811,24 @@ fn deliver(
             },
             Duration::from_secs(5),
         )
-        .map_err(|_| "doorbell_reservation_failed")?;
+        .map_err(|cause| {
+            // The store's own code: its refusal, a full queue, or no answer
+            // in time, when the reservation may still have been saved.
+            crate::diagnostic!(json!({"component":"delivery",
+                "kind":"doorbell.reservation_failed","letter_id":id,
+                "pane_id":observed.actor.pane_id,"cause":cause}));
+            SendFailure::NotTyped("doorbell_reservation_failed")
+        })?;
     let attempt = reservation["attempt"]
         .as_u64()
         .filter(|value| (1..=3).contains(value))
-        .ok_or("doorbell_reservation_format")? as u8;
+        .ok_or(SendFailure::NotTyped("doorbell_reservation_format"))? as u8;
     // The durable save may wait. Reinspect the native owner afterwards
     // instead of treating the pre-save answer as current evidence.
     if stop.load(Ordering::Acquire) {
         return Ok(Outcome::Stopped);
     }
-    if let Err(reason) = native_current(connector, observed)? {
+    if let Err(reason) = native_current(connector, observed).map_err(SendFailure::NotTyped)? {
         return Ok(Outcome::Held(reason));
     }
     if stop.load(Ordering::Acquire) {
@@ -811,7 +836,7 @@ fn deliver(
     }
     if let Err(reason) = owner
         .lock()
-        .map_err(|_| "runtime_unavailable")?
+        .map_err(|_| SendFailure::NotTyped("runtime_unavailable"))?
         .delivery_bell_current(id, observed, Some(attempt))
     {
         return Ok(Outcome::Held(reason));
@@ -821,18 +846,18 @@ fn deliver(
     // Herdr owns submission for each input reader, including Windows paste
     // bursts (herdrdev/herdr#3187). Raw pane input bypasses that contract.
     let parameters = wire::delivery_prompt_params(&observed.raw_pane_id, line)
-        .map_err(|_| "herdr_parameters")?;
+        .map_err(|_| SendFailure::NotTyped("herdr_parameters"))?;
     // The message the bell writes into the conversation is the letter's,
     // never the operator's request (PRD session-record-goal-flow D-19): the
     // label reads it as a letter from `sender` by this record, as it reads
     // an operator's message by a submit.
     owner
         .lock()
-        .map_err(|_| "runtime_unavailable")?
+        .map_err(|_| SendFailure::NotTyped("runtime_unavailable"))?
         .record_bell(&observed.actor.pane_id, line, (sender, kind));
     let submitted = request_small_response(connector, "agent.prompt", parameters, PROMPT_TIMEOUT)
-        .map_err(|_| "herdr_call_failed")?;
-    wire::delivery_prompted(submitted).map_err(|_| "herdr_format")?;
+        .map_err(|_| SendFailure::MaybeTyped("herdr_call_failed"))?;
+    wire::delivery_prompted(submitted).map_err(|_| SendFailure::MaybeTyped("herdr_format"))?;
     // Arrival is not intake. Only a flushed prompt-hook confirmation clears it.
     Ok(Outcome::Rung)
 }
@@ -849,19 +874,19 @@ fn type_answer(
     work: &crate::runtime::mission_events::AnswerWork,
     observed: &Observation,
     stop: &AtomicBool,
-) -> Result<Outcome, AnswerSendFailure> {
+) -> Result<Outcome, SendFailure> {
     if stop.load(Ordering::Acquire) {
         return Ok(Outcome::Stopped);
     }
-    if let Err(reason) = native_current(connector, observed).map_err(AnswerSendFailure::NotTyped)? {
+    if let Err(reason) = native_current(connector, observed).map_err(SendFailure::NotTyped)? {
         return Ok(Outcome::Held(reason));
     }
     let parameters = wire::delivery_prompt_params(&observed.raw_pane_id, &work.line)
-        .map_err(|_| AnswerSendFailure::NotTyped("herdr_parameters"))?;
+        .map_err(|_| SendFailure::NotTyped("herdr_parameters"))?;
     {
         let mut guard = owner
             .lock()
-            .map_err(|_| AnswerSendFailure::NotTyped("runtime_unavailable"))?;
+            .map_err(|_| SendFailure::NotTyped("runtime_unavailable"))?;
         if let Err(reason) = guard.mission_answer_current(work, observed) {
             return Ok(Outcome::Held(reason));
         }
@@ -869,9 +894,8 @@ fn type_answer(
         guard.mission_answer_typing(&work.mission, work.key);
     }
     let submitted = request_small_response(connector, "agent.prompt", parameters, PROMPT_TIMEOUT)
-        .map_err(|_| AnswerSendFailure::MaybeTyped("herdr_call_failed"))?;
-    wire::delivery_prompted(submitted)
-        .map_err(|_| AnswerSendFailure::MaybeTyped("herdr_format"))?;
+        .map_err(|_| SendFailure::MaybeTyped("herdr_call_failed"))?;
+    wire::delivery_prompted(submitted).map_err(|_| SendFailure::MaybeTyped("herdr_format"))?;
     Ok(Outcome::Rung)
 }
 
@@ -1636,6 +1660,44 @@ mod tests {
                 Some("🦉 Codex report: private · hide inbox")
             );
         }
+    }
+
+    /// A bell whose reservation the store did not answer typed nothing, so
+    /// a pane at rest, which has no reason to move, is rung again on the
+    /// retry timer instead of waiting for it until the letter expires
+    /// (with-hide/hide-private#307: a resting Codex CLI kept a letter pending).
+    #[test]
+    fn a_bell_whose_reservation_failed_rings_again_on_the_timer() {
+        let bell = Bell::start(json!({}));
+        let mut doorbell = Doorbell::default();
+        let at = now();
+        let stop = AtomicBool::new(false);
+        let ((), records) = crate::diagnostics::capture(|| {
+            doorbell.pass(&bell.runtime, &bell.client.stopped(), &stop, at)
+        });
+        let failed = records
+            .iter()
+            .find(|record| record["kind"] == "doorbell.failed")
+            .unwrap_or_else(|| panic!("{records:?}"));
+        assert_eq!(failed["code"], "doorbell_reservation_failed");
+        assert_eq!(failed["maybe_typed"], false);
+        assert!(
+            records
+                .iter()
+                .any(|record| record["kind"] == "doorbell.reservation_failed"
+                    && record["cause"] == "delivery_unavailable"),
+            "the store's own answer is kept: {records:?}"
+        );
+        assert!(bell.typed().is_empty());
+        bell.pass(&mut doorbell, at + 1);
+        assert!(bell.typed().is_empty(), "the retry waits for its timer");
+        bell.pass(&mut doorbell, at + RETRY_FIRST_MS);
+        assert_eq!(
+            bell.typed().len(),
+            1,
+            "the pane did not move, the timer rang"
+        );
+        assert_eq!(bell.attempts(), 1);
     }
 
     /// The operator's answer to a mission's decision whose prompt Herdr
