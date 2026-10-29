@@ -780,7 +780,7 @@ fn controlling(sink: &Sink, pane: &str) -> Option<()> {
 /// The journey's page through a forward on `link`, as a browser display
 /// previews a device's localhost page; waits for its server to answer.
 fn page_over(runtime: &tokio::runtime::Runtime, link: &Arc<dyn NodeLink>) {
-    use hided::page_forward::PageForward;
+    use hided::page_forward::{PageForward, PageLink};
     let link = link
         .as_any()
         .and_then(|link| link.downcast_ref::<hide_node::ssh::RemoteHost>())
@@ -788,7 +788,7 @@ fn page_over(runtime: &tokio::runtime::Runtime, link: &Arc<dyn NodeLink>) {
         .clone();
     let forward = runtime
         .block_on(PageForward::start(
-            link,
+            PageLink::Device(link),
             SocketAddr::from(([127, 0, 0, 1], PAGE_PORT)),
             None,
             false,

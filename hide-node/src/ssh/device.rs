@@ -11,19 +11,19 @@
 //! Herdr, files, Git, terminals and pages are that link's streams and calls,
 //! so a connection signs in once.
 
-use super::host::bootstrap::{self, HerdrChoice, Pipe, ProbeError, Stop};
+use super::host::bootstrap::{self, HerdrChoice};
 use super::host::{
-    ATTEMPT_ENDED as ENDED, ChildLink, ChildOutput, HelperPackages, PaneEventsSlot, PaneHook,
-    TerminalHook,
+    ATTEMPT_ENDED as ENDED, HelperPackages, PaneEventsSlot, PaneHook, TerminalHook,
 };
 use super::hosts::{Resolve, ssh_g};
-use super::openssh::{self, SignInLine, SshProgram, Version};
+use super::openssh::{SshProgram, Version};
+use super::session::{self, Dial};
 use super::*;
 use hide_node_link::call_as;
 use hide_node_link::device::{
     Attempt, Cancel, DeviceConnector, DeviceTransport, DialedTransport, EstablishError,
     Established, HostConsent, HostIdentity, NodeReady, SignIn, SignInWait, SshFailure,
-    SshHostListing, SshProblem, Wake,
+    SshHostListing, SshProblem,
 };
 use hide_node_link::protocol::{Call, Hello, KitAction};
 
@@ -32,18 +32,6 @@ use hide_node_link::protocol::{Call, Hello, KitAction};
 pub const MAX_DIALING: usize = 4;
 /// How long a device waits for its turn before its attempt fails.
 const TURN_WITHIN: Duration = Duration::from_secs(10 * 60);
-/// How long ssh has to sign in and reach the start script, not counting the
-/// time a question or a browser check waits for the operator: a server that
-/// takes longer is not answering.
-const SIGN_IN_TIMEOUT: Duration = Duration::from_secs(90);
-/// How long a browser check waits (D-10).
-const BROWSER_WITHIN: Duration = Duration::from_secs(5 * 60);
-/// How long an attempt nobody may be asked for keeps going after a sign-in
-/// link appeared: an ordinary banner's link is followed by the connection at
-/// once, and a check that holds the sign-in waits for the operator (B14).
-const UNATTENDED_BROWSER_GRACE: Duration = Duration::from_secs(15);
-/// The lines of ssh's error output kept for the classification and the log.
-const STDERR_TAIL: usize = 64;
 /// How long the helper's Herdr has to answer before the kit is asked to
 /// start it.
 const HERDR_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
@@ -242,7 +230,7 @@ impl DeviceConnector for Connector {
         registered: &[String],
         stop: &AtomicBool,
     ) -> Result<hide_node_link::device::HerdrProfileListing, String> {
-        super::profiles::list(&self.herdr_program, home, registered, stop)
+        super::profiles::list(&self.herdr_program, &self.resolve, home, registered, stop)
     }
 }
 
@@ -371,137 +359,6 @@ impl Drop for Turn {
     }
 }
 
-/// The start script's pipe on an `ssh` that may still be signing in: what
-/// ssh prints on its error output meanwhile is read for a browser check
-/// (D-10) and kept for the classification, and the time a question or a
-/// check waits for the operator does not count against the sign-in's own
-/// clock.
-struct SigningIn<'a> {
-    link: ChildLink,
-    /// Open until the connection reaches the device's shell.
-    desk: Option<askpass::Desk>,
-    sign_in: &'a dyn SignIn,
-    wake: Wake,
-    cancel: Cancel,
-    stderr: std::collections::VecDeque<String>,
-    signed_in: bool,
-    /// When a sign-in link was shown on the row (or, for an attempt nobody
-    /// may be asked for, seen).
-    browser: Option<Instant>,
-    browser_expired: bool,
-    /// Time the operator held, added to every deadline given.
-    held: Duration,
-    tick: Instant,
-}
-
-impl SigningIn<'_> {
-    fn operator_turn(&self) -> bool {
-        self.desk.as_ref().is_some_and(askpass::Desk::operator_turn)
-            || (self.browser.is_some() && self.wake == Wake::Allowed)
-    }
-
-    fn error_line(&mut self, line: String) {
-        if !self.signed_in
-            && self.browser.is_none()
-            && let SignInLine::Browser(url) = openssh::sign_in_line(&line)
-        {
-            self.browser = Some(Instant::now());
-            if self.wake == Wake::Allowed {
-                self.sign_in.show(Some(SignInWait::Browser { url }));
-            }
-        }
-        if self.stderr.len() == STDERR_TAIL {
-            self.stderr.pop_front();
-        }
-        self.stderr.push_back(line);
-    }
-
-    /// The sign-in is over: the connection reached the device's shell.
-    fn reached_shell(&mut self) {
-        if !self.signed_in {
-            self.signed_in = true;
-            if self.browser.take().is_some() && self.wake == Wake::Allowed {
-                self.sign_in.show(None);
-            }
-        }
-    }
-
-    /// Whether a browser check ran out of its time.
-    fn browser_over(&mut self) -> bool {
-        let Some(shown) = self.browser else {
-            return false;
-        };
-        let within = if self.wake == Wake::Allowed {
-            BROWSER_WITHIN
-        } else {
-            UNATTENDED_BROWSER_GRACE
-        };
-        if shown.elapsed() < within {
-            return false;
-        }
-        self.browser_expired = true;
-        if self.wake == Wake::Allowed {
-            self.sign_in.show(None);
-        }
-        true
-    }
-}
-
-impl Pipe for SigningIn<'_> {
-    fn send(&mut self, bytes: &[u8], until: Instant) -> Result<(), String> {
-        if self.cancel.is_cancelled() {
-            return Err(ENDED.to_owned());
-        }
-        self.link
-            .send(bytes, until + self.held)
-            .map_err(|error| error.to_string())
-    }
-
-    fn line(&mut self, until: Instant) -> Result<Vec<u8>, Stop> {
-        loop {
-            if self.cancel.is_cancelled() {
-                return Err(Stop::Ended(ENDED.to_owned()));
-            }
-            // B8: the first question the operator cancelled or left
-            // unanswered ends the attempt; ssh would only ask again or try
-            // its next way of signing in.
-            if !self.signed_in
-                && self
-                    .desk
-                    .as_ref()
-                    .is_some_and(|desk| desk.refusal().is_some())
-            {
-                return Err(Stop::Ended("a sign-in question got no answer".to_owned()));
-            }
-            let now = Instant::now();
-            if !self.signed_in && self.operator_turn() {
-                self.held += now.saturating_duration_since(self.tick);
-            }
-            self.tick = now;
-            if !self.signed_in && self.browser_over() {
-                return Err(Stop::Ended(
-                    "the check in the browser was not finished in time".to_owned(),
-                ));
-            }
-            let deadline = until + self.held;
-            if now >= deadline {
-                return Err(Stop::Quiet);
-            }
-            // A second at a time, so the operator's time is counted as it
-            // passes.
-            match self.link.next(deadline.min(now + Duration::from_secs(1))) {
-                ChildOutput::Line(line) => {
-                    self.reached_shell();
-                    return Ok(line);
-                }
-                ChildOutput::Error(line) => self.error_line(line),
-                ChildOutput::Quiet => {}
-                ChildOutput::Ended(reason) => return Err(Stop::Ended(reason)),
-            }
-        }
-    }
-}
-
 impl DialedTransport for SshDevice {
     fn capability_test(&self, operation_id: &str, check: SnapshotCheck<'_>) -> CapabilityReport {
         let mut report = CapabilityReport::new(
@@ -598,129 +455,23 @@ impl DialedTransport for SshDevice {
                 ),
             })
         })?;
-        // B21: an ssh that cannot hand a question to Hide gets none to hand.
-        let desk = match (&self.askpass, version.asks_through_askpass()) {
-            (Some(program), true) => {
-                if !program.is_file() {
-                    return Err(EstablishError::Helper(format!(
-                        "Hide's sign-in helper {} is missing; reinstall Hide",
-                        program.display()
-                    )));
-                }
-                // ssh expands `~` and `%d` to the user database's home,
-                // whatever HOME it was given.
-                let key_files = hide_platform::user_agents::account_home()
-                    .ok()
-                    .and_then(|home| resolved.identity_files(&home, &self.alias));
-                Some(
-                    askpass::Desk::open(&std::env::temp_dir(), Arc::clone(&sign_in), key_files)
-                        .map_err(|error| {
-                            EstablishError::Helper(format!(
-                                "The sign-in desk could not open: {error}"
-                            ))
-                        })?,
-                )
-            }
-            _ => None,
-        };
-        let mut command = self.program.command();
-        command.args(self.program.link_args(
-            &self.alias,
-            &resolved,
-            version,
-            bootstrap::REMOTE_COMMAND,
-        ));
-        match (&desk, &self.askpass) {
-            (Some(desk), Some(program)) => {
-                command.envs(desk.environment(program));
-            }
-            _ => {
-                command.env("SSH_ASKPASS_REQUIRE", "never");
-            }
-        }
-        command
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
-        stage("dial");
-        // Tied: ssh still signing in reads nothing that would tell it this
-        // process died, so its group ends with this process either way.
-        let child = match hide_platform::process::OwnedChild::spawn_tied(&mut command) {
-            Ok(child) => child,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Err(EstablishError::Ssh(openssh::missing(self.program.path())));
-            }
-            Err(error) => {
-                return Err(EstablishError::Helper(format!(
-                    "ssh could not start: {error}"
-                )));
-            }
-        };
-        // From here a cancel ends ssh at once, and the attempt has ended
-        // only once ssh is reaped.
-        let link = ChildLink::start(&target, child, Some(&cancel)).map_err(|error| {
-            EstablishError::Helper(format!("ssh's link could not start: {error}"))
-        })?;
-        let mut pipe = SigningIn {
-            link,
-            desk,
-            sign_in: &*sign_in,
+        let (mut pipe, facts) = session::sign_in(
+            &Dial {
+                program: &self.program,
+                alias: &self.alias,
+                resolved: &resolved,
+                version,
+                askpass: self.askpass.as_deref(),
+                target: &target,
+            },
+            Arc::clone(&sign_in),
             wake,
-            cancel: cancel.clone(),
-            stderr: std::collections::VecDeque::new(),
-            signed_in: false,
-            browser: None,
-            browser_expired: false,
-            held: Duration::ZERO,
-            tick: Instant::now(),
-        };
+            &cancel,
+            &stage,
+        )?;
         // Until the helper starts, every way out ends and reaps the `ssh`
         // child before the attempt returns (B8, B26).
-        let started = (|pipe: &mut SigningIn<'_>| -> Result<(HostIdentity, bootstrap::Installed), EstablishError> {
-            stage("sign_in");
-            let facts = match bootstrap::probe(&mut *pipe, Instant::now() + SIGN_IN_TIMEOUT) {
-                Ok(facts) => facts,
-                Err(ProbeError::Unsupported(reason)) => {
-                    return Err(EstablishError::Unsupported(reason));
-                }
-                Err(ProbeError::Stopped(stop)) => {
-                    let stderr: Vec<String> = pipe.stderr.iter().cloned().collect();
-                    let mut failure =
-                        openssh::classify(&openssh::Ending {
-                            stderr: &stderr,
-                            refusal: pipe.desk.as_ref().and_then(askpass::Desk::refusal).or_else(
-                                || {
-                                    (pipe.browser_expired && wake == Wake::NotAllowed)
-                                        .then_some(hide_node_link::device::Refusal::NotAllowed)
-                                },
-                            ),
-                            proxied: resolved.proxied(),
-                            prompts_unavailable: !version.asks_through_askpass(),
-                            browser_waited: pipe.browser_expired,
-                        });
-                    if failure.problem == SshProblem::Unclassified && stderr.is_empty() {
-                        failure.detail = match stop {
-                            Stop::Quiet => {
-                                format!("ssh did not sign in within {} s", SIGN_IN_TIMEOUT.as_secs())
-                            }
-                            Stop::Ended(reason) => reason,
-                        };
-                    }
-                    crate::diagnostic!(json!({
-                        "component": "remote_host",
-                        "kind": "host.ssh_failed",
-                        "target": target,
-                        "problem": failure.problem.code(),
-                        "stderr_tail": stderr,
-                    }));
-                    return Err(EstablishError::Ssh(failure));
-                }
-            };
-            // Signed in: nothing more is asked on this connection, and the
-            // operator's time counted toward the sign-in alone; the install's
-            // and the start's deadlines are their own.
-            pipe.desk = None;
-            pipe.held = Duration::ZERO;
+        let started = (|pipe: &mut session::SigningIn| -> Result<(HostIdentity, bootstrap::Installed), EstablishError> {
             let identity = HostIdentity {
                 user: resolved.user.clone(),
                 hostname: resolved.hostname.clone(),
@@ -754,7 +505,7 @@ impl DialedTransport for SshDevice {
                 });
             }
         };
-        let SigningIn { mut link, .. } = pipe;
+        let mut link = pipe.link;
         let rest = link.take_rest();
         let host = link.into_host(rest, self.panes.clone(), on_close);
         stage("hello");

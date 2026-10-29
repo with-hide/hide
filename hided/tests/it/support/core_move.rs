@@ -21,10 +21,22 @@ use serde_json::{Value, json};
 
 use super::remote_core::Herdr;
 use super::remote_delivery::renderer::Renderer;
-use super::remote_delivery::{
-    Environment, READY_BOUND, Ssh, read, successful, wait_for, wait_within,
-};
+use super::remote_delivery::{Environment, READY_BOUND, read, successful, wait_for, wait_within};
 use super::run::Run;
+use super::sshd::Sshd;
+
+/// The target account's `head`: the system's, except that once
+/// `.cut-upload` holds a count, the counted `head -c` that brings it to zero
+/// kills its process group, which is the start script's session.
+const CUTTING_HEAD: &str = r#"#!/bin/sh
+arm="$HOME/.cut-upload"
+if [ "${1:-}" = -c ] && [ -f "$arm" ]; then
+  left=$(cat "$arm")
+  if [ "$left" -le 1 ]; then rm -f "$arm"; kill -KILL 0; fi
+  echo $((left - 1)) > "$arm"
+fi
+exec /usr/bin/head "$@"
+"#;
 
 pub const SOURCE_NODE: &str = "fixture-move-source";
 pub const TARGET_NODE: &str = "fixture-move-target";
@@ -132,7 +144,7 @@ enum Reach {
 pub struct Fixture {
     pub source: Machine,
     pub target: Machine,
-    pub ssh: Ssh,
+    pub ssh: Sshd,
     pub cli: PathBuf,
     pub root: PathBuf,
     removed: bool,
@@ -226,6 +238,12 @@ impl Fixture {
             // The target's reads find `herdr` where a real install puts it.
             fs::create_dir_all(target_env.home.join(".local/bin"))?;
             std::os::unix::fs::symlink(&bin, target_env.home.join(".local/bin/herdr"))?;
+            // The start script's `head`, which a file sent to the target
+            // passes through, ends the connection on the count
+            // `cut_upload_at` arms ([`Fixture::cut_upload_at`]).
+            let head = target_env.home.join("bin/head");
+            fs::write(&head, CUTTING_HEAD)?;
+            fs::set_permissions(&head, std::os::unix::fs::PermissionsExt::from_mode(0o755))?;
             // The move's checks on the target run stand-ins for the machine's
             // own `gh`, session and power settings, and the agent Hide AI asks
             // answers there as signed in; `fail_checks` turns each against the
@@ -306,13 +324,6 @@ impl Fixture {
                 .map_err(anyhow::Error::msg)?;
             let ssh_dir = source_env.home.join(".ssh");
             fs::create_dir_all(&ssh_dir)?;
-            for name in ["host", "client"] {
-                let mut command = source_env.command("/usr/bin/ssh-keygen");
-                command
-                    .args(["-q", "-t", "ed25519", "-N", "", "-f"])
-                    .arg(ssh_dir.join(name));
-                successful(command)?;
-            }
             let source_herdr = Herdr::start(
                 &root.join("m"),
                 source_env.clone(),
@@ -325,29 +336,10 @@ impl Fixture {
                 target_socket.clone(),
                 &bin,
             )?;
-            let ssh = Ssh::start(
-                target_env.clone(),
-                target_socket.clone(),
-                &ssh_dir.join("host"),
-                &ssh_dir.join("client"),
-            )?;
-            let public = fs::read_to_string(ssh_dir.join("host.pub"))?;
-            fs::write(
-                ssh_dir.join("known_hosts"),
-                format!("[127.0.0.1]:{} {}\n", ssh.port, public.trim()),
-            )?;
-            // The system `ssh` the device link runs reads `known_hosts` from
-            // the account's own home, not `HOME`, so the config names the
-            // fixture's.
-            fs::write(
-                ssh_dir.join("config"),
-                format!(
-                    "Host {ALIAS}\n  HostName 127.0.0.1\n  Port {}\n  User fixture\n  IdentityFile {}\n  IdentityAgent none\n  UserKnownHostsFile {}\n  GlobalKnownHostsFile /dev/null\n",
-                    ssh.port,
-                    ssh_dir.join("client").display(),
-                    ssh_dir.join("known_hosts").display(),
-                ),
-            )?;
+            // The target machine is the system's own `sshd`, whose sessions
+            // run in the target account's environment.
+            let ssh = Sshd::start(&root.join("sshd"), &target_env.values())?;
+            fs::write(ssh_dir.join("config"), ssh.client_config(ALIAS))?;
             source_env.set(
                 "HIDE_HOST_HELPER_ROOT",
                 target_env.home.join("helper").into_os_string(),
@@ -790,6 +782,15 @@ impl Fixture {
             let pid = state["pid"].as_u64()? as u32;
             hide_platform::process::is_alive(pid).then_some(pid)
         }))
+    }
+
+    /// Ends the connection to the target as the `nth` file sent from now
+    /// starts to arrive there, as a connection that dropped: the session's
+    /// whole process group ends, the server stays online, and the move can
+    /// dial again.
+    pub fn cut_upload_at(&self, nth: usize) -> Result<()> {
+        fs::write(self.target.home().join(".cut-upload"), nth.to_string())?;
+        Ok(())
     }
 
     /// Holds the target's handover record lock, as another change of it

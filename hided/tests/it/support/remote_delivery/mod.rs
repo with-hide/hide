@@ -4,7 +4,6 @@
 pub mod renderer;
 pub mod responsive;
 use super::run::{Run, finish};
-use super::ssh_server as ssh;
 
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
@@ -17,8 +16,6 @@ use anyhow::{Context, Result, bail, ensure};
 use hide_platform::process::{CapturedOutput, OwnedChild};
 use serde_json::{Value, json};
 
-pub use ssh::Ssh;
-
 pub const READY_BOUND: Duration = Duration::from_secs(30);
 const READ_CAP: usize = 1024 * 1024;
 
@@ -30,16 +27,6 @@ pub const PROMPT: &str = "fixture-ready> ";
 pub struct Environment {
     pub home: PathBuf,
     values: BTreeMap<OsString, OsString>,
-}
-
-impl ssh::Account for Environment {
-    fn command(&self, program: &OsStr) -> Command {
-        Environment::command(self, program)
-    }
-
-    fn home(&self) -> &Path {
-        &self.home
-    }
 }
 
 impl Environment {

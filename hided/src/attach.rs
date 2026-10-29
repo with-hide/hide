@@ -629,11 +629,20 @@ fn take_link(stream: LocalStream, service: &AttachService) {
         attach_failed(&node.node, &message);
         return;
     }
-    // From here the stream is the node's link; nothing of the handshake is
-    // left unread, since the node writes nothing more until it is asked.
+    // From here the stream carries the node's link and its screens'
+    // streams (`link_mux`); nothing of the handshake is left unread, since
+    // the node writes nothing more until it reads the acceptance.
     drop(reader);
     drop(writer);
     let _ = stream.set_read_timeout(None);
+    let stream = match crate::link_mux::serve(stream) {
+        Ok(link) => link,
+        Err(error) => {
+            service.grants.revoke(&relay_token);
+            attach_failed(&node.node, &error.to_string());
+            return;
+        }
+    };
     let established = inbound::establish(
         InboundNode {
             node: node.node.clone(),

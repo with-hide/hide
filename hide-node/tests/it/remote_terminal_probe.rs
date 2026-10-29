@@ -104,7 +104,7 @@ struct IsolatedDevice {
 
 /// Reads the device from `variable` and refuses, before anything connects,
 /// a target that could be an operator's account. The install spells `~/`
-/// from the SFTP home, which is the account's own home even where the
+/// from the home the device reports, which is the account's own home even where the
 /// private sshd gives its commands another `HOME`: on 2026-10-09 a probe
 /// with the `~/` defaults uploaded its node into a real account's
 /// `~/.hide/host-helper`. So the alias must resolve to the private sshd's
@@ -152,8 +152,17 @@ fn isolated_device(
     let helper_root = inside_home("HERDR_TEST_REMOTE_HELPER_ROOT")?;
     let cli_dir = inside_home("HERDR_TEST_REMOTE_CLI_DIR")?;
     let herdr_socket = under_tmp("HERDR_TEST_REMOTE_HERDR_SOCKET")?;
-    let resolved = hide_node::ssh::SshAlias::from_config_file(ssh_config, &alias)
-        .map_err(|error| format!("SSH alias {alias:?} does not resolve: {error}"))?;
+    let resolved = std::process::Command::new("ssh")
+        .arg("-F")
+        .arg(ssh_config)
+        .args(["-G", "--", &alias])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| {
+            hide_node::ssh::openssh::Resolved::read(&String::from_utf8_lossy(&output.stdout))
+        })
+        .ok_or_else(|| format!("SSH alias {alias:?} does not resolve"))?;
     if resolved.port != port {
         return Err(format!(
             "SSH alias {alias:?} resolves to port {}, not the private sshd's {port}",

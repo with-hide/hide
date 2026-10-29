@@ -498,9 +498,9 @@ struct RelayShared {
 }
 
 /// One screen's relay to its core. Its task reads the core whatever the
-/// screen takes: russh stops reading the whole SSH connection while one
-/// channel's buffer is full, so a relay left unread would stall every other
-/// screen, the panes and the link.
+/// screen takes: the connection to the core closes a stream whose reader
+/// falls behind rather than stall every other screen, the panes and the
+/// link (`link_mux`), so a relay left unread would lose its screen.
 struct ScreenRelay {
     shared: Arc<RelayShared>,
     to_core: mpsc::Sender<tungstenite::Message>,

@@ -12,11 +12,12 @@
 //! its network addresses changed, a node waiting on what a move may change
 //! (the core's machine unreachable, a connection that failed on the way, a
 //! link that was lost) tries at once, a node the core refused or that has
-//! something to fix keeps its wait, and a live link must answer an SSH ping
-//! within three seconds or is dropped and dialed again; while the core's
+//! something to fix keeps its wait, and a live link must answer a ping
+//! through its connection within three seconds or is dropped and dialed
+//! again; while the core's
 //! machine is unreachable, its SSH port is probed and the node tries at once
-//! when the port answers again. Dropping the role ends the link, the SSH
-//! connection and both threads.
+//! when the port answers again. Dropping the role ends the link, its `ssh`
+//! and both threads.
 
 use std::collections::BTreeSet;
 use std::io::{BufRead, BufReader};
@@ -26,7 +27,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime};
 
-use hide_node::ssh::SshAlias;
+use hide_node::ssh::session::{SessionError, SshTarget};
 use hide_node::ssh::upstream::Upstream;
 use hide_node::terminal::OutputSink;
 use hide_node::terminal::device::NodeTerminals;
@@ -36,6 +37,7 @@ use tokio::sync::watch;
 
 use crate::attach::{self, Accepted, AttachOutcome, Line, NodeHello};
 use crate::backoff::Backoff;
+use crate::link_mux::Mux;
 use crate::placement::Placement;
 
 /// A link that lived this long starts the wait over.
@@ -79,14 +81,14 @@ pub struct LiveLink {
     pub generation: u64,
     pub accepted: Accepted,
     /// The loopback port on this machine whose connections reach the
-    /// core's port through the link's SSH connection.
+    /// core's port through the link's connection.
     pub relay_port: u16,
     /// This node's terminals for the link's life: the node's screens send
     /// its own panes' keys here, without the link.
     pub terminals: Arc<NodeTerminals>,
-    /// The link's SSH connection, which a page of the core's machine
-    /// reaches the core's loopback through (`node_pages`).
-    pub upstream: Arc<Upstream>,
+    /// The link's connection, which the screens' relay and a page of the
+    /// core's machine reach that machine's loopback through (`node_pages`).
+    pub core: Arc<Mux>,
 }
 
 /// Where the node's link is.
@@ -387,12 +389,12 @@ impl NodeRole {
             roots_changed,
             updates,
         });
-        let config = home.join(".ssh/config");
+        let home = home.to_owned();
         let thread = {
             let shared = Arc::clone(&shared);
             std::thread::Builder::new()
                 .name("node-role-link".to_owned())
-                .spawn(move || keep_linked(&shared, &config, &placement, &identity))
+                .spawn(move || keep_linked(&shared, &home, &placement, &identity))
                 .map_err(|error| format!("the node link thread could not start: {error}"))?
         };
         let mut role = Self {
@@ -539,7 +541,7 @@ impl Drop for NodeRole {
     }
 }
 
-fn keep_linked(shared: &Shared, config: &Path, placement: &Placement, identity: &NodeIdentity) {
+fn keep_linked(shared: &Shared, home: &Path, placement: &Placement, identity: &NodeIdentity) {
     let mut placement = placement.clone();
     let mut backoff = Backoff::default();
     let mut generation = 0;
@@ -552,7 +554,7 @@ fn keep_linked(shared: &Shared, config: &Path, placement: &Placement, identity: 
             return;
         }
         let started = Instant::now();
-        let reason = link_once(shared, config, &placement, identity, generation);
+        let reason = link_once(shared, home, &placement, identity, generation);
         // The core now runs this build: the next dial reaches it at once.
         if let LinkFailure::CoreUpdated { program } = reason {
             placement.program = program;
@@ -624,8 +626,9 @@ fn watch(shared: &Shared) {
         let upstream = lock(&shared.upstream).clone();
         if let Some(moved) = moved {
             port.moved();
-            let answered = match (&phase, &upstream) {
-                (Phase::Live(_), Some(upstream)) => Some(upstream.alive(ANSWER_WITHIN)),
+            let live = shared.live.borrow().clone();
+            let answered = match (&phase, &live) {
+                (Phase::Live(_), Some(live)) => Some(live.core.alive(ANSWER_WITHIN)),
                 _ => None,
             };
             herdr_core::diagnostic!(json!({
@@ -841,42 +844,33 @@ fn parked(shared: &Shared) -> bool {
 /// Answers why it ended.
 fn link_once(
     shared: &Shared,
-    config: &Path,
+    home: &Path,
     placement: &Placement,
     identity: &NodeIdentity,
     generation: u64,
 ) -> LinkFailure {
-    match try_link(shared, config, placement, identity, generation) {
+    match try_link(shared, home, placement, identity, generation) {
         Ok(ended) | Err(ended) => ended,
     }
 }
 
 fn try_link(
     shared: &Shared,
-    config: &Path,
+    home: &Path,
     placement: &Placement,
     identity: &NodeIdentity,
     generation: u64,
 ) -> Result<LinkFailure, LinkFailure> {
-    // The alias is read again for every attempt, so a fix the operator
-    // makes to it reaches the next dial; a connection to an alias that
-    // changed is ended and a new one made.
-    let alias = SshAlias::from_config_file(config, &placement.alias)
-        .map_err(|error| LinkFailure::Ended(format!("ssh_alias: {}", error.diagnostic().reason)))?;
+    // `ssh` reads the alias at every dial, so a fix the operator makes to
+    // it reaches the next one; a connection the watch or the operator
+    // ended is replaced.
     let upstream = {
         let mut slot = lock(&shared.upstream);
         match slot.as_ref() {
-            Some(upstream) if *upstream.alias() == alias => Arc::clone(upstream),
+            Some(upstream) if !upstream.closed() => Arc::clone(upstream),
             _ => {
-                let upstream = Arc::new(
-                    Upstream::new(alias)
-                        .map_err(|error| LinkFailure::Ended(format!("ssh: {error}")))?,
-                );
-                let replaced = slot.replace(Arc::clone(&upstream));
-                drop(slot);
-                if let Some(replaced) = replaced {
-                    replaced.close();
-                }
+                let upstream = Arc::new(Upstream::new(SshTarget::new(home, &placement.alias)));
+                *slot = Some(Arc::clone(&upstream));
                 upstream
             }
         }
@@ -902,7 +896,6 @@ fn try_link(
         identity,
         shared,
         &channel.stderr,
-        &upstream,
         generation,
     );
     lock(&shared.state).link = None;
@@ -992,19 +985,18 @@ fn update_core(
         Err(reason) => return failed(format!("upload: {reason}")),
     };
     log("update.uploaded", json!({"program": program}));
-    let mut command = format!(
-        "{} core-update --previous {} --intent {intent}",
-        hide_node::ssh::shell_quote(&program),
-        hide_node::ssh::shell_quote(&placement.program),
-    );
+    let mut command = vec![
+        program.clone(),
+        "core-update".to_owned(),
+        "--previous".to_owned(),
+        placement.program.clone(),
+        "--intent".to_owned(),
+        intent.clone(),
+    ];
     if let Some(state_dir) = &placement.state_dir {
-        command.push_str(&format!(
-            " --state-dir {}",
-            hide_node::ssh::shell_quote(state_dir)
-        ));
+        command.extend(["--state-dir".to_owned(), state_dir.clone()]);
     }
-    let output = match upstream.exec(
-        "core-update",
+    let output = match upstream.run(
         &command,
         crate::core_update::OUTPUT_CAP,
         crate::core_update::WITHIN,
@@ -1013,9 +1005,9 @@ fn update_core(
         Err(error) => return failed(format!("core-update: {error}")),
     };
     if let Err(reason) = crate::core_update::outcome(
-        &output.stdout,
-        &output.exit_status.to_string(),
-        &output.stderr,
+        &String::from_utf8_lossy(&output.stdout),
+        &output.status.to_string(),
+        &String::from_utf8_lossy(&output.stderr),
     ) {
         return failed(reason);
     }
@@ -1042,25 +1034,13 @@ fn update_core(
 /// the machine's SSH server is unreachable, and only it is probed; one that
 /// failed on the way after the server answered is a transport failure a move
 /// may change; a host key, a sign-in or an alias is the operator's to fix.
-fn attach_failure(error: hide_node_link::device::RemoteError) -> LinkFailure {
+fn attach_failure(error: SessionError) -> LinkFailure {
     if error.never_reached_server() {
         LinkFailure::Unreachable(error.to_string())
     } else if error.a_move_can_change() {
         LinkFailure::Transport(format!("ssh: {error}"))
     } else {
         LinkFailure::Ended(format!("ssh: {error}"))
-    }
-}
-
-/// Why the screens' forward over the link could not be set up: what a move
-/// may change (the connection, a local port) is a transport failure, what
-/// the operator must fix is not.
-fn forward_failure(error: hide_node_link::device::RemoteError) -> LinkFailure {
-    let reason = format!("relay_forward: {error}");
-    if error.a_move_can_change() {
-        LinkFailure::Transport(reason)
-    } else {
-        LinkFailure::Ended(reason)
     }
 }
 
@@ -1079,7 +1059,6 @@ fn serve_link(
     identity: &NodeIdentity,
     shared: &Shared,
     stderr: &Mutex<Vec<u8>>,
-    upstream: &Arc<Upstream>,
     generation: u64,
 ) -> Result<LinkFailure, LinkFailure> {
     let ended = LinkFailure::Ended;
@@ -1181,9 +1160,32 @@ fn serve_link(
         "core": placement.node,
         "port": accepted.port,
     }));
-    // The screens' way to the core: held for the link's life, and ended
-    // with it.
-    let forward = upstream.forward(accepted.port).map_err(forward_failure)?;
+    // From here the connection carries the link and the screens' streams;
+    // what the reader read past the acceptance is the core's first frames.
+    let pending = reader.buffer().to_vec();
+    drop(reader);
+    drop(writer);
+    let (core, link) = Mux::start(stream.duplicate(), pending)
+        .map_err(|error| LinkFailure::Transport(format!("link_mux: {error}")))?;
+    let core = Arc::new(core);
+    let carried = carry_link(shared, identity, accepted, generation, &core, link);
+    core.close();
+    carried
+}
+
+/// Serves the core's calls on `link` once the core took the node, with the
+/// screens' way to the core held for the link's life and ended with it.
+fn carry_link(
+    shared: &Shared,
+    identity: &NodeIdentity,
+    accepted: Accepted,
+    generation: u64,
+    core: &Arc<Mux>,
+    link: LocalStream,
+) -> Result<LinkFailure, LinkFailure> {
+    let forward = core
+        .forward(accepted.port)
+        .map_err(|error| LinkFailure::Transport(format!("relay_forward: {error}")))?;
     let terminals = Arc::new(NodeTerminals::for_screen(
         Arc::clone(&shared.screen),
         identity.herdr_bin.clone(),
@@ -1204,7 +1206,7 @@ fn serve_link(
         accepted,
         relay_port: forward.port(),
         terminals: Arc::clone(&terminals),
-        upstream: Arc::clone(upstream),
+        core: Arc::clone(core),
     })));
     let browser = shared
         .browser
@@ -1214,8 +1216,8 @@ fn serve_link(
             generation,
         });
     let link_end = serve(
-        reader,
-        writer,
+        BufReader::new(link.duplicate()),
+        link,
         identity,
         &terminals,
         &roots,
@@ -1433,113 +1435,42 @@ mod tests {
         }
     }
 
-    /// Dial failures as the SSH client writes them, and whether a move of
-    /// the network may change each.
-    fn dial_outcomes() -> Vec<(hide_node_link::device::RemoteError, bool)> {
-        use hide_node_link::device::{
-            DIAL_OPERATION, HOST_KEY_OPERATION, RemoteError, RemoteStage,
-        };
-        let error = |operation: &str, stage, reason: &str, retryable, action_required| {
-            RemoteError::new(operation, "core", stage, reason, retryable, action_required)
+    /// Dial failures as `ssh` ends them, and whether a move of the network
+    /// may change each.
+    fn dial_outcomes() -> Vec<(SessionError, bool)> {
+        use hide_node_link::device::{SshFailure, SshProblem};
+        let ssh = |problem, detail: &str| {
+            SessionError::Ssh(SshFailure {
+                problem,
+                detail: detail.to_owned(),
+            })
         };
         vec![
+            (ssh(SshProblem::Unreachable, "Connection refused"), true),
             (
-                error(
-                    DIAL_OPERATION,
-                    RemoteStage::Ssh,
-                    "Connection refused",
-                    true,
-                    false,
-                ),
+                ssh(SshProblem::NameNotFound, "Could not resolve hostname"),
                 true,
             ),
             (
-                error(
-                    "remote-connect",
-                    RemoteStage::Ssh,
-                    "Connection reset by peer",
-                    true,
-                    false,
-                ),
+                ssh(SshProblem::ProxyFailed, "kex_exchange_identification"),
                 true,
             ),
             (
-                error(
-                    "remote-connect",
-                    RemoteStage::Ssh,
-                    "SSH connection or authentication timed out",
-                    true,
-                    false,
-                ),
+                ssh(SshProblem::Unclassified, "Connection reset by peer"),
                 true,
             ),
+            (SessionError::Lost("the connection ended".to_owned()), true),
+            (ssh(SshProblem::HostKeyChanged, "host key changed"), false),
             (
-                error(
-                    "node-attach",
-                    RemoteStage::Ssh,
-                    "channel open failure",
-                    true,
-                    false,
-                ),
-                true,
-            ),
-            (
-                error(
-                    HOST_KEY_OPERATION,
-                    RemoteStage::Ssh,
-                    "host key changed: ...",
-                    false,
-                    true,
-                ),
+                ssh(SshProblem::SignInNeeded, "a question was needed"),
                 false,
             ),
+            (ssh(SshProblem::SignInRefused, "Permission denied"), false),
             (
-                error(
-                    "remote-auth",
-                    RemoteStage::Auth,
-                    "no identity authenticated",
-                    false,
-                    true,
-                ),
-                false,
-            ),
-            (
-                error(
-                    "ssh-alias-import",
-                    RemoteStage::Alias,
-                    "unknown alias",
-                    false,
-                    true,
-                ),
+                SessionError::Refused("the core's program is missing".to_owned()),
                 false,
             ),
         ]
-    }
-
-    /// The screens' forward is judged as the dial is: a connection or port
-    /// failure wakes on a move, a forward the operator must fix does not.
-    #[test]
-    fn a_forward_that_must_be_fixed_does_not_wake_on_a_move() {
-        use hide_node_link::device::{RemoteError, RemoteStage};
-        let forward = |reason: &str, retryable, action_required| {
-            forward_failure(RemoteError::new(
-                "workspace-browser-forward",
-                "core",
-                RemoteStage::Tunnel,
-                reason,
-                retryable,
-                action_required,
-            ))
-        };
-        let waiting = |reason| Phase::Waiting { reason };
-        assert!(wakes_on_move(
-            &waiting(forward("could not reserve a port", true, false)),
-            None
-        ));
-        assert!(!wakes_on_move(
-            &waiting(forward("remote endpoint must be loopback", false, true)),
-            None
-        ));
     }
 
     /// A move wakes a wait on what the network may have caused, and never

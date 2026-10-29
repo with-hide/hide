@@ -26,7 +26,6 @@ pub mod inbound;
 mod link_streams;
 #[path = "wsl.rs"]
 pub mod wsl;
-use futures_util::{StreamExt, TryStreamExt, stream};
 use hide_node_link::HostError;
 pub use hide_node_link::LinkError;
 use hide_node_link::panes::{NodeEvent, PanesStarted};
@@ -35,8 +34,6 @@ use hide_node_link::{LinkAnswer, NodeLink, call_as};
 pub use link_streams::{
     LinkHerdrConnector, LinkStream, LinkWriter, MAX_HERDR_PENDING, OpenError, StreamCloser,
 };
-use russh_sftp::client::{RawSftpSession, error::Error as SftpError};
-use russh_sftp::protocol::{FileAttributes, StatusCode};
 use serde_json::value::RawValue;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -1220,35 +1217,9 @@ fn hex_digest(bytes: &[u8]) -> String {
         .collect()
 }
 
-fn sftp_failure(what: &str, error: impl fmt::Display) -> EstablishError {
-    EstablishError::Install(format!("{what}: {error}"))
-}
-
-/// Puts this build in a version folder under `helper_root` on a machine
-/// that already runs a build of Hide's, without the device's first-install
-/// checks: a core update (PRD core-host-node-move B10) on the machine
-/// running the core, whose helper root the move already made. Answers where
-/// the build's `hided` is. `raw` has started.
-pub(super) async fn install_build(
-    raw: &RawSftpSession,
-    packages: &HelperPackages,
-    os: &str,
-    arch: &str,
-    helper_root: &str,
-) -> Result<String, EstablishError> {
-    let payload = packages.payload(os, arch)?.without_herdr();
-    if !payload.missing.is_empty() {
-        return Err(EstablishError::Install(format!(
-            "This build cannot update a core without all of its parts: {}",
-            payload.missing.join("; ")
-        )));
-    }
-    let (home, owner, root) = private_root_spelling(raw, helper_root).await?;
-    place_payload(raw, &home, owner, &root, &payload).await
-}
-
 impl HelperPackages {
-    /// [`install_build`] on this machine: this build in its version folder
+    /// A core update's install (`bootstrap::install_build`) on this
+    /// machine: this build in its version folder
     /// under `root`, the folder a remote install of it would name, for a
     /// core update run where the core runs (PRD core-host-node-move Q13).
     /// A file already there is kept only when its bytes are this build's;
@@ -1288,627 +1259,6 @@ impl HelperPackages {
         }
         Ok(version_dir.join(HELPER_NAME))
     }
-}
-
-/// The account's home as SFTP reports it, its owner, and `helper_root`
-/// spelled under it, checked to be a plain path.
-async fn private_root_spelling(
-    raw: &RawSftpSession,
-    helper_root: &str,
-) -> Result<(String, u32, String), EstablishError> {
-    let home = raw
-        .realpath(".")
-        .await
-        .map_err(|error| sftp_failure("SFTP did not report the home directory", error))?
-        .files
-        .first()
-        .map(|entry| entry.filename.clone())
-        .ok_or_else(|| {
-            EstablishError::Install("SFTP did not report the home directory".to_owned())
-        })?;
-    if !home.starts_with('/') || home.chars().any(char::is_control) {
-        return Err(EstablishError::Install(
-            "SFTP reported an unusable home directory".to_owned(),
-        ));
-    }
-    let owner = raw
-        .lstat(&home)
-        .await
-        .map_err(|error| sftp_failure("The home directory could not be inspected", error))?
-        .attrs
-        .uid
-        .ok_or_else(|| {
-            EstablishError::Install("SFTP did not report the home directory's owner".to_owned())
-        })?;
-    let root = match helper_root.strip_prefix("~/") {
-        Some(rest) => format!("{}/{rest}", home.trim_end_matches('/')),
-        None if helper_root.starts_with('/') => helper_root.to_owned(),
-        None => {
-            return Err(EstablishError::Install(format!(
-                "The helper install root {helper_root:?} must be absolute or start with ~/"
-            )));
-        }
-    };
-    if root.split('/').any(|part| part == ".." || part == ".") || root.chars().any(char::is_control)
-    {
-        return Err(EstablishError::Install(
-            "The helper install root is not a plain path".to_owned(),
-        ));
-    }
-    Ok((home, owner, root))
-}
-
-/// Puts `payload` in its version folder under `root`, every part of it: a
-/// core update runs only a whole build. Answers where its helper is.
-async fn place_payload(
-    raw: &RawSftpSession,
-    home: &str,
-    owner: u32,
-    root: &str,
-    payload: &Payload,
-) -> Result<String, EstablishError> {
-    // Everything from here goes through the path the check resolved, whose
-    // every folder was checked and none is a link, so a link on the spelled
-    // path cannot be swapped between the check and the launch.
-    let root = ensure_private_dirs(raw, home, root, owner).await?;
-    let version = payload.version();
-    let version_dir = format!("{root}/{}", &version[..16]);
-    ensure_private_dir(raw, &version_dir, owner).await?;
-    let (helper, parts) = payload
-        .files
-        .split_first()
-        .ok_or_else(|| EstablishError::Install("The build carries no helper".to_owned()))?;
-    let final_path = format!("{version_dir}/{}", helper.relative);
-    let reusable = match raw.lstat(&final_path).await {
-        Ok(existing) => {
-            private_file(&existing.attrs, owner)
-                && existing.attrs.size == Some(helper.bytes.len() as u64)
-                && remote_digest(raw, &final_path, helper.bytes.len(), "helper")
-                    .await
-                    .ok()
-                    .as_deref()
-                    == Some(helper.digest.as_str())
-        }
-        Err(_) => false,
-    };
-    let helper_path = if reusable {
-        final_path
-    } else {
-        place_file(raw, &version_dir, helper, owner, "helper").await?
-    };
-    let mut folders = std::collections::HashSet::new();
-    for part in parts {
-        async {
-            // Each folder on the way is made private before anything is put
-            // in it, parents first.
-            let mut folder = version_dir.clone();
-            if let Some((parents, _)) = part.relative.rsplit_once('/') {
-                for name in parents.split('/') {
-                    folder = format!("{folder}/{name}");
-                    if folders.insert(folder.clone()) {
-                        ensure_private_dir(raw, &folder, owner).await?;
-                    }
-                }
-            }
-            let path = format!("{version_dir}/{}", part.relative);
-            match raw.lstat(&path).await {
-                Ok(existing)
-                    if private_file(&existing.attrs, owner)
-                        && existing.attrs.size == Some(part.bytes.len() as u64) =>
-                {
-                    Ok(())
-                }
-                _ => place_file(raw, &version_dir, part, owner, &part.relative)
-                    .await
-                    .map(|_| ()),
-            }
-        }
-        .await?;
-    }
-    if let Some(herdr) = &payload.herdr {
-        place_herdr(raw, &root, herdr, owner).await?;
-    }
-    Ok(helper_path)
-}
-
-/// Puts the pinned Herdr in `<root>/herdr/<copy>/herdr`, by the kit parts'
-/// rule: a private file of its size already there is the verified upload
-/// an earlier connection renamed into place. Answers whether it was sent.
-async fn place_herdr(
-    raw: &RawSftpSession,
-    root: &str,
-    herdr: &Package,
-    owner: u32,
-) -> Result<bool, EstablishError> {
-    let folder = format!("{root}/{}", hide_kit::device_herdr::HERDR_DIR);
-    ensure_private_dir(raw, &folder, owner).await?;
-    let copy = format!("{folder}/{}", herdr_copy_name(herdr));
-    ensure_private_dir(raw, &copy, owner).await?;
-    match raw.lstat(&format!("{copy}/{}", herdr.relative)).await {
-        Ok(existing)
-            if private_file(&existing.attrs, owner)
-                && existing.attrs.size == Some(herdr.bytes.len() as u64) =>
-        {
-            Ok(false)
-        }
-        _ => place_file(raw, &copy, herdr, owner, "pinned Herdr")
-            .await
-            .map(|_| true),
-    }
-}
-
-/// Numbers each upload this process stages, so two connections to one
-/// account (two registrations of the same machine) never share a staging
-/// name.
-static NEXT_UPLOAD: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-use super::transfer::{TRANSFER_CHUNK, TRANSFERS_IN_FLIGHT};
-
-/// Staging names this process made whose upload ended before it removed
-/// them: an install that times out drops its upload mid-write, where no
-/// `await` can run. The next upload into the same folder removes them. Only
-/// this process's own names are ever listed, and the list is capped.
-static ABANDONED_STAGING: Mutex<Vec<String>> = Mutex::new(Vec::new());
-const ABANDONED_STAGING_CAP: usize = 64;
-
-/// A staging name in use; dropped before `finish`, it is listed as abandoned.
-struct Staging {
-    path: String,
-    finished: bool,
-}
-
-impl Staging {
-    fn finish(mut self) {
-        self.finished = true;
-    }
-}
-
-impl Drop for Staging {
-    fn drop(&mut self) {
-        if self.finished {
-            return;
-        }
-        let mut abandoned = lock_recover(&ABANDONED_STAGING);
-        if abandoned.len() == ABANDONED_STAGING_CAP {
-            abandoned.remove(0);
-        }
-        abandoned.push(std::mem::take(&mut self.path));
-    }
-}
-
-/// Removes the staging files this process abandoned in `folder`.
-async fn remove_abandoned_staging(raw: &RawSftpSession, folder: &str) {
-    let here: Vec<String> = {
-        let mut abandoned = lock_recover(&ABANDONED_STAGING);
-        let (here, elsewhere) = std::mem::take(&mut *abandoned)
-            .into_iter()
-            .partition(|path| path.rsplit_once('/').map(|(parent, _)| parent) == Some(folder));
-        *abandoned = elsewhere;
-        here
-    };
-    for path in here {
-        let _ = raw.remove(&path).await;
-    }
-}
-
-/// Whether `path` already holds exactly `package`'s bytes.
-async fn holds(raw: &RawSftpSession, path: &str, package: &Package, what: &str) -> bool {
-    matches!(
-        remote_digest(raw, path, package.bytes.len(), what).await,
-        Ok(found) if found == package.digest
-    )
-}
-
-/// Uploads `package` beside its final name, checks the uploaded bytes, and
-/// renames it into place, so the final name only ever holds a whole,
-/// verified copy. Another connection to the same account can place the same
-/// build at the same time: a final name that already holds these bytes is
-/// kept rather than replaced.
-async fn place_file(
-    raw: &RawSftpSession,
-    version_dir: &str,
-    package: &Package,
-    owner: u32,
-    what: &str,
-) -> Result<String, EstablishError> {
-    let upload_id = NEXT_UPLOAD.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let since = Instant::now();
-    let stage = |phase: &str| {
-        crate::diagnostic!(json!({
-            "component": "remote_host",
-            "kind": "host.upload_stage",
-            "upload_id": upload_id,
-            "package": package.relative,
-            "bytes": package.bytes.len(),
-            "phase": phase,
-            "elapsed_ms": since.elapsed().as_millis() as u64,
-        }));
-    };
-    stage("open");
-    let final_path = format!("{version_dir}/{}", package.relative);
-    let (folder, name) = final_path
-        .rsplit_once('/')
-        .unwrap_or((version_dir, package.relative.as_str()));
-    let staging = format!(
-        "{folder}/.upload-{name}-{}-{}",
-        std::process::id(),
-        upload_id
-    );
-    remove_abandoned_staging(raw, folder).await;
-    // Only a process that ended with this same pid could have left it.
-    let _ = raw.remove(&staging).await;
-    let staged = Staging {
-        path: staging.clone(),
-        finished: false,
-    };
-    let handle = raw
-        .open(
-            &staging,
-            OpenFlags::CREATE | OpenFlags::EXCLUDE | OpenFlags::WRITE,
-            FileAttributes {
-                permissions: Some(if package.executable { 0o700 } else { 0o600 }),
-                ..FileAttributes::empty()
-            },
-        )
-        .await
-        .map_err(|error| sftp_failure(&format!("The {what} could not be uploaded"), error))?
-        .handle;
-    // The read-back below checks the whole file.
-    stage("write");
-    let written = super::transfer::write_bytes(raw, &handle, &package.bytes, |error| {
-        sftp_failure(&format!("The {what} upload failed"), error)
-    })
-    .await;
-    stage("close");
-    let closed = raw.close(handle).await;
-    let verified = match (written, closed) {
-        (Ok(()), Ok(_)) => {
-            stage("read_back");
-            match remote_digest(raw, &staging, package.bytes.len(), what).await {
-                Ok(uploaded) if uploaded == package.digest => Ok(()),
-                Ok(_) => Err(EstablishError::Install(format!(
-                    "The uploaded {what} did not match the package; it was not used"
-                ))),
-                Err(error) => Err(error),
-            }
-        }
-        (Err(error), _) => Err(error),
-        (Ok(()), Err(error)) => Err(sftp_failure(
-            &format!("The {what} upload did not finish"),
-            error,
-        )),
-    };
-    if let Err(error) = verified {
-        let _ = raw.remove(&staging).await;
-        staged.finish();
-        return Err(error);
-    }
-    stage("place");
-    if holds(raw, &final_path, package, what).await {
-        let _ = raw.remove(&staging).await;
-        staged.finish();
-    } else {
-        let _ = raw.remove(&final_path).await;
-        let renamed = raw.rename(&staging, &final_path).await;
-        if renamed.is_err() {
-            let _ = raw.remove(&staging).await;
-        }
-        staged.finish();
-        if let Err(error) = renamed
-            && !holds(raw, &final_path, package, what).await
-        {
-            return Err(sftp_failure(
-                &format!("The {what} could not be put in place"),
-                error,
-            ));
-        }
-    }
-    let placed = raw.lstat(&final_path).await.map_err(|error| {
-        sftp_failure(
-            &format!("The installed {what} could not be inspected"),
-            error,
-        )
-    })?;
-    if !private_file(&placed.attrs, owner) {
-        let _ = raw.remove(&final_path).await;
-        return Err(EstablishError::Install(format!(
-            "{final_path} was not left a file only the account can change, so the {what} was not used"
-        )));
-    }
-    stage("complete");
-    Ok(final_path)
-}
-
-/// A helper file the account owns and no group or other account can write.
-/// Its folder is already private, so this refuses what a device's own
-/// defaults could leave behind, not what another account could swap in.
-fn private_file(attrs: &FileAttributes, owner: u32) -> bool {
-    attrs.is_regular()
-        && attrs.uid == Some(owner)
-        && attrs.permissions.is_some_and(|mode| mode & 0o022 == 0)
-}
-
-/// Where the private walk to the helper root starts, and the names it
-/// creates from there: below home it starts at home, which it never touches,
-/// and anywhere else at `/`. Both are the device's paths, so they are read
-/// as `/`-spelled names whatever system the core runs on: empty names (`//`,
-/// a trailing `/`) are dropped as the device drops them, and `/home/al` is
-/// not a prefix of `/home/alice`.
-fn private_walk(
-    home: &str,
-    root: &str,
-) -> Result<(String, String), hide_platform::path::PathError> {
-    let plain = |path: &str| {
-        let names: Vec<&str> = path.split('/').filter(|name| !name.is_empty()).collect();
-        format!("/{}", names.join("/"))
-    };
-    let (home, root) = (plain(home), plain(root));
-    match hide_platform::path::wire_relative(&home, &root) {
-        Ok(below) => Ok((home.trim_end_matches('/').to_owned(), below.to_string())),
-        Err(hide_platform::path::PathError::Outside) => Ok((String::new(), root)),
-        Err(error) => Err(error),
-    }
-}
-
-/// Creates and checks the helper root, and answers the real path it resolves
-/// to, which is the one the helper is installed under and started from.
-async fn ensure_private_dirs(
-    raw: &RawSftpSession,
-    home: &str,
-    root: &str,
-    owner: u32,
-) -> Result<String, EstablishError> {
-    let (mut current, relative) = private_walk(home, root).map_err(|error| {
-        EstablishError::Install(format!(
-            "The helper install root is not a plain path: {error}"
-        ))
-    })?;
-    for part in relative.split('/').filter(|part| !part.is_empty()) {
-        current.push('/');
-        current.push_str(part);
-        // An existing ancestor may be a link (`/tmp` on macOS), but the link
-        // and the folder it leads to must both be ones no other account can
-        // change, or that account could swap the helper between its digest
-        // check and its launch (OpenSSH's rule for key files). The root
-        // itself is checked without following links below.
-        match raw.lstat(&current).await {
-            Ok(link) if link.attrs.is_symlink() && !owned_by(&link.attrs, owner) => {
-                return Err(EstablishError::Install(format!(
-                    "{current} is a link another account owns, so the helper was not installed"
-                )));
-            }
-            Ok(_) | Err(SftpError::Status(_)) => {}
-            Err(error) => {
-                return Err(sftp_failure(
-                    "The helper folder could not be inspected",
-                    error,
-                ));
-            }
-        }
-        match raw.stat(&current).await {
-            Ok(attrs) if attrs.attrs.is_dir() => validate_ancestor(&attrs.attrs, owner, &current)?,
-            Ok(_) => {
-                return Err(EstablishError::Install(format!(
-                    "{current} exists and is not a folder, so the helper was not installed"
-                )));
-            }
-            Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => {
-                make_private_dir(raw, &current).await?;
-            }
-            Err(error) => {
-                return Err(sftp_failure(
-                    "The helper folder could not be inspected",
-                    error,
-                ));
-            }
-        }
-    }
-    let attrs = raw
-        .lstat(root)
-        .await
-        .map_err(|error| sftp_failure("The helper folder could not be inspected", error))?
-        .attrs;
-    validate_private(&attrs, owner, root)?;
-    // The walk above checked each folder as spelled, and home not at all.
-    // The folder the root really is is checked again from `/`, home and its
-    // parents included, so a linked ancestor whose target sits under a
-    // folder another account can change is refused as well (OpenSSH's
-    // `safe_path` rule for key files, which a device that signs in with a
-    // key already passes).
-    let resolved = raw
-        .realpath(root)
-        .await
-        .map_err(|error| sftp_failure("The helper folder could not be resolved", error))?
-        .files
-        .first()
-        .map(|entry| entry.filename.clone())
-        .ok_or_else(|| {
-            EstablishError::Install("SFTP did not resolve the helper folder".to_owned())
-        })?;
-    for ancestor in ancestors(&resolved)? {
-        let attrs = raw
-            .lstat(&ancestor)
-            .await
-            .map_err(|error| sftp_failure("The helper folder could not be inspected", error))?
-            .attrs;
-        if !attrs.is_dir() {
-            return Err(EstablishError::Install(format!(
-                "{ancestor} is not a folder on the resolved helper path, so the helper was not installed"
-            )));
-        }
-        validate_ancestor(&attrs, owner, &ancestor)?;
-    }
-    let attrs = raw
-        .lstat(&resolved)
-        .await
-        .map_err(|error| sftp_failure("The helper folder could not be inspected", error))?
-        .attrs;
-    validate_private(&attrs, owner, &resolved)?;
-    Ok(resolved)
-}
-
-/// Every folder above `resolved`, from `/`, for an absolute path SFTP
-/// resolved; anything else is refused rather than guessed at.
-fn ancestors(resolved: &str) -> Result<Vec<String>, EstablishError> {
-    if !resolved.starts_with('/')
-        || resolved.chars().any(char::is_control)
-        || resolved.split('/').any(|part| part == ".." || part == ".")
-    {
-        return Err(EstablishError::Install(format!(
-            "SFTP resolved the helper folder to an unusable path {resolved:?}"
-        )));
-    }
-    let parts: Vec<&str> = resolved
-        .split('/')
-        .filter(|part| !part.is_empty())
-        .collect();
-    let mut folders = vec!["/".to_owned()];
-    let mut current = String::new();
-    for part in parts.iter().take(parts.len().saturating_sub(1)) {
-        current.push('/');
-        current.push_str(part);
-        folders.push(current.clone());
-    }
-    Ok(folders)
-}
-
-/// Makes `path` a 0700 folder. Another connection to the same account (two
-/// registrations of one machine connecting together) can make it first: a
-/// folder that is there when `mkdir` fails is taken as that one, and the
-/// caller checks it as it would its own.
-async fn make_private_dir(raw: &RawSftpSession, path: &str) -> Result<(), EstablishError> {
-    let made = raw
-        .mkdir(
-            path,
-            FileAttributes {
-                permissions: Some(0o700),
-                ..FileAttributes::empty()
-            },
-        )
-        .await;
-    match made {
-        Ok(_) => Ok(()),
-        Err(error) => match raw.lstat(path).await {
-            Ok(found) if found.attrs.is_dir() => Ok(()),
-            _ => Err(sftp_failure(
-                "The helper folder could not be created",
-                error,
-            )),
-        },
-    }
-}
-
-async fn ensure_private_dir(
-    raw: &RawSftpSession,
-    path: &str,
-    owner: u32,
-) -> Result<(), EstablishError> {
-    match raw.lstat(path).await {
-        Ok(attrs) => validate_private(&attrs.attrs, owner, path),
-        Err(SftpError::Status(status)) if status.status_code == StatusCode::NoSuchFile => {
-            make_private_dir(raw, path).await?;
-            let attrs = raw
-                .lstat(path)
-                .await
-                .map_err(|error| sftp_failure("The helper folder could not be inspected", error))?;
-            validate_private(&attrs.attrs, owner, path)
-        }
-        Err(error) => Err(sftp_failure(
-            "The helper folder could not be inspected",
-            error,
-        )),
-    }
-}
-
-fn owned_by(attrs: &FileAttributes, owner: u32) -> bool {
-    attrs.uid == Some(owner) || attrs.uid == Some(0)
-}
-
-/// A folder on the way to the helper root: owned by the account or by root,
-/// and writable by no group or other account unless it is a root-owned sticky
-/// folder such as `/tmp`, where others cannot rename what the account made.
-/// A folder whose mode was not reported is refused, not assumed safe. Group
-/// write is refused even for a group only the account is in (a `umask 002`
-/// home on some Linux systems), as OpenSSH's default rule does; the refusal
-/// names the fix.
-fn validate_ancestor(attrs: &FileAttributes, owner: u32, path: &str) -> Result<(), EstablishError> {
-    let Some(mode) = attrs.permissions else {
-        return Err(EstablishError::Install(format!(
-            "The device did not report who can change {path}, so the helper was not installed under it"
-        )));
-    };
-    let shared = mode & 0o022 != 0;
-    let root_sticky = attrs.uid == Some(0) && mode & 0o1000 != 0;
-    if owned_by(attrs, owner) && (!shared || root_sticky) {
-        return Ok(());
-    }
-    Err(EstablishError::Install(if owned_by(attrs, owner) {
-        format!(
-            "{path} can be changed by its group or by other accounts, so the helper was not installed under it; remove that write access on the device (chmod go-w {path}) or choose another install root"
-        )
-    } else {
-        format!(
-            "{path} belongs to another account, so the helper was not installed under it; choose another install root"
-        )
-    }))
-}
-
-fn validate_private(attrs: &FileAttributes, owner: u32, path: &str) -> Result<(), EstablishError> {
-    if !attrs.is_dir()
-        || attrs.uid != Some(owner)
-        || attrs.permissions.is_none_or(|mode| mode & 0o022 != 0)
-    {
-        return Err(EstablishError::Install(format!(
-            "{path} must be a folder owned by the account and not writable by others; the helper was not installed"
-        )));
-    }
-    Ok(())
-}
-
-async fn remote_digest(
-    raw: &RawSftpSession,
-    path: &str,
-    length: usize,
-    what: &str,
-) -> Result<String, EstablishError> {
-    let handle = raw
-        .open(path, OpenFlags::READ, FileAttributes::empty())
-        .await
-        .map_err(|error| sftp_failure(&format!("The {what} could not be read back"), error))?
-        .handle;
-    let mut hasher = Sha256::new();
-    let mut offset = 0usize;
-    // Several reads in flight, hashed in file order. A file that ends early
-    // answers nothing more and is incomplete below.
-    let read_range = |start: usize, end: usize| {
-        let handle = handle.clone();
-        async move {
-            super::transfer::read_range(raw, &handle, start as u64, end as u64)
-                .await
-                .map_err(|error| sftp_failure(&format!("The {what} could not be read back"), error))
-        }
-    };
-    let result = stream::iter((0..length).step_by(TRANSFER_CHUNK))
-        .map(|start| read_range(start, (start + TRANSFER_CHUNK).min(length)))
-        .buffered(TRANSFERS_IN_FLIGHT)
-        .try_for_each(|bytes| {
-            offset += bytes.len();
-            hasher.update(&bytes);
-            futures_util::future::ready(Ok(()))
-        })
-        .await;
-    let _ = raw.close(handle).await;
-    result?;
-    if offset != length {
-        return Err(EstablishError::Install(format!(
-            "The {what} on the device is incomplete"
-        )));
-    }
-    Ok(hasher
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect())
 }
 
 /// Where a link's lines come from: the pipes of the child that runs a
@@ -2237,6 +1587,30 @@ impl ChildLink {
         }
     }
 
+    /// At most `max` bytes of the child's standard output, at least one, for
+    /// a step that answers in counted bytes. What it writes on its error
+    /// output meanwhile waits for [`Self::next`], the latest
+    /// [`MAX_START_LINE`] bytes of it.
+    pub(super) fn bytes(&mut self, max: usize, until: Instant) -> Result<Vec<u8>, bootstrap::Stop> {
+        loop {
+            if !self.stdout.is_empty() {
+                let taken = self.stdout.len().min(max);
+                return Ok(self.stdout.drain(..taken).collect());
+            }
+            if let Some(reason) = self.stdout_ended.clone() {
+                return Err(bootstrap::Stop::Ended(reason));
+            }
+            if self.stderr.len() > MAX_START_LINE {
+                let over = self.stderr.len() - MAX_START_LINE;
+                self.stderr.drain(..over);
+            }
+            let left = until.saturating_duration_since(Instant::now());
+            if left.is_zero() || self.recv(left).is_none() {
+                return Err(bootstrap::Stop::Quiet);
+            }
+        }
+    }
+
     /// Takes one arrival within `within` into the buffers; `None` when none
     /// came.
     fn recv(&mut self, within: Duration) -> Option<()> {
@@ -2328,7 +1702,99 @@ impl ChildLink {
     pub(super) fn take_rest(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.stdout)
     }
+
+    /// The child's input and output as one local stream, for a peer this
+    /// process speaks to itself (the attach role on a core's machine, PRD
+    /// system-ssh-device-link B33): what is written to the stream reaches
+    /// the child's input, and what the child writes is read from it, past
+    /// the start script's last line. Its error output goes to `stderr`, the
+    /// first [`CHILD_STDERR_KEPT`] bytes, for the diagnostic of a stream
+    /// that ended early.
+    ///
+    /// The child's output ending ends the stream, and the stream's far end
+    /// closing ends the child: its input closes, and its tree is ended after
+    /// [`CHILD_EXIT_GRACE`], as for a link.
+    pub(super) fn into_stream(
+        self,
+        stderr: Arc<Mutex<Vec<u8>>>,
+    ) -> std::io::Result<hide_platform::ipc::LocalStream> {
+        let Self {
+            mut arrivals,
+            input,
+            ending,
+            stdout,
+            stderr: said,
+            stdout_ended,
+            ..
+        } = self;
+        let keep = move |bytes: &[u8]| {
+            let mut kept = lock_recover(&stderr);
+            let room = CHILD_STDERR_KEPT.saturating_sub(kept.len());
+            kept.extend_from_slice(&bytes[..bytes.len().min(room)]);
+        };
+        keep(&said);
+        let (ours, theirs) = hide_platform::ipc::LocalStream::pair()?;
+        let ending = Arc::new(Mutex::new(Some(ending)));
+        let end = {
+            let ending = Arc::clone(&ending);
+            move || {
+                if let Some(ending) = lock_recover(&ending).take() {
+                    ending.end();
+                }
+            }
+        };
+        let mut down = theirs.duplicate();
+        let shutdown = theirs.shutdown_handle();
+        let down_end = end.clone();
+        std::thread::Builder::new()
+            .name("child-stream-down".into())
+            .spawn(move || {
+                let mut written = stdout.is_empty() || down.write_all(&stdout).is_ok();
+                if stdout_ended.is_some() {
+                    written = false;
+                }
+                while written {
+                    match arrivals.blocking_recv() {
+                        Some(Arrival::Data(data)) => written = down.write_all(&data).is_ok(),
+                        Some(Arrival::Stderr(data)) => keep(&data),
+                        Some(Arrival::StderrClosed) => {}
+                        Some(Arrival::Ended(_)) | None => break,
+                    }
+                }
+                shutdown.shutdown();
+                down_end();
+            })?;
+        let mut up = theirs;
+        std::thread::Builder::new()
+            .name("child-stream-up".into())
+            .spawn(move || {
+                let mut buffer = vec![0_u8; LOCAL_READ_BYTES];
+                loop {
+                    let read = match std::io::Read::read(&mut up, &mut buffer) {
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                        Ok(0) | Err(_) => break,
+                        Ok(read) => read,
+                    };
+                    let sent = match lock_recover(&input).as_mut() {
+                        Some(input) => input
+                            .write_all(&buffer[..read])
+                            .and_then(|()| input.flush())
+                            .is_ok(),
+                        None => false,
+                    };
+                    if !sent {
+                        break;
+                    }
+                }
+                up.shutdown_handle().shutdown();
+                end();
+            })?;
+        Ok(ours)
+    }
 }
+
+/// The most of a child's error output [`ChildLink::into_stream`] keeps.
+pub(super) const CHILD_STDERR_KEPT: usize = 4096;
 
 /// A start script's pipe on a child that asks for nothing while it starts
 /// (the `wsl.exe` of a distribution): its error lines are kept, the last
@@ -2393,6 +1859,13 @@ impl bootstrap::Pipe for UnaskedStart {
                 ChildOutput::Ended(reason) => return Err(bootstrap::Stop::Ended(reason)),
             }
         }
+    }
+
+    fn bytes(&mut self, max: usize, until: Instant) -> Result<Vec<u8>, bootstrap::Stop> {
+        if self.cancel.is_cancelled() {
+            return Err(bootstrap::Stop::Ended(ATTEMPT_ENDED.to_owned()));
+        }
+        self.link.bytes(max, until)
     }
 }
 
@@ -2925,7 +2398,6 @@ fn deliver_event(inner: &Arc<Inner>, panes: Option<&PaneHook>, line: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::AtomicBool;
 
     /// A device's terminal line past its cap ends the link, and an answer
     /// keeps its own, larger cap: a device's node is another machine's
@@ -3194,14 +2666,6 @@ mod tests {
         node.join().expect("the node thread");
     }
 
-    fn folder(uid: u32, mode: u32) -> FileAttributes {
-        FileAttributes {
-            uid: Some(uid),
-            permissions: Some(0o040000 | mode),
-            ..FileAttributes::empty()
-        }
-    }
-
     /// Waits until a request waits for a slot. Queueing wakes no one, so
     /// the count is the only state to watch.
     #[allow(clippy::disallowed_methods)] // a polling helper: it sleeps between observations of a state, bounded by a deadline
@@ -3322,75 +2786,6 @@ mod tests {
             hide_node_link::ErrorCode::InvalidPath
         );
         assert!(serde_json::from_str::<AnswerLine>(r#"{"ok":1}"#).is_err());
-    }
-
-    /// A helper file is reused or started only as the account's own file no
-    /// group or other account can write, and never when its mode is unknown.
-    #[test]
-    fn a_helper_file_others_can_write_is_not_reused_or_started() {
-        let me = 501;
-        let file = |uid: u32, mode: Option<u32>| FileAttributes {
-            uid: Some(uid),
-            permissions: mode.map(|mode| 0o100000 | mode),
-            ..FileAttributes::empty()
-        };
-        assert!(private_file(&file(me, Some(0o700)), me));
-        assert!(!private_file(&file(me, Some(0o720)), me));
-        assert!(!private_file(&file(me, Some(0o702)), me));
-        assert!(!private_file(&file(502, Some(0o700)), me));
-        assert!(!private_file(&file(me, None), me));
-        assert!(!private_file(&folder(me, 0o700), me));
-    }
-
-    /// The folders on the way to the helper root follow OpenSSH's rule: the
-    /// account's or root's, and shared-writable only as a root sticky folder.
-    #[test]
-    fn a_helper_root_ancestor_another_account_can_change_is_refused() {
-        let me = 501;
-        assert!(validate_ancestor(&folder(me, 0o700), me, "/tmp/mine").is_ok());
-        assert!(validate_ancestor(&folder(0, 0o755), me, "/usr").is_ok());
-        assert!(validate_ancestor(&folder(0, 0o1777), me, "/private/tmp").is_ok());
-        assert!(validate_ancestor(&folder(502, 0o755), me, "/tmp/theirs").is_err());
-        assert!(validate_ancestor(&folder(me, 0o777), me, "/tmp/open").is_err());
-        assert!(validate_ancestor(&folder(0, 0o777), me, "/shared").is_err());
-        // A mode the device did not report is refused, even for root's.
-        let unreported = FileAttributes {
-            uid: Some(0),
-            permissions: None,
-            ..FileAttributes::empty()
-        };
-        assert!(validate_ancestor(&unreported, me, "/").is_err());
-        // A group-writable home folder names the fix.
-        let refusal = validate_ancestor(&folder(me, 0o775), me, "/home/me/.local")
-            .unwrap_err()
-            .to_string();
-        assert!(refusal.contains("chmod go-w /home/me/.local"), "{refusal}");
-        // The resolved path is checked from `/`, home and its parents too.
-        assert_eq!(
-            ancestors("/Users/example/.hide/host-helper").unwrap(),
-            ["/", "/Users", "/Users/example", "/Users/example/.hide"]
-        );
-        assert_eq!(ancestors("/helper").unwrap(), ["/"]);
-        assert!(ancestors("relative/helper").is_err());
-        assert!(ancestors("/a/../b").is_err());
-        assert!(owned_by(&folder(0, 0o755), me) && !owned_by(&folder(502, 0o755), me));
-        let walk = |home: &str, root: &str| private_walk(home, root).unwrap();
-        let pair = |start: &str, below: &str| (start.to_owned(), below.to_owned());
-        assert_eq!(
-            walk("/home/alice", "/home/alice/.hide/helper"),
-            pair("/home/alice", ".hide/helper")
-        );
-        assert_eq!(walk("/home/alice", "/home/alice"), pair("/home/alice", ""));
-        assert_eq!(walk("/", "/helper"), pair("", "helper"));
-        // Spelled with empty names, it is the same folder and the same walk.
-        assert_eq!(
-            walk("/home/alice/", "/home/alice//.hide/helper/"),
-            pair("/home/alice", ".hide/helper")
-        );
-        // Outside home, and beside it by a shared prefix, it walks from `/`.
-        assert_eq!(walk("/home/alice", "/opt/hide"), pair("", "/opt/hide"));
-        assert_eq!(walk("/home/al", "/home/alice/x"), pair("", "/home/alice/x"));
-        assert!(private_walk("/home/alice", "/home/alice/../bob").is_err());
     }
 
     #[test]
@@ -3591,242 +2986,4 @@ mod tests {
         assert_ne!(packages.payload(os, arch).unwrap().version(), second);
     }
 
-    /// A writable in-memory SFTP account for the upload tests: each write
-    /// lands at its own offset, a read answers at most `read_cap` bytes, and
-    /// while `slow` is set every write waits, so an install can be cut off
-    /// mid-upload.
-    #[derive(Clone, Default)]
-    struct Uploads {
-        files: Arc<Mutex<std::collections::BTreeMap<String, Vec<u8>>>>,
-        slow: Arc<AtomicBool>,
-    }
-
-    struct UploadAccount {
-        uploads: Uploads,
-        read_cap: usize,
-    }
-
-    const UPLOAD_OWNER: u32 = 501;
-
-    fn ok_status(id: u32) -> russh_sftp::protocol::Status {
-        russh_sftp::protocol::Status {
-            id,
-            status_code: StatusCode::Ok,
-            error_message: String::new(),
-            language_tag: String::new(),
-        }
-    }
-
-    impl russh_sftp::server::Handler for UploadAccount {
-        type Error = StatusCode;
-        fn unimplemented(&self) -> Self::Error {
-            StatusCode::OpUnsupported
-        }
-        async fn open(
-            &mut self,
-            id: u32,
-            filename: String,
-            flags: OpenFlags,
-            _attrs: FileAttributes,
-        ) -> Result<russh_sftp::protocol::Handle, Self::Error> {
-            let mut files = lock_recover(&self.uploads.files);
-            if flags.contains(OpenFlags::CREATE) {
-                if flags.contains(OpenFlags::EXCLUDE) && files.contains_key(&filename) {
-                    return Err(StatusCode::Failure);
-                }
-                files.entry(filename.clone()).or_default();
-            } else if !files.contains_key(&filename) {
-                return Err(StatusCode::NoSuchFile);
-            }
-            Ok(russh_sftp::protocol::Handle {
-                id,
-                handle: filename,
-            })
-        }
-        async fn write(
-            &mut self,
-            id: u32,
-            handle: String,
-            offset: u64,
-            data: Vec<u8>,
-        ) -> Result<russh_sftp::protocol::Status, Self::Error> {
-            if self.uploads.slow.load(Ordering::SeqCst) {
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-            let mut files = lock_recover(&self.uploads.files);
-            let file = files.get_mut(&handle).ok_or(StatusCode::NoSuchFile)?;
-            let end = offset as usize + data.len();
-            if file.len() < end {
-                file.resize(end, 0);
-            }
-            file[offset as usize..end].copy_from_slice(&data);
-            Ok(ok_status(id))
-        }
-        async fn read(
-            &mut self,
-            id: u32,
-            handle: String,
-            offset: u64,
-            len: u32,
-        ) -> Result<russh_sftp::protocol::Data, Self::Error> {
-            let files = lock_recover(&self.uploads.files);
-            let bytes = files.get(&handle).ok_or(StatusCode::NoSuchFile)?;
-            let offset = offset as usize;
-            if offset >= bytes.len() {
-                return Err(StatusCode::Eof);
-            }
-            let end = bytes.len().min(offset + (len as usize).min(self.read_cap));
-            Ok(russh_sftp::protocol::Data {
-                id,
-                data: bytes[offset..end].to_vec(),
-            })
-        }
-        async fn close(
-            &mut self,
-            id: u32,
-            _handle: String,
-        ) -> Result<russh_sftp::protocol::Status, Self::Error> {
-            Ok(ok_status(id))
-        }
-        async fn lstat(
-            &mut self,
-            id: u32,
-            path: String,
-        ) -> Result<russh_sftp::protocol::Attrs, Self::Error> {
-            let files = lock_recover(&self.uploads.files);
-            let bytes = files.get(&path).ok_or(StatusCode::NoSuchFile)?;
-            Ok(russh_sftp::protocol::Attrs {
-                id,
-                attrs: FileAttributes {
-                    uid: Some(UPLOAD_OWNER),
-                    size: Some(bytes.len() as u64),
-                    permissions: Some(0o100700),
-                    ..FileAttributes::empty()
-                },
-            })
-        }
-        async fn remove(
-            &mut self,
-            id: u32,
-            filename: String,
-        ) -> Result<russh_sftp::protocol::Status, Self::Error> {
-            lock_recover(&self.uploads.files)
-                .remove(&filename)
-                .ok_or(StatusCode::NoSuchFile)?;
-            Ok(ok_status(id))
-        }
-        async fn rename(
-            &mut self,
-            id: u32,
-            oldpath: String,
-            newpath: String,
-        ) -> Result<russh_sftp::protocol::Status, Self::Error> {
-            let mut files = lock_recover(&self.uploads.files);
-            let bytes = files.remove(&oldpath).ok_or(StatusCode::NoSuchFile)?;
-            files.insert(newpath, bytes);
-            Ok(ok_status(id))
-        }
-    }
-
-    fn package(relative: &str, length: usize) -> Package {
-        let bytes: Vec<u8> = (0..length).map(|index| (index * 31 % 251) as u8).collect();
-        let digest = Sha256::digest(&bytes)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
-        Package {
-            relative: relative.to_owned(),
-            bytes,
-            digest,
-            executable: true,
-        }
-    }
-
-    /// Runs `body` against a fresh in-memory account.
-    fn with_account<T>(
-        uploads: &Uploads,
-        read_cap: usize,
-        body: impl AsyncFnOnce(&RawSftpSession) -> T,
-    ) -> T {
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()
-            .unwrap();
-        runtime.block_on(async {
-            let (client, server) = tokio::io::duplex(1024 * 1024);
-            let account = UploadAccount {
-                uploads: uploads.clone(),
-                read_cap,
-            };
-            let task = tokio::spawn(russh_sftp::server::run(server, account));
-            let raw = RawSftpSession::new(client);
-            raw.init().await.unwrap();
-            let result = body(&raw).await;
-            let _ = raw.close_session();
-            drop(raw);
-            let _ = task.await;
-            result
-        })
-    }
-
-    fn staging_names(uploads: &Uploads) -> Vec<String> {
-        lock_recover(&uploads.files)
-            .keys()
-            .filter(|path| path.contains("/.upload-"))
-            .cloned()
-            .collect()
-    }
-
-    /// The helper goes up many writes at a time and is read back many reads
-    /// at a time, short reads included; what lands is the package, byte for
-    /// byte, under its final name, with no staging file left.
-    #[test]
-    fn a_pipelined_upload_places_the_package_byte_for_byte() {
-        let uploads = Uploads::default();
-        let helper = package("hided", TRANSFER_CHUNK * TRANSFERS_IN_FLIGHT * 3 + 1234);
-        let placed = with_account(&uploads, 10_000, async |raw| {
-            place_file(raw, "/pipelined/v1", &helper, UPLOAD_OWNER, "helper").await
-        })
-        .unwrap();
-        assert_eq!(placed, "/pipelined/v1/hided");
-        assert_eq!(
-            lock_recover(&uploads.files).get("/pipelined/v1/hided"),
-            Some(&helper.bytes)
-        );
-        assert!(staging_names(&uploads).is_empty());
-    }
-
-    /// An install that times out mid-upload drops the upload where nothing
-    /// can be awaited; its staging file is gone after the next upload into
-    /// the same folder, and nothing else there is touched.
-    #[test]
-    fn a_timed_out_upload_leaves_no_staging_file_after_the_next_attempt() {
-        let uploads = Uploads::default();
-        lock_recover(&uploads.files).insert("/timed-out/v1/other".into(), b"kept".to_vec());
-        let helper = package("hided", TRANSFER_CHUNK * TRANSFERS_IN_FLIGHT * 4);
-        uploads.slow.store(true, Ordering::SeqCst);
-        let first = with_account(&uploads, usize::MAX, async |raw| {
-            tokio::time::timeout(
-                Duration::from_millis(30),
-                place_file(raw, "/timed-out/v1", &helper, UPLOAD_OWNER, "helper"),
-            )
-            .await
-        });
-        assert!(first.is_err(), "the first attempt was cut off");
-        assert_eq!(staging_names(&uploads).len(), 1, "it left its staging file");
-
-        uploads.slow.store(false, Ordering::SeqCst);
-        with_account(&uploads, usize::MAX, async |raw| {
-            place_file(raw, "/timed-out/v1", &helper, UPLOAD_OWNER, "helper").await
-        })
-        .unwrap();
-        assert!(staging_names(&uploads).is_empty());
-        let files = lock_recover(&uploads.files);
-        assert_eq!(files.get("/timed-out/v1/hided"), Some(&helper.bytes));
-        assert_eq!(
-            files.get("/timed-out/v1/other").map(Vec::as_slice),
-            Some(&b"kept"[..])
-        );
-    }
 }
