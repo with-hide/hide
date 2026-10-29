@@ -771,24 +771,15 @@ impl OwnedChild {
                 }
             }
         }
-        if unconfirmed.is_none() && reaped {
-            return;
-        }
-        // Said from that thread too, where a write nobody reads blocks
-        // nothing else. With no thread to wait in, the process stays
-        // unreaped until this one exits, and nothing is left to do.
         let pid = self.child.id();
-        let _ = std::thread::Builder::new()
-            .name("hide-tied-reaper".to_owned())
-            .spawn(move || {
-                if let Some(error) = unconfirmed {
-                    eprintln!("process.tied_end_unconfirmed_at_drop pid={pid} error={error}");
-                }
-                if !reaped {
-                    eprintln!("process.tied_child_left_to_reaper pid={pid}");
-                    sys::reap(pid);
-                }
-            });
+        if let Some(error) = unconfirmed {
+            sys::diagnose(&format!(
+                "process.tied_end_unconfirmed_at_drop pid={pid} error={error}\n"
+            ));
+        }
+        if !reaped {
+            sys::reap_later(pid);
+        }
     }
 }
 
@@ -1467,15 +1458,16 @@ mod sys {
 
     /// The variable that makes this program a tied child's supervisor
     /// ([`supervise_if_asked`]): the protocol's version, the watch's
-    /// descriptor, the descriptor diagnostics go to and the end's bound in
-    /// milliseconds, space separated. The first two keep their place in
-    /// every version, so a supervisor of another version can still say on
-    /// the watch that it does not speak this one.
+    /// descriptor, the descriptor diagnostics go to, and the end's and the
+    /// start's bounds in milliseconds, space separated. The first two keep
+    /// their place in every version, so a supervisor of another version can
+    /// still say on the watch that it does not speak this one.
     const SUPERVISOR_KEY: &std::ffi::CStr = c"HIDE_TIED_SUPERVISOR";
-    const SUPERVISOR_VERSION: &str = "1";
+    const SUPERVISOR_VERSION: &str = "2";
 
-    /// How long a tied child's supervisor has to say that its child runs: a
-    /// program starting, so only a machine that cannot run one reaches it.
+    /// How long a tied child's start may take, from this process's side and
+    /// from the supervisor's: a program starting, so only a machine that
+    /// cannot run one reaches it.
     const TIED_START_LIMIT: Duration = Duration::from_secs(10);
 
     /// How much longer than the end's own bound this process waits for the
@@ -1559,21 +1551,16 @@ mod sys {
         let (reader, watch) = UnixStream::pair()?;
         // Where this process's own diagnostics go, so the supervisor's still
         // reach them once this process is gone.
-        let diagnostics: std::os::fd::OwnedFd = match duplicate(libc::STDERR_FILENO) {
-            Ok(diagnostics) => diagnostics,
-            Err(_) => std::fs::OpenOptions::new()
-                .write(true)
-                .open("/dev/null")?
-                .into(),
-        };
+        let diagnostics = diagnostics_of_its_own()?;
         let descriptors = [reader.as_raw_fd(), diagnostics.as_raw_fd()];
         supervisor.env(
             SUPERVISOR_KEY.to_str().unwrap_or_default(),
             format!(
-                "{SUPERVISOR_VERSION} {} {} {}",
+                "{SUPERVISOR_VERSION} {} {} {} {}",
                 descriptors[0],
                 descriptors[1],
-                end_limit.as_millis()
+                end_limit.as_millis(),
+                TIED_START_LIMIT.as_millis()
             ),
         );
         // SAFETY: only async-signal-safe fcntl and prctl run after fork. The
@@ -1608,13 +1595,64 @@ mod sys {
         }));
         if let Err(error) = started(&mut tie, TIED_START_LIMIT) {
             // Nothing of the child runs: the supervisor leads its group and
-            // still held the child, or the child never ran its program. The
-            // group is all there is to end.
+            // holds the child until this process answers, or the child never
+            // ran its program. The group is all there is to end.
             let _ = signal(-(child.id() as libc::pid_t), libc::SIGKILL);
             let _ = child.wait();
             return Err(error);
         }
         Ok((child, tie))
+    }
+
+    /// Where this process's standard error goes, as a descriptor no write
+    /// to blocks and no child inherits. A regular file never blocks a write,
+    /// so it is shared as it is; any other stream is opened again by its
+    /// name as a description of its own, made nonblocking, so this
+    /// process's own writes stay as they were: Linux names every stream but
+    /// a socket, macOS only a terminal. Anything else gets `/dev/null`, and
+    /// what is written there is dropped rather than ever blocking.
+    pub(super) fn diagnostics_of_its_own() -> io::Result<std::os::fd::OwnedFd> {
+        // SAFETY: an all-zero `stat` is a valid value, filled before use.
+        let mut status: libc::stat = unsafe { std::mem::zeroed() };
+        // SAFETY: `fstat` writes into the value this function owns.
+        let regular = unsafe { libc::fstat(libc::STDERR_FILENO, &mut status) } == 0
+            && status.st_mode & libc::S_IFMT == libc::S_IFREG;
+        if regular && let Ok(shared) = duplicate(libc::STDERR_FILENO) {
+            return Ok(shared);
+        }
+        let opened = |name: &std::ffi::CStr| {
+            // SAFETY: `open` takes a terminated path and flags and returns a
+            // new descriptor this value owns.
+            let descriptor = unsafe {
+                libc::open(
+                    name.as_ptr(),
+                    libc::O_WRONLY
+                        | libc::O_APPEND
+                        | libc::O_NONBLOCK
+                        | libc::O_NOCTTY
+                        | libc::O_CLOEXEC,
+                )
+            };
+            // SAFETY: as above.
+            (descriptor >= 0).then(|| unsafe { std::os::fd::OwnedFd::from_raw_fd(descriptor) })
+        };
+        #[cfg(target_os = "linux")]
+        if let Some(own) = opened(c"/proc/self/fd/2") {
+            return Ok(own);
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let mut name = [0 as libc::c_char; 256];
+            // SAFETY: `ttyname_r` writes a terminated name of at most the
+            // buffer's length.
+            if unsafe { libc::ttyname_r(libc::STDERR_FILENO, name.as_mut_ptr(), name.len()) } == 0
+                // SAFETY: as above.
+                && let Some(own) = opened(unsafe { std::ffi::CStr::from_ptr(name.as_ptr()) })
+            {
+                return Ok(own);
+            }
+        }
+        opened(c"/dev/null").ok_or_else(io::Error::last_os_error)
     }
 
     /// A copy of `descriptor` that no child inherits.
@@ -1630,48 +1668,57 @@ mod sys {
 
     /// Waits up to `limit` for the supervisor to say that the child runs,
     /// or why it does not, and answers an error only when nothing of the
-    /// child runs. The supervisor says `spawned` while it still holds the
-    /// child, then lets it go and says `started` once the child runs its
-    /// program, or `failed`, after reaping it, when it could not. From
-    /// `spawned` on, the child may run and start processes of its own
-    /// whatever else the supervisor says or fails to say, and the supervisor
+    /// child runs. The supervisor says `spawned` while it holds the child,
+    /// and lets it go only once this process answers `go`, which it does
+    /// only within `limit`: an owner past it never answers, and the
+    /// supervisor then ends the held child itself, so nothing ran. Once
+    /// `go` is written the child may run and start processes of its own
+    /// whatever the supervisor says or fails to say next, and the supervisor
     /// can end before it says more, which the child itself can do: anything
-    /// but `failed` hands the child to its owner, whose end of it ends its
-    /// tree as every end does.
+    /// but `failed` then hands the child to its owner, whose end of it ends
+    /// its tree as every end does.
     fn started(tie: &mut Tie, limit: Duration) -> io::Result<()> {
         let supervisor = tie
             .supervisor
             .as_mut()
             .ok_or_else(|| io::Error::other("tied child has no supervisor"))?;
         let until = Instant::now() + limit;
-        let mut spawned = false;
+        let timed_out = || {
+            io::Error::new(
+                io::ErrorKind::TimedOut,
+                "tied supervisor said nothing in time: this program has no supervisor, or cannot start",
+            )
+        };
+        let mut released = false;
         loop {
             let line = match supervisor.hear(until.saturating_duration_since(Instant::now())) {
                 Ok(Some(line)) => line,
-                Ok(None) | Err(_) if spawned => return Ok(()),
+                Ok(None) | Err(_) if released => return Ok(()),
                 Ok(None) => {
                     return Err(io::Error::new(
                         io::ErrorKind::UnexpectedEof,
                         "tied supervisor ended before its child started: this program has no supervisor",
                     ));
                 }
-                Err(error) if error.kind() == io::ErrorKind::TimedOut => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        "tied supervisor said nothing in time: this program has no supervisor, or cannot start",
-                    ));
-                }
+                Err(error) if error.kind() == io::ErrorKind::TimedOut => return Err(timed_out()),
                 Err(error) => return Err(error),
             };
             match line.split_once(' ') {
-                Some(("spawned", _)) if !spawned => spawned = true,
+                Some(("spawned", _)) if !released => {
+                    if Instant::now() >= until {
+                        return Err(timed_out());
+                    }
+                    // A supervisor that cannot hear it has not let the child go.
+                    std::io::Write::write_all(&mut supervisor.watch, b"go\n")?;
+                    released = true;
+                }
                 Some(("failed", code)) => {
                     return Err(code
                         .parse()
                         .map(io::Error::from_raw_os_error)
                         .unwrap_or_else(|_| io::Error::other("tied child did not start")));
                 }
-                _ if spawned => return Ok(()),
+                _ if released => return Ok(()),
                 Some(("unsupported", version)) => {
                     return Err(io::Error::new(
                         io::ErrorKind::Unsupported,
@@ -1718,6 +1765,9 @@ mod sys {
         /// once that starter is gone.
         #[cfg(target_os = "macos")]
         known: std::collections::BTreeSet<u64>,
+        /// The last look was whole and found no process of the tree.
+        #[cfg(target_os = "macos")]
+        quiet: bool,
     }
 
     /// What one look at a tied tree saw: its processes that still run, each
@@ -1757,11 +1807,25 @@ mod sys {
             }
         }
 
-        /// macOS: a whole look that finds nothing of the tree running is the
-        /// proof. A table that does not read, or a process whose ids do not
-        /// read while it exists, leaves the look short of one.
         #[cfg(target_os = "macos")]
         fn look(&mut self, status: &mut Option<libc::c_int>) -> Seen {
+            self.look_between(status, || {})
+        }
+
+        /// macOS: two looks in a row that are whole and find no process of
+        /// the tree are the proof. A table that does not read, or a process
+        /// whose ids do not read while it exists, leaves a look short of
+        /// whole. A look that found a process of the tree is never quiet,
+        /// also once that process ended before the look at which of them
+        /// still run: what it started meanwhile is in no table yet, and the
+        /// next look finds it by the ids this one kept. `between` runs
+        /// between the table and that look, where a test moves the tree.
+        #[cfg(target_os = "macos")]
+        fn look_between(
+            &mut self,
+            status: &mut Option<libc::c_int>,
+            between: impl FnOnce(),
+        ) -> Seen {
             supervisor::reap(self.child, status);
             let (found, whole) = match all_pids() {
                 Ok(pids) => {
@@ -1771,12 +1835,15 @@ mod sys {
                 }
                 Err(_) => (Vec::new(), false),
             };
+            between();
+            let quiet = whole && found.is_empty();
+            let gone = quiet && self.quiet;
+            self.quiet = quiet;
             let running: Vec<Member> = found
                 .into_iter()
                 .filter(|(pid, _)| is_alive(*pid))
                 .map(|(pid, id)| Member { pid, id })
                 .collect();
-            let gone = whole && running.is_empty();
             Seen { running, gone }
         }
     }
@@ -2095,6 +2162,7 @@ mod sys {
             // SAFETY: as the watch.
             let diagnostics = unsafe { std::fs::File::from_raw_fd(diagnostics_fd) };
             let limit = Duration::from_millis(fields.next()?.parse().ok()?);
+            let start_limit = Duration::from_millis(fields.next()?.parse().ok()?);
             let (wake, woken) = match wake_pipe() {
                 Ok(pipe) => pipe,
                 Err(error) => {
@@ -2111,7 +2179,7 @@ mod sys {
                 libc::sigemptyset(&mut action.sa_mask);
                 libc::sigaction(libc::SIGCHLD, &action, std::ptr::null_mut());
             }
-            let (child, mut tree) = match start(arguments, &mut watch, &given) {
+            let (child, mut tree) = match start(arguments, &mut watch, &given, start_limit) {
                 Ok(started) => started,
                 Err(error) => {
                     // Nothing of the child runs: it never ran its program,
@@ -2220,25 +2288,14 @@ mod sys {
             status
         }
 
-        /// Writes `line` to the owner's diagnostics in one write, giving up
-        /// after a second: a pipe nobody empties must not keep the
-        /// supervisor from exiting. The descriptor is shared with the owner,
-        /// so it stays blocking, and an alarm interrupts the write instead.
+        /// Writes `line` to the owner's diagnostics in one write, which the
+        /// owner gave as a descriptor that never blocks
+        /// ([`super::diagnostics_of_its_own`]): a line that does not fit at
+        /// once is dropped, so a pipe nobody empties cannot keep the
+        /// supervisor from exiting.
         fn diagnose(diagnostics: &std::fs::File, line: &str) {
-            extern "C" fn interrupt(_: libc::c_int) {}
-            // SAFETY: an all-zero `sigaction` is a valid value, filled before
-            // use; without `SA_RESTART` the alarm ends a blocked write with
-            // `EINTR`, and a line shorter than `PIPE_BUF` is written whole or
-            // not at all.
-            unsafe {
-                let mut action: libc::sigaction = std::mem::zeroed();
-                action.sa_sigaction = interrupt as extern "C" fn(libc::c_int) as usize;
-                libc::sigemptyset(&mut action.sa_mask);
-                libc::sigaction(libc::SIGALRM, &action, std::ptr::null_mut());
-                libc::alarm(1);
-                libc::write(diagnostics.as_raw_fd(), line.as_ptr().cast(), line.len());
-                libc::alarm(0);
-            }
+            // SAFETY: a plain write of a buffer this function borrows.
+            unsafe { libc::write(diagnostics.as_raw_fd(), line.as_ptr().cast(), line.len()) };
         }
 
         fn close_on_exec(descriptor: libc::c_int) {
@@ -2285,6 +2342,7 @@ mod sys {
             arguments: &[CString],
             watch: &mut UnixStream,
             given: &[libc::sighandler_t; SHIELDED.len()],
+            limit: Duration,
         ) -> io::Result<(u32, Tree)> {
             if arguments.is_empty() {
                 return Err(io::ErrorKind::InvalidInput.into());
@@ -2364,8 +2422,20 @@ mod sys {
                 roots,
                 #[cfg(target_os = "macos")]
                 known: std::collections::BTreeSet::from(roots),
+                #[cfg(target_os = "macos")]
+                quiet: false,
             };
             let _ = writeln!(watch, "spawned {pid}");
+            if !answered(watch, limit) {
+                let mut raw = 0;
+                // SAFETY: as above: the held child exits once its hold closes.
+                unsafe {
+                    libc::close(hold);
+                    libc::close(failed);
+                    libc::waitpid(pid, &mut raw, 0);
+                }
+                return Err(io::Error::from_raw_os_error(libc::ETIMEDOUT));
+            }
             let byte = 0u8;
             let mut error = 0 as libc::c_int;
             // SAFETY: plain reads and writes of values this function owns.
@@ -2390,6 +2460,56 @@ mod sys {
             }
             let _ = writeln!(watch, "started {pid}");
             Ok((pid as u32, tree))
+        }
+
+        /// Whether the owner answers `spawned` with `go` within `limit`.
+        /// Silence, the owner's end or anything else is no, and the child is
+        /// never let go: an owner past its own bound does not answer. Read a
+        /// byte at a time, so nothing said after it is taken.
+        fn answered(watch: &mut UnixStream, limit: Duration) -> bool {
+            let until = Instant::now() + limit;
+            let mut heard = Vec::new();
+            loop {
+                if heard.last() == Some(&b'\n') {
+                    return heard == b"go\n";
+                }
+                if heard.len() > 8 {
+                    return false;
+                }
+                let left = until.saturating_duration_since(Instant::now());
+                if left.is_zero() {
+                    return false;
+                }
+                let mut look = libc::pollfd {
+                    fd: watch.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                let wait =
+                    libc::c_int::try_from(left.as_millis().max(1)).unwrap_or(libc::c_int::MAX);
+                // SAFETY: one valid `pollfd` for the count passed.
+                match unsafe { libc::poll(&mut look, 1, wait) } {
+                    0 => continue,
+                    ready if ready < 0 => {
+                        if io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+                            continue;
+                        }
+                        return false;
+                    }
+                    _ => {}
+                }
+                let mut byte = [0u8; 1];
+                match watch.read(&mut byte) {
+                    Ok(0) => return false,
+                    Ok(_) => heard.push(byte[0]),
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            io::ErrorKind::Interrupted | io::ErrorKind::WouldBlock
+                        ) => {}
+                    Err(_) => return false,
+                }
+            }
         }
 
         /// The child has the supervisor's standard streams, which are the
@@ -2874,13 +2994,101 @@ mod sys {
         }
     }
 
-    /// Waits for this process's child `pid`, which nothing else waits for.
-    pub(super) fn reap(pid: u32) {
-        let mut raw = 0;
-        // SAFETY: waits for this process's own child.
-        while unsafe { libc::waitpid(pid as libc::pid_t, &mut raw, 0) } < 0
-            && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted
-        {}
+    /// Writes one diagnostic line where this process's standard error goes
+    /// without ever blocking ([`diagnostics_of_its_own`]); a line that does
+    /// not fit at once is dropped.
+    pub(super) fn diagnose(line: &str) {
+        if let Ok(diagnostics) = diagnostics_of_its_own() {
+            // SAFETY: a plain write of a buffer this function borrows.
+            unsafe { libc::write(diagnostics.as_raw_fd(), line.as_ptr().cast(), line.len()) };
+        }
+    }
+
+    /// How many children a drop could not reap in time the reaper holds.
+    const REAPER_CAP: usize = 64;
+
+    /// This process's one thread that reaps the children a drop could not
+    /// wait for within its bound, and what it waits for.
+    #[derive(Default)]
+    struct Reaping {
+        state: std::sync::Mutex<ReapingState>,
+        more: std::sync::Condvar,
+    }
+
+    #[derive(Default)]
+    struct ReapingState {
+        waiting: Vec<u32>,
+        running: bool,
+    }
+
+    static REAPING: std::sync::OnceLock<Reaping> = std::sync::OnceLock::new();
+
+    /// Hands this process's child `pid`, which nothing else waits for, to
+    /// the reaper, started with the first. The reaper never blocks on one:
+    /// it asks each without waiting, every 100 ms while it holds any. Past
+    /// [`REAPER_CAP`], or with no thread to run it, the child is refused,
+    /// logged, and stays unreaped until this process exits.
+    pub(super) fn reap_later(pid: u32) {
+        admit(REAPING.get_or_init(Reaping::default), pid, REAPER_CAP);
+    }
+
+    fn admit(reaping: &'static Reaping, pid: u32, cap: usize) {
+        let mut state = reaping
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.waiting.len() >= cap {
+            drop(state);
+            diagnose(&format!("process.tied_reaper_full pid={pid} cap={cap}\n"));
+            return;
+        }
+        if !state.running {
+            let started = std::thread::Builder::new()
+                .name("hide-tied-reaper".to_owned())
+                .spawn(move || reap_waiting(reaping));
+            if let Err(error) = started {
+                drop(state);
+                diagnose(&format!(
+                    "process.tied_reaper_unstarted pid={pid} error={error}\n"
+                ));
+                return;
+            }
+            state.running = true;
+        }
+        state.waiting.push(pid);
+        drop(state);
+        reaping.more.notify_one();
+        diagnose(&format!("process.tied_child_left_to_reaper pid={pid}\n"));
+    }
+
+    fn reap_waiting(reaping: &'static Reaping) {
+        let mut state = reaping
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        loop {
+            state.waiting.retain(|pid| {
+                let mut raw = 0;
+                // SAFETY: asks, without waiting, about this process's own child.
+                match unsafe { libc::waitpid(*pid as libc::pid_t, &mut raw, libc::WNOHANG) } {
+                    0 => true,
+                    reaped if reaped > 0 => false,
+                    _ => io::Error::last_os_error().kind() == io::ErrorKind::Interrupted,
+                }
+            });
+            state = if state.waiting.is_empty() {
+                reaping
+                    .more
+                    .wait(state)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+            } else {
+                reaping
+                    .more
+                    .wait_timeout(state, Duration::from_millis(100))
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .0
+            };
+        }
     }
 
     /// The owner stops owning the child, which runs on: a tied child's
@@ -3864,11 +4072,23 @@ mod sys {
             tie.supervisor.as_mut().unwrap().report(SHORT)
         }
 
+        /// What this process answered the supervisor, waiting a little.
+        fn answer(said: &mut UnixStream) -> Vec<u8> {
+            said.set_read_timeout(Some(SHORT)).unwrap();
+            let mut answer = [0u8; 16];
+            match std::io::Read::read(said, &mut answer) {
+                Ok(read) => answer[..read].to_vec(),
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => Vec::new(),
+                Err(error) => panic!("{error}"),
+            }
+        }
+
         #[test]
         fn a_start_that_goes_quiet_once_the_child_was_let_go_hands_the_child_over() {
             let (mut tie, mut said) = told();
             said.write_all(b"spawned 7\n").unwrap();
             started(&mut tie, SHORT).unwrap();
+            assert_eq!(answer(&mut said), b"go\n");
             // What the supervisor says of the start later comes before the
             // end's report.
             said.write_all(b"started 7\nconfirmed 1\n").unwrap();
@@ -3882,12 +4102,21 @@ mod sys {
         fn a_start_whose_supervisor_ends_once_the_child_was_let_go_hands_the_child_over() {
             let (mut tie, mut said) = told();
             said.write_all(b"spawned 7\n").unwrap();
-            drop(said);
+            let supervisor = std::thread::spawn(move || answer(&mut said));
             started(&mut tie, SHORT).unwrap();
+            assert_eq!(supervisor.join().unwrap(), b"go\n");
             assert!(matches!(
                 report(&mut tie),
                 Ending::Unconfirmed { left: None }
             ));
+        }
+
+        #[test]
+        fn a_start_whose_supervisor_ends_before_it_hears_the_answer_is_an_error() {
+            let (mut tie, mut said) = told();
+            said.write_all(b"spawned 7\n").unwrap();
+            drop(said);
+            started(&mut tie, SHORT).unwrap_err();
         }
 
         #[test]
@@ -3898,12 +4127,104 @@ mod sys {
         }
 
         #[test]
+        fn an_owner_past_its_start_bound_never_lets_the_held_child_go() {
+            let (mut tie, mut said) = told();
+            said.write_all(b"spawned 7\n").unwrap();
+            let error = started(&mut tie, Duration::ZERO).unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+            assert_eq!(answer(&mut said), b"");
+        }
+
+        #[test]
         fn a_child_that_could_not_run_its_program_is_an_error_after_it_was_let_go() {
             let (mut tie, mut said) = told();
             said.write_all(b"spawned 7\nfailed 2\nconfirmed 0\n")
                 .unwrap();
             let error = started(&mut tie, SHORT).unwrap_err();
             assert_eq!(error.kind(), io::ErrorKind::NotFound);
+        }
+
+        #[test]
+        fn the_reaper_reaps_what_it_holds_without_waiting_and_refuses_past_its_cap() {
+            let reaping: &'static Reaping = Box::leak(Box::default());
+            let children: Vec<u32> = (0..3)
+                .map(|_| Command::new("/bin/sleep").arg("0.3").spawn().unwrap().id())
+                .collect();
+            for pid in &children {
+                admit(reaping, *pid, 2);
+            }
+            let held = reaping.state.lock().unwrap().waiting.clone();
+            assert_eq!(held, children[..2]);
+            let until = Instant::now() + Duration::from_secs(5);
+            while !reaping.state.lock().unwrap().waiting.is_empty() && Instant::now() < until {
+                pause_until(Instant::now() + Duration::from_millis(20));
+            }
+            let mut raw = 0;
+            // SAFETY: waits for this test's own child, which the reaper refused.
+            let refused = unsafe { libc::waitpid(children[2] as libc::pid_t, &mut raw, 0) };
+            let state = reaping.state.lock().unwrap();
+            assert!(state.waiting.is_empty() && state.running);
+            assert_eq!(refused, children[2] as libc::pid_t);
+            for pid in &children[..2] {
+                // SAFETY: asks, without waiting, about this test's own child.
+                let asked = unsafe { libc::waitpid(*pid as libc::pid_t, &mut raw, libc::WNOHANG) };
+                assert_eq!(asked, -1, "{pid} was not reaped");
+            }
+        }
+
+        /// The child of the tree, alive when the table is read, starts a
+        /// process in a session of its own and exits before the look at
+        /// which processes still run: that look proves nothing, and the next
+        /// finds the new process by the child's id.
+        #[cfg(target_os = "macos")]
+        #[test]
+        fn a_member_that_ends_between_the_table_and_the_look_leaves_no_proof() {
+            let folder = tempfile::tempdir().unwrap();
+            let ready = folder.path().join("ready");
+            let mut child = Command::new("/bin/sh")
+                .args([
+                    "-c",
+                    r#"read -r _
+perl -e 'use POSIX; POSIX::setsid(); open(my $f, ">", $ARGV[0]) or die; print $f $$; close $f; sleep 60' "$1" >/dev/null 2>&1 &
+while [ ! -s "$1" ]; do :; done"#,
+                    "sh",
+                ])
+                .arg(&ready)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            // No supervisor process: the tree is the child and what chains
+            // to it, not what else this test process started.
+            let supervisor = std::process::id();
+            let roots = [u64::MAX, unique_id(child.id()).unwrap()];
+            let mut tree = Tree {
+                supervisor,
+                child: child.id(),
+                roots,
+                known: std::collections::BTreeSet::from(roots),
+                quiet: true,
+            };
+            let mut status = None;
+            let mut input = child.stdin.take().unwrap();
+            let seen = tree.look_between(&mut status, || {
+                input.write_all(b"\n").unwrap();
+                child.wait().unwrap();
+            });
+            let started: u32 = std::fs::read_to_string(&ready).unwrap().parse().unwrap();
+            let next = tree.look(&mut status);
+            // SAFETY: a plain signal to the process this test's child started.
+            unsafe { libc::kill(started as libc::pid_t, libc::SIGKILL) };
+            assert!(seen.running.is_empty() && !seen.gone);
+            assert_eq!(
+                next.running
+                    .iter()
+                    .map(|member| member.pid)
+                    .collect::<Vec<_>>(),
+                [started]
+            );
+            assert!(!next.gone);
         }
 
         // The ids below: the supervisor is 1, the child 2.
@@ -4430,7 +4751,19 @@ mod sys {
     }
 
     /// A Windows process leaves nothing to reap: closing its handle is all.
-    pub(super) fn reap(_: u32) {}
+    pub(super) fn reap_later(_: u32) {}
+
+    /// Writes one diagnostic line to this process's standard error when it
+    /// is a file, which never blocks a write; a pipe or a console may, so
+    /// the line is dropped there.
+    pub(super) fn diagnose(line: &str) {
+        use windows_sys::Win32::Storage::FileSystem::{FILE_TYPE_DISK, GetFileType};
+        // SAFETY: plain calls on this process's standard error handle.
+        let to_file = unsafe { GetFileType(GetStdHandle(STD_ERROR_HANDLE)) } == FILE_TYPE_DISK;
+        if to_file {
+            let _ = std::io::Write::write_all(&mut std::io::stderr(), line.as_bytes());
+        }
+    }
 
     pub(super) fn release(tie: &mut Tie) {
         // SAFETY: an all-zero limit structure is a valid value: no flags.

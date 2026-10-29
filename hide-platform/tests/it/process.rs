@@ -267,6 +267,44 @@ fn child_role() {
                 ),
             }
         }
+        // An owner whose standard error is a full pipe nobody reads drops,
+        // one after another, tied children whose end it never asked for and
+        // cannot confirm, one with its supervisor stopped. It says how many
+        // threads it ran before and after, how many children it left
+        // unreaped, and whether its standard error stayed blocking.
+        #[cfg(unix)]
+        "tied_drops_unconfirmed" => {
+            fill_standard_error();
+            let folder = tempfile::tempdir().unwrap();
+            let threads_before = thread_count();
+            for round in 0..6 {
+                let ready = folder.path().join(round.to_string());
+                let mut command = role_command("sleep");
+                command.env(READY_FILE, &ready);
+                let child = OwnedChild::spawn_tied_within(&mut command, Duration::ZERO).unwrap();
+                let left = announced_pid(&ready);
+                if round == 5 {
+                    // SAFETY: stops the supervisor this owner has not reaped.
+                    unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGSTOP) };
+                }
+                drop(child);
+                kill_tree(left).unwrap();
+            }
+            let threads_after = thread_count();
+            let own = std::process::id();
+            let unreaped = descendants(own)
+                .unwrap()
+                .into_iter()
+                // SAFETY: signal 0 only asks whether the process exists.
+                .filter(|pid| unsafe { libc::kill(*pid as libc::pid_t, 0) } == 0 && !is_alive(*pid))
+                .count();
+            // SAFETY: reads this process's own descriptor flags.
+            let blocking =
+                unsafe { libc::fcntl(libc::STDERR_FILENO, libc::F_GETFL) } & libc::O_NONBLOCK == 0;
+            println!(
+                "OUTCOME threads_before={threads_before} threads_after={threads_after} unreaped={unreaped} blocking={blocking}"
+            );
+        }
         // An owner whose own diagnostics nobody reads: its standard error
         // is a full pipe when its tied child's end is unconfirmed. It says
         // how long waiting for the child took, and how long dropping a
@@ -665,6 +703,41 @@ fn fill_standard_error() {
             );
         }
         assert_eq!(libc::fcntl(libc::STDERR_FILENO, libc::F_SETFL, flags), 0);
+    }
+}
+
+/// How many threads this process runs.
+#[cfg(unix)]
+fn thread_count() -> usize {
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_to_string("/proc/self/status")
+            .unwrap()
+            .lines()
+            .find_map(|line| line.strip_prefix("Threads:"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        // SAFETY: an all-zero `proc_taskinfo` is a valid value, filled by
+        // `proc_pidinfo` up to the size passed.
+        let mut info: libc::proc_taskinfo = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of::<libc::proc_taskinfo>() as libc::c_int;
+        // SAFETY: as above.
+        let written = unsafe {
+            libc::proc_pidinfo(
+                std::process::id() as libc::c_int,
+                libc::PROC_PIDTASKINFO,
+                0,
+                (&mut info as *mut libc::proc_taskinfo).cast(),
+                size,
+            )
+        };
+        assert_eq!(written, size);
+        info.pti_threadnum as usize
     }
 }
 
@@ -1169,8 +1242,10 @@ fn a_tied_child_that_outlives_its_supervisor_never_reads_as_ended() {
 #[test]
 fn a_tied_end_past_its_bound_is_an_error_not_a_status() {
     let _serial = serial();
+    // A log file, as hided's standard error is.
+    let log = tempfile::NamedTempFile::new().unwrap();
     let output = role_command("tied_unconfirmed")
-        .stderr(Stdio::piped())
+        .stderr(log.reopen().unwrap())
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -1179,10 +1254,10 @@ fn a_tied_end_past_its_bound_is_an_error_not_a_status() {
             && stdout.contains("again=false ran_on=true"),
         "{stdout}"
     );
+    let logged = std::fs::read_to_string(log.path()).unwrap();
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("process.tied_tree_outlived_its_end"),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
+        logged.contains("process.tied_tree_outlived_its_end"),
+        "{logged}"
     );
 }
 
@@ -1228,6 +1303,89 @@ fn an_unconfirmed_tied_end_blocks_neither_wait_nor_drop() {
     assert!(number("dropped_ms") < 10_000, "{outcome}");
 }
 
+/// The supervisor lets its child go only once its owner answers `spawned`:
+/// an owner that does not answer, as one past its start bound never does,
+/// leaves a child that never ran, which the supervisor ends itself. This
+/// test is that owner, so it decides when, and whether, the answer comes.
+#[cfg(unix)]
+#[test]
+fn a_tied_supervisor_lets_its_child_go_only_once_its_owner_answers() {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::net::UnixStream;
+    use std::os::unix::process::CommandExt;
+
+    let _serial = serial();
+    for answers in [false, true] {
+        let folder = tempfile::tempdir().unwrap();
+        let ran = folder.path().join("ran");
+        let (owner, supervisor_end) = UnixStream::pair().unwrap();
+        let diagnostics = std::fs::OpenOptions::new()
+            .write(true)
+            .open("/dev/null")
+            .unwrap();
+        let lent = [supervisor_end.as_raw_fd(), diagnostics.as_raw_fd()];
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["/bin/sh", "-c", "touch \"$1\"", "sh"])
+            .arg(&ran)
+            .env(
+                "HIDE_TIED_SUPERVISOR",
+                format!("2 {} {} 1000 300", lent[0], lent[1]),
+            )
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        // SAFETY: only fcntl runs after fork, on descriptors that live until
+        // spawn returns.
+        unsafe {
+            command.pre_exec(move || {
+                for descriptor in lent {
+                    let flags = libc::fcntl(descriptor, libc::F_GETFD);
+                    if flags < 0
+                        || libc::fcntl(descriptor, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0
+                    {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                }
+                Ok(())
+            });
+        }
+        let mut supervisor = command.spawn().unwrap();
+        let identity = FixtureProcess::live(supervisor.id());
+        drop(supervisor_end);
+        drop(diagnostics);
+        owner.set_read_timeout(Some(HANG_LIMIT)).unwrap();
+        let mut said = BufReader::new(owner.try_clone().unwrap()).lines();
+        let spawned = said.next().unwrap().unwrap();
+        assert!(spawned.starts_with("spawned "), "{spawned}");
+        if answers {
+            (&owner).write_all(b"go\n").unwrap();
+        }
+        let rest: Vec<String> = said.map(Result::unwrap).collect();
+        let status = supervisor.wait().unwrap();
+        drop(identity);
+        if answers {
+            assert!(
+                rest.first()
+                    .is_some_and(|line| line.starts_with("started ")),
+                "{rest:?}"
+            );
+            assert!(status.success(), "{status:?} {rest:?}");
+            assert!(ran.exists(), "the child never ran once it was let go");
+        } else {
+            assert_eq!(
+                rest,
+                [
+                    format!("failed {}", libc::ETIMEDOUT),
+                    "confirmed 0".to_owned()
+                ]
+            );
+            assert_eq!(status.code(), Some(127));
+            assert!(!ran.exists(), "the child ran with no answer from its owner");
+        }
+    }
+}
+
 /// After an app update replaced this program's file, macOS refuses to start
 /// a tied child with an error that says so, since its supervisor would be
 /// another build; Linux still runs the file this program runs.
@@ -1248,6 +1406,48 @@ fn a_tied_child_after_this_programs_file_was_replaced() {
         "OUTCOME started"
     };
     assert!(stdout.contains(expected), "{stdout}");
+}
+
+/// Dropping tied children whose end cannot be confirmed, while the owner's
+/// standard error is a full pipe, leaves no thread and no unreaped child
+/// behind, and never makes the owner's standard error nonblocking.
+#[cfg(unix)]
+#[test]
+fn unconfirmed_tied_drops_leave_no_thread_or_child_behind() {
+    let _serial = serial();
+    let mut owner = role_command("tied_drops_unconfirmed")
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let identity = FixtureProcess::live(owner.id());
+    // Held unread for the role's life.
+    let _diagnostics = owner.stderr.take().unwrap();
+    let (said, heard) = mpsc::channel();
+    let stdout = owner.stdout.take().unwrap();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if line.contains("OUTCOME ") {
+                let _ = said.send(line);
+            }
+        }
+    });
+    let outcome = heard.recv_timeout(Duration::from_secs(120));
+    drop(identity);
+    let _ = owner.wait();
+    let outcome = outcome.expect("the owner did not finish its drops");
+    let number = |key: &str| -> usize {
+        outcome
+            .split_once(&format!("{key}="))
+            .and_then(|(_, rest)| rest.split(' ').next()?.parse().ok())
+            .unwrap_or_else(|| panic!("{outcome}"))
+    };
+    assert_eq!(
+        number("threads_after"),
+        number("threads_before"),
+        "{outcome}"
+    );
+    assert_eq!(number("unreaped"), 0, "{outcome}");
+    assert!(outcome.contains("blocking=true"), "{outcome}");
 }
 
 /// The tree's own signals to its group as the child starts (a `kill 0`)
