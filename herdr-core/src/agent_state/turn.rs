@@ -1094,6 +1094,10 @@ pub mod push {
                 Effective::Seen
             } else if agent.human_notice {
                 Effective::Other
+            } else if agent.read {
+                // A read ask listed in Needs You is read: it clears a notice
+                // and never announces again (needs-you-cleanup D-10, B12).
+                Effective::Seen
             } else {
                 Effective::from_group(&agent.group)
             };

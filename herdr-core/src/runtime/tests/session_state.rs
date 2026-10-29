@@ -669,13 +669,22 @@ fn a_new_conversation_in_the_pane_drops_its_mark() {
 }
 
 #[test]
-fn the_phone_lists_a_read_question_in_revisit_between_unread_and_working() {
-    // B19.
-    let runtime = with_read_question();
+fn the_phone_lists_a_read_question_in_needs_you_read_and_a_starred_one_in_revisit() {
+    // needs-you-cleanup B11, B13: a read, unanswered question stays in 내
+    // 차례, read; ☆ puts it off to 다시 볼 것.
+    let mut runtime = with_read_question();
     let row = &runtime.snapshot.navigator.agents[0];
     let phone =
         crate::agent_state::phone::project(&json!({"navigator": {"agents": [row]}}), "local");
-    assert_eq!(phone.agents().next().unwrap().group, "revisit");
+    let listed = phone.agents().next().unwrap();
+    assert_eq!((listed.group.as_str(), listed.read), ("needs_you", true));
+    let _dirs = hold_dirs(&mut runtime);
+    assert!(runtime.star_session("session"));
+    let row = &runtime.snapshot.navigator.agents[0];
+    let phone =
+        crate::agent_state::phone::project(&json!({"navigator": {"agents": [row]}}), "local");
+    let listed = phone.agents().next().unwrap();
+    assert_eq!((listed.group.as_str(), listed.read), ("revisit", false));
     assert_eq!(
         crate::agent_state::phone::GROUP_ORDER,
         ["needs_you", "done", "revisit", "working", "seen"]
@@ -741,4 +750,25 @@ fn resolving_a_read_question_takes_it_out_of_revisit() {
     assert!(runtime.snapshot.navigator.agents[0].revisit.is_some());
     assert!(runtime.resolve_session("session", ResolveSource::Operator));
     assert!(runtime.snapshot.navigator.agents[0].revisit.is_none());
+}
+
+#[test]
+fn a_star_on_an_unread_question_reads_it_and_puts_it_off_to_revisit() {
+    // needs-you-cleanup B13: ☆ on an ask in 내 차례 reads it, so it stops
+    // calling for attention, and moves it to 다시 볼 것.
+    let mut runtime = with_status("idle");
+    runtime.refresh_pane_read_state();
+    let row = &mut runtime.snapshot.navigator.agents[0];
+    row.demand = "question".into();
+    row.changed_at_unix_ms = Some(5);
+    runtime.refresh_pane_read_state();
+    runtime.sync_session_state();
+    let row = &runtime.snapshot.navigator.agents[0];
+    assert_eq!((row.unread, row.group.as_str()), (true, "needs_you"));
+    let _dirs = hold_dirs(&mut runtime);
+    assert!(runtime.star_session("session"));
+    let row = &runtime.snapshot.navigator.agents[0];
+    assert!(!row.unread, "the star read it");
+    assert_ne!(row.group, "needs_you");
+    assert!(row.revisit.is_some_and(|r| r.starred && r.read_ask));
 }

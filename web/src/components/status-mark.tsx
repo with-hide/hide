@@ -21,15 +21,22 @@ import { Hint } from "./ui/tooltip";
  * `label`, the mark's words, so its hover and accessible name tell a waiting
  * ring from a working one (B36).
  */
-export function StatusMark({ mark, label, className, ...rest }: { mark: RowMark | null; label?: string } & HTMLAttributes<HTMLSpanElement>) {
+export function StatusMark({ mark, label, read = false, className, ...rest }: { mark: RowMark | null; label?: string; read?: boolean } & HTMLAttributes<HTMLSpanElement>) {
   const shape = (
     <span
       {...(label ? { role: "img", "aria-label": label } : { "aria-hidden": true })}
       data-mark={mark ?? undefined}
+      data-mark-read={read ? "true" : undefined}
       className={cn("inline-flex size-(--size-agent-mark) shrink-0 items-center justify-center", className)}
       {...rest}
     >
-      {mark === "turn" ? (
+      {mark === "turn" && read ? (
+        <svg viewBox="0 0 12 12" className="size-full">
+          {/* An ask the operator read and has not answered: the same `!`, hollow (needs-you-cleanup B10). */}
+          <circle cx="6" cy="6" r="5.35" fill="none" strokeWidth="1.3" className="stroke-warning" />
+          <path d="M5.3 3.1h1.4l-.23 4.1h-.94zM5.3 8.1h1.4v1.3H5.3z" className="fill-warning" />
+        </svg>
+      ) : mark === "turn" ? (
         <svg viewBox="0 0 12 12" className="size-full">
           <circle cx="6" cy="6" r="6" className="fill-warning" />
           <path d="M5.25 2.6h1.5l-.25 4.6h-1zM5.25 8.2h1.5v1.4h-1.5z" className="fill-status-foreground" />

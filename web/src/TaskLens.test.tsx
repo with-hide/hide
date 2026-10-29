@@ -324,12 +324,18 @@ it("draws each task's row mark and line as the sidebar does, counts no folded ch
   expect(at("parent").querySelector("[data-descendant-mark]")).toBeNull();
 });
 
-it("draws the row's ★ only on a task the operator starred, so a read question waiting in 다시 볼 것 is starred by its button, not put away (PRD revisit-group B8)", async () => {
+it("keeps a read question in 내 차례 dimmed with a hollow ! and 읽음, and its ☆ puts it off to 다시 볼 것 (needs-you-cleanup B10, B13)", async () => {
   const agents = [
-    row("asked", { mark: "turn", group: "seen", demand: "question", activity: "idle", revisit: { starred: false, read_ask: true, since_unix_ms: 1 } } as Partial<AgentRow>),
+    row("asked", { mark: "quiet", group: "seen", demand: "question", activity: "idle", revisit: { starred: false, read_ask: true, since_unix_ms: 1 } } as Partial<AgentRow>),
     row("kept", { mark: "quiet", group: "seen", activity: "idle", revisit: { starred: true, read_ask: false, since_unix_ms: 1 } } as Partial<AgentRow>),
   ];
-  const { container, sent } = await render(snapshot(agents, [card("asked", "revisit", "hide-main"), card("kept", "revisit", "hide-main")]), agents);
+  const { container, sent } = await render(snapshot(agents, [{ ...card("asked", "needs_you", "hide-main"), read: true }, card("kept", "revisit", "hide-main")]), agents);
+  const at = (pane: string) => container.querySelector(`[data-task-row="${pane}"]`)!;
+  expect(at("asked").getAttribute("data-task-read")).toBe("true");
+  expect(at("asked").querySelector("[data-mark]")?.getAttribute("data-mark-read")).toBe("true");
+  expect(at("asked").querySelector("[data-task-read-tag]")?.textContent).toBe("읽음");
+  expect(at("asked").querySelector('[data-task-focus="row"]')?.getAttribute("aria-label")).toContain("내 차례 · 읽은 질문");
+  expect(at("kept").getAttribute("data-task-read")).toBeNull();
   const button = (id: string) => container.querySelector<HTMLButtonElement>(`[data-task-revisit="${id}"]`)!;
   expect(button("asked").getAttribute("aria-pressed")).toBe("false");
   expect(button("asked").getAttribute("aria-label")).toBe("다시 볼 것으로 표시");
