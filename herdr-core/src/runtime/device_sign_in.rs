@@ -18,7 +18,7 @@ use serde::Deserialize;
 use super::*;
 use crate::model::DeviceSignInSnapshot;
 use crate::remote::Wake;
-use hide_node_link::device::{Answer, Refusal, Secret, SignIn, SignInWait};
+use hide_node_link::device::{Answer, Refusal, ShownSignIn, SignIn, SignInReply, SignInWait};
 
 /// How long a question waits for the operator (D-05).
 const ANSWER_WITHIN: Duration = Duration::from_secs(5 * 60);
@@ -32,26 +32,6 @@ pub(super) struct SignInState {
     /// Where the operator's answer goes; `None` for a wait that ends by
     /// itself (a browser check, a security key's touch).
     answer: Option<mpsc::SyncSender<Result<Answer, Refusal>>>,
-}
-
-/// The operator's reply to a question on the device row. Its `Debug` shows
-/// nothing typed.
-#[derive(Deserialize)]
-#[serde(tag = "reply", rename_all = "snake_case")]
-pub(super) enum SignInReply {
-    Text { text: String },
-    Accept,
-    Cancel,
-}
-
-impl std::fmt::Debug for SignInReply {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            Self::Text { .. } => "Text(..)",
-            Self::Accept => "Accept",
-            Self::Cancel => "Cancel",
-        })
-    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -222,11 +202,7 @@ impl Runtime {
             .sign_in
             .as_ref()
             .is_some_and(|state| state.question == payload.question && state.answer.is_some());
-        let reply = match &payload.reply {
-            SignInReply::Text { .. } => "text",
-            SignInReply::Accept => "accept",
-            SignInReply::Cancel => "cancel",
-        };
+        let reply = payload.reply.code();
         crate::diagnostic!(serde_json::json!({
             "component": "remote_host",
             "kind": if pending { "host.sign_in_answered" } else { "host.sign_in_answer_stale" },
@@ -244,11 +220,7 @@ impl Runtime {
         else {
             return false;
         };
-        let _ = answer.send(match payload.reply {
-            SignInReply::Text { text } => Ok(Answer::Text(Secret::new(text))),
-            SignInReply::Accept => Ok(Answer::Accept),
-            SignInReply::Cancel => Err(Refusal::Cancelled),
-        });
+        let _ = answer.send(payload.reply.into_answer());
         self.refresh_device_snapshots()
     }
 
@@ -260,62 +232,13 @@ impl Runtime {
     /// What the device row shows its attempt waiting on.
     pub(super) fn device_sign_in_snapshot(&self, device_id: &str) -> Option<DeviceSignInSnapshot> {
         let state = self.device_hosts.get(device_id)?.sign_in.as_ref()?;
-        let key_command = match &state.wait {
-            SignInWait::Secret {
-                key_file: Some(file),
-                ..
-            } => Some(add_key_command(file)),
-            _ => None,
-        };
-        Some(DeviceSignInSnapshot {
-            question: state.question,
-            wait: state.wait.clone(),
-            key_command,
-        })
-    }
-}
-
-/// The command that adds a key to the agent of the machine ssh runs on, so
-/// its passphrase is typed once rather than on every connection (D-07,
-/// B9).
-fn add_key_command(file: &str) -> String {
-    let quoted = if file
-        .chars()
-        .all(|character| character.is_ascii_alphanumeric() || "/._-~+@:".contains(character))
-    {
-        file.to_owned()
-    } else {
-        format!("'{}'", file.replace('\'', r"'\''"))
-    };
-    if cfg!(target_os = "macos") {
-        format!("ssh-add --apple-use-keychain {quoted}")
-    } else {
-        format!("ssh-add {quoted}")
+        Some(ShownSignIn::new(state.question, state.wait.clone()))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_add_key_command_quotes_a_file_a_shell_would_split() {
-        let plain = add_key_command("/home/al/.ssh/id_ed25519");
-        let spaced = add_key_command("/Users/example/a b/.ssh/it's");
-        if cfg!(target_os = "macos") {
-            assert_eq!(
-                plain,
-                "ssh-add --apple-use-keychain /home/al/.ssh/id_ed25519"
-            );
-            assert_eq!(
-                spaced,
-                r"ssh-add --apple-use-keychain '/Users/example/a b/.ssh/it'\''s'"
-            );
-        } else {
-            assert_eq!(plain, "ssh-add /home/al/.ssh/id_ed25519");
-            assert_eq!(spaced, r"ssh-add '/Users/example/a b/.ssh/it'\''s'");
-        }
-    }
 
     #[test]
     fn a_reply_names_nothing_typed_in_its_debug() {

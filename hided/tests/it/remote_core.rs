@@ -195,7 +195,7 @@ fn a_core_link_that_needs_the_operator_dials_again_only_when_they_connect() -> R
             role.phase() == Phase::Connecting,
             "the first dial ended while it was held"
         );
-        role.connect_again();
+        role.connect_again(None);
         held.open.send(())?;
         let owed = |phase: &Phase| {
             matches!(phase, Phase::Waiting { reason: LinkFailure::Operator(failure) }
@@ -226,7 +226,7 @@ fn a_core_link_that_needs_the_operator_dials_again_only_when_they_connect() -> R
                 &format!("]:{} ", held.port),
             ),
         )?;
-        role.connect_again();
+        role.connect_again(None);
         let phase = role.wait_for(LINK_BOUND, |phase| matches!(phase, Phase::Live(_)));
         ensure!(
             matches!(phase, Phase::Live(_)),

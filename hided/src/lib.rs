@@ -50,6 +50,7 @@ mod product_analytics;
 pub mod ps_cli;
 pub mod relay;
 pub mod screen_event;
+pub mod screen_sign_in;
 pub mod seat;
 pub mod server;
 pub mod shell_exec;

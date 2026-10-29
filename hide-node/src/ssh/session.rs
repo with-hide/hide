@@ -56,6 +56,9 @@ pub(super) struct SigningIn {
     /// may be asked for, seen).
     browser: Option<Instant>,
     pub(super) browser_expired: bool,
+    /// The sign-in stopped because the screen that pressed for it went away
+    /// while it waited on the operator.
+    withdrawn: bool,
     /// Time the operator held, added to every deadline given.
     pub(super) held: Duration,
     tick: Instant,
@@ -139,6 +142,16 @@ impl Pipe for SigningIn {
                     .is_some_and(|desk| desk.refusal().is_some())
             {
                 return Err(Stop::Ended("a sign-in question got no answer".to_owned()));
+            }
+            // B8: the screen that pressed went away or cancelled while the
+            // sign-in waits on the operator (a browser check, a key touch):
+            // nobody is left to finish it. A sign-in that needs nobody, keys
+            // or the agent, goes on; a question it asks later is refused.
+            if !self.signed_in && self.operator_turn() && self.sign_in.withdrawn() {
+                self.withdrawn = true;
+                return Err(Stop::Ended(
+                    "the screen that asked for the sign-in went away".to_owned(),
+                ));
             }
             let now = Instant::now();
             if !self.signed_in && self.operator_turn() {
@@ -283,6 +296,7 @@ pub(super) fn sign_in(
         signed_in: false,
         browser: None,
         browser_expired: false,
+        withdrawn: false,
         held: Duration::ZERO,
         tick: Instant::now(),
     };
@@ -305,6 +319,7 @@ pub(super) fn sign_in(
                     .desk
                     .as_ref()
                     .and_then(askpass::Desk::refusal)
+                    .or_else(|| pipe.withdrawn.then_some(Refusal::Cancelled))
                     .or_else(|| {
                         (pipe.browser_expired && wake == Wake::NotAllowed)
                             .then_some(Refusal::NotAllowed)
@@ -453,6 +468,13 @@ impl SshTarget {
         }
     }
 
+    /// Has `program` answer ssh's questions instead of the `hide` beside
+    /// this program: a test's.
+    pub fn with_askpass_program(mut self, program: PathBuf) -> Self {
+        self.askpass = Some(program);
+        self
+    }
+
     pub fn alias(&self) -> &str {
         &self.alias
     }
@@ -470,10 +492,12 @@ impl SshTarget {
 /// the session is dropped, which ends its `ssh`, or [`Self::attach`] hands
 /// its pipes to the attach role.
 ///
-/// Nobody is asked anything yet: a question, an unknown server key or a
+/// Its questions go to the screen that started it (the node window's strip,
+/// the core move dialog) when the operator's own press started it
+/// (`Wake::Allowed`); otherwise a question, an unknown server key or a
 /// check in the browser ends the sign-in as `sign_in_needed`, as an attempt
-/// Hide made by itself does (D-06); keys, the agent and Tailscale SSH sign
-/// in.
+/// Hide made by itself does (D-06), and keys, the agent and Tailscale SSH
+/// still sign in.
 pub struct Session {
     pipe: SigningIn,
     facts: Facts,
@@ -484,16 +508,26 @@ pub struct Session {
 }
 
 impl Session {
-    /// Signs in to `target`'s alias, as `ssh -G` resolved it (`resolved`);
+    /// Signs in to `target`'s alias, as `ssh -G` resolved it (`resolved`),
+    /// with its questions going to `screen` when `wake` allows asking;
     /// `cancel` ends the `ssh` at once, from the dial to the session's end.
     pub fn open(
         target: &SshTarget,
         resolved: &Resolved,
         cancel: &Cancel,
+        screen: Arc<dyn SignIn>,
+        wake: Wake,
     ) -> Result<Self, SessionError> {
         let name = format!("ssh:{}", target.alias);
         let version = target.program.version().map_err(SessionError::Ssh)?;
-        let (pipe, facts) = sign_in(
+        // D-06, B14: a dial nobody pressed for hands its questions to
+        // nobody, so the first one ends it as a sign-in needed and the
+        // screen never shows it.
+        let asks: Arc<dyn SignIn> = match wake {
+            Wake::Allowed => Arc::clone(&screen),
+            Wake::NotAllowed => Arc::new(NoSignIn),
+        };
+        let signed = sign_in(
             &Dial {
                 program: &target.program,
                 alias: &target.alias,
@@ -502,12 +536,14 @@ impl Session {
                 askpass: target.askpass.as_deref(),
                 target: &name,
             },
-            Arc::new(NoSignIn),
-            Wake::NotAllowed,
+            Arc::clone(&asks),
+            wake,
             cancel,
             &|_| {},
-        )
-        .map_err(SessionError::of_establish)?;
+        );
+        // Signed in or not, nothing of this sign-in waits on the screen.
+        asks.ended();
+        let (pipe, facts) = signed.map_err(SessionError::of_establish)?;
         Ok(Self {
             pipe,
             facts,

@@ -139,6 +139,8 @@ pub(super) fn back_checks_failed(moves: &MoveControl, failed: Vec<FailedCheck>) 
         direction: Some(Direction::Back),
         checked,
         failed,
+        ssh_problem: moves.view().ssh_problem,
+        alias: moves.view().alias,
         ..MoveView::default()
     });
 }
@@ -191,19 +193,29 @@ pub(super) async fn prepare_back(
     );
     let state_dir = placement.state_dir.clone();
     let build = own_build(env).map_err(|reason| fail(CheckId::Connection, reason))?;
+    let press = moves.take_press();
     let inspected = tokio::task::spawn_blocking(move || {
         let mut remote = Remote::new(&home, &alias, &program, &build);
         if let Some(state_dir) = &state_dir {
             remote = remote.with_state_dir(state_dir);
         }
-        let inspected = driver::inspect(&remote, &[])?;
-        Ok::<_, MoveFailure>((remote, inspected))
+        // The operator pressed for these checks, so their dial may ask what
+        // ssh asks in that screen's dialog; the move's later dials ask
+        // nobody (D-06).
+        remote.may_ask(press);
+        let inspected = driver::inspect(&remote, &[]);
+        remote.may_ask(None);
+        let ssh = remote.ssh_problem();
+        inspected
+            .map(|inspected| (remote, inspected))
+            .map_err(|failure| (failure, ssh))
     })
     .await
     .map_err(|error| fail(CheckId::Connection, error.to_string()))?;
     let (remote, inspected) = match inspected {
         Ok(found) => found,
-        Err(failure) => {
+        Err((failure, ssh)) => {
+            super::stopped_on_ssh(moves, ssh, &placement.alias);
             failed.push(FailedCheck {
                 check: CheckId::Connection,
                 detail: format!("{failure:?}"),

@@ -33,6 +33,13 @@ const REQUEST_WITHIN: Duration = Duration::from_secs(10);
 /// How long the askpass waits for its answer: past the row's own bound
 /// (five minutes, D-05), so the row, not the askpass, decides when it ends.
 const ANSWER_WITHIN: Duration = Duration::from_secs(6 * 60);
+/// How long a security key waits for its touch (D-05's five minutes): past
+/// it the attempt ends as a sign-in nobody answered, as a question does.
+const TOUCH_WITHIN: Duration = if cfg!(test) {
+    Duration::from_millis(300)
+} else {
+    Duration::from_secs(5 * 60)
+};
 /// Askpass connections a desk serves at once. ssh asks one question at a
 /// time; anything past this is refused, not queued.
 const MAX_ASKING: usize = 4;
@@ -343,14 +350,19 @@ fn serve(stream: LocalStream, state: &DeskState) {
             state.operator.fetch_add(1, Ordering::SeqCst);
             state.sign_in.show(Some(SignInWait::Touch { prompt }));
             // ssh ends the askpass once the key was touched; its end is this
-            // stream's end.
+            // stream's end. A touch that never comes ends the attempt.
             let mut rest = stream.duplicate();
-            let _ = std::io::copy(
+            let until = Instant::now() + TOUCH_WITHIN;
+            rest.set_deadline(until);
+            let read = std::io::copy(
                 &mut (&mut rest).take(MAX_MESSAGE as u64),
                 &mut std::io::sink(),
             );
             state.sign_in.show(None);
             state.operator.fetch_sub(1, Ordering::SeqCst);
+            if read.is_err() && Instant::now() >= until {
+                lock(&state.refusal).get_or_insert(Refusal::TimedOut);
+            }
             return;
         }
         Asked::Question(_) if lock(&state.refusal).is_some() => return hold(state),
@@ -624,6 +636,32 @@ mod tests {
         assert_eq!(first.join().unwrap(), None);
         assert_eq!(again.join().unwrap(), None);
         assert_eq!(*lock(&row.seen), ["secret"]);
+    }
+
+    /// D-05, B11: a security key's touch is shown and cleared, and one that
+    /// never comes ends the attempt as a sign-in nobody answered once its
+    /// bound passes, as an unanswered question does.
+    #[test]
+    fn a_touch_that_never_comes_ends_the_attempt_at_its_bound() {
+        let (desk, row, _parent) = desk_with(Err(Refusal::Cancelled));
+        let (path, token) = (desk.path.clone(), desk.token.clone());
+        let touching = std::thread::spawn(move || {
+            ask_desk(
+                &path,
+                token,
+                "Confirm user presence for key ED25519-SK SHA256:abc".to_owned(),
+                Some("none".to_owned()),
+            )
+        });
+        let deadline = Instant::now() + std::time::Duration::from_secs(10);
+        while desk.refusal().is_none() {
+            assert!(Instant::now() < deadline, "the touch never timed out");
+            std::thread::yield_now();
+        }
+        assert_eq!(desk.refusal(), Some(Refusal::TimedOut));
+        assert_eq!(*lock(&row.seen), ["touch", "cleared"]);
+        drop(desk);
+        assert_eq!(touching.join().unwrap(), None);
     }
 
     /// A desk whose process died leaves its folder; the next desk opened

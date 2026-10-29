@@ -7,8 +7,8 @@ import type { Device, DeviceHost, Kit, SnapshotRest } from "../snapshot";
 import { REFERENCE_FOLDS, sidebarScene, type SceneContent } from "./sceneData";
 
 /** The states a frame of `design/review-targets.json` names, in the order the review lists them. */
-export const CORE_MOVE_STATES = ["devices", "device-kit-failed", "device-unsupported", "devices-menu", "devices-offline", "node-menu", "checks-failed", "confirm", "moving", "failed", "done", "waiting", "give-up", "take-here", "abandoned"] as const;
-export const CORE_WINDOW_STATES = ["rail-node", "rail-core", "window-moving", "window-updating", "window-unreachable", "window-sign-in", "window-disconnected", "window-waiting"] as const;
+export const CORE_MOVE_STATES = ["devices", "device-kit-failed", "device-unsupported", "devices-menu", "devices-offline", "node-menu", "checks-failed", "confirm", "moving", "failed", "done", "waiting", "give-up", "take-here", "abandoned", "checks-sign-in", "checks-host-key", "checks-ssh-failed"] as const;
+export const CORE_WINDOW_STATES = ["rail-node", "rail-core", "window-moving", "window-updating", "window-unreachable", "window-sign-in", "window-disconnected", "window-waiting", "window-asks", "window-host-key", "window-host-key-changed"] as const;
 export type CoreMoveState = (typeof CORE_MOVE_STATES)[number] | (typeof CORE_WINDOW_STATES)[number];
 
 /**
@@ -64,6 +64,11 @@ export const DIALOG_VIEWS: Partial<Record<CoreMoveState, MoveView>> = {
   "give-up": view({ state: "waiting", step: "reattach", cause: { kind: "unreachable" }, abandon: true }),
   "take-here": view({ state: "waiting", direction: "back", device: null, step: "start_target", cause: { kind: "unreachable" }, abandon: true }),
   abandoned: view({ state: "abandoned" }),
+  // PRD system-ssh-device-link B33: the checks' sign-in asks in the dialog, and a connection that stopped on ssh says
+  // what the device row says.
+  "checks-sign-in": view({ state: "checking", intent: null, sign_in: { question: 2, kind: "secret", prompt: "Enter passphrase for key '/Users/example/.ssh/id_ed25519': ", key_file: "/Users/example/.ssh/id_ed25519", key_command: "ssh-add --apple-use-keychain /Users/example/.ssh/id_ed25519" } }),
+  "checks-host-key": view({ state: "checking", intent: null, sign_in: { question: 1, kind: "host_key", host: "mini.example.ts.net (100.64.0.12)", fingerprint: "SHA256:Q2nT0x9a8pKf3vLr7YbW5cHs1dJe6uMg4iNz0oPqRt8", key_command: null } }),
+  "checks-ssh-failed": view({ state: "checks_failed", intent: null, alias: "mini", failed: [{ check: "connection", detail: "Refused" }], ssh_problem: "host_key_changed" }),
 };
 
 /** The dialog states that open at the give-up confirm, as the strip's action opens it. */
@@ -77,12 +82,16 @@ export const WINDOW_STATES: Partial<Record<CoreMoveState, { connection: "moving"
   "window-sign-in": { connection: "reconnecting", link: { phase: "stopped", machine: null, alias: "mini", problem: "sign_in_needed" } },
   "window-disconnected": { connection: "reconnecting", link: { phase: "disconnected", machine: null, alias: "mini" } },
   "window-waiting": { connection: "moving", move: view({ state: "waiting", step: "reattach", cause: { kind: "unreachable" }, abandon: true }) },
+  // PRD system-ssh-device-link B33: what ssh asks the dial the operator's Retry started, under the strip.
+  "window-asks": { connection: "reconnecting", link: { phase: "connecting", machine: null, alias: "mini", sign_in: { question: 3, kind: "secret", prompt: "al@mini's password: ", key_command: null } } },
+  "window-host-key": { connection: "reconnecting", link: { phase: "connecting", machine: null, alias: "mini", sign_in: { question: 1, kind: "host_key", host: "mini.example.ts.net (100.64.0.12)", fingerprint: "SHA256:Q2nT0x9a8pKf3vLr7YbW5cHs1dJe6uMg4iNz0oPqRt8", key_command: null } } },
+  "window-host-key-changed": { connection: "reconnecting", link: { phase: "stopped", machine: null, alias: "mini", problem: "host_key_changed" } },
 };
 
 /** Which side each state is drawn from. */
 export function sideOf(state: CoreMoveState): CoreMoveSide {
   if (state === "rail-core") return "linked";
-  return state === "node-menu" || state === "take-here" || state === "rail-node" || state === "window-updating" || state === "window-unreachable" || state === "window-sign-in" || state === "window-disconnected" ? "node" : "core";
+  return state === "node-menu" || state === "take-here" || state === "rail-node" || state === "window-updating" || state === "window-unreachable" || state === "window-sign-in" || state === "window-disconnected" || state === "window-asks" || state === "window-host-key" || state === "window-host-key-changed" ? "node" : "core";
 }
 
 /** The device whose ⋯ menu a state opens, and the item it points at. */

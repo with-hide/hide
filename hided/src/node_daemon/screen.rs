@@ -4,6 +4,7 @@
 
 use super::terminals::{InputNotices, take_terminal_key};
 use super::*;
+use crate::core_move::control::MoveScreen;
 
 /// Core frames one screen may leave untaken before its backlog is dropped
 /// and it is drawn again from a fresh snapshot (D-20).
@@ -53,9 +54,18 @@ pub(super) async fn screen(
         state.desktop_screens.fetch_add(1, Ordering::SeqCst);
     }
     let mut local_reads = 0_u64;
+    // This screen's hold on a move it asks for, which its end lets go of.
+    let mover = crate::core_move::control::MoveScreen::new(&state.seat.moves);
+    // B8: the dial this screen's Retry started ends with the screen,
+    // whether or not it asked anything yet.
+    let _press = Press {
+        release: Arc::clone(&state.release_sign_in),
+        connection,
+    };
     let ended = attached(
         &mut socket,
         &state,
+        &mover,
         handshake,
         &forwarded_handshake(&handshake_text),
         connection,
@@ -91,12 +101,19 @@ pub(super) async fn screen(
 /// stands each time that changes (`core_link` frame), and where a move of
 /// the core stands from the moment one is under way (`core_move` frame), a
 /// window shown nothing of a move until then; what it sends meanwhile is
-/// dropped and counted, but for the operator's reconnect (B16) and a move's
-/// asks, such as giving up a move whose peer never answers. `None` when the
-/// screen left first.
-async fn hold(socket: &mut WebSocket, state: &NodeState) -> Option<Arc<LiveLink>> {
+/// dropped and counted, but for the operator's reconnect (B16), an answer to
+/// what the dial their Retry started asks (`core_link` {action: `sign_in`},
+/// PRD system-ssh-device-link B33) and a move's asks, such as giving up a
+/// move whose peer never answers. `None` when the screen left first.
+async fn hold(
+    socket: &mut WebSocket,
+    state: &NodeState,
+    mover: &MoveScreen,
+    connection: u64,
+) -> Option<Arc<LiveLink>> {
     let mut live = state.live.clone();
     let mut phases = state.phases.clone();
+    let mut sign_ins = state.sign_ins.clone();
     let mut told: Option<Value> = None;
     let mut move_frames = state.seat.moves.subscribe();
     move_frames.mark_changed();
@@ -105,7 +122,16 @@ async fn hold(socket: &mut WebSocket, state: &NodeState) -> Option<Arc<LiveLink>
         if let Some(link) = live.borrow_and_update().clone() {
             return Some(link);
         }
-        let frame = phases.borrow_and_update().link_frame(&state.core_alias);
+        // Only the screen whose Retry started the dial is shown what it
+        // asks; another sees the link connecting.
+        let sign_in = sign_ins
+            .borrow_and_update()
+            .clone()
+            .filter(|shown| shown.owner == connection)
+            .map(|shown| shown.sign_in);
+        let frame = phases
+            .borrow_and_update()
+            .link_frame(&state.core_alias, sign_in.as_ref());
         if let Some(frame) = frame
             && told.as_ref() != Some(&frame)
         {
@@ -129,6 +155,11 @@ async fn hold(socket: &mut WebSocket, state: &NodeState) -> Option<Arc<LiveLink>
                     return None;
                 }
             }
+            changed = sign_ins.changed() => {
+                if changed.is_err() {
+                    return None;
+                }
+            }
             changed = move_frames.changed() => {
                 if changed.is_err() {
                     return None;
@@ -136,7 +167,7 @@ async fn hold(socket: &mut WebSocket, state: &NodeState) -> Option<Arc<LiveLink>
                 let view = move_frames.borrow_and_update().clone();
                 move_told |= view.state.busy();
                 if move_told {
-                    let frame = crate::core_move::control::frame(&view);
+                    let frame = mover.frame(&view);
                     if socket.send(Message::Text(frame.into())).await.is_err() {
                         return None;
                     }
@@ -147,12 +178,15 @@ async fn hold(socket: &mut WebSocket, state: &NodeState) -> Option<Arc<LiveLink>
                 Some(Ok(Message::Text(text))) => {
                     match screen_event::read(&text, &[Kind::CoreLink, Kind::CoreMove]) {
                         Some(routed) if routed.kind == Kind::CoreLink => {
-                            if control_link(socket, state, &routed.event).await.is_err() {
+                            if control_link(socket, state, &routed.event, connection)
+                                .await
+                                .is_err()
+                            {
                                 return None;
                             }
                         }
                         Some(routed) => {
-                            if let Err(reason) = state.seat.moves.request_event(&routed.event) {
+                            if let Err(reason) = mover.request_event(&routed.event) {
                                 let frame = crate::core_move::control::refusal_frame(reason);
                                 if socket.send(Message::Text(frame.into())).await.is_err() {
                                     return None;
@@ -178,7 +212,29 @@ async fn hold(socket: &mut WebSocket, state: &NodeState) -> Option<Arc<LiveLink>
 /// off this task, since the record is written durably and a dial in
 /// progress is waited for. A change that did not happen is told to the
 /// screen; why goes to the log. `Err` when the screen left.
-async fn control_link(socket: &mut WebSocket, state: &NodeState, event: &Value) -> Result<(), ()> {
+async fn control_link(
+    socket: &mut WebSocket,
+    state: &NodeState,
+    event: &Value,
+    connection: u64,
+) -> Result<(), ()> {
+    if event.pointer("/payload/action").and_then(Value::as_str) == Some("sign_in") {
+        // The answer goes to the waiting question and nowhere else, and only
+        // from the screen whose Retry started the dial: the log hears only
+        // that it came (B10).
+        let answer = event.get("payload").cloned().and_then(|payload| {
+            serde_json::from_value::<crate::screen_sign_in::SignInAnswer>(payload).ok()
+        });
+        if let Some(answer) = answer {
+            let _ = (state.answer_sign_in)(connection, answer.question, answer.reply);
+        } else {
+            herdr_core::diagnostic!(json!({
+                "component": "node_daemon",
+                "kind": "core_link.sign_in_malformed",
+            }));
+        }
+        return Ok(());
+    }
     let action = event
         .pointer("/payload/action")
         .cloned()
@@ -186,7 +242,7 @@ async fn control_link(socket: &mut WebSocket, state: &NodeState, event: &Value) 
     let outcome = match action {
         Some(action) => {
             let control = Arc::clone(&state.link_control);
-            tokio::task::spawn_blocking(move || control(action))
+            tokio::task::spawn_blocking(move || control(action, connection))
                 .await
                 .unwrap_or_else(|error| Err(error.to_string()))
         }
@@ -218,12 +274,13 @@ async fn control_link(socket: &mut WebSocket, state: &NodeState, event: &Value) 
 async fn attached(
     socket: &mut WebSocket,
     state: &NodeState,
+    mover: &MoveScreen,
     handshake: Handshake,
     handshake_text: &str,
     connection: u64,
     local_reads: &mut u64,
 ) -> ScreenEnd {
-    let Some(link) = hold(socket, state).await else {
+    let Some(link) = hold(socket, state, mover, connection).await else {
         return ScreenEnd::Left;
     };
     let relay = tokio::select! {
@@ -257,7 +314,7 @@ async fn attached(
     // A move of the core is this machine's hided's, beside the core's
     // traffic.
     let mut move_frames = state.seat.moves.subscribe();
-    let frame = crate::core_move::control::frame(&move_frames.borrow_and_update());
+    let frame = mover.frame(&move_frames.borrow_and_update());
     if socket.send(Message::Text(frame.into())).await.is_err() {
         return ScreenEnd::Left;
     }
@@ -268,7 +325,7 @@ async fn attached(
                 if changed.is_err() {
                     return ScreenEnd::Left;
                 }
-                let frame = crate::core_move::control::frame(&move_frames.borrow_and_update());
+                let frame = mover.frame(&move_frames.borrow_and_update());
                 if socket.send(Message::Text(frame.into())).await.is_err() {
                     return ScreenEnd::Left;
                 }
@@ -356,13 +413,13 @@ async fn attached(
                         let routed = screen_event::read(&text, TAKEN_HERE);
                         let routed = routed.as_ref().map(|routed| (routed.kind, &routed.event));
                         if let Some((Kind::CoreLink, event)) = routed {
-                            if control_link(socket, state, event).await.is_err() {
+                            if control_link(socket, state, event, connection).await.is_err() {
                                 return ScreenEnd::Left;
                             }
                             continue;
                         }
                         if let Some((Kind::CoreMove, event)) = routed {
-                            if let Err(reason) = state.seat.moves.request_event(event) {
+                            if let Err(reason) = mover.request_event(event) {
                                 let frame = crate::core_move::control::refusal_frame(reason);
                                 if socket.send(Message::Text(frame.into())).await.is_err() {
                                     return ScreenEnd::Left;
@@ -718,6 +775,19 @@ const TAKEN_HERE: &[Kind] = &[
     Kind::CoreMove,
     Kind::CoreLink,
 ];
+
+/// A screen connection's hold on the dial its Retry starts: dropping it, as
+/// the connection ends, ends that dial's sign-in (B8).
+struct Press {
+    release: Arc<dyn Fn(u64) + Send + Sync>,
+    connection: u64,
+}
+
+impl Drop for Press {
+    fn drop(&mut self) {
+        (self.release)(self.connection);
+    }
+}
 
 #[cfg(test)]
 mod tests {
