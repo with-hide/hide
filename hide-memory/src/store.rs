@@ -1056,6 +1056,35 @@ pub struct MemoryStore {
     connection: Connection,
     mode: StoreMode,
     path: PathBuf,
+    /// A hook reader's invocation expiry, which its busy handler reads; it is
+    /// declared after `connection` so it outlives the handler's last call.
+    _busy_wait: Option<Box<HookExpiry>>,
+}
+
+/// Whether a hook invocation's budget has run out.
+type HookExpiry = Box<dyn Fn() -> bool + Send>;
+
+/// The busy handler of a hook reader: SQLite calls it while another
+/// connection holds the lock the reader needs, and the reader waits for that
+/// lock until its invocation expires, a millisecond at a time.
+///
+/// # Safety
+///
+/// `expiry` is the `HookExpiry` the reader's `MemoryStore` owns, which lives
+/// longer than its connection.
+#[allow(clippy::disallowed_methods)] // a production wait: SQLite retries the lock when this returns
+unsafe extern "C" fn wait_within_hook_budget(
+    expiry: *mut std::ffi::c_void,
+    _attempt: std::ffi::c_int,
+) -> std::ffi::c_int {
+    // SAFETY: the pointer was registered from a live `Box<HookExpiry>` that
+    // the store drops only after its connection is closed.
+    let expired = unsafe { &*expiry.cast::<HookExpiry>() };
+    if std::panic::catch_unwind(std::panic::AssertUnwindSafe(expired)).unwrap_or(true) {
+        return 0;
+    }
+    std::thread::sleep(Duration::from_millis(1));
+    1
 }
 
 impl MemoryStore {
@@ -1081,6 +1110,7 @@ impl MemoryStore {
             connection,
             mode: StoreMode::Writer,
             path: path.to_path_buf(),
+            _busy_wait: None,
         };
         store.check_integrity()?;
         check_projection_integrity(&store.connection)?;
@@ -1110,6 +1140,7 @@ impl MemoryStore {
             connection,
             mode: StoreMode::ReadOnly,
             path: path.to_path_buf(),
+            _busy_wait: None,
         };
         store.check_integrity()?;
         Ok(store)
@@ -1136,20 +1167,52 @@ impl MemoryStore {
     /// Once true, the predicate must remain true for this connection's lifetime.
     pub fn open_hook_read_only_with_expiry<E>(path: &Path, expired: E) -> Result<Self, MemoryError>
     where
-        E: Fn() -> bool + Send + 'static,
+        E: Fn() -> bool + Clone + Send + 'static,
     {
         Self::open_hook_read_only_until(path, Some(expired))
     }
 
+    /// A write transaction never blocks this reader: in WAL mode a reader
+    /// sees the last commit while a writer works. What does block it is the
+    /// moment a connection opens with no other open (it rebuilds the WAL
+    /// index) or closes as the last one (it checkpoints and removes the WAL),
+    /// which every short-lived writer process goes through. Each is bounded by
+    /// the WAL, which autocheckpoint keeps near 1,000 pages, so the reader
+    /// waits it out within its invocation's expiry rather than answering
+    /// unavailable. Without an expiry it does not wait.
     fn open_hook_read_only_until<E>(path: &Path, expired: Option<E>) -> Result<Self, MemoryError>
     where
-        E: Fn() -> bool + Send + 'static,
+        E: Fn() -> bool + Clone + Send + 'static,
     {
+        let busy_wait = expired
+            .clone()
+            .map(|expired| Box::new(Box::new(expired) as HookExpiry));
         let connection = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
         )?;
         connection.busy_timeout(Duration::ZERO)?;
+        if let Some(expiry) = &busy_wait {
+            let expiry: *const HookExpiry = &**expiry;
+            // SAFETY: `busy_wait` moves into the store beside `connection`
+            // and is dropped after it, so the pointer outlives every call;
+            // on an early return the local `busy_wait`, declared first, is
+            // dropped last.
+            let status = unsafe {
+                rusqlite::ffi::sqlite3_busy_handler(
+                    connection.handle(),
+                    Some(wait_within_hook_budget),
+                    expiry.cast_mut().cast(),
+                )
+            };
+            if status != rusqlite::ffi::SQLITE_OK {
+                return Err(rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(status),
+                    None,
+                )
+                .into());
+            }
+        }
         if let Some(expired) = expired {
             connection.progress_handler(250, Some(expired));
         }
@@ -1159,6 +1222,7 @@ impl MemoryStore {
             connection,
             mode: StoreMode::ReadOnly,
             path: path.to_path_buf(),
+            _busy_wait: busy_wait,
         };
         let ready: bool = store.connection.query_row(
             "SELECT generation=validated FROM memory_projection_state WHERE id=1",
@@ -11131,6 +11195,7 @@ PRAGMA user_version=14;"#,
             connection,
             mode: StoreMode::Writer,
             path: PathBuf::new(),
+            _busy_wait: None,
         };
         assert!(
             store
@@ -11263,6 +11328,7 @@ PRAGMA user_version=14;"#,
             connection,
             mode: StoreMode::Writer,
             path: PathBuf::new(),
+            _busy_wait: None,
         };
         let state = store.project_state("p").unwrap();
         assert!(

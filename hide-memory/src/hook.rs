@@ -975,28 +975,79 @@ mod tests {
         assert!(corrupt.context.is_none());
     }
 
-    #[test]
-    fn a_locked_store_answers_unavailable_without_waiting_for_the_writer() {
-        let temp = tempfile::tempdir().unwrap();
-        let (path, project) = enabled_store(temp.path(), &temp.path().join("project"), &[]);
-
-        let lock = rusqlite::Connection::open(&path).unwrap();
-        lock.pragma_update(None, "journal_mode", "DELETE").unwrap();
+    /// Holds the lock a WAL reader waits for, as a connection does while it
+    /// opens alone or closes last: an exclusive-mode connection that has
+    /// written holds the database file until it is dropped.
+    fn hold_store(path: &Path) -> rusqlite::Connection {
+        let lock = rusqlite::Connection::open(path).unwrap();
         lock.pragma_update(None, "locking_mode", "EXCLUSIVE")
             .unwrap();
-        lock.execute_batch("BEGIN EXCLUSIVE").unwrap();
+        lock.execute_batch("BEGIN IMMEDIATE; UPDATE memory_projection_state SET generation=generation WHERE id=1; COMMIT;")
+            .unwrap();
+        lock
+    }
+
+    #[test]
+    fn a_prompt_during_another_connections_lock_waits_for_it_and_gets_its_memory() {
+        let temp = tempfile::tempdir().unwrap();
+        let (path, project) = enabled_store(
+            temp.path(),
+            &temp.path().join("project"),
+            &[rule(
+                "Project Memory provider work uses a bounded queue",
+                0.9,
+            )],
+        );
+        let held = Arc::new(std::sync::Mutex::new(Some(hold_store(&path))));
+        // The lock ends the first time the reader asks whether it may keep
+        // waiting, so the test waits on the reader, not on a clock.
+        let expired = {
+            let held = Arc::clone(&held);
+            let clock = frozen();
+            move || {
+                drop(held.lock().unwrap().take());
+                clock()
+            }
+        };
+        let result = context_for(
+            &path,
+            &project,
+            ask(
+                HookEvent::UserPromptSubmit,
+                "s",
+                Some("the provider queue is stuck"),
+            ),
+            expired,
+        );
+        assert!(
+            held.lock().unwrap().is_none(),
+            "the reader never met the lock"
+        );
+        assert_eq!(result.outcome, HookOutcome::Provided { count: 1 });
+        assert!(result.context.is_some());
+    }
+
+    #[test]
+    fn a_lock_held_past_the_budget_answers_deadline_when_the_budget_ends() {
+        let temp = tempfile::tempdir().unwrap();
+        let (path, project) = enabled_store(temp.path(), &temp.path().join("project"), &[]);
+        let _lock = hold_store(&path);
+        let (elapsed, clock) = invocation_clock();
+        // Each question from the waiting reader moves the clock 10 ms, so the
+        // budget ends after ten waits whatever the machine's speed.
+        let expired = move || {
+            elapsed.fetch_add(10, Ordering::SeqCst);
+            clock()
+        };
         let started = Instant::now();
-        // The lock decides the outcome; the frozen clock never expires, and
-        // the elapsed bound below catches a wait for the writer.
         let result = context_for(
             &path,
             &project,
             ask(HookEvent::UserPromptSubmit, "s", Some("keep going")),
-            frozen(),
+            expired,
         );
-        assert_eq!(result.outcome, HookOutcome::Unavailable);
+        assert_eq!(result.outcome, HookOutcome::Deadline);
         assert!(result.context.is_none());
         assert!(started.elapsed() < Duration::from_millis(crate::HOOK_DEADLINE_MS));
-        lock.execute_batch("ROLLBACK").unwrap();
     }
 }
