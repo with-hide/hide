@@ -3658,6 +3658,32 @@ fn a_missions_open_decision_waits_on_the_operator_on_its_resting_conductors_row(
         })
     );
 
+    // B3: answered from the map, the row leaves 내 차례 at once, while the
+    // answer is still on its way to the Conductor.
+    let key = runtime.missions.book.missions[0]
+        .question
+        .as_ref()
+        .unwrap()
+        .key;
+    assert!(
+        runtime
+            .answer_mission("mission-1", key, None, Some("main".into()), false)
+            .unwrap()
+    );
+    let answered = conductor_shown(&mut runtime);
+    assert_eq!(
+        (answered.ask_subject, answered.group),
+        (None, resting.group.clone())
+    );
+    // The Conductor asks something new: that question stands.
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Rebase on main first?"}),
+    )
+    .unwrap();
+    assert_eq!(conductor_shown(&mut runtime).group, "needs_you");
+
     // B3: cleared, the row shows its own state again at once.
     command(
         &mut runtime,
