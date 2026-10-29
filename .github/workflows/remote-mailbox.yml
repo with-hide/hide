@@ -181,6 +181,7 @@ jobs:
           owner: with-hide
           repositories: hide,hide-private
       - name: Report flaky and failed tests
+        id: flaky
         if: ${{ !cancelled() }}
         continue-on-error: true
         timeout-minutes: 5
@@ -190,11 +191,16 @@ jobs:
       - name: Keep the lane's run directory
         # The daemon's and both Herdr servers' logs behind a failed run, without
         # the staged binaries, the copies of them the install places in each
-        # account's helper and bin folders, and the fixture's SSH keys.
-        if: ${{ failure() }}
+        # account's helper and bin folders, and the fixture's SSH keys. A
+        # flaky run is kept too: its first attempt's logs are the evidence its
+        # issue needs (docs/TESTING.md, Flaky tests). Of the remote core
+        # journeys' runs (rc-*) only the logs are kept: each daemon's and
+        # Herdr server's output and the Logs folders' records, which name the
+        # runner's fixture paths and nothing of its state, keys or binaries.
+        if: ${{ failure() || steps.flaky.outputs.flaky == 'true' }}
         uses: actions/upload-artifact@v7
         with:
-          name: hide-remote-mailbox-logs-${{ inputs.runner }}
+          name: hide-remote-mailbox-logs-${{ inputs.runner }}-attempt-${{ github.run_attempt }}
           include-hidden-files: true
           path: |
             agents/runs/rd-*
@@ -202,21 +208,23 @@ jobs:
             !agents/runs/rd-*/*/*/.ssh/**
             !agents/runs/rd-*/*/*/helper/**
             !agents/runs/rd-*/*/*/bin/**
+            agents/runs/rc-*/**/*.log
+            agents/runs/rc-*/**/Logs/*.jsonl
           if-no-files-found: ignore
       - name: Keep core move failure logs
         # Core-move fixtures use short /tmp paths for Unix sockets, outside
         # rd-*. Keep only logs, never their SSH keys, state or staged binaries.
-        if: ${{ failure() }}
+        if: ${{ failure() || steps.flaky.outputs.flaky == 'true' }}
         uses: actions/upload-artifact@v7
         with:
-          name: hide-core-move-logs-${{ inputs.runner }}
+          name: hide-core-move-logs-${{ inputs.runner }}-attempt-${{ github.run_attempt }}
           include-hidden-files: true
           path: |
             /tmp/hcm-*/**/*.log
             /tmp/hcm-*/**/Logs/*.jsonl
           if-no-files-found: ignore
       - name: Summarize the stalled device connection
-        if: ${{ failure() }}
+        if: ${{ failure() || steps.flaky.outputs.flaky == 'true' }}
         shell: bash
         run: |
           python3 - <<'PY'
