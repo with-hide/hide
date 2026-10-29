@@ -1031,7 +1031,7 @@ impl Runtime {
                     .devices
                     .iter()
                     .filter(|device| device.kind == "remote")
-                    .map(device_answer)
+                    .map(|device| self.device_answer(device))
                     .collect::<Vec<_>>();
                 Ok((serde_json::json!({ "devices": devices }), false))
             }
@@ -1068,7 +1068,7 @@ impl Runtime {
                     .devices
                     .iter()
                     .find(|device| device.id == id)
-                    .map(device_answer)
+                    .map(|device| self.device_answer(device))
                     .ok_or("device_unavailable")?;
                 let name = device["label"].as_str().unwrap_or(&id).to_owned();
                 Ok((
@@ -1097,22 +1097,54 @@ impl Runtime {
                 self.remove_device(&device_id).map_err(refused)?;
                 Ok((serde_json::json!({ "device_id": device_id }), true))
             }
+            DeviceCommand::Retry { device_id } => {
+                let registration = self
+                    .device_registration(&device_id)
+                    .ok_or("device_unknown")?;
+                if !registration.origin.core_redials() {
+                    return Err("device_dials_in".into());
+                }
+                // A connected device, an attempt that runs and one waiting
+                // on the operator are left as they are, as the row offers no
+                // Retry for them: asking again converges on the same
+                // attempt, and an agent never ends a question the operator
+                // is answering (B30).
+                let state = |runtime: &Self| {
+                    runtime
+                        .snapshot
+                        .navigator
+                        .devices
+                        .iter()
+                        .find(|device| device.id == device_id)
+                        .map(|device| runtime.device_answer(device))
+                        .ok_or("device_unavailable")
+                };
+                let before = state(self)?;
+                let started = before["state"] == "failed";
+                if started {
+                    self.retry_remote_device(&device_id);
+                }
+                Ok((
+                    serde_json::json!({ "started": started, "device": state(self)? }),
+                    started,
+                ))
+            }
         }
     }
-}
 
-/// One device as `hide device` answers it.
-fn device_answer(device: &crate::model::DeviceSnapshot) -> serde_json::Value {
-    serde_json::json!({
-        "id": device.id,
-        "label": device.label,
-        "ssh_alias": device.ssh_alias,
-        "state": device.state,
-        "message": device.message,
-        "helper": {
-            "consent": device.host.consent,
-            "state": device.host.state,
-            "message": device.host.message,
-        },
-    })
+    /// One device as `hide device` answers it.
+    fn device_answer(&self, device: &crate::model::DeviceSnapshot) -> serde_json::Value {
+        let remote_state = self
+            .snapshot
+            .status
+            .remote
+            .iter()
+            .find(|status| status.target_id == device.id)
+            .map(|status| status.state.as_str());
+        let problem = self
+            .device_hosts
+            .get(&device.id)
+            .and_then(|host| host.problem);
+        crate::device_command::device_answer(device, remote_state, problem)
+    }
 }

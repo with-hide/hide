@@ -53,11 +53,15 @@ hide agent catalog [--machine <device id>]
 hide device list [--json]
 hide device add <ssh alias> [--name <name>] [--socket <path>] [--json]
 hide device remove <device id> [--json]
+hide device retry <device id> [--wait] [--json]
 ```
 
-- Add or remove a device only when the operator asked for it, and only from the machine that runs Hide; on a device these are refused with `machine_not_permitted`.
+- Add, connect or remove a device only when the operator asked for it, and only from the machine that runs Hide; on a device these are refused with `machine_not_permitted`.
 - `add` takes a `Host` name from `~/.ssh/config` and registers the device without Hide's helper; tell the operator what its answer says: they open Settings › Devices and choose Allow and install on its row, and until then its files, Git and terminals wait.
-- `list` gives each device's id, the one `--machine` takes, its state and whether its helper is allowed; `remove` forgets a device, takes Hide's kit off it when its helper was allowed, and leaves its panes, agents and files running there.
+- `list` gives each device's id, the one `--machine` takes, its `state` (`connected`, `connecting`, `operator_turn`, `failed`), what it `waits_on` from the operator (`allow_and_install`, `sign_in` with its `input`, `host_key`, `browser` with its `url`, or nothing), its `failure` (`action` `sign_in`, `check_host_key` or `retry`, the finer `cause`, and for a retry ssh's last line as `detail`) and its `next_action`.
+- `retry` starts the attempt the row's Retry starts, which may ask the operator; with `--wait` it answers once the device is connected, it is the operator's turn, the attempt failed, or five minutes passed (`device_wait_timeout`). A device that is connected, connecting or waiting on the operator gets no new attempt; the answer says where it is.
+- When it is the operator's turn, ask them for what `next_action` names. No command answers what ssh asks, trusts a server key or allows the helper: those are the operator's, on the device's row, and you never see what they type.
+- `remove` forgets a device, takes Hide's kit off it when its helper was allowed, and leaves its panes, agents and files running there.
 
 ## The operator's screen
 

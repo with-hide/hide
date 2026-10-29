@@ -1,22 +1,34 @@
-//! `hide device list|add|remove`: the SSH devices of Settings › Devices,
-//! for an agent the operator asked to add or remove one. The core answers
-//! (`herdr_core::device_command`); this file reads the words and prints the
-//! answer, as one JSON line with `--json` and as lines for a person without.
+//! `hide device list|add|remove|retry`: the SSH devices of Settings ›
+//! Devices, for an agent the operator asked to add, connect or remove one.
+//! The core answers (`herdr_core::device_command`); this file reads the
+//! words, waits on a retry's outcome when asked, and prints the answer, as
+//! one JSON line with `--json` and as lines for a person without.
 use crate::env::Env;
 use herdr_core::device_command::DeviceCommand;
 use serde_json::{Value, json};
+use std::time::{Duration, Instant};
 
-pub const USAGE: &str = "hide device list [--json]\nhide device add <ssh alias> [--name <name>] [--socket <path>] [--json]\nhide device remove <device id> [--json]";
+pub const USAGE: &str = "hide device list [--json]\nhide device add <ssh alias> [--name <name>] [--socket <path>] [--json]\nhide device remove <device id> [--json]\nhide device retry <device id> [--wait] [--json]";
+
+/// How long `retry --wait` waits for an attempt to connect, reach the
+/// operator's turn or fail: past ssh connecting and a first install of
+/// Hide's helper over a slow link. What waits on the operator returns at
+/// once, so this bounds only the attempt's own work.
+const WAIT_BOUND: Duration = Duration::from_secs(300);
+const WAIT_POLL: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Eq, PartialEq)]
 pub struct DeviceCli {
     pub command: DeviceCommand,
     pub json: bool,
+    /// `retry --wait`: answer the attempt's outcome, not its start.
+    pub wait: bool,
 }
 
 pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli, String> {
     let verb = args.next().map(String::as_str);
     let mut json = false;
+    let mut wait = false;
     let mut name = None;
     let mut socket = None;
     let mut words = Vec::new();
@@ -24,6 +36,10 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
         let slot = match arg.as_str() {
             "--json" if !json => {
                 json = true;
+                continue;
+            }
+            "--wait" if verb == Some("retry") && !wait => {
+                wait = true;
                 continue;
             }
             "--name" if verb == Some("add") && name.is_none() => &mut name,
@@ -49,47 +65,116 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
         (Some("remove"), [device_id]) => DeviceCommand::Remove {
             device_id: device_id.clone(),
         },
+        (Some("retry"), [device_id]) => DeviceCommand::Retry {
+            device_id: device_id.clone(),
+        },
         _ => return Err(USAGE.to_owned()),
     };
     if !command.valid() {
         return Err(USAGE.to_owned());
     }
-    Ok(DeviceCli { command, json })
+    Ok(DeviceCli {
+        command,
+        json,
+        wait,
+    })
 }
 
 pub fn run(env: &Env, cli: &DeviceCli) -> Result<(), String> {
     let answer = (|| {
-        let mut credential = crate::workspace_cli::Credential::acquire(env)?;
-        crate::workspace_cli::request_device(&mut credential, &cli.command)
+        let mut credential =
+            crate::workspace_cli::Credential::acquire(env).map_err(Refused::Unreachable)?;
+        let mut value = ask(&mut credential, &cli.command)?;
+        if let (true, DeviceCommand::Retry { device_id }) = (cli.wait, &cli.command) {
+            value["device"] = outcome(&mut credential, device_id, value["device"].clone())?;
+        }
+        Ok(value)
     })();
-    let (code, message) = match answer {
-        Ok(answer) if answer["ok"] == true => {
-            let value = &answer["result"];
+    let (code, message, device) = match answer {
+        Ok(value) => {
             if cli.json {
                 println!("{}", json!({"ok":true,"value":value}));
             } else {
-                print!("{}", draw(&cli.command, value));
+                print!("{}", draw(&cli.command, &value));
             }
             return Ok(());
         }
-        Ok(answer) => {
-            let code = answer["reason"]
-                .as_str()
-                .unwrap_or("device_unavailable")
-                .to_owned();
-            let message = answer["next_action"].as_str().unwrap_or(&code).to_owned();
-            (code, message)
-        }
-        Err(code) => {
+        Err(Refused::Answer { code, message }) => (code, message, None),
+        Err(Refused::Unreachable(code)) => {
             let message = crate::cli::request_next_action(&code).to_owned();
-            (code, message)
+            (code, message, None)
         }
+        Err(Refused::WaitedOut(device)) => (
+            "device_wait_timeout".to_owned(),
+            format!(
+                "The attempt is still connecting after {} seconds; run hide device retry {} --wait again to keep waiting",
+                WAIT_BOUND.as_secs(),
+                device["id"].as_str().unwrap_or_default()
+            ),
+            Some(device),
+        ),
     };
-    println!(
-        "{}",
-        json!({"ok":false,"error":{"code":code,"message":message}})
-    );
+    let mut line = json!({"ok":false,"error":{"code":code,"message":message}});
+    if let Some(device) = device {
+        line["device"] = device;
+    }
+    println!("{line}");
     Err(code)
+}
+
+enum Refused {
+    /// The core's refusal, with what the caller does about it.
+    Answer { code: String, message: String },
+    /// No answer arrived, for this reason code.
+    Unreachable(String),
+    /// `retry --wait` reached its bound while the attempt still ran; the
+    /// device as last read.
+    WaitedOut(Value),
+}
+
+fn ask(
+    credential: &mut crate::workspace_cli::Credential<'_>,
+    command: &DeviceCommand,
+) -> Result<Value, Refused> {
+    let answer =
+        crate::workspace_cli::request_device(credential, command).map_err(Refused::Unreachable)?;
+    if answer["ok"] == true {
+        return Ok(answer["result"].clone());
+    }
+    let code = answer["reason"]
+        .as_str()
+        .unwrap_or("device_unavailable")
+        .to_owned();
+    let message = answer["next_action"].as_str().unwrap_or(&code).to_owned();
+    Err(Refused::Answer { code, message })
+}
+
+/// Reads the device until its attempt has an outcome: connected, the
+/// operator's turn or failed (PRD system-ssh-device-link B30).
+#[allow(clippy::disallowed_methods)] // polls a state the core changes on its own worker, bounded by WAIT_BOUND
+fn outcome(
+    credential: &mut crate::workspace_cli::Credential<'_>,
+    device_id: &str,
+    mut device: Value,
+) -> Result<Value, Refused> {
+    let deadline = Instant::now() + WAIT_BOUND;
+    while device["state"] == "connecting" {
+        if Instant::now() >= deadline {
+            return Err(Refused::WaitedOut(device));
+        }
+        std::thread::sleep(WAIT_POLL);
+        let list = ask(credential, &DeviceCommand::List)?;
+        device = list["devices"]
+            .as_array()
+            .and_then(|devices| devices.iter().find(|device| device["id"] == device_id))
+            .cloned()
+            // Removed while the attempt ran.
+            .ok_or_else(|| Refused::Answer {
+                code: "device_unknown".to_owned(),
+                message: herdr_core::device_command::next_action("device_unknown").to_owned(),
+            })?;
+    }
+    Ok(device)
 }
 
 /// The answer as lines for a person.
@@ -113,28 +198,48 @@ fn draw(command: &DeviceCommand, value: &Value) -> String {
         DeviceCommand::Remove { device_id } => format!(
             "Removed {device_id}. Its panes, agents and files on the device keep running.\n"
         ),
+        DeviceCommand::Retry { .. } => format!(
+            "{}{}",
+            if value["started"] == true {
+                "Started an attempt: "
+            } else {
+                "No new attempt: "
+            },
+            device_line(&value["device"])
+        ),
     }
 }
 
 fn device_line(device: &Value) -> String {
     let text = |key: &str| device[key].as_str().unwrap_or_default();
-    let helper = &device["helper"];
-    let helper_state = match (helper["consent"].as_str(), helper["state"].as_str()) {
-        (Some("none" | "outdated"), _) => {
-            "not allowed - choose Allow and install in Settings > Devices"
-        }
-        (_, Some(state)) => state,
-        _ => "unknown",
-    };
     let mut line = format!(
-        "{}  {}  ssh {}  {}  helper {helper_state}\n",
+        "{}  {}  ssh {}  {}\n",
         text("id"),
         text("label"),
         text("ssh_alias"),
-        text("state"),
+        text("state").replace('_', " "),
     );
-    if let Some(message) = device["message"].as_str() {
-        line.push_str(&format!("  {message}\n"));
+    let waits_on = &device["waits_on"];
+    if let Some(kind) = waits_on["kind"].as_str() {
+        line.push_str(&format!("  waits on {}", kind.replace('_', " ")));
+        if let Some(input) = waits_on["input"].as_str() {
+            line.push_str(&format!(" ({input})"));
+        }
+        line.push('\n');
+    }
+    let failure = &device["failure"];
+    if let Some(action) = failure["action"].as_str() {
+        line.push_str(&format!("  failed: {}", action.replace('_', " ")));
+        if let Some(cause) = failure["cause"].as_str() {
+            line.push_str(&format!(" ({cause})"));
+        }
+        if let Some(detail) = failure["detail"].as_str() {
+            line.push_str(&format!(" - {detail}"));
+        }
+        line.push('\n');
+    }
+    if let Some(next) = device["next_action"].as_str() {
+        line.push_str(&format!("  next: {next}\n"));
     }
     line
 }
@@ -166,6 +271,7 @@ mod tests {
                     herdr_socket_path: Some("/tmp/h.sock".into()),
                 },
                 json: false,
+                wait: false,
             })
         );
         assert!(parse_words(&["add"]).is_err());
@@ -176,14 +282,50 @@ mod tests {
     }
 
     #[test]
-    fn a_device_without_the_helper_says_where_to_allow_it() {
+    fn retry_takes_one_device_id_and_waits_only_when_asked() {
+        let retry = |wait| {
+            Ok(DeviceCli {
+                command: DeviceCommand::Retry {
+                    device_id: "studio".into(),
+                },
+                json: true,
+                wait,
+            })
+        };
+        assert_eq!(parse_words(&["retry", "studio", "--json"]), retry(false));
+        assert_eq!(
+            parse_words(&["retry", "--wait", "studio", "--json"]),
+            retry(true)
+        );
+        assert!(parse_words(&["retry"]).is_err());
+        assert!(parse_words(&["retry", "studio", "--wait", "--wait"]).is_err());
+        assert!(parse_words(&["list", "--wait"]).is_err());
+        // Nothing answers what the operator answers on the row.
+        for verb in ["allow", "trust", "answer", "sign-in"] {
+            assert!(parse_words(&[verb, "studio"]).is_err(), "{verb}");
+        }
+    }
+
+    #[test]
+    fn a_device_says_what_it_waits_on_and_what_to_do() {
         let line = device_line(&json!({
-            "id": "studio", "label": "Studio", "ssh_alias": "studio", "state": "unavailable",
-            "message": null, "helper": {"consent": "none", "state": "not_allowed", "message": null},
+            "id": "studio", "label": "Studio", "ssh_alias": "studio", "state": "operator_turn",
+            "waits_on": {"kind": "sign_in", "input": "secret"}, "failure": null,
+            "next_action": "Ask the operator to type the password or code ssh asks for on Studio's row in Settings > Devices",
         }));
         assert_eq!(
             line,
-            "studio  Studio  ssh studio  unavailable  helper not allowed - choose Allow and install in Settings > Devices\n"
+            "studio  Studio  ssh studio  operator turn\n  waits on sign in (secret)\n  next: Ask the operator to type the password or code ssh asks for on Studio's row in Settings > Devices\n"
+        );
+        let line = device_line(&json!({
+            "id": "studio", "label": "Studio", "ssh_alias": "studio", "state": "failed",
+            "waits_on": null,
+            "failure": {"action": "retry", "cause": "unclassified", "detail": "kex_exchange_identification: Connection closed"},
+            "next_action": "Fix what detail names, or ask the operator to, then run hide device retry studio",
+        }));
+        assert_eq!(
+            line,
+            "studio  Studio  ssh studio  failed\n  failed: retry (unclassified) - kex_exchange_identification: Connection closed\n  next: Fix what detail names, or ask the operator to, then run hide device retry studio\n"
         );
     }
 }

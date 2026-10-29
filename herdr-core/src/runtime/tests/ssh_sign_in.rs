@@ -589,3 +589,97 @@ fn ended_attempts_leave_no_slot_for_their_devices() {
         runtime.device_attempts.is_empty()
     });
 }
+
+fn device_command(
+    shared: &Arc<Mutex<Runtime>>,
+    command: crate::device_command::DeviceCommand,
+) -> serde_json::Value {
+    shared
+        .lock()
+        .unwrap()
+        .device_command(crate::node::TEST_NODE, command)
+        .expect("answered")
+        .0
+}
+
+fn retry_command() -> crate::device_command::DeviceCommand {
+    crate::device_command::DeviceCommand::Retry {
+        device_id: DEVICE.to_owned(),
+    }
+}
+
+/// B29-B31: `hide device` reads a stopped sign-in as the operator's to do,
+/// its retry starts the row's attempt that may ask, and while the row asks
+/// the answer names what to ask the operator for without ssh's words, and
+/// another retry leaves the question the operator is answering alone.
+#[test]
+fn hide_device_retry_starts_the_rows_attempt_and_leaves_its_question_alone() {
+    use crate::device_command::DeviceCommand;
+    let (shared, asked) = ssh_runtime();
+    shared.lock().unwrap().connect_registered_devices();
+    settled(&shared);
+    let list = device_command(&shared, DeviceCommand::List);
+    let device = &list["devices"][0];
+    assert_eq!(device["state"], "failed");
+    assert_eq!(
+        device["failure"]["action"], "sign_in",
+        "a sign-in nobody was asked for is signed in again"
+    );
+    assert_eq!(device["failure"]["cause"], "sign_in_needed");
+
+    let started = device_command(&shared, retry_command());
+    assert_eq!(started["started"], true);
+    assert_eq!(started["device"]["state"], "connecting");
+    question(&shared);
+    let waiting = device_command(&shared, retry_command());
+    assert_eq!(waiting["started"], false);
+    assert_eq!(waiting["device"]["state"], "operator_turn");
+    assert_eq!(
+        waiting["device"]["waits_on"],
+        serde_json::json!({"kind": "sign_in", "input": "secret"})
+    );
+    assert!(
+        waiting["device"]["next_action"]
+            .as_str()
+            .is_some_and(|next| next.contains("password or code")),
+        "{waiting}"
+    );
+    assert!(
+        !waiting.to_string().contains("alice"),
+        "ssh's question reached the answer: {waiting}"
+    );
+    assert_eq!(
+        *asked.wakes.lock().unwrap(),
+        [Wake::NotAllowed, Wake::Allowed],
+        "the second retry started an attempt"
+    );
+}
+
+/// B29, operator decision 2026-10-30: a failure reads as the row's one
+/// action for it, with the core's finer cause beside it; a changed server
+/// key is checked in a terminal, and a refusing access policy is retried
+/// once changed, not signed in again.
+#[test]
+fn hide_device_reads_a_failure_as_the_rows_action() {
+    for (problem, action, said) in [
+        (SshProblem::HostKeyChanged, "check_host_key", "ssh mini"),
+        (SshProblem::PolicyRefused, "retry", "hide device retry mini"),
+        (SshProblem::Unreachable, "retry", "hide device retry mini"),
+    ] {
+        let (shared, asked) = ssh_runtime();
+        *asked.fails_with.lock().unwrap() = Some(problem);
+        shared.lock().unwrap().connect_registered_devices();
+        settled(&shared);
+        let list = device_command(&shared, crate::device_command::DeviceCommand::List);
+        let device = &list["devices"][0];
+        assert_eq!(device["state"], "failed", "{problem:?}");
+        assert_eq!(device["failure"]["action"], action, "{problem:?}");
+        assert_eq!(device["failure"]["cause"], problem.code());
+        assert!(
+            device["next_action"]
+                .as_str()
+                .is_some_and(|next| next.contains(said)),
+            "{device}"
+        );
+    }
+}

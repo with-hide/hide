@@ -452,8 +452,12 @@ When ssh asks for something, the machine's row in Settings › Devices asks you:
 hide hands the answer to that ssh and keeps it nowhere, so a later connection asks again; for a key's passphrase the row shows the `ssh-add` command (`ssh-add --apple-use-keychain <key>` on a Mac) that puts the key in your agent so it is not asked again.
 A reconnect hide starts on its own asks nothing and stops at Sign in on the row until you press it; a server whose key no longer matches `known_hosts` is refused without asking, with the `ssh <alias>` to check it in a terminal.
 
-An agent you ask to add a machine does it with `hide device add <alias> [--name <name>] [--socket <path>]`, run on the machine that runs Hide; `hide device list` shows each machine's id, state and helper, and `hide device remove <id>` removes one as Settings does.
+An agent you ask to add a machine does it with `hide device add <alias> [--name <name>] [--socket <path>]`, run on the machine that runs Hide, and `hide device remove <id>` removes one as Settings does.
 The command registers the machine without Hide's helper, and its answer tells the agent to ask you to choose Allow and install on the machine's row in Settings › Devices: installing writes that account's hook files, which only you agree to, and until then the machine's Herdr, files, Git and terminals wait.
+`hide device list` shows each machine's id and where its connection is: connected, connecting, your turn, or failed.
+For your turn it names what the row waits on (Allow and install, a sign-in to type, a server key to trust, or a browser page with its link), and for a failure it names the row's one action for it (sign in, check the changed server key with `ssh <alias>` in a terminal, or retry once what ssh's last line names is fixed) with the finer cause beside it; it never carries what ssh asks in its own words or anything you type.
+`hide device retry <id>` starts the attempt the row's Retry starts, which may ask you on the row, and with `--wait` answers once the machine is connected, it is your turn, the attempt failed, or five minutes passed; a machine already connected, connecting or waiting on you gets no new attempt.
+When it is your turn the agent asks you for what the row needs, such as "type the password or code ssh asks for on the row": no command answers what ssh asks, trusts a server key or allows the helper, so those stay yours, on the row.
 A remove is refused while a file tab of that machine is open, because Settings stores the tab's draft first and the command cannot; a command run on a connected machine is refused with `machine_not_permitted`.
 
 The remote machine does not need Herdr installed or a server running first.

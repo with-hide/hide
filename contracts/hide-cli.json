@@ -584,6 +584,21 @@
             ],
             "type": "object"
         },
+        "device_retried": {
+            "properties": {
+                "device": {
+                    "type": "object"
+                },
+                "started": {
+                    "type": "object"
+                }
+            },
+            "required": [
+                "started",
+                "device"
+            ],
+            "type": "object"
+        },
         "inbox": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "definitions": {
@@ -2215,6 +2230,42 @@
         },
         {
             "answers": [
+                "device_retried"
+            ],
+            "arguments": [
+                {
+                    "name": "device_id",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "device retry",
+            "options": [
+                {
+                    "name": "--wait",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "machine_not_permitted",
+                "device_unknown",
+                "device_dials_in",
+                "device_wait_timeout"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
                 "letter"
             ],
             "arguments": [
@@ -3553,7 +3604,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:b711f3291862bea12d5d3bccee299e221261318d64e700ab05e86c650f87e089",
+    "digest": "sha256:d92c5a9dbe78feaab4273a3c3c97f0545ebbf7b4146e2f294dfc052080eaa3e1",
     "envelopes": {
         "agent": {
             "answer": "value",
