@@ -799,13 +799,13 @@ fn a_sleeping_child_is_archived_with_its_root_once_its_label_proves_the_conversa
     assert!(record(&runtime).is_none(), "nothing was saved");
 
     let session = session_of("w1:p3");
-    let transcript = "/home/operator/.claude/projects/a/s-w1-p3.jsonl";
+    let transcript = format!("{A}/s-w1-p3.jsonl");
     let owner = hide_session::label_reference_token("claude", "id", &session);
     let label = crate::labels::store::PaneRecord {
         owner: owner.clone(),
         proven_reference: owner,
         native_session_id: Some(session.clone()),
-        native_source_path: Some(transcript.to_owned()),
+        native_source_path: Some(transcript.clone()),
         ..Default::default()
     };
     runtime.set_label_overlay(crate::labels::overlay::LabelOverlay::of_records(
@@ -826,7 +826,7 @@ fn a_sleeping_child_is_archived_with_its_root_once_its_label_proves_the_conversa
             .source_reference
             .as_ref()
             .map(|reference| (reference.kind.as_str(), reference.value.as_str())),
-        Some(("path", transcript)),
+        Some(("path", transcript.as_str())),
         "its resume proves the transcript the label read"
     );
     assert_eq!(saved.members.len(), 5);
