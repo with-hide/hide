@@ -58,6 +58,9 @@ else hs=none; sum() { echo none; }; fi;
 safe() { set -- $(ls -ldn -- "$1" 2>/dev/null); case ${1:-} in d*) ;; *) return 3;; esac; [ "${3:-}" = "$uid" ] || [ "${3:-}" = 0 ] || return 1; case $1 in ?????w*|????????w*) ;; *) return 0;; esac; [ "$3" = 0 ] || return 2; case $1 in ?????????[tT]*) return 0;; esac; return 2; };
 mine() { set -- $(ls -ldn -- "$1" 2>/dev/null); [ "${3:-}" = "$uid" ] || return 1; case ${1:-} in ?????w*|????????w*) return 1;; esac; return 0; };
 store() { { (umask 077; mkdir -p -- "${1%/*}") && cat > "$1"; } || { cat > /dev/null; return 1; }; };
+o= e= x= t=;
+trap 'rm -f -- ${o:+"$o"} ${e:+"$e"} ${x:+"$x"} ${t:+"$t"}' EXIT;
+trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 141' PIPE; trap 'exit 143' TERM;
 say probe "$me" "${HOME:-}" "$(uname -s)" "$(uname -m)" "${mid:--}" "$hs";
 root=;
 while IFS=$T read -r cmd a b c d; do
@@ -76,20 +79,20 @@ while [ "$i" -lt "$a" ] && IFS=$T read -r rel dig; do i=$((i+1)); f=$root/$rel; 
 say end;;
 put) [ -n "$root" ] || { say fail "no install folder was chosen"; exit 65; }; f=$root/$a; t=${f%/*}/.upload-${f##*/}-$$;
 find "${f%/*}" -maxdepth 1 -name '.upload-*' -mmin +10 -exec rm -f {} + 2>/dev/null;
-if head -c "$d" | store "$t" && [ "$(sum "$t")" = "$b" ] && chmod -- "$c" "$t" && mv -f -- "$t" "$f"; then say ok; else rm -f -- "$t"; say fail "$a did not arrive whole"; fi;;
+if head -c "$d" | store "$t" && [ "$(sum "$t")" = "$b" ] && chmod -- "$c" "$t" && mv -f -- "$t" "$f"; then t=; say ok; else rm -f -- "$t"; t=; say fail "$a did not arrive whole"; fi;;
 start) [ -n "$root" ] || { say fail "no install folder was chosen"; exit 65; }; h=$root/$a;
 case $b in session=*) unset HERDR_SOCKET_PATH; HERDR_SESSION=${b#session=}; export HERDR_SESSION;; socket=*) unset HERDR_SESSION; HERDR_SOCKET_PATH=${b#socket=}; export HERDR_SOCKET_PATH;; esac;
 [ -x "$h" ] || { say fail "the helper $h is missing"; exit 65; };
 cd -- "$HOME" 2>/dev/null || :;
 say start; exec "$h" node serve --own-herdr;;
 run) set --; i=0; while [ "$i" -lt "$a" ] && IFS= read -r w; do set -- "$@" "$w"; i=$((i+1)); done;
-o=$(mktemp) || { say fail "no temporary file for the command's output"; continue; };
-e=$(mktemp) || { rm -f -- "$o"; say fail "no temporary file for the command's output"; continue; };
-command "$@" </dev/null >"$o" 2>"$e"; s=$?; ol=$(($(wc -c <"$o"))); el=$(($(wc -c <"$e")));
+o=$(mktemp "${TMPDIR:-/tmp}/hide-run.XXXXXX") && e=$(mktemp "${TMPDIR:-/tmp}/hide-run.XXXXXX") && x=$(mktemp "${TMPDIR:-/tmp}/hide-run.XXXXXX") || { rm -f -- ${o:+"$o"} ${e:+"$e"}; o= e= x=; say fail "no temporary file for the command's output"; continue; };
+{ { command "$@" </dev/null; echo $? >"$x"; } 2>&1 1>&3 3>&- | head -c $((b+1)) >"$e"; } 3>&1 | head -c $((b+1)) >"$o";
+s=$(cat -- "$x"); s=${s:-255}; ol=$(($(wc -c <"$o"))); el=$(($(wc -c <"$e")));
 if [ "$ol" -gt "$b" ] || [ "$el" -gt "$b" ]; then say big "$s" "$ol" "$el"; else say ran "$s" "$ol" "$el"; cat -- "$o" "$e"; fi;
-rm -f -- "$o" "$e";;
+rm -f -- "$o" "$e" "$x"; o= e= x=;;
 fput) case $a in /*) ;; *) head -c "$c" >/dev/null; say fail "$a is not absolute"; continue;; esac; t=$a.part;
-if head -c "$c" | (umask 077; store "$t") && [ "$(sum "$t")" = "$b" ] && mv -f -- "$t" "$a"; then say ok; else rm -f -- "$t"; say fail "$a did not arrive whole"; fi;;
+if head -c "$c" | (umask 077; store "$t") && [ "$(sum "$t")" = "$b" ] && mv -f -- "$t" "$a"; then t=; say ok; else rm -f -- "$t"; t=; say fail "$a did not arrive whole"; fi;;
 fget) if [ -f "$a" ] && [ -r "$a" ]; then n=$(($(wc -c <"$a"))); say file "$n" "$(sum "$a")"; head -c "$n" <"$a"; else say fail "$a is not a file Hide can read"; fi;;
 attach) [ -x "$a" ] || { say fail "$a is missing"; exit 65; };
 cd -- "${HOME:-/}" 2>/dev/null || :;
@@ -513,9 +516,12 @@ fn number<T: std::str::FromStr>(field: &str) -> Result<T, StepError> {
 }
 
 /// Runs `argv` on the machine with no input, from the account's home, and
-/// answers its exit status and output, each at most `cap` bytes. A command
-/// still running at `until` loses the connection, and the command is not
-/// waited for.
+/// answers its exit status and output, each at most `cap` bytes: the script
+/// keeps no more than one byte past the cap of either while the command
+/// writes, and a command that writes past it is refused (the command ends
+/// on its next write). A command still running at `until` loses the
+/// connection, and the command is not waited for; the script removes its
+/// temporary files however it ends.
 pub(crate) fn run(
     pipe: &mut dyn Pipe,
     argv: &[String],
