@@ -331,9 +331,10 @@ it("draws each card's state as its mark and border, colour only for what wants a
     }
     expect(card(map, "old").querySelector("[data-node-landing]")).toBeNull();
     expect(card(map, "outside").className).toContain("border-dotted");
-    // A pull request's number is plain on a card; its state's colours are the panel's.
+    // A pull request Hide read carries its state's PR mark on the card, as in the panel.
     expect(card(map, "core").querySelector("[data-node-pr]")?.textContent).toBe(`${"#"}1703`);
-    expect(card(map, "core").querySelector("[data-pr-mark]")).toBeNull();
+    expect(card(map, "core").querySelector("[data-pr-mark]")?.getAttribute("data-pr-mark")).toBe("mergeable");
+    expect(card(map, "old").querySelector("[data-pr-mark]")?.getAttribute("data-pr-mark")).toBe("merged");
     expect(card(map, "core").querySelector("[data-node-criteria]")?.textContent).toBe("criteria 2/4");
     // n is the ✓ lines alone; the skipped one stands beside it.
     expect(card(map, "engine").querySelector("[data-node-criteria]")?.textContent).toBe("criteria 1/4⤳1");

@@ -7,8 +7,8 @@ import type { FullConfig } from "@playwright/test";
 import { endVctip } from "./platform-fixture";
 import { buildFixtureShims } from "./shims/build";
 
-export default function globalSetup(config: FullConfig): void {
-  buildFixtureShims(path.dirname(config.configFile!));
+export default async function globalSetup(config: FullConfig): Promise<void> {
+  await buildFixtureShims(path.dirname(config.configFile!));
   if (process.platform === "win32") {
     const ended = endVctip();
     if (ended.length > 0) console.log(`ended vctip.exe ${ended.join(", ")} before the first test`);

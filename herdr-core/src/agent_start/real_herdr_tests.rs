@@ -264,10 +264,26 @@ impl PrivateHerdr {
         self.request("pane.process_info", json!({"pane_id": pane}))
     }
 
+    /// What the fixture's programs recorded under `name`: the lines they
+    /// appended to that file, or on Windows the records `RECORD` wrote as
+    /// files of their own in that folder, in no particular order.
     fn file(&self, name: &str) -> String {
-        std::fs::read_to_string(self.home.join(name))
-            .unwrap_or_default()
-            .replace("\r\n", "\n")
+        let path = self.home.join(name);
+        #[cfg(windows)]
+        {
+            let Ok(records) = std::fs::read_dir(&path) else {
+                return String::new();
+            };
+            records
+                .map(|record| std::fs::read_to_string(record.unwrap().path()).unwrap_or_default())
+                .collect()
+        }
+        #[cfg(unix)]
+        {
+            std::fs::read_to_string(path)
+                .unwrap_or_default()
+                .replace("\r\n", "\n")
+        }
     }
 
     /// A new unfocused tab in `workspace`, made as the product makes an
@@ -425,11 +441,19 @@ fn unix_agent(herdr: &PrivateHerdr) {
     std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
 }
 
-/// Appends a line to a file in the fixture home, again while another pane
-/// holds the file: Windows refuses a second writer, and two panes record at
-/// once.
+/// Writes a line as a file of its own in the folder `$kind` of the fixture
+/// home. Two panes record at once, and Windows refuses a second writer of one
+/// file: appending to a shared file needed a retry that caught every error,
+/// and when it gave up the pane said only that the file "stayed locked"
+/// (issues 180 and 277). A record of its own has no other writer, and any
+/// error it meets is the pane's own message. It calls .NET rather than a
+/// cmdlet, so no module loads on first use while a start waits.
 #[cfg(windows)]
-const RECORD: &str = "function Record($file, $line) { for ($i = 0; $i -lt 50; $i++) { try { Add-Content -ErrorAction Stop -Path \"$env:USERPROFILE\\$file\" -Value $line; return } catch { Start-Sleep -Milliseconds 100 } }; throw \"$file stayed locked\" }\r\n";
+const RECORD: &str = "function Record($kind, $line) { [IO.File]::WriteAllText([IO.Path]::Combine($env:USERPROFILE, $kind, [guid]::NewGuid().ToString('N')), $line + \"`n\") }\r\n";
+
+/// The pane's folder name, without a cmdlet.
+#[cfg(windows)]
+const FOLDER: &str = "[IO.Path]::GetFileName($PWD.ProviderPath)";
 
 /// Herdr starts Windows agents through PowerShell: `claude.ps1` is found as
 /// a script, records its folder and arguments, and runs a copy of
@@ -438,6 +462,7 @@ const RECORD: &str = "function Record($file, $line) { for ($i = 0; $i -lt 50; $i
 fn windows_agent(herdr: &PrivateHerdr) {
     let agent = herdr.home.join("agent");
     std::fs::create_dir_all(&agent).unwrap();
+    std::fs::create_dir_all(herdr.home.join("claude-args")).unwrap();
     let system = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
     std::fs::copy(
         Path::new(&system).join(r"System32\timeout.exe"),
@@ -447,7 +472,7 @@ fn windows_agent(herdr: &PrivateHerdr) {
     std::fs::write(
         herdr.home.join(r"bin\claude.ps1"),
         format!(
-            "{RECORD}Record 'claude-args' ((Split-Path -Leaf (Get-Location).Path) + ' ' + ($args -join ' '))\r\n& \"$env:USERPROFILE\\agent\\claude.exe\" /t 600 /nobreak\r\n"
+            "{RECORD}Record 'claude-args' ({FOLDER} + ' ' + ($args -join ' '))\r\n& \"$env:USERPROFILE\\agent\\claude.exe\" /t 600 /nobreak\r\n"
         ),
     )
     .unwrap();
@@ -505,6 +530,7 @@ fn user_files(herdr: &PrivateHerdr, shell: &str) {
 #[cfg(windows)]
 fn user_files(herdr: &PrivateHerdr, _shell: &str) {
     std::fs::create_dir_all(herdr.home.join("Documents")).unwrap();
+    std::fs::create_dir_all(herdr.home.join("answers")).unwrap();
     let profile = Command::new("powershell.exe")
         .args(["-NoProfile", "-Command", "$PROFILE.CurrentUserCurrentHost"])
         .env("USERPROFILE", &herdr.home)
@@ -521,7 +547,7 @@ fn user_files(herdr: &PrivateHerdr, _shell: &str) {
     std::fs::write(
         &profile,
         format!(
-            "{RECORD}Write-Host -NoNewline '{QUESTION} '\r\n$key = [Console]::ReadKey($true)\r\nRecord 'answers' ((Split-Path -Leaf (Get-Location).Path) + ' answered [' + $key.KeyChar + ']')\r\n"
+            "{RECORD}[Console]::Write('{QUESTION} ')\r\n$key = [Console]::ReadKey($true)\r\nRecord 'answers' ({FOLDER} + ' answered [' + $key.KeyChar + ']')\r\n"
         ),
     )
     .unwrap();

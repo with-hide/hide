@@ -245,6 +245,12 @@ mod tests {
     /// kit builds: Node, which an agent CLI installed from npm runs, aborts at
     /// start-up without `SystemRoot`. Node is required, not optional, as in
     /// hide-agent-hooks' `windows_scripts.rs`.
+    ///
+    /// This is the first Node a CI job starts, and a fresh runner reads and
+    /// scans `node.exe` on that first start: it took from 2.5 s to past the
+    /// 30 s hang guard (issue 202), and the next Node in the job 0.1 s. So
+    /// the first start is paid before the guard begins, as `stand_ins` does
+    /// for any program a test runs against a deadline.
     #[cfg(windows)]
     #[test]
     fn a_windows_program_that_runs_node_starts_in_the_kits_environment() {
@@ -254,6 +260,7 @@ mod tests {
             "node",
         )
         .expect("node is required to start a Windows program the way an agent CLI does");
+        crate::stand_ins::ready_with_args(&node, &["--version"]);
         let finished = run(
             &node,
             &[
