@@ -128,12 +128,15 @@ pub struct NodeState {
 }
 
 /// What the operator asks of the link from this machine's window (PRD
-/// core-host-node-move B16): a `core_link` event {action}.
+/// core-host-node-move B16): a `core_link` event {action}. `retry` dials
+/// again after a failure only the operator could fix, as a window's
+/// connect does.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum LinkAction {
     Disconnect,
     Reconnect,
+    Retry,
 }
 
 /// The node role, running: its link and its screen server.
@@ -212,6 +215,10 @@ impl NodeDaemon {
             let own_node = screen_node.clone();
             Arc::new(move |action: LinkAction| {
                 let role = role.upgrade().ok_or("the node is stopping")?;
+                if action == LinkAction::Retry {
+                    role.connect_again();
+                    return Ok(());
+                }
                 let disconnected = action == LinkAction::Disconnect;
                 // Recorded first, so a restart keeps what the operator chose.
                 let recorded = crate::placement::update(&state_dir, &own_node, |placement| {

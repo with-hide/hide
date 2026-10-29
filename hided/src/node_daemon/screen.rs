@@ -173,7 +173,8 @@ async fn hold(socket: &mut WebSocket, state: &NodeState) -> Option<Arc<LiveLink>
 }
 
 /// A screen's `core_link` event: the operator ends the link from this
-/// machine's window or restores it (B16). The record and the link change
+/// machine's window or restores it (B16), or retries a link that waits for
+/// them. The record and the link change
 /// off this task, since the record is written durably and a dial in
 /// progress is waited for. A change that did not happen is told to the
 /// screen; why goes to the log. `Err` when the screen left.
@@ -189,7 +190,7 @@ async fn control_link(socket: &mut WebSocket, state: &NodeState, event: &Value) 
                 .await
                 .unwrap_or_else(|error| Err(error.to_string()))
         }
-        None => Err("a core_link event names disconnect or reconnect".to_owned()),
+        None => Err("a core_link event names disconnect, reconnect or retry".to_owned()),
     };
     herdr_core::diagnostic!(json!({
         "component": "node_daemon",

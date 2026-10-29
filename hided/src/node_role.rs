@@ -31,6 +31,7 @@ use hide_node::ssh::session::{SessionError, SshTarget};
 use hide_node::ssh::upstream::Upstream;
 use hide_node::terminal::OutputSink;
 use hide_node::terminal::device::NodeTerminals;
+use hide_node_link::device::SshFailure;
 use hide_platform::ipc::{LocalStream, ShutdownHandle};
 use serde_json::json;
 use tokio::sync::watch;
@@ -158,9 +159,16 @@ pub enum LinkFailure {
     /// key exchange, a channel that failed, or the handshake cut off or left
     /// unanswered. A move may change it.
     Transport(String),
-    /// Anything else on the way to a link, which no move changes (an alias,
-    /// a host key or a sign-in to fix, an answer this build does not read):
-    /// its reason.
+    /// `ssh` failed on what only the operator can change (an
+    /// [`SshProblem`](hide_node_link::device::SshProblem) Hide does not
+    /// retry): a sign-in it could not ask, a refused sign-in or access
+    /// policy, a changed server key, or this computer's `ssh`. Nothing
+    /// dials again until a window connects ([`NodeRole::connect_again`]),
+    /// so no background attempt repeats it at the server.
+    Operator(SshFailure),
+    /// Anything else on the way to a link, which no move changes (an
+    /// answer this build does not read, a step the machine refused): its
+    /// reason.
     Ended(String),
     /// A link the core had taken ended: its reason.
     Lost(String),
@@ -169,6 +177,12 @@ pub enum LinkFailure {
 }
 
 impl LinkFailure {
+    /// Whether only the operator ends this wait: no backoff, sleep, network
+    /// move or port coming back dials again.
+    fn waits_for_operator(&self) -> bool {
+        matches!(self, Self::Operator(_))
+    }
+
     /// Whether a sleep or a network move may change this answer, so the
     /// wait is cut short when one is seen: a dial that never reached the
     /// core's machine, a connection that failed on the way, and a link that
@@ -188,12 +202,18 @@ impl Phase {
     /// this machine dials it by, which a screen that has not drawn the core
     /// yet names instead of an empty machine; `None` while live, when the
     /// core draws the screen itself.
+    ///
+    /// A wait only the operator ends is `stopped`, with `problem`, the
+    /// ssh failure's code, for the screen to word what they can do.
     pub fn link_frame(&self, alias: &str) -> Option<serde_json::Value> {
-        let (phase, machine) = match self {
+        let (phase, machine, problem) = match self {
             Self::Live(_) => return None,
-            Self::Connecting => ("connecting", None),
-            Self::Updating { machine, .. } => ("updating", Some(machine)),
-            Self::Disconnected => ("disconnected", None),
+            Self::Connecting => ("connecting", None, None),
+            Self::Updating { machine, .. } => ("updating", Some(machine), None),
+            Self::Disconnected => ("disconnected", None, None),
+            Self::Waiting {
+                reason: LinkFailure::Operator(failure),
+            } => ("stopped", None, Some(failure.problem.code())),
             Self::Waiting { reason } => (
                 "waiting",
                 match reason {
@@ -202,11 +222,13 @@ impl Phase {
                     | LinkFailure::UpdateFailed { machine, .. } => Some(machine),
                     _ => None,
                 },
+                None,
             ),
         };
-        Some(
-            json!({"type": "core_link", "payload": {"phase": phase, "machine": machine, "alias": alias}}),
-        )
+        Some(json!({
+            "type": "core_link",
+            "payload": {"phase": phase, "machine": machine, "alias": alias, "problem": problem},
+        }))
     }
 }
 
@@ -216,6 +238,14 @@ impl std::fmt::Display for LinkFailure {
             Self::Unreachable(error) => write!(formatter, "unreachable: {error}"),
             Self::Attach(outcome) => formatter.write_str(outcome.code()),
             Self::WrongCore(node) => write!(formatter, "wrong_core: the machine answers as {node}"),
+            Self::Operator(failure) => {
+                write!(
+                    formatter,
+                    "ssh: {}: {}",
+                    failure.problem.code(),
+                    failure.detail
+                )
+            }
             Self::Refused(reason)
             | Self::Transport(reason)
             | Self::Ended(reason)
@@ -234,6 +264,9 @@ struct State {
     stopping: bool,
     /// Set by [`NodeRole::wake`]: the next attempt does not wait.
     woken: bool,
+    /// Set by a window's connect ([`NodeRole::connect_again`]) since the
+    /// last attempt started: the only end of a wait on the operator.
+    asked: bool,
     /// The live link's stream, ended to end the link.
     link: Option<ShutdownHandle>,
     /// This connection's one update of the core (B20).
@@ -376,6 +409,7 @@ impl NodeRole {
                 phase: first.clone(),
                 stopping: false,
                 woken: false,
+                asked: false,
                 link: None,
                 update: Update::Untried,
                 disconnected: placement.disconnected,
@@ -485,13 +519,21 @@ impl NodeRole {
         wake(&self.shared);
     }
 
-    /// A window connects (`hide connect`, a launch or its Retry): a core
-    /// update that failed on the last connection gets this one's attempt,
-    /// which starts at once (B10, B20). Anything else is left as it is.
+    /// A window connects (`hide connect`, a launch, or a Retry on its
+    /// window or strip): a core update that failed on the last connection
+    /// gets this one's attempt (B10, B20), and a wait on what only the
+    /// operator could fix dials again; either starts at once. Anything else
+    /// is left as it is.
     pub fn connect_again(&self) {
         let mut state = lock(&self.shared.state);
         // The operator ended the link; only their reconnect dials again.
-        if state.disconnected || !matches!(state.update, Update::Failed(_)) {
+        if state.disconnected {
+            return;
+        }
+        state.asked = true;
+        let owed = matches!(&state.phase, Phase::Waiting { reason } if reason.waits_for_operator());
+        let update_failed = matches!(state.update, Update::Failed(_));
+        if !owed && !update_failed {
             return;
         }
         state.update = Update::Untried;
@@ -550,6 +592,8 @@ fn keep_linked(shared: &Shared, home: &Path, placement: &Placement, identity: &N
             return;
         }
         generation += 1;
+        // A window's connect from here on can end a wait on the operator.
+        lock(&shared.state).asked = false;
         if set_phase(shared, Phase::Connecting) {
             return;
         }
@@ -570,36 +614,49 @@ fn keep_linked(shared: &Shared, home: &Path, placement: &Placement, identity: &N
         if started.elapsed() >= SETTLED {
             backoff.reset();
         }
-        let wait = backoff.failed();
+        // A wait on the operator has no retry: only their connect ends it.
+        let owed = reason.waits_for_operator();
+        let wait = (!owed).then(|| backoff.failed());
         herdr_core::diagnostic!(json!({
             "component": "node_role",
             "kind": "link.ended",
             "core": placement.node,
             "reason": reason.to_string(),
             "lived_ms": started.elapsed().as_millis() as u64,
-            "retry_ms": wait.as_millis() as u64,
+            "retry_ms": wait.map(|wait| wait.as_millis() as u64),
         }));
         if set_phase(shared, Phase::Waiting { reason }) {
             return;
         }
-        let deadline = Instant::now() + wait;
+        let deadline = wait.map(|wait| Instant::now() + wait);
         let mut state = lock(&shared.state);
-        while !state.stopping && !state.woken && !state.disconnected {
-            let left = deadline.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                break;
-            }
-            state = shared
-                .changed
-                .wait_timeout(state, left)
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .0;
+        while !state.stopping
+            && !state.disconnected
+            && !(if owed { state.asked } else { state.woken })
+        {
+            state = match deadline {
+                Some(deadline) => {
+                    let left = deadline.saturating_duration_since(Instant::now());
+                    if left.is_zero() {
+                        break;
+                    }
+                    shared
+                        .changed
+                        .wait_timeout(state, left)
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .0
+                }
+                None => shared
+                    .changed
+                    .wait(state)
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            };
         }
         if state.stopping {
             return;
         }
-        // Woken, the wait starts over.
-        if std::mem::take(&mut state.woken) {
+        // Woken or asked, the wait starts over.
+        if std::mem::take(&mut state.woken) || owed {
             backoff.reset();
         }
     }
@@ -1033,8 +1090,14 @@ fn update_core(
 /// Why a dial for the attach role failed. Only a dial that never reached
 /// the machine's SSH server is unreachable, and only it is probed; one that
 /// failed on the way after the server answered is a transport failure a move
-/// may change; a host key, a sign-in or an alias is the operator's to fix.
+/// may change; a host key, a sign-in or this computer's `ssh` waits for the
+/// operator.
 fn attach_failure(error: SessionError) -> LinkFailure {
+    if let SessionError::Ssh(failure) = &error
+        && !failure.problem.retried()
+    {
+        return LinkFailure::Operator(failure.clone());
+    }
     if error.never_reached_server() {
         LinkFailure::Unreachable(error.to_string())
     } else if error.a_move_can_change() {
@@ -1359,10 +1422,43 @@ mod tests {
         .unwrap();
         assert_eq!(
             frame["payload"],
-            json!({"phase": "waiting", "machine": null, "alias": "mini"})
+            json!({"phase": "waiting", "machine": null, "alias": "mini", "problem": null})
         );
         let frame = Phase::Disconnected.link_frame("mini").unwrap();
         assert_eq!(frame["payload"]["alias"], "mini");
+    }
+
+    /// A dial that failed on what only the operator can change waits for
+    /// them, and the held screen is told which failure it is; what a network
+    /// or a server coming back can change keeps its retry.
+    #[test]
+    fn a_dial_the_operator_must_fix_stops_and_names_its_problem() {
+        use hide_node_link::device::{SshFailure, SshProblem};
+        for problem in [
+            SshProblem::SignInNeeded,
+            SshProblem::SignInRefused,
+            SshProblem::HostKeyChanged,
+            SshProblem::PolicyRefused,
+            SshProblem::SshMissing,
+            SshProblem::OpenSshOld,
+        ] {
+            let reason = attach_failure(SessionError::Ssh(SshFailure {
+                problem,
+                detail: "detail".to_owned(),
+            }));
+            assert!(reason.waits_for_operator(), "{problem:?}");
+            let frame = Phase::Waiting { reason }.link_frame("mini").unwrap();
+            assert_eq!(frame["payload"]["phase"], "stopped");
+            assert_eq!(frame["payload"]["problem"], problem.code());
+        }
+        for (error, _) in dial_outcomes() {
+            let owed = matches!(&error, SessionError::Ssh(failure) if !failure.problem.retried());
+            assert_eq!(
+                attach_failure(error.clone()).waits_for_operator(),
+                owed,
+                "{error}"
+            );
+        }
     }
 
     /// The port is probed for a dial that could not reach the core's
