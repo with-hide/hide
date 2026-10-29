@@ -3635,7 +3635,7 @@ Removing a device's project closes its panes through that device's Herdr by thei
 Opening a registered device project Herdr has no workspace in, from its row or a new tab, opens its owner at the registered folder through that device's remote control, keyed by the folder while in flight.
 
 A device's checkouts are found in the same catalog lookup as this machine's (`catalog_checkout`: the navigator, then each device's Herdr session), and the checkout in front is the selected device's own focus (`front_checkout`), so a file opened on a device lands in the checkout that asked and showing it moves no focus on this machine.
-Each device authenticates as its own ssh config says: an absent `SSH_AUTH_SOCK` stops only a device whose config names no `IdentityFile` or `IdentityAgent`, and that device's row says so.
+Each device signs in as `ssh <alias>` would from the operator's terminal (`authenticate` in `hide-node/src/ssh.rs`, the key order in `hide-node/src/ssh/identities.rs`): the `none` method, then the agent's keys and the alias's key files in OpenSSH's `pubkey_prepare` order, so an absent `SSH_AUTH_SOCK` stops only a device whose usable key is in that agent, and that device's row says so.
 A local path is judged inside its checkout after resolving the folder that holds it, so a shell that spells `/var` for `/private/var` still opens it, while the document keeps the path as the shell sent it.
 
 ### Home

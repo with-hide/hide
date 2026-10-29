@@ -444,7 +444,15 @@ If a part cannot be taken out, for example because Herdr is not running, it stay
 
 hide can show and drive a Herdr server on another machine.
 Open Settings, choose Devices, and add the machine with a label and the alias `~/.ssh/config` already knows it by; that alias is the only thing hide stores about it.
-Authentication stays with SSH: the alias's `IdentityFile`, or the running SSH agent, is what hide signs in with, and hide never asks for or keeps a password.
+Authentication stays with SSH and signs in the way `ssh <alias>` does in your terminal, on macOS, Linux and Windows alike.
+hide first tries SSH's `none` method, which a [Tailscale SSH](https://tailscale.com/kb/1193/tailscale-ssh) host accepts from a machine on its tailnet, so such a host needs no key.
+Otherwise it offers keys in OpenSSH's order: the SSH agent's keys for the alias's key files, then the agent's other keys unless the alias sets `IdentitiesOnly yes`, then the key files themselves.
+The key files are every `IdentityFile` the alias's config gives it, or, when it gives none, OpenSSH's defaults in that account's `~/.ssh` (`id_rsa`, `id_ecdsa`, `id_ecdsa_sk`, `id_ed25519`, `id_ed25519_sk`); `IdentityFile none` uses none.
+The agent is the one `IdentityAgent` names, otherwise the one `SSH_AUTH_SOCK` names.
+hide never asks for or keeps a password or a passphrase: a key behind a passphrase, or on a security key, is used only through the agent, and when sign-in fails the device row names that key with the command that loads it there, `ssh-add --apple-use-keychain <file>` on macOS and `ssh-add <file>` elsewhere.
+A failed sign-in also says whether nothing could be offered or the machine refused every key offered, since one needs a key loaded and the other needs a key authorized there.
+An `IdentityFile` may start with `~/` or `%d/`; one with another `%` token, an environment variable, or a relative path is refused on the device row rather than guessed.
+A Tailscale SSH host whose policy asks for a browser check holds the sign-in; after ten seconds the device row shows the address the check gave, to confirm there before Retry.
 
 An agent you ask to add a machine does it with `hide device add <alias> [--name <name>] [--socket <path>]`, run on the machine that runs Hide; `hide device list` shows each machine's id, state and helper, and `hide device remove <id>` removes one as Settings does.
 The command registers the machine without Hide's helper, and its answer tells the agent to ask you to choose Allow and install on the machine's row in Settings › Devices: installing writes that account's hook files, which only you agree to, and until then the machine's files, Git and terminals wait.

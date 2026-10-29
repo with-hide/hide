@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use anyhow::anyhow;
 use russh::client::{self, Handle, Handler, Msg};
 use russh::keys::{
-    PrivateKeyWithHashAlg, PublicKeyOrCertificate, agent::client::AgentClient,
+    PrivateKey, PrivateKeyWithHashAlg, PublicKeyOrCertificate, agent::client::AgentClient,
     check_known_hosts_path,
 };
 use russh::{Channel, ChannelMsg, Disconnect, Pty};
@@ -52,6 +52,12 @@ use hide_node_link::device::{
     RemoteResult, RemoteStage, SnapshotCheck, valid_remote_socket_path,
 };
 const SSH_OPERATION_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long sign-in waits for the server to answer the `none` method. A
+/// server answers it at once unless it holds it, as Tailscale SSH's check
+/// mode does until the operator confirms in a browser; the bound sits inside
+/// [`SSH_OPERATION_TIMEOUT`] so the hold is reported as itself, not as a
+/// connection that timed out.
+const SIGN_IN_HOLD_BOUND: Duration = Duration::from_secs(10);
 /// Session channels (an exec, a shell or a subsystem) a device's connection
 /// keeps open at once. OpenSSH's sshd allows ten per connection
 /// (`MaxSessions`), and the node's link holds one for as long as it lives; a
@@ -252,8 +258,16 @@ impl SshAlias {
         };
         let identities_only = match directives.identities_only {
             None => false,
-            Some(value) if value.eq_ignore_ascii_case("yes") || value.eq_ignore_ascii_case("true") => true,
-            Some(value) if value.eq_ignore_ascii_case("no") || value.eq_ignore_ascii_case("false") => false,
+            Some(value)
+                if value.eq_ignore_ascii_case("yes") || value.eq_ignore_ascii_case("true") =>
+            {
+                true
+            }
+            Some(value)
+                if value.eq_ignore_ascii_case("no") || value.eq_ignore_ascii_case("false") =>
+            {
+                false
+            }
             Some(_) => return Err(alias_error(alias, "IdentitiesOnly must be yes or no")),
         };
         // OpenSSH adds its default files only when no IdentityFile matched,
@@ -1811,6 +1825,7 @@ impl RusshRemoteClient {
         // port probe, which reads the greeting, also counts it.
         let presented = Arc::clone(&handler.presented);
         let rejected = Arc::clone(&handler.rejected);
+        let banner = Arc::clone(&handler.banner);
         let reached_operation = || {
             if presented.load(std::sync::atomic::Ordering::SeqCst) {
                 "remote-connect"
@@ -1897,7 +1912,7 @@ impl RusshRemoteClient {
                         )
                     }
                 })?;
-            authenticate(&mut session, &self.host).await?;
+            authenticate(&mut session, &self.host, &banner, SIGN_IN_HOLD_BOUND).await?;
             connecting.release();
             Ok(session)
         })
@@ -2105,10 +2120,18 @@ impl RusshRemoteClient {
 }
 
 /// Signs in the way `ssh <alias>` would from the operator's terminal: the
-/// keys of [`identities::Plan`], in OpenSSH's order, until the server accepts
-/// one. A refusal says what was offered and, for a key Hide could not use
-/// itself, how to give it to the agent.
-async fn authenticate(session: &mut Handle<KnownHostHandler>, host: &SshAlias) -> RemoteResult<()> {
+/// `none` method first, which a server that already knows the client, such
+/// as Tailscale SSH, accepts; then the keys of [`identities::Plan`], in
+/// OpenSSH's order, until the server accepts one. A refusal says what was
+/// offered and, for a key Hide could not use itself, how to give it to the
+/// agent. `banner` is where the session's handler keeps the server's sign-in
+/// banner, and `hold` bounds the wait for `none`.
+async fn authenticate(
+    session: &mut Handle<KnownHostHandler>,
+    host: &SshAlias,
+    banner: &Mutex<Option<String>>,
+    hold: Duration,
+) -> RemoteResult<()> {
     let failed = |error: &dyn fmt::Display, retryable: bool| {
         remote_error(
             "remote-auth",
@@ -2119,6 +2142,16 @@ async fn authenticate(session: &mut Handle<KnownHostHandler>, host: &SshAlias) -
             true,
         )
     };
+    match tokio::time::timeout(hold, session.authenticate_none(host.user.clone())).await {
+        Ok(Ok(result)) if result.success() => return Ok(()),
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => return Err(failed(&error, true)),
+        Err(_) => {
+            let shown = banner.lock().ok().and_then(|slot| slot.clone());
+            return Err(failed(&held_sign_in(shown.as_deref()), true));
+        }
+    }
+
     let reads: Vec<KeyFile> = host
         .identity_files
         .iter()
@@ -2176,17 +2209,15 @@ async fn authenticate(session: &mut Handle<KnownHostHandler>, host: &SshAlias) -
             .flatten();
         for offer in &plan.offers {
             let result = match (*offer, agent.as_mut()) {
-                (Offer::Agent(index), Some(agent)) => {
-                    session
-                        .authenticate_publickey_with(
-                            host.user.clone(),
-                            agent_keys[index].clone(),
-                            hash,
-                            agent,
-                        )
-                        .await
-                        .map_err(|error| failed(&error, true))?
-                }
+                (Offer::Agent(index), Some(agent)) => session
+                    .authenticate_publickey_with(
+                        host.user.clone(),
+                        agent_keys[index].clone(),
+                        hash,
+                        agent,
+                    )
+                    .await
+                    .map_err(|error| failed(&error, true))?,
                 (Offer::Agent(_), None) => continue,
                 (Offer::File(index), _) => {
                     let KeyFile::Usable(key) = &reads[index] else {
@@ -2195,7 +2226,7 @@ async fn authenticate(session: &mut Handle<KnownHostHandler>, host: &SshAlias) -
                     session
                         .authenticate_publickey(
                             host.user.clone(),
-                            PrivateKeyWithHashAlg::new(Arc::new(key.clone()), hash),
+                            PrivateKeyWithHashAlg::new(Arc::new(PrivateKey::clone(key)), hash),
                         )
                         .await
                         .map_err(|error| failed(&error, true))?
@@ -2213,6 +2244,24 @@ async fn authenticate(session: &mut Handle<KnownHostHandler>, host: &SshAlias) -
         &identities::refusal(agent_state, source, &plan, &host.identity_files, &reads),
         retryable,
     ))
+}
+
+/// The reason for a server that held the `none` sign-in past the bound. Its
+/// banner is the server's text, so only an `https://` address is lifted out
+/// of it, never the rest.
+fn held_sign_in(banner: Option<&str>) -> String {
+    let address = banner.and_then(|banner| {
+        banner
+            .split_whitespace()
+            .find(|word| word.starts_with("https://") && word.len() <= 2048)
+            .filter(|word| word.bytes().all(|byte| byte.is_ascii_graphic()))
+    });
+    match address {
+        Some(address) => format!(
+            "the server is holding sign-in until it is confirmed in a browser: open {address}, confirm, then Retry"
+        ),
+        None => "the server held sign-in without answering".to_owned(),
+    }
 }
 
 async fn execute_channel(
@@ -2276,6 +2325,9 @@ struct KnownHostHandler {
     /// Told when the session ends: the session owns its handler and drops
     /// it then, whether the server disconnected or the connection failed.
     end: Option<tokio::sync::watch::Sender<bool>>,
+    /// The last banner the server sent during sign-in: where Tailscale SSH's
+    /// check mode puts the address the operator confirms in a browser.
+    banner: Arc<Mutex<Option<String>>>,
 }
 
 impl Drop for KnownHostHandler {
@@ -2296,6 +2348,7 @@ impl KnownHostHandler {
             presented: Arc::default(),
             rejected: Arc::default(),
             end: None,
+            banner: Arc::default(),
         }
     }
 
@@ -2325,6 +2378,17 @@ impl Handler for KnownHostHandler {
                 .store(true, std::sync::atomic::Ordering::SeqCst);
         }
         checked
+    }
+
+    async fn auth_banner(
+        &mut self,
+        banner: &str,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        if let Ok(mut slot) = self.banner.lock() {
+            *slot = Some(banner.to_owned());
+        }
+        Ok(())
     }
 }
 

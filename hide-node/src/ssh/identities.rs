@@ -116,7 +116,7 @@ pub enum AgentOnly {
 #[derive(Debug)]
 pub enum KeyFile {
     /// A private key Hide signs with itself.
-    Usable(PrivateKey),
+    Usable(Box<PrivateKey>),
     /// A private key only the agent can use; its public half, when one could
     /// be read, matches it to an agent key.
     AgentOnly(AgentOnly, Option<PublicKey>),
@@ -144,7 +144,7 @@ impl KeyFile {
             Ok(key) if is_security_key(key.algorithm()) => {
                 Self::AgentOnly(AgentOnly::SecurityKey, Some(key.public_key().clone()))
             }
-            Ok(key) => Self::Usable(key),
+            Ok(key) => Self::Usable(Box::new(key)),
             Err(KeyError::KeyIsEncrypted) => {
                 // An OpenSSH-format key keeps its public half unencrypted; an
                 // older PEM key has only its `.pub` beside it.
@@ -212,7 +212,10 @@ impl Plan {
         let mut others = Vec::new();
         for (index, key) in agent.iter().enumerate() {
             let file = (0..files.len()).find(|file| {
-                !covered[*file] && files[*file].public().is_some_and(|public| same_key(public, key))
+                !covered[*file]
+                    && files[*file]
+                        .public()
+                        .is_some_and(|public| same_key(public, key))
             });
             match file {
                 Some(file) => {
@@ -274,9 +277,7 @@ pub fn refusal(
     let mut sentence = if plan.offers.is_empty() {
         let why = match agent {
             AgentState::Disabled => "the ssh config sets IdentityAgent none".to_owned(),
-            AgentState::NotSet => {
-                "no IdentityAgent is set and SSH_AUTH_SOCK is not set".to_owned()
-            }
+            AgentState::NotSet => "no IdentityAgent is set and SSH_AUTH_SOCK is not set".to_owned(),
             AgentState::Unreachable => {
                 format!("the SSH agent reached through {source} did not answer")
             }

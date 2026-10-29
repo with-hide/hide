@@ -61,12 +61,8 @@ pub(super) fn list(
                 .as_ref()
                 .map_err(Clone::clone)
                 .and_then(|contents| {
-                    super::SshAlias::from_target_contents(
-                        target,
-                        contents,
-                        &home.join(".ssh"),
-                    )
-                    .map_err(|_| "The saved SSH target could not be resolved".to_owned())
+                    super::SshAlias::from_target_contents(target, contents, &home.join(".ssh"))
+                        .map_err(|_| "The saved SSH target could not be resolved".to_owned())
                 })
                 .map(|alias| {
                     format!(

@@ -28,7 +28,7 @@ pub const REGISTRY: [EnvironmentVariableSpec; 4] = [
         key: SSH_AUTH_SOCK_KEY,
         required: false,
         format: "absolute Unix-domain socket path",
-        absent_behavior: "A device whose ssh config names no IdentityFile or IdentityAgent cannot authenticate and says so on its row; every other device connects",
+        absent_behavior: "Devices still sign in with the none method, their key files (IdentityFile, or OpenSSH's default ~/.ssh keys) and an ssh config IdentityAgent; a device whose only usable key needs this agent says so on its row",
     },
     EnvironmentVariableSpec {
         key: HERDR_SOCKET_PATH_KEY,
@@ -100,11 +100,11 @@ fn validate_with(mut read: impl FnMut(&str) -> Option<OsString>) -> EnvironmentR
             SSH_AUTH_SOCK_KEY => match value {
                 None => (
                     "absent",
-                    "SSH agent socket is unavailable; only devices whose ssh config names an IdentityFile or IdentityAgent can authenticate",
+                    "SSH agent socket is unavailable; devices sign in with their IdentityFile or default ~/.ssh keys, or an ssh config IdentityAgent",
                 ),
                 Some(value) if value.is_empty() || !Path::new(&value).is_absolute() => (
                     "invalid",
-                    "SSH agent socket configuration is invalid; only devices whose ssh config names an IdentityFile or IdentityAgent can authenticate",
+                    "SSH agent socket configuration is invalid; devices sign in with their IdentityFile or default ~/.ssh keys, or an ssh config IdentityAgent",
                 ),
                 Some(_) => ("available", "SSH agent socket configuration is available"),
             },

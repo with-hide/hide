@@ -2,11 +2,13 @@
 //! names, from real key files in a temporary home and a real SSH agent (a
 //! Unix socket, or a named pipe on Windows). The server records every key it
 //! was asked to sign in with, so a test sees the order a client offered them.
+//! It answers the `none` method as a test sets: refused, as OpenSSH's sshd
+//! does, or accepted or held behind a banner, as Tailscale SSH does.
 
 use futures_util::stream;
 use russh::keys::ssh_key::LineEnding;
-use russh::keys::ssh_key::public::KeyData;
 use russh::keys::ssh_key::private::Ed25519Keypair;
+use russh::keys::ssh_key::public::KeyData;
 use russh::keys::{PrivateKey, PublicKey};
 use russh::server::{self, Auth};
 
@@ -36,14 +38,43 @@ fn locked_key_unlocked() -> PrivateKey {
         .unwrap()
 }
 
+/// How the fixture server answers the `none` method.
+#[derive(Clone)]
+enum NoneAnswer {
+    Refuse,
+    /// Tailscale SSH: the tailnet already identified the client.
+    Accept,
+    /// Tailscale SSH's check mode: this banner, then no answer.
+    Hold(&'static str),
+}
+
 #[derive(Clone)]
 struct Server {
+    none: NoneAnswer,
     accepts: Arc<Vec<PublicKey>>,
     tried: Arc<Mutex<Vec<PublicKey>>>,
 }
 
 impl server::Handler for Server {
     type Error = russh::Error;
+
+    async fn authentication_banner(&mut self) -> Result<Option<String>, Self::Error> {
+        Ok(match self.none {
+            NoneAnswer::Hold(banner) => Some(banner.to_owned()),
+            NoneAnswer::Refuse | NoneAnswer::Accept => None,
+        })
+    }
+
+    async fn auth_none(&mut self, _user: &str) -> Result<Auth, Self::Error> {
+        match self.none {
+            NoneAnswer::Refuse => Ok(Auth::reject()),
+            NoneAnswer::Accept => Ok(Auth::Accept),
+            NoneAnswer::Hold(_) => {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                Ok(Auth::reject())
+            }
+        }
+    }
 
     async fn auth_publickey(&mut self, user: &str, key: &PublicKey) -> Result<Auth, Self::Error> {
         self.tried.lock().unwrap().push(key.clone());
@@ -71,6 +102,10 @@ struct Fixture {
 
 impl Fixture {
     fn new(accepts: &[&PublicKey]) -> Self {
+        Self::answering(NoneAnswer::Refuse, accepts)
+    }
+
+    fn answering(none: NoneAnswer, accepts: &[&PublicKey]) -> Self {
         let home = tempfile::tempdir().unwrap();
         std::fs::create_dir(home.path().join(".ssh")).unwrap();
         let runtime = Builder::new_multi_thread()
@@ -79,9 +114,7 @@ impl Fixture {
             .build()
             .unwrap();
         let host_key = key(200);
-        let listener = runtime
-            .block_on(TcpListener::bind("127.0.0.1:0"))
-            .unwrap();
+        let listener = runtime.block_on(TcpListener::bind("127.0.0.1:0")).unwrap();
         let port = listener.local_addr().unwrap().port();
         std::fs::write(
             home.path().join(".ssh/known_hosts"),
@@ -99,6 +132,7 @@ impl Fixture {
         });
         let tried = Arc::new(Mutex::new(Vec::new()));
         let handler = Server {
+            none,
             accepts: Arc::new(accepts.iter().map(|key| (*key).clone()).collect()),
             tried: Arc::clone(&tried),
         };
@@ -143,15 +177,17 @@ impl Fixture {
             ),
             &self.ssh_dir(),
         )?;
+        let handler = KnownHostHandler::new(&alias);
+        let banner = Arc::clone(&handler.banner);
         self.runtime.block_on(async {
             let mut session = client::connect(
                 Arc::new(client::Config::default()),
                 ("127.0.0.1", self.port),
-                KnownHostHandler::new(&alias),
+                handler,
             )
             .await
             .expect("the fixture server's host key is trusted");
-            authenticate(&mut session, &alias).await
+            authenticate(&mut session, &alias, &banner, Duration::from_secs(1)).await
         })
     }
 
@@ -186,10 +222,9 @@ impl Agent {
                 let accepted = listener.accept().await.map(|(socket, _)| socket);
                 Some((accepted, listener))
             });
-            fixture.runtime.spawn(russh::keys::agent::server::serve(
-                Box::pin(connections),
-                (),
-            ));
+            fixture
+                .runtime
+                .spawn(russh::keys::agent::server::serve(Box::pin(connections), ()));
             path
         };
         #[cfg(windows)]
@@ -213,10 +248,9 @@ impl Agent {
                     Some((connected.map(|()| server), next))
                 }
             });
-            fixture.runtime.spawn(russh::keys::agent::server::serve(
-                Box::pin(connections),
-                (),
-            ));
+            fixture
+                .runtime
+                .spawn(russh::keys::agent::server::serve(Box::pin(connections), ()));
             PathBuf::from(name)
         };
         Self { path, _dir: dir }
@@ -261,11 +295,16 @@ fn every_identity_file_is_tried_in_order() {
     fixture.write_key("id_ed25519", &default);
 
     fixture
-        .sign_in("  IdentityAgent none\n  IdentityFile ~/.ssh/first\n  IdentityFile ~/.ssh/second\n")
+        .sign_in(
+            "  IdentityAgent none\n  IdentityFile ~/.ssh/first\n  IdentityFile ~/.ssh/second\n",
+        )
         .unwrap();
     assert_eq!(
         fixture.tried(),
-        [first.public_key().key_data().clone(), second.public_key().key_data().clone()]
+        [
+            first.public_key().key_data().clone(),
+            second.public_key().key_data().clone()
+        ]
     );
 }
 
@@ -340,7 +379,10 @@ fn agent_keys_for_the_files_go_first_and_identities_only_keeps_the_rest_back() {
         .unwrap_err();
     assert_eq!(
         fixture.tried(),
-        [named.public_key().key_data().clone(), file_only.public_key().key_data().clone()]
+        [
+            named.public_key().key_data().clone(),
+            file_only.public_key().key_data().clone()
+        ]
     );
 }
 
@@ -364,4 +406,32 @@ fn nothing_to_offer_says_why() {
         .unwrap_err();
     let reason = &refused.diagnostic().reason;
     assert!(reason.contains("~/.ssh/missing does not exist"), "{reason}");
+}
+
+/// Tailscale SSH: the tailnet identified the client, so the `none` method
+/// signs in with no key and no agent, as `ssh` does.
+#[test]
+fn a_server_that_accepts_none_signs_in_without_a_key() {
+    let fixture = Fixture::answering(NoneAnswer::Accept, &[]);
+    fixture.sign_in("  IdentityAgent none\n").unwrap();
+    assert!(fixture.tried().is_empty());
+}
+
+/// Tailscale SSH's check mode holds the `none` method until the operator
+/// confirms in a browser; sign-in stops within its bound and the reason
+/// carries the address from the banner, and nothing else from it.
+#[test]
+fn a_held_sign_in_reports_the_address_its_banner_names() {
+    let fixture = Fixture::answering(
+        NoneAnswer::Hold(
+            "# Tailscale SSH requires an additional check.\n# To authenticate, visit: https://login.tailscale.com/a/l1234abcd\n",
+        ),
+        &[],
+    );
+    let held = fixture.sign_in("  IdentityAgent none\n").unwrap_err();
+    assert_eq!(held.stage(), RemoteStage::Auth);
+    assert_eq!(
+        held.diagnostic().reason,
+        "the server is holding sign-in until it is confirmed in a browser: open https://login.tailscale.com/a/l1234abcd, confirm, then Retry"
+    );
 }
