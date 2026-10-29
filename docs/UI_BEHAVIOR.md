@@ -1128,7 +1128,7 @@ Each action is one event to the core: a filter, a hide, a fold, Fold all, Unfold
 Places are kept for each map apart: a device's map of every project, and each project's own map (B4); they are kept divided by the interface scale, so a moved project or session keeps its place on the map when the scale changes (B13).
 A record whose project or session is gone draws nothing, and a new session finds its place beside its parent or in its project as before (B12).
 Each kind of record keeps at most 512, and past that the least recently changed is forgotten with a diagnostic; a stored record this build cannot read loads as nothing, the rest of the arrangement and of the UI state load, and the load leaves a diagnostic (B15).
-Selection, the project search, the graph/list choice and the camera are not remembered.
+Selection, the side column's search, the graph/list choice and the camera are not remembered.
 
 The graph is a force map centred on the operator, the way Obsidian's graph view is drawn (PRD overview-main-map D-01, D-20): a `나` circle is fixed at the centre, and every session without a lineage parent (a root) is held loosely toward it by a faint line.
 Each project gathers around its own place on an ellipse around the operator, so a project's sessions settle as one cluster apart from the others.
@@ -1164,6 +1164,10 @@ Choosing a session of a hidden project, from Waiting on you or the session list,
 Choosing a project's name moves the camera to that project's sessions; a project outside the graph budget opens its project scope instead.
 Hiding removes that project's sessions, name, glow, outlines and lines from the map without moving any other circle; its row stays, dimmed, keeps its counts, and shows a crossed-out eye without pointing, named `<project> 그래프에 다시 보이기` and pressed, which returns the sessions to the same places (B9).
 A hidden row's name is not a button that moves the camera, because there is nothing on the map to move to; the eye of a project outside the graph budget is disabled (B11).
+The search box finds projects and sessions: the project list keeps the projects whose name holds the words, and under it `세션` lists, first twenty by title, the sessions whose own title, checkout or branch holds them, each with its state, agent, project and a `그래프에서 숨김` mark for a hidden project; more than twenty says how many more, and nothing found says `일치하는 항목 없음`.
+A project's name finds the project and not each of its sessions again, because its row already stands for them.
+While the search has words and nothing is chosen, the map dims every session, project name and folded project it does not find, as a filter dims, and moves nothing; a session found by its project's name stays bright, and a folded team's root stays bright when it holds a found session.
+Choosing a found session, or Enter in the search box, which takes the first one (else moves the camera to the first found project still on the map), shows it as a pane's `개요에서 보기` does: its hidden project shows again, its folded project and team unfold, its panel opens and the camera centres it; Escape returns to the column with the search as it was.
 Hiding never affects the list view or the filter counts.
 Hiding the project of the selected or highlighted session clears that selection.
 Below the project list, Waiting on you lists each root whose turn it is, drawn on the map or not, with its project, title and question, and Go answer focuses the asking pane: the root when it asks, else its first asking descendant.
