@@ -1,11 +1,13 @@
 // A child a vitest file awaits instead of waiting for it synchronously, so the
 // worker keeps answering vitest (with-hide/hide-private#48). It is bounded the
-// way the synchronous call was, in time and in output. On every other way out
-// (its deadline, too much output, a start error, the caller's abort) its whole
-// tree is ended before the promise settles, and a tree whose end could not be
-// confirmed is reported as such at once, so its caller keeps the files it may
-// still hold. The tree belongs to the worker until then: a worker that exits
-// first ends it too (`ownUntilWorkerExit`).
+// way the synchronous call was, in time and in output. However it ends (by
+// itself, at its deadline, with too much output, a start error or the caller's
+// abort) its whole tree is ended before the promise settles: its first
+// process's exit says nothing of what that process started, and on Windows
+// `close` comes with that exit even while a descendant holds the output. A
+// tree whose end could not be confirmed is reported as such at once, so its
+// caller keeps the files it may still hold. The tree belongs to the worker
+// until then: a worker that exits first ends it too (`ownUntilWorkerExit`).
 import { spawn, type ChildProcess } from "node:child_process";
 import { endProcessGroup, endWindowsTree, listWindowsTree, type WindowsProcess } from "./process-tree";
 import { ownUntilWorkerExit } from "./worker-owned";
@@ -55,16 +57,21 @@ export function runBounded(executable: string, args: readonly string[], bounds: 
   }
   const tool = bounds.processTool;
   return supervise(executable, child, bounds, () => {
-    if (!tool) throw new Error("no hide-processes to follow the tree with");
+    if (!tool) {
+      // Only the compile of `hide-processes` itself runs without it (shims/build.ts):
+      // nothing can follow that compiler's tree, so its own exit is all there is to go on.
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      throw new Error("no hide-processes to follow the tree with");
+    }
     if (unlisted !== undefined || !owned?.length) throw new Error(`the tree of ${pid} has no identity to follow`, { cause: unlisted });
     endWindowsTree(tool, owned);
   });
 }
 
 /**
- * Watches `child` within `bounds`, and on any ending but its own runs
- * `endTree`, which returns once the tree is gone and throws when it cannot
- * say so. Exported for the tests that give it an `endTree` that fails.
+ * Watches `child` within `bounds`, and however it ends runs `endTree`, which
+ * returns once the tree is gone and throws when it cannot say so. Exported
+ * for the tests that give it an `endTree` that fails.
  */
 export function supervise(executable: string, child: ChildProcess, bounds: Bounds, endTree: () => void): Promise<BoundedResult> {
   return new Promise((resolve, reject) => {
@@ -76,27 +83,28 @@ export function supervise(executable: string, child: ChildProcess, bounds: Bound
       clearTimeout(timer);
       bounds.signal?.removeEventListener("abort", abort);
     };
+    /** Ends the tree, and says why not when it could not; a child that never started has none. */
+    const endOwned = (): string | undefined => {
+      if (!owned) return undefined;
+      try {
+        owned.stop();
+        owned = undefined;
+        return undefined;
+      } catch (cleanup) {
+        // Still the worker's to end when it exits.
+        owned = ownUntilWorkerExit(endTree);
+        return `its tree was not confirmed ended: ${cleanup instanceof Error ? cleanup.message : String(cleanup)}`;
+      }
+    };
     const fail = (error: Error) => {
       if (settled) return;
       finish();
-      // A child that never started has no tree.
-      let treeEnded = true;
-      let reason = error.message;
-      if (owned) {
-        try {
-          owned.stop();
-          owned = undefined;
-        } catch (cleanup) {
-          treeEnded = false;
-          reason += `; its tree was not confirmed ended: ${cleanup instanceof Error ? cleanup.message : String(cleanup)}`;
-          // Still the worker's to end when it exits.
-          owned = ownUntilWorkerExit(endTree);
-        }
-      }
+      const unended = endOwned();
       // A process outside the tree that inherited a pipe would hold `close` open.
       child.stdout?.destroy();
       child.stderr?.destroy();
-      reject(new BoundedChildError(reason, treeEnded, output.stdout, output.stderr, { cause: error }));
+      const reason = unended ? `${error.message}; ${unended}` : error.message;
+      reject(new BoundedChildError(reason, !unended, output.stdout, output.stderr, { cause: error }));
     };
     const timer = setTimeout(() => fail(new Error(`${executable} did not end within ${bounds.timeoutMs} ms`)), bounds.timeoutMs);
     const abort = () => fail(new Error(`${executable} was abandoned by its caller`, { cause: bounds.signal?.reason }));
@@ -115,9 +123,9 @@ export function supervise(executable: string, child: ChildProcess, bounds: Bound
     child.once("close", (status, signal) => {
       if (settled) return;
       finish();
-      // It ended by itself and every pipe it held is closed.
-      owned?.disown();
-      resolve({ status, signal, ...output });
+      const unended = endOwned();
+      if (unended) reject(new BoundedChildError(`${executable} ended with status ${status}, signal ${signal}, but ${unended}`, false, output.stdout, output.stderr));
+      else resolve({ status, signal, ...output });
     });
   });
 }
