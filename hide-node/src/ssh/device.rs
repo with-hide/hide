@@ -656,7 +656,9 @@ impl DialedTransport for SshDevice {
                 )));
             }
         };
-        let link = ChildLink::start(&target, child).map_err(|error| {
+        // From here a cancel ends ssh at once, and the attempt has ended
+        // only once ssh is reaped.
+        let link = ChildLink::start(&target, child, Some(&cancel)).map_err(|error| {
             EstablishError::Helper(format!("ssh's link could not start: {error}"))
         })?;
         let mut pipe = SigningIn {
@@ -714,8 +716,11 @@ impl DialedTransport for SshDevice {
                     return Err(EstablishError::Ssh(failure));
                 }
             };
-            // Signed in: nothing more is asked on this connection.
+            // Signed in: nothing more is asked on this connection, and the
+            // operator's time counted toward the sign-in alone; the install's
+            // and the start's deadlines are their own.
             pipe.desk = None;
+            pipe.held = Duration::ZERO;
             let identity = HostIdentity {
                 user: resolved.user.clone(),
                 hostname: resolved.hostname.clone(),
@@ -821,8 +826,11 @@ impl DialedTransport for SshDevice {
                 host::start_terminals_at(socket.clone(), &host, hook)
             }
         };
-        // A cancel during the kit pass, which does not stop, still ends the
-        // link before it is handed out.
+        // The link is the core's from here, which closes it its own way: a
+        // cancel no longer kills ssh. One that came before ends the link
+        // here; one after it reaches the core, which drops this attempt's
+        // result as stale and closes it.
+        cancel.disarm();
         if cancel.is_cancelled() {
             host.close(ENDED);
             return Err(ended());

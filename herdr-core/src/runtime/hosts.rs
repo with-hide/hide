@@ -24,55 +24,32 @@ use crate::remote::{
     NodeReady, OnClose, SshFailure, SshProblem, Wake,
 };
 
-/// How long a device's attempt waits for the one before it to end: past the
-/// longest step an attempt does not stop in (its kit pass), so two never run
-/// at once (PRD system-ssh-device-link B26).
+/// How long a device's attempt waits for the ones before it to end. A
+/// cancelled attempt's `ssh` is killed at once and reaped within a moment,
+/// and a link the core closed is reaped within `CHILD_EXIT_GRACE`, so this is
+/// only the bound on one that does not; a waiter that gives up leaves the
+/// earlier attempt in the device's slot (PRD system-ssh-device-link B26).
 const PREVIOUS_ATTEMPT_WITHIN: Duration = Duration::from_secs(4 * 60);
 
-/// A dial a worker runs for a device. Cancelling it stops the attempt at its
-/// next wait; its end is heard once the attempt returned, with the `ssh` it
-/// started ended and reaped.
-#[derive(Clone, Default)]
-pub(crate) struct AttemptRun {
-    cancel: Cancel,
-    ended: Arc<(Mutex<bool>, std::sync::Condvar)>,
-}
-
-impl AttemptRun {
-    pub(super) fn cancel(&self) {
-        self.cancel.cancel();
-    }
-
-    fn has_ended(&self) -> bool {
-        *ended_lock(&self.ended.0)
-    }
-
-    /// Whether the attempt ended within `within`.
-    pub(crate) fn wait_ended(&self, within: Duration) -> bool {
-        let (ended, heard) = &*self.ended;
-        let guard = ended_lock(ended);
-        let (guard, _) = heard
-            .wait_timeout_while(guard, within, |ended| !*ended)
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        *guard
-    }
-}
-
-fn ended_lock(ended: &Mutex<bool>) -> std::sync::MutexGuard<'_, bool> {
-    ended
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-/// Marks its attempt ended when the worker leaves it, whichever way.
-struct AttemptEnd(AttemptRun);
-
-impl Drop for AttemptEnd {
-    fn drop(&mut self) {
-        let (ended, heard) = &*self.0.ended;
-        *ended_lock(ended) = true;
-        heard.notify_all();
-    }
+/// Waits until each of `earlier` has ended, or `own` is cancelled, or
+/// [`PREVIOUS_ATTEMPT_WITHIN`] passes; answers whether they all ended with
+/// `own` still wanted.
+fn earlier_attempts_ended(earlier: &[Cancel], own: &Cancel) -> bool {
+    let until = std::time::Instant::now() + PREVIOUS_ATTEMPT_WITHIN;
+    let ended = earlier.iter().all(|attempt| {
+        loop {
+            let left = until.saturating_duration_since(std::time::Instant::now());
+            if attempt.wait_ended(left.min(Duration::from_secs(1))) {
+                break true;
+            }
+            if own.is_cancelled() || left.is_zero() {
+                break false;
+            }
+        }
+    });
+    // A waiter cancelled while the earlier ones ended gives up too: a later
+    // dial already waits for it.
+    ended && !own.is_cancelled()
 }
 
 /// A node and the link that reads its files.
@@ -634,16 +611,22 @@ impl Runtime {
         };
         self.set_host_phase(device_id, HostPhase::Connecting);
         let device = device_id.to_owned();
-        // A dial waits for the device's one before it, so two never run at
-        // once, even across a removal and adding the device again.
-        let (run, previous) = match &start {
+        // The device's slot keeps every dial until nothing of it runs, its
+        // `ssh` reaped included, and a dial waits for all those before it, so
+        // two never run at once, even across a removal and adding the device
+        // again or a waiter that gave up.
+        let (run, earlier) = match &start {
             HostStart::Dial { .. } => {
-                self.device_attempts.retain(|_, run| !run.has_ended());
-                let run = AttemptRun::default();
-                let previous = self.device_attempts.insert(device.clone(), run.clone());
-                (Some(run), previous)
+                let slot = self.device_attempts.entry(device.clone()).or_default();
+                slot.retain(|run| !run.ended());
+                let earlier = slot.clone();
+                let run = Cancel::default();
+                // The worker's share, taken before the run can be looked at.
+                let worker = run.hold();
+                slot.push(run.clone());
+                (Some((run, worker)), earlier)
             }
-            HostStart::Arrived { .. } => (None, None),
+            HostStart::Arrived { .. } => (None, Vec::new()),
         };
         let spawned = thread::Builder::new()
             .name("herdr-core-device-host".to_owned())
@@ -675,8 +658,7 @@ impl Runtime {
                         retirement_projects,
                         wake,
                     } => {
-                        let run = run.unwrap_or_default();
-                        let _end = AttemptEnd(run.clone());
+                        let (run, _worker) = run.expect("a dial has its run");
                         let attempt = Attempt {
                             wake,
                             sign_in: Arc::new(super::device_sign_in::RowSignIn {
@@ -685,12 +667,10 @@ impl Runtime {
                                 generation,
                                 wake,
                             }),
-                            cancel: run.cancel.clone(),
+                            cancel: run.clone(),
                             on_close,
                         };
-                        let result = if previous
-                            .is_some_and(|previous| !previous.wait_ended(PREVIOUS_ATTEMPT_WITHIN))
-                        {
+                        let result = if !earlier_attempts_ended(&earlier, &run) {
                             Err(EstablishError::Helper(
                                 "An earlier connection attempt to this device has not ended; Retry once it has"
                                     .to_owned(),
@@ -922,17 +902,23 @@ impl Runtime {
         // A question of the attempt this one replaces answers nothing now:
         // its channel goes with it, which ends the wait.
         host.sign_in = None;
-        // The attempt this generation replaces stops at its next wait.
-        if let Some(run) = self.device_attempts.get(device_id) {
+        // The attempts this generation replaces end: a running `ssh` is
+        // killed at once, and a working link, which its transport handed on,
+        // is the close's to end.
+        for run in self.device_attempts.get(device_id).into_iter().flatten() {
             run.cancel();
         }
         generation
     }
 
-    /// Every dial still running, cancelled, for the core's stop to wait out
+    /// Every dial not yet ended, cancelled, for the core's stop to wait out
     /// off the lock.
-    pub(crate) fn take_device_attempts(&mut self) -> Vec<AttemptRun> {
-        let runs: Vec<AttemptRun> = self.device_attempts.drain().map(|(_, run)| run).collect();
+    pub(crate) fn take_device_attempts(&mut self) -> Vec<Cancel> {
+        let runs: Vec<Cancel> = self
+            .device_attempts
+            .drain()
+            .flat_map(|(_, runs)| runs)
+            .collect();
         for run in &runs {
             run.cancel();
         }

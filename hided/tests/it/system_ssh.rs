@@ -342,6 +342,146 @@ mod unix {
         );
     }
 
+    /// B26: a cancel ends an attempt whose upload write is blocked at once,
+    /// by ending its `ssh`, not at the install's deadline (180 s), and the
+    /// attempt has ended only once that `ssh` and every process under it are
+    /// reaped. The `ssh` here runs the device's start script in a local
+    /// shell that stops reading partway through the upload, as a device
+    /// that hangs does.
+    #[test]
+    fn a_cancel_ends_a_blocked_upload_and_the_attempt_with_its_reaped_ssh() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::Builder::new()
+            .prefix("sc")
+            .tempdir_in("/tmp")
+            .unwrap();
+        let base = std::fs::canonicalize(root.path()).unwrap();
+        let local = base.join("l");
+        std::fs::create_dir_all(local.join(".ssh")).unwrap();
+        std::fs::write(local.join(".ssh/config"), "").unwrap();
+        let packages = base.join("p");
+        std::fs::create_dir(&packages).unwrap();
+        std::fs::write(packages.join("hided"), vec![7u8; 8 * 1024 * 1024]).unwrap();
+        let ssh = base.join("ssh");
+        std::fs::write(
+            &ssh,
+            r#"#!/bin/sh
+for word; do
+  case "$word" in
+    -V) echo "OpenSSH_9.6p1, OpenSSL 3.0.13" >&2; exit 0 ;;
+    -G) printf 'user %s\nhostname 127.0.0.1\nport 22\n' "$(id -un)"; exit 0 ;;
+  esac
+done
+for last; do :; done
+{ dd bs=1 count=65536 2>/dev/null; touch "$0.blocked"; sleep 1000; } | /bin/sh -c "$last"
+"#,
+        )
+        .unwrap();
+        std::fs::set_permissions(&ssh, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let blocked = ssh.with_extension("blocked");
+        // The attempt's processes: those that name this test's folder, the
+        // stand-in `ssh` and its supervisor, and everything under them;
+        // other tests run theirs beside it.
+        let attempt_tree = {
+            let base = base.to_str().unwrap().to_owned();
+            move || {
+                let mut tree: Vec<u32> = hide_platform::process::descendants(std::process::id())
+                    .unwrap()
+                    .into_iter()
+                    .filter(|pid| {
+                        let args = std::process::Command::new("ps")
+                            .args(["-o", "args=", "-p", &pid.to_string()])
+                            .output()
+                            .unwrap();
+                        String::from_utf8_lossy(&args.stdout).contains(&base)
+                    })
+                    .collect();
+                for pid in tree.clone() {
+                    tree.extend(hide_platform::process::descendants(pid).unwrap());
+                }
+                tree.sort_unstable();
+                tree.dedup();
+                tree
+            }
+        };
+
+        let transport = hide_node::ssh::Connector::new(Some(packages))
+            .with_askpass_program(PathBuf::from(env!("CARGO_BIN_EXE_hide")))
+            .with_ssh_program(ssh.clone())
+            .transport(&local, "system-ssh", "device", None)
+            .unwrap();
+        let attempt = Cancel::default();
+        let returned = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let canceller = {
+            let attempt = attempt.clone();
+            let returned = Arc::clone(&returned);
+            std::thread::spawn(move || {
+                while !blocked.exists() {
+                    if returned.load(std::sync::atomic::Ordering::SeqCst) {
+                        return None;
+                    }
+                    std::thread::yield_now();
+                }
+                // A window for the write to block: nothing reports a write
+                // that waits.
+                #[allow(clippy::disallowed_methods)]
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                let tree = attempt_tree();
+                attempt.cancel();
+                Some((std::time::Instant::now(), tree))
+            })
+        };
+        let result = transport.establish(
+            &HostConsent {
+                contract: HOST_CONSENT_CONTRACT,
+                helper_root: "~/helper".to_owned(),
+                cli_dir: None,
+                granted_at_unix_ms: 1,
+                identity: None,
+            },
+            &[],
+            Attempt {
+                wake: Wake::Allowed,
+                sign_in: Arc::new(Row::default()),
+                cancel: attempt.clone(),
+                on_close: Box::new(|_| {}),
+            },
+        );
+        returned.store(true, std::sync::atomic::Ordering::SeqCst);
+        let Some((cancelled, tree)) = canceller.join().unwrap() else {
+            panic!(
+                "the attempt ended before its upload blocked: {:?}",
+                result.err()
+            );
+        };
+        assert!(
+            cancelled.elapsed() < std::time::Duration::from_secs(20),
+            "the attempt went on {:?} after its cancel",
+            cancelled.elapsed()
+        );
+        match result {
+            Err(EstablishError::Helper(reason)) => {
+                assert!(reason.contains("attempt was ended"), "{reason}")
+            }
+            other => panic!("the cancelled attempt ended otherwise: {:?}", other.err()),
+        }
+        assert!(
+            attempt.ended(),
+            "the attempt returned before its ssh was reaped"
+        );
+        // The stand-in, its supervisor, the shell that writes and the one
+        // that reads.
+        assert!(tree.len() >= 4, "{tree:?}");
+        let left: Vec<u32> = tree
+            .into_iter()
+            .filter(|pid| hide_platform::process::is_alive(*pid))
+            .collect();
+        assert!(
+            left.is_empty(),
+            "processes of the attempt outlived it: {left:?}"
+        );
+    }
+
     /// B1: a key ssh finds by itself in the account's own `~/.ssh`, named
     /// nowhere in the alias, signs in as it does in a terminal.
     #[test]

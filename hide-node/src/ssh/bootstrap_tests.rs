@@ -44,7 +44,7 @@ impl Device {
         let child = hide_platform::process::OwnedChild::spawn(&mut command).unwrap();
         self.pid.set(child.id());
         UnaskedStart::new(
-            ChildLink::start("device:test", child).unwrap(),
+            ChildLink::start("device:test", child, None).unwrap(),
             hide_node_link::device::Cancel::default(),
         )
     }

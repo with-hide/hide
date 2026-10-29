@@ -2055,7 +2055,7 @@ pub fn over_child(
     panes: Option<PaneHook>,
     on_close: Box<dyn FnOnce(String) + Send + 'static>,
 ) -> std::io::Result<RemoteHost> {
-    Ok(ChildLink::start(target, child)?.into_host(Vec::new(), panes, on_close))
+    Ok(ChildLink::start(target, child, None)?.into_host(Vec::new(), panes, on_close))
 }
 
 /// What one look at a [`ChildLink`] before it carries the node brought.
@@ -2082,7 +2082,10 @@ pub(super) enum ChildOutput {
 /// The link owns the child (engineering rule 14): when it ends, for any
 /// reason, the child's input closes, so the helper reads its end and exits,
 /// and a child still running after [`CHILD_EXIT_GRACE`] is ended with its
-/// tree. A child that exits ends the link.
+/// tree. A child that exits ends the link. Started for a connection attempt,
+/// the child is that attempt's until it is reaped: its reaper holds a share
+/// of the attempt, and the attempt's cancel ends it at once until the
+/// transport disarms it (`Cancel`).
 pub(super) struct ChildLink {
     target: String,
     runtime: Arc<RemoteRuntime>,
@@ -2106,6 +2109,7 @@ impl ChildLink {
     pub(super) fn start(
         target: &str,
         mut child: hide_platform::process::OwnedChild,
+        attempt: Option<&hide_node_link::device::Cancel>,
     ) -> std::io::Result<Self> {
         let missing =
             |what: &str| std::io::Error::other(format!("the child's {what} is not piped"));
@@ -2164,7 +2168,15 @@ impl ChildLink {
             })?;
         let input: Arc<Mutex<Option<Box<dyn std::io::Write + Send>>>> =
             Arc::new(Mutex::new(Some(Box::new(stdin))));
-        let ending = ChildEnding::start(target, child, Arc::clone(&input))?;
+        let ending = ChildEnding::start(
+            target,
+            child,
+            Arc::clone(&input),
+            attempt.map(hide_node_link::device::Cancel::hold),
+        )?;
+        if let Some(attempt) = attempt {
+            attempt.arm(ending.killer());
+        }
         Ok(Self {
             target: target.to_owned(),
             runtime,
@@ -2406,7 +2418,12 @@ fn take_line(buffer: &mut Vec<u8>) -> Option<Vec<u8>> {
 /// and ending the tree is what frees such a write. While a start script's
 /// write is armed with a deadline, passing it ends the tree at once.
 struct ChildEnding {
-    told: Option<mpsc::SyncSender<Told>>,
+    /// Shared only with the killer an attempt's cancel holds, as a weak
+    /// reference, so the link's end is still every sender gone.
+    told: Option<Arc<mpsc::SyncSender<Told>>>,
+    /// Set by the killer: the thread ends the child at its next look, also
+    /// when the queue was too full to take the word.
+    killed: Arc<std::sync::atomic::AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -2422,17 +2439,25 @@ impl ChildEnding {
         target: &str,
         mut child: hide_platform::process::OwnedChild,
         input: Arc<Mutex<Option<Box<dyn std::io::Write + Send>>>>,
+        held: Option<hide_node_link::device::Held>,
     ) -> std::io::Result<Self> {
         let (told, heard) = mpsc::sync_channel::<Told>(4);
+        let killed = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let target = target.to_owned();
+        let thread_killed = Arc::clone(&killed);
         let thread = std::thread::Builder::new()
             .name("node-link-child".into())
             .spawn(move || {
+                let killed = || thread_killed.load(std::sync::atomic::Ordering::SeqCst);
                 // Told, every sender gone, or an armed write's deadline
                 // passed: either way the link is over.
                 let mut armed: Option<Instant> = None;
                 let mut kill = false;
                 let late = loop {
+                    if killed() {
+                        kill = true;
+                        break false;
+                    }
                     let heard = match armed {
                         None => heard
                             .recv()
@@ -2455,7 +2480,7 @@ impl ChildEnding {
                 let since = Instant::now();
                 let mut input_open = true;
                 let mut status = None;
-                while !late && !kill && since.elapsed() < CHILD_EXIT_GRACE {
+                while !late && !kill && !killed() && since.elapsed() < CHILD_EXIT_GRACE {
                     if input_open {
                         input_open = !close_unless_writing(&input);
                     }
@@ -2486,15 +2511,33 @@ impl ChildEnding {
                     "write_deadline_passed": late,
                     "after_ms": since.elapsed().as_millis() as u64,
                 }));
+                // The attempt this child was started for has nothing of it
+                // left running only now.
+                drop(held);
             })?;
         Ok(Self {
-            told: Some(told),
+            told: Some(Arc::new(told)),
+            killed,
             thread: Some(thread),
         })
     }
 
+    /// What an attempt's cancel runs: tells the thread to end the child now,
+    /// without waiting, and keeps nothing of the link alive.
+    fn killer(&self) -> impl Fn() + Send + 'static {
+        let told = self.told.as_ref().map(Arc::downgrade);
+        let killed = Arc::clone(&self.killed);
+        move || {
+            killed.store(true, std::sync::atomic::Ordering::SeqCst);
+            if let Some(told) = told.as_ref().and_then(std::sync::Weak::upgrade) {
+                let _ = told.try_send(Told::Kill);
+            }
+        }
+    }
+
     /// Ends the child and its tree now and returns once it is reaped.
     fn kill(&mut self) {
+        self.killed.store(true, std::sync::atomic::Ordering::SeqCst);
         if let Some(told) = self.told.take() {
             let _ = told.send(Told::Kill);
         }

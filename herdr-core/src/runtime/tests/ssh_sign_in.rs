@@ -29,6 +29,9 @@ struct Asked {
     most_running: AtomicUsize,
     /// Set, an attempt asks nothing and fails as ssh does with this class.
     fails_with: Mutex<Option<SshProblem>>,
+    /// Set, each attempt's `ssh` outlives its return until the test reaps
+    /// it, as a real one's reaper holds its share until the reap.
+    unreaped: Mutex<Option<Vec<hide_node_link::device::Held>>>,
 }
 
 struct Devices(Arc<Asked>);
@@ -115,6 +118,9 @@ impl DialedTransport for AskingDevice {
         self.0.most_running.fetch_max(running, Ordering::SeqCst);
         self.0.wakes.lock().unwrap().push(attempt.wake);
         self.0.cancels.lock().unwrap().push(attempt.cancel.clone());
+        if let Some(unreaped) = self.0.unreaped.lock().unwrap().as_mut() {
+            unreaped.push(attempt.cancel.hold());
+        }
         if let Some(problem) = *self.0.fails_with.lock().unwrap() {
             if let Some(ending) = self.0.ending.lock().unwrap().take() {
                 let _ = ending.recv();
@@ -390,17 +396,24 @@ fn once_a_sign_in_is_needed_hides_own_work_starts_no_ssh() {
     );
 }
 
-/// B26: withdrawing consent ends the running attempt, and the attempt the
-/// consent given again starts waits until that one has ended, so two never
-/// run for one device.
+/// B26: withdrawing consent ends the running attempt, and an attempt the
+/// consent given again starts reaches ssh only once the one before it has
+/// ended, its `ssh` reaped included; a waiting attempt that is itself
+/// cancelled gives up without the device's slot forgetting the earlier one,
+/// so the attempt after it still waits for that `ssh`.
 #[test]
 #[allow(clippy::disallowed_methods)] // a window in which the next attempt must not start: no state reports a start that did not happen
-fn withdrawing_consent_ends_the_attempt_and_the_next_waits_for_it() {
+fn an_attempt_reaches_ssh_only_once_the_ones_before_it_are_reaped() {
     let (shared, asked) = ssh_runtime();
-    retry(&shared);
+    shared.lock().unwrap().connect_registered_devices();
+    settled(&shared);
+    *asked.unreaped.lock().unwrap() = Some(Vec::new());
+    let retry = event(
+        "device_host_retry",
+        serde_json::json!({"device_id": DEVICE}),
+    );
+    assert!(shared.lock().unwrap().dispatch_json(&retry));
     question(&shared);
-    let (release, ending) = std::sync::mpsc::channel();
-    *asked.ending.lock().unwrap() = Some(ending);
     let consent = |allow: bool| {
         event(
             "device_host_consent",
@@ -410,17 +423,46 @@ fn withdrawing_consent_ends_the_attempt_and_the_next_waits_for_it() {
     shared.lock().unwrap().dispatch_json(&consent(false));
     super::wait_for("the question to end", || answers(&asked).len() == 2);
     assert_eq!(answers(&asked)[1], Err(Refusal::Ended));
-    assert!(asked.cancels.lock().unwrap()[1].is_cancelled());
+    let first = asked.cancels.lock().unwrap()[1].clone();
+    assert!(first.is_cancelled());
+    super::wait_for("the attempt to return", || {
+        asked.running.load(Ordering::SeqCst) == 0
+    });
+    assert!(!first.ended(), "its ssh is not reaped yet");
+
+    let window = || std::thread::sleep(std::time::Duration::from_millis(300));
     shared.lock().unwrap().dispatch_json(&consent(true));
     super::wait(&shared, "the next attempt to start", |runtime| {
         runtime.device_host_connecting(DEVICE)
     });
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    window();
     assert_eq!(asked.wakes.lock().unwrap().len(), 2);
-    release.send(()).unwrap();
-    super::wait_for("the next attempt to reach ssh", || {
+    // The waiting attempt is cancelled in turn and gives up.
+    shared.lock().unwrap().dispatch_json(&consent(false));
+    super::wait(&shared, "the waiting attempt to give up", |runtime| {
+        !runtime.device_host_connecting(DEVICE)
+    });
+    shared.lock().unwrap().dispatch_json(&consent(true));
+    super::wait(&shared, "the third attempt to start", |runtime| {
+        runtime.device_host_connecting(DEVICE)
+    });
+    window();
+    assert_eq!(
+        asked.wakes.lock().unwrap().len(),
+        2,
+        "an attempt reached ssh beside one whose ssh still runs"
+    );
+
+    // The first attempt's ssh is reaped.
+    asked.unreaped.lock().unwrap().take();
+    super::wait_for("the third attempt to reach ssh", || {
         asked.wakes.lock().unwrap().len() == 3
     });
+    assert!(
+        !asked.cancels.lock().unwrap()[2].is_cancelled(),
+        "the attempt that gave up reached ssh"
+    );
+    assert!(first.ended());
     assert_eq!(asked.most_running.load(Ordering::SeqCst), 1);
 }
 

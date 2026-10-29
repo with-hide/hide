@@ -1245,9 +1245,10 @@ pub struct Runtime {
     device_hosts: HashMap<String, hosts::DeviceHost>,
     /// When each device's lost or failed link is tried again.
     device_host_retries: HashMap<String, hosts::HostRetry>,
-    /// Each device's latest dial, kept past the device's removal until it
-    /// ends, so the next one for that device waits for it.
-    device_attempts: HashMap<String, hosts::AttemptRun>,
+    /// Each device's dials that have not ended (a working link's included,
+    /// until its `ssh` is reaped), kept past the device's removal, so the
+    /// next one for that device waits for them.
+    device_attempts: HashMap<String, Vec<crate::remote::Cancel>>,
     /// The devices for which an attempt that may wake the machine was asked
     /// while one that may not was running (`hosts::HostAttempt`): should
     /// that one find the machine off, the next one may wake it.

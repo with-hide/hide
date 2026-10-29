@@ -67,6 +67,8 @@ struct Device {
     helper_path: String,
     local: PathBuf,
     current_packages: PathBuf,
+    /// The connection attempt the link came from.
+    attempt: hide_node_link::device::Cancel,
 }
 
 /// The pane of the device's Herdr whose shell is this test process, so a
@@ -257,13 +259,17 @@ impl Device {
             granted_at_unix_ms: 1,
             identity: None,
         };
+        let attempt = hide_node_link::device::Cancel::default();
         let established = match transport.establish(
             &consent,
             &[],
-            hide_node_link::device::Attempt::unattended(
-                hide_node_link::device::Wake::Allowed,
-                Box::new(|_| {}),
-            ),
+            hide_node_link::device::Attempt {
+                cancel: attempt.clone(),
+                ..hide_node_link::device::Attempt::unattended(
+                    hide_node_link::device::Wake::Allowed,
+                    Box::new(|_| {}),
+                )
+            },
         ) {
             Ok(established) => established,
             Err(error) => panic!("the device's node did not start: {error:?}"),
@@ -282,7 +288,64 @@ impl Device {
             helper_path: established.helper_path,
             local,
             current_packages: packages,
+            attempt,
         }
+    }
+}
+
+/// The `ssh` processes under this process that read `local`'s client
+/// config: one device's, while other tests run theirs beside it.
+fn device_ssh_processes(local: &Path) -> Vec<u32> {
+    let config = local.join(".ssh").join("config");
+    hide_platform::process::descendants(std::process::id())
+        .unwrap()
+        .into_iter()
+        .filter(|pid| hide_platform::process::name_of(*pid).is_ok_and(|name| name == "ssh"))
+        .filter(|pid| {
+            let args = Command::new("ps")
+                .args(["-o", "args=", "-p", &pid.to_string()])
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&args.stdout).contains(config.to_str().unwrap())
+        })
+        .collect()
+}
+
+/// PRD system-ssh-device-link B26: a working link's attempt has not ended
+/// while its `ssh` runs; a cancel then no longer kills it, since the link is
+/// the core's to close; and the attempt ends once the closed link's `ssh` is
+/// reaped, which is what lets the device's next attempt start.
+#[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
+fn a_working_link_ends_its_attempt_only_once_its_ssh_is_reaped() {
+    let device = Device::start();
+    let ssh = device_ssh_processes(&device.local);
+    assert_eq!(ssh.len(), 1, "one ssh per device: {ssh:?}");
+    assert!(!device.attempt.ended());
+    device.attempt.cancel();
+    assert!(
+        call_as::<String>(
+            &*device.link,
+            Call::Git {
+                root: "/".into(),
+                command: hide_node_link::git::GitCommand::Version,
+            },
+            Duration::from_secs(30)
+        )
+        .is_ok(),
+        "a cancel after the hand-off ended the link"
+    );
+    assert!(!device.attempt.ended());
+    device.link.close("test closes the link");
+    assert!(
+        device.attempt.wait_ended(Duration::from_secs(30)),
+        "the closed link's ssh was not reaped"
+    );
+    for pid in ssh {
+        assert!(
+            !hide_platform::process::is_alive(pid),
+            "ssh {pid} outlived its attempt"
+        );
     }
 }
 

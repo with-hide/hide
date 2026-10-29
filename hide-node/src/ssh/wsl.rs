@@ -426,7 +426,7 @@ impl DialedTransport for WslDevice {
             .stderr(Stdio::piped());
         let child = hide_platform::process::OwnedChild::spawn(&mut command)
             .map_err(|error| EstablishError::Helper(format!("wsl.exe could not start: {error}")))?;
-        let link = ChildLink::start(&target, child).map_err(|error| {
+        let link = ChildLink::start(&target, child, Some(&cancel)).map_err(|error| {
             EstablishError::Helper(format!("The distribution's link could not start: {error}"))
         })?;
         let mut pipe = UnaskedStart::new(link, cancel.clone());
@@ -549,6 +549,12 @@ impl DialedTransport for WslDevice {
                 super::start_terminals_at(socket, &host, hook)
             }
         };
+        // The link is the core's from here (see the SSH device's).
+        cancel.disarm();
+        if cancel.is_cancelled() {
+            host.close(super::ATTEMPT_ENDED);
+            return Err(EstablishError::Helper(super::ATTEMPT_ENDED.to_owned()));
+        }
         stage("ready");
         Ok(Established {
             node: NodeReady {

@@ -714,21 +714,116 @@ impl Attempt {
     }
 }
 
-/// Ends one connection attempt from outside it: the core cancels the
-/// attempt of a device that was removed, whose consent was withdrawn, or
-/// that a newer attempt replaced, and the transport stops at its next wait
-/// (its turn, the sign-in, the install, the start), ending and reaping the
-/// `ssh` it started before it returns (PRD system-ssh-device-link B26).
-#[derive(Clone, Debug, Default)]
-pub struct Cancel(std::sync::Arc<std::sync::atomic::AtomicBool>);
+/// One connection attempt's life, shared by the core that started it and
+/// the transport that runs it (PRD system-ssh-device-link B26).
+///
+/// The core cancels the attempt of a device that was removed, whose consent
+/// was withdrawn, or that a newer attempt replaced. While the transport owns
+/// a process for the attempt it arms that process's kill ([`Self::arm`]),
+/// which a cancel runs at once, so a write or a wait on the process ends
+/// with it; every other wait (its turn, the sign-in) looks at the cancel.
+/// The transport disarms the kill as it hands a working link to the core,
+/// which closes that link its own way from then on.
+///
+/// Each part of the attempt that may still run holds a share ([`Self::hold`]):
+/// the worker until it returns, and a process's reaper until the process is
+/// reaped. The attempt has ended once no share is held, so the next attempt
+/// for the device waits until nothing of this one runs.
+#[derive(Clone, Default)]
+pub struct Cancel(std::sync::Arc<CancelState>);
+
+#[derive(Default)]
+struct CancelState {
+    cancelled: std::sync::atomic::AtomicBool,
+    kill: std::sync::Mutex<Option<Box<dyn Fn() + Send>>>,
+    held: std::sync::Mutex<usize>,
+    released: std::sync::Condvar,
+}
+
+impl std::fmt::Debug for Cancel {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Cancel")
+            .field("cancelled", &self.is_cancelled())
+            .field("ended", &self.ended())
+            .finish()
+    }
+}
+
+fn locked<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 impl Cancel {
+    /// Cancels the attempt and runs its armed kill, which only tells the
+    /// process's owner to end it and never waits, so a caller may hold a
+    /// lock.
     pub fn cancel(&self) {
-        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.0
+            .cancelled
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(kill) = locked(&self.0.kill).as_ref() {
+            kill();
+        }
     }
 
     pub fn is_cancelled(&self) -> bool {
-        self.0.load(std::sync::atomic::Ordering::SeqCst)
+        self.0.cancelled.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Arms what ends the attempt's process at once on a cancel, and runs it
+    /// now when the attempt is cancelled already. `kill` may run more than
+    /// once and must not block.
+    pub fn arm(&self, kill: impl Fn() + Send + 'static) {
+        let mut armed = locked(&self.0.kill);
+        let kill = armed.insert(Box::new(kill));
+        if self.is_cancelled() {
+            kill();
+        }
+    }
+
+    /// The attempt's process now carries a link the core owns: a cancel no
+    /// longer ends it.
+    pub fn disarm(&self) {
+        locked(&self.0.kill).take();
+    }
+
+    /// A share of the attempt that runs until the returned [`Held`] drops.
+    pub fn hold(&self) -> Held {
+        *locked(&self.0.held) += 1;
+        Held(self.clone())
+    }
+
+    /// Whether nothing of the attempt runs any more.
+    pub fn ended(&self) -> bool {
+        *locked(&self.0.held) == 0
+    }
+
+    /// Waits up to `within` for the attempt to end; answers whether it did.
+    pub fn wait_ended(&self, within: std::time::Duration) -> bool {
+        let held = locked(&self.0.held);
+        let (held, _) = self
+            .0
+            .released
+            .wait_timeout_while(held, within, |held| *held > 0)
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *held == 0
+    }
+}
+
+/// A share of a [`Cancel`]'s attempt, given back when dropped.
+pub struct Held(Cancel);
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        let state = &self.0.0;
+        let mut held = locked(&state.held);
+        *held -= 1;
+        if *held == 0 {
+            state.released.notify_all();
+        }
     }
 }
 
@@ -961,6 +1056,46 @@ pub trait DialedTransport: DeviceTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A cancel runs the armed kill, also one armed after it, and none once
+    /// disarmed; the attempt ends only once every share is given back.
+    #[test]
+    fn a_cancel_kills_what_is_armed_and_the_attempt_ends_with_its_last_share() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let kills = std::sync::Arc::new(AtomicUsize::new(0));
+        let counting = |kills: &std::sync::Arc<AtomicUsize>| {
+            let kills = std::sync::Arc::clone(kills);
+            move || {
+                kills.fetch_add(1, Ordering::SeqCst);
+            }
+        };
+        let attempt = Cancel::default();
+        assert!(attempt.ended());
+        let worker = attempt.hold();
+        let child = attempt.hold();
+        attempt.arm(counting(&kills));
+        attempt.cancel();
+        assert_eq!(kills.load(Ordering::SeqCst), 1);
+        drop(worker);
+        assert!(!attempt.ended());
+        assert!(!attempt.wait_ended(std::time::Duration::from_millis(10)));
+        let waiting = {
+            let attempt = attempt.clone();
+            std::thread::spawn(move || attempt.wait_ended(std::time::Duration::from_secs(10)))
+        };
+        drop(child);
+        assert!(waiting.join().unwrap());
+
+        let late = Cancel::default();
+        late.cancel();
+        late.arm(counting(&kills));
+        assert_eq!(kills.load(Ordering::SeqCst), 2);
+        let handed_on = Cancel::default();
+        handed_on.arm(counting(&kills));
+        handed_on.disarm();
+        handed_on.cancel();
+        assert_eq!(kills.load(Ordering::SeqCst), 2);
+    }
 
     fn identity() -> RemoteHostIdentity {
         RemoteHostIdentity {

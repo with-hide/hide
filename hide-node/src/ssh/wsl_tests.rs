@@ -353,7 +353,7 @@ fn a_write_blocked_on_a_child_that_stopped_reading_does_not_hold_its_end() {
     };
     held.recv().unwrap();
     let told = Instant::now();
-    super::super::ChildEnding::start("wsl:test", child, input)
+    super::super::ChildEnding::start("wsl:test", child, input, None)
         .unwrap()
         .end();
     let deadline = told + super::super::CHILD_EXIT_GRACE + Duration::from_secs(5);
