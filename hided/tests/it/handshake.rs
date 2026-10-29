@@ -1912,12 +1912,19 @@ async fn hide_path_opens_a_registered_folder_and_answers_why_another_was_not_add
         let answer = open(path.clone()).await.unwrap().unwrap();
         assert_eq!(answer["ok"], false, "{path}: {answer}");
         assert_eq!(answer["reason"], reason, "{path}");
-        assert!(answer["next_action"].as_str().is_some_and(|next| !next.is_empty()));
+        assert!(
+            answer["next_action"]
+                .as_str()
+                .is_some_and(|next| !next.is_empty())
+        );
     }
     let health: Value = serde_json::from_str(
         &reqwest_get(&format!("http://127.0.0.1:{}/health", running.port)).await,
     )
     .unwrap();
-    assert_eq!(health["clients"], 1, "each command's connection left; the window stays");
+    assert_eq!(
+        health["clients"], 1,
+        "each command's connection left; the window stays"
+    );
     running.stop();
 }

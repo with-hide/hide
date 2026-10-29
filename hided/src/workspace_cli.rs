@@ -533,7 +533,11 @@ pub fn request_project_open(credential: &mut Credential, path: &str) -> Result<V
 /// state file this account owns: one `/ws` connection whose handshake names
 /// `client_kind: "cli"` carries one request and its answer, and is never a
 /// screen (`hided/src/project_open.rs`).
-pub fn request_project_open_with_token(port: u16, token: &str, path: &str) -> Result<Value, String> {
+pub fn request_project_open_with_token(
+    port: u16,
+    token: &str,
+    path: &str,
+) -> Result<Value, String> {
     let reference = Reference {
         token: token.to_owned(),
         route: Route::Daemon {

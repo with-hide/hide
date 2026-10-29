@@ -9,9 +9,7 @@
 
 use std::collections::VecDeque;
 
-use super::events::{
-    CreateWorkspacePayload, Event, RemoteControlPayload, RemoteControlRequest,
-};
+use super::events::{CreateWorkspacePayload, Event, RemoteControlPayload, RemoteControlRequest};
 use super::*;
 use crate::project_open::ProjectOpenReceipt;
 

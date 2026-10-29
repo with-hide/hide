@@ -3857,7 +3857,10 @@ mod tests {
             CommandKind::Status { json: false }
         );
         assert_eq!(parse(&["hide", "./status"]).unwrap(), folder("./status"));
-        assert_eq!(parse(&["hide", "open", "status"]).unwrap(), folder("status"));
+        assert_eq!(
+            parse(&["hide", "open", "status"]).unwrap(),
+            folder("status")
+        );
         assert_eq!(
             parse(&["hide", "open", "a", "b"]).unwrap_err(),
             "usage: hide [open] [<path>]"
@@ -3874,7 +3877,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("notes.txt");
         std::fs::write(&file, "x").unwrap();
-        assert_eq!(local_folder(dir.path().to_str().unwrap()).unwrap(), dir.path());
+        assert_eq!(
+            local_folder(dir.path().to_str().unwrap()).unwrap(),
+            dir.path()
+        );
         let file = file.to_str().unwrap();
         assert_eq!(
             local_folder(file).unwrap_err(),

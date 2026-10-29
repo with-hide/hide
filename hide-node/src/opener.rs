@@ -208,10 +208,7 @@ fn shell_execute(target: &OsStr) -> Result<(), &'static str> {
         ) -> isize;
     }
     let verb = "open\0".encode_utf16().collect::<Vec<_>>();
-    let file = target
-        .encode_wide()
-        .chain(Some(0))
-        .collect::<Vec<_>>();
+    let file = target.encode_wide().chain(Some(0)).collect::<Vec<_>>();
     // A ShellExecuteW return above 32 means the association accepted it.
     let result = unsafe {
         ShellExecuteW(

@@ -152,7 +152,11 @@ fn every_receipt_still_waiting_refuses_one_more_request() {
     let node = runtime.node.as_str().to_owned();
     for index in 0..32 {
         runtime
-            .project_open(&node, &format!("/tmp/hide-open-{index}"), &format!("{index}-wait"))
+            .project_open(
+                &node,
+                &format!("/tmp/hide-open-{index}"),
+                &format!("{index}-wait"),
+            )
             .unwrap();
     }
     assert_eq!(
