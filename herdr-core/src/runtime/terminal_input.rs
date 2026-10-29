@@ -473,40 +473,44 @@ fn reads_keys(group: &wire::PaneProcessGroup, input: LineInput) -> bool {
 
 /// Reads once whether the shell of `pane_id` reads keys itself, asking
 /// Herdr for the shell and `node`, the machine that runs it, for its
-/// terminal, each within what is left before `deadline`.
+/// terminal, each within what is left before `deadline`. `None` when the
+/// deadline came before the read finished: a read it cut short says nothing
+/// about the shell, not even that its request failed.
 fn shell_reads_keys(
     connector: &dyn ApiConnector,
     node: &dyn NodeLink,
     pane_id: &str,
     deadline: Instant,
-) -> Result<bool, String> {
+) -> Result<Option<bool>, String> {
     let left = || {
         deadline
             .saturating_duration_since(Instant::now())
             .min(SHELL_READ_TIMEOUT)
     };
-    // A read given no time fails as a read; past the deadline the wait ends
-    // as a timeout instead.
+    let cut = || Instant::now() >= deadline;
     let timeout = left();
     if timeout.is_zero() {
-        return Ok(false);
+        return Ok(None);
     }
     let params = wire::pane_process_info_params(pane_id)?;
-    let group = request_with_connector(connector, "pane.process_info", params, timeout)
-        .map_err(|error| format!("pane.process_info failed: {error}"))
-        .and_then(wire::pane_process_group)?;
+    let group = match request_with_connector(connector, "pane.process_info", params, timeout) {
+        Ok(answer) => wire::pane_process_group(answer)?,
+        Err(_) if cut() => return Ok(None),
+        Err(error) => return Err(format!("pane.process_info failed: {error}")),
+    };
     // A pane whose shell Herdr has not named yet is still starting.
     let Some(shell) = group.shell_pid else {
-        return Ok(false);
+        return Ok(Some(false));
     };
     let timeout = left();
     if timeout.is_zero() {
-        return Ok(false);
+        return Ok(None);
     }
-    let input =
-        crate::node_access::call_as::<LineInput>(node, Call::LineInput { pid: shell }, timeout)
-            .map_err(|error| format!("the shell's terminal could not be read: {error}"))?;
-    Ok(reads_keys(&group, input))
+    match crate::node_access::call_as::<LineInput>(node, Call::LineInput { pid: shell }, timeout) {
+        Ok(input) => Ok(Some(reads_keys(&group, input))),
+        Err(_) if cut() => Ok(None),
+        Err(error) => Err(format!("the shell's terminal could not be read: {error}")),
+    }
 }
 
 /// Waits until `deadline` for the shell of `pane_id` to read keys itself,
@@ -532,8 +536,11 @@ fn wait_for_shell_reading(
             return Some(failure.map_or(ShellWait::Timeout, ShellWait::Unreadable));
         }
         match shell_reads_keys(connector, node, pane_id, deadline) {
-            Ok(true) => return Some(ShellWait::Reading),
-            Ok(false) => failure = None,
+            Ok(Some(true)) => return Some(ShellWait::Reading),
+            Ok(Some(false)) => failure = None,
+            // The deadline cut the read: the last finished read's answer
+            // stands, so a shell that could never be read ends unreadable.
+            Ok(None) => {}
             Err(message) => failure = Some(message),
         }
         thread::sleep(SHELL_READING_POLL.min(deadline.saturating_duration_since(Instant::now())));
@@ -1012,16 +1019,63 @@ mod tests {
     fn a_terminal_that_is_never_read_ends_the_wait_at_its_bound_with_its_reason() {
         let herdr = shell_pane("shell-wait-unreadable");
         let node = Terminal::answering(vec![Err("link down".to_owned())]);
+        // The bound only has to hold one finished read; wherever it falls in
+        // a later one, that read is cut and the failure before it stands.
         let Some(ShellWait::Unreadable(reason)) = wait_for_shell_reading(
             &herdr.connector(),
             &node,
             "w1:p2",
-            Instant::now() + Duration::from_millis(150),
+            Instant::now() + Duration::from_secs(1),
             || true,
         ) else {
             panic!("an unreadable terminal ends the wait as unreadable");
         };
         assert!(reason.contains("link down"), "{reason}");
+    }
+
+    /// A node whose first read of the terminal fails at once, and whose
+    /// later reads spend the whole time the wait gives them before failing,
+    /// as a call to a node that stopped answering does.
+    struct Outlasting(std::sync::atomic::AtomicUsize);
+
+    impl NodeLink for Outlasting {
+        #[allow(clippy::disallowed_methods)] // stands in for a call that spends its timeout
+        fn call(
+            &self,
+            _: Call,
+            timeout: Duration,
+        ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+            if self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                return Err(crate::node_access::LinkError::NotConnected(
+                    "link down".to_owned(),
+                ));
+            }
+            thread::sleep(timeout);
+            Err(crate::node_access::LinkError::Unknown(
+                "timed out".to_owned(),
+            ))
+        }
+    }
+
+    /// A read the bound cuts short says nothing about the shell: the wait
+    /// ends with the failure of the last read that finished. The bound is
+    /// one read's own limit, so the second read is always the one cut.
+    #[test]
+    fn a_read_the_bound_cuts_short_leaves_the_last_failure_as_the_reason() {
+        let herdr = shell_pane("shell-wait-cut");
+        let node = Outlasting(Default::default());
+        let outcome = wait_for_shell_reading(
+            &herdr.connector(),
+            &node,
+            "w1:p2",
+            Instant::now() + SHELL_READ_TIMEOUT,
+            || true,
+        );
+        let Some(ShellWait::Unreadable(reason)) = &outcome else {
+            panic!("{outcome:?}");
+        };
+        assert!(reason.contains("link down"), "{reason}");
+        assert_eq!(node.0.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 
     #[test]
