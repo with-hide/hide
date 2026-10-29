@@ -343,3 +343,64 @@ it("opens the project scope for a pane outside the graph budget", async () => {
     expect(container.querySelector("[data-graph-preview] .og-details-head")?.textContent).toContain("Session 400");
   } finally { await act(async () => reactRoot.unmount()); }
 });
+
+// The side column's search finds sessions as well as projects: a found session is shown on the map
+// as a pane's Show in Overview shows it, opening its hidden project and the folded project and team it is in.
+it("finds a session from the side column's search and shows it, opening what hid it", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("CSS", { escape: (value: string) => value });
+  initializeInterfaceI18n("en");
+  const checkout: Checkout = { id: "alpha-main", workspace_id: "alpha", label: "main", path: "/fixture/alpha", branch: "feat/map", purpose: null, is_worktree: false, exists: true, has_panes: true, pull_request: null, tabs: [], active_tab_id: null, next_tab_label: "Tab 1", strip: [], agent_scope: emptyScope() };
+  const root = legacyAgentRow({ id: "r", pane_id: "r", identity_label: "배포 확인", agent_kind: "claude", session_id: "native-r", group: "working", activity: "working" });
+  const child = legacyAgentRow({ id: "c", pane_id: "c", identity_label: "검증 자식", agent_kind: "codex", session_id: "native-c", group: "working", activity: "working", delegated: true, lineage_parent_pane_id: "r" });
+  const projects: BoardProject[] = [{ agents: [root, child], device: null, workspace: { id: "alpha", label: "알파", device_id: "local", path: "/fixture/alpha", registered: true, temporary: false, pinned: false, checkouts: [checkout], inactive_checkouts: { expanded: false, checkout_ids: [] }, agent_scope: { ...emptyScope(), members: [root, child].map((agent) => ({ pane_id: agent.pane_id, project_id: "alpha", checkout_id: checkout.id })) } } }];
+  const alpha = { device_id: "local", workspace_id: "alpha" };
+  const rest = { navigator: { devices: [{ id: "local", kind: "local" }], workspaces: projects.map((project) => project.workspace), focused_device_id: "local" }, status: {},
+    overview_graph: { available: true, limit: 2000, retained_count: 0, truncated: false, retention_ms: 86400000, letters: [], sessions: ["r", "c"].map((pane) => ({ device_id: "local", pane_id: pane, session_digest: `digest-${pane}`, launch_model: null, launch_effort: null })) },
+    ui_state: { overview_graph: { ...GRAPH_CHOICES_DEFAULTS, hidden_projects: [alpha], folded_projects: [alpha], team_folds: [{ session: { device_id: "local", pane_id: "r", session: "digest-r" }, folded: true }] } },
+  } as unknown as SnapshotRest;
+  useShellStore.setState({ rest, agents: [root, child], focusedPaneId: null, connection: "live", linkSummaries: null });
+  useUiStore.getState().setOverview({ projectId: null, panel: null });
+  useUiStore.setState({ overviewOpen: false, opening: null, screen: { kind: "main", deviceId: "local" } });
+  const events: Parameters<DispatchFn>[0][] = [];
+  const actions = createActions((event) => { events.push(event); return true; });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const reactRoot = createRoot(container);
+  const search = () => container.querySelector<HTMLInputElement>('[data-graph-projects] input[aria-label="Find project or session"]')!;
+  const type = (value: string) => act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(search(), value);
+    search().dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  const found = () => [...container.querySelectorAll("[data-graph-found-session]")].map((row) => row.getAttribute("data-graph-found-session"));
+  const head = () => container.querySelector("[data-graph-preview] .og-details-head")?.textContent;
+  try {
+    await act(async () => reactRoot.render(<TooltipProvider><OverviewGraph projects={projects} deviceId="local" actions={actions} /></TooltipProvider>));
+    // A session is found by its own title, and its hidden project is said beside it.
+    await type("검증");
+    expect(found()).toEqual(["c"]);
+    expect(container.querySelector('[data-graph-found-session="c"] .og-hidden-mark')?.textContent).toBe("Hidden on the graph");
+    expect(container.querySelector("[data-graph-project-row]")).toBeNull();
+    // A project's name finds the project, not each of its sessions again.
+    await type("알파");
+    expect(found()).toEqual([]);
+    expect(container.querySelector('[data-graph-project-row="alpha"]')).not.toBeNull();
+    await type("없는 이름");
+    expect(container.querySelector(".og-no-match")?.textContent).toBe("Nothing matches");
+    // Choosing the found session opens what hides it, one change each, and its details.
+    await type("검증");
+    await act(async () => container.querySelector<HTMLButtonElement>('[data-graph-found-session="c"]')!.click());
+    expect(head()).toContain("검증 자식");
+    expect(events.map((event) => (event.payload as { change: unknown }).change)).toEqual([
+      { kind: "project_hidden", project: alpha, hidden: false },
+      { kind: "project_folded", project: alpha, folded: false },
+      { kind: "team_folded", session: { device_id: "local", pane_id: "r", session: "digest-r" }, folded: false },
+    ]);
+    // Escape goes back to the column with the search as it was; Enter takes the first found session.
+    await act(async () => useUiStore.getState().escapeLayers.at(-1)!());
+    expect(search().value).toBe("검증");
+    await type("배포");
+    await act(async () => search().dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    expect(head()).toContain("배포 확인");
+  } finally { await act(async () => reactRoot.unmount()); }
+});
