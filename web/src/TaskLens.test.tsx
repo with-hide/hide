@@ -322,3 +322,18 @@ it("draws each task's row mark and line as the sidebar does, counts no folded ch
   expect(at("parent").querySelector("[data-task-children]")).toBeNull();
   expect(at("parent").querySelector("[data-descendant-mark]")?.textContent).toBe("!1");
 });
+
+it("draws the row's ★ only on a task the operator starred, so a read question waiting in 다시 볼 것 is starred by its button, not put away (PRD revisit-group B8)", async () => {
+  const agents = [
+    row("asked", { mark: "turn", group: "seen", demand: "question", activity: "idle", revisit: { starred: false, read_ask: true, since_unix_ms: 1 } } as Partial<AgentRow>),
+    row("kept", { mark: "quiet", group: "seen", activity: "idle", revisit: { starred: true, read_ask: false, since_unix_ms: 1 } } as Partial<AgentRow>),
+  ];
+  const { container, sent } = await render(snapshot(agents, [card("asked", "revisit", "hide-main"), card("kept", "revisit", "hide-main")]), agents);
+  const button = (id: string) => container.querySelector<HTMLButtonElement>(`[data-task-revisit="${id}"]`)!;
+  expect(button("asked").getAttribute("aria-pressed")).toBe("false");
+  expect(button("asked").getAttribute("aria-label")).toBe("다시 볼 것으로 표시");
+  expect(button("kept").getAttribute("aria-pressed")).toBe("true");
+  await act(async () => button("asked").click());
+  await act(async () => button("kept").click());
+  expect(sent.map((event) => [event.kind, event.payload.pane_id])).toEqual([["revisit_star", "asked"], ["revisit_done", "kept"]]);
+});

@@ -1829,7 +1829,8 @@ mod tests {
             let connection = rusqlite::Connection::open(&database).unwrap();
             connection
                 .execute_batch(
-                    "DROP TRIGGER recheck_ends_on_check; DROP TRIGGER recheck_ends_on_change;
+                    "DROP TABLE analysis_admissions; DROP TABLE analysis_holds;
+DROP TRIGGER recheck_ends_on_check; DROP TRIGGER recheck_ends_on_change;
 DROP TABLE card_changes; DROP TABLE card_misses; DROP TABLE repeat_requests; DROP TABLE split_pairs;
 ALTER TABLE memory_items DROP COLUMN aging; ALTER TABLE memory_items DROP COLUMN aging_clock_ms;
 ALTER TABLE memory_items DROP COLUMN last_given_at_ms; ALTER TABLE memory_items DROP COLUMN recheck_at_ms;

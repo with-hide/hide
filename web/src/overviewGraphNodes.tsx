@@ -30,11 +30,12 @@ function useRevealNode(id: string) {
 
 export type OperatorNode = Node<{ label: string }, "operator">;
 /** A project's name above its sessions, in the project's color; dragging it moves the whole project. */
-export type ProjectNode = Node<{ group: GraphProject; accent: ProjectAccent; current: boolean; emphasized: boolean; fold: (id: string) => void; point: (id: string | null) => void }, "project">;
+/** `muted`: the side column's search found nothing of this project. */
+export type ProjectNode = Node<{ group: GraphProject; accent: ProjectAccent; current: boolean; emphasized: boolean; muted: boolean; fold: (id: string) => void; point: (id: string | null) => void }, "project">;
 /** The soft light behind a project's sessions, fading to nothing at its edge. */
 export type GlowNode = Node<{ accent: ProjectAccent; emphasized: boolean }, "glow">;
 /** A folded project: one circle with its name and counts. */
-export type ClusterNode = Node<{ summary: ProjectSummary; accent: ProjectAccent; orb: number; emphasized: boolean; unfold: (id: string) => void; point: (id: string | null) => void }, "cluster">;
+export type ClusterNode = Node<{ summary: ProjectSummary; accent: ProjectAccent; orb: number; emphasized: boolean; muted: boolean; unfold: (id: string) => void; point: (id: string | null) => void }, "cluster">;
 export type TeamNode = Node<{ path: string; width: number; height: number; selected: boolean }, "team">;
 /** A team root's fold: how many descendants, their states, and whether they are folded away. */
 export type TeamFold = { count: number; turn: number; going: number; done: number; folded: boolean; toggle: () => void };
@@ -82,7 +83,7 @@ export function ProjectGraphNode({ data }: NodeProps<ProjectNode>) {
   const id = data.group.id;
   // The name drags the project; the fold button beside it is not part of the drag handle. Folding
   // replaces this node under the pointer, so no pointer leave arrives and the emphasis ends with the fold.
-  return <div className="og-project" data-graph-project={data.group.project.workspace.id} data-current={data.current} data-emphasized={data.emphasized} data-accent={data.accent} onPointerEnter={() => data.point(id)} onPointerLeave={() => data.point(null)} onFocus={() => data.point(id)} onBlur={() => data.point(null)}>
+  return <div className="og-project" data-graph-project={data.group.project.workspace.id} data-current={data.current} data-emphasized={data.emphasized} data-muted={data.muted} data-accent={data.accent} onPointerEnter={() => data.point(id)} onPointerLeave={() => data.point(null)} onFocus={() => data.point(id)} onBlur={() => data.point(null)}>
     <span className="og-project-name og-project-drag" title={t("overviewGraph.dragProject", { project: label })}>{label}</span>
     <button type="button" className="og-project-fold nodrag nopan" aria-label={t("overviewGraph.foldProject", { project: label })} title={t("overviewGraph.foldProject", { project: label })} onClick={() => { data.point(null); data.fold(id); }}><ChevronsDownUpIcon aria-hidden="true" /></button>
   </div>;
@@ -103,7 +104,7 @@ export function ClusterGraphNode({ data }: NodeProps<ClusterNode>) {
   const { t } = useInterfaceTranslation();
   const { summary } = data;
   const label = summary.project.workspace.label;
-  return <div className="og-cluster" data-graph-cluster={summary.project.workspace.id} data-accent={data.accent} data-emphasized={data.emphasized} onPointerEnter={() => data.point(summary.id)} onPointerLeave={() => data.point(null)} onFocus={() => data.point(summary.id)} onBlur={() => data.point(null)}>
+  return <div className="og-cluster" data-graph-cluster={summary.project.workspace.id} data-accent={data.accent} data-emphasized={data.emphasized} data-muted={data.muted} onPointerEnter={() => data.point(summary.id)} onPointerLeave={() => data.point(null)} onFocus={() => data.point(summary.id)} onBlur={() => data.point(null)}>
     <Ports />
     <button type="button" className="og-cluster-orb og-cluster-drag nopan" style={{ width: data.orb, height: data.orb }} aria-label={t("overviewGraph.unfoldProject", { project: label, count: summary.sessions })} onClick={() => { data.point(null); data.unfold(summary.id); }}>{summary.sessions}{summary.turn > 0 ? <span className="og-orb-state"><StatusMark mark="turn" /></span> : null}</button>
     <strong>{label}</strong>

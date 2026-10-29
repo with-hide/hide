@@ -867,10 +867,15 @@ fn resume_event(provider: &str, session: &str) -> Vec<u8> {
 
 /// The external Herdr connect finishes with a usable old stream while the
 /// current execution changes. Its preceding response orders the transition.
+/// Only the worker's own next connect takes it: the control lane focuses on
+/// the same connector beside the worker, and a transition its connect took
+/// would land while the worker had already passed its check.
 #[cfg(unix)]
 struct HerdrConnectTransition {
     connector: hide_herdr_client::LocalSocketConnector,
     armed: Arc<std::sync::atomic::AtomicBool>,
+    /// The name of the worker's thread.
+    worker: &'static str,
     transition: Box<dyn Fn() + Send + Sync>,
 }
 
@@ -880,7 +885,9 @@ impl hide_herdr_client::ApiConnector for HerdrConnectTransition {
         &self,
     ) -> Result<Box<dyn hide_herdr_client::ApiStream>, hide_herdr_client::ApiError> {
         let stream = self.connector.connect()?;
-        if self.armed.swap(false, Ordering::SeqCst) {
+        if std::thread::current().name() == Some(self.worker)
+            && self.armed.swap(false, Ordering::SeqCst)
+        {
             (self.transition)();
         }
         Ok(stream)
@@ -1048,6 +1055,7 @@ fn native_archive_current_journey(kind: &'static str, flag: &str) {
         let old_connector = Arc::new(HerdrConnectTransition {
             connector: old.connector(),
             armed,
+            worker: "herdr-core-checkout-tab-create",
             transition: Box::new(move || {
                 let runtime = connect_runtime.upgrade().unwrap();
                 let mut runtime = runtime.lock().unwrap();
@@ -1465,6 +1473,7 @@ fn native_fork_current_journey(kind: &'static str) {
         let connector = Arc::new(HerdrConnectTransition {
             connector: old.connector(),
             armed,
+            worker: "herdr-core-agent-fork",
             transition: Box::new(move || {
                 let runtime = connect_runtime.upgrade().unwrap();
                 let mut runtime = runtime.lock().unwrap();

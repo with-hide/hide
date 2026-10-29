@@ -2189,16 +2189,37 @@ mod tests {
         }
 
         /// Wakes the worker and moves the clock past the wake's delay. The
-        /// intro command answers with a read, so the first one proves the
-        /// wake was taken before the clock moved, and the second only makes
-        /// the worker look at the clock.
+        /// clock moves only once the worker has taken the wake and looked at
+        /// the clock after it (`handled`); the intro command then makes it
+        /// look again. A read does not prove this: one an earlier command
+        /// published can still be waiting, and a clock moved before the wake
+        /// was taken put the run three real minutes away.
         fn wake_and_wait_out_the_delay(&self) {
             self.send(Command::Wake);
-            self.send(Command::IntroSeen);
-            self.next_read();
+            self.handled();
             self.clock
                 .fetch_add(policy::WAKE_DELAY_MS + 1, Ordering::SeqCst);
             self.send(Command::IntroSeen);
+        }
+
+        /// Returns once the worker has handled every command sent before
+        /// and looked at the clock after them. A pen with no run of its
+        /// Project is refused and changes nothing; its answer comes after
+        /// the worker has passed over each earlier command.
+        fn handled(&self) {
+            let (reply, answer) = mpsc::channel();
+            self.send(Command::Pen {
+                project: "no-run".into(),
+                edit: NotebookEdit::Merge {
+                    into: LineId(1),
+                    from: LineId(2),
+                },
+                reply,
+            });
+            assert!(matches!(
+                answer.recv_timeout(WAIT).expect("the pen's answer"),
+                Err(PenRefused::Stopped)
+            ));
         }
     }
 

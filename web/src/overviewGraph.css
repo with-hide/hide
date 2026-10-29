@@ -170,9 +170,15 @@
 .og-now { display: flex; min-width: 0; align-items: baseline; gap: var(--spacing-sm); margin-block: var(--spacing-sm); }
 .og-now b { flex-shrink: 0; color: var(--muted-foreground); font-size: var(--text-caption); font-weight: 500; }
 .og-details-actions { display: flex; flex-wrap: wrap; gap: var(--spacing-sm); margin-top: var(--spacing-md); }
-.og-team-list > button, .og-talks > div { display: flex; width: 100%; min-width: 0; align-items: center; gap: var(--spacing-sm); padding-block: var(--spacing-xs); border: 0; border-bottom: var(--size-hairline) solid var(--border); background: transparent; color: var(--foreground); font-size: var(--text-caption); text-align: left; }
-.og-team-list > button { cursor: pointer; }
-.og-team-list > button:hover { background: var(--accent); }
+.og-team-list > button, .og-found > button, .og-talks > div { display: flex; width: 100%; min-width: 0; align-items: center; gap: var(--spacing-sm); padding-block: var(--spacing-xs); border: 0; border-bottom: var(--size-hairline) solid var(--border); background: transparent; color: var(--foreground); font-size: var(--text-caption); text-align: left; }
+.og-team-list > button, .og-found > button { cursor: pointer; }
+.og-team-list > button:hover, .og-found > button:hover { background: var(--accent); }
 .og-team-list > button > span:not([data-mark]), .og-talks > div > span:not([data-mark]) { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .og-team-list > button > small, .og-talks > div > small { flex-shrink: 0; color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
 .og-hidden-mark { flex-shrink: 0; color: var(--muted-foreground); }
+/* What the side column's search does not find dims on the map; nothing moves. */
+.og-project[data-muted="true"]:not([data-emphasized="true"]), .og-cluster[data-muted="true"]:not([data-emphasized="true"]) { opacity: var(--opacity-dimmed); }
+.og-found > button > span:not([data-mark]):not([data-agent-mark]) { min-width: 0; flex: 1; overflow: hidden; }
+.og-found > button > small { flex-shrink: 0; color: var(--muted-foreground); }
+.og-no-match { margin: var(--spacing-sm) 0 0; color: var(--muted-foreground); font-size: var(--text-caption); }
+.og-found h3 span { font-variant-numeric: tabular-nums; }

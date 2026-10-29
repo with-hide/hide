@@ -1062,13 +1062,30 @@ fn usage_opencode_2_rows_past_the_read_total_are_read_by_the_next_read() {
         opencode_2_step(&db, id, true, 100 + index as u64, 0.1 * (index + 1) as f64);
         opencode_2_pad(&db, id, 3 * 1024 * 1024);
     }
-    // 3 MiB rows: two fit the read's scan total, the third waits.
-    let first = usage::read(home.path(), Agent::OpenCode, &path, None).unwrap();
-    assert!(first.skipped.is_empty());
-    assert_eq!(first.events.len(), 2);
-    assert!(first.has_more);
-    let (rest, _) = usage_drain(home.path(), Agent::OpenCode, &path, Some(first.checkpoint));
-    let all: Vec<_> = first.events.iter().chain(&rest).collect();
+    // 3 MiB rows: two fit a read's scan total and the third waits for the
+    // next read. The read's time budget may end it sooner, but never before
+    // its first row, so each read with more to come has moved on.
+    let mut saved = None;
+    let mut all = Vec::new();
+    for read in 1.. {
+        assert!(read <= 8, "the reads did not finish");
+        let step = usage::read(home.path(), Agent::OpenCode, &path, saved).unwrap();
+        assert!(step.skipped.is_empty(), "{:?}", step.skipped);
+        assert!(
+            step.events.len() <= 2,
+            "read {read} took {} rows",
+            step.events.len()
+        );
+        assert!(
+            !step.has_more || !step.events.is_empty(),
+            "read {read} took no row"
+        );
+        all.extend(step.events);
+        if !step.has_more {
+            break;
+        }
+        saved = Some(step.checkpoint);
+    }
     assert_eq!(all.len(), 4, "{all:?}");
     assert_eq!(
         all.iter()

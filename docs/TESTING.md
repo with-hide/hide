@@ -75,6 +75,7 @@ Keep one representative journey per user-visible flow; when a long spec carries 
   While the test holds a request the product will time out, run nothing slow between holding and releasing it, and give every observation poll in that window explicit `intervals`.
   Playwright's default poll backoff grows to a second between attempts, which is time taken from the product's deadline.
   A process start is slow in that sense: `a_slow_ask_for_one_home_does_not_hold_another_home_behind_it` in `hide-platform/tests/it/programs.rs` started the second home's login shell while it held the first home's ten-second ask, and at load 32 the first ask reached its deadline (issue 859); it now reads the second home's answer before the hold, so the held window starts no process, and counts the shell's starts to show it.
+  A test does not read through a product budget it is not about: `a_linked_node_s_closed_session_is_analyzed_through_its_link_and_waits_while_it_is_down` in `herdr-core/src/runtime/memory_analysis.rs` asked Memory's hook, whose answer the hook cuts at one second, and under load got none in more than a third of its runs; it asserts the scope the hook would read, and the hook's answer is `memory_hook`'s tests' to hold.
 
 `web/e2e/pane-focus-ordering.spec.ts`'s rapid-click test showed the cost.
 It holds the first focus request, whose transport deadline is five seconds, while it sends forty clicks.
@@ -100,6 +101,12 @@ When the behavior depends on the order of two events, the test fixes that order;
 - A test that hands the delivery store its passes itself starts the store alone (`Worker::store`), not with the doorbell and watch producers (`Worker::spawn`), which pass on their own clocks.
   The store still passes on its own while a registration move or end is asked for, so the test looks at what an event left under that event's own lock, and stops the store before it compares the ledger file with the published ledger.
   `SleepingChild` in `herdr-core/src/runtime/tests/agent_sleep.rs` ran the producers, and in more than fifty recorded Linux CI runs a pass of theirs moved the woken pane's registration between the wake and the test's look; an order such a pass can make is a test of its own there (`a_pass_begun_before_the_wake_keeps_the_record_and_the_next_one_moves_the_registration`).
+- An event whose worker answers at once is looked at under the event's own lock: dispatch it and read what it left (`loading`, `checking`) before releasing, or the answer may already have replaced it (`runtime/tests/ssh_hosts.rs`, `runtime/tests/inbound.rs`).
+- A stand-in for the other side answers only what the test asks of it.
+  The held node link in `herdr-core/src/runtime/tests/inbound.rs` reaches a Herdr that waits until the link ends, because a socket that never existed was refused at once and the node's session sync then marked the node disconnected after the test had connected it.
+  A connect that swaps the current Herdr (`HerdrConnectTransition` in `runtime/tests/links.rs`) is taken only by the worker's own thread, because the control lane connects on the same connector beside it.
+- A read is a barrier only when nothing else can have published it.
+  The suggestions worker's tests wait for a pen's own reply (`handled`), not for the next read, because a read an earlier command published could still be waiting, and the clock moved before the wake was taken.
 - Before releasing, assert the barrier the race needs, such as the number of accepted requests, so a stale snapshot or an earlier diagnostic cannot satisfy it.
 - After releasing, assert the outcome and the boundary's own record (`gate.requests`, `gate.maximum()`), which show the order the product actually saw.
 - A race the test cannot order proves nothing either way; find the boundary to gate before writing the assertion.
