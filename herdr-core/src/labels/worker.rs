@@ -2719,8 +2719,11 @@ impl LabelWorker {
                 // A reply that answers the question ending a turn this
                 // label read as finished: a missed question, kept as a
                 // signal for checking the verdict, with ids only
-                // (needs-you-cleanup D-06, D-15).
-                if record.end == Some(LabelEnd::Done) {
+                // (needs-you-cleanup D-06, D-15). Only the turn's first
+                // analysis reads the end of the turn before it.
+                if record.end == Some(LabelEnd::Done)
+                    && record.analysis_turn_start != Some(outcome.turn)
+                {
                     for request in analysis
                         .requests
                         .iter()
