@@ -22,6 +22,21 @@ pub fn refusal_next_action(reason: &str) -> &'static str {
     }
 }
 
+/// What a plain shell's `hide <path>` does about a refusal the node gave
+/// before the core was asked ([`NodeEvent::ProjectOpen`]).
+pub fn project_open_next_action(reason: &str) -> &'static str {
+    match reason {
+        "caller_not_this_account" => "Run it as the account this device was connected to Hide with",
+        "project_open_busy" => "Wait for the folder being opened, then run it again",
+        "project_open_rate_limited" => "Wait a minute, then run it again",
+        "invalid_request" => "Check the path, then run it again",
+        _ => "Connect this device in Hide first, then run it again",
+    }
+}
+
+/// Opens one node takes in a rolling minute from plain shells.
+pub const PROJECT_OPENS_PER_MINUTE: usize = 6;
+
 /// Streams one link carries at once.
 pub const MAX_STREAMS: usize = 8;
 /// The most bytes of a stream one message carries.
@@ -39,6 +54,13 @@ pub const MAX_BROWSER_STREAMS: usize = 4;
 /// connections the Browser Views of the core's machine hold to the node's
 /// loopback servers, a few per page.
 pub const MAX_PAGE_STREAMS: usize = 32;
+/// How long a node waits for the core to take a [`NodeEvent::ProjectOpen`]
+/// ([`ProofAnswer::ProjectOpenAccepted`]): a link that ended without the
+/// node noticing answers its caller within this, never hangs it.
+pub const PROJECT_OPEN_ACCEPT: std::time::Duration = std::time::Duration::from_secs(5);
+/// How long a node waits for the outcome of an accepted open: past the
+/// core's own 30 s wait for the registration, which answers on its own.
+pub const PROJECT_OPEN_ANSWER: std::time::Duration = std::time::Duration::from_secs(40);
 /// How often a node that dialed its core writes [`NodeEvent::Ping`].
 pub const HEARTBEAT: std::time::Duration = std::time::Duration::from_secs(10);
 /// How long the attach role waits for a byte from its node before it ends
@@ -147,6 +169,18 @@ pub enum NodeEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         hook: Option<HookRequest>,
     },
+    /// A process of the node's own account (`LocalStream::
+    /// peer_is_this_account`), in no pane, asked to open `path`, an absolute
+    /// folder on this device in the wire spelling, as a project: `hide
+    /// <path>` from a plain shell. The node issues no credential for it; the
+    /// core answers [`ProofAnswer::ProjectOpenAccepted`] at once and then
+    /// [`ProofAnswer::ProjectOpen`] with what `hide <path>` prints, and does
+    /// nothing else for it. `request_id` makes a retry converge.
+    ProjectOpen {
+        request: u64,
+        path: String,
+        request_id: String,
+    },
     /// A credential the node handed out is no longer held: its reference
     /// expired, was removed, or its holder ended.
     Revoke { token: String },
@@ -216,6 +250,14 @@ pub enum ProofAnswer {
     Refused {
         reason: String,
         next_action: String,
+    },
+    /// The core took a [`NodeEvent::ProjectOpen`]; its outcome follows.
+    ProjectOpenAccepted,
+    /// The outcome of a [`NodeEvent::ProjectOpen`]: the `workspace_result`
+    /// line a `hide <path>` reads, `ok` with `{label, path, added, window}`
+    /// or the reason and next action.
+    ProjectOpen {
+        answer: serde_json::Value,
     },
 }
 

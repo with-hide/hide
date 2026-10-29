@@ -693,3 +693,83 @@ fn a_spawn_with_machine_starts_the_agent_on_the_device_under_its_caller() -> Res
         Ok(())
     })
 }
+
+/// `hide <path>` from a plain shell on the device, an ssh login with no
+/// Hide pane: its node proves it only as a process of its own account, the
+/// core registers the device's folder as the device's helper judges it, and
+/// the same command again only brings the project forward. A folder outside
+/// the device's home is refused, since only Add a project asks about one.
+#[test]
+#[ignore = "external lane requires this worktree's CLI binaries and HIDE_E2E_HERDR_BIN"]
+fn a_plain_shell_on_the_device_opens_its_folder_as_a_project() -> Result<()> {
+    Fixture::journey(|fixture| {
+        let remote_hide = fixture.remote.environment.home.join("bin/hide");
+        let folder = fixture.remote.environment.home.join("plain-open");
+        std::fs::create_dir_all(folder.join("src"))?;
+        // The run directory lives inside this checkout, whose repository
+        // holds the account's home; the folder is a repository of its own,
+        // as the fixture's project is.
+        let mut init = fixture.remote.environment.command("/usr/bin/git");
+        init.args(["-c", "init.defaultBranch=main", "-C"])
+            .arg(&folder)
+            .args(["init", "-q"]);
+        fixture::successful(init)?;
+        let open = |path: &std::path::Path| {
+            let mut command = fixture.remote.environment.command(&remote_hide);
+            command.arg(path);
+            fixture::capture(command)
+        };
+        let text = |bytes: &[u8]| String::from_utf8_lossy(bytes).into_owned();
+
+        let added = open(&folder)?;
+        ensure!(
+            added.status.success() && text(&added.stdout).starts_with("Added plain-open ("),
+            "the device's folder was not added: {} {}",
+            text(&added.stdout),
+            text(&added.stderr)
+        );
+        // The device asked its core; it never started a Hide of its own,
+        // whatever folder its helper was installed in.
+        let device_state = hide_kit::layout::default_state_dir(&fixture.remote.environment.home);
+        ensure!(
+            !device_state.join("hided.json").exists(),
+            "the device started a Hide of its own at {}",
+            device_state.display()
+        );
+        let wire = folder.to_string_lossy().into_owned();
+        wait_for("the device's folder registered on the core", || {
+            let snapshot = fixture.snapshot()?;
+            Ok(snapshot
+                .pointer("/status/remote")
+                .and_then(Value::as_array)
+                .and_then(|rows| rows.iter().find(|row| row["target_id"] == "remote"))
+                .and_then(|remote| remote.pointer("/session/workspaces"))
+                .and_then(Value::as_array)
+                .is_some_and(|rows| {
+                    rows.iter()
+                        .any(|row| row["registered"] == true && row["path"] == wire.as_str())
+                })
+                .then_some(()))
+        })?;
+
+        let again = open(&folder.join("src"))?;
+        ensure!(
+            again.status.success() && text(&again.stdout).starts_with("Brought plain-open ("),
+            "a folder inside the project was not only brought forward: {} {}",
+            text(&again.stdout),
+            text(&again.stderr)
+        );
+
+        let outside = tempfile::tempdir()?;
+        let refused = open(outside.path())?;
+        ensure!(
+            !refused.status.success()
+                && text(&refused.stderr).contains("needs_confirmation")
+                && text(&refused.stderr).contains("Add a project"),
+            "a folder outside the device's home was not refused: {} {}",
+            text(&refused.stdout),
+            text(&refused.stderr)
+        );
+        Ok(())
+    })
+}

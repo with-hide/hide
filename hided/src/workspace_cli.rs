@@ -529,6 +529,51 @@ pub fn request_project_open(credential: &mut Credential, path: &str) -> Result<V
     })
 }
 
+/// `hide <path>` from a shell in no pane on a device: asked of the node
+/// pane service of this device's link, which proves the caller only as a
+/// process of its own account and sends the open up with no credential
+/// (`hide_host::panes`). No live service means the device is not connected;
+/// several mean several cores have it open, and which one is meant is not
+/// guessed.
+/// No node of this account answers: this machine is no connected device.
+pub const NOT_LINKED: &str = "device_not_linked";
+
+pub fn request_project_open_on_bridge(env: &Env, path: &str) -> Result<Value, String> {
+    project_open_on_bridge(&hide_kit::layout::workspace_bridges(&env.state_dir), path)
+}
+
+fn project_open_on_bridge(bridge_dir: &Path, path: &str) -> Result<Value, String> {
+    let mut bridges = live_bridges(bridge_dir, Instant::now() + TIMEOUT)?;
+    let mut stream = match bridges.len() {
+        0 => return Err(NOT_LINKED.to_owned()),
+        1 => bridges.remove(0),
+        _ => return Err("bridge_ambiguous".to_owned()),
+    };
+    // The node answers within its own two bounds: the core's acceptance,
+    // then the open's outcome.
+    stream.set_deadline(
+        Instant::now()
+            + hide_node_link::panes::PROJECT_OPEN_ACCEPT
+            + hide_node_link::panes::PROJECT_OPEN_ANSWER
+            + TIMEOUT,
+    );
+    let request_id = fresh_request_id()?;
+    let request = json!({"project_open": {"path": path, "request_id": request_id}});
+    writeln!(stream, "{request}").map_err(|_| "bridge_unavailable".to_owned())?;
+    let mut line = String::new();
+    BufReader::new(stream)
+        .take(hide_node_link::panes::HOOK_RESPONSE_LIMIT as u64)
+        .read_line(&mut line)
+        .map_err(|error| {
+            if error.kind() == std::io::ErrorKind::TimedOut {
+                "request_timeout".to_owned()
+            } else {
+                "bridge_unavailable".to_owned()
+            }
+        })?;
+    serde_json::from_str(&line).map_err(|_| "bridge_unavailable".to_owned())
+}
+
 /// `hide <path>` on the core's own machine, with the daemon's token from the
 /// state file this account owns: one `/ws` connection whose handshake names
 /// `client_kind: "cli"` carries one request and its answer, and is never a
@@ -1585,6 +1630,68 @@ mod tests {
         });
         panes.remove_folder();
         assert_eq!(bootstrap_bridges(&bridges, &request), Ok(None));
+    }
+
+    /// A plain shell's `hide <path>` on a device asks the one node of its
+    /// link and reads the core's answer; with that node stopped, or a second
+    /// core's node beside it, it is refused with a reason at once.
+    #[test]
+    fn a_plain_shell_opens_through_its_device_s_one_node() {
+        use hide_node_link::panes::ProofAnswer;
+        let directory = short_dir();
+        let bridges = directory.path().join("bridges");
+        let herdr = directory.path().join("no-herdr.sock");
+        let (sent, lines) = mpsc::channel();
+        let output = std::sync::Mutex::new(Lines(Vec::new(), sent));
+        let panes = hide_host::panes::Panes::new();
+        let other = hide_host::panes::Panes::new();
+        let answer = json!({"type":"workspace_result","ok":true,"result":{"label":"app","path":"/home/me/app","added":true,"window":true}});
+        std::thread::scope(|scope| {
+            panes
+                .start(scope, &output, &bridges, herdr.to_str().unwrap())
+                .unwrap();
+            let panes = &panes;
+            let answered = answer.clone();
+            let core = scope.spawn(move || {
+                let event = next_event(&lines);
+                assert_eq!(event["event"], "project_open");
+                assert_eq!(event["path"], "/home/me/app");
+                let request = event["request"].as_u64().unwrap();
+                panes
+                    .answer_proof(request, ProofAnswer::ProjectOpenAccepted)
+                    .unwrap();
+                panes
+                    .answer_proof(request, ProofAnswer::ProjectOpen { answer: answered })
+                    .unwrap();
+            });
+            assert_eq!(
+                project_open_on_bridge(&bridges, "/home/me/app"),
+                Ok(answer.clone())
+            );
+            core.join().unwrap();
+            other
+                .start(scope, &output, &bridges, herdr.to_str().unwrap())
+                .unwrap();
+            assert_eq!(
+                project_open_on_bridge(&bridges, "/home/me/app"),
+                Err("bridge_ambiguous".to_owned())
+            );
+            other.stop();
+            panes.stop();
+        });
+        other.remove_folder();
+        // A folder a killed node left still holds its socket's path, which
+        // no listener answers any more.
+        panes.remove_folder();
+        let dead = bridges.join("bridge-dead");
+        private::create_dir_all(&dead).unwrap();
+        private::create_new_file(&dead.join("bootstrap.sock")).unwrap();
+        let asked = Instant::now();
+        assert_eq!(
+            project_open_on_bridge(&bridges, "/home/me/app"),
+            Err(NOT_LINKED.to_owned())
+        );
+        assert!(asked.elapsed() < Duration::from_secs(2));
     }
 
     /// A command's bytes cross the node both ways, the first of them sent

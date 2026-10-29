@@ -10,7 +10,10 @@
 //! connection whose handshake names `client_kind: "cli"`
 //! ([`operator_request`]). A command in a pane, a device's included, asks
 //! with its pane credential as every scoped request does, and its machine
-//! is the credential's (`server::scoped_client_loop`). A folder on this
+//! is the credential's (`server::scoped_client_loop`). A plain shell of a
+//! device's own account asks its node, which sends the request up its link
+//! with no credential (`node_panes`, `NodeEvent::ProjectOpen`), and its
+//! machine is that link's node. A folder on this
 //! machine is judged on hided's `$HOME` line first, exactly as a picked
 //! folder is; a device's folder is judged by that device's helper inside the
 //! core's registration.
@@ -75,6 +78,18 @@ pub(crate) fn run(
     }
 }
 
+/// The `workspace_result` line `hide <path>` reads for `outcome`.
+pub(crate) fn answer(request_id: &str, outcome: Result<Value, Refused>) -> Value {
+    match outcome {
+        Ok(result) => {
+            json!({"type":"workspace_result","request_id":request_id,"ok":true,"result":result})
+        }
+        Err((reason, next_action)) => {
+            json!({"type":"workspace_result","request_id":request_id,"ok":false,"reason":reason,"next_action":next_action})
+        }
+    }
+}
+
 /// The one request a `/ws` connection that proved the daemon's own token
 /// with `client_kind: "cli"` makes: `{type: "project_open", request_id,
 /// path}`, answered with a `workspace_result` as every scoped request is,
@@ -123,15 +138,11 @@ pub(crate) async fn operator_request(mut socket: WebSocket, state: AppState, con
             })
             .await;
             match outcome {
-                Ok(Ok(result)) => {
-                    json!({"type":"workspace_result","request_id":request_id,"ok":true,"result":result})
-                }
-                Ok(Err((reason, next_action))) => {
-                    json!({"type":"workspace_result","request_id":request_id,"ok":false,"reason":reason,"next_action":next_action})
-                }
-                Err(_) => {
-                    json!({"type":"workspace_result","request_id":request_id,"ok":false,"reason":"project_open_unavailable","next_action":next_action("")})
-                }
+                Ok(outcome) => answer(&request_id, outcome),
+                Err(_) => answer(
+                    &request_id,
+                    Err(("project_open_unavailable".to_owned(), next_action(""))),
+                ),
             }
         }
         _ => {
