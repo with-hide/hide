@@ -478,6 +478,14 @@ mod unix {
                 .contains("ssh-ed25519")
         );
         assert_eq!(told.lock().unwrap().last(), Some(&None));
+        // A press whose window closed asks nobody, but a sign-in that needs
+        // nobody, the key and the now-known server, still connects, as a
+        // core move's check whose window went away must.
+        let press = pressed_by(A);
+        screen.release(A);
+        let shown_before = told.lock().unwrap().len();
+        assert_eq!(run(&upstream(press)).unwrap().status, 0);
+        assert_eq!(told.lock().unwrap().len(), shown_before);
         // The dial after it, as an attach after the update the press signed
         // in for, asks nobody and runs on the session that press opened:
         // with the trust gone it could not dial again without asking.

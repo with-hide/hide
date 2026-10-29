@@ -13,8 +13,9 @@
 //! question, between two, or on one. Everything a lease does (show, ask,
 //! answer, cancel, its deadline) goes through the one lock of its
 //! [`ScreenSignIn`], so a reply checked against one question cannot act on
-//! the next. A lease that is no longer the current one reads as withdrawn,
-//! so the dial holding it ends and reaps its `ssh` at its next look. A dial
+//! the next. A lease that is no longer the current one reads as withdrawn
+//! and asks nobody: the dial holding it ends at once where it waits on the
+//! operator, and a sign-in that needs nobody goes on. A dial
 //! nobody pressed for holds no lease and never reaches this.
 
 use std::sync::mpsc;

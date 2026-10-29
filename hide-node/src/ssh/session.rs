@@ -53,6 +53,9 @@ pub(super) struct SigningIn {
     /// may be asked for, seen).
     browser: Option<Instant>,
     pub(super) browser_expired: bool,
+    /// The sign-in stopped because the screen that pressed for it went away
+    /// while it waited on the operator.
+    withdrawn: bool,
     /// Time the operator held, added to every deadline given.
     pub(super) held: Duration,
     tick: Instant,
@@ -137,7 +140,12 @@ impl Pipe for SigningIn {
             {
                 return Err(Stop::Ended("a sign-in question got no answer".to_owned()));
             }
-            if !self.signed_in && self.sign_in.withdrawn() {
+            // B8: the screen that pressed went away or cancelled while the
+            // sign-in waits on the operator (a browser check, a key touch):
+            // nobody is left to finish it. A sign-in that needs nobody, keys
+            // or the agent, goes on; a question it asks later is refused.
+            if !self.signed_in && self.operator_turn() && self.sign_in.withdrawn() {
+                self.withdrawn = true;
                 return Err(Stop::Ended(
                     "the screen that asked for the sign-in went away".to_owned(),
                 ));
@@ -280,6 +288,7 @@ pub(super) fn sign_in(
         signed_in: false,
         browser: None,
         browser_expired: false,
+        withdrawn: false,
         held: Duration::ZERO,
         tick: Instant::now(),
     };
@@ -302,7 +311,7 @@ pub(super) fn sign_in(
                     .desk
                     .as_ref()
                     .and_then(askpass::Desk::refusal)
-                    .or_else(|| pipe.sign_in.withdrawn().then_some(Refusal::Cancelled))
+                    .or_else(|| pipe.withdrawn.then_some(Refusal::Cancelled))
                     .or_else(|| {
                         (pipe.browser_expired && wake == Wake::NotAllowed)
                             .then_some(Refusal::NotAllowed)
