@@ -410,7 +410,8 @@ fn windows_inbox_openssh_asks_through_hides_askpass() {
         .unwrap();
     assert!(made.status.success(), "{made:?}");
     let row = Row::answering(vec![text("fixture passphrase")]);
-    let desk = hide_node::ssh::askpass::Desk::open(&std::env::temp_dir(), row.clone(), None).unwrap();
+    let desk =
+        hide_node::ssh::askpass::Desk::open(&std::env::temp_dir(), row.clone(), None).unwrap();
     let read = std::process::Command::new(openssh.join("ssh-keygen.exe"))
         .args(["-y", "-f"])
         .arg(&key)
