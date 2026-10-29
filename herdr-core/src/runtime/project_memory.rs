@@ -980,17 +980,25 @@ impl Runtime {
         // D-17, B28). The tab holds the button; a screen behind it is
         // refused here.
         if payload.action == MemoryAction::Promote && !self.branch_room(&node, &path) {
+            let git = self.catalog_workspaces().any(|workspace| {
+                workspace.device_id == node.as_str() && workspace.path == path && workspace.is_git
+            });
+            let (kind, message) = if git {
+                (
+                    "memory.branches_full",
+                    "Merge or discard a waiting branch before starting another",
+                )
+            } else {
+                (
+                    "memory.not_git",
+                    "Documents are fixed on a git branch; this folder is not a git repository",
+                )
+            };
             crate::diagnostic!(json!({
                 "component": "memory", "kind": "promotion.refused",
-                "workspace_id": payload.workspace_id, "reason": "no_branch_room",
+                "workspace_id": payload.workspace_id, "reason": kind,
             }));
-            self.memory_action_failed(
-                &payload.workspace_id,
-                payload.action,
-                "memory.branches_full",
-                "Merge or discard a waiting branch before starting another",
-                false,
-            );
+            self.memory_action_failed(&payload.workspace_id, payload.action, kind, message, false);
             return true;
         }
         let start = match payload.action {

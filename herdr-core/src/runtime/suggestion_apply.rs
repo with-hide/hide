@@ -403,10 +403,6 @@ impl Runtime {
         }
     }
 
-    /// The operator's `main에 합치기` or `버리기` on a ready 제안 line (PRD
-    /// hide-ai-branch-first-apply D-05, D-07, B6-B8, B10): Hide merges or
-    /// deletes the branch on the Project's machine, off the lock, and hands
-    /// the worker what came of it. A press while one runs is dropped.
     /// Whether a merge or a discard of this line's branch is under way: a
     /// pull request or a rebase started now would work on a branch that is
     /// being merged or deleted.
@@ -422,6 +418,10 @@ impl Runtime {
         })
     }
 
+    /// The operator's `main에 합치기` or `버리기` on a ready 제안 line (PRD
+    /// hide-ai-branch-first-apply D-05, D-07, B6-B8, B10): Hide merges or
+    /// deletes the branch on the Project's machine, off the lock, and hands
+    /// the worker what came of it. A press while one runs is dropped.
     pub(super) fn decide_suggestion_branch(
         &mut self,
         project: &ProjectRef,
@@ -562,6 +562,15 @@ impl Runtime {
             move |runtime, change| {
                 let (key, deciding) = carried;
                 runtime.suggestions_work.apply.deciding.remove(&deciding);
+                // A branch its agent moved after the operator read it is
+                // read again at the next tick, not a minute later, so the
+                // row shows what it holds now before the next press.
+                if matches!(&change, AttemptMove::DecisionRefused(code) if code == "merge_branch_moved")
+                {
+                    let work = &mut runtime.suggestions_work.apply;
+                    work.read_after.remove(&key);
+                    work.next_unix_ms = 0;
+                }
                 if let Some(followed) = runtime
                     .suggestions_work
                     .apply

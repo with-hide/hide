@@ -44,6 +44,9 @@ impl Runtime {
             self.snapshot.pr_work.branch_diff = Some(shown);
             return;
         };
+        // Stamped before any answer, so a failed read is not read again
+        // until the branch moves (`follow_branch_diff`).
+        shown.tip = place.tip.clone();
         let link = match self.node_link(&place.node) {
             Ok(link) => link,
             Err(_) => {
@@ -55,7 +58,6 @@ impl Runtime {
             }
         };
         let tip = place.tip.clone();
-        shown.tip = tip.clone();
         self.snapshot.pr_work.branch_diff = Some(shown);
         let call = Call::BranchDiff {
             root: place.root,
