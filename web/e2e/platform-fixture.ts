@@ -4,7 +4,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { endWindowsTree, listWindowsTree, type WindowsProcess } from "./process-tree";
 import { copyFixtureShim, fixtureShimPath } from "./shims/build";
+
+export type { WindowsProcess };
 
 export const fixtureExecutable = (name: string): string => `${name}${process.platform === "win32" ? ".exe" : ""}`;
 
@@ -131,9 +134,6 @@ export function fixtureOpenCommand(root?: string, privateRoot?: string): string 
   return command;
 }
 
-/** A Windows process, named by its id and creation time so a reused id is never taken for it. */
-export type WindowsProcess = { id: number; created: string };
-
 const powershell = (script: string, env: NodeJS.ProcessEnv = {}): string =>
   execFileSync("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `$ErrorActionPreference = 'Stop'\n${script}`], {
     env: { ...process.env, ...env },
@@ -162,18 +162,9 @@ export function windowsTcpSummary(): string[] {
   `).split(/\r?\n/).filter(Boolean);
 }
 
-/**
- * `pid` and its live descendants. Windows keeps a running executable and a
- * process's working folder locked, and a pane's processes can outlive the
- * Herdr server that started them, so a fixture lists its tree before it
- * stops the server and ends what is left with `endWindowsProcesses`.
- */
+/** `pid` and its live descendants, as the fixtures' `hide-processes` lists them (`listWindowsTree`). */
 export function windowsProcessTree(pid: number): WindowsProcess[] {
-  const listed = execFileSync(fixtureShimPath("hide-processes"), ["tree", String(pid)], { encoding: "utf8", timeout: 30_000, windowsHide: true });
-  return listed.split(/\r?\n/).filter(Boolean).map((line) => {
-    const [id, created] = line.split(" ");
-    return { id: Number(id), created: created! };
-  });
+  return listWindowsTree(fixtureShimPath("hide-processes"), pid);
 }
 
 /**
@@ -195,26 +186,7 @@ export function endVctip(): number[] {
   return JSON.parse(ended) as number[];
 }
 
-/**
- * Ends `owned`, every process they started, and, given `root`, every process
- * started from an executable under it (the fixture's shims, which hided also
- * runs), and returns once none is left, so the caller can delete `root`.
- * What an owned process started is found from its identity, so a child it
- * started after `owned` was listed is ended even once its parent is gone: an
- * owner killed while it starts a child leaves that child behind, and on
- * Windows a child started suspended and not yet in its job object (hided's
- * `OwnedChild::spawn`) stays suspended for good and keeps its executable
- * locked, where the path check did not find it. Throws naming the survivors
- * after five seconds.
- */
+/** Ends `owned` and what they started, and given `root` what runs from under it, with the fixtures' `hide-processes` (`endWindowsTree`). */
 export function endWindowsProcesses(owned: WindowsProcess[], root?: string): void {
-  // The folder's trailing separator keeps a sibling whose name starts the same from matching.
-  const folder = root ? `${root.replace(/[\\/]+$/, "")}\\` : "-";
-  try {
-    execFileSync(fixtureShimPath("hide-processes"), ["end", folder, ...owned.map((item) => `${item.id}:${item.created}`)], { encoding: "utf8", timeout: 30_000, windowsHide: true });
-  } catch (error) {
-    // The program names the survivors on stderr, which is the reason.
-    const stderr = String((error as { stderr?: unknown }).stderr ?? "").trim();
-    throw new Error(stderr || String(error), { cause: error });
-  }
+  endWindowsTree(fixtureShimPath("hide-processes"), owned, root);
 }

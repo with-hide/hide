@@ -6245,10 +6245,17 @@ impl Runtime {
         elapsed_ms: u128,
     ) -> bool {
         self.workspace_creations_in_flight.remove(request_path);
+        let node = self.node.as_str().to_owned();
         let outcome = match result {
             Ok(outcome) => outcome,
             Err(failure) => {
                 self.set_error(failure.kind, failure.message, false);
+                self.settle_project_open(
+                    &node,
+                    request_path,
+                    Err(failure.kind),
+                    super::project_open::Forward::No,
+                );
                 return true;
             }
         };
@@ -6348,6 +6355,13 @@ impl Runtime {
             "duration_ms": elapsed_ms,
                 "git_init": if git_init_failed { "failed" } else { "complete_or_skipped" },
         }));
+        // The registration already put the project in front on its first tab.
+        self.settle_project_open(
+            &node,
+            request_path,
+            Ok(()),
+            super::project_open::Forward::No,
+        );
         true
     }
 }

@@ -59,11 +59,22 @@ function stage(chapter: PracticeChapter) {
     return true;
   };
   const actions = createActions(send);
+  // A world answers most inputs with the state it had, and every input starts
+  // from its state drawn again, so each state is drawn and its screens read
+  // once and handed to the store as often as an input starts from it: drawing
+  // it again for every input was most of this test's time, and on a Windows
+  // runner past vitest's 5 s (hide-private issue 114).
+  const drawn = new Map<unknown, Partial<ReturnType<typeof useShellStore.getState>>>();
   const show = (next: unknown) => {
     model = next;
-    const { rest, agents, focused, usage } = world.snapshot(next, NOW);
-    for (const id of world.panes(next)) expect(typeof world.screen(next, id, 80)).toBe("string");
-    useShellStore.setState({ rest, agents, connection: "live", focusedPaneId: focused, usage: usage ? { nodes: [usage] } : null });
+    let state = drawn.get(next);
+    if (!state) {
+      const { rest, agents, focused, usage } = world.snapshot(next, NOW);
+      for (const id of world.panes(next)) expect(typeof world.screen(next, id, 80)).toBe("string");
+      state = { rest, agents, connection: "live", focusedPaneId: focused, usage: usage ? { nodes: [usage] } : null };
+      drawn.set(next, state);
+    }
+    useShellStore.setState(state);
   };
   show(model);
   useUiStore.setState({ screen: { kind: "workspace" }, overviewOpen: false, laneExpanded: false, stackFront: "view" });

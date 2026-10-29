@@ -89,7 +89,8 @@ OS_LANES = ("os-contract", "windows-check", "windows-e2e", "windows-desktop")
 # The remote mailbox lane builds `hided`, `hide`, the host helper and the hook
 # binary, and runs `hided`'s `remote_delivery`, `node_contract`,
 # `device_bootstrap` and `system_ssh` tests against them over the system's
-# ssh and sshd, and its `held_letter_notice` test against the pinned Herdr; a
+# ssh and sshd, its `held_letter_notice` test against the pinned Herdr, and
+# `hide-host`'s check of another account's open on a device's bridge; a
 # change to any crate they link (the device link's `hide-node` and
 # `hide-node-link` reach it through `hided`), or to the tests, can change its
 # result, and nothing else can. Web code and web specs do not reach it.

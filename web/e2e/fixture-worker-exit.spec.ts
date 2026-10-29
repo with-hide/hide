@@ -7,7 +7,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { endStartGroup, herdrBinary } from "./herdr-fixture";
+import { herdrBinary } from "./herdr-fixture";
+import { endProcessGroup } from "./process-tree";
 import { endWindowsProcesses, fixtureProgram, type WindowsProcess } from "./platform-fixture";
 import { fixtureShimPath } from "./shims/build";
 import { afterCleanup } from "./worker-owned";
@@ -129,7 +130,7 @@ async function withPendingWorker(refuse: boolean, check: (root: string, fixture:
     for (const start of starts) {
       try {
         if (process.platform === "win32") endWindowsProcesses(start.owned);
-        else endStartGroup(start.leader);
+        else endProcessGroup(start.leader);
       } catch (error) { failures.push(error); }
     }
     if (failures.length > 0) throw new AggregateError(failures, `pending CLI exit unconfirmed; preserve ${fixture?.root ?? root} and ${root}`);

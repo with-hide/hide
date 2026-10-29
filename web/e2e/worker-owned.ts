@@ -7,7 +7,8 @@
 
 const running = new Set<() => void>();
 
-process.once("exit", () => {
+/** Runs every stop still owned, as the worker's exit does; exported for the test of that exit. */
+export function stopEveryOwned(): void {
   for (const stop of [...running]) {
     try {
       stop();
@@ -15,7 +16,9 @@ process.once("exit", () => {
       console.error("e2e fixture stop failed at worker exit", error);
     }
   }
-});
+}
+
+process.once("exit", stopEveryOwned);
 
 /**
  * `stop`, run at most once, and at worker exit if nothing ran it before.

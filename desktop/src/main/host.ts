@@ -16,7 +16,7 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, net, Notif
 import { DebUpdater, MacUpdater, NsisUpdater, RpmUpdater } from "electron-updater";
 import { CHECK_UPDATES_COMMAND, SETUP_COMMAND, type HerdrRestart } from "../../../web/src/host";
 import type { MenuCommand } from "./menu";
-import { BINDINGS_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, EDITOR_OPEN_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, EXTERNAL_DESCRIBE_CHANNEL, EXTERNAL_LIVE_CHANNEL, EXTERNAL_OPEN_CHANNEL, EXTERNAL_READ_CHANNEL, PICK_FOLDER_CHANNEL, PRACTICE_OPEN_CHANNEL, PROBE_PATHS_CHANNEL, HERDR_RESTART_CHANNEL, QUIT_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL } from "../channel";
+import { BINDINGS_CHANNEL, COME_FORWARD_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, EDITOR_OPEN_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, EXTERNAL_DESCRIBE_CHANNEL, EXTERNAL_LIVE_CHANNEL, EXTERNAL_OPEN_CHANNEL, EXTERNAL_READ_CHANNEL, PICK_FOLDER_CHANNEL, PRACTICE_OPEN_CHANNEL, PROBE_PATHS_CHANNEL, HERDR_RESTART_CHANNEL, QUIT_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL } from "../channel";
 import { BrowserViews, type ResolvedPage } from "./browser";
 import { practiceBounds, practiceUrl } from "./practice";
 import { BrowserCdpGateway, CdpActionUncertain, parseBrowserControlResult, type CdpAction, type CdpActionResult, type CdpScope } from "./browserCdp";
@@ -230,6 +230,7 @@ export class DesktopHost {
     );
     this.startBrowserControl(this.browsers);
     this.listenReveal();
+    this.listenComeForward();
     this.listenPickFolder();
     this.listenHerdrRestart();
     this.listenQuit();
@@ -337,6 +338,23 @@ export class DesktopHost {
         shell.showItemInFolder(target.path);
         this.log.event("reveal.shown", { kind: target.kind });
       }).catch(() => this.log.event("reveal.failed", {}));
+    });
+  }
+
+  /**
+   * `hide <path>` brought a project in front (the daemon's `window_call`
+   * frame): the window comes forward as a second launch brings it. Only this
+   * window's page on the daemon origin is heard.
+   */
+  private listenComeForward(): void {
+    ipcMain.on(COME_FORWARD_CHANNEL, (event: IpcMainEvent) => {
+      if (!this.fromShell(event) || !this.window) {
+        this.log.event("come_forward.refused", { reason: "sender" });
+        return;
+      }
+      if (this.window.isMinimized()) this.window.restore();
+      this.present(this.window, true);
+      this.log.event("come_forward.shown", {});
     });
   }
 

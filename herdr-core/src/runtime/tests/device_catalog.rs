@@ -1116,6 +1116,7 @@ fn a_device_registration_is_listed_without_panes_pinned_and_removed_on_that_devi
 
     assert!(runtime.ingest_device_registration(
         TARGET,
+        t.other.as_str(),
         "Other".to_owned(),
         Ok(hide_node_link::register::Registrable {
             root: t.other.clone(),
@@ -1232,6 +1233,38 @@ fn a_device_folder_outside_its_home_is_registered_only_with_its_confirmation() {
     assert_eq!(registrations.len(), 1);
     assert_eq!(registrations[0].device_id, TARGET);
     assert_eq!(registrations[0].path, t.other);
+}
+
+/// `hide <path>` in a device's pane: its folder is judged by that device's
+/// helper as the dialog's is, and the request's receipt carries the helper's
+/// refusal rather than the shared error a next event clears.
+#[test]
+fn a_device_folder_hide_opens_is_judged_by_the_device_s_helper() {
+    let t = tree();
+    let mut runtime = runtime();
+    runtime.device_hosts.insert(
+        TARGET.to_owned(),
+        hosts::DeviceHost {
+            phase: hosts::HostPhase::Ready {
+                host: FakeDevice::new(),
+                platform: "macos aarch64".to_owned(),
+                helper_path: Some("/fake/hided".to_owned()),
+                windows_drives: None,
+            },
+            generation: 1,
+        },
+    );
+    assert!(!Path::new(&t.other).starts_with(std::env::var("HOME").unwrap()));
+
+    runtime.project_open(TARGET, &t.other, "1-device").unwrap();
+
+    assert_eq!(
+        runtime.project_open_receipt("1-device"),
+        Some(crate::project_open::ProjectOpenReceipt::Refused {
+            reason: "workspace_create_refused_needs_confirmation".to_owned()
+        })
+    );
+    assert!(runtime.snapshot.ui_state.workspace_registrations.is_empty());
 }
 
 /// wsl-device B20: removing a project outside the device's home removes its
@@ -1357,6 +1390,7 @@ fn a_tab_in_a_device_registration_without_a_workspace_creates_one_there() {
     // is the one asked.
     assert!(runtime.ingest_device_registration(
         TARGET,
+        t.other.as_str(),
         "Other".to_owned(),
         Ok(hide_node_link::register::Registrable {
             root: t.other.clone(),
@@ -1460,6 +1494,7 @@ fn registering_device(runtime: &mut Runtime, sessions: Vec<WorkspaceSnapshot>) {
 fn register_on_device(runtime: &mut Runtime, root: &str) -> bool {
     runtime.ingest_device_registration(
         TARGET,
+        root,
         "Project".to_owned(),
         Ok(hide_node_link::register::Registrable {
             root: root.to_owned(),
@@ -1901,6 +1936,7 @@ fn a_registration_answer_after_its_device_was_removed_is_dropped() {
     let mut runtime = runtime();
     assert!(!runtime.ingest_device_registration(
         TARGET,
+        t.other.as_str(),
         "Other".to_owned(),
         Ok(hide_node_link::register::Registrable {
             root: t.other.clone(),

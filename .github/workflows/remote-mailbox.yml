@@ -162,6 +162,13 @@ jobs:
         env:
           HIDE_E2E_HERDR_BIN: ${{ steps.herdr.outputs.bin }}
         run: bash scripts/verify-cargo.sh nextest --profile ci -p hided --test it -E 'test(/^(remote_delivery|held_letter_notice|device_bootstrap|node_contract|system_ssh)::/) & !test(protocol24)' --run-ignored only
+      - name: Another account's hide <path> on a device's bridge
+        # hide-host/src/panes.rs: a plain shell's `hide <path>` is proved only
+        # as a process of the node's own account, by the kernel's answer about
+        # the stream's other end. The runner's passwordless sudo starts the one
+        # process of another account (`nobody`) this needs.
+        timeout-minutes: 5
+        run: bash scripts/verify-cargo.sh nextest --profile ci -p hide-host --lib -E 'test(=panes::tests::another_account_s_open_is_refused_by_the_kernel_s_peer_check)' --run-ignored only
       - name: A screen machine whose core runs on another machine
         # hided/tests/it/remote_core.rs (PRD core-host-node-remote-core): a
         # node-role hided attached over this lane's loopback SSH to a core

@@ -2439,6 +2439,13 @@ impl Runtime {
                             "workspace.create.refused_during_removal",
                             format!("Workspace {workspace_id} removal is closing panes"),
                         );
+                        let node = self.node.as_str().to_owned();
+                        self.settle_project_open(
+                            &node,
+                            &payload.path,
+                            Err("workspace.remove_in_flight"),
+                            super::project_open::Forward::No,
+                        );
                         return true;
                     }
                     // A folder that is a project already is answered, not made
@@ -2461,6 +2468,13 @@ impl Runtime {
                                 "workspace.create_registered",
                                 format!("{} is already a project", existing.label),
                                 false,
+                            );
+                            let node = self.node.as_str().to_owned();
+                            self.settle_project_open(
+                                &node,
+                                &payload.path,
+                                Ok(()),
+                                super::project_open::Forward::Checkout,
                             );
                             return true;
                         }
@@ -2488,6 +2502,13 @@ impl Runtime {
                     if let Err(message) = result {
                         self.workspace_creations_in_flight.remove(&path);
                         self.set_error("workspace.create_worker_failed", message, true);
+                        let node = self.node.as_str().to_owned();
+                        self.settle_project_open(
+                            &node,
+                            &path,
+                            Err("workspace.create_worker_failed"),
+                            super::project_open::Forward::No,
+                        );
                     } else {
                         self.push_diagnostic(
                             "workspace.create.requested",
@@ -2500,6 +2521,13 @@ impl Runtime {
                     "workspace.control_unavailable",
                     "Workspace creation requires a live Herdr connection so its initial tab and pane can be created",
                     true,
+                );
+                let node = self.node.as_str().to_owned();
+                self.settle_project_open(
+                    &node,
+                    &payload.path,
+                    Err("workspace.control_unavailable"),
+                    super::project_open::Forward::No,
                 );
                 true
             }
