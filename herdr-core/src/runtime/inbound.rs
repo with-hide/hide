@@ -128,7 +128,7 @@ impl Runtime {
             "target": node,
         }));
         self.inbound_arrivals.insert(node.to_owned(), arrived);
-        self.connect_remote_device(&registration);
+        self.connect_remote_device(&registration, super::hosts::HostAttempt::Background);
         self.refresh_device_snapshots();
         Ok(())
     }

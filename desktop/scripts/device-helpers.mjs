@@ -1,4 +1,8 @@
-// The artifact boundary between native helper builds and the Mac package.
+// The artifact boundary between native helper builds and the packages that
+// carry the Linux device kit's manifest: the Mac app, and the Windows app,
+// whose WSL distributions are Linux devices (PRD wsl-device D-04). One run
+// makes the bundles once (`bundle` below) and both packages take those
+// bytes, so the manifest each ships names the archives the release has.
 // Inputs live in this checkout, never in a shared build directory.
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -107,6 +111,36 @@ export function prepareDeviceBundles(directory, identity, output, herdrPaths) {
   return manifest;
 }
 
+/**
+ * The bundles one run already made in `output`, checked before a package
+ * ships their manifest: made for this source, version and order, for every
+ * Linux platform, each archive there with the size and digest the manifest
+ * names. Answers the manifest's path; refuses anything else.
+ */
+export function readDeviceBundles(output, identity) {
+  assertIdentity(identity);
+  const file = path.join(output, DEVICE_BUNDLE_MANIFEST);
+  const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
+  if (manifest.format !== 1 || manifest.commit !== identity.commit || manifest.version !== identity.version || manifest.order !== identity.order) {
+    throw new Error("device bundle identity mismatch: make the bundles for this source, version and order");
+  }
+  if (Object.keys(manifest.platforms).sort().join(",") !== Object.keys(DEVICE_PLATFORMS).sort().join(",")) throw new Error("device bundles do not cover every Linux platform");
+  for (const [platform, bundle] of Object.entries(manifest.platforms)) {
+    if (bundle.asset !== `hide-device-${platform}-${identity.version}.tar.gz`) throw new Error(`unexpected device bundle name for ${platform}: ${bundle.asset}`);
+    const archive = path.join(output, bundle.asset);
+    const stat = fs.lstatSync(archive);
+    if (!stat.isFile() || stat.size !== bundle.size) throw new Error(`device bundle ${bundle.asset} is missing or another size`);
+    if (digest(fs.readFileSync(archive)) !== bundle.sha256) throw new Error(`device bundle digest mismatch: ${bundle.asset}`);
+  }
+  return file;
+}
+
+/** The pinned Herdr for each Linux platform, fetched and verified by the repository's fetch script. */
+export function fetchDeviceHerdr() {
+  return Object.fromEntries(Object.keys(DEVICE_PLATFORMS).map((name) => [name,
+    execFileSync("zsh", ["scripts/fetch-herdr-runtime.sh", "--platform", name], { cwd: repo, encoding: "utf8" }).trim()]));
+}
+
 /** Builds with the repository's release recipe, natively on each Linux processor. */
 function build(platform, identity) {
   assertIdentity(identity);
@@ -133,7 +167,17 @@ function build(platform, identity) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const [action, platform, version, commit, order, ...extra] = process.argv.slice(2);
-  if (action !== "build" || extra.length || !order) throw new Error("usage: device-helpers.mjs build <platform> <version> <source-sha> <build-order>");
-  build(platform, { version: version.replace(/^v/, ""), commit, order });
+  const [action, ...rest] = process.argv.slice(2);
+  if (action === "build" && rest.length === 4) {
+    const [platform, version, commit, order] = rest;
+    build(platform, { version: version.replace(/^v/, ""), commit, order });
+  } else if (action === "bundle" && rest.length === 3) {
+    // Once per run, from both platforms' helpers in desktop/out/device-helpers.
+    const [version, commit, order] = rest;
+    const out = path.join(repo, "desktop/out");
+    const manifest = prepareDeviceBundles(path.join(out, "device-helpers"), { version: version.replace(/^v/, ""), commit, order }, path.join(out, "device-bundles"), fetchDeviceHerdr());
+    console.log(`device_manifest=${manifest}`);
+  } else {
+    throw new Error("usage: device-helpers.mjs build <platform> <version> <source-sha> <build-order> | bundle <version> <source-sha> <build-order>");
+  }
 }

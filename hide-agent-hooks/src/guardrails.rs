@@ -638,7 +638,7 @@ fn matches(
 
 /// `path` made absolute against `cwd` (`~` and `~/x` against `home`) and
 /// with `.` and `..` taken out by name.
-fn absolute(home: &Path, cwd: &Path, path: &Path) -> PathBuf {
+pub(crate) fn absolute(home: &Path, cwd: &Path, path: &Path) -> PathBuf {
     let text = path.to_string_lossy();
     let joined = if text == "~" {
         home.to_path_buf()

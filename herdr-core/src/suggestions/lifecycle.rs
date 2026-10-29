@@ -34,6 +34,86 @@ pub struct LineLife {
     /// left.
     #[serde(default)]
     pub skipped_with: Option<Evidence>,
+    /// A line for the Hide global instruction: what Hide wrote, and why the
+    /// last press wrote nothing (PRD memory-self-improve D-07, D-30, D-33).
+    #[serde(default)]
+    pub local: Option<LocalApply>,
+}
+
+/// A global instruction line's story; the file itself is the operator's
+/// and Hide's together, so only the line and its times are kept.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalApply {
+    /// The line the last apply wrote, which its Undo takes out.
+    #[serde(default)]
+    pub line: Option<String>,
+    /// The file already had the line when the operator pressed, so Hide
+    /// wrote nothing and its Undo takes nothing out (B8, B9).
+    #[serde(default)]
+    pub adopted: bool,
+    /// A write saved before it is made, so a press repeated after a write
+    /// whose answer was lost reads the file as that write's (B8, B9).
+    #[serde(default)]
+    pub writing: Option<LocalWrite>,
+    #[serde(default)]
+    pub applied_at_unix_ms: Option<u64>,
+    /// The operator said it again in a session that was given the line, so
+    /// it is offered again (B11).
+    #[serde(default)]
+    pub recurred_at_unix_ms: Option<u64>,
+    #[serde(default)]
+    pub failure: Option<LocalFailure>,
+}
+
+/// A write to the Hide global instruction that may have landed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalWrite {
+    Apply(String),
+    Revert(String),
+}
+
+/// Why a press on a global instruction line wrote nothing (B5, B8-B10,
+/// B29), as the row says it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalFailure {
+    /// The line would take the file past its cap (`자리 없음`, B10).
+    NoRoom,
+    /// The file is over its cap as it is.
+    TooLarge,
+    /// The file is not UTF-8 or cannot be read.
+    Unreadable,
+    /// The file changed after the preview the operator saw (B8).
+    Changed,
+    /// The line Hide wrote was edited or removed by hand (B9).
+    Edited,
+    /// Writing the file failed (B29): `다시 시도`.
+    WriteFailed,
+    /// No readable words stand behind the line (B7, D-34).
+    EvidenceUnconfirmed,
+    /// The line carries markup, a character no one would see, or a secret,
+    /// so no session is given it.
+    BadLine,
+}
+
+impl LocalFailure {
+    pub(crate) fn of(refusal: &crate::global_instruction::Refusal) -> Self {
+        use crate::global_instruction::{Refusal, Unusable};
+        match refusal {
+            Refusal::Unusable {
+                unusable: Unusable::TooLarge,
+            } => Self::TooLarge,
+            Refusal::Unusable {
+                unusable: Unusable::Unreadable,
+            } => Self::Unreadable,
+            Refusal::NoRoom => Self::NoRoom,
+            Refusal::BadLine => Self::BadLine,
+            Refusal::Changed { .. } => Self::Changed,
+            Refusal::Edited { .. } => Self::Edited,
+            Refusal::WriteFailed => Self::WriteFailed,
+        }
+    }
 }
 
 /// The sessions and pull requests behind a line: the units its score

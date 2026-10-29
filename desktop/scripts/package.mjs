@@ -37,7 +37,7 @@ import { applyFuses, assertFuses } from "./fuses.mjs";
 import { APP_ID, buildInstallers } from "./installers.mjs";
 import { assertNotarized, developerIdOptions, macosSigning, notarizeApp } from "./macos-signing.mjs";
 import { orderOnMain, resolveVersion } from "./build-identity.mjs";
-import { DEVICE_PLATFORMS, DEVICE_BUNDLE_MANIFEST, prepareDeviceBundles } from "./device-helpers.mjs";
+import { DEVICE_BUNDLE_MANIFEST, fetchDeviceHerdr, prepareDeviceBundles, readDeviceBundles } from "./device-helpers.mjs";
 import { checkReleaseBinaries, recordReleaseBinaries } from "./release-binaries.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -140,13 +140,27 @@ if (phase !== "assemble") {
 const order = process.env.HIDE_BUILD_ORDER || orderOnMain();
 if (!/^[0-9]+$/.test(order)) throw new Error(`the package's build order could not be read (got '${order}')`);
 // Required artifacts are checked before the native release build, or before
-// the app is assembled from compiled binaries. No partial Mac app may
-// silently leave another supported system without its kit.
+// the app is assembled from compiled binaries. No partial Mac or Windows app
+// may silently leave a Linux device, or a WSL distribution, without its kit.
+// The bundles a run's `device-bundles` job made, downloaded here, are used as
+// they are, so the Mac and Windows apps ship one manifest. A release (one
+// that names HIDE_VERSION) and every Windows app refuse to start without
+// them, since bundles made again here would not match the digests the other
+// app embeds; a local Mac build without them makes its own from the helpers.
 const deviceBundles = path.join(out, "device-bundles");
-const deviceManifest = platform === "darwin" && phase !== "compile"
-  ? prepareDeviceBundles(path.join(out, "device-helpers"), { version, commit, order }, deviceBundles,
-      Object.fromEntries(Object.keys(DEVICE_PLATFORMS).map((name) => [name, run("zsh", ["scripts/fetch-herdr-runtime.sh", "--platform", name])])))
-  : null;
+const carriesDeviceKit = (platform === "darwin" || platform === "win32") && phase !== "compile";
+const identity = { version, commit, order };
+const madeBundles = fs.existsSync(path.join(deviceBundles, DEVICE_BUNDLE_MANIFEST));
+const releasing = Boolean(process.env.HIDE_VERSION);
+if (carriesDeviceKit && !madeBundles && (releasing || platform === "win32")) {
+  const app = releasing ? `the ${version} release` : "the Windows app";
+  throw new Error(`${app} needs this run's device bundles in ${deviceBundles} (the hide-device-bundles artifact, made by desktop/scripts/device-helpers.mjs bundle)`);
+}
+const deviceManifest = !carriesDeviceKit
+  ? null
+  : madeBundles
+    ? readDeviceBundles(deviceBundles, identity)
+    : prepareDeviceBundles(path.join(out, "device-helpers"), identity, deviceBundles, fetchDeviceHerdr());
 const cargoRelease = path.join(repo, "target", "release");
 const releaseBinaries = [`hided${exe}`, `hide${exe}`, `hide-agent-hooks${exe}`];
 if (phase === "assemble") {
@@ -331,9 +345,11 @@ if (deviceManifest) {
     for (const name of ["hided", "hide", "hide-agent-hooks", "herdr"]) {
       if (fs.existsSync(path.join(bundledResources, `${name}-${devicePlatform}`))) throw new Error("foreign device binaries must not ship in the app");
     }
-    fs.copyFileSync(path.join(deviceBundles, asset), path.join(release, asset));
+    // The archives and their manifest are release assets once, beside the
+    // Mac app; the Windows app ships the same manifest and publishes neither.
+    if (platform === "darwin") fs.copyFileSync(path.join(deviceBundles, asset), path.join(release, asset));
   }
-  fs.copyFileSync(deviceManifest, path.join(release, DEVICE_BUNDLE_MANIFEST));
+  if (platform === "darwin") fs.copyFileSync(deviceManifest, path.join(release, DEVICE_BUNDLE_MANIFEST));
   console.log(`device_manifest_bytes=${fs.statSync(deviceManifest).size}`);
 }
 // What a downloader of the update gets is the zip, so Gatekeeper judges the app expanded from it.

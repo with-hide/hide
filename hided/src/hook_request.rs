@@ -235,12 +235,90 @@ pub(crate) fn memory(
     let deadline = Instant::now() + herdr_core::memory_hook::WITHIN;
     let scope = core.memory_scope(&cap.context, deadline).map_err(|reason| {
         herdr_core::diagnostic!(json!({"component":"memory","kind":"hook.unavailable","pane":cap.pane_id,"device":cap.context.device_id,"reason":reason}));
-        ("memory_unavailable".to_owned(), "Continue without Project Memory")
-    })?;
-    serde_json::to_value(herdr_core::memory_hook::answer(&scope, ask, deadline)).map_err(|_| {
+    });
+    memory_answer(core.state_dir(), scope, ask, deadline)
+}
+
+/// A hook's answer: Memory's context when its scope was found, and on a
+/// session start the Hide global instruction whatever Memory answers (off,
+/// unresolved or unreachable; PRD memory-self-improve D-31). The global read
+/// is one small bounded file, outside Memory's deadline.
+fn memory_answer(
+    state_dir: &std::path::Path,
+    scope: Result<herdr_core::memory_hook::Scope, ()>,
+    ask: &herdr_core::memory_hook::Ask,
+    deadline: Instant,
+) -> Result<Value, Failure> {
+    let global = ask
+        .starts_session()
+        .then(|| herdr_core::global_instruction::for_session(state_dir))
+        .flatten();
+    let answer = match (scope, global) {
+        (Ok(scope), global) => herdr_core::memory_hook::HookContext {
+            global,
+            ..herdr_core::memory_hook::answer(&scope, ask, deadline)
+        },
+        (Err(()), Some(global)) => herdr_core::memory_hook::global_only(global),
+        (Err(()), None) => {
+            return Err((
+                "memory_unavailable".to_owned(),
+                "Continue without Project Memory",
+            ));
+        }
+    };
+    serde_json::to_value(answer).map_err(|_| {
         (
             "result_encoding_failed".to_owned(),
             "Continue without Project Memory",
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ask(event: &str) -> herdr_core::memory_hook::Ask {
+        memory_ask(event, "claude", "s-1", "").unwrap()
+    }
+
+    /// B1, D-31: a session start with no Memory still gets the global
+    /// instruction; a prompt, or an empty file, keeps the old refusal.
+    #[test]
+    fn a_session_start_gets_the_global_instruction_without_memory() {
+        let state = tempfile::tempdir().unwrap();
+        let deadline = Instant::now() + herdr_core::memory_hook::WITHIN;
+        assert_eq!(
+            memory_answer(state.path(), Err(()), &ask("SessionStart"), deadline)
+                .unwrap_err()
+                .0,
+            "memory_unavailable"
+        );
+        std::fs::write(
+            hide_kit::layout::global_instruction(state.path()),
+            "Answer in Korean.\n",
+        )
+        .unwrap();
+        let answer = memory_answer(state.path(), Err(()), &ask("SessionStart"), deadline).unwrap();
+        assert_eq!(answer["context"], Value::Null);
+        assert_eq!(answer["outcome"], "unavailable");
+        assert!(
+            answer["global"]
+                .as_str()
+                .unwrap()
+                .contains("trust=\"operator-approved\">\nThe operator approved")
+        );
+        assert!(
+            answer["global"]
+                .as_str()
+                .unwrap()
+                .contains("Answer in Korean.")
+        );
+        assert_eq!(
+            memory_answer(state.path(), Err(()), &ask("UserPromptSubmit"), deadline)
+                .unwrap_err()
+                .0,
+            "memory_unavailable"
+        );
+    }
 }

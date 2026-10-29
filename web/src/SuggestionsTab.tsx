@@ -14,7 +14,7 @@ import { allAgents } from "./navigation";
 import { catalogWorkspaces, type ProjectSuggestions, type SuggestionEvidence, type SuggestionRow } from "./snapshot";
 import { suggestionSteps } from "./hideAiSteps";
 import { useShellStore } from "./store";
-import { applyOffer, appliedSummary, attemptLine, suggestionGroups, suggestionMark, suggestionTitle, type SuggestionMark } from "./suggestionList";
+import { applyOffer, appliedSummary, attemptLine, localLine, suggestionGroups, suggestionMark, suggestionTitle, type SuggestionMark } from "./suggestionList";
 import { useUiStore } from "./ui";
 
 /**
@@ -22,7 +22,9 @@ import { useUiStore } from "./ui";
  * D-44, B10-B18): one line for the tab's state, then 고를 것, 반영 중 and the
  * folded 반영됨, each row as the core sent it. A row opens in place to its
  * fix and evidence; every press is one `suggestion_action` and the core
- * moves the row.
+ * moves the row. The open row's evidence is read again masked while it is
+ * open (PRD memory-self-improve B7), and the Hide global instruction shows
+ * only when sessions are not given it (B5).
  */
 export function SuggestionsTab({ project, actions }: { project: ProjectSuggestions; actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -30,8 +32,16 @@ export function SuggestionsTab({ project, actions }: { project: ProjectSuggestio
   const [folded, setFolded] = useState(true);
   const applied = appliedSummary(groups.applied);
   const line = statusLine(project, groups.choose.length + groups.applying.length);
+  const open = useUiStore((state) => state.openSuggestion);
+  const workspace = project.workspace_id;
+  useEffect(() => {
+    if (!open) return;
+    actions.suggestionEvidence(workspace, open);
+    return () => actions.suggestionEvidence(workspace, null);
+  }, [actions, workspace, open]);
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-auto px-md pb-lg" data-suggestions={project.status}>
+      <GlobalInstruction project={project} actions={actions} />
       {line ? (
         <HideAiExplainer title={t(line)} steps={suggestionSteps(t)} data-suggestions-status={project.status}>
           {project.status === "off" ? (
@@ -71,6 +81,32 @@ function statusLine(project: ProjectSuggestions, open: number): "suggestions.sta
     case "not_investigated":
     case "idle": return null;
   }
+}
+
+/** The Hide global instruction (B5): one line with `파일 열기` while sessions are not given it, nothing while they are. */
+function GlobalInstruction({ project, actions }: { project: ProjectSuggestions; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const global = project.global;
+  if (!global?.unusable) return null;
+  return (
+    <div className="flex min-w-0 flex-wrap items-center gap-x-sm gap-y-xxs border-b border-border py-sm text-caption" data-suggestions-global={global.unusable}>
+      <span className="font-medium text-foreground">{t("suggestions.global.title")}</span>
+      <span className="text-warning">{t(global.unusable === "too_large" ? "suggestions.global.too_large" : "suggestions.global.unreadable")}</span>
+      <OpenFile path={global.path} actions={actions} />
+    </div>
+  );
+}
+
+/** `파일 열기`: the Hide global instruction in the system's editor, where the operator fixes what Hide cannot (B5, B9, B10). */
+function OpenFile({ path, actions }: { path: string; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  // The path is the core's machine's; a window elsewhere has no such file to open.
+  if (!actions.onCoreMachine()) return null;
+  return (
+    <button type="button" className="pointer-events-auto shrink-0 text-subtle-foreground underline-offset-4 hover:text-foreground hover:underline" title={path} onClick={() => actions.openOwnedFile(path)} data-suggestion-open-file={path}>
+      {t("suggestions.local.openFile")}
+    </button>
+  );
 }
 
 function Group({ name, rows, project, actions, kind }: { name: string; rows: SuggestionRow[]; project: ProjectSuggestions; actions: Actions; kind: "choose" | "applying" }) {
@@ -138,8 +174,15 @@ function Lines({ row, open, project, actions }: { row: SuggestionRow; open: bool
   const { t } = useInterfaceTranslation();
   const working = row.state === "hide_ai_working";
   const attempt = attemptLine(t, row);
+  const local = localLine(t, row, project.global?.unusable ?? null);
   return (
     <div className={cn("col-start-2 flex min-w-0 flex-col gap-xxs text-caption", working && "opacity-(--opacity-dimmed)")}>
+      {local ? (
+        <span className="flex min-w-0 flex-wrap items-center gap-x-sm" data-suggestion-local={row.local?.failure ?? (row.local?.recurred ? "recurred" : row.local?.present ? "present" : "held")}>
+          <span className={cn("min-w-0 break-words", local.tone === "warning" ? "text-warning" : local.tone === "success" ? "text-success" : "text-muted-foreground")}>{local.text}</span>
+          {local.openFile && project.global ? <OpenFile path={project.global.path} actions={actions} /> : null}
+        </span>
+      ) : null}
       {row.escalated ? (
         <span className="flex min-w-0 items-center gap-xs" data-suggestion-escalated={row.escalated.level}>
           <span className="shrink-0 text-warning">{t("suggestions.escalated")}</span>
@@ -215,6 +258,7 @@ function AgentLink({ agentId, actions }: { agentId: string | null; actions: Acti
 function Fix({ row, open }: { row: SuggestionRow; open: boolean }) {
   const { t } = useInterfaceTranslation();
   if (row.group !== "choose") return null;
+  if (row.local) return <LocalFix row={row} line={row.local.line} open={open} />;
   const text = row.fix ?? (row.outcome === "issue" ? t("suggestions.issueFix") : null);
   if (!text) return null;
   return (
@@ -225,12 +269,24 @@ function Fix({ row, open }: { row: SuggestionRow; open: boolean }) {
   );
 }
 
+/** The one line a global instruction row writes, as it will read in the file (PRD memory-self-improve B6). */
+function LocalFix({ row, line, open }: { row: SuggestionRow; line: string; open: boolean }) {
+  const { t } = useInterfaceTranslation();
+  return (
+    <div className="col-start-2 flex min-w-0 flex-col gap-xxs" data-suggestion-fix={row.id} data-suggestion-local-line="true">
+      <span className="text-micro text-muted-foreground">{t("suggestions.local.target")}</span>
+      <p className={cn("whitespace-pre-wrap break-words rounded-xs bg-secondary px-xs py-xxs text-caption text-foreground", !open && "line-clamp-2")}>{line}</p>
+    </div>
+  );
+}
+
 /** A row in full (B10): the evidence it rests on, and 고칠 것 once it left the choice; evidence that is gone stays, dimmed, and opens nothing. */
 function Detail({ row, project, actions }: { row: SuggestionRow; project: ProjectSuggestions; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   return (
     <div className="col-start-2 flex min-w-0 flex-col gap-sm pt-xs" data-suggestion-detail={row.id}>
-      {row.fix && row.group !== "choose" ? (
+      {row.local && row.group !== "choose" ? <LocalFix row={row} line={row.local.line} open /> : null}
+      {row.fix && !row.local && row.group !== "choose" ? (
         <div className="flex flex-col gap-xxs">
           <span className="text-micro text-muted-foreground">{t("suggestions.fix")}</span>
           <p className="whitespace-pre-wrap break-words break-keep text-caption text-foreground">{row.fix}</p>
@@ -255,39 +311,71 @@ function Evidence({ evidence, project, actions }: { evidence: SuggestionEvidence
   const pull = evidence.kind === "pr" && evidence.url && evidence.pr_number !== null ? { workspace_id: project.workspace_id, number: evidence.pr_number, url: evidence.url } : null;
   const openable = !evidence.gone && (session !== null || pull !== null);
   const name = evidence.kind === "pr" && evidence.pr_number !== null ? t("suggestions.openPr", { number: String(evidence.pr_number) }) : t("suggestions.evidence.session");
+  const said = evidence.excerpt ? (
+    <p className="min-w-0 whitespace-pre-wrap break-words border-l-2 border-border pl-sm text-caption text-muted-foreground" data-suggestion-excerpt="true">{evidence.excerpt}</p>
+  ) : evidence.unreadable ? (
+    <span className="text-caption text-warning" data-suggestion-excerpt-unreadable="true">{t("suggestions.evidence.unreadable")}</span>
+  ) : null;
   return (
-    <button
-      type="button"
-      disabled={!openable}
-      className={cn("pointer-events-auto grid min-w-0 grid-cols-[auto_1fr_auto] items-center gap-x-sm rounded-xs text-left text-caption outline-none enabled:hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring", evidence.gone && "opacity-(--opacity-dimmed)")}
-      onClick={() => (session ? actions.openSessionRecord(session) : pull ? actions.openSessionPullRequest(pull) : undefined)}
-      data-suggestion-evidence={evidence.kind}
-      data-suggestion-evidence-gone={evidence.gone ? "true" : undefined}
-    >
-      {evidence.agent ? <AgentLogo agent={evidence.agent} label={evidence.agent} /> : <span aria-hidden="true" className="size-(--size-icon-lg)" />}
-      {evidence.improvement ? (
+    <div className="flex min-w-0 flex-col gap-xxs">
+      <button
+        type="button"
+        disabled={!openable}
+        className={cn("pointer-events-auto grid min-w-0 grid-cols-[auto_1fr_auto] items-center gap-x-sm rounded-xs text-left text-caption outline-none enabled:hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring", evidence.gone && "opacity-(--opacity-dimmed)")}
+        onClick={() => (session ? actions.openSessionRecord(session) : pull ? actions.openSessionPullRequest(pull) : undefined)}
+        data-suggestion-evidence={evidence.kind}
+        data-suggestion-evidence-gone={evidence.gone ? "true" : undefined}
+      >
+        {evidence.agent ? <AgentLogo agent={evidence.agent} label={evidence.agent} /> : <span aria-hidden="true" className="size-(--size-icon-lg)" />}
+        {evidence.given ? (
         <span className="flex min-w-0 items-center gap-xs">
-          <Badge data-suggestion-evidence-improvement={evidence.improvement}>{t(`suggestions.improvement.${evidence.improvement}`)}</Badge>
-          <span className="min-w-0 truncate text-subtle-foreground">{name}{evidence.gone ? ` · ${t("suggestions.evidence.gone")}` : ""}</span>
+          <Badge data-suggestion-evidence-given={evidence.given}>{t(evidence.given === "index" ? "suggestions.evidence.givenIndex" : "suggestions.evidence.givenBody")}</Badge>
+          <span className="min-w-0 truncate text-subtle-foreground">{name} · {signal}{evidence.gone ? ` · ${t("suggestions.evidence.gone")}` : ""}</span>
         </span>
-      ) : (
-        <span className="min-w-0 truncate text-subtle-foreground">{name} · {signal}{evidence.gone ? ` · ${t("suggestions.evidence.gone")}` : ""}</span>
-      )}
-      <span className="shrink-0 font-mono text-muted-foreground">{sourceTime(evidence.at_unix_ms, language)}</span>
-    </button>
+      ) : evidence.improvement ? (
+          <span className="flex min-w-0 items-center gap-xs">
+            <Badge data-suggestion-evidence-improvement={evidence.improvement}>{t(`suggestions.improvement.${evidence.improvement}`)}</Badge>
+            <span className="min-w-0 truncate text-subtle-foreground">{name}{evidence.gone ? ` · ${t("suggestions.evidence.gone")}` : ""}</span>
+          </span>
+        ) : (
+          <span className="min-w-0 truncate text-subtle-foreground">{name} · {signal}{evidence.gone ? ` · ${t("suggestions.evidence.gone")}` : ""}</span>
+        )}
+        <span className="shrink-0 font-mono text-muted-foreground">{sourceTime(evidence.at_unix_ms, language)}</span>
+      </button>
+      {said ? <div className="ml-sm pl-(--size-icon-lg)">{said}</div> : null}
+    </div>
   );
 }
 
-/** A choice's `문서 고치는 PR 열기` or `이슈로 남기기` (B10, B14), `GitHub 연결 필요` in its place (B18), and a failed attempt's `다시 시도` (B12), each with a quiet `넘어가기` beside it (D-51, B16). */
+/**
+ * A choice's `문서 고치는 PR 열기` or `이슈로 남기기` (B10, B14), `GitHub 연결
+ * 필요` in its place (B18), and a failed attempt's `다시 시도` (B12), each
+ * with a quiet `넘어가기` beside it (D-51, B16). A global instruction row
+ * offers `Hide 전역 지시에 넣기` with the preview it was shown, held while it
+ * cannot be written, and `되돌리기` once it went in (PRD memory-self-improve
+ * B8, B9).
+ */
 function Buttons({ row, project, actions }: { row: SuggestionRow; project: ProjectSuggestions; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const id = project.workspace_id;
   const offer = applyOffer(row);
   const retry = row.group === "applying" && attemptLine(t, row)?.retry === true;
+  const revert = row.group === "applied" && row.local !== null && row.local !== undefined && row.local.failure !== "edited";
+  if (revert) {
+    return (
+      <div className="col-start-2 flex flex-wrap items-center gap-xs pt-xxs">
+        <Button className="pointer-events-auto" size="sm" variant="outline" onClick={() => actions.suggestionAction(id, row.id, "revert")} data-suggestion-revert={row.id}>{t("suggestions.local.revert")}</Button>
+      </div>
+    );
+  }
   if (offer === null && !retry) return null;
   return (
     <div className="col-start-2 flex flex-wrap items-center gap-xs pt-xxs">
-      {offer === "github_needed" ? (
+      {offer === "local" || offer === "local_held" ? (
+        <Button className="pointer-events-auto" size="sm" disabled={offer === "local_held"} onClick={() => row.local?.preview != null && actions.suggestionAction(id, row.id, "apply", row.local.preview)} data-suggestion-apply={offer}>
+          {t(row.local?.failure === "write_failed" ? "suggestions.retry" : "suggestions.makeLocal")}
+        </Button>
+      ) : offer === "github_needed" ? (
         <span className="text-caption text-muted-foreground" data-suggestion-github-needed="true">{t("suggestions.githubNeeded")}</span>
       ) : offer ? (
         <Button className="pointer-events-auto" size="sm" variant={offer === "issue" ? "secondary" : "default"} onClick={() => actions.suggestionAction(id, row.id, "apply")} data-suggestion-apply={offer}>

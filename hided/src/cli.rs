@@ -105,7 +105,7 @@ pub enum CommandKind {
 
 const LINKS_USAGE: &str = "usage: hide links pr <number> | issue <number> | branch <name> | session <id> [--all-projects]";
 
-const MEMORY_USAGE: &str = "usage: hide memory show <card> | search <words> | add <text> | forget <card> | undo <card> | placed <card> <path> | building <card> <branch> <path> | unbuilt <card> <reason> | outdated <card> <reason> | skipped <card> <reason> | stale <card> <reason> | release <card>";
+const MEMORY_USAGE: &str = "usage: hide memory show <card> | search <words> | add <text> | forget <card> | undo <card> | placed <card> <path> | building <card> <branch> <path> | unbuilt <card> <reason> | outdated <card> <reason> | skipped <card> <reason> | stale <card> <reason> | release <card> | recheck <card>";
 
 const BROWSER_USAGE: &str = "usage: hide browser open <url-or-path> [--wait] [--request-id <id>] | connect [--display <id>] | help | <command> <display> ... (see hide browser help)";
 
@@ -196,7 +196,7 @@ fn help_text() -> String {
         text.push_str(&indent(lines));
     }
     text.push_str(
-        "\nCommands that act on the operator's screen (workspace, file, diff, view, browser) need Hide's window open and a pane or shell inside a registered checkout.\nThey never start Hide.\nhide links needs only that pane or shell and a running Hide, and reads the project it is in unless --all-projects is given.\nhide memory reads, adds to and forgets from that project's Project Memory, which Hide keeps for the projects of its own device and of every linked device with a Memory reader.\nhide memory release ends a hold that an agent's stale report put on a card.\nRun in a Hide shell pane with no agent, it also lets that card's text be reported stale once more.\n",
+        "\nCommands that act on the operator's screen (workspace, file, diff, view, browser) need Hide's window open and a pane or shell inside a registered checkout.\nThey never start Hide.\nhide links needs only that pane or shell and a running Hide, and reads the project it is in unless --all-projects is given.\nhide memory reads, adds to and forgets from that project's Project Memory, which Hide keeps for the projects of its own device and of every linked device with a Memory reader.\nhide memory release ends a hold that an agent's stale report put on a card.\nhide memory recheck has a card checked again, out of every hook until the check ends; an agent may ask only for a card its conversation was given.\nRun in a Hide shell pane with no agent, it also lets that card's text be reported stale once more.\n",
     );
     text
 }
@@ -441,6 +441,8 @@ fn parse_memory<'a>(mut iter: impl Iterator<Item = &'a String>) -> Result<Comman
             .map(|number| MemoryCommand::Undo { number }),
         (Some("release"), [card]) => herdr_core::memory_command::parse_card(card)
             .map(|number| MemoryCommand::Release { number }),
+        (Some("recheck"), [card]) => herdr_core::memory_command::parse_card(card)
+            .map(|number| MemoryCommand::Recheck { number }),
         (Some("placed"), [card, path]) => {
             herdr_core::memory_command::parse_card(card).map(|number| MemoryCommand::Placed {
                 number,
@@ -1048,6 +1050,10 @@ fn memory_text(
                 _ => format!("Released {card}; Hide hands it to agents again.\n"),
             }
         }
+        MemoryCommand::Recheck { .. } => format!(
+            "{} waits to be checked again; Hide stops giving it until the check keeps, corrects or forgets it.\n",
+            text(&result["card"])
+        ),
         MemoryCommand::Placed { .. } => format!(
             "{} points at {} once its pull request merges.\n",
             text(&result["card"]),
@@ -2556,18 +2562,19 @@ fn start_of(state_dir: &Path, pid: u32, timeout: Duration) -> Option<StartStep> 
     })
 }
 
-/// Looks at the started daemon until it answers or `within` has passed on
-/// `now`'s clock. No request may outlast the time left, so the wait ends at
-/// the bound it names, and the error says what was last seen, so a slow
-/// start names its stage.
+/// Looks at the started daemon until it answers, `exited` reports it gone,
+/// or `within` has passed on `now`'s clock. No request may outlast the time
+/// left, so the wait ends at the bound it names, and the error says what was
+/// last seen, so a slow start names its stage.
 #[cfg(test)]
 fn wait_healthy_within<T>(
     within: Duration,
     now: impl Fn() -> std::time::Instant,
     pause: impl FnMut(Duration),
+    exited: impl FnMut() -> Option<std::process::ExitStatus>,
     probe: impl FnMut(Duration) -> Result<T, Unready>,
 ) -> Result<T, String> {
-    wait_started(within, now, pause, || None, probe).map_err(|waited| match waited {
+    wait_started(within, now, pause, exited, probe).map_err(|waited| match waited {
         Waited::Timeout(detail) => detail,
         Waited::Exited(status) => format!("exited with {status}"),
     })
@@ -2776,6 +2783,7 @@ mod tests {
             HEALTHY_WITHIN,
             || clock.get(),
             |pause| clock.set(clock.get() + pause),
+            || None,
             // A `/health` that times out takes all the time it is given.
             |timeout| {
                 let left = (start + HEALTHY_WITHIN).saturating_duration_since(clock.get());
@@ -2819,6 +2827,7 @@ mod tests {
             HEALTHY_WITHIN,
             || clock.get(),
             |pause| clock.set(clock.get() + pause),
+            || None,
             |timeout| {
                 clock.set(clock.get() + timeout);
                 let step = (clock.get() - start).as_secs() / step_every.as_secs();
@@ -2851,6 +2860,7 @@ mod tests {
             HEALTHY_WITHIN,
             || clock.get(),
             |pause| clock.set(clock.get() + pause),
+            || None,
             |timeout| -> Result<(), Unready> {
                 clock.set(clock.get() + timeout);
                 let step = if clock.get() - start < stuck_from {
@@ -2878,6 +2888,47 @@ mod tests {
         assert_eq!(
             error,
             "hided made no progress for 10s; last waited on step 3 (core.owner) of its start"
+        );
+    }
+
+    /// A daemon that refuses its state folder exits before it answers
+    /// (PRD core-host-node B2): the look after its exit ends the wait, with
+    /// no further pause and long before the health bound.
+    #[test]
+    fn a_daemon_that_exits_ends_the_wait_at_the_next_look() {
+        #[cfg(unix)]
+        use std::os::unix::process::ExitStatusExt;
+        #[cfg(windows)]
+        use std::os::windows::process::ExitStatusExt;
+        let start = std::time::Instant::now();
+        let clock = std::cell::Cell::new(start);
+        let exits_at = start + Duration::from_millis(350);
+        let refused = Duration::from_millis(5);
+        let paused_after_exit = std::cell::Cell::new(false);
+        let error = wait_healthy_within::<()>(
+            HEALTHY_WITHIN,
+            || clock.get(),
+            |pause| {
+                paused_after_exit.set(paused_after_exit.get() || clock.get() >= exits_at);
+                clock.set(clock.get() + pause);
+            },
+            || (clock.get() >= exits_at).then(|| std::process::ExitStatus::from_raw(256)),
+            // No state is written yet, so each look is answered at once.
+            |_| {
+                clock.set(clock.get() + refused);
+                Err(Unready {
+                    detail: "the daemon to write its state".to_owned(),
+                    start: None,
+                })
+            },
+        )
+        .unwrap_err();
+        assert!(error.starts_with("exited with"), "{error}");
+        assert!(!paused_after_exit.get(), "the wait paused after the exit");
+        let ended = clock.get() - start;
+        assert!(
+            ended <= Duration::from_millis(350) + HEALTH_PAUSE + refused,
+            "ended {ended:?} after the start, not at the look after the exit"
         );
     }
 
@@ -3308,6 +3359,10 @@ mod tests {
         assert_eq!(
             parse(&["hide", "memory", "release", "m5"]),
             Ok(CommandKind::Memory(MemoryCommand::Release { number: 5 }))
+        );
+        assert_eq!(
+            parse(&["hide", "memory", "recheck", "m5"]),
+            Ok(CommandKind::Memory(MemoryCommand::Recheck { number: 5 }))
         );
         for bad in [
             &["hide", "memory", "forget"][..],

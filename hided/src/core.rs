@@ -202,6 +202,9 @@ pub struct CoreHandle {
     /// What every pane's output reaches: the hub, and the terminals relay
     /// of each linked node (`relay`).
     pub outputs: Arc<crate::relay::ScreenOutputs>,
+    /// The core's state folder, which holds the Hide global instruction a
+    /// session start reads without the owner thread.
+    state_dir: std::path::PathBuf,
     /// What a shutdown ends, taken out by the first one, so a second
     /// shutdown or the `Drop` after it finds nothing left to close.
     running: Mutex<Option<Running>>,
@@ -250,6 +253,11 @@ impl CoreHandle {
     /// The machine the core runs on.
     pub fn node(&self) -> &herdr_core::node::NodeId {
         &self.node
+    }
+
+    /// The core's state folder.
+    pub fn state_dir(&self) -> &std::path::Path {
+        &self.state_dir
     }
 
     pub fn prepare_delivery_human(
@@ -476,6 +484,10 @@ impl CoreHandle {
         panes: hide_node::ssh::PaneEventsSlot,
     ) -> Result<Self, String> {
         let node = options.node_id.clone();
+        let state_dir = std::path::Path::new(&options.app_state_path)
+            .parent()
+            .unwrap_or(std::path::Path::new("."))
+            .to_path_buf();
         let (command_tx, command_rx) = mpsc::channel::<Command>();
         let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
         let (notify_tx, _) = broadcast::channel(32);
@@ -522,6 +534,7 @@ impl CoreHandle {
             terminals,
             hub,
             outputs,
+            state_dir,
             running: Mutex::new(Some(Running { thread, local })),
         })
     }
@@ -930,6 +943,12 @@ fn owner_loop(
     )
     .with_pane_events(panes)
     .with_terminals(Arc::clone(&terminals) as Arc<dyn DeviceSink>);
+    // This PC's WSL distributions are devices too (PRD wsl-device D-01);
+    // there is no WSL to reach on any other system.
+    let devices = match hide_node::ssh::host::wsl::WslAccess::of_this_pc() {
+        Some(wsl) => devices.with_wsl(wsl),
+        None => devices,
+    };
     let analytics = crate::env::product_analytics_token().and_then(|token| {
         match crate::product_analytics::Worker::start(home.as_deref(), &state_dir, token) {
             Ok(worker) => worker,

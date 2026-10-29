@@ -199,6 +199,7 @@ impl Device {
                     identity: None,
                 },
                 &[],
+                hide_node_link::device::Wake::Allowed,
                 Box::new(|_| {}),
             )
             .map_err(|error| anyhow::anyhow!("{error}"))?;

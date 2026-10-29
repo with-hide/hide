@@ -2091,7 +2091,7 @@ pub(super) fn delivery_panes(agents: Vec<serde_json::Value>) -> SessionSnapshotP
 struct SleepingChild {
     shared: Arc<std::sync::Mutex<Runtime>>,
     client: crate::delivery::worker::Client,
-    _worker: crate::delivery::worker::Worker,
+    worker: crate::delivery::worker::Worker,
     _root: tempfile::TempDir,
     ledger_path: PathBuf,
     node: String,
@@ -2206,7 +2206,12 @@ impl SleepingChild {
         assert_eq!(runtime.snapshot.navigator.sleeping_sessions.len(), 1);
 
         let shared = Arc::new(std::sync::Mutex::new(runtime));
-        let (worker, client) = crate::delivery::worker::Worker::spawn(
+        // The store alone, so the test's passes are the ones that run: the
+        // doorbell and watch producers pass on their own clocks, and one of
+        // theirs between the wake and the test's look moved the registration
+        // before the test saw it asked for, or wrote the file while the test
+        // compared it with the published ledger.
+        let (worker, client) = crate::delivery::worker::Worker::store(
             Arc::downgrade(&shared),
             crate::handle::ChangeNotifier::noop(),
             ledger_path.clone(),
@@ -2215,7 +2220,7 @@ impl SleepingChild {
         Self {
             shared,
             client,
-            _worker: worker,
+            worker,
             _root: root,
             ledger_path,
             node,
@@ -2246,9 +2251,10 @@ impl SleepingChild {
     }
 
     /// The core started the conversation again in a new pane, which Herdr
-    /// lists as an agent of `session` and the session read shows.
-    fn woken(&self, session: &str) {
-        let mut runtime = self.shared.lock().unwrap();
+    /// lists as an agent of `session` and the session read shows. It runs
+    /// under the caller's lock, so the caller can look at the wake before the
+    /// store's own upkeep, which runs while a move is asked for, can pass.
+    fn woken(&self, runtime: &mut Runtime, session: &str) {
         let record = runtime
             .snapshot
             .ui_state
@@ -2278,6 +2284,51 @@ impl SleepingChild {
         agent.pane_id = Some(WOKEN.into());
         confirmed.agents.push(agent);
         runtime.ingest_session(Ok(confirmed));
+    }
+
+    /// After the pass that moved it, the woken pane holds the registration,
+    /// the letter and the watch, in the published ledger and in the file.
+    fn assert_handed_over(self) {
+        // Stopped first, so the file is the one the store's last pass wrote.
+        drop(self.worker);
+        let runtime = self.shared.lock().unwrap();
+        // The pass answers after it publishes, and the publish settles the
+        // record, so there is nothing to wait for.
+        assert!(runtime.snapshot.ui_state.agent_sleep.dormant.is_empty());
+        assert!(runtime.delivery_registration_rebinds().is_empty());
+        let ledger = runtime.delivery_state().unwrap();
+        let record = ledger
+            .agents
+            .iter()
+            .find(|record| record.id == "agent-2")
+            .unwrap();
+        assert!(!record.ended);
+        assert_eq!(record.pane, WOKEN);
+        assert_eq!(record.instance, WOKEN);
+        assert_eq!(record.parent.as_deref(), Some("agent-1"));
+        assert_eq!(record.actor.pane_id, WOKEN);
+        assert_eq!(record.actor.session, self.child.session);
+        assert_eq!(ledger.watches.len(), 1);
+        assert_eq!(ledger.watches[0].target.pane_id, WOKEN);
+        let letter = ledger
+            .letters
+            .iter()
+            .find(|letter| letter.id == self.letter)
+            .unwrap();
+        assert_eq!(letter.recipient.pane_id, WOKEN);
+        assert_eq!(letter.state, crate::delivery::ledger::State::Pending);
+        assert_eq!(
+            crate::delivery::ledger::load(&self.ledger_path).unwrap(),
+            *ledger
+        );
+        // The old pane stays closed: only the woken one is a live address now.
+        assert!(crate::coordination::resolve_actor(&ledger, SLEEPER).is_none());
+        assert_eq!(
+            crate::coordination::resolve_actor(&ledger, "reviewer")
+                .unwrap()
+                .pane_id,
+            WOKEN
+        );
     }
 }
 
@@ -2320,11 +2371,11 @@ fn a_sleeping_childs_registration_letters_and_watch_pass_to_the_pane_that_wakes_
         );
     }
 
-    sleeping.woken(CHILD_NATIVE);
     {
         // The record stays until the ledger shows the pane took the
         // registration over, and it asks for exactly that move.
-        let runtime = sleeping.shared.lock().unwrap();
+        let mut runtime = sleeping.shared.lock().unwrap();
+        sleeping.woken(&mut runtime, CHILD_NATIVE);
         assert!(
             runtime
                 .snapshot
@@ -2346,47 +2397,37 @@ fn a_sleeping_childs_registration_letters_and_watch_pass_to_the_pane_that_wakes_
         );
     }
     sleeping.pass();
-    wait(
-        &sleeping.shared,
-        "the sleeping record to be settled",
-        |runtime| runtime.snapshot.ui_state.agent_sleep.dormant.is_empty(),
-    );
+    sleeping.assert_handed_over();
+}
 
-    let runtime = sleeping.shared.lock().unwrap();
-    assert!(runtime.delivery_registration_rebinds().is_empty());
-    let ledger = runtime.delivery_state().unwrap();
-    let record = ledger
-        .agents
-        .iter()
-        .find(|record| record.id == "agent-2")
-        .unwrap();
-    assert!(!record.ended);
-    assert_eq!(record.pane, WOKEN);
-    assert_eq!(record.instance, WOKEN);
-    assert_eq!(record.parent.as_deref(), Some("agent-1"));
-    assert_eq!(record.actor.pane_id, WOKEN);
-    assert_eq!(record.actor.session, sleeping.child.session);
-    assert_eq!(ledger.watches.len(), 1);
-    assert_eq!(ledger.watches[0].target.pane_id, WOKEN);
-    let letter = ledger
-        .letters
-        .iter()
-        .find(|letter| letter.id == sleeping.letter)
-        .unwrap();
-    assert_eq!(letter.recipient.pane_id, WOKEN);
-    assert_eq!(letter.state, crate::delivery::ledger::State::Pending);
-    assert_eq!(
-        crate::delivery::ledger::load(&sleeping.ledger_path).unwrap(),
-        *ledger
-    );
-    // The old pane stays closed: only the woken one is a live address now.
-    assert!(crate::coordination::resolve_actor(&ledger, SLEEPER).is_none());
-    assert_eq!(
-        crate::coordination::resolve_actor(&ledger, "reviewer")
-            .unwrap()
-            .pane_id,
-        WOKEN
-    );
+/// The orders the store's own passes make around a wake, as the doorbell
+/// and watch producers made them on CI: a pass that read the ledger before
+/// the wake publishes after it, and the next pass lands before the core
+/// looks again. The record outlasts the first, which does not show the move,
+/// and the second hands everything to the woken pane.
+#[test]
+fn a_pass_begun_before_the_wake_keeps_the_record_and_the_next_one_moves_the_registration() {
+    let sleeping = SleepingChild::new();
+    sleeping.pane_closed();
+    {
+        let mut runtime = sleeping.shared.lock().unwrap();
+        let before = runtime.delivery_state().unwrap();
+        sleeping.woken(&mut runtime, CHILD_NATIVE);
+        runtime.publish_delivery(before, false);
+        assert!(
+            runtime
+                .snapshot
+                .ui_state
+                .agent_sleep
+                .dormant
+                .contains_key(&sleeping.id)
+        );
+        let rebinds = runtime.delivery_registration_rebinds();
+        assert_eq!(rebinds.len(), 1);
+        assert_eq!(rebinds["agent-2"].to.pane_id, WOKEN);
+    }
+    sleeping.pass();
+    sleeping.assert_handed_over();
 }
 
 /// A pane that is not the same conversation never inherits the registration:
@@ -2395,7 +2436,7 @@ fn a_sleeping_childs_registration_letters_and_watch_pass_to_the_pane_that_wakes_
 fn a_woken_pane_of_another_conversation_inherits_nothing_and_the_registration_ends() {
     let sleeping = SleepingChild::new();
     sleeping.pane_closed();
-    sleeping.woken("another-native");
+    sleeping.woken(&mut sleeping.shared.lock().unwrap(), "another-native");
     sleeping.pass();
     wait(
         &sleeping.shared,

@@ -218,6 +218,7 @@ mod tests {
                 home: None,
                 machine_identity: MachineIdentity::Available { id: machine },
                 reader_features: None,
+                herdr_socket: None,
                 windows_drives: None,
             };
             let response = Response {

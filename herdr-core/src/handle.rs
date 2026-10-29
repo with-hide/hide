@@ -135,6 +135,15 @@ impl Drop for Core {
         // to lock the runtime, so a join under the lock never returns.
         let remote_syncs = { lock_recover(&self.runtime).take_remote_syncs() };
         drop(remote_syncs);
+        // After the coordinators, so no timer dials a device again: each
+        // device's link ends with the core, and with it what the link owns
+        // here, a WSL distribution's `wsl.exe` and the helper inside it
+        // (PRD wsl-device B27). Closed outside the lock, which a link's end
+        // takes to record it.
+        let device_links = { lock_recover(&self.runtime).ready_device_channels() };
+        for (_, link) in device_links {
+            link.close("core stopping");
+        }
         if let Some(worker) = attachment_worker {
             let _ = worker.join();
         }

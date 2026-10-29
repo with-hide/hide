@@ -733,6 +733,94 @@ fn disconnected_devices_zero_the_physical_tile_but_keep_overview_members_from_th
     assert!(!runtime.refresh_agent_scopes());
 }
 
+/// PRD wsl-device B6: a WSL distribution's device is scoped as every device
+/// is, from its own registration's row and its own session: its tile,
+/// tasks and Overview count its agents, and this PC's count none of them.
+#[test]
+fn a_wsl_distributions_device_is_scoped_to_its_own_session() {
+    let mut runtime = runtime();
+    runtime.snapshot.navigator.agents.clear();
+    runtime.snapshot.navigator.workspaces.clear();
+    let id = crate::runtime::devices::wsl_device_id("Ubuntu");
+    let consent = runtime.new_host_consent();
+    runtime
+        .snapshot
+        .ui_state
+        .device_registrations
+        .push(crate::model::DeviceRegistration {
+            id: id.clone(),
+            label: "WSL Ubuntu".to_owned(),
+            origin: crate::model::LinkOrigin::Wsl {
+                distro: "Ubuntu".to_owned(),
+            },
+            herdr_socket_path: None,
+            herdr_session: None,
+            host_consent: Some(consent),
+        });
+    runtime.rebuild_device_rows();
+    let mut project = workspace(
+        "wsl-project",
+        "app",
+        "/mnt/c/work/app",
+        vec![checkout(
+            "wsl-project",
+            "wsl-checkout",
+            "/mnt/c/work/app",
+            Some(pane("root", "/mnt/c/work/app")),
+        )],
+    );
+    project.device_id = id.clone();
+    runtime.snapshot.status.remote = vec![RemoteStatusSnapshot {
+        target_id: id.clone(),
+        state: "connected".into(),
+        message: None,
+        herdr_version: None,
+        files: RemoteFileListSnapshot::idle(),
+        catalog: Default::default(),
+        session: Some(RemoteSessionSnapshot {
+            workspaces: vec![project],
+            agents: rows(),
+            active_tab_ids: Default::default(),
+            focused_workspace_id: None,
+            focused_checkout_id: None,
+            focused_tab_id: None,
+            focused_pane_id: None,
+            pane_layouts: Vec::new(),
+            pane_hook_tokens: Default::default(),
+            issue_tokens: Default::default(),
+            issue_links: Default::default(),
+            herdr_version: None,
+        }),
+        unreachable_since_unix_ms: None,
+    }];
+    assert!(runtime.refresh_agent_scopes());
+    let device = runtime
+        .snapshot
+        .navigator
+        .devices
+        .iter()
+        .find(|device| device.id == id)
+        .expect("the WSL device's row");
+    assert_eq!(device.wsl_distro.as_deref(), Some("Ubuntu"));
+    let scope = &device.agent_scope;
+    assert_eq!((scope.total, scope.overview_total), (2, 1));
+    assert_eq!(scope.listed.len(), 2);
+    assert!(scope.places_live);
+    let here = &runtime
+        .snapshot
+        .navigator
+        .devices
+        .iter()
+        .find(|device| device.kind != "remote")
+        .expect("this PC's row")
+        .agent_scope;
+    assert_eq!(
+        (here.total, here.listed.len()),
+        (0, 0),
+        "this PC lists none of the distribution's agents"
+    );
+}
+
 #[test]
 fn checkout_trees_and_folded_badges_preserve_cross_checkout_lineage_and_priority() {
     let mut runtime = runtime();

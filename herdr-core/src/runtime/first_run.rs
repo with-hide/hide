@@ -92,7 +92,7 @@ impl Runtime {
         if let Some(mut devices) = payload.devices {
             devices.sort();
             devices.dedup();
-            draft.devices = devices;
+            draft.devices = Some(devices);
         }
         if let Some(device) = payload.project_device {
             draft.project_device = Some(device);

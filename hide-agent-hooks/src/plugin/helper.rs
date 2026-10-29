@@ -314,6 +314,9 @@ fn prompt_memory(
     };
     let mut start = false;
     let mut context = String::new();
+    // The Hide global instruction comes with the session-start ask, in its
+    // own slot outside Memory's quota (PRD memory-self-improve D-31).
+    let mut global = None;
     if input.memory_first.unwrap_or(input.first) {
         let index = memory_context_until(request(HookEvent::SessionStart), home, deadline);
         start = matches!(
@@ -321,10 +324,18 @@ fn prompt_memory(
             HookMemoryOutcome::Provided { .. } | HookMemoryOutcome::Empty
         );
         context.push_str(index.context.as_deref().unwrap_or_default());
+        // Once a session: with the start guidance, or with the session-start
+        // capsule when the guidance came first; Memory off answers no
+        // capsule, so a later prompt does not carry it again.
+        global = index.global.filter(|_| input.first || start);
     }
     let prompt = memory_context_until(request(HookEvent::UserPromptSubmit), home, deadline);
     let body = prompt.context.as_deref().unwrap_or_default();
     let (context, index_kept) = bounded_memory_capsule(&context, body);
+    let context = match (global, context) {
+        (Some(global), Some(context)) => Some(format!("{global}{context}")),
+        (global, context) => global.or(context),
+    };
     (context, start && index_kept)
 }
 
@@ -405,6 +416,14 @@ fn tool(home: &Path, agent: &Agent, input: Input, deadline: Instant) -> Value {
             cwd: input.cwd.clone(),
         })
     };
+    // No agent writes the Hide global instruction (PRD memory-self-improve
+    // D-07), in any session or project.
+    if let Some(reason) =
+        call().and_then(|call| hide_agent_hooks::global_guard::refusal(home, &call))
+    {
+        hide_agent_hooks::global_guard::record_refusal(home, runtime, pane.as_deref());
+        return json!({ "deny": reason });
+    }
     // The guardrails hold in any session of a guarded project, a Herdr pane
     // or not (PRD agent-guardrails B22); the guards after them only in one.
     if let Some(reason) = guardrails::refusal_for(home, runtime, pane.as_deref(), call) {

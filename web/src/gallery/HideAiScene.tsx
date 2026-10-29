@@ -1,5 +1,6 @@
 // The production lane on its Hide AI tool over invented wire values, one
-// state per screen the PRD names (hide-ai-suggestions B3, B10-B19), for
+// state per screen the PRD names (hide-ai-suggestions B3, B10-B19, and
+// memory-self-improve B5-B11 for the Hide global instruction), for
 // review captures. Which rows exist, their groups and counts are the core's
 // and are tested in herdr-core.
 import { useEffect, useLayoutEffect, useMemo } from "react";
@@ -13,7 +14,7 @@ import { useUiStore } from "../ui";
 import type { LaneFrame, LaneSizes, WorkspaceView } from "../workspace";
 import { memorySceneProject } from "./MemoryScene";
 
-export const HIDE_AI_SCENE_STATES = ["new", "improvement", "applying", "applied", "settings", "settings_unread", "off", "first_run", "not_investigated", "memory", "empty", "memory_empty", "suggestions_off"] as const;
+export const HIDE_AI_SCENE_STATES = ["new", "improvement", "applying", "applied", "settings", "settings_unread", "off", "first_run", "not_investigated", "memory", "empty", "memory_empty", "suggestions_off", "global", "global_unusable"] as const;
 export type HideAiSceneState = (typeof HIDE_AI_SCENE_STATES)[number];
 export type HideAiSceneLanguage = "en" | "ko" | "zh-CN" | "ja";
 export type HideAiSceneParams = { theme: "light" | "dark"; state: HideAiSceneState; width: number; language: HideAiSceneLanguage };
@@ -29,7 +30,7 @@ export function hideAiSceneParams(params: URLSearchParams): HideAiSceneParams {
 }
 
 const MINUTE = 60_000;
-const SIGNALS: SuggestionSignal[] = ["failed_tool", "agent_wait", "correction", "label_missed", "improvement", "check_failed", "change_request"];
+const SIGNALS: SuggestionSignal[] = ["failed_tool", "agent_wait", "correction", "repeated_request", "memory_ignored", "label_missed", "improvement", "check_failed", "change_request"];
 
 const row = (id: string, fields: Partial<SuggestionRow>): SuggestionRow => ({
   id, source: "notebook", group: "choose", state: "new", discomfort: null, cause: null, fix: null, outcome: "pr", basis: null,
@@ -84,6 +85,37 @@ const APPLIED_ROWS: SuggestionRow[] = [
   row("s2", { group: "applied", state: "effective", discomfort: "커밋 메시지에 도구 이름이 들어가요", attempt: { phase: "merged", started_at_unix_ms: Date.now() - 6 * 1440 * MINUTE, pr_number: 1661, url: "https://github.com/hide/hide/pull/1661", agent_id: null, failure: null } }),
 ];
 
+const GLOBAL_PATH = "~/.hide/state/global-instruction.md";
+
+/** A personal request said again across sessions, opened with its words read back masked, one of them no longer readable (B6, B7). */
+const LOCAL_NEW: SuggestionRow = row("s21", {
+  discomfort: "답을 한국어로 해 달라고 계속 말해요",
+  basis: { signal: "repeated_request", tag: "answer in korean" },
+  outcome: "local",
+  local: { line: "운영자가 한국어로 물으면 한국어로 답한다.", preview: "p1", present: false, applied_at_unix_ms: null, recurred: false, failure: null },
+  evidence: [
+    { kind: "session", signal: "repeated_request", improvement: null, agent: "claude", session_id: "r1", pr_number: null, url: null, at_unix_ms: Date.now() - 50 * MINUTE, gone: false, excerpt: "한국어로 답해 줘. 앞에서도 말했는데 영어로 왔어.", unreadable: false },
+    { kind: "session", signal: "repeated_request", improvement: null, agent: "codex", session_id: "r2", pr_number: null, url: null, at_unix_ms: Date.now() - 1440 * MINUTE, gone: false, excerpt: "답은 한국어로 부탁해", unreadable: false },
+    { kind: "session", signal: "repeated_request", improvement: null, agent: "claude", session_id: "r3", pr_number: null, url: null, at_unix_ms: Date.now() - 3 * 1440 * MINUTE, gone: false, excerpt: null, unreadable: true },
+  ],
+});
+
+/** A line that went in and was said again in a session given it (B11). */
+const LOCAL_RECURRED: SuggestionRow = row("s22", {
+  discomfort: "em dash를 쓰지 말라고 또 말했어요",
+  basis: { signal: "memory_ignored", tag: "m31" },
+  outcome: "local",
+  local: { line: "글에 em dash를 쓰지 않고 하이픈을 쓴다.", preview: "p2", present: false, applied_at_unix_ms: Date.now() - 2 * 1440 * MINUTE, recurred: true, failure: null },
+});
+
+const LOCAL_APPLIED: SuggestionRow = row("s20", {
+  group: "applied", state: "applied", discomfort: "커밋 제목을 영어로 쓰라고 매번 말해요", outcome: "local",
+  local: { line: "커밋 제목은 영어 명령문으로 쓴다.", preview: null, present: true, applied_at_unix_ms: Date.now() - 4 * 1440 * MINUTE, recurred: false, failure: null },
+});
+
+/** The file grew past its limit by hand: sessions are not given it, and a line cannot go in (B5, B10). */
+const LOCAL_HELD: SuggestionRow = { ...LOCAL_NEW, evidence: [], local: { ...LOCAL_NEW.local!, preview: null } };
+
 /** The Project's Hide AI as the core would send it in each state, for this scene and the lane scenes that show the tool. */
 export function hideAiSceneProject(state: HideAiSceneState, workspaceId = "herdr-ide"): ProjectSuggestions {
   const base: ProjectSuggestions = {
@@ -123,6 +155,8 @@ export function hideAiSceneProject(state: HideAiSceneState, workspaceId = "herdr
     case "first_run": return { ...base, intro_seen: false, status: "first_run_pending", rows: [], counts: { suggestions: 0, rail: 1 } };
     case "empty":
     case "memory_empty": return { ...base, status: "none_today", rows: [], counts: { suggestions: 0, rail: 0 } };
+    case "global": return { ...base, global: { path: GLOBAL_PATH, unusable: null }, rows: [LOCAL_NEW, LOCAL_RECURRED, ...NEW_ROWS.slice(0, 1), LOCAL_APPLIED, ...APPLIED_ROWS], counts: { suggestions: 3, rail: 4 } };
+    case "global_unusable": return { ...base, global: { path: GLOBAL_PATH, unusable: "too_large" }, rows: [LOCAL_HELD, ...NEW_ROWS.slice(1, 2)], counts: { suggestions: 2, rail: 3 } };
     case "suggestions_off": return { ...base, status: "off", settings: { ...base.settings, suggestions_enabled: false }, counts: { suggestions: 0, rail: 0 } };
   }
 }
@@ -146,14 +180,14 @@ export function HideAiScene({ theme, state, width, language }: HideAiSceneParams
   useLayoutEffect(() => {
     const memory = { ...memorySceneProject(state === "off" || state === "settings_unread" ? "off" : state === "memory_empty" ? "empty" : "correction"), workspace_id: "herdr-ide" };
     useShellStore.setState({ rest, memory: { project: memory }, suggestions: { project: hideAiSceneProject(state) }, connection: "gone" });
-    useUiStore.setState({ hideAiTab: state === "memory" || state === "memory_empty" ? "memory" : "suggestions", openSuggestion: state === "new" ? "s12" : state === "improvement" ? "s18" : null });
+    useUiStore.setState({ hideAiTab: state === "memory" || state === "memory_empty" ? "memory" : "suggestions", openSuggestion: state === "new" ? "s12" : state === "improvement" ? "s18" : state === "global" ? "s21" : null });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
   }, [rest, state, theme]);
   // The fold and the sheet are the components' own; the scene presses them as the operator would, once the tool drew them.
   const drawn = useShellStore((store) => store.suggestions?.project?.workspace_id === "herdr-ide");
   useEffect(() => {
-    const press = state === "applied" ? "[data-suggestions-fold]" : state === "settings" || state === "settings_unread" ? "[data-hide-ai-settings-open]" : null;
+    const press = state === "applied" || state === "global" ? "[data-suggestions-fold]" : state === "settings" || state === "settings_unread" ? "[data-hide-ai-settings-open]" : null;
     if (!drawn || !press) return;
     document.querySelector<HTMLElement>(press)?.click();
     if (state !== "settings_unread") return;

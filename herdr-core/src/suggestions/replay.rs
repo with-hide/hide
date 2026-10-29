@@ -88,6 +88,7 @@ fn session_facts(
             always: false,
             head: None,
             improvement: None,
+            said: None,
         };
         let mut failed = Vec::new();
         let mut waited = None;
@@ -207,6 +208,7 @@ fn replay(mut facts: Vec<Observation>, since: u64, now: u64) -> ProjectReplay {
             at_unix_ms: fact.at_unix_ms,
             always: fact.always,
             improvement: None,
+            said: None,
             line: None,
             fresh: false,
         })

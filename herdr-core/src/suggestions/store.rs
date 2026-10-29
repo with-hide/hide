@@ -568,6 +568,7 @@ impl SuggestionStore {
                     at_unix_ms: record.fact.at_unix_ms,
                     always: record.fact.always,
                     improvement: record.fact.improvement,
+                    said: record.fact.said,
                     line: on_line.get(&record.id).copied(),
                     fresh,
                 })
@@ -659,6 +660,7 @@ mod tests {
             always: false,
             head: None,
             improvement: None,
+            said: None,
         }
     }
 
@@ -751,6 +753,7 @@ mod tests {
             always: false,
             head: Some(head.into()),
             improvement: None,
+            said: None,
         };
         let first = store.record("p", vec![check("a", NOW)], NOW).unwrap();
         assert_eq!(first.written, [RecordId(1)]);

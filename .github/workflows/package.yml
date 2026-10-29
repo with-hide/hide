@@ -33,11 +33,14 @@
 # signature and reach no secret.
 #
 # Every call also builds the two Linux device helpers (`device-helpers.yml`),
-# which the Mac app's device bundles are made from and which a release
-# candidate hands the private publisher (docs/BUILD.md). The Mac lane is two
-# jobs, so its native build does not wait for them: `compile (macos)` builds
-# the web shell and the release binaries while the helpers build, and
-# `package (macos)` needs both before it assembles the app, so a failed helper
+# which a release candidate hands the private publisher (docs/BUILD.md), and
+# makes the Linux device bundles from them once (`device-bundles`): the Mac
+# app and the Windows app, whose WSL distributions are Linux devices (PRD
+# wsl-device D-04), ship that one manifest, so each names the archives the
+# release has. The Mac and Windows native builds do not wait for the
+# helpers: `compile (macos)` and `compile (windows)` build the web shell and
+# the release binaries while the helpers build, and each package job needs
+# its compile and the bundles before it assembles the app, so a failed helper
 # or compile fails the package and no app is made without them.
 name: package
 
@@ -127,24 +130,110 @@ jobs:
       version: ${{ needs.helper-identity.outputs.version }}
       build-order: ${{ needs.helper-identity.outputs.build-order }}
 
-  package:
-    name: package (${{ matrix.system }})
+  device-bundles:
+    name: device bundles
+    needs: [helper-identity, device-helpers]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: with-hide/hide
+          ref: ${{ inputs.source-sha || github.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install zsh for the Herdr fetch
+        run: sudo apt-get install -y --no-install-recommends zsh
+      - uses: actions/download-artifact@v8
+        with:
+          name: hide-device-helper-linux-x86_64
+          path: desktop/out/device-helpers/linux-x86_64
+      - uses: actions/download-artifact@v8
+        with:
+          name: hide-device-helper-linux-aarch64
+          path: desktop/out/device-helpers/linux-aarch64
+      - name: Make the Linux device bundles and their manifest
+        env:
+          VERSION: ${{ needs.helper-identity.outputs.version }}
+          SOURCE_SHA: ${{ needs.helper-identity.outputs.source-sha }}
+          BUILD_ORDER: ${{ needs.helper-identity.outputs.build-order }}
+        run: node desktop/scripts/device-helpers.mjs bundle "$VERSION" "$SOURCE_SHA" "$BUILD_ORDER"
+      - name: Keep the bundles for the packages that carry their manifest
+        uses: actions/upload-artifact@v7
+        with:
+          name: hide-device-bundles
+          path: desktop/out/device-bundles/*
+          if-no-files-found: error
+          retention-days: 7
+
+  windows-compile:
+    name: compile (windows)
+    needs: helper-identity
     env:
       HIDE_POSTHOG_PROJECT_TOKEN: ${{ vars.HIDE_POSTHOG_PROJECT_TOKEN }}
-    runs-on: ${{ matrix.runner }}
+      # The identity the bundles are made with; `package (windows)` checks the
+      # binaries' record against its own before it uses them.
+      HIDE_VERSION: ${{ needs.helper-identity.outputs.version }}
+      HIDE_BUILD_ORDER: ${{ needs.helper-identity.outputs.build-order }}
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Keep line endings as committed
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+        with:
+          repository: with-hide/hide
+          ref: ${{ inputs.source-sha || github.sha }}
+      # Saved by a run on main (the nightly, a candidate dispatched from main);
+      # a pull request and a release tag read it and never write it.
+      - uses: ./.github/actions/rust-cache
+        timeout-minutes: 10
+        with:
+          set: release
+          save: ${{ github.ref == 'refs/heads/main' }}
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Install dependencies
+        timeout-minutes: 5
+        run: bash scripts/verify-web.sh install
+      - name: Build the web shell and the release binaries
+        timeout-minutes: 50
+        env:
+          HIDE_WEB_TYPECHECKED_SHA: ${{ inputs.web-typechecked && (inputs.source-sha || github.sha) || '' }}
+        run: bash scripts/verify-web.sh desktop package compile
+      - name: Keep the release binaries for the package job
+        uses: actions/upload-artifact@v7
+        with:
+          name: hide-windows-release-binaries
+          path: |
+            target/release/hided.exe
+            target/release/hide.exe
+            target/release/hide-agent-hooks.exe
+            desktop/out/release-binaries.json
+          if-no-files-found: error
+          retention-days: 1
+
+  package:
+    name: package (linux)
+    env:
+      HIDE_POSTHOG_PROJECT_TOKEN: ${{ vars.HIDE_POSTHOG_PROJECT_TOKEN }}
+    runs-on: ubuntu-latest
     # The third-party dependencies come from the release set main keeps, and
     # nothing else does: every hide crate and the link are built from this
     # checkout. docs/BUILD.md, "CI's Rust caches", says why a restored
     # dependency cannot change what ships, and where that argument stops.
+    # It waits for nothing: the Linux app carries no device kit.
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - system: windows
-            runner: windows-latest
-          - system: linux
-            runner: ubuntu-latest
     defaults:
       run:
         shell: bash
@@ -171,7 +260,6 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - name: Install zsh for the Herdr fetch, rpmbuild for the rpm and a display for the update test
-        if: matrix.system == 'linux'
         run: sudo apt-get install -y --no-install-recommends zsh rpm xvfb
       - name: Name the version
         env:
@@ -205,35 +293,24 @@ jobs:
       - name: Check each installer against its checksum
         working-directory: desktop/out/release
         run: for checksum in *.sha256; do sha256sum -c "$checksum"; done
-      - name: Install, install again while Herdr runs, and uninstall
-        if: matrix.system == 'windows'
-        timeout-minutes: 15
-        run: node desktop/scripts/smoke-windows-installer.mjs "desktop/out/release/hide-v${HIDE_VERSION}-windows-x64-setup.exe"
       - name: Install the package
         id: installed
         timeout-minutes: 10
         run: |
-          if [ "${{ matrix.system }}" = windows ]; then
-            # Git Bash would rewrite /S into a path.
-            MSYS_NO_PATHCONV=1 "desktop/out/release/hide-v${HIDE_VERSION}-windows-x64-setup.exe" /S
-            app="$(cygpath -m "$LOCALAPPDATA")/Programs/hide"
-          else
-            sudo apt-get install -y "./desktop/out/release/hide-v${HIDE_VERSION}-linux-x64.deb"
-            app=/opt/hide
-            # Every account can reach the app; a new terminal's `hide` is the CLI, the app menu has the window, and no sandbox step was asked of anyone.
-            [ "$(stat -c %a /opt/hide)" = 755 ] || { echo "::error::/opt/hide is $(stat -c %a /opt/hide), not 755"; exit 1; }
-            cli="$(command -v hide || true)"
-            [ -n "$cli" ] && [ "$(readlink -f "$cli")" = /opt/hide/resources/hide ] || { echo "::error::a new terminal's hide is '$cli', not the CLI"; ls -l /usr/bin/hide /etc/alternatives/hide || true; exit 1; }
-            grep -qx 'Exec=/opt/hide/hide %U' /usr/share/applications/hide.desktop || { echo "::error::the menu entry does not open /opt/hide/hide"; dpkg -L hide | grep -v '^/opt/hide/' || true; cat /usr/share/applications/hide.desktop || true; exit 1; }
-            stat -c '%a %U' /opt/hide/chrome-sandbox
-          fi
-          test -x "$app/resources/hide${{ matrix.system == 'windows' && '.exe' || '' }}"
+          sudo apt-get install -y "./desktop/out/release/hide-v${HIDE_VERSION}-linux-x64.deb"
+          app=/opt/hide
+          # Every account can reach the app; a new terminal's `hide` is the CLI, the app menu has the window, and no sandbox step was asked of anyone.
+          [ "$(stat -c %a /opt/hide)" = 755 ] || { echo "::error::/opt/hide is $(stat -c %a /opt/hide), not 755"; exit 1; }
+          cli="$(command -v hide || true)"
+          [ -n "$cli" ] && [ "$(readlink -f "$cli")" = /opt/hide/resources/hide ] || { echo "::error::a new terminal's hide is '$cli', not the CLI"; ls -l /usr/bin/hide /etc/alternatives/hide || true; exit 1; }
+          grep -qx 'Exec=/opt/hide/hide %U' /usr/share/applications/hide.desktop || { echo "::error::the menu entry does not open /opt/hide/hide"; dpkg -L hide | grep -v '^/opt/hide/' || true; cat /usr/share/applications/hide.desktop || true; exit 1; }
+          stat -c '%a %U' /opt/hide/chrome-sandbox
+          test -x "$app/resources/hide"
           echo "app=$app" >> "$GITHUB_OUTPUT"
       - name: Start the installed package without a window
         timeout-minutes: 5
         run: node desktop/scripts/smoke-package.mjs "${{ steps.installed.outputs.app }}"
       - name: Install the rpm in Fedora and start it without a window
-        if: matrix.system == 'linux'
         timeout-minutes: 15
         run: |
           docker run --rm -v "$PWD:/w" -w /w fedora:42 bash -euo pipefail -c '
@@ -256,14 +333,165 @@ jobs:
           # The fixture's own `hide status` and `hide stop` read target/debug;
           # these are the package's binaries, so no workspace is built twice.
           mkdir -p target/debug
-          exe="${{ matrix.system == 'windows' && '.exe' || '' }}"
-          cp "${{ steps.installed.outputs.app }}/resources/hide$exe" "${{ steps.installed.outputs.app }}/resources/hided$exe" target/debug/
+          cp "${{ steps.installed.outputs.app }}/resources/hide" "${{ steps.installed.outputs.app }}/resources/hided" target/debug/
+      - name: Build two release versions of the same app for the update test
+        # N is installed, N+1 is served from a local feed (PRD auto-update
+        # D-29); both are the package above with another version, so the
+        # update changes nothing but the version. On Linux the script builds
+        # only the deb this test updates through; the shipped rpm and its
+        # Fedora install check above still use the full release set.
+        timeout-minutes: 15
+        run: |
+          bundle="$(sed -n 's/^bundle=//p' "$RUNNER_TEMP/package.out")"
+          test -d "$bundle"
+          node desktop/scripts/installers.mjs "$bundle" 0.0.1 "$RUNNER_TEMP/update-n"
+          node desktop/scripts/installers.mjs "$bundle" 0.0.2 "$RUNNER_TEMP/update-next"
+          sudo apt-get install -y --allow-downgrades "$RUNNER_TEMP/update-n/hide-v0.0.1-linux-x64.deb"
+      - name: Update the installed app to the next version
+        # The installed N finds N+1, downloads it, and Restart in the Help
+        # menu installs it while the Herdr server and the daemon keep running
+        # (desktop/e2e/packaged-update.spec.ts).
+        id: update
+        timeout-minutes: 15
+        env:
+          HIDE_E2E_UPDATE_APP: ${{ steps.installed.outputs.app }}/hide
+          HIDE_E2E_UPDATE_FEED: ${{ runner.temp }}/update-next
+          HIDE_E2E_UPDATE_VERSION: 0.0.2
+          HIDE_E2E_HERDR_BIN: ${{ steps.installed.outputs.app }}/resources/herdr
+          HIDE_E2E_SCREENSHOT_DIR: ${{ runner.temp }}/hide-e2e
+        run: |
+          mkdir -p "$HIDE_E2E_SCREENSHOT_DIR"
+          xvfb-run -a bash scripts/verify-web.sh desktop e2e packaged-update.spec.ts
+      - name: Mint the development issues token
+        # Development issues live in with-hide/hide-private (docs/TESTING.md,
+        # Flaky tests); one App token reads this run here and files there. A run
+        # without the App's key, such as a fork's, files nothing and stays green.
+        id: issues-token
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 2
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.HIDE_ISSUES_APP_CLIENT_ID }}
+          private-key: ${{ secrets.HIDE_ISSUES_APP_KEY }}
+          owner: with-hide
+          repositories: hide,hide-private
+      - name: Report flaky and failed window tests
+        # See the macOS job below.
+        id: flaky
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ steps.issues-token.outputs.token }}
+        run: python3 scripts/ci-flaky-report.py --suite desktop --playwright desktop/e2e-report.json
+      - name: Keep the failed window run
+        if: ${{ failure() || steps.flaky.outputs.flaky == 'true' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: hide-package-window-logs-linux
+          path: |
+            ${{ runner.temp }}/hide-e2e
+            desktop/test-results
+          if-no-files-found: ignore
+      - name: Keep the package
+        # Exactly the system's release files (installers.mjs leaves nothing else there); kept
+        # from a failed run too, so a package that did not install can be looked at.
+        if: ${{ !cancelled() && hashFiles('desktop/out/release/*') != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: hide-package-linux
+          path: desktop/out/release/*
+          if-no-files-found: error
+          # A release attaches it within the same run; a pull request's copy
+          # is there to be tried on a real machine within the week.
+          retention-days: 7
+
+  windows-package:
+    name: package (windows)
+    # Its own job, so the Linux package does not wait for the Windows
+    # binaries and the device bundles this one needs.
+    needs: [helper-identity, device-bundles, windows-compile]
+    env:
+      HIDE_POSTHOG_PROJECT_TOKEN: ${{ vars.HIDE_POSTHOG_PROJECT_TOKEN }}
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Keep line endings as committed
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+        with:
+          repository: with-hide/hide
+          ref: ${{ inputs.source-sha || github.sha }}
+      # The app is assembled from `compile (windows)`'s binaries, so this job
+      # builds no Rust and restores no cache.
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - name: Take the identity the binaries and the bundles were made with
+        env:
+          VERSION: ${{ needs.helper-identity.outputs.version }}
+          BUILD_ORDER: ${{ needs.helper-identity.outputs.build-order }}
+        run: |
+          echo "HIDE_VERSION=${VERSION#v}" >> "$GITHUB_ENV"
+          echo "HIDE_BUILD_ORDER=$BUILD_ORDER" >> "$GITHUB_ENV"
+      - uses: actions/download-artifact@v8
+        with:
+          name: hide-windows-release-binaries
+          path: ${{ github.workspace }}
+          digest-mismatch: error
+      - uses: actions/download-artifact@v8
+        with:
+          name: hide-device-bundles
+          path: desktop/out/device-bundles
+          digest-mismatch: error
+      - run: bash scripts/verify-web.sh install
+      - name: Package the unsigned app, its installers and update files
+        # The packager assembles `compile (windows)`'s checked binaries with
+        # the run's device bundles, fetches the pinned Herdr and refuses when
+        # any of them cannot run; electron-builder then wraps the app in
+        # desktop/out/release.
+        timeout-minutes: 50
+        env:
+          HIDE_WEB_TYPECHECKED_SHA: ${{ inputs.web-typechecked && (inputs.source-sha || github.sha) || '' }}
+        run: bash scripts/verify-web.sh desktop package assemble | tee "$RUNNER_TEMP/package.out"
+      - name: Check each installer against its checksum
+        working-directory: desktop/out/release
+        run: for checksum in *.sha256; do sha256sum -c "$checksum"; done
+      - name: Install, install again while Herdr runs, and uninstall
+        timeout-minutes: 15
+        run: node desktop/scripts/smoke-windows-installer.mjs "desktop/out/release/hide-v${HIDE_VERSION}-windows-x64-setup.exe"
+      - name: Install the package
+        id: installed
+        timeout-minutes: 10
+        run: |
+          # Git Bash would rewrite /S into a path.
+          MSYS_NO_PATHCONV=1 "desktop/out/release/hide-v${HIDE_VERSION}-windows-x64-setup.exe" /S
+          app="$(cygpath -m "$LOCALAPPDATA")/Programs/hide"
+          test -x "$app/resources/hide.exe"
+          echo "app=$app" >> "$GITHUB_OUTPUT"
+      - name: Start the installed package without a window
+        timeout-minutes: 5
+        run: node desktop/scripts/smoke-package.mjs "${{ steps.installed.outputs.app }}"
+      - name: Name the installed package's binaries for the window and update fixtures
+        run: |
+          # The fixture's own `hide status` and `hide stop` read target/debug;
+          # these are the package's binaries, so no workspace is built twice.
+          mkdir -p target/debug
+          cp "${{ steps.installed.outputs.app }}/resources/hide.exe" "${{ steps.installed.outputs.app }}/resources/hided.exe" target/debug/
       - name: The packaged app's window
         # The installed hide.exe with its window, against a private HOME, state
         # and Herdr (desktop/e2e/packaged-window.spec.ts); the shell it draws
         # is kept below.
         id: window
-        if: matrix.system == 'windows'
         timeout-minutes: 10
         env:
           HIDE_E2E_PACKAGED_APP: ${{ steps.installed.outputs.app }}/hide.exe
@@ -284,11 +512,7 @@ jobs:
           test -d "$bundle"
           node desktop/scripts/installers.mjs "$bundle" 0.0.1 "$RUNNER_TEMP/update-n"
           node desktop/scripts/installers.mjs "$bundle" 0.0.2 "$RUNNER_TEMP/update-next"
-          if [ "${{ matrix.system }}" = windows ]; then
-            MSYS_NO_PATHCONV=1 "$RUNNER_TEMP/update-n/hide-v0.0.1-windows-x64-setup.exe" /S
-          else
-            sudo apt-get install -y --allow-downgrades "$RUNNER_TEMP/update-n/hide-v0.0.1-linux-x64.deb"
-          fi
+          MSYS_NO_PATHCONV=1 "$RUNNER_TEMP/update-n/hide-v0.0.1-windows-x64-setup.exe" /S
       - name: Update the installed app to the next version
         # The installed N finds N+1, downloads it, and Restart in the Help
         # menu installs it while the Herdr server and the daemon keep running
@@ -296,24 +520,20 @@ jobs:
         id: update
         timeout-minutes: 15
         env:
-          HIDE_E2E_UPDATE_APP: ${{ steps.installed.outputs.app }}/hide${{ matrix.system == 'windows' && '.exe' || '' }}
+          HIDE_E2E_UPDATE_APP: ${{ steps.installed.outputs.app }}/hide.exe
           HIDE_E2E_UPDATE_FEED: ${{ runner.temp }}/update-next
           HIDE_E2E_UPDATE_VERSION: 0.0.2
-          HIDE_E2E_HERDR_BIN: ${{ steps.installed.outputs.app }}/resources/herdr${{ matrix.system == 'windows' && '.exe' || '' }}
+          HIDE_E2E_HERDR_BIN: ${{ steps.installed.outputs.app }}/resources/herdr.exe
           HIDE_E2E_SCREENSHOT_DIR: ${{ runner.temp }}/hide-e2e
         run: |
           mkdir -p "$HIDE_E2E_SCREENSHOT_DIR"
-          if [ "${{ matrix.system }}" = windows ]; then
-            # The installer stops every program under the install folder, and
-            # the app runs its Herdr server from the build's runtime copy, so
-            # the test's server runs from the packaged folder, not the install.
-            HIDE_E2E_HERDR_BIN="$(sed -n 's/^bundle=//p' "$RUNNER_TEMP/package.out")/resources/herdr.exe"
-            export HIDE_E2E_HERDR_BIN
-            test -f "$HIDE_E2E_HERDR_BIN"
-            bash scripts/verify-web.sh desktop e2e packaged-update.spec.ts
-          else
-            xvfb-run -a bash scripts/verify-web.sh desktop e2e packaged-update.spec.ts
-          fi
+          # The installer stops every program under the install folder, and
+          # the app runs its Herdr server from the build's runtime copy, so
+          # the test's server runs from the packaged folder, not the install.
+          HIDE_E2E_HERDR_BIN="$(sed -n 's/^bundle=//p' "$RUNNER_TEMP/package.out")/resources/herdr.exe"
+          export HIDE_E2E_HERDR_BIN
+          test -f "$HIDE_E2E_HERDR_BIN"
+          bash scripts/verify-web.sh desktop e2e packaged-update.spec.ts
       - name: Mint the development issues token
         # Development issues live in with-hide/hide-private (docs/TESTING.md,
         # Flaky tests); one App token reads this run here and files there. A run
@@ -338,7 +558,7 @@ jobs:
           GH_TOKEN: ${{ steps.issues-token.outputs.token }}
         run: python3 scripts/ci-flaky-report.py --suite desktop --playwright desktop/e2e-report.json
       - name: Keep the packaged window
-        if: ${{ matrix.system == 'windows' && steps.window.outcome == 'success' }}
+        if: steps.window.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: hide-package-window-windows
@@ -348,7 +568,7 @@ jobs:
         if: ${{ failure() || steps.flaky.outputs.flaky == 'true' }}
         uses: actions/upload-artifact@v7
         with:
-          name: hide-package-window-logs-${{ matrix.system }}
+          name: hide-package-window-logs-windows
           path: |
             ${{ runner.temp }}/hide-e2e
             desktop/test-results
@@ -359,7 +579,7 @@ jobs:
         if: ${{ !cancelled() && hashFiles('desktop/out/release/*') != '' }}
         uses: actions/upload-artifact@v7
         with:
-          name: hide-package-${{ matrix.system }}
+          name: hide-package-windows
           path: desktop/out/release/*
           if-no-files-found: error
           # A release attaches it within the same run; a pull request's copy
@@ -420,7 +640,7 @@ jobs:
 
   macos-package:
     name: package (macos)
-    needs: [helper-identity, device-helpers, macos-compile]
+    needs: [helper-identity, device-bundles, macos-compile]
     env:
       HIDE_POSTHOG_PROJECT_TOKEN: ${{ vars.HIDE_POSTHOG_PROJECT_TOKEN }}
     if: ${{ inputs.include-macos }}
@@ -472,12 +692,9 @@ jobs:
           digest-mismatch: error
       - uses: actions/download-artifact@v8
         with:
-          name: hide-device-helper-linux-x86_64
-          path: desktop/out/device-helpers/linux-x86_64
-      - uses: actions/download-artifact@v8
-        with:
-          name: hide-device-helper-linux-aarch64
-          path: desktop/out/device-helpers/linux-aarch64
+          name: hide-device-bundles
+          path: desktop/out/device-bundles
+          digest-mismatch: error
       - name: Install the Developer ID certificate and the notary key
         # The certificate goes into a keychain of this job's own, put on the
         # search list so codesign finds it; the step names the one Developer

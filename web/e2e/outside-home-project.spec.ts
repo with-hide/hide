@@ -20,17 +20,30 @@ function git(cwd: string, args: string[]): string {
   return execFileSync("git", ["-c", "user.name=e2e", "-c", "user.email=e2e@example.invalid", "-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false", ...args], { cwd, encoding: "utf8" });
 }
 
-/** The folders the core lists as registered, from the snapshots the page receives. */
-function registrations(page: Page): { paths: string[] | null } {
-  const seen: { paths: string[] | null } = { paths: null };
+type Seen = { paths: string[] | null; unread: Set<number> };
+
+/**
+ * The folders the core lists as registered, and when it refused a worktree
+ * because it had not read the repository's worktrees yet, from the snapshots
+ * the page receives.
+ */
+function watchCore(page: Page): Seen {
+  const seen: Seen = { paths: null, unread: new Set() };
   page.on("websocket", (socket) => socket.on("framereceived", ({ payload }) => {
     try {
-      const frame = JSON.parse(String(payload)) as { payload?: { rest?: { ui_state?: { workspace_registrations?: { path: string }[] } } } };
+      const frame = JSON.parse(String(payload)) as { payload?: { rest?: { ui_state?: { workspace_registrations?: { path: string }[] }; status?: { last_error?: { kind: string; occurred_at: number } | null } } } };
       const listed = frame.payload?.rest?.ui_state?.workspace_registrations;
       if (listed) seen.paths = listed.map((registration) => registration.path);
+      const error = frame.payload?.rest?.status?.last_error;
+      if (error?.kind === "worktree.create_unread") seen.unread.add(error.occurred_at);
     } catch { /* Terminal frames are binary. */ }
   }));
   return seen;
+}
+
+/** The worktrees Git lists for `repo`, other than `repo` itself. */
+function worktreesOf(repo: string): string[] {
+  return git(repo, ["worktree", "list", "--porcelain"]).split("\n").filter((line) => line.startsWith("worktree ")).map((line) => line.slice("worktree ".length)).filter((folder) => fs.realpathSync.native(folder) !== repo);
 }
 
 test("a project outside home is asked about again after its removal, and its worktree is made, selected and read", async ({ page }) => {
@@ -48,7 +61,7 @@ test("a project outside home is asked about again after its removal, and its wor
     git(repo, ["commit", "-q", "-m", "initial"]);
     daemon = await startHided(herdr, "outside-home-project");
     expect(path.relative(daemon.home, repo).startsWith("..")).toBe(true);
-    const registered = registrations(page);
+    const registered = watchCore(page);
     await page.goto(`${daemon.origin}/#token=${daemon.token}`);
     await expect(page.locator("[data-main-screen]")).toBeVisible({ timeout: 20_000 });
 
@@ -75,19 +88,29 @@ test("a project outside home is asked about again after its removal, and its wor
 
     // B19: the registered project makes a worktree where Herdr puts one,
     // lists it under itself, and its files are read once it is selected.
-    await sendEvent(page, daemon, "create_worktree", { repository_root: toPage(repo), branch: BRANCH, base_branch: null, agent_kind: null, purpose: null });
+    // The core reads a project's worktrees off its lock after registering it,
+    // and a worktree asked for before that read is refused as one to ask for
+    // again in a moment (`worktree.create_unread`), so it is asked again.
+    const create = () => sendEvent(page, daemon!, "create_worktree", { repository_root: toPage(repo), branch: BRANCH, base_branch: null, agent_kind: null, purpose: null });
+    let refusals = registered.unread.size;
+    await create();
+    await expect.poll(async () => {
+      if (registered.unread.size > refusals) {
+        refusals = registered.unread.size;
+        await create();
+      }
+      return worktreesOf(repo).length;
+    }, { timeout: 60_000 }).toBe(1);
     const worktree = project.locator("[data-checkout-row]").filter({ has: page.locator(`[data-checkout][aria-label^="${BRANCH}"]`) });
     // A worktree with no agent yet stands in this fold (session UI B9).
     const quiet = project.getByRole("button", { name: /^Worktrees with no agents/ });
     await expect(quiet).toBeVisible({ timeout: 60_000 });
     await quiet.click();
     await expect(worktree).toBeVisible({ timeout: 30_000 });
-    const listed = git(repo, ["worktree", "list", "--porcelain"]).split("\n").filter((line) => line.startsWith("worktree ")).map((line) => line.slice("worktree ".length));
-    const made = listed.find((folder) => fs.realpathSync.native(folder) !== repo);
-    expect(made, listed.join(", ")).toBeTruthy();
+    const [made] = worktreesOf(repo);
     await worktree.locator("[data-checkout]").first().click();
     await showExplorer(page);
-    await expect(page.locator(`[data-explorer-row="${toPage(fs.realpathSync.native(made!))}/README.md"]`)).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator(`[data-explorer-row="${toPage(fs.realpathSync.native(made))}/README.md"]`)).toBeVisible({ timeout: 30_000 });
   } finally {
     daemon?.stop();
     herdr.stop();

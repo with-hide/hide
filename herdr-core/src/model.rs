@@ -914,6 +914,8 @@ pub struct DeviceSnapshot {
     /// for any other state.
     pub problem: Option<String>,
     pub ssh_alias: Option<String>,
+    /// The WSL distribution of this PC the device is (PRD wsl-device D-20).
+    pub wsl_distro: Option<String>,
     /// The Herdr socket the registration names on the device, if any.
     pub herdr_socket_path: Option<String>,
     pub agent_count: u32,
@@ -3128,7 +3130,10 @@ impl FirstRunStep {
 #[serde(default)]
 pub struct FirstRunChoices {
     pub agents: Option<Vec<String>>,
-    pub devices: Vec<String>,
+    /// The checked device rows; none until the operator checks or unchecks
+    /// one, so the step can start with this PC's default WSL distribution
+    /// checked (PRD wsl-device B1) and keep it unchecked once they say so.
+    pub devices: Option<Vec<String>>,
     pub project_device: Option<String>,
     pub project_path: String,
     pub project_form: FirstRunProjectForm,
@@ -3398,6 +3403,17 @@ pub struct ProjectMemorySnapshot {
     pub expanded: Option<MemoryCardSnapshot>,
     /// The matcher's answer to the shell's `memory_search`.
     pub search: Option<MemorySearchSnapshot>,
+    /// Cards out of the hooks after 60 quiet days, newest archive first,
+    /// each with its 되살리기 (PRD memory-self-improve B22).
+    pub archived: Vec<MemoryArchivedSnapshot>,
+}
+
+/// One archived card of the Memory tab's archive list.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct MemoryArchivedSnapshot {
+    pub number: u64,
+    pub title: String,
+    pub archived_at_unix_ms: u64,
 }
 
 /// Why a Project's Memory cannot be read.
@@ -3431,6 +3447,8 @@ pub struct MemoryRowSnapshot {
     /// The card waits to be checked against the repository again and is not
     /// given to agents meanwhile (`확인 중`).
     pub verifying: bool,
+    /// Neither given nor said for 30 days (`낡음`, B22); still given.
+    pub stale: bool,
     /// The card's way into the repository's own files while it is on one;
     /// absent for a card that is not, was dismissed or whose pull request
     /// closed unmerged (B30-B32).
@@ -3632,6 +3650,85 @@ pub struct MemoryCardSnapshot {
     pub sources: Vec<MemorySourceSnapshot>,
     /// The text the current one replaced, which the card's Undo restores.
     pub previous: Option<MemoryPreviousSnapshot>,
+    /// What Hide changed on the card by itself or on a recheck, newest
+    /// first, each with its 되돌리기 (B34).
+    pub changes: Vec<MemoryChangeSnapshot>,
+}
+
+/// One row of a card's change history (B21, B34).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct MemoryChangeSnapshot {
+    /// What `memory_action` `undo_change` names.
+    pub id: u64,
+    #[serde(flatten)]
+    pub change: MemoryChange,
+    pub at_unix_ms: u64,
+    /// Already taken back.
+    pub undone: bool,
+    /// Why it cannot be taken back; absent when it can, or was.
+    pub undo_blocked: Option<MemoryUndoBlocked>,
+}
+
+/// What one change did (`memory_change_kind`).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MemoryChange {
+    Stale,
+    Archive,
+    Revive,
+    /// The operator's own words added after the card was missed twice (B17).
+    Alias {
+        aliases: Vec<String>,
+    },
+    /// Cards of the same meaning folded into this one (B20, B21).
+    Merge {
+        cards: Vec<u64>,
+    },
+    /// A recheck: who asked, and once its sources were read again, how many
+    /// were a letter and how many could not be read (근거 확인 불가, B27).
+    Recheck {
+        by_agent: bool,
+        letters: Option<u64>,
+        unreadable: Option<u64>,
+    },
+}
+
+impl MemoryChange {
+    pub fn kind_str(&self) -> &'static str {
+        match self {
+            Self::Stale => "stale",
+            Self::Archive => "archive",
+            Self::Revive => "revive",
+            Self::Alias { .. } => "alias",
+            Self::Merge { .. } => "merge",
+            Self::Recheck { .. } => "recheck",
+        }
+    }
+}
+
+/// Why a change cannot be taken back (`memory_undo_blocked`).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryUndoBlocked {
+    /// A later aging move replaced it; that one is taken back instead.
+    LaterChange,
+    /// A merged-in card changed since, so splitting would lose its text.
+    MergedCardChanged,
+    /// A merged-in card is gone for good.
+    MergedCardGone,
+    /// The recheck already ended; its result has its own Undo.
+    RecheckFinished,
+}
+
+impl MemoryUndoBlocked {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::LaterChange => "later_change",
+            Self::MergedCardChanged => "merged_card_changed",
+            Self::MergedCardGone => "merged_card_gone",
+            Self::RecheckFinished => "recheck_finished",
+        }
+    }
 }
 
 /// Where a card came from: one event of one session.
@@ -3690,6 +3787,12 @@ pub enum MemoryAction {
     Dismiss,
     CardRight,
     DocRight,
+    /// Bring an archived card back (B22).
+    Revive,
+    /// Hold the card out of the hooks until it is checked again (B27).
+    Recheck,
+    /// Take back one change of the card's history (B34).
+    UndoChange,
 }
 
 impl MemoryAction {
@@ -3704,6 +3807,9 @@ impl MemoryAction {
             Self::Dismiss => "dismiss",
             Self::CardRight => "card_right",
             Self::DocRight => "doc_right",
+            Self::Revive => "revive",
+            Self::Recheck => "recheck",
+            Self::UndoChange => "undo_change",
         }
     }
 }
@@ -5125,20 +5231,30 @@ pub enum LinkOrigin {
     /// The machine's own node dials this core over the operator's SSH
     /// login; its id is its node id.
     Inbound,
+    /// A WSL distribution of the PC the core runs on, whose node the core
+    /// starts through `wsl.exe` (PRD wsl-device D-01, D-07).
+    Wsl { distro: String },
 }
 
 impl LinkOrigin {
     pub fn ssh_alias(&self) -> Option<&str> {
         match self {
             Self::Dialed { ssh_alias } => Some(ssh_alias),
-            Self::Inbound => None,
+            Self::Inbound | Self::Wsl { .. } => None,
+        }
+    }
+
+    pub fn wsl_distro(&self) -> Option<&str> {
+        match self {
+            Self::Wsl { distro } => Some(distro),
+            Self::Dialed { .. } | Self::Inbound => None,
         }
     }
 
     /// Whether the core brings a lost link back itself; a node that dials
     /// in comes back only by dialing again.
     pub fn core_redials(&self) -> bool {
-        matches!(self, Self::Dialed { .. })
+        matches!(self, Self::Dialed { .. } | Self::Wsl { .. })
     }
 
     /// Whether removing the registration takes Hide's kit off the machine:
@@ -5146,24 +5262,29 @@ impl LinkOrigin {
     /// in runs Hide itself and registers again on its next link, so the kit
     /// the core keeps there through that link stays.
     pub fn removes_kit(&self) -> bool {
-        matches!(self, Self::Dialed { .. })
+        matches!(self, Self::Dialed { .. } | Self::Wsl { .. })
     }
 
     /// Whether the core's helper there waits for the operator's consent; a
     /// node that dials in was allowed by the operator's own SSH login.
     pub fn takes_consent(&self) -> bool {
-        matches!(self, Self::Dialed { .. })
+        matches!(self, Self::Dialed { .. } | Self::Wsl { .. })
     }
 
-    /// Whether the machine's own node reports its facts (ports, disk,
-    /// GitHub) to the core, rather than the core reading them over a dial.
+    /// Whether the core reads the machine's facts (ports, disk, GitHub)
+    /// through its node as it reads its own machine's (D-29): a node that
+    /// dials in, and a WSL distribution of this PC, whose pull requests
+    /// this PC's GitHub login reads (PRD wsl-device D-18, B14). A device
+    /// the core dials over SSH has none of them.
     pub fn reports_own_facts(&self) -> bool {
-        matches!(self, Self::Inbound)
+        matches!(self, Self::Inbound | Self::Wsl { .. })
     }
 }
 
 /// A registration as the store and the shell spell it: the alias of a
-/// device the core dials, or the flag of a node that dials in, never both.
+/// device the core dials, the flag of a node that dials in, or the WSL
+/// distribution it is, exactly one. A build that knows only the first two
+/// reads a WSL record as naming neither and drops it alone (`persistence`).
 #[derive(Deserialize, Serialize)]
 struct StoredDeviceRegistration {
     id: String,
@@ -5178,24 +5299,27 @@ struct StoredDeviceRegistration {
     host_consent: Option<HostConsent>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     inbound: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    wsl_distro: Option<String>,
 }
 
 impl TryFrom<StoredDeviceRegistration> for DeviceRegistration {
     type Error = String;
 
     fn try_from(stored: StoredDeviceRegistration) -> Result<Self, String> {
-        let origin = match (stored.ssh_alias, stored.inbound) {
-            (Some(ssh_alias), false) => LinkOrigin::Dialed { ssh_alias },
-            (None, true) => LinkOrigin::Inbound,
-            (Some(_), true) => {
+        let origin = match (stored.ssh_alias, stored.inbound, stored.wsl_distro) {
+            (Some(ssh_alias), false, None) => LinkOrigin::Dialed { ssh_alias },
+            (None, true, None) => LinkOrigin::Inbound,
+            (None, false, Some(distro)) => LinkOrigin::Wsl { distro },
+            (None, false, None) => {
                 return Err(format!(
-                    "device {} has both an SSH alias and a node that dials in",
+                    "device {} names neither an SSH alias, a node that dials in nor a WSL distribution",
                     stored.id
                 ));
             }
-            (None, false) => {
+            _ => {
                 return Err(format!(
-                    "device {} has neither an SSH alias nor a node that dials in",
+                    "device {} names more than one way its link opens",
                     stored.id
                 ));
             }
@@ -5222,6 +5346,7 @@ impl From<DeviceRegistration> for StoredDeviceRegistration {
             herdr_session: registration.herdr_session,
             host_consent: registration.host_consent,
             inbound,
+            wsl_distro: registration.origin.wsl_distro().map(str::to_owned),
         }
     }
 }
@@ -6368,6 +6493,12 @@ pub struct SshHostsSnapshot {
     pub hosts: Vec<SshHostSnapshot>,
     /// The config names more concrete aliases than are listed.
     pub truncated: bool,
+    /// This PC's WSL distributions, listed beside the aliases (PRD
+    /// wsl-device B4); none on a system without WSL.
+    pub wsl: Vec<WslDistributionSnapshot>,
+    /// Why this PC's WSL distributions could not be read; a failed read is
+    /// never shown as "no WSL" (B25).
+    pub wsl_problem: Option<String>,
 }
 
 impl Default for SshHostsSnapshot {
@@ -6376,8 +6507,27 @@ impl Default for SshHostsSnapshot {
             state: "idle".to_owned(),
             hosts: Vec::new(),
             truncated: false,
+            wsl: Vec::new(),
+            wsl_problem: None,
         }
     }
+}
+
+/// One WSL distribution of this PC, as Add device lists it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct WslDistributionSnapshot {
+    pub name: String,
+    /// The name the device gets when it is added (PRD wsl-device D-20).
+    pub device_name: String,
+    /// 1 or 2; only a WSL 2 distribution connects.
+    pub wsl_version: u8,
+    /// The distribution `wsl.exe` runs when none is named.
+    pub default: bool,
+    /// The name of the registered device that already is this distribution.
+    pub added_as: Option<String>,
+    /// Why it cannot be connected: `setup_unfinished` (its first-run user
+    /// setup has not finished, B28) or `wsl1`.
+    pub problem: Option<String>,
 }
 
 /// One alias of the config.
@@ -6416,8 +6566,14 @@ impl Default for HerdrProfilesSnapshot {
 pub struct HerdrProfileSnapshot {
     pub id: String,
     pub label: String,
+    /// The SSH target, or the distribution of a WSL row.
     pub target: String,
     pub session: String,
+    /// Set on the one row that is not a saved Herdr profile: this PC's
+    /// default WSL distribution (PRD wsl-device B1), which connects as a
+    /// WSL device.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wsl_distro: Option<String>,
     pub enabled: bool,
     pub added_as: Option<String>,
     pub problem: Option<String>,
@@ -7919,6 +8075,9 @@ mod wire_enum_tests {
             MemoryAction::Dismiss,
             MemoryAction::CardRight,
             MemoryAction::DocRight,
+            MemoryAction::Revive,
+            MemoryAction::Recheck,
+            MemoryAction::UndoChange,
         ];
         for variant in actions {
             match variant {
@@ -7930,12 +8089,68 @@ mod wire_enum_tests {
                 | MemoryAction::Promote
                 | MemoryAction::Dismiss
                 | MemoryAction::CardRight
-                | MemoryAction::DocRight => {}
+                | MemoryAction::DocRight
+                | MemoryAction::Revive
+                | MemoryAction::Recheck
+                | MemoryAction::UndoChange => {}
             }
             assert_eq!(serde_json::to_value(variant).unwrap(), variant.as_str());
         }
         assert_wire(&contract, "memory_action", &actions);
         checked.insert("memory_action");
+
+        let changes = [
+            MemoryChange::Stale,
+            MemoryChange::Archive,
+            MemoryChange::Revive,
+            MemoryChange::Alias {
+                aliases: Vec::new(),
+            },
+            MemoryChange::Merge { cards: Vec::new() },
+            MemoryChange::Recheck {
+                by_agent: false,
+                letters: None,
+                unreadable: None,
+            },
+        ];
+        for change in &changes {
+            match change {
+                MemoryChange::Stale
+                | MemoryChange::Archive
+                | MemoryChange::Revive
+                | MemoryChange::Alias { .. }
+                | MemoryChange::Merge { .. }
+                | MemoryChange::Recheck { .. } => {}
+            }
+            assert_eq!(
+                serde_json::to_value(change).unwrap()["kind"],
+                change.kind_str()
+            );
+        }
+        let kinds = changes
+            .iter()
+            .map(MemoryChange::kind_str)
+            .collect::<Vec<_>>();
+        assert_eq!(contract["memory_change_kind"], serde_json::json!(kinds));
+        checked.insert("memory_change_kind");
+
+        let blocked = [
+            MemoryUndoBlocked::LaterChange,
+            MemoryUndoBlocked::MergedCardChanged,
+            MemoryUndoBlocked::MergedCardGone,
+            MemoryUndoBlocked::RecheckFinished,
+        ];
+        for variant in blocked {
+            match variant {
+                MemoryUndoBlocked::LaterChange
+                | MemoryUndoBlocked::MergedCardChanged
+                | MemoryUndoBlocked::MergedCardGone
+                | MemoryUndoBlocked::RecheckFinished => {}
+            }
+            assert_eq!(serde_json::to_value(variant).unwrap(), variant.as_str());
+        }
+        assert_wire(&contract, "memory_undo_blocked", &blocked);
+        checked.insert("memory_undo_blocked");
 
         let send_states = [
             ViewFeedbackSendState::Sending,
@@ -8843,7 +9058,9 @@ mod wire_enum_tests {
                     | Signal::LabelMissed
                     | Signal::Improvement
                     | Signal::CheckFailed
-                    | Signal::ChangeRequest => {}
+                    | Signal::ChangeRequest
+                    | Signal::RepeatedRequest
+                    | Signal::MemoryIgnored => {}
                 }
             }
             assert_wire(&contract, "suggestion_signal", &signals);
@@ -8879,14 +9096,60 @@ mod wire_enum_tests {
             assert_wire(&contract, "suggestion_apply_mode", &modes);
             checked.insert("suggestion_apply_mode");
 
-            let outcomes = [Outcome::Pr, Outcome::Issue];
+            let outcomes = [Outcome::Pr, Outcome::Issue, Outcome::Local];
             for variant in outcomes {
                 match variant {
-                    Outcome::Pr | Outcome::Issue => {}
+                    Outcome::Pr | Outcome::Issue | Outcome::Local => {}
                 }
             }
             assert_wire(&contract, "suggestion_outcome", &outcomes);
             checked.insert("suggestion_outcome");
+
+            use crate::suggestions::lifecycle::LocalFailure;
+            let failures = [
+                LocalFailure::NoRoom,
+                LocalFailure::TooLarge,
+                LocalFailure::Unreadable,
+                LocalFailure::Changed,
+                LocalFailure::Edited,
+                LocalFailure::WriteFailed,
+                LocalFailure::EvidenceUnconfirmed,
+                LocalFailure::BadLine,
+            ];
+            for variant in failures {
+                match variant {
+                    LocalFailure::NoRoom
+                    | LocalFailure::TooLarge
+                    | LocalFailure::Unreadable
+                    | LocalFailure::Changed
+                    | LocalFailure::Edited
+                    | LocalFailure::WriteFailed
+                    | LocalFailure::EvidenceUnconfirmed
+                    | LocalFailure::BadLine => {}
+                }
+            }
+            assert_wire(&contract, "suggestion_local_failure", &failures);
+            checked.insert("suggestion_local_failure");
+
+            use crate::global_instruction::Unusable;
+            let unusable = [Unusable::TooLarge, Unusable::Unreadable];
+            for variant in unusable {
+                match variant {
+                    Unusable::TooLarge | Unusable::Unreadable => {}
+                }
+            }
+            assert_wire(&contract, "global_instruction_unusable", &unusable);
+            checked.insert("global_instruction_unusable");
+
+            use crate::suggestions::ledger::Given;
+            let given = [Given::Index, Given::Body];
+            for variant in given {
+                match variant {
+                    Given::Index | Given::Body => {}
+                }
+            }
+            assert_wire(&contract, "suggestion_given", &given);
+            checked.insert("suggestion_given");
         }
 
         let unavailable = [

@@ -1468,6 +1468,7 @@ fn a_closed_device_file_reopens_only_on_its_device_and_leaves_this_machines_clos
             message: None,
             problem: None,
             ssh_alias: Some(DEVICE.to_owned()),
+            wsl_distro: None,
             herdr_socket_path: None,
             agent_count: 0,
             test: None,

@@ -3,7 +3,7 @@ import { Buffer } from "node:buffer";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { deviceHelperResources, prepareDeviceBundles } from "./device-helpers.mjs";
+import { deviceHelperResources, prepareDeviceBundles, readDeviceBundles } from "./device-helpers.mjs";
 import { execFileSync } from "node:child_process";
 
 const identity = { commit: "a".repeat(40), version: "1.2.3", order: "42" };
@@ -32,6 +32,39 @@ function artifacts() {
   }
   return root;
 }
+
+// PRD wsl-device D-04: the Mac and Windows apps ship the manifest of the one set of bundles a run made,
+// so each names the archives the release has; a package takes them only when they are that set.
+describe("bundles one run made, as a package takes them", () => {
+  function made() {
+    const root = artifacts();
+    const herdr = Object.fromEntries(["linux-x86_64", "linux-aarch64"].map((p) => [p, path.join(root, p, "hided")]));
+    const out = path.join(root, "bundles");
+    return { out, manifest: prepareDeviceBundles(root, identity, out, herdr) };
+  }
+
+  it("takes the manifest of bundles made for this source, version and order", () => {
+    const { out, manifest } = made();
+    expect(readDeviceBundles(out, identity)).toBe(manifest);
+  });
+
+  it.each(["commit", "version", "order"])("refuses bundles made for another %s", (key) => {
+    const { out } = made();
+    expect(() => readDeviceBundles(out, { ...identity, [key]: key === "commit" ? "b".repeat(40) : "99" })).toThrow("identity mismatch");
+  });
+
+  it("refuses an archive that changed after its manifest was made, or is missing", () => {
+    const { out, manifest } = made();
+    const { platforms } = JSON.parse(fs.readFileSync(manifest, "utf8"));
+    const archive = path.join(out, platforms["linux-x86_64"].asset);
+    const bytes = fs.readFileSync(archive);
+    bytes[bytes.length - 1] ^= 0xff;
+    fs.writeFileSync(archive, bytes);
+    expect(() => readDeviceBundles(out, identity)).toThrow("digest mismatch");
+    fs.rmSync(archive);
+    expect(() => readDeviceBundles(out, identity)).toThrow();
+  });
+});
 
 describe("Mac device helper inputs", () => {
   it("publishes separate four-program archives and a small manifest of their final bytes", () => {

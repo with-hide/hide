@@ -71,6 +71,8 @@ pub const MOVES_WITH_CORE: &[&str] = &[
     LINKS,
     hide_kit::layout::USAGE_STORE,
     hide_kit::layout::SUGGESTIONS_STORE,
+    // Names no machine: the operator's instructions for every Project.
+    hide_kit::layout::GLOBAL_INSTRUCTION,
     hide_kit::layout::PRODUCT_ANALYTICS_ID,
     LOCAL_ISSUES,
     MISSIONS,

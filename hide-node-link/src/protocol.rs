@@ -229,7 +229,12 @@ use crate::error::HostError;
 /// `needs_confirmation` for such a folder without one (PRD wsl-device D-02,
 /// D-10). A helper on 55 would drop the confirmation and refuse every folder
 /// outside its home, so it is refused at Hello and upgraded.
-pub const PROTOCOL_VERSION: u32 = 56;
+/// 57: a node started with `node serve --own-herdr` bridges its own Herdr
+/// over its link and names that server's socket in its Hello
+/// (`Hello::herdr_socket`), which is how the core reaches a WSL
+/// distribution's Herdr (PRD wsl-device D-07). A helper on 56 has no such
+/// flag, so it is refused at Hello and upgraded.
+pub const PROTOCOL_VERSION: u32 = 57;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).
@@ -1194,6 +1199,14 @@ pub struct Hello {
     /// remain available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reader_features: Option<crate::sessions::ReaderFeatures>,
+    /// The socket of the node's own Herdr, as the node spells it, when its
+    /// link streams bridge that server to the core: a WSL distribution's
+    /// helper, whose Herdr no socket on the core's machine reaches (PRD
+    /// wsl-device D-07). Absent for a node that bridges none. Both ends of
+    /// a link run one build, so the field never meets a peer that lacks it;
+    /// its default only keeps a Hello without it readable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub herdr_socket: Option<String>,
     /// Where the node shows the drives of the Windows PC it runs on, when it
     /// is a WSL distribution (`hide_platform::host::windows_drives`), so Add
     /// a project can spell a pasted `C:\` path as that node's own path.

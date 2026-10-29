@@ -12,7 +12,7 @@ import { useUiStore } from "../ui";
 import type { LaneFrame, LaneSizes, WorkspaceView } from "../workspace";
 import { hideAiSceneProject } from "./HideAiScene";
 
-export const MEMORY_SCENE_STATES = ["workspace", "correction", "off", "ai_not_ready", "analyzing", "empty", "unreadable", "forgotten", "verifying", "reconsent", "checking", "check_budget_exhausted", "evicted", "full"] as const;
+export const MEMORY_SCENE_STATES = ["workspace", "correction", "off", "ai_not_ready", "analyzing", "empty", "unreadable", "forgotten", "verifying", "reconsent", "checking", "check_budget_exhausted", "evicted", "full", "upkeep"] as const;
 export type MemorySceneState = (typeof MEMORY_SCENE_STATES)[number];
 export type MemorySceneLanguage = "en" | "ko" | "zh-CN" | "ja";
 export type MemorySceneParams = { theme: "light" | "dark"; state: MemorySceneState; width: number; language: MemorySceneLanguage };
@@ -74,6 +74,25 @@ export function memorySceneProject(state: MemorySceneState): ProjectMemory {
     case "forgotten": return { ...base, rows: ROWS.filter((card) => card.number !== 9), forgotten: 9 };
     case "evicted": return { ...base, evicted_cards: 3, evicted_through_unix_ms: Date.now() - 5 * MINUTE };
     case "full": return { ...base, capacity_reached: true, evicted_cards: 3, evicted_through_unix_ms: Date.now() - 5 * MINUTE };
+    // What Memory keeps by itself (PRD memory-self-improve B21, B22, B27, B34):
+    // an unused card's mark, a card's change history and the archive.
+    case "upkeep": return {
+      ...base,
+      rows: [ROWS[5]!, { ...ROWS[7]!, stale: true }, ROWS[6]!],
+      expanded: {
+        ...EXPANDED!,
+        previous: null,
+        changes: [
+          { id: 52, kind: "recheck", by_agent: true, letters: 1, unreadable: 1, at_unix_ms: Date.now() - 30 * MINUTE, undone: false, undo_blocked: "recheck_finished" },
+          { id: 47, kind: "alias", aliases: ["누수", "LEAK"], at_unix_ms: Date.now() - 2 * 1440 * MINUTE, undone: false, undo_blocked: null },
+          { id: 31, kind: "merge", cards: [14, 15], at_unix_ms: Date.now() - 6 * 1440 * MINUTE, undone: false, undo_blocked: null },
+        ],
+      },
+      archived: [
+        { number: 2, title: "배포 전에는 staging 슬랙 채널에 알린다", archived_at_unix_ms: Date.now() - 3 * 1440 * MINUTE },
+        { number: 4, title: "README 스크린샷은 다크 테마로 찍는다", archived_at_unix_ms: Date.now() - 9 * 1440 * MINUTE },
+      ],
+    };
   }
 }
 

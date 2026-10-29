@@ -23,6 +23,8 @@ pub mod inbound;
 mod link_streams;
 #[path = "retirement.rs"]
 mod retirement;
+#[path = "wsl.rs"]
+pub mod wsl;
 use futures_util::{StreamExt, TryStreamExt, stream};
 use hide_node_link::HostError;
 pub use hide_node_link::LinkError;
@@ -301,8 +303,10 @@ impl Payload {
 }
 
 /// A package keeps the mode bits it has here, which the device's copy gets.
-/// A system without mode bits has nothing to give it, so the package is
-/// refused there rather than installed with a guessed mode.
+/// A system without mode bits (Windows, which carries the Linux device kit
+/// for its WSL distributions) has nothing to give it: there a package is
+/// executable exactly when it is one of the kit's programs, by the kit's
+/// contract, never by a guess from the file.
 fn read_package(relative: &str, path: &Path) -> Result<Package, String> {
     use std::io::Read;
     let unreadable = |error: std::io::Error| {
@@ -312,23 +316,36 @@ fn read_package(relative: &str, path: &Path) -> Result<Package, String> {
     if !file.metadata().map_err(unreadable)?.is_file() {
         return Err(format!("The package {} is not a file", path.display()));
     }
-    let mode = hide_platform::fs::permissions::Permissions::of(&file)
+    let executable = match hide_platform::fs::permissions::Permissions::of(&file)
         .map_err(unreadable)?
         .unix_mode()
-        .ok_or_else(|| {
+    {
+        Some(mode) => mode & 0o111 != 0,
+        None => program_by_contract(relative).ok_or_else(|| {
             format!(
                 "The package {} has no file mode on this system to install it with",
                 path.display()
             )
-        })?;
+        })?,
+    };
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes).map_err(unreadable)?;
     Ok(Package {
         relative: relative.to_owned(),
         digest: hex_digest(&bytes),
         bytes,
-        executable: mode & 0o111 != 0,
+        executable,
     })
+}
+
+/// Whether the kit part at `relative` is a program, for a system whose
+/// files carry no mode; `None` for a name the kit does not define.
+fn program_by_contract(relative: &str) -> Option<bool> {
+    match relative {
+        HELPER_NAME | CLI_NAME | HOOKS_NAME => Some(true),
+        name if name == hide_kit::device_herdr::HERDR_PROGRAM => Some(true),
+        _ => None,
+    }
 }
 
 fn platform_label(os: &str) -> &str {
@@ -2306,6 +2323,12 @@ enum LinkSource {
         _connection: Arc<Connection>,
     },
     Stream(tokio::sync::mpsc::Receiver<Vec<u8>>),
+    /// The stdout and stderr of a child this process owns, and what ends
+    /// it ([`over_child`]).
+    Child {
+        arrivals: tokio::sync::mpsc::Receiver<Arrival>,
+        ending: ChildEnding,
+    },
 }
 
 /// What one read of a link's source brought.
@@ -2341,6 +2364,10 @@ impl LinkSource {
                 Some(chunk) => Arrival::Data(chunk),
                 None => Arrival::Ended("the node's attach stream closed".to_owned()),
             },
+            LinkSource::Child { arrivals, .. } => arrivals
+                .recv()
+                .await
+                .unwrap_or_else(|| Arrival::Ended("the helper's output closed".to_owned())),
         }
     }
 
@@ -2353,6 +2380,10 @@ impl LinkSource {
                 let _ = channel.close().await;
             }
             LinkSource::Stream(chunks) => drop(chunks),
+            LinkSource::Child { arrivals, ending } => {
+                drop(arrivals);
+                ending.end();
+            }
         }
     }
 }
@@ -2415,6 +2446,180 @@ pub fn over_local_stream(
     ))
 }
 
+/// How long a child whose input closed has to exit by itself before it is
+/// ended: the helper reads the end of its input and returns at once, so
+/// this is only the bound on one that does not.
+const CHILD_EXIT_GRACE: Duration = Duration::from_secs(5);
+
+/// A link over the stdin and stdout of a child this process started and
+/// owns: the `wsl.exe` that runs a WSL distribution's helper (PRD wsl-device
+/// D-07). It runs the same reader, calls and pane events as any link; the
+/// child's standard error is kept as the link's diagnostic tail. The link
+/// owns the child (engineering rule 14): when the link ends, for any reason,
+/// the child's input closes, so the helper reads its end and exits, and a
+/// child still running after [`CHILD_EXIT_GRACE`] is ended with its tree. A
+/// child that exits ends the link. `target` names it in the log.
+pub fn over_child(
+    target: &str,
+    mut child: hide_platform::process::OwnedChild,
+    panes: Option<PaneHook>,
+    on_close: Box<dyn FnOnce(String) + Send + 'static>,
+) -> std::io::Result<RemoteHost> {
+    let missing = |what: &str| std::io::Error::other(format!("the helper's {what} is not piped"));
+    let stdin = child.take_stdin().ok_or_else(|| missing("input"))?;
+    let mut stdout = child.take_stdout().ok_or_else(|| missing("output"))?;
+    let mut stderr = child.take_stderr().ok_or_else(|| missing("error output"))?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .thread_name("node-link")
+        .enable_all()
+        .build()?;
+    let runtime = Arc::new(RemoteRuntime(Some(runtime)));
+    let (arrive, arrivals) = tokio::sync::mpsc::channel::<Arrival>(LOCAL_READ_CHUNKS);
+    let stderr_arrive = arrive.clone();
+    std::thread::Builder::new()
+        .name("node-link-read".into())
+        .spawn(move || {
+            let mut buffer = vec![0u8; LOCAL_READ_BYTES];
+            let ended = loop {
+                match std::io::Read::read(&mut stdout, &mut buffer) {
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                    Ok(0) => break "the helper's output closed".to_owned(),
+                    Err(error) => break format!("the helper's output failed: {error}"),
+                    Ok(read) => {
+                        if arrive
+                            .blocking_send(Arrival::Data(buffer[..read].to_vec()))
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                }
+            };
+            let _ = arrive.blocking_send(Arrival::Ended(ended));
+        })?;
+    std::thread::Builder::new()
+        .name("node-link-stderr".into())
+        .spawn(move || {
+            let mut buffer = vec![0u8; 4096];
+            loop {
+                match std::io::Read::read(&mut stderr, &mut buffer) {
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                    Ok(0) | Err(_) => return,
+                    Ok(read) => {
+                        // A full queue drops diagnostic bytes, never a line
+                        // of the link's own output.
+                        if let Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) =
+                            stderr_arrive.try_send(Arrival::Stderr(buffer[..read].to_vec()))
+                        {
+                            return;
+                        }
+                    }
+                }
+            }
+        })?;
+    let input: Arc<Mutex<Option<Box<dyn std::io::Write + Send>>>> =
+        Arc::new(Mutex::new(Some(Box::new(stdin))));
+    let ending = ChildEnding::start(target, child, Arc::clone(&input))?;
+    let writer: Pin<Box<dyn AsyncWrite + Send>> = Box::pin(BlockingWriter {
+        stream: input,
+        writing: None,
+    });
+    Ok(start_reader(
+        target.to_owned(),
+        runtime,
+        None,
+        writer,
+        LinkSource::Child { arrivals, ending },
+        panes,
+        on_close,
+    ))
+}
+
+/// What ends the child of an [`over_child`] link: told once, from the
+/// link's end or its drop, a thread closes the child's input and waits out
+/// [`CHILD_EXIT_GRACE`] for it before ending its tree. The clock starts when
+/// it is told: a write blocked on a child that stopped reading holds the
+/// input until the child ends, so the input closes once no write holds it,
+/// and ending the tree is what frees such a write.
+struct ChildEnding {
+    told: Option<mpsc::SyncSender<()>>,
+}
+
+impl ChildEnding {
+    fn start(
+        target: &str,
+        mut child: hide_platform::process::OwnedChild,
+        input: Arc<Mutex<Option<Box<dyn std::io::Write + Send>>>>,
+    ) -> std::io::Result<Self> {
+        let (told, heard) = mpsc::sync_channel::<()>(1);
+        let target = target.to_owned();
+        std::thread::Builder::new()
+            .name("node-link-child".into())
+            .spawn(move || {
+                // Told, or every sender gone: either way the link is over.
+                let _ = heard.recv();
+                let pid = child.id();
+                let since = Instant::now();
+                let mut input_open = true;
+                let mut status = None;
+                while since.elapsed() < CHILD_EXIT_GRACE {
+                    if input_open {
+                        input_open = !close_unless_writing(&input);
+                    }
+                    match child.try_wait() {
+                        Ok(Some(exited)) => {
+                            status = Some(exited);
+                            break;
+                        }
+                        Ok(None) => std::thread::park_timeout(Duration::from_millis(50)),
+                        Err(_) => break,
+                    }
+                }
+                let killed = status.is_none();
+                if killed {
+                    let _ = child.kill_tree();
+                    status = child.wait().ok();
+                }
+                if input_open {
+                    close_unless_writing(&input);
+                }
+                crate::diagnostic!(json!({
+                    "component": "remote_host",
+                    "kind": "host.child_ended",
+                    "target": target,
+                    "pid": pid,
+                    "code": status.and_then(|status| status.code()),
+                    "killed": killed,
+                    "after_ms": since.elapsed().as_millis() as u64,
+                }));
+            })?;
+        Ok(Self { told: Some(told) })
+    }
+
+    fn end(mut self) {
+        if let Some(told) = self.told.take() {
+            let _ = told.try_send(());
+        }
+    }
+}
+
+/// Closes a child link's input unless a write holds it; answers whether it
+/// is closed.
+fn close_unless_writing(input: &Mutex<Option<Box<dyn std::io::Write + Send>>>) -> bool {
+    match input.try_lock() {
+        Ok(mut held) => {
+            held.take();
+            true
+        }
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => {
+            poisoned.into_inner().take();
+            true
+        }
+        Err(std::sync::TryLockError::WouldBlock) => false,
+    }
+}
+
 /// Shuts a local link's stream down when it goes.
 struct ShutdownOnDrop(hide_platform::ipc::ShutdownHandle);
 
@@ -2433,14 +2638,15 @@ const LOCAL_READ_BYTES: usize = 64 * 1024;
 /// runtime's blocking pool, so a stalled peer holds a pool thread, never the
 /// runtime, and the link's own write timeout still ends the wait.
 struct BlockingWriter {
-    stream: Arc<std::sync::Mutex<hide_platform::ipc::LocalStream>>,
+    /// Empty once the link ended its child's input ([`over_child`]).
+    stream: Arc<std::sync::Mutex<Option<Box<dyn std::io::Write + Send>>>>,
     writing: Option<tokio::task::JoinHandle<std::io::Result<usize>>>,
 }
 
 impl BlockingWriter {
     fn new(stream: hide_platform::ipc::LocalStream) -> Self {
         Self {
-            stream: Arc::new(std::sync::Mutex::new(stream)),
+            stream: Arc::new(std::sync::Mutex::new(Some(Box::new(stream)))),
             writing: None,
         }
     }
@@ -2458,7 +2664,10 @@ impl AsyncWrite for BlockingWriter {
             let bytes = buffer.to_vec();
             self.writing = Some(tokio::task::spawn_blocking(move || {
                 let mut stream = lock_recover(&stream);
-                std::io::Write::write_all(&mut *stream, &bytes)?;
+                let stream = stream.as_mut().ok_or_else(|| {
+                    std::io::Error::new(std::io::ErrorKind::BrokenPipe, "the link's input closed")
+                })?;
+                std::io::Write::write_all(stream, &bytes)?;
                 Ok(bytes.len())
             }));
         }
@@ -3111,6 +3320,7 @@ mod tests {
                 reason: "fixture identity is unavailable".to_owned(),
             },
             reader_features: None,
+            herdr_socket: None,
             windows_drives: None,
         };
         let refusal = helper_protocol_refusal(&hello(23)).expect("refused");

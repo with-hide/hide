@@ -15,7 +15,7 @@ import path from "node:path";
 import { agentPane, type HideAnswer } from "./agent-pane";
 import { startHerdr } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
-import { enterWorkspace, screenshot } from "./wire";
+import { enterWorkspace, placedBoxes, screenshot } from "./wire";
 
 test.describe.configure({ timeout: 120_000 });
 
@@ -93,8 +93,7 @@ test("the Conductor's first plan shows on its pane, the map follows the record, 
     await expect(map.locator("[data-mission-status]")).toHaveAttribute("data-mission-status", "planning");
     await expect(map.locator("[data-mission-node]")).toHaveCount(3);
     // The node that waits on another is drawn below it (down flow).
-    const api = (await map.locator('[data-mission-node="api"]').boundingBox())!;
-    const screen = (await map.locator('[data-mission-node="screen"]').boundingBox())!;
+    const [api, screen] = await placedBoxes(map, '[data-mission-node="api"]', '[data-mission-node="screen"]');
     expect(screen.y).toBeGreaterThan(api.y + api.height);
 
     await mission(conductor, ["mission", "start"]);

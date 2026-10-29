@@ -71,6 +71,9 @@ describe("where settings live and what a device reported", () => {
     expect(deviceSubtitle(device({ host }), status)).toBe("studio · macos aarch64 · Herdr 0.9.1");
     expect(deviceSubtitle(device({ host: { ...host, state: "connecting" } }), status)).toBe("studio · Herdr 0.9.1");
     expect(deviceSubtitle(device({ kind: "local", host }), status)).toBe("local, no SSH alias");
+    // PRD wsl-device B5: a WSL distribution is named where it is, the core's PC, in place of its Linux platform.
+    const wsl = device({ id: "wsl-ubuntu-1a2b3c4d", label: "WSL Ubuntu", ssh_alias: null, wsl_distro: "Ubuntu", host: { ...host, platform: "linux x86_64" } });
+    expect(deviceSubtitleIn(wsl, { ...status, target_id: wsl.id }, t, "This PC")).toBe("WSL Ubuntu · This PC · Herdr 0.9.1");
   });
 
   it("tells a changed host key, an unknown one and a refused sign-in apart", () => {

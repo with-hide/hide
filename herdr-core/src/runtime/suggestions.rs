@@ -52,6 +52,8 @@ pub(super) struct SuggestionsWork {
     /// Open pull requests a review asked changes of, until they merge
     /// (B4: a review's change that was fixed and merged).
     changes_requested: HashSet<String>,
+    /// The open row's excerpts (PRD memory-self-improve B7).
+    pub(super) evidence: super::suggestion_evidence::EvidenceWork,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -78,6 +80,10 @@ pub(super) struct SuggestionActionPayload {
     workspace_id: String,
     id: String,
     action: SuggestionActionKind,
+    /// The global instruction preview the operator pressed on (PRD
+    /// memory-self-improve B8).
+    #[serde(default)]
+    preview: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize)]
@@ -87,6 +93,8 @@ enum SuggestionActionKind {
     Dismiss,
     Restore,
     Retry,
+    /// Takes a global instruction line back out (B9).
+    Revert,
 }
 
 /// `suggestion_settings`: exactly one of ⚙'s settings; a 읽을 곳 switch is
@@ -165,6 +173,11 @@ impl Runtime {
                 None => Command::Close,
             });
         }
+        if self.suggestions_work.opened != opened {
+            // Another Project's rows share these ids; what was read for the
+            // last one says nothing about them.
+            self.suggestions_work.evidence.close();
+        }
         self.suggestions_work.opened = opened;
         self.compose_suggestions()
     }
@@ -220,7 +233,7 @@ impl Runtime {
             let action = match payload.action {
                 SuggestionActionKind::Apply | SuggestionActionKind::Retry => MemoryAction::Promote,
                 SuggestionActionKind::Dismiss => MemoryAction::Dismiss,
-                SuggestionActionKind::Restore => {
+                SuggestionActionKind::Restore | SuggestionActionKind::Revert => {
                     crate::diagnostic!(json!({
                         "component": "suggestions", "kind": "action.unsupported",
                         "workspace_id": payload.workspace_id, "id": payload.id,
@@ -235,7 +248,23 @@ impl Runtime {
             SuggestionActionKind::Restore => LineAction::Restore,
             SuggestionActionKind::Apply => LineAction::Apply,
             SuggestionActionKind::Retry => LineAction::Retry,
+            SuggestionActionKind::Revert => LineAction::Revert,
         };
+        // A row none of whose words could be read again is not applied
+        // (PRD memory-self-improve D-34, B7).
+        if matches!(action, LineAction::Apply | LineAction::Retry)
+            && self
+                .suggestions_work
+                .evidence
+                .unconfirmed(&payload.workspace_id, &payload.id)
+        {
+            crate::diagnostic!(json!({
+                "component": "suggestions", "kind": "apply.refused",
+                "workspace_id": payload.workspace_id, "id": payload.id,
+                "reason": "evidence_unconfirmed",
+            }));
+            return false;
+        }
         let Some(line) = line_of_row(&payload.id) else {
             crate::diagnostic!(json!({
                 "component": "suggestions", "kind": "action.unknown_row",
@@ -247,6 +276,7 @@ impl Runtime {
             project,
             line,
             action,
+            seen: payload.preview,
         });
         false
     }
@@ -327,6 +357,7 @@ impl Runtime {
                 crate::model::MemoryAction::Disable
             },
             number: None,
+            change: None,
         })
     }
 
@@ -373,6 +404,7 @@ impl Runtime {
                         always: false,
                         head: pr.head_oid.clone(),
                         improvement: None,
+                        said: None,
                     };
                     let open = pr.merged_at_unix_ms.is_none() && pr.closed_at_unix_ms.is_none();
                     if open {
@@ -423,7 +455,9 @@ impl Runtime {
             "component": "suggestions", "kind": "wake", "cause": payload.cause.as_str(),
         }));
         self.send_suggestions(Command::Wake);
-        false
+        // The app opening is also what may start a WSL distribution that is
+        // off (PRD wsl-device B3); a resume or an unlock is not.
+        matches!(payload.cause, WakeCause::AppOpen) && self.wake_devices_for_app()
     }
 
     /// The worker's read of the opened Project.
@@ -554,6 +588,10 @@ impl Runtime {
                     super::suggestion_memory::lay_memory_rows(&mut project, memory);
                 }
                 lay_facts(&mut project, facts, memory_on);
+                super::suggestion_evidence::lay_excerpts(
+                    &mut project,
+                    &self.suggestions_work.evidence,
+                );
                 project.counts = self.suggestion_counts(&project);
                 project
             });
@@ -615,7 +653,7 @@ fn lay_facts(project: &mut ProjectSuggestionsSnapshot, facts: LockFacts, memory_
     for signal in &mut project.settings.signals {
         signal.unavailable = if signal.signal.needs_github() && github_missing {
             Some(SignalUnavailable::NoGithub)
-        } else if signal.signal == Signal::Correction && !memory_on {
+        } else if signal.signal.learned_by_memory() && !memory_on {
             Some(SignalUnavailable::MemoryOff)
         } else if signal.signal == Signal::Improvement && !facts.analysis {
             Some(SignalUnavailable::AnalysisOff)
@@ -625,7 +663,9 @@ fn lay_facts(project: &mut ProjectSuggestionsSnapshot, facts: LockFacts, memory_
     }
     if github_missing {
         for row in &mut project.rows {
-            if row.state == SuggestionState::New {
+            // A global instruction line is written here, with no GitHub
+            // (PRD memory-self-improve B8).
+            if row.state == SuggestionState::New && row.outcome != Outcome::Local {
                 row.hold = Some(SuggestionHold::GithubNeeded);
             }
         }
