@@ -540,6 +540,9 @@ The toolbar holds Back, Forward, Reload (Stop while the page loads), the address
 A page that cannot load says so in its slot with the address and Chromium's reason, and Reload loads its address again.
 A page whose renderer stopped says the same with the reason.
 In a plain browser tab a browser display shows its address on the toolbar row and reads `Pages open in the Hide desktop app.` below it, and a web address gets Open in browser, which opens it in a new tab.
+A load the core asks for (a display's `load` stamp) writes three lines to the desktop log, nothing on screen: `browser.load_routed` when hided answered its route, `browser.load_committed` when its document committed and `browser.load_stopped` when its own load call settled, with `outcome` `loaded`, `failed` (with Chromium's `code`) or `aborted`.
+Each carries the display `id`, the page's native `contents` id, since a display id repeats across checkouts and a load stamp is not global, the `load` stamp and `ms` since the host was asked, and never the checkout's path, so a load that never ends names the stage it stopped at.
+The lines belong to that one load: a commit or stop that arrives while it still waits for its route is the earlier load's, a newer load or a failed route ends it, and a navigation the page makes itself writes none.
 
 ## Verification
 

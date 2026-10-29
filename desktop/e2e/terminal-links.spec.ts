@@ -509,7 +509,11 @@ test("terminal HTML opens a rendered page and right-click offers actions for the
   await expect(page.getByRole("menuitem", { name: "Copy path", exact: true })).toHaveCount(0);
   await page.keyboard.press("Escape");
   expect(sent.get("terminal_click") ?? 0).toBe(clicks);
+  // Only Open source revealed and only the first click opened a page: a
+  // right-click opens nothing, also on Windows, where the menu comes after
+  // the button's release (with-hide/hide-private#252).
   expect(sent.get("reveal_path")).toBe(1);
+  expect(sent.get("browser_open")).toBe(1);
 });
 
 /** A current native frame of this exact candidate, without activating any app. */

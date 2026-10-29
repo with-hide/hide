@@ -55,6 +55,109 @@ describe("native browser load generations", () => {
   });
 });
 
+// A first page that stayed loading on Windows CI left no line saying which
+// stage it stopped at (with-hide/hide-private#221): the route, the commit or the stop.
+describe("native browser load stages", () => {
+  /** A subject whose clock the test moves, whose routes and native loads each wait for the test to settle them. */
+  function stages() {
+    let now = 1_000;
+    const log = { event: vi.fn() };
+    const routes: { workspace: string; load: number; answer: (route: ResolvedPage) => void; refuse: (error: Error) => void }[] = [];
+    const resolve = vi.fn((workspace: string, _id: string, load: number) => new Promise<ResolvedPage>((answer, refuse) => { routes.push({ workspace, load, answer, refuse }); }));
+    const subject = new BrowserViews(log as unknown as HostLog, () => true, resolve, vi.fn(), vi.fn(), () => english, new ExternalFiles(vi.fn()), { bound: 600_000, every: 60_000, now: () => now });
+    Reflect.set(subject, "node", "local");
+    const url = "https://example.test/";
+    let nextContents = 7;
+    const page = (workspace: string) => {
+      const loads: { url: string; finish: () => void; abort: () => void }[] = [];
+      const contents = Object.assign(new EventEmitter(), {
+        id: nextContents++,
+        loadURL: vi.fn((target: string) => new Promise<void>((finish, fail) => { loads.push({ url: target, finish, abort: () => fail(Object.assign(new Error("aborted"), { errno: -3 })) }); })),
+        setWindowOpenHandler: vi.fn(), getZoomFactor: () => 1, isDestroyed: () => false,
+        setVisualZoomLevelLimits: vi.fn().mockResolvedValue(undefined), navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+      });
+      const value = {
+        key: `${workspace}/d1`, workspace, id: "d1", applied: 3, partition: browserPartition(workspace, url, "local"), route: null, loading: null,
+        state: { url, loading: true, failure: null }, report: null, settled: new Set(), device: null, bounds: null, emulated: null, view: { webContents: contents },
+      };
+      (Reflect.get(subject, "pages") as Map<string, unknown>).set(value.key, value);
+      Reflect.get(subject, "watch").call(subject, value);
+      /** The core asks for `load`, as a newer stamp from its snapshot does. */
+      const ask = (load: number) => {
+        value.applied = load;
+        Reflect.get(subject, "load").call(subject, value, url);
+      };
+      return { contents, loads, ask };
+    };
+    const logged = () => log.event.mock.calls.filter(([name]) => String(name).startsWith("browser.load_") && name !== "browser.load_failed").map(([name, fields]) => [name, fields]);
+    return { page, routes, logged, tick: (ms: number) => { now += ms; }, url };
+  }
+
+  it("logs each stage against its own load, so a reopen waiting for its route never takes the commit or stop of the load before it", async () => {
+    const { page, routes, logged, tick, url } = stages();
+    const { contents, loads, ask } = page("local\u0000/checkout");
+    ask(3);
+    tick(40);
+    routes[0]!.answer({ url, source_url: url, load: 3 });
+    await vi.waitFor(() => expect(loads).toHaveLength(1));
+    // The reopen arrives while the first load is on its way, and the first
+    // load commits and finishes while the reopen still waits for its route.
+    tick(10);
+    ask(4);
+    contents.emit("did-navigate", {}, url);
+    contents.emit("did-stop-loading");
+    loads[0]!.finish();
+    tick(100);
+    routes[1]!.answer({ url, source_url: url, load: 4 });
+    await vi.waitFor(() => expect(loads).toHaveLength(2));
+    tick(200);
+    contents.emit("did-navigate", {}, url);
+    contents.emit("did-navigate", {}, `${url}next`);
+    tick(60);
+    loads[1]!.finish();
+    await vi.waitFor(() => expect(logged()).toHaveLength(4));
+    // A navigation the page made itself is not a load the core asked for.
+    contents.emit("did-start-loading");
+    contents.emit("did-navigate", {}, `${url}clicked`);
+    contents.emit("did-stop-loading");
+    expect(logged()).toEqual([
+      ["browser.load_routed", { id: "d1", contents: 7, load: 3, ms: 40 }],
+      ["browser.load_routed", { id: "d1", contents: 7, load: 4, ms: 100 }],
+      ["browser.load_committed", { id: "d1", contents: 7, load: 4, ms: 300 }],
+      ["browser.load_stopped", { id: "d1", contents: 7, load: 4, ms: 360, outcome: "loaded" }],
+    ]);
+  });
+
+  it("tells apart two checkouts' displays of the same id and load by their native page", async () => {
+    const { page, routes, logged, url } = stages();
+    const first = page("local\u0000/one");
+    const second = page("local\u0000/two");
+    first.ask(3);
+    second.ask(3);
+    for (const route of routes) route.answer({ url, source_url: url, load: route.load });
+    await vi.waitFor(() => expect(first.loads.length + second.loads.length).toBe(2));
+    second.loads[0]!.abort();
+    first.loads[0]!.finish();
+    await vi.waitFor(() => expect(logged()).toHaveLength(4));
+    expect(logged().filter(([name]) => name === "browser.load_stopped")).toEqual([
+      ["browser.load_stopped", { id: "d1", contents: 8, load: 3, ms: 0, outcome: "aborted" }],
+      ["browser.load_stopped", { id: "d1", contents: 7, load: 3, ms: 0, outcome: "loaded" }],
+    ]);
+  });
+
+  it("ends a load whose route failed, so the page's next navigation logs no stage of it", async () => {
+    const { page, routes, logged } = stages();
+    const { contents, loads, ask } = page("local\u0000/checkout");
+    ask(3);
+    routes[0]!.refuse(new Error("view_unavailable"));
+    await vi.waitFor(() => expect(contents.listenerCount("did-navigate")).toBeGreaterThan(0));
+    await new Promise((settled) => setImmediate(settled));
+    contents.emit("did-navigate", {}, "https://example.test/elsewhere");
+    expect(loads).toHaveLength(0);
+    expect(logged()).toEqual([]);
+  });
+});
+
 describe("native browser CDP inventory", () => {
   it("stops notifying a CDP owner that leaves while it is told a page became ineligible", () => {
     const subject = new BrowserViews({ event: vi.fn() } as unknown as HostLog, () => true, vi.fn(), vi.fn(), vi.fn(), () => english, new ExternalFiles(vi.fn()));
