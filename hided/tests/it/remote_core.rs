@@ -147,8 +147,9 @@ fn a_node_of_another_build_or_the_cores_own_machine_is_refused() -> Result<()> {
 
 /// A core link that fails on what only the operator can fix starts no ssh
 /// by itself: an alias whose server key is not known yet waits as a sign-in
-/// the operator owes, the server sees no other connection however long it
-/// waits, and the operator's connect after they trusted the key links it.
+/// the operator owes, a window that connected during that first dial adds
+/// none, the server sees no other connection however long it waits, and the
+/// operator's connect after they trusted the key links it.
 #[test]
 #[ignore = "external lane requires this worktree's CLI binaries and HIDE_E2E_HERDR_BIN"]
 fn a_core_link_that_needs_the_operator_dials_again_only_when_they_connect() -> Result<()> {
@@ -159,11 +160,19 @@ fn a_core_link_that_needs_the_operator_dials_again_only_when_they_connect() -> R
             .join(".ssh")
             .join("unknown_known_hosts");
         std::fs::write(&known_hosts, "")?;
+        let held = held_dial(fixture.ssh.port)?;
         let config = fixture.screen_home().join(".ssh").join("config");
-        let alias = fixture.ssh.client_config(UNKNOWN).replace(
-            &fixture.ssh.known_hosts.display().to_string(),
-            &known_hosts.display().to_string(),
-        );
+        let alias = fixture
+            .ssh
+            .client_config(UNKNOWN)
+            .replace(
+                &fixture.ssh.known_hosts.display().to_string(),
+                &known_hosts.display().to_string(),
+            )
+            .replace(
+                &format!("Port {}\n", fixture.ssh.port),
+                &format!("Port {}\n", held.port),
+            );
         std::fs::write(&config, std::fs::read_to_string(&config)? + &alias)?;
         let placement = hided::placement::Placement {
             alias: UNKNOWN.to_owned(),
@@ -177,6 +186,17 @@ fn a_core_link_that_needs_the_operator_dials_again_only_when_they_connect() -> R
             screen(),
         )
         .map_err(anyhow::Error::msg)?;
+        // A cold launch: the window connects while the first dial is in
+        // flight, as `hide connect` does, and joins that dial.
+        held.accepted
+            .recv_timeout(LINK_BOUND)
+            .context("the first dial never reached the server")?;
+        ensure!(
+            role.phase() == Phase::Connecting,
+            "the first dial ended while it was held"
+        );
+        role.connect_again();
+        held.open.send(())?;
         let owed = |phase: &Phase| {
             matches!(phase, Phase::Waiting { reason: LinkFailure::Operator(failure) }
                 if failure.problem == hide_node_link::device::SshProblem::SignInNeeded)
@@ -199,7 +219,13 @@ fn a_core_link_that_needs_the_operator_dials_again_only_when_they_connect() -> R
             "ssh dialed again with nobody asking: {}",
             fixture.ssh.log()
         );
-        std::fs::copy(&fixture.ssh.known_hosts, &known_hosts)?;
+        std::fs::write(
+            &known_hosts,
+            std::fs::read_to_string(&fixture.ssh.known_hosts)?.replace(
+                &format!("]:{} ", fixture.ssh.port),
+                &format!("]:{} ", held.port),
+            ),
+        )?;
         role.connect_again();
         let phase = role.wait_for(LINK_BOUND, |phase| matches!(phase, Phase::Live(_)));
         ensure!(
@@ -212,6 +238,51 @@ fn a_core_link_that_needs_the_operator_dials_again_only_when_they_connect() -> R
             fixture.ssh.log()
         );
         Ok(())
+    })
+}
+
+/// A loopback relay to the server on `to` that holds the first connection
+/// it accepts until `open` hears, so a test acts while a dial is in flight;
+/// every later connection goes straight through. Its threads end with the
+/// test's process.
+struct HeldDial {
+    port: u16,
+    accepted: std::sync::mpsc::Receiver<()>,
+    open: std::sync::mpsc::SyncSender<()>,
+}
+
+fn held_dial(to: u16) -> Result<HeldDial> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let port = listener.local_addr()?.port();
+    let (accepted_tx, accepted) = std::sync::mpsc::channel();
+    let (open, opened) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        for (index, client) in listener.incoming().enumerate() {
+            let Ok(client) = client else { return };
+            if index == 0 && (accepted_tx.send(()).is_err() || opened.recv().is_err()) {
+                return;
+            }
+            let Ok(server) = std::net::TcpStream::connect(("127.0.0.1", to)) else {
+                return;
+            };
+            for (from, into) in [
+                (client.try_clone(), server.try_clone()),
+                (server.try_clone(), client.try_clone()),
+            ] {
+                let (Ok(mut from), Ok(mut into)) = (from, into) else {
+                    return;
+                };
+                std::thread::spawn(move || {
+                    let _ = std::io::copy(&mut from, &mut into);
+                    let _ = into.shutdown(std::net::Shutdown::Write);
+                });
+            }
+        }
+    });
+    Ok(HeldDial {
+        port,
+        accepted,
+        open,
     })
 }
 

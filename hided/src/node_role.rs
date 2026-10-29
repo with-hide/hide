@@ -264,8 +264,8 @@ struct State {
     stopping: bool,
     /// Set by [`NodeRole::wake`]: the next attempt does not wait.
     woken: bool,
-    /// Set by a window's connect ([`NodeRole::connect_again`]) since the
-    /// last attempt started: the only end of a wait on the operator.
+    /// Set by a window's connect ([`NodeRole::connect_again`]) during a wait
+    /// on the operator: the only end of that wait.
     asked: bool,
     /// The live link's stream, ended to end the link.
     link: Option<ShutdownHandle>,
@@ -523,19 +523,20 @@ impl NodeRole {
     /// window or strip): a core update that failed on the last connection
     /// gets this one's attempt (B10, B20), and a wait on what only the
     /// operator could fix dials again; either starts at once. Anything else
-    /// is left as it is.
+    /// is left as it is: a connect while an attempt is in flight joins that
+    /// attempt, so a cold launch dials once however its window connects.
     pub fn connect_again(&self) {
         let mut state = lock(&self.shared.state);
         // The operator ended the link; only their reconnect dials again.
         if state.disconnected {
             return;
         }
-        state.asked = true;
         let owed = matches!(&state.phase, Phase::Waiting { reason } if reason.waits_for_operator());
         let update_failed = matches!(state.update, Update::Failed(_));
         if !owed && !update_failed {
             return;
         }
+        state.asked = owed;
         state.update = Update::Untried;
         state.phase = Phase::Connecting;
         self.shared.phases.send_replace(Phase::Connecting);
@@ -592,7 +593,7 @@ fn keep_linked(shared: &Shared, home: &Path, placement: &Placement, identity: &N
             return;
         }
         generation += 1;
-        // A window's connect from here on can end a wait on the operator.
+        // A connect that ended the last wait is spent by this attempt.
         lock(&shared.state).asked = false;
         if set_phase(shared, Phase::Connecting) {
             return;
