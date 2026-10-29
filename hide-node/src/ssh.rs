@@ -54,10 +54,25 @@ use hide_node_link::device::{
 const SSH_OPERATION_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long sign-in waits for the server to answer the `none` method. A
 /// server answers it at once unless it holds it, as Tailscale SSH's check
-/// mode does until the operator confirms in a browser; the bound sits inside
-/// [`SSH_OPERATION_TIMEOUT`] so the hold is reported as itself, not as a
-/// connection that timed out.
-const SIGN_IN_HOLD_BOUND: Duration = Duration::from_secs(10);
+/// mode does until the operator confirms in a browser.
+#[derive(Clone, Copy, Debug)]
+struct SignInWait {
+    /// A hold shorter than this is a slow answer, not a check: a banner a
+    /// server sends every client is never shown as one.
+    grace: Duration,
+    /// A hold whose banner names no address to confirm at.
+    held: Duration,
+    /// A hold whose banner names one: long enough to sign in in a browser.
+    check: Duration,
+}
+
+const SIGN_IN_WAIT: SignInWait = SignInWait {
+    grace: Duration::from_secs(2),
+    held: SSH_OPERATION_TIMEOUT,
+    check: Duration::from_secs(5 * 60),
+};
+/// How often a held sign-in looks at the banner it was sent.
+const SIGN_IN_POLL: Duration = Duration::from_millis(250);
 /// Session channels (an exec, a shell or a subsystem) a device's connection
 /// keeps open at once. OpenSSH's sshd allows ten per connection
 /// (`MaxSessions`), and the node's link holds one for as long as it lives; a
@@ -863,6 +878,9 @@ struct Connection {
     ended: Mutex<Option<tokio::sync::watch::Receiver<bool>>>,
     /// The host key the last dial accepted, the identity consent binds.
     observed_key: Arc<Mutex<Option<String>>>,
+    /// The address a held sign-in asks the operator to confirm at, while it
+    /// is held; the device's row shows it.
+    sign_in_check: Arc<Mutex<Option<String>>>,
     sessions: Arc<Semaphore>,
 }
 
@@ -1223,6 +1241,7 @@ impl RusshRemoteClient {
                 session: tokio::sync::Mutex::new(None),
                 ended: Mutex::new(None),
                 observed_key: Arc::new(Mutex::new(None)),
+                sign_in_check: Arc::new(Mutex::new(None)),
                 sessions: Arc::new(Semaphore::new(MAX_SESSION_CHANNELS)),
             }),
             runtime,
@@ -1404,6 +1423,11 @@ impl RusshRemoteClient {
         lock_recover(&self.herdr_status)
             .as_ref()
             .map(|status| status.socket.clone())
+    }
+
+    /// The address a sign-in held for a browser check waits on, if one does.
+    pub(crate) fn sign_in_check(&self) -> Option<String> {
+        lock_recover(&self.connection.sign_in_check).clone()
     }
 
     pub(crate) fn cached_herdr_version(&self) -> Option<String> {
@@ -1815,7 +1839,11 @@ impl RusshRemoteClient {
 
     async fn connect(&self, handler: KnownHostHandler) -> RemoteResult<Handle<KnownHostHandler>> {
         let config = client::Config {
-            inactivity_timeout: Some(SSH_OPERATION_TIMEOUT),
+            // Sign-in sends nothing while a server holds it for a browser
+            // check, and keepalives start only once it is signed in, so the
+            // idle bound outlasts the check; a signed-in session that stops
+            // answering ends on its unanswered keepalives instead.
+            inactivity_timeout: Some(SIGN_IN_WAIT.check + SSH_OPERATION_TIMEOUT),
             keepalive_interval: Some(Duration::from_secs(5)),
             ..client::Config::default()
         };
@@ -1833,7 +1861,7 @@ impl RusshRemoteClient {
                 hide_node_link::device::DIAL_OPERATION
             }
         };
-        tokio::time::timeout(SSH_OPERATION_TIMEOUT, async {
+        let dialed = tokio::time::timeout(SSH_OPERATION_TIMEOUT, async {
             let socket = TcpStream::connect((self.host.hostname.as_str(), self.host.port))
                 .await
                 .map_err(|error| {
@@ -1878,7 +1906,7 @@ impl RusshRemoteClient {
                     false,
                 )
             })?;
-            let mut connecting = ConnectingSocket(Some(shutdown));
+            let connecting = ConnectingSocket(Some(shutdown));
             let socket = TcpStream::from_std(socket).map_err(|error| {
                 remote_error(
                     "remote-connect",
@@ -1889,7 +1917,7 @@ impl RusshRemoteClient {
                     false,
                 )
             })?;
-            let mut session = client::connect_stream(Arc::new(config), socket, handler)
+            let session = client::connect_stream(Arc::new(config), socket, handler)
                 .await
                 .map_err(|error| {
                     if rejected.load(std::sync::atomic::Ordering::SeqCst) {
@@ -1912,9 +1940,7 @@ impl RusshRemoteClient {
                         )
                     }
                 })?;
-            authenticate(&mut session, &self.host, &banner, SIGN_IN_HOLD_BOUND).await?;
-            connecting.release();
-            Ok(session)
+            Ok((session, connecting))
         })
         .await
         .map_err(|_| {
@@ -1922,7 +1948,7 @@ impl RusshRemoteClient {
             let reason = if operation == hide_node_link::device::DIAL_OPERATION {
                 "no SSH server answered in time"
             } else {
-                "SSH connection or authentication timed out"
+                "SSH connection timed out"
             };
             remote_error(
                 operation,
@@ -1932,7 +1958,20 @@ impl RusshRemoteClient {
                 true,
                 false,
             )
-        })?
+        })??;
+        // Sign-in keeps its own bounds: a server may hold it for minutes
+        // while the operator confirms it in a browser.
+        let (mut session, mut connecting) = dialed;
+        authenticate(
+            &mut session,
+            &self.host,
+            &banner,
+            &self.connection.sign_in_check,
+            SIGN_IN_WAIT,
+        )
+        .await?;
+        connecting.release();
+        Ok(session)
     }
 
     /// A browser view on this Mac reaches a loopback server on the device.
@@ -2125,12 +2164,14 @@ impl RusshRemoteClient {
 /// OpenSSH's order, until the server accepts one. A refusal says what was
 /// offered and, for a key Hide could not use itself, how to give it to the
 /// agent. `banner` is where the session's handler keeps the server's sign-in
-/// banner, and `hold` bounds the wait for `none`.
+/// banner; `check` is where a held sign-in shows the address it waits on
+/// for as long as it waits, and `wait` bounds that.
 async fn authenticate(
     session: &mut Handle<KnownHostHandler>,
     host: &SshAlias,
     banner: &Mutex<Option<String>>,
-    hold: Duration,
+    check: &Mutex<Option<String>>,
+    wait: SignInWait,
 ) -> RemoteResult<()> {
     let failed = |error: &dyn fmt::Display, retryable: bool| {
         remote_error(
@@ -2142,14 +2183,42 @@ async fn authenticate(
             true,
         )
     };
-    match tokio::time::timeout(hold, session.authenticate_none(host.user.clone())).await {
-        Ok(Ok(result)) if result.success() => return Ok(()),
-        Ok(Ok(_)) => {}
-        Ok(Err(error)) => return Err(failed(&error, true)),
-        Err(_) => {
-            let shown = banner.lock().ok().and_then(|slot| slot.clone());
-            return Err(failed(&held_sign_in(shown.as_deref()), true));
+    let started = tokio::time::Instant::now();
+    let answer = {
+        let none = session.authenticate_none(host.user.clone());
+        tokio::pin!(none);
+        let mut deadline = started + wait.held;
+        let mut shown = None;
+        loop {
+            let next = (tokio::time::Instant::now() + SIGN_IN_POLL).min(deadline);
+            if let Ok(answer) = tokio::time::timeout_at(next, &mut none).await {
+                break answer;
+            }
+            let now = tokio::time::Instant::now();
+            if shown.is_none()
+                && now >= started + wait.grace
+                && let Some(address) = check_address(lock_recover(banner).as_deref())
+            {
+                shown = Some(ShownCheck::new(check, address));
+                deadline = started + wait.check;
+            }
+            if now >= deadline {
+                let reason = if shown.is_some() {
+                    format!(
+                        "{}: the server held sign-in for a browser check that was not confirmed in time",
+                        hide_node_link::device::SIGN_IN_CHECK_EXPIRED
+                    )
+                } else {
+                    "the server held sign-in without answering".to_owned()
+                };
+                return Err(failed(&reason, true));
+            }
         }
+    };
+    match answer {
+        Ok(result) if result.success() => return Ok(()),
+        Ok(_) => {}
+        Err(error) => return Err(failed(&error, true)),
     }
 
     let reads: Vec<KeyFile> = host
@@ -2246,21 +2315,31 @@ async fn authenticate(
     ))
 }
 
-/// The reason for a server that held the `none` sign-in past the bound. Its
+/// The address a held sign-in's banner asks the operator to confirm at. The
 /// banner is the server's text, so only an `https://` address is lifted out
 /// of it, never the rest.
-fn held_sign_in(banner: Option<&str>) -> String {
-    let address = banner.and_then(|banner| {
-        banner
-            .split_whitespace()
-            .find(|word| word.starts_with("https://") && word.len() <= 2048)
-            .filter(|word| word.bytes().all(|byte| byte.is_ascii_graphic()))
-    });
-    match address {
-        Some(address) => format!(
-            "the server is holding sign-in until it is confirmed in a browser: open {address}, confirm, then Retry"
-        ),
-        None => "the server held sign-in without answering".to_owned(),
+fn check_address(banner: Option<&str>) -> Option<String> {
+    banner?
+        .split_whitespace()
+        .find(|word| word.starts_with("https://") && word.len() <= 2048)
+        .filter(|word| word.bytes().all(|byte| byte.is_ascii_graphic()))
+        .map(str::to_owned)
+}
+
+/// A held sign-in's address, shown for as long as this value lives: every
+/// way sign-in ends takes it away.
+struct ShownCheck<'a>(&'a Mutex<Option<String>>);
+
+impl<'a> ShownCheck<'a> {
+    fn new(slot: &'a Mutex<Option<String>>, address: String) -> Self {
+        *lock_recover(slot) = Some(address);
+        Self(slot)
+    }
+}
+
+impl Drop for ShownCheck<'_> {
+    fn drop(&mut self) {
+        *lock_recover(self.0) = None;
     }
 }
 

@@ -285,6 +285,10 @@ impl DeviceTransport for SshDevice {
         self.client()
             .and_then(|client| client.cached_herdr_version())
     }
+
+    fn sign_in_check(&self) -> Option<String> {
+        self.client().and_then(|client| client.sign_in_check())
+    }
 }
 
 impl DialedTransport for SshDevice {

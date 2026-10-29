@@ -14,6 +14,15 @@ use russh::server::{self, Auth};
 
 use super::*;
 
+/// Sign-in's bounds, scaled down so a held sign-in ends within a test.
+const TEST_WAIT: SignInWait = SignInWait {
+    grace: Duration::from_millis(200),
+    held: Duration::from_secs(1),
+    check: Duration::from_secs(2),
+};
+
+const CHECK_BANNER: &str = "# Tailscale SSH requires an additional check.\n# To authenticate, visit: https://login.tailscale.com/a/l1234abcd\n";
+
 /// A key made from a fixed seed, so every run uses the same key.
 fn key(seed: u8) -> PrivateKey {
     PrivateKey::from(Ed25519Keypair::from_seed(&[seed; 32]))
@@ -44,13 +53,18 @@ enum NoneAnswer {
     Refuse,
     /// Tailscale SSH: the tailnet already identified the client.
     Accept,
-    /// Tailscale SSH's check mode: this banner, then no answer.
-    Hold(&'static str),
+    /// Tailscale SSH's check mode: this banner, then no answer until the
+    /// check is confirmed, if it ever is.
+    Hold(&'static str, Option<Duration>),
 }
 
 #[derive(Clone)]
 struct Server {
     none: NoneAnswer,
+    /// The client's shown check, which a held sign-in reads when it confirms.
+    check: Arc<Mutex<Option<String>>>,
+    /// What the client showed at the moment the check was confirmed.
+    shown_at_confirm: Arc<Mutex<Option<Option<String>>>>,
     accepts: Arc<Vec<PublicKey>>,
     tried: Arc<Mutex<Vec<PublicKey>>>,
 }
@@ -60,7 +74,7 @@ impl server::Handler for Server {
 
     async fn authentication_banner(&mut self) -> Result<Option<String>, Self::Error> {
         Ok(match self.none {
-            NoneAnswer::Hold(banner) => Some(banner.to_owned()),
+            NoneAnswer::Hold(banner, _) => Some(banner.to_owned()),
             NoneAnswer::Refuse | NoneAnswer::Accept => None,
         })
     }
@@ -69,7 +83,12 @@ impl server::Handler for Server {
         match self.none {
             NoneAnswer::Refuse => Ok(Auth::reject()),
             NoneAnswer::Accept => Ok(Auth::Accept),
-            NoneAnswer::Hold(_) => {
+            NoneAnswer::Hold(_, Some(confirmed)) => {
+                tokio::time::sleep(confirmed).await;
+                *lock_recover(&self.shown_at_confirm) = Some(lock_recover(&self.check).clone());
+                Ok(Auth::Accept)
+            }
+            NoneAnswer::Hold(_, None) => {
                 tokio::time::sleep(Duration::from_secs(60)).await;
                 Ok(Auth::reject())
             }
@@ -98,6 +117,9 @@ struct Fixture {
     runtime: Runtime,
     port: u16,
     tried: Arc<Mutex<Vec<PublicKey>>>,
+    /// Where a held sign-in shows the address it waits on.
+    check: Arc<Mutex<Option<String>>>,
+    shown_at_confirm: Arc<Mutex<Option<Option<String>>>>,
 }
 
 impl Fixture {
@@ -131,8 +153,12 @@ impl Fixture {
             ..server::Config::default()
         });
         let tried = Arc::new(Mutex::new(Vec::new()));
+        let check = Arc::new(Mutex::new(None));
+        let shown_at_confirm = Arc::new(Mutex::new(None));
         let handler = Server {
             none,
+            check: Arc::clone(&check),
+            shown_at_confirm: Arc::clone(&shown_at_confirm),
             accepts: Arc::new(accepts.iter().map(|key| (*key).clone()).collect()),
             tried: Arc::clone(&tried),
         };
@@ -152,6 +178,8 @@ impl Fixture {
             runtime,
             port,
             tried,
+            check,
+            shown_at_confirm,
         }
     }
 
@@ -187,7 +215,7 @@ impl Fixture {
             )
             .await
             .expect("the fixture server's host key is trusted");
-            authenticate(&mut session, &alias, &banner, Duration::from_secs(1)).await
+            authenticate(&mut session, &alias, &banner, &self.check, TEST_WAIT).await
         })
     }
 
@@ -418,20 +446,62 @@ fn a_server_that_accepts_none_signs_in_without_a_key() {
 }
 
 /// Tailscale SSH's check mode holds the `none` method until the operator
-/// confirms in a browser; sign-in stops within its bound and the reason
-/// carries the address from the banner, and nothing else from it.
+/// confirms in a browser: while it waits, the address from its banner (and
+/// nothing else from the banner) is shown, and a confirmed check signs in
+/// and takes the address away.
 #[test]
-fn a_held_sign_in_reports_the_address_its_banner_names() {
+fn a_held_sign_in_shows_its_address_until_the_check_is_confirmed() {
     let fixture = Fixture::answering(
-        NoneAnswer::Hold(
-            "# Tailscale SSH requires an additional check.\n# To authenticate, visit: https://login.tailscale.com/a/l1234abcd\n",
-        ),
+        NoneAnswer::Hold(CHECK_BANNER, Some(Duration::from_millis(1200))),
         &[],
     );
+    fixture.sign_in("  IdentityAgent none\n").unwrap();
+    assert_eq!(
+        *lock_recover(&fixture.shown_at_confirm),
+        Some(Some("https://login.tailscale.com/a/l1234abcd".to_owned()))
+    );
+    assert_eq!(*lock_recover(&fixture.check), None);
+}
+
+/// A check that is never confirmed ends at its bound with a reason the row
+/// reads as its own class, and the address is no longer shown.
+#[test]
+fn an_unconfirmed_check_ends_at_its_bound_as_its_own_problem() {
+    let fixture = Fixture::answering(NoneAnswer::Hold(CHECK_BANNER, None), &[]);
+    let started = Instant::now();
     let held = fixture.sign_in("  IdentityAgent none\n").unwrap_err();
+    assert!(
+        started.elapsed() >= TEST_WAIT.check,
+        "{:?}",
+        started.elapsed()
+    );
     assert_eq!(held.stage(), RemoteStage::Auth);
     assert_eq!(
+        hide_node_link::device::connection_problem(&held.to_string()),
+        Some("sign_in_check")
+    );
+    assert!(!held.diagnostic().reason.contains("login.tailscale.com"));
+    assert_eq!(*lock_recover(&fixture.check), None);
+}
+
+/// A hold whose banner names no address is not a check: it ends at the
+/// shorter bound, as a refused sign-in.
+#[test]
+fn a_hold_without_an_address_ends_as_a_refused_sign_in() {
+    let fixture = Fixture::answering(NoneAnswer::Hold("Authorized use only.\n", None), &[]);
+    let started = Instant::now();
+    let held = fixture.sign_in("  IdentityAgent none\n").unwrap_err();
+    assert!(
+        started.elapsed() < TEST_WAIT.check,
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(
         held.diagnostic().reason,
-        "the server is holding sign-in until it is confirmed in a browser: open https://login.tailscale.com/a/l1234abcd, confirm, then Retry"
+        "the server held sign-in without answering"
+    );
+    assert_eq!(
+        hide_node_link::device::connection_problem(&held.to_string()),
+        Some("authentication")
     );
 }

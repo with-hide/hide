@@ -452,7 +452,7 @@ The agent is the one `IdentityAgent` names, otherwise the one `SSH_AUTH_SOCK` na
 hide never asks for or keeps a password or a passphrase: a key behind a passphrase, or on a security key, is used only through the agent, and when sign-in fails the device row names that key with the command that loads it there, `ssh-add --apple-use-keychain <file>` on macOS and `ssh-add <file>` elsewhere.
 A failed sign-in also says whether nothing could be offered or the machine refused every key offered, since one needs a key loaded and the other needs a key authorized there.
 An `IdentityFile` may start with `~/` or `%d/`; one with another `%` token, an environment variable, or a relative path is refused on the device row rather than guessed.
-A Tailscale SSH host whose policy asks for a browser check holds the sign-in; after ten seconds the device row shows the address the check gave, to confirm there before Retry.
+A Tailscale SSH host whose policy asks for a browser check holds the sign-in; hide waits up to five minutes for the check to be confirmed, then reports on the device row that it was not, and Retry starts a new one.
 
 An agent you ask to add a machine does it with `hide device add <alias> [--name <name>] [--socket <path>]`, run on the machine that runs Hide; `hide device list` shows each machine's id, state and helper, and `hide device remove <id>` removes one as Settings does.
 The command registers the machine without Hide's helper, and its answer tells the agent to ask you to choose Allow and install on the machine's row in Settings › Devices: installing writes that account's hook files, which only you agree to, and until then the machine's files, Git and terminals wait.

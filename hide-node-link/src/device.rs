@@ -11,6 +11,9 @@ use serde::{Deserialize, Serialize};
 /// changed key from a missing one without parsing the rest of the sentence.
 pub const HOST_KEY_CHANGED: &str = "host key changed";
 pub const HOST_KEY_UNKNOWN: &str = "host key unknown";
+/// What a sign-in failure starts with when the server held it for a browser
+/// check (Tailscale SSH's check mode) that was not confirmed in time.
+pub const SIGN_IN_CHECK_EXPIRED: &str = "browser check not confirmed";
 
 /// Herdr's named-session grammar, before a route is stored or dispatched.
 pub fn valid_herdr_session(session: &str) -> bool {
@@ -28,13 +31,16 @@ pub fn ssh_alias_is_one_token(alias: &str) -> bool {
 }
 
 /// Which trust or sign-in step a connection failure names, read off the
-/// words this module wrote into it: a changed host key, an unknown one, or a
-/// refused authentication (PRD S5.5 B38). Any other failure is `None`.
+/// words this module wrote into it: a changed host key, an unknown one, a
+/// browser check the server held sign-in for and that was not confirmed, or
+/// a refused authentication (PRD S5.5 B38). Any other failure is `None`.
 pub fn connection_problem(message: &str) -> Option<&'static str> {
     if message.contains(HOST_KEY_CHANGED) {
         Some("host_key_changed")
     } else if message.contains(HOST_KEY_UNKNOWN) {
         Some("host_key_unknown")
+    } else if message.contains(SIGN_IN_CHECK_EXPIRED) {
+        Some("sign_in_check")
     } else if message.contains("stage=auth ") {
         Some("authentication")
     } else {
@@ -660,6 +666,12 @@ pub trait DeviceTransport: Send + Sync {
     fn cached_herdr_version(&self) -> Option<String>;
     /// The exact socket already resolved for this transport, without I/O.
     fn cached_herdr_socket(&self) -> Option<String> {
+        None
+    }
+    /// The address the device's SSH server asked the operator to confirm
+    /// sign-in at, while it holds that sign-in (Tailscale SSH's check
+    /// mode), without I/O; `None` when no sign-in waits for one.
+    fn sign_in_check(&self) -> Option<String> {
         None
     }
 }
