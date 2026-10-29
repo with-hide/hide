@@ -177,37 +177,36 @@ fn child_role() {
             println!("READY {}", grandchild.id());
             let _ = grandchild.wait();
         }
-        // An `ssh` whose proxy command left with `setsid` and that then
-        // exits first: its child outlives it in a session of its own.
+        // A process that leaves its starter's session, as a `setsid` proxy
+        // command's helper does.
         #[cfg(unix)]
-        "leaves_setsid" => {
-            let mut command = Command::new(std::env::current_exe().unwrap());
+        "setsid_sleep" => {
+            // SAFETY: setsid takes nothing and has no memory effects.
+            assert!(unsafe { libc::setsid() } >= 0);
+            thread::sleep(Duration::from_secs(60));
+        }
+        // Windows' form of a tied child that leaves a process detached from
+        // it and exits at once: off its console and out of its group.
+        #[cfg(windows)]
+        "leaves_detached" => {
+            use std::os::windows::process::CommandExt;
+            const DETACHED_PROCESS: u32 = 0x0000_0008;
+            const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+            let mut command = role_command("sleep");
             command
-                .args([
-                    "--exact",
-                    "process::child_role",
-                    "--nocapture",
-                    "--test-threads=1",
-                ])
-                .env(ROLE, "sleep")
-                .env_remove(OWNER_LAUNCH_KEYS[0])
-                .env_remove(OWNER_LAUNCH_KEYS[1])
-                .stdout(Stdio::null());
-            // SAFETY: setsid is async-signal-safe.
-            unsafe {
-                std::os::unix::process::CommandExt::pre_exec(&mut command, || {
-                    if libc::setsid() < 0 {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                    Ok(())
-                });
-            }
-            let grandchild = command.spawn().unwrap();
-            println!("READY {}", grandchild.id());
-            // Long enough for the keeper to have looked, as an `ssh` that
-            // failed after its proxy started.
-            thread::sleep(Duration::from_secs(2));
+                .stdout(Stdio::null())
+                .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+            println!("READY {}", command.spawn().unwrap().id());
             std::process::exit(0);
+        }
+        // An owner whose tied child left an orphan: a process it started
+        // through a shell that has exited, so its parent is gone.
+        #[cfg(target_os = "linux")]
+        "tied_owner_orphan" => {
+            let mut child = OwnedChild::spawn_tied(&mut setsid_sleep_from(LEAVES_ORPHAN)).unwrap();
+            let orphan = orphaned_number(child.take_stdout().unwrap());
+            println!("OWNED {orphan}");
+            thread::sleep(Duration::from_secs(60));
         }
         // Two levels below it: a child that has a `tree` child.
         "deep" => {
@@ -413,6 +412,54 @@ fn ready_number(stdout: std::process::ChildStdout) -> u32 {
         .expect("the child role did not become ready")
 }
 
+/// A tied child's shell script whose `"$@"` starts the `setsid_sleep` role.
+#[cfg(unix)]
+fn setsid_sleep_from(script: &str) -> Command {
+    let mut command = Command::new("/bin/sh");
+    command
+        .args(["-c", script, "sh"])
+        .arg(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "process::child_role",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(ROLE, "setsid_sleep")
+        .env_remove(OWNER_LAUNCH_KEYS[0])
+        .env_remove(OWNER_LAUNCH_KEYS[1])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    command
+}
+
+/// Starts the `setsid_sleep` role from a subshell that exits at once, so
+/// the role's parent is gone, and says `GONE` once it has: the shell waits
+/// for the subshell before it goes on.
+#[cfg(target_os = "linux")]
+const LEAVES_ORPHAN: &str =
+    r#"( "$@" >/dev/null 2>&1 & echo "READY $!" ); echo GONE; exec sleep 60"#;
+
+/// The pid [`LEAVES_ORPHAN`] says, once its parent is gone.
+#[cfg(target_os = "linux")]
+fn orphaned_number(stdout: std::process::ChildStdout) -> u32 {
+    let (ready, heard) = mpsc::channel();
+    thread::spawn(move || {
+        let mut orphan = None;
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if let Some((_, number)) = line.split_once("READY ") {
+                orphan = number.trim().parse::<u32>().ok();
+            } else if line == "GONE" {
+                let _ = ready.send(orphan.unwrap());
+                return;
+            }
+        }
+    });
+    heard
+        .recv_timeout(Duration::from_secs(30))
+        .expect("the orphan's parent did not exit")
+}
+
 /// The pid a `sleep` child wrote to `path` once it ran.
 #[allow(clippy::disallowed_methods)] // a polling helper: it sleeps between observations of a state, bounded by a deadline
 fn announced_pid(path: &std::path::Path) -> u32 {
@@ -453,6 +500,11 @@ impl FixtureProcess {
             pid,
             started: start_time(pid).unwrap(),
         }
+    }
+
+    /// For a process that may already have been ended.
+    fn if_live(pid: u32) -> Option<Self> {
+        start_time(pid).ok().map(|started| Self { pid, started })
     }
 }
 
@@ -728,19 +780,132 @@ fn a_tied_child_ends_with_its_owner_and_leaves_no_watcher() {
     assert!(left.is_empty(), "{left:?}");
 }
 
-/// A tied child that exits first takes with it what it left in a session
-/// of its own, while its owner lives on.
+/// A tied child that starts a process detached from it (in a session of its
+/// own on Linux, off its console and group on Windows) and exits at once,
+/// before anything could have looked at what it started and before that
+/// process may even have started running, takes it with it once its owner
+/// has reaped it. macOS cannot name such a process (docs/INSTALL.md, What
+/// each system supports); the test below is its form.
+#[cfg(any(target_os = "linux", windows))]
+#[test]
+fn a_tied_child_that_exits_at_once_leaves_no_detached_descendant() {
+    let _serial = serial();
+    #[cfg(unix)]
+    let mut command = setsid_sleep_from(r#""$@" >/dev/null 2>&1 & echo "READY $!""#);
+    #[cfg(windows)]
+    let mut command = role_command("leaves_detached");
+    let mut child = OwnedChild::spawn_tied(&mut command).unwrap();
+    let left = ready_number(child.take_stdout().unwrap());
+    let _identity = FixtureProcess::if_live(left);
+    assert!(child.wait().unwrap().success());
+    drop(child);
+    assert!(
+        gone_within(left, Duration::from_secs(5)),
+        "{left}, which the tied child left detached from it, survived it"
+    );
+}
+
+/// A tied child that starts a process in a session of its own and exits as
+/// soon as that process runs, within milliseconds and before anything has
+/// looked at the tree, takes it with it once its owner has reaped it.
 #[cfg(unix)]
 #[test]
-fn a_tied_child_that_exits_first_leaves_no_setsid_descendant() {
+fn a_tied_child_that_exits_once_its_setsid_process_runs_leaves_none() {
     let _serial = serial();
-    let mut child = OwnedChild::spawn_tied(&mut role_command("leaves_setsid")).unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let running = folder.path().join("running");
+    let mut command = Command::new("/bin/sh");
+    command
+        .args([
+            "-c",
+            r#"perl -e 'use POSIX; POSIX::setsid(); open(my $f, ">", $ARGV[0]) or die; close $f; sleep 60' "$1" >/dev/null 2>&1 &
+d=$!
+while [ ! -e "$1" ]; do :; done
+echo "READY $d""#,
+            "sh",
+        ])
+        .arg(&running)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let mut child = OwnedChild::spawn_tied(&mut command).unwrap();
     let left = ready_number(child.take_stdout().unwrap());
-    let _identity = FixtureProcess::live(left);
+    let _identity = FixtureProcess::if_live(left);
     assert!(child.wait().unwrap().success());
+    drop(child);
     assert!(
         gone_within(left, Duration::from_secs(5)),
         "{left}, which the tied child left in a session of its own, survived it"
+    );
+}
+
+/// Ending a tied child ends every process of its tree before the owner has
+/// reaped the child: none of them is still on its way out once `kill_tree`
+/// and `wait` return, one in a session of its own included.
+#[cfg(unix)]
+#[test]
+fn a_killed_tied_tree_has_ended_when_its_child_is_reaped() {
+    let _serial = serial();
+    let mut child = OwnedChild::spawn_tied(&mut setsid_sleep_from(
+        r#""$@" >/dev/null 2>&1 & echo "READY $!"; exec sleep 60"#,
+    ))
+    .unwrap();
+    let left = ready_number(child.take_stdout().unwrap());
+    let _identity = FixtureProcess::live(left);
+    let tree = descendants(child.id()).unwrap();
+    assert!(tree.contains(&left), "{tree:?} {left}");
+    assert!(child.kill_tree().unwrap());
+    child.wait().unwrap();
+    let alive: Vec<u32> = tree.into_iter().filter(|pid| is_alive(*pid)).collect();
+    assert!(
+        alive.is_empty(),
+        "{alive:?} of the tied tree outlived its end"
+    );
+}
+
+/// A process a tied child started through a shell that has since exited
+/// has no parent left under the child, and still ends with the child's
+/// kill: on Linux it comes back under the supervisor.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_tied_childs_orphan_ends_with_its_kill() {
+    let _serial = serial();
+    let mut child = OwnedChild::spawn_tied(&mut setsid_sleep_from(LEAVES_ORPHAN)).unwrap();
+    let orphan = orphaned_number(child.take_stdout().unwrap());
+    let _identity = FixtureProcess::live(orphan);
+    assert!(child.kill_tree().unwrap());
+    child.wait().unwrap();
+    assert!(
+        !is_alive(orphan),
+        "{orphan}, the tied child's orphan, outlived its kill"
+    );
+}
+
+/// The same orphan ends with the owner's death, which no destructor sees.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_tied_childs_orphan_ends_with_its_owners_death() {
+    let _serial = serial();
+    let mut owner = role_command("tied_owner_orphan").spawn().unwrap();
+    let stdout = owner.stdout.take().unwrap();
+    let (send, recv) = mpsc::channel();
+    let reader = thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if let Some((_, pid)) = line.split_once("OWNED ") {
+                send.send(pid.trim().parse::<u32>().unwrap()).unwrap();
+                return;
+            }
+        }
+    });
+    let orphan = recv
+        .recv_timeout(HANG_LIMIT)
+        .expect("the owner did not announce its tied child's orphan");
+    let _identity = FixtureProcess::live(orphan);
+    owner.kill().unwrap();
+    owner.wait().unwrap();
+    reader.join().unwrap();
+    assert!(
+        gone_within(orphan, Duration::from_secs(10)),
+        "{orphan}, the tied child's orphan, survived its owner's death"
     );
 }
 
