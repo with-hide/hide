@@ -82,11 +82,9 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<DeviceCli
 
 pub fn run(env: &Env, cli: &DeviceCli) -> Result<(), String> {
     let answer = (|| {
-        let mut credential =
-            crate::workspace_cli::Credential::acquire(env).map_err(Refused::Unreachable)?;
-        let mut value = ask(&mut credential, &cli.command)?;
+        let mut value = ask(env, &cli.command)?;
         if let (true, DeviceCommand::Retry { device_id }) = (cli.wait, &cli.command) {
-            value["device"] = outcome(&mut credential, device_id, value["device"].clone())?;
+            value["device"] = outcome(env, device_id, value["device"].clone())?;
         }
         Ok(value)
     })();
@@ -132,12 +130,12 @@ enum Refused {
     WaitedOut(Value),
 }
 
-fn ask(
-    credential: &mut crate::workspace_cli::Credential<'_>,
-    command: &DeviceCommand,
-) -> Result<Value, Refused> {
-    let answer =
-        crate::workspace_cli::request_device(credential, command).map_err(Refused::Unreachable)?;
+/// One request on its own credential: a bare `hide`'s one-shot credential
+/// ends with its answer, so each read of a wait takes a new one.
+fn ask(env: &Env, command: &DeviceCommand) -> Result<Value, Refused> {
+    let answer = crate::workspace_cli::Credential::acquire(env)
+        .and_then(|mut credential| crate::workspace_cli::request_device(&mut credential, command))
+        .map_err(Refused::Unreachable)?;
     if answer["ok"] == true {
         return Ok(answer["result"].clone());
     }
@@ -152,18 +150,14 @@ fn ask(
 /// Reads the device until its attempt has an outcome: connected, the
 /// operator's turn or failed (PRD system-ssh-device-link B30).
 #[allow(clippy::disallowed_methods)] // polls a state the core changes on its own worker, bounded by WAIT_BOUND
-fn outcome(
-    credential: &mut crate::workspace_cli::Credential<'_>,
-    device_id: &str,
-    mut device: Value,
-) -> Result<Value, Refused> {
+fn outcome(env: &Env, device_id: &str, mut device: Value) -> Result<Value, Refused> {
     let deadline = Instant::now() + WAIT_BOUND;
     while device["state"] == "connecting" {
         if Instant::now() >= deadline {
             return Err(Refused::WaitedOut(device));
         }
         std::thread::sleep(WAIT_POLL);
-        let list = ask(credential, &DeviceCommand::List)?;
+        let list = ask(env, &DeviceCommand::List)?;
         device = list["devices"]
             .as_array()
             .and_then(|devices| devices.iter().find(|device| device["id"] == device_id))
