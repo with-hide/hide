@@ -624,6 +624,30 @@ impl Runtime {
                 // The worker's share, taken before the run can be looked at.
                 let worker = run.hold();
                 slot.push(run.clone());
+                // A run leaves the slot as it ends, the device's included
+                // once nothing of it runs, so a removed device keeps no slot.
+                // It ends on a worker's or a reaper's thread, which may not
+                // take the lock where it stands.
+                let runtime = context.runtime.clone();
+                let ended_device = device.clone();
+                run.when_ended(move || {
+                    let spawned = thread::Builder::new()
+                        .name("herdr-core-device-attempt-ended".to_owned())
+                        .spawn(move || {
+                            if let Some(runtime) = runtime.upgrade()
+                                && let Ok(mut guard) = runtime.lock()
+                            {
+                                guard.forget_ended_attempts(&ended_device);
+                            }
+                        });
+                    if let Err(error) = spawned {
+                        crate::diagnostic!(serde_json::json!({
+                            "component": "remote_host",
+                            "kind": "host.attempt_forget_failed",
+                            "error": error.to_string(),
+                        }));
+                    }
+                });
                 (Some((run, worker)), earlier)
             }
             HostStart::Arrived { .. } => (None, Vec::new()),
@@ -909,6 +933,16 @@ impl Runtime {
             run.cancel();
         }
         generation
+    }
+
+    /// Drops the device's ended runs, and its slot once none is left.
+    pub(super) fn forget_ended_attempts(&mut self, device_id: &str) {
+        if let Some(slot) = self.device_attempts.get_mut(device_id) {
+            slot.retain(|run| !run.ended());
+            if slot.is_empty() {
+                self.device_attempts.remove(device_id);
+            }
+        }
     }
 
     /// Every dial not yet ended, cancelled, for the core's stop to wait out

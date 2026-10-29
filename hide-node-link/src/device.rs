@@ -738,6 +738,7 @@ struct CancelState {
     kill: std::sync::Mutex<Option<Box<dyn Fn() + Send>>>,
     held: std::sync::Mutex<usize>,
     released: std::sync::Condvar,
+    ended: std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 impl std::fmt::Debug for Cancel {
@@ -796,6 +797,19 @@ impl Cancel {
         Held(self.clone())
     }
 
+    /// Runs `then` once the attempt's last share is given back, on the
+    /// thread that gives it back and outside every lock of the attempt, or
+    /// now when nothing of it runs. It must not block.
+    pub fn when_ended(&self, then: impl FnOnce() + Send + 'static) {
+        let held = locked(&self.0.held);
+        if *held > 0 {
+            *locked(&self.0.ended) = Some(Box::new(then));
+            return;
+        }
+        drop(held);
+        then();
+    }
+
     /// Whether nothing of the attempt runs any more.
     pub fn ended(&self) -> bool {
         *locked(&self.0.held) == 0
@@ -821,8 +835,17 @@ impl Drop for Held {
         let state = &self.0.0;
         let mut held = locked(&state.held);
         *held -= 1;
-        if *held == 0 {
-            state.released.notify_all();
+        if *held > 0 {
+            return;
+        }
+        // Taken while the count is held, so a `when_ended` racing this drop
+        // either finds the attempt running and leaves its callback here, or
+        // finds it ended and runs it itself.
+        let then = locked(&state.ended).take();
+        state.released.notify_all();
+        drop(held);
+        if let Some(then) = then {
+            then();
         }
     }
 }
@@ -1083,8 +1106,19 @@ mod tests {
             let attempt = attempt.clone();
             std::thread::spawn(move || attempt.wait_ended(std::time::Duration::from_secs(10)))
         };
+        let (told, heard) = std::sync::mpsc::channel();
+        attempt.when_ended(move || told.send(()).unwrap());
+        assert!(heard.try_recv().is_err());
         drop(child);
         assert!(waiting.join().unwrap());
+        heard
+            .try_recv()
+            .expect("the end was told when the last share went");
+        let (told, heard) = std::sync::mpsc::channel();
+        attempt.when_ended(move || told.send(()).unwrap());
+        heard
+            .try_recv()
+            .expect("an attempt that ended is told at once");
 
         let late = Cancel::default();
         late.cancel();

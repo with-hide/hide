@@ -44,7 +44,7 @@ impl DeviceConnector for Devices {
         alias: &str,
         _herdr_socket: Option<String>,
     ) -> Result<Arc<dyn DialedTransport>, String> {
-        assert_eq!(alias, DEVICE);
+        assert!(alias.starts_with(DEVICE), "{alias}");
         Ok(Arc::new(AskingDevice(Arc::clone(&self.0))))
     }
 
@@ -515,4 +515,77 @@ fn a_changed_server_key_stays_the_rows_reason_until_an_attempt_ends_otherwise() 
     release.send(()).unwrap();
     settled(&shared);
     assert_eq!(reason(&shared.lock().unwrap()), changed);
+}
+
+/// B26: a run leaves the device's slot as nothing of it runs any more, and
+/// a device's slot with it, so attempts of removed devices are not kept
+/// until the core stops.
+#[test]
+fn ended_attempts_leave_no_slot_for_their_devices() {
+    let (shared, asked) = ssh_runtime();
+    let devices = ["mini-a", "mini-b", "mini-c"];
+    {
+        let mut runtime = shared.lock().unwrap();
+        for id in devices {
+            let consent = runtime.new_host_consent();
+            runtime
+                .snapshot
+                .ui_state
+                .device_registrations
+                .push(crate::model::DeviceRegistration {
+                    id: id.to_owned(),
+                    label: id.to_owned(),
+                    origin: crate::model::LinkOrigin::Dialed {
+                        ssh_alias: id.to_owned(),
+                    },
+                    herdr_socket_path: None,
+                    herdr_session: None,
+                    host_consent: Some(consent),
+                });
+        }
+        runtime.rebuild_device_rows();
+    }
+    // Each attempt's `ssh` stays unreaped until the test reaps it.
+    *asked.unreaped.lock().unwrap() = Some(Vec::new());
+    shared.lock().unwrap().connect_registered_devices();
+    super::wait_for("every device's attempt to reach ssh", || {
+        asked.unreaped.lock().unwrap().as_ref().unwrap().len() == devices.len() + 1
+    });
+    super::wait(&shared, "the attempts to settle", |runtime| {
+        devices
+            .iter()
+            .chain([&DEVICE])
+            .all(|id| !runtime.device_host_connecting(id))
+    });
+    assert_eq!(
+        shared.lock().unwrap().device_attempts.len(),
+        devices.len() + 1
+    );
+    for id in devices {
+        assert!(shared.lock().unwrap().dispatch_json(&event(
+            "remove_device",
+            serde_json::json!({"device_id": id}),
+        )));
+    }
+    assert!(
+        asked
+            .cancels
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|run| run.is_cancelled())
+            .count()
+            >= devices.len()
+    );
+    assert_eq!(
+        shared.lock().unwrap().device_attempts.len(),
+        devices.len() + 1,
+        "a run whose ssh still runs keeps its slot"
+    );
+
+    // Every `ssh` is reaped.
+    asked.unreaped.lock().unwrap().take();
+    super::wait(&shared, "every slot to go", |runtime| {
+        runtime.device_attempts.is_empty()
+    });
 }
