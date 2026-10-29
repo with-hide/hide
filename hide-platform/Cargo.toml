@@ -14,6 +14,9 @@ interprocess = "=2.4.4"
 trash = { version = "=5.2.9", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
+# Runs a tied child's supervisor before `main` when this program is started
+# as one (`process::spawn_tied`).
+ctor = { version = "=1.0.13", default-features = false, features = ["std", "proc_macro"] }
 libc = "=0.2.190"
 notify = "=8.2.0"
 

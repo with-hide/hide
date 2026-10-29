@@ -50,6 +50,41 @@ use std::time::{Duration, Instant};
 /// the bound only stops a pid-reuse cycle in a corrupt reading from looping.
 const MAX_DEPTH: usize = 32;
 
+/// How long ending a tied child's tree ([`OwnedChild::spawn_tied`]) waits
+/// for what it killed to have ended: a killed process is gone within
+/// milliseconds, so only one stuck in the kernel, or a tree that keeps
+/// starting processes, reaches it.
+const TIED_END_LIMIT: Duration = Duration::from_secs(5);
+
+/// How ending a tied child's tree went. Only a confirmed end lets the child
+/// count as ended; an unconfirmed one is an error its owner gets in place of
+/// the child's status.
+#[derive(Clone, Copy, Debug)]
+enum Ending {
+    /// Nothing of the tree runs; `ended_any` says whether something still
+    /// ran for the end to kill.
+    Confirmed { ended_any: bool },
+    /// `left` processes still ran when the bound passed, or nothing said
+    /// how many.
+    Unconfirmed { left: Option<usize> },
+}
+
+impl Ending {
+    fn result(self) -> io::Result<bool> {
+        match self {
+            Self::Confirmed { ended_any } => Ok(ended_any),
+            Self::Unconfirmed { left: Some(left) } => Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("a tied child's tree outlived its end: {left} still running"),
+            )),
+            Self::Unconfirmed { left: None } => Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "a tied child's tree end is unconfirmed: nothing reported it",
+            )),
+        }
+    }
+}
+
 /// Hard allocation ceiling for one capture, across stdout and stderr.
 /// A caller's smaller limit remains binding (hooks use 64 KiB).
 pub const MAX_CAPTURE_BYTES: usize = 1024 * 1024;
@@ -365,6 +400,9 @@ fn failed_guarded_spawn(source: io::Error, mut child: OwnedChild, deadline: Inst
 pub struct OwnedChild {
     child: Child,
     tie: sys::Tie,
+    /// Started by [`Self::spawn_tied`]: it counts as ended only once its
+    /// whole tree is confirmed gone.
+    tied: bool,
     /// The tree is already ended, so a later drop has nothing to signal.
     ended: bool,
     /// The child has been waited for, so its id may name another process.
@@ -385,6 +423,7 @@ impl OwnedChild {
         Ok(Self {
             child,
             tie,
+            tied: false,
             ended: false,
             reaped: false,
             released: false,
@@ -395,20 +434,35 @@ impl OwnedChild {
     /// [`Self::spawn`] for a child that is not cooperative and must still
     /// end with this process when it dies without running a destructor,
     /// such as an `ssh` still signing in, which reads nothing that would tell
-    /// it. On Unix the owned process is a small `sh` supervisor that starts
-    /// the child itself, so nothing of the child runs before its watch does,
-    /// and passes the child's status on as its own; a watcher it starts reads
-    /// a pipe only this process writes, and the pipe closing without a
-    /// stand-down line ends the child and every process under it, `setsid`
-    /// ones included. Reaping, releasing or dropping the owner stands it
-    /// down. Its three standard streams are always pipes, and the command's
-    /// program, arguments, environment changes and folder are carried; an
-    /// `env_clear` is not. On Windows the job already ends the tree.
+    /// it. Its whole tree, `setsid` processes included, has ended before the
+    /// child counts as ended: `wait`, `try_wait` and `kill_tree` answer only
+    /// once that is confirmed, and an end nothing confirmed within its bound
+    /// is their error, never a status.
+    ///
+    /// On Unix the owned process is this program started again as the
+    /// child's supervisor, which runs before `main` and so needs no part of
+    /// the caller: it starts the child, passes the child's status on as its
+    /// own, and ends the tree when the child exits, when this process says
+    /// so, and when this process dies, which closes the watch it reads.
+    /// Linux runs the file this process runs, even once it was replaced;
+    /// macOS runs the file at its path and refuses one put there since, as
+    /// an app update does. Its three standard streams are always pipes, and
+    /// the command's program, arguments, environment changes and folder are
+    /// carried; an `env_clear` is not. On Windows the child's job holds the
+    /// tree.
     pub fn spawn_tied(command: &mut Command) -> io::Result<Self> {
-        let (child, tie) = sys::spawn_tied(command)?;
+        Self::spawn_tied_within(command, TIED_END_LIMIT)
+    }
+
+    /// [`Self::spawn_tied`] with the bound its tree's end is confirmed
+    /// within, for a test that needs the bound to pass.
+    #[doc(hidden)]
+    pub fn spawn_tied_within(command: &mut Command, end_limit: Duration) -> io::Result<Self> {
+        let (child, tie) = sys::spawn_tied(command, end_limit)?;
         Ok(Self {
             child,
             tie,
+            tied: true,
             ended: false,
             reaped: false,
             released: false,
@@ -427,6 +481,7 @@ impl OwnedChild {
         Ok(Self {
             child,
             tie,
+            tied: false,
             ended: false,
             reaped: false,
             released: false,
@@ -556,20 +611,23 @@ impl OwnedChild {
         self.child.stderr.take()
     }
 
-    /// `Ok(None)` while the child runs.
+    /// `Ok(None)` while the child runs. A tied child's status comes only
+    /// with its whole tree confirmed gone; an end nothing confirmed is the
+    /// error, also when asked again.
     pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
-        let status = self.child.try_wait()?;
-        if status.is_some() {
-            self.reaped = true;
-            sys::reaped(&mut self.tie);
-        }
-        Ok(status)
+        let Some(status) = self.child.try_wait()? else {
+            return Ok(None);
+        };
+        self.reaped = true;
+        sys::reaped(&mut self.tie)?;
+        Ok(Some(status))
     }
 
+    /// The child's status, as [`Self::try_wait`] answers it once it exits.
     pub fn wait(&mut self) -> io::Result<ExitStatus> {
         let status = self.child.wait()?;
         self.reaped = true;
-        sys::reaped(&mut self.tie);
+        sys::reaped(&mut self.tie)?;
         Ok(status)
     }
 
@@ -591,16 +649,19 @@ impl OwnedChild {
     /// reaped: `wait` does that. On Unix, descendants that left the group with
     /// `setsid` are found by walking the process table before the group is
     /// signalled, which is only done while the child has not been waited for:
-    /// a reaped child's pid may name another process.
+    /// a reaped child's pid may name another process. A tied child's tree
+    /// is ended by its supervisor, and this returns once the end is
+    /// confirmed; an end nothing confirmed within its bound is the error.
     pub fn kill_tree(&mut self) -> io::Result<bool> {
-        if self.ended && self.reaped {
+        if self.ended && self.reaped && !self.tied {
             // Nothing is left that this owner could name, and the child's id
             // may be another process's by now.
             return Ok(false);
         }
-        let ended = sys::kill_tree_of(&mut self.child, &self.tie, self.reaped)?;
-        self.ended = true;
-        Ok(ended)
+        let ended = sys::kill_tree_of(&mut self.child, &mut self.tie, self.reaped);
+        // A tied child's supervisor has nothing more to be told either way.
+        self.ended = ended.is_ok() || self.tied;
+        ended
     }
 }
 
@@ -614,9 +675,11 @@ impl Drop for OwnedChild {
         // the leftovers of a finished child ended calls `kill_tree` at the
         // moment it exits. A Windows job ends them when it closes after this.
         if !self.ended && !self.reaped {
-            self.ended = sys::kill_tree_of(&mut self.child, &self.tie, false).is_ok();
+            self.ended = sys::kill_tree_of(&mut self.child, &mut self.tie, false).is_ok();
         }
-        if (self.ended || self.reaped) && !self.bounded_drop {
+        // A tied child's supervisor exits once it reported, or was ended
+        // when it did not.
+        if (self.ended || self.reaped || self.tied) && !self.bounded_drop {
             // The kill is a signal away from the child exiting; reaping here
             // leaves no zombie and costs microseconds.
             let _ = self.child.wait();
@@ -1205,116 +1268,168 @@ mod sys {
     pub(super) struct Tie {
         // The child's dedicated reader gets EOF if the owner crashes.
         _owner: Option<UnixStream>,
-        /// This process's end of a tied child's watch ([`spawn_tied`]): a
-        /// line on it stands the watcher down, and its close without one,
-        /// which this process's death is, ends the child's tree.
-        watch: Option<UnixStream>,
-        /// What names a tied child's tree beyond its group, kept until the
-        /// tree is ended.
-        tree: Option<Tree>,
+        /// A tied child's supervisor ([`spawn_tied`]), which this process
+        /// tells to end the tree and which reports how the end went.
+        supervisor: Option<Supervisor>,
     }
 
-    /// A tied child's tree is everything the child started, at any depth,
-    /// `setsid` ones and orphans included, named without watching the
-    /// process table over time. On Linux the supervisor is a child
-    /// subreaper, so a process whose parent ends comes back under the
-    /// supervisor and the tree is what is under it. macOS has no subreaper
-    /// and keeps instead, for each process, the unique id of the process
-    /// that started it, also once it is handed to launchd: the tree is what
-    /// chains by those ids to the supervisor or the child, whose ids are
-    /// read before the child runs. A process whose starter is neither, and
-    /// that is reaped before anything reads it, breaks the chain there
-    /// (docs/INSTALL.md, What each system supports).
-    pub(super) struct Tree {
-        #[cfg(target_os = "macos")]
-        roots: [u64; 2],
+    /// This process's side of a tied child's supervisor: the watch it is
+    /// told on and reports on, and its report once it gave one.
+    struct Supervisor {
+        watch: UnixStream,
+        heard: Vec<u8>,
+        report: Option<super::Ending>,
     }
 
-    /// A tied child's supervisor, run as `/bin/sh -c SUPERVISOR hide-tied
-    /// <program> <args>…` with this process's watch as descriptor 3. It
-    /// starts the child itself, so the watch exists before the child does,
-    /// held before it runs until this process has read what it needs of it:
-    /// the supervisor writes the child's pid on the watch, and the child
-    /// runs once a line reaches it on its input ([`started`]). It then starts
-    /// a watcher that reads the watch: a line is this process standing down;
-    /// the watch closing without one is this process's death, and the
-    /// watcher sends the supervisor `TERM` ([`WATCHER`]). When the child
-    /// exits, or on that `TERM`, the supervisor ends what is under it
-    /// ([`REST`]) and exits with the child's status. The child gets the
-    /// supervisor's standard streams: an asynchronous list's input is
-    /// `/dev/null` unless redirected, so it is passed on through descriptor
-    /// 4.
-    const SUPERVISOR: &str = r#"watcher=$HIDE_TIED_WATCHER
-rest=$HIDE_TIED_REST
-unset HIDE_TIED_WATCHER HIDE_TIED_REST
-trap '/bin/sh -c "$rest" hide-tied-rest "$$"' TERM
-exec 4<&0
-{ IFS= read -r _ <&4 || exit 125; exec "$@" <&4 3<&- 4<&-; } &
-child=$!
-exec 4<&-
-echo "$child" >&3
-/bin/sh -c "$watcher" hide-tied-watch "$$" <&3 >/dev/null 2>&1 3<&- &
-exec 3<&-
-wait "$child"
-status=$?
-/bin/sh -c "$rest" hide-tied-rest "$$"
-exit "$status"
-"#;
+    impl Supervisor {
+        /// The next line the supervisor says, waiting up to `within`; `None`
+        /// once it has said all it will.
+        fn hear(&mut self, within: Duration) -> io::Result<Option<String>> {
+            let until = Instant::now() + within;
+            loop {
+                if let Some(end) = self.heard.iter().position(|byte| *byte == b'\n') {
+                    let line: Vec<u8> = self.heard.drain(..=end).collect();
+                    return Ok(Some(String::from_utf8_lossy(&line[..end]).into_owned()));
+                }
+                if self.heard.len() > 128 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "tied supervisor said too much",
+                    ));
+                }
+                let left = until.saturating_duration_since(Instant::now());
+                if left.is_zero() {
+                    return Err(io::ErrorKind::TimedOut.into());
+                }
+                // Waited on with `poll`: macOS refuses a read timeout on a
+                // socket whose other end has closed, which is how a
+                // supervisor that exited leaves it.
+                let mut look = libc::pollfd {
+                    fd: self.watch.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                let wait =
+                    libc::c_int::try_from(left.as_millis().max(1)).unwrap_or(libc::c_int::MAX);
+                // SAFETY: one valid `pollfd` for the count passed.
+                match unsafe { libc::poll(&mut look, 1, wait) } {
+                    0 => continue,
+                    ready if ready < 0 => {
+                        let error = io::Error::last_os_error();
+                        if error.kind() == io::ErrorKind::Interrupted {
+                            continue;
+                        }
+                        return Err(error);
+                    }
+                    _ => {}
+                }
+                let mut buffer = [0u8; 64];
+                match self.watch.read(&mut buffer) {
+                    Ok(0) => return Ok(None),
+                    Ok(read) => self.heard.extend_from_slice(&buffer[..read]),
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                    Err(error) => return Err(error),
+                }
+            }
+        }
 
-    /// The watcher [`SUPERVISOR`] starts: `$1` the supervisor. Told nothing
-    /// before the watch closes, it has the supervisor end its tree. It
-    /// stops nothing: once the owner is gone the supervisor's group has no
-    /// parent outside it, and the system hangs up on every member of such a
-    /// group as soon as one of them stops and another exits, the walk that
-    /// would end the tree among them.
-    const WATCHER: &str = r#"read -r _ && exit 0
-kill -s TERM "$1" 2>/dev/null
-"#;
-
-    /// Ends every process under `$1` but itself: it kills what the walk of
-    /// the process table finds alive and walks again, until a walk finds
-    /// nothing alive, since a process can start another between a walk and
-    /// its kill. It gives up after 50 walks, which only a process the kill
-    /// cannot end, or one that keeps starting others, reaches.
-    const REST: &str = r#"n=0
-while [ "$n" -lt 50 ]; do
-  pids=$(ps -A -o pid= -o ppid= -o stat= 2>/dev/null | awk -v root="$1" -v self="$$" '
-{ kids[$2] = kids[$2] " " $1; zombie[$1] = ($3 ~ /^Z/) }
-END {
-  n = 1; queue[1] = root
-  for (i = 1; i <= n; i++) {
-    m = split(kids[queue[i]], k, " ")
-    for (j = 1; j <= m; j++) {
-      p = k[j]
-      if ((p in seen) || p == self) continue
-      seen[p] = 1; queue[++n] = p
-      if (!zombie[p]) print p
+        /// How the supervisor said its tree's end went, waiting up to
+        /// `within` for it to say. Silence, or the watch closing first, is
+        /// an end nothing confirmed.
+        fn report(&mut self, within: Duration) -> super::Ending {
+            if let Some(report) = self.report {
+                return report;
+            }
+            let report = match self.hear(within) {
+                Ok(Some(line)) => match line.split_once(' ') {
+                    Some(("confirmed", ended_any)) => super::Ending::Confirmed {
+                        ended_any: ended_any == "1",
+                    },
+                    Some(("unconfirmed", left)) => super::Ending::Unconfirmed {
+                        left: left.parse().ok(),
+                    },
+                    _ => super::Ending::Unconfirmed { left: None },
+                },
+                _ => super::Ending::Unconfirmed { left: None },
+            };
+            self.report = Some(report);
+            report
+        }
     }
-  }
-}')
-  [ -n "$pids" ] || exit 0
-  kill -s KILL $pids 2>/dev/null
-  n=$((n + 1))
-done
-exit 1
-"#;
 
-    /// How long a tied child's supervisor has to say which pid its child
-    /// has: a `sh` starting, so only a machine that cannot run one reaches
-    /// it.
+    /// The variable that makes this program a tied child's supervisor
+    /// ([`supervise_if_asked`]): the protocol's version, the watch's
+    /// descriptor, the descriptor diagnostics go to and the end's bound in
+    /// milliseconds, space separated. The first two keep their place in
+    /// every version, so a supervisor of another version can still say on
+    /// the watch that it does not speak this one.
+    const SUPERVISOR_KEY: &std::ffi::CStr = c"HIDE_TIED_SUPERVISOR";
+    const SUPERVISOR_VERSION: &str = "1";
+
+    /// How long a tied child's supervisor has to say that its child runs: a
+    /// program starting, so only a machine that cannot run one reaches it.
     const TIED_START_LIMIT: Duration = Duration::from_secs(10);
 
-    /// How long ending a tied tree waits for what it killed to have ended:
-    /// a killed process is gone within milliseconds, so only one stuck in
-    /// the kernel reaches it.
-    const TIED_END_LIMIT: Duration = Duration::from_secs(5);
+    /// How much longer than the end's own bound this process waits for the
+    /// supervisor's report before it gives the supervisor up.
+    const TIED_REPORT_SLACK: Duration = Duration::from_secs(2);
 
-    pub(super) fn spawn_tied(command: &mut Command) -> io::Result<(Child, Tie)> {
+    /// Runs a tied child's supervisor in place of this program's `main` when
+    /// this process was started as one ([`spawn_tied`]), and does nothing
+    /// else: one look at the environment when the variable is absent.
+    #[ctor::ctor(unsafe)]
+    fn supervise_if_asked() {
+        // SAFETY: before `main`, with this process's one thread.
+        let marker = unsafe { libc::getenv(SUPERVISOR_KEY.as_ptr()) };
+        if marker.is_null() {
+            return;
+        }
+        // SAFETY: `getenv` answered a string the environment owns, copied
+        // before the variable is taken out, so that neither the child nor
+        // the processes it starts see it.
+        let marker = unsafe { std::ffi::CStr::from_ptr(marker) }
+            .to_bytes()
+            .to_vec();
+        // SAFETY: as above.
+        unsafe { libc::unsetenv(SUPERVISOR_KEY.as_ptr()) };
+        supervisor::run(&marker, &supervisor::arguments())
+    }
+
+    /// The file a tied child's supervisor runs: the one this process was
+    /// started from, which on Linux the kernel names even once it was
+    /// replaced or deleted at its path. macOS names it by its path only, so
+    /// a file put at that path since, as an app update does, is refused
+    /// rather than run: it may be another build, or no supervisor at all.
+    fn own_program() -> io::Result<PathBuf> {
+        #[cfg(target_os = "macos")]
+        {
+            let image = image_of(std::process::id())?;
+            match crate::fs::identity::file_id(&image.path) {
+                Ok(file) if file == image.file => Ok(image.path),
+                Ok(_) | Err(_) => Err(io::Error::other(format!(
+                    "this program's file at {} was replaced since it started, so it cannot supervise a tied child",
+                    image.path.display()
+                ))),
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            Ok(PathBuf::from("/proc/self/exe"))
+        }
+    }
+
+    pub(super) fn spawn_tied(
+        command: &mut Command,
+        end_limit: Duration,
+    ) -> io::Result<(Child, Tie)> {
         // The supervisor runs what `command` names, with its environment and
-        // folder; its three standard streams are pipes.
-        let mut supervisor = Command::new("/bin/sh");
+        // folder; its three standard streams are pipes the child gets. Its
+        // own failure to start is not the child's program missing.
+        let supervisor_failed = |error: io::Error| {
+            io::Error::other(format!("the tied supervisor could not start: {error}"))
+        };
+        let mut supervisor = Command::new(own_program().map_err(supervisor_failed)?);
         supervisor
-            .args(["-c", SUPERVISOR, "hide-tied"])
             .arg(command.get_program())
             .args(command.get_args())
             .stdin(std::process::Stdio::piped())
@@ -1330,19 +1445,37 @@ exit 1
             supervisor.current_dir(folder);
         }
         let (reader, watch) = UnixStream::pair()?;
-        let descriptor = reader.as_raw_fd();
-        // SAFETY: only async-signal-safe dup2, fcntl and prctl run after
-        // fork. The descriptor lives until spawn returns, and `supervisor` is
-        // dropped here, so the closure never runs on a recycled descriptor.
+        // Where this process's own diagnostics go, so the supervisor's still
+        // reach them once this process is gone.
+        let diagnostics: std::os::fd::OwnedFd = match duplicate(libc::STDERR_FILENO) {
+            Ok(diagnostics) => diagnostics,
+            Err(_) => std::fs::OpenOptions::new()
+                .write(true)
+                .open("/dev/null")?
+                .into(),
+        };
+        let descriptors = [reader.as_raw_fd(), diagnostics.as_raw_fd()];
+        supervisor.env(
+            SUPERVISOR_KEY.to_str().unwrap_or_default(),
+            format!(
+                "{SUPERVISOR_VERSION} {} {} {}",
+                descriptors[0],
+                descriptors[1],
+                end_limit.as_millis()
+            ),
+        );
+        // SAFETY: only async-signal-safe fcntl and prctl run after fork. The
+        // descriptors live until spawn returns, and `supervisor` is dropped
+        // here, so the closure never runs on a recycled descriptor.
         unsafe {
             supervisor.pre_exec(move || {
-                if descriptor == 3 {
-                    let flags = libc::fcntl(3, libc::F_GETFD);
-                    if flags < 0 || libc::fcntl(3, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
+                for descriptor in descriptors {
+                    let flags = libc::fcntl(descriptor, libc::F_GETFD);
+                    if flags < 0
+                        || libc::fcntl(descriptor, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0
+                    {
                         return Err(io::Error::last_os_error());
                     }
-                } else if libc::dup2(descriptor, 3) < 0 {
-                    return Err(io::Error::last_os_error());
                 }
                 // Kept across exec: every process under the supervisor whose
                 // parent ends comes back under it.
@@ -1353,207 +1486,242 @@ exit 1
                 Ok(())
             });
         }
-        // The supervisor's arguments are the child's, so the watcher's and
-        // the rest's scripts travel in the environment, which the supervisor
-        // takes back out before the child starts.
-        supervisor
-            .env("HIDE_TIED_WATCHER", WATCHER)
-            .env("HIDE_TIED_REST", REST);
-        let (mut child, mut tie) = spawn(&mut supervisor, None)?;
+        let (mut child, mut tie) = spawn(&mut supervisor, None).map_err(supervisor_failed)?;
         drop(reader);
-        tie.watch = Some(watch);
-        if let Err(error) = started(&mut child, &mut tie) {
-            let _ = kill_tree_of(&mut child, &tie, false);
+        drop(diagnostics);
+        tie.supervisor = Some(Supervisor {
+            watch,
+            heard: Vec::new(),
+            report: None,
+        });
+        if let Err(error) = started(&mut tie) {
+            // The supervisor leads its group and holds the child until it
+            // has said it runs, so the group is all there is to end.
+            let _ = signal(-(child.id() as libc::pid_t), libc::SIGKILL);
             let _ = child.wait();
-            reaped(&mut tie);
             return Err(error);
         }
         Ok((child, tie))
     }
 
-    /// Reads the child's pid the supervisor writes on the watch, records
-    /// what names the tree while the child is held, and lets it run.
-    fn started(supervisor: &mut Child, tie: &mut Tie) -> io::Result<()> {
-        use std::io::Write;
-        let watch = tie
-            .watch
+    /// A copy of `descriptor` that no child inherits.
+    fn duplicate(descriptor: libc::c_int) -> io::Result<std::os::fd::OwnedFd> {
+        // SAFETY: `fcntl` duplicates a descriptor this process holds.
+        let copy = unsafe { libc::fcntl(descriptor, libc::F_DUPFD_CLOEXEC, 3) };
+        if copy < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: the copy is a new descriptor this function owns.
+        Ok(unsafe { std::os::fd::OwnedFd::from_raw_fd(copy) })
+    }
+
+    /// Waits for the supervisor to say that the child runs, or why it does
+    /// not. It says `spawned` while the child is still held and `started`
+    /// once the child runs its program, so a supervisor that ends between
+    /// the two, which the child itself can do, leaves a child that may run:
+    /// that is not a spawn error, and the child's `wait` reads the end as
+    /// unconfirmed.
+    fn started(tie: &mut Tie) -> io::Result<()> {
+        let supervisor = tie
+            .supervisor
             .as_mut()
-            .ok_or_else(|| io::Error::other("tied child has no watch"))?;
-        watch.set_read_timeout(Some(TIED_START_LIMIT))?;
-        let mut line = Vec::new();
-        let mut byte = [0u8; 1];
-        while byte != *b"\n" {
-            if line.len() > 20 {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "tied supervisor named no child",
-                ));
-            }
-            match watch.read(&mut byte)? {
-                0 => {
+            .ok_or_else(|| io::Error::other("tied child has no supervisor"))?;
+        let until = Instant::now() + TIED_START_LIMIT;
+        let mut spawned = false;
+        let line = loop {
+            match supervisor.hear(until.saturating_duration_since(Instant::now())) {
+                Ok(Some(line)) if line.starts_with("spawned ") && !spawned => spawned = true,
+                Ok(Some(line)) => break line,
+                Ok(None) if spawned => return Ok(()),
+                Ok(None) => {
                     return Err(io::Error::new(
                         io::ErrorKind::UnexpectedEof,
-                        "tied supervisor ended before its child started",
+                        "tied supervisor ended before its child started: this program has no supervisor",
                     ));
                 }
-                _ => line.push(byte[0]),
+                Err(error) if error.kind() == io::ErrorKind::TimedOut => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "tied supervisor said nothing in time: this program has no supervisor, or cannot start",
+                    ));
+                }
+                Err(error) => return Err(error),
             }
+        };
+        match line.split_once(' ') {
+            Some(("started", _)) if spawned => Ok(()),
+            Some(("failed", code)) => Err(code
+                .parse()
+                .map(io::Error::from_raw_os_error)
+                .unwrap_or_else(|_| io::Error::other("tied child did not start"))),
+            Some(("unsupported", version)) => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!(
+                    "this program's file speaks tied supervisor version {version}, not {SUPERVISOR_VERSION}: it was replaced by another build"
+                ),
+            )),
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("tied supervisor said {line:?}"),
+            )),
         }
-        watch.set_read_timeout(None)?;
-        let pid: u32 = std::str::from_utf8(&line[..line.len() - 1])
-            .ok()
-            .and_then(|pid| pid.parse().ok())
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "tied child pid"))?;
-        tie.tree = Some(Tree {
-            #[cfg(target_os = "macos")]
-            roots: [unique_id(supervisor.id())?, unique_id(pid)?],
-        });
-        #[cfg(not(target_os = "macos"))]
-        let _ = pid;
-        supervisor
-            .stdin
-            .as_mut()
-            .ok_or_else(|| io::Error::other("tied child has no input"))?
-            .write_all(b"\n")
     }
 
-    /// The child was waited for: its id may name another process from now
-    /// on, so the watcher stands down and nothing signals it any more. On
-    /// macOS a process the child left that launchd took is not under the
-    /// supervisor, whose rest did not reach it, so it is ended here.
-    pub(super) fn reaped(tie: &mut Tie) {
-        stand_down(tie);
+    /// The supervisor has exited: its report says whether its tree ended,
+    /// and it said it before it exited.
+    pub(super) fn reaped(tie: &mut Tie) -> io::Result<()> {
+        match tie.supervisor.as_mut() {
+            Some(supervisor) => supervisor.report(TIED_REPORT_SLACK).result().map(drop),
+            None => Ok(()),
+        }
+    }
+
+    /// What a tied child's supervisor ends ([`supervisor::run`]): every
+    /// process under it on Linux, where it is a child subreaper, so a
+    /// process whose parent ends comes back under it. macOS has no
+    /// subreaper and keeps instead, for each process, the unique id of the
+    /// process that started it, also once launchd takes it: the tree is
+    /// the child and what chains by those ids to the supervisor or the
+    /// child, whose ids are read before the child runs. A process whose
+    /// starter is neither and was reaped before the end looked breaks the
+    /// chain there (docs/INSTALL.md, What each system supports).
+    struct Tree {
+        supervisor: u32,
         #[cfg(target_os = "macos")]
-        if let Some(tree) = tie.tree.take() {
-            end_tree(None, &tree);
-        }
-        tie.tree = None;
+        roots: [u64; 2],
     }
 
-    fn stand_down(tie: &mut Tie) {
-        use std::io::Write;
-        if let Some(mut watch) = tie.watch.take() {
-            let _ = watch.write_all(b"\n");
+    impl Tree {
+        /// The tree's processes that are still running, each named so that
+        /// its kill reaches it alone.
+        #[cfg(not(target_os = "macos"))]
+        fn members(&self) -> Vec<Member> {
+            descendants(self.supervisor)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|pid| is_alive(*pid))
+                .filter_map(|pid| Member::pin(pid, self.supervisor))
+                .collect()
+        }
+
+        #[cfg(target_os = "macos")]
+        fn members(&self) -> Vec<Member> {
+            lineage(self.roots)
+                .into_iter()
+                .filter(|(pid, _)| is_alive(*pid))
+                .map(|(pid, id)| Member { pid, id })
+                .collect()
         }
     }
 
-    /// Kills everything of a tied tree but its supervisor, walking again
-    /// until a walk finds nothing alive: a process can start another
-    /// between a walk and its kill. A stopped supervisor keeps everything
-    /// under it where the walk finds it. Past [`TIED_END_LIMIT`], which only
-    /// a process the kill cannot end or one that keeps starting others
-    /// reaches, it stops with a diagnostic.
-    fn end_tree(supervisor: Option<u32>, tree: &Tree) -> bool {
-        let until = Instant::now() + TIED_END_LIMIT;
-        let mut ended = false;
+    /// Kills every running process of a tied tree but its supervisor, and
+    /// looks again until a look finds none: a process can start another
+    /// between a look and its kill. A killed process is gone within
+    /// milliseconds, so past `limit` only one the kill cannot end, or a tree
+    /// that keeps starting processes, is left, and the end is unconfirmed.
+    fn end_tree(tree: &Tree, limit: Duration) -> super::Ending {
+        let until = Instant::now() + limit;
+        let mut ended_any = false;
         loop {
-            let members = members(supervisor, tree);
+            let members = tree.members();
             if members.is_empty() {
-                return ended;
+                return super::Ending::Confirmed { ended_any };
             }
             if Instant::now() >= until {
-                eprintln!(
-                    "process.tied_tree_outlived_its_end supervisor={} left={}",
-                    supervisor.map_or_else(|| "reaped".to_owned(), |pid| pid.to_string()),
-                    members.len()
-                );
-                return ended;
+                return super::Ending::Unconfirmed {
+                    left: Some(members.len()),
+                };
             }
             for member in &members {
-                ended |= kill_member(supervisor, member);
+                ended_any |= member.kill();
             }
             pause_until(Instant::now() + Duration::from_millis(1));
         }
     }
 
-    /// A living process of a tied tree, named so that its kill reaches that
-    /// process and never one that took its pid since the walk.
+    /// A process to end, named so that its kill reaches that process and
+    /// never one that took its pid since it was found. Linux pins it with a
+    /// pidfd, checked to be under the ancestor it was found under once
+    /// open; macOS keeps its unique id, checked again right before the
+    /// signal, since no macOS call signals a process by its unique id.
     struct Member {
+        #[cfg(not(target_os = "linux"))]
         pid: u32,
+        #[cfg(target_os = "linux")]
+        pidfd: std::os::fd::OwnedFd,
         #[cfg(target_os = "macos")]
         id: u64,
     }
 
-    /// What is under the supervisor, where every orphan comes back to it.
-    #[cfg(not(target_os = "macos"))]
-    fn members(supervisor: Option<u32>, _: &Tree) -> Vec<Member> {
-        supervisor
-            .map(|leader| descendants(leader).unwrap_or_default())
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|pid| is_alive(*pid))
-            .map(|pid| Member { pid })
-            .collect()
-    }
-
-    /// A pidfd names the process itself, so once it is open the process is
-    /// checked to still be under the supervisor and then signalled through
-    /// it: a pid another process took after the walk is never signalled.
-    #[cfg(target_os = "linux")]
-    fn kill_member(supervisor: Option<u32>, member: &Member) -> bool {
-        let Some(leader) = supervisor else {
-            return false;
-        };
-        // SAFETY: `pidfd_open` takes a pid and flags and returns a new
-        // descriptor this function owns and closes.
-        let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, member.pid as libc::pid_t, 0) };
-        if fd < 0 {
-            return false;
+    impl Member {
+        #[cfg(target_os = "linux")]
+        fn pin(pid: u32, ancestor: u32) -> Option<Self> {
+            // SAFETY: `pidfd_open` takes a pid and flags and returns a new
+            // descriptor this value owns.
+            let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid as libc::pid_t, 0) };
+            if fd < 0 {
+                return None;
+            }
+            // SAFETY: the descriptor was just opened and is owned here alone.
+            let pidfd = unsafe { std::os::fd::OwnedFd::from_raw_fd(fd as libc::c_int) };
+            descends_from(pid, ancestor).then_some(Self { pidfd })
         }
-        let fd = fd as libc::c_int;
-        let sent = descends_from(member.pid, leader)
+
+        #[cfg(target_os = "linux")]
+        fn kill(&self) -> bool {
             // SAFETY: the descriptor is open; no signal information is passed.
-            && unsafe {
+            let sent = unsafe {
                 libc::syscall(
                     libc::SYS_pidfd_send_signal,
-                    fd,
+                    self.pidfd.as_raw_fd(),
                     libc::SIGKILL,
                     std::ptr::null::<libc::siginfo_t>(),
                     0,
                 )
-            } == 0;
-        // SAFETY: the descriptor was opened above and is closed once.
-        unsafe { libc::close(fd) };
-        sent
+            };
+            sent == 0
+        }
+
+        #[cfg(target_os = "macos")]
+        fn pin(pid: u32, _: u32) -> Option<Self> {
+            unique_id(pid).ok().map(|id| Self { pid, id })
+        }
+
+        #[cfg(target_os = "macos")]
+        fn kill(&self) -> bool {
+            unique_id(self.pid).is_ok_and(|id| id == self.id)
+                && signal(self.pid as libc::pid_t, libc::SIGKILL).is_ok()
+        }
+
+        /// Unix systems other than Linux and macOS are not supported
+        /// targets; this keeps them building with the walk's pid.
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        fn pin(pid: u32, _: u32) -> Option<Self> {
+            Some(Self { pid })
+        }
+
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        fn kill(&self) -> bool {
+            signal(self.pid as libc::pid_t, libc::SIGKILL).is_ok()
+        }
     }
 
-    /// Unix systems other than Linux and macOS are not supported targets;
-    /// this keeps them building with the walk's pid.
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    fn kill_member(_: Option<u32>, member: &Member) -> bool {
-        signal(member.pid as libc::pid_t, libc::SIGKILL).is_ok()
-    }
-
-    /// What chains by unique id to the supervisor or the child. A pid is
-    /// signalled only while it still has the unique id the chain found: no
-    /// macOS call signals a process by its unique id, so the check and the
-    /// signal are as close as two calls can be.
+    /// The child, while it runs, and every process whose starter chains by
+    /// unique id to the supervisor or the child, with its unique id: only
+    /// the supervisor is not one of them.
     #[cfg(target_os = "macos")]
-    fn members(_: Option<u32>, tree: &Tree) -> Vec<Member> {
-        lineage(&tree.roots)
-            .into_iter()
-            .filter(|(pid, _)| is_alive(*pid))
-            .map(|(pid, id)| Member { pid, id })
-            .collect()
-    }
-
-    #[cfg(target_os = "macos")]
-    fn kill_member(_: Option<u32>, member: &Member) -> bool {
-        unique_id(member.pid).is_ok_and(|id| id == member.id)
-            && signal(member.pid as libc::pid_t, libc::SIGKILL).is_ok()
-    }
-
-    /// Every process whose starter chains by unique id to one of `roots`,
-    /// with its unique id.
-    #[cfg(target_os = "macos")]
-    fn lineage(roots: &[u64]) -> Vec<(u32, u64)> {
+    fn lineage([supervisor, child]: [u64; 2]) -> Vec<(u32, u64)> {
         let table: Vec<(u32, [u64; 2])> = all_pids()
             .unwrap_or_default()
             .into_iter()
             .filter_map(|pid| Some((pid, unique_ids(pid).ok()?)))
             .collect();
-        let mut known: std::collections::HashSet<u64> = roots.iter().copied().collect();
-        let mut found = Vec::new();
+        let mut known = std::collections::BTreeSet::from([supervisor, child]);
+        let mut found: Vec<(u32, u64)> = table
+            .iter()
+            .filter(|(_, [id, _])| *id == child)
+            .map(|(pid, [id, _])| (*pid, *id))
+            .collect();
         loop {
             let before = found.len();
             for (pid, [id, starter]) in &table {
@@ -1608,6 +1776,441 @@ exit 1
         Ok([info.unique_id, info.starter_unique_id])
     }
 
+    /// A tied child's supervisor: this program, started again by
+    /// [`spawn_tied`] with [`SUPERVISOR_KEY`] set, which runs here from a
+    /// constructor before `main`, so it keeps to the C library and to
+    /// what of the standard library needs nothing `main` sets up, and
+    /// never panics on purpose. It starts the child, held before it runs
+    /// until its unique id is read (macOS), says that it runs, and waits:
+    /// for the child to exit, for the owner to write `end`, or for the
+    /// watch to close, which is the owner's death. Each way it ends the
+    /// tree the same way ([`end_tree`]), says how that went, and exits
+    /// with the child's status. On Linux it reaps every orphan that comes
+    /// back under it while the tree runs, and nothing while it ends it, so
+    /// a killed child's pid stays its own until the supervisor exits.
+    pub(super) mod supervisor {
+        use std::ffi::CString;
+        use std::io::Write;
+        use std::sync::atomic::AtomicI32;
+
+        use super::*;
+
+        /// The write end of the pipe a child's exit wakes the supervisor on.
+        static WAKE: AtomicI32 = AtomicI32::new(-1);
+
+        extern "C" fn on_child(_: libc::c_int) {
+            let wake = WAKE.load(Ordering::Relaxed);
+            if wake >= 0 {
+                let saved = io::Error::last_os_error().raw_os_error().unwrap_or(0);
+                let byte = 0u8;
+                // SAFETY: `write` is async-signal-safe; a full pipe already
+                // holds a wake, so a refused write loses nothing.
+                unsafe { libc::write(wake, (&byte as *const u8).cast(), 1) };
+                set_errno(saved);
+            }
+        }
+
+        fn set_errno(value: libc::c_int) {
+            // SAFETY: the location is this thread's own errno.
+            unsafe {
+                #[cfg(target_os = "linux")]
+                {
+                    *libc::__errno_location() = value;
+                }
+                #[cfg(target_os = "macos")]
+                {
+                    *libc::__error() = value;
+                }
+            }
+            #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+            let _ = value;
+        }
+
+        /// The child's program and arguments: this process's arguments after
+        /// its own name. Linux reads them from the kernel, since some C
+        /// libraries call a constructor without them.
+        pub(in super::super) fn arguments() -> Vec<CString> {
+            #[cfg(target_os = "linux")]
+            {
+                let mut line = std::fs::read("/proc/self/cmdline").unwrap_or_default();
+                if line.last() == Some(&0) {
+                    line.pop();
+                }
+                line.split(|byte| *byte == 0)
+                    .skip(1)
+                    .filter_map(|argument| CString::new(argument).ok())
+                    .collect()
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                // SAFETY: the C runtime keeps the arguments for the life of
+                // the process and sets them before any constructor runs.
+                unsafe {
+                    let count = *libc::_NSGetArgc();
+                    let values = *libc::_NSGetArgv();
+                    (1..count.max(0) as usize)
+                        .map(|index| std::ffi::CStr::from_ptr(*values.add(index)).to_owned())
+                        .collect()
+                }
+            }
+        }
+
+        /// Runs the supervisor and exits as the child did.
+        pub(in super::super) fn run(marker: &[u8], arguments: &[CString]) -> ! {
+            exit_as(supervise(marker, arguments))
+        }
+
+        enum Why {
+            Exited,
+            Told,
+            OwnerGone,
+        }
+
+        fn supervise(marker: &[u8], arguments: &[CString]) -> Option<libc::c_int> {
+            let marker = std::str::from_utf8(marker).ok()?;
+            let mut fields = marker.split(' ');
+            let version = fields.next()?;
+            let watch_fd: libc::c_int = fields.next()?.parse().ok()?;
+            close_on_exec(watch_fd);
+            // SAFETY: the owner passed this descriptor open, for this
+            // process alone.
+            let mut watch = unsafe { UnixStream::from_raw_fd(watch_fd) };
+            // SAFETY: plain calls on this process's own signal state; the
+            // child gets its default back before it runs.
+            unsafe { libc::signal(libc::SIGPIPE, libc::SIG_IGN) };
+            if version != SUPERVISOR_VERSION {
+                let _ = writeln!(watch, "unsupported {SUPERVISOR_VERSION}");
+                return None;
+            }
+            let diagnostics_fd: libc::c_int = fields.next()?.parse().ok()?;
+            close_on_exec(diagnostics_fd);
+            // SAFETY: as the watch.
+            let mut diagnostics = unsafe { std::fs::File::from_raw_fd(diagnostics_fd) };
+            let limit = Duration::from_millis(fields.next()?.parse().ok()?);
+            let (wake, woken) = match wake_pipe() {
+                Ok(pipe) => pipe,
+                Err(error) => {
+                    let _ = writeln!(watch, "failed {}", error.raw_os_error().unwrap_or(0));
+                    return None;
+                }
+            };
+            WAKE.store(woken, Ordering::Relaxed);
+            // SAFETY: an all-zero `sigaction` is a valid value, filled before use.
+            unsafe {
+                let mut action: libc::sigaction = std::mem::zeroed();
+                action.sa_sigaction = on_child as extern "C" fn(libc::c_int) as usize;
+                action.sa_flags = libc::SA_RESTART | libc::SA_NOCLDSTOP;
+                libc::sigemptyset(&mut action.sa_mask);
+                libc::sigaction(libc::SIGCHLD, &action, std::ptr::null_mut());
+            }
+            let (child, tree) = match start(arguments, &mut watch) {
+                Ok(started) => started,
+                Err(error) => {
+                    let _ = writeln!(watch, "failed {}", error.raw_os_error().unwrap_or(0));
+                    return Some(127 << 8);
+                }
+            };
+            // The tree's own signals to its group (a `kill 0`) reach the
+            // supervisor too, which ends only by its own decision.
+            for ignored in [libc::SIGHUP, libc::SIGINT, libc::SIGQUIT, libc::SIGTERM] {
+                // SAFETY: as above.
+                unsafe { libc::signal(ignored, libc::SIG_IGN) };
+            }
+            leave_streams();
+            let mut status = None;
+            let mut released = false;
+            let mut heard = Vec::new();
+            let why = loop {
+                reap(child, &mut status);
+                if status.is_some() {
+                    if released {
+                        return status;
+                    }
+                    break Why::Exited;
+                }
+                let mut looks = [
+                    libc::pollfd {
+                        fd: if released { -1 } else { watch_fd },
+                        events: libc::POLLIN,
+                        revents: 0,
+                    },
+                    libc::pollfd {
+                        fd: wake,
+                        events: libc::POLLIN,
+                        revents: 0,
+                    },
+                ];
+                // SAFETY: the array is valid for the count passed.
+                if unsafe { libc::poll(looks.as_mut_ptr(), 2, -1) } < 0 {
+                    continue;
+                }
+                if looks[1].revents != 0 {
+                    let mut drained = [0u8; 64];
+                    // SAFETY: the buffer is valid for its length.
+                    while unsafe { libc::read(wake, drained.as_mut_ptr().cast(), drained.len()) }
+                        > 0
+                    {}
+                }
+                if looks[0].revents != 0 {
+                    let mut buffer = [0u8; 64];
+                    match watch.read(&mut buffer) {
+                        Ok(0) => break Why::OwnerGone,
+                        Ok(read) => heard.extend_from_slice(&buffer[..read]),
+                        Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                        Err(_) => break Why::OwnerGone,
+                    }
+                    let mut told = false;
+                    while let Some(end) = heard.iter().position(|byte| *byte == b'\n') {
+                        let line: Vec<u8> = heard.drain(..=end).collect();
+                        match &line[..end] {
+                            b"end" => told = true,
+                            b"release" => released = true,
+                            _ => {}
+                        }
+                    }
+                    if told {
+                        break Why::Told;
+                    }
+                    heard.truncate(64);
+                }
+            };
+            let ending = end_tree(&tree, limit);
+            if status.is_none() {
+                let mut raw = 0;
+                let flags = match ending {
+                    super::super::Ending::Confirmed { .. } => 0,
+                    super::super::Ending::Unconfirmed { .. } => libc::WNOHANG,
+                };
+                // SAFETY: waits for this process's own child.
+                if unsafe { libc::waitpid(child as libc::pid_t, &mut raw, flags) } > 0 {
+                    status = Some(raw);
+                }
+            }
+            match ending {
+                super::super::Ending::Confirmed { ended_any } => {
+                    let _ = writeln!(watch, "confirmed {}", u8::from(ended_any));
+                }
+                super::super::Ending::Unconfirmed { left } => {
+                    let left = left.unwrap_or(0);
+                    let _ = writeln!(watch, "unconfirmed {left}");
+                    let _ = writeln!(
+                        diagnostics,
+                        "process.tied_tree_outlived_its_end supervisor={} child={child} left={left} after={}",
+                        tree.supervisor,
+                        match why {
+                            Why::Exited => "child_exit",
+                            Why::Told => "owner_end",
+                            Why::OwnerGone => "owner_gone",
+                        }
+                    );
+                }
+            }
+            status
+        }
+
+        fn close_on_exec(descriptor: libc::c_int) {
+            // SAFETY: plain calls on a descriptor this process holds.
+            unsafe {
+                let flags = libc::fcntl(descriptor, libc::F_GETFD);
+                if flags >= 0 {
+                    libc::fcntl(descriptor, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+                }
+            }
+        }
+
+        /// A pipe whose ends no child inherits, read end first; the write
+        /// end never blocks.
+        fn pipe() -> io::Result<[libc::c_int; 2]> {
+            let mut ends = [0; 2];
+            // SAFETY: the array has room for the two descriptors.
+            if unsafe { libc::pipe(ends.as_mut_ptr()) } < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            for end in ends {
+                close_on_exec(end);
+            }
+            Ok(ends)
+        }
+
+        fn wake_pipe() -> io::Result<(libc::c_int, libc::c_int)> {
+            let [read, write] = pipe()?;
+            for end in [read, write] {
+                // SAFETY: plain calls on descriptors this process holds.
+                unsafe {
+                    let flags = libc::fcntl(end, libc::F_GETFL);
+                    libc::fcntl(end, libc::F_SETFL, flags | libc::O_NONBLOCK);
+                }
+            }
+            Ok((read, write))
+        }
+
+        /// Starts the child, held before it runs until what names its tree
+        /// is read and the owner has been told it exists (`spawned`), and
+        /// answers its pid once it runs its program (`started`). A program
+        /// that cannot run is the error `execvp` gave.
+        fn start(arguments: &[CString], watch: &mut UnixStream) -> io::Result<(u32, Tree)> {
+            if arguments.is_empty() {
+                return Err(io::ErrorKind::InvalidInput.into());
+            }
+            let mut pointers: Vec<*const libc::c_char> =
+                arguments.iter().map(|argument| argument.as_ptr()).collect();
+            pointers.push(std::ptr::null());
+            let [held, hold] = pipe()?;
+            let [failed, fail] = pipe()?;
+            // SAFETY: this process has one thread, so the child may run
+            // anything; it runs only the calls below.
+            let pid = unsafe { libc::fork() };
+            if pid == 0 {
+                // SAFETY: as above.
+                unsafe {
+                    libc::close(hold);
+                    libc::close(failed);
+                    libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+                    let mut byte = 0u8;
+                    loop {
+                        let read = libc::read(held, (&mut byte as *mut u8).cast(), 1);
+                        if read == 1 {
+                            break;
+                        }
+                        if read == 0
+                            || io::Error::last_os_error().kind() != io::ErrorKind::Interrupted
+                        {
+                            libc::_exit(125);
+                        }
+                    }
+                    libc::execvp(pointers[0], pointers.as_ptr());
+                    let error = io::Error::last_os_error().raw_os_error().unwrap_or(0);
+                    libc::write(fail, (&error as *const libc::c_int).cast(), 4);
+                    libc::_exit(127);
+                }
+            }
+            // SAFETY: plain closes of this process's own ends.
+            unsafe {
+                libc::close(held);
+                libc::close(fail);
+            }
+            if pid < 0 {
+                let error = io::Error::last_os_error();
+                // SAFETY: as above.
+                unsafe {
+                    libc::close(hold);
+                    libc::close(failed);
+                }
+                return Err(error);
+            }
+            let supervisor = std::process::id();
+            let tree = Tree {
+                supervisor,
+                #[cfg(target_os = "macos")]
+                roots: [
+                    unique_id(supervisor).unwrap_or(0),
+                    unique_id(pid as u32).unwrap_or(0),
+                ],
+            };
+            let _ = writeln!(watch, "spawned {pid}");
+            let byte = 0u8;
+            let mut error = 0 as libc::c_int;
+            // SAFETY: plain reads and writes of values this function owns.
+            let told = unsafe {
+                libc::write(hold, (&byte as *const u8).cast(), 1);
+                libc::close(hold);
+                let told = loop {
+                    let read = libc::read(failed, (&mut error as *mut libc::c_int).cast(), 4);
+                    if read >= 0 || io::Error::last_os_error().kind() != io::ErrorKind::Interrupted
+                    {
+                        break read;
+                    }
+                };
+                libc::close(failed);
+                told
+            };
+            if told == 4 {
+                let mut raw = 0;
+                // SAFETY: waits for this process's own child, which has exited.
+                unsafe { libc::waitpid(pid, &mut raw, 0) };
+                return Err(io::Error::from_raw_os_error(error));
+            }
+            let _ = writeln!(watch, "started {pid}");
+            Ok((pid as u32, tree))
+        }
+
+        /// The child has the supervisor's standard streams, which are the
+        /// owner's pipes; letting go of them leaves their end to the child.
+        fn leave_streams() {
+            // SAFETY: plain calls on this process's own descriptors.
+            unsafe {
+                let null = libc::open(c"/dev/null".as_ptr(), libc::O_RDWR);
+                if null >= 0 {
+                    for stream in 0..3 {
+                        libc::dup2(null, stream);
+                    }
+                    if null > 2 {
+                        libc::close(null);
+                    }
+                }
+            }
+        }
+
+        /// Reaps every exited child of the supervisor without waiting, and
+        /// keeps the child's status when it is one of them.
+        fn reap(child: u32, status: &mut Option<libc::c_int>) {
+            loop {
+                let mut raw = 0;
+                // SAFETY: waits, without blocking, for this process's children.
+                let reaped = unsafe { libc::waitpid(-1, &mut raw, libc::WNOHANG) };
+                if reaped > 0 {
+                    if reaped as u32 == child {
+                        *status = Some(raw);
+                    }
+                    continue;
+                }
+                if reaped < 0 && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return;
+            }
+        }
+
+        /// Exits with the child's status: its exit code, or the signal that
+        /// ended it, except one that would leave a core dump of this
+        /// program, which is passed on by its number as a shell does.
+        fn exit_as(status: Option<libc::c_int>) -> ! {
+            // SAFETY: plain calls that end this process.
+            unsafe {
+                match status {
+                    Some(status) if libc::WIFEXITED(status) => {
+                        libc::_exit(libc::WEXITSTATUS(status))
+                    }
+                    Some(status) if libc::WIFSIGNALED(status) => {
+                        let ended_by = libc::WTERMSIG(status);
+                        if !libc::WCOREDUMP(status)
+                            && [
+                                libc::SIGHUP,
+                                libc::SIGINT,
+                                libc::SIGKILL,
+                                libc::SIGPIPE,
+                                libc::SIGALRM,
+                                libc::SIGTERM,
+                                libc::SIGUSR1,
+                                libc::SIGUSR2,
+                            ]
+                            .contains(&ended_by)
+                        {
+                            libc::signal(ended_by, libc::SIG_DFL);
+                            let mut set: libc::sigset_t = std::mem::zeroed();
+                            libc::sigemptyset(&mut set);
+                            libc::sigaddset(&mut set, ended_by);
+                            libc::sigprocmask(libc::SIG_UNBLOCK, &set, std::ptr::null_mut());
+                            libc::raise(ended_by);
+                        }
+                        libc::_exit(128 + ended_by)
+                    }
+                    _ => libc::_exit(125),
+                }
+            }
+        }
+    }
+
     pub(super) fn spawn(
         command: &mut Command,
         deadline: Option<Instant>,
@@ -1622,8 +2225,7 @@ exit 1
                     child,
                     Tie {
                         _owner: None,
-                        watch: None,
-                        tree: None,
+                        supervisor: None,
                     },
                 )
             });
@@ -1673,12 +2275,12 @@ exit 1
         if let Err(source) = acknowledged {
             let tie = Tie {
                 _owner: Some(owner),
-                watch: None,
-                tree: None,
+                supervisor: None,
             };
             let owned = OwnedChild {
                 child,
                 tie,
+                tied: false,
                 ended: false,
                 reaped: false,
                 released: false,
@@ -1690,8 +2292,7 @@ exit 1
             child,
             Tie {
                 _owner: Some(owner),
-                watch: None,
-                tree: None,
+                supervisor: None,
             },
         ))
     }
@@ -2003,33 +2604,47 @@ exit 1
         }
     }
 
-    /// The owner stops owning the child, which runs on: the watcher stands
-    /// down and nothing of its tree is ended.
+    /// The owner stops owning the child, which runs on: a tied child's
+    /// supervisor waits for it and ends nothing.
     pub(super) fn release(tie: &mut Tie) {
-        stand_down(tie);
-        tie.tree = None;
+        if let Some(mut supervisor) = tie.supervisor.take() {
+            let _ = std::io::Write::write_all(&mut supervisor.watch, b"release\n");
+        }
     }
 
-    pub(super) fn kill_tree_of(child: &mut Child, tie: &Tie, reaped: bool) -> io::Result<bool> {
+    pub(super) fn kill_tree_of(child: &mut Child, tie: &mut Tie, reaped: bool) -> io::Result<bool> {
         let leader = child.id();
-        // A tied child's supervisor is stopped first, so it cannot end
-        // before the tree under it, and the tree is killed until nothing of
-        // it lives; the group's kill below then ends the supervisor. This
-        // process is the supervisor's parent in another group, so the
-        // stopped group is not one the system hangs up on.
-        let mut tied = false;
-        if let (Some(tree), false) = (&tie.tree, reaped) {
-            let _ = signal(leader as libc::pid_t, libc::SIGSTOP);
-            tied = end_tree(Some(leader), tree);
+        // A tied child's supervisor ends its own tree and says how that
+        // went; nothing of the tree is left for this process to signal.
+        if let Some(supervisor) = tie.supervisor.as_mut() {
+            if supervisor.report.is_none() && !reaped {
+                // A supervisor that has exited already said its report.
+                let _ = std::io::Write::write_all(&mut supervisor.watch, b"end\n");
+                let report = supervisor.report(super::TIED_END_LIMIT + TIED_REPORT_SLACK);
+                if matches!(report, super::Ending::Unconfirmed { left: None }) {
+                    // It said nothing in time: ending the supervisor is all
+                    // that is left, and what it held is unconfirmed.
+                    let _ = signal(-(leader as libc::pid_t), libc::SIGKILL);
+                    eprintln!(
+                        "process.tied_tree_outlived_its_end supervisor={leader} left=unknown"
+                    );
+                }
+            }
+            return supervisor.report(TIED_REPORT_SLACK).result();
         }
         // Members that left the group (a `setsid` helper) are reached only by
-        // walking the table, and the walk comes before the first signal:
-        // ending a parent hands its children to init. A reaped child's id may
-        // be another process's, so nothing is walked for it.
-        let members = if reaped {
+        // walking the table, and each is pinned before the first signal:
+        // ending a parent hands its children to init, out of the walk's
+        // reach. A reaped child's id may be another process's, so nothing is
+        // walked for it.
+        let members: Vec<Member> = if reaped {
             Vec::new()
         } else {
-            descendants(leader).unwrap_or_default()
+            descendants(leader)
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|pid| Member::pin(pid, leader))
+                .collect()
         };
         // The group is the child's own, so this reaches only what the child
         // started, even once the child has exited (an unreaped leader, or any
@@ -2050,10 +2665,10 @@ exit 1
             }
             Err(error) => return Err(error),
         };
-        for member in members {
-            ended |= signal(member as libc::pid_t, libc::SIGKILL).is_ok();
+        for member in &members {
+            ended |= member.kill();
         }
-        Ok(ended || tied)
+        Ok(ended)
     }
 
     /// Whether nothing is left running in the child's group, by the answer
@@ -2064,8 +2679,15 @@ exit 1
     /// exiting. Asked once the leader is reaped; the system hands no new
     /// process the group's id while a member keeps it. A member that left the
     /// group was signalled by `kill_tree_of` but is not waited for here,
-    /// since only its pid would name it.
-    pub(super) fn tree_ended(child: &Child, _: &Tie) -> io::Result<bool> {
+    /// since only its pid would name it. A tied child's tree has ended once
+    /// its supervisor confirmed it.
+    pub(super) fn tree_ended(child: &Child, tie: &Tie) -> io::Result<bool> {
+        if let Some(supervisor) = &tie.supervisor {
+            return Ok(matches!(
+                supervisor.report,
+                Some(super::Ending::Confirmed { .. })
+            ));
+        }
         Ok(!group_members(child.id())?.into_iter().any(is_alive))
     }
 
@@ -3007,7 +3629,9 @@ mod sys {
     }
 
     /// The job a child lives in. Closing it ends everything still in it.
-    pub(super) struct Tie(Owned, bool);
+    /// The child's job, whether the child was put in it, and, for a tied
+    /// child, the bound its tree's end is confirmed within.
+    pub(super) struct Tie(Owned, bool, Option<Duration>);
 
     pub(super) fn spawn(
         command: &mut Command,
@@ -3085,7 +3709,8 @@ mod sys {
             if let Some(deadline) = deadline {
                 let owned = OwnedChild {
                     child,
-                    tie: Tie(job, false),
+                    tie: Tie(job, false, None),
+                    tied: false,
                     ended: false,
                     reaped: false,
                     released: false,
@@ -3101,7 +3726,8 @@ mod sys {
             if let Some(deadline) = deadline {
                 let owned = OwnedChild {
                     child,
-                    tie: Tie(job, true),
+                    tie: Tie(job, true, None),
+                    tied: false,
                     ended: false,
                     reaped: false,
                     released: false,
@@ -3113,11 +3739,12 @@ mod sys {
             let _ = child.wait();
             return Err(error);
         }
-        let tie = Tie(job, true);
+        let tie = Tie(job, true, None);
         if let Some(deadline) = deadline.filter(|deadline| Instant::now() >= *deadline) {
             let owned = OwnedChild {
                 child,
                 tie,
+                tied: false,
                 ended: false,
                 reaped: false,
                 released: false,
@@ -3342,12 +3969,59 @@ mod sys {
         Ok(())
     }
 
-    /// The job already ends the tree when this process dies.
-    pub(super) fn spawn_tied(command: &mut Command) -> io::Result<(Child, Tie)> {
-        spawn(command, None)
+    /// The job already ends the tree when this process dies; a tied child
+    /// counts as ended only once nothing of its job runs.
+    pub(super) fn spawn_tied(
+        command: &mut Command,
+        end_limit: Duration,
+    ) -> io::Result<(Child, Tie)> {
+        let (child, mut tie) = spawn(command, None)?;
+        tie.2 = Some(end_limit);
+        Ok((child, tie))
     }
 
-    pub(super) fn reaped(_: &mut Tie) {}
+    /// A tied child has exited: what it left in its job is ended, and its
+    /// end is confirmed once the job has nothing running.
+    pub(super) fn reaped(tie: &mut Tie) -> io::Result<()> {
+        match tie.2 {
+            Some(limit) => end_job(tie, limit).map(drop),
+            None => Ok(()),
+        }
+    }
+
+    /// Ends everything in a tied child's job and waits, up to `limit`, until
+    /// the job counts nothing running: `TerminateJobObject` returns before
+    /// its processes have ended.
+    fn end_job(tie: &Tie, limit: Duration) -> io::Result<bool> {
+        if !tie.1 {
+            // Assignment failed before the suspended child could run, so the
+            // child was alone and its exit was seen first.
+            return Ok(false);
+        }
+        let running = active_processes(tie)?;
+        // SAFETY: the job handle is open for as long as `tie` lives.
+        if running > 0 && unsafe { TerminateJobObject((tie.0).0, 1) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let until = Instant::now() + limit;
+        loop {
+            let left = active_processes(tie)?;
+            if left == 0 {
+                return super::Ending::Confirmed {
+                    ended_any: running > 0,
+                }
+                .result();
+            }
+            if Instant::now() >= until {
+                eprintln!("process.tied_tree_outlived_its_end left={left}");
+                return super::Ending::Unconfirmed {
+                    left: Some(left as usize),
+                }
+                .result();
+            }
+            pause_until(Instant::now() + Duration::from_millis(1));
+        }
+    }
 
     pub(super) fn release(tie: &mut Tie) {
         // SAFETY: an all-zero limit structure is a valid value: no flags.
@@ -3364,7 +4038,10 @@ mod sys {
         };
     }
 
-    pub(super) fn kill_tree_of(child: &mut Child, tie: &Tie, reaped: bool) -> io::Result<bool> {
+    pub(super) fn kill_tree_of(child: &mut Child, tie: &mut Tie, reaped: bool) -> io::Result<bool> {
+        if let (Some(limit), true) = (tie.2, tie.1) {
+            return end_job(tie, limit);
+        }
         if !tie.1 {
             // Assignment failed before the suspended child could run. Its
             // process handle is still ours, but the empty job cannot end it.
