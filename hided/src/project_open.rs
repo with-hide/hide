@@ -21,11 +21,11 @@
 use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket};
-use herdr_core::project_open::{ProjectOpenReceipt, next_action, valid_path};
+use herdr_core::project_open::{ProjectOpenReceipt, Unheld, next_action, valid_path};
 use serde_json::{Value, json};
 use std::sync::atomic::Ordering;
 
-use crate::boundary::{Boundary, Unregistrable};
+use crate::boundary::{Boundary, Refusal, Unregistrable};
 use crate::core::CoreHandle;
 use crate::server::AppState;
 
@@ -38,7 +38,7 @@ pub(crate) type Refused = (String, &'static str);
 /// async runtime.
 pub(crate) fn run(
     core: &CoreHandle,
-    boundary: &Boundary,
+    roots: &crate::RootFollower,
     window_calls: &tokio::sync::broadcast::Sender<Value>,
     windows: usize,
     device: &str,
@@ -49,17 +49,15 @@ pub(crate) fn run(
     if !valid_path(raw) {
         return Err(refused("invalid_path"));
     }
-    let path = if boundary.names_this_node(Some(device)) {
-        match boundary.resolve_registration(raw, None) {
-            Ok(real) => hide_platform::path::to_wire_lossy(&real),
-            Err(Unregistrable::Refused(refusal)) => return Err(refused(refusal.code())),
-            Err(Unregistrable::ConfirmProject(_)) => return Err(refused("needs_confirmation")),
-        }
+    let boundary = roots.boundary();
+    let (path, unheld) = if boundary.names_this_node(Some(device)) {
+        admit(boundary, raw, || crate::server::roots_current(roots))
+            .map_err(|refusal| refused(refusal.code()))?
     } else {
-        raw.to_owned()
+        (raw.to_owned(), Unheld::Register)
     };
     match core
-        .project_open(device, &path, request_id)
+        .project_open(device, &path, request_id, unheld)
         .map_err(|code| refused(&code))?
     {
         ProjectOpenReceipt::Opened {
@@ -76,6 +74,44 @@ pub(crate) fn run(
         ProjectOpenReceipt::Refused { reason } => Err(refused(&reason)),
         ProjectOpenReceipt::Pending => Err(refused("project_open_unconfirmed")),
     }
+}
+
+/// The spelling a folder of this machine reaches the core in, and whether
+/// the core may register it. The `$HOME` line Add a project's Browse folder
+/// meets comes first, so a folder under home registers as a picked one does.
+/// A folder it would ask the operator to confirm, one outside home, is
+/// admitted only when it is written inside a checkout the operator already
+/// registered, by the walk that refuses a link out of that checkout, and the
+/// core then only brings that checkout forward: the registration is the
+/// operator's confirmation, and nothing new is added without the question.
+/// The roots follow the core only while a window is open, so a path no root
+/// holds brings them current (`catch_up`) and is checked once more before it
+/// is refused, as a client event is (`server::admit_event`).
+fn admit(
+    boundary: &Boundary,
+    raw: &str,
+    catch_up: impl FnOnce() -> bool,
+) -> Result<(String, Unheld), Refusal> {
+    let unconfirmed = match boundary.resolve_registration(raw, None) {
+        Ok(real) => return Ok((hide_platform::path::to_wire_lossy(&real), Unheld::Register)),
+        Err(Unregistrable::Refused(Refusal::NeedsConfirmation))
+        | Err(Unregistrable::ConfirmProject(_)) => Refusal::NeedsConfirmation,
+        Err(Unregistrable::Refused(refusal)) => return Err(refusal),
+    };
+    let held = match boundary
+        .resolve_target(raw)
+        .or_else(|refusal| match refusal {
+            Refusal::OutsideCheckout if catch_up() => boundary.resolve_target(raw),
+            refusal => Err(refusal),
+        }) {
+        Ok(held) => held,
+        Err(Refusal::OutsideCheckout) => return Err(unconfirmed),
+        Err(refusal) => return Err(refusal),
+    };
+    if !held.is_dir() {
+        return Err(Refusal::NotADirectory);
+    }
+    Ok((hide_platform::path::to_wire_lossy(&held), Unheld::Refuse))
 }
 
 /// The `workspace_result` line `hide <path>` reads for `outcome`.
@@ -125,16 +161,16 @@ pub(crate) async fn operator_request(mut socket: WebSocket, state: AppState, con
         .map(str::to_owned);
     let response = match (request_id, path) {
         (Some(request_id), Some(path)) => {
-            let (core, boundary, calls) = (
+            let (core, roots, calls) = (
                 std::sync::Arc::clone(&state.core),
-                std::sync::Arc::clone(&state.boundary),
+                std::sync::Arc::clone(&state.roots),
                 state.window_calls.clone(),
             );
             let windows = state.renderers.load(Ordering::SeqCst);
             let id = request_id.clone();
             let outcome = tokio::task::spawn_blocking(move || {
-                let device = boundary.node().as_str().to_owned();
-                run(&core, &boundary, &calls, windows, &device, &path, &id)
+                let device = roots.boundary().node().as_str().to_owned();
+                run(&core, &roots, &calls, windows, &device, &path, &id)
             })
             .await;
             match outcome {

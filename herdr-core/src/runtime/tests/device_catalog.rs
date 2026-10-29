@@ -1256,7 +1256,14 @@ fn a_device_folder_hide_opens_is_judged_by_the_device_s_helper() {
     );
     assert!(!Path::new(&t.other).starts_with(std::env::var("HOME").unwrap()));
 
-    runtime.project_open(TARGET, &t.other, "1-device").unwrap();
+    runtime
+        .project_open(
+            TARGET,
+            &t.other,
+            "1-device",
+            crate::project_open::Unheld::Register,
+        )
+        .unwrap();
 
     assert_eq!(
         runtime.project_open_receipt("1-device"),

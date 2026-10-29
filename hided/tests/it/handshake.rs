@@ -1976,3 +1976,57 @@ async fn hide_path_opens_a_registered_folder_and_answers_why_another_was_not_add
     );
     running.stop();
 }
+
+/// `hide <path>` for a project the operator registered outside home: the
+/// registration is the confirmation Add a project asked for, so the
+/// checkout and a folder inside it come forward without asking again, while
+/// a folder beside it, which no registration holds, still meets the
+/// question, as does a link inside it that leads out of it, and a file
+/// inside it is not a folder (hide-private#350).
+#[tokio::test]
+async fn hide_path_opens_a_project_registered_outside_home_and_nothing_beside_it() {
+    let (dir, env) = test_env(true);
+    let home = hide_platform::fs::identity::canonical(dir.path()).unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let volume = hide_platform::fs::identity::canonical(outside.path()).unwrap();
+    assert!(!volume.starts_with(&home), "the project is outside home");
+    let checkout = volume.join("project");
+    std::fs::create_dir_all(checkout.join("src")).unwrap();
+    std::fs::write(checkout.join("README.md"), "x").unwrap();
+    std::fs::create_dir_all(volume.join("beside")).unwrap();
+    std::fs::create_dir_all(volume.join("project-other")).unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(volume.join("beside"), checkout.join("leak")).unwrap();
+    seed_registration(&env.state_dir, "w-outside", &checkout);
+    let running = hided::start_daemon(env).await.expect("start daemon");
+    let open = |path: String| {
+        let (port, token) = (running.port, running.token.clone());
+        tokio::task::spawn_blocking(move || {
+            hided::workspace_cli::request_project_open_with_token(port, &token, &path)
+        })
+    };
+    // No window is open, so nothing has brought the boundary's roots up to
+    // the core yet: the request does.
+    let answer = open(wire(&checkout)).await.unwrap().unwrap();
+    assert_eq!(answer["ok"], true, "{answer}");
+    assert_eq!(answer["result"]["path"], json!(wire(&checkout)), "{answer}");
+    assert_eq!(answer["result"]["added"], false);
+
+    let answer = open(wire(&checkout.join("src"))).await.unwrap().unwrap();
+    assert_eq!(answer["ok"], true, "{answer}");
+    assert_eq!(answer["result"]["path"], json!(wire(&checkout)));
+    assert_eq!(answer["result"]["added"], false);
+
+    for (path, reason) in [
+        (wire(&volume.join("beside")), "needs_confirmation"),
+        (wire(&volume.join("project-other")), "needs_confirmation"),
+        (wire(&checkout.join("README.md")), "not_a_directory"),
+        #[cfg(unix)]
+        (wire(&checkout.join("leak")), "needs_confirmation"),
+    ] {
+        let answer = open(path.clone()).await.unwrap().unwrap();
+        assert_eq!(answer["ok"], false, "{path}: {answer}");
+        assert_eq!(answer["reason"], reason, "{path}");
+    }
+    running.stop();
+}

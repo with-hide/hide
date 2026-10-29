@@ -111,6 +111,7 @@ enum Command {
         device_id: String,
         path: String,
         request_id: String,
+        unheld: herdr_core::project_open::Unheld,
         reply: Sender<Result<(), String>>,
     },
     ProjectOpenReceipt {
@@ -468,13 +469,15 @@ impl CoreHandle {
     /// then its receipt read again every `PROJECT_OPEN_POLL`, off the owner
     /// thread and the runtime lock, until it settles or `PROJECT_OPEN_WAIT`
     /// is over (`project_open_unconfirmed`). The same request id asked
-    /// again joins its first receipt.
+    /// again joins its first receipt; `unheld` says whether a folder no
+    /// registered checkout holds may be registered.
     #[allow(clippy::disallowed_methods)] // a production wait for the registration, bounded by PROJECT_OPEN_WAIT
     pub fn project_open(
         &self,
         device: &str,
         path: &str,
         request_id: &str,
+        unheld: herdr_core::project_open::Unheld,
     ) -> Result<herdr_core::project_open::ProjectOpenReceipt, String> {
         use herdr_core::project_open::ProjectOpenReceipt;
         let (reply, result) = mpsc::channel();
@@ -483,6 +486,7 @@ impl CoreHandle {
                 device_id: device.to_owned(),
                 path: path.to_owned(),
                 request_id: request_id.to_owned(),
+                unheld,
                 reply,
             })
             .map_err(|_| "project_open_unavailable".to_owned())?;
@@ -1153,9 +1157,10 @@ fn owner_loop(
                 device_id,
                 path,
                 request_id,
+                unheld,
                 reply,
             } => {
-                let _ = reply.send(core.project_open(&device_id, &path, &request_id));
+                let _ = reply.send(core.project_open(&device_id, &path, &request_id, unheld));
             }
 
             Command::ProjectOpenReceipt { request_id, reply } => {

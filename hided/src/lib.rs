@@ -819,6 +819,11 @@ impl RootFollower {
         }
     }
 
+    /// The boundary these roots are applied to.
+    pub fn boundary(&self) -> &Boundary {
+        &self.boundary
+    }
+
     /// A client arrived after none were connected.
     pub fn resume(&self) {
         self.resumed.notify_one();
