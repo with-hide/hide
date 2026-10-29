@@ -52,15 +52,18 @@ The hold is the card's, not the agent's: it decides only what the hooks give, an
 
 A Conductor and its workers are ordinary agents: a Conductor's row, its workers' rows and their delegated tabs read and group as any agent's do, and a mission adds no attention state, group, badge or notification (PRD software-factory-conductor D-14).
 The mission's own states (`planning`, `running`, `merge_wait`, `done`, `cancelled`) and each node's live only in the mission record and are drawn only on the map and the row's mission chip ([UI_BEHAVIOR.md: A mission's map](UI_BEHAVIOR.md#a-missions-map)).
-A decision the Conductor waits on reaches the operator through the Conductor's own row, which asks as any agent asks.
+A decision the Conductor waits on reaches the operator through the Conductor's own row: the core lays it there as a question, as it lays a plan waiting for review (below), with `ask_subject` `{cause: "mission_decision", line}` carrying the decision's one line (needs-you-cleanup D-12).
+The row then stands in Needs You, its line reads `판단 · <line>` (`mission.askDecision`) and its row and mission chips keep the mission's progress with a `!` in the decision colour; a decision answered from the map or in the Conductor's pane, cleared by the Conductor, or ended with the mission is lifted from the row at once, and a new one replaces the line.
 A wake the core sends the Conductor for a pull request change is a letter from `hide:conductor`, delivered and read like any other ([delivery.md: Missions](delivery.md#missions)).
 
 ### A plan waiting for review is a question
 
-A plan an agent put up with `--ask` (PRD hide-plan D-12, D-30) adds no status, mark, colour or group: the core lays it on the agent's row as the question it is, a `user_turn` of kind question with no text and the row's `ask_subject` `{cause: "plan_review", steps}`, before the read axis and the lineage run, so the row waits on the operator and the ask's own path carries it once.
+A plan an agent put up with `--ask` (PRD hide-plan D-12, D-30), and a mission decision on its Conductor's row (above), adds no status, mark, colour or group: the core lays it on the agent's row as the question it is, a `user_turn` of kind question with no text and the row's `ask_subject` `{cause: "plan_review", steps}`, before the read axis and the lineage run, so the row waits on the operator and the ask's own path carries it once.
 The core sends what is asked, never the words: the row's line, its `ask` and the pane band carry the same `subject`, a bell or phone notice carries it beside `detail`, and the window, the bell and the phone word it in their own interface language (`plan.askReview`, `계획 검토 · N단계` in Korean, `Plan review · N steps` in English); the phone's service worker gets those words from the page with `{{count}}` left in.
 The agent's own question, any other demand and a working agent come first: the plan's question is laid only on a resting row with none of them, and it is gone once the agent runs `hide plan approve`, `set` without `--ask` over a finished plan, or `drop` ([delivery.md: Plans](delivery.md#plans)).
 The same rule holds for a device's rows.
+A mission decision follows the same path (`plans.rs::lay_reviews_on`), laid again whenever the plan book or the mission book moves; its `detail` is the decision's line, cut to a row's width, so a phone page or service worker that does not know the cause draws the plain sentence.
+A row that has both a plan waiting for review and a mission decision carries the one asked first and counts the other behind it, as the root's other asks are counted (`외 N건`, needs-you-cleanup D-13).
 
 ## agent_status provenance and background waits
 
@@ -184,7 +187,7 @@ Regression owners: `herdr-core/src/runtime/tests/unseen_views.rs`, `a_seen_recor
 
 A row with no demand of its own, not blocked and stopped (idle or done) waits when something in progress will wake it: work that is still running, or an answer someone is still making for it.
 It has not finished, so it sits in Working, draws the in-progress ring, has `status_code: waiting`, and is not emphasized.
-In every list, the project tree included, its line leads with `대기 · ` (Waiting) and goes on with the label's sentence or, with none, the proven cause, so a ring whose line is missing or does not start with 대기 is an agent at work (status-marks D-18, B29).
+In every list, the project tree included, its line leads with what it waits for, `자식 기다림`, `백그라운드 기다림`, `CI 기다림` or `답장 기다림` (`agents.wait.*`), and goes on with the label's sentence or, with none, the cause's detail; a row with no proven cause leads with `대기 · ` (Waiting), so a ring whose line is missing or does not start with one of these is an agent at work (status-marks D-18, B29; needs-you-cleanup D-05, D-14).
 Why it waits is one additive wire value, `wait`, beside `group: working`; absent means the row waits for nothing.
 No new group value reaches the wire, so a decoder that does not know the field draws an ordinary Working row.
 `apply_lineage` decides it on the same pass that sums `descendant_counts`, by this precedence (`axes.rs::own_wait` and the children check):
@@ -223,7 +226,7 @@ A pull request counts while it is open and its checks rollup is pending with at 
 A project whose GitHub status is stale, unavailable or unreadable holds nothing either, because its last answer may be long over.
 Each exclusion writes one `checks_wait.excluded` diagnostic per pane, pull request and reason (`stale` or `expected_only`), so the log says why a row did not wait.
 A device's rows never wait on checks: `lay_checks` places only this machine's panes, so a pull request a node reads for its own project reaches that node's rows through the link record and its PR card (`links.rs::link_projects`, `open_links`), never as a wait, and a device this core does not read links none.
-The wait is `wait: checks` with `checks_wait`, the pull request's number, on the row (`own_wait` takes it after a background task and before a reply), and its line, with no sentence, says `대기 · CI · PR #N`.
+The wait is `wait: checks` with `checks_wait`, the pull request's number, on the row (`own_wait` takes it after a background task and before a reply), and its line, with no sentence, says `CI 기다림 · PR #N`.
 
 A turn that ends having just printed a pull request's address is not a stop until GitHub has answered for it (D-09): the sighting sets off a GitHub read (`projects.rs`, `Sighted.owed`), and until that read lands or fails the row waits on that pull request the same way, so a turn that opened a pull request with checks about to start is never announced finished first.
 The hold has no timer of its own: the read landing, a failed read and the agent working again each end it.
@@ -313,7 +316,7 @@ The sections are named for whose move is next: Needs You (`내 차례`) and Unre
 
 | Group | Membership |
 | --- | --- |
-| Needs You | An unread demand - question, approval or block - or a pane Herdr reports as blocked, or whose native question or plan waits for the operator, right now, or an operator-owned row with a View to look at |
+| Needs You | An unread demand - question, approval or block - or a pane Herdr reports as blocked, or whose native question or plan waits for the operator, right now, or a question the core laid on the row (a plan review, a mission decision), or an operator-owned row with a View to look at |
 | Done (Unread) | No demand, stopped, completion reported, and unread |
 | Working | Running, or a quiet row waiting on a working descendant, a proven background task or a reply still being made |
 | Seen | Everything else: ready idle, read demands, read completions, unknown |
@@ -325,6 +328,9 @@ A delegated row sits only in Working or Seen, and a Hide AI row for a home only 
 Each of the four groups above is then a group of the rows the operator's lists enumerate; a home's row is counted in none of them until it is in Needs You (see Work Hide AI does for a home).
 
 Done is deliberately separate from Needs You: a stop to read is "look when you have a moment", an unread demand is "act now".
+
+A read, unanswered question or approval is Seen in this group, so the app icon badge, desktop and phone notifications and the pet, which follow the group, count only unread asks (needs-you-cleanup D-09, D-10).
+The lists the operator reads to answer, the 태스크 list's 내 차례 in 상태별 and in each project's band, the project chip `내 차례 N`, the project tool's 할 일 and the phone's 내 차례, still stand it in Needs You, drawn read (A device's tasks), so the count there can be larger than the badge on purpose.
 
 An archived session (PRD session-archive) is in no group and draws no mark: nothing of it runs, so it has no turn, no progress and nothing to read, and it is counted on no badge.
 A resolved row rests in every list, so its mark is counted on no checkout badge either (`sync_checkout_agent_summaries`), as the 태스크 list's Needs You, the raised lists and the phone's list already leave it out.
@@ -361,7 +367,7 @@ Only a finished verdict draws the green dot and the word Done (`끝남`); work l
 Read, a stop with work left keeps its line, subdued, with its word (`line.mode: kept`, B7).
 
 A line leads with the word for what is asked or how the turn ended (`질문 · …`, `승인 · …`, `막힘 · …`, `끝남 · …`, `일 남음 · …`); an Unread row's line is only ever `끝남 · …` or `일 남음 · …` (B6).
-A working row says its sentence alone or has no line; a waiting row's line is `대기 · ` and its sentence, or with none the proven cause: `대기 · 백그라운드 작업`, `대기 · 자식 에이전트 N개 작업 중`, `대기 · 답장`, `대기 · CI · PR #N` (B10, B29).
+A working row says its sentence alone or has no line; a waiting row's line leads with what it waits for and its sentence, or with none the cause's detail: `백그라운드 기다림`, `자식 기다림 · 자식 N개 작업 중`, `답장 기다림`, `CI 기다림 · PR #N`, and `대기 · ` with a sentence when no cause is proven (B10, B29; needs-you-cleanup B17, B18).
 The web splits a line into its lead word, sentence and background tail (`lineParts`), and a narrow row cuts only the sentence, so the lead and the tail always show.
 A Needs You line's ask verb says the same word: an Answer reads `질문` (Question) and an Approval `승인` (Approval), followed by ` · ` and what to do.
 A row of unknown state, or on an unreachable device, has no mark and is drawn dimmed whole, and its line says why (B16).
@@ -396,9 +402,9 @@ Closing a parent alone does not close its children: they lose their parent on th
 A subtree close is undone by one Reopen closed: the parent and its descendants come back as the same registrations in their new panes, so the lineage tokens name the new parent pane and each child is delegated again under it, its descendants and the children left open included ([ARCHITECTURE.md: Reopening locally closed work](ARCHITECTURE.md#reopening-locally-closed-work)).
 Regression owners: `each_row_lists_its_live_descendants_deepest_first_and_a_leaf_lists_none`, `a_descendant_on_a_disconnected_device_is_never_listed_for_a_close`, and the tree-close tests in `herdr-core/src/runtime/tests/tree_close.rs`.
 
-Needs You and Done ordinarily belong to operator-owned roots.
-A delegated row stays Working or Seen while its parent can handle it; `agent_state/escalation.rs` raises it to Needs You only under the six conditions below.
-The row keeps its own demand, mark and status word, and its lineage root carries the ask (Delegated escalation below); what changes is only which group the row sits in and whether it is drawn bright.
+Needs You and Done belong to operator-owned roots.
+A delegated row stays Working or Seen; under the six conditions below `agent_state/escalation.rs` raises its lineage root to Needs You, with the child's ask on the root's line (Delegated escalation below).
+The raised row keeps its own demand, mark, status word and group; what changes is that it is drawn bright and its root carries the ask.
 Done is therefore scoped to the lineage root: a delegated child that finishes leaves a dimmed Seen row, and the completion the operator acts on is the root's.
 
 ## Where a parent comes from
@@ -457,7 +463,7 @@ Regression owners: `a_parent_declared_as_a_pane_token_is_the_lineage`, `a_child_
 ## The descendant mark and the tree popover
 
 `agent_state/escalation.rs::lift` gives each row one `descendant_mark` over its whole subtree (PRD D-40): `raised` with the number of raised descendants if there are any, else `working` with the number of working descendants, else none.
-The shell draws only the `raised` kind, as the turn mark and N, and only where those descendants are hidden: a folded sidebar parent, a 태스크 row whose children are folded.
+The shell draws only the `raised` kind, as the turn mark and N, and only in the tree popover on a folded branch: a sidebar or 태스크 row draws no count, because its root already stands in Needs You with the raised ask on its line (needs-you-cleanup D-03, B7).
 The `working` kind is still computed and draws nowhere: a parent waiting on its children shows its ring and the working child's line (PRD session-record-redesign D-04).
 Idle, done and unknown descendants add nothing, so a mark never says only that children exist.
 `row.state.tree_rank` orders siblings in every tree: asking or raised, itself or below it, first; then working; then finished and unread; then the rest.
@@ -1098,7 +1104,7 @@ An idle or done parent still owns the child; only a closed parent pane or absent
 `escalation::lift` carries every raised descendant to its lineage root (PRD D-10, D-27) as a `RaisedAsk`: the verb, what to do, the originating title, the agent named, the pane Open goes to, since when, the titles from the root and the checkout.
 The verb is Approval for a blocked child (Answer when it is blocked on a native question, with that question as what to do), Answer for an undelivered or unanswered letter, Confirm for an unanswered watch and Draft for a letter held by the parent's input, which names and opens that parent; a blocked parent stands for itself and adds no ask.
 An Answer also names the parent that has not received the letter.
-The root's asks are ordered by verb, then by age; the root enters Needs You and its second line is the lead ask, unless its own demand comes first, which an AI question or a block the operator has read no longer is.
+The root's asks are ordered by verb, then by age; the root enters Needs You and its second line is whichever waited longest of the lead ask and its own demand (an AI question or a block the operator has read no longer is one), ending with `외 N건` for every other ask waiting under the root, its own question or a mission decision included (needs-you-cleanup D-13, B9).
 The raised child keeps its own place in the tree, and no ancestor between it and the root changes group.
 Menu blocking uses Approval, a letter or question uses Answer, an unanswered watch uses Confirm, and a draft uses Draft.
 The first three causes clear on receipt or a successful bell, menu blocking on answer, and watch escalation on response, cancellation or a new child activity episode.
@@ -1117,7 +1123,7 @@ The notice says why the terminal is not live and is drawn in the pane's body: th
 A pane with a notice takes no answer, so it has no band, progress or working line.
 The band is the operator's turn and nothing else: the pane's own Approval, Answer or Blocked first, then the lead raised descendant, then the pane's own Stopped.
 A block the operator has read stays a Blocked band, read, as its row's `!` stays, behind a raised descendant's ask; only work left (`stopped_unfinished`, a wait nothing proves) is a Stopped band, which the shell words `일 남음` (Unfinished), as the row's line does, and draws without the warning colour, since it is not the operator's to answer.
-A pull request's verb (Fix, Review, Merge) and a finished turn (Result) have no band: the header's PR mark and status mark already say them; a finished turn the operator has not looked at still shows its request and result without a band until the pane is read; Working has a thin blue line and can show its own progress, a wait on working children shows its request and `대기 · 자식 에이전트 N개 작업 중`, while CI wait, a read finished turn and Idle have nothing.
+A pull request's verb (Fix, Review, Merge) and a finished turn (Result) have no band: the header's PR mark and status mark already say them; a finished turn the operator has not looked at still shows its request and result without a band until the pane is read; Working has a thin blue line and can show its own progress, a wait on working children shows its request and `자식 기다림 · 자식 N개 작업 중`, while CI wait, a read finished turn and Idle have nothing.
 A band stays until it is answered, not until it is read: `Band.read` says the operator has had the pane focused since it arrived, and a question the operator read but did not answer keeps its Answer band although the row's verb has left Answer.
 An ask band is quiet text on the secondary fill with a warning rail (PRD D-43): the pane's own ask starts with its verb and says what is asked (for an Answer, the row's second line, so a native question reads as itself).
 A raised descendant's `RaisedAsk` starts with its verb, then the originating agent's name and `(자식)` for a direct child or `(하위 세션)` for a deeper descendant, what to do, the unreceived parent for an Answer, the elapsed time, and Open.
@@ -1178,13 +1184,15 @@ The core never renames the Herdr tab for this; the Recent Panels label is projec
 ### A device's tasks
 
 A device's tasks (PRD overview-device-tasks D-05) group a root and every descendant on any device into one task, derived by `agent_state/tally/tasks.rs` from the same agent rows and lineage the sidebar draws; the sidebar's 태스크 list draws them (PRD sidebar-task-lens D-20), the Overview's Projects counts them, and the shell adds no state of its own.
-A task's state is its root's, in this order: blocked when the root's demand is an error, Needs You and Done from the root's group, working from its activity, revisit while the root carries `revisit` (below), waiting while it waits on proven work (its descendants, a background task, a reply or a pull request's checks), and otherwise resting, or cleanup when every pull request merged and a linked worktree is still on disk.
-`revisit` (PRD revisit-group) is laid on a root row by `sessions::revisit_of` from the row's own axes and the operator's mark in `ui_state.revisit_sessions`: a question or approval the operator read, on a root that is not blocked, working or resolved, unless 다시 볼 것에서 빼기 put away that ask (known by its state stamp, `changed_at_unix_ms`, which reading does not move); or the operator's ★.
+A task's state is its root's, in this order: blocked when the root's demand is an error, Needs You and Done from the root's group, working from its activity, revisit while the root carries the operator's ★ (below), Needs You with `read: true` while the root carries a read, unanswered ask not put off (needs-you-cleanup D-04), waiting while it waits on proven work (its descendants, a background task, a reply or a pull request's checks), and otherwise resting, or cleanup when every pull request merged and a linked worktree is still on disk.
+`revisit` (PRD revisit-group) is laid on a root row by `sessions::revisit_of` from the row's own axes and the operator's mark in `ui_state.revisit_sessions`: a question or approval the operator read, on a root that is not blocked, working or resolved, unless 치우기 or 다시 볼 것에서 빼기 put away that ask (known by its state stamp, `changed_at_unix_ms`, which reading does not move); or the operator's ★.
+A read ask without the ★ stands in Needs You, drawn read; 다시 볼 것 holds only what the operator put off with ★ (needs-you-cleanup D-04, B16), and ☆ on an unread ask reads it as the operator's focus would (`axes::read_now`) before starring it.
+Putting away an unanswered ask, by 치우기, 다시 볼 것에서 빼기 or the record's 넘기기, records one `verdict.ask_put_away` diagnostic, and a reply that answers the question ending a turn the label read as finished records one `verdict.answer_after_done`; both carry ids only and change nothing on screen (needs-you-cleanup D-06, D-15).
 The current state wins: a ★ task that asks, finishes or works stands in that group, and a ★ wins over waiting, rest and an automatic resolution, while an operator's 해결 takes the mark.
-A mark is bound to the session the pane hosted when it was written and is dropped when another known conversation replaces it or the pane closes, while a conversation reported only after the ★ keeps it; the phone's 다시 볼 것 counts as read, so reading an ask on the desktop clears its phone notice; the archive record keeps the root's ★ and gives it back to the resumed pane; at most 256 tasks carry a ★ (`MAX_STARRED_SESSIONS`), and a mark changes only once the state save holds it.
-Inside revisit the task waiting longest stands first, by the older of its ask and its ★.
+A mark is bound to the session the pane hosted when it was written and is dropped when another known conversation replaces it or the pane closes, while a conversation reported only after the ★ keeps it; a read ask on the phone stands in 내 차례 with `read: true` and counts as read, as its 다시 볼 것 does, so reading an ask on the desktop clears its phone notice and moving it between the two never announces it again; the archive record keeps the root's ★ and gives it back to the resumed pane; at most 256 tasks carry a ★ (`MAX_STARRED_SESSIONS`), and a mark changes only once the state save holds it.
+Inside revisit the task waiting longest stands first, by the older of its ask and its ★; inside Needs You a read ask stands by when its ask began, among the unread ones.
 A resolved root rests whatever its group was, and a descendant's state moves only its own row, as everywhere else: a child's ask reaches the card through the root's escalation ([Delegated escalation](#delegated-escalation)), never as a second state.
-A project's Needs You counts the tasks whose root asks for the operator, blocked ones included and resolved ones not, and work another device's root delegated here is counted on the root's device alone.
+A project's Needs You counts the tasks whose root asks for the operator, blocked ones and read asks included and resolved ones not, and work another device's root delegated here is counted on the root's device alone.
 A checkout names its issue or memo by the resolution below, and a started item rides its task instead of standing in the backlog.
 
 `runtime/issues.rs` resolves workspace manual overrides, pane-family issue tokens, branch configuration, PR closing references, then the two supported branch prefixes.
