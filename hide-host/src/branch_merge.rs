@@ -10,15 +10,21 @@
 //! and no answer is read from its wording: the exit codes, the porcelain
 //! formats and the state files in the git directory decide.
 //!
-//! The base's worktree is merged in place with `git merge`, so the operator's
-//! files and index move with the branch. When no worktree holds the base the
-//! ref moves alone: a fast-forward is one compare-and-swap `update-ref`, and
-//! a merge commit is built with `merge-tree --write-tree` (git 2.38) and
-//! `commit-tree` and then swapped in the same way; an older git answers an
-//! error rather than merging some other way. A base that moves between the
-//! read and the write is `BaseMoved` on the ref path, where the swap is
-//! atomic; on the worktree path the head is re-read just before `git merge`,
-//! and git itself refuses a head that moves under it.
+//! A merge commit is built with `merge-tree --write-tree` (git 2.38) and
+//! `commit-tree`. The base's worktree is moved in place by `git merge
+//! --ff-only --no-overwrite-ignore` to the branch's tip or to that commit, so
+//! the operator's files and index move with the branch, and a file the
+//! operator keeps ignored is never overwritten: the refusals read before the
+//! write name it, and git's fast-forward refuses one that appears after (its
+//! real merge would overwrite it, flag or not). An older git merges the
+//! worktree with `git merge --no-ff`, where only the refusals read before it
+//! guard an ignored file. When no worktree holds the base the ref moves
+//! alone: the tip or the merge commit is swapped in with one compare-and-swap
+//! `update-ref`, and an older git answers an error for a merge commit rather
+//! than merging some other way. A base that moves between the read and the
+//! write is `BaseMoved` on the ref path, where the swap is atomic; on the
+//! worktree path the head is re-read just before `git merge`, and git itself
+//! refuses a head that moves under it.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -297,11 +303,35 @@ fn ignored_paths(worktree: &Path) -> HostResult<Vec<String>> {
         .collect())
 }
 
-/// Whether `path` is one of `ignored` or inside an ignored folder.
-fn covers(ignored: &[String], path: &str) -> bool {
-    ignored
-        .iter()
-        .any(|entry| entry == path || (entry.ends_with('/') && path.starts_with(entry.as_str())))
+/// The worktree's own paths (uncommitted or ignored, a folder ending in `/`)
+/// that writing `changed` would overwrite: the same path, or one inside the
+/// other, a file where the branch puts a folder or a folder where it puts a
+/// file. Each is named as the operator's path, except a branch path inside an
+/// ignored folder, which says more than the folder does.
+fn overwritten(
+    local: impl IntoIterator<Item = String>,
+    changed: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    let mut found = BTreeSet::new();
+    for path in local {
+        let folder = path.ends_with('/');
+        let bare = path.trim_end_matches('/');
+        let prefix = format!("{bare}/");
+        let mut inside = changed
+            .range(prefix.clone()..)
+            .take_while(|entry| entry.starts_with(&prefix))
+            .peekable();
+        if folder {
+            found.extend(inside.by_ref().cloned());
+        }
+        let in_changed_file = bare
+            .match_indices('/')
+            .any(|(at, _)| changed.contains(&bare[..at]));
+        if changed.contains(bare) || in_changed_file || inside.peek().is_some() {
+            found.insert(path);
+        }
+    }
+    found
 }
 
 /// Every path in `git status -z` output, a rename's or copy's two included.
@@ -496,46 +526,76 @@ impl Plan<'_> {
             })?
         };
         let changed = changed_paths(root, &fork, &self.tip)?;
-        let ignored = ignored_paths(worktree)?;
-        let overlap: Vec<String> = status_paths(worktree)?
-            .into_iter()
-            .filter(|path| changed.contains(path))
-            .chain(
-                changed
-                    .iter()
-                    .filter(|path| covers(&ignored, path))
-                    .cloned(),
-            )
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect();
+        let overlap = self.overwritten_in(worktree, &changed)?;
         if !overlap.is_empty() {
             return Ok(dirty(overlap));
         }
-        if !self.fast_forward && supports_merge_tree() {
-            // A conflict is found in the object store, so the operator's
-            // files are not written and aborted.
-            if trial_merge(root, &self.base_tip, &self.tip)?.is_none() {
+        // A merge commit is built in the object store where git can, so a
+        // conflict leaves the operator's files unwritten, and the worktree
+        // then only fast-forwards to it: git's real merge overwrites an
+        // ignored file whatever `--no-overwrite-ignore` says, its
+        // fast-forward refuses to.
+        let target = if self.fast_forward {
+            Some(self.tip.clone())
+        } else if supports_merge_tree() {
+            let Some(commit) = self.merge_commit(root)? else {
                 return Ok(MergeOutcome::Conflict);
-            }
-        }
+            };
+            Some(commit)
+        } else {
+            None
+        };
         if read_text(worktree, &["rev-parse", "--verify", "HEAD"])? != self.base_tip {
             return Ok(MergeOutcome::BaseMoved);
         }
-        let ff_args = ["merge", "--ff-only", "--no-stat", &self.tip];
-        let merge_args = [
-            "merge",
-            "--no-ff",
-            "--no-edit",
-            "--no-stat",
-            "-m",
-            self.message,
-            &self.tip,
-        ];
-        let args: &[&str] = if self.fast_forward {
-            &ff_args
-        } else {
-            &merge_args
+        self.write(worktree, target.as_deref())
+    }
+
+    /// The worktree's uncommitted and ignored paths that a merge writing
+    /// `changed` would overwrite.
+    fn overwritten_in(
+        &self,
+        worktree: &Path,
+        changed: &BTreeSet<String>,
+    ) -> HostResult<BTreeSet<String>> {
+        let local = status_paths(worktree)?
+            .into_iter()
+            .chain(ignored_paths(worktree)?);
+        Ok(overwritten(local, changed))
+    }
+
+    /// Moves the worktree on `HEAD` to `target`, a commit that has the base
+    /// as its first parent, or merges the branch with `git merge` when this
+    /// git cannot build that commit. Git refuses, rather than overwrites, an
+    /// ignored file in the way of the fast-forward, so one that appeared after
+    /// the refusals were read is still kept.
+    fn write(&self, worktree: &Path, target: Option<&str>) -> HostResult<MergeOutcome> {
+        let ff_args;
+        let merge_args;
+        let args: &[&str] = match target {
+            Some(target) => {
+                ff_args = [
+                    "merge",
+                    "--ff-only",
+                    "--no-stat",
+                    "--no-overwrite-ignore",
+                    target,
+                ];
+                &ff_args
+            }
+            None => {
+                merge_args = [
+                    "merge",
+                    "--no-ff",
+                    "--no-edit",
+                    "--no-stat",
+                    "--no-overwrite-ignore",
+                    "-m",
+                    self.message,
+                    &self.tip,
+                ];
+                &merge_args
+            }
         };
         let output = match run_within(worktree, args, crate::git_run::CHANGE_DEADLINE) {
             Ok(output) => output,
@@ -581,11 +641,11 @@ impl Plan<'_> {
             };
         }
         // Git refused before it wrote anything. What it can refuse over
-        // without a conflict is the working tree: a file it would overwrite
-        // that is modified, or untracked where the branch adds one.
-        let status = status_paths(worktree)?;
-        if status.is_empty() {
-            return Err(describe(args, output));
+        // without a conflict is a head that moved, or the working tree: a
+        // file it would overwrite that is modified, or untracked or ignored
+        // where the branch adds one.
+        if read_text(worktree, &["rev-parse", "--verify", "HEAD"])? != self.base_tip {
+            return Ok(MergeOutcome::BaseMoved);
         }
         let changed = changed_paths(
             worktree,
@@ -593,16 +653,53 @@ impl Plan<'_> {
                 .unwrap_or_else(|| self.base_tip.clone()),
             &self.tip,
         )?;
-        let overlap: Vec<String> = status
-            .iter()
-            .filter(|path| changed.contains(*path))
-            .cloned()
-            .collect();
-        Ok(dirty(if overlap.is_empty() {
-            status
-        } else {
-            overlap.into_iter().collect()
-        }))
+        let overlap = self.overwritten_in(worktree, &changed)?;
+        if !overlap.is_empty() {
+            return Ok(dirty(overlap));
+        }
+        let status = status_paths(worktree)?;
+        if status.is_empty() {
+            return Err(describe(args, output));
+        }
+        Ok(dirty(status))
+    }
+
+    /// The merge commit of the branch into the base, written to the object
+    /// store with the base as its first parent and referenced by nothing, or
+    /// `None` when the two change the same lines. It is signed when the
+    /// operator's `commit.gpgSign` asks, as `git merge` would sign it;
+    /// `commit-tree` reads only its `-S`.
+    fn merge_commit(&self, root: &Path) -> HostResult<Option<String>> {
+        let Some(tree) = trial_merge(root, &self.base_tip, &self.tip)? else {
+            return Ok(None);
+        };
+        let sign_args = ["config", "--type=bool", "--get", "commit.gpgSign"];
+        let sign = run(root, &sign_args)?;
+        let sign = match sign.status.code() {
+            Some(0) => String::from_utf8_lossy(&sign.stdout).trim() == "true",
+            Some(1) => false,
+            _ => return Err(describe(&sign_args, &sign)),
+        };
+        let mut args = vec![
+            "commit-tree",
+            &tree,
+            "-p",
+            &self.base_tip,
+            "-p",
+            &self.tip,
+            "-m",
+            self.message,
+        ];
+        if sign {
+            args.push("-S");
+        }
+        let output = run_within(root, &args, crate::git_run::CHANGE_DEADLINE)?;
+        if !output.status.success() {
+            return Err(describe(&args, &output));
+        }
+        Ok(Some(
+            String::from_utf8_lossy(&output.stdout).trim().to_owned(),
+        ))
     }
 
     /// No worktree holds the base: move the ref alone.
@@ -616,22 +713,10 @@ impl Plan<'_> {
                     "merging a branch that is not checked out needs git 2.38 or newer",
                 ));
             }
-            let Some(tree) = trial_merge(root, &self.base_tip, &self.tip)? else {
+            let Some(commit) = self.merge_commit(root)? else {
                 return Ok(MergeOutcome::Conflict);
             };
-            read_text(
-                root,
-                &[
-                    "commit-tree",
-                    &tree,
-                    "-p",
-                    &self.base_tip,
-                    "-p",
-                    &self.tip,
-                    "-m",
-                    self.message,
-                ],
-            )?
+            commit
         };
         let reference = format!("refs/heads/{}", self.base);
         let log = format!("merge {}", self.branch);
@@ -653,5 +738,107 @@ impl Plan<'_> {
             return Ok(MergeOutcome::BaseMoved);
         }
         Err(describe(&args, &output))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn set(paths: &[&str]) -> BTreeSet<String> {
+        paths.iter().map(|path| (*path).to_owned()).collect()
+    }
+
+    #[test]
+    fn a_local_path_is_overwritten_by_the_same_path_or_one_inside_the_other() {
+        let changed = set(&["secret/config", "cache", "build/out.txt", "a.txt"]);
+        let local = [
+            "secret",     // a file where the branch adds a folder
+            "cache/data", // a file in a folder where the branch adds a file
+            "cache/",     // that folder, ignored
+            "build/",     // an ignored folder the branch adds into
+            "a.txt",      // the same path
+            "secret.bak", // a neighbour sharing only a prefix
+            "sec",
+            "a.txt.orig",
+            "build-old/",
+        ];
+        assert_eq!(
+            overwritten(local.map(str::to_owned), &changed),
+            set(&["a.txt", "build/out.txt", "cache/", "cache/data", "secret"])
+        );
+    }
+
+    fn git(dir: &Path, args: &[&str]) -> String {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args([
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=f@example.invalid",
+            ])
+            .args(["-c", "commit.gpgsign=false"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git {args:?}: {output:?}");
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    }
+
+    /// The write itself refuses an ignored file in the branch's way, for one
+    /// that appears after the refusals were read: a fast-forward and a merge
+    /// commit alike leave its bytes and the head where they were.
+    #[test]
+    fn the_write_keeps_an_ignored_file_that_appeared_after_the_refusals_were_read() {
+        for fast_forward in [true, false] {
+            let folder = tempfile::tempdir().unwrap();
+            let dir = folder.path();
+            git(dir, &["init", "-q", "-b", "main"]);
+            std::fs::write(dir.join(".gitignore"), "secret\n").unwrap();
+            git(dir, &["add", ".gitignore"]);
+            git(dir, &["commit", "-qm", "ignore"]);
+            git(dir, &["checkout", "-q", "-b", "feat"]);
+            std::fs::create_dir(dir.join("secret")).unwrap();
+            std::fs::write(dir.join("secret/config"), "from the branch\n").unwrap();
+            git(dir, &["add", "-f", "secret/config"]);
+            git(dir, &["commit", "-qm", "add"]);
+            let tip = git(dir, &["rev-parse", "HEAD"]);
+            git(dir, &["checkout", "-q", "main"]);
+            if !fast_forward {
+                std::fs::write(dir.join("main.txt"), "m\n").unwrap();
+                git(dir, &["add", "main.txt"]);
+                git(dir, &["commit", "-qm", "main"]);
+            }
+            let base_tip = git(dir, &["rev-parse", "HEAD"]);
+            let plan = Plan {
+                branch: "feat",
+                base: "main",
+                message: "Merge feat",
+                tip,
+                base_tip: base_tip.clone(),
+                fast_forward,
+            };
+            let target = if fast_forward {
+                plan.tip.clone()
+            } else {
+                plan.merge_commit(dir).unwrap().unwrap()
+            };
+            std::fs::write(dir.join("secret"), "operator data\n").unwrap();
+            let outcome = plan.write(dir, Some(&target)).unwrap();
+            assert_eq!(
+                outcome,
+                MergeOutcome::Dirty {
+                    files: vec!["secret".to_owned()]
+                },
+                "fast forward: {fast_forward}"
+            );
+            assert_eq!(
+                std::fs::read_to_string(dir.join("secret")).unwrap(),
+                "operator data\n"
+            );
+            assert_eq!(git(dir, &["rev-parse", "HEAD"]), base_tip);
+        }
     }
 }
