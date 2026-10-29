@@ -92,9 +92,11 @@ export function useReturnFocus(open: boolean, named?: { target: () => HTMLElemen
     if (openedAtClose.current !== null && openedAtClose.current !== layersOpened) return;
     // Radix hands focus back a tick after the layer closed; an item that
     // moved the keyboard on purpose in the meantime (Rename's inline field)
-    // keeps it, since taking it back would blur and commit that field.
+    // keeps it, since taking it back would blur and commit that field. A
+    // surface around the target (a dialog's focus trap, which takes the
+    // keyboard when the closed layer's focused element leaves) is a fallback.
     const now = document.activeElement;
-    if (now instanceof HTMLElement && now !== document.body && now.isConnected && !named?.within?.()?.contains(now)) return;
+    if (now instanceof HTMLElement && now !== document.body && now.isConnected && !now.contains(target) && !named?.within?.()?.contains(now)) return;
     returnKeyboardFocus(() => restoreFocus(target));
   }, []);
 }

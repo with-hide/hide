@@ -2,30 +2,38 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
+import { Dialog, DialogContent, DialogTitle } from "./dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./select";
 
 afterEach(() => { document.body.replaceChildren(); });
 
-/** A language select beside the control the operator moves to next, as Settings lays them out. */
+/**
+ * A language select beside the control the operator moves to next, inside a
+ * dialog as Settings lays them out: the dialog's focus trap takes the keyboard
+ * when the picked option leaves, before the select's own hand-back runs.
+ */
 function mountSelect() {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
   act(() => root.render(
-    <>
-      <Select defaultValue="en">
-        <SelectTrigger aria-label="language"><SelectValue /></SelectTrigger>
-        <SelectContent>
-          <SelectItem value="en">English</SelectItem>
-          <SelectItem value="ko">Korean</SelectItem>
-        </SelectContent>
-      </Select>
-      <input type="range" aria-label="size" />
-    </>,
+    <Dialog open>
+      <DialogContent aria-describedby={undefined}>
+        <DialogTitle>Settings</DialogTitle>
+        <Select defaultValue="en">
+          <SelectTrigger aria-label="language"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="en">English</SelectItem>
+            <SelectItem value="ko">Korean</SelectItem>
+          </SelectContent>
+        </Select>
+        <input type="range" aria-label="size" />
+      </DialogContent>
+    </Dialog>,
   ));
-  const trigger = container.querySelector<HTMLButtonElement>("[aria-label=language]")!;
-  const next = container.querySelector<HTMLInputElement>("[aria-label=size]")!;
+  const trigger = document.querySelector<HTMLButtonElement>("[aria-label=language]")!;
+  const next = document.querySelector<HTMLInputElement>("[aria-label=size]")!;
   return { trigger, next, unmount: () => act(() => root.unmount()) };
 }
 
