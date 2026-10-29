@@ -128,6 +128,18 @@ class RefusedCell(unittest.TestCase):
         self.assertEqual(table["title"]["status"], cells.NOT_MEASURED)
         self.assertEqual(record["provider_limit"]["failure"], "Hide's reader found no assistant message")
 
+    def test_a_start_whose_emitter_failed_beside_an_unanswered_turn_stays_the_emitters_failure(self):
+        unanswered = cells.turn_verdict([], [{"role": "user", "text": "go"}], "JOURNEY-1")
+        emitter = cells.emitter_verdict(None, "herdr:codex")
+        verdict = cells.start_verdict((cells.PASS, "spawned"), unanswered, emitter)
+        self.assertEqual(cells.kind(unanswered), cells.NO_ANSWER)
+        table, record = self.settled(verdict)
+        self.assertEqual((table["resume"]["status"], table["resume"]["reason"]), emitter)
+        self.assertEqual(table["title"]["status"], cells.PENDING)
+        self.assertNotIn("provider_limit", record)
+        alone = cells.start_verdict((cells.PASS, "spawned"), unanswered, (cells.PASS, "emitter"))
+        self.assertEqual(self.settled(alone)[0]["resume"]["status"], cells.NOT_MEASURED)
+
     def test_an_answered_turn_another_session_or_a_plain_failure_stays_a_failure(self):
         answered = {"session": THREAD, "events": [{"role": "assistant", "text": "something else"}]}
         for verdict in (

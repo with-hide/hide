@@ -221,10 +221,12 @@ def emitter_verdict(session, expected):
 
 
 def start_verdict(*verdicts):
-    """The first verdict that did not pass, or all of their reasons."""
-    for verdict in verdicts:
-        if verdict[0] != PASS:
-            return verdict
+    """The first verdict that did not pass, a turn never answered last, or
+    all of their reasons. A provider's limit explains only that turn, so a
+    check that failed on its own beside it is the start's failure."""
+    failed = [verdict for verdict in verdicts if verdict[0] != PASS]
+    if failed:
+        return next((verdict for verdict in failed if kind(verdict) != NO_ANSWER), failed[0])
     return PASS, "; ".join(reason for _, reason in verdicts)
 
 
