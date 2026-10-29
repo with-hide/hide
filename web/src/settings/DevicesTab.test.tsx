@@ -183,10 +183,10 @@ it("shows helper failures on a connected device and consent before Herdr can con
   expect(down.q('[data-device-host-retry="mini"]')).not.toBeNull();
   await down.unmount();
 
-  for (const problem of ["device_unavailable", "device_protocol_behind"]) {
+  for (const message of ["Herdr 0.8.2 uses an older protocol", "Herdr was not found"]) {
     const blocked = await mount(state([remote("studio", {
-      state: "unavailable", problem,
-      message: problem === "device_protocol_behind" ? "Herdr 0.8.2 uses an older protocol" : "Herdr was not found",
+      state: "unavailable",
+      message,
       host: { ...host, consent: "none", state: "not_allowed", helper_root: null },
     })]));
     try {
@@ -204,11 +204,14 @@ it("shows helper failures on a connected device and consent before Herdr can con
 it("shows why an Intel Mac is unsupported before a session connects, without a helper retry", async () => {
   const message = "Intel Mac devices are not supported; Hide ships for Apple Silicon Macs only";
   const view = await mount(state([remote("mini", {
-    state: "unavailable", problem: "device_unavailable",
+    state: "unavailable", problem: "unsupported", message,
     host: { ...host, platform: "macos-x86_64", consent: "granted", state: "unsupported", message },
   })]));
   try {
     expect(view.q('[data-device-host="mini:unsupported"]')?.textContent).toContain(message);
+    // The helper line says it once; the row adds no second line for the same reason.
+    expect(view.q('[data-device-problem]')).toBeNull();
+    expect(view.q('[data-device-message="mini"]')).toBeNull();
     expect(view.q('[data-device-host-retry="mini"]')).toBeNull();
   } finally {
     await view.unmount();
@@ -222,7 +225,7 @@ it.each([
 ])("shows the kit failure and retries before a device session connects: %s", async (reason) => {
   const message = `Device kit download failed: ${reason}. Retry the device connection`;
   const view = await mount(state([remote("mini", {
-    state: "unavailable", problem: "device_protocol_behind", message: "Herdr uses an older protocol",
+    state: "unavailable", message: "Herdr uses an older protocol",
     host: { ...host, consent: "granted", state: "unavailable", message },
   })]));
   try {
@@ -373,4 +376,97 @@ it("puts a node's own machine first as This Mac, with the core back and the end 
   expect(document.querySelector('[data-device-move="mini"]')).toBeNull();
   window.location.hash = "";
   await unmount();
+});
+
+// PRD system-ssh-device-link: what ssh asks and how it failed, on the device's row.
+const waiting = (id: string, sign_in: Device["sign_in"]) => {
+  const next = state([remote(id, { state: "unavailable", sign_in, host: { ...host, state: "connecting" } })]);
+  next.rest.status.remote = [{ target_id: id, state: "connecting", message: null, herdr_version: "0.9.1" }];
+  return next;
+};
+
+it("asks ssh's question in a masked field, sends the answer to that question and clears it, and cancels (B6, B8, B9)", async () => {
+  const view = await mount(waiting("mini", { question: 7, key_command: "ssh-add --apple-use-keychain /Users/al/.ssh/id_ed25519", kind: "secret", prompt: "Enter passphrase for key '/Users/al/.ssh/id_ed25519':", key_file: "/Users/al/.ssh/id_ed25519" }));
+  try {
+    expect(view.q('[data-device-sign-in="mini:secret"]')?.textContent).toContain("Enter passphrase for key '/Users/al/.ssh/id_ed25519':");
+    const field = view.q('[data-device-sign-in-field="mini"]') as HTMLInputElement;
+    expect(field.type).toBe("password");
+    expect(view.q('[data-device-sign-in-key-command="mini"]')?.textContent).toContain("ssh-add --apple-use-keychain /Users/al/.ssh/id_ed25519");
+    // A device mid-attempt offers no Retry beside its question.
+    expect(view.q('[data-device-retry="mini"]')).toBeNull();
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(field, "hunter2");
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => { view.q('[data-device-sign-in-submit="mini"]')!.click(); });
+    expect(sent(view.events, "device_sign_in")).toEqual([{ schema_version: 2, kind: "device_sign_in", payload: { device_id: "mini", question: 7, reply: "text", text: "hunter2" } }]);
+    expect(field.value).toBe("");
+    await act(async () => { view.q('[data-device-sign-in-cancel="mini"]')!.click(); });
+    expect(sent(view.events, "device_sign_in")[1]).toEqual({ schema_version: 2, kind: "device_sign_in", payload: { device_id: "mini", question: 7, reply: "cancel" } });
+  } finally {
+    await view.unmount();
+  }
+});
+
+it("shows a server it has not met with its fingerprint, and neither trust nor cancel is chosen for the operator (B12)", async () => {
+  const view = await mount(waiting("mini", { question: 2, key_command: null, kind: "host_key", host: "[mini.example]:2222", fingerprint: "SHA256:Jq8F2n1xR0a+e3uY7kz6m4W0cB9vT5pLhGd2sQ1oE8I" }));
+  try {
+    expect(view.q('[data-device-sign-in-fingerprint="mini"]')?.textContent).toBe("SHA256:Jq8F2n1xR0a+e3uY7kz6m4W0cB9vT5pLhGd2sQ1oE8I");
+    const trust = view.q('[data-device-sign-in-trust="mini"]')!;
+    expect(trust.textContent).toBe("Trust this server and connect");
+    expect([trust, view.q('[data-device-sign-in-cancel="mini"]')]).not.toContain(document.activeElement);
+    await act(async () => { trust.click(); });
+    expect(sent(view.events, "device_sign_in")).toEqual([{ schema_version: 2, kind: "device_sign_in", payload: { device_id: "mini", question: 2, reply: "accept" } }]);
+  } finally {
+    await view.unmount();
+  }
+});
+
+it("opens a sign-in page in the default browser and says it waits for it (B4)", async () => {
+  const opened = vi.spyOn(window, "open").mockReturnValue(null);
+  const view = await mount(waiting("mini", { question: 1, key_command: null, kind: "browser", url: "https://login.tailscale.com/a/1a2b3c" }));
+  try {
+    expect(view.q('[data-device-sign-in="mini:browser"]')?.textContent).toContain("Waiting for confirmation in the browser");
+    await act(async () => { view.q('[data-device-sign-in-open="mini"]')!.click(); });
+    expect(opened).toHaveBeenCalledWith("https://login.tailscale.com/a/1a2b3c", "_blank", "noopener,noreferrer");
+  } finally {
+    opened.mockRestore();
+    await view.unmount();
+  }
+});
+
+it("says a failure by its class and keeps ssh's words in the log, except an unclassified one's last line (B13, B18, B19)", async () => {
+  const unavailable = { ...host, state: "unavailable" as const, message: "Host key verification failed." };
+  const changed = await mount(state([remote("mini", { state: "unavailable", problem: "host_key_changed", message: "Host key verification failed.", host: unavailable })]));
+  try {
+    expect(changed.q('[data-device-problem="mini:host_key_changed"]')?.textContent).toContain("Server key changed");
+    expect(changed.q('[data-device-problem-command="mini"]')?.textContent).toBe("ssh mini");
+    expect(changed.row("mini")?.textContent).not.toContain("Host key verification failed.");
+    // The helper is the link: its unavailable line would say the same failure again.
+    expect(changed.q('[data-device-host]')).toBeNull();
+  } finally {
+    await changed.unmount();
+  }
+  const odd = await mount(state([remote("mini", { state: "unavailable", problem: "unclassified", message: "kex_exchange_identification: read: Connection reset by peer", host: { ...unavailable, message: "kex_exchange_identification: read: Connection reset by peer" } })]));
+  try {
+    expect(odd.q('[data-device-problem="mini:unclassified"]')?.textContent).toBe("!ssh could not connect");
+    expect(odd.q('[data-device-message="mini"]')?.textContent).toBe("kex_exchange_identification: read: Connection reset by peer");
+  } finally {
+    await odd.unmount();
+  }
+});
+
+it("stops a reconnect nobody could be asked for at Sign in, which starts an attempt that may ask (B8, B14)", async () => {
+  const next = state([remote("mini", { state: "unavailable", problem: "sign_in_needed", host: { ...host, state: "unavailable", message: "ssh needs an answer" } })]);
+  next.rest.status.remote = [{ target_id: "mini", state: "unavailable", message: null, herdr_version: null as never }];
+  const view = await mount(next);
+  try {
+    expect(view.q('[data-device-problem="mini:sign_in_needed"]')?.textContent).toContain("Sign-in needed");
+    const signIn = view.q('[data-device-retry="mini"]')!;
+    expect(signIn.textContent).toBe("Sign in");
+    await act(async () => { signIn.click(); });
+    expect(sent(view.events, "retry_connect")).toEqual([{ schema_version: 2, kind: "retry_connect", payload: { target_id: "mini" } }]);
+  } finally {
+    await view.unmount();
+  }
 });

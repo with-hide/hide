@@ -9333,6 +9333,72 @@ mod wire_enum_tests {
         assert_wire(&contract, "suggestion_attempt_phase", &phases);
         checked.insert("suggestion_attempt_phase");
 
+        use hide_node_link::device::{SignInWait, SshProblem};
+        let problems = [
+            SshProblem::SignInNeeded,
+            SshProblem::BrowserTimeout,
+            SshProblem::SignInRefused,
+            SshProblem::PolicyRefused,
+            SshProblem::HostKeyChanged,
+            SshProblem::NameNotFound,
+            SshProblem::Unreachable,
+            SshProblem::ProxyFailed,
+            SshProblem::Unsupported,
+            SshProblem::SshMissing,
+            SshProblem::OpenSshOld,
+            SshProblem::Unclassified,
+        ];
+        for variant in problems {
+            match variant {
+                SshProblem::SignInNeeded
+                | SshProblem::BrowserTimeout
+                | SshProblem::SignInRefused
+                | SshProblem::PolicyRefused
+                | SshProblem::HostKeyChanged
+                | SshProblem::NameNotFound
+                | SshProblem::Unreachable
+                | SshProblem::ProxyFailed
+                | SshProblem::Unsupported
+                | SshProblem::SshMissing
+                | SshProblem::OpenSshOld
+                | SshProblem::Unclassified => {}
+            }
+        }
+        assert_wire(&contract, "device_problem", &problems.map(SshProblem::code));
+        checked.insert("device_problem");
+
+        let text = String::new;
+        let waits = [
+            SignInWait::Queued,
+            SignInWait::Secret {
+                prompt: text(),
+                key_file: None,
+            },
+            SignInWait::HostKey {
+                host: text(),
+                fingerprint: text(),
+            },
+            SignInWait::Confirm { prompt: text() },
+            SignInWait::Touch { prompt: text() },
+            SignInWait::Browser { url: text() },
+        ];
+        for variant in &waits {
+            match variant {
+                SignInWait::Queued
+                | SignInWait::Secret { .. }
+                | SignInWait::HostKey { .. }
+                | SignInWait::Confirm { .. }
+                | SignInWait::Touch { .. }
+                | SignInWait::Browser { .. } => {}
+            }
+        }
+        assert_wire(
+            &contract,
+            "device_sign_in_kind",
+            &waits.each_ref().map(SignInWait::kind),
+        );
+        checked.insert("device_sign_in_kind");
+
         let unchecked = contract
             .keys()
             .filter(|key| !checked.contains(key.as_str()))

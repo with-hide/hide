@@ -1,4 +1,6 @@
 import { emptyScope } from "../test/legacyAgentScope";
+import fs from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import tokensText from "../../design/tokens.json?raw";
 import { initializeInterfaceI18n } from "./i18n/instance";
@@ -31,14 +33,14 @@ import {
   unstoredDeviceDrafts,
 } from "./settings";
 import { redact } from "./redact";
-import type { Device, DeviceHost, Kit, KitComponent, RemoteStatus } from "./snapshot";
+import type { Device, DeviceHost, DeviceProblem, Kit, KitComponent, RemoteStatus } from "./snapshot";
 
 // The English strings are what the sheet shipped with; the rules read the same under them.
 const t = initializeInterfaceI18n("en").getFixedT(null, "translation");
 const korean = initializeInterfaceI18n("ko").getFixedT(null, "translation");
 const deviceSubtitle = (device: Device, remote: RemoteStatus | undefined) => deviceSubtitleIn(device, remote, t);
 const deviceAwayLine = (patch: Partial<Device>, name = "Mac mini") => deviceAwayLineIn(device(patch), name, t);
-const deviceProblemLine = (problem: string | null | undefined, alias: string | null) => deviceProblemLineIn(problem, alias, t);
+const deviceProblemLine = (problem: DeviceProblem | null | undefined, alias: string | null, platform?: string) => deviceProblemLineIn(problem, alias, t, platform);
 const deviceRemovalLines = (deviceId: string, registrations: Parameters<typeof deviceRemovalLinesIn>[1], tabs: Parameters<typeof deviceRemovalLinesIn>[2], drafts: Parameters<typeof deviceRemovalLinesIn>[3], onlyExported: (tabId: string) => boolean = () => false) =>
   deviceRemovalLinesIn(deviceId, registrations, tabs, drafts, onlyExported, t);
 const deviceLine = (device: Device, remote: RemoteStatus | undefined) => deviceLineIn(device, remote, t);
@@ -76,11 +78,25 @@ describe("where settings live and what a device reported", () => {
     expect(deviceSubtitleIn(wsl, { ...status, target_id: wsl.id }, t, "This PC")).toBe("WSL Ubuntu · This PC · Herdr 0.9.1");
   });
 
-  it("tells a changed host key, an unknown one and a refused sign-in apart", () => {
-    expect(deviceProblemLine("host_key_changed", "studio")?.headline).toBe("Host key changed");
-    expect(deviceProblemLine("host_key_unknown", "studio")?.action).toContain("ssh studio");
-    expect(deviceProblemLine("authentication", "studio")?.headline).toBe("Sign-in refused");
+  it("words every class of ssh failure, with the command a terminal checks it with where it has one (PRD system-ssh-device-link B13, B18-B21)", () => {
+    const contract = JSON.parse(fs.readFileSync(path.resolve(__dirname, "../../contracts/snapshot-wire-enums.json"), "utf8")) as { device_problem: DeviceProblem[] };
+    for (const problem of contract.device_problem) {
+      const line = deviceProblemLine(problem, "studio");
+      expect(line?.headline, problem).toBeTruthy();
+      expect(line?.headline).not.toMatch(/devices\./);
+    }
+    expect(deviceProblemLine("host_key_changed", "studio")).toMatchObject({ headline: "Server key changed", command: "ssh studio" });
+    expect(deviceProblemLine("proxy_failed", "studio")?.command).toBe("ssh studio");
+    expect(deviceProblemLine("sign_in_refused", "studio")).toMatchObject({ headline: "Sign-in refused", command: null });
+    // An unclassified failure has no advice of its own: ssh's last line is said under it (B19).
+    expect(deviceProblemLine("unclassified", "studio")).toEqual({ headline: "ssh could not connect", action: null, command: null });
     expect(deviceProblemLine(null, "studio")).toBeNull();
+  });
+
+  it("says how to install ssh on the system the core runs on (B20)", () => {
+    expect(deviceProblemLine("ssh_missing", "studio", "windows x86_64")?.action).toContain("Optional features");
+    expect(deviceProblemLine("ssh_missing", "studio", "linux x86_64")?.action).toContain("openssh-client");
+    expect(deviceProblemLine("ssh_missing", "studio", "macos aarch64")?.action).toBe("Install the OpenSSH client, then Retry.");
   });
 });
 
@@ -93,9 +109,18 @@ describe("what a screen says while a device is away", () => {
   });
 
   it("says a refused trust or sign-in by its class, with the one thing to do in the hint", () => {
-    const away = deviceAwayLine({ state: "unavailable", problem: "authentication", ssh_alias: "mini", message: "stage=auth target=ssh:mini" });
+    const away = deviceAwayLine({ state: "unavailable", problem: "sign_in_refused", ssh_alias: "mini", message: "Permission denied (publickey,password)." });
     expect(away.text).toBe("Mac mini is not connected: Sign-in refused. Showing the last state it reported; nothing is sent until it reconnects.");
-    expect(away.hint).toContain("IdentityFile");
+    expect(away.hint).toBe("mini did not accept the answer. Retry to sign in again.");
+    expect(away.toRow).toBe(false);
+  });
+
+  it("leads a device waiting on a sign-in to its row, where it is answered (B15)", () => {
+    const asking = deviceAwayLine({ state: "unavailable", ssh_alias: "mini", sign_in: { question: 3, key_command: null, kind: "secret", prompt: "alice@mini's password:" } });
+    expect(asking).toEqual({ text: "Mac mini is not connected: waiting for you to sign in. Showing the last state it reported; nothing is sent until it reconnects.", hint: "Answer on its row in Settings › Devices.", toRow: true });
+    expect(deviceAwayLine({ state: "unavailable", problem: "sign_in_needed" }).toRow).toBe(true);
+    // A place in line for other devices asks nothing of the operator.
+    expect(deviceAwayLine({ state: "unavailable", sign_in: { question: 4, key_command: null, kind: "queued" } }).toRow).toBe(false);
   });
 });
 
