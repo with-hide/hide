@@ -706,6 +706,14 @@ fn a_plain_shell_on_the_device_opens_its_folder_as_a_project() -> Result<()> {
         let remote_hide = fixture.remote.environment.home.join("bin/hide");
         let folder = fixture.remote.environment.home.join("plain-open");
         std::fs::create_dir_all(folder.join("src"))?;
+        // The run directory lives inside this checkout, whose repository
+        // holds the account's home; the folder is a repository of its own,
+        // as the fixture's project is.
+        let mut init = fixture.remote.environment.command("/usr/bin/git");
+        init.args(["-c", "init.defaultBranch=main", "-C"])
+            .arg(&folder)
+            .args(["init", "-q"]);
+        fixture::successful(init)?;
         let open = |path: &std::path::Path| {
             let mut command = fixture.remote.environment.command(&remote_hide);
             command.arg(path);
