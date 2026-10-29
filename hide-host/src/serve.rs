@@ -1244,6 +1244,44 @@ pub fn handle_with_progress(
         Call::Git { root, command } => {
             to_value(crate::git_command::run(&absolute(&root)?, &command)?)
         }
+        Call::BranchFacts {
+            root,
+            branch,
+            tip,
+            base,
+        } => to_value(crate::branch_merge::facts(
+            &absolute(&root)?,
+            &branch,
+            tip.as_deref(),
+            &base,
+        )?),
+        Call::BranchMerge {
+            root,
+            branch,
+            base,
+            message,
+        } => to_value(crate::branch_merge::merge(
+            &absolute(&root)?,
+            &branch,
+            &base,
+            &message,
+        )?),
+        Call::BranchDiff {
+            root,
+            branch,
+            base,
+            path,
+        } => to_value(crate::branch_merge::diff(
+            &absolute(&root)?,
+            &branch,
+            &base,
+            &path,
+        )?),
+        Call::BranchDiscard { root, branch, tip } => to_value(crate::branch_merge::discard(
+            &absolute(&root)?,
+            &branch,
+            tip.as_deref(),
+        )?),
         Call::AiAvailability { backend } => to_value(env.ai.availability(&backend)?),
         Call::AiModels { backend } => to_value(env.ai.models(&backend)?),
         Call::AiExecute { backend, request } => to_value(env.ai.execute(

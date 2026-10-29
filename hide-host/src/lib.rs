@@ -12,6 +12,7 @@
 
 pub mod ai;
 pub mod attachments;
+pub mod branch_merge;
 pub mod bytes;
 pub mod catalog;
 pub mod cleanup;

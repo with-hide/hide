@@ -602,7 +602,7 @@ fn committed_diff(
     bounded(entry.path.clone(), text)
 }
 
-fn bounded(path: String, text: Result<(String, bool), String>) -> Diff {
+pub(crate) fn bounded(path: String, text: Result<(String, bool), String>) -> Diff {
     let (text, truncated) = match text {
         Ok(read) => read,
         Err(reason) => {
@@ -700,7 +700,17 @@ fn git_diff_text(
     no_index: bool,
     input: Option<std::fs::File>,
 ) -> Result<(String, bool), String> {
-    let mut command = git.command();
+    diff_text(git.command(), arguments, no_index, input)
+}
+
+/// [`git_diff_text`] for a `git` command the caller has started in its own
+/// directory (a branch's diff, which has no opened checkout root).
+pub(crate) fn diff_text(
+    mut command: Command,
+    arguments: &[&str],
+    no_index: bool,
+    input: Option<std::fs::File>,
+) -> Result<(String, bool), String> {
     command.args(arguments);
     command.stdin(match input {
         Some(input) => Stdio::from(input),
