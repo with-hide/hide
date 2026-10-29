@@ -4,6 +4,7 @@ import { stepMarks, type MoveView } from "./coreMove";
 import { createInterfaceI18n } from "./i18n/instance";
 import { moveForm } from "./settings/CoreMoveDialog";
 import { coreMachineName, moveMachines } from "./screenMachine";
+import type { DeviceProblem } from "./snapshot";
 
 const view = (over: Partial<MoveView>): MoveView => ({ state: "idle", direction: "forward", device: "mini", intent: null, sent: 0, total: 0, failed: [], step: null, cause: null, node: null, ...over });
 
@@ -91,17 +92,27 @@ describe("the strip above the window (W1 to W3)", () => {
     expect(windowStrip({ ...fresh, connection: "connecting", link: { phase: "disconnected", machine: null, alias: "mini" } }, t)?.text).toBe("mini core와 연결을 끊었어요");
   });
 
-  it("says what the operator can do when the link stopped on what only they can fix, and offers the retry", async () => {
+  it("offers the device row's three actions when the link stopped on what only the operator can fix", async () => {
     const { t } = await createInterfaceI18n("ko");
     const base = { refused: false, move: null, machines, coreMachine: "Mac mini", connection: "reconnecting" as const };
-    const stopped = (problem: string) => windowStrip({ ...base, link: { phase: "stopped", machine: null, alias: "mini", problem } }, t);
-    expect(stopped("sign_in_needed")).toEqual({
-      kind: "stopped",
-      mark: "warn",
-      text: "Mac mini core에 로그인하려면 확인이 필요해요 · 터미널에서 ssh mini 명령을 한 번 실행하거나 ssh-add로 키를 더해 주세요",
-      action: "retry",
-    });
-    expect(stopped("host_key_changed")?.text).toBe("Mac mini core의 서버 키가 바뀌었어요 · 터미널에서 확인해 주세요");
-    expect(stopped("sign_in_refused")).toMatchObject({ text: "ssh로 Mac mini core에 연결하지 못했어요 · 터미널에서 ssh mini 명령으로 이유를 확인해 주세요", action: "retry" });
+    const stopped = (problem: DeviceProblem) => windowStrip({ ...base, link: { phase: "stopped", machine: null, alias: "mini", problem } }, t);
+    // A sign-in: its Retry reads Sign in and starts the dial that may ask.
+    expect(stopped("sign_in_needed")).toEqual({ kind: "stopped", mark: "warn", text: "Mac mini core에 연결하려면 로그인이 필요해요", action: "sign_in" });
+    expect(stopped("sign_in_refused")).toMatchObject({ text: "Mac mini core가 로그인을 거절했어요", action: "sign_in" });
+    // A changed server key: the terminal command that checks it, and no Retry (#1840's decision for the device row).
+    expect(stopped("host_key_changed")).toEqual({ kind: "stopped", mark: "warn", text: "Mac mini core의 서버 키가 바뀌었어요 · 터미널에서 확인해 주세요", command: "ssh mini" });
+    // Anything else is a retry.
+    expect(stopped("cannot_connect")).toMatchObject({ text: "ssh로 Mac mini core에 연결하지 못했어요 · 터미널에서 ssh mini 명령으로 이유를 확인해 주세요", action: "retry" });
+    expect(stopped("cannot_connect")?.command).toBeUndefined();
+  });
+
+  it("shows what ssh asks the operator's own dial under the strip, whatever the phase", async () => {
+    const { t } = await createInterfaceI18n("ko");
+    const base = { refused: false, move: null, machines, coreMachine: "Mac mini", connection: "reconnecting" as const };
+    const sign_in = { question: 3, kind: "host_key" as const, host: "[mini]:22", fingerprint: "SHA256:abc", key_command: null };
+    expect(windowStrip({ ...base, link: { phase: "connecting", machine: null, alias: "mini", sign_in } }, t)).toEqual({ kind: "sign_in", mark: "pending", text: "Mac mini core에 로그인하는 중", signIn: sign_in });
+    expect(windowStrip({ ...base, link: { phase: "updating", machine: "Mac mini", alias: "mini", sign_in } }, t)?.signIn).toBe(sign_in);
+    // A live link draws the core; nothing of the strip stays.
+    expect(windowStrip({ ...base, connection: "live", link: { phase: "connecting", machine: null, alias: "mini", sign_in } }, t)).toBeNull();
   });
 });

@@ -1393,16 +1393,7 @@ impl DeviceProblem {
 }
 
 /// What a device's connection attempt waits on, as its row shows it.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct DeviceSignInSnapshot {
-    /// The number the row's answer names (`device_sign_in`).
-    pub question: u64,
-    #[serde(flatten)]
-    pub wait: hide_node_link::device::SignInWait,
-    /// For a key's passphrase: the command that adds the key to the agent
-    /// of the machine ssh runs on, so it is typed once (B9).
-    pub key_command: Option<String>,
-}
+pub type DeviceSignInSnapshot = hide_node_link::device::ShownSignIn;
 
 /// One staged connection test of an SSH device: SSH, authentication, Herdr,
 /// protocol, PTY and Git, each with the host's answer.

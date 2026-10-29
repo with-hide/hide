@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
-use hide_node_link::device::Cancel;
+use hide_node_link::device::{Cancel, NoSignIn, SignIn, SshProblem, Wake};
 
 use super::lock_recover;
 use super::openssh;
@@ -92,6 +92,13 @@ pub struct Upstream {
     /// Set while a resolution of the core machine's name runs: one at a
     /// time, however long the system's resolver takes.
     resolving: Arc<AtomicBool>,
+    /// Where the next dial's questions go: the sign-in of the operator's
+    /// own press, none for a dial nobody pressed for (PRD
+    /// system-ssh-device-link D-06, B33). A dial takes it, so one press
+    /// allows one sign-in and every later dial asks nobody.
+    press: Mutex<Option<Arc<dyn SignIn>>>,
+    /// What `ssh` stopped on at the last dial, none when it signed in.
+    failed: Mutex<Option<SshProblem>>,
 }
 
 impl Upstream {
@@ -103,12 +110,28 @@ impl Upstream {
             cancel: Cancel::default(),
             resolved: Mutex::new(None),
             resolving: Arc::default(),
+            press: Mutex::new(None),
+            failed: Mutex::new(None),
         }
+    }
+
+    /// Where the next dial may ask the operator: `press`, the sign-in of a
+    /// step their own press started, or none. The dial takes it, so the
+    /// dials after it ask nobody until the next press; a session already
+    /// signed in asks nothing more.
+    pub fn may_ask(&self, press: Option<Arc<dyn SignIn>>) {
+        *lock_recover(&self.press) = press;
     }
 
     /// The alias this connection dials.
     pub fn alias(&self) -> &str {
         self.target.alias()
+    }
+
+    /// What `ssh` stopped on at the last dial, for a screen to say what the
+    /// operator does about it; none when that dial signed in.
+    pub fn ssh_problem(&self) -> Option<SshProblem> {
+        *lock_recover(&self.failed)
     }
 
     /// Runs `step` on the session the last step left, or on a new one, and
@@ -130,9 +153,22 @@ impl Upstream {
     }
 
     fn open(&self) -> Result<Session, SessionError> {
+        let opened = self.dial();
+        *lock_recover(&self.failed) = match &opened {
+            Err(SessionError::Ssh(failure)) => Some(failure.problem),
+            _ => None,
+        };
+        opened
+    }
+
+    fn dial(&self) -> Result<Session, SessionError> {
+        let (asks, wake): (Arc<dyn SignIn>, _) = match lock_recover(&self.press).take() {
+            Some(press) => (press, Wake::Allowed),
+            None => (Arc::new(NoSignIn), Wake::NotAllowed),
+        };
         let resolved = self.target.resolve().map_err(SessionError::Ssh)?;
         *lock_recover(&self.resolved) = Some(resolved.clone());
-        Session::open(&self.target, &resolved, &self.cancel)
+        Session::open(&self.target, &resolved, &self.cancel, asks, wake)
     }
 
     /// Runs `program attach [--state-dir <dir>]` on the machine in place of
