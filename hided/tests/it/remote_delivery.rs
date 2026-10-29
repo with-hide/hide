@@ -728,6 +728,14 @@ fn a_plain_shell_on_the_device_opens_its_folder_as_a_project() -> Result<()> {
             text(&added.stdout),
             text(&added.stderr)
         );
+        // The device asked its core; it never started a Hide of its own,
+        // whatever folder its helper was installed in.
+        let device_state = hide_kit::layout::default_state_dir(&fixture.remote.environment.home);
+        ensure!(
+            !device_state.join("hided.json").exists(),
+            "the device started a Hide of its own at {}",
+            device_state.display()
+        );
         let wire = folder.to_string_lossy().into_owned();
         wait_for("the device's folder registered on the core", || {
             let snapshot = fixture.snapshot()?;

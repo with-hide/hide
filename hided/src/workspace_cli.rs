@@ -535,6 +535,9 @@ pub fn request_project_open(credential: &mut Credential, path: &str) -> Result<V
 /// (`hide_host::panes`). No live service means the device is not connected;
 /// several mean several cores have it open, and which one is meant is not
 /// guessed.
+/// No node of this account answers: this machine is no connected device.
+pub const NOT_LINKED: &str = "device_not_linked";
+
 pub fn request_project_open_on_bridge(env: &Env, path: &str) -> Result<Value, String> {
     project_open_on_bridge(&hide_kit::layout::workspace_bridges(&env.state_dir), path)
 }
@@ -542,7 +545,7 @@ pub fn request_project_open_on_bridge(env: &Env, path: &str) -> Result<Value, St
 fn project_open_on_bridge(bridge_dir: &Path, path: &str) -> Result<Value, String> {
     let mut bridges = live_bridges(bridge_dir, Instant::now() + TIMEOUT)?;
     let mut stream = match bridges.len() {
-        0 => return Err("bridge_unavailable".to_owned()),
+        0 => return Err(NOT_LINKED.to_owned()),
         1 => bridges.remove(0),
         _ => return Err("bridge_ambiguous".to_owned()),
     };
@@ -1686,7 +1689,7 @@ mod tests {
         let asked = Instant::now();
         assert_eq!(
             project_open_on_bridge(&bridges, "/home/me/app"),
-            Err("bridge_unavailable".to_owned())
+            Err(NOT_LINKED.to_owned())
         );
         assert!(asked.elapsed() < Duration::from_secs(2));
     }

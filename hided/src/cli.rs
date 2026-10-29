@@ -2088,22 +2088,10 @@ fn open_path(env: &Env, raw: &str) -> Result<(), String> {
     let folder = local_folder(raw)?;
     let wire = hide_platform::path::to_wire(&folder)
         .map_err(|_| format!("{raw}: Hide cannot spell this folder's path; rename it and retry"))?;
-    let local = match healthy_daemon(env) {
-        Some((_, health)) => health["role"] != "node",
-        None => !runs_from_helper_kit(env),
-    };
-    if !local {
-        // A pane's command proves its pane; a plain shell (an ssh login to
-        // the device) asks the device's link as a process of its account.
-        let in_pane = std::env::var_os(crate::env::HIDE_CAP_REF).is_some() || env.pane_id.is_some();
-        let answer = if in_pane {
-            crate::workspace_cli::Credential::acquire(env).and_then(|mut credential| {
-                crate::workspace_cli::request_project_open(&mut credential, &wire)
-            })
-        } else {
-            crate::workspace_cli::request_project_open_on_bridge(env, &wire)
-        }
-        .map_err(|reason| open_path_refusal(&reason, open_path_next_action(&reason)))?;
+    let in_pane = std::env::var_os(crate::env::HIDE_CAP_REF).is_some() || env.pane_id.is_some();
+    if let Some(answer) = open_path_elsewhere(env, &wire, in_pane) {
+        let answer =
+            answer.map_err(|reason| open_path_refusal(&reason, open_path_next_action(&reason)))?;
         let result = open_path_result(&answer)?;
         if result["window"] != true {
             println!(
@@ -2121,6 +2109,44 @@ fn open_path(env: &Env, raw: &str) -> Result<(), String> {
         open_browser(&state, &health)?;
     }
     Ok(())
+}
+
+/// `hide <path>` asked of a core on another machine, or `None` when this
+/// machine runs the core, or would once bare `hide` starts it. A pane's
+/// command proves its pane. A plain shell, an ssh login to a device, asks
+/// the device's link as a process of its account; that this machine is a
+/// device is read from what runs, not from where this binary lives: no core
+/// daemon here and a live link of this account. With neither, only a
+/// helper's binary is a device, one not connected now.
+fn open_path_elsewhere(
+    env: &Env,
+    wire: &str,
+    in_pane: bool,
+) -> Option<Result<serde_json::Value, String>> {
+    let daemon = healthy_daemon(env);
+    if daemon
+        .as_ref()
+        .is_some_and(|(_, health)| health["role"] != "node")
+    {
+        return None;
+    }
+    if in_pane {
+        return (daemon.is_some() || runs_from_helper_kit(env)).then(|| {
+            crate::workspace_cli::Credential::acquire(env).and_then(|mut credential| {
+                crate::workspace_cli::request_project_open(&mut credential, wire)
+            })
+        });
+    }
+    match crate::workspace_cli::request_project_open_on_bridge(env, wire) {
+        Err(reason)
+            if reason == crate::workspace_cli::NOT_LINKED
+                && daemon.is_none()
+                && !runs_from_helper_kit(env) =>
+        {
+            None
+        }
+        answer => Some(answer),
+    }
 }
 
 /// The folder `raw` names on this machine, resolved from the working
@@ -2201,7 +2227,7 @@ fn open_path_next_action(reason: &str) -> &'static str {
         "caller_not_in_pane" => {
             "On a connected device, run it in a Hide pane there: Hide takes a device's commands only from the panes it runs, and this shell is not one"
         }
-        "hide_unavailable" | "bridge_unavailable" => {
+        "hide_unavailable" | "bridge_unavailable" | crate::workspace_cli::NOT_LINKED => {
             "This device is not connected to Hide: connect it in Hide first, then run it again"
         }
         "bridge_ambiguous" => {
@@ -3879,6 +3905,82 @@ mod tests {
             "usage: hide [open] [<path>]"
         );
         assert!(help_text().contains("hide ./status opens the folder status"));
+    }
+
+    /// A plain shell on a device asks its core over the device's link even
+    /// when its `hide` is not the helper's own binary (a helper installed
+    /// in another folder); with no link it is the core's machine, where
+    /// bare `hide` starts Hide.
+    #[test]
+    fn a_plain_shell_asks_its_device_s_link_wherever_its_binary_lives() {
+        use hide_node_link::panes::ProofAnswer;
+        struct Events(std::sync::mpsc::Sender<serde_json::Value>);
+        impl std::io::Write for Events {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                for line in bytes
+                    .split(|byte| *byte == b'\n')
+                    .filter(|line| !line.is_empty())
+                {
+                    let _ = self
+                        .0
+                        .send(serde_json::from_slice(line).map_err(std::io::Error::other)?);
+                }
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        // A socket's path has a length bound a long TMPDIR overflows.
+        let dir = if cfg!(unix) {
+            tempfile::Builder::new().prefix("hc").tempdir_in("/tmp")
+        } else {
+            tempfile::Builder::new().prefix("hc").tempdir()
+        }
+        .unwrap();
+        let (home, state) = (dir.path().join("h"), dir.path().join("s"));
+        let env = crate::env::load_from(|key| match key {
+            "HOME" => Some(home.display().to_string()),
+            "HIDE_STATE_DIR" => Some(state.display().to_string()),
+            _ => None,
+        })
+        .unwrap();
+        assert!(open_path_elsewhere(&env, "/home/me/app", false).is_none());
+
+        let (sender, events) = std::sync::mpsc::channel();
+        let output = std::sync::Mutex::new(Events(sender));
+        let panes = hide_host::panes::Panes::new();
+        let bridges = hide_kit::layout::workspace_bridges(&env.state_dir);
+        let answer =
+            serde_json::json!({"type":"workspace_result","ok":true,"result":{"label":"app"}});
+        std::thread::scope(|scope| {
+            panes
+                .start(scope, &output, &bridges, "/tmp/hide-test-herdr.sock")
+                .unwrap();
+            let panes = &panes;
+            let answered = answer.clone();
+            scope.spawn(move || {
+                let event = loop {
+                    let event = events.recv_timeout(Duration::from_secs(10)).unwrap();
+                    if event["event"] == "project_open" {
+                        break event;
+                    }
+                };
+                let request = event["request"].as_u64().unwrap();
+                panes
+                    .answer_proof(request, ProofAnswer::ProjectOpenAccepted)
+                    .unwrap();
+                panes
+                    .answer_proof(request, ProofAnswer::ProjectOpen { answer: answered })
+                    .unwrap();
+            });
+            assert_eq!(
+                open_path_elsewhere(&env, "/home/me/app", false),
+                Some(Ok(answer.clone()))
+            );
+            panes.stop();
+        });
+        panes.remove_folder();
     }
 
     #[test]
