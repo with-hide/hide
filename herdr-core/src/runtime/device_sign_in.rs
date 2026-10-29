@@ -1,6 +1,6 @@
 //! What a device's connection attempt waits on from the operator, and how
 //! their answer reaches it (PRD system-ssh-device-link D-05, D-06, D-08,
-//! D-10, B4-B15, B27).
+//! D-10, B4-B15).
 //!
 //! The attempt runs on its worker, off the runtime lock; the transport
 //! hands it a [`RowSignIn`], which puts what ssh asks on the device's row
@@ -30,7 +30,7 @@ pub(super) struct SignInState {
     question: u64,
     wait: SignInWait,
     /// Where the operator's answer goes; `None` for a wait that ends by
-    /// itself (queued, a browser check, a security key's touch).
+    /// itself (a browser check, a security key's touch).
     answer: Option<mpsc::SyncSender<Result<Answer, Refusal>>>,
 }
 
@@ -89,12 +89,8 @@ impl RowSignIn {
 impl SignIn for RowSignIn {
     fn show(&self, wait: Option<SignInWait>) {
         // A touch needs the operator, so an attempt nobody may be asked for
-        // shows none (B14); a queued attempt is shown whoever started it.
-        if self.wake == Wake::NotAllowed
-            && wait
-                .as_ref()
-                .is_some_and(|wait| !matches!(wait, SignInWait::Queued))
-        {
+        // shows none (B14).
+        if self.wake == Wake::NotAllowed && wait.is_some() {
             return;
         }
         self.with_runtime(|runtime| {

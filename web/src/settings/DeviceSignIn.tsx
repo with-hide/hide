@@ -9,9 +9,9 @@ import { FixCommand } from "./FixCommand";
 
 /**
  * What a device's connection waits on, on its row (PRD system-ssh-device-link
- * B4, B6, B9, B11, B12, B27): ssh's own question with a masked field, a
- * server to trust or not, a security key to touch, a page to confirm in the
- * browser, or its turn behind other devices. An answer goes to the question
+ * B4, B6, B9, B11, B12): ssh's own question with a masked field, a server
+ * to trust or not, a security key to touch, or a page to confirm in the
+ * browser. An answer goes to the question
  * it names and is cleared from the field as it is sent; nothing here keeps it.
  * A new question (ssh asking again after a wrong answer, B7) is a new field.
  */
@@ -19,12 +19,6 @@ export function DeviceSignIn({ deviceId, wait, actions }: { deviceId: string; wa
   const { t } = useInterfaceTranslation();
   const cancel = () => actions.answerDeviceSignIn(deviceId, wait.question, { reply: "cancel" });
   switch (wait.kind) {
-    case "queued":
-      return (
-        <div data-device-sign-in={`${deviceId}:queued`}>
-          <Status tone="pending">{t("devices.signIn.queued")}</Status>
-        </div>
-      );
     case "touch":
       return (
         <div className="space-y-xxs" data-device-sign-in={`${deviceId}:touch`}>

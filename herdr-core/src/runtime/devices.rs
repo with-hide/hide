@@ -666,7 +666,7 @@ impl Runtime {
             let problem = host
                 .and_then(|host| host.problem)
                 .filter(|_| state != "ready")
-                .map(|problem| problem.code().to_owned());
+                .map(|problem| crate::model::DeviceProblem::of(problem).code().to_owned());
             let sign_in = sign_ins.get(&device.id).cloned();
             let test = tests.get(&device.id).cloned();
             let herdr_behind = self.device_herdr_behind.get(&device.id).cloned();

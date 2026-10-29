@@ -4,8 +4,9 @@
 // `view=devices` is Settings › Devices on the same PC with its connected WSL
 // distribution beside an SSH device (B5): the name and where it is.
 // `view=sign-in` and `view=failures` are its SSH devices waiting on the
-// operator and stopped by each class of ssh failure (PRD
-// system-ssh-device-link B4-B21), on a Mac, or with `system=windows` on the PC.
+// operator (PRD system-ssh-device-link B4-B14) and stopped in each of the
+// three failure states, sign in, server key and cannot connect, on a Mac, or
+// with `system=windows` on the PC.
 import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
 import { Dialog, DialogBody, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
@@ -47,27 +48,28 @@ const waiting = (id: string, sign_in: DeviceSignIn | null, problem: DeviceProble
   device(id, { label: id, ssh_alias: id, state: "unavailable", sign_in, problem, host: { ...host("macos aarch64"), state: sign_in ? "connecting" : "unavailable" } });
 const failed = (id: string, problem: DeviceProblem, message: string | null = null): Device => ({ ...waiting(id, null, problem), message });
 
-/** What each SSH device waits on from the operator (B4, B6, B8, B9, B11, B12, B14, B27). */
+/** What each SSH device waits on from the operator (B4, B6, B8, B9, B11, B12, B14). */
 const SIGN_IN: Device[] = [
   waiting("studio", { question: 4, key_command: "ssh-add --apple-use-keychain ~/.ssh/id_ed25519", kind: "secret", prompt: "Enter passphrase for key '/Users/example/.ssh/id_ed25519':", key_file: "/Users/example/.ssh/id_ed25519" }),
   waiting("build-box", { question: 2, key_command: null, kind: "host_key", host: "[build-box.example]:2222", fingerprint: "SHA256:Jq8F2n1xR0a+e3uY7kz6m4W0cB9vT5pLhGd2sQ1oE8I" }),
   waiting("lab", { question: 3, key_command: null, kind: "browser", url: "https://login.tailscale.com/a/7f3e9c21d4" }),
   waiting("yubi-mini", { question: 5, key_command: null, kind: "touch", prompt: "Confirm user presence for key ED25519-SK SHA256:Qw3r…" }),
-  waiting("nas", { question: 6, key_command: null, kind: "queued" }),
   waiting("pi", null, "sign_in_needed"),
 ];
 
-/** Each class of failure a device row words (B5, B7, B13, B18-B21). */
+/**
+ * The three failure states a device row draws: sign in (needed, refused),
+ * the changed server key, and cannot connect over ssh's last line or Hide's
+ * sentence where ssh has none.
+ */
 const FAILURES: Device[] = [
-  failed("studio", "browser_timeout"),
+  failed("studio", "sign_in_needed"),
   failed("build-box", "sign_in_refused"),
   failed("lab", "host_key_changed"),
-  failed("edge", "policy_refused"),
-  failed("pi", "name_not_found"),
-  failed("nas", "unreachable"),
-  failed("jump", "proxy_failed"),
+  failed("edge", "cannot_connect", "tailscale: tailnet policy does not permit you to SSH to this node"),
+  failed("pi", "cannot_connect", "ssh: Could not resolve hostname pi: nodename nor servname provided, or not known"),
+  failed("ci", "cannot_connect", "kex_exchange_identification: read: Connection reset by peer"),
   failed("old-box", "openssh_old"),
-  failed("ci", "unclassified", "kex_exchange_identification: read: Connection reset by peer"),
   failed("tower", "ssh_missing"),
 ];
 
