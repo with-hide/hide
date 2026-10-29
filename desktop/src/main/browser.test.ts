@@ -55,6 +55,47 @@ describe("native browser load generations", () => {
   });
 });
 
+// A first page that stayed loading on Windows CI left no line saying which
+// stage it stopped at (with-hide/hide-private#221): the route, the commit or the stop.
+it("logs each stage of a load the core asked for with its display, load and time, and nothing for one the page began", async () => {
+  let now = 1_000;
+  let answer!: (route: ResolvedPage) => void;
+  const log = { event: vi.fn() };
+  const subject = new BrowserViews(log as unknown as HostLog, () => true, vi.fn(() => new Promise<ResolvedPage>((done) => { answer = done; })), vi.fn(), vi.fn(), () => english, new ExternalFiles(vi.fn()), { bound: 600_000, every: 60_000, now: () => now });
+  const url = "https://example.test/";
+  const contents = Object.assign(new EventEmitter(), {
+    loadURL: vi.fn().mockResolvedValue(undefined), setWindowOpenHandler: vi.fn(), getZoomFactor: () => 1, isDestroyed: () => false,
+    setVisualZoomLevelLimits: vi.fn().mockResolvedValue(undefined), navigationHistory: { canGoBack: () => false, canGoForward: () => false },
+  });
+  const page = {
+    key: "d1", workspace: "local\u0000/checkout", id: "d1", applied: 3, partition: browserPartition("local\u0000/checkout", url, "local"), route: null, loading: null,
+    state: { url, loading: true, failure: null }, report: null, settled: new Set(), device: null, bounds: null, emulated: null, view: { webContents: contents },
+  };
+  (Reflect.get(subject, "pages") as Map<string, unknown>).set(page.key, page);
+  Reflect.set(subject, "node", "local");
+  Reflect.get(subject, "watch").call(subject, page);
+  const stages = () => log.event.mock.calls.filter(([name]) => String(name).startsWith("browser.load_")).map(([name, fields]) => [name, fields]);
+
+  Reflect.get(subject, "load").call(subject, page, url);
+  now += 40;
+  answer({ url, source_url: url, load: 3 });
+  await vi.waitFor(() => expect(contents.loadURL).toHaveBeenCalledOnce());
+  now += 200;
+  contents.emit("did-navigate", {}, url);
+  contents.emit("did-navigate", {}, `${url}next`);
+  now += 60;
+  contents.emit("did-stop-loading");
+  // A navigation the page made itself is not a load the core asked for.
+  contents.emit("did-start-loading");
+  contents.emit("did-navigate", {}, `${url}clicked`);
+  contents.emit("did-stop-loading");
+  expect(stages()).toEqual([
+    ["browser.load_routed", { id: "d1", load: 3, ms: 40 }],
+    ["browser.load_committed", { id: "d1", load: 3, ms: 240 }],
+    ["browser.load_stopped", { id: "d1", load: 3, ms: 300 }],
+  ]);
+});
+
 describe("native browser CDP inventory", () => {
   it("stops notifying a CDP owner that leaves while it is told a page became ineligible", () => {
     const subject = new BrowserViews({ event: vi.fn() } as unknown as HostLog, () => true, vi.fn(), vi.fn(), vi.fn(), () => english, new ExternalFiles(vi.fn()));

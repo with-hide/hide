@@ -16,6 +16,7 @@ import { runInPane, startHerdr, type HerdrFixture } from "../../web/e2e/herdr-fi
 import { fixtureExecutable } from "../../web/e2e/platform-fixture";
 import { chooseExpand, countSent, enterWorkspace, setLanePinned, showDocuments, showExplorer, showProjectRow } from "../../web/e2e/wire";
 import { fitWindow, focusPage, hostLog, isolate, launch, NEEDS_FOCUS, nodeOf, relaunch, screenshot, shellPage, test, type Isolated } from "./fixture";
+import { dumpOnFailure } from "../../web/e2e/failure-dump";
 import { compositorPresents, quietFor } from "../../web/e2e/wait";
 
 test.describe.configure({ timeout: 240_000 });
@@ -192,6 +193,39 @@ function openFromCli(target: string, extra: string[] = []): Promise<Record<strin
   return cliFromPane(["browser", "open", target, ...extra]);
 }
 
+/**
+ * Where each native page's load stands now, and which of them Playwright has
+ * taken charge of: a page whose route never came has not started loading, one
+ * the network holds waits for its response, one whose renderer holds it has
+ * its response and no committed address, and one that loaded and went
+ * unreported has neither (with-hide/hide-private#221). Addresses without their
+ * hash, which carries the daemon's token on the shell's.
+ */
+async function loadSides(): Promise<unknown> {
+  const native = await app!.evaluate(({ BrowserWindow }) =>
+    (BrowserWindow.getAllWindows().find((window) => window.getParentWindow() === null)?.contentView.children ?? []).flatMap((child) => {
+      const contents = (child as { webContents?: Electron.WebContents }).webContents;
+      if (!contents) return [];
+      return [{
+        id: contents.id, url: contents.getURL().split("#")[0], loading: contents.isLoading(), mainFrame: contents.isLoadingMainFrame(),
+        waitingForResponse: contents.isWaitingForResponse(), pid: contents.getOSProcessId(), crashed: contents.isCrashed(),
+      }];
+    }),
+  );
+  const playwright = app!.context().pages().map((page) => page.url().split("#")[0]);
+  const host = hostLog(run.env).filter((line) => line.event.startsWith("browser."));
+  return { at: new Date().toISOString(), native, playwright, host };
+}
+
+/** The first page of a test opened from the operator's pane and waited for, with where its load stood if it did not end. */
+function openLoaded(target: string, expected: Record<string, unknown> = { ok: true }): Promise<Record<string, unknown>> {
+  return dumpOnFailure("first page load", loadSides, async () => {
+    const opened = await openFromCli(target, ["--wait"]);
+    expect(opened).toMatchObject(expected);
+    return opened;
+  });
+}
+
 /** Waits until the view showing `url` covers its display's slot as the shell lays it out now. */
 async function expectOnSlot(page: Page, url: string, displayId: string): Promise<void> {
   await expect
@@ -235,8 +269,7 @@ test(`browser: Agent tabs share one page per address through a background open a
     if (callFiles) await showDocuments(page);
   };
   try {
-    const opened = await openFromCli(url, ["--wait"]);
-    expect(opened).toMatchObject({ status: 0, ok: true, page: { state: "loaded" } });
+    const opened = await openLoaded(url, { status: 0, ok: true, page: { state: "loaded" } });
     const a = (opened.result as { view_id: string }).view_id;
     await shownAndSelected(page, url, a);
     const mark = async (id: number, script: string) => app!.evaluate(({ webContents }, { id, script }) => webContents.fromId(id)!.executeJavaScript(script), { id, script });
@@ -1116,7 +1149,7 @@ test("page width: a page opened into the lane widens it to 900 beside Agent View
 
   // A page opened from the operator's pane comes in front and the lane
   // widens to 900, so the site draws its desktop layout (B1).
-  expect(await openFromCli(site, ["--wait"])).toMatchObject({ ok: true });
+  await openLoaded(site);
   await expect(divider).toHaveAttribute("aria-valuenow", "900");
   await expect.poll(() => storedLaneWidth()).toBe(900);
   // Only the documents widen; the width Memory and the other panel tools share is left as it was.
@@ -1168,7 +1201,7 @@ test("page width: widening leaves Agent Views 480 pinned or not, never narrows, 
   // What Agent Views keeps beside the documents and the tool column (B2).
   const room = async () => body - 8 - ((await tool.count()) ? Math.round((await tool.boundingBox())!.width) + 8 : 0) - 480;
 
-  expect(await openFromCli(`${origin}/site.html`, ["--wait"])).toMatchObject({ ok: true });
+  await openLoaded(`${origin}/site.html`);
   await expect(page.locator("[data-workspace-screen]")).toHaveAttribute("data-lane-mode", "overlay");
   await expect.poll(async () => Number(await divider.getAttribute("aria-valuenow"))).toBe(await room());
 
@@ -1267,7 +1300,7 @@ test("device size: a page lays out at 390, 768 and 1280 CSS pixels at any zoom, 
   const page = await shellPage(app);
   await enterWorkspace(page, "fixture");
   const site = `${origin}/site.html`;
-  expect(await openFromCli(site, ["--wait"])).toMatchObject({ ok: true });
+  await openLoaded(site);
   const displayId = await displayIdOf(page, "Site");
   const toolbar = page.locator(`[data-browser-display="${displayId}"]`);
   const button = toolbar.locator("[data-browser-device-button]");

@@ -82,6 +82,12 @@ type Page = {
   emulated: string | null;
   report: NodeJS.Timeout | null;
   route: ResolvedPage | null;
+  /**
+   * The load the core asked for that has not stopped yet: its stamp, when it
+   * was asked and whether its document committed. Each stage is one log line,
+   * so a load that never ends names the stage it stopped at.
+   */
+  loading: { load: number; at: number; committed: boolean } | null;
   partition: string;
   /** Native file reads are forbidden before the first load of a web/blank
    * generation. Only a separately created manual-file partition permits them. */
@@ -600,6 +606,7 @@ export class BrowserViews {
       emulated: null,
       report: null,
       route: null,
+      loading: null,
       partition,
       fileRestricted: !partition.startsWith("persist:hide-browser-file-") && !display.grant,
       cdpRestricted: false,
@@ -738,6 +745,7 @@ export class BrowserViews {
       return;
     }
     const stamp = page.applied;
+    page.loading = { load: stamp, at: this.idle.now(), committed: false };
     this.update(page, { url, loading: true, failure: null });
     // An outside file's route is its own file, which no daemon may name.
     const resolved = page.grant ? Promise.resolve<ResolvedPage>({ url, source_url: url, load: stamp }) : this.resolve(page.workspace, page.id, stamp);
@@ -749,6 +757,7 @@ export class BrowserViews {
       if (!loadable(route.url)) throw new Error("Resolved page address cannot be loaded");
       if (!page.grant && browserPartition(page.workspace, route.source_url, this.node) !== page.partition) throw new Error("Resolved page requires a different browser partition");
       page.route = route;
+      this.loadStage(page, "browser.load_routed");
       return page.view.webContents.loadURL(route.url).catch((error: unknown) => {
         // did-fail-load reports it; a load a newer one replaced is not a failure.
         const code = (error as { errno?: number }).errno;
@@ -761,12 +770,26 @@ export class BrowserViews {
     });
   }
 
+  /** One stage of the load the core asked of `page`, with the time since it asked; nothing for a load the page began itself. */
+  private loadStage(page: Page, event: "browser.load_routed" | "browser.load_committed" | "browser.load_stopped"): void {
+    if (!page.loading || page.loading.load !== page.applied) return;
+    this.log.event(event, { id: page.id, load: page.loading.load, ms: this.idle.now() - page.loading.at });
+  }
+
   private watch(page: Page): void {
     const contents = page.view.webContents;
     const history = () => ({ canGoBack: contents.navigationHistory.canGoBack(), canGoForward: contents.navigationHistory.canGoForward() });
     contents.on("did-start-loading", () => this.update(page, { loading: true, failure: null }));
-    contents.on("did-stop-loading", () => this.update(page, { loading: false, ...history() }));
+    contents.on("did-stop-loading", () => {
+      this.loadStage(page, "browser.load_stopped");
+      page.loading = null;
+      this.update(page, { loading: false, ...history() });
+    });
     contents.on("did-navigate", (_event, url) => {
+      if (page.loading && !page.loading.committed) {
+        this.loadStage(page, "browser.load_committed");
+        page.loading.committed = true;
+      }
       // A new document plays nothing yet.
       page.playing = false;
       // A new document takes its host's zoom, and starts without the device size.
