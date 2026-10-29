@@ -11,7 +11,7 @@ import { requireInterfaceLanguage } from "../i18n/locale";
 import { canRetryDevice, deviceLine, deviceProblemLine, deviceSubtitle, hostLine, kitProblems, retrySignsIn } from "../settings";
 import type { Device, RemoteStatus } from "../snapshot";
 import { useShellStore } from "../store";
-import { DeviceSignIn } from "./DeviceSignIn";
+import { DeviceSignIn } from "./SignInPrompt";
 import { FixCommand } from "./FixCommand";
 import { KitProblem } from "./MachineKit";
 

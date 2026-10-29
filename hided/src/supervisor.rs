@@ -652,10 +652,12 @@ struct Prepared {
     remote: Remote,
 }
 
-/// The connection check stopped on `ssh`: the view says what the operator
-/// does about it as the device row does, which [`checks_failed`] keeps.
-pub(super) fn stopped_on_ssh(moves: &MoveControl, ssh: Option<SshProblem>) {
+/// The connection check stopped on `ssh` dialing `alias`: the view says what
+/// the operator does about it as the device row does, which
+/// [`checks_failed`] keeps.
+pub(super) fn stopped_on_ssh(moves: &MoveControl, ssh: Option<SshProblem>, alias: &str) {
     moves.update(|view| {
+        view.alias = ssh.map(|_| alias.to_owned());
         view.ssh_problem =
             ssh.map(|problem| herdr_core::DeviceProblem::of(problem).code().to_owned());
     });
@@ -674,6 +676,7 @@ fn checks_failed(moves: &MoveControl, device: &str, failed: Vec<FailedCheck>) {
         checked,
         failed,
         ssh_problem: moves.view().ssh_problem,
+        alias: moves.view().alias,
         ..MoveView::default()
     });
 }
@@ -799,7 +802,7 @@ async fn prepare(
             return Err(failed);
         }
         Err((failure, ssh)) => {
-            stopped_on_ssh(moves, ssh);
+            stopped_on_ssh(moves, ssh, &source.ssh_alias);
             failed.push(FailedCheck {
                 check: CheckId::Connection,
                 detail: format!("{failure:?}"),

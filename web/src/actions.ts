@@ -71,6 +71,7 @@ import {
   type LinkTarget,
   type PrMergeMethod,
   type LookAt,
+  type SignInReply,
 } from "./snapshot";
 import { fileUrl, focusBrowserDisplay, isHtmlFile } from "./browserViews";
 import { requestLine } from "./editor/lineRequest";
@@ -1479,7 +1480,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      * to trust a server or say yes, cancel to end the attempt. It names the
      * question it answers, so an answer to one ssh no longer asks reaches nothing.
      */
-    answerDeviceSignIn(deviceId: string, question: number, reply: { reply: "text"; text: string } | { reply: "accept" } | { reply: "cancel" }) {
+    answerDeviceSignIn(deviceId: string, question: number, reply: SignInReply) {
       dispatch({ schema_version: 2, kind: "device_sign_in", payload: { device_id: deviceId, question, ...reply } });
     },
 
@@ -1501,6 +1502,16 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
      */
     coreLink(action: "disconnect" | "reconnect" | "retry") {
       dispatch({ schema_version: 2, kind: "core_link", payload: { action } });
+    },
+
+    /** Answers what ssh asks the core link's dial on this window's strip (PRD system-ssh-device-link B33). */
+    answerCoreLinkSignIn(question: number, reply: SignInReply) {
+      dispatch({ schema_version: 2, kind: "core_link", payload: { action: "sign_in", question, ...reply } });
+    },
+
+    /** Answers what ssh asks the move's checks in the move dialog (PRD system-ssh-device-link B33). */
+    answerCoreMoveSignIn(question: number, reply: SignInReply) {
+      dispatch({ schema_version: 2, kind: "core_move", payload: { action: "sign_in", question, ...reply } });
     },
 
     /**

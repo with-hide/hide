@@ -7,7 +7,10 @@ import { useInterfaceTranslation } from "../i18n/client";
 import { cn } from "../lib/utils";
 import { moveMachines } from "../screenMachine";
 import { useShellStore } from "../store";
+import { deviceProblemLine, retrySignsIn } from "../settings";
+import type { DeviceProblem } from "../snapshot";
 import { FixCommand } from "./FixCommand";
+import { SignInPrompt } from "./SignInPrompt";
 
 /** What the operator asked from Settings: the core toward a device, or back to this machine from a node's window. */
 export type MoveRequest = { direction: "forward"; device: string } | { direction: "back" };
@@ -79,9 +82,16 @@ const MARK: Record<StepMark, { glyph: string; line: string; mark: string }> = {
  * dialog only asks; the supervisor's frame says where the move is, so a
  * window that closed it and opens Settings again finds the same state.
  */
-export function CoreMoveDialog({ request, asked: first, giveUp = false, actions, onClose, onRequest }: { request: MoveRequest; asked: MoveView | null; giveUp?: boolean; actions: Actions; onClose: () => void; onRequest: (request: MoveRequest) => void }) {
+export function CoreMoveDialog({ request, asked: first, giveUp = false, actions, onClose: close, onRequest }: { request: MoveRequest; asked: MoveView | null; giveUp?: boolean; actions: Actions; onClose: () => void; onRequest: (request: MoveRequest) => void }) {
   const { t } = useInterfaceTranslation();
   const view = useShellStore((s) => s.coreMove);
+  // A question nobody sees any more is cancelled, which ends the checks' sign-in rather than leave it waiting
+  // out its five minutes (PRD system-ssh-device-link B8).
+  const onClose = () => {
+    const asking = view?.sign_in;
+    if (asking && (asking.kind === "secret" || asking.kind === "host_key" || asking.kind === "confirm")) actions.answerCoreMoveSignIn(asking.question, { reply: "cancel" });
+    close();
+  };
   const refusal = useShellStore((s) => s.coreMoveRefusal);
   const devices = useShellStore((s) => s.rest?.navigator?.devices);
   // The frame the last request was sent beside: the dialog waits until a newer one answers it.
@@ -141,7 +151,11 @@ export function CoreMoveDialog({ request, asked: first, giveUp = false, actions,
                 {refusal === "move_busy" || refusal === "core_pending" ? t("coreMove.refused.busy") : refusal === "move_unavailable" || refusal === "moving" ? t("coreMove.refused.unavailable") : t("coreMove.refused.other")}
               </p>
             ) : (
-              <p className="text-body text-muted-foreground" data-core-move-checking="true">{t("coreMove.checking")}</p>
+              <>
+                <p className="text-body text-muted-foreground" data-core-move-checking="true">{t("coreMove.checking")}</p>
+                {/* What ssh asks the checks' sign-in, as a device's row shows it (PRD system-ssh-device-link B33). */}
+                {view?.sign_in ? <SignInPrompt id="core-move" wait={view.sign_in} actions={actions} answer={(question, reply) => actions.answerCoreMoveSignIn(question, reply)} /> : null}
+              </>
             )
           ) : null}
           {form === "checks_failed" ? (
@@ -151,7 +165,7 @@ export function CoreMoveDialog({ request, asked: first, giveUp = false, actions,
               </p>
               <ul className="space-y-xs">
                 {failed.map((row) => (
-                  <FailedCheck key={row.check} check={row.check} detail={row.detail} machine={checkMachine(row.check, machines)} actions={actions} />
+                  <FailedCheck key={row.check} check={row.check} detail={row.detail} machine={checkMachine(row.check, machines)} ssh={row.check === "connection" ? (view?.ssh_problem ?? null) : null} alias={view?.alias ?? null} actions={actions} />
                 ))}
               </ul>
             </>
@@ -230,7 +244,8 @@ export function CoreMoveDialog({ request, asked: first, giveUp = false, actions,
           {form === "checks_failed" ? (
             <>
               <Button variant="secondary" onClick={onClose}>{t("common.close")}</Button>
-              <Button data-core-move-recheck="true" onClick={() => ask(request, false)}>{t("coreMove.recheck")}</Button>
+              {/* A sign-in's check again reads Sign in, as the device row's Retry does: the checks may ask. */}
+              <Button data-core-move-recheck="true" onClick={() => ask(request, false)}>{retrySignsIn(view?.ssh_problem) ? t("devices.signIn.start") : t("coreMove.recheck")}</Button>
             </>
           ) : null}
           {form === "confirm" ? (
@@ -272,10 +287,15 @@ export function CoreMoveDialog({ request, asked: first, giveUp = false, actions,
   );
 }
 
-/** One check that did not pass: its name, and the one command that fixes it where there is one; what the check found is its hint. */
-function FailedCheck({ check, detail, machine, actions }: { check: MoveView["failed"][number]["check"]; detail: string; machine: string; actions: Actions }) {
+/**
+ * One check that did not pass: its name, and the one command that fixes it where there is one; what the check found
+ * is its hint. A connection that stopped on ssh (`ssh`) says what the device row says of it, with the row's terminal
+ * command for a changed server key.
+ */
+function FailedCheck({ check, detail, machine, ssh, alias, actions }: { check: MoveView["failed"][number]["check"]; detail: string; machine: string; ssh: DeviceProblem | null; alias: string | null; actions: Actions }) {
   const { t } = useInterfaceTranslation();
-  const command = checkCommand(check);
+  const problem = deviceProblemLine(ssh, alias, t);
+  const command = problem ? problem.command : checkCommand(check);
   return (
     <li className="flex min-w-0 items-center justify-between gap-md" data-core-move-check={check} title={detail}>
       <span className="min-w-0 text-body text-destructive">
@@ -285,7 +305,9 @@ function FailedCheck({ check, detail, machine, actions }: { check: MoveView["fai
       {command ? (
         <FixCommand command={command} what="core move command" actions={actions} data-core-move-command={check} />
       ) : (
-        <span className="min-w-0 text-right text-caption text-muted-foreground">{t(`coreMove.fix.${check}`, { machine })}</span>
+        <span className="min-w-0 text-right text-caption text-muted-foreground" data-core-move-ssh-problem={ssh ?? undefined}>
+          {problem ? (problem.note ?? problem.headline) : t(`coreMove.fix.${check}`, { machine })}
+        </span>
       )}
     </li>
   );

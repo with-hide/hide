@@ -1802,6 +1802,9 @@ export type DeviceSignIn = { question: number; key_command: string | null } & (
   | { kind: "browser"; url: string }
 );
 
+/** The operator's reply to what ssh asks, on whichever screen shows it: the device row, a node window's strip, the move dialog. */
+export type SignInReply = { reply: "text"; text: string } | { reply: "accept" } | { reply: "cancel" };
+
 /** Why a device's Herdr stays older than Hide's (`contracts/snapshot-wire-enums.json`: `herdr_behind_cause`). */
 export type HerdrBehindCause = "cannot_hand_off" | "handoff_failed";
 

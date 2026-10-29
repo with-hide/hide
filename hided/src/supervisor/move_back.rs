@@ -140,6 +140,7 @@ pub(super) fn back_checks_failed(moves: &MoveControl, failed: Vec<FailedCheck>) 
         checked,
         failed,
         ssh_problem: moves.view().ssh_problem,
+        alias: moves.view().alias,
         ..MoveView::default()
     });
 }
@@ -213,7 +214,7 @@ pub(super) async fn prepare_back(
     let (remote, inspected) = match inspected {
         Ok(found) => found,
         Err((failure, ssh)) => {
-            super::stopped_on_ssh(moves, ssh);
+            super::stopped_on_ssh(moves, ssh, &placement.alias);
             failed.push(FailedCheck {
                 check: CheckId::Connection,
                 detail: format!("{failure:?}"),

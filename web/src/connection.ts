@@ -1,5 +1,7 @@
 import type { TFunction } from "i18next";
 import { giveUpOffered, movingStripText, type CoreLink, type MoveMachines, type MoveView } from "./coreMove";
+import { deviceProblemLine, retrySignsIn } from "./settings";
+import type { DeviceSignIn } from "./snapshot";
 
 /** `moving`: a move holds the window until the machine that takes the core draws it; input is refused meanwhile. */
 export type ConnectionState = "connecting" | "live" | "reconnecting" | "gone" | "moving";
@@ -33,24 +35,30 @@ export function badgeText(state: ConnectionState, refused: boolean, t: TFunction
 /**
  * The strip above the window, in the place and size the connection badge always had (D-08); `reconnect` offers the
  * operator's way back after they ended the link (B16), `retry` the dial a link that stopped on what only they can fix
- * waits for, and `give_up` the move's wait on its other machine where the
- * move offers it (amendment 4), which only opens the move dialog at its confirm.
+ * waits for, `sign_in` the same dial where the link stopped on a sign-in, and `give_up` the move's wait on its other
+ * machine where the move offers it (amendment 4), which only opens the move dialog at its confirm. A link that stopped
+ * on a changed server key carries the terminal `command` that checks it, as the device row does; `signIn` is what ssh
+ * asks the dial the operator started, which the strip shows below its line (PRD system-ssh-device-link B33).
  */
 export type WindowStrip = {
-  kind: ConnectionState | "updating" | "unreachable" | "stopped" | "disconnected";
+  kind: ConnectionState | "updating" | "unreachable" | "stopped" | "disconnected" | "sign_in";
   text: string;
   mark: "pending" | "warn" | null;
-  action?: "reconnect" | "retry" | "give_up";
+  action?: "reconnect" | "retry" | "sign_in" | "give_up";
+  command?: string;
+  signIn?: DeviceSignIn;
 };
 
 /**
- * What the strip says while the link waits for the operator: what they can do in a terminal before they retry, by
- * the ssh failure it stopped on.
+ * What the strip says while the link waits for the operator, by the ssh failure it stopped on as the device row
+ * groups it: a sign-in their Sign in asks for, a changed server key they check in a terminal, or a connection to retry.
  */
 function stoppedText(link: CoreLink, machine: string, t: TFunction<"translation">): string {
   switch (link.problem) {
     case "sign_in_needed":
-      return t("coreMove.strip.signIn", { machine, alias: link.alias });
+      return t("coreMove.strip.signIn", { machine });
+    case "sign_in_refused":
+      return t("coreMove.strip.signInRefused", { machine });
     case "host_key_changed":
       return t("coreMove.strip.hostKeyChanged", { machine });
     default:
@@ -75,10 +83,11 @@ export function windowStrip(
     const strip: WindowStrip = { kind: "moving", text: movingStripText(move, input.machines, t), mark: "pending" };
     return giveUpOffered(move) ? { ...strip, action: "give_up" } : strip;
   }
-  if (connection !== "live" && link && link.phase !== "connecting") {
+  if (connection !== "live" && link) {
     // The core's machine as the window's rows name it once it drew the core; before that by the name the
     // core's hello gave, which is its host name, or the alias it is dialed by.
     const machine = input.coreMachine || link.machine || link.alias;
+    if (link.sign_in) return { kind: "sign_in", text: t("coreMove.strip.signingIn", { machine }), mark: "pending", signIn: link.sign_in };
     switch (link.phase) {
       case "updating":
         return { kind: "updating", text: t("coreMove.strip.updating", { machine }), mark: "pending" };
@@ -86,8 +95,12 @@ export function windowStrip(
         return { kind: "disconnected", text: t("coreMove.strip.disconnected", { machine }), mark: "warn", action: "reconnect" };
       case "waiting":
         return { kind: "unreachable", text: t("coreMove.strip.unreachable", { machine }), mark: "warn" };
-      case "stopped":
-        return { kind: "stopped", text: stoppedText(link, machine, t), mark: "warn", action: "retry" };
+      case "stopped": {
+        const command = deviceProblemLine(link.problem, link.alias, t)?.command ?? undefined;
+        return { kind: "stopped", text: stoppedText(link, machine, t), mark: "warn", action: retrySignsIn(link.problem) ? "sign_in" : "retry", ...(command ? { command } : {}) };
+      }
+      case "connecting":
+        break;
     }
   }
   const text = badgeText(connection, input.refused, t);
