@@ -600,6 +600,7 @@ test("the phone caches group and row status words in the desktop language", asyn
         status_waiting: "대기",
         status_stopped: "멈춤",
         status_unfinished: "일 남음",
+        subject_mission_decision: "판단",
         subject_plan_review: "계획 검토 · {{count}}단계",
       });
     await page.locator("[data-interface-language]").click();

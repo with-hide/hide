@@ -101,12 +101,12 @@ test("the 태스크 list groups the device's tasks, folds children and resting o
     await expect(tasks.locator(`[data-task-child="${child}"]`)).toContainText("하위 작업 검증");
     await tasks.locator(`[data-task-chevron="${parent}"]`).click();
     await expect(tasks.locator(`[data-task-child="${child}"]`)).toHaveCount(0);
-    // B12: Enter goes to the pane; a read question leaves Needs You.
+    // B12: Enter goes to the pane; a read question stays in Needs You, read, until it is answered
+    // (needs-you-cleanup B10).
     await row(question).locator('[data-task-focus="row"]').focus();
     await page.keyboard.press("Enter");
     await expect(page.locator(`[data-pane-view="${question}"]`)).toHaveAttribute("data-focused", "true");
-    await expect(group("needs_you").locator(`[data-task-row="${question}"]`)).toHaveCount(0);
-    await expect(row(question).locator('[data-task-line="needs_you"]')).toHaveCount(0);
+    await expect(group("needs_you").locator(`[data-task-row="${question}"]`)).toHaveAttribute("data-task-read", "true");
     await row(asking).locator('[data-task-focus="row"]').click();
     await expect(page.locator(`[data-pane-view="${asking}"]`)).toHaveAttribute("data-focused", "true");
     await expect(row(asking)).toHaveAttribute("data-selected", "true");
@@ -116,7 +116,7 @@ test("the 태스크 list groups the device's tasks, folds children and resting o
     await page.keyboard.press("Home");
     await expect(tasks.locator('[data-task-list] [data-task-focus]').first()).toBeFocused();
     await page.keyboard.press("ArrowDown");
-    await expect(row(asking).locator('[data-task-focus="row"]')).toBeFocused();
+    await expect(group("needs_you").locator('[data-task-focus="row"]').first()).toBeFocused();
     // B18: Resolve from the ⋯ menu is saved, and the row stays under 쉬는 중.
     await row(stopped).hover();
     await tasks.locator(`[data-task-more="${stopped}"]`).click();
