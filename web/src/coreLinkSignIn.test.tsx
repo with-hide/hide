@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
-import { act } from "react";
+import { act, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
 import { createActions } from "./actions";
 import { ConnectionBadge } from "./badge";
 import { TooltipProvider } from "./components/ui/tooltip";
 import type { CoreLink, MoveView } from "./coreMove";
-import { CoreMoveDialog } from "./settings/CoreMoveDialog";
+import type { Actions } from "./actions";
+import { askMove, CoreMoveDialog } from "./settings/CoreMoveDialog";
 import { useShellStore } from "./store";
 import type { DispatchFn } from "./ws";
 
@@ -127,6 +128,55 @@ it("ends the sign-in of the checks the move dialog asked for when it closes, bef
   }
   const view = await mount({ connection: "live", coreMove: checking({}), coreMoveRefusal: null, rest: null }, (actions) => (
     <CoreMoveDialog request={{ direction: "forward", device: "mini" }} asked={null} giveUp actions={actions} onClose={() => {}} onRequest={() => {}} />
+  ));
+  try {
+    await act(async () => view.button("Close")?.click());
+    expect(sent(view.events, "core_move")).toEqual([]);
+  } finally {
+    await view.unmount();
+  }
+});
+
+// A device's Move sends the check and opens the dialog beside the frame it was sent beside, as the Devices tab does.
+function MoveOpened({ actions, onClose }: { actions: Actions; onClose: () => void }) {
+  const request = { direction: "forward" as const, device: "mini" };
+  const [asked] = useState(() => askMove(actions, request, false));
+  return <CoreMoveDialog request={request} asked={asked} actions={actions} onClose={onClose} onRequest={() => {}} />;
+}
+
+const check = { schema_version: 2, kind: "core_move", payload: { action: "check", device: "mini" } };
+const cancelled = { schema_version: 2, kind: "core_move", payload: { action: "sign_in", reply: "cancel" } };
+
+// Closed before the core's first frame answers the request (B8): the dialog's own request is what runs, so the
+// Cancel follows it on the same socket, from no move yet, from an idle one, and from a failed check asked again.
+it("ends the sign-in of the request the move dialog sent when it closes before the core answers", async () => {
+  for (const before of [null, checking({ state: "idle", device: null })]) {
+    const view = await mount({ connection: "live", coreMove: before, coreMoveRefusal: null, rest: null }, (actions) => <MoveOpened actions={actions} onClose={() => {}} />);
+    try {
+      await act(async () => view.button("Close")?.click());
+      expect(sent(view.events, "core_move")).toEqual([check, cancelled]);
+    } finally {
+      await view.unmount();
+    }
+  }
+  const failed = checking({ state: "checks_failed", failed: [{ check: "connection", detail: "Refused" }], ssh_problem: "cannot_connect", alias: "mini" });
+  const view = await mount({ connection: "live", coreMove: failed, coreMoveRefusal: null, rest: null }, (actions) => (
+    <CoreMoveDialog request={{ direction: "forward", device: "mini" }} asked={null} actions={actions} onClose={() => {}} onRequest={() => {}} />
+  ));
+  try {
+    await act(async () => view.q('[data-core-move-recheck="true"]')?.click());
+    await act(async () => view.button("Close")?.click());
+    expect(sent(view.events, "core_move")).toEqual([check, cancelled]);
+  } finally {
+    await view.unmount();
+  }
+});
+
+// Once the core answered the request with a result, nothing of it runs, and closing sends nothing.
+it("sends no Cancel when the move dialog closes on a result", async () => {
+  const failed = checking({ state: "checks_failed", failed: [{ check: "connection", detail: "Refused" }], ssh_problem: "cannot_connect", alias: "mini" });
+  const view = await mount({ connection: "live", coreMove: failed, coreMoveRefusal: null, rest: null }, (actions) => (
+    <CoreMoveDialog request={{ direction: "forward", device: "mini" }} asked={null} actions={actions} onClose={() => {}} onRequest={() => {}} />
   ));
   try {
     await act(async () => view.button("Close")?.click());

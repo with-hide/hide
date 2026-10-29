@@ -91,11 +91,13 @@ export function CoreMoveDialog({ request, asked: first, giveUp = false, actions,
   const [asked, setAsked] = useState<MoveView | null>(first);
   // Whether this dialog's own press started what runs: opened on a device's Move or Move back, or asked again here.
   const [pressed, setPressed] = useState(!giveUp);
-  // Closing on checks this dialog asked for ends their sign-in, whether it shows a question, a browser check, a key
-  // touch or nothing yet, rather than leave it waiting out its five minutes for a dialog nobody sees (PRD
-  // system-ssh-device-link B8); the window's end does the same on hided's side.
+  // Closing while the request this dialog sent runs ends its sign-in, whether it shows a question, a browser check, a
+  // key touch or nothing yet, and before the core's first frame answers the request too, rather than leave it waiting
+  // out its five minutes for a dialog nobody sees (PRD system-ssh-device-link B8); the window's end does the same on
+  // hided's side. The Cancel follows the request on the same socket, so the core reads it after taking the request.
   const onClose = () => {
-    if (pressed && view?.state === "checking") actions.cancelCoreMoveSignIn();
+    const unanswered = !view || view === asked;
+    if (pressed && !refusal && (unanswered || view.state === "checking")) actions.cancelCoreMoveSignIn();
     close();
   };
   const ask = (next: MoveRequest, start: boolean) => {
