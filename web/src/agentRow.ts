@@ -132,7 +132,7 @@ export function lineParts(t: TFunction<"translation">, agent: LineAgent, line: R
     case "checks_failed":
       return parts(null, t("agents.line.checksFailed", { number: line.pull_request ?? 0 }));
     case "waiting":
-      return parts(statusText(t, "waiting"), line.text || waitCause(t, agent, line));
+      return parts(waitWord(t, agent.wait), line.text || waitDetail(t, agent, line));
     case "kept":
       return parts(word ?? statusText(t, agent.status_code), line.text);
     case "request":
@@ -151,17 +151,22 @@ export function lineText(t: TFunction<"translation">, agent: LineAgent, line: Ro
   return [lead, text, tail].filter(Boolean).join(" · ");
 }
 
-/** What a waiting in-progress row with no sentence is proven to wait on (B10), or null when the cause names nothing past 대기. */
-function waitCause(t: TFunction<"translation">, agent: LineAgent, line: RowLine): string | null {
+/**
+ * What a waiting row's line leads with: what it waits for, `자식 기다림`, `CI
+ * 기다림`, `답장 기다림` or `백그라운드 기다림`, so 대기 never reads as waiting on the
+ * operator; with no proven cause, `대기` (needs-you-cleanup D-14).
+ */
+export function waitWord(t: TFunction<"translation">, wait: AgentWait | null | undefined): string {
+  return wait ? t(`agents.wait.${wait}`) : statusText(t, "waiting");
+}
+
+/** The cause's detail a waiting row with no sentence says after its word (B10): the pull request its checks run on, or how many children work; null when the word says it all. */
+function waitDetail(t: TFunction<"translation">, agent: LineAgent, line: RowLine): string | null {
   switch (agent.wait) {
     case "checks":
-      return line.pull_request ? t("agents.line.checksWait", { number: line.pull_request }) : null;
+      return line.pull_request ? t("agents.line.pullRequest", { number: line.pull_request }) : null;
     case "children":
       return t("agents.line.children", { count: agent.descendant_counts?.working ?? 0 });
-    case "background":
-      return t("agents.line.background");
-    case "reply":
-      return t("agents.line.reply");
     default:
       return null;
   }
@@ -199,12 +204,12 @@ export function markName(t: TFunction<"translation">, mark: Exclude<RowMark, "un
  * own words, `재움 · 열면 깨어남` (B31), and a finished turn with tasks left
  * adds them, `읽을 것 · 끝남 · 백그라운드 2개 남음` (B27).
  */
-export function markWords(t: TFunction<"translation">, agent: Pick<AgentRow, "mark" | "status_code" | "look"> & { background_left?: number }): string {
+export function markWords(t: TFunction<"translation">, agent: Pick<AgentRow, "mark" | "status_code" | "look"> & { background_left?: number; wait?: AgentWait | null }): string {
   if (agent.mark === "asleep") return statusText(t, agent.status_code);
   if (agent.mark === "look") return [markName(t, "look"), agent.look?.label].filter(Boolean).join(" · ");
   if (agent.mark === "unknown") return statusText(t, agent.status_code === "starting" ? "starting" : "unknown");
   const name = markName(t, agent.mark);
-  const word = agent.mark === "going" ? null : agent.mark === "waiting" ? statusText(t, "waiting") : agent.mark === "quiet" ? (QUIET_WORDS.has(agent.status_code) ? statusText(t, agent.status_code) : null) : agent.mark === "unread" && agent.status_code === "stopped" ? statusText(t, agent.status_code) : leadWord(t, agent);
+  const word = agent.mark === "going" ? null : agent.mark === "waiting" ? waitWord(t, agent.wait) : agent.mark === "quiet" ? (QUIET_WORDS.has(agent.status_code) ? statusText(t, agent.status_code) : null) : agent.mark === "unread" && agent.status_code === "stopped" ? statusText(t, agent.status_code) : leadWord(t, agent);
   const left = agent.background_left ? t("agents.backgroundLeftWords", { count: agent.background_left }) : null;
   return [name, word, left].filter(Boolean).join(" · ");
 }

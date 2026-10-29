@@ -205,10 +205,13 @@ describe("the line's words (status-marks D-04, B7, B10, B13, B16)", () => {
     expect(lineText(t, blocked, sidebarLine(blocked)!)).toBe("막힘 · 디스크 여유가 없음");
   });
 
-  it("leads a waiting row's sentence, or with none the cause Hide proved, with 대기 in every list (D-18, B10, B29)", async () => {
+  it("leads a waiting row's sentence, or with none the cause's detail, with what it waits for in every list, and 대기 with no proven cause (D-18, B10, B29, needs-you-cleanup B17-B19)", async () => {
     const { t } = await createInterfaceI18n("ko");
     const said = row("w", { activity: "stopped", status_code: "waiting", wait: "background", detail: "빌드 끝나기를 기다림" });
-    expect(lineText(t, said, sidebarLine(said)!)).toBe("대기 · 빌드 끝나기를 기다림");
+    expect(lineText(t, said, sidebarLine(said)!)).toBe("백그라운드 기다림 · 빌드 끝나기를 기다림");
+    const unproven = row("u", { activity: "stopped", status_code: "waiting", wait: null, detail: "결과 기다리는 중" });
+    unproven.state = { ...unproven.state, line: { text: "결과 기다리는 중", mode: "waiting", tone: { kind: "subtle", read: false } } };
+    expect(lineText(t, unproven, sidebarLine(unproven)!)).toBe("대기 · 결과 기다리는 중");
     expect(treeLine(said)).toMatchObject({ mode: "waiting" });
     // A working row says its sentence alone, and a tree row draws none of it.
     const working = row("x", { detail: "파서 고치는 중", unread: true });
@@ -219,10 +222,14 @@ describe("the line's words (status-marks D-04, B7, B10, B13, B16)", () => {
       agent.state = { ...agent.state, line: { text: "", mode: "waiting", tone: { kind: "subtle", read: false }, pull_request } };
       return lineText(t, agent, sidebarLine(agent)!);
     };
-    expect(waiting("checks", 12)).toBe("대기 · CI · PR #12");
-    expect(waiting("children")).toBe("대기 · 자식 에이전트 2개 작업 중");
-    expect(waiting("background")).toBe("대기 · 백그라운드 작업");
-    expect(waiting("reply")).toBe("대기 · 답장");
+    expect(waiting("checks", 12)).toBe("CI 기다림 · PR #12");
+    expect(waiting("children")).toBe("자식 기다림 · 자식 2개 작업 중");
+    expect(waiting("background")).toBe("백그라운드 기다림");
+    expect(waiting("reply")).toBe("답장 기다림");
+    const en = (await createInterfaceI18n("en")).t;
+    const checks = row("c", { activity: "stopped", status_code: "waiting", wait: "checks" });
+    checks.state = { ...checks.state, line: { text: "", mode: "waiting", tone: { kind: "subtle", read: false }, pull_request: 12 } };
+    expect(lineText(en, checks, sidebarLine(checks)!)).toBe("Waiting on CI · PR #12");
   });
 
   it("words a question the core asks for the agent from its subject, in the interface language (hide-plan B14)", async () => {
