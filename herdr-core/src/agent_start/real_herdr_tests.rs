@@ -515,8 +515,10 @@ fn prompt_files(herdr: &PrivateHerdr, shell: &str) -> PathBuf {
     .unwrap();
     // fish generates completions from man pages in the background, in the
     // shell's own foreground group, the first time it reads input unless
-    // this folder exists.
+    // this folder exists: in its data folder up to fish 3, in its cache
+    // folder from fish 4 (4.9.3 ran it for about 3 s after its first prompt).
     std::fs::create_dir_all(herdr.home.join(".local/share/fish/generated_completions")).unwrap();
+    std::fs::create_dir_all(herdr.home.join(".cache/fish/generated_completions")).unwrap();
     path
 }
 
@@ -819,16 +821,19 @@ fn a_windows_powershell_startup_question_is_never_answered_by_a_start_and_each_t
 }
 
 /// Codex CLI 0.165.0 as a sleep meets it: it turns the kitty keyboard
-/// protocol on, quits on the first Ctrl+C into its empty composer, reads no
-/// input while it shuts down and hands the terminal back 600 ms later, with
-/// the protocol off and the line settings it found put back without
-/// discarding what it never read. A key sent in that time is left for the
-/// shell, encoded in the protocol.
+/// protocol on, quits on the first Ctrl+C into its empty composer and reads
+/// no input while it shuts down; then it hands the terminal back with the
+/// protocol off and the line settings it found put back without discarding
+/// what it never read, so a key sent meanwhile is left for the shell,
+/// encoded in the protocol. It hands back only once the test opens the
+/// `codex-release` FIFO in its home (`Release`); the alarm is its hang guard.
 #[cfg(unix)]
 const CODEX: &str = r#"#define _GNU_SOURCE
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <termios.h>
-#include <time.h>
 #include <unistd.h>
 
 static void say(const char *text) { (void)!write(1, text, strlen(text)); }
@@ -836,6 +841,8 @@ static void say(const char *text) { (void)!write(1, text, strlen(text)); }
 int main(int argc, char **argv) {
     (void)argv;
     if (argc < 2) return 0;
+    char release[4096];
+    snprintf(release, sizeof release, "%s/codex-release", getenv("HOME"));
     struct termios found, raw;
     tcgetattr(0, &found);
     raw = found;
@@ -852,13 +859,170 @@ int main(int argc, char **argv) {
         if (count > 32) count = 0;
     }
     say("Shutting down...\r\n");
-    struct timespec shutdown = {0, 600000000};
-    nanosleep(&shutdown, NULL);
+    alarm(60);
+    char byte;
+    int gate = open(release, O_RDONLY);
+    if (gate < 0 || read(gate, &byte, 1) != 1) return 1;
     say("\033[<u");
     tcsetattr(0, TCSANOW, &found);
     return 0;
 }
 "#;
+
+/// What the stand-in Codex CLI shows while it shuts down.
+#[cfg(unix)]
+const QUITTING: &str = "Shutting down...";
+
+/// Lets the stand-in Codex CLI hand its terminal back at what the sleep has
+/// observed, never at a time: a screen read after the first press that
+/// shows it quitting, which the sleep acts on, or a second press answered,
+/// whose key Herdr has then written to the terminal the stand-in no longer
+/// reads.
+#[cfg(unix)]
+struct Release {
+    fifo: PathBuf,
+    presses: std::sync::atomic::AtomicUsize,
+    released: std::sync::atomic::AtomicBool,
+}
+
+#[cfg(unix)]
+impl Release {
+    /// Herdr answered `method` with `answer`; called before the sleep reads
+    /// the answer.
+    fn answered(&self, method: &str, answer: &str) {
+        use std::sync::atomic::Ordering;
+        let observed = match method {
+            "pane.send_keys" => self.presses.fetch_add(1, Ordering::SeqCst) == 1,
+            "pane.read" => self.presses.load(Ordering::SeqCst) >= 1 && answer.contains(QUITTING),
+            _ => false,
+        };
+        if observed && !self.released.swap(true, Ordering::SeqCst) {
+            self.open();
+        }
+    }
+
+    /// Opens the FIFO for writing, which ends the stand-in's wait, once it
+    /// is waiting there; it is by the time either boundary is reached, and
+    /// the deadline is the hang guard.
+    #[allow(clippy::disallowed_methods)] // a polling helper: it sleeps between observations of a state, bounded by a deadline
+    fn open(&self) {
+        use std::os::unix::fs::OpenOptionsExt;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&self.fifo)
+            {
+                Ok(mut fifo) => {
+                    std::io::Write::write_all(&mut fifo, b"r").unwrap();
+                    return;
+                }
+                // No reader yet.
+                Err(error) if error.raw_os_error() == Some(libc::ENXIO) => {}
+                Err(error) => panic!("open the stand-in's release: {error}"),
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the stand-in never waited for its release"
+            );
+            thread::sleep(POLL_INTERVAL);
+        }
+    }
+}
+
+/// Herdr's socket, with each answer shown to `Release` before the caller
+/// reads it.
+#[cfg(unix)]
+struct Watched {
+    socket: LocalSocketConnector,
+    release: std::sync::Arc<Release>,
+}
+
+#[cfg(unix)]
+impl ApiConnector for Watched {
+    fn connect(&self) -> Result<Box<dyn hide_herdr_client::ApiStream>, ApiError> {
+        Ok(Box::new(WatchedStream {
+            stream: self.socket.connect()?,
+            release: std::sync::Arc::clone(&self.release),
+            request: Vec::new(),
+            answer: Vec::new(),
+            told: false,
+        }))
+    }
+}
+
+/// One request's stream: Herdr answers one line and closes it.
+#[cfg(unix)]
+struct WatchedStream {
+    stream: Box<dyn hide_herdr_client::ApiStream>,
+    release: std::sync::Arc<Release>,
+    request: Vec<u8>,
+    answer: Vec<u8>,
+    told: bool,
+}
+
+#[cfg(unix)]
+impl WatchedStream {
+    fn tell(&mut self) {
+        if self.told {
+            return;
+        }
+        self.told = true;
+        let request: Value = serde_json::from_slice(&self.request).unwrap_or_default();
+        self.release.answered(
+            request["method"].as_str().unwrap_or_default(),
+            &String::from_utf8_lossy(&self.answer),
+        );
+    }
+}
+
+#[cfg(unix)]
+impl std::io::Write for WatchedStream {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let written = self.stream.write(bytes)?;
+        self.request.extend_from_slice(&bytes[..written]);
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.stream.flush()
+    }
+}
+
+#[cfg(unix)]
+impl std::io::Read for WatchedStream {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let read = self.stream.read(buffer)?;
+        self.answer.extend_from_slice(&buffer[..read]);
+        if self.answer.contains(&b'\n') || read == 0 {
+            self.tell();
+        }
+        Ok(read)
+    }
+}
+
+#[cfg(unix)]
+impl hide_herdr_client::ApiStream for WatchedStream {
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> Result<(), ApiError> {
+        self.stream.set_read_timeout(timeout)
+    }
+
+    fn set_write_timeout(&self, timeout: Option<Duration>) -> Result<(), ApiError> {
+        self.stream.set_write_timeout(timeout)
+    }
+
+    fn read_line_with_timeout(&mut self, timeout: Duration) -> Result<String, ApiError> {
+        let line = self.stream.read_line_with_timeout(timeout)?;
+        self.answer.extend_from_slice(line.as_bytes());
+        self.tell();
+        Ok(line)
+    }
+
+    fn shutdown_handle(&self) -> Result<Box<dyn hide_herdr_client::ConnectionShutdown>, ApiError> {
+        self.stream.shutdown_handle()
+    }
+}
 
 /// The scenario every Unix shell runs: Hide sleeps an idle Codex CLI in its
 /// pane (`agent_sleep_herdr::end_agent`) and wakes it there, and the resume
@@ -870,6 +1034,14 @@ fn sleep_and_wake(shell: &str, variable: &str) {
     let herdr = PrivateHerdr::new(std::env::var(variable).ok());
     native_agent(&herdr, "codex", CODEX);
     prompt_files(&herdr, shell);
+    let fifo = herdr.home.join("codex-release");
+    assert!(
+        Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .expect("mkfifo runs")
+            .success()
+    );
     let created = herdr.request(
         "workspace.create",
         json!({"cwd": herdr.home, "label": "agents", "focus": false}),
@@ -879,11 +1051,12 @@ fn sleep_and_wake(shell: &str, variable: &str) {
         .unwrap()
         .to_owned();
     let pane = herdr.tab(&workspace, "slept", None);
-    herdr.wait_on(&pane, Duration::from_secs(30), "the prompt shows", || {
-        herdr.screen(&pane).contains("fixture")
-    });
-    herdr.request(
-        "agent.start",
+    start_within(
+        &herdr.connector(),
+        None,
+        "slept",
+        &pane,
+        ShellStart::Plain,
         wire::agent_start_params(
             &pane,
             "slept",
@@ -892,7 +1065,12 @@ fn sleep_and_wake(shell: &str, variable: &str) {
             crate::codex_launch::CodexDaemon::Unsupported,
         )
         .unwrap(),
-    );
+        Duration::from_secs(10),
+        Duration::from_secs(30),
+        Duration::ZERO,
+        &|| Ok(()),
+    )
+    .unwrap_or_else(|error| panic!("the agent starts: {error:?}"));
     herdr.wait_on(
         &pane,
         Duration::from_secs(30),
@@ -915,10 +1093,23 @@ fn sleep_and_wake(shell: &str, variable: &str) {
         home: herdr.home.clone(),
         shell: None,
     };
+    let release = std::sync::Arc::new(Release {
+        fifo,
+        presses: Default::default(),
+        released: Default::default(),
+    });
+    let watched = Watched {
+        socket: herdr.connector(),
+        release: std::sync::Arc::clone(&release),
+    };
     assert!(
-        crate::agent_sleep_herdr::end_agent(&herdr.connector(), &node, &pane, "codex").is_ok(),
+        crate::agent_sleep_herdr::end_agent(&watched, &node, &pane, "codex").is_ok(),
         "the agent quit; pane shows:\n{}",
         herdr.screen(&pane)
+    );
+    assert!(
+        release.released.load(std::sync::atomic::Ordering::SeqCst),
+        "the stand-in quit only on its release"
     );
     let woke = crate::agent_sleep_herdr::start_agent(
         &herdr.connector(),
