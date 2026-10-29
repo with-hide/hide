@@ -5,8 +5,9 @@
 
 use super::*;
 
-/// Schema 23. An admission is kept for a day, so the rows are bounded by the
-/// daily call cap; a hold is kept for the day it was made.
+/// Schema 23. An admission is kept for the last 24 hours, which can span two
+/// UTC days, so its rows are bounded by the hour's cap over 24 hours (1,920),
+/// under two days of the daily cap; a hold is kept for yesterday and today.
 pub(super) const TABLES: &str = "
 CREATE TABLE analysis_admissions(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,provider TEXT NOT NULL,session_id TEXT NOT NULL,at_ms INTEGER NOT NULL);
 CREATE INDEX analysis_admissions_session ON analysis_admissions(project_id,provider,session_id,at_ms);
@@ -71,7 +72,7 @@ pub(super) fn rewind(connection: &Connection, now: u64) -> Result<usize, MemoryE
     )?)
 }
 
-/// Keeps the admitted call and forgets those older than a day.
+/// Keeps the admitted call and forgets those older than 24 hours.
 pub(super) fn record(
     connection: &Connection,
     now: u64,
@@ -108,6 +109,7 @@ impl MemoryStore {
 
     /// Records that the session reached its day's calls and answers whether
     /// this is the first time this UTC day, so the hold is reported once.
+    /// Yesterday's and today's holds are kept; older ones are forgotten.
     pub fn hold_session(
         &self,
         now_unix_ms: u64,
