@@ -6,8 +6,8 @@
 use super::*;
 
 /// Schema 23. An admission is kept for the last 24 hours, which can span two
-/// UTC days, so its rows are bounded by the hour's cap over 24 hours (1,920),
-/// under two days of the daily cap; a hold is kept for yesterday and today.
+/// UTC days, so its rows are bounded by two days of the daily cap (2,000); a
+/// hold is kept for yesterday and today.
 pub(super) const TABLES: &str = "
 CREATE TABLE analysis_admissions(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,provider TEXT NOT NULL,session_id TEXT NOT NULL,at_ms INTEGER NOT NULL);
 CREATE INDEX analysis_admissions_session ON analysis_admissions(project_id,provider,session_id,at_ms);
