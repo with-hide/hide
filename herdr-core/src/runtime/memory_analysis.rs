@@ -5440,7 +5440,7 @@ mod tests {
         fixture.write(&fixture.lines);
         let key = ("claude", SESSION.to_owned());
         for _ in 0..40 {
-            fixture.push(json!({"candidates":[],"alias_backfill":[]}));
+            fixture.push(json!({"candidates":[],"alias_backfill":[],"repeats":[],"merges":[]}));
         }
         let earlier = hide_memory::SESSION_DAILY_GROUP_LIMIT - 2;
         fixture.write_groups("claude", SESSION, earlier);
