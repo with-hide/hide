@@ -686,6 +686,39 @@ mod tests {
         assert!(notices.is_empty());
     }
 
+    /// needs-you-cleanup B12, B14: a question announces once; read, it stays
+    /// listed in 내 차례 and its notice closes, and neither ☆ nor taking the
+    /// ★ off announces it again.
+    #[test]
+    fn a_read_question_listed_in_needs_you_never_announces_again() {
+        let mut transitions = Transitions::default();
+        transitions.observe(&project(
+            &rest(json!([row("w1:p1", "working", "none", None)])),
+            "local",
+        ));
+        let (notices, _) = transitions.observe(&project(
+            &rest(json!([row("w1:p1", "needs_you", "question", None)])),
+            "local",
+        ));
+        assert_eq!(notices.len(), 1);
+        let read = |starred: bool| {
+            let mut row = row("w1:p1", "seen", "question", None);
+            row["revisit"] = json!({"starred": starred, "read_ask": true, "since_unix_ms": 5});
+            project(&rest(json!([row])), "local")
+        };
+        let listed = read(false);
+        let agent = listed.agents().next().unwrap();
+        assert_eq!((agent.group.as_str(), agent.read), ("needs_you", true));
+        let (notices, cleared) = transitions.observe(&listed);
+        assert!(notices.is_empty());
+        assert_eq!(cleared.len(), 1, "reading it closes its notice");
+        assert!(transitions.observe(&read(true)).0.is_empty(), "☆");
+        assert!(
+            transitions.observe(&read(false)).0.is_empty(),
+            "★ taken off"
+        );
+    }
+
     /// B5: a block enters Needs You like a question, notifies once, and its
     /// notification closes once the operator has read it.
     #[test]

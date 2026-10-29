@@ -1230,6 +1230,78 @@ mod row_tests {
         assert_eq!(demand_verb(&agent), Some(Verb::Answer));
     }
 
+    fn raised(pane: &str, since: Option<u64>) -> super::super::escalation::RaisedAsk {
+        super::super::escalation::RaisedAsk {
+            verb: super::super::escalation::Verb::Approval,
+            what: Some(format!("{pane} asks")),
+            subject: None,
+            raised_pane_id: pane.into(),
+            origin_title: pane.into(),
+            pane_id: pane.into(),
+            title: pane.into(),
+            agent_kind: "codex".into(),
+            open_pane_id: pane.into(),
+            since_unix_ms: since,
+            unreceived_by: None,
+            path: Vec::new(),
+            checkout: None,
+            human_notice: false,
+        }
+    }
+
+    // needs-you-cleanup D-13, B9: of everything waiting on the operator under
+    // one root, the one asked first leads the row and the rest are `외 N건`:
+    // raised descendants, the row's own ask, and the core's questions laid
+    // behind it.
+    #[test]
+    fn the_oldest_ask_under_a_root_leads_and_the_rest_are_counted_behind_it() {
+        use super::super::escalation::Verb;
+        let decision = crate::model::AskSubject::MissionDecision {
+            line: "Skip the check line?".into(),
+        };
+        let mut agent = row();
+        agent.group = "needs_you".into();
+        agent.demand = "question".into();
+        agent.unread = true;
+        agent.user_turn = Some(hide_session::turns::UserTurnFact {
+            kind: hide_session::turns::UserTurnKind::Question,
+            content: None,
+        });
+        // A mission decision laid at 200, a plan review behind it.
+        agent.ask_subject = Some(decision.clone());
+        agent.laid_since_unix_ms = Some(200);
+        agent.laid_more = 1;
+        agent.raised = vec![raised("child", Some(300)), raised("grandchild", Some(400))];
+        let lead = |agent: &SidebarAgentSnapshot| {
+            let state = row_state(agent);
+            let ask = state.ask.unwrap();
+            (ask.verb, ask.subject, ask.more, state.request_since)
+        };
+        // Own decision asked first: it leads, the two raises and the plan
+        // review behind it.
+        assert_eq!(
+            lead(&agent),
+            (Verb::Answer, Some(decision.clone()), 3, Some(200))
+        );
+        // A child that asked earlier leads instead, the count unchanged.
+        agent.raised[0].since_unix_ms = Some(100);
+        assert_eq!(lead(&agent), (Verb::Approval, None, 3, Some(100)));
+        // An undated raise never outranks a dated own ask.
+        agent.raised[0].since_unix_ms = None;
+        assert_eq!(lead(&agent), (Verb::Answer, Some(decision), 3, Some(200)));
+        // With no ask of its own the first raise leads, the other counted.
+        agent.user_turn = None;
+        agent.ask_subject = None;
+        agent.laid_since_unix_ms = None;
+        agent.laid_more = 0;
+        agent.demand = "none".into();
+        let state = row_state(&agent);
+        assert_eq!(
+            state.ask.map(|ask| (ask.what, ask.more)),
+            Some((Some("child asks".to_owned()), 1))
+        );
+    }
+
     // agent-blocked-state B1 with agent-hierarchy-screens B14: a block in
     // Needs You is asked in no verb; its row and Sessions line carry the cause.
     #[test]
