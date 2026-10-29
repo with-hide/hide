@@ -425,6 +425,38 @@ pub fn sign_in_line(line: &str) -> SignInLine {
     SignInLine::Browser(url.to_owned())
 }
 
+/// One line of ssh's error output as Hide keeps it, for the classification,
+/// a failure's words and the log: each link cut to its host, since the rest
+/// of a sign-in link carries the code or token that signs in. Only the row
+/// is shown the whole link ([`sign_in_line`]), while its check waits.
+pub fn kept_line(line: &str) -> String {
+    let mut kept = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(start) = ["https://", "http://"]
+        .iter()
+        .filter_map(|scheme| rest.find(scheme))
+        .min()
+    {
+        let (before, link) = rest.split_at(start);
+        let end = link
+            .find(|character: char| character.is_whitespace() || character.is_control())
+            .unwrap_or(link.len());
+        let (link, after) = link.split_at(end);
+        let (scheme, address) = link.split_once("://").unwrap_or((link, ""));
+        let authority = address.split(['/', '?', '#']).next().unwrap_or_default();
+        // What comes before an `@` signs in too; it is not the host.
+        let host = authority.rsplit('@').next().unwrap_or_default();
+        kept.push_str(before);
+        kept.push_str(scheme);
+        kept.push_str("://");
+        kept.push_str(host);
+        kept.push_str("/…");
+        rest = after;
+    }
+    kept.push_str(rest);
+    kept
+}
+
 /// How an attempt that did not connect ended, as the classification reads
 /// it.
 pub struct Ending<'a> {
@@ -743,6 +775,24 @@ mod tests {
         );
         assert_eq!(sign_in_line("Authorized use only."), SignInLine::Other);
         assert_eq!(sign_in_line("see https:// for more"), SignInLine::Other);
+    }
+
+    #[test]
+    fn a_kept_line_names_each_links_host_and_nothing_that_signs_in() {
+        assert_eq!(
+            kept_line("# To authenticate, visit: https://login.tailscale.com/a/1a2b3c."),
+            "# To authenticate, visit: https://login.tailscale.com/…"
+        );
+        assert_eq!(
+            kept_line(
+                "open https://team.cloudflareaccess.com/cdn-cgi/access/cli?token=x or http://al:pw@proxy.test:8080#code=y now"
+            ),
+            "open https://team.cloudflareaccess.com/… or http://proxy.test:8080/… now"
+        );
+        assert_eq!(
+            kept_line("al@studio: Permission denied (publickey)."),
+            "al@studio: Permission denied (publickey)."
+        );
     }
 
     fn ending(stderr: &[&str]) -> SshFailure {
