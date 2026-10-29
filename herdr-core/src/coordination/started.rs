@@ -206,7 +206,7 @@ pub(crate) mod tests {
                 terminal: None,
                 shell: None,
                 child: None,
-                made_checkout: false,
+                made_checkout: None,
             },
             1,
         )?;

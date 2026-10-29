@@ -45,6 +45,8 @@ pub(crate) mod cleanup;
 mod checkout_start;
 #[path = "worktree_control.rs"]
 mod worktree_control;
+#[cfg(test)]
+pub(crate) use worktree_control::test_worktree;
 pub use worktree_control::{
     AgentFailure, CheckoutTabRequest, HomeStartRequest, IssueWriteFailure, PendingAgentStart,
     PurposeMirror, PurposeTaskOutcome, PurposeTaskRequest, RemovalFailure, TabTarget,

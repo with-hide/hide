@@ -758,8 +758,8 @@ fn a_device_that_cannot_record_the_worktree_trust_starts_no_agent_there() {
 }
 
 /// A spawn refused after it made its worktree, here because Codex's trust of
-/// it could not be recorded, takes that worktree away again with its branch
-/// and pane, never forced, so the same intent asked again makes it anew and
+/// it could not be recorded, takes that worktree's folder away again with
+/// its pane, never forced, so the same intent asked again makes it anew and
 /// leaves none behind (with-hide/hide-private#56).
 #[test]
 fn a_spawn_refused_after_making_its_worktree_leaves_none_behind() {
@@ -775,18 +775,22 @@ fn a_spawn_refused_after_making_its_worktree_leaves_none_behind() {
     let worktree = spawner.node.worktree.lock().unwrap();
     assert_eq!(worktree.created, 2);
     assert!(!worktree.exists && !worktree.pane_open);
+    // What the device's host is asked to remove: the folder at the commit it
+    // was made at, unforced, and never the branch. What the host keeps is
+    // its own removal's (`worktree_control`'s tests run it on a repository).
     let removed = worktree
         .removed
         .iter()
         .map(|removal| {
             (
                 removal.checkout_path.as_str(),
+                removal.expected_head_sha.as_deref(),
                 removal.delete_branch.as_deref(),
                 removal.force_delete_branch || removal.discard_changes,
             )
         })
         .collect::<Vec<_>>();
-    assert_eq!(removed, [(WORKTREE, Some("topic"), false); 2]);
+    assert_eq!(removed, [(WORKTREE, Some("c0ffee"), None, false); 2]);
     assert_eq!(spawner.count("agent.start"), 0);
 }
 
