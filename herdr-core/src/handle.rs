@@ -1106,12 +1106,62 @@ mod tests {
     /// (with-hide/hide-private#75).
     const ONLY_THE_CORE_ENDS_THE_DIAL: Duration = Duration::from_secs(30);
 
+    /// The listener that stands for the device: its one accept runs on a
+    /// thread this value owns, which its drop wakes and joins, so a setup
+    /// that fails before the core dials leaves no thread or socket behind.
+    struct SilentListener {
+        address: std::net::SocketAddr,
+        accepted: std::sync::mpsc::Receiver<std::io::Result<TcpStream>>,
+        accepting: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl SilentListener {
+        fn bind() -> Self {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let (sender, accepted) = std::sync::mpsc::channel();
+            let accepting = std::thread::spawn(move || {
+                let _ = sender.send(listener.accept().map(|(peer, _)| peer));
+            });
+            Self {
+                address,
+                accepted,
+                accepting: Some(accepting),
+            }
+        }
+
+        /// The connection the core's attempt made, which then waits for the
+        /// greeting.
+        fn dialed(&self) -> TcpStream {
+            self.accepted
+                .recv_timeout(ONLY_THE_CORE_ENDS_THE_DIAL)
+                .expect("the core never dialed the device")
+                .expect("the listener accepts the dial")
+        }
+    }
+
+    impl Drop for SilentListener {
+        fn drop(&mut self) {
+            let Some(accepting) = self.accepting.take() else {
+                return;
+            };
+            // An accept still waiting takes this connection and returns.
+            if !accepting.is_finished() {
+                let _ = TcpStream::connect(self.address);
+            }
+            if accepting.join().is_err() && !std::thread::panicking() {
+                panic!("the listener's accept thread panicked");
+            }
+        }
+    }
+
     /// A core whose one device is an alias for a listener that takes the
     /// TCP connection and never sends the SSH greeting, and that connection
     /// as the device holds it once the core's attempt dialed it.
     struct SilentDevice {
         core: Option<Box<super::Core>>,
         peer: TcpStream,
+        _listener: SilentListener,
         _home: tempfile::TempDir,
         _state: tempfile::TempDir,
     }
@@ -1120,20 +1170,23 @@ mod tests {
         fn dialed() -> Self {
             let home = tempfile::tempdir().unwrap();
             let state = tempfile::tempdir().unwrap();
-            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-            std::fs::create_dir_all(home.path().join(".ssh")).unwrap();
+            let listener = SilentListener::bind();
+            let ssh = home.path().join(".ssh");
+            std::fs::create_dir_all(&ssh).unwrap();
+            // `-F` and `HOME` do not move what `ssh` reads from the account's
+            // own home, so every key and host file is named here: the dial
+            // reads none of the account's (`/` reads on Windows too).
+            let private = |name: &str| ssh.join(name).to_string_lossy().replace('\\', "/");
             std::fs::write(
-                home.path().join(".ssh/config"),
+                ssh.join("config"),
                 format!(
-                    "Host silent\n  HostName 127.0.0.1\n  Port {}\n  User fixture\n  IdentityAgent none\n  ConnectTimeout 600\n",
-                    listener.local_addr().unwrap().port()
+                    "Host silent\n  HostName 127.0.0.1\n  Port {}\n  User fixture\n  IdentityFile none\n  IdentitiesOnly yes\n  IdentityAgent none\n  UserKnownHostsFile \"{}\"\n  GlobalKnownHostsFile \"{}\"\n  ConnectTimeout 600\n",
+                    listener.address.port(),
+                    private("known_hosts"),
+                    private("known_hosts_global"),
                 ),
             )
             .unwrap();
-            let (accepted, peer) = std::sync::mpsc::channel();
-            std::thread::spawn(move || {
-                let _ = accepted.send(listener.accept().map(|(peer, _)| peer));
-            });
             let core = super::Core::create(
                 crate::CoreOptions {
                     schema_version: crate::SCHEMA_VERSION,
@@ -1164,13 +1217,11 @@ mod tests {
             )));
             // The accept is the barrier: the attempt's `ssh` is connected and
             // waits for the greeting.
-            let peer = peer
-                .recv_timeout(ONLY_THE_CORE_ENDS_THE_DIAL)
-                .expect("the core never dialed the device")
-                .expect("the listener accepts the dial");
+            let peer = listener.dialed();
             Self {
                 core: Some(core),
                 peer,
+                _listener: listener,
                 _home: home,
                 _state: state,
             }
