@@ -88,7 +88,8 @@ AGY_CRATES = {"hide-agent-adapter", "hide-agent-hooks", "hide-ai", "hide-kit", "
 OS_LANES = ("os-contract", "windows-check", "windows-e2e", "windows-desktop")
 # The remote mailbox lane builds `hided`, `hide`, the host helper and the hook
 # binary, and runs `hided`'s `remote_delivery` test against them over
-# private SSH, and its `held_letter_notice` test against the pinned Herdr; a
+# private SSH, its `held_letter_notice` test against the pinned Herdr, and
+# `hide-host`'s check of another account's open on a device's bridge; a
 # change to any crate they link, or to the tests, can change its result, and
 # nothing else can. Web code and web specs do not reach it.
 MAILBOX_CRATES = {"herdr-core", "hided", "hide-agent-hooks", "hide-host"}
