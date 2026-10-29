@@ -606,6 +606,45 @@ impl SshProblem {
             Self::NameNotFound | Self::Unreachable | Self::ProxyFailed | Self::Unclassified
         )
     }
+
+    /// What the operator does about it, the one grouping the device row and
+    /// `hide device` share: sign in again, check the server key in a
+    /// terminal, or retry.
+    pub fn action(self) -> FailureAction {
+        match self {
+            Self::SignInNeeded | Self::BrowserTimeout | Self::SignInRefused => {
+                FailureAction::SignIn
+            }
+            Self::HostKeyChanged => FailureAction::CheckHostKey,
+            Self::PolicyRefused
+            | Self::NameNotFound
+            | Self::Unreachable
+            | Self::ProxyFailed
+            | Self::Unsupported
+            | Self::SshMissing
+            | Self::OpenSshOld
+            | Self::Unclassified => FailureAction::Retry,
+        }
+    }
+}
+
+/// What the operator does about a failed ssh connection ([`SshProblem::action`]).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureAction {
+    SignIn,
+    CheckHostKey,
+    Retry,
+}
+
+impl FailureAction {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::SignIn => "sign_in",
+            Self::CheckHostKey => "check_host_key",
+            Self::Retry => "retry",
+        }
+    }
 }
 
 /// A classified ssh failure: the class and the one line the row may show
