@@ -399,7 +399,7 @@ function TaskRow({ entry, family, open, selected, number, showProject, disabled,
           {open ? null : <DescendantMark agent={agent} />}
           <AgentPrMark agent={agent} family={family} staleness={staleness} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: project?.id ?? null, url: pull.url, number: pull.number })} onExternal={(pull) => actions.openLink(pull.url, true)} />
           <MissionChip agent={agent} onOpen={(id) => actions.openMission(id)} />
-          <TimeSlot agent={agent} record={record} menu={menu} revisit={{ on: card.state === "revisit" || starred(agent), disabled, actions }} />
+          <TimeSlot agent={agent} record={record} menu={menu} revisit={{ on: starred(agent), disabled, actions }} />
         </div>
         <SecondLine entry={entry} showProject={showProject} />
       </div>
@@ -534,7 +534,9 @@ function revisitEntry(agent: AgentRow, disabled: boolean, t: TFunction<"translat
 
 /**
  * The ☆/★ beside the record button (PRD revisit-group D-08, B8): ☆ stars the
- * task, ★ on a starred task or one waiting in 다시 볼 것 is 다시 볼 것에서 빼기.
+ * task and ★, drawn only on a starred one, is 다시 볼 것에서 빼기. A read ask
+ * waits in 다시 볼 것 with ☆, so pressing it stars rather than puts it away;
+ * the ⋯ menu's 다시 볼 것에서 빼기 puts that ask away.
  */
 function RevisitButton({ agent, on, disabled, actions }: { agent: AgentRow; on: boolean; disabled: boolean; actions: Actions }) {
   const { t } = useInterfaceTranslation();
