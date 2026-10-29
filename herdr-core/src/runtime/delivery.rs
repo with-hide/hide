@@ -2757,7 +2757,7 @@ pub(crate) mod tests {
     fn only_the_attested_pane_asks_who_it_is() {
         let root = tempfile::tempdir().unwrap();
         let (runtime, _, target, path) = fixture(root.path());
-        let (worker, client) = Worker::spawn(
+        let (worker, client) = Worker::store(
             Arc::downgrade(&runtime),
             ChangeNotifier::noop(),
             path.clone(),
@@ -2839,7 +2839,7 @@ pub(crate) mod tests {
     fn only_a_prompt_hook_of_the_panes_own_session_is_a_submission() {
         let root = tempfile::tempdir().unwrap();
         let (runtime, _, target, path) = fixture(root.path());
-        let (worker, client) = Worker::spawn(
+        let (worker, client) = Worker::store(
             Arc::downgrade(&runtime),
             ChangeNotifier::noop(),
             path.clone(),
@@ -2959,7 +2959,7 @@ pub(crate) mod tests {
     fn a_tool_events_ask_hands_a_working_agent_its_due_letters_and_submits_nothing() {
         let root = tempfile::tempdir().unwrap();
         let (runtime, sender, _, path) = fixture(root.path());
-        let (worker, client) = Worker::spawn(
+        let (worker, client) = Worker::store(
             Arc::downgrade(&runtime),
             ChangeNotifier::noop(),
             path.clone(),
@@ -3090,7 +3090,7 @@ pub(crate) mod tests {
     fn remote_delivery_uses_attested_pane_and_native_kind_without_a_remote_store() {
         let root = tempfile::tempdir().unwrap();
         let (runtime, _, _, path) = fixture(root.path());
-        let (worker, client) = Worker::spawn(
+        let (worker, client) = Worker::store(
             Arc::downgrade(&runtime),
             ChangeNotifier::noop(),
             path.clone(),
@@ -3182,13 +3182,14 @@ pub(crate) mod tests {
         assert_eq!(result["sender"]["kind"], "claude");
         assert_eq!(result["sender"]["device_id"], "device");
         assert_eq!(result["sender"]["pane_id"], caller);
+        // Stopped before its file is read: the store passes on its own too.
+        drop(worker);
         let stored = crate::delivery::ledger::load(&path).unwrap();
         assert_eq!(stored.letters.len(), 1);
         assert_eq!(
             stored.letters[0].sender.session.as_deref(),
             Some("remote-session")
         );
-        drop(worker);
     }
 
     /// A core with its own `w1:p2`, `w1:p9` and unnamed `w1:p5`, `w1:p6`, and a
@@ -3251,7 +3252,7 @@ pub(crate) mod tests {
     fn a_bare_pane_id_names_a_pane_on_the_callers_own_machine() {
         let root = tempfile::tempdir().unwrap();
         let (runtime, _, _, path) = fixture(root.path());
-        let (worker, client) = Worker::spawn(
+        let (worker, client) = Worker::store(
             Arc::downgrade(&runtime),
             ChangeNotifier::noop(),
             path.clone(),
@@ -3396,9 +3397,10 @@ pub(crate) mod tests {
             .as_deref(),
             Some("caller_identity_conflict")
         );
+        // Stopped before its file is read: the store passes on its own too.
+        drop(worker);
         let stored = crate::delivery::ledger::load(&path).unwrap();
         assert_eq!(stored.letters.len(), 5);
-        drop(worker);
     }
 
     #[test]
@@ -3406,7 +3408,7 @@ pub(crate) mod tests {
         let root = tempfile::tempdir().unwrap();
         let (runtime, actor, _, path) = fixture(root.path());
         let before = std::fs::read(&path).unwrap();
-        let (worker, client) = Worker::spawn(
+        let (worker, client) = Worker::store(
             Arc::downgrade(&runtime),
             ChangeNotifier::noop(),
             path.clone(),
@@ -3488,7 +3490,7 @@ pub(crate) mod tests {
         let root = tempfile::tempdir().unwrap();
         let (runtime, actor, _, path) = fixture(root.path());
         let before = std::fs::read(&path).unwrap();
-        let (worker, client) = Worker::spawn(
+        let (worker, client) = Worker::store(
             Arc::downgrade(&runtime),
             ChangeNotifier::noop(),
             path.clone(),
@@ -3580,7 +3582,7 @@ pub(crate) mod tests {
     fn moved_terminal_keeps_registration_letters_and_watch_after_restart() {
         let root = tempfile::tempdir().unwrap();
         let (runtime, _, _, path) = fixture(root.path());
-        let (worker, client) = Worker::spawn(
+        let (worker, client) = Worker::store(
             Arc::downgrade(&runtime),
             ChangeNotifier::noop(),
             path.clone(),
@@ -3626,6 +3628,8 @@ pub(crate) mod tests {
                 Duration::from_secs(5),
             )
             .unwrap();
+        // Stopped before its file is read: the store passes on its own too.
+        drop(worker);
         let persisted = crate::delivery::ledger::load(&path).unwrap();
         let child = &persisted.agents[1];
         assert_eq!(child.id, "agent-2");
@@ -3638,7 +3642,6 @@ pub(crate) mod tests {
         assert!(persisted.letters[0].recipient.same_identity(&child.actor));
         assert!(!child.actor.same_identity(&old_child));
         persisted.validate().unwrap();
-        drop(worker);
     }
 
     #[test]
@@ -3672,7 +3675,7 @@ pub(crate) mod tests {
     fn remote_observation_without_a_local_socket_keeps_the_registered_session() {
         let root = tempfile::tempdir().unwrap();
         let (runtime, _, _, path) = fixture(root.path());
-        let (worker, client) = Worker::spawn(
+        let (worker, client) = Worker::store(
             Arc::downgrade(&runtime),
             ChangeNotifier::noop(),
             path.clone(),
@@ -3710,6 +3713,8 @@ pub(crate) mod tests {
                 Duration::from_secs(5),
             )
             .unwrap();
+        // Stopped before its file is read: the store passes on its own too.
+        drop(worker);
         let persisted = crate::delivery::ledger::load(&path).unwrap();
         let child = &persisted.agents[1];
         assert_eq!(child.actor.pane_id, "remote:device:pane:moved-child");
@@ -3717,7 +3722,6 @@ pub(crate) mod tests {
         assert!(!child.ended);
         assert!(persisted.watches[0].target.same_identity(&child.actor));
         persisted.validate().unwrap();
-        drop(worker);
     }
 
     fn only_lead() -> SessionSnapshotPayload {
@@ -3735,7 +3739,7 @@ pub(crate) mod tests {
     fn herdr_closing_a_registered_pane_ends_the_registration_and_its_watches() {
         let root = tempfile::tempdir().unwrap();
         let (runtime, _, _, path) = fixture(root.path());
-        let (worker, client) = Worker::spawn(
+        let (worker, client) = Worker::store(
             Arc::downgrade(&runtime),
             ChangeNotifier::noop(),
             path.clone(),
@@ -3755,6 +3759,8 @@ pub(crate) mod tests {
                 Duration::from_secs(5),
             )
             .unwrap();
+        // Stopped before its file is read: the store passes on its own too.
+        drop(worker);
         let persisted = crate::delivery::ledger::load(&path).unwrap();
         let ended = |ledger: &Ledger| {
             ledger
@@ -3773,7 +3779,6 @@ pub(crate) mod tests {
         assert!(guard.delivery_registrations_gone().is_empty());
         assert!(crate::coordination::resolve_actor(&persisted, "child").is_none());
         drop(guard);
-        drop(worker);
     }
 
     /// The same close ends the answer wait of a request the closed pane's agent
@@ -3782,7 +3787,7 @@ pub(crate) mod tests {
     fn herdr_closing_a_pane_ends_the_answer_wait_of_the_requests_it_held() {
         let root = tempfile::tempdir().unwrap();
         let (runtime, _, _, path) = fixture(root.path());
-        let (worker, client) = Worker::spawn(
+        let (worker, client) = Worker::store(
             Arc::downgrade(&runtime),
             ChangeNotifier::noop(),
             path.clone(),
@@ -3825,6 +3830,8 @@ pub(crate) mod tests {
                 Duration::from_secs(5),
             )
             .unwrap();
+        // Stopped before its file is read: the store passes on its own too.
+        drop(worker);
         let mut persisted = crate::delivery::ledger::load(&path).unwrap();
         let shown = crate::delivery::mailbox::apply(
             &mut persisted,
@@ -3840,7 +3847,6 @@ pub(crate) mod tests {
         assert!(!persisted.letters[0].open());
         // The ended agent can no longer be the one who answers it.
         assert!(crate::coordination::resolve_actor(&persisted, &child.name).is_none());
-        drop(worker);
     }
 
     /// A pane read ends only this Herdr's registrations it can vouch for:
@@ -4036,7 +4042,7 @@ pub(crate) mod tests {
                 json!({"type":"agent_list","agents":[
                 native("sender", "writer-session"), native("recipient", "reader-session")]})
             });
-        let (worker, client) = Worker::spawn(
+        let (worker, client) = Worker::store(
             Arc::downgrade(&runtime),
             ChangeNotifier::noop(),
             path.clone(),

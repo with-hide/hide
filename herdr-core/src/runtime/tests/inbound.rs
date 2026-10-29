@@ -62,8 +62,33 @@ impl crate::node_access::NodeLink for OldMemoryReader {
     }
 }
 
-/// The transport of a node that dialed in, reaching no Herdr.
-struct HeldLink;
+/// The transport of a node that dialed in. Its Herdr answers nothing while
+/// the link stands, so the node's session sync reports no state of its own
+/// over the one a test hands the core: a socket that never existed answered
+/// at once, and that answer landed after the test's own often enough.
+struct HeldLink(Arc<LinkEnd>);
+
+/// Whether the test let the link go, which ends every wait on its Herdr.
+#[derive(Default)]
+struct LinkEnd {
+    ended: Mutex<bool>,
+    changed: std::sync::Condvar,
+}
+
+/// The node's Herdr as [`HeldLink`] reaches it.
+struct HeldHerdr(Arc<LinkEnd>);
+
+impl hide_herdr_client::ApiConnector for HeldHerdr {
+    fn connect(
+        &self,
+    ) -> Result<Box<dyn hide_herdr_client::ApiStream>, hide_herdr_client::ApiError> {
+        let ended = self.0.ended.lock().unwrap();
+        drop(self.0.changed.wait_while(ended, |ended| !*ended).unwrap());
+        Err(hide_herdr_client::ApiError::NotRunning(
+            "the test's link ended".to_owned(),
+        ))
+    }
+}
 
 /// A node's link that stands until the test lets it go, and then ends, so
 /// the core's phase for it can be read at each step.
@@ -76,11 +101,16 @@ pub(super) fn held_link() -> (Arrived, mpsc::Sender<()>) {
 /// [`held_link`] whose node answers as `host` does.
 fn held_link_to(host: Arc<dyn crate::node_access::NodeLink>) -> (Arrived, mpsc::Sender<()>) {
     let (release, wait) = mpsc::channel::<()>();
+    let end = Arc::new(LinkEnd::default());
+    let ending = Arc::clone(&end);
     let arrived = Arrived {
-        transport: Arc::new(HeldLink),
+        transport: Arc::new(HeldLink(end)),
         node: super::device_kit::node_ready(host, None),
         hear_close: Box::new(move |on_close| {
-            let _ = wait.recv_timeout(Duration::from_secs(10));
+            // The test drops its end, or unwinds past it.
+            let _ = wait.recv();
+            *ending.ended.lock().unwrap() = true;
+            ending.changed.notify_all();
             on_close("the test's link ended".to_owned());
         }),
     };
@@ -89,9 +119,7 @@ fn held_link_to(host: Arc<dyn crate::node_access::NodeLink>) -> (Arrived, mpsc::
 
 impl DeviceTransport for HeldLink {
     fn herdr_api_connector(&self) -> Arc<dyn hide_herdr_client::ApiConnector> {
-        Arc::new(hide_herdr_client::LocalSocketConnector::new(
-            "/tmp/herdr-core-inbound-never.sock",
-        ))
+        Arc::new(HeldHerdr(Arc::clone(&self.0)))
     }
 
     fn cached_herdr_version(&self) -> Option<String> {
@@ -1201,8 +1229,12 @@ fn a_moved_core_reads_its_own_kit_and_its_node_s_and_each_read_ends() {
         .unwrap()
         .accept_inbound_node(NODE, "MacBook", link)
         .expect("the link");
+    // A check asked while kit work is queued or running joins that work
+    // instead of showing a read of its own.
     wait(&shared, "the node's connection pass", |runtime| {
-        !runtime.device_kit_running.contains(NODE) && !node.calls().is_empty()
+        !runtime.device_kit_running.contains(NODE)
+            && !runtime.device_kit_pending.contains_key(NODE)
+            && !node.calls().is_empty()
     });
 
     let event = serde_json::json!({
@@ -1210,12 +1242,11 @@ fn a_moved_core_reads_its_own_kit_and_its_node_s_and_each_read_ends() {
         "kind": "kit_check",
         "payload": {},
     });
-    shared
-        .lock()
-        .unwrap()
-        .dispatch_json(&serde_json::to_vec(&event).unwrap());
     {
-        let runtime = shared.lock().unwrap();
+        // Under the event's own lock: each read answers at once, so after a
+        // release it may already have ended.
+        let mut runtime = shared.lock().unwrap();
+        runtime.dispatch_json(&serde_json::to_vec(&event).unwrap());
         for machine in [own.as_str(), NODE] {
             assert!(kit_row(&runtime, machine).checking, "{machine} is read");
         }

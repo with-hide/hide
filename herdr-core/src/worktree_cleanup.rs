@@ -1045,17 +1045,24 @@ fn publish(context: &CleanupPlace, snapshot: CleanupSnapshot) {
     }
 }
 
-/// Marks the worker done, so the lane is free again.
-fn worker_finished(context: &CleanupPlace, id: u64) {
+/// Hands the worker's last snapshot to the runtime and frees the lane under
+/// the same lock, so no event sees the answer while the lane is still held:
+/// a confirmation pressed on a review just answered was refused when the
+/// lane was freed by a second lock after the answer.
+fn worker_ended(context: &CleanupPlace, id: u64, last: CleanupSnapshot) {
     if let Some(runtime) = context.runtime.upgrade() {
         match runtime.lock() {
-            Ok(mut guard) => guard.cleanup_worker_finished(id),
+            Ok(mut guard) => {
+                guard.ingest_cleanup(last);
+                guard.cleanup_worker_finished(id);
+            }
             Err(_) => crate::diagnostic!(serde_json::json!({
                 "component": "cleanup",
                 "kind": "worker_finished.lock_poisoned",
                 "cleanup_id": id,
             })),
         }
+        context.notifier.notify();
     }
 }
 
@@ -1065,7 +1072,8 @@ fn worker_finished(context: &CleanupPlace, id: u64) {
 /// snapshot leaves a terminal one behind instead of a review stuck loading.
 struct WorkerGuard {
     publish: Box<dyn Fn(CleanupSnapshot) + Send>,
-    finished: Box<dyn Fn() + Send>,
+    /// Publishes the last snapshot and frees the lane, as one step.
+    ended: Box<dyn Fn(CleanupSnapshot) + Send>,
     last: CleanupSnapshot,
     terminal_phase: &'static str,
     armed: bool,
@@ -1074,13 +1082,13 @@ struct WorkerGuard {
 impl WorkerGuard {
     fn new(
         publish: Box<dyn Fn(CleanupSnapshot) + Send>,
-        finished: Box<dyn Fn() + Send>,
+        ended: Box<dyn Fn(CleanupSnapshot) + Send>,
         start: CleanupSnapshot,
         terminal_phase: &'static str,
     ) -> Self {
         Self {
             publish,
-            finished,
+            ended,
             last: start,
             terminal_phase,
             armed: true,
@@ -1095,7 +1103,7 @@ impl WorkerGuard {
         let (a, b, id) = (context.clone(), context.clone(), start.id);
         Self::new(
             Box::new(move |snapshot| publish(&a, snapshot)),
-            Box::new(move || worker_finished(&b, id)),
+            Box::new(move |last| worker_ended(&b, id, last)),
             start,
             terminal_phase,
         )
@@ -1107,18 +1115,17 @@ impl WorkerGuard {
         (self.publish)(snapshot);
     }
 
-    /// The run's own final snapshot.
+    /// The run's own final snapshot, which ends the worker.
     fn finish(mut self, snapshot: CleanupSnapshot) {
         self.armed = false;
-        self.last = snapshot.clone();
-        (self.publish)(snapshot);
+        self.last = snapshot;
     }
 }
 
 impl Drop for WorkerGuard {
     fn drop(&mut self) {
+        let mut last = std::mem::take(&mut self.last);
         if self.armed {
-            let mut last = self.last.clone();
             last.phase = self.terminal_phase.into();
             last.message = Some("The cleanup worker stopped before it finished".into());
             crate::diagnostic!(serde_json::json!({
@@ -1127,9 +1134,8 @@ impl Drop for WorkerGuard {
                 "cleanup_id": last.id,
                 "phase": self.terminal_phase,
             }));
-            (self.publish)(last);
         }
-        (self.finished)();
+        (self.ended)(last);
     }
 }
 
@@ -3304,21 +3310,16 @@ mod tests {
         assert!(tracked.is_empty());
     }
 
-    type Published = std::sync::Arc<std::sync::Mutex<Vec<CleanupSnapshot>>>;
+    /// What the guard handed over, in order: a step of the run, or its end,
+    /// which carries the last snapshot and frees the lane in one call.
+    type Published = std::sync::Arc<std::sync::Mutex<Vec<(&'static str, CleanupSnapshot)>>>;
 
-    fn guard(
-        terminal: &'static str,
-    ) -> (
-        WorkerGuard,
-        Published,
-        std::sync::Arc<std::sync::atomic::AtomicBool>,
-    ) {
+    fn guard(terminal: &'static str) -> (WorkerGuard, Published) {
         let published = Published::default();
-        let finished = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let (sink, flag) = (published.clone(), finished.clone());
+        let (steps, ends) = (published.clone(), published.clone());
         let guard = WorkerGuard::new(
-            Box::new(move |snapshot| sink.lock().unwrap().push(snapshot)),
-            Box::new(move || flag.store(true, Ordering::SeqCst)),
+            Box::new(move |snapshot| steps.lock().unwrap().push(("step", snapshot))),
+            Box::new(move |snapshot| ends.lock().unwrap().push(("end", snapshot))),
             CleanupSnapshot {
                 id: 4,
                 phase: "removing".into(),
@@ -3326,12 +3327,12 @@ mod tests {
             },
             terminal,
         );
-        (guard, published, finished)
+        (guard, published)
     }
 
     #[test]
     fn a_worker_that_panics_leaves_a_terminal_answer_and_frees_the_lane() {
-        let (guard, published, finished) = guard("complete");
+        let (guard, published) = guard("complete");
         let stopped = std::thread::spawn(move || {
             let mut guard = guard;
             guard.publish(CleanupSnapshot {
@@ -3345,16 +3346,21 @@ mod tests {
         .join();
         assert!(stopped.is_err());
         let published = published.lock().unwrap();
-        let last = published.last().unwrap();
+        assert_eq!(
+            published.iter().map(|(kind, _)| *kind).collect::<Vec<_>>(),
+            ["step", "end"]
+        );
+        let (_, last) = published.last().unwrap();
         assert_eq!((last.id, last.phase.as_str()), (4, "complete"));
         assert_eq!(last.progress, Some(CleanupProgress { done: 1, total: 3 }));
         assert!(last.message.is_some());
-        assert!(finished.load(Ordering::SeqCst));
     }
 
+    /// The answer and the free lane arrive together, so a confirmation
+    /// pressed on the answer always finds the lane free.
     #[test]
-    fn a_worker_that_finishes_publishes_only_its_own_answer_and_frees_the_lane() {
-        let (guard, published, finished) = guard("failed");
+    fn a_worker_that_finishes_hands_over_its_answer_as_it_frees_the_lane() {
+        let (guard, published) = guard("failed");
         guard.finish(CleanupSnapshot {
             id: 4,
             phase: "review".into(),
@@ -3362,8 +3368,8 @@ mod tests {
         });
         let published = published.lock().unwrap();
         assert_eq!(published.len(), 1);
-        assert_eq!(published[0].phase, "review");
-        assert!(finished.load(Ordering::SeqCst));
+        assert_eq!(published[0].0, "end");
+        assert_eq!(published[0].1.phase, "review");
     }
 
     #[test]

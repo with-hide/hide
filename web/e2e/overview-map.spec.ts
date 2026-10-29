@@ -203,3 +203,38 @@ test("a pane's Show in Overview opens Work with its session chosen and gives the
     await expect(graph.locator("[data-graph-preview]")).toHaveCount(0);
   } finally { daemon?.stop(); herdr.stop(); }
 });
+
+// The side column's search finds a session on the map: what it does not find dims in place,
+// and Enter shows the first found session with its details, as choosing it on the map does.
+test("Overview's work map search dims what it does not find and Enter shows the found session", async ({ page }) => {
+  const herdr = await startHerdr({ readiness: "registered" });
+  let daemon: Daemon | undefined;
+  try {
+    daemon = await startHided(herdr, "overview-map-search");
+    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
+    await enterWorkspace(page, "fixture");
+    await openOverview(page, "work");
+    const graph = page.locator("[data-overview-graph]");
+    await expect(graph).toHaveAttribute("data-graph-phase", "ready", { timeout: 30_000 });
+    const current = graph.locator('.og-session[data-current="true"]');
+    const title = (await current.locator("[data-agent-title]").textContent())?.trim();
+    if (!title) throw new Error("current session has no title");
+    const search = graph.getByRole("textbox", { name: "Find project or session" });
+    const place = () => current.evaluate((node) => (node.closest(".react-flow__node") as HTMLElement).style.transform);
+    const before = await place();
+    await search.fill("no session is called this");
+    await expect(graph.locator(".og-no-match")).toHaveText("Nothing matches");
+    await expect(current).toHaveAttribute("data-muted", "true");
+    await expect(graph.locator("[data-graph-project]")).toHaveAttribute("data-muted", "true");
+    expect(await place()).toBe(before);
+    await search.fill(title);
+    await expect(current).toHaveAttribute("data-muted", "false");
+    await expect(graph.locator(`[data-graph-found-session="${await current.getAttribute("data-graph-session")}"]`)).toHaveCount(1);
+    await search.press("Enter");
+    await expect(graph.locator("[data-graph-preview] .og-details-head")).toContainText(title);
+    await expect(current.locator(".og-session-target")).toHaveAttribute("aria-pressed", "true");
+    await page.keyboard.press("Escape");
+    await expect(graph.locator("[data-graph-preview]")).toHaveCount(0);
+    await expect(search).toHaveValue(title);
+  } finally { daemon?.stop(); herdr.stop(); }
+});

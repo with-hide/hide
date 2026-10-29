@@ -156,7 +156,12 @@ const LSOF_DEADLINE: Duration = Duration::from_secs(10);
 
 #[cfg(not(windows))]
 fn run_lsof(arguments: &[&str]) -> Result<String, String> {
-    run_within(Command::new("lsof").args(arguments), LSOF_DEADLINE)
+    // `-w` keeps warnings (an unreachable FUSE mount, say) off stderr, so
+    // what lsof writes there is an error and `run_within` can read it as one.
+    run_within(
+        Command::new("lsof").arg("-w").args(arguments),
+        LSOF_DEADLINE,
+    )
 }
 
 #[cfg(any(not(windows), test))]
@@ -169,19 +174,27 @@ fn run_within(command: &mut Command, deadline: Duration) -> Result<String, Strin
                 deadline.as_secs().max(1)
             )
         })?;
-    // lsof exits non-zero when some of what it was asked about is gone, which
-    // is routine here: a process can exit between the two calls. Whatever it
-    // did report is still true, so the output is used and only an empty
-    // failure is treated as one.
-    if !output.status.success() && output.stdout.is_empty() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-        return Err(if stderr.is_empty() {
-            format!("lsof exited with {}", output.status)
-        } else {
-            stderr
-        });
+    lsof_answer(&output)
+}
+
+/// What one finished `lsof` said, read by its exit status as its manual
+/// defines it: 0 lists everything asked about, and 1 means something asked
+/// about was not found, which is how lsof answers a machine with no listener
+/// (exit 1, nothing printed) and a process that exited between the two calls.
+/// Either way what it did print is true. An error lsof detected is written to
+/// stderr, any other status is not lsof's answer, and a signal ended it before
+/// it answered; those are failures.
+#[cfg(any(not(windows), test))]
+fn lsof_answer(output: &std::process::Output) -> Result<String, String> {
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+    match output.status.code() {
+        Some(0 | 1) if stderr.is_empty() => {
+            Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+        }
+        Some(1) => Err(format!("lsof reported an error: {stderr}")),
+        _ if stderr.is_empty() => Err(format!("lsof exited with {}", output.status)),
+        _ => Err(format!("lsof exited with {}: {stderr}", output.status)),
     }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 /// Parses `lsof -F pn` field output.
@@ -280,6 +293,38 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(10));
         let ok = run_within(Command::new("echo").arg("p1"), Duration::from_secs(10)).unwrap();
         assert_eq!(ok.trim(), "p1");
+    }
+
+    #[cfg(unix)]
+    fn finished(shell: &str) -> Result<String, String> {
+        run_within(
+            Command::new("sh").args(["-c", shell]),
+            Duration::from_secs(10),
+        )
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn nothing_found_is_an_empty_answer_and_only_a_failed_run_is_an_error() {
+        // lsof's answer on a machine with no listener: exit 1, nothing printed.
+        assert_eq!(finished("exit 1"), Ok(String::new()));
+        // A process gone between the calls: exit 1 with what was still found.
+        assert_eq!(finished("echo p1; exit 1"), Ok("p1\n".to_owned()));
+        assert_eq!(finished("echo p1"), Ok("p1\n".to_owned()));
+
+        let detected =
+            finished("echo p1; echo 'lsof: status error on /x' >&2; exit 1").unwrap_err();
+        assert!(detected.contains("status error on /x"), "{detected}");
+        let other = finished("exit 2").unwrap_err();
+        assert!(other.contains("exited with"), "{other}");
+        let signalled = finished("kill -9 $$").unwrap_err();
+        assert!(signalled.contains("exited with"), "{signalled}");
+        let missing = run_within(
+            &mut Command::new("hide-no-such-lsof"),
+            Duration::from_secs(10),
+        )
+        .unwrap_err();
+        assert!(missing.contains("could not be run"), "{missing}");
     }
 
     #[test]

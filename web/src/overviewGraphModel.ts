@@ -22,6 +22,8 @@ export function graphActivity(agent: AgentRow): GraphActivity {
     default: return "unknown";
   }
 }
+/** Whether a session's own words, its title, checkout or branch, hold a search's lowercased needle. */
+export const graphSessionMatches = (row: GraphAgent, needle: string) => [row.agent.identity_label, row.checkout.label, row.checkout.branch].some((text) => text?.toLocaleLowerCase().includes(needle));
 const PRIORITY: Record<GraphActivity, number> = { turn: 0, working: 1, results: 2, unknown: 3, idle: 4, resting: 5 };
 /** One pair of sessions and every letter and Herdr input between them, by direction. */
 export type Communication = { id: string; source: string; target: string; letters: number; direct: number; directions: { from: string; to: string; letters: number; direct: number }[] };
