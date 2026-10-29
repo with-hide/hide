@@ -137,7 +137,7 @@ describe("the Hide AI tool", () => {
     expect([...document.querySelectorAll("[data-suggestions-status] li")].map((step) => step.textContent)).toEqual([
       "Finds where agents keep getting stuck in sessions and PR reviews",
       "Suggests how to stop the same mistakes",
-      "Pick one and it lands as a PR, so agents get smarter on their own",
+      "Pick one and the fix waits on a branch for you to merge, so agents get smarter on their own",
     ]);
     await render(suggestionsProject({ status: "investigating", rows: [suggestionRow("s1")] }));
     expect(q("[data-hide-ai-investigating]")?.textContent).toBe("Investigating");
@@ -161,11 +161,11 @@ describe("the Hide AI tool", () => {
     expect(sent("suggestion_settings")).toEqual([{ workspace_id: "p", suggestions_enabled: true }]);
   });
 
-  it("shows 고칠 것 above a new suggestion's PR or issue, with 넘어가기 beside it and beside GitHub connection needed (B10, B14, B16, B18)", async () => {
+  it("shows 고칠 것 above a new suggestion's fix or issue, with 넘어가기 beside it and beside GitHub connection needed (B10, B14, B16, B18)", async () => {
     await render(suggestionsProject({ rows: [
       suggestionRow("s1"),
       suggestionRow("s2", { outcome: "issue" }),
-      suggestionRow("s3", { hold: "github_needed" }),
+      suggestionRow("s3", { outcome: "issue", hold: "github_needed" }),
       suggestionRow("s4", { discomfort: null, basis: { signal: "failed_tool", tag: "cargo test" } }),
       suggestionRow("s5", { outcome: "issue", fix: null }),
       suggestionRow("s6", { returned_after_skip: true }),
@@ -173,7 +173,7 @@ describe("the Hide AI tool", () => {
     expect(q('[data-suggestion="s1"] [data-suggestion-mark]')?.getAttribute("data-suggestion-mark")).toBe("new");
     expect(q('[data-suggestion="s1"]')?.textContent).toContain("Missed · cause s1");
     expect(q('[data-suggestion-fix="s1"]')?.textContent).toBe("Fixfix s1");
-    expect(q('[data-suggestion="s1"] [data-suggestion-apply]')?.textContent).toBe("Open a PR that fixes the docs");
+    expect(q('[data-suggestion="s1"] [data-suggestion-apply]')?.textContent).toBe("Fix the docs");
     expect(q('[data-suggestion="s2"] [data-suggestion-apply]')?.textContent).toBe("Leave it as an issue");
     // An issue says why it becomes one: in the core's words, else in Hide's.
     expect(q('[data-suggestion-fix="s2"]')?.textContent).toBe("Fixfix s2");
@@ -259,6 +259,73 @@ describe("the Hide AI tool", () => {
       { workspace_id: "p", id: "s3", action: "retry" },
       { workspace_id: "p", id: "s4", action: "dismiss" },
     ]);
+  });
+
+  /** A ready branch as the core sends it (PRD hide-ai-branch-first-apply B3). */
+  const ready = (failure: string | null, files = 2) => ({
+    group: "applying" as const,
+    state: "my_turn" as const,
+    attempt: {
+      phase: "ready" as const, started_at_unix_ms: 1, pr_number: null, url: null, agent_id: null, failure, purpose: "branch" as const,
+      branch: { name: "hide-suggestion-s1-x", base: "main", checkout: "/wt", files: [{ path: "AGENTS.md", added: 4, removed: 1, binary: false }, { path: "docs/a.md", added: 2, removed: 0, binary: false }].slice(0, files), files_total: files, added: 6, removed: 1 },
+    },
+  });
+
+  it("offers a ready branch's three choices and opens its card, or its one file's diff, in the 보기 slot (hide-ai-branch-first-apply B3, B4, B6-B10)", async () => {
+    await render(suggestionsProject({ rows: [
+      suggestionRow("s1", ready(null)),
+      suggestionRow("s2", ready(null, 1)),
+      suggestionRow("s3", ready("merge_dirty")),
+      suggestionRow("s4", ready("merge_conflict")),
+      suggestionRow("s5", { group: "applying", state: "hide_ai_working", attempt: { phase: "working", started_at_unix_ms: Date.now(), pr_number: null, url: null, agent_id: null, failure: null, purpose: "branch" } }),
+      suggestionRow("s6", { group: "applying", state: "my_turn", attempt: { phase: "failed", started_at_unix_ms: 1, pr_number: null, url: null, agent_id: null, failure: "no_change", purpose: "branch" } }),
+    ] }));
+    expect(q('[data-suggestion="s1"] [data-suggestion-mark]')?.getAttribute("data-suggestion-mark")).toBe("my_turn");
+    expect(q('[data-suggestion-branch="hide-suggestion-s1-x"]')?.textContent).toContain("See what changed");
+    expect(q('[data-suggestion="s1"] [data-suggestion-branch]')?.textContent).toContain("2 files+6−1");
+    expect(q('[data-suggestion-merge="s1"]')?.textContent).toBe("Merge into main");
+    expect(q('[data-suggestion-open-pr="s1"]')?.textContent).toBe("Open a PR");
+    expect(q('[data-suggestion-discard="s1"]')?.textContent).toBe("Discard");
+    expect(q('[data-suggestion="s3"] [data-suggestion-attempt]')?.textContent).toContain("main has unsaved changes in the same files");
+    expect(q('[data-suggestion-merge="s3"]')?.textContent).toBe("Try again");
+    expect(q('[data-suggestion="s4"] [data-suggestion-attempt]')?.textContent).toContain("main changed, so it has to be made again");
+    expect(q('[data-suggestion-merge="s4"]')).toBeNull();
+    expect(q('[data-suggestion-rebase="s4"]')?.textContent).toBe("Make it again");
+    expect(q('[data-suggestion="s5"] [data-suggestion-attempt]')?.textContent).toContain("Fixing");
+    expect(q('[data-suggestion="s6"] [data-suggestion-attempt]')?.textContent).toContain("Ended without changing anything");
+    expect(q('[data-suggestion-retry="s6"]')).not.toBeNull();
+    await click('[data-suggestion-branch-view="s1"]');
+    await click('[data-suggestion-branch-view="s2"]');
+    await click('[data-suggestion-merge="s1"]');
+    await click('[data-suggestion-open-pr="s1"]');
+    await click('[data-suggestion-rebase="s4"]');
+    await click('[data-suggestion-discard="s1"]');
+    expect(sent("detail_open")).toEqual([
+      { item: { kind: "branch", workspace_id: "p", row: "s1" } },
+      { item: { kind: "branch", workspace_id: "p", row: "s2", path: "AGENTS.md" } },
+    ]);
+    expect(sent("suggestion_action")).toEqual([
+      { workspace_id: "p", id: "s1", action: "merge" },
+      { workspace_id: "p", id: "s1", action: "open_pr" },
+      { workspace_id: "p", id: "s4", action: "rebase" },
+      { workspace_id: "p", id: "s1", action: "discard" },
+    ]);
+  });
+
+  it("offers no PR without GitHub, fixes the docs without it, and holds a new fix while five branches wait (hide-ai-branch-first-apply B1, B9, B28)", async () => {
+    await render(suggestionsProject({ github: "missing", rows: [
+      suggestionRow("s1", ready(null)),
+      suggestionRow("s2"),
+      suggestionRow("s3", { hold: "branches_full" }),
+      suggestionRow("m7", { source: "memory", memory_cards: [7, 9, 12], ...ready(null) }),
+    ] }));
+    expect(q('[data-suggestion-merge="s1"]')).not.toBeNull();
+    expect(q('[data-suggestion-open-pr="s1"]')).toBeNull();
+    expect(q('[data-suggestion="s2"] [data-suggestion-apply]')?.textContent).toBe("Fix the docs");
+    expect(q('[data-suggestion="s2"] [data-suggestion-github-needed]')).toBeNull();
+    expect(q('[data-suggestion="s3"] [data-suggestion-apply]')).toBeNull();
+    expect(q('[data-suggestion="s3"] [data-suggestion-hold="branches_full"]')?.textContent).toBe("5 branches are waiting for a decision");
+    expect(q('[data-suggestion="m7"]')?.textContent).toContain("Apply 3 corrections to the docs");
   });
 
   it("words a Memory card's failed way into the documents, with its card id and the core's detail (D-02, B12)", async () => {
@@ -381,7 +448,7 @@ describe("the Hide AI tool", () => {
     expect(sheet?.querySelector("[data-hide-ai-cannot-investigate]")?.textContent).toBe("This AI can't investigate");
     expect(sheet?.querySelector("[data-hide-ai-provider-order]")?.textContent).toBe("Follows the order in Settings › Hide AI. At a usage limit, the next AI");
     expect(sheet?.querySelector('[data-hide-ai-choice="quantity"]')?.getAttribute("data-hide-ai-choice-value")).toBe("normal");
-    expect(sheet?.textContent).toContain("Pressing the button opens a PR or an issue");
+    expect(sheet?.textContent).toContain("Pressing the button fixes it on a branch or opens an issue");
     await click("#hide-ai-quantity-few");
     await click("#hide-ai-apply_mode-auto_pr");
     expect([...sheet!.querySelectorAll("[data-hide-ai-signal-group]")].map((row) => row.getAttribute("data-hide-ai-signal-group"))).toEqual(["session", "github"]);

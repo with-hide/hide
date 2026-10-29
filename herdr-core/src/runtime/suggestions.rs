@@ -7,9 +7,9 @@
 
 use super::*;
 use crate::model::{
-    MemoryAction, ProjectSuggestionsSnapshot, SignalUnavailable, SuggestionCountsSnapshot,
-    SuggestionGroup, SuggestionHold, SuggestionState, SuggestionsAi, SuggestionsGithub,
-    SuggestionsSnapshot,
+    MemoryAction, ProjectSuggestionsSnapshot, SignalUnavailable, SuggestionAttemptPhase,
+    SuggestionCountsSnapshot, SuggestionGroup, SuggestionHold, SuggestionState, SuggestionsAi,
+    SuggestionsGithub, SuggestionsSnapshot,
 };
 use crate::suggestions::analysis::{Analysis, TagGrouping};
 use crate::suggestions::investigation::node::{Checkout, ProjectReads};
@@ -95,6 +95,14 @@ enum SuggestionActionKind {
     Retry,
     /// Takes a global instruction line back out (B9).
     Revert,
+    /// `main에 합치기` on a ready branch (PRD hide-ai-branch-first-apply D-05).
+    Merge,
+    /// `PR 올리기` on a ready branch (D-06).
+    OpenPr,
+    /// `버리기` on a ready branch (D-07).
+    Discard,
+    /// `다시 맞추기` on a ready branch the base moved under (B8, B12).
+    Rebase,
 }
 
 /// `suggestion_settings`: exactly one of ⚙'s settings; a 읽을 곳 switch is
@@ -229,11 +237,51 @@ impl Runtime {
         else {
             return false;
         };
+        // A new fix waits while five branches wait for a decision (PRD
+        // hide-ai-branch-first-apply D-17, B28).
+        if matches!(payload.action, SuggestionActionKind::Apply)
+            && self.held_row(&payload.workspace_id, &payload.id)
+                == Some(SuggestionHold::BranchesFull)
+        {
+            crate::diagnostic!(json!({
+                "component": "suggestions", "kind": "apply.refused",
+                "workspace_id": payload.workspace_id, "id": payload.id,
+                "reason": "branches_full",
+            }));
+            return false;
+        }
+        // `PR 올리기` is offered only while GitHub is connected and permitted
+        // (D-03, B9); an agent asked to push without it would only fail.
+        if matches!(payload.action, SuggestionActionKind::OpenPr)
+            && self.suggestions_github(&project.node, &project.path) != SuggestionsGithub::Connected
+        {
+            crate::diagnostic!(json!({
+                "component": "suggestions", "kind": "apply.refused",
+                "workspace_id": payload.workspace_id, "id": payload.id,
+                "reason": "github_needed",
+            }));
+            return false;
+        }
         if let Some(number) = super::suggestion_memory::card_of_row(&payload.id) {
+            let decision = match payload.action {
+                SuggestionActionKind::Merge => Some(super::memory_branch::BatchDecision::Merge),
+                SuggestionActionKind::OpenPr => Some(super::memory_branch::BatchDecision::OpenPr),
+                SuggestionActionKind::Discard => Some(super::memory_branch::BatchDecision::Discard),
+                SuggestionActionKind::Rebase => Some(super::memory_branch::BatchDecision::Rebase),
+                _ => None,
+            };
+            if let Some(decision) = decision {
+                return self.decide_memory_batch(&payload.workspace_id, number, decision);
+            }
             let action = match payload.action {
                 SuggestionActionKind::Apply | SuggestionActionKind::Retry => MemoryAction::Promote,
                 SuggestionActionKind::Dismiss => MemoryAction::Dismiss,
-                SuggestionActionKind::Restore | SuggestionActionKind::Revert => {
+                SuggestionActionKind::Merge
+                | SuggestionActionKind::OpenPr
+                | SuggestionActionKind::Discard
+                | SuggestionActionKind::Rebase
+                | SuggestionActionKind::Restore
+                | SuggestionActionKind::Revert => {
                     crate::diagnostic!(json!({
                         "component": "suggestions", "kind": "action.unsupported",
                         "workspace_id": payload.workspace_id, "id": payload.id,
@@ -243,12 +291,24 @@ impl Runtime {
             };
             return self.apply_memory_row_action(payload.workspace_id, number, action);
         }
+        let decide = |runtime: &mut Self, decision| {
+            line_of_row(&payload.id)
+                .is_some_and(|line| runtime.decide_suggestion_branch(&project, line.0, decision))
+        };
         let action = match payload.action {
+            SuggestionActionKind::Merge => {
+                return decide(self, super::suggestion_apply::BranchDecision::Merge);
+            }
+            SuggestionActionKind::Discard => {
+                return decide(self, super::suggestion_apply::BranchDecision::Discard);
+            }
             SuggestionActionKind::Dismiss => LineAction::Dismiss,
             SuggestionActionKind::Restore => LineAction::Restore,
             SuggestionActionKind::Apply => LineAction::Apply,
             SuggestionActionKind::Retry => LineAction::Retry,
             SuggestionActionKind::Revert => LineAction::Revert,
+            SuggestionActionKind::OpenPr => LineAction::OpenPr,
+            SuggestionActionKind::Rebase => LineAction::Rebase,
         };
         // A row none of whose words could be read again is not applied
         // (PRD memory-self-improve D-34, B7).
@@ -272,6 +332,15 @@ impl Runtime {
             }));
             return false;
         };
+        if matches!(action, LineAction::OpenPr | LineAction::Rebase)
+            && self.suggestion_branch_deciding(&project, line.0)
+        {
+            crate::diagnostic!(json!({
+                "component": "suggestions", "kind": "decision.refused",
+                "line": line.0, "reason": "deciding",
+            }));
+            return false;
+        }
         self.send_suggestions(Command::Action {
             project,
             line,
@@ -567,6 +636,7 @@ impl Runtime {
             .opened
             .as_ref()
             .is_some_and(|opened| self.memory_shown_on(&opened.workspace_id));
+        let branches = self.branch_overlay();
         let project = self
             .suggestions_work
             .opened
@@ -588,6 +658,7 @@ impl Runtime {
                     super::suggestion_memory::lay_memory_rows(&mut project, memory);
                 }
                 lay_facts(&mut project, facts, memory_on);
+                lay_branches(&mut project, &branches);
                 super::suggestion_evidence::lay_excerpts(
                     &mut project,
                     &self.suggestions_work.evidence,
@@ -605,7 +676,95 @@ impl Runtime {
             return false;
         }
         self.snapshot.suggestions = Some(Arc::new(next));
+        self.follow_branch_diff();
         true
+    }
+
+    /// The hold the tab shows on row `id` of the opened Project now.
+    fn held_row(&self, workspace_id: &str, id: &str) -> Option<SuggestionHold> {
+        self.snapshot
+            .suggestions
+            .as_ref()?
+            .project
+            .as_ref()
+            .filter(|project| project.workspace_id == workspace_id)?
+            .rows
+            .iter()
+            .find(|row| row.id == id)?
+            .hold
+    }
+
+    /// Whether the Project at `root` on `node` may start one more document
+    /// fix: it is a git repository and fewer than five branches wait for the
+    /// operator's decision there (PRD hide-ai-branch-first-apply D-09, D-17).
+    pub(super) fn branch_room(&self, node: &crate::node::NodeId, root: &str) -> bool {
+        let git = self
+            .catalog_workspaces()
+            .find(|workspace| workspace.device_id == node.as_str() && workspace.path == root)
+            .is_some_and(|workspace| workspace.is_git);
+        git && self.branches_waiting(node, root) < super::branch_decision::WAITING_BRANCHES
+    }
+
+    /// The branches waiting for the operator's decision in the Project at
+    /// `root` on `node`: ready 제안 attempts and ready Memory batches.
+    pub(super) fn branches_waiting(&self, node: &crate::node::NodeId, root: &str) -> usize {
+        let lines = self
+            .suggestions_work
+            .apply
+            .followed
+            .iter()
+            .filter(|attempt| {
+                attempt.location.node == node.as_str()
+                    && attempt.location.path == root
+                    && attempt.phase == crate::suggestions::lifecycle::AttemptPhase::Ready
+            })
+            .count();
+        lines + self.memory_branches_waiting(node, root)
+    }
+
+    /// What the lock knows about the opened Project's branches: whether it
+    /// is a git repository, the ready branches Hide is merging now and where
+    /// each attempt branch is checked out (PRD hide-ai-branch-first-apply).
+    fn branch_overlay(&self) -> BranchOverlay {
+        let Some(opened) = self.suggestions_work.opened.as_ref() else {
+            return BranchOverlay::default();
+        };
+        let git = self
+            .catalog_workspaces()
+            .find(|workspace| workspace.id == opened.workspace_id)
+            .is_some_and(|workspace| workspace.is_git);
+        let work = &self.suggestions_work.apply;
+        let mut merging = HashSet::new();
+        let mut checkouts = HashMap::new();
+        for attempt in &work.followed {
+            if attempt.location.node != opened.node.as_str() || attempt.location.path != opened.root
+            {
+                continue;
+            }
+            if work
+                .deciding
+                .get(&(attempt.project_id.clone(), attempt.line.0))
+                == Some(&super::suggestion_apply::BranchDecision::Merge)
+            {
+                merging.insert(crate::suggestions::read::row_id(attempt.line));
+            }
+            if let Some(path) = self.branch_checkout(&opened.node, &opened.root, &attempt.branch) {
+                checkouts.insert(attempt.branch.clone(), path);
+            }
+        }
+        for (branch, merge) in self.memory_branch_overlay(&opened.node, &opened.root) {
+            if let Some(path) = self.branch_checkout(&opened.node, &opened.root, &branch) {
+                checkouts.insert(branch.clone(), path);
+            }
+            if let Some(row) = merge {
+                merging.insert(row);
+            }
+        }
+        BranchOverlay {
+            git,
+            merging,
+            checkouts,
+        }
     }
 
     /// The tab's number and the rail's (D-01): the rows that wait on the
@@ -663,11 +822,66 @@ fn lay_facts(project: &mut ProjectSuggestionsSnapshot, facts: LockFacts, memory_
     }
     if github_missing {
         for row in &mut project.rows {
-            // A global instruction line is written here, with no GitHub
-            // (PRD memory-self-improve B8).
-            if row.state == SuggestionState::New && row.outcome != Outcome::Local {
+            // A document fix is committed on a branch and a global
+            // instruction line is written here, both with no GitHub (PRD
+            // hide-ai-branch-first-apply D-03, memory-self-improve B8): only
+            // an issue needs it.
+            if row.state == SuggestionState::New && row.outcome == Outcome::Issue {
                 row.hold = Some(SuggestionHold::GithubNeeded);
             }
+        }
+    }
+}
+
+/// What the lock adds to the rows about their branches (PRD
+/// hide-ai-branch-first-apply).
+#[derive(Debug, Default)]
+struct BranchOverlay {
+    /// The Project is a git repository: a folder that is not one gets no
+    /// document fix (D-09, B16).
+    git: bool,
+    /// Rows whose ready branch Hide is merging now.
+    merging: HashSet<String>,
+    /// Where each attempt branch is checked out, which a branch card's file
+    /// opens.
+    checkouts: HashMap<String, String>,
+}
+
+/// Lays the branch facts on the rows: no document fix in a folder that is
+/// not a git repository (B16), a new fix held while five branches wait for
+/// a decision (D-17, B28), `합치는 중` on a branch being merged (B6), and
+/// the checkout each branch is in.
+fn lay_branches(project: &mut ProjectSuggestionsSnapshot, overlay: &BranchOverlay) {
+    if !overlay.git {
+        project
+            .rows
+            .retain(|row| !(row.state == SuggestionState::New && row.outcome == Outcome::Pr));
+    }
+    let waiting = project
+        .rows
+        .iter()
+        .filter(|row| {
+            row.attempt
+                .as_ref()
+                .is_some_and(|attempt| attempt.phase == SuggestionAttemptPhase::Ready)
+        })
+        .count();
+    for row in &mut project.rows {
+        if row.state == SuggestionState::New
+            && row.outcome == Outcome::Pr
+            && row.hold.is_none()
+            && waiting >= super::branch_decision::WAITING_BRANCHES
+        {
+            row.hold = Some(SuggestionHold::BranchesFull);
+        }
+        let Some(attempt) = row.attempt.as_mut() else {
+            continue;
+        };
+        if attempt.phase == SuggestionAttemptPhase::Ready && overlay.merging.contains(&row.id) {
+            attempt.phase = SuggestionAttemptPhase::Merging;
+        }
+        if let Some(branch) = attempt.branch.as_mut() {
+            branch.checkout = overlay.checkouts.get(&branch.name).cloned();
         }
     }
 }
@@ -759,15 +973,21 @@ impl Sink for RuntimeSink {
         self.apply(move |runtime| runtime.follow_suggestion_attempts(attempts, watches));
     }
 
-    fn can_apply(&self, location: &ProjectLocation, _outcome: Outcome) -> bool {
+    fn can_apply(&self, location: &ProjectLocation, outcome: Outcome) -> bool {
         let Ok(node) = crate::node::NodeId::parse(&location.node) else {
             return false;
         };
         let Some(runtime) = self.runtime.upgrade() else {
             return false;
         };
-        runtime.lock().is_ok_and(|guard| {
-            guard.suggestions_github(&node, &location.path) == SuggestionsGithub::Connected
+        runtime.lock().is_ok_and(|guard| match outcome {
+            // A document fix needs a git repository and room for one more
+            // waiting branch (PRD hide-ai-branch-first-apply D-09, D-17).
+            Outcome::Pr => guard.branch_room(&node, &location.path),
+            Outcome::Issue => {
+                guard.suggestions_github(&node, &location.path) == SuggestionsGithub::Connected
+            }
+            Outcome::Local => false,
         })
     }
 

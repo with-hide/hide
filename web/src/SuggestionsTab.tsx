@@ -11,10 +11,10 @@ import { requireInterfaceLanguage } from "./i18n/locale";
 import { cn } from "./lib/utils";
 import { sourceTime } from "./memoryList";
 import { allAgents } from "./navigation";
-import { catalogWorkspaces, type ProjectSuggestions, type SuggestionEvidence, type SuggestionRow } from "./snapshot";
+import { catalogWorkspaces, type ProjectSuggestions, type SuggestionBranch, type SuggestionEvidence, type SuggestionRow } from "./snapshot";
 import { suggestionSteps } from "./hideAiSteps";
 import { useShellStore } from "./store";
-import { applyOffer, appliedSummary, attemptLine, localLine, suggestionGroups, suggestionMark, suggestionTitle, type SuggestionMark } from "./suggestionList";
+import { applyOffer, appliedSummary, attemptLine, localLine, suggestionGroups, suggestionMark, suggestionTitle, type BranchChoice, type SuggestionMark } from "./suggestionList";
 import { useUiStore } from "./ui";
 
 /**
@@ -196,18 +196,19 @@ function Lines({ row, open, project, actions }: { row: SuggestionRow; open: bool
         </span>
       ) : null}
       {row.group === "choose" && row.hold === "auto_pr_unreviewed" ? <span className="text-muted-foreground" data-suggestion-hold="auto_pr_unreviewed">{t("suggestions.waitsForAutoPr")}</span> : null}
-      {row.group !== "choose" && attempt ? (
-        <span className="flex min-w-0 items-center gap-sm" data-suggestion-attempt={row.attempt?.phase}>
+      {row.group !== "choose" && attempt && !(attempt.branch && attempt.branch.again === null) ? (
+        <span className="flex min-w-0 items-center gap-sm" data-suggestion-attempt={row.attempt?.phase} data-suggestion-failure={row.attempt?.failure ?? undefined}>
           {row.attempt?.phase === "pr_open" && row.attempt.url ? (
             <PrLink project={project} actions={actions} url={row.attempt.url} label={attempt.text} className="min-w-0 truncate text-warning hover:text-warning" />
           ) : (
             <span className={cn("min-w-0 truncate", attempt.tone === "warning" ? "text-warning" : attempt.tone === "destructive" ? "text-destructive" : "text-muted-foreground")} title={attempt.text}>{attempt.text}</span>
           )}
-          {row.attempt && (row.attempt.phase === "starting" || row.attempt.phase === "working") ? <Elapsed since={row.attempt.started_at_unix_ms} className="shrink-0 text-muted-foreground" /> : null}
+          {row.attempt && (row.attempt.phase === "starting" || row.attempt.phase === "working" || row.attempt.phase === "merging") ? <Elapsed since={row.attempt.started_at_unix_ms} className="shrink-0 text-muted-foreground" /> : null}
           {row.attempt?.url && row.attempt.phase !== "pr_open" ? <PrLink project={project} actions={actions} url={row.attempt.url} label={row.outcome === "issue" && row.attempt.pr_number === null ? t("suggestions.openIssue") : t("suggestions.openPr", { number: String(row.attempt.pr_number ?? "") })} /> : null}
           <AgentLink agentId={row.attempt?.agent_id ?? null} actions={actions} />
         </span>
       ) : null}
+      {row.group === "applying" && row.attempt?.phase === "ready" && row.attempt.branch ? <BranchLine row={row} branch={row.attempt.branch} project={project} actions={actions} /> : null}
       {row.group === "applying" && row.attempt?.phase === "failed" && row.cause ? (
         <span className={cn("min-w-0 break-words text-muted-foreground", !open && "truncate")} title={row.cause} data-suggestion-failure-detail="true">{row.cause}</span>
       ) : null}
@@ -247,6 +248,29 @@ function AgentLink({ agentId, actions }: { agentId: string | null; actions: Acti
     <button type="button" className="pointer-events-auto ml-auto shrink-0 text-subtle-foreground hover:text-foreground" aria-label={t("suggestions.openAgent")} onClick={() => actions.openAgent(pane)} data-suggestion-agent={agentId}>
       {t("suggestions.agent")}
     </button>
+  );
+}
+
+/**
+ * A ready branch's line (PRD hide-ai-branch-first-apply B3, B4): `바뀐 것
+ * 보기`, the branch, its file count and +/−. The press opens the branch's
+ * card in the 보기 slot, or its one file's diff straight away; the checkout
+ * in front stays where it is.
+ */
+function BranchLine({ row, branch, project, actions }: { row: SuggestionRow; branch: SuggestionBranch; project: ProjectSuggestions; actions: Actions }) {
+  const { t } = useInterfaceTranslation();
+  const only = branch.files_total === 1 && branch.files.length === 1 ? branch.files[0]!.path : null;
+  return (
+    <span className="flex min-w-0 items-center gap-sm" data-suggestion-branch={branch.name}>
+      <button type="button" className="pointer-events-auto shrink-0 text-warning underline-offset-4 hover:underline" onClick={() => actions.openBranchCard(project.workspace_id, row.id, only)} data-suggestion-branch-view={row.id}>
+        {t("suggestions.branch.view")}
+      </button>
+      <span className="min-w-0 truncate font-mono text-subtle-foreground" title={branch.name}>{branch.name}</span>
+      <span className="shrink-0 text-muted-foreground">{t("suggestions.branch.files", { count: branch.files_total })}</span>
+      <span className="shrink-0 font-mono text-pr-mergeable">+{branch.added}</span>
+      <span className="shrink-0 font-mono text-pr-failed">−{branch.removed}</span>
+      <AgentLink agentId={row.attempt?.agent_id ?? null} actions={actions} />
+    </span>
   );
 }
 
@@ -348,8 +372,10 @@ function Evidence({ evidence, project, actions }: { evidence: SuggestionEvidence
 }
 
 /**
- * A choice's `문서 고치는 PR 열기` or `이슈로 남기기` (B10, B14), `GitHub 연결
- * 필요` in its place (B18), and a failed attempt's `다시 시도` (B12), each
+ * A choice's `문서 고치기` or `이슈로 남기기` (B10, B14), `GitHub 연결 필요`
+ * or `결정을 기다리는 브랜치가 5개예요` in its place (B18; PRD
+ * hide-ai-branch-first-apply B28), a ready branch's choices, and a failed
+ * attempt's `다시 시도` (B12), each
  * with a quiet `넘어가기` beside it (D-51, B16). A global instruction row
  * offers `Hide 전역 지시에 넣기` with the preview it was shown, held while it
  * cannot be written, and `되돌리기` once it went in (PRD memory-self-improve
@@ -359,7 +385,9 @@ function Buttons({ row, project, actions }: { row: SuggestionRow; project: Proje
   const { t } = useInterfaceTranslation();
   const id = project.workspace_id;
   const offer = applyOffer(row);
-  const retry = row.group === "applying" && attemptLine(t, row)?.retry === true;
+  const line = row.group === "applying" ? attemptLine(t, row) : null;
+  const retry = line?.retry === true;
+  if (line?.branch) return <BranchButtons row={row} project={project} actions={actions} again={line.branch.again} />;
   const revert = row.group === "applied" && row.local !== null && row.local !== undefined && row.local.failure !== "edited";
   if (revert) {
     return (
@@ -377,6 +405,8 @@ function Buttons({ row, project, actions }: { row: SuggestionRow; project: Proje
         </Button>
       ) : offer === "github_needed" ? (
         <span className="text-caption text-muted-foreground" data-suggestion-github-needed="true">{t("suggestions.githubNeeded")}</span>
+      ) : offer === "branches_full" ? (
+        <span className="text-caption text-muted-foreground" data-suggestion-hold="branches_full">{t("suggestions.branchesFull")}</span>
       ) : offer ? (
         <Button className="pointer-events-auto" size="sm" variant={offer === "issue" ? "secondary" : "default"} onClick={() => actions.suggestionAction(id, row.id, "apply")} data-suggestion-apply={offer}>
           {t(offer === "issue" ? "suggestions.makeIssue" : "suggestions.makePr")}
@@ -384,6 +414,30 @@ function Buttons({ row, project, actions }: { row: SuggestionRow; project: Proje
       ) : null}
       {retry ? <Button className="pointer-events-auto" size="sm" variant="outline" onClick={() => actions.suggestionAction(id, row.id, "retry")} data-suggestion-retry={row.id}>{t("suggestions.retry")}</Button> : null}
       <Button className="pointer-events-auto text-muted-foreground" size="sm" variant="ghost" onClick={() => actions.suggestionAction(id, row.id, "dismiss")} data-suggestion-dismiss={row.id}>{t("suggestions.dismiss")}</Button>
+    </div>
+  );
+}
+
+/**
+ * A ready branch's three choices (PRD hide-ai-branch-first-apply D-03,
+ * B6-B10): `main에 합치기`, `PR 올리기` only while GitHub is connected, and a
+ * quiet `버리기`. A refused merge puts its answer first: `다시 시도` merges
+ * again, `다시 맞추기` makes the branch again on its base.
+ */
+export function BranchButtons({ row, project, actions, again, className }: { row: SuggestionRow; project: ProjectSuggestions; actions: Actions; again: BranchChoice["again"]; className?: string }) {
+  const { t } = useInterfaceTranslation();
+  const id = project.workspace_id;
+  const base = row.attempt?.branch?.base ?? "main";
+  const pr = project.github === "connected" && row.outcome === "pr";
+  return (
+    <div className={cn("col-start-2 flex flex-wrap items-center gap-xs pt-xxs", className)} data-suggestion-branch-buttons={row.id}>
+      {again === "rebase" ? (
+        <Button className="pointer-events-auto" size="sm" onClick={() => actions.suggestionAction(id, row.id, "rebase")} data-suggestion-rebase={row.id}>{t("suggestions.branch.rebase")}</Button>
+      ) : (
+        <Button className="pointer-events-auto" size="sm" onClick={() => actions.suggestionAction(id, row.id, "merge")} data-suggestion-merge={row.id}>{t(again === "merge" ? "suggestions.retry" : "suggestions.branch.merge", { base })}</Button>
+      )}
+      {pr ? <Button className="pointer-events-auto" size="sm" variant="outline" onClick={() => actions.suggestionAction(id, row.id, "open_pr")} data-suggestion-open-pr={row.id}>{t("suggestions.branch.openPr")}</Button> : null}
+      <Button className="pointer-events-auto text-muted-foreground" size="sm" variant="ghost" onClick={() => actions.suggestionAction(id, row.id, "discard")} data-suggestion-discard={row.id}>{t("suggestions.branch.discard")}</Button>
     </div>
   );
 }

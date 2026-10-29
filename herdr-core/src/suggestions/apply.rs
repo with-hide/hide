@@ -5,7 +5,7 @@
 //! saves what it answers, so one writer keeps each attempt.
 
 use super::ledger::{PrRef, RecordIndex, Signal};
-use super::lifecycle::{Attempt, AttemptMove, AttemptPhase, LineLife, Watch};
+use super::lifecycle::{Attempt, AttemptMove, AttemptPhase, AttemptPurpose, LineLife, Watch};
 use super::notebook::{Line, LineId, Notebook, Outcome, Stage, Strike, StruckBy};
 use super::store::ProjectLocation;
 use std::collections::{BTreeMap, BTreeSet};
@@ -27,6 +27,27 @@ pub(crate) struct ApplyOrder {
     /// may already exist (the attempt's fields of the same names).
     pub issue_title: Option<String>,
     pub issue_since: Option<u64>,
+    /// What the agent is asked to do on the branch.
+    pub purpose: AttemptPurpose,
+    /// The agent of the ready branch a new agent takes over, which ends
+    /// first so one worktree never holds two of Hide's agents.
+    pub previous_agent: Option<String>,
+}
+
+/// How an attempt begins (PRD hide-ai-branch-first-apply D-01, D-06, B12).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Begin {
+    /// A new suggestion, pressed or by the automatic mode: its fix is
+    /// committed on a branch of its own.
+    New,
+    /// `다시 시도` after a failure: the same branch, the same ask.
+    Retry,
+    /// `PR 올리기` on a ready branch: the same branch is pushed and one pull
+    /// request opened.
+    OpenPr,
+    /// `다시 맞추기` on a ready branch the base moved under: the same branch
+    /// is made again on the base as it is now.
+    Rebase,
 }
 
 /// What the line says, for the agent's prompt or the issue's text.
@@ -45,6 +66,9 @@ pub(crate) struct ApplyBrief {
     pub records: usize,
     /// The pull request a retry continues on the same branch.
     pub pr: Option<PrRef>,
+    /// The branch a ready branch is measured against, which `다시 맞추기`
+    /// makes it again on.
+    pub base: Option<String>,
 }
 
 /// An attempt the runtime follows until it settles.
@@ -64,6 +88,10 @@ pub(crate) struct FollowedAttempt {
     pub issue_title: Option<String>,
     pub issue_since: Option<u64>,
     pub reviewed: bool,
+    pub purpose: AttemptPurpose,
+    pub branch_facts: Option<super::lifecycle::BranchSummary>,
+    /// Why the last merge of its ready branch did not happen.
+    pub failure: Option<String>,
 }
 
 /// Why a line cannot be applied now.
@@ -75,30 +103,49 @@ pub(crate) enum NotReady {
     Local,
 }
 
-/// Begins an attempt on `line`: a new suggestion on a press or by itself, or
-/// a failed attempt on `다시 시도`, which continues the same branch and pull
-/// request (B12), or for an issue line the same title, looked for since the
-/// first try before another is made (B14). The line moves to 반영 중 and
+/// Begins an attempt on `line`: a new suggestion on a press or by itself,
+/// a failed attempt on `다시 시도`, which continues the same branch, pull
+/// request and ask (B12), or a ready branch on `PR 올리기` or `다시 맞추기`,
+/// which start an agent on that same branch (PRD hide-ai-branch-first-apply
+/// D-06, B12). An issue line's retry keeps the same title, looked for since
+/// the first try before another is made (B14). The line moves to 반영 중 and
 /// its attempt is `starting`.
 pub(crate) fn begin(
     line: &mut Line,
     life: &mut LineLife,
     index: &RecordIndex,
-    retry: bool,
+    how: Begin,
     auto: bool,
     now: u64,
-) -> Result<(Outcome, String, String, ApplyBrief), NotReady> {
+) -> Result<(Outcome, String, String, ApplyBrief, AttemptPurpose), NotReady> {
     let previous = life.attempt.as_ref();
-    let continues = previous
-        .filter(|attempt| matches!(attempt.phase, AttemptPhase::Failed | AttemptPhase::CiFailed));
-    let ready = if retry {
-        line.stage == Stage::Applying && continues.is_some()
-    } else {
-        line.stage == Stage::Suggested
+    let continues = previous.filter(|attempt| match how {
+        Begin::New => false,
+        Begin::Retry => matches!(attempt.phase, AttemptPhase::Failed | AttemptPhase::CiFailed),
+        Begin::OpenPr | Begin::Rebase => attempt.phase == AttemptPhase::Ready,
+    });
+    let ready = match how {
+        Begin::New => line.stage == Stage::Suggested,
+        _ => line.stage == Stage::Applying && continues.is_some(),
     };
     if !ready || line.struck.is_some() {
         return Err(NotReady::Stage);
     }
+    let outcome = line.outcome.unwrap_or(Outcome::Pr);
+    if outcome == Outcome::Local {
+        return Err(NotReady::Local);
+    }
+    if outcome == Outcome::Issue && matches!(how, Begin::OpenPr | Begin::Rebase) {
+        return Err(NotReady::Stage);
+    }
+    let purpose = match (how, continues) {
+        (Begin::OpenPr, _) => AttemptPurpose::Pr,
+        (Begin::Rebase, _) => AttemptPurpose::Rebase,
+        // A rebase that failed is asked again as a rebase; any other retry
+        // asks what the failed attempt asked.
+        (Begin::Retry, Some(attempt)) => attempt.purpose,
+        _ => AttemptPurpose::Branch,
+    };
     let stamp = base36(now);
     let branch = continues.map_or_else(
         || format!("hide-suggestion-s{}-{stamp}", line.id.0),
@@ -107,11 +154,9 @@ pub(crate) fn begin(
     let agent_name = format!("suggestion-apply-s{}-{stamp}", line.id.0);
     let pr = continues.and_then(|attempt| attempt.pr.clone());
     let repository = continues.and_then(|attempt| attempt.repository.clone());
-    let outcome = line.outcome.unwrap_or(Outcome::Pr);
-    if outcome == Outcome::Local {
-        return Err(NotReady::Local);
-    }
-    let brief = brief(line, index, pr.clone());
+    let branch_facts = continues.and_then(|attempt| attempt.branch_facts.clone());
+    let mut brief = brief(line, index, pr.clone());
+    brief.base = branch_facts.as_ref().map(|facts| facts.base.clone());
     let (issue_title, issue_since) = match outcome {
         Outcome::Pr | Outcome::Local => (None, None),
         Outcome::Issue => (
@@ -121,6 +166,9 @@ pub(crate) fn begin(
             continues.map(|attempt| attempt.issue_since.unwrap_or(attempt.started_at_unix_ms)),
         ),
     };
+    // An automatic attempt keeps holding the next one until the operator
+    // decides, whichever step runs now.
+    let auto = auto || continues.is_some_and(|attempt| attempt.auto);
     life.attempt = Some(Attempt {
         started_at_unix_ms: now,
         auto,
@@ -135,10 +183,12 @@ pub(crate) fn begin(
         issue_since,
         failure: None,
         reviewed: false,
+        purpose,
+        branch_facts,
     });
     line.stage = Stage::Applying;
     line.updated_at_unix_ms = now;
-    Ok((outcome, branch, agent_name, brief))
+    Ok((outcome, branch, agent_name, brief, purpose))
 }
 
 /// An issue's title and body (B14, D-29): the check or command the line
@@ -196,6 +246,7 @@ fn brief(line: &Line, index: &RecordIndex, pr: Option<PrRef>) -> ApplyBrief {
         prs,
         records: line.records.len(),
         pr,
+        base: None,
     }
 }
 
@@ -252,6 +303,37 @@ pub(crate) fn moved(
                 attempt.repository = repository;
             }
         }
+        AttemptMove::Ready(facts) => {
+            // A pull request the agent opened anyway is followed as one; a
+            // ready branch read again keeps the merge refusal it had unless
+            // its commit moved.
+            match attempt.phase {
+                AttemptPhase::Starting | AttemptPhase::Working => attempt.failure = None,
+                AttemptPhase::Ready => {
+                    if attempt.branch_facts.as_ref().map(|old| &old.tip) != Some(&facts.tip) {
+                        attempt.failure = None;
+                    }
+                }
+                _ => return false,
+            }
+            attempt.phase = AttemptPhase::Ready;
+            attempt.branch_facts = Some(facts);
+        }
+        AttemptMove::DecisionRefused(code) => {
+            if attempt.phase != AttemptPhase::Ready {
+                return false;
+            }
+            attempt.failure = Some(code);
+        }
+        AttemptMove::Discarded => {
+            attempt.phase = AttemptPhase::Closed;
+            line.struck = Some(Strike {
+                by: StruckBy::Operator,
+                reason: None,
+                at_unix_ms: now,
+            });
+            line.stage = Stage::Candidate;
+        }
         AttemptMove::PrOpen(pr) => {
             attempt.phase = AttemptPhase::PrOpen;
             attempt.pr = Some(pr);
@@ -274,10 +356,14 @@ pub(crate) fn moved(
             pr,
             at_unix_ms,
             base,
+            merge_commit,
         } => {
             attempt.phase = AttemptPhase::Merged;
             attempt.reviewed = true;
-            attempt.pr = Some(pr.clone());
+            attempt.failure = None;
+            if pr.is_some() {
+                attempt.pr = pr.clone();
+            }
             life.watch = Some(Watch {
                 merged_at_unix_ms: at_unix_ms,
                 pr,
@@ -288,7 +374,7 @@ pub(crate) fn moved(
                     .as_ref()
                     .is_some_and(|(signal, _)| *signal == Signal::CheckFailed),
                 sessions: BTreeSet::new(),
-                merge_commit: None,
+                merge_commit,
                 heads: BTreeMap::new(),
             });
             line.stage = Stage::Watching;
@@ -373,6 +459,9 @@ pub(crate) fn followed(
                 issue_title: attempt.issue_title.clone(),
                 issue_since: attempt.issue_since,
                 reviewed: attempt.reviewed,
+                purpose: attempt.purpose,
+                branch_facts: attempt.branch_facts.clone(),
+                failure: attempt.failure.clone(),
             })
         })
         .collect()
@@ -429,7 +518,7 @@ mod tests {
         line.outcome = Some(Outcome::Issue);
         let index = RecordIndex::default();
         let mut life = LineLife::default();
-        begin(&mut line, &mut life, &index, false, false, 100).unwrap();
+        begin(&mut line, &mut life, &index, Begin::New, false, 100).unwrap();
         let first = life.attempt.clone().unwrap();
         assert_eq!(
             first.issue_title.as_deref(),
@@ -441,7 +530,7 @@ mod tests {
         );
         for retried in [300, 400] {
             life.attempt.as_mut().unwrap().phase = AttemptPhase::Failed;
-            begin(&mut line, &mut life, &index, true, false, retried).unwrap();
+            begin(&mut line, &mut life, &index, Begin::Retry, false, retried).unwrap();
             let attempt = life.attempt.as_ref().unwrap();
             assert_eq!(attempt.issue_title, first.issue_title);
             assert_eq!(attempt.issue_since, Some(100), "since the first try");
@@ -453,20 +542,28 @@ mod tests {
         let index = RecordIndex::default();
         let mut suggested = line(Stage::Suggested);
         let mut life = LineLife::default();
-        let (outcome, branch, agent, _) =
-            begin(&mut suggested, &mut life, &index, false, false, 1_000).unwrap();
+        let (outcome, branch, agent, _, purpose) =
+            begin(&mut suggested, &mut life, &index, Begin::New, false, 1_000).unwrap();
         assert_eq!(outcome, Outcome::Pr);
         assert_eq!(branch, "hide-suggestion-s4-rs");
         assert_eq!(agent, "suggestion-apply-s4-rs");
+        assert_eq!(purpose, AttemptPurpose::Branch, "a fix starts on a branch");
         assert_eq!(suggested.stage, Stage::Applying);
         assert_eq!(life.attempt.as_ref().unwrap().phase, AttemptPhase::Starting);
         assert_eq!(
-            begin(&mut suggested, &mut life, &index, false, false, 2_000),
+            begin(&mut suggested, &mut life, &index, Begin::New, false, 2_000),
             Err(NotReady::Stage),
             "already applying"
         );
         assert_eq!(
-            begin(&mut suggested, &mut life, &index, true, false, 2_000),
+            begin(
+                &mut suggested,
+                &mut life,
+                &index,
+                Begin::Retry,
+                false,
+                2_000
+            ),
             Err(NotReady::Stage),
             "nothing failed"
         );
@@ -478,8 +575,15 @@ mod tests {
             AttemptMove::CiFailed(pr(9)),
             3_000
         ));
-        let (_, again, _, brief) =
-            begin(&mut suggested, &mut life, &index, true, false, 4_000).unwrap();
+        let (_, again, _, brief, _) = begin(
+            &mut suggested,
+            &mut life,
+            &index,
+            Begin::Retry,
+            false,
+            4_000,
+        )
+        .unwrap();
         assert_eq!(again, branch);
         assert_eq!(brief.pr, Some(pr(9)));
         let attempt = life.attempt.as_ref().unwrap();
@@ -497,7 +601,7 @@ mod tests {
         let index = RecordIndex::default();
         let mut applying = line(Stage::Suggested);
         let mut life = LineLife::default();
-        begin(&mut applying, &mut life, &index, false, true, 1_000).unwrap();
+        begin(&mut applying, &mut life, &index, Begin::New, true, 1_000).unwrap();
         assert!(!moved(
             &mut applying,
             &mut life,
@@ -539,16 +643,17 @@ mod tests {
             &mut merged_life,
             1_000,
             AttemptMove::Merged {
-                pr: pr(7),
+                pr: Some(pr(7)),
                 at_unix_ms: 4_000,
                 base: Some("main".into()),
+                merge_commit: None,
             },
             4_000
         ));
         assert_eq!(merged.stage, Stage::Watching);
         let watch = merged_life.watch.unwrap();
         assert!(watch.ci, "a CI line's watch");
-        assert_eq!(watch.pr, pr(7));
+        assert_eq!(watch.pr, Some(pr(7)));
         assert_eq!(watch.base.as_deref(), Some("main"));
 
         assert!(moved(
@@ -606,7 +711,15 @@ mod tests {
         assert_eq!(next_auto(&notebook, &lives), Some(LineId(2)));
         let index = RecordIndex::default();
         let life = lives.get_mut(&LineId(2)).unwrap();
-        begin(&mut notebook.lines[1], life, &index, false, true, 1_000).unwrap();
+        begin(
+            &mut notebook.lines[1],
+            life,
+            &index,
+            Begin::New,
+            true,
+            1_000,
+        )
+        .unwrap();
         assert_eq!(next_auto(&notebook, &lives), None);
         let life = lives.get_mut(&LineId(2)).unwrap();
         moved(

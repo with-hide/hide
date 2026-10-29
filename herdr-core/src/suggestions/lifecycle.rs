@@ -155,13 +155,18 @@ pub enum AttemptPhase {
     /// Written before the spawn; the agent has not shown yet.
     Starting,
     Working,
+    /// The agent committed on its branch and stopped: the operator's turn to
+    /// merge it, open a pull request or discard it (PRD
+    /// hide-ai-branch-first-apply D-01, D-02).
+    Ready,
     PrOpen,
     CiFailed,
     /// The agent ended with no pull request, or never started.
     Failed,
     IssueOpen,
     Merged,
-    /// The pull request was closed unmerged or the issue closed.
+    /// The pull request was closed unmerged, the branch was discarded, or the
+    /// issue closed.
     Closed,
 }
 
@@ -170,9 +175,56 @@ impl AttemptPhase {
     pub(crate) fn followed(self) -> bool {
         matches!(
             self,
-            Self::Starting | Self::Working | Self::PrOpen | Self::CiFailed | Self::IssueOpen
+            Self::Starting
+                | Self::Working
+                | Self::Ready
+                | Self::PrOpen
+                | Self::CiFailed
+                | Self::IssueOpen
         )
     }
+}
+
+/// What an attempt's agent is asked to do on its branch (PRD
+/// hide-ai-branch-first-apply D-01, D-06, B12).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttemptPurpose {
+    /// Commit the fix on the branch and stop.
+    Branch,
+    /// Push the branch and open one pull request. An attempt saved before
+    /// branch-first apply has no purpose and was asked for a pull request.
+    #[default]
+    Pr,
+    /// Make the branch again on the base as it is now and stop.
+    Rebase,
+}
+
+/// What a ready branch holds against its base, as the node read it.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BranchSummary {
+    pub base: String,
+    /// The branch's commit when it was read, which tells a merge done by
+    /// hand from a branch deleted unmerged once the branch is gone (D-08).
+    pub tip: String,
+    pub ahead: u32,
+    #[serde(default)]
+    pub files: Vec<BranchFileSummary>,
+    /// Every changed file, of which `files` keeps the first few.
+    #[serde(default)]
+    pub files_total: u32,
+    pub added: u32,
+    pub removed: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BranchFileSummary {
+    /// Repository-relative.
+    pub path: String,
+    pub added: u32,
+    pub removed: u32,
+    #[serde(default)]
+    pub binary: bool,
 }
 
 /// One go at applying a line: one agent in one worktree on one branch, with
@@ -212,11 +264,19 @@ pub struct Attempt {
     /// longer holds the next (D-29).
     #[serde(default)]
     pub reviewed: bool,
+    #[serde(default)]
+    pub purpose: AttemptPurpose,
+    /// What the branch holds once it is ready; kept past a pull request so
+    /// the row still names the branch.
+    #[serde(default)]
+    pub branch_facts: Option<BranchSummary>,
 }
 
 impl Attempt {
-    /// An automatic attempt nobody has reviewed yet, from its start to its
-    /// pull request's first review: it holds the next automatic one (D-29).
+    /// An automatic attempt nobody has decided yet, from its start until the
+    /// operator chose what to do with its branch, or reviewed its pull
+    /// request: it holds the next automatic one (D-29, PRD
+    /// hide-ai-branch-first-apply D-04).
     pub(crate) fn holds_next_auto(&self) -> bool {
         self.auto
             && !self.reviewed
@@ -224,6 +284,7 @@ impl Attempt {
                 self.phase,
                 AttemptPhase::Starting
                     | AttemptPhase::Working
+                    | AttemptPhase::Ready
                     | AttemptPhase::PrOpen
                     | AttemptPhase::CiFailed
             )
@@ -241,17 +302,30 @@ pub(crate) enum AttemptMove {
         agent_id: String,
         repository: Option<String>,
     },
+    /// Its agent stopped with commits on the branch: the operator's turn.
+    Ready(BranchSummary),
+    /// Hide's merge or discard of a ready branch did not happen, with the
+    /// code the row words (`merge_dirty`, `merge_conflict`, `merge_moved`,
+    /// `merge_failed`, `discard_failed`); the branch stays ready.
+    DecisionRefused(String),
+    /// The branch was discarded, or deleted unmerged: the line is skipped as
+    /// `넘어가기` skips it (D-07, D-08).
+    Discarded,
     /// Its pull request is open, or its checks pass again.
     PrOpen(PrRef),
     /// Its pull request's checks failed and the agent is not working.
     CiFailed(PrRef),
     /// Someone reviewed its pull request.
     Reviewed,
+    /// It reached its base (D-08): its pull request merged, or its branch
+    /// merged locally, by Hide or by hand, with no pull request.
     Merged {
-        pr: PrRef,
+        pr: Option<PrRef>,
         at_unix_ms: u64,
         /// The branch it merged into.
         base: Option<String>,
+        /// The commit on the base that holds it, when known without GitHub.
+        merge_commit: Option<String>,
     },
     /// Its pull request closed unmerged: the operator's `넘어가기`.
     Closed,
@@ -268,7 +342,9 @@ pub(crate) enum AttemptMove {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Watch {
     pub merged_at_unix_ms: u64,
-    pub pr: PrRef,
+    /// The pull request that merged; none for a branch merged locally (PRD
+    /// hide-ai-branch-first-apply B14).
+    pub pr: Option<PrRef>,
     /// The branch the pull request merged into, which a checkout must have
     /// caught up with for its records to count.
     #[serde(default)]

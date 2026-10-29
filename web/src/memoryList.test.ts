@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { memoryCards, memoryTabQuestions, memoryTime, selectableMemoryQuestions, sourceTime, visibleCards } from "./memoryList";
+import { MEMORY_BATCH_LIMIT, checkedCorrections, confirmedCorrections, memoryCards, memoryTabQuestions, memoryTime, sourceTime, visibleCards } from "./memoryList";
 import type { MemoryDocument, MemoryRow, ProjectMemory } from "./snapshot";
 
 const row = (number: number): MemoryRow => ({
@@ -26,7 +26,34 @@ describe("the Memory tab's questions", () => {
     ];
     expect(memoryTabQuestions(project({ questions })).map((question) => question.number)).toEqual([2, 5]);
     // Only a confirmed newer memory joins a batch fix; an `ask` is answered first.
-    expect([...selectableMemoryQuestions(project({ questions }))]).toEqual([2]);
+    expect(confirmedCorrections(project({ questions })).map((question) => question.number)).toEqual([2]);
+  });
+
+  const correction = (number: number, at: number | null, authority: MemoryDocument["authority"] = "card_newer"): ProjectMemory["questions"][number] => ({
+    kind: "docs_disagree", number, title: `card ${number}`, document: { ...DOCUMENT, authority, operator_at_unix_ms: at },
+  });
+
+  it("checks the five most recent confirmed corrections from the start, the most recent first", () => {
+    const questions = [1, 2, 3, 4, 5, 6, 7].map((number) => correction(number, number * 10));
+    const shown = project({ questions });
+    expect(confirmedCorrections(shown).map((question) => question.number)).toEqual([7, 6, 5, 4, 3, 2, 1]);
+    expect(checkedCorrections(shown, {})).toEqual([7, 6, 5, 4, 3]);
+    expect(checkedCorrections(shown, {}).length).toBe(MEMORY_BATCH_LIMIT);
+  });
+
+  it("keeps the operator's own check and uncheck, never past five, and none checked means nothing to apply", () => {
+    const questions = [1, 2, 3, 4, 5, 6, 7].map((number) => correction(number, number * 10));
+    const shown = project({ questions });
+    expect(checkedCorrections(shown, { 7: false, 2: true })).toEqual([6, 5, 4, 3, 2]);
+    expect(checkedCorrections(shown, { 7: true, 1: true, 2: true })).toEqual([7, 6, 5, 4, 3]);
+    expect(checkedCorrections(shown, Object.fromEntries([1, 2, 3, 4, 5, 6, 7].map((number) => [number, false])))).toEqual([]);
+  });
+
+  it("cannot check a comparison that still asks which side is right, and a corrected one lands checked", () => {
+    const asking = project({ questions: [correction(2, 20, "ask"), correction(3, 30)] });
+    expect(checkedCorrections(asking, { 2: true })).toEqual([3]);
+    const answered = project({ questions: [correction(2, 20, "card_newer"), correction(3, 30)] });
+    expect(checkedCorrections(answered, {})).toEqual([3, 2]);
   });
 });
 

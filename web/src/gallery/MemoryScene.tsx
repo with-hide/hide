@@ -61,7 +61,7 @@ export function memorySceneProject(state: MemorySceneState): ProjectMemory {
   switch (state) {
     case "workspace":
       return { ...base, expanded: EXPANDED };
-    case "correction": return { ...base, rows: [{ ...ROWS[6]!, title: "Use the repository verification script", body_preview: "Use the verification script so local checks and CI use the same toolchain." }], questions: [{ kind: "docs_disagree", number: ROWS[6]!.number, title: "Use the repository verification script", document: { authority: "card_newer", document: "docs/TESTING.md", document_at_unix_ms: Date.now(), operator_at_unix_ms: Date.now() - 1440 * MINUTE } }] };
+    case "correction": return { ...base, rows: [{ ...ROWS[6]!, title: "Use the repository verification script", body_preview: "Use the verification script so local checks and CI use the same toolchain." }], questions: [{ kind: "docs_disagree", number: ROWS[6]!.number, title: "Use the repository verification script", document: { authority: "card_newer", document: "docs/TESTING.md", document_at_unix_ms: Date.now(), operator_at_unix_ms: Date.now() - 1440 * MINUTE, operator_line: "검증은 저장소 스크립트로 해. 로컬이랑 CI가 같아야 해", document_sentence: "Run cargo test and pnpm test directly before a merge.", replacement: "Run the repository verification script before a merge." } }] };
     case "off": return { ...base, enabled: false, usable_cards: 0 };
     case "ai_not_ready": return { ...base, analysis: "ai_not_ready" };
     case "analyzing": return { ...base, analysis: "analyzing" };

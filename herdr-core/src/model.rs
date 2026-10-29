@@ -873,6 +873,10 @@ pub enum HomeTurn {
     PrReview { pr_number: u64 },
     /// Checks failed and the agent is not at work on them.
     CiFailed { pr_number: u64 },
+    /// The agent committed the fix on its branch and stopped: the operator
+    /// looks at it and merges, sends or discards it (PRD
+    /// hide-ai-branch-first-apply D-02, B3).
+    BranchReady,
 }
 
 /// A checkout Hide AI made for an agent it started.
@@ -3375,6 +3379,9 @@ pub struct ProjectMemorySnapshot {
     pub usable_cards: usize,
     /// At the store's cap with no card it may forget: new cards are refused.
     pub capacity_reached: bool,
+    /// True when the Project already has 5 branches waiting for a decision,
+    /// so `N개 문서에 반영` starts nothing until one is decided.
+    pub branches_full: bool,
     /// Older cards forgotten automatically to make room, still forgotten,
     /// since the Memory tab last said so (`memory_evictions_seen`).
     pub evicted_cards: usize,
@@ -3472,6 +3479,13 @@ pub struct MemoryPromotionSnapshot {
     /// Why GitHub could not say whether an `unconfirmed` attempt's pull
     /// request came, when it gave a reason.
     pub github_failure: Option<GithubFailureCategory>,
+    /// The batch's branch, which the 제안 tab's one row per batch is drawn
+    /// from (PRD hide-ai-branch-first-apply D-13).
+    #[serde(skip)]
+    pub branch: Option<String>,
+    /// Why Hide's last merge or discard of a ready branch did not happen.
+    #[serde(skip)]
+    pub failure: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -3493,6 +3507,9 @@ pub enum MemoryPromotionState {
     /// The card's decision is not built and no branch builds it; the card is
     /// asked about once.
     Unbuilt,
+    /// The card is committed on its batch's branch, which waits for the
+    /// operator's decision (PRD hide-ai-branch-first-apply D-13).
+    Ready,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -3513,6 +3530,19 @@ pub struct MemoryDocumentSnapshot {
     pub document: String,
     pub document_at_unix_ms: Option<u64>,
     pub operator_at_unix_ms: Option<u64>,
+    /// The operator's words that made the comparison, cut to their first
+    /// non-empty line; none when the conversation cannot be read.
+    pub operator_line: Option<String>,
+    /// The document's current sentence the correction replaces; none until a
+    /// comparison answer carried the pair.
+    pub document_sentence: Option<String>,
+    /// The sentence that replaces `document_sentence`.
+    pub replacement: Option<String>,
+}
+
+impl MemoryDocumentSnapshot {
+    /// The most characters of the operator's words a row carries.
+    const OPERATOR_LINE_CHARS: usize = 160;
 }
 
 impl From<&hide_memory::DocumentComparison> for MemoryDocumentSnapshot {
@@ -3522,6 +3552,14 @@ impl From<&hide_memory::DocumentComparison> for MemoryDocumentSnapshot {
             document: comparison.document.clone(),
             document_at_unix_ms: comparison.document_at_unix_ms,
             operator_at_unix_ms: comparison.operator_at_unix_ms,
+            operator_line: comparison
+                .operator_text
+                .lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+                .map(|line| line.chars().take(Self::OPERATOR_LINE_CHARS).collect()),
+            document_sentence: comparison.document_sentence.clone(),
+            replacement: comparison.replacement.clone(),
         }
     }
 }
@@ -4059,6 +4097,15 @@ pub enum DetailItem {
     Worktrees { workspace_id: String },
     /// A project's last seven days of cost, from its Project tool (B31).
     Cost { workspace_id: String },
+    /// A Hide AI branch waiting for the operator's decision, by its 제안 row,
+    /// with the file whose diff it shows, or its card of files (PRD
+    /// hide-ai-branch-first-apply B4).
+    Branch {
+        workspace_id: String,
+        row: String,
+        #[serde(default)]
+        path: Option<String>,
+    },
 }
 
 /// The lane's 보기 slot (PRD sidebar-task-lens D-50): what it opened, oldest
@@ -4939,6 +4986,32 @@ pub struct PrWorkSnapshot {
     /// most [`PR_CARD_LIMIT`] (PRD work-tab-pr-lens D-06).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub cards: Vec<PrCardSnapshot>,
+    /// The diff of one file of a Hide AI branch the 보기 slot's branch card
+    /// shows (PRD hide-ai-branch-first-apply B4); absent while the slot shows
+    /// no branch file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch_diff: Option<BranchDiffSnapshot>,
+}
+
+/// One file's committed diff on a Hide AI branch against its base, read on
+/// the machine that holds the Project and never from the checkout in front.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+pub struct BranchDiffSnapshot {
+    pub workspace_id: String,
+    /// The 제안 row (`s12`, `m72`) whose branch it is.
+    pub row: String,
+    pub path: String,
+    /// The text has not answered yet.
+    pub reading: bool,
+    /// The read failed; the reason is in the log.
+    pub failed: bool,
+    pub text: Option<String>,
+    /// Why the text is short or absent, as the diff documents word it.
+    pub notice: Option<hide_node_link::git::DiffNotice>,
+    /// The branch commit the read was asked at; a row whose branch moved
+    /// is read again (`runtime::branch_card`).
+    #[serde(skip)]
+    pub tip: Option<String>,
 }
 
 /// Cards kept at once; the least recently asked for is dropped.
@@ -8033,6 +8106,7 @@ mod wire_enum_tests {
             MemoryPromotionState::Unconfirmed,
             MemoryPromotionState::Building,
             MemoryPromotionState::Unbuilt,
+            MemoryPromotionState::Ready,
         ];
         for variant in promotion_states {
             match variant {
@@ -8042,7 +8116,8 @@ mod wire_enum_tests {
                 | MemoryPromotionState::Failed
                 | MemoryPromotionState::Unconfirmed
                 | MemoryPromotionState::Building
-                | MemoryPromotionState::Unbuilt => {}
+                | MemoryPromotionState::Unbuilt
+                | MemoryPromotionState::Ready => {}
             }
         }
         assert_wire(&contract, "memory_promotion_state", &promotion_states);
@@ -9005,6 +9080,11 @@ mod wire_enum_tests {
                 workspace_id: "w".into(),
             },
             DetailItem::Plan { session },
+            DetailItem::Branch {
+                workspace_id: "w".into(),
+                row: "s1".into(),
+                path: None,
+            },
         ];
         for item in &items {
             match item {
@@ -9013,7 +9093,8 @@ mod wire_enum_tests {
                 | DetailItem::Mission { .. }
                 | DetailItem::Worktrees { .. }
                 | DetailItem::Cost { .. }
-                | DetailItem::Plan { .. } => {}
+                | DetailItem::Plan { .. }
+                | DetailItem::Branch { .. } => {}
             }
         }
         let kinds: Vec<String> = items
@@ -9273,11 +9354,14 @@ mod wire_enum_tests {
 
         let holds = [
             SuggestionHold::GithubNeeded,
+            SuggestionHold::BranchesFull,
             SuggestionHold::AutoPrUnreviewed,
         ];
         for variant in holds {
             match variant {
-                SuggestionHold::GithubNeeded | SuggestionHold::AutoPrUnreviewed => {}
+                SuggestionHold::GithubNeeded
+                | SuggestionHold::BranchesFull
+                | SuggestionHold::AutoPrUnreviewed => {}
             }
         }
         assert_wire(&contract, "suggestion_hold", &holds);
@@ -9295,6 +9379,8 @@ mod wire_enum_tests {
         let phases = [
             SuggestionAttemptPhase::Starting,
             SuggestionAttemptPhase::Working,
+            SuggestionAttemptPhase::Ready,
+            SuggestionAttemptPhase::Merging,
             SuggestionAttemptPhase::PrOpen,
             SuggestionAttemptPhase::CiFailed,
             SuggestionAttemptPhase::Failed,
@@ -9305,6 +9391,8 @@ mod wire_enum_tests {
             match variant {
                 SuggestionAttemptPhase::Starting
                 | SuggestionAttemptPhase::Working
+                | SuggestionAttemptPhase::Ready
+                | SuggestionAttemptPhase::Merging
                 | SuggestionAttemptPhase::PrOpen
                 | SuggestionAttemptPhase::CiFailed
                 | SuggestionAttemptPhase::Failed
@@ -9314,6 +9402,20 @@ mod wire_enum_tests {
         }
         assert_wire(&contract, "suggestion_attempt_phase", &phases);
         checked.insert("suggestion_attempt_phase");
+
+        use crate::suggestions::lifecycle::AttemptPurpose;
+        let purposes = [
+            AttemptPurpose::Branch,
+            AttemptPurpose::Pr,
+            AttemptPurpose::Rebase,
+        ];
+        for variant in purposes {
+            match variant {
+                AttemptPurpose::Branch | AttemptPurpose::Pr | AttemptPurpose::Rebase => {}
+            }
+        }
+        assert_wire(&contract, "suggestion_attempt_purpose", &purposes);
+        checked.insert("suggestion_attempt_purpose");
 
         let unchecked = contract
             .keys()

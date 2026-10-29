@@ -180,7 +180,8 @@ fn group_and_state(line: &Line, life: &LineLife) -> Option<(SuggestionGroup, Sug
                     SuggestionState::HideAiWorking
                 }
                 Some(
-                    AttemptPhase::PrOpen
+                    AttemptPhase::Ready
+                    | AttemptPhase::PrOpen
                     | AttemptPhase::CiFailed
                     | AttemptPhase::IssueOpen
                     | AttemptPhase::Failed
@@ -201,6 +202,7 @@ fn attempt(life: &LineLife) -> Option<SuggestionAttemptSnapshot> {
     let phase = match attempt.phase {
         AttemptPhase::Starting => SuggestionAttemptPhase::Starting,
         AttemptPhase::Working => SuggestionAttemptPhase::Working,
+        AttemptPhase::Ready => SuggestionAttemptPhase::Ready,
         AttemptPhase::PrOpen => SuggestionAttemptPhase::PrOpen,
         AttemptPhase::CiFailed => SuggestionAttemptPhase::CiFailed,
         AttemptPhase::Failed | AttemptPhase::Closed => SuggestionAttemptPhase::Failed,
@@ -218,7 +220,44 @@ fn attempt(life: &LineLife) -> Option<SuggestionAttemptSnapshot> {
             .or_else(|| attempt.issue_url.clone()),
         agent_id: attempt.agent_id.clone(),
         failure: attempt.failure.clone(),
+        branch: on_branch(attempt).then(|| branch(attempt)),
+        purpose: attempt.purpose,
     })
+}
+
+/// Whether an attempt works on a branch of its own: every pull request
+/// line's, never an issue's.
+fn on_branch(attempt: &crate::suggestions::lifecycle::Attempt) -> bool {
+    attempt.issue_title.is_none() && attempt.issue_url.is_none()
+}
+
+/// The attempt's branch as the row and its card draw it; the worktree it is
+/// checked out in is laid by the runtime, which knows the node's facts.
+pub(crate) fn branch(
+    attempt: &crate::suggestions::lifecycle::Attempt,
+) -> crate::model::SuggestionBranchSnapshot {
+    let facts = attempt.branch_facts.as_ref();
+    crate::model::SuggestionBranchSnapshot {
+        name: attempt.branch.clone(),
+        base: facts.map(|facts| facts.base.clone()),
+        checkout: None,
+        files: facts.map_or_else(Vec::new, |facts| {
+            facts
+                .files
+                .iter()
+                .map(|file| crate::model::SuggestionBranchFileSnapshot {
+                    path: file.path.clone(),
+                    added: file.added,
+                    removed: file.removed,
+                    binary: file.binary,
+                })
+                .collect()
+        }),
+        files_total: facts.map_or(0, |facts| facts.files_total),
+        added: facts.map_or(0, |facts| facts.added),
+        removed: facts.map_or(0, |facts| facts.removed),
+        tip: facts.map(|facts| facts.tip.clone()),
+    }
 }
 
 fn evidence(line: &Line, input: &ReadInput<'_>) -> Vec<SuggestionEvidenceSnapshot> {
@@ -359,6 +398,7 @@ pub fn project(input: &ReadInput<'_>) -> ProjectSuggestionsSnapshot {
                     }),
                 local: local(line, life, input.index, input.global),
                 evidence_unconfirmed: false,
+                memory_cards: Vec::new(),
             })
         })
         .collect::<Vec<_>>();
