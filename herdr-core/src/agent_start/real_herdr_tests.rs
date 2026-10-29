@@ -24,12 +24,9 @@ use serde_json::json;
 use super::*;
 
 const QUESTION: &str = "Update the framework now? [Y/n]";
-/// The start of the prompt the user's files give a Unix shell, and of
-/// PowerShell's own.
+/// The start of the prompt the user's files give a Unix shell.
 #[cfg(unix)]
 const PROMPT: &str = "fixture";
-#[cfg(windows)]
-const PROMPT: &str = "PS ";
 
 /// B8: the seed tab must remain discoverable when shell integration is absent.
 #[test]
@@ -102,7 +99,8 @@ fn a_new_worktrees_seed_tab_is_named_from_creation_proof_without_shell_replaceme
 }
 
 /// The pane's node: it writes the integration for `shell` as the product's
-/// node does.
+/// node does, and reads how a process's terminal takes input from this
+/// machine, where the private server's shells run.
 struct Node {
     home: PathBuf,
     shell: Option<String>,
@@ -112,8 +110,11 @@ impl NodeLink for Node {
     fn call(
         &self,
         call: Call,
-        _timeout: Duration,
+        timeout: Duration,
     ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+        if let Call::LineInput { .. } = call {
+            return hide_node::Local::of_process().call(call, timeout);
+        }
         let Call::ShellIntegration = call else {
             panic!("unexpected {call:?}");
         };
@@ -816,17 +817,19 @@ fn a_windows_powershell_startup_question_is_never_answered_by_a_start_and_each_t
 /// the tail of the sleep's second Ctrl+C, which Codex had quit before reading
 /// and which Herdr had encoded in the keyboard protocol Codex turned on
 /// (`ESC[99;5u`). Typed behind it, the wake ran `9;5ucodex ... resume <id>`.
+#[cfg(unix)]
 const STRAY: &str = "9;5u";
 
-/// The scenario every shell runs: text an ended agent left in its shell's
-/// line is there when the wake types into that pane, and the resume line
-/// still runs, with its own arguments, as the agent the wake names.
+/// The scenario every Unix shell runs: text an ended agent left in its
+/// shell's line is there when the wake types into that pane, and the resume
+/// line still runs, with its own arguments, as the agent the wake names. A
+/// Windows console has no state that proves the shell reads at its prompt,
+/// so a wake there keeps the line (`docs/INSTALL.md`, What each system
+/// supports).
+#[cfg(unix)]
 fn wake_after_stray_text(shell: &str, variable: &str) {
     let herdr = PrivateHerdr::new(std::env::var(variable).ok());
-    #[cfg(unix)]
     unix_agent(&herdr);
-    #[cfg(windows)]
-    windows_agent(&herdr);
     user_files(&herdr, shell, false);
     let created = herdr.request(
         "workspace.create",
@@ -869,6 +872,7 @@ fn wake_after_stray_text(shell: &str, variable: &str) {
             session_id: Some("slept-session".into()),
             codex_daemon: crate::codex_launch::CodexDaemon::Unknown,
         },
+        PaneLine::AfterAgent,
     );
     assert_eq!(woke, crate::agent_sleep_herdr::WakeOutcome::Started);
     herdr.wait_on(
@@ -899,11 +903,4 @@ fn a_bash_wake_runs_its_resume_line_past_text_the_ended_agent_left_in_the_shell(
 #[ignore = "needs the pinned Herdr and fish: HIDE_E2E_HERDR_BIN, HIDE_TEST_FISH_BIN"]
 fn a_fish_wake_runs_its_resume_line_past_text_the_ended_agent_left_in_the_shell() {
     wake_after_stray_text("fish", "HIDE_TEST_FISH_BIN");
-}
-
-#[cfg(windows)]
-#[test]
-#[ignore = "needs the pinned Herdr: HIDE_E2E_HERDR_BIN"]
-fn a_windows_powershell_wake_runs_its_resume_line_past_text_the_ended_agent_left_in_the_shell() {
-    wake_after_stray_text("powershell", "HIDE_TEST_POWERSHELL_BIN");
 }

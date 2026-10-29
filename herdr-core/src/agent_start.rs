@@ -37,12 +37,24 @@
 //! not the command. Such a start therefore abandons the shell's line first,
 //! with the terminal's interrupt character: a Unix shell drops its line on it
 //! in every editing mode (Ctrl+U does not, in zsh's or bash's vi mode after
-//! an Escape left in the line), the terminal drops what it still holds
-//! unread, and Windows PowerShell cancels its line on it. It is the raw byte,
-//! sent as text: Herdr encodes a named key from the terminal modes the pane
-//! reports, and an agent ended by a signal leaves its keyboard protocol on
-//! there (Codex CLI 0.165.0), so a named Ctrl+C would reach the shell as the
-//! same `ESC[99;5u`.
+//! an Escape left in the line). It is the raw byte, sent as text: Herdr
+//! encodes a named key from the terminal modes the pane reports, and an agent
+//! ended by a signal leaves its keyboard protocol on there (Codex CLI
+//! 0.165.0), so a named Ctrl+C would reach the shell as the same `ESC[99;5u`.
+//!
+//! An interrupt stops whatever holds the terminal, so it is sent only when a
+//! read made right before it shows the shell owning its line: the shell alone
+//! holds the terminal, and the terminal hands keys over as they come, which a
+//! Unix shell's line editor asks for only while it reads at its prompt (its
+//! hooks and its commands run with the terminal back in line mode). Anything
+//! else keeps the line and the start goes on: a Windows console, which has
+//! no such mode and where Herdr names the shell alone while another program
+//! runs in it; a terminal in line mode; another program in the foreground;
+//! a read that failed. The caller fences Hide's own input: only a wake asks
+//! for it, and the pane's input gate stays closed from the end to the agent's
+//! return (`runtime/terminal.rs`, `sleep_record_panes`). A writer outside
+//! Hide that submits a command between that read and the interrupt is the
+//! residual, as for Herdr's own check before it types a start.
 //!
 //! The shell holding the terminal does not say its startup files are done:
 //! a startup file that asks a question (oh-my-zsh's `[Y/n]` update prompt
@@ -178,8 +190,9 @@ pub(crate) enum PaneLine {
     /// Nothing an agent was meant to read: no agent has run in the pane, or
     /// the pane is a new one.
     Fresh,
-    /// The pane an agent was just ended in: the line is abandoned before the
-    /// start is typed.
+    /// The pane an agent was just ended in, whose input gate Hide holds
+    /// closed: the line is abandoned before the start is typed, when the
+    /// shell is proven to own it.
     AfterAgent,
 }
 
@@ -495,14 +508,34 @@ fn start_within(
     };
     let mut settled = false;
     let mut busy = 0_u32;
-    // Once, while the shell holds the terminal: a start Herdr refused typed
-    // nothing, so the line is still empty when it is sent again.
+    // Once, while the shell owns its line: a start Herdr refused typed
+    // nothing, so the line is still empty when it is sent again. A state
+    // that may pass (line mode, another program in front) is read again
+    // before the next attempt; one that will not ends the try.
     let mut abandon = line == PaneLine::AfterAgent;
+    let mut kept = None;
     loop {
         shell.wait(started, deadline)?;
         check().map_err(StartError::refused)?;
-        if std::mem::take(&mut abandon) {
-            shell.abandon_line()?;
+        if abandon {
+            match shell.owns_line() {
+                Ok(()) => {
+                    shell.abandon_line()?;
+                    abandon = false;
+                }
+                Err(keep) => {
+                    abandon = !keep.lasts();
+                    if kept.replace(keep.code()) != Some(keep.code()) {
+                        crate::diagnostic!(serde_json::json!({
+                            "component": "agent_start",
+                            "kind": "line_kept",
+                            "request": correlation_id,
+                            "pane_id": pane_id,
+                            "reason": keep.code(),
+                        }));
+                    }
+                }
+            }
         }
         match request_with_correlation_id(
             connector,
@@ -578,6 +611,35 @@ struct Shell<'a> {
     line: usize,
     awaits_mark: std::cell::Cell<bool>,
     program: Option<String>,
+}
+
+/// Why a start in the pane an agent was ended in keeps the shell's line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Keep {
+    /// Another program holds the terminal, or shares the shell's group.
+    Foreground,
+    /// The terminal is in line mode: the shell is not reading at its prompt.
+    LineMode,
+    /// A Windows console, whose prompt no read can prove.
+    Console,
+    /// The pane's machine cannot be asked, or a read failed.
+    Unread,
+}
+
+impl Keep {
+    fn code(self) -> &'static str {
+        match self {
+            Self::Foreground => "foreground_other",
+            Self::LineMode => "line_mode",
+            Self::Console => "console",
+            Self::Unread => "unread",
+        }
+    }
+
+    /// Whether a later read cannot prove the line the shell's either.
+    fn lasts(self) -> bool {
+        matches!(self, Self::Console | Self::Unread)
+    }
 }
 
 /// What a start still waited for when its wait ran out.
@@ -764,6 +826,34 @@ impl Shell<'_> {
             "reason": read.err().filter(|_| !released).map(|error| error.to_string()),
         }));
         released
+    }
+
+    /// Whether the shell owns its line now, read right before an interrupt
+    /// would be sent: the shell alone holds the terminal and its line editor
+    /// takes keys as they come.
+    fn owns_line(&self) -> Result<(), Keep> {
+        let node = self.node.ok_or(Keep::Unread)?;
+        let group = wire::pane_process_info_params(self.pane_id)
+            .and_then(|params| {
+                request_with_connector(self.connector, "pane.process_info", params, READ_TIMEOUT)
+                    .map_err(|error| error.to_string())
+            })
+            .and_then(wire::pane_process_group)
+            .map_err(|_| Keep::Unread)?;
+        let shell = group
+            .shell_pid
+            .filter(|_| group.shell_holds_terminal())
+            .ok_or(Keep::Foreground)?;
+        match crate::node_access::call_as::<LineInput>(
+            node,
+            Call::LineInput { pid: shell },
+            READ_TIMEOUT,
+        ) {
+            Ok(LineInput::Keys) => Ok(()),
+            Ok(LineInput::Lines { .. }) => Err(Keep::LineMode),
+            Ok(LineInput::Console) => Err(Keep::Console),
+            Err(_) => Err(Keep::Unread),
+        }
     }
 
     /// Abandons whatever the shell's line holds, before a start in the pane
@@ -1095,35 +1185,23 @@ mod tests {
         );
     }
 
-    /// A start in the pane an agent was ended in abandons the shell's line
-    /// with the raw interrupt character, once the shell holds the terminal
-    /// and before Herdr types the start; a start Herdr refused typed nothing,
-    /// so the line is not abandoned again before it is sent again.
-    #[test]
-    fn a_start_after_an_agent_abandons_the_shells_line_once_before_it_types() {
-        let reads = Arc::new(AtomicUsize::new(0));
-        let starts = Arc::new(AtomicUsize::new(0));
-        let (read, started_once) = (Arc::clone(&reads), Arc::clone(&starts));
-        let herdr =
-            FakeHerdr::start_with_errors(
-                "agent-start-after-agent",
-                move |method, _| match method {
-                    // The ended agent still holds the terminal at the first read.
-                    "pane.process_info" if read.fetch_add(1, Ordering::SeqCst) == 0 => {
-                        Ok(process_info(4200, &[4200]))
-                    }
-                    "pane.process_info" => Ok(process_info(SHELL, &[SHELL])),
-                    "pane.send_text" => Ok(json!({"type": "ok"})),
-                    "agent.start" if started_once.fetch_add(1, Ordering::SeqCst) == 0 => {
-                        Err((PANE_BUSY.into(), "a prompt hook holds the terminal".into()))
-                    }
-                    "agent.start" => Ok(started()),
-                    other => panic!("unexpected {other}"),
-                },
-            );
-        let answer = start_within(
+    /// The shell's interrupts a start in the pane an agent was ended in sent.
+    fn interrupts(herdr: &FakeHerdr) -> Vec<Value> {
+        herdr
+            .calls()
+            .into_iter()
+            .filter(|(method, _)| method == "pane.send_text")
+            .map(|(_, params)| params)
+            .collect()
+    }
+
+    fn start_after_agent(
+        herdr: &FakeHerdr,
+        node: Option<&dyn NodeLink>,
+    ) -> Result<Value, StartError> {
+        start_within(
             &herdr.connector(),
-            None,
+            node,
             "test:wake",
             "w1:p1",
             ShellStart::Plain,
@@ -1133,26 +1211,133 @@ mod tests {
             Duration::ZERO,
             PaneLine::AfterAgent,
             &|| Ok(()),
-        );
+        )
+    }
+
+    /// A start in the pane an agent was ended in abandons the shell's line
+    /// with the raw interrupt character only once a read right before it
+    /// shows the shell reading at its prompt: while the terminal is still in
+    /// line mode (a prompt hook running) the line is kept and the start is
+    /// sent; Herdr refused it before typing anything, so the next attempt
+    /// reads again, and the line is abandoned once, before Herdr types.
+    #[test]
+    fn a_start_after_an_agent_abandons_the_line_once_the_shell_reads_at_its_prompt() {
+        let starts = Arc::new(AtomicUsize::new(0));
+        let started_once = Arc::clone(&starts);
+        let herdr =
+            FakeHerdr::start_with_errors(
+                "agent-start-after-agent",
+                move |method, _| match method {
+                    "pane.process_info" => Ok(process_info(SHELL, &[SHELL])),
+                    "pane.send_text" => Ok(json!({"type": "ok"})),
+                    "agent.start" if started_once.fetch_add(1, Ordering::SeqCst) == 0 => {
+                        Err((PANE_BUSY.into(), "a prompt hook holds the terminal".into()))
+                    }
+                    "agent.start" => Ok(started()),
+                    other => panic!("unexpected {other}"),
+                },
+            );
+        let terminal = Terminal::answering(vec![
+            Ok(LineInput::Lines { limit: 1024 }),
+            Ok(LineInput::Keys),
+        ]);
+        let answer = start_after_agent(&herdr, Some(&terminal));
         assert!(answer.is_ok(), "{answer:?}");
         assert_eq!(
             herdr.methods(),
             [
                 "pane.process_info",
                 "pane.process_info",
-                "pane.send_text",
                 "agent.start",
                 "pane.process_info",
+                "pane.process_info",
+                "pane.send_text",
                 "agent.start"
             ]
         );
-        let abandoned: Vec<Value> = herdr
-            .calls()
-            .into_iter()
-            .filter(|(method, _)| method == "pane.send_text")
-            .map(|(_, params)| params)
+        assert_eq!(
+            interrupts(&herdr),
+            [json!({"pane_id": "w1:p1", "text": "\u{3}"})]
+        );
+    }
+
+    /// On Windows Herdr refuses the pane as busy while another program runs
+    /// in its shell, and `pane.process_info` names the shell alone: a
+    /// console proves no prompt, so no interrupt goes out on any attempt and
+    /// the console is not read again.
+    #[test]
+    fn a_start_after_an_agent_sends_no_interrupt_to_a_console_herdr_reads_busy() {
+        let starts = Arc::new(AtomicUsize::new(0));
+        let started_twice = Arc::clone(&starts);
+        let herdr =
+            FakeHerdr::start_with_errors("agent-start-console", move |method, _| match method {
+                "pane.process_info" => Ok(process_info(SHELL, &[SHELL])),
+                "agent.start" if started_twice.fetch_add(1, Ordering::SeqCst) < 2 => {
+                    Err((PANE_BUSY.into(), "a child runs in the shell".into()))
+                }
+                "agent.start" => Ok(started()),
+                other => panic!("unexpected {other}"),
+            });
+        let terminal = Terminal::answering(vec![Ok(LineInput::Console)]);
+        let ((), records) = crate::diagnostics::capture(|| {
+            let answer = start_after_agent(&herdr, Some(&terminal));
+            assert!(answer.is_ok(), "{answer:?}");
+        });
+        assert!(interrupts(&herdr).is_empty());
+        assert_eq!(terminal.reads.load(Ordering::SeqCst), 1);
+        assert_eq!(starts.load(Ordering::SeqCst), 3);
+        let kept: Vec<&Value> = records
+            .iter()
+            .filter(|record| record["kind"] == "line_kept")
             .collect();
-        assert_eq!(abandoned, [json!({"pane_id": "w1:p1", "text": "\u{3}"})]);
+        assert_eq!(kept.len(), 1, "{records:?}");
+        assert_eq!(kept[0]["reason"], "console");
+    }
+
+    /// The shell held the terminal when the wait read it, and another
+    /// program has taken it by the read before the interrupt; a terminal in
+    /// line mode, a node that cannot be read, or none at all prove nothing
+    /// either. Each keeps the line, and the start goes on.
+    #[test]
+    fn a_start_after_an_agent_keeps_the_line_it_cannot_prove_the_shells() {
+        type Case = (&'static str, bool, Option<Result<LineInput, String>>);
+        let cases: [Case; 4] = [
+            ("foreground_other", true, Some(Ok(LineInput::Keys))),
+            (
+                "line_mode",
+                false,
+                Some(Ok(LineInput::Lines { limit: 4096 })),
+            ),
+            ("unread", false, Some(Err("link down".into()))),
+            ("unread", false, None),
+        ];
+        for (reason, taken, answer) in cases {
+            let reads = Arc::new(AtomicUsize::new(0));
+            let read = Arc::clone(&reads);
+            let herdr = FakeHerdr::start("agent-start-kept", move |method, _| match method {
+                // The wait's read sees the shell; the next one, when
+                // `taken`, a hook's program in the foreground.
+                "pane.process_info" if taken && read.fetch_add(1, Ordering::SeqCst) == 1 => {
+                    process_info(4200, &[4200])
+                }
+                "pane.process_info" => process_info(SHELL, &[SHELL]),
+                "agent.start" => started(),
+                other => panic!("unexpected {other}"),
+            });
+            let terminal = answer.map(|answer| Terminal::answering(vec![answer]));
+            let ((), records) = crate::diagnostics::capture(|| {
+                let answer =
+                    start_after_agent(&herdr, terminal.as_ref().map(|node| node as &dyn NodeLink));
+                assert!(answer.is_ok(), "{reason}: {answer:?}");
+            });
+            assert!(interrupts(&herdr).is_empty(), "{reason}");
+            assert!(
+                records
+                    .iter()
+                    .any(|record| record["kind"] == "line_kept" && record["reason"] == reason),
+                "{reason}: {records:?}"
+            );
+        }
     }
 
     /// On Windows Herdr refuses a shell with any child process, while

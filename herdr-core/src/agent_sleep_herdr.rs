@@ -442,10 +442,13 @@ pub(crate) enum WakeOutcome {
 /// once the pane's shell holds its terminal (`agent_start`); Herdr answers
 /// when it has taken the start, and the session sync settles the start once
 /// the agent rests (`session_sync/launch_settle.rs`, herdrdev/herdr#3853).
+/// `line` is [`PaneLine::AfterAgent`](crate::agent_start::PaneLine) only for
+/// a wake, whose pane takes no input from Hide until the agent is back.
 pub(crate) fn start_agent(
     connector: &dyn ApiConnector,
     node: &dyn NodeLink,
     request: &WakeRequest,
+    line: crate::agent_start::PaneLine,
 ) -> WakeOutcome {
     if let Some(cwd) = request.cwd.as_deref()
         && !crate::node_access::is_directory(node, cwd)
@@ -480,7 +483,7 @@ pub(crate) fn start_agent(
         crate::agent_start::ShellStart::Plain,
         params,
         Duration::from_millis(AGENT_START_TIMEOUT_MS + 5_000),
-        crate::agent_start::PaneLine::AfterAgent,
+        line,
         &|| Ok(()),
     ) {
         Ok(value) => match wire::started_agent(value) {
@@ -618,6 +621,7 @@ pub(crate) fn spawn_wake(context: SleepTarget, request: WakeRequest) -> Result<(
                     pane_id: context.herdr_pane_id.clone(),
                     ..request.clone()
                 },
+                crate::agent_start::PaneLine::AfterAgent,
             );
             let Some(runtime) = context.runtime.upgrade() else {
                 return;
@@ -674,11 +678,6 @@ mod tests {
             let expected = args.clone();
             let herdr = FakeHerdr::start("wake-alias", move |method, params| match method {
                 "pane.process_info" => process_info(42, 42),
-                // The wake abandons what the ended agent left in the line.
-                "pane.send_text" => {
-                    assert_eq!(params["text"], "\u{3}");
-                    json!({"type": "ok"})
-                }
                 "agent.start" => {
                     assert_eq!(params["kind"], canonical);
                     assert_eq!(params["args"], json!(expected));
@@ -702,14 +701,17 @@ mod tests {
                         cwd: None,
                         session_id: None,
                         codex_daemon: crate::codex_launch::CodexDaemon::Unsupported,
-                    }
+                    },
+                    crate::agent_start::PaneLine::AfterAgent,
                 ),
                 WakeOutcome::Started,
                 "{kind}"
             );
+            // Pid 42 is no terminal this machine can read, so the wake keeps
+            // the line rather than interrupt what it cannot see.
             assert_eq!(
                 herdr.methods(),
-                ["pane.process_info", "pane.send_text", "agent.start"]
+                ["pane.process_info", "pane.process_info", "agent.start"]
             );
         }
     }
@@ -894,13 +896,15 @@ mod tests {
     const CODEX_QUITTING: &str = "\u{203a} Shutting down...\n";
 
     /// Ends the stand-in agent of `kind` that answers each press of its quit
-    /// key by `press` (the presses before it, the agent's pid) and shows the
-    /// screen `shown` returns for that count; returns the keys the pane was
-    /// sent. The node is never asked to end anything.
+    /// key by `press` (the presses before it, the agent's pid), shows the
+    /// screen `shown` returns for the presses so far and answers each read
+    /// of it by `read` (the same count, the pid); returns the keys the pane
+    /// was sent. The node is never asked to end anything.
     fn quit_by_keys(
         kind: &'static str,
         shown: fn(usize) -> &'static str,
         press: fn(usize, u32),
+        read: fn(usize, u32),
     ) -> Vec<Value> {
         let mut agent =
             process::OwnedChild::spawn(&mut agent_tree_command("tool")).expect("the agent starts");
@@ -917,7 +921,11 @@ mod tests {
                 let shell = std::process::id();
                 process_info(shell, if process::is_alive(pid) { pid } else { shell })
             }
-            "pane.read" => screen(shown(pressed.load(Ordering::SeqCst))),
+            "pane.read" => {
+                let presses = pressed.load(Ordering::SeqCst);
+                read(presses, pid);
+                screen(shown(presses))
+            }
             "pane.send_keys" => {
                 press(pressed.fetch_add(1, Ordering::SeqCst), pid);
                 json!({"type": "ok"})
@@ -951,6 +959,7 @@ mod tests {
                     process::terminate(pid).expect("the agent quits");
                 }
             },
+            |_, _| {},
         );
         assert_eq!(keys, [json!(["ctrl+c"]), json!(["ctrl+c"])]);
     }
@@ -959,9 +968,9 @@ mod tests {
     /// and takes a moment to hand the terminal back: a second press then
     /// reaches the shell, in the keyboard protocol Codex had turned on, and
     /// the wake typed behind it (with-hide/hide-private#37). The first press
-    /// is the only one.
+    /// is the only one: the agent ends only after the sleep has read it
+    /// quitting, so the sleep saw that state and did not press again.
     #[test]
-    #[allow(clippy::disallowed_methods)] // the stand-in's quit takes a moment, which is the subject
     fn an_agent_quitting_on_its_first_press_is_sent_no_second_one() {
         let keys = quit_by_keys(
             "codex",
@@ -972,12 +981,11 @@ mod tests {
                     CODEX_QUITTING
                 }
             },
-            |_, pid| {
-                // The quit ends the agent a moment after it has begun.
-                thread::spawn(move || {
-                    thread::sleep(Duration::from_millis(600));
-                    process::terminate(pid).expect("the agent quits");
-                });
+            |_, _| {},
+            |presses, pid| {
+                if presses == 1 {
+                    let _ = process::terminate(pid);
+                }
             },
         );
         assert_eq!(keys, [json!(["ctrl+c"])]);
@@ -999,6 +1007,7 @@ mod tests {
                     process::terminate(pid).expect("the agent quits");
                 }
             },
+            |_, _| {},
         );
         assert_eq!(keys, [json!(["ctrl+c"]), json!(["ctrl+c"])]);
     }
@@ -1182,6 +1191,7 @@ mod tests {
                 cwd: None,
                 session_id: None,
             },
+            crate::agent_start::PaneLine::AfterAgent,
         );
         let WakeOutcome::Failed { reason, .. } = outcome else {
             panic!("wake started")
@@ -1220,6 +1230,7 @@ mod tests {
                 cwd: None,
                 session_id: None,
             },
+            crate::agent_start::PaneLine::AfterAgent,
         );
         assert_eq!(
             outcome,
@@ -1246,6 +1257,7 @@ mod tests {
                 cwd: Some("/nonexistent/agent-sleep-test".into()),
                 session_id: None,
             },
+            crate::agent_start::PaneLine::AfterAgent,
         );
         assert!(matches!(
             outcome,

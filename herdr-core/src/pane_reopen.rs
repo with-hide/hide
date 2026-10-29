@@ -120,6 +120,9 @@ pub(crate) fn reopen(
             session_id: Some(request.session_id.clone()),
             codex_daemon: request.codex_daemon,
         },
+        // A reopen leaves the pane's input gate open, so the operator may
+        // have typed into the line: it is kept.
+        crate::agent_start::PaneLine::Fresh,
     ) {
         WakeOutcome::Started => Ok(()),
         WakeOutcome::Failed { detail, .. } => Err(ReopenFailure {
