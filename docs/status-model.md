@@ -32,12 +32,13 @@ The home's turn is computed by the core from what the home's own tracker already
 
 | The attempt's pull request | Turn |
 | --- | --- |
+| No pull request; the agent committed on its branch and stopped, and the branch waits for the operator's decision (PRD hide-ai-branch-first-apply B3) | `branch_ready`, which stays after the row is read until the branch is merged, discarded or sent on |
 | Open, not a draft, checks all passing or none, no change requested | `pr_review`, which stays after the row is read |
 | Open, not a draft, checks failed, and the agent is not working | `ci_failed` |
 | A draft, checks pending or unknown, a requested change, or failed checks while the agent works | none |
 | Merged, closed, or no pull request | none; the attempt leaves the table |
 
-A row has one line; its second line is the agent's ask or its block's cause, then `ci_failed`, then `pr_review`.
+A row has one line; its second line is the agent's ask or its block's cause, then `ci_failed`, then `pr_review` or `branch_ready`.
 Entering Needs You notifies once, as for an operator row, and a turn changing inside it does not notify again, because the notification state machine follows the group and not the word.
 Only a live agent has a row: an attempt with no agent (a failure with no pull request, an open pull request after the operator closed the pane) shows in the 제안 tab alone (D-15).
 The shell words the turn and opens the home from the row (the Hide AI tool's 제안 tab with the target's row open); the phone opens the agent's detail.
