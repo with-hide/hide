@@ -27,10 +27,12 @@ use super::sshd::Sshd;
 
 /// The target account's `head`: the system's, except that once
 /// `.cut-upload` holds a count, the counted `head -c` that brings it to zero
-/// kills its process group, which is the start script's session.
+/// kills its process group, which is the start script's session. A `head -c`
+/// that writes into a file is a run's output cap, not an upload, and is not
+/// counted.
 const CUTTING_HEAD: &str = r#"#!/bin/sh
 arm="$HOME/.cut-upload"
-if [ "${1:-}" = -c ] && [ -f "$arm" ]; then
+if [ "${1:-}" = -c ] && [ ! -f /dev/stdout ] && [ -f "$arm" ]; then
   left=$(cat "$arm")
   if [ "$left" -le 1 ]; then rm -f "$arm"; kill -KILL 0; fi
   echo $((left - 1)) > "$arm"
