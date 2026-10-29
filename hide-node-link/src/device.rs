@@ -864,6 +864,15 @@ impl Cancel {
 /// A share of a [`Cancel`]'s attempt, given back when dropped.
 pub struct Held(Cancel);
 
+impl Held {
+    /// What this share stood for may still run, and nothing can confirm it
+    /// ended: the share is never given back, so the attempt never counts as
+    /// ended and a wait for it ends at its own bound.
+    pub fn outlived(self) {
+        std::mem::forget(self);
+    }
+}
+
 impl Drop for Held {
     fn drop(&mut self) {
         let state = &self.0.0;
