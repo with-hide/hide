@@ -2155,7 +2155,8 @@ With no window open the command opens Hide as bare `hide` does, already on that 
 A path that is not a folder, or one that cannot be registered, is answered with the reason and what to do next, and the command exits non-zero; nothing else opens.
 A command's name wins over a folder of the same name: `hide status` is the command, `hide ./status` opens the folder `status`, and a word that is neither is answered as neither.
 On a connected device the command works in a Hide pane there: the device's helper judges the folder against that device's home, the device comes forward on the project, and its first terminal opens there once the helper has confirmed the folder.
-A plain SSH shell on the device is refused with the reason, because Hide takes a device's commands only from the panes it runs ([INSTALL.md](INSTALL.md#what-each-system-supports)).
+A plain SSH shell on the device works the same way while the device is connected: its helper takes this one command from a process of the account it runs as, and nothing else that shell runs gains a pane's reach ([INSTALL.md](INSTALL.md#what-each-system-supports)).
+There it runs one open at a time and six a minute; past either, or with the device not connected or open in more than one Hide, the shell hears why and what to do, and the command exits non-zero.
 
 ### Removing a project's registration
 
