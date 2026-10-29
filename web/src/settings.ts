@@ -453,9 +453,13 @@ export function socketProblem(path: string, t: Translate): string | null {
   return null;
 }
 
-/** Whether Retry is offered: a registered SSH device that is not connected and not mid-attempt, which one waiting on a sign-in is. */
+/**
+ * Whether Retry is offered: a registered SSH device that is not connected and
+ * not mid-attempt, which one waiting on a sign-in is. A changed server key has
+ * the terminal check as its one action: a retry before it is refused again.
+ */
 export function canRetryDevice(device: Device, remote: RemoteStatus | undefined): boolean {
-  return device.kind === "remote" && device.state !== "ready" && device.sign_in == null && deviceState(device, remote).tone !== "pending";
+  return device.kind === "remote" && device.state !== "ready" && device.sign_in == null && device.problem !== "host_key_changed" && deviceState(device, remote).tone !== "pending";
 }
 
 /**

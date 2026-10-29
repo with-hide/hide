@@ -201,17 +201,17 @@ it("shows helper failures on a connected device and consent before Herdr can con
   }
 });
 
-it("shows why an Intel Mac is unsupported before a session connects, without a helper retry", async () => {
+it("says an Intel Mac reached over ssh could not connect, once and in plain words, without a helper retry", async () => {
   const message = "Intel Mac devices are not supported; Hide ships for Apple Silicon Macs only";
   const view = await mount(state([remote("mini", {
     state: "unavailable", problem: "unsupported", message,
     host: { ...host, platform: "macos-x86_64", consent: "granted", state: "unsupported", message },
   })]));
   try {
-    expect(view.q('[data-device-host="mini:unsupported"]')?.textContent).toContain(message);
-    // The helper line says it once; the row adds no second line for the same reason.
-    expect(view.q('[data-device-problem]')).toBeNull();
-    expect(view.q('[data-device-message="mini"]')).toBeNull();
+    expect(view.q('[data-device-problem="mini:unsupported"]')?.textContent).toBe("!Couldn't connectHide does not run on this device's system.");
+    // The helper is the link: its unsupported line would say the same reason again.
+    expect(view.q('[data-device-host]')).toBeNull();
+    expect(view.row("mini")?.textContent).not.toContain(message);
     expect(view.q('[data-device-host-retry="mini"]')).toBeNull();
   } finally {
     await view.unmount();
@@ -441,6 +441,8 @@ it("draws a changed server key with its terminal check and a connection that cou
   try {
     expect(changed.q('[data-device-problem="mini:host_key_changed"]')?.textContent).toContain("Server key changed");
     expect(changed.q('[data-device-problem-command="mini"]')?.textContent).toBe("ssh mini");
+    // The terminal check is its one action: a retry before it would be refused again.
+    expect(changed.q('[data-device-retry="mini"]')).toBeNull();
     expect(changed.row("mini")?.textContent).not.toContain("Host key verification failed.");
     // The helper is the link: its unavailable line would say the same failure again.
     expect(changed.q('[data-device-host]')).toBeNull();

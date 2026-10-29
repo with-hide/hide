@@ -195,13 +195,12 @@ function DeviceAttention({ device, actions, onAct, onAllow }: { device: Device; 
   // when Herdr cannot yet supply a readable session. A failed helper kit
   // must keep its reason and Retry visible before that session connects.
   // An unsupported platform keeps its reason visible too, without a Retry.
-  // The helper is the link, so an ssh failure or a sign-in is its line, said
-  // once below; an unsupported device stays the helper's to say.
-  const linkSays = signIn !== null || (device.problem != null && device.problem !== "unsupported");
-  const helper = remote && (device.state === "ready" || needsAllow || (host?.state === "unavailable" && !linkSays) || host?.state === "unsupported") && host && host.consent !== "this_machine" && host.state !== "ready" ? hostLine(host, t) : null;
-  // An attempt waiting on the operator shows that wait, not the last one's
-  // failure; an unsupported device is the helper line's to say.
-  const problem = remote && device.state !== "ready" && !signIn && !(device.problem === "unsupported" && helper) ? deviceProblemLine(device.problem, device.ssh_alias, t, corePlatform) : null;
+  // The helper is the link, so an ssh failure, an unsupported system ssh
+  // reached or a sign-in is its line, said once below.
+  const linkSays = signIn !== null || device.problem != null;
+  const helper = remote && (device.state === "ready" || needsAllow || ((host?.state === "unavailable" || host?.state === "unsupported") && !linkSays)) && host && host.consent !== "this_machine" && host.state !== "ready" ? hostLine(host, t) : null;
+  // An attempt waiting on the operator shows that wait, not the last one's failure.
+  const problem = remote && device.state !== "ready" && !signIn ? deviceProblemLine(device.problem, device.ssh_alias, t, corePlatform) : null;
   // A connection that could not be made shows ssh's last line under its
   // headline, and a failure that is not ssh's keeps its own words; a sign-in
   // or a changed server key needs none of ssh's, which stay in the log.
