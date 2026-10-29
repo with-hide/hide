@@ -14,7 +14,7 @@ import type { SceneParams } from "./SidebarScene";
 
 type Example = { title: string; group: SessionGroup; line: string | null; ask?: NonNullable<AgentState["ask"]>; pr?: PrState; unfinished?: boolean; mark?: AgentRow["descendant_mark"]; read?: boolean; wait?: AgentWait; pull?: number };
 /** Each example's task: its row's index and the state the core gave it. */
-const TASKS: [number, TaskState][] = [[0, "needs_you"], [1, "needs_you"], [2, "needs_you"], [4, "working"], [5, "waiting"], [3, "done"], [6, "revisit"], [7, "resting"], [8, "resting"], [9, "needs_you"], [10, "needs_you"], [11, "working"], [12, "working"]];
+const TASKS: [number, TaskState][] = [[0, "needs_you"], [1, "needs_you"], [2, "needs_you"], [4, "working"], [5, "waiting"], [3, "done"], [6, "revisit"], [7, "resting"], [8, "resting"], [9, "needs_you"], [10, "needs_you"], [11, "waiting"], [12, "waiting"]];
 const EXAMPLES: Example[] = [
   { title: "입력과 세션 복귀 흐름 검토", group: "needs_you", line: null, ask: { verb: "approval", what: "검증 명령 실행 권한이 필요합니다", more: 0 } },
   { title: "한국어 입력 경계 검토", group: "needs_you", line: null, ask: { verb: "answer", what: "기존 stdin 종료 경로도 남길까요?", more: 0 } },
@@ -93,7 +93,7 @@ const MARKS: [RowMark, StatusTone["kind"], RequestVerb][] = [
   ["turn", "warning", "answer"], ["turn", "warning", "answer"], ["turn", "warning", "answer"],
   ["done", "success", "review"], ["done", "success", "review"], ["going", "working", "working"],
   ["going", "working", "waiting"], ["quiet", "subtle", "idle"], ["quiet", "subtle", "result"],
-  ["turn", "warning", "answer"], ["turn", "warning", "answer"], ["going", "working", "waiting"], ["going", "working", "waiting"],
+  ["turn", "warning", "answer"], ["turn", "warning", "answer"], ["waiting", "working", "waiting"], ["waiting", "working", "waiting"],
 ];
 
 export function SessionWorkflowScene({ scene: kind, theme, content, scale, width, state }: SceneParams & { scene: "session-panel" | "pane-header" }) {
