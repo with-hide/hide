@@ -1089,7 +1089,11 @@ fn seed_memory(
             analysis_provider: "codex".into(),
             session_id: "source-session".into(),
             content_hash: format!("{node}-hash"),
-            created_at_unix_ms: 1,
+            // Made now, as an analysis makes it: a card made long ago and
+            // never given is archived by the core's first aging pass.
+            created_at_unix_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)?
+                .as_millis() as u64,
         },
         &[hide_memory::Candidate {
             text: rule.into(),
@@ -1214,7 +1218,9 @@ fn an_agent_on_either_machine_reads_the_one_memory_the_core_owns() -> Result<()>
                         .as_str()
                         .is_some_and(|context| context.contains("<hide-memory-index ")
                             && context.contains("m1 The node's checkout keeps its rule")
-                            && !context.contains("hide-memory-receipt")
+                            // The index's receipt records only that the
+                            // lines were shown (PRD memory-self-improve B16).
+                            && context.contains("<hide-memory-receipt event=\"SessionStart\"")
                             && !context.contains("The core's checkout")),
                 "the node's agent did not get its Project's Memory: {answer}"
             );

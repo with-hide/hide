@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { startHerdr, type HerdrFixture } from "./herdr-fixture";
-import { waitForTerminal } from "./group-start-helper";
+import { createdTabs, herdrTabIds, waitForTerminal } from "./group-start-helper";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, screenshot } from "./wire";
 import { chord } from "./chords";
@@ -26,9 +26,13 @@ function workspaces(herdr: HerdrFixture): Workspace[] {
   return listed.result.workspaces;
 }
 
+function tabIds(herdr: HerdrFixture, workspaceId: string): string[] {
+  const listed = herdr.run(["tab", "list", "--workspace", workspaceId]) as { result: { tabs: { tab_id: string }[] } };
+  return listed.result.tabs.map((tab) => tab.tab_id);
+}
+
 function tabCount(herdr: HerdrFixture, workspaceId: string): number {
-  const listed = herdr.run(["tab", "list", "--workspace", workspaceId]) as { result: { tabs: unknown[] } };
-  return listed.result.tabs.length;
+  return tabIds(herdr, workspaceId).length;
 }
 
 /** The agent tab strip holds `count` tabs; if it never does, the failure carries Herdr's tab lists and the strip as drawn. */
@@ -41,15 +45,15 @@ async function expectTabs(page: Page, herdr: HerdrFixture, count: number, timeou
 /** Two quick new-tab requests must both create terminals in the checkout's owner. */
 async function twoTerminals(page: Page, herdr: HerdrFixture): Promise<void> {
   const shownBefore = await page.locator('[data-agent-tab-bar] [role="tab"]').count();
-  const before = workspaces(herdr).reduce((sum, workspace) => sum + tabCount(herdr, workspace.workspace_id), 0);
+  const before = herdrTabIds(herdr);
   await page.locator("[data-terminal-host]").first().click();
   await page.keyboard.press(chord("new_tab"));
   await page.keyboard.press(chord("new_tab"));
-  await expect.poll(() => workspaces(herdr).reduce((sum, workspace) => sum + tabCount(herdr, workspace.workspace_id), 0)).toBe(before + 2);
-  // Server creation can precede the page snapshot. Capture the selected tab
-  // only after both requested tabs have reached the strip.
+  const created = await createdTabs(herdr, before, 2);
+  // Server creation can precede the page snapshot: the strip holds both
+  // tabs, and the page draws the later one in front.
   await expectTabs(page, herdr, shownBefore + 2);
-  await waitForTerminal(page);
+  await waitForTerminal(page, created.at(-1)!);
 }
 
 test("A new tab in a Git checkout goes to the workspace Herdr binds to it, not the unbound one it was asked from", async ({ page }) => {
@@ -159,22 +163,25 @@ test("A new tab in a linked worktree with no workspace opens one bound to it, na
       await menu.locator('[data-menu-item="new_tab_here"]').click();
     };
 
+    const tabsBefore = herdrTabIds(herdr);
     await newTabHere();
-    await waitForTerminal(page);
+    const [first] = await createdTabs(herdr, tabsBefore);
     await expect.poll(() => boundTo(linked).length, { timeout: 20_000 }).toBe(1);
     const [owner] = boundTo(linked);
     expect(before).not.toContain(owner.workspace_id);
+    expect(tabIds(herdr, owner.workspace_id)).toEqual([first]);
+    await waitForTerminal(page, first!);
     // D-14: the workspace Hide opened is named as the sidebar names the checkout.
     await expect.poll(() => boundTo(linked)[0].label, { timeout: 10_000 }).toBe("feature");
-    expect(tabCount(herdr, owner.workspace_id)).toBe(1);
     // Opening the terminal moves the checkout out of the empty fold.
     // The next menu is opened on the current row after that transition.
     await expect(feature.locator("[data-checkout]")).toHaveAttribute("aria-current", "true");
     await expect(project.getByRole("button", { name: /^Worktrees with no agents/ })).toHaveCount(0);
 
     await newTabHere();
-    await waitForTerminal(page);
-    await expect.poll(() => tabCount(herdr, owner.workspace_id), { timeout: 20_000 }).toBe(2);
+    const [second] = await createdTabs(herdr, [...tabsBefore, first!]);
+    expect(tabIds(herdr, owner.workspace_id)).toEqual([first, second]);
+    await waitForTerminal(page, second!);
     expect(boundTo(linked)).toHaveLength(1);
     await screenshot(page, "checkout-owner-linked");
   } finally {

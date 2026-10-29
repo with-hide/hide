@@ -401,7 +401,8 @@ pub fn request_memory(
         | herdr_core::memory_command::MemoryCommand::Outdated { .. }
         | herdr_core::memory_command::MemoryCommand::Skipped { .. }
         | herdr_core::memory_command::MemoryCommand::Stale { .. }
-        | herdr_core::memory_command::MemoryCommand::Release { .. } => (true, TIMEOUT),
+        | herdr_core::memory_command::MemoryCommand::Release { .. }
+        | herdr_core::memory_command::MemoryCommand::Recheck { .. } => (true, TIMEOUT),
         herdr_core::memory_command::MemoryCommand::Search { .. } => (false, TIMEOUT),
     };
     credential.run(|path, after| {

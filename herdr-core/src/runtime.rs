@@ -75,6 +75,7 @@ mod session_state;
 mod snapshot_delta;
 mod ssh_hosts;
 mod suggestion_apply;
+mod suggestion_evidence;
 mod suggestion_memory;
 pub(crate) mod suggestions;
 mod tab_focus;

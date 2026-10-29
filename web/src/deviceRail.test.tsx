@@ -64,6 +64,15 @@ describe("a rail tile (quick device-rail-slack)", () => {
     expect(html).not.toContain("tabindex");
   });
 
+  // PRD wsl-device B5, D-20: a WSL distribution's tile draws its name's letters and says where it is.
+  it("letters a WSL distribution's tile from its name and names it with where it is, never Remote", () => {
+    const wsl: Tile = { id: "wsl-ubuntu-1a2b3c4d", label: "WSL Ubuntu", icon: "remote", core: false, place: "This PC" };
+    const html = view({ tile: wsl, counts: { needs_you: 1, done: 0 } });
+    expect(html).toMatch(/data-rail-glyph="true"[^>]*>WU</);
+    expect(tile(html)).toContain('aria-label="WSL Ubuntu · This PC, Needs You 1"');
+    expect(html).not.toContain("Remote");
+  });
+
   it("draws no name under the tile: This Mac is the laptop and a device its monogram", () => {
     expect(view({ tile: local })).toContain("lucide-laptop");
     const remote = view({ tile: mini });

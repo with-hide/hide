@@ -46,6 +46,7 @@ fn action(workspace: &str, action: MemoryAction) -> crate::runtime::events::Memo
         action,
         number: None,
         numbers: Vec::new(),
+        change: None,
     }
 }
 
@@ -512,6 +513,7 @@ fn the_largest_comparison_set_and_event_group_fit_one_request() {
             "session",
             &serde_json::to_string(&group).unwrap(),
             &similar,
+            &[],
             hide_ai::OutputLanguage::English,
         )
         .unwrap();
@@ -799,4 +801,25 @@ fn memory_enable_and_disable_failures_stay_with_the_requested_project() {
         opened(&runtime).unwrap().action_failure,
         Some(MemoryAction::Disable)
     );
+}
+
+#[test]
+fn a_recheck_from_the_memory_tab_is_refused_while_hide_ai_is_off() {
+    // PRD memory-self-improve D-41, B28: Hide AI's check finishes a recheck.
+    let (runtime, workspace) = opened_project();
+    let runtime = Arc::new(Mutex::new(runtime));
+    let mut guard = runtime.lock().unwrap();
+    guard.install_worker_context(
+        Arc::downgrade(&runtime),
+        crate::handle::ChangeNotifier::noop(),
+    );
+    assert!(!guard.ai_active());
+    let mut recheck = action(&workspace, MemoryAction::Recheck);
+    recheck.number = Some(1);
+    assert!(guard.apply_memory_action(recheck));
+    assert_eq!(
+        guard.snapshot.status.last_error.as_ref().unwrap().kind,
+        "memory.recheck_ai_off"
+    );
+    assert_eq!(guard.project_memory.action, None);
 }

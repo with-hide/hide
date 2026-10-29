@@ -902,11 +902,39 @@ fn original_words(
     project_id: &str,
     human: &hide_memory::MemorySource,
 ) -> Option<String> {
+    source_event(
+        store,
+        node,
+        project_id,
+        &human.provider,
+        &human.session_id,
+        human.event_offset,
+    )
+    .filter(|event| event.kind == hide_session::EventKind::Human)
+    .map(|event| {
+        hide_memory::redact(&event.text)
+            .text
+            .chars()
+            .take(hide_memory::COMPARISON_EXCERPT_BYTES / 4)
+            .collect()
+    })
+}
+
+/// The conversation event a card's source names, read again from the
+/// session the node holds, or none when it cannot be read.
+pub(super) fn source_event(
+    store: &MemoryStore,
+    node: &dyn NodeLink,
+    project_id: &str,
+    provider: &str,
+    session_id: &str,
+    event_offset: u64,
+) -> Option<hide_session::ConversationEvent> {
     let source = store
         .list_session_sources(project_id)
         .ok()?
         .into_iter()
-        .find(|source| source.id == human.session_id && source.provider == human.provider)?;
+        .find(|source| source.id == session_id && source.provider == provider)?;
     let agent = hide_session::Agent::from_kind(&source.provider)?;
     let scope = hide_session::SessionReadScope {
         id: source.id,
@@ -938,22 +966,14 @@ fn original_words(
         }
         let next = read.checkpoint.clone();
         let more = read.has_more;
-        let words = read
+        let found = read
             .events
             .into_iter()
             .zip(read.event_offsets)
-            .find(|(event, offset)| {
-                *offset == human.event_offset && event.kind == hide_session::EventKind::Human
-            })
-            .map(|(event, _)| {
-                hide_memory::redact(&event.text)
-                    .text
-                    .chars()
-                    .take(hide_memory::COMPARISON_EXCERPT_BYTES / 4)
-                    .collect()
-            });
-        if words.is_some() {
-            return words;
+            .find(|(_, offset)| *offset == event_offset)
+            .map(|(event, _)| event);
+        if found.is_some() {
+            return found;
         }
         if !more
             || read.read_bytes == 0
@@ -968,6 +988,64 @@ fn original_words(
         checkpoint = Some(next);
     }
     None
+}
+
+/// The most rechecked cards whose sources one pass reads again, and the most
+/// sources read for one card; one past it counts as unreadable, so the card
+/// is kept.
+const RECHECKS_PER_PASS: usize = 4;
+const RECHECK_SOURCES: usize = 16;
+
+/// Reads again the human sources of cards waiting on a recheck (PRD
+/// memory-self-improve D-34, B27): a source that is really a Hide letter
+/// stops standing as the operator's words, and a card whose every human
+/// source was a letter is forgotten. No model is asked; the repository check
+/// that follows is the existing one. Answers whether a card changed.
+pub(super) fn read_recheck_sources(
+    store: &mut MemoryStore,
+    node: &dyn NodeLink,
+    project_id: &str,
+) -> Result<bool, String> {
+    let waiting = store
+        .rechecks_to_read(project_id)
+        .map_err(|error| error.to_string())?;
+    let mut changed = false;
+    for (number, sources) in waiting.into_iter().take(RECHECKS_PER_PASS) {
+        let mut verdicts = hide_memory::SourceVerdicts::default();
+        for (index, source) in sources.into_iter().enumerate() {
+            let event = (index < RECHECK_SOURCES)
+                .then(|| {
+                    source_event(
+                        store,
+                        node,
+                        project_id,
+                        &source.provider,
+                        &source.session_id,
+                        source.event_offset,
+                    )
+                })
+                .flatten();
+            match event {
+                None => verdicts.unreadable.push(source),
+                Some(event) if !event.from_operator() => verdicts.letters.push(source),
+                Some(_) => {}
+            }
+        }
+        let outcome = store
+            .settle_recheck_sources(project_id, number, &verdicts, super::memory::now_ms())
+            .map_err(|error| error.to_string())?;
+        crate::diagnostic!(serde_json::json!({
+            "component": "memory",
+            "kind": "recheck.sources_read",
+            "project_id": project_id,
+            "card": number,
+            "letters": verdicts.letters.len(),
+            "unreadable": verdicts.unreadable.len(),
+            "forgotten": outcome == hide_memory::SourcesOutcome::Forgotten,
+        }));
+        changed |= !verdicts.letters.is_empty();
+    }
+    Ok(changed)
 }
 
 #[cfg(test)]

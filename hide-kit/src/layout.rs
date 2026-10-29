@@ -209,6 +209,16 @@ pub fn suggestions_store(state_dir: &Path) -> PathBuf {
 
 pub const SUGGESTIONS_STORE: &str = "suggestions.sqlite3";
 
+/// The Hide global instruction every session started in a Hide pane receives
+/// at its start, in every Project (PRD memory-self-improve D-23, D-29): Hide's
+/// own file, which the operator may edit and the core writes for a fix the
+/// operator applied; never one of an agent's own global files.
+pub fn global_instruction(state_dir: &Path) -> PathBuf {
+    state_dir.join(GLOBAL_INSTRUCTION)
+}
+
+pub const GLOBAL_INSTRUCTION: &str = "global-instruction.md";
+
 /// Usage events and retained daily totals, owned by the core's usage worker.
 pub const USAGE_STORE: &str = "usage.sqlite3";
 

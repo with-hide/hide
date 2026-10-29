@@ -1003,6 +1003,7 @@ fn a_saved_profile_keeps_the_devices_route_even_when_disabled() {
             label: "Build server".to_owned(),
             target: "build.example".to_owned(),
             session: "review".to_owned(),
+            wsl_distro: None,
             enabled: false,
             added_as: None,
             problem: Some("disabled".to_owned()),

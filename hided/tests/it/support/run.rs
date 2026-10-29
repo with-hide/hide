@@ -6,6 +6,7 @@
 //! about 400 MB under `agents/runs/` each).
 
 use std::fs;
+use std::io::Read;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -42,7 +43,52 @@ pub fn finish(run: &mut impl Run, journey: Result<()>) -> Result<()> {
         }
         (Err(error), _) | (Ok(()), Err(error)) => error,
     };
+    if let Err(error) = shed_programs(run.root()) {
+        eprintln!(
+            "the kept run {} still holds programs: {error:#}",
+            run.root().display()
+        );
+    }
     Err(failure).context(format!("run kept at {}", run.root().display()))
+}
+
+/// Removes every native program under a kept run's `root`, leaving its logs,
+/// records and scripts. The programs are copies of the build (staged,
+/// stripped, installed in each account's helper and bin folders), about
+/// 0.9 GB per core-move run, so a lane whose journeys failed one after
+/// another filled the runner's disk and failed the rest with it (issue
+/// hide-private#120). Links are removed, never followed.
+pub fn shed_programs(root: &Path) -> Result<()> {
+    for entry in fs::read_dir(root).with_context(|| format!("read {}", root.display()))? {
+        let path = entry?.path();
+        let kind = fs::symlink_metadata(&path)?.file_type();
+        if kind.is_dir() {
+            shed_programs(&path)?;
+        } else if kind.is_file() && is_program(&path)? {
+            fs::remove_file(&path).with_context(|| format!("remove {}", path.display()))?;
+        }
+    }
+    Ok(())
+}
+
+/// Whether `path` starts as an ELF or Mach-O program does.
+fn is_program(path: &Path) -> Result<bool> {
+    let mut magic = [0_u8; 4];
+    let mut file = fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
+    let mut read = 0;
+    while read < magic.len() {
+        match file.read(&mut magic[read..])? {
+            0 => return Ok(false),
+            count => read += count,
+        }
+    }
+    Ok(matches!(
+        magic,
+        [0x7f, b'E', b'L', b'F']
+            | [0xfe, 0xed, 0xfa, 0xce | 0xcf]
+            | [0xce | 0xcf, 0xfa, 0xed, 0xfe]
+            | [0xca, 0xfe, 0xba, 0xbe]
+    ))
 }
 
 #[cfg(test)]
@@ -111,6 +157,25 @@ mod tests {
         let text = format!("{error:#}");
         assert!(text.contains("the letter never arrived"), "{text}");
         assert!(text.contains(&run.root().display().to_string()), "{text}");
+    }
+
+    #[test]
+    fn a_kept_run_keeps_its_logs_and_links_but_not_its_programs() {
+        let mut run = Fake::new(false);
+        let root = run.root().to_path_buf();
+        let program = std::env::current_exe().unwrap();
+        fs::create_dir_all(root.join("c/home/helper")).unwrap();
+        fs::copy(&program, root.join("c/home/helper/hided")).unwrap();
+        fs::write(root.join("c/home/gh"), "#!/bin/sh\nexit 0\n").unwrap();
+        fs::write(root.join("c/empty"), "").unwrap();
+        std::os::unix::fs::symlink(&program, root.join("c/home/herdr")).unwrap();
+        finish(&mut run, Err(anyhow!("the helper never became ready"))).unwrap_err();
+        assert!(root.join("evidence").is_file());
+        assert!(root.join("c/home/gh").is_file());
+        assert!(root.join("c/empty").is_file());
+        assert!(!root.join("c/home/helper/hided").exists());
+        assert!(fs::symlink_metadata(root.join("c/home/herdr")).is_ok());
+        assert!(program.is_file(), "a link's target is not the run's");
     }
 
     #[test]

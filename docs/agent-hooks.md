@@ -73,6 +73,7 @@ Supervised delegation uses `hide agent spawn --parent here` to record responsibi
 ## What the hook returns and reports back
 
 On `SessionStart`, the helper writes one runtime JSON envelope whose `hookSpecificOutput.additionalContext` combines the worktree-purpose instruction with the Project Memory index when Memory is enabled: at most 20 rule, decision and lesson cards, one line each (`m3 Tests run with nextest`), under a line that says to read a card in full with `hide memory show <card>` and to find others with `hide memory search <words>`, and nothing when the Project has no such card (PRD project-memory-v2 D-03, B10); a card waiting to be checked against the repository is left out of the index (PRD memory-card-quality D-06).
+The index ends with a receipt line, `<hide-memory-receipt event="SessionStart" ...>`, that records only that the session was shown those lines, never that it was given a card (PRD memory-self-improve B16); an archived card is left out like a waiting one.
 A card whose promotion merged into the repository keeps its index line but points at its file (`m3 Tests run with nextest -> docs/TESTING.md`) or its pull request, and is never given in full (B10, B12).
 The instruction explains supervised delegation (`hide agent spawn --parent here …`, with an automatic watch) and independent operator handoff (`hide agent spawn …`, without parent or automatic watch); both preserve focus and record origin.
 It also says that `--machine <device id>`, used from the machine that runs Hide, starts the agent on a connected device (an agent on a device is refused with `machine_not_permitted`), where the id is the `device_id` `hide workspace info` shows and the `machine` `hide agent list` shows for agents there, and that `--repo` and `--path` are then that device's paths.
@@ -242,6 +243,28 @@ The parent's `Stop` replaces the running ids with the ones it lists: a subagent 
 A `Stop` that lists nothing (an input cut off, or a Claude Code that sends no `background_tasks`) changes nothing; nothing sweeps, since no signal says a running subagent ended.
 The running ids are capped at 256 per session, the remembered finished ids at 256 (the oldest go first, and the done count keeps them); crossing the running cap fails the event and is written down as the pane's last report failure.
 Codex and the runtimes whose input carries no subagent id keep the older rule: a start adds one, a stop moves one to done, and the turn's `Stop` sets `working` to what the runtime lists, none for Codex.
+
+### The Hide global instruction
+
+A session start also carries the Hide global instruction (PRD memory-self-improve D-23, D-29, D-31): `global-instruction.md` in the core's state folder (`hide_kit::layout::global_instruction`), Hide's own file of instructions the operator approved for every Project and every agent, never one of an agent's own global files.
+The core reads it on the same `workspace memory --event SessionStart` answer as Memory, in its own `global` field, whether Memory is on, off, unresolved for the checkout or unreachable, so a session in any Project and on any connected device gets it (`herdr_core::global_instruction`, `hided/src/hook_request.rs`).
+It goes in Hide's own `<hide-global-instruction trust="operator-approved">` block, before Memory's untrusted block, and under its own cap of 4 KiB and 1,600 estimated tokens, kept apart from Memory's 1,200, so it never shortens Memory's index or bodies (B4).
+A file over the cap or not UTF-8 is given to no session, never cut, and each start it would have reached leaves a `global_instruction.not_given` diagnostic (B5); an empty file gives nothing.
+The read is one bounded file read on hided's request task, outside Memory's one-second deadline, and the hook's own 1,250 ms Memory wait is unchanged (B31).
+Claude Code, Codex and Antigravity get it at `SessionStart`; OpenCode, Pi and omp get it with their session's first prompt, beside the start guidance, once a session.
+Grok's `SessionStart` cannot add context and an Antigravity session's own child sessions run no Hide hook, so neither gets it ([INSTALL.md](INSTALL.md#what-each-system-supports)).
+A session on a device whose link is down gets no answer from the core, so it starts without the instruction and the hook records `memory.unavailable`, as it does for Memory; the next session after the link returns gets it (B3).
+A session started outside a Hide pane has no Hide hook identity and gets nothing.
+
+Because every session takes the file as the operator's own instruction, no agent writes it (D-07): the pre-tool hook refuses a file tool's write to it, a shell call with a word or redirection naming it, and a shell call that names it by its bare name beside a state folder or runs in one (`cd ~/.hide/state && ... >> global-instruction.md`, a `bash -c` script, an `eval`), in every session and Project and whatever the project's guardrails say (`hide_agent_hooks::global_guard`).
+It looks for the file in every state folder the account's core can have, `HIDE_STATE_DIR`, the folder the kit installed the hook for, `$XDG_STATE_HOME/hide` and `~/.hide/state`, and for the file a link at any of them points to; names are compared without case, as macOS and Windows find files.
+Only a payload that names `global-instruction.md`, or the name of the file a link there points to, is parsed, so other calls cost a byte search and a link read per state folder; OpenCode's plugin and the Pi and omp extension send the helper the same calls, with no protection on as with one; a payload that names it but was cut at the hook's read limit before Hide could read what the call does is refused rather than guessed.
+A file tool's read passes; a shell call cannot be told apart from a write, so one naming the file is refused, read or not.
+Each refusal writes one `global_instruction` `guard.refused` line to `spawn-guard.log` with the runtime and the pane, never the command or its paths.
+OpenCode, Pi and omp take the same refusal through the plugin helper: their plugin and extension send a call naming the file to the helper whether or not a project guardrail is on.
+Like the guardrails it is a guard, not a security boundary: a script that spells the name another way is not seen, Claude Code's PowerShell tool on Windows reaches no pre-tool hook, and the file stays a plain file the operator's own processes can change; a confirm before a hand edit counts is a follow-up, not this change.
+The core follows a link at the file only to an existing regular `.md` or `.txt` file: through a link it never makes a file or a folder, and a link to anything else is read as an unreadable file, given to no session.
+A move of the core carries the text the core reads through such a link as a regular file, since the link would point nowhere on the receiving machine, and leaves a link whose file the core reads as too large or unreadable behind with a `global_instruction.link_left` diagnostic and its reason.
 
 ### What a hook records when it fails
 

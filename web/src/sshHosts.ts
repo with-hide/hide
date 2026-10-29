@@ -62,8 +62,13 @@ export function wslChoice(row: WslDistribution): WslChoice {
   const base = { value: `${WSL_VALUE}${row.name}`, distro: row.name, deviceName: row.device_name };
   if (row.added_as !== null) return { kind: "added", ...base, name: row.added_as };
   if (row.problem === "setup_unfinished") return { kind: "unavailable", ...base, reason: "devices.wsl.setupUnfinished", command: null };
-  if (row.problem === "wsl1") return { kind: "unavailable", ...base, reason: "devices.wsl.version1", command: `wsl --set-version ${row.name} 2` };
+  if (row.problem === "wsl1") return { kind: "unavailable", ...base, reason: "devices.wsl.version1", command: wslConvertCommand(row.name) };
   return { kind: "available", ...base };
+}
+
+/** The one command that switches a WSL 1 distribution to WSL 2, which Hide connects (PRD wsl-device B29). */
+export function wslConvertCommand(distro: string): string {
+  return `wsl --set-version ${distro} 2`;
 }
 
 /** The distributions in the order listed, the one `wsl.exe` runs by default first. */

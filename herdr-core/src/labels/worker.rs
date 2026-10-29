@@ -249,6 +249,7 @@ fn send_suggestion_records(
             always: false,
             head: None,
             improvement,
+            said: None,
         })
         .collect();
     client.send(Command::Observe {

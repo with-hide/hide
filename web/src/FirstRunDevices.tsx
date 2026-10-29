@@ -1,5 +1,9 @@
 // Saved configuration is not reachability. Only the explicit Connect press
 // admits selected profiles to the existing consent and connection owner.
+// On Windows this PC's default WSL distribution is a row too, checked until
+// the operator unchecks it (PRD wsl-device B1); its press installs Hide there
+// and brings its tile to the front (B2), and one on WSL 1 shows the command
+// that switches it instead of a checkbox it could use (B29).
 import { useEffect, useState } from "react";
 import type { Actions } from "./actions";
 import { Note, Status } from "./components/settings-rows";
@@ -13,6 +17,7 @@ import { DeviceInstallTerms } from "./settings/AddDevice";
 import { useShellStore } from "./store";
 import { remoteStateText } from "./coreError";
 import { profileRefusalText } from "./kitWhy";
+import { wslConvertCommand } from "./sshHosts";
 
 export function FirstRunDevices({ actions, primary, onBack, onNext }: {
   actions: Actions;
@@ -23,11 +28,17 @@ export function FirstRunDevices({ actions, primary, onBack, onNext }: {
   const { t } = useInterfaceTranslation();
   const rest = useShellStore((s) => s.rest);
   const profiles = rest?.status?.herdr_profiles;
-  const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set(rest?.ui_state?.first_run_choices?.devices ?? []));
+  const [picked, setPicked] = useState<ReadonlySet<string> | null>(() => {
+    const draft = rest?.ui_state?.first_run_choices?.devices;
+    return draft ? new Set(draft) : null;
+  });
   const [sent, setSent] = useState<ReadonlySet<string>>(new Set());
   const revision = useShellStore((s) => s.revision);
   const [pressedAt, setPressedAt] = useState<number | null>(null);
   const rows = profiles?.profiles ?? [];
+  // Until a row is checked or unchecked, the default WSL distribution is (B1).
+  const selected = picked ?? new Set(rows.filter((profile) => profile.wsl_distro && !profile.problem && !profile.added_as).map((profile) => profile.id));
+  const wsl = rows.some((profile) => profile.wsl_distro);
   const reading = !profiles || profiles.state === "idle" || profiles.state === "loading";
   const failed = profiles?.state === "failed";
   const rowState = (profile: HerdrProfile) => {
@@ -64,14 +75,14 @@ export function FirstRunDevices({ actions, primary, onBack, onNext }: {
   const toggle = (id: string) => {
     const next = new Set(selected);
     if (!next.delete(id)) next.add(id);
-    setSelected(next);
+    setPicked(next);
     actions.saveFirstRunDraft({ devices: [...next] });
   };
   return (
     <>
       <DialogHeader>
-        <DialogTitle>{t("firstRun.devices.title")}</DialogTitle>
-        <DialogDescription>{t("firstRun.devices.description")}</DialogDescription>
+        <DialogTitle>{t(wsl ? "firstRun.devices.titleWsl" : "firstRun.devices.title")}</DialogTitle>
+        <DialogDescription className="break-keep">{t(wsl ? "firstRun.devices.descriptionWsl" : "firstRun.devices.description")}</DialogDescription>
       </DialogHeader>
       <DialogBody className="flex flex-col gap-md" data-first-run-devices={reading ? "loading" : failed ? "failed" : rows.length === 0 ? "empty" : "ready"}>
         {reading ? <Status tone="pending">{t("firstRun.devices.loading")}</Status> : failed ? (
@@ -87,18 +98,25 @@ export function FirstRunDevices({ actions, primary, onBack, onNext }: {
               const remote = rest?.status?.remote?.find((row) => row.target_id === profile.device_id);
               const reason = profile.connect_refusal ? profileRefusalText(profile.connect_refusal, t) : (remote && remote.state !== "connected" && remote.state !== "not_connected" ? remoteStateText(remote.state, profile.label, t) : null);
               const locked = busy || ["added", "connected", "disabled", "unavailable"].includes(state);
+              const distro = profile.wsl_distro ?? null;
+              // A WSL row is named where it is, and only Herdr's own rows read "Saved in Herdr".
+              const here = distro ? t("firstRun.devices.wslHere") : null;
+              const quiet = distro !== null && (state === "saved" || state === "unavailable");
               return (
-                <div key={profile.id} className="flex flex-wrap items-start gap-sm px-md py-sm" data-first-run-device={profile.id} data-device-state={state}>
-                  <Checkbox id={`herdr-profile-${profile.id}`} checked={selected.has(profile.id)} disabled={locked} onCheckedChange={() => toggle(profile.id)} aria-label={profile.label} className="mt-xxs" />
+                <div key={profile.id} className="flex flex-wrap items-start gap-sm px-md py-sm" data-first-run-device={profile.id} data-device-state={state} data-first-run-wsl={distro ?? undefined}>
+                  <Checkbox id={`herdr-profile-${profile.id}`} checked={selected.has(profile.id)} disabled={locked} onCheckedChange={() => toggle(profile.id)} aria-label={here ? `${profile.label} · ${here}` : profile.label} className="mt-xxs" />
                   <label htmlFor={`herdr-profile-${profile.id}`} className="flex min-w-0 flex-1 flex-col gap-xs">
                     <span className="break-words text-subhead font-medium text-foreground">{profile.label}</span>
-                    <span className="break-all font-mono text-caption text-muted-foreground">{profile.target} · {t("firstRun.devices.session", { session: profile.session })}</span>
+                    {here ? <span className="break-keep text-caption text-muted-foreground">{here}</span>
+                      : <span className="break-all font-mono text-caption text-muted-foreground">{profile.target} · {t("firstRun.devices.session", { session: profile.session })}</span>}
                     {state === "failed" ? <Status tone="error">{t("firstRun.devices.failed")}</Status> : null}
                     {state === "failed" && reason ? <span className="break-words text-caption text-muted-foreground">{reason}</span> : null}
-                    {state === "unavailable" ? <Status tone="warn">{t("firstRun.devices.unavailable")}</Status> : null}
+                    {state === "unavailable" && distro ? <WslProblem distro={distro} problem={profile.problem} /> : null}
+                    {state === "unavailable" && !distro ? <Status tone="warn">{t("firstRun.devices.unavailable")}</Status> : null}
                   </label>
                   <span className="max-w-full text-caption" aria-live="polite">
                     {state === "failed" ? <Button size="sm" variant="secondary" disabled={busy} onClick={() => connect(profile)} data-first-run-device-retry={profile.id}>{t("common.retry")}</Button>
+                      : quiet ? null
                       : <Status tone={state === "connected" ? "ok" : state === "connecting" || state === "installing" ? "pending" : "muted"}>{t(DEVICE_STATE_LABEL[state])}</Status>}
                   </span>
                 </div>
@@ -122,6 +140,20 @@ export function FirstRunDevices({ actions, primary, onBack, onNext }: {
       </DialogFooter>
     </>
   );
+}
+
+/** Why this PC's WSL distribution cannot connect: its setup is unfinished, or it runs on WSL 1, with the command that switches it (B29). */
+function WslProblem({ distro, problem }: { distro: string; problem: string | null }) {
+  const { t } = useInterfaceTranslation();
+  if (problem === "wsl1") {
+    return (
+      <span className="flex flex-col gap-xxs text-caption text-muted-foreground" data-first-run-wsl-problem="wsl1">
+        <span className="break-keep">{t("devices.wsl.version1")}</span>
+        <span className="break-words font-mono text-subtle-foreground" data-first-run-wsl-command={distro}>{wslConvertCommand(distro)}</span>
+      </span>
+    );
+  }
+  return <span className="break-keep text-caption text-muted-foreground" data-first-run-wsl-problem={problem ?? undefined}>{t(problem === "setup_unfinished" ? "devices.wsl.setupUnfinished" : "firstRun.devices.unavailable")}</span>;
 }
 
 const DEVICE_STATE_LABEL = {

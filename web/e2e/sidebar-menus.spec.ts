@@ -14,8 +14,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { claudeProjects, labelAgent, setFixtureSession, writeFixtureTranscript, startHerdr, type HerdrFixture } from "./herdr-fixture";
-import { waitForTerminal } from "./group-start-helper";
-import { herdrTabs } from "./failure-dump";
+import { createdTabs, herdrTabIds, waitForTerminal } from "./group-start-helper";
 import { startHided } from "./hided-fixture";
 import { rest, screenshot } from "./wire";
 import { chord, commandLabel } from "./chords";
@@ -267,8 +266,7 @@ test("a checkout row's menu offers worktree actions, and the default checkout ca
 test("New tab in main opens a terminal in the default checkout", async ({ page }) => {
   const { herdr, projectRow, main, stop } = await startMenus(page);
   try {
-    const nativeTabs = () => (herdrTabs(herdr) as { tabs: string[] }[]).flatMap((workspace) => workspace.tabs).sort();
-    const before = nativeTabs();
+    const before = herdrTabIds(herdr);
     // Drafts share the Agent tab kind; native IDs distinguish the live tabs.
     const liveTabs = page.locator('[data-tab-bar] [data-tab-kind="herdr"]:not([data-tab^="draft:"])');
     const menu = await openMenu(page, projectRow, "repo actions");
@@ -276,9 +274,10 @@ test("New tab in main opens a terminal in the default checkout", async ({ page }
     await expect(page.locator("[data-workspace-screen]")).toBeVisible({ timeout: 20_000 });
     await expect(liveTabs).toHaveCount(2);
     await expect(main.locator("[data-checkout]")).toHaveAttribute("aria-current", "true");
-    const started = await waitForTerminal(page);
+    const [started] = await createdTabs(herdr, before);
+    await waitForTerminal(page, started!);
     await expect(liveTabs).toHaveCount(2, { timeout: 20_000 });
-    await expect.poll(nativeTabs).toEqual([...before, started].sort());
+    expect(herdrTabIds(herdr).sort()).toEqual([...before, started].sort());
     await expect(main.locator("[data-checkout]")).toHaveAttribute("aria-current", "true");
   } finally { stop(); }
 });

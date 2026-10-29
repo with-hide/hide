@@ -55,6 +55,22 @@ impl Environment {
             fs::create_dir_all(folder)?;
         }
         fs::write(home.join(".zshrc"), format!("PS1='{PROMPT}'\n"))?;
+        let path = format!(
+            "{}:/usr/bin:/bin:/usr/sbin:/sbin",
+            home.join("bin").display()
+        );
+        // A daemon finds `gh` and `git` on its login shell's `PATH`, and on
+        // macOS that shell's `path_helper` puts the system's folders first,
+        // where a runner keeps its own signed-out `gh` (issue
+        // hide-private#201). The account's startup files put its own folders
+        // first, as an operator's installs come first (`fixtureLoginShellPath`
+        // in `web/e2e/platform-fixture.ts`).
+        for file in [".zprofile", ".bash_profile", ".profile"] {
+            fs::write(
+                home.join(file),
+                format!("PATH={}:\"$PATH\"\nexport PATH\n", quote(&path)),
+            )?;
+        }
         // This journey starts after retirement. Mark only that private
         // prerequisite complete so candidate kit reconciliation never reaches
         // the account's actual service manager; mailbox state is never seeded.
@@ -97,14 +113,7 @@ impl Environment {
             // key or hook arrives through the machine's configuration.
             ("GIT_CONFIG_NOSYSTEM", "1".into()),
             ("SHELL", "/bin/zsh".into()),
-            (
-                "PATH",
-                format!(
-                    "{}:/usr/bin:/bin:/usr/sbin:/sbin",
-                    home.join("bin").display()
-                )
-                .into(),
-            ),
+            ("PATH", path.into()),
             ("HERDR_SOCKET_PATH", socket.as_os_str().to_owned()),
             ("HERDR_BIN_PATH", bin.as_os_str().to_owned()),
             (

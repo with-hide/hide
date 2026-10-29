@@ -361,6 +361,59 @@ describe("the Memory tab", () => {
     ]);
   });
 
+  it("marks an unused card, brings an archived one back, and takes back a change or says why it cannot (PRD memory-self-improve B21, B22, B34)", async () => {
+    const now = Date.now();
+    await render(memory({
+      rows: [row(3, { stale: true }), row(7)],
+      archived: [{ number: 12, title: "Old deploy rule", archived_at_unix_ms: now }],
+      expanded: {
+        number: 3, body: "text", cited_paths: [], sources: [], previous: null,
+        changes: [
+          { id: 41, kind: "recheck", by_agent: true, letters: 1, unreadable: 2, at_unix_ms: now, undone: false, undo_blocked: "recheck_finished" },
+          { id: 40, kind: "merge", cards: [5, 6], at_unix_ms: now, undone: false, undo_blocked: null },
+          { id: 39, kind: "alias", aliases: ["린트"], at_unix_ms: now, undone: true, undo_blocked: null },
+        ],
+      },
+    }));
+    expect(container.querySelector("[data-memory-stale='3']")?.textContent).toBe("Unused 30 days");
+    expect(container.querySelector("[data-memory-stale='7']")).toBeNull();
+    expect(container.querySelector("[data-memory-card='12']")).toBeNull();
+    const history = container.querySelector("[data-memory-history='3']")?.textContent ?? "";
+    expect(history).toContain("Check asked by an agent");
+    expect(history).toContain("Sources that could not be read: 2");
+    expect(history).toContain("Merged m5, m6");
+    expect(history).toContain("Undone");
+    expect(container.querySelector("[data-memory-undo-blocked='recheck_finished']")).not.toBeNull();
+    // A finished recheck leaves the card free to be checked again, once Hide AI is on to check it (D-41).
+    expect(container.querySelector("[data-memory-recheck='3']")?.hasAttribute("disabled")).toBe(true);
+    expect(container.querySelector("[data-memory-recheck='3']")?.getAttribute("title")).toBe("Checking again needs Hide AI. Turn it on in Settings › Hide AI");
+    await act(async () => useShellStore.setState({ rest: { ...rest, status: { background_ai: { enabled: true, provider: "claude", chosen: true, unavailable_reason: null, providers: [], refusal: null } } } as unknown as SnapshotRest }));
+    expect(container.querySelector("[data-memory-recheck='3']")?.hasAttribute("disabled")).toBe(false);
+    await click("[data-memory-undo-change='40']");
+    expect(container.querySelector("[data-memory-undo-change='39']")).toBeNull();
+    await click("[data-memory-recheck='3']");
+    await click("[data-memory-archived] button");
+    await click("[data-memory-revive='12']");
+    expect(sent("memory_action")).toEqual([
+      { workspace_id: "p", action: "undo_change", number: 3, change: 40 },
+      { workspace_id: "p", action: "recheck", number: 3 },
+      { workspace_id: "p", action: "revive", number: 12 },
+    ]);
+  });
+
+  it("shows a card waiting on its recheck as checking instead of offering another", async () => {
+    await render(memory({
+      rows: [row(3, { verifying: true })],
+      expanded: {
+        number: 3, body: "text", cited_paths: [], sources: [], previous: null,
+        changes: [{ id: 41, kind: "recheck", by_agent: false, letters: null, unreadable: null, at_unix_ms: Date.now(), undone: false, undo_blocked: null }],
+      },
+    }));
+    expect(container.querySelector("[data-memory-recheck='3']")).toBeNull();
+    expect(container.querySelector("[data-memory-rechecking='3']")?.textContent).toBe("Checking again");
+    expect(container.querySelector("[data-memory-history='3']")?.textContent).toContain("Check asked by you");
+  });
+
   it("sends one search for one edit while two windows show the Project's shared answer", async () => {
     // Two windows on one Project share the core's search; the second follows it.
     const other = document.createElement("div");

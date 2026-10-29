@@ -6,7 +6,7 @@ import { useInterfaceTranslation } from "../i18n/client";
 import { badgeText, deviceConnected, frontDeviceId, railDeviceIds, tileCounts, tileHint, tileMonogram, tileName, type TileCounts } from "../devices";
 import { cn } from "../lib/utils";
 import { numberOf, numberedDevices } from "../numbering";
-import { coreShared, isCoreMachine, machineName, windowDeviceId } from "../screenMachine";
+import { coreShared, isCoreMachine, machineName, windowDeviceId, wslPlace } from "../screenMachine";
 import { useShellStore } from "../store";
 import { useUiStore } from "../ui";
 import { EntryContextMenu } from "./entry-menu";
@@ -14,7 +14,8 @@ import { Keycap } from "./ui/keycap";
 import { Hint } from "./ui/tooltip";
 
 /** `core` marks the machine the core runs on, set only while the core works with another machine (Q11). */
-export type Tile = { id: string; label: string; icon: "local" | "remote"; core: boolean };
+/** `place` is where a WSL distribution's device is, which its hint says after the name (PRD wsl-device B5). */
+export type Tile = { id: string; label: string; icon: "local" | "remote"; core: boolean; place?: string | null };
 
 /** The rounded square every tile is, the add tile included; a tile's marks hang off its corners, and the focus outline stands outside the selected ring. */
 const TILE = "relative flex size-(--size-icon-button-standard) shrink-0 items-center justify-center rounded-md outline-none focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring";
@@ -46,6 +47,7 @@ export function DeviceRail({ actions }: { actions: Actions }) {
       label: machineName(devices, id, t),
       icon: id === own ? "local" : "remote",
       core: shared && isCoreMachine(devices, id),
+      place: wslPlace(devices, id, t),
     }));
   }, [devices, t]);
   // A ⌘ hold numbers the tiles ⌘n selects (`numbering.ts`).
@@ -105,11 +107,13 @@ const RailTile = memo(function RailTile({ tile, selected, number, actions }: { t
  */
 export function RailTileView({ tile, selected, counts, connected, number = null, onSelect }: { tile: Tile; selected: boolean; counts: TileCounts; connected: boolean; number?: number | null; onSelect: () => void }) {
   const { t } = useInterfaceTranslation();
+  // The name with where it is, `WSL Ubuntu · This PC`; the glyph keeps the name's letters (`WU`).
+  const named = tile.place ? `${tile.label} · ${tile.place}` : tile.label;
   return (
-    <Hint label={tileHint(tile.label, connected, counts, t, tile.core)} side="right">
+    <Hint label={tileHint(named, connected, counts, t, tile.core)} side="right">
       <button
         type="button"
-        aria-label={tileName(tile.label, connected, counts, t, tile.core)}
+        aria-label={tileName(named, connected, counts, t, tile.core)}
         aria-pressed={selected}
         data-rail-tile={tile.id}
         data-rail-connected={connected ? "true" : "false"}

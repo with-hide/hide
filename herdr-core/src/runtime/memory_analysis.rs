@@ -18,7 +18,7 @@
 
 use super::memory::{
     MemoryReceipt, SESSION_CALL_TIMEOUT, digest, now_ms, project_identity, project_sessions,
-    session_conversation, session_stat, trusted_memory_receipt,
+    session_conversation, session_stat, trusted_memory_receipts,
 };
 use super::memory_evidence::{CheckoutFacts, check_evidence};
 use super::memory_verify::{CheckProgress, check_before_suggestion, reverify_pending};
@@ -1240,7 +1240,7 @@ fn run_analysis_turn(
         }
         Ok(())
     };
-    let mut cards = Vec::new();
+    let mut taught = Taught::default();
     let result = analyze_session(
         store,
         link.as_ref(),
@@ -1253,12 +1253,20 @@ fn run_analysis_turn(
         &task.stat,
         &input.cancel,
         &mut admit,
-        &mut cards,
+        &mut taught,
     );
     if let Some(client) = input.suggestions.as_ref()
-        && !cards.is_empty()
+        && !taught.signals.is_empty()
     {
-        send_corrections(client, project_id, &task.root, &task.session, cards);
+        client.send(crate::suggestions::worker::Command::ObserveProject {
+            project_id: project_id.clone(),
+            facts: std::mem::take(&mut taught.signals),
+        });
+    }
+    if let Some(client) = input.suggestions.as_ref()
+        && !taught.cards.is_empty()
+    {
+        send_corrections(client, project_id, &task.root, &task.session, taught.cards);
     }
     let mut unusable = false;
     let (learned, error, rotate) = match result {
@@ -1363,6 +1371,49 @@ fn walk_project(
     {
         log_ended_hold(project_id, &ended, "expired");
     }
+    // Memory keeps itself with no model: cards no one was given or said
+    // age, and a recheck that ran out gives its card back (PRD
+    // memory-self-improve B22, B28).
+    match store.age_cards(project_id, now_ms()) {
+        Ok(aged) if !aged.skipped => {
+            tally.checked |= !(aged.staled.is_empty()
+                && aged.archived.is_empty()
+                && aged.recheck_expired.is_empty());
+            if !aged.staled.is_empty() || !aged.archived.is_empty() {
+                crate::diagnostic!(json!({
+                    "component": "memory",
+                    "kind": "cards.aged",
+                    "project_id": project_id,
+                    "staled": aged.staled,
+                    "archived": aged.archived,
+                }));
+            }
+            if aged.changes_trimmed > 0 {
+                crate::diagnostic!(json!({
+                    "component": "memory",
+                    "kind": "card_changes.trimmed",
+                    "project_id": project_id,
+                    "trimmed": aged.changes_trimmed,
+                    "limit": hide_memory::CHANGE_LIMIT,
+                }));
+            }
+            for card in aged.recheck_expired {
+                crate::diagnostic!(json!({
+                    "component": "memory",
+                    "kind": "recheck.expired",
+                    "project_id": project_id,
+                    "card": card,
+                }));
+            }
+        }
+        Ok(_) => {}
+        Err(error) => crate::diagnostic!(json!({
+            "component": "memory",
+            "kind": "cards.aging_failed",
+            "project_id": project_id,
+            "message": error.to_string(),
+        })),
+    }
     // Memory walks and analyzes the sessions of agents the node holding them
     // reads for Memory, through their conversation reader: a JSONL file's
     // (Claude Code, Codex, Grok, Pi, omp, agy) by byte offset, and OpenCode's
@@ -1383,6 +1434,15 @@ fn walk_project(
         .collect::<Vec<_>>();
     // What a card rests on is compared with the repository first: it needs
     // no model, so it runs whether Hide AI is on or off (D-06).
+    match super::memory_verify::read_recheck_sources(store, sessions_node, project_id) {
+        Ok(changed) => tally.checked |= changed,
+        Err(message) => crate::diagnostic!(json!({
+            "component": "memory",
+            "kind": "recheck.read_failed",
+            "project_id": project_id,
+            "message": message,
+        })),
+    }
     let mut facts = CheckoutFacts::new(sessions_node, root);
     match check_evidence(store, &mut facts, project_id, now_ms()) {
         Ok(moved) => tally.checked |= moved > 0,
@@ -1961,21 +2021,44 @@ fn record_receipt(
     text: &str,
     offset: u64,
 ) -> Result<bool, String> {
-    let Some(receipt) = trusted_memory_receipt(
+    let receipts = trusted_memory_receipts(
         store,
         project_id,
         provider,
         session_id,
         provider_injected,
         text,
-    ) else {
+    );
+    if receipts.is_empty() {
         return Ok(false);
-    };
+    }
+    for receipt in receipts {
+        record_one_receipt(store, project_id, provider, session_id, &receipt, offset)?;
+    }
+    Ok(true)
+}
+
+/// Records one signed receipt line: an index's as an index (PRD
+/// memory-self-improve D-35), a prompt's bodies as before.
+fn record_one_receipt(
+    store: &mut MemoryStore,
+    project_id: &str,
+    provider: &str,
+    session_id: &str,
+    receipt: &MemoryReceipt,
+    offset: u64,
+) -> Result<(), String> {
     // A receipt naming no card records nothing.
     if receipt.item_key().is_empty() {
-        return Ok(true);
+        return Ok(());
     }
-    match store.record_receipt(
+    let record = if receipt.is_index() {
+        MemoryStore::record_index_receipt
+    } else {
+        MemoryStore::record_receipt
+    };
+    match record(
+        store,
         project_id,
         provider,
         session_id,
@@ -2021,7 +2104,7 @@ fn record_receipt(
             return Err(error.to_string());
         }
     }
-    Ok(true)
+    Ok(())
 }
 
 /// Records the receipts the label reads of live panes found, each against
@@ -2114,7 +2197,7 @@ fn analyze_session(
     stat: &hide_node_link::sessions::SessionStat,
     cancel: &CancelToken,
     admit: &mut dyn FnMut(&MemoryStore) -> Result<(), AnalysisFailure>,
-    cards: &mut Vec<u64>,
+    taught: &mut Taught,
 ) -> Result<usize, AnalysisFailure> {
     let local = |error: String| AnalysisFailure::Local(error);
     let provider = session.agent.as_str();
@@ -2269,7 +2352,12 @@ fn analyze_session(
         }
         if !written.summary.duplicate_batch {
             learned += written.summary.created + written.summary.superseded;
-            cards.extend(
+            let (signals, repeated) =
+                memory_signals(store, project_id, root, session, &written.summary);
+            taught.signals.extend(signals);
+            // A turn counted as a repeat raises no correction of its own
+            // (D-37, B13): its card's repeat records stand for it.
+            taught.cards.extend(
                 written
                     .summary
                     .outcomes
@@ -2279,7 +2367,8 @@ fn analyze_session(
                         | hide_memory::CandidateOutcome::Merged { number }
                         | hide_memory::CandidateOutcome::Superseded { number } => Some(*number),
                         _ => None,
-                    }),
+                    })
+                    .filter(|number| !repeated.contains(number)),
             );
         }
         completed = index + 1;
@@ -2347,6 +2436,166 @@ pub(crate) fn log_ended_hold(project_id: &str, ended: &hide_memory::EndedHold, c
     }));
 }
 
+/// What one session's analysis hands the 제안 tab.
+#[derive(Default)]
+pub(super) struct Taught {
+    /// The cards it taught or confirmed, its corrections of the agent.
+    cards: Vec<u64>,
+    /// Its repeated requests and ignored cards (PRD memory-self-improve
+    /// D-14, D-08).
+    signals: Vec<crate::suggestions::ledger::Observation>,
+}
+
+/// A batch's repeated requests and ignored cards as the 제안 tab's records
+/// (PRD memory-self-improve D-14, D-37, D-46, B6, B12, B13, B18): every time
+/// each meaning the batch named was said, with the operator's words behind
+/// the card that says the same, which the ledger keeps once whatever sends
+/// them again; and one record per card the session was given and ignored.
+/// A record carries places and digests, never words (D-43). Also answers
+/// the cards this session's own repeats name.
+fn memory_signals(
+    store: &MemoryStore,
+    project_id: &str,
+    root: &str,
+    session: &ProjectSession,
+    summary: &hide_memory::ApplySummary,
+) -> (
+    Vec<crate::suggestions::ledger::Observation>,
+    std::collections::BTreeSet<u64>,
+) {
+    use crate::suggestions::ledger::{Given, Observation, Said, SessionRef, Signal};
+    let key = format!("{}:{}", session.agent.as_str(), session.id);
+    let mut repeated = std::collections::BTreeSet::new();
+    let mut said_here = Vec::new();
+    let observation = |signal, tag: String, session: SessionRef, at, said| Observation {
+        signal,
+        tag,
+        session: Some(session),
+        pr: None,
+        checkout: Some(root.to_owned()),
+        at_unix_ms: at,
+        always: false,
+        head: None,
+        improvement: None,
+        said: Some(said),
+    };
+    let mut signals = Vec::new();
+    if !summary.repeated.is_empty() {
+        match store.repeat_sources(project_id) {
+            Ok(sources) => signals.extend(
+                sources
+                    .into_iter()
+                    .filter(|source| summary.repeated.contains(&source.meaning))
+                    .inspect(|source| {
+                        if source.session == key && !source.from_card {
+                            repeated.extend(source.card);
+                            said_here.push(source.event_offset);
+                        }
+                    })
+                    .filter_map(|source| {
+                        let (agent, id) = source.session.split_once(':')?;
+                        Some(observation(
+                            Signal::RepeatedRequest,
+                            source.meaning.clone(),
+                            SessionRef {
+                                agent: agent.to_owned(),
+                                id: id.to_owned(),
+                            },
+                            source.at_unix_ms,
+                            Said {
+                                personal: source.scope == hide_memory::RepeatScope::Personal,
+                                procedure: source.procedure,
+                                line: source.line,
+                                offset: source.event_offset,
+                                words: source.words,
+                                session_started_at_unix_ms: source.session_started_unix_ms,
+                                given: None,
+                            },
+                        ))
+                    }),
+            ),
+            Err(error) => crate::diagnostic!(json!({
+                "component": "memory", "kind": "repeats.read_failed",
+                "project_id": project_id, "message": error.to_string(),
+            })),
+        }
+    }
+    // A repeat's turn that also made or confirmed a card, matched or not,
+    // stands in its repeat records only.
+    if !said_here.is_empty() {
+        match store.cards_said_at(project_id, &key, &said_here) {
+            Ok(cards) => repeated.extend(cards),
+            Err(error) => crate::diagnostic!(json!({
+                "component": "memory", "kind": "repeats.read_failed",
+                "project_id": project_id, "message": error.to_string(),
+            })),
+        }
+    }
+    for (number, miss) in &summary.misses {
+        if *miss != hide_memory::Miss::Ignored {
+            continue;
+        }
+        let (Ok(Some(card)), Ok(misses)) = (
+            store.item_by_number(project_id, *number),
+            store.card_misses(project_id, *number),
+        ) else {
+            continue;
+        };
+        let Some(miss) = misses
+            .iter()
+            .rev()
+            .find(|miss| miss.kind == hide_memory::Miss::Ignored && miss.session == key)
+        else {
+            continue;
+        };
+        // Only a card the operator said stands behind a stronger fix: an
+        // agent's own note never becomes the operator's instruction (B18).
+        if card.human_source_count == 0 {
+            crate::diagnostic!(json!({
+                "component": "memory", "kind": "ignored_card.not_suggested",
+                "project_id": project_id, "card": number, "reason": "agent_card",
+            }));
+            continue;
+        }
+        // The card's text is the line a stronger fix writes, kept as a
+        // repeat's line is; a long card stands by its index line.
+        let Some(line) = (!card.body.contains('\n'))
+            .then(|| hide_memory::instruction_line(&card.body))
+            .flatten()
+            .or_else(|| hide_memory::instruction_line(&card.title))
+        else {
+            crate::diagnostic!(json!({
+                "component": "memory", "kind": "ignored_card.not_suggested",
+                "project_id": project_id, "card": number, "reason": "bad_line",
+            }));
+            continue;
+        };
+        signals.push(observation(
+            Signal::MemoryIgnored,
+            hide_memory::card_name(*number),
+            SessionRef {
+                agent: session.agent.as_str().to_owned(),
+                id: session.id.clone(),
+            },
+            miss.at_unix_ms,
+            Said {
+                personal: card.kind == hide_memory::CandidateKind::Preference,
+                procedure: false,
+                line,
+                offset: miss.event_offset,
+                words: None,
+                session_started_at_unix_ms: session.started_at_unix_ms,
+                given: match miss.via.as_deref() {
+                    Some("index") => Some(Given::Index),
+                    Some("body") => Some(Given::Body),
+                    _ => None,
+                },
+            },
+        ));
+    }
+    (signals, repeated)
+}
+
 /// The cards a session taught or confirmed, as that session's corrections
 /// of the agent: one record per card, named by its number.
 fn send_corrections(
@@ -2373,6 +2622,7 @@ fn send_corrections(
             always: false,
             head: None,
             improvement: None,
+            said: None,
         })
         .collect();
     client.send(crate::suggestions::worker::Command::ObserveProject {
@@ -2474,6 +2724,9 @@ pub(crate) fn write_cards(
         source.session_id,
         &content_hash,
     ]);
+    let known_meanings = store
+        .known_meanings(source.project_id, KNOWN_MEANINGS)
+        .map_err(|error| local(error.to_string()))?;
     let request = analyzer
         .request(
             request_id,
@@ -2481,6 +2734,7 @@ pub(crate) fn write_cards(
             source.session_id,
             &serialized,
             &similar,
+            &known_meanings,
             language,
         )
         .map_err(|error| local(error.to_string()))?;
@@ -2712,6 +2966,8 @@ pub(crate) fn write_cards(
                 evidence,
                 document_comparisons,
                 reverify_superseded: !documents.is_empty(),
+                repeats: operator_repeats(&output.repeats, group),
+                merges: output.merges.clone(),
             };
             store
                 .prepare_analysis(&batch_id, &candidates, &options)
@@ -2745,6 +3001,31 @@ pub(crate) fn write_cards(
         crate::diagnostic!(
             json!({"component":"memory", "kind":"card.evicted", "project_id":source.project_id, "batch_id":batch_id, "card":number, "reason":"card_capacity"})
         );
+    }
+    // What Memory did on its own beside the cards (PRD memory-self-improve
+    // B15-B17, B20, B24, B33): counts and card numbers, never words.
+    if !summary.misses.is_empty()
+        || !summary.aliases_added.is_empty()
+        || !summary.revived.is_empty()
+        || !summary.merged.is_empty()
+        || !summary.merges_refused.is_empty()
+        || summary.repeats_left_out > 0
+        || !summary.misses_full.is_empty()
+    {
+        crate::diagnostic!(json!({
+            "component": "memory",
+            "kind": "analysis.upkeep",
+            "project_id": source.project_id,
+            "batch_id": batch_id,
+            "ignored": summary.misses.iter().filter(|(_, miss)| *miss == hide_memory::Miss::Ignored).map(|(number, _)| number).collect::<Vec<_>>(),
+            "missed": summary.misses.iter().filter(|(_, miss)| *miss == hide_memory::Miss::Missed).map(|(number, _)| number).collect::<Vec<_>>(),
+            "aliases_added": summary.aliases_added,
+            "revived": summary.revived,
+            "merged": summary.merged,
+            "merges_refused": summary.merges_refused,
+            "repeats_left_out": summary.repeats_left_out,
+            "misses_full": summary.misses_full,
+        }));
     }
     for number in &summary.sources_full {
         crate::diagnostic!(
@@ -2946,6 +3227,55 @@ pub(super) fn validate_candidates(candidates: &mut Vec<Candidate>, events: &[Val
             .collect();
     }
     before - candidates.len()
+}
+
+/// The meanings an analysis is shown, so it names a request the same way.
+const KNOWN_MEANINGS: usize = 20;
+
+/// The repeated requests the answer named, each with only the operator's
+/// own events (`human`, never a delegating agent's or a letter) and when and
+/// what each said; one with none left is dropped (PRD memory-self-improve
+/// D-14, B13).
+fn operator_repeats(
+    repeats: &[hide_memory::RepeatRequest],
+    group: &[Value],
+) -> Vec<hide_memory::RepeatRequest> {
+    let human = group
+        .iter()
+        .filter(|event| event.get("kind").and_then(Value::as_str) == Some("human"))
+        .filter_map(|event| {
+            Some((
+                event.get("offset")?.as_u64()?,
+                (
+                    event
+                        .get("at_unix_ms")
+                        .and_then(Value::as_u64)
+                        .unwrap_or_else(now_ms),
+                    event
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .map(hide_memory::words_digest),
+                ),
+            ))
+        })
+        .collect::<HashMap<_, _>>();
+    repeats
+        .iter()
+        .filter_map(|repeat| {
+            let sources = repeat
+                .sources
+                .iter()
+                .filter_map(|(offset, _, _)| {
+                    let (at, words) = human.get(offset)?;
+                    Some((*offset, *at, words.clone()))
+                })
+                .collect::<Vec<_>>();
+            (!sources.is_empty()).then(|| hide_memory::RepeatRequest {
+                sources,
+                ..repeat.clone()
+            })
+        })
+        .collect()
 }
 
 /// Keeps only the cited paths that name a file or folder inside the
@@ -3219,7 +3549,9 @@ mod tests {
                         analysis_provider: "codex".to_owned(),
                         session_id: "seed".to_owned(),
                         content_hash: "seed".to_owned(),
-                        created_at_unix_ms: 1,
+                        // Old enough to rank below what a test learns, young enough not
+                        // to age on the first walk.
+                        created_at_unix_ms: now_ms() - 29 * 86_400_000,
                     },
                     &[Candidate {
                         text: "Keep the hook under 100 ms".to_owned(),
@@ -3313,6 +3645,8 @@ mod tests {
                     "target_id": null,
                 }],
                 "alias_backfill": [],
+            "repeats": [],
+            "merges": [],
             }));
         }
 
@@ -3841,6 +4175,8 @@ mod tests {
                 "target_id": null,
             }],
             "alias_backfill": [],
+        "repeats": [],
+        "merges": [],
         }));
         assert_eq!(fixture.pass(false, true), ["analyzing", "learned one"]);
         let sent: Value = serde_json::from_str(&fixture.backend.inputs.lock().unwrap()[0]).unwrap();
@@ -4588,7 +4924,7 @@ mod tests {
             .answers
             .lock()
             .unwrap()
-            .push(json!({"candidates": [], "alias_backfill": []}));
+            .push(json!({"candidates": [], "alias_backfill": [], "repeats": [], "merges": []}));
         assert_eq!(
             fixture.pass_for(key.clone(), false, true).0,
             ["analyzing", "analyzed"]
@@ -4924,7 +5260,7 @@ mod tests {
                 .answers
                 .lock()
                 .unwrap()
-                .push(json!({"candidates":[],"alias_backfill":[]}));
+                .push(json!({"candidates":[],"alias_backfill":[],"repeats":[],"merges":[]}));
         }
         let (_, first) = fixture.pass_for(key.clone(), false, true);
         assert_eq!(fixture.calls(), 4);
@@ -4964,7 +5300,7 @@ mod tests {
                 .answers
                 .lock()
                 .unwrap()
-                .push(json!({"candidates":[],"alias_backfill":[]}));
+                .push(json!({"candidates":[],"alias_backfill":[],"repeats":[],"merges":[]}));
         }
         for _ in 0..10 {
             let before = fixture.calls();
@@ -5433,7 +5769,7 @@ mod tests {
                     analysis_provider: "codex".into(),
                     session_id: "peer-seed".into(),
                     content_hash: "peer-seed".into(),
-                    created_at_unix_ms: 1,
+                    created_at_unix_ms: now_ms(),
                 },
                 &[Candidate {
                     text: "Keep the peer hook under 100 ms".into(),
@@ -6109,6 +6445,156 @@ mod tests {
         );
     }
 
+    /// PRD memory-self-improve D-14, D-46, B13, B18: a batch's repeated
+    /// request reaches the 제안 tab as every time it was said, with the
+    /// operator's sources behind the preference card that says the same.
+    #[test]
+    fn a_batchs_repeat_becomes_suggestion_records_with_its_cards_sessions() {
+        use crate::suggestions::ledger::Signal;
+        use hide_memory::{
+            AnalysisBatch, ApplyOptions, Candidate, CandidateKind, CandidateRelation,
+            RepeatRequest, RepeatScope,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = MemoryStore::open(&dir.path().join("m.sqlite3")).unwrap();
+        store
+            .ensure_project("p", std::path::Path::new("/repo"), "node")
+            .unwrap();
+        store.set_enabled("p", true, true).unwrap();
+        let batch = |id: &str, session: &str, at| AnalysisBatch {
+            id: id.into(),
+            project_id: "p".into(),
+            provider: "claude".into(),
+            analysis_provider: "claude".into(),
+            session_id: session.into(),
+            content_hash: id.into(),
+            created_at_unix_ms: at,
+        };
+        let candidate = |relation| Candidate {
+            text: "Answer in Korean".into(),
+            title: "Answer in Korean".into(),
+            aliases: Vec::new(),
+            kind: CandidateKind::Preference,
+            confidence: 0.9,
+            salience: 0.9,
+            source_offsets: vec![1],
+            human_offsets: vec![1],
+            source_times: [(1, 10)].into(),
+            source_words: [(1, hide_memory::words_digest("한국어로 답해"))].into(),
+            cited_paths: Vec::new(),
+            relation,
+        };
+        store
+            .apply_candidates(&batch("b1", "s1", 10), &[candidate(CandidateRelation::New)])
+            .unwrap();
+        let card = store.item_by_number("p", 1).unwrap().unwrap();
+        let options = ApplyOptions {
+            repeats: vec![RepeatRequest {
+                meaning: "답은 한국어로".into(),
+                scope: RepeatScope::Personal,
+                procedure: false,
+                target_id: Some(card.id.clone()),
+                line: "Answer the operator in Korean.".into(),
+                sources: vec![(4, 20, Some("again".into()))],
+            }],
+            ..ApplyOptions::default()
+        };
+        let summary = store
+            .apply_candidates_with(
+                &batch("b2", "s2", 20),
+                &[Candidate {
+                    source_offsets: vec![4],
+                    human_offsets: vec![4],
+                    source_times: [(4, 20)].into(),
+                    source_words: [(4, "again".to_owned())].into(),
+                    ..candidate(CandidateRelation::Same {
+                        target_id: card.id.clone(),
+                    })
+                }],
+                &options,
+            )
+            .unwrap();
+        let session = ProjectSession {
+            id: "s2".into(),
+            agent: hide_session::Agent::Claude,
+            locator: "/s2.jsonl".into(),
+            checkout_path: "/repo".into(),
+            first_human_request: None,
+            started_at_unix_ms: Some(15),
+            updated_at_unix_ms: 20,
+            title: None,
+            event_count: 1,
+            availability: SessionAvailability::Available,
+            stamp: None,
+        };
+        let (signals, repeated) = memory_signals(&store, "p", "/repo", &session, &summary);
+        // s2's turn is in the repeat, so the card it taught is no correction
+        // of its own (D-37, B13).
+        assert_eq!(repeated, [card.number].into());
+        // The ledger keeps one record per key: the same words said again
+        // (here the card's own source in s2) are one (D-37).
+        let repeats = signals
+            .iter()
+            .filter(|fact| fact.signal == Signal::RepeatedRequest)
+            .map(|fact| {
+                assert!(fact.said.as_ref().unwrap().personal);
+                (
+                    fact.key().unwrap(),
+                    fact.session.as_ref().unwrap().id.clone(),
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+        assert_eq!(
+            repeats
+                .into_values()
+                .collect::<std::collections::BTreeSet<_>>(),
+            ["s1".to_owned(), "s2".to_owned()].into(),
+            "the card's own session counts too"
+        );
+        assert!(
+            signals
+                .iter()
+                .all(|fact| fact.tag == "답은 한국어로" || fact.tag == "m1")
+        );
+        // A repeat no card matched, whose turn made a new card: that card is
+        // no correction either (D-37).
+        let options = ApplyOptions {
+            repeats: vec![RepeatRequest {
+                meaning: "테스트는 nextest로".into(),
+                scope: RepeatScope::Project,
+                procedure: false,
+                target_id: None,
+                line: "Run tests with nextest.".into(),
+                sources: vec![(7, 30, Some("nextest".into()))],
+            }],
+            ..ApplyOptions::default()
+        };
+        let summary = store
+            .apply_candidates_with(
+                &batch("b3", "s3", 30),
+                &[Candidate {
+                    text: "Run tests with nextest".into(),
+                    title: "Run tests with nextest".into(),
+                    kind: CandidateKind::Rule,
+                    source_offsets: vec![7],
+                    human_offsets: vec![7],
+                    source_times: [(7, 30)].into(),
+                    source_words: [(7, "nextest".to_owned())].into(),
+                    ..candidate(CandidateRelation::New)
+                }],
+                &options,
+            )
+            .unwrap();
+        let made = store.item_by_number("p", 2).unwrap().unwrap();
+        assert_eq!(made.title, "Run tests with nextest");
+        let s3 = ProjectSession {
+            id: "s3".into(),
+            ..session
+        };
+        let (_, repeated) = memory_signals(&store, "p", "/repo", &s3, &summary);
+        assert_eq!(repeated, [2].into());
+    }
+
     #[test]
     fn an_oversized_event_keeps_its_two_ends_and_the_instruction_beside_a_paste() {
         // A JSONL line past the reader's cap never becomes an event; an
@@ -6681,6 +7167,8 @@ mod tests {
                 "target_id": "m2",
             }],
             "alias_backfill": [],
+        "repeats": [],
+        "merges": [],
         }));
         assert_eq!(
             fixture
@@ -6787,6 +7275,8 @@ mod tests {
                     "target_id": target,
                 }],
                 "alias_backfill": [],
+            "repeats": [],
+            "merges": [],
             }));
         };
         answer(&parent, "new", Value::Null);

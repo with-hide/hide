@@ -440,10 +440,15 @@ test("terminal HTML opens a rendered page and right-click offers actions for the
   await dockFiles(page, paneId);
   // The page this HTML link opens widens the lane until Agent Views keep
   // their 480px (UI_BEHAVIOR.md, lane widths), about 31 columns on macOS
-  // here, so the address goes on a line of its own that still fits.
+  // and 29 on Linux here, so the address goes on a line of its own that
+  // still fits. Herdr's frames carry no wrap flag, so an address that ends
+  // at the terminal's edge reads as running on into a next row that starts
+  // with a word (`terminalLinks.ts`); the blank row after it keeps the
+  // address whole at any width the font gives.
   await print(page, paneId, [
     "html src/report.HTML:2",
     `${origin}/a.html`,
+    "",
     `osc8 \u001b]8;;${pathToFileURL(html).href}#L2\u001b\\HTML source label\u001b]8;;\u001b\\`,
     "folder ./src",
     "plain MENU-END",

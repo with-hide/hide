@@ -1,8 +1,13 @@
 //! Saved machine discovery reuses the device connector's machine boundary.
 //! One request joins one owned, cancelable worker; no polling or SSH probes.
+//! Beside the saved profiles the first-run step lists this PC's default WSL
+//! distribution (PRD wsl-device B1, D-13), read from the account's registry
+//! as Add device reads it, so listing never starts WSL; it connects as a WSL
+//! device and comes to the front (B2, D-12).
 
 use super::*;
 use crate::model::{HerdrProfileRefusal, HerdrProfileSnapshot, HerdrProfilesSnapshot};
+use crate::remote::WslListing;
 use hide_node_link::device::HerdrProfileListing;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -55,12 +60,16 @@ impl Runtime {
                 .unwrap_or_else(|_| {
                     Err("Saved machine discovery stopped unexpectedly. Retry".to_owned())
                 });
+                let wsl = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    devices.wsl_distributions()
+                }))
+                .unwrap_or_else(|_| Err("The WSL listing ended unexpectedly".to_owned()));
                 let Some(runtime) = context.runtime.upgrade() else {
                     return;
                 };
                 let changed = runtime
                     .lock()
-                    .map(|mut guard| guard.settle_herdr_profiles(id, listing))
+                    .map(|mut guard| guard.settle_herdr_profiles(id, listing, &wsl))
                     .unwrap_or(false);
                 if changed {
                     context.notifier.notify();
@@ -73,6 +82,7 @@ impl Runtime {
             self.settle_herdr_profiles(
                 id,
                 Err("Saved machine discovery could not start. Retry".to_owned()),
+                &Ok(Vec::new()),
             );
         }
         true
@@ -82,6 +92,7 @@ impl Runtime {
         &mut self,
         id: u64,
         answer: Result<HerdrProfileListing, String>,
+        wsl: &WslListing,
     ) -> bool {
         if self
             .herdr_profiles_job
@@ -91,12 +102,27 @@ impl Runtime {
             return false;
         }
         self.herdr_profiles_job = None;
+        // A listing that could not be read proves nothing about WSL, so the
+        // step keeps its failed state with Retry rather than reading empty
+        // and being skipped (B1, B25); only a listing read empty is none.
+        let answer = answer.and_then(|listing| match wsl {
+            Ok(distributions) => Ok((listing, distributions)),
+            Err(reason) => {
+                crate::diagnostic!(serde_json::json!({
+                    "component": "herdr_profiles",
+                    "kind": "wsl.listing_failed",
+                    "request": id,
+                    "message": reason,
+                }));
+                Err("This PC's WSL distributions could not be read. Retry".to_owned())
+            }
+        });
         match answer {
             Err(error) => {
                 self.snapshot.status.herdr_profiles.state = "failed".to_owned();
                 self.snapshot.status.herdr_profiles.error = Some(error);
             }
-            Ok(listing) => {
+            Ok((listing, distributions)) => {
                 self.herdr_profile_endpoints = listing.endpoints;
                 let profiles = listing
                     .profiles
@@ -125,6 +151,7 @@ impl Runtime {
                             label: profile.label,
                             target: profile.target,
                             session: profile.session,
+                            wsl_distro: None,
                             enabled: profile.enabled,
                             added_as,
                             problem,
@@ -133,6 +160,11 @@ impl Runtime {
                             connect_refusal: None,
                         }
                     })
+                    .collect::<Vec<_>>();
+                let profiles = self
+                    .default_wsl_row(distributions)
+                    .into_iter()
+                    .chain(profiles)
                     .collect();
                 self.snapshot.status.herdr_profiles = HerdrProfilesSnapshot {
                     state: "ready".to_owned(),
@@ -191,6 +223,50 @@ impl Runtime {
         }
     }
 
+    /// The step's row for this PC's default WSL distribution (PRD wsl-device
+    /// B1, B29), or none without WSL. One that cannot connect (WSL 1, its
+    /// setup unfinished) is a row with that problem. Another distribution is
+    /// no row: Add device lists it (D-13).
+    fn default_wsl_row(
+        &self,
+        distributions: &[hide_node_link::device::WslDistribution],
+    ) -> Option<HerdrProfileSnapshot> {
+        let distribution = distributions.iter().find(|found| found.default)?;
+        let registration = self.wsl_registration(&distribution.name);
+        let device_id = registration.map(|registration| registration.id.clone());
+        let problem = if distribution.setup_unfinished {
+            Some("setup_unfinished")
+        } else if distribution.wsl_version != 2 {
+            Some("wsl1")
+        } else {
+            None
+        };
+        Some(HerdrProfileSnapshot {
+            id: format!("wsl:{}", distribution.name),
+            label: super::devices::wsl_device_label(&distribution.name),
+            target: distribution.name.clone(),
+            session: "default".to_owned(),
+            wsl_distro: Some(distribution.name.clone()),
+            enabled: true,
+            added_as: registration.map(|registration| registration.label.clone()),
+            problem: problem.map(str::to_owned),
+            connect_state: device_id
+                .as_deref()
+                .map(|device| self.profile_connection(device))
+                .unwrap_or_else(|| "saved".to_owned()),
+            device_id,
+            connect_refusal: None,
+        })
+    }
+
+    fn wsl_registration(&self, distro: &str) -> Option<&crate::model::DeviceRegistration> {
+        self.snapshot
+            .ui_state
+            .device_registrations
+            .iter()
+            .find(|registration| registration.origin.wsl_distro() == Some(distro))
+    }
+
     pub(super) fn connect_herdr_profile(&mut self, profile_id: &str, consent: bool) -> bool {
         let Some(index) = self
             .snapshot
@@ -225,17 +301,27 @@ impl Runtime {
             row.connect_refusal = Some(refusal);
             return true;
         }
-        let registration = self
-            .profile_registration(&profile.target, &profile.session)
-            .cloned();
-        let registration = match registration {
-            Some(registration) => {
+        let registration = match profile.wsl_distro.as_deref() {
+            Some(distro) => self.wsl_registration(distro),
+            None => self.profile_registration(&profile.target, &profile.session),
+        }
+        .cloned();
+        if registration.is_none() && self.snapshot.ui_state.device_registrations.len() >= 64 {
+            let row = &mut self.snapshot.status.herdr_profiles.profiles[index];
+            row.connect_state = "failed".to_owned();
+            row.connect_refusal = Some(HerdrProfileRefusal::DeviceLimit);
+            return true;
+        }
+        let registration = match (registration, profile.wsl_distro.as_deref()) {
+            (Some(registration), _) => {
                 // Re-entry is inert. Only a failed connection or an absent
                 // consent is an explicit retry of the selected device.
                 let state = self.profile_connection(&registration.id);
                 // Explicit import also protects a pre-existing default-session
                 // registration on subsequent automatic kit work and reconnects.
-                if registration.herdr_session.is_none() {
+                // A WSL device reaches its account's own Herdr, so it names none.
+                let import = profile.wsl_distro.is_none() && registration.herdr_session.is_none();
+                if import {
                     if let Some(stored) = self
                         .snapshot
                         .ui_state
@@ -254,7 +340,7 @@ impl Runtime {
                 if registration.host_consent.is_none() {
                     self.set_host_consent(&registration.id, true);
                 }
-                if state == "failed" || state == "added" || registration.herdr_session.is_none() {
+                if state == "failed" || state == "added" || import {
                     self.retry_remote_device(&registration.id);
                 } else if state == "connected" {
                     self.retry_device_host_now(
@@ -273,13 +359,17 @@ impl Runtime {
                 }
                 registration
             }
-            None => {
-                if self.snapshot.ui_state.device_registrations.len() >= 64 {
+            // The press is the install consent, as Add device's is (B2).
+            (None, Some(distro)) => match self.register_wsl_device(distro, true) {
+                Ok(registration) => registration,
+                Err(refusal) => {
+                    self.set_error(refusal.code, refusal.message, false);
                     let row = &mut self.snapshot.status.herdr_profiles.profiles[index];
                     row.connect_state = "failed".to_owned();
-                    row.connect_refusal = Some(HerdrProfileRefusal::DeviceLimit);
                     return true;
                 }
+            },
+            (None, None) => {
                 use sha2::{Digest, Sha256};
                 let digest = format!("{:x}", Sha256::digest(profile.id.as_bytes()));
                 let id = format!("herdr-{}", &digest[..32]);
@@ -315,6 +405,11 @@ impl Runtime {
                 registration
             }
         };
+        // The distribution's tile comes to the front with its press, so its
+        // projects and agents are the ones the next steps show (D-12).
+        if profile.wsl_distro.is_some() {
+            self.bring_device_forward(registration.id.clone());
+        }
         if self.remote_connections.contains_key(&registration.id)
             && let Some(status) = self.snapshot.status.remote.iter_mut().find(|status| {
                 status.target_id == registration.id && status.state == "not_connected"
@@ -331,9 +426,11 @@ impl Runtime {
             .profiles
             .iter()
             .enumerate()
-            .filter(|(_, row)| {
-                self.profile_registration(&row.target, &row.session)
-                    .is_some_and(|r| r.id == registration.id)
+            .filter(|(_, row)| match row.wsl_distro.as_deref() {
+                Some(distro) => registration.origin.wsl_distro() == Some(distro),
+                None => self
+                    .profile_registration(&row.target, &row.session)
+                    .is_some_and(|r| r.id == registration.id),
             })
             .map(|(index, _)| index)
             .collect();
@@ -352,9 +449,14 @@ impl Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hide_node_link::device::HerdrProfile;
+    use hide_node_link::device::{HerdrProfile, WslDistribution};
 
     fn discovered() -> Runtime {
+        discovered_with(&Ok(Vec::new()))
+    }
+
+    /// The saved profiles beside `wsl`, this PC's distributions.
+    fn discovered_with(wsl: &WslListing) -> Runtime {
         let mut runtime = super::super::tests::runtime();
         runtime.herdr_profiles_job = Some(HerdrProfilesJob {
             id: 1,
@@ -388,8 +490,18 @@ mod tests {
                 .collect(),
                 truncated: false,
             }),
+            wsl,
         );
         runtime
+    }
+
+    fn distro(name: &str, wsl_version: u8, default: bool) -> WslDistribution {
+        WslDistribution {
+            name: name.to_owned(),
+            wsl_version,
+            setup_unfinished: false,
+            default,
+        }
     }
 
     fn connect(runtime: &mut Runtime, profile: &str, consent: bool) {
@@ -443,5 +555,178 @@ mod tests {
         assert_ne!(rows[0].device_id, rows[2].device_id);
         let stored = serde_json::to_value(&runtime.snapshot.ui_state).unwrap();
         assert_eq!(stored["device_registrations"][0]["herdr_session"], "review");
+    }
+
+    /// PRD wsl-device B1, D-13: the step lists this PC's default WSL
+    /// distribution first, as the device it would be, and no other.
+    #[test]
+    fn the_default_wsl_distribution_is_the_steps_first_row_and_no_other_is() {
+        let runtime = discovered_with(&Ok(vec![
+            distro("Debian", 2, false),
+            distro("Ubuntu", 2, true),
+        ]));
+        let rows = &runtime.snapshot.status.herdr_profiles.profiles;
+        assert_eq!(
+            rows.len(),
+            5,
+            "the four saved profiles and one distribution"
+        );
+        let wsl = &rows[0];
+        assert_eq!(
+            (
+                wsl.id.as_str(),
+                wsl.label.as_str(),
+                wsl.wsl_distro.as_deref()
+            ),
+            ("wsl:Ubuntu", "WSL Ubuntu", Some("Ubuntu"))
+        );
+        assert_eq!(
+            (wsl.problem.as_deref(), wsl.connect_state.as_str()),
+            (None, "saved")
+        );
+        assert!(rows[1..].iter().all(|row| row.wsl_distro.is_none()));
+        // Listing installs and registers nothing (B2).
+        assert!(runtime.snapshot.ui_state.device_registrations.is_empty());
+        let wire = serde_json::to_value(&rows[1]).unwrap();
+        assert!(
+            wire.get("wsl_distro").is_none(),
+            "a saved profile's wire is unchanged"
+        );
+    }
+
+    /// B29, D-14: a default distribution that cannot connect is its row with
+    /// why; no WSL or no default is no row.
+    #[test]
+    fn a_default_wsl_1_or_unfinished_distribution_says_why_and_no_wsl_is_no_row() {
+        let first = |wsl: WslListing| {
+            discovered_with(&wsl)
+                .snapshot
+                .status
+                .herdr_profiles
+                .profiles[0]
+                .clone()
+        };
+        assert_eq!(
+            first(Ok(vec![distro("Legacy", 1, true)]))
+                .problem
+                .as_deref(),
+            Some("wsl1")
+        );
+        let mut fresh = distro("Fresh", 2, true);
+        fresh.setup_unfinished = true;
+        assert_eq!(
+            first(Ok(vec![fresh])).problem.as_deref(),
+            Some("setup_unfinished")
+        );
+        for wsl in [Ok(Vec::new()), Ok(vec![distro("Debian", 2, false)])] {
+            assert_eq!(first(wsl).wsl_distro, None);
+        }
+        // A WSL 1 row sent to connect anyway is refused and registers nothing.
+        let mut runtime = discovered_with(&Ok(vec![distro("Legacy", 1, true)]));
+        connect(&mut runtime, "wsl:Legacy", true);
+        assert!(runtime.snapshot.ui_state.device_registrations.is_empty());
+        assert_eq!(
+            runtime.snapshot.status.herdr_profiles.profiles[0].connect_refusal,
+            Some(HerdrProfileRefusal::InvalidTarget)
+        );
+    }
+
+    /// B1, B25: on a PC with no saved profiles, a WSL listing that could not
+    /// be read keeps the Devices step, failed with Retry, instead of reading
+    /// as empty; only a listing read empty skips it.
+    #[test]
+    fn an_unreadable_wsl_listing_keeps_the_step_and_only_a_read_empty_one_skips_it() {
+        let at_devices = |wsl: &WslListing| {
+            let mut runtime = super::super::tests::runtime();
+            runtime.snapshot.ui_state.first_run = Some(crate::model::FirstRun {
+                version: crate::model::FIRST_RUN_VERSION,
+                step: crate::model::FirstRunStep::Devices,
+            });
+            runtime.herdr_profiles_job = Some(HerdrProfilesJob {
+                id: 1,
+                stop: Arc::new(AtomicBool::new(false)),
+            });
+            runtime.settle_herdr_profiles(
+                1,
+                Ok(HerdrProfileListing {
+                    profiles: Vec::new(),
+                    endpoints: Default::default(),
+                    truncated: false,
+                }),
+                wsl,
+            );
+            runtime
+        };
+        let unreadable = at_devices(&Err("the registry could not be read".to_owned()));
+        let profiles = &unreadable.snapshot.status.herdr_profiles;
+        assert_eq!(profiles.state, "failed");
+        assert!(profiles.error.is_some());
+        assert!(profiles.profiles.is_empty());
+        assert_eq!(
+            unreadable.first_run_step(),
+            Some(crate::model::FirstRunStep::Devices)
+        );
+        let empty = at_devices(&Ok(Vec::new()));
+        assert_eq!(empty.snapshot.status.herdr_profiles.state, "ready");
+        assert_eq!(
+            empty.first_run_step(),
+            Some(crate::model::FirstRunStep::Notifications)
+        );
+    }
+
+    /// macOS, Linux and a PC without WSL: the step is the saved profiles,
+    /// exactly as before.
+    #[test]
+    fn without_wsl_the_step_is_the_saved_profiles_alone() {
+        let runtime = discovered();
+        let rows = &runtime.snapshot.status.herdr_profiles.profiles;
+        assert_eq!(
+            rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>(),
+            ["first", "alias", "second", "disabled"]
+        );
+        assert!(rows.iter().all(|row| row.wsl_distro.is_none()));
+    }
+
+    /// B2, D-08, D-12: pressing connect with the row checked registers the
+    /// distribution as its WSL device with the install consent and brings
+    /// its tile to the front; without consent nothing is registered.
+    #[test]
+    fn connecting_the_wsl_row_registers_its_device_with_consent_and_selects_it() {
+        let mut runtime = discovered_with(&Ok(vec![distro("Ubuntu", 2, true)]));
+        connect(&mut runtime, "wsl:Ubuntu", false);
+        assert!(runtime.snapshot.ui_state.device_registrations.is_empty());
+        connect(&mut runtime, "wsl:Ubuntu", true);
+        let id = super::super::devices::wsl_device_id("Ubuntu");
+        let registrations = &runtime.snapshot.ui_state.device_registrations;
+        assert_eq!(registrations.len(), 1);
+        let registration = &registrations[0];
+        assert_eq!(
+            (
+                registration.id.as_str(),
+                registration.label.as_str(),
+                registration.origin.wsl_distro()
+            ),
+            (id.as_str(), "WSL Ubuntu", Some("Ubuntu"))
+        );
+        assert!(registration.host_consent.is_some());
+        assert_eq!(registration.herdr_session, None);
+        assert_eq!(
+            runtime.snapshot.navigator.focused_device_id.as_deref(),
+            Some(id.as_str())
+        );
+        let row = &runtime.snapshot.status.herdr_profiles.profiles[0];
+        assert_eq!(
+            (row.device_id.as_deref(), row.added_as.as_deref()),
+            (Some(id.as_str()), Some("WSL Ubuntu"))
+        );
+        // The saved profiles keep their own routes.
+        assert!(
+            runtime.snapshot.status.herdr_profiles.profiles[1..]
+                .iter()
+                .all(|row| row.device_id.is_none())
+        );
+        // Pressing again is the same device, not a second one.
+        connect(&mut runtime, "wsl:Ubuntu", true);
+        assert_eq!(runtime.snapshot.ui_state.device_registrations.len(), 1);
     }
 }

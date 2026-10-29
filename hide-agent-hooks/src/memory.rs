@@ -94,7 +94,7 @@ pub fn project_memory_output_until(
         }
     };
     HookMemoryResult {
-        stdout: match &projected.context {
+        stdout: match &projected.joined() {
             Some(context) => hook_stdout_with_context(runtime, event, Some(context)),
             None => crate::runtime::hook_stdout(runtime, event),
         },
@@ -119,6 +119,10 @@ pub struct MemoryRequest<'a> {
 pub struct MemoryContext {
     pub context: Option<String>,
     pub outcome: HookMemoryOutcome,
+    /// The Hide global instruction a session start carries, in its own slot
+    /// and under its own cap, whether or not Memory answered (PRD
+    /// memory-self-improve D-31).
+    pub global: Option<String>,
 }
 
 impl MemoryContext {
@@ -126,6 +130,19 @@ impl MemoryContext {
         Self {
             context: None,
             outcome,
+            global: None,
+        }
+    }
+
+    /// The global instruction first, then Memory's context, or none.
+    pub fn joined(&self) -> Option<String> {
+        match (&self.global, &self.context) {
+            (None, None) => None,
+            (global, context) => Some(format!(
+                "{}{}",
+                global.as_deref().unwrap_or_default(),
+                context.as_deref().unwrap_or_default()
+            )),
         }
     }
 }
@@ -199,6 +216,7 @@ pub fn memory_context_until(
     MemoryContext {
         context: answer.context,
         outcome: answer.outcome.into(),
+        global: answer.global,
     }
 }
 
@@ -248,6 +266,28 @@ fn note(home: &Path, cause: &str, kind: &str, code: &str, step: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// B1, D-31: the global instruction rides beside Memory's context, first,
+    /// and alone when Memory gave nothing.
+    #[test]
+    fn the_global_instruction_comes_before_memory_and_without_it() {
+        let both = MemoryContext {
+            context: Some("<memory/>\n".into()),
+            outcome: HookMemoryOutcome::Empty,
+            global: Some("<global/>\n".into()),
+        };
+        assert_eq!(both.joined().as_deref(), Some("<global/>\n<memory/>\n"));
+        let alone = MemoryContext {
+            context: None,
+            outcome: HookMemoryOutcome::Unavailable,
+            global: Some("<global/>\n".into()),
+        };
+        assert_eq!(alone.joined().as_deref(), Some("<global/>\n"));
+        assert_eq!(
+            MemoryContext::without(HookMemoryOutcome::Disabled).joined(),
+            None
+        );
+    }
 
     #[test]
     fn oversized_input_is_drained_but_never_parsed() {

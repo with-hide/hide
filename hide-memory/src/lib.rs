@@ -26,7 +26,7 @@ pub use evidence::{
 pub use reconcile::{
     COMPARISON_EXCERPT_BYTES, DocumentAuthority, DocumentComparison, PROMOTION_BATCH_LIMIT,
 };
-pub use redaction::{RedactedText, redact};
+pub use redaction::{RedactedText, is_invisible, redact};
 pub use store::hold::{
     CardHold, EndedHold, ReleasedReport, StaleOutcome, StaleRefusal, StaleReporter,
 };
@@ -38,6 +38,17 @@ pub use store::{
     PreviousRevision, ProjectMemoryState, Promotion, PromotionState, PromotionSuggestion,
     ReceiptRecord, RetrievalQuery, SessionCursorRecord, SessionSourceRecord, StoreMode,
     branch_name, card_name, parse_card_name, repository_path, words_digest,
+};
+/// The bounds an analysis answer's repeats and merges are held to (PRD
+/// memory-self-improve D-44).
+pub mod store_limits {
+    pub use crate::store::merges_limits::{ABSORBED_PER_MERGE, MERGES_PER_ANSWER};
+    pub use crate::store::repeats_limits::{LINE_CHARS, MEANING_CHARS, REPEATS_PER_ANSWER};
+}
+pub use store::{
+    Aging, AgingReport, CHANGE_LIMIT, CardChange, CardMiss, ChangeKind, Merge, Miss, RECHECK_LIMIT,
+    RepeatRequest, RepeatScope, RepeatSource, Requester, SourceRef, SourceVerdicts, SourcesOutcome,
+    instruction_line,
 };
 pub use verify::{
     Correction, DOCUMENT_EXCERPT_BYTES, DOCUMENT_LIMIT, EXCERPT_SOURCE_BYTES, Excerpt,
@@ -90,6 +101,8 @@ pub const INDEX_LINE_LIMIT: usize = 20;
 pub const SEARCH_RESULT_LIMIT: usize = 10;
 /// Cards one analysis compares new text against (D-13).
 pub const COMPARISON_LIMIT: usize = 30;
+/// The archived cards compared beside them (PRD memory-self-improve D-38).
+pub const ARCHIVED_COMPARISON_LIMIT: usize = 10;
 pub const PROMPT_ITEM_LIMIT: usize = 3;
 pub const INJECTION_TOKEN_LIMIT: usize = 600;
 /// A card's index line, in characters (D-23: an old card's is its first 60).

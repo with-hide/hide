@@ -925,7 +925,7 @@ While the Project is still being read the tool says so; a Project that is not re
 ### The 제안 tab
 
 The 제안 tab lists what Hide AI suggests fixing, the fixes under way and the ones applied (D-05 to D-07).
-The core decides every group, mark, hold and count; the screen draws them and every press is one `suggestion_action` (`apply`, `dismiss`, `restore`, `retry`) naming the row by its id (`s12` for a suggestion, `m72` for a memory on its way into the documents).
+The core decides every group, mark, hold and count; the screen draws them and every press is one `suggestion_action` (`apply`, `dismiss`, `restore`, `retry`, `revert`) naming the row by its id (`s12` for a suggestion, `m72` for a memory on its way into the documents).
 The tab has one line for its state and no more (D-44): `다음에 Hide를 열 때 첫 조사` before the first investigation, `오늘은 제안 없음` when today's run left nothing open, each of these two as the owl's title over what the tab gives the operator, `세션과 PR 리뷰에서 에이전트가 자주 막히는 곳을 찾아요`, `같은 실수가 반복되지 않게 개선 방향을 제안해요` and `고르면 PR로 반영돼서, 에이전트가 알아서 똑똑해져요`, and `제안이 꺼져 있어요` over the same steps with `켜기` under them when ⚙ turned suggestions off; while a run goes, `조사 중` sits small in the head and the rows stay as they were, and after a run that could not investigate `조사 못 함` sits there the same way until a run investigates, nothing new having risen from it (D-35).
 A failure the operator cannot act on, such as a run that hit its turn or time limit or the usage limit, goes to the diagnostic log and draws nothing.
 
@@ -944,15 +944,28 @@ Hide never merges.
 A row being applied says what its agent does: `PR 만드는 중` (`이슈 만드는 중`) with the time since it started and `에이전트 ↗` while the agent lives, then `PR #n 리뷰` in the warning colour with the pull request once it is open and the operator's turn; `CI 실패` in the destructive colour, or what stopped it in plain words (`PR 없이 끝났어요`, `에이전트가 시작하지 못했어요`, `셸이 시작을 마치지 못했어요`, `아직 만들어지지 않아 문서는 그대로 뒀어요`, with the core's detail, such as the shell's question or the agent's reason, on a quiet line under it), keeps the row there with `다시 시도` and `넘어가기` (B11, B12); a code this build has no words for reads `PR 없이 끝났어요`.
 An open issue reads `이슈 열림` with the issue.
 A merged row folds under `반영됨 N · 효과 있었음 M`; while the watch runs its line is the quiet `지켜보는 중 · 세션 2/5`, a row whose problem did not come back reads `효과 있었음`, and nothing else is said (B15).
+A request the operator keeps repeating and a memory agents keep missing rise here too (PRD memory-self-improve B6, B12, B18), titled `같은 요청을 계속 하고 있어요: <meaning>` or `에이전트가 받은 기억을 계속 놓쳐요: m31` when the analysis left no discomfort; a project's way of working rises as any suggestion does, with a skill for a procedure as its first fix.
+A personal preference's fix is one line of the Hide global instruction, which every Hide pane session is given: in place of `고칠 것` the row shows `Hide 전역 지시에 들어갈 줄` over the line in a tinted box, and its button is `Hide 전역 지시에 넣기`, which needs no GitHub and is never pressed automatically (B8).
+The press goes in with the preview the row was drawn from; when the file or the line changed since, nothing is written and the row reads `파일이 바뀌어서 새 미리보기예요` with the new one, and when the line has no room it reads `자리 없음: Hide 전역 지시가 한도를 넘어요` with `파일 열기`, its button held (B10).
+A line with markup, a hidden character or a secret reads `이 줄은 넣을 수 없어요: 마크업, 보이지 않는 문자나 비밀값이 있어요`, its button held.
+A line the file already had reads `이미 Hide 전역 지시에 있어요` and offers only `넘어가기`; pressed when the file had it, it is adopted, and its `되돌리기` leaves the file as it is.
+A write that failed reads `파일을 쓰지 못했어요` and its button becomes `다시 시도` (B29).
+An applied line folds under 반영됨 reading `Hide 전역 지시에 들어 있어요` in the success colour, with `되돌리기`, which takes out only that line and brings the row back to 고를 것 (B9); a line changed by hand reads `손으로 고친 줄이라 그대로 뒀어요` with `파일 열기` and no `되돌리기`.
+Said again in a session that was given the line, the row comes back to 고를 것 reading `넣은 뒤에도 또 말했어요` in the warning colour with `파일 열기`, where the operator rewords it, and `넘어가기` (B11).
+An ignored memory's evidence carries a chip, `목록으로 받음` or `본문으로 받음`, saying how the session had been given it (B15).
+`파일 열기` shows only in a window on the core's machine, whose file it is.
+Opening a row reads its operator's words again, masked, at most 300 characters each and five a row, each a quiet quoted line under its evidence; words that cannot be read again say `근거 확인 불가`, and when none can, the row reads `근거를 확인할 수 없어 넣지 않아요` and its button is held (B7).
+The tab's first line is `Hide 전역 지시` with `너무 커서 세션에 넣지 않아요` or `읽을 수 없어 세션에 넣지 않아요` and `파일 열기` while sessions are not given the file because it was edited past its limit or out of UTF-8, and nothing while they are (B5); `파일 열기` hands the file to the system's editor.
+
 A row being applied whose agent lives is also one row in the sidebar's and the 태스크 list's Needs You while it is the operator's turn (see Work Hide AI does for a home), and choosing that row opens this tool on 제안 with the row open (B11); a memory on its way into the documents is one of these rows from its first offer, named by its memory with its number (`m72`) before the title, and so is a promotion already under way before this change (D-02, B2).
 
 ⚙ opens a sheet under the head in three areas (D-26, B19): what 제안 and Memory share, then 제안, then Memory.
 The shared area is a tinted box: `사용하는 AI` and the chip of the agent Settings › Hide AI chose (the listed agent standing in while Runs on is past the usage limit), which opens that page, then `설정 › Hide AI의 순서를 따라요. 한도에 걸리면 다음 AI로` (D-53) and the line on what is sent; when that agent cannot promise to only read (OpenCode), `이 AI로는 조사할 수 없음` stands under the chip and no investigation runs.
 제안 and Memory each open with a head of their own, a mark, the name, what it does and its own switch, and their settings sit under the name.
 제안 holds `제안 양` (`적게`, `보통`, `많이`, one segmented choice with what the chosen one means and how many a week under it), `반영 방식` (`확인하고 반영`, `버튼을 누르면 PR이나 이슈를 열어요`, or `자동으로 PR 열기`, the same way), `읽을 곳`, and `넘어간 제안 N개`, which unfolds to each one with `되살리기` and a quiet line saying whether it can still rise once (`다시 쌓이면 한 번 올라와요`) or not (`다시 올라오지 않아요`); restoring one lets the core judge it again on what piled up.
-`읽을 곳` has two switches (D-52): `세션 기록` (`실패한 명령 · 에이전트 막힘 · 내 정정 · 세션에 남은 문제 · 개선할 점`) and `GitHub` (`CI 실패 · 리뷰 지적`).
-The core keeps seven signals; a switch shows on while any signal of its group that can be read is on, and one press is one `suggestion_settings` with `signal_group`, which turns the whole group (B5).
-`GitHub` is off with `GitHub 저장소가 아니에요` under it when the repository is not on GitHub; with Memory off, `Memory가 꺼져 있어 내 정정은 읽지 않아요` stands under `세션 기록`, and with Hide AI or the turn-end analysis (Settings › Hide AI's agent summaries) off, `개선할 점은 턴 끝 분석이 켜져야 기록돼요` stands there the same way (B27, D-57).
+`읽을 곳` has two switches (D-52): `세션 기록` (`실패한 명령 · 에이전트 막힘 · 내 정정 · 반복한 요청 · 안 지킨 기억 · 세션에 남은 문제 · 개선할 점`) and `GitHub` (`CI 실패 · 리뷰 지적`).
+The core keeps nine signals; a switch shows on while any signal of its group that can be read is on, and one press is one `suggestion_settings` with `signal_group`, which turns the whole group (B5).
+`GitHub` is off with `GitHub 저장소가 아니에요` under it when the repository is not on GitHub; with Memory off, `Memory가 꺼져 있어 내 정정과 반복한 요청은 읽지 않아요` stands under `세션 기록`, and with Hide AI or the turn-end analysis (Settings › Hide AI's agent summaries) off, `개선할 점은 턴 끝 분석이 켜져야 기록돼요` stands there the same way (B27, D-57).
 Memory holds `이 프로젝트의 기억 지우기` in the destructive colour, which asks first, naming the Project and the number of memories.
 With the head switch off every switch in the sheet is dimmed.
 
@@ -993,6 +1006,13 @@ An Outdated comparison dims its card and names the document and its date, asks n
 Document references in card metadata and Compare headers show a single-line filename, truncated when needed, with the full path on hover and the date alongside.
 An unverified card waiting to be checked against the repository again is dimmed; only the card the worker is checking shows `확인 중` in its existing status line, and a promotion keeps priority there.
 An already verified card awaiting its first document comparison stays usable and keeps its suggestions while waiting, even when the checking budget is spent.
+A card neither given nor said for 30 days shows `30일 안 씀` beside its kind and is still given (PRD memory-self-improve B22).
+After 60 days it leaves the list for `보관 N`, a folded line under the cards that opens to each archived card's number, title, archive date and `되살리기`, which brings it back with a fresh clock.
+A card shown in full has `다시 확인` beside `지우기`: it takes the card out of the hooks until it is checked again, and while it waits the button reads `다시 확인 중` (B27).
+Hide AI finishes the check, so with Hide AI off (Settings › Hide AI) `다시 확인` is dimmed with `다시 확인하려면 Hide AI가 켜져 있어야 해요. 설정 › Hide AI에서 켜요` as its hint, and the core refuses it as `hide memory recheck` does (D-41).
+Under its sources, `변경 기록` lists what Hide changed on the card by itself, newest first: `안 쓰는 기억으로 표시`, `보관됨`, `되살림`, the operator's words added as aliases, the memories merged into it, and each recheck with who asked and, once its sources were read again, how many were letters and how many could not be read (`근거 확인 불가`) (B34).
+Each line has `되돌리기`, or says why it cannot be taken back (a later change replaced it, a merged memory changed or is gone, the check already ended), and a taken-back line stays dimmed as `되돌림`.
+Nothing here alerts: a miss, an alias or an aging move is only a history line (B17).
 The waiting reason or exhausted checking budget is explained once above the list, without repeating it on every row.
 When no card is usable and cards await checks, the existing empty slot says why and that accepted cards return one by one.
 The core supplies the checking budget's next reset timestamp, and its explanation draws that date and time in the viewer's timezone and interface language, with no UTC wording.
@@ -2198,8 +2218,15 @@ The agents step is the first-run agent choice (Settings: each machine's install 
 Returning to Agents shows the saved choice, or the machine's enabled agents when no draft exists; installed agents start enabled only for the unanswered initial choice.
 An old installation or discovery answer can settle its own operation but cannot advance a different step.
 Devices reads only the saved Herdr machine configuration, without probing SSH or contacting a listed machine.
+In the Windows app it also lists this PC's default WSL distribution first, read from WSL's own registry without starting it, as `WSL Ubuntu` over `이 PC (WSL)`, and the step is then titled `Hide에서 쓸 기기를 연결하세요` (PRD wsl-device B1, D-13); another distribution is not listed here and is added later from Add device.
 Loading, a failed read with Retry, a proven empty result, disabled or invalid profiles and already-added machines are distinct states; only the proven empty result skips Devices.
+A WSL list that could not be read is a failed read too, with the same Retry, and never an empty one, so a PC that has WSL does not lose the step to a registry it could not read (B1).
 Every profile starts unchecked and names its label, SSH target and Herdr session, including when these need to wrap.
+The WSL row starts checked until the operator unchecks it, which the draft keeps (`first_run_choices.devices` stays null until a row is checked or unchecked), and it names no target, session or `Herdr에 저장됨`.
+Its Connect is the install consent, as Add device's is: nothing is installed in WSL before it, and it registers the distribution's device, which installs Hide's helper and hooks there, and brings its `WU` tile to the front in the same event, so the project step adds to it and a WSL agent can be started at once (B2).
+Before Connect the WSL row lists no agents: only the distribution's own helper reads what is installed there, and reading it any earlier would start WSL before the consent, so the row is `WSL Ubuntu` over `이 PC (WSL)` alone (B1, by the operator's choice).
+After Connect its install runs as any device's does, and its agents show where a device's kit already shows them: the project step's agent choice and Settings › Agents.
+A default distribution on WSL 1 cannot be checked and says `WSL 1이에요. WSL 2로 바꾸면 연결할 수 있어요:` over its command `wsl --set-version <distribution> 2`, and one whose setup is unfinished says `배포판 설정을 먼저 마치세요` (B29); a PC without WSL has no WSL row, and its step is the saved profiles alone, skipped when there are none.
 Checking a device changes the draft alone; Connect selected explicitly allows Hide's helper, command and selected agent integrations on those checked devices through the existing Add device connector and install owner.
 Existing Herdr sessions, tabs and workspaces stay in place.
 Connecting and installing hold the Connect control; per-device failures remain available for explicit Retry, while successful machines remain added and are not connected again by Back or re-entry.
@@ -2353,6 +2380,10 @@ A machine whose core runs on another machine (ARCHITECTURE.md, A core on another
 Its `다시 연결` is answered that the machine reconnects by itself, and removing it ends its connection until it attaches again; neither adds a state or a line of its own.
 The window's own machine is always the first tile and the one named This Mac (`이 Mac`), the laptop glyph (`web/src/screenMachine.ts`, `windowFirst`); on a window of a machine whose core runs elsewhere, the core's machine follows it, named by the name the operator registered it under before the core moved to it, which the core keeps (`machine_label`, ARCHITECTURE.md, Moving the core), and by the name its machine gives itself when it has none.
 The tile of the machine that runs the core wears a crown notched into its bottom-left corner (`--size-rail-crown` in a `--size-rail-badge` notch, the corner the `×` and the marks leave free), and its hint adds `core 실행 중`; the crown shows only once a machine dials in to a core, that is on a node's window or while any device dials in, since with one core and its devices nothing needs telling apart (PRD core-host-node-move B2).
+
+This PC's WSL distribution is a device like any other, one tile per distribution lettered from its name (`WSL Ubuntu` → `WU`) (PRD wsl-device B5, D-12, D-20).
+Every surface that names it says after its name where it is, the core's machine as this window names it, and never `원격`: the tile's hint and accessible name (`WSL Ubuntu · 이 PC · Needs You 3`), the sidebar title's smaller word, which is `원격` for an SSH device, the Overview's device switch, ⌘K's device row, its surface while it shows no tab, and the line under its name in Settings › Devices, in place of its Linux platform (`WSL Ubuntu · 이 PC · Herdr 0.9.5`) (`wslPlace` in `web/src/screenMachine.ts`).
+Choosing its tile scopes the sidebar, 태스크, PR, Overview, the tile counts and the ⌥⌘ numbers to its own items by the rules above (B6), and a stopped distribution reads as any device that is not connected.
 
 A window on a machine whose core runs elsewhere shows its core's state and takes its strip, in the place and size of the connection badge, when the core cannot draw it (W1 to W3, B16):
 
