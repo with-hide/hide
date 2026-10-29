@@ -199,8 +199,8 @@ fn removing_devices_retires_only_their_pane_reads_and_rejects_late_publications(
 }
 
 /// The system ssh's refusal of the configuration reaches the device row as
-/// an unclassified failure with ssh's own last line (PRD
-/// system-ssh-device-link B19). A literal hostname does not have to be
+/// a connection that could not be made, over ssh's own last line. A literal
+/// hostname does not have to be
 /// declared as an SSH alias.
 #[test]
 fn unreadable_ssh_configuration_is_reported_on_the_device_row() {
@@ -218,7 +218,7 @@ fn unreadable_ssh_configuration_is_reported_on_the_device_row() {
     let runtime = shared.lock().unwrap();
     let row = device(&runtime, "nowhere");
     assert_eq!(row.state, "unavailable");
-    assert_eq!(row.problem.as_deref(), Some("unclassified"));
+    assert_eq!(row.problem.as_deref(), Some("cannot_connect"));
     let message = row.message.clone().expect("failure reason");
     assert!(
         message.contains("bad configuration option"),
@@ -793,12 +793,29 @@ fn hide_device_adds_without_the_helper_and_says_who_allows_it() {
     assert!(changed);
     assert_eq!(answer["device"]["id"], "studio-local");
     assert_eq!(answer["device"]["label"], "Studio.local");
-    assert_eq!(answer["device"]["helper"]["consent"], "none");
+    assert_eq!(answer["device"]["state"], "operator_turn");
+    assert_eq!(
+        answer["device"]["waits_on"],
+        serde_json::json!({"kind": "allow_and_install"})
+    );
     assert!(
         answer["next_action"]
             .as_str()
             .is_some_and(|next| next.contains("Allow and install"))
     );
+    // Retrying cannot stand in for the operator's Allow: it starts nothing
+    // and says the same.
+    let (retry, changed) = runtime
+        .device_command(
+            core,
+            DeviceCommand::Retry {
+                device_id: "studio-local".into(),
+            },
+        )
+        .expect("answered");
+    assert!(!changed);
+    assert_eq!(retry["started"], false);
+    assert_eq!(retry["device"], answer["device"]);
     let registration = &runtime.snapshot.ui_state.device_registrations[0];
     assert!(registration.host_consent.is_none());
 
@@ -838,7 +855,8 @@ fn hide_device_adds_without_the_helper_and_says_who_allows_it() {
     assert_eq!(runtime.snapshot.ui_state.device_registrations.len(), 1);
 }
 
-/// Only the core's machine adds or removes a device, an alias `ssh` would
+/// Only the core's machine adds, retries or removes a device, an unknown
+/// one is not retried, an alias `ssh` would
 /// read as an option is refused, and a device with a file tab open is not
 /// removed, since its draft is the shell's to store first.
 #[test]
@@ -846,12 +864,28 @@ fn hide_device_refuses_a_device_caller_an_option_alias_and_open_files() {
     use crate::device_command::DeviceCommand;
     let mut runtime = runtime();
     let core = crate::node::TEST_NODE;
+    for command in [
+        DeviceCommand::List,
+        DeviceCommand::Retry {
+            device_id: "studio".into(),
+        },
+    ] {
+        assert_eq!(
+            runtime.device_command("studio", command).err().as_deref(),
+            Some("machine_not_permitted")
+        );
+    }
     assert_eq!(
         runtime
-            .device_command("studio", DeviceCommand::List)
+            .device_command(
+                core,
+                DeviceCommand::Retry {
+                    device_id: "studio".into()
+                }
+            )
             .err()
             .as_deref(),
-        Some("machine_not_permitted")
+        Some("device_unknown")
     );
     let add = |alias: &str| DeviceCommand::Add {
         ssh_alias: alias.into(),

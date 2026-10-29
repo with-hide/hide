@@ -426,13 +426,11 @@ pub enum Wake {
 }
 
 /// What a connection attempt waits on, as the device's row shows it (PRD
-/// system-ssh-device-link B4-B12, B27). The words are ssh's own; a secret
+/// system-ssh-device-link B4-B12). The words are ssh's own; a secret
 /// the operator types is never part of it.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SignInWait {
-    /// Other devices are connecting; this one dials when a place is free.
-    Queued,
     /// ssh asks for something to type that is shown masked: a password, a
     /// key's passphrase (with the key's file, for the `ssh-add` line), a
     /// one-time code or a security key's PIN. `prompt` is ssh's sentence.
@@ -465,7 +463,6 @@ impl SignInWait {
     /// The `kind` the row and `hide device` read.
     pub fn kind(&self) -> &'static str {
         match self {
-            Self::Queued => "queued",
             Self::Secret { .. } => "secret",
             Self::HostKey { .. } => "host_key",
             Self::Confirm { .. } => "confirm",
@@ -603,6 +600,45 @@ impl SshProblem {
             self,
             Self::NameNotFound | Self::Unreachable | Self::ProxyFailed | Self::Unclassified
         )
+    }
+
+    /// What the operator does about it, the one grouping the device row and
+    /// `hide device` share: sign in again, check the server key in a
+    /// terminal, or retry.
+    pub fn action(self) -> FailureAction {
+        match self {
+            Self::SignInNeeded | Self::BrowserTimeout | Self::SignInRefused => {
+                FailureAction::SignIn
+            }
+            Self::HostKeyChanged => FailureAction::CheckHostKey,
+            Self::PolicyRefused
+            | Self::NameNotFound
+            | Self::Unreachable
+            | Self::ProxyFailed
+            | Self::Unsupported
+            | Self::SshMissing
+            | Self::OpenSshOld
+            | Self::Unclassified => FailureAction::Retry,
+        }
+    }
+}
+
+/// What the operator does about a failed ssh connection ([`SshProblem::action`]).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureAction {
+    SignIn,
+    CheckHostKey,
+    Retry,
+}
+
+impl FailureAction {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::SignIn => "sign_in",
+            Self::CheckHostKey => "check_host_key",
+            Self::Retry => "retry",
+        }
     }
 }
 

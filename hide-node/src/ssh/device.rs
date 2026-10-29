@@ -316,17 +316,13 @@ struct Turns {
 struct Turn(&'static Turns);
 
 impl Turns {
-    /// Waits for a turn, showing the row queued meanwhile; none once
-    /// `cancel` ends the attempt or the wait runs out.
-    fn take(&'static self, sign_in: &dyn SignIn, cancel: &Cancel) -> Option<Turn> {
+    /// Waits for a turn; none once `cancel` ends the attempt or the wait
+    /// runs out. The row reads connecting meanwhile: the operator has
+    /// nothing to do about the wait (design principle 13).
+    fn take(&'static self, cancel: &Cancel) -> Option<Turn> {
         let deadline = Instant::now() + TURN_WITHIN;
         let mut taken = lock_recover(&self.taken);
-        let mut shown = false;
         while *taken >= MAX_DIALING {
-            if !shown {
-                sign_in.show(Some(SignInWait::Queued));
-                shown = true;
-            }
             if cancel.is_cancelled() {
                 return None;
             }
@@ -343,9 +339,6 @@ impl Turns {
         }
         *taken += 1;
         drop(taken);
-        if shown {
-            sign_in.show(None);
-        }
         Some(Turn(self))
     }
 }
@@ -441,7 +434,7 @@ impl DialedTransport for SshDevice {
             .program
             .resolve(&self.alias)
             .map_err(EstablishError::Ssh)?;
-        let _turn = DIALING.take(&*sign_in, &cancel).ok_or_else(|| {
+        let _turn = DIALING.take(&cancel).ok_or_else(|| {
             if cancel.is_cancelled() {
                 return ended();
             }

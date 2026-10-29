@@ -244,63 +244,59 @@ export function deviceSubtitle(device: Device, remote: RemoteStatus | undefined,
 }
 
 /**
- * Why a device's ssh did not connect, in the operator's words, with the one
- * thing to do about it (PRD system-ssh-device-link B5, B7, B8, B13, B18-B21)
- * and, where a terminal shows more than the row can, the command that does.
- * ssh's own words are the diagnostic log's; only an unclassified failure
- * keeps its last line, which the row shows under this headline (B19).
+ * Why a device's ssh did not connect, as one of three states by what the
+ * operator does: sign in (needed or refused, the row's button reads Sign in),
+ * check the changed server key with the `ssh <alias>` a terminal runs, or
+ * retry a connection that could not be made. A retry shows ssh's last line,
+ * which the row draws under this headline, or, where ssh has nothing useful
+ * to say (no ssh, an old OpenSSH, a system Hide does not run on), the plain
+ * sentence in `note`. ssh's other words are the diagnostic log's.
  * `platform` is the core machine's, where ssh runs, for how to install it.
  */
-export function deviceProblemLine(problem: DeviceProblem | null | undefined, alias: string | null, t: Translate, platform?: string | null): { headline: string; action: string | null; command: string | null } | null {
-  const target = alias ?? t("devices.targetFallback");
-  const terminal = alias ? `ssh ${alias}` : null;
+export function deviceProblemLine(problem: DeviceProblem | null | undefined, alias: string | null, t: Translate, platform?: string | null): { headline: string; note: string | null; command: string | null } | null {
   switch (problem) {
     case "sign_in_needed":
-      return { headline: t("devices.problem.signInNeeded"), action: t("devices.problem.signInNeededAction"), command: null };
-    case "browser_timeout":
-      return { headline: t("devices.problem.browserTimeout"), action: t("devices.problem.browserTimeoutAction"), command: null };
+      return { headline: t("devices.problem.signInNeeded"), note: null, command: null };
     case "sign_in_refused":
-      return { headline: t("devices.problem.signInRefused"), action: t("devices.problem.signInRefusedAction", { alias: target }), command: null };
-    case "policy_refused":
-      return { headline: t("devices.problem.policyRefused"), action: t("devices.problem.policyRefusedAction", { alias: target }), command: null };
+      return { headline: t("devices.problem.signInRefused"), note: null, command: null };
     case "host_key_changed":
-      return { headline: t("devices.problem.hostKeyChanged"), action: t("devices.problem.hostKeyChangedAction", { alias: target }), command: terminal };
-    case "name_not_found":
-      return { headline: t("devices.problem.nameNotFound"), action: t("devices.problem.nameNotFoundAction", { alias: target }), command: null };
-    case "unreachable":
-      return { headline: t("devices.problem.unreachable"), action: t("devices.problem.unreachableAction", { alias: target }), command: null };
-    case "proxy_failed":
-      return { headline: t("devices.problem.proxyFailed"), action: t("devices.problem.proxyFailedAction", { alias: target }), command: terminal };
-    case "unsupported":
-      return { headline: t("devices.problem.unsupported"), action: t("devices.problem.unsupportedAction"), command: null };
+      return { headline: t("devices.problem.hostKeyChanged"), note: null, command: alias ? `ssh ${alias}` : null };
+    case "cannot_connect":
+      return { headline: t("devices.problem.cannotConnect"), note: null, command: null };
     case "ssh_missing": {
       const system = platform?.split(" ")[0];
-      const action = system === "windows" ? "devices.problem.sshMissingWindows" : system === "linux" ? "devices.problem.sshMissingLinux" : "devices.problem.sshMissingOther";
-      return { headline: t("devices.problem.sshMissing"), action: t(action), command: null };
+      const note = system === "windows" ? "devices.problem.sshMissingWindows" : system === "linux" ? "devices.problem.sshMissingLinux" : "devices.problem.sshMissingOther";
+      return { headline: t("devices.problem.cannotConnect"), note: t(note), command: null };
     }
     case "openssh_old":
-      return { headline: t("devices.problem.opensshOld"), action: t("devices.problem.opensshOldAction"), command: null };
-    case "unclassified":
-      return { headline: t("devices.problem.unclassified"), action: null, command: null };
+      return { headline: t("devices.problem.cannotConnect"), note: t("devices.problem.opensshOld"), command: null };
+    case "unsupported":
+      return { headline: t("devices.problem.cannotConnect"), note: t("devices.problem.unsupported"), command: null };
     default:
       return null;
   }
 }
 
+/** Whether the row's Retry starts a sign-in, which it then reads as (B8, B14). */
+export function retrySignsIn(problem: DeviceProblem | null | undefined): boolean {
+  return problem === "sign_in_needed" || problem === "sign_in_refused";
+}
+
 /**
  * Whether the device waits on the operator's sign-in (B15): a question or a
  * browser page its row asks about now, or an attempt that stopped because
- * nobody could be asked. A place to wait for its turn asks nothing.
+ * nobody could be asked.
  */
 export function deviceWaitsForSignIn(device: Pick<Device, "sign_in" | "problem">): boolean {
-  return (device.sign_in != null && device.sign_in.kind !== "queued") || device.problem === "sign_in_needed";
+  return device.sign_in != null || device.problem === "sign_in_needed";
 }
 
 /**
  * What a screen showing a device's last state says while the device is away:
- * the machine's name and that it is not connected, and for a failed sign-in or
- * connection its class, with what to do in the hint. A device that waits on a
- * sign-in says so and leads to its row in Settings, where it is answered
+ * the machine's name and that it is not connected, and for a failed sign-in
+ * or connection its state, with the terminal command or Hide's sentence in
+ * the hint. A device that waits on a sign-in says so and leads to its row in
+ * Settings, where it is answered
  * (B15). The words the connection failed with are the device row's and the
  * diagnostic log's, never this sentence.
  */
@@ -310,7 +306,8 @@ export function deviceAwayLine(device: Device, name: string, t: Translate): { te
   }
   const problem = deviceProblemLine(device.problem, device.ssh_alias, t);
   if (!problem) return { text: t("panes.workspace.stale", { device: name }), hint: null, toRow: false };
-  return { text: t("panes.workspace.staleProblem", { device: name, problem: problem.headline }), hint: problem.action, toRow: false };
+  const hint = problem.command ? `${t("devices.problem.checkInTerminal")}: ${problem.command}` : problem.note;
+  return { text: t("panes.workspace.staleProblem", { device: name, problem: problem.headline }), hint, toRow: false };
 }
 
 /** The helper line a device row carries: whether file and Git work may run there, and why not. */
@@ -456,9 +453,13 @@ export function socketProblem(path: string, t: Translate): string | null {
   return null;
 }
 
-/** Whether Retry is offered: a registered SSH device that is not connected and not mid-attempt, which one waiting on a sign-in is. */
+/**
+ * Whether Retry is offered: a registered SSH device that is not connected and
+ * not mid-attempt, which one waiting on a sign-in is. A changed server key has
+ * the terminal check as its one action: a retry before it is refused again.
+ */
 export function canRetryDevice(device: Device, remote: RemoteStatus | undefined): boolean {
-  return device.kind === "remote" && device.state !== "ready" && device.sign_in == null && deviceState(device, remote).tone !== "pending";
+  return device.kind === "remote" && device.state !== "ready" && device.sign_in == null && device.problem !== "host_key_changed" && deviceState(device, remote).tone !== "pending";
 }
 
 /**

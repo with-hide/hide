@@ -452,8 +452,12 @@ When ssh asks for something, the machine's row in Settings › Devices asks you:
 hide hands the answer to that ssh and keeps it nowhere, so a later connection asks again; for a key's passphrase the row shows the `ssh-add` command (`ssh-add --apple-use-keychain <key>` on a Mac) that puts the key in your agent so it is not asked again.
 A reconnect hide starts on its own asks nothing and stops at Sign in on the row until you press it; a server whose key no longer matches `known_hosts` is refused without asking, with the `ssh <alias>` to check it in a terminal.
 
-An agent you ask to add a machine does it with `hide device add <alias> [--name <name>] [--socket <path>]`, run on the machine that runs Hide; `hide device list` shows each machine's id, state and helper, and `hide device remove <id>` removes one as Settings does.
+An agent you ask to add a machine does it with `hide device add <alias> [--name <name>] [--socket <path>]`, run on the machine that runs Hide, and `hide device remove <id>` removes one as Settings does.
 The command registers the machine without Hide's helper, and its answer tells the agent to ask you to choose Allow and install on the machine's row in Settings › Devices: installing writes that account's hook files, which only you agree to, and until then the machine's Herdr, files, Git and terminals wait.
+`hide device list` shows each machine's id and where its connection is: connected, connecting, your turn, or failed.
+For your turn it names what the row waits on (Allow and install, a sign-in to type, a server key to trust, or a browser page with its link), and for a failure it names the row's one action for it (sign in, check the changed server key with `ssh <alias>` in a terminal, or retry once what ssh's last line names is fixed) with the finer cause beside it; it never carries what ssh asks in its own words or anything you type.
+`hide device retry <id>` starts the attempt the row's Retry starts, which may ask you on the row, and with `--wait` answers once the machine is connected, it is your turn, the attempt failed, or five minutes passed; a machine already connected, connecting or waiting on you gets no new attempt.
+When it is your turn the agent asks you for what the row needs, such as "type the password or code ssh asks for on the row": no command answers what ssh asks, trusts a server key or allows the helper, so those stay yours, on the row.
 A remove is refused while a file tab of that machine is open, because Settings stores the tab's draft first and the command cannot; a command run on a connected machine is refused with `machine_not_permitted`.
 
 The remote machine does not need Herdr installed or a server running first.
@@ -488,7 +492,7 @@ Only supported device platforms get the kit; another platform shows why on its r
 Removing a machine never stops its Herdr server, including one Hide started.
 Removing a machine while it is connected takes Hide's hook entries, the `hide` link and the helper folder `~/.hide/host-helper` off it, and leaves `~/.hide/kit` and `~/.hide/agent-hooks`; removing it while it is not connected leaves them there, where they do no harm, and adding it again replaces them.
 When a Herdr server on that machine still runs the Herdr copy Hide moved it to, the helper folder stays with that copy and the removal says so; delete `~/.hide/host-helper` there once that server has stopped.
-Each device row in Settings shows whether the remote session is connected and, when it is not, why in one line with what to do (the name was not found, the machine did not answer, the sign-in was refused, an access policy refused it, its server key changed, its proxy command failed, `ssh` is missing or too old), and for any other failure ssh's last line; ssh's full output goes to the diagnostic log.
+Each device row in Settings shows whether the remote session is connected and, when it is not, why in one of three states with its one action: a sign-in is needed or was refused (Sign in), its server key changed (the `ssh <alias>` to check it in a terminal), or it could not connect (ssh's last line, or a plain sentence when `ssh` is missing or too old, and Retry); ssh's full output goes to the diagnostic log.
 `Test` runs the SSH, authentication, protocol, Herdr, PTY and Git stages one after another and lists the first one that needs attention on that host.
 
 ## Move the core to another Mac
@@ -637,5 +641,5 @@ Confirm the SSH host works outside hide first, with the same alias the device wa
 ssh <host-alias> true
 ```
 
-hide runs that same `ssh`, so what fails there fails in hide too; the device row in Settings names the class of the failure with what to do, the diagnostic log keeps ssh's own words, and `Test` names the stage that failed.
+hide runs that same `ssh`, so what fails there fails in hide too; the device row in Settings says whether to sign in, check the server key or retry, with ssh's last line when it could not connect, the diagnostic log keeps ssh's own words, and `Test` names the stage that failed.
 What ssh asks is answered on the device row; hide does not store, log or copy an answer.

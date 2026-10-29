@@ -302,7 +302,9 @@ pub const COMMANDS: &[Spec] = &[
         refusals: &["here_unavailable", "ps_answer_unreadable"],
     },
     // Only the core's own machine may run these. Add registers the device
-    // without Hide's helper, which the operator allows on its row.
+    // without Hide's helper, which the operator allows on its row. A device
+    // answers its state, what it waits on from the operator, its failure by
+    // the row's action and the next step, never ssh's words.
     Spec {
         words: &["device", "list"],
         arguments: &[],
@@ -347,6 +349,26 @@ pub const COMMANDS: &[Spec] = &[
             "device_unknown",
             "device_local_remove_denied",
             "device_files_open",
+        ],
+    },
+    // Starts the row's Retry, an attempt that may ask the operator; with
+    // --wait it answers the attempt's outcome. Nothing answers what the
+    // attempt asks: that is the operator's, on the row.
+    Spec {
+        words: &["device", "retry"],
+        arguments: &[Arg {
+            name: "device_id",
+            value: Key,
+        }],
+        repeats: None,
+        options: &[switch("--wait"), switch("--json")],
+        rest: None,
+        answers: &["device_retried"],
+        refusals: &[
+            "machine_not_permitted",
+            "device_unknown",
+            "device_dials_in",
+            "device_wait_timeout",
         ],
     },
     spec(
@@ -936,6 +958,10 @@ fn answers() -> Value {
     map.insert("device_list".into(), shape(&["devices"]));
     map.insert("device_added".into(), shape(&["device", "next_action"]));
     map.insert("device_removed".into(), shape(&["device_id"]));
+    map.insert(
+        "device_retried".into(),
+        herdr_core::device_command::retried_schema(),
+    );
     answers
 }
 
