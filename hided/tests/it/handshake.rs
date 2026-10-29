@@ -1850,3 +1850,74 @@ async fn a_wake_is_taken_only_with_the_token_and_a_known_cause() {
     assert_eq!(post_json(&url, Some(&running.token), wake).await, 204);
     running.stop();
 }
+
+/// `hide <path>` on the core's machine: the command asks with the daemon's
+/// token over one `/ws` connection that is never a screen. A folder a
+/// registered checkout holds comes forward and the windows are called; any
+/// other folder meets the Add a project dialog's `$HOME` line and the core's
+/// own registration, whose refusal is the command's answer.
+#[tokio::test]
+async fn hide_path_opens_a_registered_folder_and_answers_why_another_was_not_added() {
+    let (dir, env) = test_env(true);
+    let home = hide_platform::fs::identity::canonical(dir.path()).unwrap();
+    let checkout = home.join("projects").join("alpha");
+    std::fs::create_dir_all(checkout.join("src")).unwrap();
+    std::fs::create_dir_all(home.join("projects").join("beta")).unwrap();
+    seed_registration(&env.state_dir, "w-alpha", &checkout);
+    let running = hided::start_daemon(env).await.expect("start daemon");
+    let mut window = connect(running.port, None).await;
+    window
+        .send(Message::Text(
+            json!({"token": running.token, "schema_version": 2, "client_kind": "desktop"})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    // A renderer is told where a core move stands before its snapshot.
+    while first_frame(&mut window).await["type"] != "snapshot" {}
+
+    let open = |path: String| {
+        let (port, token) = (running.port, running.token.clone());
+        tokio::task::spawn_blocking(move || {
+            hided::workspace_cli::request_project_open_with_token(port, &token, &path)
+        })
+    };
+    let answer = open(wire(&checkout.join("src"))).await.unwrap().unwrap();
+    assert_eq!(answer["ok"], true, "{answer}");
+    assert_eq!(answer["result"]["path"], json!(wire(&checkout)));
+    assert_eq!(answer["result"]["added"], false);
+    assert_eq!(answer["result"]["window"], true);
+    let called = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if first_frame(&mut window).await["type"] == "window_call" {
+                return;
+            }
+        }
+    })
+    .await;
+    assert!(called.is_ok(), "the open window is called forward");
+
+    let outside = tempfile::tempdir().unwrap();
+    for (path, reason) in [
+        (wire(&home.join("projects").join("gone")), "not_found"),
+        (wire(outside.path()), "needs_confirmation"),
+        (wire(&home), "home_root"),
+        // The dialog's own registration, refused by the core: no Herdr runs.
+        (
+            wire(&home.join("projects").join("beta")),
+            "workspace_control_unavailable",
+        ),
+    ] {
+        let answer = open(path.clone()).await.unwrap().unwrap();
+        assert_eq!(answer["ok"], false, "{path}: {answer}");
+        assert_eq!(answer["reason"], reason, "{path}");
+        assert!(answer["next_action"].as_str().is_some_and(|next| !next.is_empty()));
+    }
+    let health: Value = serde_json::from_str(
+        &reqwest_get(&format!("http://127.0.0.1:{}/health", running.port)).await,
+    )
+    .unwrap();
+    assert_eq!(health["clients"], 1, "each command's connection left; the window stays");
+    running.stop();
+}

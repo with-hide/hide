@@ -148,6 +148,10 @@ pub struct AppState {
     pub own_screens: Arc<Mutex<usize>>,
     /// Which screen each pane's terminal size follows (`pane_sizes`).
     pub pane_sizes: Arc<crate::pane_sizes::PaneSizes>,
+    /// A `hide <path>` that brought a project in front asks this machine's
+    /// windows to come forward too (`project_open`): each sends its screen
+    /// a `window_call` frame.
+    pub window_calls: tokio::sync::broadcast::Sender<()>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -860,6 +864,11 @@ async fn client_loop(
         }
         return;
     }
+    // `hide <path>` on this machine: one request, never a screen.
+    if handshake.client_kind.as_deref() == Some("cli") {
+        crate::project_open::operator_request(socket, state, connection).await;
+        return;
+    }
     screen_loop(socket, state, connection, handshake, None).await;
 }
 
@@ -934,6 +943,7 @@ async fn screen_loop(
     }
     // A move of the core is the process's, beside the core's state.
     let mut move_frames = state.seat.moves.subscribe();
+    let mut window_calls = state.window_calls.subscribe();
     if renderer && relay.is_none() {
         let frame = crate::core_move::control::frame(&move_frames.borrow_and_update());
         if socket.send(Message::Text(frame.into())).await.is_err() {
@@ -1064,6 +1074,15 @@ async fn screen_loop(
                     // snapshot stream; the tree re-reads on the next change.
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {}
+                }
+            }
+            // `state` holds the sender, so the channel never closes under
+            // this loop, and a window that lagged behind calls still comes
+            // forward once.
+            _ = window_calls.recv(), if renderer && relay.is_none() => {
+                let frame = json!({"type": "window_call"}).to_string();
+                if socket.send(Message::Text(frame.into())).await.is_err() {
+                    break;
                 }
             }
             changed = move_frames.changed(), if renderer && relay.is_none() => {
@@ -1474,6 +1493,9 @@ enum ScopedRequest {
     },
     /// `hide device`: the core's own device registrations.
     Device(herdr_core::device_command::DeviceCommand),
+    /// `hide <path>`: a folder of the caller's machine opened as a project
+    /// (`project_open`).
+    ProjectOpen(String),
 }
 
 impl ScopedRequest {
@@ -1491,6 +1513,7 @@ impl ScopedRequest {
                 | Self::AgentCatalog(..)
                 | Self::Ps { .. }
                 | Self::Device(..)
+                | Self::ProjectOpen(..)
         )
     }
 }
@@ -1616,6 +1639,10 @@ async fn scoped_client_loop(
                         .ok()
                         .filter(herdr_core::device_command::DeviceCommand::valid)
                         .map(ScopedRequest::Device),
+                        Some("project_open") => value["path"]
+                            .as_str()
+                            .filter(|path| herdr_core::project_open::valid_path(path))
+                            .map(|path| ScopedRequest::ProjectOpen(path.to_owned())),
                         _ => None,
                     };
                     // A plan carries its whole node list, so a mission
@@ -1655,6 +1682,8 @@ async fn scoped_client_loop(
                         let command_request_id = request_id.clone();
                         let caller_node = source.as_ref().map(|(node, _)| node.clone());
                         let command_relay = Arc::clone(&chosen);
+                        let boundary = Arc::clone(&state.boundary);
+                        let window_calls = state.window_calls.clone();
                         let outcome = if let Some(Err((reason, next_action))) = &relay_slot {
                             Ok(Err(((*reason).to_owned(), *next_action)))
                         } else {
@@ -1757,6 +1786,15 @@ async fn scoped_client_loop(
                                             (code, next)
                                         })?
                                 }
+                                ScopedRequest::ProjectOpen(path) => crate::project_open::run(
+                                    &core,
+                                    &boundary,
+                                    &window_calls,
+                                    renderers.load(Ordering::SeqCst),
+                                    &cap.context.device_id,
+                                    &path,
+                                    &command_request_id,
+                                )?,
                                 ScopedRequest::Device(command) => {
                                     core.device_command(&cap.context.device_id, command)
                                         .map_err(|code| {
@@ -4352,7 +4390,7 @@ impl Drop for OwnScreen {
     }
 }
 
-fn client_gone(state: &AppState, connection: u64, renderer: bool, desktop: bool) {
+pub(crate) fn client_gone(state: &AppState, connection: u64, renderer: bool, desktop: bool) {
     if renderer {
         renderer_count(state, false);
     }

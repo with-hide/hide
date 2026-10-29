@@ -159,8 +159,42 @@ fn platform_opener() -> &'static std::ffi::OsStr {
     std::ffi::OsStr::new("xdg-open")
 }
 
+/// Hands `target`, a file or an address such as the shell's own URL, to
+/// this system's handler for it and waits only for the handoff: macOS's
+/// `open`, the desktop's `xdg-open`, Windows's `ShellExecuteW`, which takes
+/// the text as it is, where `cmd /C start` would read the `&` an address
+/// carries as a second command.
+pub fn hand_to_system(target: &OsStr) -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        shell_execute(target).map_err(|_| io::Error::other("ShellExecuteW refused the address"))
+    }
+    #[cfg(unix)]
+    {
+        let status = Command::new(platform_opener())
+            .arg(target)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(io::Error::other(format!(
+                "{} exited with {status}",
+                platform_opener().to_string_lossy()
+            )))
+        }
+    }
+}
+
 #[cfg(windows)]
 fn shell_open(path: &Path) -> Result<(), &'static str> {
+    shell_execute(path.as_os_str())
+}
+
+#[cfg(windows)]
+fn shell_execute(target: &OsStr) -> Result<(), &'static str> {
     use std::os::windows::ffi::OsStrExt;
     #[link(name = "shell32")]
     unsafe extern "system" {
@@ -174,8 +208,7 @@ fn shell_open(path: &Path) -> Result<(), &'static str> {
         ) -> isize;
     }
     let verb = "open\0".encode_utf16().collect::<Vec<_>>();
-    let file = path
-        .as_os_str()
+    let file = target
         .encode_wide()
         .chain(Some(0))
         .collect::<Vec<_>>();
