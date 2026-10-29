@@ -195,6 +195,13 @@ impl Writer {
         })
     }
 
+    /// Whether the worker has taken the last batch. Until it has, an
+    /// observation only marks itself owed and the next one plans it.
+    #[cfg(test)]
+    pub(crate) fn taken(&self) -> bool {
+        !self.queued.load(Ordering::Acquire)
+    }
+
     /// Failed names get one new attempt on a new authoritative connection,
     /// and every wait is judged again by its first agent list.
     pub(crate) fn reconnected(&mut self) {
