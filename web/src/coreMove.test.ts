@@ -90,4 +90,18 @@ describe("the strip above the window (W1 to W3)", () => {
     expect(windowStrip({ ...fresh, connection: "reconnecting", link: { phase: "waiting", machine: null, alias: "mini" } }, t)?.text).toBe("mini의 core에 연결할 수 없어요 · 다시 연결하는 중");
     expect(windowStrip({ ...fresh, connection: "connecting", link: { phase: "disconnected", machine: null, alias: "mini" } }, t)?.text).toBe("mini core와 연결을 끊었어요");
   });
+
+  it("says what the operator can do when the link stopped on what only they can fix, and offers the retry", async () => {
+    const { t } = await createInterfaceI18n("ko");
+    const base = { refused: false, move: null, machines, coreMachine: "Mac mini", connection: "reconnecting" as const };
+    const stopped = (problem: string) => windowStrip({ ...base, link: { phase: "stopped", machine: null, alias: "mini", problem } }, t);
+    expect(stopped("sign_in_needed")).toEqual({
+      kind: "stopped",
+      mark: "warn",
+      text: "Mac mini core에 로그인하려면 확인이 필요해요 · 터미널에서 ssh mini 명령을 한 번 실행하거나 ssh-add로 키를 더해 주세요",
+      action: "retry",
+    });
+    expect(stopped("host_key_changed")?.text).toBe("Mac mini core의 서버 키가 바뀌었어요 · 터미널에서 확인해 주세요");
+    expect(stopped("sign_in_refused")).toMatchObject({ text: "ssh로 Mac mini core에 연결하지 못했어요 · 터미널에서 ssh mini 명령으로 이유를 확인해 주세요", action: "retry" });
+  });
 });

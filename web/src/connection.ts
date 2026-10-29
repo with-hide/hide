@@ -32,10 +32,31 @@ export function badgeText(state: ConnectionState, refused: boolean, t: TFunction
 
 /**
  * The strip above the window, in the place and size the connection badge always had (D-08); `reconnect` offers the
- * operator's way back after they ended the link (B16), and `give_up` the move's wait on its other machine where the
+ * operator's way back after they ended the link (B16), `retry` the dial a link that stopped on what only they can fix
+ * waits for, and `give_up` the move's wait on its other machine where the
  * move offers it (amendment 4), which only opens the move dialog at its confirm.
  */
-export type WindowStrip = { kind: ConnectionState | "updating" | "unreachable" | "disconnected"; text: string; mark: "pending" | "warn" | null; action?: "reconnect" | "give_up" };
+export type WindowStrip = {
+  kind: ConnectionState | "updating" | "unreachable" | "stopped" | "disconnected";
+  text: string;
+  mark: "pending" | "warn" | null;
+  action?: "reconnect" | "retry" | "give_up";
+};
+
+/**
+ * What the strip says while the link waits for the operator: what they can do in a terminal before they retry, by
+ * the ssh failure it stopped on.
+ */
+function stoppedText(link: CoreLink, machine: string, t: TFunction<"translation">): string {
+  switch (link.problem) {
+    case "sign_in_needed":
+      return t("coreMove.strip.signIn", { machine, alias: link.alias });
+    case "host_key_changed":
+      return t("coreMove.strip.hostKeyChanged", { machine });
+    default:
+      return t("coreMove.strip.stopped", { machine, alias: link.alias });
+  }
+}
 
 /**
  * What the strip says (PRD core-host-node-move W1 to W3, B16): the move's
@@ -65,6 +86,8 @@ export function windowStrip(
         return { kind: "disconnected", text: t("coreMove.strip.disconnected", { machine }), mark: "warn", action: "reconnect" };
       case "waiting":
         return { kind: "unreachable", text: t("coreMove.strip.unreachable", { machine }), mark: "warn" };
+      case "stopped":
+        return { kind: "stopped", text: stoppedText(link, machine, t), mark: "warn", action: "retry" };
     }
   }
   const text = badgeText(connection, input.refused, t);

@@ -8,7 +8,7 @@ import { REFERENCE_FOLDS, sidebarScene, type SceneContent } from "./sceneData";
 
 /** The states a frame of `design/review-targets.json` names, in the order the review lists them. */
 export const CORE_MOVE_STATES = ["devices", "device-kit-failed", "device-unsupported", "devices-menu", "devices-offline", "node-menu", "checks-failed", "confirm", "moving", "failed", "done", "waiting", "give-up", "take-here", "abandoned"] as const;
-export const CORE_WINDOW_STATES = ["rail-node", "rail-core", "window-moving", "window-updating", "window-unreachable", "window-disconnected", "window-waiting"] as const;
+export const CORE_WINDOW_STATES = ["rail-node", "rail-core", "window-moving", "window-updating", "window-unreachable", "window-sign-in", "window-disconnected", "window-waiting"] as const;
 export type CoreMoveState = (typeof CORE_MOVE_STATES)[number] | (typeof CORE_WINDOW_STATES)[number];
 
 /**
@@ -74,6 +74,7 @@ export const WINDOW_STATES: Partial<Record<CoreMoveState, { connection: "moving"
   "window-moving": { connection: "moving", move: view({ state: "copying", step: "copy" }) },
   "window-updating": { connection: "connecting", link: { phase: "updating", machine: "Mac mini", alias: "mini" } },
   "window-unreachable": { connection: "reconnecting", link: { phase: "waiting", machine: "Mac mini", alias: "mini" } },
+  "window-sign-in": { connection: "reconnecting", link: { phase: "stopped", machine: null, alias: "mini", problem: "sign_in_needed" } },
   "window-disconnected": { connection: "reconnecting", link: { phase: "disconnected", machine: null, alias: "mini" } },
   "window-waiting": { connection: "moving", move: view({ state: "waiting", step: "reattach", cause: { kind: "unreachable" }, abandon: true }) },
 };
@@ -81,7 +82,7 @@ export const WINDOW_STATES: Partial<Record<CoreMoveState, { connection: "moving"
 /** Which side each state is drawn from. */
 export function sideOf(state: CoreMoveState): CoreMoveSide {
   if (state === "rail-core") return "linked";
-  return state === "node-menu" || state === "take-here" || state === "rail-node" || state === "window-updating" || state === "window-unreachable" || state === "window-disconnected" ? "node" : "core";
+  return state === "node-menu" || state === "take-here" || state === "rail-node" || state === "window-updating" || state === "window-unreachable" || state === "window-sign-in" || state === "window-disconnected" ? "node" : "core";
 }
 
 /** The device whose ⋯ menu a state opens, and the item it points at. */
