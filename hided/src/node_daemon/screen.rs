@@ -91,12 +91,34 @@ pub(super) async fn screen(
 /// stands each time that changes (`core_link` frame), and where a move of
 /// the core stands from the moment one is under way (`core_move` frame), a
 /// window shown nothing of a move until then; what it sends meanwhile is
-/// dropped and counted, but for the operator's reconnect (B16) and a move's
-/// asks, such as giving up a move whose peer never answers. `None` when the
-/// screen left first.
+/// dropped and counted, but for the operator's reconnect (B16), an answer to
+/// what the dial their Retry started asks (`core_link` {action: `sign_in`},
+/// PRD system-ssh-device-link B33) and a move's asks, such as giving up a
+/// move whose peer never answers. `None` when the screen left first.
 async fn hold(socket: &mut WebSocket, state: &NodeState) -> Option<Arc<LiveLink>> {
+    state.held_screens.fetch_add(1, Ordering::SeqCst);
+    let held = held(socket, state).await;
+    let last = state.held_screens.fetch_sub(1, Ordering::SeqCst) == 1;
+    // B8: a question no held screen shows any more is cancelled, which
+    // ends the attempt, rather than left to wait out its five minutes.
+    if held.is_none() && last {
+        let waiting = state
+            .sign_ins
+            .borrow()
+            .as_ref()
+            .filter(|shown| shown.wait.is_question())
+            .map(|shown| shown.question);
+        if let Some(question) = waiting {
+            (state.answer_sign_in)(question, SignInReply::Cancel);
+        }
+    }
+    held
+}
+
+async fn held(socket: &mut WebSocket, state: &NodeState) -> Option<Arc<LiveLink>> {
     let mut live = state.live.clone();
     let mut phases = state.phases.clone();
+    let mut sign_ins = state.sign_ins.clone();
     let mut told: Option<Value> = None;
     let mut move_frames = state.seat.moves.subscribe();
     move_frames.mark_changed();
@@ -105,7 +127,10 @@ async fn hold(socket: &mut WebSocket, state: &NodeState) -> Option<Arc<LiveLink>
         if let Some(link) = live.borrow_and_update().clone() {
             return Some(link);
         }
-        let frame = phases.borrow_and_update().link_frame(&state.core_alias);
+        let sign_in = sign_ins.borrow_and_update().clone();
+        let frame = phases
+            .borrow_and_update()
+            .link_frame(&state.core_alias, sign_in.as_ref());
         if let Some(frame) = frame
             && told.as_ref() != Some(&frame)
         {
@@ -125,6 +150,11 @@ async fn hold(socket: &mut WebSocket, state: &NodeState) -> Option<Arc<LiveLink>
                 }
             }
             changed = phases.changed() => {
+                if changed.is_err() {
+                    return None;
+                }
+            }
+            changed = sign_ins.changed() => {
                 if changed.is_err() {
                     return None;
                 }
@@ -179,6 +209,22 @@ async fn hold(socket: &mut WebSocket, state: &NodeState) -> Option<Arc<LiveLink>
 /// progress is waited for. A change that did not happen is told to the
 /// screen; why goes to the log. `Err` when the screen left.
 async fn control_link(socket: &mut WebSocket, state: &NodeState, event: &Value) -> Result<(), ()> {
+    if event.pointer("/payload/action").and_then(Value::as_str) == Some("sign_in") {
+        // The answer goes to the waiting question and nowhere else: the log
+        // hears only that it came (B10).
+        let answer = event.get("payload").cloned().and_then(|payload| {
+            serde_json::from_value::<crate::screen_sign_in::SignInAnswer>(payload).ok()
+        });
+        if let Some(answer) = answer {
+            (state.answer_sign_in)(answer.question, answer.reply);
+        } else {
+            herdr_core::diagnostic!(json!({
+                "component": "node_daemon",
+                "kind": "core_link.sign_in_malformed",
+            }));
+        }
+        return Ok(());
+    }
     let action = event
         .pointer("/payload/action")
         .cloned()

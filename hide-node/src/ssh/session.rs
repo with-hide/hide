@@ -445,6 +445,13 @@ impl SshTarget {
         }
     }
 
+    /// Has `program` answer ssh's questions instead of the `hide` beside
+    /// this program: a test's.
+    pub fn with_askpass_program(mut self, program: PathBuf) -> Self {
+        self.askpass = Some(program);
+        self
+    }
+
     pub fn alias(&self) -> &str {
         &self.alias
     }
@@ -462,10 +469,12 @@ impl SshTarget {
 /// the session is dropped, which ends its `ssh`, or [`Self::attach`] hands
 /// its pipes to the attach role.
 ///
-/// Nobody is asked anything yet: a question, an unknown server key or a
+/// Its questions go to the screen that started it (the node window's strip,
+/// the core move dialog) when the operator's own press started it
+/// (`Wake::Allowed`); otherwise a question, an unknown server key or a
 /// check in the browser ends the sign-in as `sign_in_needed`, as an attempt
-/// Hide made by itself does (D-06); keys, the agent and Tailscale SSH sign
-/// in.
+/// Hide made by itself does (D-06), and keys, the agent and Tailscale SSH
+/// still sign in.
 pub struct Session {
     pipe: SigningIn,
     facts: Facts,
@@ -476,16 +485,26 @@ pub struct Session {
 }
 
 impl Session {
-    /// Signs in to `target`'s alias, as `ssh -G` resolved it (`resolved`);
+    /// Signs in to `target`'s alias, as `ssh -G` resolved it (`resolved`),
+    /// with its questions going to `screen` when `wake` allows asking;
     /// `cancel` ends the `ssh` at once, from the dial to the session's end.
     pub fn open(
         target: &SshTarget,
         resolved: &Resolved,
         cancel: &Cancel,
+        screen: Arc<dyn SignIn>,
+        wake: Wake,
     ) -> Result<Self, SessionError> {
         let name = format!("ssh:{}", target.alias);
         let version = target.program.version().map_err(SessionError::Ssh)?;
-        let (pipe, facts) = sign_in(
+        // D-06, B14: a dial nobody pressed for hands its questions to
+        // nobody, so the first one ends it as a sign-in needed and the
+        // screen never shows it.
+        let asks: Arc<dyn SignIn> = match wake {
+            Wake::Allowed => Arc::clone(&screen),
+            Wake::NotAllowed => Arc::new(NoSignIn),
+        };
+        let signed = sign_in(
             &Dial {
                 program: &target.program,
                 alias: &target.alias,
@@ -494,12 +513,14 @@ impl Session {
                 askpass: target.askpass.as_deref(),
                 target: &name,
             },
-            Arc::new(NoSignIn),
-            Wake::NotAllowed,
+            asks,
+            wake,
             cancel,
             &|_| {},
-        )
-        .map_err(SessionError::of_establish)?;
+        );
+        // Signed in or not, nothing of this sign-in waits on the screen.
+        screen.ended();
+        let (pipe, facts) = signed.map_err(SessionError::of_establish)?;
         Ok(Self {
             pipe,
             facts,

@@ -101,7 +101,8 @@ pub use ai::{
 };
 pub use handle::Core;
 pub use model::{
-    CoreOptions, DeviceRegistration, LinkOrigin, SCHEMA_VERSION, Snapshot, SnapshotDeltaPayload,
+    CoreOptions, DeviceProblem, DeviceRegistration, LinkOrigin, SCHEMA_VERSION, Snapshot,
+    SnapshotDeltaPayload,
 };
 pub use model::{
     RemoteFileListSnapshot, RemoteSessionSnapshot, RemoteStatusSnapshot, RestSections,

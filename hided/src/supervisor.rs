@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use herdr_core::node_migration::{self, copy};
+use hide_node_link::device::{SshProblem, Wake};
 use serde_json::json;
 
 use crate::core_move::abandoned::{self, Abandoned, PeerStep};
@@ -651,6 +652,15 @@ struct Prepared {
     remote: Remote,
 }
 
+/// The connection check stopped on `ssh`: the view says what the operator
+/// does about it as the device row does, which [`checks_failed`] keeps.
+pub(super) fn stopped_on_ssh(moves: &MoveControl, ssh: Option<SshProblem>) {
+    moves.update(|view| {
+        view.ssh_problem =
+            ssh.map(|problem| herdr_core::DeviceProblem::of(problem).code().to_owned());
+    });
+}
+
 fn checks_failed(moves: &MoveControl, device: &str, failed: Vec<FailedCheck>) {
     let checked =
         crate::core_move::control::checks_run(&crate::core_move::control::FORWARD_CHECKS, &failed);
@@ -663,6 +673,7 @@ fn checks_failed(moves: &MoveControl, device: &str, failed: Vec<FailedCheck>) {
         device: Some(device.to_owned()),
         checked,
         failed,
+        ssh_problem: moves.view().ssh_problem,
         ..MoveView::default()
     });
 }
@@ -743,25 +754,36 @@ async fn prepare(
     let (alias, program) = (source.ssh_alias.clone(), source.helper_path.clone());
     let own = build.clone();
     let stranded = retry.clone();
+    let sign_in = moves.sign_in();
     let inspected = tokio::task::spawn_blocking(move || {
-        let remote = Remote::new(&home, &alias, &program, &own);
-        let inspected = driver::inspect(&remote, &asks)?;
-        // A copy an earlier try placed there and could not take back (the
-        // device unreachable as it rolled back) is taken back first.
-        let inspected = match (&stranded, &inspected.handover) {
-            (Some(retry), Some(handover))
-                if handover.intent == retry.intent && handover.state.is_pending() =>
-            {
-                let aborted = driver::abort_target(&remote, retry)?;
-                log(
-                    "retry.aborted_stranded",
-                    json!({"intent": retry.intent, "aborted": format!("{aborted:?}")}),
-                );
-                driver::inspect(&remote, &asks)?
-            }
-            _ => inspected,
-        };
-        Ok::<_, MoveFailure>((remote, inspected))
+        let remote = Remote::new(&home, &alias, &program, &own).with_sign_in(sign_in);
+        // The operator pressed for these checks, so their dial may ask what
+        // ssh asks in the dialog; the move's later dials ask nobody (D-06).
+        remote.may_ask(Wake::Allowed);
+        let inspected = (|| {
+            let inspected = driver::inspect(&remote, &asks)?;
+            // A copy an earlier try placed there and could not take back (the
+            // device unreachable as it rolled back) is taken back first.
+            let inspected = match (&stranded, &inspected.handover) {
+                (Some(retry), Some(handover))
+                    if handover.intent == retry.intent && handover.state.is_pending() =>
+                {
+                    let aborted = driver::abort_target(&remote, retry)?;
+                    log(
+                        "retry.aborted_stranded",
+                        json!({"intent": retry.intent, "aborted": format!("{aborted:?}")}),
+                    );
+                    driver::inspect(&remote, &asks)?
+                }
+                _ => inspected,
+            };
+            Ok::<_, MoveFailure>(inspected)
+        })();
+        remote.may_ask(Wake::NotAllowed);
+        let ssh = remote.ssh_problem();
+        inspected
+            .map(|inspected| (remote, inspected))
+            .map_err(|failure| (failure, ssh))
     })
     .await
     .map_err(|error| fail(CheckId::Connection, error.to_string()))?;
@@ -769,14 +791,15 @@ async fn prepare(
         Ok(found) => found,
         // Another build's answers are not read: its build is the one check
         // it can fail.
-        Err(MoveFailure::OtherBuild { build: theirs }) => {
+        Err((MoveFailure::OtherBuild { build: theirs }, _)) => {
             failed.push(FailedCheck {
                 check: CheckId::Build,
                 detail: format!("the device runs {theirs}, this machine {build}"),
             });
             return Err(failed);
         }
-        Err(failure) => {
+        Err((failure, ssh)) => {
+            stopped_on_ssh(moves, ssh);
             failed.push(FailedCheck {
                 check: CheckId::Connection,
                 detail: format!("{failure:?}"),

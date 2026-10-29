@@ -31,7 +31,7 @@ use hide_node::ssh::session::{SessionError, SshTarget};
 use hide_node::ssh::upstream::Upstream;
 use hide_node::terminal::OutputSink;
 use hide_node::terminal::device::NodeTerminals;
-use hide_node_link::device::SshFailure;
+use hide_node_link::device::{ShownSignIn, SignInReply, SshFailure, Wake};
 use hide_platform::ipc::{LocalStream, ShutdownHandle};
 use serde_json::json;
 use tokio::sync::watch;
@@ -40,6 +40,7 @@ use crate::attach::{self, Accepted, AttachOutcome, Line, NodeHello};
 use crate::backoff::Backoff;
 use crate::link_mux::Mux;
 use crate::placement::Placement;
+use crate::screen_sign_in::ScreenSignIn;
 
 /// A link that lived this long starts the wait over.
 const SETTLED: Duration = Duration::from_secs(30);
@@ -204,8 +205,15 @@ impl Phase {
     /// core draws the screen itself.
     ///
     /// A wait only the operator ends is `stopped`, with `problem`, the
-    /// ssh failure's code, for the screen to word what they can do.
-    pub fn link_frame(&self, alias: &str) -> Option<serde_json::Value> {
+    /// ssh failure as the device row groups it (`DeviceProblem`), for the
+    /// screen to offer the row's action.
+    /// `sign_in` is what the dial their Retry or connect started asks them
+    /// now (PRD system-ssh-device-link B33), which the strip shows.
+    pub fn link_frame(
+        &self,
+        alias: &str,
+        sign_in: Option<&ShownSignIn>,
+    ) -> Option<serde_json::Value> {
         let (phase, machine, problem) = match self {
             Self::Live(_) => return None,
             Self::Connecting => ("connecting", None, None),
@@ -213,7 +221,11 @@ impl Phase {
             Self::Disconnected => ("disconnected", None, None),
             Self::Waiting {
                 reason: LinkFailure::Operator(failure),
-            } => ("stopped", None, Some(failure.problem.code())),
+            } => (
+                "stopped",
+                None,
+                Some(herdr_core::DeviceProblem::of(failure.problem).code()),
+            ),
             Self::Waiting { reason } => (
                 "waiting",
                 match reason {
@@ -227,7 +239,13 @@ impl Phase {
         };
         Some(json!({
             "type": "core_link",
-            "payload": {"phase": phase, "machine": machine, "alias": alias, "problem": problem},
+            "payload": {
+                "phase": phase,
+                "machine": machine,
+                "alias": alias,
+                "problem": problem,
+                "sign_in": sign_in,
+            },
         }))
     }
 }
@@ -265,7 +283,9 @@ struct State {
     /// Set by [`NodeRole::wake`]: the next attempt does not wait.
     woken: bool,
     /// Set by a window's connect ([`NodeRole::connect_again`]) during a wait
-    /// on the operator: the only end of that wait.
+    /// on the operator: the only end of that wait, and the one attempt
+    /// that may ask the operator what ssh asks (PRD system-ssh-device-link
+    /// D-06, B33).
     asked: bool,
     /// The live link's stream, ended to end the link.
     link: Option<ShutdownHandle>,
@@ -350,6 +370,10 @@ struct Shared {
     /// How this node updates an older core to its build; none leaves an
     /// older core refused as another build.
     updates: Option<Updates>,
+    /// What the dial the operator started asks, on this machine's held
+    /// windows (`core_link` frame's `sign_in`).
+    sign_in: Arc<ScreenSignIn>,
+    sign_ins: watch::Receiver<Option<ShownSignIn>>,
 }
 
 /// What a node needs to update its core to this build (PRD
@@ -404,6 +428,13 @@ impl NodeRole {
         } else {
             Phase::Connecting
         };
+        let (shown, sign_ins) = watch::channel(None);
+        let sign_in = Arc::new(ScreenSignIn::new(
+            "core_link",
+            Box::new(move |wait| {
+                shown.send_replace(wait);
+            }),
+        ));
         let shared = Arc::new(Shared {
             state: Mutex::new(State {
                 phase: first.clone(),
@@ -422,6 +453,8 @@ impl NodeRole {
             browser,
             roots_changed,
             updates,
+            sign_in,
+            sign_ins,
         });
         let home = home.to_owned();
         let thread = {
@@ -459,6 +492,17 @@ impl NodeRole {
     /// The phase, as it changes.
     pub fn phases(&self) -> watch::Receiver<Phase> {
         self.shared.phases.subscribe()
+    }
+
+    /// What the dial asks the operator, as it changes.
+    pub fn sign_ins(&self) -> watch::Receiver<Option<ShownSignIn>> {
+        self.shared.sign_ins.clone()
+    }
+
+    /// A window's answer to what the dial asks; one for a question no longer
+    /// asked reaches nothing.
+    pub fn answer_sign_in(&self, question: u64, reply: SignInReply) -> bool {
+        self.shared.sign_in.answer(question, reply)
     }
 
     /// The operator ends the link from this machine's window (B16): the
@@ -593,13 +637,18 @@ fn keep_linked(shared: &Shared, home: &Path, placement: &Placement, identity: &N
             return;
         }
         generation += 1;
-        // A connect that ended the last wait is spent by this attempt.
-        lock(&shared.state).asked = false;
+        // A connect that ended the last wait is spent by this attempt, the
+        // only one that may ask the operator (D-06).
+        let wake = if std::mem::take(&mut lock(&shared.state).asked) {
+            Wake::Allowed
+        } else {
+            Wake::NotAllowed
+        };
         if set_phase(shared, Phase::Connecting) {
             return;
         }
         let started = Instant::now();
-        let reason = link_once(shared, home, &placement, identity, generation);
+        let reason = link_once(shared, home, &placement, identity, generation, wake);
         // The core now runs this build: the next dial reaches it at once.
         if let LinkFailure::CoreUpdated { program } = reason {
             placement.program = program;
@@ -906,8 +955,9 @@ fn link_once(
     placement: &Placement,
     identity: &NodeIdentity,
     generation: u64,
+    wake: Wake,
 ) -> LinkFailure {
-    match try_link(shared, home, placement, identity, generation) {
+    match try_link(shared, home, placement, identity, generation, wake) {
         Ok(ended) | Err(ended) => ended,
     }
 }
@@ -918,6 +968,7 @@ fn try_link(
     placement: &Placement,
     identity: &NodeIdentity,
     generation: u64,
+    wake: Wake,
 ) -> Result<LinkFailure, LinkFailure> {
     // `ssh` reads the alias at every dial, so a fix the operator makes to
     // it reaches the next one; a connection the watch or the operator
@@ -927,12 +978,18 @@ fn try_link(
         match slot.as_ref() {
             Some(upstream) if !upstream.closed() => Arc::clone(upstream),
             _ => {
-                let upstream = Arc::new(Upstream::new(SshTarget::new(home, &placement.alias)));
+                let upstream = Arc::new(
+                    Upstream::new(SshTarget::new(home, &placement.alias))
+                        .with_sign_in(Arc::clone(&shared.sign_in) as _),
+                );
                 *slot = Some(Arc::clone(&upstream));
                 upstream
             }
         }
     };
+    // The attempt's dials, the core update's included, ask the operator
+    // only when their connect started it.
+    upstream.may_ask(wake);
     let channel = upstream
         .attach(&placement.program, placement.state_dir.as_deref())
         .map_err(attach_failure)?;
@@ -1040,6 +1097,12 @@ fn update_core(
     let packages = hide_node::ssh::host::HelperPackages::new(Some(updates.packages.clone()));
     let program = match upstream.install_build(&packages, &root) {
         Ok(program) => program,
+        // A dial that stopped on a sign-in or a server key waits for the
+        // operator's Retry like the link's own, and leaves this
+        // connection's update untried for it.
+        Err(SessionError::Ssh(failure)) if !failure.problem.retried() => {
+            return LinkFailure::Operator(failure);
+        }
         Err(reason) => return failed(format!("upload: {reason}")),
     };
     log("update.uploaded", json!({"program": program}));
@@ -1419,13 +1482,13 @@ mod tests {
         let frame = Phase::Waiting {
             reason: LinkFailure::Unreachable("connection refused".to_owned()),
         }
-        .link_frame("mini")
+        .link_frame("mini", None)
         .unwrap();
         assert_eq!(
             frame["payload"],
-            json!({"phase": "waiting", "machine": null, "alias": "mini", "problem": null})
+            json!({"phase": "waiting", "machine": null, "alias": "mini", "problem": null, "sign_in": null})
         );
-        let frame = Phase::Disconnected.link_frame("mini").unwrap();
+        let frame = Phase::Disconnected.link_frame("mini", None).unwrap();
         assert_eq!(frame["payload"]["alias"], "mini");
     }
 
@@ -1448,9 +1511,12 @@ mod tests {
                 detail: "detail".to_owned(),
             }));
             assert!(reason.waits_for_operator(), "{problem:?}");
-            let frame = Phase::Waiting { reason }.link_frame("mini").unwrap();
+            let frame = Phase::Waiting { reason }.link_frame("mini", None).unwrap();
             assert_eq!(frame["payload"]["phase"], "stopped");
-            assert_eq!(frame["payload"]["problem"], problem.code());
+            assert_eq!(
+                frame["payload"]["problem"],
+                herdr_core::DeviceProblem::of(problem).code()
+            );
         }
         for (error, _) in dial_outcomes() {
             let owed = matches!(&error, SessionError::Ssh(failure) if !failure.problem.retried());

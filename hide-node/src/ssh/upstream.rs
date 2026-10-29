@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
-use hide_node_link::device::Cancel;
+use hide_node_link::device::{Cancel, NoSignIn, SignIn, SshProblem, Wake};
 
 use super::lock_recover;
 use super::openssh;
@@ -92,6 +92,13 @@ pub struct Upstream {
     /// Set while a resolution of the core machine's name runs: one at a
     /// time, however long the system's resolver takes.
     resolving: Arc<AtomicBool>,
+    /// The screen a dial's questions go to.
+    sign_in: Arc<dyn SignIn>,
+    /// Whether the next dial may ask the operator: only one their own press
+    /// started (PRD system-ssh-device-link D-06, B33).
+    wake: Mutex<Wake>,
+    /// What `ssh` stopped on at the last dial, none when it signed in.
+    failed: Mutex<Option<SshProblem>>,
 }
 
 impl Upstream {
@@ -103,12 +110,34 @@ impl Upstream {
             cancel: Cancel::default(),
             resolved: Mutex::new(None),
             resolving: Arc::default(),
+            sign_in: Arc::new(NoSignIn),
+            wake: Mutex::new(Wake::NotAllowed),
+            failed: Mutex::new(None),
         }
+    }
+
+    /// Sends the questions of a dial the operator started to `sign_in`.
+    pub fn with_sign_in(mut self, sign_in: Arc<dyn SignIn>) -> Self {
+        self.sign_in = sign_in;
+        self
+    }
+
+    /// Whether the dials from now on may ask the operator: `Wake::Allowed`
+    /// only for steps their own press started. A session already signed in
+    /// asks nothing more.
+    pub fn may_ask(&self, wake: Wake) {
+        *lock_recover(&self.wake) = wake;
     }
 
     /// The alias this connection dials.
     pub fn alias(&self) -> &str {
         self.target.alias()
+    }
+
+    /// What `ssh` stopped on at the last dial, for a screen to say what the
+    /// operator does about it; none when that dial signed in.
+    pub fn ssh_problem(&self) -> Option<SshProblem> {
+        *lock_recover(&self.failed)
     }
 
     /// Runs `step` on the session the last step left, or on a new one, and
@@ -130,9 +159,25 @@ impl Upstream {
     }
 
     fn open(&self) -> Result<Session, SessionError> {
+        let opened = self.dial();
+        *lock_recover(&self.failed) = match &opened {
+            Err(SessionError::Ssh(failure)) => Some(failure.problem),
+            _ => None,
+        };
+        opened
+    }
+
+    fn dial(&self) -> Result<Session, SessionError> {
         let resolved = self.target.resolve().map_err(SessionError::Ssh)?;
         *lock_recover(&self.resolved) = Some(resolved.clone());
-        Session::open(&self.target, &resolved, &self.cancel)
+        let wake = *lock_recover(&self.wake);
+        Session::open(
+            &self.target,
+            &resolved,
+            &self.cancel,
+            Arc::clone(&self.sign_in),
+            wake,
+        )
     }
 
     /// Runs `program attach [--state-dir <dir>]` on the machine in place of

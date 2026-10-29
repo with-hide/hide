@@ -49,6 +49,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use futures_util::{SinkExt, StreamExt};
 use hide_node::terminal::OutputSink;
+use hide_node_link::device::{ShownSignIn, SignInReply};
 use hide_node_link::terminal::{
     KeyTarget, MAX_PANE_ID_BYTES, TerminalDown, TerminalLine, TerminalNode, TerminalUp,
     decode_base64, device_pane_prefix, encode_base64,
@@ -106,6 +107,16 @@ pub struct NodeState {
     /// Ends or restores the link at the operator's word from this
     /// machine's window (B16), recorded in the placement first.
     pub link_control: Arc<dyn Fn(LinkAction) -> Result<(), String> + Send + Sync>,
+    /// What the dial a window's Retry or connect started asks, which a held
+    /// screen is told (PRD system-ssh-device-link B33).
+    pub sign_ins: watch::Receiver<Option<ShownSignIn>>,
+    /// A held screen's answer to it; one for a question no longer asked
+    /// reaches nothing.
+    pub answer_sign_in: Arc<dyn Fn(u64, SignInReply) -> bool + Send + Sync>,
+    /// Screens held while the link is down: when the last one leaves, a
+    /// question still waiting is cancelled, so the attempt ends rather than
+    /// wait for a screen nobody sees (B8).
+    pub held_screens: Arc<AtomicUsize>,
     pub clients: Arc<AtomicUsize>,
     pub connections: Arc<AtomicU64>,
     pub last_client_gone: Arc<Mutex<Instant>>,
@@ -236,6 +247,14 @@ impl NodeDaemon {
             }) as Arc<dyn Fn(LinkAction) -> Result<(), String> + Send + Sync>
         };
         let phases = role.phases();
+        let sign_ins = role.sign_ins();
+        let answer_sign_in = {
+            let role = Arc::downgrade(&role);
+            Arc::new(move |question: u64, reply: SignInReply| {
+                role.upgrade()
+                    .is_some_and(|role| role.answer_sign_in(question, reply))
+            }) as Arc<dyn Fn(u64, SignInReply) -> bool + Send + Sync>
+        };
         let browser_routes = BrowserRoutes::new(Arc::new(NodePages::new(
             screen_node,
             core_node,
@@ -261,6 +280,9 @@ impl NodeDaemon {
                 core_alias,
                 connect_again,
                 link_control,
+                sign_ins,
+                answer_sign_in,
+                held_screens: Arc::new(AtomicUsize::new(0)),
                 clients: Arc::new(AtomicUsize::new(0)),
                 connections: Arc::new(AtomicU64::new(0)),
                 last_client_gone: Arc::new(Mutex::new(Instant::now())),

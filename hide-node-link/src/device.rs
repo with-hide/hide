@@ -524,6 +524,104 @@ pub trait SignIn: Send + Sync {
     /// core's bound; an attempt Hide started by itself is answered
     /// [`Refusal::NotAllowed`] at once.
     fn ask(&self, question: SignInWait) -> Result<Answer, Refusal>;
+    /// The attempt's sign-in is over, signed in or not: whatever it still
+    /// shows or asks goes, and a question still waiting is answered
+    /// [`Refusal::Ended`]. A caller whose own state ends with the attempt,
+    /// as the device row's does, has nothing to do.
+    fn ended(&self) {}
+}
+
+/// What an attempt waits on as a screen shows it: the device row
+/// (`DeviceSnapshot.sign_in`), a node window's strip (`core_link`) and the
+/// core move dialog (`core_move`) read the same shape (PRD
+/// system-ssh-device-link B6-B12, B33).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ShownSignIn {
+    /// The number an answer names, so an answer typed for a question ssh no
+    /// longer asks never answers the next one (B7).
+    pub question: u64,
+    #[serde(flatten)]
+    pub wait: SignInWait,
+    /// For a key's passphrase: the command that adds the key to the agent
+    /// of the machine ssh runs on, so it is typed once (B9).
+    #[serde(default)]
+    pub key_command: Option<String>,
+}
+
+impl ShownSignIn {
+    pub fn new(question: u64, wait: SignInWait) -> Self {
+        let key_command = match &wait {
+            SignInWait::Secret {
+                key_file: Some(file),
+                ..
+            } => Some(add_key_command(file)),
+            _ => None,
+        };
+        Self {
+            question,
+            wait,
+            key_command,
+        }
+    }
+}
+
+/// The command that adds a key to the agent of the machine ssh runs on, so
+/// its passphrase is typed once rather than on every connection (D-07,
+/// B9).
+pub fn add_key_command(file: &str) -> String {
+    let quoted = if file
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || "/._-~+@:".contains(character))
+    {
+        file.to_owned()
+    } else {
+        format!("'{}'", file.replace('\'', r"'\''"))
+    };
+    if cfg!(target_os = "macos") {
+        format!("ssh-add --apple-use-keychain {quoted}")
+    } else {
+        format!("ssh-add {quoted}")
+    }
+}
+
+/// The operator's reply to a shown question, from whichever screen shows
+/// it. Its `Debug` shows nothing typed (B10).
+#[derive(Deserialize)]
+#[serde(tag = "reply", rename_all = "snake_case")]
+pub enum SignInReply {
+    Text { text: String },
+    Accept,
+    Cancel,
+}
+
+impl SignInReply {
+    /// The reply's kind, for a log line: never what was typed.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::Text { .. } => "text",
+            Self::Accept => "accept",
+            Self::Cancel => "cancel",
+        }
+    }
+
+    /// The answer the waiting question takes.
+    pub fn into_answer(self) -> Result<Answer, Refusal> {
+        match self {
+            Self::Text { text } => Ok(Answer::Text(Secret::new(text))),
+            Self::Accept => Ok(Answer::Accept),
+            Self::Cancel => Err(Refusal::Cancelled),
+        }
+    }
+}
+
+impl fmt::Debug for SignInReply {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Text { .. } => "Text(..)",
+            Self::Accept => "Accept",
+            Self::Cancel => "Cancel",
+        })
+    }
 }
 
 /// A [`SignIn`] that asks nobody and shows nothing: a test's, or a caller
@@ -1113,6 +1211,25 @@ pub trait DialedTransport: DeviceTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_add_key_command_quotes_a_file_a_shell_would_split() {
+        let plain = add_key_command("/home/al/.ssh/id_ed25519");
+        let spaced = add_key_command("/Users/example/a b/.ssh/it's");
+        if cfg!(target_os = "macos") {
+            assert_eq!(
+                plain,
+                "ssh-add --apple-use-keychain /home/al/.ssh/id_ed25519"
+            );
+            assert_eq!(
+                spaced,
+                r"ssh-add --apple-use-keychain '/Users/example/a b/.ssh/it'\''s'"
+            );
+        } else {
+            assert_eq!(plain, "ssh-add /home/al/.ssh/id_ed25519");
+            assert_eq!(spaced, r"ssh-add '/Users/example/a b/.ssh/it'\''s'");
+        }
+    }
 
     /// A cancel runs the armed kill, also one armed after it, and none once
     /// disarmed; the attempt ends only once every share is given back.

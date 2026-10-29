@@ -11,7 +11,10 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, watch};
 
+use hide_node_link::device::{ShownSignIn, SignIn};
+
 use super::journal::{Journal, MoveFailure, MoveStep};
+use crate::screen_sign_in::{ScreenSignIn, SignInAnswer};
 
 /// What a window's `core_move` event asks: a request the supervisor takes,
 /// or the abandon of the move its wait offers, which the wait itself hears.
@@ -266,6 +269,16 @@ pub struct MoveView {
     /// Whether the move's wait takes an `abandon` request now.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub abandon: bool,
+    /// What `ssh` asks while the checks the operator pressed for sign in to
+    /// the other machine (PRD system-ssh-device-link B33); the dialog
+    /// answers it with a `core_move` event {action: `sign_in`}.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sign_in: Option<ShownSignIn>,
+    /// The connection check stopped on ssh: the device row's grouping of its
+    /// failure (`sign_in_needed`, `sign_in_refused`, `host_key_changed`,
+    /// `cannot_connect`, ...), so the dialog offers the row's action.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_problem: Option<String>,
 }
 
 impl MoveView {
@@ -286,7 +299,9 @@ impl MoveView {
 /// The supervisor's side of the move: one request waiting at most, and the
 /// view every role sends.
 pub struct MoveControl {
-    view: watch::Sender<MoveView>,
+    view: Arc<watch::Sender<MoveView>>,
+    /// What the checks' `ssh` asks, which the view carries as `sign_in`.
+    sign_in: Arc<ScreenSignIn>,
     requests: mpsc::Sender<Asked>,
     receiver: Mutex<Option<mpsc::Receiver<Asked>>>,
     /// The wait that offers an abandon now, whose move a resumed move's
@@ -334,8 +349,21 @@ impl RequestRefusal {
 impl Default for MoveControl {
     fn default() -> Self {
         let (requests, receiver) = mpsc::channel(1);
+        let view = Arc::new(watch::Sender::new(MoveView::default()));
+        let shown = Arc::clone(&view);
+        let sign_in = Arc::new(ScreenSignIn::new(
+            "core_move",
+            Box::new(move |wait| {
+                shown.send_if_modified(|view| {
+                    let changed = view.sign_in != wait;
+                    view.sign_in = wait;
+                    changed
+                });
+            }),
+        ));
         Self {
-            view: watch::Sender::new(MoveView::default()),
+            view,
+            sign_in,
             requests,
             receiver: Mutex::new(Some(receiver)),
             offered: Mutex::new(None),
@@ -477,6 +505,21 @@ impl MoveControl {
 
     /// Takes a window's `core_move` event; the refusal is its reason code.
     pub fn request_event(&self, event: &serde_json::Value) -> Result<(), &'static str> {
+        let payload = event.get("payload").cloned();
+        if payload
+            .as_ref()
+            .and_then(|payload| payload.get("action"))
+            .and_then(serde_json::Value::as_str)
+            == Some("sign_in")
+        {
+            // The answer goes to the waiting question and nowhere else; one
+            // for a question no longer asked reaches nothing (B7, B10).
+            let answer = payload
+                .and_then(|payload| serde_json::from_value::<SignInAnswer>(payload).ok())
+                .ok_or("move_malformed")?;
+            self.sign_in.answer(answer.question, answer.reply);
+            return Ok(());
+        }
         let ask: WindowAsk = serde_json::from_value(
             event
                 .get("payload")
@@ -549,12 +592,20 @@ impl MoveControl {
         self.view.borrow().clone()
     }
 
-    pub fn set(&self, view: MoveView) {
+    /// Replaces the view; what `ssh` asks now stays, since only its
+    /// question's answer or end takes it away.
+    pub fn set(&self, mut view: MoveView) {
         self.view.send_if_modified(|current| {
+            view.sign_in = current.sign_in.take();
             let changed = *current != view;
             *current = view;
             changed
         });
+    }
+
+    /// Where the checks' `ssh` asks the operator: the dialog.
+    pub fn sign_in(&self) -> Arc<dyn SignIn> {
+        Arc::clone(&self.sign_in) as _
     }
 
     pub fn update(&self, change: impl FnOnce(&mut MoveView)) {

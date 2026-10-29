@@ -4,12 +4,14 @@
 //! (`supervisor`). Every step takes the journal and answers a typed failure.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use herdr_core::node_migration::{self, IdTable, KnownProject, OwnerChange, copy};
 use hide_node::ssh::session::SshTarget;
 use hide_node::ssh::transfer::FileCopy;
 use hide_node::ssh::upstream::Upstream;
+use hide_node_link::device::{SignIn, SshProblem, Wake};
 use serde_json::{Value, json};
 
 use super::answer::{StepAnswer, StepLine};
@@ -51,6 +53,24 @@ impl Remote {
     pub fn with_state_dir(mut self, state_dir: &str) -> Self {
         self.state_dir = Some(state_dir.to_owned());
         self
+    }
+
+    /// Sends what `ssh` asks, at a dial [`Self::may_ask`] allows, to the
+    /// move dialog (PRD system-ssh-device-link B33).
+    pub fn with_sign_in(mut self, sign_in: Arc<dyn SignIn>) -> Self {
+        self.upstream = self.upstream.with_sign_in(sign_in);
+        self
+    }
+
+    /// Whether the dials from now on may ask the operator: only the checks
+    /// their own press started (D-06); a later dial of the move asks nobody.
+    pub fn may_ask(&self, wake: Wake) {
+        self.upstream.may_ask(wake);
+    }
+
+    /// What `ssh` stopped on at the last dial; none when it signed in.
+    pub fn ssh_problem(&self) -> Option<SshProblem> {
+        self.upstream.ssh_problem()
     }
 
     /// Installs this machine's build from `packages` beside the `hided` it
