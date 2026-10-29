@@ -208,8 +208,10 @@ struct Stream {
     /// is connected.
     socket: Option<TcpStream>,
     closed: bool,
-    /// Set when anything but its own reader's end closes the stream: its
-    /// reader stops sending, a wait for room in the outbox included.
+    /// Set when the stream is aborted (the other end's close, a failed
+    /// write, an overflow, the connection's end): its reader stops sending,
+    /// a wait for room in the outbox included. A normal end never sets it,
+    /// so the reader's close stays behind the data it queued.
     cancel: Arc<AtomicBool>,
     /// The stream's threads still running (its connect, its reader, its
     /// writer); its slot is free once none is.
@@ -310,8 +312,9 @@ impl Shared {
         self.close_by(id, abort, true)
     }
 
-    /// [`Shared::close`]; `cancel` is false only for the stream's own
-    /// reader at its socket's end, which still sends its close in order.
+    /// [`Shared::close`]; `cancel` is false for a normal end, the stream's
+    /// own reader at its socket's end or its writer once it wrote all it
+    /// was given, so the reader still sends its close in order.
     fn close_by(&self, id: u32, abort: bool, cancel: bool) -> bool {
         let first = {
             let mut streams = lock(&self.streams);
@@ -419,7 +422,9 @@ impl Shared {
     }
 
     /// The other end's bytes to the socket, until the stream closes or a
-    /// write fails or waits past [`WRITE_WITHIN`], which aborts it.
+    /// write fails or waits past [`WRITE_WITHIN`], which aborts it. A
+    /// stream that closed once its writer wrote all it was given ends
+    /// normally: its reader is not cancelled.
     fn write_stream(&self, id: u32, mut socket: TcpStream, queued: mpsc::Receiver<Vec<u8>>) {
         let mut failed = false;
         while let Ok(bytes) = queued.recv() {
@@ -433,7 +438,7 @@ impl Shared {
         if failed {
             self.abort(id);
         } else {
-            self.close(id, true);
+            self.close_by(id, false, false);
         }
         self.finished(id);
     }
@@ -1141,6 +1146,58 @@ mod tests {
             })
             .expect("the carrier's hold outlived its stream");
         assert!(mux.live());
+    }
+
+    /// A stream that ends normally while the connection takes nothing
+    /// sends its close behind every frame of its data already waiting: the
+    /// writer's normal end does not push the close ahead of them.
+    #[test]
+    fn a_normal_end_closes_behind_the_streams_queued_data() {
+        let (node_end, mut peer) = LocalStream::pair().unwrap();
+        let (mux, _node_link) = Mux::start(node_end, Vec::new()).unwrap();
+        // The stream's data, as its reader queued it, until the connection's
+        // input is full and the outbox stays full behind it.
+        let chunk = vec![7_u8; MAX_FRAME];
+        let mut queued = 0;
+        for _ in 0..1000 {
+            while !data_full(&mux.shared) {
+                mux.shared.data(DATA, 1, &chunk, None).unwrap();
+                queued += 1;
+            }
+            std::thread::yield_now();
+        }
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (local, _) = listener.accept().unwrap();
+        let _carried = mux
+            .carry(local, &[SocketAddr::from((Ipv4Addr::LOCALHOST, 9))])
+            .unwrap();
+        // The local end ends normally; its writer has nothing to write.
+        client.shutdown(Shutdown::Both).unwrap();
+        until("the stream's writer never ended", || {
+            lock(&mux.shared.streams)
+                .get(&1)
+                .is_none_or(|stream| stream.closed && stream.running == 1)
+        });
+        // The connection takes its input again.
+        peer.set_read_timeout(Some(Duration::from_secs(15)))
+            .unwrap();
+        let mut data = 0;
+        loop {
+            let mut header = [0_u8; 9];
+            peer.read_exact(&mut header).unwrap();
+            let stream = u32::from_be_bytes([header[1], header[2], header[3], header[4]]);
+            let length = u32::from_be_bytes([header[5], header[6], header[7], header[8]]);
+            let mut payload = vec![0_u8; length as usize];
+            peer.read_exact(&mut payload).unwrap();
+            match (header[0], stream) {
+                (DATA, 1) => data += payload.len(),
+                (CLOSE, 1) => break,
+                _ => {}
+            }
+        }
+        assert_eq!(data, queued * MAX_FRAME, "the close overtook its data");
+        until("the slot outlived its stream", || slots(&mux.shared) == 0);
     }
 
     /// The core's owner ends the connection while the link's reader waits
