@@ -50,11 +50,11 @@ pub(crate) struct AnswerWork {
     pub line: String,
 }
 
-/// Why the doorbell could not confirm an answer: it failed before the
-/// answer was typed, or after Herdr was asked to type it, when the answer
-/// may already be in the conversation.
+/// Why the doorbell could not confirm what it types, a letter's bell or a
+/// mission's answer: it failed before the text was typed, or after Herdr was
+/// asked to type it, when the text may already be in the conversation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum AnswerSendFailure {
+pub(crate) enum SendFailure {
     NotTyped(&'static str),
     MaybeTyped(&'static str),
 }
@@ -633,13 +633,13 @@ impl Runtime {
         &mut self,
         id: &str,
         key: u64,
-        result: Result<(), AnswerSendFailure>,
+        result: Result<(), SendFailure>,
     ) {
         let now = super::memory::now_ms();
         // A typed or uncertain answer reports for the prompt the doorbell
         // asked, once; a failure before it, for an answer still to type.
         let typing = self.missions.answers_typing.remove(id);
-        if typing == matches!(result, Err(AnswerSendFailure::NotTyped(_))) {
+        if typing == matches!(result, Err(SendFailure::NotTyped(_))) {
             return;
         }
         let Some(mission) = self.missions.book.get_mut(id) else {
@@ -664,7 +664,7 @@ impl Runtime {
                 event.source = Some(AnswerSource::Banner);
                 event
             }
-            Err(AnswerSendFailure::NotTyped(code)) => {
+            Err(SendFailure::NotTyped(code)) => {
                 let text = answer.text.clone();
                 mission.answer = None;
                 mission.answer_failed = Some(AnswerFailure::SendFailed);
@@ -674,7 +674,7 @@ impl Runtime {
                 }));
                 MissionEvent::new(now, EventKind::AnswerUndelivered).line(Some(&text))
             }
-            Err(AnswerSendFailure::MaybeTyped(code)) => {
+            Err(SendFailure::MaybeTyped(code)) => {
                 // Held as unconfirmed since the prompt was asked; set again so
                 // nothing in between makes it due.
                 answer.unconfirmed = true;

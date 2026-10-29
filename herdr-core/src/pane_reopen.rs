@@ -194,6 +194,14 @@ mod tests {
         }})
     }
 
+    /// The agent's screen as `pane.read` answers it: one that asks for no
+    /// second press.
+    fn screen() -> Value {
+        json!({"type": "pane_read", "read": {"pane_id": "w1:p1", "workspace_id": "w1",
+            "tab_id": "w1:t1", "source": "visible", "format": "ansi", "revision": 1,
+            "truncated": false, "text": "\u{203a} \n"}})
+    }
+
     /// B29: a refusal known up front touches nothing, so the pane is as it was.
     #[test]
     fn a_refusal_known_before_the_end_asks_herdr_nothing() {
@@ -272,9 +280,11 @@ mod tests {
                     let gone = !process::is_alive(pid) || seen.load(Ordering::SeqCst);
                     process_info(shell, if gone { shell } else { pid })
                 }
-                // The agent quits on the second press of its quit keys.
+                // The agent quits on the first press of its quit key, as
+                // Codex does into an empty composer.
+                "pane.read" => screen(),
                 "pane.send_keys" => {
-                    if presses.fetch_add(1, Ordering::SeqCst) == 1 {
+                    if presses.fetch_add(1, Ordering::SeqCst) == 0 {
                         process::terminate(pid).expect("the agent quits");
                     }
                     json!({"type": "ok"})
@@ -352,7 +362,8 @@ mod tests {
                         let gone = !process::is_alive(pid) || seen.load(Ordering::SeqCst);
                         Ok(process_info(shell, if gone { shell } else { pid }))
                     }
-                    // The agent quits on its keys; the start is the subject.
+                    // The agent quits on its key; the start is the subject.
+                    "pane.read" => Ok(screen()),
                     "pane.send_keys" => {
                         let _ = process::terminate(pid);
                         Ok(json!({"type": "ok"}))
@@ -413,7 +424,8 @@ mod tests {
                     let gone = !process::is_alive(pid) || seen.load(Ordering::SeqCst);
                     Ok(process_info(shell, if gone { shell } else { pid }))
                 }
-                // The agent quits on its keys; the start is the subject.
+                // The agent quits on its key; the start is the subject.
+                "pane.read" => Ok(screen()),
                 "pane.send_keys" => {
                     let _ = process::terminate(pid);
                     Ok(json!({"type": "ok"}))

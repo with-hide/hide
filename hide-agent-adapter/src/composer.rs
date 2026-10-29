@@ -190,6 +190,14 @@ impl Composer {
     }
 }
 
+/// Whether a row of a screen Herdr read with styling (as [`Composer::judge`]
+/// reads one) shows `text`, whatever its pen.
+pub fn screen_shows(screen: &str, text: &str) -> bool {
+    screen
+        .split('\n')
+        .any(|row| visible(&cells(row)).contains(text))
+}
+
 impl Placeholder {
     fn matches(&self, line: &Cells) -> bool {
         let start = line

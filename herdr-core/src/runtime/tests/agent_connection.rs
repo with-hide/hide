@@ -869,7 +869,12 @@ fn a_reopen_through_the_worker_waits_for_herdr_to_release_the_name() {
                 let gone = !process::is_alive(pid) || gone_flag.load(Ordering::SeqCst);
                 Ok(info(shell, if gone { shell } else { pid }))
             }
-            // The agent quits on its own keys, so the node never ends it.
+            // The agent quits on its own key, so the node never ends it.
+            "pane.read" => Ok(
+                json!({"type": "pane_read", "read": {"pane_id": "w1:p2", "workspace_id": "w1",
+                "tab_id": "w1:t1", "source": "visible", "format": "ansi", "revision": 1,
+                "truncated": false, "text": "\u{203a} \n"}}),
+            ),
             "pane.send_keys" => {
                 let _ = process::terminate(pid);
                 Ok(json!({"type": "ok"}))
@@ -985,6 +990,11 @@ fn a_reopen_in_its_pane_resumes_with_the_choice_the_agent_was_started_with() {
                     "pane_id": "w1:p2", "shell_pid": shell, "foreground_process_group_id": foreground,
                     "foreground_processes": [{"pid": shell, "name": "zsh"}]
                 }})
+            }
+            "pane.read" => {
+                json!({"type": "pane_read", "read": {"pane_id": "w1:p2", "workspace_id": "w1",
+                "tab_id": "w1:t1", "source": "visible", "format": "ansi", "revision": 1,
+                "truncated": false, "text": "\u{203a} \n"}})
             }
             "pane.send_keys" => {
                 let _ = process::terminate(pid);

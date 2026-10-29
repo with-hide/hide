@@ -342,23 +342,39 @@ impl LaunchDialect {
         !matches!(self, Self::Claude | Self::Codex | Self::Antigravity)
     }
 
-    /// The keys, as Herdr names them, that make the idle agent quit on its
+    /// The key, as Herdr names it, that makes the idle agent quit on its
     /// own, as the operator quits it: a sleep in the agent's own pane presses
-    /// them first, so the agent puts back the terminal modes it set (bracketed
-    /// paste, extended keys) before the shell takes the terminal again
-    /// (herdrdev/herdr#5371: a Windows prompt reads a bracketed paste left on
-    /// as keys), and ends it only when it does not quit. Each is a press of
-    /// its own, read within the agent's double-press window: Claude Code
-    /// 2.1.302 quits on a second Ctrl+C within 800 ms of the first ("Press
-    /// Ctrl-C again to exit"), Codex CLI on a second Ctrl+C ("again to quit")
-    /// and agy 1.4.2 on "ctrl+c or ctrl+d twice"; Ctrl+D is never pressed,
-    /// because a shell that already holds the terminal ends on it. A first
-    /// Ctrl+C clears a draft instead, and that agent is then ended. Empty for
-    /// an agent that closes its pane when sleeping.
-    pub const fn exit_keys(self) -> &'static [&'static str] {
+    /// it first, so the agent puts back the terminal modes it set (bracketed
+    /// paste, its keyboard protocol, the alternate screen, mouse reports)
+    /// before the shell takes the terminal again, and ends it only when it
+    /// does not quit. No signal does that: Codex CLI 0.165.0 ended by
+    /// SIGHUP, SIGINT or SIGTERM leaves every mode on (measured 2026-10-29),
+    /// and a Windows prompt reads a bracketed paste left on as keys
+    /// (herdrdev/herdr#5371). A press clears a draft first, and Ctrl+D is
+    /// never pressed, because a shell that already holds the terminal ends on
+    /// it. None for an agent that closes its pane when sleeping.
+    pub const fn quit_key(self) -> Option<&'static str> {
         match self {
-            Self::Claude | Self::Codex | Self::Antigravity => &["ctrl+c", "ctrl+c"],
-            Self::Grok | Self::OpenCode | Self::Pi | Self::Omp | Self::Cursor => &[],
+            Self::Claude | Self::Codex | Self::Antigravity => Some("ctrl+c"),
+            Self::Grok | Self::OpenCode | Self::Pi | Self::Omp | Self::Cursor => None,
+        }
+    }
+
+    /// What the agent shows while it waits for its quit key a second time,
+    /// the only sign that a press did not start its quit. Claude Code
+    /// 2.1.312 shows "Press Ctrl-C again to exit" for 800 ms and agy 1.4.9
+    /// "press ctrl+c again to exit" (measured 2026-10-29). Codex CLI 0.165.0
+    /// quits on the first press into an empty composer and asks for none;
+    /// "again to quit" is the hint it showed while it did ask. A second
+    /// press is never sent without it: one that reaches an agent already
+    /// quitting is left for its shell to read, in the keyboard protocol the
+    /// agent turned on (with-hide/hide-private#37).
+    pub const fn quit_again(self) -> Option<&'static str> {
+        match self {
+            Self::Claude => Some("Press Ctrl-C again to exit"),
+            Self::Codex => Some("again to quit"),
+            Self::Antigravity => Some("press ctrl+c again to exit"),
+            Self::Grok | Self::OpenCode | Self::Pi | Self::Omp | Self::Cursor => None,
         }
     }
 
