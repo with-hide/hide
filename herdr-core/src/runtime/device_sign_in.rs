@@ -304,20 +304,20 @@ mod tests {
 
     #[test]
     fn the_add_key_command_quotes_a_file_a_shell_would_split() {
-        let plain = add_key_command("/home/a/.ssh/id_ed25519");
-        let spaced = add_key_command("/Users/a b/.ssh/it's");
+        let plain = add_key_command("/home/al/.ssh/id_ed25519");
+        let spaced = add_key_command("/Users/example/a b/.ssh/it's");
         if cfg!(target_os = "macos") {
             assert_eq!(
                 plain,
-                "ssh-add --apple-use-keychain /home/a/.ssh/id_ed25519"
+                "ssh-add --apple-use-keychain /home/al/.ssh/id_ed25519"
             );
             assert_eq!(
                 spaced,
-                r"ssh-add --apple-use-keychain '/Users/a b/.ssh/it'\''s'"
+                r"ssh-add --apple-use-keychain '/Users/example/a b/.ssh/it'\''s'"
             );
         } else {
-            assert_eq!(plain, "ssh-add /home/a/.ssh/id_ed25519");
-            assert_eq!(spaced, r"ssh-add '/Users/a b/.ssh/it'\''s'");
+            assert_eq!(plain, "ssh-add /home/al/.ssh/id_ed25519");
+            assert_eq!(spaced, r"ssh-add '/Users/example/a b/.ssh/it'\''s'");
         }
     }
 

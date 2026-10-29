@@ -76,15 +76,16 @@ jobs:
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           [ -f ~/.ssh/id_ed25519 ] || ssh-keygen -q -t ed25519 -N '' -f ~/.ssh/id_ed25519
           echo "HIDE_E2E_SSH_DEFAULT_KEY=$HOME/.ssh/id_ed25519.pub" >> "$GITHUB_ENV"
+          account=hidepw
           password=$(openssl rand -hex 16)
           echo "::add-mask::$password"
           if [ "$RUNNER_OS" = Linux ]; then
-            sudo useradd -m -s /bin/sh hidepw
-            echo "hidepw:$password" | sudo chpasswd
+            sudo useradd -m -s /bin/sh "$account"
+            echo "$account:$password" | sudo chpasswd
             sudo mkdir -p /run/sshd
           else
-            sudo sysadminctl -addUser hidepw -password "$password" -home /Users/hidepw -shell /bin/sh
-            sudo createhomedir -c -u hidepw >/dev/null
+            sudo sysadminctl -addUser "$account" -password "$password" -home "/Users/$account" -shell /bin/sh
+            sudo createhomedir -c -u "$account" >/dev/null
           fi
           config="$RUNNER_TEMP/password-sshd"
           mkdir -p "$config"
@@ -95,7 +96,7 @@ jobs:
             "UsePAM yes" > "$config/sshd_config"
           sudo chown root "$config/host" "$config/sshd_config"
           sudo /usr/sbin/sshd -f "$config/sshd_config" -E "$config/sshd.log"
-          echo "HIDE_E2E_SSH_PASSWORD=hidepw:$password:2222" >> "$GITHUB_ENV"
+          echo "HIDE_E2E_SSH_PASSWORD=$account:$password:2222" >> "$GITHUB_ENV"
       - name: Install cargo-nextest
         timeout-minutes: 3
         run: bash scripts/install-nextest.sh

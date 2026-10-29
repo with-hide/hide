@@ -49,7 +49,7 @@ const failed = (id: string, problem: DeviceProblem, message: string | null = nul
 
 /** What each SSH device waits on from the operator (B4, B6, B8, B9, B11, B12, B14, B27). */
 const SIGN_IN: Device[] = [
-  waiting("studio", { question: 4, key_command: "ssh-add --apple-use-keychain ~/.ssh/id_ed25519", kind: "secret", prompt: "Enter passphrase for key '/Users/you/.ssh/id_ed25519':", key_file: "/Users/you/.ssh/id_ed25519" }),
+  waiting("studio", { question: 4, key_command: "ssh-add --apple-use-keychain ~/.ssh/id_ed25519", kind: "secret", prompt: "Enter passphrase for key '/Users/example/.ssh/id_ed25519':", key_file: "/Users/example/.ssh/id_ed25519" }),
   waiting("build-box", { question: 2, key_command: null, kind: "host_key", host: "[build-box.example]:2222", fingerprint: "SHA256:Jq8F2n1xR0a+e3uY7kz6m4W0cB9vT5pLhGd2sQ1oE8I" }),
   waiting("lab", { question: 3, key_command: null, kind: "browser", url: "https://login.tailscale.com/a/7f3e9c21d4" }),
   waiting("yubi-mini", { question: 5, key_command: null, kind: "touch", prompt: "Confirm user presence for key ED25519-SK SHA256:Qw3r…" }),
