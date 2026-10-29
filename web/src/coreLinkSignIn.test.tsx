@@ -118,6 +118,7 @@ it("words a connection check that stopped on a sign-in as the device row does an
     expect(view.q('[data-core-move-ssh-problem="sign_in_needed"]')?.textContent).toBe("Sign-in needed");
     expect(view.q('[data-core-move-recheck="true"]')?.textContent).toBe("Sign in");
     await view.set({ coreMove: { ...failed, ssh_problem: "host_key_changed" } });
+    expect(view.q('[data-core-move-check="connection"]')?.textContent).toContain("Server key changed");
     expect(view.q('[data-core-move-check="connection"]')?.textContent).toContain("ssh mini");
     expect(view.q('[data-core-move-recheck="true"]')?.textContent).toBe("Check again");
   } finally {

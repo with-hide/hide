@@ -302,12 +302,18 @@ function FailedCheck({ check, detail, machine, ssh, alias, actions }: { check: M
         <span aria-hidden="true">× </span>
         {t(`coreMove.check.${check}`, { machine })}
       </span>
-      {command ? (
+      {problem ? (
+        // The device row's words for the ssh failure, and its terminal command for a changed server key.
+        <span className="flex min-w-0 items-center justify-end gap-sm">
+          <span className="min-w-0 text-right text-caption text-muted-foreground" data-core-move-ssh-problem={ssh ?? undefined}>
+            {problem.note ?? problem.headline}
+          </span>
+          {command ? <FixCommand command={command} what="ssh command" actions={actions} data-core-move-command={check} /> : null}
+        </span>
+      ) : command ? (
         <FixCommand command={command} what="core move command" actions={actions} data-core-move-command={check} />
       ) : (
-        <span className="min-w-0 text-right text-caption text-muted-foreground" data-core-move-ssh-problem={ssh ?? undefined}>
-          {problem ? (problem.note ?? problem.headline) : t(`coreMove.fix.${check}`, { machine })}
-        </span>
+        <span className="min-w-0 text-right text-caption text-muted-foreground">{t(`coreMove.fix.${check}`, { machine })}</span>
       )}
     </li>
   );
