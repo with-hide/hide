@@ -10,16 +10,18 @@
 //! its files and Git are the node's, by their Linux paths, never through a
 //! `\\wsl$` share (D-15).
 //!
-//! A one-shot `wsl.exe` runs only on a connection attempt's worker, off the
-//! runtime lock: the running check, the account probe and the install. Each
-//! has a deadline, at most [`MAX_CALLS`] run at once in this process, and
-//! one that does not answer in time is a failed attempt, never "no WSL"
-//! (B25). Before any of them, the distribution's registry entry, read
-//! without starting WSL, says whether it exists, which WSL runs it and
-//! whether its first-run setup finished; and only an attempt that may wake
-//! a distribution ([`Wake`]) runs anything in one that is off (D-11).
+//! The link's child first runs the start script every dialed device runs
+//! ([`super::bootstrap`], PRD system-ssh-device-link D-02): the account
+//! probe, the install and the helper's start go over its own pipes, so a
+//! connection starts one `wsl.exe` besides the running check. Both run on
+//! a connection attempt's worker, off the runtime lock, each with a
+//! deadline; at most [`MAX_CALLS`] run at once in this process, and one
+//! that does not answer in time is a failed attempt, never "no WSL" (B25).
+//! Before any of them, the distribution's registry entry, read without
+//! starting WSL, says whether it exists, which WSL runs it and whether its
+//! first-run setup finished; and only an attempt that may wake a
+//! distribution ([`Wake`]) runs anything in one that is off (D-11).
 
-use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -29,8 +31,8 @@ use hide_herdr_client::ApiError;
 
 use hide_node_link::call_as;
 use hide_node_link::device::{
-    CapabilityReport, DeviceTransport, DialedTransport, EstablishError, Established, HostConsent,
-    HostIdentity, NodeReady, OnClose, RemoteHostIdentity, RemoteStage, SnapshotCheck, Upload, Wake,
+    Attempt, CapabilityReport, DeviceTransport, DialedTransport, EstablishError, Established,
+    HostConsent, HostIdentity, NodeReady, RemoteHostIdentity, RemoteStage, SnapshotCheck, Wake,
     WslDistribution, WslListing,
 };
 use hide_node_link::protocol::{Call, Hello, KitAction};
@@ -38,15 +40,15 @@ use hide_platform::wsl::Distribution;
 use serde_json::json;
 
 use super::{
-    DEFAULT_CLI_DIR, HELLO_TIMEOUT, HelperPackages, Package, PaneHook, Payload, RemoteHost,
-    TerminalHook, helper_protocol_refusal, lock_recover, platform_of,
+    ChildLink, DEFAULT_CLI_DIR, HELLO_TIMEOUT, HelperPackages, PaneHook, RemoteHost, TerminalHook,
+    UnaskedStart, bootstrap, helper_protocol_refusal, lock_recover,
 };
 
-/// One-shot `wsl.exe` calls this process runs at once, across every
-/// distribution; a call that finds none free within [`CALL_ADMISSION`] is
-/// a failed attempt (engineering rule 15). `wsl.exe` serializes much of its
-/// work in one service, so more would only queue there, where no deadline
-/// reaches.
+/// `wsl.exe` calls this process runs at once, across every distribution: a
+/// running check, or a link's child until its helper starts. A call that
+/// finds none free within [`CALL_ADMISSION`] is a failed attempt
+/// (engineering rule 15). `wsl.exe` serializes much of its work in one
+/// service, so more would only queue there, where no deadline reaches.
 pub const MAX_CALLS: usize = 4;
 const CALL_ADMISSION: Duration = Duration::from_secs(10);
 
@@ -55,32 +57,11 @@ const RUNNING_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long the account probe may take: it may be what starts the
 /// distribution, and a cold start of WSL's virtual machine takes seconds.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(60);
-/// How long the whole install may take, every file together.
-const INSTALL_TIMEOUT: Duration = Duration::from_secs(180);
-/// The most a probe or an install step may write back.
-const CALL_OUTPUT_LIMIT: usize = 64 * 1024;
 /// How long the bridged Herdr has to answer before the kit is asked to
 /// start it.
 const HERDR_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long the kit pass a connection runs before its services may take.
 const KIT_TIMEOUT: Duration = Duration::from_secs(180);
-
-/// The account probe, as the distribution's default user: who it is, its
-/// home, its platform, and whether it can check an upload's digest. One
-/// line, so no Windows argument rule has a newline to read.
-const PROBE_SCRIPT: &str = "id -un; id -u; printf '%s\\n' \"$HOME\"; uname -s -m; command -v sha256sum >/dev/null && echo sha256sum || echo none";
-
-/// Prints the relative path of each `<path> <digest>` pair under `$1` that
-/// already holds those bytes as a file the account owns, so a connection
-/// sends only what is missing and an install that stopped part way resumes
-/// with what it had not sent (B26).
-const HELD_SCRIPT: &str = "set -u; root=$1; shift; held() { [ -f \"$1\" ] && [ ! -L \"$1\" ] && [ -O \"$1\" ] || return 1; set -- \"$2\" $(sha256sum < \"$1\"); [ \"$1\" = \"$2\" ]; }; while [ $# -ge 2 ]; do if held \"$root/$1\" \"$2\"; then printf '%s\\n' \"$1\"; fi; shift 2; done";
-
-/// Puts its standard input at `$1/$2` with mode `$4`: written beside the
-/// final name in a folder only the account can enter, checked against the
-/// digest `$3`, and renamed into place, so the final name only ever holds a
-/// whole, verified copy and an interrupted upload leaves nothing in use.
-const PLACE_SCRIPT: &str = "set -eu; umask 077; root=$1; final=$1/$2; digest=$3; mode=$4; dir=${final%/*}; mkdir -p -- \"$dir\"; chmod -- 700 \"$root\"; tmp=$dir/.upload-${final##*/}-$$; trap 'rm -f -- \"$tmp\"' EXIT; cat > \"$tmp\"; set -- $(sha256sum < \"$tmp\"); [ \"$1\" = \"$digest\" ] || { echo 'the uploaded file did not match the package' >&2; exit 66; }; chmod -- \"$mode\" \"$tmp\"; mv -f -- \"$tmp\" \"$final\"; trap - EXIT";
 
 /// How this process reaches WSL: the `wsl.exe` it runs and where it reads
 /// the distributions; a test's stand-in for both on a system without WSL.
@@ -187,81 +168,17 @@ impl WslDevice {
         format!("wsl:{}", self.distro)
     }
 
-    /// `wsl.exe -d <distro> [-u <user>] --cd ~ -e <command…>`.
-    fn command(&self, user: Option<&str>, command: &[&str]) -> Command {
+    /// `wsl.exe -d <distro> --cd ~ -e <command…>`, as the distribution's
+    /// default user.
+    fn command(&self, command: &[&str]) -> Command {
         let mut wsl = Command::new(&self.access.program);
-        wsl.args(["-d", &self.distro]);
-        if let Some(user) = user {
-            wsl.args(["-u", user]);
-        }
         // The helper and its scripts start in the Linux home, not in the
         // Windows folder this process runs in, which WSL would mount.
-        wsl.args(["--cd", "~", "-e"]).args(command);
+        wsl.args(["-d", &self.distro, "--cd", "~", "-e"])
+            .args(command)
+            // wsl.exe's own messages in UTF-8, as the link reads them.
+            .env("WSL_UTF8", "1");
         wsl
-    }
-
-    /// Runs one `wsl.exe` to its end within `deadline`, with `input` on its
-    /// standard input; answers its standard output. Admitted among
-    /// [`MAX_CALLS`].
-    fn call(
-        &self,
-        what: &str,
-        user: Option<&str>,
-        command: &[&str],
-        input: Option<Vec<u8>>,
-        deadline: Instant,
-    ) -> Result<String, String> {
-        let _admitted = CALLS
-            .admit(Instant::now() + CALL_ADMISSION)
-            .ok_or_else(|| {
-                format!(
-                    "WSL is busy with {MAX_CALLS} other calls from Hide; {what} was not started"
-                )
-            })?;
-        let mut command = self.command(user, command);
-        command
-            .stdin(if input.is_some() {
-                Stdio::piped()
-            } else {
-                Stdio::null()
-            })
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        let mut child = hide_platform::process::OwnedChild::spawn(&mut command)
-            .map_err(|error| format!("wsl.exe could not start for {what}: {error}"))?;
-        // The input goes from its own thread, so a child that writes while
-        // it reads never waits on this one. It ends when the pipe closes.
-        let writing = match (input, child.take_stdin()) {
-            (Some(bytes), Some(mut stdin)) => Some(
-                std::thread::Builder::new()
-                    .name("wsl-call-input".into())
-                    .spawn(move || stdin.write_all(&bytes).and_then(|()| stdin.flush()))
-                    .map_err(|error| format!("{what} could not send its input: {error}"))?,
-            ),
-            _ => None,
-        };
-        let captured = child.capture_until(deadline, CALL_OUTPUT_LIMIT);
-        if let Some(writing) = writing {
-            // The child has ended, so the pipe is closed and the write over.
-            let _ = writing.join();
-        }
-        let output = captured.map_err(|error| match error.kind {
-            hide_platform::process::CaptureFailureKind::Deadline => {
-                format!("WSL did not answer {what} in time")
-            }
-            _ => format!("{what} failed: {error}"),
-        })?;
-        if !output.status.success() {
-            let stderr = hide_platform::wsl::decode(&output.stderr);
-            let line = stderr.lines().rev().find(|line| !line.trim().is_empty());
-            return Err(format!(
-                "{what} failed ({}){}",
-                output.status,
-                line.map(|line| format!(": {}", line.trim()))
-                    .unwrap_or_default()
-            ));
-        }
-        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     }
 
     /// Whether the distribution runs now; asking starts nothing.
@@ -278,151 +195,17 @@ impl WslDevice {
             .map_err(|error| error.to_string())
     }
 
-    fn probe(&self) -> Result<Probe, EstablishError> {
-        let answer = self
-            .call(
-                "the account probe",
-                None,
-                &["sh", "-c", PROBE_SCRIPT],
-                None,
-                Instant::now() + PROBE_TIMEOUT,
-            )
-            .map_err(EstablishError::Helper)?;
-        Probe::read(&answer).map_err(EstablishError::Unsupported)
-    }
-
-    /// Puts `payload` in its version folder under `root`, sending only the
-    /// files that are not already there whole (see [`HELD_SCRIPT`]).
-    fn install(
-        &self,
-        user: &str,
-        root: &str,
-        payload: &Payload,
-    ) -> Result<(String, bool, Upload), EstablishError> {
-        let deadline = Instant::now() + INSTALL_TIMEOUT;
-        let version_dir = format!("{root}/{}", &payload.version()[..16]);
-        let mut files: Vec<(String, &Package)> = payload
-            .files
-            .iter()
-            .map(|file| {
-                (
-                    format!("{}/{}", &payload.version()[..16], file.relative),
-                    file,
-                )
-            })
-            .collect();
-        if let Some(herdr) = &payload.herdr {
-            files.push((
-                format!(
-                    "{}/{}/{}",
-                    hide_kit::device_herdr::HERDR_DIR,
-                    super::herdr_copy_name(herdr),
-                    herdr.relative
-                ),
-                herdr,
-            ));
-        }
-        let mut held_args = vec!["sh", "-c", HELD_SCRIPT, "sh", root];
-        for (relative, file) in &files {
-            held_args.push(relative);
-            held_args.push(&file.digest);
-        }
-        let held = self
-            .call("the install check", Some(user), &held_args, None, deadline)
-            .map_err(EstablishError::Install)?;
-        let held: std::collections::BTreeSet<&str> = held.lines().collect();
-        let mut upload = Upload {
-            missing: payload.missing.clone(),
-            ..Upload::default()
+    /// Why the start script stopped before the helper started, with the
+    /// last thing `wsl.exe` said.
+    fn stopped(pipe: &UnaskedStart, stop: bootstrap::Stop) -> String {
+        let reason = match stop {
+            bootstrap::Stop::Quiet => "WSL did not answer the account probe in time".to_owned(),
+            bootstrap::Stop::Ended(reason) => format!("WSL ended the connection: {reason}"),
         };
-        let mut fresh = false;
-        for (index, (relative, file)) in files.iter().enumerate() {
-            if held.contains(relative.as_str()) {
-                upload.reused += 1;
-                continue;
-            }
-            let mode = if file.executable { "700" } else { "600" };
-            let placed = self.call(
-                &format!("the upload of {}", file.relative),
-                Some(user),
-                &[
-                    "sh",
-                    "-c",
-                    PLACE_SCRIPT,
-                    "sh",
-                    root,
-                    relative,
-                    &file.digest,
-                    mode,
-                ],
-                Some(file.bytes.clone()),
-                deadline,
-            );
-            match placed {
-                Ok(_) => {
-                    upload.sent += 1;
-                    fresh |= index == 0;
-                }
-                // The helper, a chosen Herdr and its pin must arrive before
-                // the helper starts; an optional kit part the kit reports.
-                Err(reason)
-                    if index == 0
-                        || file.relative == hide_kit::device_herdr::HERDR_PIN
-                        || file.relative == hide_kit::device_herdr::HERDR_PROGRAM =>
-                {
-                    return Err(EstablishError::Install(reason));
-                }
-                Err(reason) => upload.missing.push(reason),
-            }
+        match pipe.last_error() {
+            Some(line) => format!("{reason}: {line}"),
+            None => reason,
         }
-        let helper = payload
-            .files
-            .first()
-            .ok_or_else(|| EstablishError::Install("The build carries no helper".to_owned()))?;
-        Ok((format!("{version_dir}/{}", helper.relative), fresh, upload))
-    }
-}
-
-/// What the account probe answered.
-#[derive(Debug, Eq, PartialEq)]
-struct Probe {
-    user: String,
-    home: String,
-    os: String,
-    arch: String,
-}
-
-impl Probe {
-    fn read(answer: &str) -> Result<Self, String> {
-        let lines: Vec<&str> = answer.lines().map(str::trim_end).collect();
-        let [user, _uid, home, uname, digest] = lines[..] else {
-            return Err(format!(
-                "The distribution answered an unreadable probe: {answer:?}"
-            ));
-        };
-        if !hide_platform::wsl::valid_user_name(user) {
-            return Err(format!(
-                "The distribution's default user {user:?} is not a name Hide can run as"
-            ));
-        }
-        if !home.starts_with('/') || home.chars().any(char::is_control) {
-            return Err("The distribution's default user has no usable home folder".to_owned());
-        }
-        if digest != "sha256sum" {
-            return Err(
-                "The distribution has no sha256sum, which Hide checks its install with".to_owned(),
-            );
-        }
-        let (os, arch) = platform_of(uname)?;
-        if os != "linux" {
-            return Err(format!("The distribution reported {os}, not Linux"));
-        }
-        Ok(Self {
-            user: user.to_owned(),
-            home: home.to_owned(),
-            os,
-            arch,
-        })
     }
 }
 
@@ -471,8 +254,24 @@ fn identity_of(distribution: &Distribution, user: &str) -> HostIdentity {
         user: user.to_owned(),
         hostname: distribution.name.clone(),
         port: 0,
-        host_key_sha256: format!("wsl:{}", distribution.id),
+        machine_id: Some(format!("wsl:{}", distribution.id)),
+        host_key_sha256: String::new(),
     }
+}
+
+/// Whether a consent bound to `bound` covers the distribution that answered
+/// as `observed`. A consent bound before contract 4 named the install id in
+/// its host key field, so it still names the install it was given for.
+fn covers(bound: &HostIdentity, observed: &HostIdentity) -> bool {
+    let machine = bound
+        .machine_id
+        .as_deref()
+        .or_else(|| Some(bound.host_key_sha256.as_str()).filter(|key| key.starts_with("wsl:")));
+    bound.user == observed.user
+        && bound.hostname == observed.hostname
+        && bound.port == observed.port
+        && machine.is_some()
+        && machine == observed.machine_id.as_deref()
 }
 
 impl DeviceTransport for WslDevice {
@@ -564,13 +363,9 @@ impl DialedTransport for WslDevice {
                 return report;
             }
         }
-        for stage in [
-            RemoteStage::Pty,
-            RemoteStage::Sftp,
-            RemoteStage::Git,
-            RemoteStage::Tunnel,
-        ] {
-            report.pass(stage, "through the node link");
+        report.pass(RemoteStage::Pty, "through the node link");
+        if !super::check_git(&link, &mut report) {
+            return report;
         }
         report.connected();
         report
@@ -580,9 +375,14 @@ impl DialedTransport for WslDevice {
         &self,
         consent: &HostConsent,
         _retirement_projects: &[String],
-        wake: Wake,
-        on_close: OnClose,
+        attempt: Attempt,
     ) -> Result<Established, EstablishError> {
+        let Attempt {
+            wake,
+            cancel,
+            on_close,
+            ..
+        } = attempt;
         let since = Instant::now();
         let target = self.target();
         let stage = |name: &str| super::establish_stage(&target, name, since);
@@ -609,53 +409,81 @@ impl DialedTransport for WslDevice {
                 )));
             }
         }
+        // The slot is held until the helper has started in place of the
+        // start script.
+        let admitted = CALLS
+            .admit(Instant::now() + CALL_ADMISSION)
+            .ok_or_else(|| {
+                EstablishError::Helper(format!(
+                    "WSL is busy with {MAX_CALLS} other calls from Hide; the connection was not started"
+                ))
+            })?;
         stage("probe");
-        let probe = self.probe()?;
-        let identity = identity_of(&distribution, &probe.user);
-        if let Some(bound) = consent.identity.as_ref()
-            && bound != &identity
-        {
-            return Err(EstablishError::IdentityChanged {
-                bound: Box::new(bound.clone()),
-                observed: Box::new(identity),
-            });
-        }
-        let payload = self.packages.payload(&probe.os, &probe.arch)?;
-        let root = match consent.helper_root.strip_prefix("~/") {
-            Some(rest) => format!("{}/{rest}", probe.home.trim_end_matches('/')),
-            None if consent.helper_root.starts_with('/') => consent.helper_root.clone(),
-            None => {
-                return Err(EstablishError::Install(format!(
-                    "The helper install root {:?} must be absolute or start with ~/",
-                    consent.helper_root
-                )));
-            }
-        };
-        if root.split('/').any(|part| part == ".." || part == ".")
-            || root.chars().any(char::is_control)
-        {
-            return Err(EstablishError::Install(
-                "The helper install root is not a plain path".to_owned(),
-            ));
-        }
-        stage("install");
-        let (helper_path, installed, upload) = self.install(&probe.user, &root, &payload)?;
-        stage("start");
-        let mut command = self.command(
-            Some(&probe.user),
-            &[&helper_path, "node", "serve", "--own-herdr"],
-        );
+        let mut command = self.command(&bootstrap::WRAPPER);
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let child = hide_platform::process::OwnedChild::spawn(&mut command).map_err(|error| {
-            EstablishError::Helper(format!("wsl.exe could not start the helper: {error}"))
+        let child = hide_platform::process::OwnedChild::spawn(&mut command)
+            .map_err(|error| EstablishError::Helper(format!("wsl.exe could not start: {error}")))?;
+        let link = ChildLink::start(&target, child, Some(&cancel)).map_err(|error| {
+            EstablishError::Helper(format!("The distribution's link could not start: {error}"))
         })?;
-        let host =
-            super::over_child(&target, child, self.panes.clone(), on_close).map_err(|error| {
-                EstablishError::Helper(format!("The helper's link could not start: {error}"))
-            })?;
+        let mut pipe = UnaskedStart::new(link, cancel.clone());
+        // Until the helper starts, every way out ends and reaps `wsl.exe`
+        // before the attempt returns (PRD system-ssh-device-link B26).
+        let started = (|pipe: &mut UnaskedStart| -> Result<(bootstrap::Installed, HostIdentity), EstablishError> {
+            let facts = match bootstrap::probe(&mut *pipe, Instant::now() + PROBE_TIMEOUT) {
+                Ok(facts) => facts,
+                Err(bootstrap::ProbeError::Unsupported(reason)) => {
+                    return Err(EstablishError::Unsupported(reason));
+                }
+                Err(bootstrap::ProbeError::Stopped(stop)) => {
+                    return Err(EstablishError::Helper(Self::stopped(pipe, stop)));
+                }
+            };
+            if facts.os != "linux" {
+                return Err(EstablishError::Unsupported(format!(
+                    "The distribution reported {}, not Linux",
+                    facts.os
+                )));
+            }
+            let identity = identity_of(&distribution, &facts.user);
+            if let Some(bound) = consent.identity.as_ref()
+                && !covers(bound, &identity)
+            {
+                return Err(EstablishError::IdentityChanged {
+                    bound: Box::new(bound.clone()),
+                    observed: Box::new(identity),
+                });
+            }
+            let payload = self.packages.payload(&facts.os, &facts.arch)?;
+            stage("install");
+            let installed =
+                bootstrap::install(&mut *pipe, &consent.helper_root, &facts.home, &payload)?;
+            stage("start");
+            bootstrap::start(
+                &mut *pipe,
+                &installed.helper_relative,
+                &bootstrap::HerdrChoice::Account,
+            )?;
+            Ok((installed, identity))
+        })(&mut pipe);
+        let (installed, identity) = match started {
+            Ok(started) => started,
+            Err(error) => {
+                pipe.link.kill();
+                return Err(if cancel.is_cancelled() {
+                    EstablishError::Helper(super::ATTEMPT_ENDED.to_owned())
+                } else {
+                    error
+                });
+            }
+        };
+        drop(admitted);
+        let host = pipe
+            .link
+            .into_host(Vec::new(), self.panes.clone(), on_close);
         stage("hello");
         let hello: Hello = call_as(&host, Call::Hello, HELLO_TIMEOUT).map_err(|error| {
             host.close("the helper did not answer Hello");
@@ -721,6 +549,12 @@ impl DialedTransport for WslDevice {
                 super::start_terminals_at(socket, &host, hook)
             }
         };
+        // The link is the core's from here (see the SSH device's).
+        cancel.disarm();
+        if cancel.is_cancelled() {
+            host.close(super::ATTEMPT_ENDED);
+            return Err(EstablishError::Helper(super::ATTEMPT_ENDED.to_owned()));
+        }
         stage("ready");
         Ok(Established {
             node: NodeReady {
@@ -729,9 +563,9 @@ impl DialedTransport for WslDevice {
                 terminals,
             },
             identity,
-            installed,
-            helper_path,
-            upload,
+            installed: installed.fresh,
+            helper_path: installed.helper_path,
+            upload: installed.upload,
             kit,
         })
     }

@@ -1754,11 +1754,10 @@ export type Device = {
   /** `local`, or for an SSH device `ready`, `unavailable` or `disabled`. */
   state: string;
   message: string | null;
-  /**
-   * Which trust or sign-in step refused the connection (S5.5 B38):
-   * `host_key_changed`, `host_key_unknown` or `authentication`; null otherwise.
-   */
-  problem?: string | null;
+  /** Why the last attempt did not connect, by class (PRD system-ssh-device-link B18); null while ready or connecting. */
+  problem?: DeviceProblem | null;
+  /** What the connection attempt waits on from the operator now (B4-B12); null when it waits on nothing. */
+  sign_in?: DeviceSignIn | null;
   ssh_alias: string | null;
   /** The WSL distribution of this PC the device is (PRD wsl-device D-20); absent from an older daemon. */
   wsl_distro?: string | null;
@@ -1779,6 +1778,36 @@ export type Device = {
    */
   herdr_behind?: HerdrBehind | null;
 };
+
+/** Why a device's SSH connection did not come up (`contracts/snapshot-wire-enums.json`: `device_problem`). */
+export type DeviceProblem =
+  | "sign_in_needed"
+  | "browser_timeout"
+  | "sign_in_refused"
+  | "policy_refused"
+  | "host_key_changed"
+  | "name_not_found"
+  | "unreachable"
+  | "proxy_failed"
+  | "unsupported"
+  | "ssh_missing"
+  | "openssh_old"
+  | "unclassified";
+
+/**
+ * What a device's connection waits on (`contracts/snapshot-wire-enums.json`:
+ * `device_sign_in_kind`): its turn, a masked answer, trust in a server the
+ * operator has not met, a yes or no, a security key's touch or a page in the
+ * browser. The words are ssh's own; an answer is never part of it.
+ */
+export type DeviceSignIn = { question: number; key_command: string | null } & (
+  | { kind: "queued" }
+  | { kind: "secret"; prompt: string; key_file?: string }
+  | { kind: "host_key"; host: string; fingerprint: string }
+  | { kind: "confirm"; prompt: string }
+  | { kind: "touch"; prompt: string }
+  | { kind: "browser"; url: string }
+);
 
 /** Why a device's Herdr stays older than Hide's (`contracts/snapshot-wire-enums.json`: `herdr_behind_cause`). */
 export type HerdrBehindCause = "cannot_hand_off" | "handoff_failed";

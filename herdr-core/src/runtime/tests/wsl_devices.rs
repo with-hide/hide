@@ -6,8 +6,8 @@
 
 use super::*;
 use crate::remote::{
-    CapabilityReport, DeviceConnector, DeviceTransport, DialedTransport, EstablishError,
-    Established, OnClose, SshHostListing, Wake, WslListing,
+    Attempt, CapabilityReport, DeviceConnector, DeviceTransport, DialedTransport, EstablishError,
+    Established, SshHostListing, Wake, WslListing,
 };
 use hide_node_link::device::{HostConsent, RemoteHostIdentity, SnapshotCheck, WslDistribution};
 use std::sync::mpsc;
@@ -117,9 +117,9 @@ impl DialedTransport for OffDistribution {
         &self,
         _consent: &HostConsent,
         _retirement_projects: &[String],
-        wake: Wake,
-        _on_close: OnClose,
+        attempt: Attempt,
     ) -> Result<Established, EstablishError> {
+        let wake = attempt.wake;
         let held = self.0.held.lock().unwrap().take();
         if let Some(held) = held {
             let _ = held.recv_timeout(Duration::from_secs(10));

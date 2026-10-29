@@ -41,7 +41,7 @@ export function CoreMoveScene({ scene, theme, state, content, language }: CoreMo
     if (state === "device-kit-failed" || state === "device-unsupported") {
       const device = next.rest.navigator!.devices!.find((device) => device.id === NODE_DEVICE)!;
       device.state = "unavailable";
-      device.problem = "device_unavailable";
+      device.problem = state === "device-unsupported" ? "unsupported" : null;
       device.message = "Herdr was not found";
       device.host = {
         ...device.host!, platform: state === "device-unsupported" ? "macos-x86_64" : "linux-aarch64", state: state === "device-unsupported" ? "unsupported" : "unavailable",

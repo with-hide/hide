@@ -425,7 +425,11 @@ function RemoteAgentArea({ actions }: { actions: Actions }) {
         <p>{connected ? t("panes.workspace.connectedEmpty", { device: name }) : t("panes.workspace.remoteState", { device: name, state: line.text })}</p>
         {away.hint ? <p className="text-caption text-muted-foreground">{away.hint}</p> : null}
         <div className="flex gap-sm">
-          {canRetryDevice(device, status ?? undefined) ? (
+          {away.toRow ? (
+            <Button variant="secondary" onClick={() => useUiStore.getState().openSettings("devices")} data-remote-sign-in={device.id}>
+              {t("devices.signIn.openRow")}
+            </Button>
+          ) : canRetryDevice(device, status ?? undefined) ? (
             <Button variant="secondary" onClick={() => actions.retryDevice(device.id)} data-remote-retry={device.id}>
               {t("sidebar.reconnect")}
             </Button>
@@ -452,7 +456,11 @@ function RemoteAgentArea({ actions }: { actions: Actions }) {
           ) : (
             <span className="min-w-0 flex-1 truncate">{away.text}</span>
           )}
-          {canRetryDevice(device, status ?? undefined) ? (
+          {away.toRow ? (
+            <Button variant="secondary" onClick={() => useUiStore.getState().openSettings("devices")} data-remote-sign-in={device.id}>
+              {t("devices.signIn.openRow")}
+            </Button>
+          ) : canRetryDevice(device, status ?? undefined) ? (
             <Button variant="secondary" onClick={() => actions.retryDevice(device.id)} data-remote-retry={device.id}>
               {t("sidebar.reconnect")}
             </Button>

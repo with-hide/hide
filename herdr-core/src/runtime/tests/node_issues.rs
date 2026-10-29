@@ -232,15 +232,15 @@ fn node_runtime_with(
     });
     runtime.device_hosts.insert(
         NODE.to_owned(),
-        hosts::DeviceHost {
-            phase: hosts::HostPhase::Ready {
+        hosts::DeviceHost::new(
+            hosts::HostPhase::Ready {
                 host: node,
                 platform: "macos aarch64".to_owned(),
                 helper_path: Some("/fake/hided".to_owned()),
                 windows_drives: None,
             },
-            generation: 1,
-        },
+            1,
+        ),
     );
     let shared = SharedRuntime::new(runtime);
     {

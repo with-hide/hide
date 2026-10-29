@@ -1474,6 +1474,16 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /**
+     * The operator's answer to what a device's ssh asks on its row (PRD
+     * system-ssh-device-link B6-B8, B12): text for a masked question, accept
+     * to trust a server or say yes, cancel to end the attempt. It names the
+     * question it answers, so an answer to one ssh no longer asks reaches nothing.
+     */
+    answerDeviceSignIn(deviceId: string, question: number, reply: { reply: "text"; text: string } | { reply: "accept" } | { reply: "cancel" }) {
+      dispatch({ schema_version: 2, kind: "device_sign_in", payload: { device_id: deviceId, question, ...reply } });
+    },
+
+    /**
      * Asks the process's supervisor about the core move (PRD
      * core-host-node-move B3 to B5): run the checks toward a device or back
      * to this machine, start the move once they passed, or give up its wait

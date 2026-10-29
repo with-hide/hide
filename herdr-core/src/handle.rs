@@ -144,6 +144,15 @@ impl Drop for Core {
         for (_, link) in device_links {
             link.close("core stopping");
         }
+        // A dial still running has its `ssh` killed and reaped, and a closed
+        // link's is reaped after its grace; waited for outside the lock, up
+        // to five seconds, since a tied `ssh` ends with this process
+        // regardless.
+        let attempts = { lock_recover(&self.runtime).take_device_attempts() };
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        for attempt in attempts {
+            attempt.wait_ended(until.saturating_duration_since(std::time::Instant::now()));
+        }
         if let Some(worker) = attachment_worker {
             let _ = worker.join();
         }

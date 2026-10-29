@@ -336,12 +336,16 @@ impl Fixture {
                 ssh_dir.join("known_hosts"),
                 format!("[127.0.0.1]:{} {}\n", ssh.port, public.trim()),
             )?;
+            // The system `ssh` the device link runs reads `known_hosts` from
+            // the account's own home, not `HOME`, so the config names the
+            // fixture's.
             fs::write(
                 ssh_dir.join("config"),
                 format!(
-                    "Host {ALIAS}\n  HostName 127.0.0.1\n  Port {}\n  User fixture\n  IdentityFile {}\n  IdentityAgent none\n",
+                    "Host {ALIAS}\n  HostName 127.0.0.1\n  Port {}\n  User fixture\n  IdentityFile {}\n  IdentityAgent none\n  UserKnownHostsFile {}\n  GlobalKnownHostsFile /dev/null\n",
                     ssh.port,
                     ssh_dir.join("client").display(),
+                    ssh_dir.join("known_hosts").display(),
                 ),
             )?;
             source_env.set(
@@ -435,7 +439,10 @@ impl Fixture {
         Ok(())
     }
 
-    /// Waits until the source's core holds a ready link to the target.
+    /// Waits until the source's core holds a ready link to the target and
+    /// reads the target's Herdr session over it, which is what a move's
+    /// connection check asks for: the session rides the helper's link, so
+    /// it connects only once the link is ready.
     pub fn device_ready(&self) -> Result<()> {
         let mut last_host = None;
         wait_for("the target's helper ready", || {
@@ -455,9 +462,14 @@ impl Fixture {
             {
                 bail!("the target's helper failed: {}", host["message"]);
             }
-            Ok(host
-                .is_some_and(|host| host["state"] == "ready")
-                .then_some(()))
+            let session = snapshot
+                .pointer("/status/remote")
+                .and_then(Value::as_array)
+                .is_some_and(|rows| {
+                    rows.iter()
+                        .any(|row| row["target_id"] == DEVICE_ID && row["state"] == "connected")
+                });
+            Ok((session && host.is_some_and(|host| host["state"] == "ready")).then_some(()))
         })
         .with_context(|| format!("last target helper state: {last_host:?}"))
     }

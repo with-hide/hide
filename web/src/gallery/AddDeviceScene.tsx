@@ -3,6 +3,9 @@
 // It proves the rendered rows; the listing itself is the daemon's.
 // `view=devices` is Settings › Devices on the same PC with its connected WSL
 // distribution beside an SSH device (B5): the name and where it is.
+// `view=sign-in` and `view=failures` are its SSH devices waiting on the
+// operator and stopped by each class of ssh failure (PRD
+// system-ssh-device-link B4-B21), on a Mac, or with `system=windows` on the PC.
 import { useLayoutEffect, useMemo } from "react";
 import { createActions } from "../actions";
 import { Dialog, DialogBody, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog";
@@ -10,7 +13,7 @@ import { TooltipProvider } from "../components/ui/tooltip";
 import { InterfaceLanguageBoundary, useInterfaceTranslation } from "../i18n/client";
 import { AddDevice } from "../settings/AddDevice";
 import { DevicesTab } from "../settings/DevicesTab";
-import type { Device, DeviceHost, SshHosts, WslDistribution } from "../snapshot";
+import type { Device, DeviceHost, DeviceProblem, DeviceSignIn, SshHosts, WslDistribution } from "../snapshot";
 import { useShellStore } from "../store";
 import { EMPTY_GALLERY_SCOPE } from "./agentScopes";
 
@@ -39,26 +42,60 @@ const DEVICES: Device[] = [
   device("studio", { label: "studio", ssh_alias: "studio", host: host("macos aarch64") }),
 ];
 
+const MAC = device("local", { kind: "local", state: "local", host: { ...host("macos aarch64"), consent: "this_machine" } });
+const waiting = (id: string, sign_in: DeviceSignIn | null, problem: DeviceProblem | null = null): Device =>
+  device(id, { label: id, ssh_alias: id, state: "unavailable", sign_in, problem, host: { ...host("macos aarch64"), state: sign_in ? "connecting" : "unavailable" } });
+const failed = (id: string, problem: DeviceProblem, message: string | null = null): Device => ({ ...waiting(id, null, problem), message });
+
+/** What each SSH device waits on from the operator (B4, B6, B8, B9, B11, B12, B14, B27). */
+const SIGN_IN: Device[] = [
+  waiting("studio", { question: 4, key_command: "ssh-add --apple-use-keychain ~/.ssh/id_ed25519", kind: "secret", prompt: "Enter passphrase for key '/Users/example/.ssh/id_ed25519':", key_file: "/Users/example/.ssh/id_ed25519" }),
+  waiting("build-box", { question: 2, key_command: null, kind: "host_key", host: "[build-box.example]:2222", fingerprint: "SHA256:Jq8F2n1xR0a+e3uY7kz6m4W0cB9vT5pLhGd2sQ1oE8I" }),
+  waiting("lab", { question: 3, key_command: null, kind: "browser", url: "https://login.tailscale.com/a/7f3e9c21d4" }),
+  waiting("yubi-mini", { question: 5, key_command: null, kind: "touch", prompt: "Confirm user presence for key ED25519-SK SHA256:Qw3r…" }),
+  waiting("nas", { question: 6, key_command: null, kind: "queued" }),
+  waiting("pi", null, "sign_in_needed"),
+];
+
+/** Each class of failure a device row words (B5, B7, B13, B18-B21). */
+const FAILURES: Device[] = [
+  failed("studio", "browser_timeout"),
+  failed("build-box", "sign_in_refused"),
+  failed("lab", "host_key_changed"),
+  failed("edge", "policy_refused"),
+  failed("pi", "name_not_found"),
+  failed("nas", "unreachable"),
+  failed("jump", "proxy_failed"),
+  failed("old-box", "openssh_old"),
+  failed("ci", "unclassified", "kex_exchange_identification: read: Connection reset by peer"),
+  failed("tower", "ssh_missing"),
+];
+
 export function AddDeviceScene({ params }: { params: URLSearchParams }) {
   const theme = params.get("theme") === "light" ? "light" : "dark";
   const lang = params.get("lang") ?? "ko";
   if (!["en", "ko", "ja", "zh-CN"].includes(lang)) throw new Error(`Unknown add device language ${lang}`);
   const view = params.get("view") ?? "add";
-  if (view !== "add" && view !== "devices") throw new Error(`Unknown add device view ${view}`);
+  if (view !== "add" && view !== "devices" && view !== "sign-in" && view !== "failures") throw new Error(`Unknown add device view ${view}`);
+  const windows = params.get("system") === "windows";
   const actions = useMemo(() => createActions(() => true), []);
   useLayoutEffect(() => {
-    const status = view === "devices" ? { remote: [WSL_ID, "studio"].map((id) => ({ target_id: id, state: "connected", message: null, herdr_version: "0.9.5" })) } : { ssh_hosts: HOSTS };
-    const navigator = view === "devices" ? { devices: DEVICES, focused_device_id: WSL_ID, workspaces: [] } : undefined;
+    const ssh = view === "sign-in" ? SIGN_IN : view === "failures" ? FAILURES : null;
+    const local = windows ? DEVICES[0]! : MAC;
+    const status = ssh
+      ? { remote: ssh.map((row) => ({ target_id: row.id, state: row.sign_in ? "connecting" : "unavailable", message: null, herdr_version: null })) }
+      : view === "devices" ? { remote: [WSL_ID, "studio"].map((id) => ({ target_id: id, state: "connected", message: null, herdr_version: "0.9.5" })) } : { ssh_hosts: HOSTS };
+    const navigator = ssh ? { devices: [local, ...ssh], focused_device_id: local.id, workspaces: [] } : view === "devices" ? { devices: DEVICES, focused_device_id: WSL_ID, workspaces: [] } : undefined;
     useShellStore.setState({ connection: "live", rest: { navigator, status, ui_state: { interface_language: lang as "en" | "ko" | "ja" | "zh-CN" } } } as never);
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
-  }, [theme, lang, view]);
+  }, [theme, lang, view, windows]);
   return (
     <>
       <InterfaceLanguageBoundary />
       <TooltipProvider>
-        <div className="h-screen w-full bg-background text-foreground" data-gallery-scene="add-device" data-scene-ready="true">
-          {view === "devices" ? <div className="px-xl py-lg"><DevicesTab actions={actions} /></div> : <Body actions={actions} />}
+        <div className="min-h-screen w-full bg-background text-foreground" data-gallery-scene="add-device" data-scene-ready="true">
+          {view === "add" ? <Body actions={actions} /> : <div className="px-xl py-lg"><DevicesTab actions={actions} /></div>}
         </div>
       </TooltipProvider>
     </>

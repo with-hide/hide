@@ -113,6 +113,20 @@ fn child_role() {
             println!("OWNED {} {helper}", child.id());
             thread::sleep(Duration::from_secs(60));
         }
+        // An uncooperative child, as an `ssh` still signing in is: it reads
+        // nothing that would tell it its owner died.
+        // Its child starts one of its own in another group, as a `setsid`
+        // proxy command does.
+        "tied_owner" => {
+            let mut child = OwnedChild::spawn_tied(&mut role_command("tree_own_group")).unwrap();
+            let outside = ready_number(child.take_stdout().unwrap());
+            let mut pids = descendants(child.id()).unwrap();
+            pids.push(child.id());
+            assert!(pids.contains(&outside), "{pids:?} {outside}");
+            let pids: Vec<String> = pids.iter().map(u32::to_string).collect();
+            println!("OWNED {}", pids.join(" "));
+            thread::sleep(Duration::from_secs(60));
+        }
         "sleep" => {
             println!("READY {}", std::process::id());
             if let Some(path) = std::env::var_os(READY_FILE) {
@@ -162,6 +176,38 @@ fn child_role() {
             let mut grandchild = command.spawn().unwrap();
             println!("READY {}", grandchild.id());
             let _ = grandchild.wait();
+        }
+        // An `ssh` whose proxy command left with `setsid` and that then
+        // exits first: its child outlives it in a session of its own.
+        #[cfg(unix)]
+        "leaves_setsid" => {
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "process::child_role",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(ROLE, "sleep")
+                .env_remove(OWNER_LAUNCH_KEYS[0])
+                .env_remove(OWNER_LAUNCH_KEYS[1])
+                .stdout(Stdio::null());
+            // SAFETY: setsid is async-signal-safe.
+            unsafe {
+                std::os::unix::process::CommandExt::pre_exec(&mut command, || {
+                    if libc::setsid() < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+            let grandchild = command.spawn().unwrap();
+            println!("READY {}", grandchild.id());
+            // Long enough for the keeper to have looked, as an `ssh` that
+            // failed after its proxy started.
+            thread::sleep(Duration::from_secs(2));
+            std::process::exit(0);
         }
         // Two levels below it: a child that has a `tree` child.
         "deep" => {
@@ -596,6 +642,106 @@ fn abrupt_owner_death_ends_guarded_child_and_helper_outside_its_group() {
         "helper outside child group survived"
     );
     drop(identities);
+}
+
+#[test]
+fn abrupt_owner_death_ends_a_tied_child_that_watches_nothing() {
+    let _serial = serial();
+    let mut owner = role_command("tied_owner").spawn().unwrap();
+    let stdout = owner.stdout.take().unwrap();
+    let (send, recv) = mpsc::channel();
+    let reader = thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if let Some((_, pids)) = line.split_once("OWNED ") {
+                let pids: Vec<u32> = pids
+                    .split_whitespace()
+                    .map(|pid| pid.parse().unwrap())
+                    .collect();
+                send.send(pids).unwrap();
+                return;
+            }
+        }
+    });
+    let ready = recv.recv_timeout(HANG_LIMIT);
+    let identities: Vec<_> = ready
+        .iter()
+        .flatten()
+        .map(|pid| FixtureProcess::live(*pid))
+        .collect();
+    owner.kill().unwrap();
+    owner.wait().unwrap();
+    reader.join().unwrap();
+    // On Unix the supervisor, the child, the watcher and the child's own
+    // child in another group; on Windows the job holds the child and its
+    // child alone.
+    let pids = ready.expect("tied owner did not announce its tree");
+    let tree = if cfg!(unix) { 4 } else { 2 };
+    assert!(pids.len() >= tree, "{pids:?}");
+    for pid in pids {
+        assert!(
+            gone_within(pid, Duration::from_secs(10)),
+            "{pid} of the tied tree survived owner SIGKILL"
+        );
+    }
+    drop(identities);
+}
+
+/// The supervisor is the child's own voice: what the owner writes reaches
+/// the child, what the child writes reaches the owner, and its status is the
+/// child's.
+#[cfg(unix)]
+#[test]
+fn a_tied_child_speaks_and_exits_through_its_supervisor() {
+    let _serial = serial();
+    let mut command = Command::new("/bin/sh");
+    command
+        .args(["-c", "read line; echo \"got:$line:$TIED_NAME\"; exit 7"])
+        .env("TIED_NAME", "carried");
+    let mut child = OwnedChild::spawn_tied(&mut command).unwrap();
+    let mut input = child.take_stdin().unwrap();
+    std::io::Write::write_all(&mut input, b"hello\n").unwrap();
+    drop(input);
+    let mut output = String::new();
+    std::io::Read::read_to_string(&mut child.take_stdout().unwrap(), &mut output).unwrap();
+    assert_eq!(output, "got:hello:carried\n");
+    assert_eq!(child.wait().unwrap().code(), Some(7));
+}
+
+#[test]
+fn a_tied_child_ends_with_its_owner_and_leaves_no_watcher() {
+    let _serial = serial();
+    let mut child = OwnedChild::spawn_tied(&mut role_command("sleep")).unwrap();
+    let pid = child.id();
+    let before = descendants(std::process::id()).unwrap();
+    assert!(before.contains(&pid));
+    assert!(child.kill_tree().unwrap());
+    child.wait().unwrap();
+    drop(child);
+    assert!(gone_within(pid, Duration::from_secs(5)));
+    // The watcher stood down and was reaped: nothing of the tie is left
+    // under this process.
+    let left: Vec<u32> = descendants(std::process::id())
+        .unwrap()
+        .into_iter()
+        .filter(|left| before.contains(left))
+        .collect();
+    assert!(left.is_empty(), "{left:?}");
+}
+
+/// A tied child that exits first takes with it what it left in a session
+/// of its own, while its owner lives on.
+#[cfg(unix)]
+#[test]
+fn a_tied_child_that_exits_first_leaves_no_setsid_descendant() {
+    let _serial = serial();
+    let mut child = OwnedChild::spawn_tied(&mut role_command("leaves_setsid")).unwrap();
+    let left = ready_number(child.take_stdout().unwrap());
+    let _identity = FixtureProcess::live(left);
+    assert!(child.wait().unwrap().success());
+    assert!(
+        gone_within(left, Duration::from_secs(5)),
+        "{left}, which the tied child left in a session of its own, survived it"
+    );
 }
 
 #[test]

@@ -12,6 +12,7 @@ anyhow = "=1.0.104"
 base64 = "=0.23.1"
 cap-std = "=4.0.3"
 futures-util = "=0.3.34"
+getrandom = "=0.2.16"
 flate2 = { version = "=1.1.10", default-features = false, features = ["rust_backend"] }
 hide-herdr-client = { path = "../hide-herdr-client" }
 hide-host = { path = "../hide-host" }

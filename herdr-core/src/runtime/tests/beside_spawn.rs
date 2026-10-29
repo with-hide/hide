@@ -212,15 +212,15 @@ fn spawner() -> Spawner {
         );
         guard.device_hosts.insert(
             DEVICE.to_owned(),
-            hosts::DeviceHost {
-                phase: hosts::HostPhase::Ready {
+            hosts::DeviceHost::new(
+                hosts::HostPhase::Ready {
                     host: Arc::new(Node),
                     platform: "macos aarch64".to_owned(),
                     helper_path: Some("/fake/hided".to_owned()),
                     windows_drives: None,
                 },
-                generation: 1,
-            },
+                1,
+            ),
         );
         guard.install_remote_control(RemoteControlContext::new(
             DEVICE,

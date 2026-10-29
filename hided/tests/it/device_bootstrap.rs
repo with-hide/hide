@@ -1,5 +1,6 @@
-//! A fresh account gets its helper and pinned Herdr over real SSH before
-//! any readable Herdr session is required. The server outlives that link.
+//! A fresh account gets its helper and pinned Herdr over the system `ssh`
+//! and a real `sshd` before any readable Herdr session is required. The
+//! server outlives that link.
 #![cfg(unix)]
 
 use std::path::PathBuf;
@@ -17,7 +18,7 @@ use hide_node_link::{NodeLink, call_as};
 use serde_json::{Value, json};
 
 use super::support::remote_delivery::{Environment, successful, wait_for};
-use super::support::ssh_server::Ssh;
+use super::support::sshd::Sshd;
 
 #[derive(Default)]
 struct Sink {
@@ -40,7 +41,7 @@ struct Device {
     environment: Environment,
     socket: PathBuf,
     pinned: PathBuf,
-    ssh: Option<Ssh>,
+    ssh: Option<Sshd>,
     link: Option<Arc<dyn NodeLink>>,
     server_pid: Option<u32>,
     transport: Option<Arc<dyn DialedTransport>>,
@@ -143,37 +144,12 @@ impl Device {
         }
         std::fs::copy(&self.pinned, packages.join("herdr"))?;
         let local = root.join("local");
-        let keys = local.join(".ssh");
-        std::fs::create_dir_all(&keys)?;
-        for name in ["host", "client"] {
-            let mut keygen = self.environment.command("/usr/bin/ssh-keygen");
-            keygen
-                .args(["-q", "-t", "ed25519", "-N", "", "-f"])
-                .arg(keys.join(name));
-            successful(keygen)?;
-        }
-        let ssh = Ssh::start(
-            self.environment.clone(),
-            self.socket.clone(),
-            &keys.join("host"),
-            &keys.join("client"),
-        )?;
-        let public = std::fs::read_to_string(keys.join("host.pub"))?;
-        std::fs::write(
-            keys.join("known_hosts"),
-            format!("[127.0.0.1]:{} {}\n", ssh.port, public.trim()),
-        )?;
-        std::fs::write(
-            keys.join("config"),
-            format!(
-                "Host bootstrap\n  HostName 127.0.0.1\n  Port {}\n  User fixture\n  IdentityFile {}\n  IdentityAgent none\n",
-                ssh.port,
-                keys.join("client").display()
-            ),
-        )?;
+        std::fs::create_dir_all(local.join(".ssh"))?;
+        let ssh = Sshd::start(&root.join("sshd"), &self.environment.values())?;
+        std::fs::write(local.join(".ssh/config"), ssh.client_config("bootstrap"))?;
         self.ssh = Some(ssh);
         let transport = hide_node::ssh::Connector::new(Some(packages))
-            .with_helper_root("~/.hide/host-helper".to_owned())
+            .with_askpass_program(PathBuf::from(env!("CARGO_BIN_EXE_hide")))
             .with_terminals(self.sink.clone())
             .with_pane_events(Arc::default())
             .transport(&local, "bootstrap", "bootstrap", None)
@@ -199,8 +175,10 @@ impl Device {
                     identity: None,
                 },
                 &[],
-                hide_node_link::device::Wake::Allowed,
-                Box::new(|_| {}),
+                hide_node_link::device::Attempt::unattended(
+                    hide_node_link::device::Wake::Allowed,
+                    Box::new(|_| {}),
+                ),
             )
             .map_err(|error| anyhow::anyhow!("{error}"))?;
         self.link = Some(Arc::clone(&established.node.host));

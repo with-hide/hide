@@ -125,6 +125,7 @@ mod snapshot_delta;
 #[cfg(unix)]
 #[path = "tests/ssh_hosts.rs"]
 mod ssh_hosts_list;
+mod ssh_sign_in;
 mod start_geometry;
 mod suggestions;
 #[path = "tests/terminal.rs"]

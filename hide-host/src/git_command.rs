@@ -23,7 +23,8 @@ pub fn run(root: &Path, command: &GitCommand) -> HostResult<String> {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let failed = |message: String| HostError::new(ErrorCode::Io, message);
     match command {
-        GitCommand::Status
+        GitCommand::Version
+        | GitCommand::Status
         | GitCommand::CommonDir
         | GitCommand::RefCommit { .. }
         | GitCommand::CountCommits { .. }

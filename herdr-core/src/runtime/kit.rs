@@ -1658,24 +1658,29 @@ impl Runtime {
     }
 
     /// Another registration that reaches the same account on the same
-    /// machine: its consent bound the same user and host key, as two
-    /// registrations for two Herdr servers there do. The hooks, the `hide`
-    /// link and the helper root belong to that account, not to one
+    /// machine (`HostIdentity::same_account`), as two registrations for two
+    /// Herdr servers there do, including one whose consent was carried to a
+    /// machine id beside one still from before contract 4. The hooks, the
+    /// `hide` link and the helper root belong to that account, not to one
     /// registration, so removing one of them leaves those for the other.
     fn registration_sharing_account(
         &self,
         registration: &crate::model::DeviceRegistration,
     ) -> Option<&crate::model::DeviceRegistration> {
-        fn account(registration: &crate::model::DeviceRegistration) -> Option<(&str, &str)> {
-            let identity = registration.host_consent.as_ref()?.identity.as_ref()?;
-            Some((&identity.user, &identity.host_key_sha256))
+        fn account(
+            registration: &crate::model::DeviceRegistration,
+        ) -> Option<&hide_node_link::device::HostIdentity> {
+            registration.host_consent.as_ref()?.identity.as_ref()
         }
         let own = account(registration)?;
         self.snapshot
             .ui_state
             .device_registrations
             .iter()
-            .find(|other| other.id != registration.id && account(other) == Some(own))
+            .find(|other| {
+                other.id != registration.id
+                    && account(other).is_some_and(|theirs| own.same_account(theirs))
+            })
     }
 
     /// What a Codex start on this machine passes about the shared daemon,

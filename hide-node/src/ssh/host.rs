@@ -1,12 +1,13 @@
 //! A device's node: `hided node serve` answering the `hide_host` contract
-//! over one SSH exec channel (PRD S5.5 D-05, D-20, D-23).
+//! over one link, the standard streams of the child that reached the device
+//! (PRD S5.5 D-05, D-20, D-23; system-ssh-device-link D-02).
 //!
 //! Nothing here runs without the operator's consent for that device, recorded
-//! on its registration and bound to the SSH identity the helper was first
-//! allowed on. The helper is installed (or replaced by a newer build) under the
-//! consented install root, started with `node serve` on an exec channel of a
-//! dedicated SSH connection, and ends when that connection does: there is no
-//! daemon, no listening socket and no background install.
+//! on its registration and bound to the identity the helper was first allowed
+//! on. The helper is installed (or replaced by a newer build) under the
+//! consented install root by the start script on that same child
+//! ([`bootstrap`]), started there with `node serve`, and ends when the child
+//! does: there is no daemon, no listening socket and no background install.
 //!
 //! Admission is bounded per device: four requests run and thirty-two wait; a
 //! request past that is refused as busy, never dropped. A request that was
@@ -15,20 +16,19 @@
 //! by reading the target again rather than by resending it (B14, B33).
 
 use super::*;
+#[path = "bootstrap.rs"]
+pub(super) mod bootstrap;
 #[path = "device_bundles.rs"]
 mod device_bundles;
 #[path = "inbound.rs"]
 pub mod inbound;
 #[path = "link_streams.rs"]
 mod link_streams;
-#[path = "retirement.rs"]
-mod retirement;
 #[path = "wsl.rs"]
 pub mod wsl;
 use futures_util::{StreamExt, TryStreamExt, stream};
 use hide_node_link::HostError;
 pub use hide_node_link::LinkError;
-use hide_node_link::device::{HostConsent, HostIdentity};
 use hide_node_link::panes::{NodeEvent, PanesStarted};
 use hide_node_link::protocol::{Call, Hello, PROTOCOL_VERSION, Request};
 use hide_node_link::{LinkAnswer, NodeLink, call_as};
@@ -128,9 +128,6 @@ const HOOKS_NAME: &str = "hide-agent-hooks";
 /// of the same system gets in a folder of its own (PRD device-herdr-update
 /// D-08, `hide_kit::device_herdr`).
 const HERDR_NAME: &str = "herdr";
-/// Bounds on a kit folder read into memory for upload (engineering rule
-/// 15); a folder past them is left out and the kit names the missing part.
-const INSTALL_TIMEOUT: Duration = Duration::from_secs(120);
 /// How long a draining connection waits for its admitted requests before it
 /// closes anyway. An admitted request is written and answered by its one
 /// deadline, and the longest call timeout is 120 s (an index walk, a
@@ -139,7 +136,40 @@ const DRAIN_BOUND: Duration = Duration::from_secs(250);
 /// How long a cancel waits to be written; the call it stops ends on its
 /// own timeout whatever happens to the cancel.
 const CANCEL_TIMEOUT: Duration = Duration::from_secs(5);
-const HELLO_TIMEOUT: Duration = Duration::from_secs(15);
+pub(super) const HELLO_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// A device test's Git stage: the node runs `git --version` over the link
+/// the device has, read-only and with no login of its own (PRD
+/// system-ssh-device-link B25). Answers whether it passed.
+pub(super) fn check_git(
+    link: &dyn hide_node_link::NodeLink,
+    report: &mut hide_node_link::device::CapabilityReport,
+) -> bool {
+    use hide_node_link::device::RemoteStage;
+    let asked = call_as::<String>(
+        link,
+        Call::Git {
+            root: "/".to_owned(),
+            command: hide_node_link::git::GitCommand::Version,
+        },
+        Duration::from_secs(10),
+    );
+    match asked {
+        Ok(version) => {
+            report.pass(RemoteStage::Git, version);
+            true
+        }
+        Err(error) => {
+            report.fail(
+                RemoteStage::Git,
+                format!("Git did not answer on the device: {error}"),
+                true,
+                true,
+            );
+            false
+        }
+    }
+}
 
 /// Local helpers, plus a manifest for device bundles fetched on connection.
 #[derive(Clone, Debug, Default)]
@@ -1065,224 +1095,11 @@ fn mark_closed(inner: &Inner, reason: String) {
     inner.stop_gates(&reason);
 }
 
-/// Connects, checks consent against the device that answered, installs the
-/// helper when the device lacks this build's, and starts it. Blocking; run
-/// it off the runtime lock.
-pub fn establish(
-    client: &RusshRemoteClient,
-    packages: &HelperPackages,
-    consent: &HostConsent,
-    retirement_projects: &[String],
-    panes: Option<PaneHook>,
-    terminals: Option<TerminalHook>,
-    on_close: Box<dyn FnOnce(String) + Send + 'static>,
-) -> Result<Established, EstablishError> {
-    let since = Instant::now();
-    let target = client.host.host_id.as_str();
-    establish_stage(target, "connect", since);
-    let session = client
-        .runtime
-        .block_on(async {
-            tokio::time::timeout(SSH_OPERATION_TIMEOUT, client.shared_session())
-                .await
-                .unwrap_or_else(|_| {
-                    Err(remote_error(
-                        "remote-host-connect",
-                        &client.host.host_id,
-                        RemoteStage::Ssh,
-                        "the SSH connection timed out",
-                        true,
-                        false,
-                    ))
-                })
-        })
-        .map_err(EstablishError::Connect)?;
-    let identity = HostIdentity {
-        user: client.host.user.clone(),
-        hostname: client.host.hostname.clone(),
-        port: client.host.port,
-        host_key_sha256: client.observed_host_key().unwrap_or_default(),
-    };
-    if identity.host_key_sha256.is_empty() {
-        return Err(EstablishError::Helper(
-            "The device's host key was not observed, so consent cannot be checked".to_owned(),
-        ));
-    }
-    if let Some(bound) = consent.identity.as_ref()
-        && bound != &identity
-    {
-        return Err(EstablishError::IdentityChanged {
-            bound: Box::new(bound.clone()),
-            observed: Box::new(identity),
-        });
-    }
-    let result = client.runtime.block_on(async {
-        tokio::time::timeout(
-            INSTALL_TIMEOUT,
-            start_helper(
-                &session,
-                client,
-                packages,
-                &consent.helper_root,
-                retirement_projects,
-                since,
-            ),
-        )
-        .await
-        .unwrap_or_else(|_| {
-            Err(EstablishError::Install(
-                "Installing the device helper timed out; nothing was started".to_owned(),
-            ))
-        })
-    });
-    // A failed setup leaves the device's connection to the channels that
-    // share it; what it opened closed with it.
-    let Started {
-        channel,
-        session_channel,
-        installed,
-        helper_path,
-        upload,
-    } = result?;
-    let host = spawn_host(
-        client,
-        Arc::clone(&client.connection),
-        channel,
-        session_channel,
-        panes.clone(),
-        on_close,
-    );
-    establish_stage(target, "hello", since);
-    let hello: Hello = call_as(&host, Call::Hello, HELLO_TIMEOUT).map_err(|error| {
-        EstablishError::Helper(format!("The device helper did not start: {error}"))
-    })?;
-    if let Some(reason) = helper_protocol_refusal(&hello) {
-        host.close("helper protocol mismatch");
-        return Err(EstablishError::Helper(reason));
-    }
-    let readers = hello.readers();
-    for reason in readers.diagnostics() {
-        crate::diagnostic!(json!({
-            "component": "remote_host",
-            "kind": "host.reader_advertisement_refused",
-            "target": target,
-            "reason": reason,
-        }));
-    }
-    host.take_readers(hello.protocol, readers)
-        .map_err(EstablishError::Helper)?;
-    // Only an unreadable account needs the kit before its services start.
-    // A normal connection publishes helper readiness first, and the core
-    // runs its automatic kit pass afterwards. Named profiles remain
-    // attachment-only and follow that normal order too.
-    let kit = if client.herdr_session.is_some() {
-        None
-    } else {
-        let known = client
-            .cached_herdr_socket()
-            .or_else(|| client.herdr_socket.clone());
-        let socket = match client.herdr_socket_path() {
-            Ok(socket) => Some(socket),
-            Err(error) => {
-                crate::diagnostic!(json!({
-                    "component": "remote_host",
-                    "kind": "host.herdr_socket_unread",
-                    "target": target,
-                    "reason": error.to_string(),
-                }));
-                // No socket was learned. The installed node resolves
-                // Herdr's environment override or account default before
-                // starting it.
-                known
-            }
-        };
-        if client.herdr_session_readable() {
-            None
-        } else {
-            establish_stage(target, "kit", since);
-            Some(
-                call_as::<hide_kit::KitReport>(
-                    &host,
-                    Call::Kit {
-                        action: hide_node_link::protocol::KitAction::Apply,
-                        cli_dir: consent
-                            .cli_dir
-                            .clone()
-                            .unwrap_or_else(|| DEFAULT_CLI_DIR.to_owned()),
-                        herdr_socket: socket,
-                        preserve_herdr_server: false,
-                        retirement_projects: retirement_projects.to_vec(),
-                    },
-                    Duration::from_secs(180),
-                )
-                .map(Box::new)
-                .map_err(|error| error.to_string()),
-            )
-        }
-    };
-    if panes.is_some() {
-        establish_stage(target, "panes", since);
-        start_panes(client, &host);
-    }
-    let terminals = match terminals {
-        None => Err("this process takes no device terminals".to_owned()),
-        Some(hook) => {
-            establish_stage(target, "terminals", since);
-            // The audited 24 link keeps its legacy features only: its node
-            // has no terminal service, so it is never asked to start one.
-            if hello.protocol == PROTOCOL_VERSION {
-                start_terminals(client, &host, hook)
-            } else {
-                let reason = format!(
-                    "the device's helper speaks protocol {}, which carries no terminals",
-                    hello.protocol
-                );
-                crate::diagnostic!(json!({
-                    "component": "remote_host",
-                    "kind": "host.terminals_unstarted",
-                    "target": target,
-                    "reason": reason,
-                }));
-                Err(reason)
-            }
-        }
-    };
-    establish_stage(target, "ready", since);
-    Ok(Established {
-        node: NodeReady {
-            host: Arc::new(host),
-            hello,
-            terminals,
-        },
-        identity,
-        installed,
-        helper_path,
-        upload,
-        kit,
-    })
-}
-
-/// Starts the node's terminal service for the device's Herdr and the writer
-/// that carries the core's side of it, so the device's panes' terminals
-/// flow inside this link (PRD core-host-node-terminal D-10). A device whose
-/// Herdr cannot be found has none; its panes read unavailable and the
-/// reason goes to the log.
-fn start_terminals(
-    client: &RusshRemoteClient,
-    host: &RemoteHost,
-    hook: TerminalHook,
-) -> Result<Arc<dyn hide_node_link::terminal::TerminalNode>, String> {
-    start_terminals_at(
-        client
-            .herdr_socket_path()
-            .map_err(|error| error.to_string()),
-        host,
-        hook,
-    )
-}
-
-/// [`start_terminals`] for the node's Herdr at `herdr_socket`, as the node
-/// names it.
+/// Starts the node's terminal service for the device's Herdr at
+/// `herdr_socket`, as the node names it, and the writer that carries the
+/// core's side of it, so the device's panes' terminals flow inside this link
+/// (PRD core-host-node-terminal D-10). A device whose Herdr cannot be found
+/// has none; its panes read unavailable and the reason goes to the log.
 pub(super) fn start_terminals_at(
     herdr_socket: Result<String, String>,
     host: &RemoteHost,
@@ -1349,7 +1166,7 @@ fn overlong_line(line: &[u8]) -> Option<String> {
 
 /// B30: each step a device's connection reaches, so a connection that
 /// stalls names the step it stalled in.
-fn establish_stage(target: &str, stage: &str, since: Instant) {
+pub(super) fn establish_stage(target: &str, stage: &str, since: Instant) {
     crate::diagnostic!(json!({
         "component": "remote_host",
         "kind": "host.establish_stage",
@@ -1359,21 +1176,11 @@ fn establish_stage(target: &str, stage: &str, since: Instant) {
     }));
 }
 
-/// Starts the node's pane service for the device's Herdr, so its panes'
-/// `hide` reaches the core over this link. A device whose Herdr cannot be
-/// found keeps its files and Git; its panes' `hide` answers that the node is
-/// unavailable, and the reason goes to the log.
-fn start_panes(client: &RusshRemoteClient, host: &RemoteHost) {
-    start_panes_at(
-        client
-            .herdr_socket_path()
-            .map_err(|error| error.to_string()),
-        host,
-    );
-}
-
-/// [`start_panes`] for the node's Herdr at `herdr_socket`, as the node
-/// names it.
+/// Starts the node's pane service for the device's Herdr at `herdr_socket`,
+/// as the node names it, so its panes' `hide` reaches the core over this
+/// link. A device whose Herdr cannot be found keeps its files and Git; its
+/// panes' `hide` answers that the node is unavailable, and the reason goes
+/// to the log.
 pub(super) fn start_panes_at(herdr_socket: Result<String, String>, host: &RemoteHost) {
     let started = herdr_socket.and_then(|herdr_socket| {
         call_as::<PanesStarted>(host, Call::PanesStart { herdr_socket }, HELLO_TIMEOUT)
@@ -1397,124 +1204,12 @@ pub(super) fn start_panes_at(herdr_socket: Result<String, String>, host: &Remote
 /// Protocol24 has an audited transition contract with a frozen reader set.
 /// Every other mismatch is refused before use; ordinary digest-based payload
 /// replacement still installs the helper carried by this build.
-fn helper_protocol_refusal(hello: &Hello) -> Option<String> {
+pub(super) fn helper_protocol_refusal(hello: &Hello) -> Option<String> {
     (!matches!(hello.protocol, 24 | PROTOCOL_VERSION)).then(|| {
         format!(
             "The device helper speaks protocol {}, this Hide needs {PROTOCOL_VERSION}; the helper this Hide carries does not match it, so rebuild or reinstall Hide",
             hello.protocol
         )
-    })
-}
-
-/// A started helper: its channel and that channel's place among the
-/// connection's sessions, and what the install did.
-struct Started {
-    channel: Channel<Msg>,
-    session_channel: tokio::sync::OwnedSemaphorePermit,
-    installed: bool,
-    helper_path: String,
-    upload: Upload,
-}
-
-async fn start_helper(
-    session: &Handle<KnownHostHandler>,
-    client: &RusshRemoteClient,
-    packages: &HelperPackages,
-    helper_root: &str,
-    retirement_projects: &[String],
-    since: Instant,
-) -> Result<Started, EstablishError> {
-    let target = client.host.host_id.clone();
-    establish_stage(&target, "platform", since);
-    let admit = |operation: &'static str, stage: RemoteStage| async move {
-        client
-            .session_channel(operation, stage)
-            .await
-            .map_err(EstablishError::Connect)
-    };
-    let permit = admit("remote-host-platform", RemoteStage::Sftp).await?;
-    let uname = execute_channel(
-        session,
-        "uname -s -m",
-        "remote-host-platform",
-        &target,
-        RemoteStage::Sftp,
-    )
-    .await
-    .map_err(EstablishError::Connect)?;
-    if uname.exit_status != 0 {
-        return Err(EstablishError::Unsupported(format!(
-            "The device could not report its platform: {}",
-            uname.stderr.trim()
-        )));
-    }
-    drop(permit);
-    let (os, arch) = platform_of(uname.stdout.trim()).map_err(EstablishError::Unsupported)?;
-    let payload = packages.payload(&os, &arch)?;
-    // The helper inherits this SSH exec environment. Read its path overrides
-    // before uploading any candidate; older helpers need no new operation.
-    establish_stage(&target, "environment", since);
-    let permit = admit("remote-retirement-environment", RemoteStage::Sftp).await?;
-    let environment = execute_channel(
-        session,
-        r#"[ "${#HCOORD_HOME}" -le 4096 ] && [ "${#HIDE_STATE_DIR}" -le 4096 ] && [ "${#XDG_STATE_HOME}" -le 4096 ] || exit 65; printf '%s\n' "${HCOORD_HOME-}" "${HIDE_STATE_DIR-}" "${XDG_STATE_HOME-}""#,
-        "remote-retirement-environment",
-        &target,
-        RemoteStage::Sftp,
-    )
-    .await
-    .map_err(EstablishError::Connect)?;
-    if environment.exit_status != 0 {
-        return Err(EstablishError::Install("The device retirement paths could not be inspected; check its SSH environment and retry; no helper was uploaded".into()));
-    }
-    drop(permit);
-    let locations = retirement::Locations::from_environment(&environment.stdout)?;
-
-    establish_stage(&target, "install", since);
-    let permit = admit("remote-host-install", RemoteStage::Sftp).await?;
-    let channel = session.channel_open_session().await.map_err(|error| {
-        EstablishError::Install(format!("The SFTP channel could not be opened: {error}"))
-    })?;
-    channel
-        .request_subsystem(true, "sftp")
-        .await
-        .map_err(|error| {
-            EstablishError::Install(format!("SFTP is not available on the device: {error}"))
-        })?;
-    let raw = RawSftpSession::new(channel.into_stream());
-    raw.set_timeout(30);
-    let installed = install(
-        &raw,
-        helper_root,
-        &payload,
-        retirement_projects,
-        &locations,
-        |phase| establish_stage(&target, phase, since),
-    )
-    .await;
-    let _ = raw.close_session();
-    drop(raw);
-    drop(permit);
-    let installed = installed?;
-    let (helper_path, fresh) = (installed.helper_path, installed.fresh);
-
-    establish_stage(&target, "start", since);
-    let session_channel = admit("remote-host-start", RemoteStage::Ssh).await?;
-    let channel = session.channel_open_session().await.map_err(|error| {
-        EstablishError::Helper(format!("The helper channel could not be opened: {error}"))
-    })?;
-    channel
-        .exec(true, format!("{} node serve", shell_quote(&helper_path)))
-        .await
-        .map_err(|error| {
-            EstablishError::Helper(format!("The helper could not be started: {error}"))
-        })?;
-    Ok(Started {
-        channel,
-        session_channel,
-        installed: fresh,
-        helper_path,
-        upload: installed.upload,
     })
 }
 
@@ -1529,53 +1224,6 @@ fn sftp_failure(what: &str, error: impl fmt::Display) -> EstablishError {
     EstablishError::Install(format!("{what}: {error}"))
 }
 
-/// Where an install left things.
-pub(super) struct Installed {
-    pub(super) helper_path: String,
-    /// Whether the helper itself was written on this connection.
-    fresh: bool,
-    upload: Upload,
-}
-
-/// Puts this build's helper and kit parts in `<root>/<version>/`, where the
-/// version is a prefix of the digest over all of them, keeping the folder
-/// layout the kit reads. The
-/// helper is reused only after checking its bytes, because Hide runs it; any
-/// other file is reused when a file of its size that only the account can
-/// change is already there, because only a verified upload is ever renamed
-/// into that private folder and reading every part back on each connection
-/// would delay every reconnect. So an install that stopped part way resumes
-/// with the files it had not sent (B18). Optional kit files that cannot be
-/// placed are reported by the kit on the device; a chosen Herdr and its
-/// pin must arrive before the helper can start. The
-/// helper removes older builds once it has pointed `current` at this one
-/// (`hide_host::kit`).
-async fn install(
-    raw: &RawSftpSession,
-    helper_root: &str,
-    payload: &Payload,
-    retirement_projects: &[String],
-    locations: &retirement::Locations,
-    stage: impl Fn(&str),
-) -> Result<Installed, EstablishError> {
-    stage("install_init");
-    raw.init()
-        .await
-        .map_err(|error| sftp_failure("SFTP did not start", error))?;
-    stage("install_root");
-    let (home, owner, root) = private_root_spelling(raw, helper_root).await?;
-    // No folders, staging files or current link have changed at this point.
-    stage("install_preflight");
-    tokio::time::timeout(
-        SSH_OPERATION_TIMEOUT,
-        retirement::preflight(raw, &home, owner, retirement_projects, locations),
-    ).await.map_err(|_| EstablishError::Install(
-        "The device retirement preflight timed out; inspect its run and request state and retry; no helper was uploaded".into()
-    ))??;
-    stage("install_payload");
-    place_payload(raw, &home, owner, &root, payload).await
-}
-
 /// Puts this build in a version folder under `helper_root` on a machine
 /// that already runs a build of Hide's, without the device's first-install
 /// checks: a core update (PRD core-host-node-move B10) on the machine
@@ -1587,7 +1235,7 @@ pub(super) async fn install_build(
     os: &str,
     arch: &str,
     helper_root: &str,
-) -> Result<Installed, EstablishError> {
+) -> Result<String, EstablishError> {
     let payload = packages.payload(os, arch)?.without_herdr();
     if !payload.missing.is_empty() {
         return Err(EstablishError::Install(format!(
@@ -1690,14 +1338,15 @@ async fn private_root_spelling(
     Ok((home, owner, root))
 }
 
-/// Puts `payload` in its version folder under `root` (see [`install`]).
+/// Puts `payload` in its version folder under `root`, every part of it: a
+/// core update runs only a whole build. Answers where its helper is.
 async fn place_payload(
     raw: &RawSftpSession,
     home: &str,
     owner: u32,
     root: &str,
     payload: &Payload,
-) -> Result<Installed, EstablishError> {
+) -> Result<String, EstablishError> {
     // Everything from here goes through the path the check resolved, whose
     // every folder was checked and none is a link, so a link on the spelled
     // path cannot be swapped between the check and the launch.
@@ -1705,10 +1354,6 @@ async fn place_payload(
     let version = payload.version();
     let version_dir = format!("{root}/{}", &version[..16]);
     ensure_private_dir(raw, &version_dir, owner).await?;
-    let mut upload = Upload {
-        missing: payload.missing.clone(),
-        ..Upload::default()
-    };
     let (helper, parts) = payload
         .files
         .split_first()
@@ -1726,19 +1371,14 @@ async fn place_payload(
         }
         Err(_) => false,
     };
-    let (helper_path, fresh) = if reusable {
-        upload.reused += 1;
-        (final_path, false)
+    let helper_path = if reusable {
+        final_path
     } else {
-        upload.sent += 1;
-        (
-            place_file(raw, &version_dir, helper, owner, "helper").await?,
-            true,
-        )
+        place_file(raw, &version_dir, helper, owner, "helper").await?
     };
     let mut folders = std::collections::HashSet::new();
     for part in parts {
-        let placed = async {
+        async {
             // Each folder on the way is made private before anything is put
             // in it, parents first.
             let mut folder = version_dir.clone();
@@ -1756,34 +1396,19 @@ async fn place_payload(
                     if private_file(&existing.attrs, owner)
                         && existing.attrs.size == Some(part.bytes.len() as u64) =>
                 {
-                    Ok(false)
+                    Ok(())
                 }
                 _ => place_file(raw, &version_dir, part, owner, &part.relative)
                     .await
-                    .map(|_| true),
+                    .map(|_| ()),
             }
         }
-        .await;
-        match placed {
-            Ok(true) => upload.sent += 1,
-            Ok(false) => upload.reused += 1,
-            // A build that names a Herdr copy must deliver both its pin and
-            // binary; retry establishment instead of publishing a ready helper.
-            Err(error) if part.relative == hide_kit::device_herdr::HERDR_PIN => return Err(error),
-            Err(error) => upload.missing.push(error.to_string()),
-        }
+        .await?;
     }
     if let Some(herdr) = &payload.herdr {
-        match place_herdr(raw, &root, herdr, owner).await? {
-            true => upload.sent += 1,
-            false => upload.reused += 1,
-        }
+        place_herdr(raw, &root, herdr, owner).await?;
     }
-    Ok(Installed {
-        helper_path,
-        fresh,
-        upload,
-    })
+    Ok(helper_path)
 }
 
 /// Puts the pinned Herdr in `<root>/herdr/<copy>/herdr`, by the kit parts'
@@ -2286,46 +1911,18 @@ async fn remote_digest(
         .collect())
 }
 
-/// Starts the link over `channel`. Its reader keeps `connection`, the
-/// device's connection the channel runs on, until the link ends: a device
-/// removed while a call is still out (its kit coming off) drops its own hold
-/// on the connection, which closes only when its last holder goes, and the
-/// call still gets its answer.
-fn spawn_host(
-    client: &RusshRemoteClient,
-    connection: Arc<Connection>,
-    channel: Channel<Msg>,
-    session_channel: tokio::sync::OwnedSemaphorePermit,
-    panes: Option<PaneHook>,
-    on_close: Box<dyn FnOnce(String) + Send + 'static>,
-) -> RemoteHost {
-    let writer: Pin<Box<dyn AsyncWrite + Send>> = Box::pin(channel.make_writer());
-    start_reader(
-        client.host.host_id.clone(),
-        Arc::clone(&client.runtime),
-        Some(session_channel),
-        writer,
-        LinkSource::Channel {
-            channel,
-            _connection: connection,
-        },
-        panes,
-        on_close,
-    )
-}
-
-/// Where a link's lines come from: a device helper's SSH exec channel, or
-/// the bytes of a node that dialed this core, as its attach role hands them
-/// over a local stream (PRD core-host-node-remote-core D-04, D-10).
+/// Where a link's lines come from: the pipes of the child that runs a
+/// device's helper, or the bytes of a node that dialed this core, as its
+/// attach role hands them over a local stream (PRD core-host-node-remote-core
+/// D-04, D-10).
 enum LinkSource {
-    Channel {
-        channel: Channel<Msg>,
-        _connection: Arc<Connection>,
-    },
     Stream(tokio::sync::mpsc::Receiver<Vec<u8>>),
     /// The stdout and stderr of a child this process owns, and what ends
-    /// it ([`over_child`]).
+    /// it ([`ChildLink`]): what its start script left unread comes first.
     Child {
+        pending: Option<Vec<u8>>,
+        stderr: Option<Vec<u8>>,
+        ended: Option<String>,
         arrivals: tokio::sync::mpsc::Receiver<Arrival>,
         ending: ChildEnding,
     },
@@ -2335,39 +1932,39 @@ enum LinkSource {
 enum Arrival {
     Data(Vec<u8>),
     Stderr(Vec<u8>),
+    /// A child's standard error reached its end.
+    StderrClosed,
     Ended(String),
 }
 
 impl LinkSource {
     async fn next(&mut self) -> Arrival {
         match self {
-            LinkSource::Channel { channel, .. } => loop {
-                match channel.wait().await {
-                    Some(ChannelMsg::Data { data }) => return Arrival::Data(data.to_vec()),
-                    Some(ChannelMsg::ExtendedData { data, .. }) => {
-                        return Arrival::Stderr(data.to_vec());
-                    }
-                    Some(ChannelMsg::ExitStatus { exit_status }) => {
-                        return Arrival::Ended(format!(
-                            "the device helper exited with status {exit_status}"
-                        ));
-                    }
-                    Some(ChannelMsg::Eof) | Some(ChannelMsg::Close) | None => {
-                        return Arrival::Ended(
-                            "the connection to the device helper closed".to_owned(),
-                        );
-                    }
-                    Some(_) => {}
-                }
-            },
             LinkSource::Stream(chunks) => match chunks.recv().await {
                 Some(chunk) => Arrival::Data(chunk),
                 None => Arrival::Ended("the node's attach stream closed".to_owned()),
             },
-            LinkSource::Child { arrivals, .. } => arrivals
-                .recv()
-                .await
-                .unwrap_or_else(|| Arrival::Ended("the helper's output closed".to_owned())),
+            LinkSource::Child {
+                pending,
+                stderr,
+                ended,
+                arrivals,
+                ..
+            } => {
+                if let Some(data) = pending.take() {
+                    return Arrival::Data(data);
+                }
+                if let Some(data) = stderr.take() {
+                    return Arrival::Stderr(data);
+                }
+                if let Some(reason) = ended.take() {
+                    return Arrival::Ended(reason);
+                }
+                arrivals
+                    .recv()
+                    .await
+                    .unwrap_or_else(|| Arrival::Ended("the helper's output closed".to_owned()))
+            }
         }
     }
 
@@ -2375,12 +1972,10 @@ impl LinkSource {
     /// input and exits.
     async fn finish(self) {
         match self {
-            LinkSource::Channel { channel, .. } => {
-                let _ = channel.eof().await;
-                let _ = channel.close().await;
-            }
             LinkSource::Stream(chunks) => drop(chunks),
-            LinkSource::Child { arrivals, ending } => {
+            LinkSource::Child {
+                arrivals, ending, ..
+            } => {
                 drop(arrivals);
                 ending.end();
             }
@@ -2453,97 +2048,390 @@ const CHILD_EXIT_GRACE: Duration = Duration::from_secs(5);
 
 /// A link over the stdin and stdout of a child this process started and
 /// owns: the `wsl.exe` that runs a WSL distribution's helper (PRD wsl-device
-/// D-07). It runs the same reader, calls and pane events as any link; the
-/// child's standard error is kept as the link's diagnostic tail. The link
-/// owns the child (engineering rule 14): when the link ends, for any reason,
-/// the child's input closes, so the helper reads its end and exits, and a
-/// child still running after [`CHILD_EXIT_GRACE`] is ended with its tree. A
-/// child that exits ends the link. `target` names it in the log.
+/// D-07). See [`ChildLink`].
 pub fn over_child(
     target: &str,
-    mut child: hide_platform::process::OwnedChild,
+    child: hide_platform::process::OwnedChild,
     panes: Option<PaneHook>,
     on_close: Box<dyn FnOnce(String) + Send + 'static>,
 ) -> std::io::Result<RemoteHost> {
-    let missing = |what: &str| std::io::Error::other(format!("the helper's {what} is not piped"));
-    let stdin = child.take_stdin().ok_or_else(|| missing("input"))?;
-    let mut stdout = child.take_stdout().ok_or_else(|| missing("output"))?;
-    let mut stderr = child.take_stderr().ok_or_else(|| missing("error output"))?;
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(1)
-        .thread_name("node-link")
-        .enable_all()
-        .build()?;
-    let runtime = Arc::new(RemoteRuntime(Some(runtime)));
-    let (arrive, arrivals) = tokio::sync::mpsc::channel::<Arrival>(LOCAL_READ_CHUNKS);
-    let stderr_arrive = arrive.clone();
-    std::thread::Builder::new()
-        .name("node-link-read".into())
-        .spawn(move || {
-            let mut buffer = vec![0u8; LOCAL_READ_BYTES];
-            let ended = loop {
-                match std::io::Read::read(&mut stdout, &mut buffer) {
-                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-                    Ok(0) => break "the helper's output closed".to_owned(),
-                    Err(error) => break format!("the helper's output failed: {error}"),
-                    Ok(read) => {
-                        if arrive
-                            .blocking_send(Arrival::Data(buffer[..read].to_vec()))
-                            .is_err()
-                        {
-                            return;
-                        }
-                    }
-                }
-            };
-            let _ = arrive.blocking_send(Arrival::Ended(ended));
-        })?;
-    std::thread::Builder::new()
-        .name("node-link-stderr".into())
-        .spawn(move || {
-            let mut buffer = vec![0u8; 4096];
-            loop {
-                match std::io::Read::read(&mut stderr, &mut buffer) {
-                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-                    Ok(0) | Err(_) => return,
-                    Ok(read) => {
-                        // A full queue drops diagnostic bytes, never a line
-                        // of the link's own output.
-                        if let Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) =
-                            stderr_arrive.try_send(Arrival::Stderr(buffer[..read].to_vec()))
-                        {
-                            return;
-                        }
-                    }
-                }
-            }
-        })?;
-    let input: Arc<Mutex<Option<Box<dyn std::io::Write + Send>>>> =
-        Arc::new(Mutex::new(Some(Box::new(stdin))));
-    let ending = ChildEnding::start(target, child, Arc::clone(&input))?;
-    let writer: Pin<Box<dyn AsyncWrite + Send>> = Box::pin(BlockingWriter {
-        stream: input,
-        writing: None,
-    });
-    Ok(start_reader(
-        target.to_owned(),
-        runtime,
-        None,
-        writer,
-        LinkSource::Child { arrivals, ending },
-        panes,
-        on_close,
-    ))
+    Ok(ChildLink::start(target, child, None)?.into_host(Vec::new(), panes, on_close))
 }
 
-/// What ends the child of an [`over_child`] link: told once, from the
-/// link's end or its drop, a thread closes the child's input and waits out
+/// What one look at a [`ChildLink`] before it carries the node brought.
+pub(super) enum ChildOutput {
+    /// A whole line of its standard output, without the line end.
+    Line(Vec<u8>),
+    /// A whole line of its standard error, without the line end.
+    Error(String),
+    /// Nothing within the time given.
+    Quiet,
+    /// Its standard output ended.
+    Ended(String),
+}
+
+/// The stdin, stdout and stderr of a child this process started and owns,
+/// as one link: the `ssh` that runs a device's start script and then its
+/// helper (PRD system-ssh-device-link D-02), or the `wsl.exe` that does the
+/// same in a WSL distribution (PRD wsl-device D-07). The start script reads
+/// and answers on it first ([`Self::next`], [`Self::send`]); then the same
+/// pipes become the node's link ([`Self::into_host`]), which runs the same
+/// reader, calls and pane events as any link, and keeps the child's standard
+/// error as its diagnostic tail.
+///
+/// The link owns the child (engineering rule 14): when it ends, for any
+/// reason, the child's input closes, so the helper reads its end and exits,
+/// and a child still running after [`CHILD_EXIT_GRACE`] is ended with its
+/// tree. A child that exits ends the link. Started for a connection attempt,
+/// the child is that attempt's until it is reaped: its reaper holds a share
+/// of the attempt, and the attempt's cancel ends it at once until the
+/// transport disarms it (`Cancel`).
+pub(super) struct ChildLink {
+    target: String,
+    runtime: Arc<RemoteRuntime>,
+    arrivals: tokio::sync::mpsc::Receiver<Arrival>,
+    input: Arc<Mutex<Option<Box<dyn std::io::Write + Send>>>>,
+    ending: ChildEnding,
+    /// Standard output read past the last whole line.
+    stdout: Vec<u8>,
+    /// Standard error read past the last whole line.
+    stderr: Vec<u8>,
+    stdout_ended: Option<String>,
+    stderr_ended: bool,
+}
+
+/// The most of one line a child may write before the start script hands
+/// over: its lines are short, and the bytes before it (a login file's
+/// greeting) are skipped line by line.
+const MAX_START_LINE: usize = 64 * 1024;
+
+impl ChildLink {
+    pub(super) fn start(
+        target: &str,
+        mut child: hide_platform::process::OwnedChild,
+        attempt: Option<&hide_node_link::device::Cancel>,
+    ) -> std::io::Result<Self> {
+        let missing =
+            |what: &str| std::io::Error::other(format!("the child's {what} is not piped"));
+        let stdin = child.take_stdin().ok_or_else(|| missing("input"))?;
+        let mut stdout = child.take_stdout().ok_or_else(|| missing("output"))?;
+        let mut stderr = child.take_stderr().ok_or_else(|| missing("error output"))?;
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_name("node-link")
+            .enable_all()
+            .build()?;
+        let runtime = Arc::new(RemoteRuntime(Some(runtime)));
+        let (arrive, arrivals) = tokio::sync::mpsc::channel::<Arrival>(LOCAL_READ_CHUNKS);
+        let stderr_arrive = arrive.clone();
+        std::thread::Builder::new()
+            .name("node-link-read".into())
+            .spawn(move || {
+                let mut buffer = vec![0u8; LOCAL_READ_BYTES];
+                let ended = loop {
+                    match std::io::Read::read(&mut stdout, &mut buffer) {
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                        Ok(0) => break "the helper's output closed".to_owned(),
+                        Err(error) => break format!("the helper's output failed: {error}"),
+                        Ok(read) => {
+                            if arrive
+                                .blocking_send(Arrival::Data(buffer[..read].to_vec()))
+                                .is_err()
+                            {
+                                return;
+                            }
+                        }
+                    }
+                };
+                let _ = arrive.blocking_send(Arrival::Ended(ended));
+            })?;
+        std::thread::Builder::new()
+            .name("node-link-stderr".into())
+            .spawn(move || {
+                let mut buffer = vec![0u8; 4096];
+                loop {
+                    match std::io::Read::read(&mut stderr, &mut buffer) {
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                        Ok(0) | Err(_) => break,
+                        Ok(read) => {
+                            // A full queue drops diagnostic bytes, never a
+                            // line of the link's own output.
+                            if let Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) =
+                                stderr_arrive.try_send(Arrival::Stderr(buffer[..read].to_vec()))
+                            {
+                                return;
+                            }
+                        }
+                    }
+                }
+                let _ = stderr_arrive.try_send(Arrival::StderrClosed);
+            })?;
+        let input: Arc<Mutex<Option<Box<dyn std::io::Write + Send>>>> =
+            Arc::new(Mutex::new(Some(Box::new(stdin))));
+        let ending = ChildEnding::start(
+            target,
+            child,
+            Arc::clone(&input),
+            attempt.map(hide_node_link::device::Cancel::hold),
+        )?;
+        if let Some(attempt) = attempt {
+            attempt.arm(ending.killer());
+        }
+        Ok(Self {
+            target: target.to_owned(),
+            runtime,
+            arrivals,
+            input,
+            ending,
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+            stdout_ended: None,
+            stderr_ended: false,
+        })
+    }
+
+    /// The next whole line the child wrote on either output, or `Quiet` once
+    /// `until` passes first.
+    pub(super) fn next(&mut self, until: Instant) -> ChildOutput {
+        loop {
+            if let Some(line) = take_line(&mut self.stderr) {
+                return ChildOutput::Error(String::from_utf8_lossy(&line).into_owned());
+            }
+            if let Some(line) = take_line(&mut self.stdout) {
+                return ChildOutput::Line(line);
+            }
+            if self.stdout.len() > MAX_START_LINE {
+                return ChildOutput::Ended(format!(
+                    "the device wrote a line longer than {} KiB before its helper started",
+                    MAX_START_LINE / 1024
+                ));
+            }
+            if self.stderr.len() > MAX_START_LINE {
+                let line = std::mem::take(&mut self.stderr);
+                return ChildOutput::Error(String::from_utf8_lossy(&line).into_owned());
+            }
+            if let Some(reason) = self.stdout_ended.clone() {
+                // What stderr still holds is read before the end is told,
+                // so a failure is classified on all of what ssh said.
+                if !self.stderr_ended {
+                    let left = until.saturating_duration_since(Instant::now());
+                    let bound = left.min(Duration::from_secs(2));
+                    match self.recv(bound) {
+                        Some(()) => continue,
+                        None => self.stderr_ended = true,
+                    }
+                }
+                if !self.stderr.is_empty() {
+                    let line = std::mem::take(&mut self.stderr);
+                    return ChildOutput::Error(String::from_utf8_lossy(&line).into_owned());
+                }
+                return ChildOutput::Ended(reason);
+            }
+            let left = until.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return ChildOutput::Quiet;
+            }
+            if self.recv(left).is_none() {
+                return ChildOutput::Quiet;
+            }
+        }
+    }
+
+    /// Takes one arrival within `within` into the buffers; `None` when none
+    /// came.
+    fn recv(&mut self, within: Duration) -> Option<()> {
+        let arrivals = &mut self.arrivals;
+        let arrival = self
+            .runtime
+            .block_on(async { tokio::time::timeout(within, arrivals.recv()).await.ok() })?;
+        match arrival {
+            Some(Arrival::Data(data)) => self.stdout.extend_from_slice(&data),
+            Some(Arrival::Stderr(data)) => self.stderr.extend_from_slice(&data),
+            Some(Arrival::StderrClosed) => self.stderr_ended = true,
+            Some(Arrival::Ended(reason)) => self.stdout_ended = Some(reason),
+            None => {
+                self.stdout_ended = Some("the helper's output closed".to_owned());
+                self.stderr_ended = true;
+            }
+        }
+        Some(())
+    }
+
+    /// Ends the child and its tree at once and returns once it is reaped, so
+    /// an attempt that stops before its helper starts leaves nothing running.
+    pub(super) fn kill(&mut self) {
+        self.ending.kill();
+    }
+
+    /// Writes `bytes` to the child's input. A write the child does not take
+    /// by `until` ends the child, which ends the write.
+    pub(super) fn send(&mut self, bytes: &[u8], until: Instant) -> std::io::Result<()> {
+        self.ending.arm(Some(until));
+        let written = {
+            let mut input = lock_recover(&self.input);
+            match input.as_mut() {
+                Some(input) => input.write_all(bytes).and_then(|()| input.flush()),
+                None => Err(std::io::Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "the child's input closed",
+                )),
+            }
+        };
+        self.ending.arm(None);
+        written
+    }
+
+    /// The node the child now runs: `pending` is what it already wrote past
+    /// the start script's last line.
+    pub(super) fn into_host(
+        self,
+        pending: Vec<u8>,
+        panes: Option<PaneHook>,
+        on_close: Box<dyn FnOnce(String) + Send + 'static>,
+    ) -> RemoteHost {
+        let Self {
+            target,
+            runtime,
+            arrivals,
+            input,
+            ending,
+            mut stdout,
+            stderr,
+            stdout_ended,
+            ..
+        } = self;
+        let mut first = pending;
+        first.append(&mut stdout);
+        let writer: Pin<Box<dyn AsyncWrite + Send>> = Box::pin(BlockingWriter {
+            stream: input,
+            writing: None,
+        });
+        start_reader(
+            target,
+            runtime,
+            None,
+            writer,
+            LinkSource::Child {
+                pending: (!first.is_empty()).then_some(first),
+                stderr: (!stderr.is_empty()).then_some(stderr),
+                ended: stdout_ended,
+                arrivals,
+                ending,
+            },
+            panes,
+            on_close,
+        )
+    }
+
+    /// Takes what the child wrote past the start script's last line, for
+    /// [`Self::into_host`].
+    pub(super) fn take_rest(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.stdout)
+    }
+}
+
+/// A start script's pipe on a child that asks for nothing while it starts
+/// (the `wsl.exe` of a distribution): its error lines are kept, the last
+/// few, for the failure they explain.
+pub(super) struct UnaskedStart {
+    pub(super) link: ChildLink,
+    errors: std::collections::VecDeque<String>,
+    cancel: hide_node_link::device::Cancel,
+}
+
+/// The error lines an [`UnaskedStart`] keeps.
+const UNASKED_ERROR_TAIL: usize = 8;
+
+impl UnaskedStart {
+    pub(super) fn new(link: ChildLink, cancel: hide_node_link::device::Cancel) -> Self {
+        Self {
+            link,
+            errors: std::collections::VecDeque::new(),
+            cancel,
+        }
+    }
+
+    /// The last line the child wrote on its error output that says anything.
+    pub(super) fn last_error(&self) -> Option<&str> {
+        self.errors
+            .iter()
+            .rev()
+            .map(|line| line.trim())
+            .find(|line| !line.is_empty())
+    }
+}
+
+impl bootstrap::Pipe for UnaskedStart {
+    fn send(&mut self, bytes: &[u8], until: Instant) -> Result<(), String> {
+        if self.cancel.is_cancelled() {
+            return Err(ATTEMPT_ENDED.to_owned());
+        }
+        self.link
+            .send(bytes, until)
+            .map_err(|error| error.to_string())
+    }
+
+    fn line(&mut self, until: Instant) -> Result<Vec<u8>, bootstrap::Stop> {
+        loop {
+            if self.cancel.is_cancelled() {
+                return Err(bootstrap::Stop::Ended(ATTEMPT_ENDED.to_owned()));
+            }
+            // A second at a time, so a cancel is seen while it waits.
+            let now = Instant::now();
+            if now >= until {
+                return Err(bootstrap::Stop::Quiet);
+            }
+            match self.link.next(until.min(now + Duration::from_secs(1))) {
+                ChildOutput::Line(line) => return Ok(line),
+                ChildOutput::Error(line) => {
+                    if self.errors.len() == UNASKED_ERROR_TAIL {
+                        self.errors.pop_front();
+                    }
+                    self.errors.push_back(line);
+                }
+                ChildOutput::Quiet => {}
+                ChildOutput::Ended(reason) => return Err(bootstrap::Stop::Ended(reason)),
+            }
+        }
+    }
+}
+
+/// Why an attempt the core cancelled stopped.
+pub(super) const ATTEMPT_ENDED: &str = "The connection attempt was ended";
+
+/// Takes the first whole line out of `buffer`, without its end.
+fn take_line(buffer: &mut Vec<u8>) -> Option<Vec<u8>> {
+    let end = buffer.iter().position(|byte| *byte == b'\n')?;
+    let mut line: Vec<u8> = buffer.drain(..=end).collect();
+    line.pop();
+    if line.last() == Some(&b'\r') {
+        line.pop();
+    }
+    Some(line)
+}
+
+/// What ends the child of a [`ChildLink`]: told once, from the link's end or
+/// its drop, a thread closes the child's input and waits out
 /// [`CHILD_EXIT_GRACE`] for it before ending its tree. The clock starts when
 /// it is told: a write blocked on a child that stopped reading holds the
 /// input until the child ends, so the input closes once no write holds it,
-/// and ending the tree is what frees such a write.
+/// and ending the tree is what frees such a write. While a start script's
+/// write is armed with a deadline, passing it ends the tree at once.
 struct ChildEnding {
-    told: Option<mpsc::SyncSender<()>>,
+    /// Shared only with the killer an attempt's cancel holds, as a weak
+    /// reference, so the link's end is still every sender gone.
+    told: Option<Arc<mpsc::SyncSender<Told>>>,
+    /// Set by the killer: the thread ends the child at its next look, also
+    /// when the queue was too full to take the word.
+    killed: Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+enum Told {
+    End,
+    /// End the child at once, without its grace.
+    Kill,
+    Arm(Option<Instant>),
 }
 
 impl ChildEnding {
@@ -2551,19 +2439,48 @@ impl ChildEnding {
         target: &str,
         mut child: hide_platform::process::OwnedChild,
         input: Arc<Mutex<Option<Box<dyn std::io::Write + Send>>>>,
+        held: Option<hide_node_link::device::Held>,
     ) -> std::io::Result<Self> {
-        let (told, heard) = mpsc::sync_channel::<()>(1);
+        let (told, heard) = mpsc::sync_channel::<Told>(4);
+        let killed = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let target = target.to_owned();
-        std::thread::Builder::new()
+        let thread_killed = Arc::clone(&killed);
+        let thread = std::thread::Builder::new()
             .name("node-link-child".into())
             .spawn(move || {
-                // Told, or every sender gone: either way the link is over.
-                let _ = heard.recv();
+                let killed = || thread_killed.load(std::sync::atomic::Ordering::SeqCst);
+                // Told, every sender gone, or an armed write's deadline
+                // passed: either way the link is over.
+                let mut armed: Option<Instant> = None;
+                let mut kill = false;
+                let late = loop {
+                    if killed() {
+                        kill = true;
+                        break false;
+                    }
+                    let heard = match armed {
+                        None => heard
+                            .recv()
+                            .map_err(|_| mpsc::RecvTimeoutError::Disconnected),
+                        Some(until) => {
+                            heard.recv_timeout(until.saturating_duration_since(Instant::now()))
+                        }
+                    };
+                    match heard {
+                        Ok(Told::Arm(until)) => armed = until,
+                        Ok(Told::Kill) => {
+                            kill = true;
+                            break false;
+                        }
+                        Ok(Told::End) | Err(mpsc::RecvTimeoutError::Disconnected) => break false,
+                        Err(mpsc::RecvTimeoutError::Timeout) => break true,
+                    }
+                };
                 let pid = child.id();
                 let since = Instant::now();
                 let mut input_open = true;
                 let mut status = None;
-                while since.elapsed() < CHILD_EXIT_GRACE {
+                while !late && !kill && !killed() && since.elapsed() < CHILD_EXIT_GRACE {
                     if input_open {
                         input_open = !close_unless_writing(&input);
                     }
@@ -2591,15 +2508,53 @@ impl ChildEnding {
                     "pid": pid,
                     "code": status.and_then(|status| status.code()),
                     "killed": killed,
+                    "write_deadline_passed": late,
                     "after_ms": since.elapsed().as_millis() as u64,
                 }));
+                // The attempt this child was started for has nothing of it
+                // left running only now.
+                drop(held);
             })?;
-        Ok(Self { told: Some(told) })
+        Ok(Self {
+            told: Some(Arc::new(told)),
+            killed,
+            thread: Some(thread),
+        })
+    }
+
+    /// What an attempt's cancel runs: tells the thread to end the child now,
+    /// without waiting, and keeps nothing of the link alive.
+    fn killer(&self) -> impl Fn() + Send + 'static {
+        let told = self.told.as_ref().map(Arc::downgrade);
+        let killed = Arc::clone(&self.killed);
+        move || {
+            killed.store(true, std::sync::atomic::Ordering::SeqCst);
+            if let Some(told) = told.as_ref().and_then(std::sync::Weak::upgrade) {
+                let _ = told.try_send(Told::Kill);
+            }
+        }
+    }
+
+    /// Ends the child and its tree now and returns once it is reaped.
+    fn kill(&mut self) {
+        self.killed.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(told) = self.told.take() {
+            let _ = told.send(Told::Kill);
+        }
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+
+    fn arm(&self, until: Option<Instant>) {
+        if let Some(told) = &self.told {
+            let _ = told.send(Told::Arm(until));
+        }
     }
 
     fn end(mut self) {
         if let Some(told) = self.told.take() {
-            let _ = told.try_send(());
+            let _ = told.try_send(Told::End);
         }
     }
 }
@@ -2765,6 +2720,7 @@ fn start_reader(
                         stderr.drain(..stderr.len() - 4096);
                     }
                 }
+                Arrival::StderrClosed => {}
                 Arrival::Ended(reason) => break reason,
             }
         };
@@ -3871,168 +3827,6 @@ mod tests {
         assert_eq!(
             files.get("/timed-out/v1/other").map(Vec::as_slice),
             Some(&b"kept"[..])
-        );
-    }
-}
-
-/// Runs against a real device: `HERDR_TEST_SSH_ALIAS` names it and
-/// `HERDR_TEST_REMOTE_FIXTURE` is a disposable folder on it holding
-/// `checkout/a.txt` with `old`. The helper is installed under the fixture,
-/// never under the account's own install root.
-#[cfg(test)]
-mod probe {
-    use super::*;
-    use hide_node_link::RootIdentity;
-    use hide_node_link::protocol::{RootOpened, RootRef};
-
-    #[test]
-    #[ignore = "needs an authorized SSH device and a disposable fixture"]
-    fn remote_host_open_save_conflict_and_close_probe() {
-        let alias_name = std::env::var("HERDR_TEST_SSH_ALIAS").expect("configured SSH alias");
-        let fixture = std::env::var("HERDR_TEST_REMOTE_FIXTURE").expect("remote fixture folder");
-        let helper_dir =
-            std::env::var("HERDR_TEST_HELPER_DIR").expect("local helper package folder");
-        let home = std::env::var_os("HOME").expect("HOME");
-        let alias =
-            SshAlias::from_config_file(&PathBuf::from(home).join(".ssh/config"), &alias_name)
-                .expect("SSH alias resolves");
-        let client = RusshRemoteClient::new(alias).expect("client");
-        let consent = HostConsent {
-            contract: HOST_CONSENT_CONTRACT,
-            helper_root: format!("{fixture}/helper"),
-            cli_dir: Some(format!("{fixture}/bin")),
-            granted_at_unix_ms: 1,
-            identity: None,
-        };
-        let packages = HelperPackages::new(Some(PathBuf::from(helper_dir)));
-        let (seen, closed) = std::sync::mpsc::channel::<String>();
-        let established = establish(
-            &client,
-            &packages,
-            &consent,
-            &[],
-            None,
-            None,
-            Box::new(move |reason| {
-                let _ = seen.send(reason);
-            }),
-        )
-        .expect("helper established");
-        eprintln!(
-            "probe: identity={} installed={} path={} platform={} {}",
-            established.identity.describe(),
-            established.installed,
-            established.helper_path,
-            established.node.hello.os,
-            established.node.hello.arch
-        );
-        let host = established.node.host;
-        let timeout = Duration::from_secs(20);
-        let root_path = format!("{fixture}/checkout");
-        let opened: RootOpened = call_as(
-            &*host,
-            Call::RootOpen {
-                root: root_path.clone(),
-            },
-            timeout,
-        )
-        .expect("root opens");
-        let root = RootRef {
-            path: root_path,
-            identity: opened.identity,
-        };
-        let listing: hide_node_link::list::Listing = call_as(
-            &*host,
-            Call::List {
-                root: root.clone(),
-                path: String::new(),
-            },
-            timeout,
-        )
-        .expect("listing");
-        assert!(
-            listing.entries.iter().any(|entry| entry.name == "a.txt"),
-            "{listing:?}"
-        );
-        let document: hide_node_link::document::Document = call_as(
-            &*host,
-            Call::OpenDocument {
-                root: root.clone(),
-                path: "a.txt".to_owned(),
-            },
-            timeout,
-        )
-        .expect("document");
-        assert_eq!(document.contents.as_deref(), Some("old\n"));
-        let revision = document.revision.expect("editable revision");
-        let saved: hide_node_link::save::Saved = call_as(
-            &*host,
-            Call::Save {
-                root: root.clone(),
-                path: "a.txt".to_owned(),
-                contents: "saved from the probe\n".to_owned(),
-                expected_revision: revision.clone(),
-            },
-            timeout,
-        )
-        .expect("save");
-        assert_ne!(saved.revision, revision);
-        match host.call(
-            Call::Save {
-                root: root.clone(),
-                path: "a.txt".to_owned(),
-                contents: "stale draft\n".to_owned(),
-                expected_revision: revision,
-            },
-            timeout,
-        ) {
-            Err(LinkError::Refused(error)) => {
-                assert_eq!(error.code, hide_node_link::ErrorCode::Conflict);
-                assert_eq!(
-                    error.actual_revision.as_deref(),
-                    Some(saved.revision.as_str())
-                );
-            }
-            other => panic!("a stale save must be a conflict: {other:?}"),
-        }
-        match host.call(
-            Call::List {
-                root: RootRef {
-                    path: root.path.clone(),
-                    identity: RootIdentity {
-                        device: 0,
-                        inode: 0,
-                    },
-                },
-                path: String::new(),
-            },
-            timeout,
-        ) {
-            Err(LinkError::Refused(error)) => {
-                assert_eq!(error.code, hide_node_link::ErrorCode::RootReplaced)
-            }
-            other => panic!("a wrong root identity must be refused: {other:?}"),
-        }
-        match host.call(
-            Call::OpenDocument {
-                root: root.clone(),
-                path: "../escape.txt".to_owned(),
-            },
-            timeout,
-        ) {
-            Err(LinkError::Refused(error)) => {
-                assert_eq!(error.code, hide_node_link::ErrorCode::InvalidPath)
-            }
-            other => panic!("a traversal must be refused: {other:?}"),
-        }
-        host.close("probe finished");
-        match host.call(Call::Hello, timeout) {
-            Err(LinkError::NotConnected(_)) => {}
-            other => panic!("a closed host takes no request: {other:?}"),
-        }
-        eprintln!(
-            "probe: close observed = {:?}",
-            closed.recv_timeout(Duration::from_secs(10)).ok()
         );
     }
 }

@@ -10,6 +10,18 @@ fn register_device(runtime: &mut Runtime, id: &str, alias: &str) -> bool {
     runtime.dispatch_json(&event)
 }
 
+/// A device registered as Add device registers one, with the helper
+/// allowed: its Herdr rides the helper's link, so nothing else dials it.
+fn register_allowed_device(runtime: &mut Runtime, id: &str, alias: &str) -> bool {
+    let event = serde_json::to_vec(&serde_json::json!({
+        "schema_version": SCHEMA_VERSION,
+        "kind": "register_device",
+        "payload": { "id": id, "label": id, "ssh_alias": alias, "host_consent": true }
+    }))
+    .expect("register device event");
+    runtime.dispatch_json(&event)
+}
+
 fn dispatch_device(runtime: &mut Runtime, kind: &str, id: &str) -> bool {
     let event = serde_json::to_vec(&serde_json::json!({
         "schema_version": SCHEMA_VERSION,
@@ -186,36 +198,32 @@ fn removing_devices_retires_only_their_pane_reads_and_rejects_late_publications(
     }
 }
 
-/// The session worker reports unreadable SSH configuration on the device
-/// row. A literal hostname does not have to be declared as an SSH alias.
+/// The system ssh's refusal of the configuration reaches the device row as
+/// an unclassified failure with ssh's own last line (PRD
+/// system-ssh-device-link B19). A literal hostname does not have to be
+/// declared as an SSH alias.
 #[test]
 fn unreadable_ssh_configuration_is_reported_on_the_device_row() {
     let shared = remote_runtime_with_unreadable_config();
     let mut runtime = shared.lock().unwrap();
-    assert!(register_device(
+    assert!(register_allowed_device(
         &mut runtime,
         "nowhere",
         "hide-test-alias-that-does-not-exist"
     ));
     drop(runtime);
     wait(&shared, "SSH configuration failure", |runtime| {
-        runtime
-            .snapshot()
-            .status
-            .remote
-            .iter()
-            .any(|status| status.target_id == "nowhere" && status.state == "unreachable")
+        device(runtime, "nowhere").problem.is_some()
     });
     let runtime = shared.lock().unwrap();
     let row = device(&runtime, "nowhere");
     assert_eq!(row.state, "unavailable");
+    assert_eq!(row.problem.as_deref(), Some("unclassified"));
     let message = row.message.clone().expect("failure reason");
     assert!(
-        message.contains("SSH target hide-test-alias-that-does-not-exist could not be resolved")
-            && message.contains("not a regular file"),
-        "the row names the target and the configuration failure: {message}"
+        message.contains("bad configuration option"),
+        "the row says what ssh said: {message}"
     );
-    assert_eq!(runtime.snapshot().status.remote[0].state, "unreachable");
     assert_eq!(diagnostic_count(&runtime, "device.registered"), 1);
 }
 
@@ -285,14 +293,15 @@ pub(super) fn runtime_with_home() -> Runtime {
     runtime
 }
 
-/// A real worker resolves private configuration that fails before any SSH
-/// connection can start. Keeping the path a directory is deterministic on
-/// every supported system.
+/// A real worker resolves the alias with the system `ssh`, which refuses a
+/// configuration it cannot read before any connection can start. An option
+/// OpenSSH does not know is refused the same way by every version.
 fn remote_runtime_with_unreadable_config() -> SharedRuntime {
     let shared = SharedRuntime::new(runtime_with_home());
     let mut runtime = shared.lock().unwrap();
     let home = runtime.home_path.as_ref().expect("fixture home");
-    std::fs::create_dir_all(home.join(".ssh/config")).unwrap();
+    std::fs::create_dir_all(home.join(".ssh")).unwrap();
+    std::fs::write(home.join(".ssh/config"), "HideNoSuchOption yes\n").unwrap();
     runtime.worker_context = Some(RuntimeWorkerContext {
         runtime: shared.weak(),
         notifier: crate::handle::ChangeNotifier::noop(),
@@ -309,7 +318,11 @@ fn a_pending_core_dials_no_device_until_its_link_commits() {
     let shared = remote_runtime_with_unreadable_config();
     let mut runtime = shared.lock().unwrap();
     runtime.hold_effects();
-    assert!(register_device(&mut runtime, "studio", "studio-host"));
+    assert!(register_allowed_device(
+        &mut runtime,
+        "studio",
+        "studio-host"
+    ));
     assert_eq!(runtime.snapshot().ui_state.device_registrations.len(), 1);
     assert!(
         runtime.snapshot().status.remote.is_empty(),
@@ -318,20 +331,11 @@ fn a_pending_core_dials_no_device_until_its_link_commits() {
     assert!(runtime.release_effects());
     drop(runtime);
     wait(&shared, "released device connection attempt", |runtime| {
-        runtime
-            .snapshot()
-            .status
-            .remote
-            .iter()
-            .any(|status| status.target_id == "studio" && status.state == "unreachable")
+        device(runtime, "studio").problem.is_some()
     });
     let runtime = shared.lock().unwrap();
     let attempt = device(&runtime, "studio").message.clone().expect("reason");
-    assert!(
-        attempt.contains("SSH target studio-host could not be resolved")
-            && attempt.contains("not a regular file"),
-        "{attempt}"
-    );
+    assert!(attempt.contains("bad configuration option"), "{attempt}");
 }
 
 /// Retry resolves configuration again instead of replaying the cached
@@ -340,23 +344,25 @@ fn a_pending_core_dials_no_device_until_its_link_commits() {
 fn retrying_a_device_makes_a_new_connection_attempt() {
     let shared = remote_runtime_with_unreadable_config();
     let mut runtime = shared.lock().unwrap();
-    assert!(register_device(&mut runtime, "studio", "studio-host"));
+    assert!(register_allowed_device(
+        &mut runtime,
+        "studio",
+        "studio-host"
+    ));
     drop(runtime);
     wait(&shared, "first configuration failure", |runtime| {
-        runtime
-            .snapshot()
-            .status
-            .remote
-            .iter()
-            .any(|status| status.target_id == "studio" && status.state == "unreachable")
+        device(runtime, "studio").problem.is_some()
     });
     let mut runtime = shared.lock().unwrap();
     let first = device(&runtime, "studio").message.clone().expect("reason");
-    assert!(first.contains("not a regular file"), "{first}");
+    assert!(first.contains("bad configuration option"), "{first}");
 
     let home = runtime.home_path.clone().expect("fixture home");
-    std::fs::remove_dir(home.join(".ssh/config")).unwrap();
-    std::fs::write(home.join(".ssh/config"), "Match all\n").unwrap();
+    std::fs::write(
+        home.join(".ssh/config"),
+        "HideNoSuchOption yes\nHideNoOtherOption yes\n",
+    )
+    .unwrap();
     let retry = serde_json::to_vec(&serde_json::json!({
         "schema_version": SCHEMA_VERSION,
         "kind": "retry_connect",
@@ -369,7 +375,7 @@ fn retrying_a_device_makes_a_new_connection_attempt() {
         device(runtime, "studio")
             .message
             .as_deref()
-            .is_some_and(|message| message.contains("SSH Match rules"))
+            .is_some_and(|message| message != first)
     });
     let runtime = shared.lock().unwrap();
     let second = device(&runtime, "studio").message.clone().expect("reason");

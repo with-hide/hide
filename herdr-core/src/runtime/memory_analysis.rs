@@ -4762,15 +4762,15 @@ mod tests {
 
             runtime.device_hosts.insert(
                 crate::node::TEST_NODE.to_owned(),
-                super::super::hosts::DeviceHost {
-                    generation: 1,
-                    phase: super::super::hosts::HostPhase::Ready {
+                super::super::hosts::DeviceHost::new(
+                    super::super::hosts::HostPhase::Ready {
                         host: Arc::clone(&fixture.node),
                         platform: "linux".to_owned(),
                         helper_path: None,
                         windows_drives: None,
                     },
-                },
+                    1,
+                ),
             );
             let prepared = runtime
                 .device_facts

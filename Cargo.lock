@@ -1360,6 +1360,7 @@ dependencies = [
  "cap-std",
  "flate2",
  "futures-util",
+ "getrandom 0.2.16",
  "hide-herdr-client",
  "hide-host",
  "hide-kit",

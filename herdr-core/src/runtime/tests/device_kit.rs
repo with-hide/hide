@@ -160,8 +160,8 @@ fn device_runtime(
         if let Some(helper) = helper {
             runtime.device_hosts.insert(
                 DEVICE.to_owned(),
-                hosts::DeviceHost {
-                    phase: hosts::HostPhase::Ready {
+                hosts::DeviceHost::new(
+                    hosts::HostPhase::Ready {
                         host: helper,
                         platform: "macos aarch64".to_owned(),
                         helper_path: Some(
@@ -170,8 +170,8 @@ fn device_runtime(
                         ),
                         windows_drives: None,
                     },
-                    generation: 1,
-                },
+                    1,
+                ),
             );
         }
         runtime.install_worker_context(shared.weak(), crate::handle::ChangeNotifier::noop());
@@ -904,13 +904,13 @@ fn a_device_on_an_unsupported_platform_shows_why() {
         let mut runtime = shared.lock().unwrap();
         runtime.device_hosts.insert(
             DEVICE.to_owned(),
-            hosts::DeviceHost {
-                phase: hosts::HostPhase::Unsupported(
+            hosts::DeviceHost::new(
+                hosts::HostPhase::Unsupported(
                     "This Hide build does not include the device helper for Linux x86_64"
                         .to_owned(),
                 ),
-                generation: 1,
-            },
+                1,
+            ),
         );
         runtime.refresh_device_snapshots();
     }
@@ -931,6 +931,7 @@ fn a_contract_2_consent_is_carried_to_the_kit_on_its_next_connection() {
         user: "me".to_owned(),
         hostname: "studio.local".to_owned(),
         port: 22,
+        machine_id: None,
         host_key_sha256: "key".to_owned(),
     };
     let mut consent = granted(&probe);
@@ -980,6 +981,49 @@ fn a_contract_2_consent_is_carried_to_the_kit_on_its_next_connection() {
     );
 }
 
+/// PRD system-ssh-device-link D-09, B16: a device allowed under contract 3
+/// connects without asking, and its first connection binds the consent to
+/// the machine that answered as its account, address and port, which from
+/// then on is the only one it covers.
+#[test]
+fn a_contract_3_consent_is_carried_and_bound_to_the_machine_that_answers() {
+    let probe = device_runtime(None, None);
+    let legacy = hide_node_link::device::HostIdentity {
+        user: "me".to_owned(),
+        hostname: "studio.local".to_owned(),
+        port: 22,
+        machine_id: None,
+        host_key_sha256: "SHA256:old-host-key".to_owned(),
+    };
+    let mut consent = granted(&probe);
+    consent.contract = 3;
+    consent.identity = Some(legacy.clone());
+    let shared = device_runtime(Some(consent), None);
+    let mut runtime = shared.lock().unwrap();
+    assert_eq!(runtime.host_snapshot(DEVICE).consent, "granted");
+    runtime.start_device_host(DEVICE, hosts::HostAttempt::Background);
+    let generation = runtime.device_host_generation(DEVICE);
+    let mut connected = established_with_terminals();
+    connected.identity.machine_id = Some("4c4c4544-0042".to_owned());
+    connected.identity.host_key_sha256 = String::new();
+    runtime.ingest_host_established(DEVICE, generation, Ok(hosts::HostReady::Dialed(connected)));
+    let bound = runtime
+        .snapshot
+        .ui_state
+        .device_registrations
+        .iter()
+        .find(|registration| registration.id == DEVICE)
+        .and_then(|registration| registration.host_consent.clone())
+        .unwrap();
+    assert_eq!(bound.contract, crate::remote::HOST_CONSENT_CONTRACT);
+    let identity = bound.identity.unwrap();
+    assert_eq!(identity.machine_id.as_deref(), Some("4c4c4544-0042"));
+    assert_eq!(
+        identity.host_key_sha256, legacy.host_key_sha256,
+        "an older build still recognizes the device"
+    );
+}
+
 /// PRD hide-home-layout D-12, B20: a device allowed for the old default
 /// helper root is not asked again; the connection installs at the new
 /// default root and keeps the bound identity. A consent for another root,
@@ -992,6 +1036,7 @@ fn a_consent_for_the_old_default_root_moves_to_the_new_one_without_asking() {
         user: "me".to_owned(),
         hostname: "studio.local".to_owned(),
         port: 22,
+        machine_id: None,
         host_key_sha256: "key".to_owned(),
     };
     let mut consent = granted(&probe);
@@ -1161,6 +1206,41 @@ fn removing_a_connected_device_takes_its_kit_off_and_then_closes_the_helper() {
 /// one leaves the kit for the other and only closes its own helper.
 #[test]
 fn removing_one_of_two_registrations_of_the_same_account_keeps_the_kit() {
+    let legacy = |hostname: &str| hide_node_link::device::HostIdentity {
+        user: "me".to_owned(),
+        hostname: hostname.to_owned(),
+        port: 22,
+        machine_id: None,
+        host_key_sha256: "SHA256:studio".to_owned(),
+    };
+    removing_one_keeps_the_kit_for(legacy("studio.local"), legacy("10.0.0.7"));
+}
+
+/// The same account when one consent was carried to the machine id it
+/// answered with and the other is still from before contract 4: the kept
+/// host key says they are one install, so removing the carried one leaves
+/// what the other still uses.
+#[test]
+fn a_carried_consent_and_a_legacy_one_for_the_same_account_keep_the_kit() {
+    let legacy = hide_node_link::device::HostIdentity {
+        user: "me".to_owned(),
+        hostname: "10.0.0.7".to_owned(),
+        port: 22,
+        machine_id: None,
+        host_key_sha256: "SHA256:studio".to_owned(),
+    };
+    let carried = hide_node_link::device::HostIdentity {
+        hostname: "studio.local".to_owned(),
+        machine_id: Some("m-studio".to_owned()),
+        ..legacy.clone()
+    };
+    removing_one_keeps_the_kit_for(carried, legacy);
+}
+
+fn removing_one_keeps_the_kit_for(
+    own: hide_node_link::device::HostIdentity,
+    twin_identity: hide_node_link::device::HostIdentity,
+) {
     let helper = KitDevice::answering(Ok(report(&[])));
     let shared = with_consent(Some(Arc::clone(&helper)));
     {
@@ -1170,25 +1250,13 @@ fn removing_one_of_two_registrations_of_the_same_account_keeps_the_kit() {
             .iter_mut()
             .find(|registration| registration.id == DEVICE)
             .unwrap();
-        device.host_consent.as_mut().unwrap().identity =
-            Some(hide_node_link::device::HostIdentity {
-                user: "me".to_owned(),
-                hostname: "studio.local".to_owned(),
-                port: 22,
-                host_key_sha256: "SHA256:studio".to_owned(),
-            });
+        device.host_consent.as_mut().unwrap().identity = Some(own);
         let mut twin = device.clone();
         twin.id = "studio-second-herdr".to_owned();
         twin.origin = crate::model::LinkOrigin::Dialed {
             ssh_alias: "studio-by-address".to_owned(),
         };
-        twin.host_consent
-            .as_mut()
-            .unwrap()
-            .identity
-            .as_mut()
-            .unwrap()
-            .hostname = "10.0.0.7".to_owned();
+        twin.host_consent.as_mut().unwrap().identity = Some(twin_identity);
         twin.label = "Studio, second Herdr".to_owned();
         registrations.push(twin);
         runtime.refresh_device_snapshots();
@@ -2215,6 +2283,7 @@ pub(super) fn established(
             user: "me".to_owned(),
             hostname: "studio.local".to_owned(),
             port: 22,
+            machine_id: None,
             host_key_sha256: "key".to_owned(),
         },
         installed: false,

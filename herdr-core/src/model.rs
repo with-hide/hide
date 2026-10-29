@@ -912,11 +912,17 @@ pub struct DeviceSnapshot {
     /// Why an SSH device is not `ready`, in the words its remote status
     /// carries; `None` while it is.
     pub message: Option<String>,
-    /// Which trust or sign-in step refused the connection, when one did:
-    /// `host_key_changed`, `host_key_unknown` or `authentication`, each
-    /// needing a different action from the operator (PRD S5.5 B38); `None`
-    /// for any other state.
+    /// Why an SSH device's last attempt did not connect, by class, each
+    /// with its own line and action on the row (PRD system-ssh-device-link
+    /// B5, B7, B8, B13, B14, B18-B21): `sign_in_needed`, `browser_timeout`,
+    /// `sign_in_refused`, `policy_refused`, `host_key_changed`,
+    /// `name_not_found`, `unreachable`, `proxy_failed`, `unsupported`,
+    /// `ssh_missing`, `openssh_old` or `unclassified`; `None` while it is
+    /// ready or connecting.
     pub problem: Option<String>,
+    /// What the device's connection attempt waits on from the operator now
+    /// (B4, B6, B9, B11, B12, B27); `None` when it waits on nothing.
+    pub sign_in: Option<DeviceSignInSnapshot>,
     pub ssh_alias: Option<String>,
     /// The WSL distribution of this PC the device is (PRD wsl-device D-20).
     pub wsl_distro: Option<String>,
@@ -1341,6 +1347,18 @@ pub struct DeviceHostSnapshot {
     /// project spells a pasted `C:\` path under it (PRD wsl-device B16).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub windows_drives: Option<String>,
+}
+
+/// What a device's connection attempt waits on, as its row shows it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct DeviceSignInSnapshot {
+    /// The number the row's answer names (`device_sign_in`).
+    pub question: u64,
+    #[serde(flatten)]
+    pub wait: hide_node_link::device::SignInWait,
+    /// For a key's passphrase: the command that adds the key to the agent
+    /// of the machine ssh runs on, so it is typed once (B9).
+    pub key_command: Option<String>,
 }
 
 /// One staged connection test of an SSH device: SSH, authentication, Herdr,
@@ -9432,6 +9450,72 @@ mod wire_enum_tests {
         }
         assert_wire(&contract, "suggestion_attempt_purpose", &purposes);
         checked.insert("suggestion_attempt_purpose");
+
+        use hide_node_link::device::{SignInWait, SshProblem};
+        let problems = [
+            SshProblem::SignInNeeded,
+            SshProblem::BrowserTimeout,
+            SshProblem::SignInRefused,
+            SshProblem::PolicyRefused,
+            SshProblem::HostKeyChanged,
+            SshProblem::NameNotFound,
+            SshProblem::Unreachable,
+            SshProblem::ProxyFailed,
+            SshProblem::Unsupported,
+            SshProblem::SshMissing,
+            SshProblem::OpenSshOld,
+            SshProblem::Unclassified,
+        ];
+        for variant in problems {
+            match variant {
+                SshProblem::SignInNeeded
+                | SshProblem::BrowserTimeout
+                | SshProblem::SignInRefused
+                | SshProblem::PolicyRefused
+                | SshProblem::HostKeyChanged
+                | SshProblem::NameNotFound
+                | SshProblem::Unreachable
+                | SshProblem::ProxyFailed
+                | SshProblem::Unsupported
+                | SshProblem::SshMissing
+                | SshProblem::OpenSshOld
+                | SshProblem::Unclassified => {}
+            }
+        }
+        assert_wire(&contract, "device_problem", &problems.map(SshProblem::code));
+        checked.insert("device_problem");
+
+        let text = String::new;
+        let waits = [
+            SignInWait::Queued,
+            SignInWait::Secret {
+                prompt: text(),
+                key_file: None,
+            },
+            SignInWait::HostKey {
+                host: text(),
+                fingerprint: text(),
+            },
+            SignInWait::Confirm { prompt: text() },
+            SignInWait::Touch { prompt: text() },
+            SignInWait::Browser { url: text() },
+        ];
+        for variant in &waits {
+            match variant {
+                SignInWait::Queued
+                | SignInWait::Secret { .. }
+                | SignInWait::HostKey { .. }
+                | SignInWait::Confirm { .. }
+                | SignInWait::Touch { .. }
+                | SignInWait::Browser { .. } => {}
+            }
+        }
+        assert_wire(
+            &contract,
+            "device_sign_in_kind",
+            &waits.each_ref().map(SignInWait::kind),
+        );
+        checked.insert("device_sign_in_kind");
 
         let unchecked = contract
             .keys()

@@ -865,15 +865,15 @@ fn acknowledged_remote_repository_edits_invalidate_native_intake_before_returnin
     runtime.snapshot.status.remote = vec![remote];
     runtime.device_hosts.insert(
         "mini".into(),
-        hosts::DeviceHost {
-            phase: hosts::HostPhase::Ready {
+        hosts::DeviceHost::new(
+            hosts::HostPhase::Ready {
                 host: super::documents::FakeDevice::new(),
                 platform: "macos aarch64".into(),
                 helper_path: Some("/fake/hided".into()),
                 windows_drives: None,
             },
-            generation: 1,
-        },
+            1,
+        ),
     );
     let mut github = crate::model::GithubProjectSnapshot {
         root_path: "/fixture/project".into(),

@@ -1,7 +1,11 @@
 # The remote mailbox crate-boundary lane (hided/tests/it/remote_delivery.rs,
 # docs/TESTING.md), with the terminal attach children's real-process test
 # beside it on the same pinned Herdr, as one reusable job: the candidate CLI binaries, two private
-# pinned Herdr servers and a loopback SSH server. `pr.yml` runs it on Linux for
+# pinned Herdr servers and a loopback SSH server. A device is reached with
+# the system `ssh` (PRD system-ssh-device-link), so the node contract, the
+# device bootstrap, the mailbox and the sign-in journeys
+# (hided/tests/it/system_ssh.rs) run against the system's own `sshd` on
+# loopback. `pr.yml` runs it on Linux for
 # a change to the crates it builds, and `nightly.yml` on macOS, the system of
 # the usual remote device: the fixture signs its staged binaries there and
 # serves SFTP from the system's own server. It also runs the one other hided
@@ -48,18 +52,51 @@ jobs:
         with:
           set: workspace
           save: false
-      - name: Install zsh and the SFTP server
+      - name: Install zsh and the SSH server
         # The fixture starts every pane's shell from SHELL=/bin/zsh, and the
-        # Herdr fetch script is zsh; the Linux image has neither. The helper
-        # install needs the SFTP server the fixture's sshd serves. The mirror
-        # can stall (web-e2e.yml), so apt retries and gives up on a silent
-        # connection. macOS has both.
+        # Herdr fetch script is zsh; the Linux image has neither. A device's
+        # tests run against the system's sshd, and the core move's install
+        # still needs the SFTP server its fixture serves. The mirror can
+        # stall (web-e2e.yml), so apt retries and gives up on a silent
+        # connection. macOS has all three.
         if: runner.os == 'Linux'
         timeout-minutes: 5
         run: |
           printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' \
             | sudo tee /etc/apt/apt.conf.d/99-ci-timeouts >/dev/null
-          sudo apt-get install -y --no-install-recommends zsh openssh-sftp-server
+          sudo apt-get install -y --no-install-recommends zsh openssh-server openssh-sftp-server
+      - name: A default key and a password account for the sign-in journeys
+        # hided/tests/it/system_ssh.rs signs in with a key ssh finds by itself
+        # in the runner account's own ~/.ssh, and as a second account with a
+        # password on a root sshd, which only a disposable runner may have.
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          [ -f ~/.ssh/id_ed25519 ] || ssh-keygen -q -t ed25519 -N '' -f ~/.ssh/id_ed25519
+          echo "HIDE_E2E_SSH_DEFAULT_KEY=$HOME/.ssh/id_ed25519.pub" >> "$GITHUB_ENV"
+          account=hidepw
+          password=$(openssl rand -hex 16)
+          echo "::add-mask::$password"
+          if [ "$RUNNER_OS" = Linux ]; then
+            sudo useradd -m -s /bin/sh "$account"
+            echo "$account:$password" | sudo chpasswd
+            sudo mkdir -p /run/sshd
+          else
+            sudo sysadminctl -addUser "$account" -password "$password" -home "/Users/$account" -shell /bin/sh
+            sudo createhomedir -c -u "$account" >/dev/null
+          fi
+          config="$RUNNER_TEMP/password-sshd"
+          mkdir -p "$config"
+          ssh-keygen -q -t ed25519 -N '' -f "$config/host"
+          printf '%s\n' \
+            "ListenAddress 127.0.0.1:2222" "HostKey $config/host" "PidFile $config/sshd.pid" \
+            "PasswordAuthentication yes" "KbdInteractiveAuthentication no" "PubkeyAuthentication no" \
+            "UsePAM yes" > "$config/sshd_config"
+          sudo chown root "$config/host" "$config/sshd_config"
+          sudo /usr/sbin/sshd -f "$config/sshd_config" -E "$config/sshd.log"
+          echo "HIDE_E2E_SSH_PASSWORD=$account:$password:2222" >> "$GITHUB_ENV"
       - name: Install cargo-nextest
         timeout-minutes: 3
         run: bash scripts/install-nextest.sh
@@ -120,11 +157,11 @@ jobs:
           echo "$digest  $bin" | shasum -a 256 -c -
           chmod 755 "$bin"
           echo "bin=$bin" >> "$GITHUB_OUTPUT"
-      - name: Remote mailbox over private SSH
-        timeout-minutes: 10
+      - name: Remote mailbox, device bootstrap and node contract over the system ssh
+        timeout-minutes: 15
         env:
           HIDE_E2E_HERDR_BIN: ${{ steps.herdr.outputs.bin }}
-        run: bash scripts/verify-cargo.sh nextest --profile ci -p hided --test it -E 'test(/^(remote_delivery|held_letter_notice|device_bootstrap)::/)' --run-ignored only
+        run: bash scripts/verify-cargo.sh nextest --profile ci -p hided --test it -E 'test(/^(remote_delivery|held_letter_notice|device_bootstrap|node_contract|system_ssh)::/) & !test(protocol24)' --run-ignored only
       - name: Another account's hide <path> on a device's bridge
         # hide-host/src/panes.rs: a plain shell's `hide <path>` is proved only
         # as a process of the node's own account, by the kernel's answer about

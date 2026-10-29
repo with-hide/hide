@@ -1,10 +1,12 @@
 //! The node contract (PRD core-host-node b5): the core's own node
 //! (`hide_node::Local`) and a device's node reached over SSH, `hided node
-//! serve` behind the loopback SSH server, answer the same calls alike, and a
-//! device's channels share its one connection.
+//! serve` behind the system's own `sshd` on loopback, answer the same calls
+//! alike, and everything a device does rides its one connection (PRD
+//! system-ssh-device-link B22). The server is a real `sshd`, which the
+//! remote mailbox lane provides, so these tests are run there.
 #![cfg(unix)]
 
-use crate::support::ssh_server;
+use crate::support::sshd::Sshd;
 
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
@@ -34,8 +36,8 @@ struct Account {
     values: Vec<(OsString, OsString)>,
 }
 
-impl ssh_server::Account for Account {
-    #[allow(clippy::disallowed_methods)] // env_clear: an SSH exec's environment (Unix only)
+impl Account {
+    #[allow(clippy::disallowed_methods)] // env_clear: a session's environment (Unix only)
     fn command(&self, program: &OsStr) -> Command {
         let mut command = Command::new(program);
         command
@@ -43,10 +45,6 @@ impl ssh_server::Account for Account {
             .envs(self.values.iter().map(|(name, value)| (name, value)))
             .current_dir(&self.home);
         command
-    }
-
-    fn home(&self) -> &Path {
-        &self.home
     }
 }
 
@@ -56,7 +54,7 @@ struct Device {
     _root: tempfile::TempDir,
     home: PathBuf,
     project: PathBuf,
-    ssh: ssh_server::Ssh,
+    ssh: Sshd,
     transport: Arc<dyn DialedTransport>,
     link: Arc<dyn NodeLink>,
     /// The device's state folder, where its node binds its pane socket.
@@ -69,6 +67,8 @@ struct Device {
     helper_path: String,
     local: PathBuf,
     current_packages: PathBuf,
+    /// The connection attempt the link came from.
+    attempt: hide_node_link::device::Cancel,
 }
 
 /// The pane of the device's Herdr whose shell is this test process, so a
@@ -186,11 +186,15 @@ impl Device {
                 ("PATH".into(), "/usr/bin:/bin:/usr/sbin:/sbin".into()),
                 ("SHELL".into(), "/bin/sh".into()),
                 ("HIDE_STATE_DIR".into(), state.clone().into()),
+                // The device's node bridges its own Herdr, the one its
+                // account's environment names (PRD system-ssh-device-link
+                // B24).
+                ("HERDR_SOCKET_PATH".into(), herdr_socket.clone().into()),
                 ("HIDE_TEST_HIDED".into(), env!("CARGO_BIN_EXE_hided").into()),
             ],
         };
         let git = |args: &[&str]| {
-            let mut command = ssh_server::Account::command(&account, OsStr::new("/usr/bin/git"));
+            let mut command = account.command(OsStr::new("/usr/bin/git"));
             command.args(["-c", "init.defaultBranch=main", "-c", "user.name=Fixture"]);
             command.args(["-c", "user.email=fixture@example.invalid", "-C"]);
             command.arg(&project).args(args);
@@ -221,37 +225,10 @@ impl Device {
             }
         });
 
-        let keys = base.join("k");
-        fs::create_dir(&keys).unwrap();
-        for name in ["host", "client"] {
-            run(Command::new("/usr/bin/ssh-keygen")
-                .args(["-q", "-t", "ed25519", "-N", "", "-f"])
-                .arg(keys.join(name)));
-        }
-        let ssh = ssh_server::Ssh::start(
-            account,
-            herdr_socket,
-            &keys.join("host"),
-            &keys.join("client"),
-        )
-        .unwrap();
+        let ssh = Sshd::start(&base.join("k"), &account.values).unwrap();
         let local = base.join("l");
         fs::create_dir_all(local.join(".ssh")).unwrap();
-        let public = fs::read_to_string(keys.join("host.pub")).unwrap();
-        fs::write(
-            local.join(".ssh/known_hosts"),
-            format!("[127.0.0.1]:{} {}\n", ssh.port, public.trim()),
-        )
-        .unwrap();
-        fs::write(
-            local.join(".ssh/config"),
-            format!(
-                "Host {ALIAS}\n  HostName 127.0.0.1\n  Port {}\n  User fixture\n  IdentityFile {}\n  IdentityAgent none\n",
-                ssh.port,
-                keys.join("client").display()
-            ),
-        )
-        .unwrap();
+        fs::write(local.join(".ssh/config"), ssh.client_config(ALIAS)).unwrap();
         // The build this daemon carries for the device: a launcher for the
         // `hided` under test, so the install moves a few bytes rather than a
         // debug binary, and the device runs this build's node.
@@ -267,6 +244,7 @@ impl Device {
         let mut connector = hide_node::ssh::Connector::new(Some(
             retained_packages.unwrap_or_else(|| packages.clone()),
         ))
+        .with_askpass_program(PathBuf::from(env!("CARGO_BIN_EXE_hide")))
         .with_pane_events(slot);
         if let Some(sink) = terminals {
             connector = connector.with_terminals(sink);
@@ -281,11 +259,17 @@ impl Device {
             granted_at_unix_ms: 1,
             identity: None,
         };
+        let attempt = hide_node_link::device::Cancel::default();
         let established = match transport.establish(
             &consent,
             &[],
-            hide_node_link::device::Wake::Allowed,
-            Box::new(|_| {}),
+            hide_node_link::device::Attempt {
+                cancel: attempt.clone(),
+                ..hide_node_link::device::Attempt::unattended(
+                    hide_node_link::device::Wake::Allowed,
+                    Box::new(|_| {}),
+                )
+            },
         ) {
             Ok(established) => established,
             Err(error) => panic!("the device's node did not start: {error:?}"),
@@ -304,11 +288,69 @@ impl Device {
             helper_path: established.helper_path,
             local,
             current_packages: packages,
+            attempt,
         }
     }
 }
 
+/// The `ssh` processes under this process that read `local`'s client
+/// config: one device's, while other tests run theirs beside it.
+fn device_ssh_processes(local: &Path) -> Vec<u32> {
+    let config = local.join(".ssh").join("config");
+    hide_platform::process::descendants(std::process::id())
+        .unwrap()
+        .into_iter()
+        .filter(|pid| hide_platform::process::name_of(*pid).is_ok_and(|name| name == "ssh"))
+        .filter(|pid| {
+            let args = Command::new("ps")
+                .args(["-o", "args=", "-p", &pid.to_string()])
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&args.stdout).contains(config.to_str().unwrap())
+        })
+        .collect()
+}
+
+/// PRD system-ssh-device-link B26: a working link's attempt has not ended
+/// while its `ssh` runs; a cancel then no longer kills it, since the link is
+/// the core's to close; and the attempt ends once the closed link's `ssh` is
+/// reaped, which is what lets the device's next attempt start.
 #[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
+fn a_working_link_ends_its_attempt_only_once_its_ssh_is_reaped() {
+    let device = Device::start();
+    let ssh = device_ssh_processes(&device.local);
+    assert_eq!(ssh.len(), 1, "one ssh per device: {ssh:?}");
+    assert!(!device.attempt.ended());
+    device.attempt.cancel();
+    assert!(
+        call_as::<String>(
+            &*device.link,
+            Call::Git {
+                root: "/".into(),
+                command: hide_node_link::git::GitCommand::Version,
+            },
+            Duration::from_secs(30)
+        )
+        .is_ok(),
+        "a cancel after the hand-off ended the link"
+    );
+    assert!(!device.attempt.ended());
+    device.link.close("test closes the link");
+    assert!(
+        device.attempt.wait_ended(Duration::from_secs(30)),
+        "the closed link's ssh was not reaped"
+    );
+    for pid in ssh {
+        assert!(
+            !hide_platform::process::is_alive(pid),
+            "ssh {pid} outlived its attempt"
+        );
+    }
+}
+
+#[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn authenticated_node_advertises_only_its_compiled_readers() {
     use hide_node_link::sessions::{ReaderFeature, ReaderFeatures};
     let device = Device::start();
@@ -574,6 +616,7 @@ fn a_retained_protocol24_node_keeps_legacy_readers_then_upgrades_normally() {
     assert_eq!(project.identity, expected.identity);
     device.link.close("ordinary build upgrade");
     let transport = hide_node::ssh::Connector::new(Some(device.current_packages.clone()))
+        .with_askpass_program(PathBuf::from(env!("CARGO_BIN_EXE_hide")))
         .transport(&device.local, "contract-node", ALIAS, None)
         .unwrap();
     let consent = HostConsent {
@@ -587,8 +630,10 @@ fn a_retained_protocol24_node_keeps_legacy_readers_then_upgrades_normally() {
         .establish(
             &consent,
             &[],
-            hide_node_link::device::Wake::Allowed,
-            Box::new(|_| {}),
+            hide_node_link::device::Attempt::unattended(
+                hide_node_link::device::Wake::Allowed,
+                Box::new(|_| {}),
+            ),
         )
         .unwrap();
     assert_eq!(
@@ -675,6 +720,7 @@ impl Drop for ReleaseOnDrop {
 /// The production overflow callback answers the actual node caller with
 /// bridge_busy, keeps its reader usable, and reaches normal close cleanup.
 #[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn a_saturated_core_answers_busy_over_ssh_and_keeps_its_reader_usable() {
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixStream;
@@ -716,8 +762,10 @@ fn a_saturated_core_answers_busy_over_ssh_and_keeps_its_reader_usable() {
                 .establish(
                     &consent,
                     &[],
-                    hide_node_link::device::Wake::Allowed,
-                    Box::new(|_| {}),
+                    hide_node_link::device::Attempt::unattended(
+                        hide_node_link::device::Wake::Allowed,
+                        Box::new(|_| {}),
+                    ),
                 )
                 .unwrap()
                 .node
@@ -781,7 +829,8 @@ fn a_saturated_core_answers_busy_over_ssh_and_keeps_its_reader_usable() {
         read(&mut request(&sockets[2], 33)),
         json!({"ok": false, "reason": "hide_unavailable", "next_action": "Reconnect the pane and retry"})
     );
-    assert_eq!(device.ssh.accepted(), 1);
+    // Each attempt is one connection of its own, and nothing else dialed.
+    assert_eq!(device.ssh.accepted(), 3);
     for link in &links {
         link.close("contract");
     }
@@ -892,6 +941,7 @@ fn unbound(value: &mut Value) {
 }
 
 #[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn the_core_s_own_node_and_a_device_link_answer_alike() {
     let device = Device::start();
     let local = hide_node::Local::new(Some(device.home.clone()));
@@ -917,6 +967,7 @@ fn the_core_s_own_node_and_a_device_link_answer_alike() {
 }
 
 #[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn a_published_guardrail_policy_is_what_the_devices_hooks_read() {
     use hide_agent_hooks::guardrails::{Policy, ProjectPolicy, Rules, read_policy};
     let device = Device::start();
@@ -967,11 +1018,12 @@ fn a_published_guardrail_policy_is_what_the_devices_hooks_read() {
 }
 
 #[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn a_device_s_channels_share_its_one_connection() {
     let device = Device::start();
-    // The link and the install's reads made one connection.
+    // The start script, the install and the link made one connection.
     assert_eq!(device.ssh.accepted(), 1);
-    // A Herdr channel opens on it, and an attachment rides the node's link.
+    // The device's Herdr is a stream of it, and an attachment rides it too.
     device.transport.herdr_api_connector().connect().unwrap();
     let request = "8a6e0e4c-3f0b-4d2c-9a51-0c6f2b9d7e10";
     let staged = stage(&device, request, 0, 1, "attached.txt").unwrap();
@@ -990,14 +1042,16 @@ fn a_device_s_channels_share_its_one_connection() {
     .unwrap();
     assert!(!Path::new(&staged).exists());
     assert_eq!(device.ssh.accepted(), 1);
-    // Closing the link ends its node and leaves the connection to the rest.
+    // The link is the connection: closing it ends the device's Herdr too,
+    // and nothing dials again on its own.
     device.link.close("contract");
-    device.transport.herdr_api_connector().connect().unwrap();
+    assert!(device.transport.herdr_api_connector().connect().is_err());
     assert_eq!(device.ssh.accepted(), 1);
 }
 
 /// B10: a request the link ends part way leaves nothing behind.
 #[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn a_link_ending_mid_request_removes_what_it_staged() {
     let device = Device::start();
     let request = "0d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
@@ -1015,6 +1069,7 @@ fn a_link_ending_mid_request_removes_what_it_staged() {
 /// first file leaves nothing behind. Which comes first, the end or the
 /// file, is ordered step by step in `hide-host`'s staging tests.
 #[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn a_link_ending_during_a_write_leaves_no_file() {
     let device = Device::start();
     let request = "5b0c9d8e-7f6a-4b5c-8d4e-3f2a1b0c9d8e";
@@ -1052,6 +1107,7 @@ fn a_link_ending_during_a_write_leaves_no_file() {
 /// backend of its own built for the core's instance and released by it,
 /// where a device used to refuse them. No provider is run.
 #[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn a_device_answers_hide_ai_for_its_own_agents() {
     let device = Device::start();
     let backend = hide_node_link::ai::BackendSpec {
@@ -1091,6 +1147,7 @@ fn a_device_answers_hide_ai_for_its_own_agents() {
 /// server, dropping the forward ends that server's connection, and a
 /// forward whose link ended reaches nothing.
 #[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn a_device_page_rides_its_node_link_and_ends_with_it() {
     use hided::page_forward::PageForward;
     use std::io::Write;
@@ -1231,6 +1288,7 @@ impl hide_node::terminal::device::DeviceSink for HeardTerminals {
 /// several of its panes opens no connection of their own, and each pane's
 /// word comes back up the same link.
 #[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn a_device_s_terminals_ride_its_one_connection() {
     use hide_node_link::terminal::{GridSize, TerminalControl, TerminalReport};
     let heard = Arc::new(HeardTerminals::default());
@@ -1276,6 +1334,7 @@ fn a_device_s_terminals_ride_its_one_connection() {
 /// connection; the link keeps the connection it runs on, so the call (the
 /// kit coming off) still gets its answer.
 #[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn a_link_outlives_its_device_s_hold_on_the_connection() {
     let Device {
         _root,
@@ -1294,6 +1353,7 @@ fn a_link_outlives_its_device_s_hold_on_the_connection() {
 /// reports up as it runs, a report answered with false stops it on the
 /// device, and the call ends with the watch's own answer.
 #[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn a_device_s_reporting_call_reports_and_stops_when_told() {
     use hide_node_link::worktrees::GitWatchReport;
     let device = Device::start();
@@ -1338,6 +1398,7 @@ fn a_device_s_reporting_call_reports_and_stops_when_told() {
 /// A draining link (consent withdrawn) stops the reporting call it would
 /// otherwise wait out for its whole bound, and closes once it has.
 #[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn a_draining_link_stops_its_reporting_call_and_closes() {
     let device = Device::start();
     let socket = pane_sockets(&device.state).pop().unwrap();
@@ -1403,6 +1464,7 @@ fn pane_sockets(state: &Path) -> Vec<PathBuf> {
 /// caller the node cannot prove is refused with today's reason, and the
 /// socket lives exactly as long as the link it answers for.
 #[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn a_device_s_pane_socket_lives_with_its_link() {
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixStream;
@@ -1458,6 +1520,7 @@ fn ask(socket: &Path, pane_id: &str, nonce: char, one_shot: bool) -> Value {
 /// reported up the link for the core's record; and closing the link takes
 /// the credential's reference with it.
 #[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn a_device_pane_s_proof_crosses_the_link_and_its_refusals_are_reported() {
     use std::os::unix::net::UnixStream;
     let device = Device::start();
@@ -1574,6 +1637,7 @@ impl hide_node::ssh::PaneEvents for IssuingEvents {
 /// again. A lasting credential names its token in the local prelude, but
 /// the node still proves the peer against the pane it issued that token for.
 #[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn a_stream_opened_by_a_one_shot_holder_names_its_pane() {
     use std::io::Write;
     use std::os::unix::net::UnixStream;
@@ -1640,6 +1704,7 @@ fn a_stream_opened_by_a_one_shot_holder_names_its_pane() {
 /// The socket proves a hook's caller before forwarding the typed command,
 /// answers that command once, and leaves no reusable reference behind.
 #[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn a_hook_proof_answers_once_and_never_hands_out_a_reference() {
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixStream;
@@ -1707,6 +1772,7 @@ fn a_hook_proof_answers_once_and_never_hands_out_a_reference() {
 }
 
 #[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn workspace_guidance_gets_one_reusable_reference_and_rejects_writes() {
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixStream;

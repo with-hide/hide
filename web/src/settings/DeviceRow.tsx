@@ -10,6 +10,9 @@ import { formatDateTime } from "../i18n/format";
 import { requireInterfaceLanguage } from "../i18n/locale";
 import { canRetryDevice, deviceLine, deviceProblemLine, deviceSubtitle, hostLine, kitProblems } from "../settings";
 import type { Device, RemoteStatus } from "../snapshot";
+import { useShellStore } from "../store";
+import { DeviceSignIn } from "./DeviceSignIn";
+import { FixCommand } from "./FixCommand";
 import { KitProblem } from "./MachineKit";
 
 /** What a row's menu and buttons ask the tab to open or record. */
@@ -88,7 +91,7 @@ export function DeviceRow({ device, status, focused, place, actions, handlers }:
           }}
           data-device-retry={device.id}
         >
-          {t("common.retry")}
+          {device.problem === "sign_in_needed" ? t("devices.signIn.start") : t("common.retry")}
         </Button>
       ) : null}
       {remote ? (
@@ -181,28 +184,46 @@ function DeviceMenu({ device, focused, place, actions, handlers }: { device: Dev
 /** The lines under a device that something needs the operator for; a healthy device has none. */
 function DeviceAttention({ device, actions, onAct, onAllow }: { device: Device; actions: Actions; onAct: () => void; onAllow: (device: Device) => void }) {
   const { t, i18n } = useInterfaceTranslation();
+  // ssh runs on the core's machine, so that system says how to install it (B20).
+  const corePlatform = useShellStore((s) => s.rest?.navigator?.devices?.find((row) => row.kind !== "remote")?.host?.platform ?? null);
   // SSH trust, sign-in and helper consent belong to a device this core dials, not to a node that dials in.
   const remote = device.kind === "remote" && device.dials_in !== true;
-  const problem = remote && device.state !== "ready" ? deviceProblemLine(device.problem, device.ssh_alias, t) : null;
+  const signIn = remote ? (device.sign_in ?? null) : null;
   const host = device.host;
   const needsAllow = host !== undefined && (host.consent !== "granted" || host.state === "identity_changed");
   // Consent starts the helper that installs or updates Herdr, including
   // when Herdr cannot yet supply a readable session. A failed helper kit
   // must keep its reason and Retry visible before that session connects.
   // An unsupported platform keeps its reason visible too, without a Retry.
-  const helper = remote && (device.state === "ready" || needsAllow || host?.state === "unavailable" || host?.state === "unsupported") && host && host.consent !== "this_machine" && host.state !== "ready" ? hostLine(host, t) : null;
+  // The helper is the link, so an ssh failure or a sign-in is its line, said
+  // once below; an unsupported device stays the helper's to say.
+  const linkSays = signIn !== null || (device.problem != null && device.problem !== "unsupported");
+  const helper = remote && (device.state === "ready" || needsAllow || (host?.state === "unavailable" && !linkSays) || host?.state === "unsupported") && host && host.consent !== "this_machine" && host.state !== "ready" ? hostLine(host, t) : null;
+  // An attempt waiting on the operator shows that wait, not the last one's
+  // failure; an unsupported device is the helper line's to say (B18).
+  const problem = remote && device.state !== "ready" && !signIn && !(device.problem === "unsupported" && helper) ? deviceProblemLine(device.problem, device.ssh_alias, t, corePlatform) : null;
+  // ssh's own words stay in the log for a classified failure; an
+  // unclassified one, or a failure that is not ssh's, keeps its last line (B19).
+  const ownWords = remote && device.state !== "ready" && !signIn && device.message && (device.problem === "unclassified" || (!device.problem && !(helper && device.message === host?.message))) ? device.message : null;
   const kit = device.kit;
   const kitShown = kit !== undefined && (Boolean(kit.unavailable) || Boolean(kit.refused) || kit.busy || kitProblems(kit).length > 0);
   const rows = [
+    signIn ? <DeviceSignIn key={`sign-in-${signIn.question}`} deviceId={device.id} wait={signIn} actions={actions} /> : null,
     problem ? (
       <div key="problem" className="space-y-xxs" data-device-problem={`${device.id}:${device.problem}`}>
         <Status tone="warn">{problem.headline}</Status>
-        <Note tone="warn">{problem.action}</Note>
+        {problem.action ? <Note tone="warn">{problem.action}</Note> : null}
+        {problem.command ? (
+          <div className="flex flex-wrap items-center gap-x-sm gap-y-xxs">
+            <span className="text-caption text-muted-foreground">{t("devices.problem.checkInTerminal")}</span>
+            <FixCommand command={problem.command} what="ssh check command" actions={actions} data-device-problem-command={device.id} />
+          </div>
+        ) : null}
       </div>
     ) : null,
-    remote && device.state !== "ready" && device.message ? (
-      <p key="message" className="break-words font-mono text-caption text-muted-foreground">
-        {device.message}
+    ownWords ? (
+      <p key="message" className="break-words font-mono text-caption text-muted-foreground" data-device-message={device.id}>
+        {ownWords}
       </p>
     ) : null,
     helper ? (

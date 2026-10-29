@@ -16,6 +16,8 @@
 //!   process it started, including ones that already left its direct line
 //!   (while the child has not been waited for; a finished child's leftovers
 //!   are ended by `kill_tree` at the moment it exits).
+//! - [`OwnedChild::spawn_tied`] ends the child's tree when this process dies
+//!   without running a destructor, for a child that watches nothing itself.
 //! - [`kill_tree`] ends a process and its descendants by pid.
 //! - [`is_alive`], [`parent_of`], [`descends_from`] and [`start_time`] describe a pid; a pid that
 //!   does not exist is `false` or `NotFound`, never a default. A start time is
@@ -390,6 +392,30 @@ impl OwnedChild {
         })
     }
 
+    /// [`Self::spawn`] for a child that is not cooperative and must still
+    /// end with this process when it dies without running a destructor,
+    /// such as an `ssh` still signing in, which reads nothing that would tell
+    /// it. On Unix the owned process is a small `sh` supervisor that starts
+    /// the child itself, so nothing of the child runs before its watch does,
+    /// and passes the child's status on as its own; a watcher it starts reads
+    /// a pipe only this process writes, and the pipe closing without a
+    /// stand-down line ends the child and every process under it, `setsid`
+    /// ones included. Reaping, releasing or dropping the owner stands it
+    /// down. Its three standard streams are always pipes, and the command's
+    /// program, arguments, environment changes and folder are carried; an
+    /// `env_clear` is not. On Windows the job already ends the tree.
+    pub fn spawn_tied(command: &mut Command) -> io::Result<Self> {
+        let (child, tie) = sys::spawn_tied(command)?;
+        Ok(Self {
+            child,
+            tie,
+            ended: false,
+            reaped: false,
+            released: false,
+            bounded_drop: false,
+        })
+    }
+
     /// Starts a cooperative child with an abrupt-owner-death boundary.
     /// Unix children call [`OwnerWatch::from_launch`] before other work and
     /// hold the watch for their full lifetime; the constructor waits for its
@@ -533,13 +559,17 @@ impl OwnedChild {
     /// `Ok(None)` while the child runs.
     pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
         let status = self.child.try_wait()?;
-        self.reaped |= status.is_some();
+        if status.is_some() {
+            self.reaped = true;
+            sys::reaped(&mut self.tie);
+        }
         Ok(status)
     }
 
     pub fn wait(&mut self) -> io::Result<ExitStatus> {
         let status = self.child.wait()?;
         self.reaped = true;
+        sys::reaped(&mut self.tie);
         Ok(status)
     }
 
@@ -550,7 +580,7 @@ impl OwnedChild {
         // A cooperative watch requires its owner until the guarded child
         // finishes. Releasing a still-live guarded child closes that channel,
         // and it exits; detached daemons must use the legacy spawn path.
-        sys::release(&self.tie);
+        sys::release(&mut self.tie);
         self.released = true;
     }
 
@@ -1175,6 +1205,177 @@ mod sys {
     pub(super) struct Tie {
         // The child's dedicated reader gets EOF if the owner crashes.
         _owner: Option<UnixStream>,
+        /// This process's end of a tied child's watch ([`spawn_tied`]): a
+        /// line on it stands the watcher down, and its close without one,
+        /// which this process's death is, ends the child's tree.
+        watch: Option<UnixStream>,
+    }
+
+    /// A tied child's supervisor, run as `/bin/sh -c SUPERVISOR hide-tied
+    /// <program> <args>…` with this process's watch as descriptor 3. It
+    /// starts the child itself, so the watch exists before the child does,
+    /// then a watcher that reads the watch: a line is this process standing
+    /// down; the watch closing without one is this process's death, and the
+    /// watcher kills the child and every process under it, found by walking
+    /// the process table before the first signal as `kill_tree_of` does (a
+    /// `setsid` proxy command leaves the group), and then the group. A
+    /// keeper it also starts ends what the child leaves behind when the
+    /// child exits first ([`KEEPER`]). The supervisor exits with the child's
+    /// status once the keeper is done, and takes its watcher with it. The
+    /// child gets the supervisor's standard streams: an asynchronous list's
+    /// input is `/dev/null` unless redirected, so it is passed on through
+    /// descriptor 4.
+    const SUPERVISOR: &str = r#"watcher=$HIDE_TIED_WATCHER
+keeper=$HIDE_TIED_KEEPER
+unset HIDE_TIED_WATCHER HIDE_TIED_KEEPER
+exec 4<&0
+"$@" <&4 3<&- 4<&- &
+child=$!
+exec 4<&-
+/bin/sh -c "$watcher" hide-tied-watch "$child" "$$" <&3 >/dev/null 2>&1 3<&- &
+watcher=$!
+exec 3<&-
+/bin/sh -c "$keeper" hide-tied-keep "$child" "$$" </dev/null >/dev/null 2>&1 &
+keeper=$!
+wait "$child"
+status=$?
+kill "$watcher" 2>/dev/null
+kill -s TERM "$keeper" 2>/dev/null
+wait "$keeper"
+exit "$status"
+"#;
+
+    /// The keeper [`SUPERVISOR`] starts: `$1` the child, `$2` the
+    /// supervisor. A process the child started and that left its group
+    /// (`setsid`) is found under the child only while the child lives, so
+    /// the keeper writes down the child's tree, each process by its id and
+    /// start time, soon after the child starts and then less and less often
+    /// (0.05 s doubling to 30 s), keeping the last tree it saw. Told the
+    /// child exited, it kills each process of that tree that is still the
+    /// same process, and everything under them. A process that leaves the
+    /// group and outlives the child between two looks escapes it; the
+    /// watcher still ends it if this process dies while the child runs.
+    const KEEPER: &str = r#"child=$1 super=$2 known= sleeper=
+tree() {
+  ps -A -o pid= -o ppid= -o lstart= 2>/dev/null | awk -v root="$child" -v super="$super" '
+{ p = $1; parent[p] = $2; kids[$2] = kids[$2] " " p; $1 = ""; $2 = ""; start[p] = $0 }
+END {
+  if (parent[root] != super) exit
+  n = 1; queue[1] = root
+  for (i = 1; i <= n; i++) {
+    m = split(kids[queue[i]], k, " ")
+    for (j = 1; j <= m; j++) if (!(k[j] in seen)) { seen[k[j]] = 1; printf "%s|%s;", k[j], start[k[j]]; queue[++n] = k[j] }
+  }
+}'
+}
+end() {
+  [ -n "$sleeper" ] && kill "$sleeper" 2>/dev/null
+  pids=$(ps -A -o pid= -o ppid= -o lstart= 2>/dev/null | KNOWN=$known awk '
+BEGIN { r = split(ENVIRON["KNOWN"], rows, ";"); for (i = 1; i <= r; i++) if (split(rows[i], f, "|") == 2) want[f[1]] = f[2] }
+{ p = $1; kids[$2] = kids[$2] " " p; $1 = ""; $2 = ""; if ((p in want) && want[p] == $0) { seen[p] = 1; queue[++n] = p } }
+END {
+  for (i = 1; i <= n; i++) {
+    print queue[i]
+    m = split(kids[queue[i]], k, " ")
+    for (j = 1; j <= m; j++) if (!(k[j] in seen)) { seen[k[j]] = 1; queue[++n] = k[j] }
+  }
+}')
+  [ -n "$pids" ] && kill -s KILL $pids 2>/dev/null
+  exit 0
+}
+trap end TERM
+step=0.05
+while :; do
+  sleep "$step" &
+  sleeper=$!
+  wait "$sleeper"
+  sleeper=
+  now=$(tree)
+  [ -n "$now" ] && known=$now
+  case $step in
+    0.05) step=0.1 ;; 0.1) step=0.2 ;; 0.2) step=0.5 ;; 0.5) step=1 ;;
+    1) step=2 ;; 2) step=4 ;; 4) step=8 ;; 8) step=15 ;; *) step=30 ;;
+  esac
+done
+"#;
+
+    /// The watcher [`SUPERVISOR`] starts: `$1` the child, `$2` the
+    /// supervisor, whose group the child shares. A child whose parent is no
+    /// longer the supervisor was reaped already, and its id may be
+    /// another's, so only the group is signalled then.
+    const WATCHER: &str = r#"read -r _ && exit 0
+pids=$(ps -A -o pid= -o ppid= 2>/dev/null | awk -v root="$1" -v super="$2" '
+{ parent[$1] = $2; kids[$2] = kids[$2] " " $1 }
+END {
+  if (parent[root] != super) exit
+  print root
+  n = 1; queue[1] = root
+  for (i = 1; i <= n; i++) {
+    m = split(kids[queue[i]], k, " ")
+    for (j = 1; j <= m; j++) if (!(k[j] in seen)) { seen[k[j]] = 1; print k[j]; queue[++n] = k[j] }
+  }
+}')
+kill -s KILL $pids 2>/dev/null
+kill -s KILL -- "-$2" 2>/dev/null
+"#;
+
+    pub(super) fn spawn_tied(command: &mut Command) -> io::Result<(Child, Tie)> {
+        // The supervisor runs what `command` names, with its environment and
+        // folder; its three standard streams are pipes.
+        let mut supervisor = Command::new("/bin/sh");
+        supervisor
+            .args(["-c", SUPERVISOR, "hide-tied"])
+            .arg(command.get_program())
+            .args(command.get_args())
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        for (key, value) in command.get_envs() {
+            match value {
+                Some(value) => supervisor.env(key, value),
+                None => supervisor.env_remove(key),
+            };
+        }
+        if let Some(folder) = command.get_current_dir() {
+            supervisor.current_dir(folder);
+        }
+        let (reader, watch) = UnixStream::pair()?;
+        let descriptor = reader.as_raw_fd();
+        // SAFETY: only async-signal-safe dup2 and fcntl run after fork. The
+        // descriptor lives until spawn returns, and `supervisor` is dropped
+        // here, so the closure never runs on a recycled descriptor.
+        unsafe {
+            supervisor.pre_exec(move || {
+                if descriptor == 3 {
+                    let flags = libc::fcntl(3, libc::F_GETFD);
+                    if flags < 0 || libc::fcntl(3, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
+                        return Err(io::Error::last_os_error());
+                    }
+                } else if libc::dup2(descriptor, 3) < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        // The supervisor's arguments are the child's, so the watcher's and
+        // the keeper's scripts travel in the environment, which the supervisor takes back out
+        // before the child starts.
+        supervisor
+            .env("HIDE_TIED_WATCHER", WATCHER)
+            .env("HIDE_TIED_KEEPER", KEEPER);
+        let (child, mut tie) = spawn(&mut supervisor, None)?;
+        drop(reader);
+        tie.watch = Some(watch);
+        Ok((child, tie))
+    }
+
+    /// The child was waited for: its id may name another process from now
+    /// on, so the watcher stands down and nothing signals it any more.
+    pub(super) fn reaped(tie: &mut Tie) {
+        use std::io::Write;
+        if let Some(mut watch) = tie.watch.take() {
+            let _ = watch.write_all(b"\n");
+        }
     }
 
     pub(super) fn spawn(
@@ -1186,7 +1387,15 @@ mod sys {
         }
         command.process_group(0);
         let Some(deadline) = deadline else {
-            return command.spawn().map(|child| (child, Tie { _owner: None }));
+            return command.spawn().map(|child| {
+                (
+                    child,
+                    Tie {
+                        _owner: None,
+                        watch: None,
+                    },
+                )
+            });
         };
         deadline
             .checked_duration_since(Instant::now())
@@ -1233,6 +1442,7 @@ mod sys {
         if let Err(source) = acknowledged {
             let tie = Tie {
                 _owner: Some(owner),
+                watch: None,
             };
             let owned = OwnedChild {
                 child,
@@ -1248,6 +1458,7 @@ mod sys {
             child,
             Tie {
                 _owner: Some(owner),
+                watch: None,
             },
         ))
     }
@@ -1559,7 +1770,9 @@ mod sys {
         }
     }
 
-    pub(super) fn release(_: &Tie) {}
+    pub(super) fn release(tie: &mut Tie) {
+        reaped(tie);
+    }
 
     pub(super) fn kill_tree_of(child: &mut Child, _: &Tie, reaped: bool) -> io::Result<bool> {
         let leader = child.id();
@@ -2865,7 +3078,14 @@ mod sys {
         Ok(())
     }
 
-    pub(super) fn release(tie: &Tie) {
+    /// The job already ends the tree when this process dies.
+    pub(super) fn spawn_tied(command: &mut Command) -> io::Result<(Child, Tie)> {
+        spawn(command, None)
+    }
+
+    pub(super) fn reaped(_: &mut Tie) {}
+
+    pub(super) fn release(tie: &mut Tie) {
         // SAFETY: an all-zero limit structure is a valid value: no flags.
         let limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
         // SAFETY: the job handle is open and `limits` is valid for the size

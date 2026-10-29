@@ -580,8 +580,6 @@ impl Runtime {
         let stages = report
             .stages
             .iter()
-            // The tunnel stage is an explicit probe the test does not run.
-            .filter(|result| result.stage != crate::remote::RemoteStage::Tunnel)
             .map(|result| DeviceTestStageSnapshot {
                 stage: result.stage.to_string(),
                 state: match result.state {
@@ -625,6 +623,16 @@ impl Runtime {
             .iter()
             .map(|device| (device.id.clone(), self.kit_view(&device.id)))
             .collect::<HashMap<_, _>>();
+        let sign_ins = self
+            .snapshot
+            .navigator
+            .devices
+            .iter()
+            .filter_map(|device| {
+                self.device_sign_in_snapshot(&device.id)
+                    .map(|sign_in| (device.id.clone(), sign_in))
+            })
+            .collect::<HashMap<_, _>>();
         let statuses = &self.snapshot.status.remote;
         let tests = &self.remote_device_tests;
         let mut changed = false;
@@ -638,26 +646,41 @@ impl Runtime {
                 continue;
             }
             let status = statuses.iter().find(|status| status.target_id == device.id);
+            let host = self.device_hosts.get(&device.id);
+            // The device's Herdr rides its node link, so a link that could
+            // not start is why the session is away, in the words the attempt
+            // ended with, also while the next attempt runs (PRD
+            // system-ssh-device-link B13, B18, B19).
+            let link_failure = host.and_then(|host| match &host.phase {
+                hosts::HostPhase::Unavailable(_)
+                | hosts::HostPhase::Unsupported(_)
+                | hosts::HostPhase::IdentityChanged(_)
+                | hosts::HostPhase::Connecting => host.failure.clone(),
+                _ => None,
+            });
             let (state, message) = match status {
                 Some(status) if status.state == "connected" => ("ready", None),
-                Some(status) => ("unavailable", status.message.clone()),
-                None => ("unavailable", None),
+                Some(status) => ("unavailable", link_failure.or(status.message.clone())),
+                None => ("unavailable", link_failure),
             };
-            let problem = message
-                .as_deref()
-                .and_then(crate::remote::connection_problem)
-                .map(str::to_owned);
+            let problem = host
+                .and_then(|host| host.problem)
+                .filter(|_| state != "ready")
+                .map(|problem| problem.code().to_owned());
+            let sign_in = sign_ins.get(&device.id).cloned();
             let test = tests.get(&device.id).cloned();
             let herdr_behind = self.device_herdr_behind.get(&device.id).cloned();
             if device.state != state
                 || device.message != message
                 || device.problem != problem
+                || device.sign_in != sign_in
                 || device.test != test
                 || device.herdr_behind != herdr_behind
             {
                 device.state = state.to_owned();
                 device.message = message;
                 device.problem = problem;
+                device.sign_in = sign_in;
                 device.test = test;
                 device.herdr_behind = herdr_behind;
                 changed = true;

@@ -247,7 +247,11 @@ use crate::error::HostError;
 /// worktree has checked out (`Call::BranchDiscard`; PRD
 /// hide-ai-branch-first-apply). A helper on 58 would refuse all four, so it is
 /// refused at Hello and upgraded.
-pub const PROTOCOL_VERSION: u32 = 59;
+/// 60: a device's test asks its node which Git it runs
+/// (`GitCommand::Version`) over the link it has, where it used to report Git
+/// without asking (PRD system-ssh-device-link B25). A helper on 59 would
+/// refuse the command, so it is refused at Hello and upgraded.
+pub const PROTOCOL_VERSION: u32 = 60;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).

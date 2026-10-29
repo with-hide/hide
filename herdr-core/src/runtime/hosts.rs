@@ -12,6 +12,7 @@
 //! dropped unsent, and nothing on the device is removed.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use super::devices::{DeviceReach, Retiring};
 use super::*;
@@ -19,9 +20,37 @@ use crate::agent_state::header::LinkWait;
 use crate::model::{DeviceHostSnapshot, HostConsent};
 use crate::node_access::NodeLink;
 use crate::remote::{
-    EstablishError, Established, HOST_CONSENT_CARRIED_FROM, HOST_CONSENT_CONTRACT, NodeReady,
-    OnClose, Wake,
+    Attempt, Cancel, EstablishError, Established, HOST_CONSENT_CARRIED_FROM, HOST_CONSENT_CONTRACT,
+    NodeReady, OnClose, SshFailure, SshProblem, Wake,
 };
+
+/// How long a device's attempt waits for the ones before it to end. A
+/// cancelled attempt's `ssh` is killed at once and reaped within a moment,
+/// and a link the core closed is reaped within `CHILD_EXIT_GRACE`, so this is
+/// only the bound on one that does not; a waiter that gives up leaves the
+/// earlier attempt in the device's slot (PRD system-ssh-device-link B26).
+const PREVIOUS_ATTEMPT_WITHIN: Duration = Duration::from_secs(4 * 60);
+
+/// Waits until each of `earlier` has ended, or `own` is cancelled, or
+/// [`PREVIOUS_ATTEMPT_WITHIN`] passes; answers whether they all ended with
+/// `own` still wanted.
+fn earlier_attempts_ended(earlier: &[Cancel], own: &Cancel) -> bool {
+    let until = std::time::Instant::now() + PREVIOUS_ATTEMPT_WITHIN;
+    let ended = earlier.iter().all(|attempt| {
+        loop {
+            let left = until.saturating_duration_since(std::time::Instant::now());
+            if attempt.wait_ended(left.min(Duration::from_secs(1))) {
+                break true;
+            }
+            if own.is_cancelled() || left.is_zero() {
+                break false;
+            }
+        }
+    });
+    // A waiter cancelled while the earlier ones ended gives up too: a later
+    // dial already waits for it.
+    ended && !own.is_cancelled()
+}
 
 /// A node and the link that reads its files.
 pub(crate) type LinkedNode = (crate::node::NodeId, Arc<dyn NodeLink>);
@@ -154,6 +183,30 @@ pub(super) struct DeviceHost {
     /// before the device was removed and added again, is recognised and
     /// dropped.
     pub(super) generation: u64,
+    /// Whether the running or last attempt might ask the operator.
+    pub(super) wake: Wake,
+    /// Why the last attempt's `ssh` did not connect, by class (B18), and
+    /// what the last attempt or link ended with, as the row says it. Both
+    /// stay while the next attempt runs, so the row keeps the reason and its
+    /// action until an attempt ends otherwise, never the words of a link
+    /// that already ended (B13, B18); none once the link is up.
+    pub(super) problem: Option<SshProblem>,
+    pub(super) failure: Option<String>,
+    /// What the running attempt waits on from the operator (B4-B12, B27).
+    pub(super) sign_in: Option<super::device_sign_in::SignInState>,
+}
+
+impl DeviceHost {
+    pub(super) fn new(phase: HostPhase, generation: u64) -> Self {
+        Self {
+            phase,
+            generation,
+            wake: Wake::NotAllowed,
+            problem: None,
+            failure: None,
+            sign_in: None,
+        }
+    }
 }
 
 impl Runtime {
@@ -203,10 +256,13 @@ impl Runtime {
 
     /// Whether a consent still covers what this build would do: the same
     /// contract, the same install root and the same command folder. A
-    /// contract-2 consent for the same folders counts, because the operator
-    /// chose to carry it to the whole kit on its next connection (D-13).
+    /// contract-2 or -3 consent for the same folders counts: the operator
+    /// chose to carry it to the whole kit on its next connection (PRD
+    /// device-parity D-13), and contract 4 changed only what the consent is
+    /// bound to (PRD system-ssh-device-link D-09, B16).
     fn consent_current(&self, consent: &HostConsent) -> bool {
-        (consent.contract == HOST_CONSENT_CONTRACT || consent.contract == HOST_CONSENT_CARRIED_FROM)
+        (consent.contract == HOST_CONSENT_CONTRACT
+            || HOST_CONSENT_CARRIED_FROM.contains(&consent.contract))
             && (consent.helper_root == self.host_helper_root || self.carries_root(consent))
             && consent.cli_dir.as_deref() == Some(self.host_cli_dir.as_str())
     }
@@ -231,9 +287,10 @@ impl Runtime {
         }
     }
 
-    /// Rewrites a carried consent to this build's scope (a contract-2 consent
-    /// to contract 3, a legacy default root to the default root), keeping the
-    /// identity it was bound to, before the connection it covers starts.
+    /// Rewrites a carried consent to this build's scope (a contract-2 or -3
+    /// consent to contract 4, a legacy default root to the default root),
+    /// keeping the identity it was bound to, before the connection it covers
+    /// starts.
     fn carry_consent_forward(&mut self, device_id: &str) {
         let root = self.host_helper_root.clone();
         let carries_root = self
@@ -247,7 +304,9 @@ impl Runtime {
             .iter_mut()
             .find(|registration| registration.id == device_id)
             .and_then(|registration| registration.host_consent.as_mut())
-            .filter(|consent| consent.contract == HOST_CONSENT_CARRIED_FROM || carries_root)
+            .filter(|consent| {
+                HOST_CONSENT_CARRIED_FROM.contains(&consent.contract) || carries_root
+            })
         else {
             return;
         };
@@ -255,12 +314,12 @@ impl Runtime {
         consent.contract = HOST_CONSENT_CONTRACT;
         let from_root = carries_root.then(|| std::mem::replace(&mut consent.helper_root, root));
         self.persist_current_ui_state();
-        if from_contract == HOST_CONSENT_CARRIED_FROM {
+        if HOST_CONSENT_CARRIED_FROM.contains(&from_contract) {
             crate::diagnostic!(serde_json::json!({
                 "component": "remote_host",
                 "kind": "host.consent_upgraded",
                 "target": device_id,
-                "from": HOST_CONSENT_CARRIED_FROM,
+                "from": from_contract,
                 "contract": HOST_CONSENT_CONTRACT,
             }));
         }
@@ -389,14 +448,28 @@ impl Runtime {
         if !registration.origin.core_redials() || self.effects_held() {
             return false;
         }
-        match self.device_hosts.get(device_id).map(|host| &host.phase) {
-            Some(HostPhase::Connecting) => {
-                if attempt.wake() == Wake::Allowed {
+        match self.device_hosts.get(device_id) {
+            Some(host) if matches!(host.phase, HostPhase::Connecting) => {
+                // Leave for the attempt after this one, should this one
+                // need what it could not ask for; one that may ask has it.
+                if attempt.wake() == Wake::Allowed && host.wake == Wake::NotAllowed {
                     self.device_wake_pending.insert(device_id.to_owned());
                 }
                 return false;
             }
-            Some(HostPhase::Ready { .. }) => return false,
+            Some(host) if matches!(host.phase, HostPhase::Ready { .. }) => return false,
+            // The last attempt stopped on what only the operator can change:
+            // a sign-in that needs them, a refused one, a changed server key.
+            // Hide's own work starts no ssh for it, so a server never sees a
+            // sign-in nobody typed; the row's Sign in, `hide device retry`
+            // or the app opening starts the next one (PRD
+            // system-ssh-device-link B14).
+            Some(host)
+                if attempt == HostAttempt::Background
+                    && host.problem.is_some_and(|problem| !problem.retried()) =>
+            {
+                return false;
+            }
             _ => {}
         }
         let generation = self.advance_host_generation(device_id);
@@ -467,16 +540,25 @@ impl Runtime {
     }
 
     /// The app opened a window on this core: each WSL distribution that is
-    /// off or lost is tried with leave to start it (B3); one whose attempt
-    /// is running gets that leave for the attempt after it, should it find
-    /// the distribution off.
+    /// off or lost is tried with leave to start it (PRD wsl-device B3), and
+    /// each SSH device that stopped because signing in needed the operator
+    /// is tried with leave to ask (PRD system-ssh-device-link D-06, B10);
+    /// one whose attempt is running gets that leave for the attempt after
+    /// it, should that one need it.
     pub(super) fn wake_devices_for_app(&mut self) -> bool {
         let woken: Vec<String> = self
             .snapshot
             .ui_state
             .device_registrations
             .iter()
-            .filter(|registration| registration.origin.wsl_distro().is_some())
+            .filter(|registration| {
+                registration.origin.wsl_distro().is_some()
+                    || registration.origin.ssh_alias().is_some()
+                        && self.device_hosts.get(&registration.id).is_some_and(|host| {
+                            matches!(host.phase, HostPhase::Connecting)
+                                || host.problem == Some(SshProblem::SignInNeeded)
+                        })
+            })
             .map(|registration| registration.id.clone())
             .collect();
         let mut changed = false;
@@ -511,6 +593,11 @@ impl Runtime {
     /// blocks, and a link that already ended tells its end at once, which
     /// takes the lock.
     fn spawn_host_start(&mut self, device_id: &str, generation: u64, start: HostStart) -> bool {
+        let host = self.device_host_entry(device_id);
+        host.wake = match &start {
+            HostStart::Dial { wake, .. } => *wake,
+            HostStart::Arrived { .. } => Wake::NotAllowed,
+        };
         if matches!(start, HostStart::Dial { .. }) {
             self.begin_device_connect(device_id);
         }
@@ -524,6 +611,47 @@ impl Runtime {
         };
         self.set_host_phase(device_id, HostPhase::Connecting);
         let device = device_id.to_owned();
+        // The device's slot keeps every dial until nothing of it runs, its
+        // `ssh` reaped included, and a dial waits for all those before it, so
+        // two never run at once, even across a removal and adding the device
+        // again or a waiter that gave up.
+        let (run, earlier) = match &start {
+            HostStart::Dial { .. } => {
+                let slot = self.device_attempts.entry(device.clone()).or_default();
+                slot.retain(|run| !run.ended());
+                let earlier = slot.clone();
+                let run = Cancel::default();
+                // The worker's share, taken before the run can be looked at.
+                let worker = run.hold();
+                slot.push(run.clone());
+                // A run leaves the slot as it ends, the device's included
+                // once nothing of it runs, so a removed device keeps no slot.
+                // It ends on a worker's or a reaper's thread, which may not
+                // take the lock where it stands.
+                let runtime = context.runtime.clone();
+                let ended_device = device.clone();
+                run.when_ended(move || {
+                    let spawned = thread::Builder::new()
+                        .name("herdr-core-device-attempt-ended".to_owned())
+                        .spawn(move || {
+                            if let Some(runtime) = runtime.upgrade()
+                                && let Ok(mut guard) = runtime.lock()
+                            {
+                                guard.forget_ended_attempts(&ended_device);
+                            }
+                        });
+                    if let Err(error) = spawned {
+                        crate::diagnostic!(serde_json::json!({
+                            "component": "remote_host",
+                            "kind": "host.attempt_forget_failed",
+                            "error": error.to_string(),
+                        }));
+                    }
+                });
+                (Some((run, worker)), earlier)
+            }
+            HostStart::Arrived { .. } => (None, Vec::new()),
+        };
         let spawned = thread::Builder::new()
             .name("herdr-core-device-host".to_owned())
             .spawn(move || {
@@ -553,12 +681,31 @@ impl Runtime {
                         consent,
                         retirement_projects,
                         wake,
-                    } => (
-                        client
-                            .establish(&consent, &retirement_projects, wake, on_close)
-                            .map(HostReady::Dialed),
-                        None,
-                    ),
+                    } => {
+                        let (run, _worker) = run.expect("a dial has its run");
+                        let attempt = Attempt {
+                            wake,
+                            sign_in: Arc::new(super::device_sign_in::RowSignIn {
+                                context: context.clone(),
+                                device_id: device.clone(),
+                                generation,
+                                wake,
+                            }),
+                            cancel: run.clone(),
+                            on_close,
+                        };
+                        let result = if !earlier_attempts_ended(&earlier, &run) {
+                            Err(EstablishError::Helper(
+                                "An earlier connection attempt to this device has not ended; Retry once it has"
+                                    .to_owned(),
+                            ))
+                        } else {
+                            client
+                                .establish(&consent, &retirement_projects, attempt)
+                                .map(HostReady::Dialed)
+                        };
+                        (result, None)
+                    }
                     HostStart::Arrived { node, hear_close } => {
                         (Ok(HostReady::Arrived(node)), Some((hear_close, on_close)))
                     }
@@ -671,16 +818,21 @@ impl Runtime {
     fn device_host_entry(&mut self, device_id: &str) -> &mut DeviceHost {
         self.device_hosts
             .entry(device_id.to_owned())
-            .or_insert(DeviceHost {
-                phase: HostPhase::NotAllowed,
-                generation: 0,
-            })
+            .or_insert_with(|| DeviceHost::new(HostPhase::NotAllowed, 0))
     }
 
     fn set_host_phase(&mut self, device_id: &str, phase: HostPhase) {
         let waiting = self.helper_link_wait(device_id);
         let linked = self.linked_node(device_id).is_ok();
-        self.device_host_entry(device_id).phase = phase;
+        let host = self.device_host_entry(device_id);
+        match &phase {
+            HostPhase::Unavailable(message)
+            | HostPhase::Unsupported(message)
+            | HostPhase::IdentityChanged(message) => host.failure = Some(message.clone()),
+            HostPhase::Connecting => {}
+            HostPhase::NotAllowed | HostPhase::Ready { .. } => host.failure = None,
+        }
+        host.phase = phase;
         // A pane of the device says what its link waits for, so its notice
         // follows the phase.
         if waiting != self.helper_link_wait(device_id) {
@@ -769,8 +921,42 @@ impl Runtime {
     pub(super) fn advance_host_generation(&mut self, device_id: &str) -> u64 {
         self.last_host_generation += 1;
         let generation = self.last_host_generation;
-        self.device_host_entry(device_id).generation = generation;
+        let host = self.device_host_entry(device_id);
+        host.generation = generation;
+        // A question of the attempt this one replaces answers nothing now:
+        // its channel goes with it, which ends the wait.
+        host.sign_in = None;
+        // The attempts this generation replaces end: a running `ssh` is
+        // killed at once, and a working link, which its transport handed on,
+        // is the close's to end.
+        for run in self.device_attempts.get(device_id).into_iter().flatten() {
+            run.cancel();
+        }
         generation
+    }
+
+    /// Drops the device's ended runs, and its slot once none is left.
+    pub(super) fn forget_ended_attempts(&mut self, device_id: &str) {
+        if let Some(slot) = self.device_attempts.get_mut(device_id) {
+            slot.retain(|run| !run.ended());
+            if slot.is_empty() {
+                self.device_attempts.remove(device_id);
+            }
+        }
+    }
+
+    /// Every dial not yet ended, cancelled, for the core's stop to wait out
+    /// off the lock.
+    pub(crate) fn take_device_attempts(&mut self) -> Vec<Cancel> {
+        let runs: Vec<Cancel> = self
+            .device_attempts
+            .drain()
+            .flat_map(|(_, runs)| runs)
+            .collect();
+        for run in &runs {
+            run.cancel();
+        }
+        runs
     }
 
     pub(super) fn ingest_host_established(
@@ -828,6 +1014,7 @@ impl Runtime {
                 let mut bound_now = false;
                 let mut helper_path = None;
                 if let Some((identity, installed, path, upload)) = dialed {
+                    let mut machine_carried = false;
                     if let Some(consent) = self
                         .snapshot
                         .ui_state
@@ -835,13 +1022,35 @@ impl Runtime {
                         .iter_mut()
                         .find(|registration| registration.id == device_id)
                         .and_then(|registration| registration.host_consent.as_mut())
-                        && consent.identity.is_none()
                     {
-                        consent.identity = Some(identity);
-                        bound_now = true;
+                        match &mut consent.identity {
+                            None => {
+                                consent.identity = Some(identity);
+                                bound_now = true;
+                            }
+                            // A consent bound before contract 4 names no
+                            // machine; the one that answered as its account,
+                            // address and port is the one it was given for,
+                            // and from now on the only one (D-09, B16).
+                            Some(bound)
+                                if bound.machine_id.is_none() && identity.machine_id.is_some() =>
+                            {
+                                bound.machine_id = identity.machine_id;
+                                machine_carried = true;
+                            }
+                            Some(_) => {}
+                        }
                     }
-                    if bound_now {
+                    if bound_now || machine_carried {
                         self.persist_current_ui_state();
+                    }
+                    if machine_carried {
+                        crate::diagnostic!(serde_json::json!({
+                            "component": "remote_host",
+                            "kind": "host.consent_machine_bound",
+                            "target": device_id,
+                            "generation": generation,
+                        }));
                     }
                     crate::diagnostic!(serde_json::json!({
                         "component": "remote_host",
@@ -859,6 +1068,9 @@ impl Runtime {
                 // Connected: leave the app gave meanwhile has nothing left to
                 // start, and must not start the distribution after a later end.
                 self.device_wake_pending.remove(device_id);
+                let host = self.device_host_entry(device_id);
+                host.problem = None;
+                host.sign_in = None;
                 self.set_host_phase(
                     device_id,
                     HostPhase::Ready {
@@ -868,18 +1080,11 @@ impl Runtime {
                         windows_drives: node.hello.windows_drives.clone(),
                     },
                 );
-                // A WSL distribution's Herdr rides this link: its session
-                // reads again now rather than at its next reconnect.
-                if self
-                    .link_origin(device_id)
-                    .is_some_and(|origin| origin.wsl_distro().is_some())
-                    && let Some(sync) = self
-                        .remote_connections
-                        .get(device_id)
-                        .and_then(|connection| connection.sync.as_ref())
-                {
-                    sync.republish_waker().refresh_topology();
-                }
+                // The device's Herdr rides this link, an SSH device's as a WSL
+                // distribution's (PRD system-ssh-device-link): its session
+                // reads again now rather than at its next reconnect, which
+                // the attempts before the link backed off to seconds away.
+                self.refresh_remote_topology(device_id);
                 match node.terminals {
                     Ok(terminals) => {
                         self.terminals.install_device(device_id, terminals);
@@ -956,24 +1161,48 @@ impl Runtime {
                     .entry(device_id.to_owned())
                     .or_default()
                     .unavailable = Some(message.clone());
-                // A changed identity or an unsupported device waits for the
-                // operator, and drops leave the app gave meanwhile; a WSL
-                // distribution that is off waits for an attempt that may
-                // wake it, at once when the app gave that leave meanwhile;
+                // A changed identity, an unsupported device or an ssh
+                // failure only the operator can change wait for the operator
+                // and drop leave the app gave meanwhile, except a sign-in
+                // that needed someone to ask, which the app's leave tries
+                // again at once, as it does a WSL distribution that is off;
                 // anything else may pass, so it is tried again, and the
                 // retry takes the app's leave.
-                let wake_next = matches!(error, EstablishError::Stopped(_))
+                let needs_operator = matches!(
+                    &error,
+                    EstablishError::Ssh(SshFailure {
+                        problem: SshProblem::SignInNeeded,
+                        ..
+                    })
+                );
+                let wake_next = (matches!(error, EstablishError::Stopped(_)) || needs_operator)
                     && self.device_wake_pending.contains(device_id);
+                let ssh_device = self
+                    .link_origin(device_id)
+                    .is_some_and(|origin| origin.ssh_alias().is_some());
+                let problem = match &error {
+                    EstablishError::Ssh(failure) => Some(failure.problem),
+                    EstablishError::Unsupported(_) if ssh_device => Some(SshProblem::Unsupported),
+                    _ => None,
+                };
                 if matches!(
-                    error,
+                    &error,
                     EstablishError::IdentityChanged { .. } | EstablishError::Unsupported(_)
-                ) {
+                ) || problem.is_some_and(|problem| !problem.retried()) && !needs_operator
+                {
                     self.device_wake_pending.remove(device_id);
                 }
+                self.device_host_entry(device_id).problem = problem;
                 let phase = match error {
                     EstablishError::IdentityChanged { .. } => HostPhase::IdentityChanged(message),
                     EstablishError::Unsupported(_) => HostPhase::Unsupported(message),
                     EstablishError::Stopped(_) => HostPhase::Unavailable(message),
+                    // A refused sign-in, a changed server key or a missing
+                    // ssh would only be refused again: the operator's retry
+                    // tries it (B7, B13, B14, B18).
+                    EstablishError::Ssh(failure) if !failure.problem.retried() => {
+                        HostPhase::Unavailable(message)
+                    }
                     _ => {
                         if self
                             .link_origin(device_id)
@@ -1062,6 +1291,9 @@ impl Runtime {
         if self.device_hosts.contains_key(device_id) {
             self.advance_host_generation(device_id);
             let host = self.device_host_entry(device_id);
+            // A link that worked ended for this reason; a failed attempt's
+            // reason stays the row's until an attempt ends otherwise.
+            host.failure.get_or_insert_with(|| reason.to_owned());
             let closing =
                 std::mem::replace(&mut host.phase, HostPhase::Unavailable(reason.to_owned()));
             if let HostPhase::Ready { host: remote, .. } = closing {
