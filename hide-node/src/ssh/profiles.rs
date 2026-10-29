@@ -64,7 +64,7 @@ pub(super) fn list(
                     super::SshAlias::from_target_contents(
                         target,
                         contents,
-                        home.join(".ssh/known_hosts"),
+                        &home.join(".ssh"),
                     )
                     .map_err(|_| "The saved SSH target could not be resolved".to_owned())
                 })
@@ -291,7 +291,6 @@ pub(super) fn ssh_config(path: &Path) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     #[test]
     fn include_wildcards_use_finite_work_and_retry_reads_the_corrected_route() {
@@ -401,11 +400,11 @@ mod tests {
 
     #[test]
     fn arbitrary_targets_resolve_without_a_config_and_explicit_values_win() {
-        let known = PathBuf::from("/private/known_hosts");
+        let ssh_dir = std::env::temp_dir().join(".ssh");
         let alias = super::super::SshAlias::from_target_contents(
             "ssh://grab@box:2222",
             "Host box\n User other\n Port 22\n HostName BOX.example\n",
-            known.clone(),
+            &ssh_dir,
         )
         .unwrap();
         assert_eq!(
@@ -413,7 +412,7 @@ mod tests {
             ("grab", "BOX.example", 2222)
         );
         let plain =
-            super::super::SshAlias::from_target_contents("grab@10.0.0.2", "", known).unwrap();
+            super::super::SshAlias::from_target_contents("grab@10.0.0.2", "", &ssh_dir).unwrap();
         assert_eq!(
             (plain.user.as_str(), plain.hostname.as_str(), plain.port),
             ("grab", "10.0.0.2", 22)

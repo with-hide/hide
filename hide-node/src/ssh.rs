@@ -20,7 +20,7 @@ use anyhow::anyhow;
 use russh::client::{self, Handle, Handler, Msg};
 use russh::keys::{
     PrivateKeyWithHashAlg, PublicKeyOrCertificate, agent::client::AgentClient,
-    check_known_hosts_path, load_secret_key,
+    check_known_hosts_path,
 };
 use russh::{Channel, ChannelMsg, Disconnect, Pty};
 use russh_sftp::client::SftpSession;
@@ -37,12 +37,15 @@ use hide_herdr_client::{ApiConnector, ApiError, ApiStream, ConnectionShutdown};
 mod device;
 pub mod host;
 pub mod hosts;
+mod identities;
 pub mod profiles;
 pub mod transfer;
 pub mod upstream;
 
 pub use device::{Connector, SshDevice};
 pub use host::{LinkStream, LinkWriter, OpenError, PaneEvents, PaneEventsSlot, RemoteHost};
+pub use identities::IdentityFile;
+use identities::{AgentState, KeyFile, Offer, Plan};
 
 use hide_node_link::device::{
     CapabilityReport, HOST_KEY_CHANGED, HOST_KEY_UNKNOWN, RemoteError, RemoteHostIdentity,
@@ -122,7 +125,13 @@ pub struct SshAlias {
     pub hostname: String,
     pub user: String,
     pub port: u16,
-    pub identity_file: Option<PathBuf>,
+    /// The key files sign-in reads, in order: every `IdentityFile` the ssh
+    /// config gives this alias, or OpenSSH's default files in `~/.ssh` when
+    /// it gives none (`IdentityFile none` leaves it empty).
+    pub identity_files: Vec<IdentityFile>,
+    /// `IdentitiesOnly yes`: the agent is used only for one of
+    /// `identity_files`, never for its other keys.
+    pub identities_only: bool,
     /// Where agent authentication looks for its socket, resolved from the SSH
     /// config the same way OpenSSH resolves it.
     pub agent_socket: AgentSocket,
@@ -164,14 +173,10 @@ impl SshAlias {
     /// Resolve configuration without making a connection or running ssh.
     pub fn from_target_file(path: &Path, target: &str) -> RemoteResult<Self> {
         let contents = profiles::ssh_config(path).map_err(|error| alias_error(target, error))?;
-        Self::from_target_contents(target, &contents, path.with_file_name("known_hosts"))
+        Self::from_target_contents(target, &contents, ssh_dir(target, path)?)
     }
 
-    fn from_target_contents(
-        target: &str,
-        contents: &str,
-        known_hosts: PathBuf,
-    ) -> RemoteResult<Self> {
+    fn from_target_contents(target: &str, contents: &str, ssh_dir: &Path) -> RemoteResult<Self> {
         let parsed = profiles::Target::parse(target).map_err(|error| alias_error(target, error))?;
         let config = russh_config::parse(contents, &parsed.host)
             .map_err(|error| alias_error(target, error.to_string()))?;
@@ -191,7 +196,7 @@ impl SshAlias {
                 "This SSH target requires a proxy route the device connector cannot use",
             ));
         }
-        let mut alias = Self::from_config_contents(&parsed.host, contents, known_hosts)?;
+        let mut alias = Self::from_config_contents(&parsed.host, contents, ssh_dir)?;
         if let Some(user) = parsed.user {
             alias.user = user;
         }
@@ -202,11 +207,11 @@ impl SshAlias {
         alias.host_id = format!("ssh:{target}");
         Ok(alias)
     }
-    pub fn from_config_contents(
-        alias: &str,
-        contents: &str,
-        known_hosts_file: impl Into<PathBuf>,
-    ) -> RemoteResult<Self> {
+    /// Resolves `alias` from an ssh config's text. `ssh_dir` is the folder the
+    /// config belongs to (the account's `~/.ssh`): its `known_hosts` and
+    /// OpenSSH's default key files are read there, and `~` in an
+    /// `IdentityFile` is the folder above it.
+    pub fn from_config_contents(alias: &str, contents: &str, ssh_dir: &Path) -> RemoteResult<Self> {
         validate_alias(alias)?;
         let config = russh_config::parse(contents, alias).map_err(|error| {
             remote_error(
@@ -240,22 +245,45 @@ impl SshAlias {
                 true,
             ));
         }
-        let identity_file = config
-            .host_config
-            .identity_file
-            .as_ref()
-            .and_then(|files| files.first())
-            .cloned();
-        let agent_socket = parse_identity_agent(alias, contents)?;
+        let directives = AuthDirectives::scan(alias, contents);
+        let agent_socket = match directives.identity_agent {
+            Some(value) => resolve_identity_agent(alias, value)?,
+            None => AgentSocket::Environment,
+        };
+        let identities_only = match directives.identities_only {
+            None => false,
+            Some(value) if value.eq_ignore_ascii_case("yes") || value.eq_ignore_ascii_case("true") => true,
+            Some(value) if value.eq_ignore_ascii_case("no") || value.eq_ignore_ascii_case("false") => false,
+            Some(_) => return Err(alias_error(alias, "IdentitiesOnly must be yes or no")),
+        };
+        // OpenSSH adds its default files only when no IdentityFile matched,
+        // and reads none at all for `IdentityFile none`.
+        let identity_files = if directives.identity_files.is_empty() {
+            identities::default_identity_files(ssh_dir)
+        } else {
+            let home = ssh_dir.parent().ok_or_else(|| {
+                alias_error(alias, "the ssh config's folder has no home folder above it")
+            })?;
+            directives
+                .identity_files
+                .iter()
+                .filter(|value| !value.trim_matches('"').eq_ignore_ascii_case("none"))
+                .map(|value| {
+                    identities::expand_identity_file(value, home)
+                        .map_err(|error| alias_error(alias, error))
+                })
+                .collect::<RemoteResult<Vec<_>>>()?
+        };
         Ok(Self {
             host_id: format!("ssh:{alias}"),
             alias: alias.to_owned(),
             hostname,
             user,
             port: config.port(),
-            identity_file,
+            identity_files,
+            identities_only,
             agent_socket,
-            known_hosts_file: known_hosts_file.into(),
+            known_hosts_file: ssh_dir.join("known_hosts"),
         })
     }
 
@@ -270,9 +298,10 @@ impl SshAlias {
                 false,
             )
         })?;
-        // The account the config belongs to records its hosts beside it,
-        // as OpenSSH's own default (`~/.ssh/known_hosts`) does for that home.
-        Self::from_config_contents(alias, &contents, path.with_file_name("known_hosts"))
+        // The account the config belongs to keeps its hosts and keys beside
+        // it, as OpenSSH's own defaults (`~/.ssh/known_hosts`, `~/.ssh/id_*`)
+        // do for that home.
+        Self::from_config_contents(alias, &contents, ssh_dir(alias, path)?)
     }
 
     pub fn identity(&self) -> RemoteHostIdentity {
@@ -289,17 +318,13 @@ impl SshAlias {
     }
 }
 
-pub fn import_ssh_aliases_from_str(
-    contents: &str,
-    known_hosts_file: impl Into<PathBuf>,
-) -> RemoteResult<Vec<SshAlias>> {
-    let known_hosts_file = known_hosts_file.into();
+pub fn import_ssh_aliases_from_str(contents: &str, ssh_dir: &Path) -> RemoteResult<Vec<SshAlias>> {
     let mut aliases = scan_alias_names(contents);
     aliases.sort();
     aliases.dedup();
     aliases
         .into_iter()
-        .map(|alias| SshAlias::from_config_contents(&alias, contents, known_hosts_file.clone()))
+        .map(|alias| SshAlias::from_config_contents(&alias, contents, ssh_dir))
         .collect()
 }
 
@@ -327,27 +352,57 @@ fn scan_alias_names(contents: &str) -> Vec<String> {
     names.into_iter().collect()
 }
 
-/// Resolves `IdentityAgent` for one alias.
+/// The folder an ssh config file sits in, where its account keeps
+/// `known_hosts` and its keys.
+fn ssh_dir<'a>(alias: &str, config: &'a Path) -> RemoteResult<&'a Path> {
+    config
+        .parent()
+        .ok_or_else(|| alias_error(alias, "the ssh config path names no folder"))
+}
+
+/// The directives that decide how one alias signs in, as written.
 ///
-/// `russh_config` drops the directive, so the `Host` block matching that
-/// already decides hostname and user is repeated here. `Match` blocks are
-/// ignored, exactly as they are for every other directive this module reads.
-fn parse_identity_agent(alias: &str, contents: &str) -> RemoteResult<AgentSocket> {
-    let mut applies = false;
-    for line in contents.lines() {
-        let Some((keyword, value)) = split_config_line(line) else {
-            continue;
-        };
-        if keyword.eq_ignore_ascii_case("host") {
-            applies = host_patterns_match(alias, value);
-        } else if keyword.eq_ignore_ascii_case("match") {
-            applies = false;
-        } else if applies && keyword.eq_ignore_ascii_case("identityagent") {
-            // OpenSSH keeps the first value it obtains for a keyword.
-            return resolve_identity_agent(alias, value);
+/// `russh_config` drops `IdentityAgent` and `IdentitiesOnly` and expands `~`
+/// in `IdentityFile` against the process's home rather than the account's, so
+/// the `Host` block matching that already decides hostname and user is
+/// repeated here. `Match` blocks are ignored, exactly as they are for every
+/// other directive this module reads.
+#[derive(Default)]
+struct AuthDirectives<'a> {
+    identity_agent: Option<&'a str>,
+    identities_only: Option<&'a str>,
+    /// Every matching line, in order: `IdentityFile` adds up across blocks.
+    identity_files: Vec<&'a str>,
+}
+
+impl<'a> AuthDirectives<'a> {
+    fn scan(alias: &str, contents: &'a str) -> Self {
+        let mut found = Self::default();
+        let mut applies = false;
+        for line in contents.lines() {
+            let Some((keyword, value)) = split_config_line(line) else {
+                continue;
+            };
+            if keyword.eq_ignore_ascii_case("host") {
+                applies = host_patterns_match(alias, value);
+            } else if keyword.eq_ignore_ascii_case("match") {
+                applies = false;
+            } else if applies {
+                match keyword.to_ascii_lowercase().as_str() {
+                    "identityfile" => found.identity_files.push(value),
+                    // OpenSSH keeps the first value it obtains for a keyword.
+                    "identityagent" => {
+                        found.identity_agent.get_or_insert(value);
+                    }
+                    "identitiesonly" => {
+                        found.identities_only.get_or_insert(value);
+                    }
+                    _ => {}
+                }
+            }
         }
+        found
     }
-    Ok(AgentSocket::Environment)
 }
 
 fn split_config_line(line: &str) -> Option<(&str, &str)> {
@@ -2049,176 +2104,114 @@ impl RusshRemoteClient {
     }
 }
 
+/// Signs in the way `ssh <alias>` would from the operator's terminal: the
+/// keys of [`identities::Plan`], in OpenSSH's order, until the server accepts
+/// one. A refusal says what was offered and, for a key Hide could not use
+/// itself, how to give it to the agent.
 async fn authenticate(session: &mut Handle<KnownHostHandler>, host: &SshAlias) -> RemoteResult<()> {
-    if let Some(identity_file) = host.identity_file.as_ref() {
-        let key = load_secret_key(identity_file, None).map_err(|error| {
-            remote_error(
-                "remote-auth",
-                &host.host_id,
-                RemoteStage::Auth,
-                error,
-                false,
-                true,
-            )
-        })?;
-        let hash = session
-            .best_supported_rsa_hash()
-            .await
-            .map_err(|error| {
-                remote_error(
-                    "remote-auth",
-                    &host.host_id,
-                    RemoteStage::Auth,
-                    error,
-                    false,
-                    true,
-                )
-            })?
-            .flatten();
-        let result = session
-            .authenticate_publickey(
-                host.user.clone(),
-                PrivateKeyWithHashAlg::new(Arc::new(key), hash),
-            )
-            .await
-            .map_err(|error| {
-                remote_error(
-                    "remote-auth",
-                    &host.host_id,
-                    RemoteStage::Auth,
-                    error,
-                    true,
-                    true,
-                )
-            })?;
-        if result.success() {
-            return Ok(());
-        }
-    }
+    let failed = |error: &dyn fmt::Display, retryable: bool| {
+        remote_error(
+            "remote-auth",
+            &host.host_id,
+            RemoteStage::Auth,
+            error,
+            retryable,
+            true,
+        )
+    };
+    let reads: Vec<KeyFile> = host
+        .identity_files
+        .iter()
+        .map(|file| KeyFile::read(&file.path))
+        .collect();
 
     let source = host.agent_socket.source();
     let socket = match &host.agent_socket {
-        AgentSocket::Disabled => {
-            return Err(remote_error(
-                "remote-auth",
-                &host.host_id,
-                RemoteStage::Auth,
-                "the ssh config sets IdentityAgent none and no IdentityFile authenticated",
-                false,
-                true,
-            ));
+        AgentSocket::Disabled => None,
+        AgentSocket::Path(socket) => Some(socket.clone().into_os_string()),
+        AgentSocket::Environment => {
+            read_remote_environment("SSH_AUTH_SOCK").map_err(|error| failed(&error, false))?
         }
-        AgentSocket::Path(socket) => socket.clone().into_os_string(),
-        AgentSocket::Environment => read_remote_environment("SSH_AUTH_SOCK")
-            .map_err(|error| {
-                remote_error(
-                    "remote-auth",
-                    &host.host_id,
-                    RemoteStage::Auth,
-                    error,
-                    false,
-                    true,
-                )
-            })?
-            .ok_or_else(|| {
-                remote_error(
-                    "remote-auth",
-                    &host.host_id,
-                    RemoteStage::Auth,
-                    "no IdentityFile, no IdentityAgent, and SSH_AUTH_SOCK is not set",
-                    false,
-                    true,
-                )
-            })?,
     };
-    // OpenSSH's agent listens on a Unix socket, and on Windows on a named
-    // pipe (`\\.\pipe\openssh-ssh-agent`), which the same setting names.
-    #[cfg(unix)]
-    let connected = AgentClient::connect_uds(socket).await;
-    #[cfg(windows)]
-    let connected = AgentClient::connect_named_pipe(socket).await;
-    let mut agent = connected.map_err(|error| {
-        remote_error(
-            "remote-auth",
-            &host.host_id,
-            RemoteStage::Auth,
-            error,
-            true,
-            true,
-        )
-    })?;
-    let identities = agent.request_identities().await.map_err(|error| {
-        remote_error(
-            "remote-auth",
-            &host.host_id,
-            RemoteStage::Auth,
-            error,
-            true,
-            true,
-        )
-    })?;
-    if identities.is_empty() {
-        // An agent that holds nothing is a different repair from an agent whose
-        // keys the server refused: one is "load a key", the other is "authorize
-        // this key".
-        return Err(remote_error(
-            "remote-auth",
-            &host.host_id,
-            RemoteStage::Auth,
-            format!("the SSH agent reached through {source} holds no identities"),
-            false,
-            true,
-        ));
-    }
-    let offered = identities.len();
-    // Without the server's preferred hash an RSA identity is signed as ssh-rsa
-    // (SHA-1), which every current sshd refuses.
-    let hash = session
-        .best_supported_rsa_hash()
-        .await
-        .map_err(|error| {
-            remote_error(
-                "remote-auth",
-                &host.host_id,
-                RemoteStage::Auth,
-                error,
-                true,
-                true,
-            )
-        })?
-        .flatten();
-    for identity in identities {
-        let result = session
-            .authenticate_publickey_with(
-                host.user.clone(),
-                identity.public_key().into_owned(),
-                hash,
-                &mut agent,
-            )
+    // An agent that does not answer is passed over, as OpenSSH passes it
+    // over, so the key files still get their turn.
+    let mut agent = None;
+    let mut agent_keys = Vec::new();
+    let agent_state = match socket {
+        None if host.agent_socket == AgentSocket::Disabled => AgentState::Disabled,
+        None => AgentState::NotSet,
+        Some(socket) => {
+            // OpenSSH's agent listens on a Unix socket, and on Windows on a
+            // named pipe (`\\.\pipe\openssh-ssh-agent`), which the same
+            // setting names.
+            #[cfg(unix)]
+            let connected = AgentClient::connect_uds(socket).await;
+            #[cfg(windows)]
+            let connected = AgentClient::connect_named_pipe(socket).await;
+            match connected {
+                Ok(mut client) => match client.request_identities().await {
+                    Ok(identities) => {
+                        agent_keys = identities
+                            .iter()
+                            .map(|identity| identity.public_key().into_owned())
+                            .collect();
+                        agent = Some(client);
+                        AgentState::Held(agent_keys.len())
+                    }
+                    Err(_) => AgentState::Unreachable,
+                },
+                Err(_) => AgentState::Unreachable,
+            }
+        }
+    };
+
+    let plan = Plan::new(&agent_keys, &reads, host.identities_only);
+    if !plan.offers.is_empty() {
+        // Without the server's preferred hash an RSA identity is signed as
+        // ssh-rsa (SHA-1), which every current sshd refuses.
+        let hash = session
+            .best_supported_rsa_hash()
             .await
-            .map_err(|error| {
-                remote_error(
-                    "remote-auth",
-                    &host.host_id,
-                    RemoteStage::Auth,
-                    error,
-                    true,
-                    true,
-                )
-            })?;
-        if result.success() {
-            return Ok(());
+            .map_err(|error| failed(&error, true))?
+            .flatten();
+        for offer in &plan.offers {
+            let result = match (*offer, agent.as_mut()) {
+                (Offer::Agent(index), Some(agent)) => {
+                    session
+                        .authenticate_publickey_with(
+                            host.user.clone(),
+                            agent_keys[index].clone(),
+                            hash,
+                            agent,
+                        )
+                        .await
+                        .map_err(|error| failed(&error, true))?
+                }
+                (Offer::Agent(_), None) => continue,
+                (Offer::File(index), _) => {
+                    let KeyFile::Usable(key) = &reads[index] else {
+                        continue;
+                    };
+                    session
+                        .authenticate_publickey(
+                            host.user.clone(),
+                            PrivateKeyWithHashAlg::new(Arc::new(key.clone()), hash),
+                        )
+                        .await
+                        .map_err(|error| failed(&error, true))?
+                }
+            };
+            if result.success() {
+                return Ok(());
+            }
         }
     }
-    Err(remote_error(
-        "remote-auth",
-        &host.host_id,
-        RemoteStage::Auth,
-        format!(
-            "the SSH agent reached through {source} offered {offered} identities and the server rejected every one"
-        ),
-        true,
-        true,
+    // Nothing offered is the operator's to fix before a retry can help; keys
+    // the server refused may be authorized there in the meantime.
+    let retryable = !plan.offers.is_empty();
+    Err(failed(
+        &identities::refusal(agent_state, source, &plan, &host.identity_files, &reads),
+        retryable,
     ))
 }
 
@@ -2516,7 +2509,7 @@ mod tests {
         SshAlias::from_config_contents(
             "mini",
             "Host mini\n  HostName mini.example.test\n  User example\n  Port 2200\n  IdentityFile ~/.ssh/id_ed25519\n",
-            "/tmp/known_hosts",
+            &fixture_ssh_dir(),
         )
         .unwrap()
     }
@@ -2608,7 +2601,8 @@ mod tests {
                 hostname: "127.0.0.1".to_owned(),
                 user: "example".to_owned(),
                 port,
-                identity_file: None,
+                identity_files: Vec::new(),
+                identities_only: false,
                 agent_socket: AgentSocket::Disabled,
                 known_hosts_file: PathBuf::from("/dev/null"),
             };
@@ -2855,7 +2849,7 @@ mod tests {
     fn alias_import_ignores_wildcard_and_negated_entries() {
         let aliases = import_ssh_aliases_from_str(
             "Host *\n  User default\nHost mini staging\n  HostName 127.0.0.1\nHost !staging\n  User nobody\nHost *.internal\n  HostName ignored\n",
-            "/tmp/known_hosts",
+            &fixture_ssh_dir(),
         )
         .unwrap();
         assert_eq!(
@@ -2869,22 +2863,93 @@ mod tests {
         assert_eq!(aliases[0].port, 22);
     }
 
+    /// The account's `~/.ssh` in alias fixtures, spelled the way this
+    /// machine spells an absolute path (a drive path on Windows).
+    fn fixture_ssh_dir() -> PathBuf {
+        std::env::temp_dir().join("hide-remote-home").join(".ssh")
+    }
+
+    /// Every `IdentityFile` that matches the alias is kept, in config order
+    /// across blocks, with `~` read as the account's home; only when none
+    /// matches do OpenSSH's defaults stand in, and `IdentityFile none`
+    /// leaves no file at all. Paths are kept, never key contents.
     #[test]
-    fn alias_import_preserves_paths_but_never_reads_key_contents() {
-        let alias = SshAlias::from_config_contents(
+    fn alias_import_keeps_every_identity_file_or_openssh_defaults() {
+        let ssh_dir = fixture_ssh_dir();
+        let home = ssh_dir.parent().unwrap();
+        let named = SshAlias::from_config_contents(
             "mini",
-            "Host mini\n  HostName mini.example.test\n  User example\n  Port 2200\n  IdentityFile /private/tmp/hide-remote-home/.ssh/id_ed25519\n",
-            "/tmp/known_hosts",
+            "Host mini\n  HostName mini.example.test\n  User example\n  IdentityFile ~/.ssh/work\n  IdentityFile=\"%d/keys/second\"\n\nHost *\n  IdentityFile ~/.ssh/everywhere\n  IdentitiesOnly yes\n",
+            &ssh_dir,
         )
         .unwrap();
         assert_eq!(
-            alias.identity_file,
-            Some(PathBuf::from(
-                "/private/tmp/hide-remote-home/.ssh/id_ed25519",
-            ))
+            named
+                .identity_files
+                .iter()
+                .map(|file| (file.path.clone(), file.shown.as_str(), file.default))
+                .collect::<Vec<_>>(),
+            [
+                (home.join(".ssh/work"), "~/.ssh/work", false),
+                (home.join("keys/second"), "%d/keys/second", false),
+                (home.join(".ssh/everywhere"), "~/.ssh/everywhere", false),
+            ]
         );
-        let encoded = serde_json::to_string(&alias).unwrap();
+        assert!(named.identities_only);
+        assert_eq!(named.known_hosts_file, ssh_dir.join("known_hosts"));
+        let encoded = serde_json::to_string(&named).unwrap();
         assert!(!encoded.contains("PRIVATE KEY"));
+
+        let unnamed = SshAlias::from_config_contents(
+            "mini",
+            "Host mini\n  HostName mini.example.test\n  User example\n",
+            &ssh_dir,
+        )
+        .unwrap();
+        assert_eq!(
+            unnamed
+                .identity_files
+                .iter()
+                .map(|file| (file.path.clone(), file.shown.as_str(), file.default))
+                .collect::<Vec<_>>(),
+            [
+                (ssh_dir.join("id_rsa"), "~/.ssh/id_rsa", true),
+                (ssh_dir.join("id_ecdsa"), "~/.ssh/id_ecdsa", true),
+                (ssh_dir.join("id_ecdsa_sk"), "~/.ssh/id_ecdsa_sk", true),
+                (ssh_dir.join("id_ed25519"), "~/.ssh/id_ed25519", true),
+                (ssh_dir.join("id_ed25519_sk"), "~/.ssh/id_ed25519_sk", true),
+            ]
+        );
+        assert!(!unnamed.identities_only);
+
+        let none = SshAlias::from_config_contents(
+            "mini",
+            "Host mini\n  HostName mini.example.test\n  User example\n  IdentityFile none\n",
+            &ssh_dir,
+        )
+        .unwrap();
+        assert!(none.identity_files.is_empty());
+    }
+
+    /// A key file name Hide would have to guess at is refused when the alias
+    /// is read, rather than becoming a key that silently never loads.
+    #[test]
+    fn an_identity_file_hide_cannot_expand_fails_visibly() {
+        for (line, reason) in [
+            ("IdentityFile ~/.ssh/%h", "percent token"),
+            ("IdentityFile ${KEYS}/id", "environment variable"),
+            ("IdentityFile keys/id", "absolute path"),
+            ("IdentitiesOnly maybe", "IdentitiesOnly must be yes or no"),
+        ] {
+            let error = SshAlias::from_config_contents(
+                "mini",
+                &format!("Host mini\n  HostName mini.example.test\n  User example\n  {line}\n"),
+                &fixture_ssh_dir(),
+            )
+            .unwrap_err();
+            assert_eq!(error.stage(), RemoteStage::Alias);
+            assert!(error.to_string().contains(reason), "{line}: {error}");
+        }
     }
 
     /// An agent socket is a path on this machine, so the fixtures spell it
@@ -2902,7 +2967,7 @@ mod tests {
                 "Host *\n  IdentityAgent {}\n\nHost mini\n  HostName mini.example.test\n  User example\n",
                 agent.display()
             ),
-            "/tmp/known_hosts",
+            &fixture_ssh_dir(),
         )
         .unwrap();
         assert_eq!(alias.agent_socket, AgentSocket::Path(agent));
@@ -2918,7 +2983,7 @@ mod tests {
                 first.display(),
                 local_agent("second.sock").display()
             ),
-            "/tmp/known_hosts",
+            &fixture_ssh_dir(),
         )
         .unwrap();
         assert_eq!(alias.agent_socket, AgentSocket::Path(first));
@@ -2929,7 +2994,7 @@ mod tests {
         let alias = SshAlias::from_config_contents(
             "mini",
             "Host github.com\n  IdentityAgent /private/tmp/hide-remote-home/github.sock\n\nHost mini\n  HostName mini.example.test\n  User example\n",
-            "/tmp/known_hosts",
+            &fixture_ssh_dir(),
         )
         .unwrap();
         assert_eq!(alias.agent_socket, AgentSocket::Environment);
@@ -2940,14 +3005,14 @@ mod tests {
         let disabled = SshAlias::from_config_contents(
             "mini",
             "Host mini\n  HostName mini.example.test\n  User example\n  IdentityAgent none\n",
-            "/tmp/known_hosts",
+            &fixture_ssh_dir(),
         )
         .unwrap();
         assert_eq!(disabled.agent_socket, AgentSocket::Disabled);
         let environment = SshAlias::from_config_contents(
             "mini",
             "Host mini\n  HostName mini.example.test\n  User example\n  IdentityAgent SSH_AUTH_SOCK\n",
-            "/tmp/known_hosts",
+            &fixture_ssh_dir(),
         )
         .unwrap();
         assert_eq!(environment.agent_socket, AgentSocket::Environment);
@@ -2958,7 +3023,7 @@ mod tests {
         let error = SshAlias::from_config_contents(
             "mini",
             "Host mini\n  HostName mini.example.test\n  User example\n  IdentityAgent $HIDE_AGENT_SOCK\n",
-            "/tmp/known_hosts",
+            &fixture_ssh_dir(),
         )
         .unwrap_err();
         assert_eq!(error.stage(), RemoteStage::Alias);
@@ -2975,7 +3040,7 @@ mod tests {
         let alias = SshAlias::from_config_contents(
             "mini",
             "Host * !mini\n  IdentityAgent /private/tmp/hide-remote-home/agent.sock\n\nHost mini\n  HostName mini.example.test\n  User example\n",
-            "/tmp/known_hosts",
+            &fixture_ssh_dir(),
         )
         .unwrap();
         assert_eq!(alias.agent_socket, AgentSocket::Environment);
@@ -3005,3 +3070,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod sign_in_tests;
