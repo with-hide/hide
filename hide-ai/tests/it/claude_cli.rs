@@ -472,14 +472,27 @@ mod usage {
     use hide_ai::{USAGE_ENVIRONMENT, UsageError};
 
     /// The fake CLI's working folder, which tells it what to answer and
-    /// keeps what it received; it goes when the test drops it.
+    /// keeps what it received; it goes when the test drops it. The fake's
+    /// interpreter has started once before, so no read's deadline holds it.
     fn usage_dir(mode: &str) -> tempfile::TempDir {
+        interpreter_started();
         let dir = tempfile::Builder::new()
             .prefix(&format!("hide-ai-usage-{mode}-"))
             .tempdir()
             .unwrap();
         std::fs::write(dir.path().join("usage-mode"), mode).unwrap();
         dir
+    }
+
+    /// The fake CLI started once before a read's deadline (docs/TESTING.md,
+    /// Writing a Rust test, rule 8): a Windows runner's first `python` of a
+    /// job took 21-30 s where later ones take about a second, so the first
+    /// reads in the job timed out before their child had started
+    /// (with-hide/hide-private#230). The lock keeps another test's `FAKE_*`
+    /// paths out of that start.
+    fn interpreter_started() {
+        let _guard = crate::FAKE_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        crate::stand_ins::ready_with_args(&fixture(), &["auth", "status", "--json"]);
     }
 
     fn usage_backend(cwd: &std::path::Path) -> ClaudeCliBackend {
