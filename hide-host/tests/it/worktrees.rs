@@ -150,7 +150,6 @@ fn removal(root: &Path, linked: &Path) -> ConfirmedRemoval {
         force_delete_branch: false,
         discard_changes: false,
         expected_ignored_repositories: Vec::new(),
-        unused_only: false,
     }
 }
 
@@ -283,72 +282,6 @@ fn discard_names_every_ignored_repository_including_worktrees_separate_gitdirs_a
         serde_json::from_value(handle(Call::WorktreeRemove { removal: request }).unwrap()).unwrap();
     assert!(!outcome.removed);
     assert!(linked.exists());
-    assert!(trash_entries(&root).is_empty());
-}
-
-/// A process standing for a pane's shell, working in `cwd` until the test
-/// ends it.
-fn working_in(cwd: &Path) -> hide_platform::process::OwnedChild {
-    let mut command = if cfg!(windows) {
-        let mut command = Command::new("cmd");
-        command.args(["/C", "ping -n 120 127.0.0.1 >NUL"]);
-        command
-    } else {
-        let mut command = Command::new("sleep");
-        command.arg("120");
-        command
-    };
-    command
-        .current_dir(cwd)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null());
-    hide_platform::process::OwnedChild::spawn(&mut command).unwrap()
-}
-
-/// A worktree Hide made and gave up goes when nothing works in it: Git sees
-/// no change and no process of this account works in it, and its branch
-/// stays (with-hide/hide-private#56).
-#[test]
-fn a_folder_nothing_works_in_is_removed_and_its_branch_kept() {
-    let (_fixture, root, linked) = linked_worktree(0);
-    let mut request = removal(&root, &linked);
-    request.unused_only = true;
-    let outcome: hide_host::worktrees::RemovalOutcome =
-        serde_json::from_value(handle(Call::WorktreeRemove { removal: request }).unwrap()).unwrap();
-    assert!(outcome.removed, "{outcome:?}");
-    assert!(!linked.exists());
-    assert_eq!(hide_host::worktrees::registered(&root).unwrap().len(), 1);
-    let branches = Command::new("git")
-        .arg("-C")
-        .arg(&root)
-        .args(["branch", "--list", "linked"])
-        .output()
-        .unwrap();
-    assert!(String::from_utf8_lossy(&branches.stdout).contains("linked"));
-    wait_for_empty_trash(&root);
-}
-
-/// A process working in the folder, a subfolder of it on macOS and Linux,
-/// keeps the worktree where it was: found in the folder once it is moved
-/// aside, or, on Windows, refusing the move itself.
-#[test]
-fn a_folder_a_process_works_in_is_kept_where_it_was() {
-    let (_fixture, root, linked) = linked_worktree(0);
-    let cwd = if cfg!(windows) {
-        linked.clone()
-    } else {
-        let inside = linked.join("src");
-        std::fs::create_dir(&inside).unwrap();
-        inside
-    };
-    let _shell = working_in(&cwd);
-    let mut request = removal(&root, &linked);
-    request.unused_only = true;
-    let outcome: hide_host::worktrees::RemovalOutcome =
-        serde_json::from_value(handle(Call::WorktreeRemove { removal: request }).unwrap()).unwrap();
-    assert!(!outcome.removed, "{outcome:?}");
-    assert!(linked.join(".git").exists());
-    assert_eq!(hide_host::worktrees::registered(&root).unwrap().len(), 2);
     assert!(trash_entries(&root).is_empty());
 }
 

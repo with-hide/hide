@@ -1964,7 +1964,6 @@ mod tests {
             force_delete_branch: false,
             discard_changes: false,
             expected_ignored_repositories: Vec::new(),
-            unused_only: false,
         }
     }
 

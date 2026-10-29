@@ -435,12 +435,6 @@ pub struct SpawnRecord {
     /// when the pane runs Herdr's own shell.
     #[serde(default)]
     pub shell: Option<String>,
-    /// The commit the worktree at `path` had checked out when this spawn
-    /// made it, so an attempt given up before its agent showed can take the
-    /// folder away again while nothing moved it; none for a worktree that
-    /// was already there, which is the operator's and never is.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub made_checkout: Option<String>,
     pub child: Option<String>,
     // Completion and the initial watch are one durable store transaction.
     // Later report/end/watch-stop events never invalidate this receipt.
@@ -505,9 +499,6 @@ pub(crate) enum Mutation {
         /// The integrated shell `pane` runs, recorded with it.
         shell: Option<String>,
         child: Option<String>,
-        /// The commit the worktree at `path` started at, when the spawn made
-        /// it.
-        made_checkout: Option<String>,
     },
     /// Herdr took a start of the spawn's agent in its pane.
     Typed {
@@ -1061,7 +1052,6 @@ pub(crate) fn apply(
                 terminal: None,
                 typed: 0,
                 shell: None,
-                made_checkout: None,
                 child: None,
                 completed: false,
                 auto_watch_id: None,
@@ -1105,7 +1095,6 @@ pub(crate) fn apply(
             terminal,
             shell,
             child,
-            made_checkout,
         } => {
             let parent = ledger
                 .spawns
@@ -1171,9 +1160,6 @@ pub(crate) fn apply(
             };
             if child.is_some() {
                 record.child = child.clone()
-            };
-            if made_checkout.is_some() {
-                record.made_checkout = made_checkout.clone()
             };
             Ok(json!(record))
         }
@@ -2494,7 +2480,6 @@ mod tests {
                 terminal: None,
                 shell: None,
                 child: None,
-                made_checkout: None,
             },
             4,
         )
@@ -2514,8 +2499,7 @@ mod tests {
                     pane: Some("wrong".into()),
                     terminal: None,
                     shell: None,
-                    child: None,
-                    made_checkout: None,
+                    child: None
                 },
                 5
             )
@@ -2645,7 +2629,6 @@ mod tests {
                 terminal: None,
                 shell: None,
                 child: None,
-                made_checkout: None,
             },
             2,
         )
@@ -2750,7 +2733,6 @@ mod tests {
                 terminal: None,
                 shell: None,
                 child: None,
-                made_checkout: None,
             },
             2,
         )
@@ -3313,7 +3295,6 @@ mod tests {
                 terminal: None,
                 shell: None,
                 child: None,
-                made_checkout: None,
             },
             Mutation::BindChild {
                 id: spawn.clone(),

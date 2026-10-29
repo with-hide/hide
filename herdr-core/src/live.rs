@@ -45,8 +45,6 @@ pub(crate) mod cleanup;
 mod checkout_start;
 #[path = "worktree_control.rs"]
 mod worktree_control;
-#[cfg(test)]
-pub(crate) use worktree_control::test_worktree;
 pub use worktree_control::{
     AgentFailure, CheckoutTabRequest, HomeStartRequest, IssueWriteFailure, PendingAgentStart,
     PurposeMirror, PurposeTaskOutcome, PurposeTaskRequest, RemovalFailure, TabTarget,
@@ -57,8 +55,7 @@ pub use worktree_control::{
     spawn_worktree_open, spawn_worktree_preflight,
 };
 pub(crate) use worktree_control::{
-    CONFIRM_TIMEOUT, MadeWorktree, ProcessWait, WorktreeKept, close_checkout_panes,
-    discard_made_worktree, prompt_argument,
+    CONFIRM_TIMEOUT, ProcessWait, close_checkout_panes, prompt_argument,
 };
 pub(crate) use worktree_control::{CheckoutStart, spawn_targeted_checkout_start};
 pub(crate) use worktree_control::{GhPlace, spawn_issue_write};

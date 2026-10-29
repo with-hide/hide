@@ -20,7 +20,7 @@ use hide_platform::process::{
     CaptureFailureKind, GroupEnd, MAX_CAPTURE_BYTES, OWNER_LAUNCH_KEYS, OwnedChild, OwnerWatch,
     RUN_OUTPUT_CAP, RunFailure, cwd_of, descendants, descends_from, detach, image_of, is_alive,
     kill_tree, measure_tree, name_of, parent_of, restrict_to_login_environment, run_to_end,
-    running, set_output_aside, start_time, terminate, terminate_group, working_in,
+    running, set_output_aside, start_time, terminate, terminate_group,
 };
 
 const ROLE: &str = "HIDE_PLATFORM_PROC_ROLE";
@@ -1136,44 +1136,6 @@ fn the_working_directory_is_the_kernels_answer_or_unsupported() {
     }
     child.kill().unwrap();
     child.wait().unwrap();
-}
-
-/// A process working in a folder inside the one asked about is found by
-/// identity, through a link to that folder too, and one working elsewhere is
-/// not; Windows cannot say.
-#[test]
-fn the_processes_working_in_a_folder_are_found_by_identity_or_unsupported() {
-    let _serial = serial();
-    let root = tempfile::tempdir().unwrap();
-    let folder = root.path().join("folder");
-    let (inside, elsewhere) = (folder.join("src"), root.path().join("elsewhere"));
-    std::fs::create_dir_all(&inside).unwrap();
-    std::fs::create_dir_all(&elsewhere).unwrap();
-    let start = |cwd: &std::path::Path| {
-        let mut child = role_command("sleep").current_dir(cwd).spawn().unwrap();
-        ready_number(child.stdout.take().unwrap());
-        child
-    };
-    let (mut working, mut idle) = (start(&inside), start(&elsewhere));
-    #[cfg(unix)]
-    {
-        let link = root.path().join("link");
-        std::os::unix::fs::symlink(&folder, &link).unwrap();
-        for asked in [&folder, &link] {
-            let found = working_in(asked).unwrap();
-            assert!(found.contains(&working.id()), "{asked:?}: {found:?}");
-            assert!(!found.contains(&idle.id()), "{asked:?}: {found:?}");
-        }
-    }
-    #[cfg(windows)]
-    assert_eq!(
-        working_in(&folder).unwrap_err().kind(),
-        ErrorKind::Unsupported
-    );
-    for child in [&mut working, &mut idle] {
-        child.kill().unwrap();
-        child.wait().unwrap();
-    }
 }
 
 #[test]

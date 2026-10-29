@@ -234,13 +234,7 @@ use crate::error::HostError;
 /// (`Hello::herdr_socket`), which is how the core reaches a WSL
 /// distribution's Herdr (PRD wsl-device D-07). A helper on 56 has no such
 /// flag, so it is refused at Hello and upgraded.
-/// 58: a worktree removal can ask for a folder nothing works in
-/// (`ConfirmedRemoval::unused_only`), which the host moves aside first and
-/// moves back when a process works in it or Git sees a change there, for a
-/// worktree a refused spawn made (with-hide/hide-private#56). A helper on 57
-/// would ignore the ask and remove the folder in place, so it is refused at
-/// Hello and upgraded.
-pub const PROTOCOL_VERSION: u32 = 58;
+pub const PROTOCOL_VERSION: u32 = 57;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).

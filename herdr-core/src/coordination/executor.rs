@@ -792,11 +792,7 @@ fn spawn(
             // reply was lost; only such a worktree is trusted for an agent
             // that asks (agy), as for a task's worktree. A worktree that was
             // already the operator's keeps whatever trust they gave it.
-            // `made_head`: the commit the worktree this spawn made just now
-            // starts at, which only a worktree made in this attempt knows;
-            // a refused spawn takes such a worktree away again while its
-            // HEAD is still there.
-            let (checkout, pane, seed_tab, made, made_head) = if let Some(existing) = existing {
+            let (checkout, pane, seed_tab, made) = if let Some(existing) = existing {
                 if path.as_ref().is_some_and(|path| path != &existing) {
                     return Err("checkout_path_conflict".into());
                 }
@@ -917,7 +913,7 @@ fn spawn(
                         tab.pane_id
                     }
                 };
-                (existing, pane, seed_tab, made, None)
+                (existing, pane, seed_tab, made)
             } else if beside_of.is_some() {
                 // The caller's worktree was listed a moment ago and is gone
                 // now; a spawn beside never makes one.
@@ -936,9 +932,6 @@ fn spawn(
                 )
                 .map_err(worktree_create_refusal)?;
                 let created = crate::wire::created_worktree(result)?;
-                let made_head = node
-                    .as_deref()
-                    .and_then(|node| worktree_head(node, &created.path, &reserved.id));
                 let launch = crate::agent_start::shell_launch(node.as_deref(), &reserved.id);
                 let tab = crate::live::replace_tab(
                     connector.as_ref(),
@@ -963,40 +956,14 @@ fn spawn(
                     id: tab.tab_id,
                     label,
                 });
-                (created.path, tab.pane_id, seed_tab, true, made_head)
+                (created.path, tab.pane_id, seed_tab, true)
             };
-            let placed = (|| -> Result<String, String> {
-                if made {
-                    crate::agent_start::trust_worktree(node.as_deref(), kind, &checkout)?;
-                }
-                // The terminal is recorded with the pane, so a later attempt
-                // can tell this pane from one Herdr gives the same id
-                // afterwards.
-                pane_terminal(connector.as_ref(), &pane)
-            })();
-            let terminal = match placed {
-                Ok(terminal) => terminal,
-                // Nothing ran in the worktree this spawn made, and the spawn
-                // keeps no record of it: it goes, so the same intent asked
-                // again makes it anew rather than leaving one more behind.
-                Err(reason) => {
-                    if let Some(head) = made_head.as_deref() {
-                        discard_attempt_worktree(
-                            connector.as_ref(),
-                            node.as_deref(),
-                            &reserved,
-                            &checkout,
-                            head,
-                            Some(&pane),
-                            &reason,
-                        );
-                    }
-                    return Err(reason);
-                }
-            };
-            // A save that failed may still land (a store that answered late),
-            // so its worktree stays: the same intent asked again finds it by
-            // its label and goes on in it.
+            if made {
+                crate::agent_start::trust_worktree(node.as_deref(), kind, &checkout)?;
+            }
+            // The terminal is recorded with the pane, so a later attempt can
+            // tell this pane from one Herdr gives the same id afterwards.
+            let terminal = pane_terminal(connector.as_ref(), &pane)?;
             reserved = serde_json::from_value(mutate(
                 client,
                 authority,
@@ -1009,7 +976,6 @@ fn spawn(
                     terminal: Some(terminal),
                     shell: shell.program().map(str::to_owned),
                     child: None,
-                    made_checkout: made_head,
                 },
             )?)
             .map_err(|_| "spawn_unavailable")?;
@@ -1073,13 +1039,7 @@ fn spawn(
                     "pane_id": pane,
                 }));
             }
-            close_unstarted_attempts(
-                connector.as_ref(),
-                node.as_deref(),
-                &*state(client)?,
-                &reserved,
-                &observed,
-            );
+            close_unstarted_attempts(connector.as_ref(), &*state(client)?, &reserved, &observed);
             crate::live::start_agent(
                 connector.as_ref(),
                 node.as_deref(),
@@ -1389,11 +1349,9 @@ fn pane_terminal(connector: &dyn ApiConnector, pane: &str) -> Result<String, Str
 /// id, and a record from before terminals were recorded, is logged and left
 /// open. A pane where an agent shows or the shell does not hold the terminal
 /// is left alone, and a pane that cannot be read or closed is logged and left
-/// to Herdr's own answer. A worktree the attempt made goes with its pane, as a
-/// refused spawn's does, unless this attempt works in it too.
+/// to Herdr's own answer.
 fn close_unstarted_attempts(
     connector: &dyn ApiConnector,
-    node: Option<&dyn crate::node_access::NodeLink>,
     ledger: &crate::delivery::ledger::Ledger,
     reserved: &SpawnRecord,
     observed: &[ProjectedAgent],
@@ -1417,29 +1375,10 @@ fn close_unstarted_attempts(
         {
             continue;
         }
-        let closable =
-            same_terminal(connector, record, pane).and_then(|()| shell_alone(connector, pane));
-        // The worktree the attempt made, unless this attempt works in it
-        // too, goes with the pane; a pane that is gone, replaced or busy
-        // is none of the removal's to close, and keeps the worktree while it
-        // is still in it.
-        let discarded = match (record.path.as_deref(), record.made_checkout.as_deref()) {
-            (Some(checkout), Some(head)) if reserved.path.as_deref() != Some(checkout) => {
-                discard_attempt_worktree(
-                    connector,
-                    node,
-                    record,
-                    checkout,
-                    head,
-                    (closable == Ok(true)).then_some(pane),
-                    "agent_not_started",
-                )
-            }
-            _ => false,
-        };
-        let closed = match closable {
+        let closed = match same_terminal(connector, record, pane)
+            .and_then(|()| shell_alone(connector, pane))
+        {
             Ok(false) => continue,
-            Ok(true) if discarded => Ok(()),
             Ok(true) => close_pane(connector, pane),
             Err(reason) => Err(reason),
         };
@@ -1449,79 +1388,6 @@ fn close_unstarted_attempts(
             "reason": closed.err(),
         }));
     }
-}
-
-/// Removes the folder of the worktree `attempt` made at `checkout`, whose
-/// HEAD was at `head`, and its closable `pane`, after the attempt was given
-/// up before its agent showed (`refusal`), through
-/// `live::discard_made_worktree`, which keeps everything that could be the
-/// operator's. Answers whether the pane was closed; the outcome is logged as
-/// `spawn` / `made_worktree.discard`.
-#[allow(clippy::too_many_arguments)] // the attempt, its worktree and why it ended
-fn discard_attempt_worktree(
-    connector: &dyn ApiConnector,
-    node: Option<&dyn crate::node_access::NodeLink>,
-    attempt: &SpawnRecord,
-    checkout: &str,
-    head: &str,
-    pane: Option<&str>,
-    refusal: &str,
-) -> bool {
-    let outcome = node
-        .ok_or_else(|| crate::live::WorktreeKept {
-            pane_closed: false,
-            reason: "the worktree's machine cannot be reached".to_owned(),
-        })
-        .and_then(|node| {
-            crate::live::discard_made_worktree(
-                connector,
-                node,
-                &crate::live::MadeWorktree {
-                    repository_root: &attempt.repo,
-                    checkout,
-                    branch: &attempt.branch,
-                    head,
-                    pane,
-                },
-            )
-        });
-    crate::diagnostic!(json!({
-        "component": "spawn", "kind": "made_worktree.discard", "spawn": attempt.id,
-        "pane_id": pane, "refusal": refusal.split(':').next().unwrap_or(refusal),
-        "removed": outcome.is_ok(),
-        "reason": outcome.as_ref().err().map(|kept| kept.reason.as_str()),
-    }));
-    match outcome {
-        Ok(()) => pane.is_some(),
-        Err(kept) => kept.pane_closed,
-    }
-}
-
-/// The commit the worktree at `path` has checked out, read on its machine
-/// right after it was made; none, and a diagnostic, when it cannot be read.
-fn worktree_head(
-    node: &dyn crate::node_access::NodeLink,
-    path: &str,
-    spawn: &str,
-) -> Option<String> {
-    crate::node_access::call_as::<String>(
-        node,
-        hide_node_link::protocol::Call::Git {
-            root: path.to_owned(),
-            command: hide_node_link::git::GitCommand::RefCommit {
-                name: "HEAD".to_owned(),
-            },
-        },
-        Duration::from_secs(10),
-    )
-    .map(|head| head.trim().to_owned())
-    .inspect_err(|error| {
-        crate::diagnostic!(json!({
-            "component": "spawn", "kind": "made_worktree.head_unread", "spawn": spawn,
-            "reason": error.to_string(),
-        }));
-    })
-    .ok()
 }
 
 /// Closes the pane `reserved` made, whose agent started but whose session a
@@ -2052,20 +1918,6 @@ mod tests {
             pane: &str,
             terminal: Option<&str>,
         ) -> SpawnRecord {
-            let place = ("/fixture", "/fixture.worktrees/801", None);
-            self.attempt_in(name, intent, pane, terminal, place)
-        }
-
-        /// An attempt of a repository placed in the worktree at a path,
-        /// which it made at a commit when one is named.
-        fn attempt_in(
-            &mut self,
-            name: &str,
-            intent: &str,
-            pane: &str,
-            terminal: Option<&str>,
-            (repo, path, made): (&str, &str, Option<&str>),
-        ) -> SpawnRecord {
             let reserved = super::super::apply(
                 &mut self.ledger,
                 &self.actor,
@@ -2078,7 +1930,7 @@ mod tests {
                         name: name.into(),
                         intent: intent.into(),
                         kind: "claude".into(),
-                        repo: repo.into(),
+                        repo: "/fixture".into(),
                         branch: "factory/801".into(),
                         path: None,
                         args: Vec::new(),
@@ -2098,12 +1950,11 @@ mod tests {
                     &Mutation::Advance {
                         seed_tab: None,
                         id: reserved["id"].as_str().unwrap().into(),
-                        path: Some(path.into()),
+                        path: Some("/fixture.worktrees/801".into()),
                         pane: Some(pane.into()),
                         terminal: terminal.map(Into::into),
                         shell: None,
                         child: None,
-                        made_checkout: made.map(Into::into),
                     },
                     1,
                 )
@@ -2148,106 +1999,6 @@ mod tests {
                 other => panic!("unexpected {other}"),
             }
         })
-    }
-
-    /// A Herdr running the earlier attempt's pane `w2:p1` in `checkout`,
-    /// its shell alone, until it is closed; `gone` makes it a pane Herdr no
-    /// longer has.
-    fn attempt_worktree_herdr(name: &str, checkout: String, gone: bool) -> FakeHerdr {
-        // The pane's shell is a real process working in the folder, which
-        // ends when the pane closes.
-        let shell =
-            std::sync::Mutex::new((!gone).then(|| crate::live::test_worktree::shell_in(&checkout)));
-        let pid = shell.lock().unwrap().as_ref().map_or(0, |shell| shell.id());
-        FakeHerdr::start_with_errors(name, move |method, params| {
-            let open = shell.lock().unwrap().is_some();
-            Ok(match method {
-                "session.snapshot" => json!({"type": "session_snapshot", "snapshot": {
-                    "version": "fixture", "protocol": hide_herdr_client::HERDR_PROTOCOL_REVISION,
-                    "workspaces": [], "tabs": [], "layouts": [], "agents": [],
-                    "panes": open.then(|| json!({"pane_id": "w2:p1", "workspace_id": "w2",
-                        "tab_id": "w2:t1", "terminal_id": "t1", "focused": false,
-                        "agent_status": "idle", "revision": 1, "cwd": checkout}))
-                        .into_iter().collect::<Vec<_>>()}}),
-                "pane.get" if !open => {
-                    return Err(("pane_not_found".into(), "pane w2:p1 not found".into()));
-                }
-                "pane.get" => json!({"type": "pane_info", "pane": {"pane_id": "w2:p1",
-                    "terminal_id": "t1", "workspace_id": "w2", "tab_id": "w2:t1",
-                    "focused": false, "agent_status": "idle", "revision": 1}}),
-                "pane.process_info" => json!({"type": "pane_process_info", "process_info": {
-                    "pane_id": params["pane_id"], "shell_pid": pid,
-                    "foreground_process_group_id": pid,
-                    "foreground_processes": [{"pid": pid, "name": "zsh"}]}}),
-                "pane.close" => {
-                    shell.lock().unwrap().take();
-                    json!({"type": "ok"})
-                }
-                other => panic!("unexpected {other}"),
-            })
-        })
-    }
-
-    /// A spawn whose agent never showed answers `agent_not_started` and
-    /// keeps its pane for the caller to read why. The next attempt, under a
-    /// new intent, closes that pane and takes away the worktree folder the
-    /// earlier attempt made, on the host's own unforced removal, and the
-    /// branch stays (with-hide/hide-private#56). The folder goes too when
-    /// the pane is already gone, but never one the new attempt works in, nor
-    /// one that holds a commit made after it.
-    #[test]
-    fn a_new_attempt_takes_away_the_worktree_an_earlier_unstarted_attempt_made() {
-        use crate::live::test_worktree::{MadeFixture, git};
-        let host = hide_node::Local::of_process();
-        let close = |made: &MadeFixture, same: bool, gone: bool| {
-            let mut attempts = Attempts::new();
-            let place = (
-                made.repo.as_str(),
-                made.checkout.as_str(),
-                Some(made.head.as_str()),
-            );
-            attempts.attempt_in("worker", "801", "w2:p1", Some("t1"), place);
-            let other = format!("{}-a1", made.checkout);
-            let path = if same { &made.checkout } else { &other };
-            let current = attempts.attempt_in(
-                "worker",
-                "801-a1",
-                "w3:p1",
-                Some("t3"),
-                (&made.repo, path, None),
-            );
-            let herdr =
-                attempt_worktree_herdr("earlier-attempt-worktree", made.checkout.clone(), gone);
-            close_unstarted_attempts(
-                &herdr.connector(),
-                Some(&host),
-                &attempts.ledger,
-                &current,
-                &[],
-            );
-            closed_panes(&herdr)
-        };
-        for gone in [false, true] {
-            let made = MadeFixture::new("factory/801", false);
-            let closed = close(&made, false, gone);
-            assert!(!made.present() && made.has_branch(), "pane gone: {gone}");
-            assert_eq!(closed.len(), usize::from(!gone));
-        }
-
-        // The new attempt works in the same worktree: only the pane closes.
-        let made = MadeFixture::new("factory/801", false);
-        assert_eq!(close(&made, true, false), ["w2:p1"]);
-        assert!(made.present());
-
-        // A commit after the attempt made it: the worktree stays and only
-        // the pane closes, as before.
-        let made = MadeFixture::new("factory/801", false);
-        git(
-            &made.checkout,
-            &["commit", "-q", "--allow-empty", "-m", "mine"],
-        );
-        assert_eq!(close(&made, false, false), ["w2:p1"]);
-        assert!(made.present());
     }
 
     fn closed_panes(herdr: &FakeHerdr) -> Vec<String> {
@@ -2295,13 +2046,7 @@ mod tests {
                     "agent_status": "idle", "agent": "claude"},
             ]}))
             .unwrap();
-        close_unstarted_attempts(
-            &herdr.connector(),
-            None,
-            &attempts.ledger,
-            &current,
-            &observed,
-        );
+        close_unstarted_attempts(&herdr.connector(), &attempts.ledger, &current, &observed);
         assert_eq!(closed_panes(&herdr), ["w2:p1"]);
     }
 
@@ -2324,7 +2069,7 @@ mod tests {
             &[],
         );
         let ((), records) = crate::diagnostics::capture(|| {
-            close_unstarted_attempts(&herdr.connector(), None, &attempts.ledger, &current, &[]);
+            close_unstarted_attempts(&herdr.connector(), &attempts.ledger, &current, &[]);
         });
         assert_eq!(closed_panes(&herdr), ["w2:p1"]);
         let outcome = |attempt: &SpawnRecord| {
@@ -2467,7 +2212,6 @@ mod tests {
                     terminal: None,
                     shell: None,
                     child: None,
-                    made_checkout: None,
                 },
                 now,
             )

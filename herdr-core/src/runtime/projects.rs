@@ -3156,7 +3156,6 @@ impl Runtime {
                 force_delete_branch: removal.force_delete_branch,
                 discard_changes: removal.discard_changes,
                 expected_ignored_repositories: removal.expected_ignored_repositories.clone(),
-                unused_only: false,
             }
         })
     }
