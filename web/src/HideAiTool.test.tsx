@@ -137,7 +137,7 @@ describe("the Hide AI tool", () => {
     expect([...document.querySelectorAll("[data-suggestions-status] li")].map((step) => step.textContent)).toEqual([
       "Finds where agents keep getting stuck in sessions and PR reviews",
       "Suggests how to stop the same mistakes",
-      "Pick one and it lands as a PR, so agents get smarter on their own",
+      "Pick one and the fix waits on a branch for you to merge, so agents get smarter on their own",
     ]);
     await render(suggestionsProject({ status: "investigating", rows: [suggestionRow("s1")] }));
     expect(q("[data-hide-ai-investigating]")?.textContent).toBe("Investigating");
