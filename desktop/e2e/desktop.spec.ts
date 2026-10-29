@@ -142,11 +142,15 @@ test("New tab: the native chord and menu each open one terminal directly", { tag
   };
 
   // New tab opens a shell in the keyboard's Agent area without a start form.
+  const selected = area.locator('[data-agent-tab-bar] [role=tab][aria-selected="true"]');
+  // The new tab is drawn before it is selected, so the tab selected until now
+  // is what the selection has to leave (with-hide/hide-private#141).
+  const initial = await selected.getAttribute("data-tab");
   await page.locator("[data-pane-view] .xterm-helper-textarea").first().focus();
   await page.keyboard.press(chord("new_tab", "electron"));
   await expect(tabs).toHaveCount(before + 1);
   await expect(start).toHaveCount(0);
-  const selected = area.locator('[data-agent-tab-bar] [role=tab][aria-selected="true"]');
+  await expect(selected).not.toHaveAttribute("data-tab", initial!);
   await expect(selected).not.toHaveAttribute("data-tab", /^draft:/);
   const first = await selected.getAttribute("data-tab");
   await expect(page.locator("[data-canvas]")).toHaveAttribute("data-canvas", first!);
