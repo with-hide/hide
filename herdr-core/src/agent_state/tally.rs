@@ -413,6 +413,11 @@ pub mod phone {
         /// The pane id of this agent's lineage root on the same device; itself for a root.
         pub root_pane_id: String,
         pub group: String,
+        /// In `needs_you` for an ask the operator read and has not answered:
+        /// listed there, drawn read, and never announced (needs-you-cleanup
+        /// D-10).
+        #[serde(skip_serializing_if = "std::ops::Not::not")]
+        pub read: bool,
         /// The row's mark (`RowMark`): `turn`, `going`, `waiting`, `done`, `unread`, `quiet` or `asleep`.
         pub mark: String,
         /// What an in-progress row waits on (`AgentWait`), which its line
@@ -727,6 +732,9 @@ pub mod phone {
                 .and_then(Value::as_str)
                 .filter(|title| !title.trim().is_empty())
                 .unwrap_or(str_of(agent, "agent_kind"));
+            let starred = agent.pointer("/revisit/starred").and_then(Value::as_bool) == Some(true);
+            let read_ask = !starred
+                && agent.pointer("/revisit/read_ask").and_then(Value::as_bool) == Some(true);
             out.push(PhoneAgent {
                 device_id: device_id.to_owned(),
                 pane_id: pane_id.to_owned(),
@@ -734,27 +742,24 @@ pub mod phone {
                     .get(pane_id)
                     .cloned()
                     .unwrap_or_else(|| pane_id.to_owned()),
-                // A quiet row the operator starred or read and left
-                // unanswered stands in 다시 볼 것 (PRD revisit-group D-10).
-                // A View to look at calls no notification (PRD
-                // unseen-agent-views D-13, B12): notices follow the group the
-                // row would have without it.
+                // A quiet row the operator starred stands in 다시 볼 것 (PRD
+                // revisit-group D-10); an ask read and left unanswered stays
+                // in 내 차례, read (needs-you-cleanup B11). A View to look at
+                // calls no notification (PRD unseen-agent-views D-13, B12):
+                // notices follow the group the row would have without it.
                 group: match agent
                     .pointer("/look/group")
                     .and_then(Value::as_str)
                     .unwrap_or_else(|| str_of(agent, "group"))
                 {
-                    "seen" if agent.get("revisit").is_some_and(|value| !value.is_null()) => {
-                        "revisit".to_owned()
-                    }
-                    "working"
-                        if str_of(agent, "activity") != "working"
-                            && agent.get("revisit").is_some_and(|value| !value.is_null()) =>
-                    {
+                    "seen" | "working" if read_ask => "needs_you".to_owned(),
+                    "seen" if starred => "revisit".to_owned(),
+                    "working" if str_of(agent, "activity") != "working" && starred => {
                         "revisit".to_owned()
                     }
                     group => group.to_owned(),
                 },
+                read: read_ask,
                 mark: str_of(agent, "mark").to_owned(),
                 wait: agent.get("wait").and_then(Value::as_str).map(str::to_owned),
                 descendants_working: agent

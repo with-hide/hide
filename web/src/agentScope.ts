@@ -133,6 +133,8 @@ export type TaskCardScope = {
   state: TaskState;
   /** `작업 → PR → 검토 → 머지` filled up to here; absent for a conversation with no worktree and no PR. */
   stage?: 1 | 2 | 3 | 4;
+  /** In 내 차례 for an ask the operator read and has not answered, drawn dimmed; it calls for no notification (needs-you-cleanup D-10). */
+  read?: true;
   /** Every pane of the task, the root first. */
   members: string[];
   /** This project's checkouts the task works in, the root's first. */

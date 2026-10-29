@@ -189,9 +189,9 @@ export type UserTurnFact = {
   content: { text: string; choices: string[]; truncated: boolean } | null;
 };
 
-export const ASK_SUBJECT_CAUSES = ["plan_review"] as const;
-/** A question the core asks on a row for the agent (`AskSubject`), which every surface words in the interface language. */
-export type AskSubject = { cause: typeof ASK_SUBJECT_CAUSES[number]; steps: number };
+export const ASK_SUBJECT_CAUSES = ["plan_review", "mission_decision"] as const;
+/** A question the core asks on a row for the agent (`AskSubject`), which every surface words in the interface language: a plan waiting for review, or the decision a Conductor's mission waits on. */
+export type AskSubject = { cause: "plan_review"; steps: number } | { cause: "mission_decision"; line: string };
 
 /** How the label read a turn's end (`LabelEnd`). */
 export type LabelEnd = "working" | "question" | "blocked" | "done" | "waiting" | "unfinished" | "limited";

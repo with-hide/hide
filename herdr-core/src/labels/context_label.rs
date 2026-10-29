@@ -29,7 +29,7 @@ use std::time::Duration;
 pub(crate) const FEATURE_ID: &str = "context_label";
 /// Bumped whenever a prompt or a schema changes, so a log line can be read
 /// against the pair that produced it.
-pub(crate) const SCHEMA_VERSION: &str = "context_label.v23";
+pub(crate) const SCHEMA_VERSION: &str = "context_label.v24";
 /// The effort a label asks of Codex, whether it is the first agent or the
 /// fallback (PRD label-judgment-fixes D-12): measured on gpt-5.6-luna over
 /// 104 label answers, `medium` turned no question into done, while the
@@ -170,7 +170,7 @@ fn end_prompt(limits: LabelLimits) -> String {
         LINE,
         "Decide end from the WHOLE last assistant answer, picking the FIRST matching case: ",
         "0 limited: the turn ended because the agent's own model provider refused it: a usage, rate or weekly limit, exhausted credit, or an API/server error printed in place of an answer. Not a tool, CI, network, disk or login failure the agent reports about its work: those are blocked. ",
-        "1 question: a specific answer, choice, approval or information is requested from the user, including an implicit quiz or a separate later decision. State the required action in line; if it cannot be one sentence, not question. This outranks any running work: never hide the request in missed and call it waiting. Greetings ('How can I help?'), completion reports and optional offers are not question. Asking to inspect an output still being produced is waiting if work proceeds without the answer; question if that answer is necessary to proceed. ",
+        "1 question: a specific answer, choice, approval or information is requested from the user, including an implicit quiz or a separate later decision. State the required action in line; if it cannot be one sentence, not question. This outranks any running work: never hide the request in missed and call it waiting. Greetings ('How can I help?'), completion reports and optional offers are not question. When the answer could be read either as asking the user something or as finished, it is question. Asking to inspect an output still being produced is waiting if work proceeds without the answer; question if that answer is necessary to proceed. ",
         "2 blocked: assigned work is unfinished and the answer states a cause the agent cannot resolve alone (disk, login/permission, network, tool/CI failure). State the cause in one sentence in line; unclear stuckness is not blocked. ",
         "3 waiting: it stopped awaiting a result of work still running (tests, build, CI, another agent), even if this answer only gives progress or answers something. Merely planning more edits is unfinished, not waiting. A PR alone does not qualify. ",
         "4 unfinished: work is not reported finished, nothing runs and no blocking cause is stated; includes giving up and unclear/interim stops. ",

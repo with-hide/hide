@@ -152,25 +152,56 @@ pub(crate) fn demand_verb(agent: &SidebarAgentSnapshot) -> Option<super::escalat
     }
 }
 
+/// When the row's own ask began: the core's question laid on it, else the
+/// request the label read.
+fn own_ask_since(agent: &SidebarAgentSnapshot) -> Option<u64> {
+    agent.laid_since_unix_ms.or_else(|| {
+        agent
+            .request
+            .as_ref()
+            .map(|request| request.verb_since_unix_ms)
+    })
+}
+
+/// Whether a root's lead raised descendant waited longer than the row's own
+/// ask, so the row leads with it (needs-you-cleanup D-13). Without its own
+/// ask the raise leads; an undated one never outranks a dated own ask.
+fn raised_leads(agent: &SidebarAgentSnapshot) -> bool {
+    let Some(lead) = agent.raised.first() else {
+        return false;
+    };
+    if demand_verb(agent).is_none() {
+        return true;
+    }
+    match (lead.since_unix_ms, own_ask_since(agent)) {
+        (Some(raised), Some(own)) => raised < own,
+        _ => false,
+    }
+}
+
 fn ask_of(agent: &SidebarAgentSnapshot, needs_you: bool) -> Option<Ask> {
     // A block is not asked of the operator in a verb: its row draws the
     // cause instead (agent-blocked-state B1).
     if !needs_you || (agent.demand == "error" && agent.unread) {
         return None;
     }
-    if let Some(verb) = demand_verb(agent) {
+    let own = demand_verb(agent);
+    // Everything else that waits on the operator under this root is counted
+    // behind the lead, `외 N건` (D-13).
+    let total = agent.raised.len() + usize::from(own.is_some()) + agent.laid_more;
+    if let Some(verb) = own.filter(|_| !raised_leads(agent)) {
         return Some(Ask {
             verb,
             what: agent.detail.clone(),
-            more: agent.raised.len(),
-            subject: agent.ask_subject,
+            more: total - 1,
+            subject: agent.ask_subject.clone(),
         });
     }
     agent.raised.first().map(|lead| Ask {
         verb: lead.verb,
         what: lead.what.clone(),
-        more: agent.raised.len() - 1,
-        subject: lead.subject,
+        more: total - 1,
+        subject: lead.subject.clone(),
     })
 }
 
@@ -240,7 +271,7 @@ pub(crate) fn row_state(agent: &SidebarAgentSnapshot) -> RowState {
                 RowLine::new(text, "quiet", subtle)
             }
         });
-    if let Some(subject) = agent.ask_subject.filter(|_| asking) {
+    if let Some(subject) = agent.ask_subject.clone().filter(|_| asking) {
         // The core's own question: the shell words it (hide-plan B14).
         line = Some(RowLine {
             subject: Some(subject),
@@ -376,10 +407,12 @@ pub(crate) fn row_state(agent: &SidebarAgentSnapshot) -> RowState {
         request_todo,
         descendant_asking: agent.descendant_counts.question + agent.descendant_counts.approval,
         request_since: if needs_you
-            && demand_verb(agent).is_none()
+            && raised_leads(agent)
             && let Some(lead) = agent.raised.first()
         {
             lead.since_unix_ms
+        } else if needs_you && agent.laid_since_unix_ms.is_some() {
+            agent.laid_since_unix_ms
         } else if request_todo {
             agent
                 .request
@@ -692,12 +725,15 @@ pub(crate) fn agent_second_line(
 pub(crate) fn native_question_line(
     turn: Option<&hide_session::turns::UserTurnFact>,
 ) -> Option<String> {
-    use crate::sidebar::MAX_EXPECTED_REPLY_CHARS;
     let turn = turn.filter(|turn| turn.kind == hide_session::turns::UserTurnKind::Question)?;
-    let line = turn
-        .content
-        .as_ref()?
-        .text()
+    first_line_cut(turn.content.as_ref()?.text())
+}
+
+/// The first line of `text`, one line and cut on a character boundary to
+/// the width of an `expected_reply`, ending in `…` when cut.
+fn first_line_cut(text: &str) -> Option<String> {
+    use crate::sidebar::MAX_EXPECTED_REPLY_CHARS;
+    let line = text
         .lines()
         .find_map(|line| crate::display_text::one_line(line, MAX_EXPECTED_REPLY_CHARS + 1))?;
     if line.chars().count() <= MAX_EXPECTED_REPLY_CHARS {
@@ -812,8 +848,14 @@ pub(crate) fn derive_from_axes(agent: &mut SidebarAgentSnapshot) {
     let question = native_question_line(agent.user_turn.as_ref());
     // A question the core asks for the agent is said by its subject, never
     // by the label's sentence about the work around it.
-    let (status_word_visible, detail) = if agent.ask_subject.is_some() {
-        (true, None)
+    let (status_word_visible, detail) = if let Some(subject) = &agent.ask_subject {
+        // A mission decision's line is also its sentence, which a surface
+        // that does not know the subject draws instead (D-12).
+        let line = match subject {
+            crate::model::AskSubject::MissionDecision { line } => first_line_cut(line),
+            crate::model::AskSubject::PlanReview { .. } => None,
+        };
+        (true, line)
     } else {
         agent_second_line(
             group,
@@ -1052,6 +1094,10 @@ pub mod push {
                 Effective::Seen
             } else if agent.human_notice {
                 Effective::Other
+            } else if agent.read {
+                // A read ask listed in Needs You is read: it clears a notice
+                // and never announces again (needs-you-cleanup D-10, B12).
+                Effective::Seen
             } else {
                 Effective::from_group(&agent.group)
             };
@@ -1121,7 +1167,7 @@ pub mod push {
                         state: announced,
                         status_code: Some(agent.status_code.clone()),
                         detail: agent.detail.clone(),
-                        subject: agent.subject,
+                        subject: agent.subject.clone(),
                         place: agent
                             .place
                             .as_deref()
@@ -1182,6 +1228,78 @@ mod row_tests {
             content: None,
         });
         assert_eq!(demand_verb(&agent), Some(Verb::Answer));
+    }
+
+    fn raised(pane: &str, since: Option<u64>) -> super::super::escalation::RaisedAsk {
+        super::super::escalation::RaisedAsk {
+            verb: super::super::escalation::Verb::Approval,
+            what: Some(format!("{pane} asks")),
+            subject: None,
+            raised_pane_id: pane.into(),
+            origin_title: pane.into(),
+            pane_id: pane.into(),
+            title: pane.into(),
+            agent_kind: "codex".into(),
+            open_pane_id: pane.into(),
+            since_unix_ms: since,
+            unreceived_by: None,
+            path: Vec::new(),
+            checkout: None,
+            human_notice: false,
+        }
+    }
+
+    // needs-you-cleanup D-13, B9: of everything waiting on the operator under
+    // one root, the one asked first leads the row and the rest are `외 N건`:
+    // raised descendants, the row's own ask, and the core's questions laid
+    // behind it.
+    #[test]
+    fn the_oldest_ask_under_a_root_leads_and_the_rest_are_counted_behind_it() {
+        use super::super::escalation::Verb;
+        let decision = crate::model::AskSubject::MissionDecision {
+            line: "Skip the check line?".into(),
+        };
+        let mut agent = row();
+        agent.group = "needs_you".into();
+        agent.demand = "question".into();
+        agent.unread = true;
+        agent.user_turn = Some(hide_session::turns::UserTurnFact {
+            kind: hide_session::turns::UserTurnKind::Question,
+            content: None,
+        });
+        // A mission decision laid at 200, a plan review behind it.
+        agent.ask_subject = Some(decision.clone());
+        agent.laid_since_unix_ms = Some(200);
+        agent.laid_more = 1;
+        agent.raised = vec![raised("child", Some(300)), raised("grandchild", Some(400))];
+        let lead = |agent: &SidebarAgentSnapshot| {
+            let state = row_state(agent);
+            let ask = state.ask.unwrap();
+            (ask.verb, ask.subject, ask.more, state.request_since)
+        };
+        // Own decision asked first: it leads, the two raises and the plan
+        // review behind it.
+        assert_eq!(
+            lead(&agent),
+            (Verb::Answer, Some(decision.clone()), 3, Some(200))
+        );
+        // A child that asked earlier leads instead, the count unchanged.
+        agent.raised[0].since_unix_ms = Some(100);
+        assert_eq!(lead(&agent), (Verb::Approval, None, 3, Some(100)));
+        // An undated raise never outranks a dated own ask.
+        agent.raised[0].since_unix_ms = None;
+        assert_eq!(lead(&agent), (Verb::Answer, Some(decision), 3, Some(200)));
+        // With no ask of its own the first raise leads, the other counted.
+        agent.user_turn = None;
+        agent.ask_subject = None;
+        agent.laid_since_unix_ms = None;
+        agent.laid_more = 0;
+        agent.demand = "none".into();
+        let state = row_state(&agent);
+        assert_eq!(
+            state.ask.map(|ask| (ask.what, ask.more)),
+            Some((Some("child asks".to_owned()), 1))
+        );
     }
 
     // agent-blocked-state B1 with agent-hierarchy-screens B14: a block in

@@ -137,9 +137,10 @@ pub(super) fn record_asks(
 ///
 /// 할 일's asks are the 태스크 cards standing in Needs You and 다시 볼 것, then
 /// the live sessions whose record still holds an open ask the cards do not
-/// already show (B34): one line per pane, the card's line winning, new while
-/// the row is unread and 다시 볼 것 once it is read, gone when an answer
-/// resolves the ask in the record or the agent works again. A closed
+/// already show (B34): one line per pane, the card's line winning, an ask
+/// read or not (needs-you-cleanup B11), gone when an answer
+/// resolves the ask in the record, 치우기 puts it away (B15) or the agent
+/// works again. A closed
 /// session's ask stays in its record and blocks nothing, so it is no line.
 pub(super) fn project(
     project: &WorkspaceSnapshot,
@@ -178,11 +179,14 @@ pub(super) fn project(
         if asking.contains(row.pane_id.as_str())
             || row.activity == "working"
             || row.resolved.is_some()
+            || crate::agent_state::sessions::ask_put_away(row)
         {
             continue;
         }
+        // Read or not, an unanswered ask is the operator's to answer
+        // (needs-you-cleanup B11); only ☆ puts it off, and 치우기 away (B15).
         asking.insert(row.pane_id.as_str());
-        (if row.unread { &mut asks } else { &mut revisits }).push((row.pane_id.clone(), true));
+        asks.push((row.pane_id.clone(), true));
     }
     let mut todo: Vec<_> = asks
         .into_iter()

@@ -6,15 +6,15 @@ import { TaskLens } from "../TaskLens";
 import { TooltipProvider } from "../components/ui/tooltip";
 import type { TaskState } from "../agentScope";
 import { PaneView } from "../PaneView";
-import type { AgentRow, AgentState, PaneConnection, PaneHeader, PrState, RaisedAsk, SessionGroup } from "../snapshot";
+import type { AgentRow, AgentState, AgentWait, Mission, PaneConnection, PaneHeader, PrState, RaisedAsk, SessionGroup } from "../snapshot";
 import type { RowMark, StatusTone, RequestVerb } from "../snapshot";
 import { useShellStore } from "../store";
 import { REFERENCE_FOLDS, sidebarScene } from "./sceneData";
 import type { SceneParams } from "./SidebarScene";
 
-type Example = { title: string; group: SessionGroup; line: string | null; ask?: NonNullable<AgentState["ask"]>; pr?: PrState; unfinished?: boolean; mark?: AgentRow["descendant_mark"] };
+type Example = { title: string; group: SessionGroup; line: string | null; ask?: NonNullable<AgentState["ask"]>; pr?: PrState; unfinished?: boolean; mark?: AgentRow["descendant_mark"]; read?: boolean; wait?: AgentWait; pull?: number };
 /** Each example's task: its row's index and the state the core gave it. */
-const TASKS: [number, TaskState][] = [[0, "needs_you"], [1, "needs_you"], [2, "needs_you"], [4, "working"], [5, "waiting"], [3, "done"], [6, "revisit"], [7, "resting"], [8, "resting"]];
+const TASKS: [number, TaskState][] = [[0, "needs_you"], [1, "needs_you"], [2, "needs_you"], [4, "working"], [5, "waiting"], [3, "done"], [6, "revisit"], [7, "resting"], [8, "resting"], [9, "needs_you"], [10, "needs_you"], [11, "waiting"], [12, "waiting"]];
 const EXAMPLES: Example[] = [
   { title: "입력과 세션 복귀 흐름 검토", group: "needs_you", line: null, ask: { verb: "approval", what: "검증 명령 실행 권한이 필요합니다", more: 0 } },
   { title: "한국어 입력 경계 검토", group: "needs_you", line: null, ask: { verb: "answer", what: "기존 stdin 종료 경로도 남길까요?", more: 0 } },
@@ -25,6 +25,11 @@ const EXAMPLES: Example[] = [
   { title: "회귀 테스트", group: "idle", line: "남은 경계 테스트 2개", unfinished: true, pr: "pending" },
   { title: "쉬는 세션", group: "idle", line: null },
   { title: "완료한 검토", group: "resolved", line: null, pr: "merged" },
+  // needs-you-cleanup: a Conductor resting on its mission's decision, a question the operator read, and two waits that name their cause.
+  { title: "사이드바 정리 미션", group: "needs_you", line: null, ask: { verb: "answer", what: null, more: 0, subject: { cause: "mission_decision", line: "뼈대의 check 줄을 건너뛸까요?" } } },
+  { title: "배포 환경 선택", group: "needs_you", line: null, ask: { verb: "answer", what: "staging부터 올릴까요?", more: 0 }, read: true },
+  { title: "검토 나눠 맡기기", group: "working", line: null, wait: "children" },
+  { title: "PR 체크 기다리기", group: "working", line: null, wait: "checks", pull: 1846 },
 ];
 const RAISED: RaisedAsk = { verb: "approval", what: "검증 명령 실행 권한이 필요합니다", raised_pane_id: "a1c1", origin_title: "한국어 입력 경계 검토", pane_id: "a1c1", title: "한국어 입력 경계 검토", agent_kind: "codex", open_pane_id: "a1c1", since_unix_ms: null, path: ["입력과 세션 복귀 흐름 검토", "한국어 입력 경계 검토"], checkout: "prd/session-ui", human_notice: true };
 const PANE_RAISED: RaisedAsk = { ...RAISED, raised_pane_id: "pane-raised-child", origin_title: "UI 검증", pane_id: "pane-raised-child", open_pane_id: "pane-raised-child", title: "UI 검증", what: "권한 승인을 기다리고 있어요", path: ["Group tab 기능 설계", "UI 검증"] };
@@ -88,6 +93,7 @@ const MARKS: [RowMark, StatusTone["kind"], RequestVerb][] = [
   ["turn", "warning", "answer"], ["turn", "warning", "answer"], ["turn", "warning", "answer"],
   ["done", "success", "review"], ["done", "success", "review"], ["going", "working", "working"],
   ["going", "working", "waiting"], ["quiet", "subtle", "idle"], ["quiet", "subtle", "result"],
+  ["turn", "warning", "answer"], ["turn", "warning", "answer"], ["waiting", "working", "waiting"], ["waiting", "working", "waiting"],
 ];
 
 export function SessionWorkflowScene({ scene: kind, theme, content, scale, width, state }: SceneParams & { scene: "session-panel" | "pane-header" }) {
@@ -107,17 +113,18 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
         // One Working root is a fork of the row beside it (PRD fork-operator-root B8).
         forked_from: index === 4 ? { pane_id: "s5", label: EXAMPLES[5]!.title } : null,
         descendant_mark: example.mark ?? null,
-        state: { ...seed.state, verb, mark_tone: { kind: tone, read: false }, chip_tone: { kind: tone, read: false }, session: { group: example.group, line: example.line, unfinished: example.unfinished ?? false }, ask: example.ask ?? null, tree_rank: 1,
+        wait: example.wait, descendant_counts: example.wait === "children" ? { error: 0, approval: 0, question: 0, working: 2, done: 0 } : undefined,
+        state: { ...seed.state, verb, mark_tone: { kind: tone, read: example.read ?? false }, chip_tone: { kind: tone, read: example.read ?? false }, session: { group: example.group, line: example.line, unfinished: example.unfinished ?? false }, ask: example.ask ?? null, tree_rank: 1,
           pr: example.pr ? { count: 1, worst: example.pr, pulls: [{ index: 0, state: example.pr }] } : null,
-          request_since: Date.now() - 180_000, line: example.line ? { text: example.line, mode: "request", tone: { kind: "subtle", read: false } } : null },
+          request_since: Date.now() - 180_000, line: example.wait ? { text: "", mode: "waiting", tone: { kind: "working", read: false }, pull_request: example.pull } : example.line ? { text: example.line, mode: "request", tone: { kind: "subtle", read: false } } : null },
         request: { verb, verb_since_unix_ms: Date.now(), line: example.line ?? undefined, request: null, later_by: null, pull_requests: example.pr ? [{ number: 220 + index, title: example.title, url: `https://example.invalid/pull/${220 + index}`, badge: example.pr === "merged" ? "merged" : "open", checks: example.pr === "failed" ? "failed" : example.pr === "pending" ? "pending" : "passing", review: example.pr === "mergeable" ? "approved" : "review_required", head_branch: "prd/session-ui", closing_issues: [], live: true, duty: true, created: true, settled_at_unix_ms: null }] : [] },
         resolved: example.group === "resolved" ? { at_unix_ms: Date.now(), source: "operator" } : null,
         // A quiet task starred to revisit, and a working one that keeps its group with a ★ (PRD revisit-group B6, B7).
-        revisit: index === 6 || index === 4 ? { starred: true, read_ask: false, since_unix_ms: Date.now() - 600_000 } : null,
+        revisit: index === 6 || index === 4 ? { starred: true, read_ask: false, since_unix_ms: Date.now() - 600_000 } : example.read ? { starred: false, read_ask: true, since_unix_ms: Date.now() - 900_000 } : null,
       };
     });
     const feature = { ...checkout, id: "session-ui", label: "prd/session-ui", branch: "prd/session-ui" };
-    const scope = { ...project.agent_scope, members: agents.map((agent, index) => ({ pane_id: agent.pane_id, project_id: project.id, checkout_id: index === 5 ? checkout.id : feature.id })), work: { s3: { pull: 0, more: 0, issues: [], issue_chips: [] }, s4: { pull: 0, more: 0, issues: [], issue_chips: [] }, s5: { pull: null, more: 0, issues: ["issue-219"], issue_chips: ["issue-219"] }, s6: { pull: 0, more: 0, issues: [], issue_chips: [] } }, tasks: { cards: TASKS.map(([member, state]) => ({ root: agents[member]!.pane_id, state, members: [agents[member]!.pane_id], checkouts: [member === 5 ? checkout.id : feature.id], recency: "" })), needs_you: 3, recency: "" } };
+    const scope = { ...project.agent_scope, members: agents.map((agent, index) => ({ pane_id: agent.pane_id, project_id: project.id, checkout_id: index === 5 ? checkout.id : feature.id })), work: { s3: { pull: 0, more: 0, issues: [], issue_chips: [] }, s4: { pull: 0, more: 0, issues: [], issue_chips: [] }, s5: { pull: null, more: 0, issues: ["issue-219"], issue_chips: ["issue-219"] }, s6: { pull: 0, more: 0, issues: [], issue_chips: [] } }, tasks: { cards: TASKS.map(([member, state]) => ({ root: agents[member]!.pane_id, state, members: [agents[member]!.pane_id], checkouts: [member === 5 ? checkout.id : feature.id], recency: "", ...(EXAMPLES[member]!.read ? { read: true as const } : {}) })), needs_you: 5, recency: "" } };
     project.agent_scope = scope;
     project.tasks = { source: null, overflow: false, tasks: [{ key: "issue-219", source: "github", id: `#${219}`, url: "https://example.invalid/issue/219", title: "세션 패널 구현", open: true }] };
     checkout.agent_scope = { ...scope, members: [scope.members[5]!] };
@@ -182,6 +189,9 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
       ...(id === "fix" || id === "merge" ? ownPr(id) : {}),
       ...(TURN_CASES.includes(id) ? { session_id: `turn-${id}`, state: { ...seed.state, pr: null }, request: { verb: "answer" as const, verb_since_unix_ms: Date.now(), line: "1~3번을 한 PR로 묶어 진행할지 답해 주세요.", end: "question" as const, pull_requests: [], ...TURN_VIEW } } : {}) }));
     base.rest.terminal = { headers };
+    // The Conductor row's mission, its open decision the row asks (needs-you-cleanup B1, B5).
+    const conductor = agents[9]!;
+    base.rest.missions = { items: [{ id: "m-gallery", title: "사이드바 정리", workspace_id: project.id, project: "/repo", checkout_path: "/repo", device_id: conductor.device_id, status: "running", scope: "pr", cap: 4, exempt: false, strength: null, other_vendor: null, conductor: { pane_id: conductor.pane_id, name: conductor.identity_label, agent_kind: "claude", session: null, present: true, takes_answers: true }, nodes: Array.from({ length: 8 }, (_, index) => ({ key: `n${index}`, title: `n${index}`, kind: "change", depends_on: [], status: "planned" })), merge_order: [], check: null, github: null, decision: "뼈대의 check 줄을 건너뛸까요?", question: null, answer: null, answer_failed: null, delay: null, report: null, created_at_unix_ms: 1, started_at_unix_ms: 1, closed_at_unix_ms: null, running: 0, stale: false, github_stale: false, github_read_at_unix_ms: null } as unknown as Mission] } as typeof base.rest.missions;
     base.rest.status = { ...base.rest.status, remote: [{ target_id: "mini", state: "not_connected", message: "Mac mini 연결되지 않음", herdr_version: null, session: null }] };
     return { ...base, agents: [...agents, ...children, ...childExamples, raisedChild, ...popoverChildren, ...narrowChildren, ...headerAgents], pane };
   }, [content]);

@@ -35,9 +35,9 @@ test("roots stay in one sidebar, open their children in place, and the header's 
     // Folded, a root whose descendants only work wears no mark: its waiting ring says it (B10, B17).
     await expect(childRow).toHaveCount(0);
     await expect(parentRow.locator('[data-descendant-mark]')).toHaveCount(0);
-    // A waiting ring's tree line leads with Waiting (대기), and at the narrowest sidebar only its sentence is cut (status-marks B29).
+    // A waiting ring's tree line leads with what it waits for, and at the narrowest sidebar only its sentence is cut (status-marks B29, needs-you-cleanup B17).
     const waitLine = parentRow.locator('[data-agent-line="waiting"]');
-    await expect(waitLine).toHaveText(`Waiting · ${WAIT_SENTENCE}`, { timeout: 20_000 });
+    await expect(waitLine).toHaveText(`Waiting on children · ${WAIT_SENTENCE}`, { timeout: 20_000 });
     expect(await sidebarOverflow(page, "calc(var(--size-sidebar-min) + var(--size-rail))")).toEqual([]);
     expect(await waitLine.locator('[data-line-part="text"]').evaluate((node) => node.scrollWidth > node.clientWidth)).toBe(true);
     await sidebarOverflow(page, "");

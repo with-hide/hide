@@ -15,6 +15,8 @@ export type PhoneAgent = {
   pane_id: string;
   root_pane_id: string;
   group: GroupId;
+  /** In 내 차례 for an ask the operator read and has not answered: drawn with a hollow `!`, never announced (needs-you-cleanup B11). */
+  read?: true;
   /** The desktop row's mark (`RowMark`). */
   mark: RowMark;
   /** What an in-progress row waits on, which its line words when it has no sentence. */

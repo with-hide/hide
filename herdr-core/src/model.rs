@@ -1368,12 +1368,15 @@ fn is_zero_u32(value: &u32) -> bool {
 /// A question the core asks on an agent's row for it, sent as what it is
 /// rather than as words, so each shell, the bell and the phone say it in
 /// their own language (hide-plan B14).
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "cause", rename_all = "snake_case")]
 pub enum AskSubject {
     /// The agent's proposed plan of `steps` steps waits for the operator's
     /// review.
     PlanReview { steps: u32 },
+    /// The mission this Conductor conducts waits on the operator's decision,
+    /// whose one line it carries (needs-you-cleanup D-12).
+    MissionDecision { line: String },
 }
 
 /// An agent's state on four independent lifecycle axes, plus the values the shell draws
@@ -1519,6 +1522,14 @@ pub struct SidebarAgentSnapshot {
     /// of its own and every surface words the subject.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ask_subject: Option<AskSubject>,
+    /// When the core's question on this row was asked, and how many more
+    /// of its questions wait behind it (a plan review and a mission decision
+    /// at once), so the row's ask leads with what waited longest and counts
+    /// the rest (needs-you-cleanup D-13).
+    #[serde(skip)]
+    pub(crate) laid_since_unix_ms: Option<u64>,
+    #[serde(skip)]
+    pub(crate) laid_more: usize,
     /// Derived: whether the row draws its status word. It leaves working and
     /// read rows, where the mark already says it, and stays on rows that
     /// still concern the operator.
@@ -7875,10 +7886,15 @@ mod wire_enum_tests {
         assert_wire(&contract, "user_turn_kind", &user_turns);
         checked.insert("user_turn_kind");
 
-        let subjects = [AskSubject::PlanReview { steps: 1 }];
-        for variant in subjects {
+        let subjects = [
+            AskSubject::PlanReview { steps: 1 },
+            AskSubject::MissionDecision {
+                line: "line".into(),
+            },
+        ];
+        for variant in &subjects {
             match variant {
-                AskSubject::PlanReview { .. } => {}
+                AskSubject::PlanReview { .. } | AskSubject::MissionDecision { .. } => {}
             }
         }
         let causes = subjects

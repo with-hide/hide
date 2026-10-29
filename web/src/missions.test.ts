@@ -114,12 +114,12 @@ describe("a takeover", () => {
 
 describe("the Conductor pane's chip (PRD mission-pane-chip B2, B10)", () => {
   const planned = [node("a", { status: "done" }), node("b", { status: "working" }), node("c", { status: "dropped" })];
-  it("reads 계획 중 before the first plan, 미션 n/m once planned or running, the decision over any open state, and each end in its word", () => {
+  it("reads 계획 중 before the first plan, 미션 n/m once planned or running, keeps its progress while a decision waits, and each end in its word", () => {
     const words = (extra: Partial<Mission>) => { const w = paneChipWords(mission("m", extra)); return [w.state, t(w.key), w.counts]; };
     expect(words({ status: "planning" })).toEqual(["planning", "Planning", null]);
     expect(words({ status: "planning", nodes: planned })).toEqual(["running", "Mission", "1/2"]);
     expect(words({ status: "running", nodes: planned })).toEqual(["running", "Mission", "1/2"]);
-    expect(words({ status: "running", nodes: planned, decision: "Which base?" })).toEqual(["decision", "1 to decide", null]);
+    expect(words({ status: "running", nodes: planned, decision: "Which base?" })).toEqual(["decision", "Mission", "1/2"]);
     expect(words({ status: "merge_wait", nodes: planned })).toEqual(["merge_wait", "Waiting to merge", null]);
     expect(words({ status: "done", nodes: planned, decision: "stale ask" })).toEqual(["done", "Mission", "1/2"]);
     expect(words({ status: "cancelled", nodes: planned })).toEqual(["cancelled", "Cancelled", null]);

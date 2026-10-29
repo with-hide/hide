@@ -36,9 +36,9 @@ pub const MAX_STARRED_SESSIONS: usize = 256;
 pub struct RevisitMark {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub starred_at_unix_ms: Option<u64>,
-    /// The state stamp (`changed_at_unix_ms`) of the read ask 다 봤음
-    /// dismissed: reading leaves it alone and a later ask has another, which
-    /// stands again.
+    /// The stamp (`ask_stamp`) of the read ask 치우기 or 다 봤음 put away:
+    /// reading leaves it alone and a later ask has another, which stands
+    /// again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dismissed_ask_since: Option<u64>,
     pub session: Option<String>,
@@ -63,33 +63,49 @@ pub struct Revisit {
 /// An ask the operator read and has not answered: a question or an approval
 /// that no longer holds the row in Needs You (a block holds it there, D-12),
 /// on a root that is not working or resolved (해결 puts it away, D-14), and
-/// not the one 다 봤음 put away. The ask is known by the stamp of the state it
-/// stands in, which the operator reading it does not move.
+/// not the one 다 봤음 put away. The ask is known by its `ask_stamp`.
 pub(crate) fn revisit_of(
     agent: &SidebarAgentSnapshot,
     mark: Option<&RevisitMark>,
 ) -> Option<Revisit> {
-    let read_ask = agent.lineage_parent_pane_id.is_none()
-        && matches!(agent.demand.as_str(), "question" | "approval")
-        && !agent.blocked
-        && !agent.unread
-        && agent.activity != "working"
-        && agent.resolved.is_none()
-        && agent.changed_at_unix_ms.is_some()
-        && mark.and_then(|m| m.dismissed_ask_since) != agent.changed_at_unix_ms;
+    let read_ask =
+        read_open_ask(agent) && mark.and_then(|m| m.dismissed_ask_since) != ask_stamp(agent);
     let starred_at = mark.and_then(|m| m.starred_at_unix_ms);
-    let since = [
-        read_ask.then_some(agent.changed_at_unix_ms).flatten(),
-        starred_at,
-    ]
-    .into_iter()
-    .flatten()
-    .min()?;
+    let since = [read_ask.then(|| ask_stamp(agent)).flatten(), starred_at]
+        .into_iter()
+        .flatten()
+        .min()?;
     Some(Revisit {
         starred: starred_at.is_some(),
         read_ask,
         since_unix_ms: since,
     })
+}
+
+/// A read, unanswered question or approval at rest on a root, whether or not
+/// 치우기 put it away.
+fn read_open_ask(agent: &SidebarAgentSnapshot) -> bool {
+    agent.lineage_parent_pane_id.is_none()
+        && matches!(agent.demand.as_str(), "question" | "approval")
+        && !agent.blocked
+        && !agent.unread
+        && agent.activity != "working"
+        && agent.resolved.is_none()
+        && ask_stamp(agent).is_some()
+}
+
+/// The stamp an ask is known by: when the core laid it (a plan review or a
+/// mission decision, which leave the agent's state alone), else the stamp of
+/// the state it stands in, which the operator reading it does not move.
+pub(crate) fn ask_stamp(agent: &SidebarAgentSnapshot) -> Option<u64> {
+    agent.laid_since_unix_ms.or(agent.changed_at_unix_ms)
+}
+
+/// Whether 치우기 put the row's read ask away (needs-you-cleanup B15): the ask
+/// stands but the row carries no read ask, so nothing lists it until the agent
+/// asks again.
+pub(crate) fn ask_put_away(agent: &SidebarAgentSnapshot) -> bool {
+    read_open_ask(agent) && !agent.revisit.is_some_and(|revisit| revisit.read_ask)
 }
 
 /// Why the operator cannot resolve the row now: work that still runs or

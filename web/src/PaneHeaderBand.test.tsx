@@ -184,7 +184,7 @@ it("says the parent waits on its working children after the request, in the side
     const row = container.querySelector('[data-pane-header-band="waiting"]')!;
     expect(row.firstElementChild?.firstElementChild?.getAttribute("data-pane-tree")).toBe("parent");
     expect(row.querySelector("[data-pane-turn-request-text]")?.textContent).toBe("Find the missing requests");
-    expect(row.querySelector("[data-pane-children-wait]")?.textContent).toBe("Waiting · 2 children working");
+    expect(row.querySelector("[data-pane-children-wait]")?.textContent).toBe("Waiting on children · 2 working");
     expect(row.querySelector("[data-pane-own-progress]")).toBeNull();
   } finally { await unmount(); }
 });
@@ -303,9 +303,9 @@ it("draws a waiting child's line in the child tree and its name, and dims an unk
     await act(async () => container.querySelector<HTMLButtonElement>("[data-pane-tree]")!.click());
     const popup = document.querySelector('[data-agent-tree="parent"]')!;
     const waiting = popup.querySelector('[data-agent-child="working"]')!;
-    expect(waiting.querySelector('[data-tree-line="waiting"]')?.textContent).toBe("Waiting · CI · PR #58");
+    expect(waiting.querySelector('[data-tree-line="waiting"]')?.textContent).toBe("Waiting on CI · PR #58");
     // The line stands in for the status word, so the name says it once.
-    expect(waiting.getAttribute("aria-label")).toBe("Child working, Claude Code, Waiting · CI · PR #58");
+    expect(waiting.getAttribute("aria-label")).toBe("Child working, Claude Code, Waiting on CI · PR #58");
     const unknown = popup.querySelector('[data-agent-child="unknown"]')!;
     expect(unknown.querySelector('[data-tree-line="kept"]')?.textContent).toBe("Status unknown");
     expect(unknown.className).toContain("opacity-(--opacity-dimmed)");
@@ -546,7 +546,7 @@ it("says a waiting pane's mark words on its record button, the words its tab and
   const root = createRoot(container);
   await act(async () => root.render(<TooltipProvider><PaneRecordButton paneId="pane-1" title="PR 올리고 CI 확인" product="Claude Code" actions={createActions(() => true)} plain={<span />}>PR 올리고 CI 확인</PaneRecordButton></TooltipProvider>));
   try {
-    expect(container.querySelector("[data-pane-record]")?.getAttribute("aria-label")).toBe("PR 올리고 CI 확인, Claude Code, In progress · Waiting, View session record");
+    expect(container.querySelector("[data-pane-record]")?.getAttribute("aria-label")).toBe("PR 올리고 CI 확인, Claude Code, In progress · Waiting on CI, View session record");
   } finally { await act(async () => root.unmount()); }
 });
 

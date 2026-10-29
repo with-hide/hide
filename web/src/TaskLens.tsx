@@ -10,7 +10,7 @@ import { agentProductName } from "./agentAdapters";
 import { backgroundTail, recordWords, forkLabel, leadWord, lineParts, markTone, markWords, rowDimmed, rowLine, rowSentence, stateLine, type LineParts } from "./agentRow";
 import { AgentForkMark } from "./components/fork-mark";
 import { RevisitStar, starred } from "./components/revisit-mark";
-import { askParts, DescendantMark, TreeChevron, TreeRails, type TreePlace } from "./components/agent-tree";
+import { askParts, TreeChevron, TreeRails, type TreePlace } from "./components/agent-tree";
 import { childrenOf } from "./components/agent-tree-popover";
 import { Elapsed } from "./components/elapsed";
 import { AgentPrMark, useAgentStaleness } from "./components/pr-mark";
@@ -370,18 +370,20 @@ function TaskRow({ entry, family, open, selected, number, showProject, disabled,
   const resolvable = !agent.resolved && agent.activity !== "working" && agent.group !== "working" && agent.demand !== "approval";
   const menu = useTaskMenu(agent, record, go, resolvable, disabled, actions, true);
   // The row's own mark words, as the sidebar row says them (status-marks B3, B33); a fold's rows say the fold.
-  // A starred task waiting in 다시 볼 것 wears the ★ in its mark's slot; a read ask keeps its own mark (PRD revisit-group B2, B6).
+  // A task waiting in 다시 볼 것 wears the ★ in its mark's slot (PRD revisit-group B6). A read ask in 내 차례
+  // wears a hollow `!`, is dimmed and says 읽음 (needs-you-cleanup B10).
   // The small ★ after the title steps aside where the time's slot shows the ☆/★ button, so the row never draws two.
-  const starMark = card.state === "revisit" && starred(agent) && !agent.revisit?.read_ask;
-  const revisitWords = card.state === "revisit" ? t(starMark ? "taskLens.revisit.starred" : "taskLens.revisit.readAsk") : starred(agent) ? t("taskLens.revisit.starred") : null;
-  const words = [card.state === "resting" || card.state === "cleanup" ? t(`taskLens.state.${card.state}`) : markWords(t, agent), revisitWords].filter(Boolean).join(" · ");
+  const starMark = card.state === "revisit";
+  const read = card.state === "needs_you" && card.read === true;
+  const revisitWords = starMark || starred(agent) ? t("taskLens.revisit.starred") : read ? t("taskLens.revisit.readAsk") : null;
+  const words = [card.state === "resting" || card.state === "cleanup" ? t(`taskLens.state.${card.state}`) : read ? t("agents.mark.turn") : markWords(t, agent), revisitWords].filter(Boolean).join(" · ");
   const sentence = rowSentence(t, agent);
   // The visible second line follows the button and is read after it, so the name leaves the sentence to it.
   const name = [agent.identity_label, forkLabel(t, agent), agentProductName(agent.agent_kind), recordWords(t, agent), agent.record_summary, words, hideAiWords(t, agent.hide_ai)].filter(Boolean).join(", ");
   return (
     <EntryContextMenu asChild label={t("taskLens.more", { name: agent.identity_label })} title={agent.identity_label} items={menu.items} onSelect={menu.select} disabled={disabled} data-task-context={agent.pane_id}>
     <li className={cn("group/task relative flex min-w-0 items-stretch rounded-xs pr-xs", selected ? "bg-selected" : "hover:bg-accent focus-within:bg-accent", rowDimmed(agent) && "opacity-(--opacity-dimmed)")}
-      data-task-row={agent.pane_id} data-task-state={card.state} data-selected={selected ? "true" : undefined} onClick={go}>
+      data-task-row={agent.pane_id} data-task-state={card.state} data-task-read={read ? "true" : undefined} data-selected={selected ? "true" : undefined} onClick={go}>
       <TreeChevron name={agent.identity_label} open={open} onToggle={toggle} hangs={false} disabled={disabled} data-task-chevron={agent.pane_id} />
       <div className="flex min-w-0 flex-1 flex-col gap-xxs py-xs pl-xs">
         <div className="flex min-h-(--size-sidebar-line) min-w-0 items-center gap-xs">
@@ -390,18 +392,18 @@ function TaskRow({ entry, family, open, selected, number, showProject, disabled,
             onClick={(event) => { event.stopPropagation(); go(); }}
             onKeyDown={(event) => rowKey(event, open, toggle, record)}
             className="flex min-w-0 flex-1 items-center gap-xs text-left outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:opacity-50">
-            {starMark ? <RevisitStar slot /> : <StatusMark mark={agent.mark} className={markTone(agent)} />}
+            {starMark ? <RevisitStar slot /> : read ? <StatusMark mark="turn" read /> : <StatusMark mark={agent.mark} className={markTone(agent)} />}
             <AgentRowMark kind={agent.agent_kind} hideAi={agent.hide_ai ? "card" : null} />
-            <AgentRecordTitle agent={agent} className="text-caption font-medium" />
+            <AgentRecordTitle agent={agent} className={cn("text-caption font-medium", read && "opacity-(--opacity-read-status)")} />
             <AgentForkMark agent={agent} />
             {starred(agent) && !starMark ? <RevisitStar className="group-hover/task:hidden group-focus-within/task:hidden hoverless:hidden" /> : null}
           </button>
-          {open ? null : <DescendantMark agent={agent} />}
           <AgentPrMark agent={agent} family={family} staleness={staleness} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: project?.id ?? null, url: pull.url, number: pull.number })} onExternal={(pull) => actions.openLink(pull.url, true)} />
           <MissionChip agent={agent} onOpen={(id) => actions.openMission(id)} />
+          {read ? <span aria-hidden="true" className="shrink-0 rounded-xs border border-border px-xxs text-micro text-subtle-foreground group-hover/task:hidden group-focus-within/task:hidden hoverless:hidden" data-task-read-tag="">{t("taskLens.readTag")}</span> : null}
           <TimeSlot agent={agent} record={record} menu={menu} revisit={{ on: starred(agent), disabled, actions }} />
         </div>
-        <SecondLine entry={entry} showProject={showProject} />
+        <SecondLine entry={entry} showProject={showProject} read={read} />
       </div>
       {number !== null ? <Keycap number={number} /> : null}
     </li>
@@ -488,7 +490,7 @@ function ArchivedRow({ entry, showProject, disabled, actions }: { entry: Archive
   );
 }
 
-type TaskMenuId = "record" | "pane" | "revisit" | "resolve" | "archive" | "close";
+type TaskMenuId = "record" | "pane" | "revisit" | "put_away" | "resolve" | "archive" | "close";
 type TaskMenu = { items: () => MenuEntry<TaskMenuId>[]; select: (id: TaskMenuId) => void };
 
 /**
@@ -503,8 +505,10 @@ function useTaskMenu(agent: AgentRow, record: (() => void) | null, onPane: () =>
       { id: "record", icon: "record", label: t("taskLens.menu.record"), unavailable: record ? null : "", shortcut: "Space" },
       { id: "pane", icon: "terminal", label: t("taskLens.menu.pane"), unavailable: disabled ? "" : null, shortcut: "↩" },
     ];
-    // Before 해결 and 세션 보관 on a root task (PRD revisit-group D-08, B9).
+    // Before 해결 and 세션 보관 on a root task (PRD revisit-group D-08, B9); a read ask in 내 차례
+    // also offers 치우기, which puts it away until the agent asks something new (needs-you-cleanup B15).
     if (root) entries.push(revisitEntry(agent, disabled, t));
+    if (root && readAsk(agent)) entries.push({ id: "put_away", icon: "unstar", label: t("taskLens.menu.putAway"), unavailable: disabled ? "" : null });
     if (resolvable) entries.push({ id: "resolve", icon: "check", label: t("agentSessions.resolve"), unavailable: disabled ? "" : null });
     const archive = root ? archiveOffer(useShellStore.getState().rest, agent, t) : { kind: "hidden" as const };
     if (archive.kind === "offered") entries.push({ id: "archive", icon: "archive", label: t("archive.menu.archive"), unavailable: archive.unavailable, separated: true });
@@ -515,6 +519,7 @@ function useTaskMenu(agent: AgentRow, record: (() => void) | null, onPane: () =>
     if (id === "record") return record?.();
     if (id === "pane") return onPane();
     if (id === "revisit") return revisitOn(agent) ? actions.finishRevisit(agent.pane_id) : actions.starSession(agent.pane_id);
+    if (id === "put_away") return actions.finishRevisit(agent.pane_id);
     if (id === "resolve") return actions.resolveSession(agent.pane_id);
     if (id === "close") return actions.closeSession(agent.pane_id);
     return actions.archiveSession(agent.pane_id);
@@ -522,9 +527,14 @@ function useTaskMenu(agent: AgentRow, record: (() => void) | null, onPane: () =>
   return { items, select };
 }
 
-/** Whether the task waits in 다시 볼 것 or wears the ★: its menu and button then say 다시 볼 것에서 빼기. */
+/** Whether the task wears the ★: its menu and button then say 다시 볼 것에서 빼기. */
 function revisitOn(agent: AgentRow): boolean {
-  return agent.revisit != null;
+  return agent.revisit?.starred === true;
+}
+
+/** An ask the operator read and has not answered, not put off with ☆: it stands read in 내 차례 (needs-you-cleanup B10). */
+function readAsk(agent: AgentRow): boolean {
+  return agent.revisit?.read_ask === true && !agent.revisit.starred;
 }
 
 function revisitEntry(agent: AgentRow, disabled: boolean, t: TFunction<"translation">): MenuEntry<TaskMenuId> {
@@ -534,9 +544,9 @@ function revisitEntry(agent: AgentRow, disabled: boolean, t: TFunction<"translat
 
 /**
  * The ☆/★ beside the record button (PRD revisit-group D-08, B8): ☆ stars the
- * task and ★, drawn only on a starred one, is 다시 볼 것에서 빼기. A read ask
- * waits in 다시 볼 것 with ☆, so pressing it stars rather than puts it away;
- * the ⋯ menu's 다시 볼 것에서 빼기 puts that ask away.
+ * task and ★, drawn only on a starred one, is 다시 볼 것에서 빼기. On an ask in
+ * 내 차례, ☆ reads it and puts it off to 다시 볼 것 (needs-you-cleanup B13);
+ * the ⋯ menu's 치우기 puts a read ask away.
  */
 function RevisitButton({ agent, on, disabled, actions }: { agent: AgentRow; on: boolean; disabled: boolean; actions: Actions }) {
   const { t } = useInterfaceTranslation();
@@ -596,7 +606,7 @@ function TimeSlot({ agent, record, menu, revisit }: { agent: AgentRow; record: (
  * B8: the project's name in 상태별, then the question, the block's cause, the
  * label line or the unfinished work; none is drawn when there is nothing to say.
  */
-function SecondLine({ entry, showProject }: { entry: TaskEntry; showProject: boolean }) {
+function SecondLine({ entry, showProject, read = false }: { entry: TaskEntry; showProject: boolean; read?: boolean }) {
   const { t } = useInterfaceTranslation();
   const indent = detailIndent(useAgentLogosShown() || Boolean(entry.agent.hide_ai));
   const { agent, card, project } = entry;
@@ -607,7 +617,7 @@ function SecondLine({ entry, showProject }: { entry: TaskEntry; showProject: boo
   return (
     <div className={cn(indent, "flex min-w-0 items-baseline gap-xs text-micro")} data-task-line={card.state}>
       {showProject && project ? <span className="shrink-0 text-muted-foreground" data-task-project={project.id}>{project.label}</span> : null}
-      {parts ? <RowLineText parts={parts} className={cn("min-w-0 flex-1", LINE_TONE[card.state] ?? "text-subtle-foreground")} title={partsTitle(parts)} /> : null}
+      {parts ? <RowLineText parts={parts} className={cn("min-w-0 flex-1", LINE_TONE[card.state] ?? "text-subtle-foreground", read && "opacity-(--opacity-read-status)")} title={partsTitle(parts)} /> : null}
     </div>
   );
 }
@@ -668,7 +678,6 @@ function ChildRow({ parent, child, depth, place, open, selected, disabled, actio
             <AgentForkMark agent={child} />
           </button>
           {device ? <span className="flex shrink-0 items-center gap-xxs rounded-xs border border-border px-xxs text-micro text-muted-foreground" data-task-device={device}><ServerIcon aria-hidden="true" className="size-(--size-icon-sm)" />{device}</span> : null}
-          {open ? null : <DescendantMark agent={child} />}
           <AgentPrMark agent={child} staleness={staleness} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: workspace, url: pull.url, number: pull.number })} onExternal={(pull) => actions.openLink(pull.url, true)} />
           <TimeSlot agent={child} record={record} menu={menu} />
         </div>

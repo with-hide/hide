@@ -771,6 +771,30 @@ fn read_fingerprint(agent: &SidebarAgentSnapshot) -> PaneReadRecord {
     }
 }
 
+/// Records what `agent` shows now as read, as the operator's focus on its
+/// pane does; the change, when the record moved. A delayed read reveals no
+/// new native state to acknowledge, so it keeps the last confirmed record.
+pub fn read_now(
+    agent: &SidebarAgentSnapshot,
+    records: &mut BTreeMap<String, PaneReadRecord>,
+    connection: &ReadConnection,
+) -> Option<ReadRecordChange> {
+    if agent.telemetry_stale {
+        return None;
+    }
+    let mut current = read_fingerprint(agent);
+    current.server = Some(connection.server_of(agent).to_owned());
+    if records.get(&agent.pane_id) == Some(&current) {
+        return None;
+    }
+    records.insert(agent.pane_id.clone(), current.clone());
+    Some(ReadRecordChange {
+        pane_id: agent.pane_id.clone(),
+        record: current,
+        evicted: false,
+    })
+}
+
 /// Whether a completion the row shows is one the operator has not seen.
 ///
 /// A completion is news only when it appears: one going away is the agent
@@ -953,21 +977,7 @@ pub fn apply_read_state(
         let settled_here = settled(agent);
         let first_settled = settled_here && connection.settled.insert(agent.pane_id.clone());
         if operator_pane_id == Some(agent.pane_id.as_str()) {
-            // A delayed read reveals no new native state to acknowledge.
-            // Keep the last confirmed fingerprint through this interval.
-            if agent.telemetry_stale {
-                continue;
-            }
-            let mut current = read_fingerprint(agent);
-            current.server = Some(connection.server_of(agent).to_owned());
-            if records.get(&agent.pane_id) != Some(&current) {
-                records.insert(agent.pane_id.clone(), current.clone());
-                changes.push(ReadRecordChange {
-                    pane_id: agent.pane_id.clone(),
-                    record: current,
-                    evicted: false,
-                });
-            }
+            changes.extend(read_now(agent, records, connection));
             continue;
         }
         let Some(record) = records.get_mut(&agent.pane_id) else {

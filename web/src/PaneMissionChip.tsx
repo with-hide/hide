@@ -55,7 +55,7 @@ function PaneMissionChip({ paneId, mission, actions }: { paneId: string; mission
   const chip = usePaneChipPopover(paneId, true);
   const words = paneChipWords(mission);
   const [first] = liveNodes(mission);
-  const state = [t(words.key), words.counts, first ? t("mission.pane.now", { title: first.title }) : null].filter(Boolean).join(" ");
+  const state = [words.state === "decision" ? t("mission.askDecision") : null, t(words.key), words.counts, first ? t("mission.pane.now", { title: first.title }) : null].filter(Boolean).join(" ");
   const label = t("mission.pane.label", { title: mission.title, state });
   const Mark = words.state === "done" ? CheckIcon : WaypointsIcon;
   return (
@@ -78,6 +78,7 @@ function PaneMissionChip({ paneId, mission, actions }: { paneId: string; mission
           )}
         >
           <Mark aria-hidden="true" className="size-(--size-icon-sm) shrink-0" />
+          {words.state === "decision" ? <span aria-hidden="true" className="font-semibold" data-mission-chip-decision="true">!</span> : null}
           <span className="whitespace-nowrap">{t(words.key)}</span>
           {mission.nodes.length > 0 ? <ProgressCells tones={missionCells(mission)} size="chip" /> : null}
           {words.counts ? <span className="font-mono tabular-nums">{words.counts}</span> : null}
