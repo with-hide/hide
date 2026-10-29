@@ -1036,11 +1036,12 @@ fn a_resumed_move_whose_alias_cannot_be_read_waits_for_its_peer() -> Result<()> 
         std::fs::rename(&config, &away)?;
         fixture.start_source()?;
         let failed = fixture.logged_after_link_wait(&fixture.source, "status.failed")?;
+        // `ssh` names the configuration it could not read.
         ensure!(
             failed["failure"]["kind"] == "unreachable"
                 && failed["failure"]["reason"]
                     .as_str()
-                    .is_some_and(|reason| reason.starts_with("ssh_alias")),
+                    .is_some_and(|reason| reason.contains(".ssh/config")),
             "{failed}"
         );
         ensure!(fixture.role()? == "node");
