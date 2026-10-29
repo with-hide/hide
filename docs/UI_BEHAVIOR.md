@@ -2145,12 +2145,12 @@ A folder holding nothing, or only `.git` and a Finder `.DS_Store`, is what a cre
 
 ### Opening a folder from a terminal
 
-CLI owner: `open_path` in `hided/src/cli.rs`; daemon owner: `hided/src/project_open.rs`; core owner: `herdr-core/src/runtime/project_open.rs`; desktop owner: the `hide:come-forward` channel in `desktop/src/main/host.ts`.
+CLI owner: `open_path` in `hided/src/cli.rs`; daemon owner: `hided/src/project_open.rs`; core owner: `herdr-core/src/runtime/project_open.rs`; page owner: `showProjectOpened` in `web/src/opening.ts`; desktop owner: the `hide:come-forward` channel in `desktop/src/main/host.ts`.
 `hide .`, `hide <path>` and `hide open <path>` open a folder as a project from any terminal, the way `code .` opens VS Code.
 The path is read on the machine the command runs on, from that shell's working directory.
 A folder a registered checkout holds, the checkout itself or a folder inside it, brings that checkout in front, the deepest one when worktrees nest, and registers nothing.
 Any other folder is registered by the same `create_workspace` Browse folder sends, so it is judged by the same rules and opens on the first terminal tab its registration starts; a folder outside home is refused with the advice to add it from Add a project, since only the dialog asks that question.
-Then every Hide window of the core's machine comes forward on that project; a browser tab cannot raise itself and is left where it is.
+Then every Hide window of the core's machine shows that project in place of All projects or an Overview, as a click on its sidebar row does, and the desktop window comes forward; a browser tab shows it too but cannot raise itself.
 With no window open the command opens Hide as bare `hide` does, already on that project, and with no Hide running it starts Hide first.
 A path that is not a folder, or one that cannot be registered, is answered with the reason and what to do next, and the command exits non-zero; nothing else opens.
 A command's name wins over a folder of the same name: `hide status` is the command, `hide ./status` opens the folder `status`, and a word that is neither is answered as neither.

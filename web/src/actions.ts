@@ -34,7 +34,7 @@ import { latestDraft, noteClosing, noteSent } from "./editor/draft";
 import { RELATION_ANSWER_TIMEOUT_MS, relationState } from "./lineage";
 import { frontDeviceId, localDeviceId, railShown } from "./devices";
 import { machineName, windowDeviceId } from "./screenMachine";
-import { allAgents, boardProjects, type OpenTarget } from "./navigation";
+import { allAgents, boardProjects } from "./navigation";
 import { cardOfItem } from "./overviewTasks";
 import { missionOfPane, takeOverPrompt, takeOverProvider } from "./missions";
 import { planOfPane } from "./plans";
@@ -79,6 +79,7 @@ import { externalBridge, externalLineKey, notePendingGrant, useExternalStore } f
 import { homeOpening } from "./hideAiOrigin";
 import { agentsByPane, allAgents as allPaneAgents } from "./paneAgents";
 import { archiveWorking } from "./archive";
+import { beginOpening } from "./opening";
 import { useShellStore } from "./store";
 import { useUiStore, type MainView, type OverviewPlace, type PendingClose, type PendingViewsClose } from "./ui";
 import { browserClipboard, type Clipboard, type ClipboardContent } from "./clipboard";
@@ -158,11 +159,6 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
   const ui = () => useUiStore.getState();
 
 
-
-  /** Remembers what was asked to come forward; `CenterScreen` shows it once it is in front. */
-  const beginOpening = (target: OpenTarget) => {
-    useUiStore.setState({ overviewOpen: false, overviewReturnFocus: ui().overviewOpen ? document.querySelector<HTMLElement>('[data-pane-view][data-focused="true"] .xterm-helper-textarea') : null, opening: { target, errorBefore: rest()?.status?.last_error?.occurred_at ?? null, failure: null } });
-  };
 
   const current = (): { checkout: Checkout; tab: Tab | null } | null => {
     const checkout = focusedCheckout(rest());

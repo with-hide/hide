@@ -1,7 +1,8 @@
 //! `hide <path>` in the daemon (`herdr_core::project_open`): one request
 //! names a folder on the caller's machine; it comes forward as a project,
 //! registered first through the same `create_workspace` the Add a project
-//! dialog sends, and every window of this machine is asked to come forward.
+//! dialog sends, and every window of this machine is asked to come forward
+//! and show it.
 //!
 //! Two callers reach it. A command on the core's own machine holds the
 //! daemon's token from the state file the account owns, which is the
@@ -35,7 +36,7 @@ pub(crate) type Refused = (String, &'static str);
 pub(crate) fn run(
     core: &CoreHandle,
     boundary: &Boundary,
-    window_calls: &tokio::sync::broadcast::Sender<()>,
+    window_calls: &tokio::sync::broadcast::Sender<Value>,
     windows: usize,
     device: &str,
     raw: &str,
@@ -58,9 +59,15 @@ pub(crate) fn run(
         .project_open(device, &path, request_id)
         .map_err(|code| refused(&code))?
     {
-        ProjectOpenReceipt::Opened { label, path, added } => {
+        ProjectOpenReceipt::Opened {
+            label,
+            path,
+            checkout_id,
+            added,
+        } => {
             // No window receives it when none is open; the caller opens one.
-            let _ = window_calls.send(());
+            let _ = window_calls
+                .send(json!({"device_id": device, "path": path, "checkout_id": checkout_id}));
             Ok(json!({"label": label, "path": path, "added": added, "window": windows > 0}))
         }
         ProjectOpenReceipt::Refused { reason } => Err(refused(&reason)),

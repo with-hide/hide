@@ -16,10 +16,13 @@ pub enum ProjectOpenReceipt {
     /// The registration is on its way.
     Pending,
     /// The project is in front: `path` is the checkout that came forward,
-    /// `added` whether this request registered it.
+    /// `checkout_id` its id when the catalog lists it (a device's new
+    /// project is listed only once its helper confirms the folder), `added`
+    /// whether this request registered it.
     Opened {
         label: String,
         path: String,
+        checkout_id: Option<String>,
         added: bool,
     },
     /// The registration was refused; `reason` is the core's error kind,

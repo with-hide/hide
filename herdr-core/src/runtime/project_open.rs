@@ -105,6 +105,7 @@ impl Runtime {
                 ProjectOpenReceipt::Opened {
                     label: target.label,
                     path: target.path,
+                    checkout_id: Some(target.checkout_id),
                     added: false,
                 }
             }
@@ -188,11 +189,13 @@ impl Runtime {
                     Some(target) => ProjectOpenReceipt::Opened {
                         label: target.label,
                         path: target.path,
+                        checkout_id: Some(target.checkout_id),
                         added: true,
                     },
                     None => ProjectOpenReceipt::Opened {
                         label: folder_label(path),
                         path: path.to_owned(),
+                        checkout_id: None,
                         added: true,
                     },
                 }

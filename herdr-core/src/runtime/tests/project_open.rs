@@ -63,6 +63,7 @@ fn a_folder_a_registered_checkout_holds_comes_forward_and_registers_nothing() {
         Some(ProjectOpenReceipt::Opened {
             label: "Alpha".to_owned(),
             path: alpha_path,
+            checkout_id: Some(alpha.clone()),
             added: false,
         })
     );

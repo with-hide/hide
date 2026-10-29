@@ -27,7 +27,7 @@ export type Isolated = {
   root: string;
   env: Record<string, string>;
   /** Runs a `hide` verb against this run's state directory. */
-  hide: (args: string[]) => { status: number | null; stdout: string };
+  hide: (args: string[]) => { status: number | null; stdout: string; stderr: string };
   daemonPid: () => number | null;
   /** A host exception this test causes on purpose, by a part of its message; cleanup fails on any other. */
   allowHostUncaught: (part: string) => void;

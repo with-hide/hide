@@ -149,9 +149,9 @@ pub struct AppState {
     /// Which screen each pane's terminal size follows (`pane_sizes`).
     pub pane_sizes: Arc<crate::pane_sizes::PaneSizes>,
     /// A `hide <path>` that brought a project in front asks this machine's
-    /// windows to come forward too (`project_open`): each sends its screen
-    /// a `window_call` frame.
-    pub window_calls: tokio::sync::broadcast::Sender<()>,
+    /// windows to come forward too, showing it (`project_open`): each sends
+    /// its screen a `window_call` frame with this payload.
+    pub window_calls: tokio::sync::broadcast::Sender<Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1077,10 +1077,11 @@ async fn screen_loop(
                 }
             }
             // `state` holds the sender, so the channel never closes under
-            // this loop, and a window that lagged behind calls still comes
-            // forward once.
-            _ = window_calls.recv(), if renderer && relay.is_none() => {
-                let frame = json!({"type": "window_call", "payload": {}}).to_string();
+            // this loop; a window that lagged behind calls skips to the
+            // newest, which is the project the operator asked for last.
+            call = window_calls.recv(), if renderer && relay.is_none() => {
+                let Ok(payload) = call else { continue };
+                let frame = json!({"type": "window_call", "payload": payload}).to_string();
                 if socket.send(Message::Text(frame.into())).await.is_err() {
                     break;
                 }

@@ -1890,13 +1890,19 @@ async fn hide_path_opens_a_registered_folder_and_answers_why_another_was_not_add
     assert_eq!(answer["result"]["window"], true);
     let called = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
-            if first_frame(&mut window).await["type"] == "window_call" {
-                return;
+            let frame = first_frame(&mut window).await;
+            if frame["type"] == "window_call" {
+                return frame["payload"].clone();
             }
         }
     })
-    .await;
-    assert!(called.is_ok(), "the open window is called forward");
+    .await
+    .expect("the open window is called forward");
+    assert_eq!(called["path"], json!(wire(&checkout)), "{called}");
+    assert_eq!(
+        called["checkout_id"].as_str().map(str::is_empty),
+        Some(false)
+    );
 
     let outside = tempfile::tempdir().unwrap();
     for (path, reason) in [

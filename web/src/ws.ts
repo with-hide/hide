@@ -5,6 +5,7 @@ import { connectionAfterHealthFails, nextBackoff } from "./connection";
 import { moveUnderWay, type MoveView } from "./coreMove";
 import { clearPending, receiveBytes, receiveBytesError, receiveBytesRefusal } from "./fileBytes";
 import { isOperatorFocus, numbered } from "./operatorFocus";
+import { showProjectOpened } from "./opening";
 import { noteArrival, probeEnabled } from "./probe";
 import { useShellStore, type TerminalChunk } from "./store";
 import { hostBridge, hostKind } from "./host";
@@ -196,9 +197,10 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
         return;
       }
       // `hide <path>` brought a project in front: the core already moved
-      // there, so only the desktop window itself has to come forward.
+      // there, so the desktop window comes forward and the page shows it.
       if (frame.type === "window_call") {
         hostBridge()?.comeForward?.();
+        showProjectOpened(frame.payload as Record<string, unknown> | undefined);
         return;
       }
       if (frame.type === "agent_notice") {
