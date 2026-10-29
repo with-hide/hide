@@ -1,12 +1,13 @@
 //! A device's node: `hided node serve` answering the `hide_host` contract
-//! over one SSH exec channel (PRD S5.5 D-05, D-20, D-23).
+//! over one link, the standard streams of the child that reached the device
+//! (PRD S5.5 D-05, D-20, D-23; system-ssh-device-link D-02).
 //!
 //! Nothing here runs without the operator's consent for that device, recorded
-//! on its registration and bound to the SSH identity the helper was first
-//! allowed on. The helper is installed (or replaced by a newer build) under the
-//! consented install root, started with `node serve` on an exec channel of a
-//! dedicated SSH connection, and ends when that connection does: there is no
-//! daemon, no listening socket and no background install.
+//! on its registration and bound to the identity the helper was first allowed
+//! on. The helper is installed (or replaced by a newer build) under the
+//! consented install root by the start script on that same child
+//! ([`bootstrap`]), started there with `node serve`, and ends when the child
+//! does: there is no daemon, no listening socket and no background install.
 //!
 //! Admission is bounded per device: four requests run and thirty-two wait; a
 //! request past that is refused as busy, never dropped. A request that was

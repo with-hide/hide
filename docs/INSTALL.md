@@ -183,6 +183,7 @@ These are real CLIs with Hide's kit and Herdr's integration against a keyless fa
 | Agent notifications ([UI_BEHAVIOR.md](UI_BEHAVIOR.md#first-run)) | supported: the wizard's notifications step asks macOS and reads its answer back; delivery on a signed build is unverified | supported: the app registers itself for toasts at launch, and the package checks require its Start menu entry; delivery and a click from the Action Center after Hide quit are unverified | supported where a notification service runs; without one the wizard and Settings say so and keep the switch off; delivery is unverified |
 | Needs You count on the app icon | supported: a count on the Dock once macOS lets Hide notify | supported: a dot on the taskbar button, with the count in its description | unverified: drawn only by a desktop that shows launcher counts for the app's `.desktop` entry, which the packages install; no desktop has been tried |
 | Device node (a remote machine's files and Git) | supported | not supported: no device runs the Windows `hided` yet, so from Windows a device's files and Git stay unavailable | supported |
+| A device reached with the system `ssh`: an alias that works in a terminal connects the same, and what ssh asks is answered on the device row ([ARCHITECTURE.md](ARCHITECTURE.md#a-devices-ssh)) | supported: the remote mailbox lane runs a ProxyJump alias, a server trusted on the row and known after, a key's passphrase asked once per connection, a default key named nowhere and a password, each through the system `ssh` against a real `sshd` (on Linux for a change to the crates it builds, and on macOS nightly); a security key's touch, a Tailscale or Cloudflare browser check and a one-time code have no runner and are unverified, closing with a check against each | unverified: Windows' own OpenSSH reads a question through Hide's askpass in the `windows check` lane, proved with its `ssh-keygen.exe` asking a key's passphrase through the same `read_passphrase` `ssh.exe` uses, because no Windows runner has an `sshd` to sign in to; a Windows core does not yet run a device's files and Git (row above); closes with a Windows-to-device sign-in journey | supported: the same lane and journeys as macOS, on each such change |
 | This PC's WSL 2 distributions as devices: listed in Add device, installed on consent, reached through `wsl.exe`, started only when the app opens or on Reconnect ([ARCHITECTURE.md](ARCHITECTURE.md#wsl-distributions-as-devices)) | does not apply: WSL is part of Windows | unverified on a person's PC: the `windows wsl` lane connects a real WSL 2 Ubuntu 24.04 on GitHub's Windows runner (install, files and Git, a terminal, the helper ending with its link, reconnect, another default user, a stopped distribution left stopped and started on leave), and the core's and connector's rules have unit tests; first run, a `/mnt/c` project, turning WSL off and on and waking from sleep are checked on the operator's own Windows PC before a release ships it | does not apply: WSL is part of Windows |
 | A WSL 1 distribution as a device | does not apply | not supported: Add device lists it as not connectable with the one command that converts it, `wsl --set-version <name> 2`, because the helper and its Herdr are proved on WSL 2 only; closes when someone who cannot convert needs it | does not apply |
 | WSL on a Windows ARM PC | does not apply | not supported: the Windows app is built for x64 only; closes with a Windows ARM build of the app | does not apply |
@@ -348,8 +349,7 @@ Every local directory below the selected HOME or registered checkout must be a r
 An outside-HOME `HIDE_STATE_DIR` or `XDG_STATE_HOME` remains supported on every system only after its entire namespace is inspected, including before a missing ledger is treated as empty; protected system directories and authenticated system aliases are allowed, while account-controlled links and directories another account can modify are refused without changing them.
 A system folder others may only add entries of their own to is allowed by the sticky rule ([ARCHITECTURE.md](ARCHITECTURE.md#the-platform-layer)): `/tmp` on Unix, and on Windows a drive's root such as `D:\`, where every signed-in account may make a folder; a folder made directly in that root inherits every signed-in account's right to change it and is refused, so a state folder there is made by Hide, whose private folders inherit nothing, or given the same protection.
 A relocated legacy home must stay below HOME and cannot overlap the active Hide state or kit; an indexed run outside HOME needs its owning checkout registered before inspection.
-On a device, the existing SSH/SFTP connection performs this read-only check against that device's registered checkouts before uploading a helper, creating its folders or changing its current link.
-It shares the local ledger and run predicates, needs no remote interpreter, and stops at the existing 15-second SSH operation deadline.
+A device runs no such check: its one release window closed before devices moved to the system `ssh`.
 The kit never stops an old test server by name without an ownership receipt.
 Before the transition, the operator checks earlier test servers and refuses automatic cleanup of any whose ownership cannot be confirmed.
 After that check succeeds, the ordered steps stop the old daemon, unload its LaunchAgent and delete the plist, remove only Hide-owned command and plugin links, remove the kit copy, and rename the old `~/.hide/hcoord` and `~/.hcoord` folders to siblings ending in `.retired-YYYY-MM-DD`.
@@ -444,7 +444,10 @@ If a part cannot be taken out, for example because Herdr is not running, it stay
 
 hide can show and drive a Herdr server on another machine.
 Open Settings, choose Devices, and add the machine with a label and the alias `~/.ssh/config` already knows it by; that alias is the only thing hide stores about it.
-Authentication stays with SSH: the alias's `IdentityFile`, or the running SSH agent, is what hide signs in with, and hide never asks for or keeps a password.
+If `ssh <alias>` works in your terminal, the machine connects the same way: hide runs your system's `ssh` with that alias, so its keys, ssh-agent, ProxyJump, certificates and Tailscale SSH all apply as they do there.
+When ssh asks for something, the machine's row in Settings › Devices asks you: a password, a key's passphrase or a one-time code in a masked field, a server it has not met with its key fingerprint to trust or cancel, a security key to touch, or a page to confirm in your browser, which it waits five minutes for.
+hide hands the answer to that ssh and keeps it nowhere, so a later connection asks again; for a key's passphrase the row shows the `ssh-add` command (`ssh-add --apple-use-keychain <key>` on a Mac) that puts the key in your agent so it is not asked again.
+A reconnect hide starts on its own asks nothing and stops at Sign in on the row until you press it; a server whose key no longer matches `known_hosts` is refused without asking, with the `ssh <alias>` to check it in a terminal.
 
 An agent you ask to add a machine does it with `hide device add <alias> [--name <name>] [--socket <path>]`, run on the machine that runs Hide; `hide device list` shows each machine's id, state and helper, and `hide device remove <id>` removes one as Settings does.
 The command registers the machine without Hide's helper, and its answer tells the agent to ask you to choose Allow and install on the machine's row in Settings › Devices: installing writes that account's hook files, which only you agree to, and until then the machine's files, Git and terminals wait.
@@ -481,7 +484,8 @@ Only supported device platforms get the kit; another platform shows why on its r
 Removing a machine never stops its Herdr server, including one Hide started.
 Removing a machine while it is connected takes Hide's hook entries, the `hide` link and the helper folder `~/.hide/host-helper` off it, and leaves `~/.hide/kit` and `~/.hide/agent-hooks`; removing it while it is not connected leaves them there, where they do no harm, and adding it again replaces them.
 When a Herdr server on that machine still runs the Herdr copy Hide moved it to, the helper folder stays with that copy and the removal says so; delete `~/.hide/host-helper` there once that server has stopped.
-Each device row in Settings shows whether the remote session is connected and, when it is not, the reason in the words the connection failed with; `Test` runs the SSH, authentication, Herdr, protocol, PTY, SFTP, and Git stages one after another and lists the first one that needs attention on that host.
+Each device row in Settings shows whether the remote session is connected and, when it is not, why in one line with what to do (the name was not found, the machine did not answer, the sign-in was refused, an access policy refused it, its server key changed, its proxy command failed, `ssh` is missing or too old), and for any other failure ssh's last line; ssh's full output goes to the diagnostic log.
+`Test` runs the SSH, authentication, protocol, Herdr, PTY and Git stages one after another and lists the first one that needs attention on that host.
 
 ## Move the core to another Mac
 
@@ -625,11 +629,7 @@ Confirm the SSH host works outside hide first, with the same alias the device wa
 
 ```sh
 ssh <host-alias> true
-ssh <host-alias> 'PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH" herdr status server --json'
 ```
 
-The second command is what hide runs to find the remote socket.
-`command not found` means Herdr is not installed there or not on a non-login shell's `PATH`; `"running":false` means the server is stopped, and running `herdr` once on that machine starts it.
-The device row in Settings carries the same answer, and `Test` names the stage that failed.
-hide delegates authentication to the existing SSH configuration and agent.
-It does not display, copy, or store a password.
+hide runs that same `ssh`, so what fails there fails in hide too; the device row in Settings names the class of the failure with what to do, the diagnostic log keeps ssh's own words, and `Test` names the stage that failed.
+What ssh asks is answered on the device row; hide does not store, log or copy an answer.

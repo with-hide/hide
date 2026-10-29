@@ -2,8 +2,10 @@
 //!
 //! The module intentionally keeps the product contract separate from the SSH
 //! implementation. Alias import and state projection are deterministic and
-//! testable without a network. The russh adapter is the only production
-//! transport; no OpenSSH subprocess is used by this path.
+//! testable without a network. A device is reached with the system `ssh`
+//! (`device.rs`, PRD system-ssh-device-link); the russh client here remains
+//! the transport of the core's own link to another machine (`upstream.rs`)
+//! until that moves too.
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
