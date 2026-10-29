@@ -8,7 +8,7 @@ import { Hint } from "../components/ui/tooltip";
 import { useInterfaceTranslation } from "../i18n/client";
 import { formatDateTime } from "../i18n/format";
 import { requireInterfaceLanguage } from "../i18n/locale";
-import { canRetryDevice, deviceLine, deviceProblemLine, deviceSubtitle, hostLine, kitProblems } from "../settings";
+import { canRetryDevice, deviceLine, deviceProblemLine, deviceSubtitle, hostLine, kitProblems, retrySignsIn } from "../settings";
 import type { Device, RemoteStatus } from "../snapshot";
 import { useShellStore } from "../store";
 import { DeviceSignIn } from "./DeviceSignIn";
@@ -91,7 +91,7 @@ export function DeviceRow({ device, status, focused, place, actions, handlers }:
           }}
           data-device-retry={device.id}
         >
-          {device.problem === "sign_in_needed" ? t("devices.signIn.start") : t("common.retry")}
+          {retrySignsIn(device.problem) ? t("devices.signIn.start") : t("common.retry")}
         </Button>
       ) : null}
       {remote ? (
@@ -195,16 +195,17 @@ function DeviceAttention({ device, actions, onAct, onAllow }: { device: Device; 
   // when Herdr cannot yet supply a readable session. A failed helper kit
   // must keep its reason and Retry visible before that session connects.
   // An unsupported platform keeps its reason visible too, without a Retry.
-  // The helper is the link, so an ssh failure or a sign-in is its line, said
-  // once below; an unsupported device stays the helper's to say.
-  const linkSays = signIn !== null || (device.problem != null && device.problem !== "unsupported");
-  const helper = remote && (device.state === "ready" || needsAllow || (host?.state === "unavailable" && !linkSays) || host?.state === "unsupported") && host && host.consent !== "this_machine" && host.state !== "ready" ? hostLine(host, t) : null;
-  // An attempt waiting on the operator shows that wait, not the last one's
-  // failure; an unsupported device is the helper line's to say (B18).
-  const problem = remote && device.state !== "ready" && !signIn && !(device.problem === "unsupported" && helper) ? deviceProblemLine(device.problem, device.ssh_alias, t, corePlatform) : null;
-  // ssh's own words stay in the log for a classified failure; an
-  // unclassified one, or a failure that is not ssh's, keeps its last line (B19).
-  const ownWords = remote && device.state !== "ready" && !signIn && device.message && (device.problem === "unclassified" || (!device.problem && !(helper && device.message === host?.message))) ? device.message : null;
+  // The helper is the link, so an ssh failure, an unsupported system ssh
+  // reached or a sign-in is its line, said once below.
+  const linkSays = signIn !== null || device.problem != null;
+  const helper = remote && (device.state === "ready" || needsAllow || ((host?.state === "unavailable" || host?.state === "unsupported") && !linkSays)) && host && host.consent !== "this_machine" && host.state !== "ready" ? hostLine(host, t) : null;
+  // An attempt waiting on the operator shows that wait, not the last one's failure.
+  const problem = remote && device.state !== "ready" && !signIn ? deviceProblemLine(device.problem, device.ssh_alias, t, corePlatform) : null;
+  // A connection that could not be made shows ssh's last line under its
+  // headline, and a failure that is not ssh's keeps its own words; a sign-in
+  // or a changed server key needs none of ssh's, which stay in the log.
+  const sshLine = problem && device.problem === "cannot_connect" ? device.message : null;
+  const ownWords = remote && device.state !== "ready" && !signIn && device.message && !device.problem && !(helper && device.message === host?.message) ? device.message : null;
   const kit = device.kit;
   const kitShown = kit !== undefined && (Boolean(kit.unavailable) || Boolean(kit.refused) || kit.busy || kitProblems(kit).length > 0);
   const rows = [
@@ -212,7 +213,8 @@ function DeviceAttention({ device, actions, onAct, onAllow }: { device: Device; 
     problem ? (
       <div key="problem" className="space-y-xxs" data-device-problem={`${device.id}:${device.problem}`}>
         <Status tone="warn">{problem.headline}</Status>
-        {problem.action ? <Note tone="warn">{problem.action}</Note> : null}
+        {problem.note ? <Note tone="warn">{problem.note}</Note> : null}
+        {sshLine ? <p className="break-words font-mono text-caption text-muted-foreground" data-device-message={device.id}>{sshLine}</p> : null}
         {problem.command ? (
           <div className="flex flex-wrap items-center gap-x-sm gap-y-xxs">
             <span className="text-caption text-muted-foreground">{t("devices.problem.checkInTerminal")}</span>

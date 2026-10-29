@@ -199,8 +199,8 @@ fn removing_devices_retires_only_their_pane_reads_and_rejects_late_publications(
 }
 
 /// The system ssh's refusal of the configuration reaches the device row as
-/// an unclassified failure with ssh's own last line (PRD
-/// system-ssh-device-link B19). A literal hostname does not have to be
+/// a connection that could not be made, over ssh's own last line. A literal
+/// hostname does not have to be
 /// declared as an SSH alias.
 #[test]
 fn unreadable_ssh_configuration_is_reported_on_the_device_row() {
@@ -218,7 +218,7 @@ fn unreadable_ssh_configuration_is_reported_on_the_device_row() {
     let runtime = shared.lock().unwrap();
     let row = device(&runtime, "nowhere");
     assert_eq!(row.state, "unavailable");
-    assert_eq!(row.problem.as_deref(), Some("unclassified"));
+    assert_eq!(row.problem.as_deref(), Some("cannot_connect"));
     let message = row.message.clone().expect("failure reason");
     assert!(
         message.contains("bad configuration option"),

@@ -11,6 +11,7 @@ import {
   deviceIdFor,
   deviceAwayLine as deviceAwayLineIn,
   deviceProblemLine as deviceProblemLineIn,
+  retrySignsIn,
   deviceRemovalLines as deviceRemovalLinesIn,
   deviceLine as deviceLineIn,
   diagnosticsText,
@@ -78,25 +79,22 @@ describe("where settings live and what a device reported", () => {
     expect(deviceSubtitleIn(wsl, { ...status, target_id: wsl.id }, t, "This PC")).toBe("WSL Ubuntu · This PC · Herdr 0.9.1");
   });
 
-  it("words every class of ssh failure, with the command a terminal checks it with where it has one (PRD system-ssh-device-link B13, B18-B21)", () => {
+  it("draws every ssh failure as one of three states: sign in, the server key, or cannot connect (operator decision 2026-10-30)", () => {
     const contract = JSON.parse(fs.readFileSync(path.resolve(__dirname, "../../contracts/snapshot-wire-enums.json"), "utf8")) as { device_problem: DeviceProblem[] };
-    for (const problem of contract.device_problem) {
-      const line = deviceProblemLine(problem, "studio");
-      expect(line?.headline, problem).toBeTruthy();
-      expect(line?.headline).not.toMatch(/devices\./);
-    }
-    expect(deviceProblemLine("host_key_changed", "studio")).toMatchObject({ headline: "Server key changed", command: "ssh studio" });
-    expect(deviceProblemLine("proxy_failed", "studio")?.command).toBe("ssh studio");
-    expect(deviceProblemLine("sign_in_refused", "studio")).toMatchObject({ headline: "Sign-in refused", command: null });
-    // An unclassified failure has no advice of its own: ssh's last line is said under it (B19).
-    expect(deviceProblemLine("unclassified", "studio")).toEqual({ headline: "ssh could not connect", action: null, command: null });
+    const headlines = new Set(contract.device_problem.map((problem) => deviceProblemLine(problem, "studio")?.headline));
+    expect(headlines).toEqual(new Set(["Sign-in needed", "Sign-in refused", "Server key changed", "Couldn't connect"]));
+    expect(contract.device_problem.filter(retrySignsIn)).toEqual(["sign_in_needed", "sign_in_refused"]);
+    expect(deviceProblemLine("host_key_changed", "studio")).toEqual({ headline: "Server key changed", note: null, command: "ssh studio" });
+    // ssh's last line is said under it, so the state adds no sentence of its own.
+    expect(deviceProblemLine("cannot_connect", "studio")).toEqual({ headline: "Couldn't connect", note: null, command: null });
+    expect(deviceProblemLine("openssh_old", "studio")?.note).toContain("8.4");
     expect(deviceProblemLine(null, "studio")).toBeNull();
   });
 
   it("says how to install ssh on the system the core runs on (B20)", () => {
-    expect(deviceProblemLine("ssh_missing", "studio", "windows x86_64")?.action).toContain("Optional features");
-    expect(deviceProblemLine("ssh_missing", "studio", "linux x86_64")?.action).toContain("openssh-client");
-    expect(deviceProblemLine("ssh_missing", "studio", "macos aarch64")?.action).toBe("Install the OpenSSH client, then Retry.");
+    expect(deviceProblemLine("ssh_missing", "studio", "windows x86_64")?.note).toContain("Optional features");
+    expect(deviceProblemLine("ssh_missing", "studio", "linux x86_64")?.note).toContain("openssh-client");
+    expect(deviceProblemLine("ssh_missing", "studio", "macos aarch64")?.note).toBe("This computer has no ssh. Install the OpenSSH client.");
   });
 });
 
@@ -108,19 +106,19 @@ describe("what a screen says while a device is away", () => {
     expect(away.text).not.toMatch(/ssh|stage=|timed out/i);
   });
 
-  it("says a refused trust or sign-in by its class, with the one thing to do in the hint", () => {
+  it("says a refused sign-in or a changed server key by its state, with the terminal check in the hint", () => {
     const away = deviceAwayLine({ state: "unavailable", problem: "sign_in_refused", ssh_alias: "mini", message: "Permission denied (publickey,password)." });
-    expect(away.text).toBe("Mac mini is not connected: Sign-in refused. Showing the last state it reported; nothing is sent until it reconnects.");
-    expect(away.hint).toBe("mini did not accept the answer. Retry to sign in again.");
-    expect(away.toRow).toBe(false);
+    expect(away).toEqual({ text: "Mac mini is not connected: Sign-in refused. Showing the last state it reported; nothing is sent until it reconnects.", hint: null, toRow: false });
+    expect(deviceAwayLine({ state: "unavailable", problem: "host_key_changed", ssh_alias: "mini" }).hint).toBe("Check in a terminal: ssh mini");
+    const lost = deviceAwayLine({ state: "unavailable", problem: "cannot_connect", ssh_alias: "mini", message: "ssh: connect to host mini port 22: Operation timed out" });
+    expect(lost.text).toBe("Mac mini is not connected: Couldn't connect. Showing the last state it reported; nothing is sent until it reconnects.");
+    expect(lost.hint).toBeNull();
   });
 
   it("leads a device waiting on a sign-in to its row, where it is answered (B15)", () => {
     const asking = deviceAwayLine({ state: "unavailable", ssh_alias: "mini", sign_in: { question: 3, key_command: null, kind: "secret", prompt: "alice@mini's password:" } });
     expect(asking).toEqual({ text: "Mac mini is not connected: waiting for you to sign in. Showing the last state it reported; nothing is sent until it reconnects.", hint: "Answer on its row in Settings › Devices.", toRow: true });
     expect(deviceAwayLine({ state: "unavailable", problem: "sign_in_needed" }).toRow).toBe(true);
-    // A place in line for other devices asks nothing of the operator.
-    expect(deviceAwayLine({ state: "unavailable", sign_in: { question: 4, key_command: null, kind: "queued" } }).toRow).toBe(false);
   });
 });
 
