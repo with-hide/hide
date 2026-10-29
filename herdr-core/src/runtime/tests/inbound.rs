@@ -125,6 +125,8 @@ impl DeviceTransport for HeldLink {
     fn cached_herdr_version(&self) -> Option<String> {
         None
     }
+
+    fn close(&self) {}
 }
 
 pub(super) fn shared_runtime() -> SharedRuntime {

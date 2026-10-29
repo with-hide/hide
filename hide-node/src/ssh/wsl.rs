@@ -487,6 +487,14 @@ impl DeviceTransport for WslDevice {
     fn cached_herdr_socket(&self) -> Option<String> {
         lock_recover(&self.herdr_socket).clone()
     }
+
+    /// A distribution's link is its only connection: `wsl.exe` and the
+    /// helper inside it end with it (PRD wsl-device B27).
+    fn close(&self) {
+        if let Some(link) = lock_recover(&self.link).as_ref() {
+            link.close("the core let go of the distribution");
+        }
+    }
 }
 
 /// The device's Herdr through its current link; no link, no Herdr, and

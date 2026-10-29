@@ -132,7 +132,9 @@ impl Drop for Core {
         self._fetch.take();
         self._session_sync.take();
         // Taken under the lock, joined outside it: a coordinator's last act is
-        // to lock the runtime, so a join under the lock never returns.
+        // to lock the runtime, so a join under the lock never returns. Each
+        // device's transport is closed before its coordinator is joined, so
+        // one waiting on a dial to a device that never answers ends now.
         let remote_syncs = { lock_recover(&self.runtime).take_remote_syncs() };
         drop(remote_syncs);
         // After the coordinators, so no timer dials a device again: each
@@ -1053,5 +1055,157 @@ impl Core {
             return;
         }
         self.notifier.set_callback(None);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Read;
+    use std::net::{TcpListener, TcpStream};
+    use std::time::{Duration, Instant};
+
+    use serde_json::json;
+
+    /// The SSH dial bound is 15 s (`SSH_OPERATION_TIMEOUT` in
+    /// `hide-node/src/ssh.rs`): a stop or removal that waits the dial out
+    /// takes about that long after the device took the connection, and one
+    /// that ends the dial takes milliseconds.
+    const ENDS_BEFORE_THE_DIAL_BOUND: Duration = Duration::from_secs(10);
+
+    /// A core whose one device points at a listener that takes the TCP
+    /// connection and never sends the SSH greeting, and the connection as
+    /// the device holds it once the core's coordinator dialed it.
+    struct SilentDevice {
+        core: Option<Box<super::Core>>,
+        peer: TcpStream,
+        _listener: TcpListener,
+        _home: tempfile::TempDir,
+        _state: tempfile::TempDir,
+    }
+
+    impl SilentDevice {
+        fn dialed() -> Self {
+            let home = tempfile::tempdir().unwrap();
+            let state = tempfile::tempdir().unwrap();
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            std::fs::create_dir_all(home.path().join(".ssh")).unwrap();
+            std::fs::write(
+                home.path().join(".ssh/config"),
+                format!(
+                    "Host silent\n  HostName 127.0.0.1\n  Port {}\n  User fixture\n  IdentityAgent none\n",
+                    listener.local_addr().unwrap().port()
+                ),
+            )
+            .unwrap();
+            let core = super::Core::create(
+                crate::CoreOptions {
+                    schema_version: crate::SCHEMA_VERSION,
+                    home: Some(home.path().display().to_string()),
+                    node_id: crate::node::test_node(),
+                    herdr_socket_path: None,
+                    herdr_bin_path: None,
+                    app_state_path: state.path().join("core-state.json").display().to_string(),
+                    host_helper_root: None,
+                    host_cli_dir: None,
+                    workspace_views_path: None,
+                    shortcut_import_path: None,
+                    local_issues_path: None,
+                    effects_held: false,
+                    machine_name: None,
+                    account_state_folder: false,
+                },
+                std::sync::Arc::new(hide_node::Local::new(Some(home.path().to_path_buf()))),
+                None,
+                crate::node::test_devices(),
+                crate::node::test_terminals().0,
+                crate::node::test_terminals().1,
+            )
+            .expect("a core starts");
+            assert!(core.dispatch_bytes(&event(
+                "register_device",
+                json!({"id": "silent", "label": "Silent", "ssh_alias": "silent"}),
+            )));
+            // Blocking with a hang guard: the coordinator dials as the
+            // device registers, so the accept is the barrier that its dial
+            // is waiting for the greeting.
+            listener.set_nonblocking(true).unwrap();
+            let guard = Instant::now() + Duration::from_secs(30);
+            let peer = loop {
+                match listener.accept() {
+                    Ok((peer, _)) => break peer,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(Instant::now() < guard, "the core never dialed the device");
+                        std::thread::park_timeout(Duration::from_millis(20));
+                    }
+                    Err(error) => panic!("accept failed: {error}"),
+                }
+            };
+            Self {
+                core: Some(core),
+                peer,
+                _listener: listener,
+                _home: home,
+                _state: state,
+            }
+        }
+
+        /// The dial was ended, not left waiting: the device sees its
+        /// connection closed. A dial still waiting would hold it open.
+        fn assert_dial_ended(&mut self) {
+            self.peer
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut byte = [0_u8; 256];
+            loop {
+                match self.peer.read(&mut byte) {
+                    Ok(0) => return,
+                    // The client's own SSH greeting, sent before it waits.
+                    Ok(_) => continue,
+                    Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => return,
+                    Err(error) => panic!("the dial still holds the device's connection: {error}"),
+                }
+            }
+        }
+    }
+
+    fn event(kind: &str, payload: serde_json::Value) -> Vec<u8> {
+        serde_json::to_vec(&json!({
+            "schema_version": crate::SCHEMA_VERSION,
+            "kind": kind,
+            "payload": payload,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_stopping_core_ends_a_dial_to_a_device_that_never_greets() {
+        let mut device = SilentDevice::dialed();
+        let started = Instant::now();
+        drop(device.core.take());
+        let stopped = started.elapsed();
+        assert!(
+            stopped < ENDS_BEFORE_THE_DIAL_BOUND,
+            "the core's stop waited {stopped:?} on the device's dial"
+        );
+        device.assert_dial_ended();
+    }
+
+    #[test]
+    fn removing_a_device_ends_its_dial_that_waits_for_a_greeting() {
+        let mut device = SilentDevice::dialed();
+        let started = Instant::now();
+        assert!(
+            device
+                .core
+                .as_ref()
+                .unwrap()
+                .dispatch_bytes(&event("remove_device", json!({"device_id": "silent"})))
+        );
+        let removed = started.elapsed();
+        assert!(
+            removed < ENDS_BEFORE_THE_DIAL_BOUND,
+            "removing the device held the core's thread {removed:?} on its dial"
+        );
+        device.assert_dial_ended();
     }
 }

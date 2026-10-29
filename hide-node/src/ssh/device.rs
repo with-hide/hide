@@ -129,6 +129,7 @@ impl DeviceConnector for Connector {
                 session,
                 helper_root: self.helper_root.clone(),
                 initialized: std::sync::OnceLock::new(),
+                closed: AtomicBool::new(false),
             }),
             packages: self.packages.clone(),
             panes: self.panes.clone().map(|events| PaneHook {
@@ -209,6 +210,9 @@ struct LazyClient {
     session: Option<String>,
     helper_root: Option<String>,
     initialized: std::sync::OnceLock<Result<Arc<RusshRemoteClient>, String>>,
+    /// Set by [`LazyClient::close`]; a client made after it is closed as it
+    /// is made, so a use racing the close never dials.
+    closed: AtomicBool,
 }
 
 impl LazyClient {
@@ -237,6 +241,18 @@ impl LazyClient {
             })
             .as_ref()
             .map_err(Clone::clone)
+            .inspect(|client| {
+                if self.closed.load(Ordering::SeqCst) {
+                    client.close();
+                }
+            })
+    }
+
+    fn close(&self) {
+        self.closed.store(true, Ordering::SeqCst);
+        if let Some(Ok(client)) = self.initialized.get() {
+            client.close();
+        }
     }
 }
 
@@ -274,6 +290,10 @@ impl ApiConnector for LazyApiConnector {
 impl DeviceTransport for SshDevice {
     fn herdr_api_connector(&self) -> Arc<dyn ApiConnector> {
         Arc::new(LazyApiConnector(Arc::clone(&self.client)))
+    }
+
+    fn close(&self) {
+        self.client.close();
     }
 
     fn cached_herdr_socket(&self) -> Option<String> {

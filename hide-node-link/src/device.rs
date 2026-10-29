@@ -662,6 +662,11 @@ pub trait DeviceTransport: Send + Sync {
     fn cached_herdr_socket(&self) -> Option<String> {
         None
     }
+    /// The core let go of the device: what this transport started ends, a
+    /// dial or handshake still waiting on the device among it, and nothing
+    /// dials through it again. It never waits, so the core calls it before
+    /// it joins the workers that use the transport.
+    fn close(&self);
 }
 
 /// A device the core dials over SSH: it tests the connection, and installs

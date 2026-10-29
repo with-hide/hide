@@ -174,6 +174,10 @@ impl DeviceTransport for InboundTransport {
     fn cached_herdr_version(&self) -> Option<String> {
         None
     }
+
+    fn close(&self) {
+        self.link.close("the core let go of the node");
+    }
 }
 
 impl Drop for InboundTransport {

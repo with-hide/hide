@@ -98,6 +98,8 @@ impl DeviceTransport for OffDistribution {
     fn cached_herdr_version(&self) -> Option<String> {
         None
     }
+
+    fn close(&self) {}
 }
 
 impl DialedTransport for OffDistribution {

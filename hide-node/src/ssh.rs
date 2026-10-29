@@ -795,6 +795,10 @@ struct Connection {
     /// The host key the last dial accepted, the identity consent binds.
     observed_key: Arc<Mutex<Option<String>>>,
     sessions: Arc<Semaphore>,
+    /// Set once the client's owner let go of the device
+    /// ([`RusshRemoteClient::close`]): a dial waiting on the device ends,
+    /// and no use dials again.
+    closed: tokio::sync::watch::Sender<bool>,
 }
 
 impl Drop for Connection {
@@ -1155,6 +1159,7 @@ impl RusshRemoteClient {
                 ended: Mutex::new(None),
                 observed_key: Arc::new(Mutex::new(None)),
                 sessions: Arc::new(Semaphore::new(MAX_SESSION_CHANNELS)),
+                closed: tokio::sync::watch::Sender::new(false),
             }),
             runtime,
             herdr_status: Arc::new(Mutex::new(None)),
@@ -1234,6 +1239,25 @@ impl RusshRemoteClient {
         } else {
             self.runtime.block_on(ended);
         }
+    }
+
+    /// The owner let go of the device: a dial or handshake waiting on it
+    /// ends now with a refusal, the connection it holds is ended, and every
+    /// later use, by any clone, is refused instead of dialing. Never waits.
+    pub(crate) fn close(&self) {
+        self.connection.closed.send_replace(true);
+        let connection = Arc::clone(&self.connection);
+        self.runtime.spawn(async move {
+            let session = connection.session.lock().await.take();
+            if let Some(session) = session {
+                let _ = bounded_ssh_operation(session.disconnect(
+                    Disconnect::ByApplication,
+                    "device closed",
+                    "en",
+                ))
+                .await;
+            }
+        });
     }
 
     /// The host key the connection's last dial accepted.
@@ -1763,7 +1787,22 @@ impl RusshRemoteClient {
                 hide_node_link::device::DIAL_OPERATION
             }
         };
-        tokio::time::timeout(SSH_OPERATION_TIMEOUT, async {
+        let closed = || {
+            remote_error(
+                "remote-connect",
+                &self.host.host_id,
+                RemoteStage::Ssh,
+                "the device's connection was closed",
+                false,
+                false,
+            )
+        };
+        let mut owner = self.connection.closed.subscribe();
+        if *owner.borrow_and_update() {
+            return Err(closed());
+        }
+        // Dropping the dial on close shuts its socket (`ConnectingSocket`).
+        let dial = tokio::time::timeout(SSH_OPERATION_TIMEOUT, async {
             let socket = TcpStream::connect((self.host.hostname.as_str(), self.host.port))
                 .await
                 .map_err(|error| {
@@ -1845,9 +1884,13 @@ impl RusshRemoteClient {
             authenticate(&mut session, &self.host).await?;
             connecting.release();
             Ok(session)
-        })
-        .await
-        .map_err(|_| {
+        });
+        let dialed = tokio::select! {
+            biased;
+            _ = owner.wait_for(|closed| *closed) => return Err(closed()),
+            dialed = dial => dialed,
+        };
+        dialed.map_err(|_| {
             let operation = reached_operation();
             let reason = if operation == hide_node_link::device::DIAL_OPERATION {
                 "no SSH server answered in time"
@@ -2588,6 +2631,81 @@ mod tests {
             .build()
             .unwrap()
             .block_on(async move { drop(forward_share) });
+    }
+
+    /// A device that takes the connection and never greets: closing the
+    /// client ends the dial waiting on it with the closed refusal, not the
+    /// dial's timeout, shuts its socket, and refuses the next dial before it
+    /// connects (with-hide/hide-private#75).
+    #[test]
+    fn close_ends_a_dial_waiting_for_the_greeting_and_refuses_the_next() {
+        let runtime = Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let alias = SshAlias {
+                host_id: "ssh:silent".to_owned(),
+                alias: "silent".to_owned(),
+                hostname: "127.0.0.1".to_owned(),
+                user: "example".to_owned(),
+                port: listener.local_addr().unwrap().port(),
+                identity_file: None,
+                agent_socket: AgentSocket::Disabled,
+                known_hosts_file: PathBuf::from("/dev/null"),
+            };
+            let client = Arc::new(RusshRemoteClient::new(alias).unwrap());
+            let dialing = Arc::clone(&client);
+            let dial = std::thread::spawn(move || {
+                dialing
+                    .runtime
+                    .block_on(dialing.connect(KnownHostHandler::new(&dialing.host)))
+                    .map(drop)
+            });
+            let (mut socket, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
+                .await
+                .expect("the client dials the device")
+                .unwrap();
+            client.close();
+            let refused = tokio::task::spawn_blocking(move || dial.join().unwrap())
+                .await
+                .unwrap()
+                .expect_err("a closed client's dial does not succeed");
+            assert_eq!(
+                refused.diagnostic().reason,
+                "the device's connection was closed",
+                "the dial ended on the close, not on its own timeout"
+            );
+            let mut byte = [0; 256];
+            tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    match socket.read(&mut byte).await {
+                        Ok(0) => break,
+                        // The client's own identification line.
+                        Ok(_) => {}
+                        Err(error) if error.kind() == io::ErrorKind::ConnectionReset => break,
+                        Err(error) => panic!("unexpected peer read failure: {error}"),
+                    }
+                }
+            })
+            .await
+            .expect("the ended dial shut its socket");
+            let again = client.connect(KnownHostHandler::new(&client.host)).await;
+            assert_eq!(
+                again.map(drop).unwrap_err().diagnostic().reason,
+                "the device's connection was closed"
+            );
+            // A dial would already wait in the backlog when `connect` returned.
+            let listener = listener.into_std().unwrap();
+            listener.set_nonblocking(true).unwrap();
+            assert_eq!(
+                listener.accept().map(drop).unwrap_err().kind(),
+                io::ErrorKind::WouldBlock,
+                "a closed client dialed the device again"
+            );
+        });
     }
 
     /// Russh starts a socket-owning task after the SSH banner but before it

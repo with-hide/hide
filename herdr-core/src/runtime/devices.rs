@@ -50,6 +50,22 @@ pub(super) enum Retiring {
     Retried,
 }
 
+/// A device connection the core let go of, dropped off the runtime lock by
+/// whoever drains it. Its transport is closed before its coordinator is
+/// joined, so a coordinator waiting on a dial or handshake to the device ends
+/// with the close, not at the dial's own timeout (with-hide/hide-private#75).
+pub(crate) struct RetiredRemote {
+    transport: DeviceReach,
+    sync: Option<session_sync::SessionSyncHandle>,
+}
+
+impl Drop for RetiredRemote {
+    fn drop(&mut self) {
+        self.transport.device().close();
+        self.sync.take();
+    }
+}
+
 pub(super) struct RemoteDeviceConnection {
     pub(super) transport: DeviceReach,
     /// `None` when the coordinator could not be started; the status entry
@@ -332,10 +348,11 @@ impl Runtime {
             .retain(|(device, _), _| device != device_id);
         self.device_github_over_limit.remove(device_id);
         self.forget_device_host(device_id, why);
-        if let Some(connection) = self.remote_connections.remove(device_id)
-            && let Some(sync) = connection.sync
-        {
-            self.retired_remote_syncs.push(sync);
+        if let Some(connection) = self.remote_connections.remove(device_id) {
+            self.retired_remote_syncs.push(RetiredRemote {
+                transport: connection.transport,
+                sync: connection.sync,
+            });
         }
         self.remote_controls.remove(device_id);
         self.terminals.remove_device(device_id);
@@ -463,18 +480,21 @@ impl Runtime {
         true
     }
 
-    pub(crate) fn take_retired_remote_syncs(&mut self) -> Vec<session_sync::SessionSyncHandle> {
+    pub(crate) fn take_retired_remote_syncs(&mut self) -> Vec<RetiredRemote> {
         std::mem::take(&mut self.retired_remote_syncs)
     }
 
-    /// Every coordinator the runtime still owns, for the FFI layer to join
-    /// before the runtime itself is dropped.
-    pub(crate) fn take_remote_syncs(&mut self) -> Vec<session_sync::SessionSyncHandle> {
+    /// Every device connection the runtime still owns, for the core to close
+    /// and join before the runtime itself is dropped.
+    pub(crate) fn take_remote_syncs(&mut self) -> Vec<RetiredRemote> {
         let mut handles = self.take_retired_remote_syncs();
         handles.extend(
             self.remote_connections
                 .values_mut()
-                .filter_map(|connection| connection.sync.take()),
+                .map(|connection| RetiredRemote {
+                    transport: connection.transport.clone(),
+                    sync: connection.sync.take(),
+                }),
         );
         handles
     }

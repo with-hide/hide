@@ -1229,10 +1229,10 @@ pub struct Runtime {
     /// The link each node that dialed this core brought, until its
     /// connection takes it (`inbound`).
     inbound_arrivals: HashMap<String, crate::remote::Arrived>,
-    /// Coordinators of removed devices, waiting for the FFI layer to join
-    /// them off the runtime lock: a join under the lock would wait for a
-    /// worker that is itself waiting for the lock.
-    retired_remote_syncs: Vec<session_sync::SessionSyncHandle>,
+    /// Connections of removed devices, waiting for the core to close and
+    /// join them off the runtime lock: a join under the lock would wait for
+    /// a worker that is itself waiting for the lock.
+    retired_remote_syncs: Vec<devices::RetiredRemote>,
     /// The last connection test of each device, kept apart from the device
     /// rows because those are rebuilt with every catalog.
     remote_device_tests: HashMap<String, crate::model::DeviceTestSnapshot>,
