@@ -494,10 +494,10 @@ fn counted(
 ) -> Result<(), StepError> {
     let mut left = size;
     while left > 0 {
-        let wanted = usize::try_from(left).unwrap_or(usize::MAX).min(COUNTED_CHUNK);
-        let chunk = pipe
-            .bytes(wanted, Instant::now() + stall)
-            .map_err(lost)?;
+        let wanted = usize::try_from(left)
+            .unwrap_or(usize::MAX)
+            .min(COUNTED_CHUNK);
+        let chunk = pipe.bytes(wanted, Instant::now() + stall).map_err(lost)?;
         take(&chunk)?;
         left -= chunk.len() as u64;
     }
@@ -505,9 +505,11 @@ fn counted(
 }
 
 fn number<T: std::str::FromStr>(field: &str) -> Result<T, StepError> {
-    field
-        .parse()
-        .map_err(|_| StepError::Lost(format!("the machine answered an unreadable count {field:?}")))
+    field.parse().map_err(|_| {
+        StepError::Lost(format!(
+            "the machine answered an unreadable count {field:?}"
+        ))
+    })
 }
 
 /// Runs `argv` on the machine with no input, from the account's home, and
@@ -588,7 +590,9 @@ pub(crate) fn put_file(
     let mut buffer = vec![0_u8; COUNTED_CHUNK];
     let mut left = size;
     while left > 0 {
-        let wanted = usize::try_from(left).unwrap_or(usize::MAX).min(buffer.len());
+        let wanted = usize::try_from(left)
+            .unwrap_or(usize::MAX)
+            .min(buffer.len());
         let filled = match read.read(&mut buffer[..wanted]) {
             Ok(0) => {
                 return Err(StepError::Local(format!(
@@ -680,9 +684,7 @@ pub(crate) fn attach(
 /// An absolute path the script takes as one field: plain, `/`-separated,
 /// with no `.` or `..` step.
 fn remote_path(path: &str) -> bool {
-    plain(path)
-        && path.starts_with('/')
-        && !path.split('/').any(|part| part == "." || part == "..")
+    plain(path) && path.starts_with('/') && !path.split('/').any(|part| part == "." || part == "..")
 }
 
 /// A field the script reads whole: no tab, no line end, no control

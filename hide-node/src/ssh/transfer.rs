@@ -89,8 +89,8 @@ pub(super) fn download(
         }
         _ => {}
     }
-    let mut written = hide_platform::fs::private::create_new_file(&part)
-        .map_err(|error| local(&part, error))?;
+    let mut written =
+        hide_platform::fs::private::create_new_file(&part).map_err(|error| local(&part, error))?;
     let copied = (|| {
         let mut hashing = Hashing {
             file: &mut written,

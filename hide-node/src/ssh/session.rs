@@ -224,6 +224,11 @@ pub(super) fn sign_in(
         _ => None,
     };
     let mut command = dial.program.command();
+    // With no desk, nothing can hear a question, so ssh asks none, of a
+    // terminal included.
+    if desk.is_none() {
+        command.args(["-o", "BatchMode=yes"]);
+    }
     command.args(dial.program.link_args(
         dial.alias,
         dial.resolved,
@@ -258,9 +263,8 @@ pub(super) fn sign_in(
     };
     // From here a cancel ends ssh at once, and the attempt has ended only
     // once ssh is reaped.
-    let link = ChildLink::start(dial.target, child, Some(cancel)).map_err(|error| {
-        EstablishError::Helper(format!("ssh's link could not start: {error}"))
-    })?;
+    let link = ChildLink::start(dial.target, child, Some(cancel))
+        .map_err(|error| EstablishError::Helper(format!("ssh's link could not start: {error}")))?;
     let mut pipe = SigningIn {
         link,
         desk,
@@ -304,10 +308,7 @@ pub(super) fn sign_in(
             if failure.problem == SshProblem::Unclassified && stderr.is_empty() {
                 failure.detail = match stop {
                     Stop::Quiet => {
-                        format!(
-                            "ssh did not sign in within {} s",
-                            SIGN_IN_TIMEOUT.as_secs()
-                        )
+                        format!("ssh did not sign in within {} s", SIGN_IN_TIMEOUT.as_secs())
                     }
                     Stop::Ended(reason) => reason,
                 };
@@ -397,7 +398,9 @@ impl From<StepError> for SessionError {
 impl fmt::Display for SessionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Ssh(failure) => write!(formatter, "{}: {}", failure.problem.code(), failure.detail),
+            Self::Ssh(failure) => {
+                write!(formatter, "{}: {}", failure.problem.code(), failure.detail)
+            }
             Self::Lost(reason) => write!(formatter, "lost: {reason}"),
             Self::Refused(reason) => formatter.write_str(reason),
             Self::Local(reason) => write!(formatter, "local: {reason}"),
@@ -419,12 +422,16 @@ pub struct SshTarget {
 
 impl SshTarget {
     /// `alias` as the account at `home` names it, through the `ssh` on
-    /// `PATH`, with the `hide` beside this program answering its questions.
+    /// `PATH`, with the `hide` beside this program hearing its questions; a
+    /// program with no `hide` beside it, such as a test, has ssh ask none.
     pub fn new(home: &Path, alias: &str) -> Self {
-        let askpass = std::env::current_exe().ok().and_then(|exe| {
-            exe.parent()
-                .map(|folder| folder.join(format!("hide{}", std::env::consts::EXE_SUFFIX)))
-        });
+        let askpass = std::env::current_exe()
+            .ok()
+            .and_then(|exe| {
+                exe.parent()
+                    .map(|folder| folder.join(format!("hide{}", std::env::consts::EXE_SUFFIX)))
+            })
+            .filter(|program| program.is_file());
         Self {
             program: SshProgram::new(PathBuf::from("ssh"), home),
             alias: alias.to_owned(),

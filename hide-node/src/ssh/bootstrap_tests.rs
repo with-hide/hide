@@ -371,7 +371,10 @@ fn a_file_goes_whole_into_a_private_folder_and_comes_back_whole() {
 
     let mut back = Vec::new();
     let (size, stated) = get_file(&mut pipe, spelled, &mut back, &|_| {}).unwrap();
-    assert_eq!((size, stated.as_str()), (bytes.len() as u64, digest.as_str()));
+    assert_eq!(
+        (size, stated.as_str()),
+        (bytes.len() as u64, digest.as_str())
+    );
     assert_eq!(back, bytes);
     assert!(matches!(
         get_file(&mut pipe, "/no/such/file", &mut Vec::new(), &|_| {}),

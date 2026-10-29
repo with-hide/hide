@@ -63,10 +63,16 @@ pub(super) fn list(
 fn endpoints(
     targets: &[String],
     stop: &AtomicBool,
-    resolve: impl Fn(&str) -> Result<hide_node_link::device::SshAddress, hide_node_link::device::SshHostProblem> + Sync,
+    resolve: impl Fn(
+        &str,
+    ) -> Result<
+        hide_node_link::device::SshAddress,
+        hide_node_link::device::SshHostProblem,
+    > + Sync,
 ) -> BTreeMap<String, Result<String, String>> {
-    let unresolved =
-        || "The saved SSH target could not be resolved. Check SSH configuration and retry".to_owned();
+    let unresolved = || {
+        "The saved SSH target could not be resolved. Check SSH configuration and retry".to_owned()
+    };
     let resolved = super::hosts::resolve_all(targets, stop, |target| {
         Target::parse(target).map_err(|_| hide_node_link::device::SshHostProblem::SshFailed)?;
         resolve(target)
@@ -149,9 +155,7 @@ impl Target {
         let uri = target.starts_with("ssh://");
         let destination = target.strip_prefix("ssh://").unwrap_or(target);
         let address = match destination.rsplit_once('@') {
-            Some((user, address)) if !user.is_empty() && !user.contains(['@', '/', ':']) => {
-                address
-            }
+            Some((user, address)) if !user.is_empty() && !user.contains(['@', '/', ':']) => address,
             Some(_) => return Err(bad()),
             None => destination,
         };
@@ -225,10 +229,15 @@ mod tests {
         );
         assert!(endpoints["-oProxyCommand=x"].is_err());
         assert!(endpoints["gone"].is_err());
-        assert!(!asked.lock().unwrap().iter().any(|target| target.starts_with('-')));
+        assert!(
+            !asked
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|target| target.starts_with('-'))
+        );
         assert!(Target::parse("ssh://u@host:0").is_err());
         assert!(validate_session("../default").is_err());
         assert!(validate_session("").is_err());
     }
-
 }

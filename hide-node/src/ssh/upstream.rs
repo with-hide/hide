@@ -150,12 +150,7 @@ impl Upstream {
     }
 
     /// Runs `argv` on the machine with no input; see [`Session::run`].
-    pub fn run(
-        &self,
-        argv: &[String],
-        cap: usize,
-        within: Duration,
-    ) -> Result<Ran, SessionError> {
+    pub fn run(&self, argv: &[String], cap: usize, within: Duration) -> Result<Ran, SessionError> {
         self.with_session(|session| session.run(argv, cap, within))
     }
 
@@ -167,11 +162,7 @@ impl Upstream {
         files: &[FileCopy],
         sent: &(dyn Fn(u64) + Sync),
     ) -> Result<(), SessionError> {
-        self.with_session(|session| {
-            files
-                .iter()
-                .try_for_each(|file| session.upload(file, sent))
-        })
+        self.with_session(|session| files.iter().try_for_each(|file| session.upload(file, sent)))
     }
 
     /// Copies `files` from the machine into their places below `into`, one

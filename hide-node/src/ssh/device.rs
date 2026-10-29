@@ -12,9 +12,7 @@
 //! so a connection signs in once.
 
 use super::host::bootstrap::{self, HerdrChoice};
-use super::host::{
-    ATTEMPT_ENDED as ENDED, HelperPackages, PaneEventsSlot, PaneHook, TerminalHook,
-};
+use super::host::{ATTEMPT_ENDED as ENDED, HelperPackages, PaneEventsSlot, PaneHook, TerminalHook};
 use super::hosts::{Resolve, ssh_g};
 use super::openssh::{SshProgram, Version};
 use super::session::{self, Dial};

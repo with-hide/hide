@@ -34,9 +34,7 @@ pub mod upstream;
 pub use device::{Connector, SshDevice};
 pub use host::{LinkStream, LinkWriter, OpenError, PaneEvents, PaneEventsSlot, RemoteHost};
 
-use hide_node_link::device::{
-    CapabilityReport, RemoteHostIdentity, RemoteStage, SnapshotCheck,
-};
+use hide_node_link::device::{CapabilityReport, RemoteHostIdentity, RemoteStage, SnapshotCheck};
 
 /// The remembered socket is one owned `String`, so a panic while it was held
 /// cannot have left it half-written; the value is taken as it is.
@@ -73,4 +71,3 @@ impl Drop for RemoteRuntime {
         }
     }
 }
-

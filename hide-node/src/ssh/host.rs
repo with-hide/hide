@@ -2985,5 +2985,4 @@ mod tests {
         write(&directory.path().join(HOOKS_NAME), b"two", 0o755);
         assert_ne!(packages.payload(os, arch).unwrap().version(), second);
     }
-
 }
