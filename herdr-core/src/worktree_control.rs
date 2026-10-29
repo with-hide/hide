@@ -2164,6 +2164,35 @@ fn create_worktree_observing_purpose(
             .map_err(unverified)?
             .is_some_and(|(_, real)| created_real.is_some() && real == created_real);
     if identity_matches {
+        // An agent's start is typed into the worktree's first tab, so that tab
+        // is replaced by one running the account's shell with Hide's
+        // integration, as a spawn's is: the start then waits for that shell's
+        // first prompt, never typing into a question its startup files ask.
+        // The repository's host runs the pane and writes the integration.
+        let launch = request.agent_kind.as_ref().and_then(|_| {
+            crate::agent_start::shell_launch(
+                Some(host),
+                &format!("herdr-core:task:{}:worktree", request.id),
+            )
+        });
+        let tab = super::replace_tab(
+            connector,
+            super::OwnedTab {
+                initial_label: Some(created.tab_label.clone()),
+                workspace_id: created.workspace_id.clone(),
+                tab_id: created.tab_id.clone(),
+                pane_id: created.pane_id.clone(),
+                launched: false,
+            },
+            &created.path,
+            &created.tab_label,
+            request.focus,
+            launch
+                .as_ref()
+                .map(|launch| launch.env.clone())
+                .unwrap_or_default(),
+            launch.as_ref().map(|launch| launch.command.as_slice()),
+        );
         let purpose_failure = request.purpose.as_ref().and_then(|purpose| {
             on_purpose_write(&created.path, purpose);
             let git = NodeGit(host);
@@ -2196,16 +2225,15 @@ fn create_worktree_observing_purpose(
         });
         return Ok(WorktreeTaskOutcome {
             path: created.path,
-            pane_id: created.pane_id,
-            created_tab_id: Some(created.tab_id),
+            pane_id: tab.pane_id,
+            created_tab_id: Some(tab.tab_id),
             issue_error,
             purpose_error: purpose_failure
                 .as_ref()
                 .map(|failure| failure.detail.clone()),
             unconfirmed_purpose_token: purpose_failure
                 .and_then(|failure| failure.unconfirmed_token),
-            // `worktree.create` takes no environment (a follow-up).
-            shell: crate::agent_start::ShellStart::Plain,
+            shell: crate::agent_start::ShellStart::of_tab(tab.launched, launch.as_ref()),
         });
     }
 
@@ -4041,6 +4069,74 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["worktree.create", "worktree.list"]
         );
+    }
+
+    /// A new worktree an agent starts in has its first tab replaced by one
+    /// running the account's shell with Hide's integration, so the start is
+    /// typed only after that shell marked its first prompt, never into a
+    /// question its startup files ask (with-hide/hide-private#57). A worktree
+    /// with no agent keeps the tab Herdr made.
+    #[test]
+    fn a_new_worktree_an_agent_starts_in_runs_the_integrated_shell() {
+        struct Integrated;
+        impl crate::node_access::NodeLink for Integrated {
+            fn call(
+                &self,
+                call: hide_node_link::protocol::Call,
+                _timeout: std::time::Duration,
+            ) -> Result<crate::node_access::LinkAnswer, crate::node_access::LinkError> {
+                use hide_node_link::protocol::Call;
+                Ok(crate::node_access::LinkAnswer::Parsed(match call {
+                    Call::Directory { path } => json!(path),
+                    Call::ShellIntegration => json!({"command": ["/bin/zsh", "-l"],
+                        "readiness": "integrated", "env": {"ZDOTDIR": "/hide/zsh"}}),
+                    other => panic!("unexpected call {other:?}"),
+                }))
+            }
+        }
+        let path = "/fixture/repo.worktrees/feature";
+        let replaced = json!({"result":{"type":"layout_apply","layout":{"workspace_id":"w2",
+            "tab_id":"w2:t2","zoomed":false,"focused_pane_id":"w2:p2",
+            "root":{"type":"pane","pane_id":"w2:p2"}}}});
+        let replacing = server(vec![
+            worktree_created(path, "feature"),
+            worktree_list(path, "feature"),
+            replaced,
+        ]);
+        let outcome = create_worktree(
+            &replacing,
+            &Integrated,
+            true,
+            &WorktreeTaskRequest {
+                agent_kind: Some("codex".into()),
+                ..task("feature")
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            (outcome.pane_id.as_str(), outcome.created_tab_id.as_deref()),
+            ("w2:p2", Some("w2:t2"))
+        );
+        assert_eq!(
+            outcome.shell,
+            crate::agent_start::ShellStart::Integrated {
+                program: "zsh".into()
+            }
+        );
+        let requests = replacing.requests.lock().unwrap();
+        let apply = &requests[2];
+        assert_eq!(apply["method"], "layout.apply");
+        assert_eq!(apply["params"]["tab_id"], "w2:t1");
+        assert_eq!(apply["params"]["focus"], true);
+        drop(requests);
+
+        let plain = server(vec![
+            worktree_created(path, "feature"),
+            worktree_list(path, "feature"),
+        ]);
+        let outcome = create_worktree(&plain, &Integrated, true, &task("feature")).unwrap();
+        assert_eq!(outcome.pane_id, "w2:p1");
+        assert_eq!(outcome.shell, crate::agent_start::ShellStart::Plain);
     }
 
     #[test]
