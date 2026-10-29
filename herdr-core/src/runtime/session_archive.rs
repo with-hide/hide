@@ -17,6 +17,7 @@ use crate::session_archive::{
     ArchiveId, ArchivePhase, ArchiveRecord, ArchivedMember, ArchivedPull,
     RESUME_CONFIRM_TIMEOUT_MS, Resume, SessionArchive,
 };
+use crate::sidebar::SessionAgentSessionPayload;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -94,11 +95,37 @@ impl Runtime {
 
     /// The native session a row reports, proven where this machine reads it.
     fn archive_session_of(&self, agent: &SidebarAgentSnapshot) -> Option<String> {
+        self.archive_proof(agent).map(|(session, _)| session)
+    }
+
+    /// The row's native session with the reference its resume proves it by.
+    /// This machine's rows carry the reference-proven facts; a sleeping row
+    /// is drawn from its record after the labels are laid, so its pane's
+    /// label proves the session the record kept.
+    fn archive_proof(
+        &self,
+        agent: &SidebarAgentSnapshot,
+    ) -> Option<(String, Option<SessionAgentSessionPayload>)> {
         let session = agent.session_id.clone().filter(|id| !id.is_empty())?;
-        match super::agent_sleep::pane_device(&agent.pane_id) {
-            // This machine's rows carry the reference-proven facts.
-            None => agent.row_facts.as_ref().map(|_| session),
-            Some(_) => Some(session),
+        let reference = agent
+            .row_facts
+            .as_ref()
+            .map(|facts| facts.native_reference.clone());
+        match (super::agent_sleep::pane_device(&agent.pane_id), reference) {
+            (Some(_), reference) => Some((session, reference.flatten())),
+            (None, Some(reference)) => Some((session, reference)),
+            (None, None) if agent.sleep.is_some() => self
+                .label_overlay
+                .proven_native(
+                    &agent.pane_id,
+                    &agent.agent_kind,
+                    &SessionAgentSessionPayload {
+                        kind: "id".to_owned(),
+                        value: session.clone(),
+                    },
+                )
+                .filter(|(proven, _)| *proven == session),
+            (None, None) => None,
         }
     }
 
@@ -264,15 +291,14 @@ impl Runtime {
             let checkout = self
                 .archive_place(&agent.pane_id)
                 .map_or_else(|| checkout_path.clone(), |(_, _, path)| path);
+            let (native_session_id, source_reference) =
+                self.archive_proof(agent).expect("checked above");
             members.push(ArchivedMember {
                 machine: self.archive_machine_of(&agent.pane_id),
                 pane_id: agent.pane_id.clone(),
                 kind: agent.agent_kind.clone(),
-                native_session_id: self.archive_session_of(agent).expect("checked above"),
-                source_reference: agent
-                    .row_facts
-                    .as_ref()
-                    .and_then(|facts| facts.native_reference.clone()),
+                native_session_id,
+                source_reference,
                 cwd: self.archive_pane_cwd(&agent.pane_id),
                 checkout_path: checkout,
                 title: agent.identity_label.clone(),

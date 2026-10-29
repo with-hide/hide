@@ -18,7 +18,9 @@ use super::analysis::LabelEnd;
 use super::facts::SessionFacts;
 use super::store::{self, PaneRecord, WakeRead};
 use crate::request_view::RowFacts;
-use crate::sidebar::{AgentLabel, SessionAgentPayload, SessionSnapshotPayload};
+use crate::sidebar::{
+    AgentLabel, SessionAgentPayload, SessionAgentSessionPayload, SessionSnapshotPayload,
+};
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct LabelOverlay {
@@ -137,6 +139,25 @@ impl LabelOverlay {
             .flatten()
     }
 
+    /// The native session and its lifecycle reference this pane's label
+    /// proves for `kind`'s `reported` reference, as [`Self::apply`] lays
+    /// them on a row. A sleeping row is drawn after the overlay is laid, so
+    /// what acts on its conversation asks here.
+    pub(crate) fn proven_native(
+        &self,
+        pane_id: &str,
+        kind: &str,
+        reported: &SessionAgentSessionPayload,
+    ) -> Option<(String, Option<SessionAgentSessionPayload>)> {
+        let label = self.panes.get(pane_id)?.label.as_ref()?;
+        let reference = label_reference_token(kind, &reported.kind, &reported.value);
+        if !label.proves(reference.as_deref()) {
+            return None;
+        }
+        let (session, reference) = label.native(kind, Some(reported));
+        Some((session?, reference))
+    }
+
     pub(crate) fn apply(&self, payload: &mut SessionSnapshotPayload) {
         self.apply_at(payload, unix_milliseconds());
     }
@@ -202,39 +223,10 @@ impl LabelOverlay {
             {
                 facts.native_title = facts.native_custom_title.take().or(facts.native_title);
             }
-            facts.native_session_id = label
-                .native_session_id
-                .as_ref()
-                .filter(|id| {
-                    label_reference_token(agent.agent.as_deref().unwrap_or_default(), "id", id)
-                        .as_deref()
-                        == label.owner.as_deref()
-                })
-                .cloned();
-            // The reference a lifecycle proof takes is the one its reader
-            // names: a file reader's proven path, or the id Herdr reported
-            // (OpenCode's session, agy's conversation, which agy's reader
-            // finds its transcript by).
-            facts.native_reference = facts.native_session_id.as_ref().and_then(|_| {
-                if agent
-                    .agent
-                    .as_deref()
-                    .and_then(hide_session::Agent::from_kind)
-                    .is_some_and(|native| {
-                        native.requires_native_file_proof()
-                            && native.proof_reference_kind() == "path"
-                    })
-                {
-                    label.native_source_path.as_ref().map(|path| {
-                        crate::sidebar::SessionAgentSessionPayload {
-                            kind: "path".into(),
-                            value: path.clone(),
-                        }
-                    })
-                } else {
-                    agent.agent_session.clone()
-                }
-            });
+            (facts.native_session_id, facts.native_reference) = label.native(
+                agent.agent.as_deref().unwrap_or_default(),
+                agent.agent_session.as_ref(),
+            );
             facts.awaiting_operator = awaiting_operator;
             facts.user_turn = label.user_turn.as_ref().and_then(|(seq, fact)| {
                 (agent.state_change_seq == Some(*seq)).then(|| fact.clone())
@@ -327,6 +319,37 @@ fn row_facts(facts: &SessionFacts) -> RowFacts {
 }
 
 impl ProvenLabel {
+    /// The native session this label proves for `kind`, and the reference a
+    /// lifecycle proof of it takes: the one its reader names, a file reader's
+    /// proven path or the id Herdr reported (OpenCode's session, agy's
+    /// conversation, which agy's reader finds its transcript by).
+    fn native(
+        &self,
+        kind: &str,
+        reported: Option<&SessionAgentSessionPayload>,
+    ) -> (Option<String>, Option<SessionAgentSessionPayload>) {
+        let session = self
+            .native_session_id
+            .as_ref()
+            .filter(|id| label_reference_token(kind, "id", id).as_deref() == self.owner.as_deref())
+            .cloned();
+        let reference = session.as_ref().and_then(|_| {
+            if hide_session::Agent::from_kind(kind).is_some_and(|native| {
+                native.requires_native_file_proof() && native.proof_reference_kind() == "path"
+            }) {
+                self.native_source_path
+                    .as_ref()
+                    .map(|path| SessionAgentSessionPayload {
+                        kind: "path".into(),
+                        value: path.clone(),
+                    })
+            } else {
+                reported.cloned()
+            }
+        });
+        (session, reference)
+    }
+
     fn proves(&self, reference: Option<&str>) -> bool {
         store::proves(
             self.owner.as_deref(),
