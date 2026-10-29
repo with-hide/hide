@@ -9,8 +9,8 @@ import { buildFixtureShims } from "../../web/e2e/shims/build";
 
 // vitest has no `globalSetup` of Playwright's, so this file builds the
 // programs the teardown runs, the same way, before it uses one.
-beforeAll(() => {
-  if (process.platform === "win32") buildFixtureShims(fileURLToPath(new URL("..", import.meta.url)));
+beforeAll(async () => {
+  if (process.platform === "win32") await buildFixtureShims(fileURLToPath(new URL("..", import.meta.url)), ["hide-processes"]);
 }, 120_000);
 
 test("a child its owner started after the owner was listed is ended once the owner is gone", { timeout: 30_000 }, async (context) => {

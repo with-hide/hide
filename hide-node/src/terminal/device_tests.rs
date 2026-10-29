@@ -289,6 +289,8 @@ struct GatedLink {
     open: Mutex<bool>,
     opened: Condvar,
     written: Mutex<Vec<Vec<u8>>>,
+    /// Told each time the link takes a line.
+    wrote: Condvar,
     fail: Mutex<Option<LineRefused>>,
     /// Lines answered busy before the link takes one.
     busy: Mutex<usize>,
@@ -303,17 +305,50 @@ impl GatedLink {
     }
 
     fn lines(&self) -> Vec<TerminalDown> {
-        self.written
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|line| {
-                serde_json::from_slice::<TerminalLine<TerminalDown>>(line)
-                    .unwrap()
-                    .terminal
-            })
-            .collect()
+        let written = self.written.lock().unwrap().clone();
+        written.iter().map(|line| parse_down(line)).collect()
     }
+
+    /// Sleeps until the lines the link took answer `done`, and returns them.
+    /// The writer takes `written` for every line, so the wait holds it only
+    /// to copy the lines it has not read and parses each once outside it: a
+    /// poll that parsed every line under it again and again kept a Linux
+    /// writer from it past the wait (with-hide/hide-private#164). `done`
+    /// runs for every line taken, so it reads the last line, not them all.
+    fn wait_for_lines(&self, mut done: impl FnMut(&[TerminalDown]) -> bool) -> Vec<TerminalDown> {
+        let deadline = std::time::Instant::now() + WAIT;
+        let mut lines = Vec::new();
+        let mut written = self.written.lock().unwrap();
+        loop {
+            let fresh = written[lines.len()..].to_vec();
+            drop(written);
+            lines.extend(fresh.iter().map(|line| parse_down(line)));
+            if done(&lines) {
+                return lines;
+            }
+            written = self.written.lock().unwrap();
+            while written.len() == lines.len() {
+                let left = deadline.saturating_duration_since(std::time::Instant::now());
+                assert!(!left.is_zero(), "timed out waiting for the link's lines");
+                written = self.wrote.wait_timeout(written, left).unwrap().0;
+            }
+        }
+    }
+}
+
+/// Whether the last line the link took is `pane`'s key line of `bytes`.
+fn ends_with_key(lines: &[TerminalDown], pane: &str, bytes: &[u8]) -> bool {
+    matches!(
+        lines.last(),
+        Some(TerminalDown::Key { target: KeyTarget::Pane(owner), data, .. })
+            if owner == pane && decode_base64(data).unwrap() == bytes
+    )
+}
+
+fn parse_down(line: &[u8]) -> TerminalDown {
+    serde_json::from_slice::<TerminalLine<TerminalDown>>(line)
+        .unwrap()
+        .terminal
 }
 
 impl LineLink for GatedLink {
@@ -331,6 +366,7 @@ impl LineLink for GatedLink {
             return Err(LineRefused::Busy);
         }
         self.written.lock().unwrap().push(line.to_vec());
+        self.wrote.notify_all();
         Ok(())
     }
 
@@ -454,13 +490,8 @@ fn a_pane_past_its_unsent_keys_reads_ended_while_other_panes_keys_go_on() {
     // Another pane's keys still go.
     proxy.key(KeyTarget::Pane("w1:p2".into()), b"other".to_vec(), 1);
     link.release();
-    wait_for(|| {
-        link.lines().iter().any(|line| {
-            matches!(line, TerminalDown::Key { target: KeyTarget::Pane(pane), .. } if pane == "w1:p2")
-        })
-    });
+    let lines = link.wait_for_lines(|lines| ends_with_key(lines, "w1:p2", b"other"));
     // The keys it took before the cap were written, in order, before it.
-    let lines = link.lines();
     let first_keys = lines
         .iter()
         .filter(|line| matches!(line, TerminalDown::Key { .. }))
@@ -476,23 +507,23 @@ fn a_pane_past_its_unsent_keys_reads_ended_while_other_panes_keys_go_on() {
         manual: true,
     });
     proxy.key(KeyTarget::Pane("w1:p1".into()), b"again".to_vec(), 1);
-    wait_for(|| {
-        link.lines().iter().any(|line| {
-            matches!(line, TerminalDown::Key { data, .. } if decode_base64(data).unwrap() == b"again")
-        })
-    });
+    link.wait_for_lines(|lines| ends_with_key(lines, "w1:p1", b"again"));
 }
 
-/// Every key line the link wrote, as (pane, bytes, typed at).
-fn key_lines(link: &GatedLink) -> Vec<(String, Vec<u8>, u64)> {
-    link.lines()
-        .into_iter()
+/// Every key line of `lines`, as (pane, bytes, typed at).
+fn key_lines(lines: &[TerminalDown]) -> Vec<(String, Vec<u8>, u64)> {
+    lines
+        .iter()
         .filter_map(|line| match line {
             TerminalDown::Key {
                 target: KeyTarget::Pane(pane),
                 data,
                 typed_at_unix_ms,
-            } => Some((pane, decode_base64(&data).unwrap(), typed_at_unix_ms)),
+            } => Some((
+                pane.clone(),
+                decode_base64(data).unwrap(),
+                *typed_at_unix_ms,
+            )),
             _ => None,
         })
         .collect()
@@ -538,17 +569,17 @@ fn a_stalled_link_takes_256_kib_of_one_byte_keys_and_refuses_only_the_next() {
     assert_eq!(refused, ["w1:p1 terminal.device_input_overflow"]);
     proxy.key(KeyTarget::Pane("w1:p2".into()), b"other".to_vec(), 1);
     link.release();
-    let arrived = |pane: &str| -> Vec<u8> {
-        key_lines(&link)
+    let arrived = |lines: &[TerminalDown], pane: &str| -> Vec<u8> {
+        key_lines(lines)
             .into_iter()
             .filter(|(owner, _, _)| owner == pane)
             .flat_map(|(_, bytes, _)| bytes)
             .collect()
     };
-    wait_for(|| arrived("w1:p2") == b"other");
-    assert_eq!(arrived("w1:p1"), typed);
+    let all = link.wait_for_lines(|lines| ends_with_key(lines, "w1:p2", b"other"));
+    assert_eq!(arrived(&all, "w1:p1"), typed);
     // Runs are bounded: 256 KiB went down in 16 KiB lines.
-    let lines = key_lines(&link);
+    let lines = key_lines(&all);
     assert!(lines.iter().all(|(_, bytes, _)| bytes.len() <= 16 * 1024));
     assert_eq!(lines.len(), MAX_UNSENT_KEY_BYTES / (16 * 1024) + 1);
 }
@@ -580,8 +611,8 @@ fn a_waiting_run_of_keys_stops_at_a_pane_a_control_an_enter_and_an_escape() {
     key("w1:p1", b"f", 10);
     key("w1:p1", b"g", 11);
     link.release();
-    wait_for(|| key_lines(&link).len() == 9);
-    let lines: Vec<(String, Vec<u8>, u64)> = key_lines(&link);
+    let all = link.wait_for_lines(|lines| ends_with_key(lines, "w1:p1", b"fg"));
+    let lines: Vec<(String, Vec<u8>, u64)> = key_lines(&all);
     let expected: Vec<(String, Vec<u8>, u64)> = [
         ("w1:p1", &b"ab"[..], 2),
         ("w1:p1", b"\r", 3),
@@ -598,7 +629,6 @@ fn a_waiting_run_of_keys_stops_at_a_pane_a_control_an_enter_and_an_escape() {
     .collect();
     assert_eq!(lines, expected);
     // The control went down between `d` and `e`.
-    let all = link.lines();
     let control = all
         .iter()
         .position(|line| {
@@ -710,18 +740,29 @@ fn every_panes_keys_at_their_caps_end_no_link_and_refuse_only_their_pane() {
         );
     }
     link.release();
-    let arrived = |pane: &str| -> usize {
-        key_lines(&link)
-            .into_iter()
-            .filter(|(owner, _, _)| owner == pane)
-            .map(|(_, bytes, _)| bytes.len())
+    let arrived = |lines: &[TerminalDown], pane: &str| -> usize {
+        lines
+            .iter()
+            .filter_map(|line| match line {
+                TerminalDown::Key {
+                    target: KeyTarget::Pane(owner),
+                    data,
+                    ..
+                } if owner == pane => Some(decode_base64(data).unwrap().len()),
+                _ => None,
+            })
             .sum()
     };
-    wait_for(|| arrived("w1:p63") == keys.len());
-    assert_eq!(arrived("w1:p0"), keys.len() + enters);
-    assert_eq!(arrived("w1:p1"), keys.len() + 1);
+    // `w1:p1`'s Enter went into the line last, behind `w1:p0`'s.
+    let lines = link.wait_for_lines(|lines| ends_with_key(lines, "w1:p1", b"\r"));
+    assert_eq!(arrived(&lines, "w1:p1"), keys.len() + 1);
+    assert_eq!(arrived(&lines, "w1:p0"), keys.len() + enters);
     for pane in 2..MAX_KEY_PANES {
-        assert_eq!(arrived(&format!("w1:p{pane}")), keys.len(), "w1:p{pane}");
+        assert_eq!(
+            arrived(&lines, &format!("w1:p{pane}")),
+            keys.len(),
+            "w1:p{pane}"
+        );
     }
     assert!(link.ended.lock().unwrap().is_none());
 }
@@ -1038,9 +1079,9 @@ fn a_busy_link_writes_the_line_again_and_refuses_nothing() {
     proxy.key(KeyTarget::Pane("w1:p1".into()), b"\r".to_vec(), 2);
     proxy.key(KeyTarget::Pane("w1:p1".into()), b"b".to_vec(), 3);
     link.release();
-    wait_for(|| key_lines(&link).len() == 3);
+    let lines = link.wait_for_lines(|lines| ends_with_key(lines, "w1:p1", b"b"));
     assert_eq!(
-        key_lines(&link),
+        key_lines(&lines),
         [
             ("w1:p1".to_owned(), b"a".to_vec(), 1),
             ("w1:p1".to_owned(), b"\r".to_vec(), 2),
@@ -1049,7 +1090,7 @@ fn a_busy_link_writes_the_line_again_and_refuses_nothing() {
     );
     assert!(heard.reports.lock().unwrap().is_empty(), "nothing refused");
     proxy.key(KeyTarget::Pane("w1:p1".into()), b"c".to_vec(), 4);
-    wait_for(|| key_lines(&link).len() == 4);
+    link.wait_for_lines(|lines| ends_with_key(lines, "w1:p1", b"c"));
 }
 
 /// A frame larger than the unsent cap goes up whole when nothing of its pane
@@ -1093,12 +1134,12 @@ fn side_channel_permission_waits_for_the_device_and_ends_with_its_link() {
             reply.send(outcome).unwrap();
         }),
     );
-    wait_for(|| !link.lines().is_empty());
+    let lines = link.wait_for_lines(|lines| !lines.is_empty());
     let TerminalDown::InputPermit {
         ticket,
         pane,
         bytes,
-    } = &link.lines()[0]
+    } = &lines[0]
     else {
         panic!("permission request")
     };
@@ -1147,7 +1188,7 @@ fn pending_device_permissions_expire_without_new_input_and_end_with_the_link() {
                 let _ = reply.send(outcome);
             }),
         );
-        wait_for(|| !link.lines().is_empty());
+        link.wait_for_lines(|lines| !lines.is_empty());
         {
             let mut state = lock(&proxy.shared.state);
             if expire {

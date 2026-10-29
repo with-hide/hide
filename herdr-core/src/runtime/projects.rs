@@ -889,9 +889,10 @@ impl Runtime {
     }
 
     pub(super) fn confirm_cleanup(&mut self, payload: CleanupConfirmPayload) -> bool {
-        // A review worker that has published its answer may not have ended
-        // yet; a confirmation waits for it, so its end can never free the
-        // lane of the worker this one starts.
+        // A worker frees the lane under the lock that hands over its answer,
+        // so a review showing its answer has no worker left; one still
+        // running refuses, so its end can never free the lane of the worker
+        // this one starts.
         if self.cleanup_worker.is_some() {
             return false;
         }

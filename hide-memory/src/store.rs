@@ -20,6 +20,7 @@ use crate::{
 pub(crate) mod hold;
 mod merges;
 mod misses;
+mod pace;
 mod progress;
 mod recheck;
 mod reinforcement;
@@ -39,7 +40,7 @@ pub use reinforcement::words_digest;
 pub use repeats::{RepeatRequest, RepeatScope, RepeatSource, instruction_line};
 pub use upkeep::{Aging, AgingReport, CHANGE_LIMIT, CardChange, ChangeKind};
 
-const SCHEMA_VERSION: i64 = 22;
+const SCHEMA_VERSION: i64 = 23;
 /// Version 2 names where analysis can go: the agent Hide AI runs on and any
 /// agent the operator added under its fallback list (PRD settings-cleanup
 /// D-26), which now includes vendors other than the two it was limited to.
@@ -1729,6 +1730,27 @@ impl MemoryStore {
         now_unix_ms: u64,
         kind: crate::MemoryCallKind,
     ) -> Result<Option<crate::MemoryCallDeferral>, MemoryError> {
+        self.admit(now_unix_ms, kind, None)
+    }
+
+    /// Admits one background analysis call for a session the same way, and
+    /// within the session's day and the machine's hour ([`pace`]); it is
+    /// counted toward both when admitted, so a failed call and its retry
+    /// spend them like an answered one.
+    pub fn admit_session_call(
+        &self,
+        now_unix_ms: u64,
+        call: &crate::SessionCall<'_>,
+    ) -> Result<Option<crate::MemoryCallDeferral>, MemoryError> {
+        self.admit(now_unix_ms, crate::MemoryCallKind::Analysis, Some(call))
+    }
+
+    fn admit(
+        &self,
+        now_unix_ms: u64,
+        kind: crate::MemoryCallKind,
+        call: Option<&crate::SessionCall<'_>>,
+    ) -> Result<Option<crate::MemoryCallDeferral>, MemoryError> {
         self.require_writer()?;
         let day = now_unix_ms / DAY_MS;
         let transaction =
@@ -1750,6 +1772,13 @@ impl MemoryStore {
         };
         if let Some(reason) = crate::budget::deferral(total, checks, pending, kind) {
             return Ok(Some(reason));
+        }
+        if let Some(call) = call {
+            pace::rewind(&transaction, now_unix_ms)?;
+            if let Some(reason) = pace::pace(&transaction, now_unix_ms, call)? {
+                return Ok(Some(reason));
+            }
+            pace::record(&transaction, now_unix_ms, call)?;
         }
         transaction.execute(
             "INSERT INTO analysis_calls(day,calls,checks) VALUES(?1,1,?2) ON CONFLICT(day) DO UPDATE SET calls=calls+1,checks=checks+?2",
@@ -4133,6 +4162,7 @@ fn migrate(
             .and_then(|_| connection.execute_batch(upkeep::COLUMNS))
             .and_then(|_| connection.execute_batch(upkeep::TABLES))
             .and_then(|_| connection.execute_batch(recheck::TRIGGERS))
+            .and_then(|_| connection.execute_batch(pace::TABLES))
             .and_then(|_| enable_fts_secure_delete(connection))
             .and_then(|_| connection.pragma_update(None, "user_version", SCHEMA_VERSION))
         {
@@ -4273,6 +4303,13 @@ COMMIT;"#,
     if version == 21 {
         back_up(connection, path, version)?;
         upkeep::migrate_version_twenty_one(connection, now_ms())?;
+        version = 22;
+    }
+    // Version 23 keeps each background analysis call with its session and
+    // time (with-hide/hide-private#65). Two new tables and no row changed,
+    // so there is nothing a backup would restore.
+    if version == 22 {
+        pace::migrate_version_twenty_two(connection)?;
         version = SCHEMA_VERSION;
     }
     if version != SCHEMA_VERSION {
@@ -10823,6 +10860,185 @@ PRAGMA user_version=14;"#,
         assert_eq!(store.analysis_calls(10 * day + 5).unwrap(), 2);
         assert_eq!(store.analysis_calls(11 * day - 1).unwrap(), 2);
         assert_eq!(store.analysis_calls(11 * day).unwrap(), 0);
+    }
+
+    fn session_call<'a>(project: &'a str, session: &'a str) -> crate::SessionCall<'a> {
+        crate::SessionCall {
+            project,
+            provider: "claude",
+            session,
+        }
+    }
+
+    #[test]
+    fn a_session_is_admitted_its_days_calls_and_a_refusal_spends_nothing() {
+        use crate::MemoryCallDeferral;
+        let (_temp, store, project) = store();
+        let morning = 10 * DAY_MS + 9 * 3_600_000;
+        let s = session_call(&project, "s");
+        for n in 0..crate::SESSION_DAILY_CALL_LIMIT {
+            assert_eq!(
+                store.admit_session_call(morning + n * 1_000, &s).unwrap(),
+                None
+            );
+        }
+        let later = morning + 600_000;
+        assert_eq!(
+            store.admit_session_call(later, &s).unwrap(),
+            Some(MemoryCallDeferral::SessionDay)
+        );
+        assert_eq!(
+            store.analysis_calls(later).unwrap(),
+            crate::SESSION_DAILY_CALL_LIMIT,
+            "the refused call is counted nowhere"
+        );
+        assert_eq!(
+            store
+                .admit_session_call(later, &session_call(&project, "t"))
+                .unwrap(),
+            None,
+            "another session's turn goes on"
+        );
+    }
+
+    #[test]
+    fn the_sessions_day_turns_at_utc_midnight_while_the_hour_runs_across_it() {
+        use crate::MemoryCallDeferral;
+        let (_temp, store, project) = store();
+        let midnight = 11 * DAY_MS;
+        let s = session_call(&project, "s");
+        let first = midnight - 1_800_000;
+        for n in 0..crate::SESSION_DAILY_CALL_LIMIT {
+            assert_eq!(
+                store.admit_session_call(first + n * 20_000, &s).unwrap(),
+                None
+            );
+        }
+        assert_eq!(
+            store.session_call_deferral(midnight - 1, &s).unwrap(),
+            Some(MemoryCallDeferral::SessionDay)
+        );
+        assert_eq!(store.admit_session_call(midnight, &s).unwrap(), None);
+        let u = session_call(&project, "u");
+        let room = crate::HOURLY_CALL_LIMIT - crate::SESSION_DAILY_CALL_LIMIT - 1;
+        for n in 0..room {
+            assert_eq!(
+                store.admit_session_call(midnight + 1 + n, &u).unwrap(),
+                None
+            );
+        }
+        assert_eq!(
+            store.admit_session_call(midnight + 1_000, &u).unwrap(),
+            Some(MemoryCallDeferral::Hour),
+            "yesterday's last half hour still fills this hour"
+        );
+        assert_eq!(
+            store
+                .admit_session_call(first + crate::CALL_WINDOW_MS, &u)
+                .unwrap(),
+            None,
+            "the oldest call is an hour old"
+        );
+    }
+
+    #[test]
+    fn calls_a_clock_ahead_stamped_hold_the_hour_from_when_it_is_put_back() {
+        use crate::MemoryCallDeferral;
+        let (_temp, store, project) = store();
+        let now = 20 * DAY_MS + 12 * 3_600_000;
+        let ahead = now + 2 * 3_600_000;
+        for n in 0..crate::HOURLY_CALL_LIMIT {
+            let session = format!("s{n}");
+            assert_eq!(
+                store
+                    .admit_session_call(ahead, &session_call(&project, &session))
+                    .unwrap(),
+                None
+            );
+        }
+        let s = session_call(&project, "s");
+        assert_eq!(
+            store.admit_session_call(now, &s).unwrap(),
+            Some(MemoryCallDeferral::Hour),
+            "the future calls count as made now"
+        );
+        assert_eq!(
+            store.rewind_future_calls(now).unwrap(),
+            crate::HOURLY_CALL_LIMIT as usize
+        );
+        assert_eq!(store.rewind_future_calls(now).unwrap(), 0);
+        assert_eq!(
+            store
+                .session_call_deferral(now + crate::CALL_WINDOW_MS - 1, &s)
+                .unwrap(),
+            Some(MemoryCallDeferral::Hour)
+        );
+        assert_eq!(
+            store
+                .admit_session_call(now + crate::CALL_WINDOW_MS, &s)
+                .unwrap(),
+            None,
+            "an hour from the correction, not an hour past the wrong time"
+        );
+    }
+
+    #[test]
+    fn a_version_twenty_two_store_opened_by_two_at_once_is_upgraded_once() {
+        let (temp, store, _project) = store();
+        let path = temp.path().join("memory.sqlite3");
+        store
+            .connection
+            .execute_batch(
+                "DROP TABLE analysis_admissions; DROP TABLE analysis_holds; PRAGMA user_version=22;",
+            )
+            .unwrap();
+        drop(store);
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let openers: Vec<_> = (0..2)
+            .map(|_| {
+                let path = path.clone();
+                let barrier = std::sync::Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    MemoryStore::open(&path).map(|_| ())
+                })
+            })
+            .collect();
+        for opener in openers {
+            opener.join().unwrap().unwrap();
+        }
+        let connection = Connection::open(&path).unwrap();
+        assert_eq!(
+            connection
+                .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
+                .unwrap(),
+            SCHEMA_VERSION
+        );
+        // The opener that read version 22 before the other upgraded finds
+        // the work done under the write lock instead of creating it again.
+        pace::migrate_version_twenty_two(&connection).unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM analysis_admissions", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn a_sessions_hold_is_reported_once_a_utc_day() {
+        let (_temp, store, project) = store();
+        let s = session_call(&project, "s");
+        let day = 30 * DAY_MS;
+        assert!(store.hold_session(day + 1, &s).unwrap());
+        assert!(!store.hold_session(day + 2, &s).unwrap());
+        assert!(
+            store
+                .hold_session(day + 1, &session_call(&project, "t"))
+                .unwrap()
+        );
+        assert!(store.hold_session(day + DAY_MS, &s).unwrap());
     }
 
     #[test]

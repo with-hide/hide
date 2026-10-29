@@ -8,6 +8,6 @@ import { buildFixtureShims } from "../../web/e2e/shims/build";
 import { makeFusedElectron } from "./fused-electron";
 
 export default async function globalSetup(config: FullConfig): Promise<void> {
-  buildFixtureShims(path.dirname(config.configFile!));
+  await buildFixtureShims(path.dirname(config.configFile!));
   await makeFusedElectron();
 }

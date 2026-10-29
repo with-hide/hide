@@ -1,4 +1,5 @@
-//! The two consumers of Memory's single UTC-day call budget.
+//! The two consumers of Memory's single UTC-day call budget, and the pace
+//! one session's background analysis and every session's together keep.
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MemoryCallKind {
@@ -11,6 +12,20 @@ pub enum MemoryCallDeferral {
     DailyCap,
     CheckShareSpent,
     ReservedForChecks,
+    /// The session made [`crate::SESSION_DAILY_CALL_LIMIT`] calls this UTC
+    /// day; the other sessions' turns go on.
+    SessionDay,
+    /// Background analysis made [`crate::HOURLY_CALL_LIMIT`] calls in the
+    /// last hour, every session together; the whole queue waits.
+    Hour,
+}
+
+/// The session one background analysis call is made for.
+#[derive(Clone, Copy, Debug)]
+pub struct SessionCall<'a> {
+    pub project: &'a str,
+    pub provider: &'a str,
+    pub session: &'a str,
 }
 
 /// The next reset of the same UTC-day counters admission reads.
@@ -38,5 +53,15 @@ pub(crate) fn deferral(
             Some(MemoryCallDeferral::ReservedForChecks)
         }
         _ => None,
+    }
+}
+
+pub(crate) fn pace(session_today: u64, last_hour: u64) -> Option<MemoryCallDeferral> {
+    if session_today >= crate::SESSION_DAILY_CALL_LIMIT {
+        Some(MemoryCallDeferral::SessionDay)
+    } else if last_hour >= crate::HOURLY_CALL_LIMIT {
+        Some(MemoryCallDeferral::Hour)
+    } else {
+        None
     }
 }

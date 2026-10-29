@@ -14,7 +14,7 @@ mod redaction;
 mod store;
 mod verify;
 
-pub use budget::{MemoryCallDeferral, MemoryCallKind, memory_call_reset_at};
+pub use budget::{MemoryCallDeferral, MemoryCallKind, SessionCall, memory_call_reset_at};
 pub use engine::{
     AliasBackfill, AnalysisOutput, HideNativeAnalyzer, HideNativeOutputError,
     SYSTEM_PROMPT_LIMIT_BYTES,
@@ -135,6 +135,19 @@ pub const PROMOTION_OPEN_LIMIT: usize = 3;
 pub const NEW_CARDS_PER_GROUP: usize = 8;
 /// Extraction groups one session may process in a background pass.
 pub const ANALYSIS_GROUP_QUANTUM: usize = 4;
+/// Requests (`AiRouter::execute`) one session's background analysis is
+/// admitted in a UTC day, failed ones and their later retries included; the
+/// router's own attempts inside one request are not counted apart. Its later
+/// groups keep their place and wait for the next day. A group asks one
+/// extraction and at most one comparison, so with no failure this is at
+/// least 36 groups.
+pub const SESSION_DAILY_CALL_LIMIT: u64 = 72;
+/// Requests background analysis is admitted in any hour, every session
+/// together, counted the same way (at least 40 groups with no failure): a
+/// backlog of sessions is caught up at this pace, and the queue waits while
+/// the last hour is full.
+pub const HOURLY_CALL_LIMIT: u64 = 80;
+pub const CALL_WINDOW_MS: u64 = 3_600_000;
 /// The most characters of the reason an agent gives when it calls a card
 /// outdated.
 pub const OUTDATED_REASON_LIMIT_CHARS: usize = 500;

@@ -1708,7 +1708,10 @@ fn the_overview_in_front_of_a_node_checkout_reads_the_node_s_project() {
 /// up a change after the review is refused by the node's recheck. Neither
 /// worktree has a pane open, so neither has a Herdr workspace: each is a row
 /// of the project only because the node lists it. This machine's node,
-/// which has none of these folders, is asked nothing.
+/// which has none of these folders, is asked nothing. The operator confirms
+/// the moment the review's answer is announced, the earliest a press can
+/// come: a worker that freed its lane by a second lock after its answer
+/// refused that press, and the removal never started.
 #[test]
 fn a_node_s_merged_worktree_is_removed_on_the_node_and_a_changed_one_is_refused() {
     // `lsof` answers nothing and exits 1 on a machine with no listener it
@@ -1756,18 +1759,52 @@ fn a_node_s_merged_worktree_is_removed_on_the_node_and_a_changed_one_is_refused(
         );
         project.id.clone()
     };
+    // What the core showed and answered when the review's answer was
+    // announced. Asserted afterwards: the announcement swallows a panic.
+    type Pressed = (crate::live::cleanup::CleanupSnapshot, Option<u64>, bool);
+    let pressed = Arc::new(Mutex::new(None::<Pressed>));
+    {
+        let mut runtime = shared.lock().unwrap();
+        let connector = runtime.remote_controls[NODE].api_connector();
+        let (owner, record) = (shared.weak(), Arc::clone(&pressed));
+        let (linked, changed) = (repo.linked.clone(), changed.clone());
+        runtime.install_remote_control(RemoteControlContext::new(
+            NODE,
+            connector,
+            shared.weak(),
+            ChangeNotifier::announcing(move || {
+                let Some(owner) = owner.upgrade() else {
+                    return;
+                };
+                let mut runtime = owner.lock().unwrap();
+                let mut record = record.lock().unwrap();
+                let Some(review) = runtime
+                    .cleanup
+                    .clone()
+                    .filter(|review| record.is_none() && review.phase == "review")
+                else {
+                    return;
+                };
+                let shown = node_project(&runtime)
+                    .and_then(|project| project.cleanup.as_ref().map(|shown| shown.id));
+                // The change the node's recheck refuses lands after the review.
+                std::fs::write(Path::new(&changed).join("notes.txt"), "kept").unwrap();
+                let event = serde_json::json!({
+                    "schema_version": SCHEMA_VERSION, "kind": "cleanup_confirm",
+                    "payload": {"id": review.id, "paths": [linked, changed]},
+                });
+                let accepted = runtime.dispatch_json(&serde_json::to_vec(&event).unwrap());
+                *record = Some((review, shown, accepted));
+            }),
+        ));
+    }
     dispatch(
         &shared,
         "cleanup_review",
         serde_json::json!({"workspace_id": workspace_id}),
     );
-    wait(&shared, "the review", |runtime| {
-        runtime
-            .cleanup
-            .as_ref()
-            .is_some_and(|review| review.phase != "loading")
-    });
-    let review = shared.lock().unwrap().cleanup.clone().unwrap();
+    wait_for("the review's answer", || pressed.lock().unwrap().is_some());
+    let (review, shown, accepted) = pressed.lock().unwrap().take().unwrap();
     assert_eq!(review.phase, "review", "{review:?}");
     // Named as the node's rows spell the project, the key its facts are under.
     assert_eq!(review.repository_root, repo.root);
@@ -1783,21 +1820,11 @@ fn a_node_s_merged_worktree_is_removed_on_the_node_and_a_changed_one_is_refused(
         review.rows
     );
     assert_eq!(
-        node_project(&shared.lock().unwrap())
-            .unwrap()
-            .cleanup
-            .as_ref()
-            .map(|shown| shown.id),
+        shown,
         Some(review.id),
         "the node project's row shows the review"
     );
-
-    std::fs::write(Path::new(&changed).join("notes.txt"), "kept").unwrap();
-    dispatch(
-        &shared,
-        "cleanup_confirm",
-        serde_json::json!({"id": review.id, "paths": [repo.linked, changed]}),
-    );
+    assert!(accepted, "a confirmation pressed on the answer is taken");
     wait(&shared, "the removal", |runtime| {
         runtime
             .cleanup
