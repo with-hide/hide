@@ -639,10 +639,12 @@ fn abrupt_owner_death_ends_a_tied_child_that_watches_nothing() {
     owner.kill().unwrap();
     owner.wait().unwrap();
     reader.join().unwrap();
-    // The supervisor, the child, the watcher and the child's own child in
-    // another group.
+    // On Unix the supervisor, the child, the watcher and the child's own
+    // child in another group; on Windows the job holds the child and its
+    // child alone.
     let pids = ready.expect("tied owner did not announce its tree");
-    assert!(pids.len() >= 4, "{pids:?}");
+    let tree = if cfg!(unix) { 4 } else { 2 };
+    assert!(pids.len() >= tree, "{pids:?}");
     for pid in pids {
         assert!(
             gone_within(pid, Duration::from_secs(10)),
