@@ -115,11 +115,16 @@ fn child_role() {
         }
         // An uncooperative child, as an `ssh` still signing in is: it reads
         // nothing that would tell it its owner died.
+        // Its child starts one of its own in another group, as a `setsid`
+        // proxy command does.
         "tied_owner" => {
-            let mut command = role_command("sleep");
-            command.stdout(Stdio::null());
-            let child = OwnedChild::spawn_tied(&mut command).unwrap();
-            println!("OWNED {}", child.id());
+            let mut child = OwnedChild::spawn_tied(&mut role_command("tree_own_group")).unwrap();
+            let outside = ready_number(child.take_stdout().unwrap());
+            let mut pids = descendants(child.id()).unwrap();
+            pids.push(child.id());
+            assert!(pids.contains(&outside), "{pids:?} {outside}");
+            let pids: Vec<String> = pids.iter().map(u32::to_string).collect();
+            println!("OWNED {}", pids.join(" "));
             thread::sleep(Duration::from_secs(60));
         }
         "sleep" => {
@@ -615,34 +620,63 @@ fn abrupt_owner_death_ends_a_tied_child_that_watches_nothing() {
     let (send, recv) = mpsc::channel();
     let reader = thread::spawn(move || {
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            if let Some((_, pid)) = line.split_once("OWNED ") {
-                send.send(pid.trim().parse::<u32>().unwrap()).unwrap();
+            if let Some((_, pids)) = line.split_once("OWNED ") {
+                let pids: Vec<u32> = pids
+                    .split_whitespace()
+                    .map(|pid| pid.parse().unwrap())
+                    .collect();
+                send.send(pids).unwrap();
                 return;
             }
         }
     });
-    let ready = recv.recv_timeout(Duration::from_secs(5));
-    let identity = ready
-        .as_ref()
-        .ok()
-        .map(|child| FixtureProcess::live(*child));
+    let ready = recv.recv_timeout(HANG_LIMIT);
+    let identities: Vec<_> = ready
+        .iter()
+        .flatten()
+        .map(|pid| FixtureProcess::live(*pid))
+        .collect();
     owner.kill().unwrap();
     owner.wait().unwrap();
     reader.join().unwrap();
-    let child = ready.expect("tied owner did not announce its child");
-    assert!(
-        gone_within(child, Duration::from_secs(5)),
-        "tied child survived owner SIGKILL"
-    );
-    drop(identity);
+    // The supervisor, the child, the watcher and the child's own child in
+    // another group.
+    let pids = ready.expect("tied owner did not announce its tree");
+    assert!(pids.len() >= 4, "{pids:?}");
+    for pid in pids {
+        assert!(
+            gone_within(pid, Duration::from_secs(10)),
+            "{pid} of the tied tree survived owner SIGKILL"
+        );
+    }
+    drop(identities);
+}
+
+/// The supervisor is the child's own voice: what the owner writes reaches
+/// the child, what the child writes reaches the owner, and its status is the
+/// child's.
+#[cfg(unix)]
+#[test]
+fn a_tied_child_speaks_and_exits_through_its_supervisor() {
+    let _serial = serial();
+    let mut command = Command::new("/bin/sh");
+    command
+        .args(["-c", "read line; echo \"got:$line:$TIED_NAME\"; exit 7"])
+        .env("TIED_NAME", "carried");
+    let mut child = OwnedChild::spawn_tied(&mut command).unwrap();
+    let mut input = child.take_stdin().unwrap();
+    std::io::Write::write_all(&mut input, b"hello\n").unwrap();
+    drop(input);
+    let mut output = String::new();
+    std::io::Read::read_to_string(&mut child.take_stdout().unwrap(), &mut output).unwrap();
+    assert_eq!(output, "got:hello:carried\n");
+    assert_eq!(child.wait().unwrap().code(), Some(7));
 }
 
 #[test]
 fn a_tied_child_ends_with_its_owner_and_leaves_no_watcher() {
     let _serial = serial();
-    let mut command = role_command("sleep");
-    command.stdout(Stdio::null());
-    let mut child = OwnedChild::spawn_tied(&mut command).unwrap();
+    let mut child = OwnedChild::spawn_tied(&mut role_command("sleep")).unwrap();
     let pid = child.id();
     let before = descendants(std::process::id()).unwrap();
     assert!(before.contains(&pid));

@@ -395,10 +395,15 @@ impl OwnedChild {
     /// [`Self::spawn`] for a child that is not cooperative and must still
     /// end with this process when it dies without running a destructor,
     /// such as an `ssh` still signing in, which reads nothing that would tell
-    /// it. On Unix a small `sh` in a group of its own holds the read end of a
-    /// pipe only this process writes; the pipe closing without a stand-down
-    /// line ends the child's group. Reaping, releasing or dropping the owner
-    /// stands it down. On Windows the job already ends the tree.
+    /// it. On Unix the owned process is a small `sh` supervisor that starts
+    /// the child itself, so nothing of the child runs before its watch does,
+    /// and passes the child's status on as its own; a watcher it starts reads
+    /// a pipe only this process writes, and the pipe closing without a
+    /// stand-down line ends the child and every process under it, `setsid`
+    /// ones included. Reaping, releasing or dropping the owner stands it
+    /// down. Its three standard streams are always pipes, and the command's
+    /// program, arguments, environment changes and folder are carried; an
+    /// `env_clear` is not. On Windows the job already ends the tree.
     pub fn spawn_tied(command: &mut Command) -> io::Result<Self> {
         let (child, tie) = sys::spawn_tied(command)?;
         Ok(Self {
@@ -1200,74 +1205,113 @@ mod sys {
     pub(super) struct Tie {
         // The child's dedicated reader gets EOF if the owner crashes.
         _owner: Option<UnixStream>,
-        /// The watcher a tied child's group has ([`spawn_tied`]).
-        warden: Option<Warden>,
+        /// This process's end of a tied child's watch ([`spawn_tied`]): a
+        /// line on it stands the watcher down, and its close without one,
+        /// which this process's death is, ends the child's tree.
+        watch: Option<UnixStream>,
     }
 
-    /// Ends a group when the pipe it reads closes before a line arrives:
-    /// only the owner holds the pipe's other end (close-on-exec), so its
-    /// death closes it, and a stand-down line lets the watcher exit with the
-    /// group untouched.
-    const WARDEN: &str = "read -r _ || kill -s KILL -- \"-$1\"";
+    /// A tied child's supervisor, run as `/bin/sh -c SUPERVISOR hide-tied
+    /// <program> <args>…` with this process's watch as descriptor 3. It
+    /// starts the child itself, so the watch exists before the child does,
+    /// then a watcher that reads the watch: a line is this process standing
+    /// down; the watch closing without one is this process's death, and the
+    /// watcher kills the child and every process under it, found by walking
+    /// the process table before the first signal as `kill_tree_of` does (a
+    /// `setsid` proxy command leaves the group), and then the group. The
+    /// supervisor exits with the child's status and takes its watcher with
+    /// it. The child gets the supervisor's standard streams: an asynchronous
+    /// list's input is `/dev/null` unless redirected, so it is passed on
+    /// through descriptor 4.
+    const SUPERVISOR: &str = r#"watcher=$HIDE_TIED_WATCHER
+unset HIDE_TIED_WATCHER
+exec 4<&0
+"$@" <&4 3<&- 4<&- &
+child=$!
+exec 4<&-
+/bin/sh -c "$watcher" hide-tied-watch "$child" "$$" <&3 >/dev/null 2>&1 3<&- &
+watcher=$!
+exec 3<&-
+wait "$child"
+status=$?
+kill "$watcher" 2>/dev/null
+exit "$status"
+"#;
 
-    struct Warden {
-        child: Child,
-        stand_down: Option<ChildStdin>,
-    }
-
-    impl Warden {
-        /// Starts the watcher of the group `leader` leads, in a group of its
-        /// own so a signal to the owner's group or the child's spares it.
-        fn watch(leader: u32) -> io::Result<Self> {
-            let mut command = Command::new("/bin/sh");
-            command
-                .args(["-c", WARDEN, "hide-warden", &leader.to_string()])
-                .stdin(std::process::Stdio::piped())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .process_group(0);
-            let mut child = command.spawn()?;
-            let stand_down = child.stdin.take();
-            Ok(Self { child, stand_down })
-        }
-
-        /// The owner answers for the group itself again: the watcher exits
-        /// without signalling it, and is reaped.
-        fn stand_down(&mut self) {
-            use std::io::Write;
-            if let Some(mut pipe) = self.stand_down.take() {
-                let _ = pipe.write_all(b"\n");
-            }
-            let _ = self.child.wait();
-        }
-    }
-
-    impl Drop for Warden {
-        fn drop(&mut self) {
-            self.stand_down();
-        }
-    }
+    /// The watcher [`SUPERVISOR`] starts: `$1` the child, `$2` the
+    /// supervisor, whose group the child shares. A child whose parent is no
+    /// longer the supervisor was reaped already, and its id may be
+    /// another's, so only the group is signalled then.
+    const WATCHER: &str = r#"read -r _ && exit 0
+pids=$(ps -A -o pid= -o ppid= 2>/dev/null | awk -v root="$1" -v super="$2" '
+{ parent[$1] = $2; kids[$2] = kids[$2] " " $1 }
+END {
+  if (parent[root] != super) exit
+  print root
+  n = 1; queue[1] = root
+  for (i = 1; i <= n; i++) {
+    m = split(kids[queue[i]], k, " ")
+    for (j = 1; j <= m; j++) if (!(k[j] in seen)) { seen[k[j]] = 1; print k[j]; queue[++n] = k[j] }
+  }
+}')
+kill -s KILL $pids 2>/dev/null
+kill -s KILL -- "-$2" 2>/dev/null
+"#;
 
     pub(super) fn spawn_tied(command: &mut Command) -> io::Result<(Child, Tie)> {
-        let (mut child, mut tie) = spawn(command, None)?;
-        match Warden::watch(child.id()) {
-            Ok(warden) => {
-                tie.warden = Some(warden);
-                Ok((child, tie))
-            }
-            Err(error) => {
-                let _ = signal(-(child.id() as libc::pid_t), libc::SIGKILL);
-                let _ = child.wait();
-                Err(error)
-            }
+        // The supervisor runs what `command` names, with its environment and
+        // folder; its three standard streams are pipes.
+        let mut supervisor = Command::new("/bin/sh");
+        supervisor
+            .args(["-c", SUPERVISOR, "hide-tied"])
+            .arg(command.get_program())
+            .args(command.get_args())
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        for (key, value) in command.get_envs() {
+            match value {
+                Some(value) => supervisor.env(key, value),
+                None => supervisor.env_remove(key),
+            };
         }
+        if let Some(folder) = command.get_current_dir() {
+            supervisor.current_dir(folder);
+        }
+        let (reader, watch) = UnixStream::pair()?;
+        let descriptor = reader.as_raw_fd();
+        // SAFETY: only async-signal-safe dup2 and fcntl run after fork. The
+        // descriptor lives until spawn returns, and `supervisor` is dropped
+        // here, so the closure never runs on a recycled descriptor.
+        unsafe {
+            supervisor.pre_exec(move || {
+                if descriptor == 3 {
+                    let flags = libc::fcntl(3, libc::F_GETFD);
+                    if flags < 0 || libc::fcntl(3, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
+                        return Err(io::Error::last_os_error());
+                    }
+                } else if libc::dup2(descriptor, 3) < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        // The supervisor's arguments are the child's, so the watcher's script
+        // travels in the environment, which the supervisor takes back out
+        // before the child starts.
+        supervisor.env("HIDE_TIED_WATCHER", WATCHER);
+        let (child, mut tie) = spawn(&mut supervisor, None)?;
+        drop(reader);
+        tie.watch = Some(watch);
+        Ok((child, tie))
     }
 
     /// The child was waited for: its id may name another process from now
-    /// on, so nothing may signal its group any more.
+    /// on, so the watcher stands down and nothing signals it any more.
     pub(super) fn reaped(tie: &mut Tie) {
-        if let Some(mut warden) = tie.warden.take() {
-            warden.stand_down();
+        use std::io::Write;
+        if let Some(mut watch) = tie.watch.take() {
+            let _ = watch.write_all(b"\n");
         }
     }
 
@@ -1285,7 +1329,7 @@ mod sys {
                     child,
                     Tie {
                         _owner: None,
-                        warden: None,
+                        watch: None,
                     },
                 )
             });
@@ -1335,7 +1379,7 @@ mod sys {
         if let Err(source) = acknowledged {
             let tie = Tie {
                 _owner: Some(owner),
-                warden: None,
+                watch: None,
             };
             let owned = OwnedChild {
                 child,
@@ -1351,7 +1395,7 @@ mod sys {
             child,
             Tie {
                 _owner: Some(owner),
-                warden: None,
+                watch: None,
             },
         ))
     }
