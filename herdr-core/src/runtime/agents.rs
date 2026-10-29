@@ -3665,6 +3665,7 @@ impl Runtime {
                             super::memory_promotion::home_turn(
                                 attempt.pull,
                                 agent.activity == "working",
+                                attempt.ready,
                             )
                         }),
                     }

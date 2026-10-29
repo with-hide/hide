@@ -20,7 +20,7 @@ use hide_memory::{
     cited_files, parse_promote_check, parse_verification, pointer_target, promote_check_request,
     query_words, relevant_excerpt, sensitive_path, verify_request, written_names,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::memory::{digest, now_ms};
 use super::memory_analysis::{AnalysisFailure, FailureScope, count_input_failure};
@@ -651,9 +651,16 @@ pub(super) fn reconcile_corrections(
                     "whole"
                 },
             ]);
-            if previous.as_deref() == Some(&fingerprint) {
+            // A correction with no stored sentence pair asks again once a day
+            // (the same call, the same daily cap) until its answer brings one.
+            let wanted = if comparison.replacement.is_none() {
+                format!("{fingerprint}:pair:{}", now_ms() / 86_400_000)
+            } else {
+                fingerprint.clone()
+            };
+            if previous.as_deref() == Some(&wanted) {
                 store
-                    .record_correction_check(project, number, revision, &fingerprint, now_ms())
+                    .record_correction_check(project, number, revision, &wanted, now_ms())
                     .map_err(local)?;
                 continue;
             }
@@ -671,17 +678,21 @@ pub(super) fn reconcile_corrections(
             let claim =
                 json!({"claim":item.body,"human_evidence":comparison.operator_text}).to_string();
             let Some(request) = hide_memory::creation_docs_request(
-                digest(&["reconcile", &item.id, &revision.to_string(), &fingerprint]),
+                digest(&["reconcile", &item.id, &revision.to_string(), &wanted]),
                 project,
                 &[(0, claim, excerpt)],
                 hide_memory::ANALYSIS_INPUT_LIMIT_BYTES,
                 language,
             ) else {
                 store
-                    .record_correction_check(project, number, revision, &fingerprint, now_ms())
+                    .record_correction_check(project, number, revision, &wanted, now_ms())
                     .map_err(local)?;
                 continue;
             };
+            let sent_excerpt = serde_json::from_str::<Value>(&request.input)
+                .ok()
+                .and_then(|input| input["candidates"][0]["excerpt"].as_str().map(str::to_owned))
+                .unwrap_or_default();
             admit(store)?;
             // A failed attempt rotates this card without certifying an unseen
             // document fingerprint. It remains eligible on the next retry.
@@ -714,14 +725,17 @@ pub(super) fn reconcile_corrections(
                         "correction_reconcile_verdict".into(),
                     )));
                 }
-                Ok(results[0]["verdict"]
-                    .as_str()
-                    .expect("validated verdict")
-                    .to_owned())
+                Ok((
+                    results[0]["verdict"]
+                        .as_str()
+                        .expect("validated verdict")
+                        .to_owned(),
+                    accepted_pair(&results[0], &sent_excerpt),
+                ))
             })();
             let subject = format!("correction:{}", item.id);
-            let verdict = match verdict {
-                Ok(verdict) => verdict,
+            let (verdict, pair) = match verdict {
+                Ok(answer) => answer,
                 // Counted against this revision and document version; set
                 // aside, it is asked about again only when either changes.
                 // An unusable answer stops nothing else; any other failure
@@ -736,7 +750,7 @@ pub(super) fn reconcile_corrections(
                                 project,
                                 number,
                                 revision,
-                                &fingerprint,
+                                &wanted,
                                 now_ms(),
                             )
                             .map_err(local)?;
@@ -762,14 +776,57 @@ pub(super) fn reconcile_corrections(
                 point_at(store, project, &item, &comparison.document).map_err(local)?;
                 result.checked.changed += 1;
             }
+            let mut certified = &wanted;
+            if matches!(verdict.as_str(), "correction" | "differs") {
+                match pair {
+                    Some((document_sentence, replacement)) => {
+                        // The authority stays whatever the operator and the
+                        // first comparison settled; only the pair is added.
+                        if let Some(mut current) =
+                            store.document_comparison(project, number).map_err(local)?
+                            && current.document == comparison.document
+                            && current.authority == comparison.authority
+                            && store
+                                .item_by_number(project, number)
+                                .map_err(local)?
+                                .is_some_and(|item| item.revision == revision)
+                        {
+                            current.document_sentence = Some(document_sentence);
+                            current.replacement = Some(replacement);
+                            if store
+                                .set_document_comparison(project, number, revision, &current)
+                                .map_err(local)?
+                            {
+                                certified = &fingerprint;
+                            }
+                        }
+                    }
+                    None => crate::diagnostic!(json!({
+                        "component": "memory",
+                        "kind": "comparison.sentence_rejected",
+                        "project_id": project,
+                        "card": number,
+                    })),
+                }
+            }
             store
-                .record_correction_check(project, number, revision, &fingerprint, now_ms())
+                .record_correction_check(project, number, revision, certified, now_ms())
                 .map_err(local)?;
         }
         Ok(())
     })();
     result.stopped = stopped.err();
     result
+}
+
+/// The sentence pair one comparison result carries, when it passes
+/// [`hide_memory::accepted_sentence_pair`] against the excerpt that was sent.
+pub(super) fn accepted_pair(result: &Value, sent_excerpt: &str) -> Option<(String, String)> {
+    hide_memory::accepted_sentence_pair(
+        sent_excerpt,
+        result["document_sentence"].as_str().unwrap_or_default(),
+        result["replacement"].as_str().unwrap_or_default(),
+    )
 }
 
 /// The card becomes a line pointing at the document that already says it:
@@ -893,6 +950,8 @@ pub(super) fn compare_document(
         operator_text,
         operator_at_unix_ms: operator_at,
         source_session,
+        document_sentence: None,
+        replacement: None,
     }
 }
 

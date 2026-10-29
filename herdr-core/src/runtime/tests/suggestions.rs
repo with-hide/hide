@@ -85,6 +85,8 @@ fn the_tab_shows_the_workers_read_with_hide_ai_and_github_laid_on_it() {
     use crate::suggestions::notebook::Outcome;
     let mut runtime = runtime();
     let (workspace, root) = opened_project(&mut runtime);
+    // A document fix is offered only in a git repository (B16).
+    runtime.snapshot.navigator.workspaces[0].is_git = true;
     let row = |id: &str, outcome| SuggestionRowSnapshot {
         id: id.into(),
         source: SuggestionSource::Notebook,
@@ -104,6 +106,7 @@ fn the_tab_shows_the_workers_read_with_hide_ai_and_github_laid_on_it() {
         watch: None,
         local: None,
         evidence_unconfirmed: false,
+        memory_cards: Vec::new(),
     };
     runtime.ingest_suggestions_read(
         workspace.clone(),
@@ -163,10 +166,10 @@ fn the_tab_shows_the_workers_read_with_hide_ai_and_github_laid_on_it() {
     assert_eq!(
         holds,
         [
-            ("s1", Some(SuggestionHold::GithubNeeded)),
+            ("s1", None),
             ("s2", Some(SuggestionHold::GithubNeeded)),
         ],
-        "a pull request and an issue both need GitHub"
+        "a document fix lands on a local branch, so only an issue needs GitHub"
     );
     let unavailable = read
         .settings
@@ -518,6 +521,9 @@ fn a_followed_attempt_follows_its_branchs_pull_request() {
         issue_title: None,
         issue_since: None,
         reviewed: false,
+        purpose: crate::suggestions::lifecycle::AttemptPurpose::Pr,
+        branch_facts: None,
+        failure: None,
     };
     runtime.follow_suggestion_attempts(vec![attempt], Vec::new());
     match commands.try_recv() {
@@ -590,6 +596,9 @@ fn an_issue_whose_create_went_unanswered_is_found_before_another_is_made() {
         issue_title: Some(title.into()),
         issue_since: None,
         reviewed: false,
+        purpose: crate::suggestions::lifecycle::AttemptPurpose::Pr,
+        branch_facts: None,
+        failure: None,
     };
     let retry = |line: u64| ApplyOrder {
         project_id: "p".into(),
@@ -607,6 +616,8 @@ fn an_issue_whose_create_went_unanswered_is_found_before_another_is_made() {
         },
         issue_title: Some(title.into()),
         issue_since: Some(started),
+        purpose: crate::suggestions::lifecycle::AttemptPurpose::Pr,
+        previous_agent: None,
     };
     let moved = |line: u64| loop {
         match commands.recv_timeout(Duration::from_secs(10)) {
@@ -697,10 +708,10 @@ fn a_watched_line_asks_github_whether_each_head_has_the_merge() {
         merged_at_unix_ms: 1,
         base: Some("main".into()),
         holding: BTreeSet::new(),
-        pr: PrRef {
+        pr: Some(PrRef {
             number: 12,
             url: "https://github.com/acme/app/pull/12".into(),
-        },
+        }),
         merge_commit: merge_commit.map(str::to_owned),
         heads: heads.iter().map(|head| (*head).to_owned()).collect(),
     };
@@ -795,4 +806,130 @@ fn a_run_investigates_only_while_hide_ai_can() {
     assert_eq!(chosen(false), "tag_grouping", "the gate shut");
     runtime.lock().unwrap().ai_settings = Some(settings(hide_ai::ProviderId::OPENCODE));
     assert_eq!(chosen(true), "tag_grouping", "OpenCode cannot investigate");
+}
+
+/// PRD hide-ai-branch-first-apply B3, B6, B13: a ready branch is read from
+/// the repository itself on the Project's node, and `main에 합치기` merges it
+/// into its base there: the base holds the branch's commit, the branch is
+/// kept, and nothing is pushed.
+#[test]
+fn a_ready_branch_is_read_from_git_and_merged_into_its_base() {
+    use crate::suggestions::apply::FollowedAttempt;
+    use crate::suggestions::lifecycle::{AttemptMove, AttemptPhase, AttemptPurpose, BranchSummary};
+    use crate::suggestions::notebook::{LineId, Outcome};
+    use crate::suggestions::store::ProjectLocation;
+    use crate::suggestions::worker::{Command, ProjectRef, SuggestionClient};
+    let folder = scratch_dir("herdr-core-branch-merge-");
+    let repo = folder.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let git = |args: &[&str]| {
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&output.stderr));
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    };
+    git(&["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join("AGENTS.md"), "one\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "first"]);
+    git(&["branch", "hide-suggestion-s2-x"]);
+    git(&["checkout", "-q", "hide-suggestion-s2-x"]);
+    std::fs::write(repo.join("AGENTS.md"), "one\ntwo\n").unwrap();
+    git(&["commit", "-q", "-am", "fix the docs"]);
+    let tip = git(&["rev-parse", "HEAD"]);
+    git(&["checkout", "-q", "main"]);
+    let root = repo.to_string_lossy().into_owned();
+
+    let mut runtime = runtime();
+    let (client, commands) = SuggestionClient::for_test();
+    runtime.suggestions_work.client = Some(client);
+    let node = runtime.node.clone();
+    let shared = SharedRuntime::new(runtime);
+    shared
+        .lock()
+        .unwrap()
+        .install_worker_context(shared.weak(), ChangeNotifier::noop());
+    let mut attempt = FollowedAttempt {
+        project_id: "p".into(),
+        location: ProjectLocation {
+            node: node.as_str().to_owned(),
+            path: root.clone(),
+        },
+        line: LineId(2),
+        started_at_unix_ms: 1,
+        outcome: Outcome::Pr,
+        phase: AttemptPhase::Ready,
+        branch: "hide-suggestion-s2-x".into(),
+        agent_id: None,
+        repository: None,
+        pr: None,
+        issue_url: None,
+        issue_title: None,
+        issue_since: None,
+        reviewed: false,
+        purpose: AttemptPurpose::Branch,
+        branch_facts: Some(BranchSummary {
+            base: "main".into(),
+            tip: "0".repeat(40),
+            ahead: 0,
+            files: Vec::new(),
+            files_total: 0,
+            added: 0,
+            removed: 0,
+        }),
+        failure: None,
+    };
+    let moved = || loop {
+        match commands.recv_timeout(Duration::from_secs(30)) {
+            Ok(Command::Attempted { change, .. }) => return change,
+            Ok(_) => {}
+            Err(_) => panic!("the attempt moved"),
+        }
+    };
+
+    shared
+        .lock()
+        .unwrap()
+        .follow_suggestion_attempts(vec![attempt.clone()], Vec::new());
+    let AttemptMove::Ready(facts) = moved() else {
+        panic!("the branch read as ready");
+    };
+    assert_eq!((facts.tip.as_str(), facts.ahead), (tip.as_str(), 1));
+    assert_eq!((facts.added, facts.removed, facts.files_total), (1, 0, 1));
+    assert_eq!(facts.files[0].path, "AGENTS.md");
+
+    attempt.branch_facts = Some(facts);
+    shared
+        .lock()
+        .unwrap()
+        .follow_suggestion_attempts(vec![attempt], Vec::new());
+    let project = ProjectRef {
+        node: node.clone(),
+        path: root.clone(),
+    };
+    assert!(shared.lock().unwrap().decide_suggestion_branch(
+        &project,
+        2,
+        crate::runtime::suggestion_apply::BranchDecision::Merge
+    ));
+    match moved() {
+        AttemptMove::Merged {
+            pr: None,
+            base: Some(base),
+            merge_commit: Some(commit),
+            ..
+        } => {
+            assert_eq!(base, "main");
+            assert_eq!(commit, tip, "a fast-forward");
+        }
+        other => panic!("merged, not {other:?}"),
+    }
+    assert_eq!(git(&["rev-parse", "main"]), tip, "main holds the fix");
+    assert_eq!(std::fs::read_to_string(repo.join("AGENTS.md")).unwrap(), "one\ntwo\n", "and so does its folder");
+    assert_eq!(git(&["rev-parse", "hide-suggestion-s2-x"]), tip, "the branch stays");
 }

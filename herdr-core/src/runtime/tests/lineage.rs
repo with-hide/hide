@@ -3035,6 +3035,7 @@ fn a_hide_started_row_follows_its_attempts_pull_request_into_and_out_of_needs_yo
                 node: machine.clone(),
                 root: "/repo".into(),
                 pull,
+                ready: false,
             },
         )])
     };

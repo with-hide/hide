@@ -254,14 +254,23 @@ pub struct SuggestionRowSnapshot {
     /// The row's evidence was opened and none of its words could be read,
     /// so it cannot be applied (B7).
     pub evidence_unconfirmed: bool,
+    /// The Memory cards a promotion batch's row carries, which the row
+    /// names `정정 N개 문서에 반영` (PRD hide-ai-branch-first-apply B20);
+    /// empty for a notebook line.
+    pub memory_cards: Vec<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SuggestionHold {
-    /// `GitHub 연결 필요` stands where `PR 만들기` or `이슈 만들기` would:
-    /// a pull request and an issue both need GitHub (D-41).
+    /// `GitHub 연결 필요` stands where `이슈로 남기기` would: an issue needs
+    /// GitHub (D-41). A document fix never waits on it (PRD
+    /// hide-ai-branch-first-apply D-03).
     GithubNeeded,
+    /// The Project already has five branches waiting for the operator's
+    /// decision, so no new fix starts until one is decided (PRD
+    /// hide-ai-branch-first-apply D-17, B28).
+    BranchesFull,
     /// An automatic pull request nobody reviewed yet holds the next one
     /// (D-29).
     AutoPrUnreviewed,
@@ -315,8 +324,14 @@ pub struct SuggestionEvidenceSnapshot {
 pub enum SuggestionAttemptPhase {
     /// The agent is being started.
     Starting,
-    /// The agent works on the pull request or the issue.
+    /// The agent works on the branch, the pull request or the issue.
     Working,
+    /// The branch holds the fix and waits for the operator: `바뀐 것 보기`,
+    /// `main에 합치기`, `PR 올리기`, `버리기` (PRD hide-ai-branch-first-apply
+    /// D-02, B3).
+    Ready,
+    /// Hide is merging the ready branch into the base (B6).
+    Merging,
     /// The pull request is open and waits for the operator's review.
     PrOpen,
     /// Its checks failed and the agent is not working (B12).
@@ -336,8 +351,39 @@ pub struct SuggestionAttemptSnapshot {
     pub url: Option<String>,
     /// The agent's registration id while it lives, which opens its pane.
     pub agent_id: Option<String>,
-    /// Why a failed attempt failed, as a code the shell words.
+    /// Why a failed attempt failed, or why a ready branch's merge did not
+    /// happen (`merge_dirty`, `merge_conflict`), as a code the shell words.
     pub failure: Option<String>,
+    /// The branch the attempt works on and, once ready, what it holds.
+    pub branch: Option<SuggestionBranchSnapshot>,
+    /// What the agent was asked to do: `branch`, `pr` or `rebase`, which
+    /// the working line words (`고치는 중`, `PR 만드는 중`, `다시 맞추는 중`).
+    pub purpose: crate::suggestions::lifecycle::AttemptPurpose,
+}
+
+/// A ready branch, as the row and its branch card draw it (PRD
+/// hide-ai-branch-first-apply D-02, B3, B4).
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SuggestionBranchSnapshot {
+    pub name: String,
+    /// The branch it is compared with and merges into.
+    pub base: Option<String>,
+    /// The attempt's worktree on the Project's machine, whose committed
+    /// changes a file of the card opens; none once it is gone.
+    pub checkout: Option<String>,
+    pub files: Vec<SuggestionBranchFileSnapshot>,
+    pub files_total: u32,
+    pub added: u32,
+    pub removed: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct SuggestionBranchFileSnapshot {
+    /// Repository-relative.
+    pub path: String,
+    pub added: u32,
+    pub removed: u32,
+    pub binary: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]

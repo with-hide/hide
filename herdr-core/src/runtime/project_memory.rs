@@ -623,6 +623,19 @@ impl Runtime {
             .state
             .as_ref()
             .is_some_and(|state| state.capacity_reached);
+        let workspace_id = project.workspace_id.clone();
+        let branches_full = self
+            .catalog_workspaces()
+            .find(|workspace| workspace.id == workspace_id)
+            .and_then(|workspace| {
+                let node = crate::node::NodeId::parse(&workspace.device_id).ok()?;
+                Some(self.branches_waiting(&node, &workspace.path))
+            })
+            .is_some_and(|waiting| waiting >= super::branch_decision::WAITING_BRANCHES);
+        let Some(project) = self.memory_section().project.as_mut() else {
+            return false;
+        };
+        project.branches_full = branches_full;
         project.evicted_cards = load.state.as_ref().map_or(0, |state| state.evicted_count);
         project.evicted_through_unix_ms = load
             .state
@@ -649,6 +662,7 @@ impl Runtime {
                 hide_memory::PromotionState::Running
                     | hide_memory::PromotionState::PrOpen
                     | hide_memory::PromotionState::Building
+                    | hide_memory::PromotionState::Ready
             );
             let snapshot = self.promotion_snapshot(&project_id, *number, promotion);
             let Some(row) = rows.iter_mut().find(|row| row.number == *number) else {
@@ -702,6 +716,7 @@ impl Runtime {
                         promotion.state,
                         crate::model::MemoryPromotionState::Running
                             | crate::model::MemoryPromotionState::PrOpen
+                            | crate::model::MemoryPromotionState::Ready
                             | crate::model::MemoryPromotionState::Failed
                             | crate::model::MemoryPromotionState::Unconfirmed
                             | crate::model::MemoryPromotionState::Building
@@ -1364,6 +1379,7 @@ fn load_opened_memory(
                 hide_memory::PromotionState::Running
                     | hide_memory::PromotionState::PrOpen
                     | hide_memory::PromotionState::Building
+                    | hide_memory::PromotionState::Ready
             )
             .then_some(*number)
         })
@@ -2032,6 +2048,8 @@ PRAGMA user_version=16;",
                 pr_number: Some(924),
                 target_path: None,
                 github_failure: None,
+                branch: Some("hide-memory-m1".into()),
+                failure: None,
             })
         );
         assert_eq!(
@@ -2083,6 +2101,8 @@ PRAGMA user_version=16;",
                             operator_text: "Operator decision".into(),
                             operator_at_unix_ms: Some(1),
                             source_session: Some("s-1".into()),
+                            document_sentence: None,
+                            replacement: None,
                         },
                     )
                     .unwrap();
@@ -2313,6 +2333,8 @@ PRAGMA user_version=16;",
                         operator_text: "Operator decision".into(),
                         operator_at_unix_ms: Some(1),
                         source_session: Some("s-1".into()),
+                        document_sentence: None,
+                        replacement: None,
                     },
                 )
                 .unwrap();

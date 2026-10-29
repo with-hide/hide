@@ -3075,6 +3075,21 @@ pub(crate) fn write_cards(
                             {
                                 comparison.authority = hide_memory::DocumentAuthority::CardNewer;
                             }
+                            match super::memory_verify::accepted_pair(
+                                result,
+                                entry["excerpt"].as_str().unwrap_or_default(),
+                            ) {
+                                Some((document_sentence, replacement)) => {
+                                    comparison.document_sentence = Some(document_sentence);
+                                    comparison.replacement = Some(replacement);
+                                }
+                                None => crate::diagnostic!(json!({
+                                    "component": "memory",
+                                    "kind": "comparison.sentence_rejected",
+                                    "project_id": source.project_id,
+                                    "candidate": index,
+                                })),
+                            }
                             document_comparisons[index] = Some(comparison);
                         }
                         _ => {
@@ -4006,6 +4021,57 @@ mod tests {
     }
 
     #[test]
+    fn creation_keeps_a_correction_sentence_pair_only_when_the_excerpt_has_the_sentence() {
+        for (sentence, kept) in [
+            ("Run tests with the ordinary\n runner before a merge.", true),
+            ("Run every test twice before a merge.", false),
+        ] {
+            let mut fixture = Fixture::new();
+            fixture.lines[0]["message"]["content"] = json!(format!(
+                "Always run tests with nextest before a merge. {}",
+                "Extra session context. ".repeat(450)
+            ));
+            fixture.write(&fixture.lines);
+            std::fs::write(
+                fixture.root.join("AGENTS.md"),
+                "Run tests with the ordinary runner before a merge.\n",
+            )
+            .unwrap();
+            fixture.backend.answers.lock().unwrap().push(json!({"results":[{
+                "candidate":0,"verdict":"correction",
+                "quote":"Run tests with the ordinary runner before a merge.",
+                "document_sentence":sentence,
+                "replacement":"Run tests with nextest before a merge."
+            }]}));
+            fixture.answer(&[]);
+            fixture.backend.answers.lock().unwrap().last_mut().unwrap()["candidates"][0]["kind"] =
+                json!("decision");
+            let _ = fixture.pass(false, true);
+            let comparison = fixture
+                .store()
+                .document_comparison(&fixture.project_id, 2)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                comparison.authority,
+                hide_memory::DocumentAuthority::CardNewer,
+                "the pair never decides authority"
+            );
+            assert_eq!(
+                (comparison.document_sentence, comparison.replacement),
+                if kept {
+                    (
+                        Some("Run tests with the ordinary runner before a merge.".into()),
+                        Some("Run tests with nextest before a merge.".into()),
+                    )
+                } else {
+                    (None, None)
+                }
+            );
+        }
+    }
+
+    #[test]
     fn creation_classifies_new_decision_conflicts_with_no_initial_reverification() {
         for (date, verdict, authority) in [
             (None, "differs", hide_memory::DocumentAuthority::Ask),
@@ -4056,7 +4122,7 @@ mod tests {
                 }
             }
             fixture.backend.answers.lock().unwrap().push(json!({"results":[{
-                "candidate":0,"verdict":verdict, "quote":"Run tests with the ordinary runner before a merge."
+                "candidate":0,"verdict":verdict, "quote":"Run tests with the ordinary runner before a merge.","document_sentence":"","replacement":""
             }]}));
             fixture.answer(&[]);
             fixture.backend.answers.lock().unwrap().last_mut().unwrap()["candidates"][0]["kind"] =
@@ -4103,7 +4169,7 @@ mod tests {
             );
             drop(inputs);
             if authority == hide_memory::DocumentAuthority::CardNewer {
-                fixture.backend.answers.lock().unwrap().push(json!({"results":[{"candidate":0,"verdict":"differs","quote":"Run tests with the ordinary runner before a merge."}]}));
+                fixture.backend.answers.lock().unwrap().push(json!({"results":[{"candidate":0,"verdict":"differs","quote":"Run tests with the ordinary runner before a merge.","document_sentence":"","replacement":""}]}));
             }
             let _ = fixture.pass(false, false);
             let after = fixture.calls();
@@ -4130,7 +4196,7 @@ mod tests {
                 )
                 .unwrap();
                 fixture.age_evidence_checks();
-                fixture.backend.answers.lock().unwrap().push(json!({"results":[{"candidate":0,"verdict":"differs","quote":"Run tests with the ordinary runner before a merge."}]}));
+                fixture.backend.answers.lock().unwrap().push(json!({"results":[{"candidate":0,"verdict":"differs","quote":"Run tests with the ordinary runner before a merge.","document_sentence":"","replacement":""}]}));
                 fixture.pass(false, false);
                 let store = fixture.store();
                 assert_eq!(
@@ -4163,7 +4229,7 @@ mod tests {
                     .answers
                     .lock()
                     .unwrap()
-                    .push(json!({"results":[{"candidate":0,"verdict":"same","quote":""}]}));
+                    .push(json!({"results":[{"candidate":0,"verdict":"same","quote":"","document_sentence":"","replacement":""}]}));
                 fixture.pass(false, false);
                 let store = fixture.store();
                 assert!(
@@ -4204,7 +4270,7 @@ mod tests {
             .answers
             .lock()
             .unwrap()
-            .push(json!({"results":[{"candidate":0,"verdict":"same","quote":""}]}));
+            .push(json!({"results":[{"candidate":0,"verdict":"same","quote":"","document_sentence":"","replacement":""}]}));
         fixture.answer(&[]);
         let _ = fixture.pass(false, true);
         assert!(
@@ -5609,6 +5675,8 @@ mod tests {
                     operator_text: "Keep the hook under 100 ms".into(),
                     operator_at_unix_ms: Some(20),
                     source_session: Some("seed".into()),
+                    document_sentence: None,
+                    replacement: None,
                 },
             )
             .unwrap();
@@ -5701,6 +5769,52 @@ mod tests {
     }
 
     #[test]
+    fn a_recheck_of_a_confirmed_correction_fills_its_missing_pair_without_moving_authority() {
+        let fixture = Fixture::new();
+        fixture.answer(&[]);
+        fixture.pass(false, true);
+        confirm_fixture_correction(&fixture, 1);
+        fixture.push(json!({"results":[{"candidate":0,"verdict":"correction","quote":"Keep the old hook budget.","document_sentence":"Keep the old hook budget.","replacement":"Keep the hook under 100 ms."}]}));
+        fixture.maintain(&mut 0);
+        let comparison = fixture
+            .store()
+            .document_comparison(&fixture.project_id, 1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(comparison.authority, hide_memory::DocumentAuthority::CardNewer);
+        assert_eq!(
+            (comparison.document_sentence, comparison.replacement),
+            (
+                Some("Keep the old hook budget.".into()),
+                Some("Keep the hook under 100 ms.".into())
+            )
+        );
+        let calls = fixture.calls();
+        fixture.maintain(&mut 0);
+        assert_eq!(fixture.calls(), calls, "a stored pair settles the unchanged document");
+    }
+
+    #[test]
+    fn a_recheck_answer_with_a_sentence_outside_the_excerpt_stores_no_pair_and_asks_once_a_day() {
+        let fixture = Fixture::new();
+        fixture.answer(&[]);
+        fixture.pass(false, true);
+        confirm_fixture_correction(&fixture, 1);
+        fixture.push(json!({"results":[{"candidate":0,"verdict":"correction","quote":"Keep the old hook budget.","document_sentence":"Keep the budget at 200 ms.","replacement":"Keep the hook under 100 ms."}]}));
+        fixture.maintain(&mut 0);
+        let comparison = fixture
+            .store()
+            .document_comparison(&fixture.project_id, 1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(comparison.authority, hide_memory::DocumentAuthority::CardNewer);
+        assert_eq!((comparison.document_sentence, comparison.replacement), (None, None));
+        let calls = fixture.calls();
+        fixture.maintain(&mut 0);
+        assert_eq!(fixture.calls(), calls, "a card without a pair is asked again the next day, not the next pass");
+    }
+
+    #[test]
     fn a_correction_answered_unusably_three_times_is_set_aside_until_its_document_changes() {
         let fixture = Fixture::new();
         fixture.answer(&[]);
@@ -5722,7 +5836,7 @@ mod tests {
             assert!(tally.error.is_none());
             assert_eq!(reconciles(&fixture), attempt);
         }
-        fixture.push(json!({"results":[{"candidate":0,"verdict":"same","quote":""}]}));
+        fixture.push(json!({"results":[{"candidate":0,"verdict":"same","quote":"","document_sentence":"","replacement":""}]}));
         fixture.maintain(&mut 0);
         assert_eq!(
             reconciles(&fixture),
@@ -5815,6 +5929,8 @@ mod tests {
                     operator_text: "Keep the hook under 100 ms".into(),
                     operator_at_unix_ms: Some(20),
                     source_session: Some("seed".into()),
+                    document_sentence: None,
+                    replacement: None,
                 },
             )
             .unwrap();
@@ -5860,7 +5976,7 @@ mod tests {
             .answers
             .lock()
             .unwrap()
-            .push(json!({"results":[{"candidate":0,"verdict":"same","quote":""}]}));
+            .push(json!({"results":[{"candidate":0,"verdict":"same","quote":"","document_sentence":"","replacement":""}]}));
         fixture.pass(true, false);
         assert!(
             fixture
@@ -5913,7 +6029,7 @@ mod tests {
         // provider times out, which ends the pass's provider work.
         fixture.backend.answers.lock().unwrap().extend([
             json!({"fail":"timeout"}),
-            json!({"results":[{"candidate":0,"verdict":"same","quote":""}]}),
+            json!({"results":[{"candidate":0,"verdict":"same","quote":"","document_sentence":"","replacement":""}]}),
         ]);
         let input = PassInput {
             nodes: vec![(crate::node::test_node(), fixture.node.clone())],
