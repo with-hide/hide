@@ -4,6 +4,7 @@
 
 use super::terminals::{InputNotices, take_terminal_key};
 use super::*;
+use crate::core_move::control::MoveScreen;
 
 /// Core frames one screen may leave untaken before its backlog is dropped
 /// and it is drawn again from a fresh snapshot (D-20).
@@ -53,9 +54,12 @@ pub(super) async fn screen(
         state.desktop_screens.fetch_add(1, Ordering::SeqCst);
     }
     let mut local_reads = 0_u64;
+    // This screen's hold on a move it asks for, which its end lets go of.
+    let mover = crate::core_move::control::MoveScreen::new(&state.seat.moves);
     let ended = attached(
         &mut socket,
         &state,
+        &mover,
         handshake,
         &forwarded_handshake(&handshake_text),
         connection,
@@ -95,27 +99,28 @@ pub(super) async fn screen(
 /// what the dial their Retry started asks (`core_link` {action: `sign_in`},
 /// PRD system-ssh-device-link B33) and a move's asks, such as giving up a
 /// move whose peer never answers. `None` when the screen left first.
-async fn hold(socket: &mut WebSocket, state: &NodeState) -> Option<Arc<LiveLink>> {
+async fn hold(
+    socket: &mut WebSocket,
+    state: &NodeState,
+    mover: &MoveScreen,
+) -> Option<Arc<LiveLink>> {
     state.held_screens.fetch_add(1, Ordering::SeqCst);
-    let held = held(socket, state).await;
+    let held = held(socket, state, mover).await;
     let last = state.held_screens.fetch_sub(1, Ordering::SeqCst) == 1;
-    // B8: a question no held screen shows any more is cancelled, which
-    // ends the attempt, rather than left to wait out its five minutes.
+    // B8: what no held screen shows any more (a question, a browser check,
+    // a key touch) is withdrawn, which ends the attempt, rather than left to
+    // wait out its five minutes.
     if held.is_none() && last {
-        let waiting = state
-            .sign_ins
-            .borrow()
-            .as_ref()
-            .filter(|shown| shown.wait.is_question())
-            .map(|shown| shown.question);
-        if let Some(question) = waiting {
-            (state.answer_sign_in)(question, SignInReply::Cancel);
-        }
+        (state.withdraw_sign_in)();
     }
     held
 }
 
-async fn held(socket: &mut WebSocket, state: &NodeState) -> Option<Arc<LiveLink>> {
+async fn held(
+    socket: &mut WebSocket,
+    state: &NodeState,
+    mover: &MoveScreen,
+) -> Option<Arc<LiveLink>> {
     let mut live = state.live.clone();
     let mut phases = state.phases.clone();
     let mut sign_ins = state.sign_ins.clone();
@@ -182,7 +187,7 @@ async fn held(socket: &mut WebSocket, state: &NodeState) -> Option<Arc<LiveLink>
                             }
                         }
                         Some(routed) => {
-                            if let Err(reason) = state.seat.moves.request_event(&routed.event) {
+                            if let Err(reason) = mover.request_event(&routed.event) {
                                 let frame = crate::core_move::control::refusal_frame(reason);
                                 if socket.send(Message::Text(frame.into())).await.is_err() {
                                     return None;
@@ -264,12 +269,13 @@ async fn control_link(socket: &mut WebSocket, state: &NodeState, event: &Value) 
 async fn attached(
     socket: &mut WebSocket,
     state: &NodeState,
+    mover: &MoveScreen,
     handshake: Handshake,
     handshake_text: &str,
     connection: u64,
     local_reads: &mut u64,
 ) -> ScreenEnd {
-    let Some(link) = hold(socket, state).await else {
+    let Some(link) = hold(socket, state, mover).await else {
         return ScreenEnd::Left;
     };
     let relay = tokio::select! {
@@ -408,7 +414,7 @@ async fn attached(
                             continue;
                         }
                         if let Some((Kind::CoreMove, event)) = routed {
-                            if let Err(reason) = state.seat.moves.request_event(event) {
+                            if let Err(reason) = mover.request_event(event) {
                                 let frame = crate::core_move::control::refusal_frame(reason);
                                 if socket.send(Message::Text(frame.into())).await.is_err() {
                                     return ScreenEnd::Left;

@@ -529,6 +529,13 @@ pub trait SignIn: Send + Sync {
     /// [`Refusal::Ended`]. A caller whose own state ends with the attempt,
     /// as the device row's does, has nothing to do.
     fn ended(&self) {}
+    /// The screen that started the attempt went away or cancelled a wait
+    /// that takes no answer (a browser check, a security key's touch): the
+    /// attempt ends as if its question were cancelled (B8). The device row,
+    /// which stays while its attempt runs, never withdraws.
+    fn withdrawn(&self) -> bool {
+        false
+    }
 }
 
 /// What an attempt waits on as a screen shows it: the device row

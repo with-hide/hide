@@ -85,11 +85,12 @@ const MARK: Record<StepMark, { glyph: string; line: string; mark: string }> = {
 export function CoreMoveDialog({ request, asked: first, giveUp = false, actions, onClose: close, onRequest }: { request: MoveRequest; asked: MoveView | null; giveUp?: boolean; actions: Actions; onClose: () => void; onRequest: (request: MoveRequest) => void }) {
   const { t } = useInterfaceTranslation();
   const view = useShellStore((s) => s.coreMove);
-  // A question nobody sees any more is cancelled, which ends the checks' sign-in rather than leave it waiting
-  // out its five minutes (PRD system-ssh-device-link B8).
+  // What nobody sees any more (a question, a browser check, a key touch) is cancelled, which ends the checks'
+  // sign-in rather than leave it waiting out its five minutes (PRD system-ssh-device-link B8); the window's end does
+  // the same on hided's side.
   const onClose = () => {
     const asking = view?.sign_in;
-    if (asking && (asking.kind === "secret" || asking.kind === "host_key" || asking.kind === "confirm")) actions.answerCoreMoveSignIn(asking.question, { reply: "cancel" });
+    if (asking) actions.answerCoreMoveSignIn(asking.question, { reply: "cancel" });
     close();
   };
   const refusal = useShellStore((s) => s.coreMoveRefusal);
@@ -244,8 +245,11 @@ export function CoreMoveDialog({ request, asked: first, giveUp = false, actions,
           {form === "checks_failed" ? (
             <>
               <Button variant="secondary" onClick={onClose}>{t("common.close")}</Button>
-              {/* A sign-in's check again reads Sign in, as the device row's Retry does: the checks may ask. */}
-              <Button data-core-move-recheck="true" onClick={() => ask(request, false)}>{retrySignsIn(view?.ssh_problem) ? t("devices.signIn.start") : t("coreMove.recheck")}</Button>
+              {/* A sign-in's check again reads Sign in, as the device row's Retry does: the checks may ask. A changed
+                  server key offers none: it is checked in a terminal, and a check again would meet the same key. */}
+              {view?.ssh_problem === "host_key_changed" ? null : (
+                <Button data-core-move-recheck="true" onClick={() => ask(request, false)}>{retrySignsIn(view?.ssh_problem) ? t("devices.signIn.start") : t("coreMove.recheck")}</Button>
+              )}
             </>
           ) : null}
           {form === "confirm" ? (

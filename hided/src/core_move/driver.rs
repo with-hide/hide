@@ -62,8 +62,9 @@ impl Remote {
         self
     }
 
-    /// Whether the dials from now on may ask the operator: only the checks
-    /// their own press started (D-06); a later dial of the move asks nobody.
+    /// Whether the next dial may ask the operator: only the checks' own,
+    /// which their press started (D-06); a later dial of the move asks
+    /// nobody.
     pub fn may_ask(&self, wake: Wake) {
         self.upstream.may_ask(wake);
     }

@@ -99,8 +99,8 @@ describe("the strip above the window (W1 to W3)", () => {
     // A sign-in: its Retry reads Sign in and starts the dial that may ask.
     expect(stopped("sign_in_needed")).toEqual({ kind: "stopped", mark: "warn", text: "Mac mini core에 연결하려면 로그인이 필요해요", action: "sign_in" });
     expect(stopped("sign_in_refused")).toMatchObject({ text: "Mac mini core가 로그인을 거절했어요", action: "sign_in" });
-    // A changed server key: the terminal command that checks it, then Retry.
-    expect(stopped("host_key_changed")).toMatchObject({ text: "Mac mini core의 서버 키가 바뀌었어요 · 터미널에서 확인해 주세요", action: "retry", command: "ssh mini" });
+    // A changed server key: the terminal command that checks it, and no Retry (#1840's decision for the device row).
+    expect(stopped("host_key_changed")).toEqual({ kind: "stopped", mark: "warn", text: "Mac mini core의 서버 키가 바뀌었어요 · 터미널에서 확인해 주세요", command: "ssh mini" });
     // Anything else is a retry.
     expect(stopped("cannot_connect")).toMatchObject({ text: "ssh로 Mac mini core에 연결하지 못했어요 · 터미널에서 ssh mini 명령으로 이유를 확인해 주세요", action: "retry" });
     expect(stopped("cannot_connect")?.command).toBeUndefined();

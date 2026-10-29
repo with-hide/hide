@@ -51,6 +51,9 @@ struct Waiting {
     /// Where the answer to the shown question goes; `None` for a wait that
     /// ends by itself (a browser check, a security key's touch).
     answer: Option<mpsc::SyncSender<Result<Answer, Refusal>>>,
+    /// The screen went away or cancelled what it showed: the attempt ends
+    /// (B8), and nothing more of it is shown or asked until it has.
+    withdrawn: bool,
 }
 
 impl ScreenSignIn {
@@ -89,16 +92,45 @@ impl ScreenSignIn {
         self.lock().shown.clone()
     }
 
+    /// The screen that started the attempt went away, or cancelled a wait:
+    /// whatever is shown goes, a question waiting is refused as cancelled,
+    /// and the attempt ends at its next look (`SignIn::withdrawn`), a
+    /// browser check or a key touch included. Nothing shown withdraws
+    /// nothing, so a screen that leaves between attempts ends none.
+    pub fn withdraw(&self) {
+        let mut state = self.lock();
+        if state.shown.is_none() {
+            return;
+        }
+        state.withdrawn = true;
+        if let Some(answer) = state.answer.take() {
+            let _ = answer.send(Err(Refusal::Cancelled));
+        }
+        herdr_core::diagnostic!(json!({
+            "component": "screen_sign_in",
+            "kind": "sign_in.withdrawn",
+            "target": self.target,
+            "question": state.last,
+        }));
+        self.set(state, None);
+    }
+
     /// The operator's reply to `question`. A reply for a question no longer
     /// asked reaches nothing: the screen already shows what is asked now.
-    /// Answers whether it reached the question.
+    /// A Cancel of a wait that takes no answer withdraws it. Answers whether
+    /// it reached the question.
     pub fn answer(&self, question: u64, reply: SignInReply) -> bool {
         let mut state = self.lock();
-        let pending = state
+        let shown = state
             .shown
             .as_ref()
-            .is_some_and(|shown| shown.question == question)
-            && state.answer.is_some();
+            .is_some_and(|shown| shown.question == question);
+        if shown && state.answer.is_none() && matches!(reply, SignInReply::Cancel) {
+            drop(state);
+            self.withdraw();
+            return true;
+        }
+        let pending = shown && state.answer.is_some();
         herdr_core::diagnostic!(json!({
             "component": "screen_sign_in",
             "kind": if pending { "sign_in.answered" } else { "sign_in.answer_stale" },
@@ -121,7 +153,7 @@ impl SignIn for ScreenSignIn {
     fn show(&self, wait: Option<SignInWait>) {
         let state = self.lock();
         // A question waiting for its answer stays: it ends with its answer.
-        if state.answer.is_some() {
+        if state.answer.is_some() || state.withdrawn {
             return;
         }
         self.set(state, wait);
@@ -131,6 +163,9 @@ impl SignIn for ScreenSignIn {
         let (sender, answers) = mpsc::sync_channel(1);
         let kind = wait.kind();
         let mut state = self.lock();
+        if state.withdrawn {
+            return Err(Refusal::Cancelled);
+        }
         state.answer = Some(sender);
         let question = self.set(state, Some(wait));
         herdr_core::diagnostic!(json!({
@@ -162,7 +197,12 @@ impl SignIn for ScreenSignIn {
     fn ended(&self) {
         let mut state = self.lock();
         state.answer = None;
+        state.withdrawn = false;
         self.set(state, None);
+    }
+
+    fn withdrawn(&self) -> bool {
+        self.lock().withdrawn
     }
 }
 
@@ -260,6 +300,34 @@ mod tests {
         sign_in.ended();
         assert!(matches!(asking.join().unwrap(), Err(Refusal::Ended)));
         assert_eq!(sign_in.shown(), None);
+    }
+
+    /// B8: a screen that goes away, or cancels a wait that takes no answer,
+    /// withdraws it: the attempt reads it withdrawn and nothing more is shown
+    /// or asked until the attempt has ended; a withdraw with nothing shown
+    /// ends nothing.
+    #[test]
+    fn a_withdrawn_browser_check_ends_the_attempt_and_asks_nothing_more() {
+        let (sign_in, _) = screen();
+        sign_in.withdraw();
+        assert!(!sign_in.withdrawn(), "nothing was shown to withdraw");
+        let browser = SignInWait::Browser {
+            url: "https://login.example.com/a".to_owned(),
+        };
+        sign_in.show(Some(browser.clone()));
+        let question = sign_in.shown().unwrap().question;
+        assert!(sign_in.answer(question, reply(json!({"reply": "cancel"}))));
+        assert!(sign_in.withdrawn());
+        assert_eq!(sign_in.shown(), None);
+        sign_in.show(Some(browser.clone()));
+        assert_eq!(sign_in.shown(), None);
+        assert!(matches!(sign_in.ask(secret()), Err(Refusal::Cancelled)));
+        sign_in.ended();
+        assert!(!sign_in.withdrawn());
+        sign_in.show(Some(browser));
+        assert!(sign_in.shown().is_some());
+        sign_in.withdraw();
+        assert!(sign_in.withdrawn());
     }
 
     /// A wait that ends by itself (a touch) is shown and cleared, and does

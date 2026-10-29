@@ -113,6 +113,8 @@ pub struct NodeState {
     /// A held screen's answer to it; one for a question no longer asked
     /// reaches nothing.
     pub answer_sign_in: Arc<dyn Fn(u64, SignInReply) -> bool + Send + Sync>,
+    /// Ends what the dial shows when no held screen is left to answer it.
+    pub withdraw_sign_in: Arc<dyn Fn() + Send + Sync>,
     /// Screens held while the link is down: when the last one leaves, a
     /// question still waiting is cancelled, so the attempt ends rather than
     /// wait for a screen nobody sees (B8).
@@ -255,6 +257,14 @@ impl NodeDaemon {
                     .is_some_and(|role| role.answer_sign_in(question, reply))
             }) as Arc<dyn Fn(u64, SignInReply) -> bool + Send + Sync>
         };
+        let withdraw_sign_in = {
+            let role = Arc::downgrade(&role);
+            Arc::new(move || {
+                if let Some(role) = role.upgrade() {
+                    role.withdraw_sign_in();
+                }
+            }) as Arc<dyn Fn() + Send + Sync>
+        };
         let browser_routes = BrowserRoutes::new(Arc::new(NodePages::new(
             screen_node,
             core_node,
@@ -282,6 +292,7 @@ impl NodeDaemon {
                 link_control,
                 sign_ins,
                 answer_sign_in,
+                withdraw_sign_in,
                 held_screens: Arc::new(AtomicUsize::new(0)),
                 clients: Arc::new(AtomicUsize::new(0)),
                 connections: Arc::new(AtomicU64::new(0)),

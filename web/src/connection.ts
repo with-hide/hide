@@ -37,7 +37,7 @@ export function badgeText(state: ConnectionState, refused: boolean, t: TFunction
  * operator's way back after they ended the link (B16), `retry` the dial a link that stopped on what only they can fix
  * waits for, `sign_in` the same dial where the link stopped on a sign-in, and `give_up` the move's wait on its other
  * machine where the move offers it (amendment 4), which only opens the move dialog at its confirm. A link that stopped
- * on a changed server key carries the terminal `command` that checks it, as the device row does; `signIn` is what ssh
+ * on a changed server key carries the terminal `command` that checks it and no retry, as the device row does; `signIn` is what ssh
  * asks the dial the operator started, which the strip shows below its line (PRD system-ssh-device-link B33).
  */
 export type WindowStrip = {
@@ -96,8 +96,11 @@ export function windowStrip(
       case "waiting":
         return { kind: "unreachable", text: t("coreMove.strip.unreachable", { machine }), mark: "warn" };
       case "stopped": {
+        // A changed server key is checked in a terminal and offers no Retry, as on the device row: a retry would meet
+        // the same key.
         const command = deviceProblemLine(link.problem, link.alias, t)?.command ?? undefined;
-        return { kind: "stopped", text: stoppedText(link, machine, t), mark: "warn", action: retrySignsIn(link.problem) ? "sign_in" : "retry", ...(command ? { command } : {}) };
+        if (link.problem === "host_key_changed") return { kind: "stopped", text: stoppedText(link, machine, t), mark: "warn", ...(command ? { command } : {}) };
+        return { kind: "stopped", text: stoppedText(link, machine, t), mark: "warn", action: retrySignsIn(link.problem) ? "sign_in" : "retry" };
       }
       case "connecting":
         break;

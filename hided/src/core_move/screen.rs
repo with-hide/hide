@@ -127,6 +127,7 @@ async fn serve(mut socket: WebSocket, mut state: ScreenState, origin: Option<Str
         let _ = socket.send(close(4001, "invalid_token")).await;
         return;
     }
+    let mover = super::control::MoveScreen::new(&state.moves);
     let mut frames = state.moves.subscribe();
     let first = frame(&frames.borrow_and_update());
     if socket.send(Message::Text(first.into())).await.is_err() {
@@ -147,7 +148,7 @@ async fn serve(mut socket: WebSocket, mut state: ScreenState, origin: Option<Str
             incoming = socket.recv() => match incoming {
                 Some(Ok(Message::Text(text))) => {
                     let taken = crate::screen_event::read(&text, &[crate::screen_event::Kind::CoreMove])
-                        .map(|routed| state.moves.request_event(&routed.event));
+                        .map(|routed| mover.request_event(&routed.event));
                     let refused = match taken {
                         Some(Ok(())) => continue,
                         Some(Err(reason)) => super::control::refusal_frame(reason),

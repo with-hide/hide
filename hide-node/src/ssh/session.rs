@@ -137,6 +137,11 @@ impl Pipe for SigningIn {
             {
                 return Err(Stop::Ended("a sign-in question got no answer".to_owned()));
             }
+            if !self.signed_in && self.sign_in.withdrawn() {
+                return Err(Stop::Ended(
+                    "the screen that asked for the sign-in went away".to_owned(),
+                ));
+            }
             let now = Instant::now();
             if !self.signed_in && self.operator_turn() {
                 self.held += now.saturating_duration_since(self.tick);
@@ -297,6 +302,7 @@ pub(super) fn sign_in(
                     .desk
                     .as_ref()
                     .and_then(askpass::Desk::refusal)
+                    .or_else(|| pipe.sign_in.withdrawn().then_some(Refusal::Cancelled))
                     .or_else(|| {
                         (pipe.browser_expired && wake == Wake::NotAllowed)
                             .then_some(Refusal::NotAllowed)

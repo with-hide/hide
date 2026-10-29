@@ -320,8 +320,9 @@ mod unix {
     /// asks on the screen whose press started it. A dial nobody pressed for
     /// stops as a sign-in needed with nothing shown; the operator's dial
     /// shows the server's fingerprint, a Cancel there ends it as a sign-in
-    /// needed, and a trust connects it, after which the screen shows
-    /// nothing and the server is known.
+    /// needed, the same connection's next dial asks nobody, and a trust
+    /// connects a new press's dial, after which the screen shows nothing
+    /// and the server is known.
     #[test]
     #[ignore = "the system's sshd; the remote mailbox lane runs it"]
     fn a_core_link_asks_on_its_screen_only_for_the_operator_s_own_dial() {
@@ -396,12 +397,23 @@ mod unix {
         );
 
         let cancelled = answer(serde_json::json!({"reply": "cancel"}));
-        needed(run(&upstream(Wake::Allowed)));
+        let pressed = upstream(Wake::Allowed);
+        needed(run(&pressed));
         let fingerprint = sshd.fingerprint().unwrap();
         assert!(
             matches!(cancelled.join().unwrap(), SignInWait::HostKey { fingerprint: shown, .. } if shown == fingerprint)
         );
         assert_eq!(screen.shown(), None);
+        // One press is one sign-in: the same connection's next dial, as a
+        // core update's after its attach, asks nobody.
+        let shown_before = told.lock().unwrap().len();
+        needed(run(&pressed));
+        assert_eq!(
+            told.lock().unwrap().len(),
+            shown_before,
+            "{:?}",
+            told.lock().unwrap()
+        );
         assert!(!known.exists() || std::fs::read_to_string(&known).unwrap().is_empty());
 
         let trusted = answer(serde_json::json!({"reply": "accept"}));

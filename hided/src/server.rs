@@ -892,6 +892,8 @@ async fn screen_loop(
     if previous == 0 {
         state.roots.resume();
     }
+    // This screen's hold on a move it asks for, which its end lets go of.
+    let mover = crate::core_move::control::MoveScreen::new(&state.seat.moves);
     let renderer = matches!(handshake.client_kind.as_deref(), Some("web" | "desktop"));
     let desktop = handshake.client_kind.as_deref() == Some("desktop");
     if renderer {
@@ -1190,7 +1192,7 @@ async fn screen_loop(
                                 } else if !state.move_gate.is_open() {
                                     Err("core_pending")
                                 } else {
-                                    state.seat.moves.request_event(&event)
+                                    mover.request_event(&event)
                                 };
                                 if let Err(reason) = answer {
                                     let frame = crate::core_move::control::refusal_frame(reason);

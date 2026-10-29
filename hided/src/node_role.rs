@@ -293,6 +293,11 @@ struct State {
     update: Update,
     /// The operator ended the link (B16); the link thread parks.
     disconnected: bool,
+    /// The core on `machine` runs an older build and its update stopped on
+    /// a sign-in nobody could be asked for: the operator's next connect
+    /// signs in for the update first and attaches on that same session, so
+    /// one press is one sign-in.
+    update_owed: Option<(String, crate::build_order::Release)>,
 }
 
 /// Where a connection's one update of the core stands (B10, B20).
@@ -444,6 +449,7 @@ impl NodeRole {
                 link: None,
                 update: Update::Untried,
                 disconnected: placement.disconnected,
+                update_owed: None,
             }),
             changed: Condvar::new(),
             upstream: Mutex::new(None),
@@ -503,6 +509,12 @@ impl NodeRole {
     /// asked reaches nothing.
     pub fn answer_sign_in(&self, question: u64, reply: SignInReply) -> bool {
         self.shared.sign_in.answer(question, reply)
+    }
+
+    /// No window is left to answer what the dial shows: the attempt ends as
+    /// a cancelled sign-in (B8).
+    pub fn withdraw_sign_in(&self) {
+        self.shared.sign_in.withdraw();
     }
 
     /// The operator ends the link from this machine's window (B16): the
@@ -913,6 +925,7 @@ fn set_phase(shared: &Shared, phase: Phase) -> bool {
     let mut state = lock(&shared.state);
     if let Phase::Live(_) = phase {
         state.update.held();
+        state.update_owed = None;
     }
     if state.phase != phase {
         state.phase = phase.clone();
@@ -987,9 +1000,19 @@ fn try_link(
             }
         }
     };
-    // The attempt's dials, the core update's included, ask the operator
-    // only when their connect started it.
+    // Only the attempt their connect started may ask, and only at its first
+    // dial: the update that follows an attach dials again and asks nobody.
     upstream.may_ask(wake);
+    // That press is owed to an update that stopped on a sign-in: it signs in
+    // for the update, and the attach takes the session the update left.
+    let owed = (wake == Wake::Allowed)
+        .then(|| lock(&shared.state).update_owed.take())
+        .flatten();
+    if let Some((machine, core)) = owed {
+        return Err(update_core(
+            shared, &upstream, placement, identity, machine, core,
+        ));
+    }
     let channel = upstream
         .attach(&placement.program, placement.state_dir.as_deref())
         .map_err(attach_failure)?;
@@ -1101,6 +1124,7 @@ fn update_core(
         // operator's Retry like the link's own, and leaves this
         // connection's update untried for it.
         Err(SessionError::Ssh(failure)) if !failure.problem.retried() => {
+            lock(&shared.state).update_owed = Some((machine, core));
             return LinkFailure::Operator(failure);
         }
         Err(reason) => return failed(format!("upload: {reason}")),

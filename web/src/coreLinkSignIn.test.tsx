@@ -80,6 +80,8 @@ it("offers Sign in for a stopped sign-in and the terminal check for a changed se
     expect(sent(view.events, "core_link")).toEqual([{ schema_version: 2, kind: "core_link", payload: { action: "retry" } }]);
     await view.set({ coreLink: link({ phase: "stopped", problem: "host_key_changed" }) });
     expect(view.q('[data-core-link-command="ssh mini"]')?.textContent).toContain("ssh mini");
+    expect(view.q("[data-core-retry]")).toBeNull();
+    await view.set({ coreLink: link({ phase: "stopped", problem: "cannot_connect" }) });
     expect(view.q('[data-core-retry="retry"]')?.textContent).toBe("Retry");
   } finally {
     await view.unmount();
@@ -108,6 +110,20 @@ it("trusts a server the move's checks ask about in the dialog and cancels a ques
   }
 });
 
+// Closing the dialog on a wait that takes no answer cancels it too, which hided reads as withdrawing it (B8).
+it("cancels a browser check the move dialog closes on", async () => {
+  const sign_in = { question: 5, kind: "browser" as const, url: "https://login.example.com/a", key_command: null };
+  const view = await mount({ connection: "live", coreMove: checking({ sign_in }), coreMoveRefusal: null, rest: null }, (actions) => (
+    <CoreMoveDialog request={{ direction: "forward", device: "mini" }} asked={null} actions={actions} onClose={() => {}} onRequest={() => {}} />
+  ));
+  try {
+    await act(async () => view.button("Close")?.click());
+    expect(sent(view.events, "core_move")).toEqual([{ schema_version: 2, kind: "core_move", payload: { action: "sign_in", question: 5, reply: "cancel" } }]);
+  } finally {
+    await view.unmount();
+  }
+});
+
 // A connection check that stopped on ssh says what the device row says and offers its action.
 it("words a connection check that stopped on a sign-in as the device row does and offers Sign in", async () => {
   const failed = checking({ state: "checks_failed", failed: [{ check: "connection", detail: "Refused" }], ssh_problem: "sign_in_needed", alias: "mini" });
@@ -120,6 +136,8 @@ it("words a connection check that stopped on a sign-in as the device row does an
     await view.set({ coreMove: { ...failed, ssh_problem: "host_key_changed" } });
     expect(view.q('[data-core-move-check="connection"]')?.textContent).toContain("Server key changed");
     expect(view.q('[data-core-move-check="connection"]')?.textContent).toContain("ssh mini");
+    expect(view.q('[data-core-move-recheck="true"]')).toBeNull();
+    await view.set({ coreMove: { ...failed, ssh_problem: "cannot_connect" } });
     expect(view.q('[data-core-move-recheck="true"]')?.textContent).toBe("Check again");
   } finally {
     await view.unmount();
