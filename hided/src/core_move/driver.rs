@@ -11,7 +11,7 @@ use herdr_core::node_migration::{self, IdTable, KnownProject, OwnerChange, copy}
 use hide_node::ssh::session::SshTarget;
 use hide_node::ssh::transfer::FileCopy;
 use hide_node::ssh::upstream::Upstream;
-use hide_node_link::device::{SignIn, SshProblem, Wake};
+use hide_node_link::device::{SignIn, SshProblem};
 use serde_json::{Value, json};
 
 use super::answer::{StepAnswer, StepLine};
@@ -55,18 +55,11 @@ impl Remote {
         self
     }
 
-    /// Sends what `ssh` asks, at a dial [`Self::may_ask`] allows, to the
-    /// move dialog (PRD system-ssh-device-link B33).
-    pub fn with_sign_in(mut self, sign_in: Arc<dyn SignIn>) -> Self {
-        self.upstream = self.upstream.with_sign_in(sign_in);
-        self
-    }
-
-    /// Whether the next dial may ask the operator: only the checks' own,
-    /// which their press started (D-06); a later dial of the move asks
-    /// nobody.
-    pub fn may_ask(&self, wake: Wake) {
-        self.upstream.may_ask(wake);
+    /// Where the next dial may ask the operator: only the checks' own, the
+    /// sign-in of the press that started them, in the move dialog (D-06,
+    /// B33); a later dial of the move asks nobody.
+    pub fn may_ask(&self, press: Option<Arc<dyn SignIn>>) {
+        self.upstream.may_ask(press);
     }
 
     /// What `ssh` stopped on at the last dial; none when it signed in.

@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use herdr_core::node_migration::{self, copy};
-use hide_node_link::device::{SshProblem, Wake};
+use hide_node_link::device::SshProblem;
 use serde_json::json;
 
 use crate::core_move::abandoned::{self, Abandoned, PeerStep};
@@ -757,12 +757,13 @@ async fn prepare(
     let (alias, program) = (source.ssh_alias.clone(), source.helper_path.clone());
     let own = build.clone();
     let stranded = retry.clone();
-    let sign_in = moves.sign_in();
+    let press = moves.take_press();
     let inspected = tokio::task::spawn_blocking(move || {
-        let remote = Remote::new(&home, &alias, &program, &own).with_sign_in(sign_in);
+        let remote = Remote::new(&home, &alias, &program, &own);
         // The operator pressed for these checks, so their dial may ask what
-        // ssh asks in the dialog; the move's later dials ask nobody (D-06).
-        remote.may_ask(Wake::Allowed);
+        // ssh asks in that screen's dialog; the move's later dials ask
+        // nobody (D-06).
+        remote.may_ask(press);
         let inspected = (|| {
             let inspected = driver::inspect(&remote, &asks)?;
             // A copy an earlier try placed there and could not take back (the
@@ -782,7 +783,7 @@ async fn prepare(
             };
             Ok::<_, MoveFailure>(inspected)
         })();
-        remote.may_ask(Wake::NotAllowed);
+        remote.may_ask(None);
         let ssh = remote.ssh_problem();
         inspected
             .map(|inspected| (remote, inspected))

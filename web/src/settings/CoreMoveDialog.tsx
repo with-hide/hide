@@ -85,19 +85,23 @@ const MARK: Record<StepMark, { glyph: string; line: string; mark: string }> = {
 export function CoreMoveDialog({ request, asked: first, giveUp = false, actions, onClose: close, onRequest }: { request: MoveRequest; asked: MoveView | null; giveUp?: boolean; actions: Actions; onClose: () => void; onRequest: (request: MoveRequest) => void }) {
   const { t } = useInterfaceTranslation();
   const view = useShellStore((s) => s.coreMove);
-  // What nobody sees any more (a question, a browser check, a key touch) is cancelled, which ends the checks'
-  // sign-in rather than leave it waiting out its five minutes (PRD system-ssh-device-link B8); the window's end does
-  // the same on hided's side.
-  const onClose = () => {
-    const asking = view?.sign_in;
-    if (asking) actions.answerCoreMoveSignIn(asking.question, { reply: "cancel" });
-    close();
-  };
   const refusal = useShellStore((s) => s.coreMoveRefusal);
   const devices = useShellStore((s) => s.rest?.navigator?.devices);
   // The frame the last request was sent beside: the dialog waits until a newer one answers it.
   const [asked, setAsked] = useState<MoveView | null>(first);
-  const ask = (next: MoveRequest, start: boolean) => setAsked(askMove(actions, next, start));
+  // Whether this dialog's own press started what runs: opened on a device's Move or Move back, or asked again here.
+  const [pressed, setPressed] = useState(!giveUp);
+  // Closing on checks this dialog asked for ends their sign-in, whether it shows a question, a browser check, a key
+  // touch or nothing yet, rather than leave it waiting out its five minutes for a dialog nobody sees (PRD
+  // system-ssh-device-link B8); the window's end does the same on hided's side.
+  const onClose = () => {
+    if (pressed && view?.state === "checking") actions.cancelCoreMoveSignIn();
+    close();
+  };
+  const ask = (next: MoveRequest, start: boolean) => {
+    setPressed(true);
+    setAsked(askMove(actions, next, start));
+  };
   // Giving up the wait is confirmed first, and only while the move's wait offers it.
   const [givingUp, setGivingUp] = useState(giveUp);
   const offered = giveUpOffered(view);

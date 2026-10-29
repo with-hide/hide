@@ -519,13 +519,13 @@ impl Session {
                 askpass: target.askpass.as_deref(),
                 target: &name,
             },
-            asks,
+            Arc::clone(&asks),
             wake,
             cancel,
             &|_| {},
         );
         // Signed in or not, nothing of this sign-in waits on the screen.
-        screen.ended();
+        asks.ended();
         let (pipe, facts) = signed.map_err(SessionError::of_establish)?;
         Ok(Self {
             pipe,

@@ -193,17 +193,18 @@ pub(super) async fn prepare_back(
     );
     let state_dir = placement.state_dir.clone();
     let build = own_build(env).map_err(|reason| fail(CheckId::Connection, reason))?;
-    let sign_in = moves.sign_in();
+    let press = moves.take_press();
     let inspected = tokio::task::spawn_blocking(move || {
-        let mut remote = Remote::new(&home, &alias, &program, &build).with_sign_in(sign_in);
+        let mut remote = Remote::new(&home, &alias, &program, &build);
         if let Some(state_dir) = &state_dir {
             remote = remote.with_state_dir(state_dir);
         }
         // The operator pressed for these checks, so their dial may ask what
-        // ssh asks in the dialog; the move's later dials ask nobody (D-06).
-        remote.may_ask(Wake::Allowed);
+        // ssh asks in that screen's dialog; the move's later dials ask
+        // nobody (D-06).
+        remote.may_ask(press);
         let inspected = driver::inspect(&remote, &[]);
-        remote.may_ask(Wake::NotAllowed);
+        remote.may_ask(None);
         let ssh = remote.ssh_problem();
         inspected
             .map(|inspected| (remote, inspected))

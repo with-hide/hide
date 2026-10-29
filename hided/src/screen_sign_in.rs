@@ -5,227 +5,363 @@
 //! question is ssh's own, it waits at most five minutes, and the operator's
 //! answer travels from the screen's event to the waiting question over a
 //! channel of that one question, never through a frame, a file or a log
-//! (B10). Which attempt may ask is the caller's: an [`Upstream`] whose dial
-//! nobody pressed for never reaches this.
+//! (B10).
 //!
-//! [`Upstream`]: hide_node::ssh::upstream::Upstream
+//! Each press is one [`Lease`], taken when the press is: it names the
+//! screen connection that pressed, and only that screen is shown what ssh
+//! asks, answers it, and by leaving or cancelling ends it, before the first
+//! question, between two, or on one. Everything a lease does (show, ask,
+//! answer, cancel, its deadline) goes through the one lock of its
+//! [`ScreenSignIn`], so a reply checked against one question cannot act on
+//! the next. A lease that is no longer the current one reads as withdrawn,
+//! so the dial holding it ends and reaps its `ssh` at its next look. A dial
+//! nobody pressed for holds no lease and never reaches this.
 
 use std::sync::mpsc;
-use std::sync::{Mutex, MutexGuard};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use hide_node_link::device::{Answer, Refusal, ShownSignIn, SignIn, SignInReply, SignInWait};
 use serde_json::json;
 
-/// How long a question waits for the operator (D-05).
+/// How long a question, a browser check or a key touch waits for the
+/// operator (D-05, D-10).
 const ANSWER_WITHIN: Duration = Duration::from_secs(5 * 60);
 
 /// A screen's answer to the question it shows: the question's number and
 /// the reply (`text`, `accept` or `cancel`), as a held node window's
 /// `core_link` event and the move dialog's `core_move` event carry them,
-/// each with `action: sign_in`.
+/// each with `action: sign_in`. A `cancel` with no question ends the
+/// screen's attempt whatever it shows, before its first question too.
 #[derive(serde::Deserialize)]
 pub struct SignInAnswer {
-    pub question: u64,
+    #[serde(default)]
+    pub question: Option<u64>,
     #[serde(flatten)]
     pub reply: SignInReply,
 }
 
-/// Hears what the screen shows each time it changes: the wait, or none.
-pub type Publish = Box<dyn Fn(Option<ShownSignIn>) + Send + Sync>;
+/// What a screen is shown, and the screen connection it is shown to.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Shown {
+    pub owner: u64,
+    pub sign_in: ShownSignIn,
+}
 
-/// One connection's sign-in on its screen: at most one wait at a time.
+/// Hears what is shown each time it changes: the wait, or none.
+pub type Publish = Box<dyn Fn(Option<Shown>) + Send + Sync>;
+
+/// A reply from a screen other than the one whose press the attempt is.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NotOwner;
+
+/// One connection's sign-in: the press it runs for now, at most one.
 pub struct ScreenSignIn {
     /// Names the connection in the log.
     target: &'static str,
-    state: Mutex<Waiting>,
+    /// How long a wait waits for the operator.
+    within: Duration,
+    slot: Mutex<Slot>,
     publish: Publish,
 }
 
 #[derive(Default)]
-struct Waiting {
-    /// The last question's number, so an answer typed for a question ssh no
-    /// longer asks never answers the next one (B7).
-    last: u64,
+struct Slot {
+    /// The last question's number, across presses, so an answer typed for
+    /// a question ssh no longer asks never answers the next one (B7).
+    question: u64,
+    /// The last lease's number.
+    generation: u64,
+    current: Option<Held>,
+}
+
+/// The current press.
+struct Held {
+    generation: u64,
+    owner: u64,
     shown: Option<ShownSignIn>,
     /// Where the answer to the shown question goes; `None` for a wait that
     /// ends by itself (a browser check, a security key's touch).
     answer: Option<mpsc::SyncSender<Result<Answer, Refusal>>>,
-    /// The screen went away or cancelled what it showed: the attempt ends
-    /// (B8), and nothing more of it is shown or asked until it has.
-    withdrawn: bool,
+    /// When a wait that takes no answer runs out (D-05, D-10).
+    deadline: Option<Instant>,
+}
+
+/// One press's sign-in, the [`SignIn`] the dial it started asks through.
+/// Dropping the last hold of it ends it.
+pub struct Lease {
+    screen: Arc<ScreenSignIn>,
+    generation: u64,
 }
 
 impl ScreenSignIn {
     pub fn new(target: &'static str, publish: Publish) -> Self {
+        Self::within(target, ANSWER_WITHIN, publish)
+    }
+
+    fn within(target: &'static str, within: Duration, publish: Publish) -> Self {
         Self {
             target,
-            state: Mutex::default(),
+            within,
+            slot: Mutex::default(),
             publish,
         }
     }
 
-    fn lock(&self) -> MutexGuard<'_, Waiting> {
-        self.state
+    fn lock(&self) -> MutexGuard<'_, Slot> {
+        self.slot
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    /// Replaces what is shown, telling the screen after the lock is let go,
-    /// and answers the number the new wait was given.
-    fn set(&self, mut state: MutexGuard<'_, Waiting>, wait: Option<SignInWait>) -> u64 {
-        let shown = wait.map(|wait| {
-            state.last += 1;
-            ShownSignIn::new(state.last, wait)
+    /// Takes the press of the screen connection `owner`: the attempt it
+    /// starts asks through the lease answered, and a press before it ends.
+    pub fn lease(self: &Arc<Self>, owner: u64) -> Arc<Lease> {
+        let mut slot = self.lock();
+        self.end(&mut slot, Refusal::Cancelled, "replaced");
+        slot.generation += 1;
+        slot.current = Some(Held {
+            generation: slot.generation,
+            owner,
+            shown: None,
+            answer: None,
+            deadline: None,
         });
-        let number = state.last;
-        if state.shown != shown {
-            state.shown.clone_from(&shown);
-            drop(state);
-            (self.publish)(shown);
-        }
-        number
+        Arc::new(Lease {
+            screen: Arc::clone(self),
+            generation: slot.generation,
+        })
     }
 
-    /// What the screen shows now.
-    pub fn shown(&self) -> Option<ShownSignIn> {
-        self.lock().shown.clone()
-    }
-
-    /// The screen that started the attempt went away, or cancelled a wait:
-    /// whatever is shown goes, a question waiting is refused as cancelled,
-    /// and the attempt ends at its next look (`SignIn::withdrawn`), a
-    /// browser check or a key touch included. Nothing shown withdraws
-    /// nothing, so a screen that leaves between attempts ends none.
-    pub fn withdraw(&self) {
-        let mut state = self.lock();
-        if state.shown.is_none() {
+    /// Ends the current press: a question waiting is refused with
+    /// `refusal`, what it shows goes, and the dial holding it reads it
+    /// withdrawn. Under the slot's lock, so nothing of a later press is
+    /// touched.
+    fn end(&self, slot: &mut Slot, refusal: Refusal, why: &'static str) {
+        let Some(held) = slot.current.take() else {
             return;
-        }
-        state.withdrawn = true;
-        if let Some(answer) = state.answer.take() {
-            let _ = answer.send(Err(Refusal::Cancelled));
+        };
+        if let Some(answer) = held.answer {
+            let _ = answer.send(Err(refusal));
         }
         herdr_core::diagnostic!(json!({
             "component": "screen_sign_in",
-            "kind": "sign_in.withdrawn",
+            "kind": "sign_in.ended",
             "target": self.target,
-            "question": state.last,
+            "generation": held.generation,
+            "why": why,
         }));
-        self.set(state, None);
+        if held.shown.is_some() {
+            (self.publish)(None);
+        }
     }
 
-    /// The operator's reply to `question`. A reply for a question no longer
-    /// asked reaches nothing: the screen already shows what is asked now.
-    /// A Cancel of a wait that takes no answer withdraws it. Answers whether
-    /// it reached the question.
-    pub fn answer(&self, question: u64, reply: SignInReply) -> bool {
-        let mut state = self.lock();
-        let shown = state
+    /// The press of `generation`, while it is the current one.
+    fn held(slot: &mut Slot, generation: u64) -> Option<&mut Held> {
+        slot.current
+            .as_mut()
+            .filter(|held| held.generation == generation)
+    }
+
+    /// Shows `wait` for the current press, or clears it, telling the screen.
+    fn set(&self, slot: &mut Slot, wait: Option<SignInWait>) -> u64 {
+        if wait.is_some() {
+            slot.question += 1;
+        }
+        let question = slot.question;
+        let Some(held) = slot.current.as_mut() else {
+            return question;
+        };
+        let shown = wait.map(|wait| ShownSignIn::new(question, wait));
+        if held.shown != shown {
+            held.shown.clone_from(&shown);
+            (self.publish)(shown.map(|sign_in| Shown {
+                owner: held.owner,
+                sign_in,
+            }));
+        }
+        question
+    }
+
+    /// What is shown now, and to whom.
+    pub fn shown(&self) -> Option<Shown> {
+        let slot = self.lock();
+        let held = slot.current.as_ref()?;
+        Some(Shown {
+            owner: held.owner,
+            sign_in: held.shown.clone()?,
+        })
+    }
+
+    /// The screen connection `owner` went away: the press it made ends,
+    /// whether or not anything shows, and a press of another screen stays
+    /// (B8).
+    pub fn release(&self, owner: u64) {
+        let mut slot = self.lock();
+        if slot.current.as_ref().is_some_and(|held| held.owner == owner) {
+            self.end(&mut slot, Refusal::Cancelled, "screen_left");
+        }
+    }
+
+    /// The reply of the screen connection `owner` to `question`, checked and
+    /// acted on in one step. A reply for a question no longer asked reaches
+    /// nothing: the screen already shows what is asked now. A Cancel of what
+    /// is shown, or a Cancel naming no question, ends the press (B8). Answers whether it reached the attempt; `NotOwner` when
+    /// another screen's press runs.
+    pub fn answer(
+        &self,
+        owner: u64,
+        question: Option<u64>,
+        reply: SignInReply,
+    ) -> Result<bool, NotOwner> {
+        let mut slot = self.lock();
+        let Some(held) = slot.current.as_mut() else {
+            return Ok(false);
+        };
+        if held.owner != owner {
+            return Err(NotOwner);
+        }
+        let cancel = matches!(reply, SignInReply::Cancel);
+        let shown = held
             .shown
             .as_ref()
-            .is_some_and(|shown| shown.question == question);
-        if shown && state.answer.is_none() && matches!(reply, SignInReply::Cancel) {
-            drop(state);
-            self.withdraw();
-            return true;
-        }
-        let pending = shown && state.answer.is_some();
+            .is_some_and(|shown| Some(shown.question) == question);
         herdr_core::diagnostic!(json!({
             "component": "screen_sign_in",
-            "kind": if pending { "sign_in.answered" } else { "sign_in.answer_stale" },
+            "kind": if shown || (cancel && question.is_none()) { "sign_in.answered" } else { "sign_in.answer_stale" },
             "target": self.target,
             "question": question,
             "reply": reply.code(),
         }));
-        if !pending {
-            return false;
+        if cancel && (question.is_none() || shown) {
+            self.end(&mut slot, Refusal::Cancelled, "cancelled");
+            return Ok(true);
         }
-        if let Some(answer) = state.answer.take() {
-            let _ = answer.send(reply.into_answer());
+        if !shown {
+            return Ok(false);
         }
-        self.set(state, None);
-        true
+        let Some(answer) = held.answer.take() else {
+            return Ok(false);
+        };
+        let _ = answer.send(reply.into_answer());
+        self.set(&mut slot, None);
+        Ok(true)
     }
 }
 
-impl SignIn for ScreenSignIn {
+impl SignIn for Lease {
     fn show(&self, wait: Option<SignInWait>) {
-        let state = self.lock();
+        let screen = &self.screen;
+        let mut slot = screen.lock();
+        let Some(held) = ScreenSignIn::held(&mut slot, self.generation) else {
+            return;
+        };
         // A question waiting for its answer stays: it ends with its answer.
-        if state.answer.is_some() || state.withdrawn {
+        if held.answer.is_some() {
             return;
         }
-        self.set(state, wait);
+        held.deadline = wait.as_ref().map(|_| Instant::now() + screen.within);
+        screen.set(&mut slot, wait);
     }
 
     fn ask(&self, wait: SignInWait) -> Result<Answer, Refusal> {
+        let screen = &self.screen;
         let (sender, answers) = mpsc::sync_channel(1);
         let kind = wait.kind();
-        let mut state = self.lock();
-        if state.withdrawn {
-            return Err(Refusal::Cancelled);
-        }
-        state.answer = Some(sender);
-        let question = self.set(state, Some(wait));
+        let question = {
+            let mut slot = screen.lock();
+            let Some(held) = ScreenSignIn::held(&mut slot, self.generation) else {
+                return Err(Refusal::Cancelled);
+            };
+            held.answer = Some(sender);
+            held.deadline = None;
+            screen.set(&mut slot, Some(wait))
+        };
         herdr_core::diagnostic!(json!({
             "component": "screen_sign_in",
             "kind": "sign_in.asked",
-            "target": self.target,
+            "target": screen.target,
             "question": question,
             "asks": kind,
         }));
-        match answers.recv_timeout(ANSWER_WITHIN) {
+        match answers.recv_timeout(screen.within) {
             Ok(answer) => answer,
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                let mut state = self.lock();
-                if state
-                    .shown
-                    .as_ref()
-                    .is_some_and(|shown| shown.question == question)
-                {
-                    state.answer = None;
-                    self.set(state, None);
+                let mut slot = screen.lock();
+                let unanswered = ScreenSignIn::held(&mut slot, self.generation).is_some_and(|held| {
+                    held.shown
+                        .as_ref()
+                        .is_some_and(|shown| shown.question == question)
+                });
+                if unanswered {
+                    screen.end(&mut slot, Refusal::TimedOut, "timed_out");
                 }
                 Err(Refusal::TimedOut)
             }
-            // The attempt ended and took the question with it.
+            // The press ended and took the question with it.
             Err(mpsc::RecvTimeoutError::Disconnected) => Err(Refusal::Ended),
         }
     }
 
     fn ended(&self) {
-        let mut state = self.lock();
-        state.answer = None;
-        state.withdrawn = false;
-        self.set(state, None);
+        let mut slot = self.screen.lock();
+        if ScreenSignIn::held(&mut slot, self.generation).is_some() {
+            self.screen.end(&mut slot, Refusal::Ended, "attempt_ended");
+        }
     }
 
     fn withdrawn(&self) -> bool {
-        self.lock().withdrawn
+        let mut slot = self.screen.lock();
+        let Some(held) = ScreenSignIn::held(&mut slot, self.generation) else {
+            return true;
+        };
+        // A browser check or a key touch nobody finished in time.
+        if held.deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            self.screen.end(&mut slot, Refusal::TimedOut, "timed_out");
+            return true;
+        }
+        false
+    }
+}
+
+impl Drop for Lease {
+    fn drop(&mut self) {
+        self.ended();
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use hide_node_link::device::SignInReply;
 
     use super::*;
 
-    fn screen() -> (Arc<ScreenSignIn>, Arc<Mutex<Vec<Option<ShownSignIn>>>>) {
+    const A: u64 = 1;
+    const B: u64 = 2;
+
+    type Told = Arc<Mutex<Vec<Option<Shown>>>>;
+
+    fn screen_within(within: Duration) -> (Arc<ScreenSignIn>, Told) {
         let told = Arc::new(Mutex::new(Vec::new()));
         let heard = Arc::clone(&told);
-        let sign_in = ScreenSignIn::new(
+        let sign_in = ScreenSignIn::within(
             "test",
+            within,
             Box::new(move |shown| heard.lock().unwrap().push(shown)),
         );
         (Arc::new(sign_in), told)
     }
 
+    fn screen() -> (Arc<ScreenSignIn>, Told) {
+        screen_within(ANSWER_WITHIN)
+    }
+
     fn reply(value: serde_json::Value) -> SignInReply {
         serde_json::from_value(value).unwrap()
+    }
+
+    fn cancel() -> SignInReply {
+        reply(json!({"reply": "cancel"}))
     }
 
     fn secret() -> SignInWait {
@@ -235,16 +371,41 @@ mod tests {
         }
     }
 
-    /// Waits until the screen shows a question, and answers its number.
-    fn asked(sign_in: &ScreenSignIn) -> u64 {
-        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    fn browser() -> SignInWait {
+        SignInWait::Browser {
+            url: "https://login.example.com/a".to_owned(),
+        }
+    }
+
+    fn touch() -> SignInWait {
+        SignInWait::Touch {
+            prompt: "Confirm user presence".to_owned(),
+        }
+    }
+
+    /// Asks `wait` on `lease` from a thread of its own, as ssh's desk does.
+    fn asking(
+        lease: &Arc<Lease>,
+        wait: SignInWait,
+    ) -> std::thread::JoinHandle<Result<Answer, Refusal>> {
+        let lease = Arc::clone(lease);
+        std::thread::spawn(move || lease.ask(wait))
+    }
+
+    /// Waits until a question numbered past `after` shows, and answers it.
+    fn asked_after(sign_in: &ScreenSignIn, after: u64) -> Shown {
+        let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            if let Some(shown) = sign_in.shown() {
-                return shown.question;
+            if let Some(shown) = sign_in.shown().filter(|shown| shown.sign_in.question > after) {
+                return shown;
             }
-            assert!(std::time::Instant::now() < deadline, "nothing was asked");
+            assert!(Instant::now() < deadline, "nothing was asked");
             std::thread::yield_now();
         }
+    }
+
+    fn asked(sign_in: &ScreenSignIn) -> u64 {
+        asked_after(sign_in, 0).sign_in.question
     }
 
     /// B6, B7, B10: the answer to the question shown reaches the waiting
@@ -253,21 +414,20 @@ mod tests {
     #[test]
     fn the_answer_to_the_shown_question_reaches_its_ask_and_nothing_else() {
         let (sign_in, told) = screen();
-        let asking = {
-            let sign_in = Arc::clone(&sign_in);
-            std::thread::spawn(move || sign_in.ask(secret()))
-        };
+        let lease = sign_in.lease(A);
+        let waiting = asking(&lease, secret());
         let question = asked(&sign_in);
-        assert!(!sign_in.answer(
-            question + 1,
-            reply(json!({"reply": "text", "text": "stale"}))
-        ));
-        assert!(sign_in.answer(question, reply(json!({"reply": "text", "text": "hunter2"}))));
-        match asking.join().unwrap() {
+        assert_eq!(sign_in.shown().unwrap().owner, A);
+        let stale = reply(json!({"reply": "text", "text": "stale"}));
+        assert_eq!(sign_in.answer(A, Some(question + 1), stale), Ok(false));
+        let typed = reply(json!({"reply": "text", "text": "hunter2"}));
+        assert_eq!(sign_in.answer(A, Some(question), typed), Ok(true));
+        match waiting.join().unwrap() {
             Ok(Answer::Text(secret)) => assert_eq!(secret.expose(), "hunter2"),
             other => panic!("{other:?}"),
         }
         assert_eq!(sign_in.shown(), None);
+        assert!(!lease.withdrawn(), "an answer ends no attempt");
         let told = told.lock().unwrap();
         assert_eq!(told.len(), 2, "{told:?}");
         assert!(!format!("{told:?}").contains("hunter2"));
@@ -277,57 +437,116 @@ mod tests {
     #[test]
     fn a_cancel_refuses_the_question() {
         let (sign_in, _) = screen();
-        let asking = {
-            let sign_in = Arc::clone(&sign_in);
-            std::thread::spawn(move || sign_in.ask(secret()))
-        };
+        let lease = sign_in.lease(A);
+        let waiting = asking(&lease, secret());
         let question = asked(&sign_in);
-        assert!(sign_in.answer(question, reply(json!({"reply": "cancel"}))));
-        assert!(matches!(asking.join().unwrap(), Err(Refusal::Cancelled)));
+        assert_eq!(sign_in.answer(A, Some(question), cancel()), Ok(true));
+        assert!(matches!(waiting.join().unwrap(), Err(Refusal::Cancelled)));
         assert_eq!(sign_in.shown(), None);
+        assert!(lease.withdrawn());
     }
 
     /// The attempt's end takes a question still waiting with it, and what
     /// it showed.
     #[test]
     fn the_sign_in_s_end_ends_a_waiting_question() {
-        let (sign_in, _) = screen();
-        let asking = {
-            let sign_in = Arc::clone(&sign_in);
-            std::thread::spawn(move || sign_in.ask(secret()))
-        };
+        let (sign_in, told) = screen();
+        let lease = sign_in.lease(A);
+        let waiting = asking(&lease, secret());
         asked(&sign_in);
-        sign_in.ended();
-        assert!(matches!(asking.join().unwrap(), Err(Refusal::Ended)));
+        lease.ended();
+        assert!(matches!(waiting.join().unwrap(), Err(Refusal::Ended)));
+        assert_eq!(sign_in.shown(), None);
+        assert_eq!(told.lock().unwrap().last(), Some(&None));
+    }
+
+    /// B8, B33: only the screen that pressed answers, and it leaving ends
+    /// its press before any question shows: the dial reads it withdrawn,
+    /// asks nothing and shows nothing. Another screen leaving ends nothing.
+    #[test]
+    fn the_screen_that_pressed_owns_the_attempt_and_its_leaving_ends_it_before_any_question() {
+        let (sign_in, told) = screen();
+        let lease = sign_in.lease(A);
+        assert_eq!(sign_in.answer(B, None, cancel()), Err(NotOwner));
+        sign_in.release(B);
+        assert!(!lease.withdrawn());
+        sign_in.release(A);
+        assert!(lease.withdrawn());
+        assert!(matches!(lease.ask(secret()), Err(Refusal::Cancelled)));
+        lease.show(Some(browser()));
+        assert_eq!(sign_in.shown(), None);
+        assert!(told.lock().unwrap().is_empty(), "{:?}", told.lock().unwrap());
+    }
+
+    /// B8: the screen that pressed leaving between two questions ends the
+    /// attempt: the second is never asked.
+    #[test]
+    fn a_screen_leaving_between_two_questions_ends_the_attempt() {
+        let (sign_in, _) = screen();
+        let lease = sign_in.lease(A);
+        let waiting = asking(&lease, secret());
+        let first = asked(&sign_in);
+        let typed = reply(json!({"reply": "text", "text": "hunter2"}));
+        assert_eq!(sign_in.answer(A, Some(first), typed), Ok(true));
+        assert!(waiting.join().unwrap().is_ok());
+        sign_in.release(A);
+        assert!(lease.withdrawn());
+        assert!(matches!(lease.ask(secret()), Err(Refusal::Cancelled)));
         assert_eq!(sign_in.shown(), None);
     }
 
-    /// B8: a screen that goes away, or cancels a wait that takes no answer,
-    /// withdraws it: the attempt reads it withdrawn and nothing more is shown
-    /// or asked until the attempt has ended; a withdraw with nothing shown
-    /// ends nothing.
+    /// The window's Cancel with no question, as closing the move dialog
+    /// sends it, ends the press whatever it shows.
     #[test]
-    fn a_withdrawn_browser_check_ends_the_attempt_and_asks_nothing_more() {
+    fn a_cancel_naming_no_question_ends_the_press() {
         let (sign_in, _) = screen();
-        sign_in.withdraw();
-        assert!(!sign_in.withdrawn(), "nothing was shown to withdraw");
-        let browser = SignInWait::Browser {
-            url: "https://login.example.com/a".to_owned(),
-        };
-        sign_in.show(Some(browser.clone()));
-        let question = sign_in.shown().unwrap().question;
-        assert!(sign_in.answer(question, reply(json!({"reply": "cancel"}))));
-        assert!(sign_in.withdrawn());
-        assert_eq!(sign_in.shown(), None);
-        sign_in.show(Some(browser.clone()));
-        assert_eq!(sign_in.shown(), None);
-        assert!(matches!(sign_in.ask(secret()), Err(Refusal::Cancelled)));
-        sign_in.ended();
-        assert!(!sign_in.withdrawn());
-        sign_in.show(Some(browser));
-        assert!(sign_in.shown().is_some());
-        sign_in.withdraw();
-        assert!(sign_in.withdrawn());
+        let lease = sign_in.lease(A);
+        assert_eq!(
+            sign_in.answer(A, None, reply(json!({"reply": "accept"}))),
+            Ok(false)
+        );
+        assert!(!lease.withdrawn());
+        assert_eq!(sign_in.answer(A, None, cancel()), Ok(true));
+        assert!(lease.withdrawn());
+    }
+
+    /// D-05, D-10: a browser check or a key touch nobody finishes ends the
+    /// attempt at its bound, and the screen shows it no more.
+    #[test]
+    fn a_touch_or_a_browser_check_nobody_finishes_ends_the_attempt_at_its_bound() {
+        for wait in [touch(), browser()] {
+            let (sign_in, told) = screen_within(Duration::from_millis(200));
+            let lease = sign_in.lease(A);
+            lease.show(Some(wait.clone()));
+            assert_eq!(sign_in.shown().map(|shown| shown.sign_in.wait), Some(wait));
+            assert!(!lease.withdrawn());
+            std::thread::sleep(Duration::from_millis(250));
+            assert!(lease.withdrawn());
+            assert_eq!(sign_in.shown(), None);
+            assert_eq!(told.lock().unwrap().last(), Some(&None));
+        }
+    }
+
+    /// B7: a Cancel the screen sent for a browser check that ended, which
+    /// arrives after ssh asked its next question, leaves that question.
+    #[test]
+    fn a_cancel_of_an_earlier_wait_leaves_the_question_asked_since() {
+        let (sign_in, _) = screen();
+        let lease = sign_in.lease(A);
+        lease.show(Some(browser()));
+        let first = sign_in.shown().unwrap().sign_in.question;
+        lease.show(None);
+        let waiting = asking(&lease, secret());
+        let second = asked_after(&sign_in, first).sign_in.question;
+        assert_eq!(sign_in.answer(A, Some(first), cancel()), Ok(false));
+        assert!(!lease.withdrawn());
+        assert_eq!(
+            sign_in.shown().map(|shown| shown.sign_in.question),
+            Some(second)
+        );
+        let typed = reply(json!({"reply": "text", "text": "hunter2"}));
+        assert_eq!(sign_in.answer(A, Some(second), typed), Ok(true));
+        assert!(waiting.join().unwrap().is_ok());
     }
 
     /// A wait that ends by itself (a touch) is shown and cleared, and does
@@ -335,21 +554,37 @@ mod tests {
     #[test]
     fn a_touch_is_shown_but_never_over_a_waiting_question() {
         let (sign_in, _) = screen();
-        let touch = || SignInWait::Touch {
-            prompt: "Confirm user presence".to_owned(),
-        };
-        sign_in.show(Some(touch()));
-        assert_eq!(sign_in.shown().map(|shown| shown.wait), Some(touch()));
-        sign_in.show(None);
+        let lease = sign_in.lease(A);
+        lease.show(Some(touch()));
+        assert_eq!(sign_in.shown().map(|shown| shown.sign_in.wait), Some(touch()));
+        lease.show(None);
         assert_eq!(sign_in.shown(), None);
-        let asking = {
-            let sign_in = Arc::clone(&sign_in);
-            std::thread::spawn(move || sign_in.ask(secret()))
-        };
+        let waiting = asking(&lease, secret());
         let question = asked(&sign_in);
-        sign_in.show(Some(touch()));
-        assert_eq!(sign_in.shown().map(|shown| shown.question), Some(question));
-        sign_in.ended();
-        assert!(asking.join().unwrap().is_err());
+        lease.show(Some(touch()));
+        assert_eq!(
+            sign_in.shown().map(|shown| shown.sign_in.question),
+            Some(question)
+        );
+        lease.ended();
+        assert!(waiting.join().unwrap().is_err());
+    }
+
+    /// A new press ends the one before it, and the old lease's end or drop
+    /// touches nothing of the new one.
+    #[test]
+    fn a_new_press_ends_the_last_and_the_last_ends_nothing_of_it() {
+        let (sign_in, _) = screen();
+        let first = sign_in.lease(A);
+        let second = sign_in.lease(B);
+        assert!(first.withdrawn());
+        first.ended();
+        drop(first);
+        sign_in.release(A);
+        assert!(!second.withdrawn());
+        second.show(Some(browser()));
+        assert_eq!(sign_in.shown().unwrap().owner, B);
+        drop(second);
+        assert_eq!(sign_in.shown(), None);
     }
 }

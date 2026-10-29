@@ -91,7 +91,7 @@ it("offers Sign in for a stopped sign-in and the terminal check for a changed se
 const checking = (over: Partial<MoveView>): MoveView => ({ state: "checking", direction: null, device: "mini", intent: null, sent: 0, total: 0, failed: [], step: null, cause: null, node: null, ...over });
 
 // The move's checks are the operator's own press: their sign-in asks in the dialog, and closing the dialog on a
-// question cancels it, which ends the checks' sign-in (B8).
+// question ends the checks' sign-in (B8).
 it("trusts a server the move's checks ask about in the dialog and cancels a question the dialog closes on", async () => {
   const sign_in = { question: 9, kind: "host_key" as const, host: "[mini]:22", fingerprint: "SHA256:abc", key_command: null };
   const onClose = vi.fn();
@@ -103,22 +103,34 @@ it("trusts a server the move's checks ask about in the dialog and cancels a ques
     await act(async () => view.q('[data-device-sign-in-trust="core-move"]')?.click());
     expect(sent(view.events, "core_move")).toEqual([{ schema_version: 2, kind: "core_move", payload: { action: "sign_in", question: 9, reply: "accept" } }]);
     await act(async () => view.button("Close")?.click());
-    expect(sent(view.events, "core_move")[1]).toEqual({ schema_version: 2, kind: "core_move", payload: { action: "sign_in", question: 9, reply: "cancel" } });
+    expect(sent(view.events, "core_move")[1]).toEqual({ schema_version: 2, kind: "core_move", payload: { action: "sign_in", reply: "cancel" } });
     expect(onClose).toHaveBeenCalled();
   } finally {
     await view.unmount();
   }
 });
 
-// Closing the dialog on a wait that takes no answer cancels it too, which hided reads as withdrawing it (B8).
-it("cancels a browser check the move dialog closes on", async () => {
+// Closing the dialog on the checks it asked for ends their sign-in whatever it shows, a browser check or nothing yet,
+// and a dialog opened to give up a move it did not ask for ends nothing (B8).
+it("ends the sign-in of the checks the move dialog asked for when it closes, before any question too", async () => {
   const sign_in = { question: 5, kind: "browser" as const, url: "https://login.example.com/a", key_command: null };
-  const view = await mount({ connection: "live", coreMove: checking({ sign_in }), coreMoveRefusal: null, rest: null }, (actions) => (
-    <CoreMoveDialog request={{ direction: "forward", device: "mini" }} asked={null} actions={actions} onClose={() => {}} onRequest={() => {}} />
+  for (const shown of [checking({ sign_in }), checking({})]) {
+    const view = await mount({ connection: "live", coreMove: shown, coreMoveRefusal: null, rest: null }, (actions) => (
+      <CoreMoveDialog request={{ direction: "forward", device: "mini" }} asked={null} actions={actions} onClose={() => {}} onRequest={() => {}} />
+    ));
+    try {
+      await act(async () => view.button("Close")?.click());
+      expect(sent(view.events, "core_move")).toEqual([{ schema_version: 2, kind: "core_move", payload: { action: "sign_in", reply: "cancel" } }]);
+    } finally {
+      await view.unmount();
+    }
+  }
+  const view = await mount({ connection: "live", coreMove: checking({}), coreMoveRefusal: null, rest: null }, (actions) => (
+    <CoreMoveDialog request={{ direction: "forward", device: "mini" }} asked={null} giveUp actions={actions} onClose={() => {}} onRequest={() => {}} />
   ));
   try {
     await act(async () => view.button("Close")?.click());
-    expect(sent(view.events, "core_move")).toEqual([{ schema_version: 2, kind: "core_move", payload: { action: "sign_in", question: 5, reply: "cancel" } }]);
+    expect(sent(view.events, "core_move")).toEqual([]);
   } finally {
     await view.unmount();
   }

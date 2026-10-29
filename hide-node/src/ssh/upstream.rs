@@ -92,12 +92,11 @@ pub struct Upstream {
     /// Set while a resolution of the core machine's name runs: one at a
     /// time, however long the system's resolver takes.
     resolving: Arc<AtomicBool>,
-    /// The screen a dial's questions go to.
-    sign_in: Arc<dyn SignIn>,
-    /// Whether the next dial may ask the operator: only one their own press
-    /// started (PRD system-ssh-device-link D-06, B33). A dial takes it, so
-    /// one press allows one sign-in and every later dial asks nobody.
-    wake: Mutex<Wake>,
+    /// Where the next dial's questions go: the sign-in of the operator's
+    /// own press, none for a dial nobody pressed for (PRD
+    /// system-ssh-device-link D-06, B33). A dial takes it, so one press
+    /// allows one sign-in and every later dial asks nobody.
+    press: Mutex<Option<Arc<dyn SignIn>>>,
     /// What `ssh` stopped on at the last dial, none when it signed in.
     failed: Mutex<Option<SshProblem>>,
 }
@@ -111,24 +110,17 @@ impl Upstream {
             cancel: Cancel::default(),
             resolved: Mutex::new(None),
             resolving: Arc::default(),
-            sign_in: Arc::new(NoSignIn),
-            wake: Mutex::new(Wake::NotAllowed),
+            press: Mutex::new(None),
             failed: Mutex::new(None),
         }
     }
 
-    /// Sends the questions of a dial the operator started to `sign_in`.
-    pub fn with_sign_in(mut self, sign_in: Arc<dyn SignIn>) -> Self {
-        self.sign_in = sign_in;
-        self
-    }
-
-    /// Whether the next dial may ask the operator: `Wake::Allowed` only for
-    /// a step their own press started. The dial takes it, so the dials after
-    /// it ask nobody until the next press; a session already signed in asks
-    /// nothing more.
-    pub fn may_ask(&self, wake: Wake) {
-        *lock_recover(&self.wake) = wake;
+    /// Where the next dial may ask the operator: `press`, the sign-in of a
+    /// step their own press started, or none. The dial takes it, so the
+    /// dials after it ask nobody until the next press; a session already
+    /// signed in asks nothing more.
+    pub fn may_ask(&self, press: Option<Arc<dyn SignIn>>) {
+        *lock_recover(&self.press) = press;
     }
 
     /// The alias this connection dials.
@@ -170,16 +162,13 @@ impl Upstream {
     }
 
     fn dial(&self) -> Result<Session, SessionError> {
-        let wake = std::mem::replace(&mut *lock_recover(&self.wake), Wake::NotAllowed);
+        let (asks, wake): (Arc<dyn SignIn>, _) = match lock_recover(&self.press).take() {
+            Some(press) => (press, Wake::Allowed),
+            None => (Arc::new(NoSignIn), Wake::NotAllowed),
+        };
         let resolved = self.target.resolve().map_err(SessionError::Ssh)?;
         *lock_recover(&self.resolved) = Some(resolved.clone());
-        Session::open(
-            &self.target,
-            &resolved,
-            &self.cancel,
-            Arc::clone(&self.sign_in),
-            wake,
-        )
+        Session::open(&self.target, &resolved, &self.cancel, asks, wake)
     }
 
     /// Runs `program attach [--state-dir <dir>]` on the machine in place of

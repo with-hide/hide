@@ -83,7 +83,7 @@ export const WINDOW_STATES: Partial<Record<CoreMoveState, { connection: "moving"
   "window-disconnected": { connection: "reconnecting", link: { phase: "disconnected", machine: null, alias: "mini" } },
   "window-waiting": { connection: "moving", move: view({ state: "waiting", step: "reattach", cause: { kind: "unreachable" }, abandon: true }) },
   // PRD system-ssh-device-link B33: what ssh asks the dial the operator's Retry started, under the strip.
-  "window-asks": { connection: "reconnecting", link: { phase: "connecting", machine: null, alias: "mini", sign_in: { question: 3, kind: "secret", prompt: "example@mini.example.ts.net's password: ", key_command: null } } },
+  "window-asks": { connection: "reconnecting", link: { phase: "connecting", machine: null, alias: "mini", sign_in: { question: 3, kind: "secret", prompt: "al@mini's password: ", key_command: null } } },
   "window-host-key": { connection: "reconnecting", link: { phase: "connecting", machine: null, alias: "mini", sign_in: { question: 1, kind: "host_key", host: "mini.example.ts.net (100.64.0.12)", fingerprint: "SHA256:Q2nT0x9a8pKf3vLr7YbW5cHs1dJe6uMg4iNz0oPqRt8", key_command: null } } },
   "window-host-key-changed": { connection: "reconnecting", link: { phase: "stopped", machine: null, alias: "mini", problem: "host_key_changed" } },
 };

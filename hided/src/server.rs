@@ -947,7 +947,7 @@ async fn screen_loop(
     let mut move_frames = state.seat.moves.subscribe();
     let mut window_calls = state.window_calls.subscribe();
     if renderer && relay.is_none() {
-        let frame = crate::core_move::control::frame(&move_frames.borrow_and_update());
+        let frame = mover.frame(&move_frames.borrow_and_update());
         if socket.send(Message::Text(frame.into())).await.is_err() {
             client_gone(&state, connection, renderer, desktop);
             return;
@@ -1092,7 +1092,7 @@ async fn screen_loop(
                 if changed.is_err() {
                     break;
                 }
-                let frame = crate::core_move::control::frame(&move_frames.borrow_and_update());
+                let frame = mover.frame(&move_frames.borrow_and_update());
                 if socket.send(Message::Text(frame.into())).await.is_err() {
                     break;
                 }

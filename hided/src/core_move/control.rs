@@ -14,7 +14,7 @@ use tokio::sync::{mpsc, watch};
 use hide_node_link::device::{ShownSignIn, SignIn};
 
 use super::journal::{Journal, MoveFailure, MoveStep};
-use crate::screen_sign_in::{ScreenSignIn, SignInAnswer};
+use crate::screen_sign_in::{Lease, NotOwner, ScreenSignIn, SignInAnswer};
 
 /// What a window's `core_move` event asks: a request the supervisor takes,
 /// or the abandon of the move its wait offers, which the wait itself hears.
@@ -271,9 +271,13 @@ pub struct MoveView {
     pub abandon: bool,
     /// What `ssh` asks while the checks the operator pressed for sign in to
     /// the other machine (PRD system-ssh-device-link B33); the dialog
-    /// answers it with a `core_move` event {action: `sign_in`}.
+    /// answers it with a `core_move` event {action: `sign_in`}. Only the
+    /// screen that pressed hears it ([`MoveScreen::frame`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sign_in: Option<ShownSignIn>,
+    /// The screen `sign_in` is shown to.
+    #[serde(skip)]
+    pub sign_in_owner: Option<u64>,
     /// The connection check stopped on ssh: the device row's grouping of its
     /// failure (`sign_in_needed`, `sign_in_refused`, `host_key_changed`,
     /// `cannot_connect`, ...), so the dialog offers the row's action.
@@ -314,17 +318,19 @@ pub struct MoveControl {
     abandoned: watch::Sender<Option<Offer>>,
     /// The number the next offer is given.
     offers: AtomicU64,
-    /// The screen whose request runs the checks now: only it answers what
-    /// their `ssh` asks, and its end withdraws it (PRD
+    /// The sign-in of the screen whose request runs the checks now, taken
+    /// with the request, for the checks' dial: only that screen is shown
+    /// and answers what their `ssh` asks, and its end ends it (PRD
     /// system-ssh-device-link B8, B33).
-    asker: Mutex<Option<u64>>,
+    press: Mutex<Option<Arc<Lease>>>,
     /// The number the next screen is given.
     screens: AtomicU64,
 }
 
 /// One screen's hold on the move: the `core_move` events it sends go
-/// through it, and dropping it, as the screen's connection ends, withdraws
-/// what the checks it asked for show.
+/// through it, the frames it hears are made by it, and dropping it, as the
+/// screen's connection ends, ends the sign-in of the checks it asked for,
+/// whether or not they asked anything yet.
 pub struct MoveScreen {
     control: Arc<MoveControl>,
     id: u64,
@@ -343,18 +349,23 @@ impl MoveScreen {
     pub fn request_event(&self, event: &serde_json::Value) -> Result<(), &'static str> {
         self.control.request_event(self.id, event)
     }
+
+    /// The `core_move` frame of `view` for this screen: what the checks'
+    /// `ssh` asks only when this screen pressed for them.
+    pub fn frame(&self, view: &MoveView) -> String {
+        if view.sign_in.is_some() && view.sign_in_owner != Some(self.id) {
+            return frame(&MoveView {
+                sign_in: None,
+                ..view.clone()
+            });
+        }
+        frame(view)
+    }
 }
 
 impl Drop for MoveScreen {
     fn drop(&mut self) {
-        let asker = *self
-            .control
-            .asker
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if asker == Some(self.id) {
-            self.control.sign_in.withdraw();
-        }
+        self.control.sign_in.release(self.id);
     }
 }
 
@@ -396,9 +407,12 @@ impl Default for MoveControl {
         let sign_in = Arc::new(ScreenSignIn::new(
             "core_move",
             Box::new(move |wait| {
+                let owner = wait.as_ref().map(|wait| wait.owner);
+                let wait = wait.map(|wait| wait.sign_in);
                 shown.send_if_modified(|view| {
-                    let changed = view.sign_in != wait;
+                    let changed = view.sign_in != wait || view.sign_in_owner != owner;
                     view.sign_in = wait;
+                    view.sign_in_owner = owner;
                     changed
                 });
             }),
@@ -411,7 +425,7 @@ impl Default for MoveControl {
             offered: Mutex::new(None),
             abandoned: watch::Sender::new(None),
             offers: AtomicU64::new(0),
-            asker: Mutex::new(None),
+            press: Mutex::new(None),
             screens: AtomicU64::new(0),
         }
     }
@@ -426,9 +440,8 @@ impl MoveControl {
     }
 
     /// [`Self::request`] from the screen `screen`, which then owns what the
-    /// checks' `ssh` asks: it is set in the same step that takes the
-    /// request, so no question of the checks shows before its owner is
-    /// known.
+    /// checks' `ssh` asks: its sign-in is taken before the supervisor hears
+    /// the request, so the checks' dial asks that screen or nobody.
     fn request_from(
         &self,
         screen: Option<u64>,
@@ -456,14 +469,15 @@ impl MoveControl {
             if view.state.busy() {
                 return false;
             }
-            *self.asker() = screen;
             before = Some(std::mem::replace(view, checking));
             true
         });
         if !taken {
             return Err(RequestRefusal::Busy);
         }
+        *self.press() = screen.map(|screen| self.sign_in.lease(screen));
         self.ask(Asked::Window(request)).inspect_err(|_| {
+            self.press().take();
             if let Some(before) = before {
                 self.view.send_replace(before);
             }
@@ -576,11 +590,10 @@ impl MoveControl {
                 .and_then(|payload| serde_json::from_value::<SignInAnswer>(payload).ok())
                 .ok_or("move_malformed")?;
             // Only the screen whose request the checks run for answers them.
-            if *self.asker() != Some(screen) {
-                return Err("move_not_asker");
-            }
-            self.sign_in.answer(answer.question, answer.reply);
-            return Ok(());
+            return match self.sign_in.answer(screen, answer.question, answer.reply) {
+                Err(NotOwner) => Err("move_not_asker"),
+                Ok(_) => Ok(()),
+            };
         }
         let ask: WindowAsk = serde_json::from_value(
             event
@@ -600,8 +613,8 @@ impl MoveControl {
             .map_err(RequestRefusal::code)
     }
 
-    fn asker(&self) -> std::sync::MutexGuard<'_, Option<u64>> {
-        self.asker
+    fn press(&self) -> std::sync::MutexGuard<'_, Option<Arc<Lease>>> {
+        self.press
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
@@ -666,15 +679,18 @@ impl MoveControl {
     pub fn set(&self, mut view: MoveView) {
         self.view.send_if_modified(|current| {
             view.sign_in = current.sign_in.take();
+            view.sign_in_owner = current.sign_in_owner.take();
             let changed = *current != view;
             *current = view;
             changed
         });
     }
 
-    /// Where the checks' `ssh` asks the operator: the dialog.
-    pub fn sign_in(&self) -> Arc<dyn SignIn> {
-        Arc::clone(&self.sign_in) as _
+    /// The sign-in of the press the checks now run for, once: their dial
+    /// asks it in that screen's dialog. None for checks no screen asked
+    /// for, which ask nobody.
+    pub fn take_press(&self) -> Option<Arc<dyn SignIn>> {
+        self.press().take().map(|press| press as _)
     }
 
     pub fn update(&self, change: impl FnOnce(&mut MoveView)) {
@@ -780,30 +796,70 @@ mod tests {
     /// another screen's end withdraws nothing.
     #[test]
     fn the_checks_sign_in_belongs_to_the_screen_that_asked_for_them() {
-        use hide_node_link::device::SignInWait;
+        use hide_node_link::device::{Refusal, SignInWait};
         let control = Arc::new(MoveControl::default());
-        let _requests = control.take_requests().unwrap();
-        let asker = MoveScreen::new(&control);
-        let other = MoveScreen::new(&control);
-        assert_eq!(
-            asker.request_event(
-                &serde_json::json!({"payload": {"action": "check", "device": "mini"}})
-            ),
-            Ok(())
-        );
-        let sign_in = control.sign_in();
-        sign_in.show(Some(SignInWait::Browser {
+        let mut requests = control.take_requests().unwrap();
+        let check = serde_json::json!({"payload": {"action": "check", "device": "mini"}});
+        // The supervisor took the last request and its checks ended.
+        let mut idle = || {
+            requests.try_recv().unwrap();
+            control.set(MoveView::default());
+        };
+
+        // A asks, B is open, A closes on a question: only A hears and
+        // answers it, B closing ends nothing, A closing ends the attempt.
+        let a = MoveScreen::new(&control);
+        let b = MoveScreen::new(&control);
+        assert_eq!(a.request_event(&check), Ok(()));
+        let press = control.take_press().unwrap();
+        press.show(Some(SignInWait::Browser {
             url: "https://login.example.com/a".to_owned(),
         }));
-        let question = control.view().sign_in.unwrap().question;
+        let view = control.view();
+        let question = view.sign_in.as_ref().unwrap().question;
+        assert!(a.frame(&view).contains("login.example.com"));
+        assert!(!b.frame(&view).contains("login.example.com"));
         let cancel = serde_json::json!({"payload": {"action": "sign_in", "question": question, "reply": "cancel"}});
-        assert_eq!(other.request_event(&cancel), Err("move_not_asker"));
-        drop(other);
-        assert!(!sign_in.withdrawn());
+        assert_eq!(b.request_event(&cancel), Err("move_not_asker"));
+        drop(b);
+        assert!(!press.withdrawn());
         assert!(control.view().sign_in.is_some());
-        drop(asker);
-        assert!(sign_in.withdrawn());
+        drop(a);
+        assert!(press.withdrawn());
         assert_eq!(control.view().sign_in, None);
+
+        // A closes while ssh runs, before it asks anything: the attempt
+        // ends, and nothing is asked.
+        idle();
+        let a = MoveScreen::new(&control);
+        assert_eq!(a.request_event(&check), Ok(()));
+        let press = control.take_press().unwrap();
+        assert!(!press.withdrawn());
+        drop(a);
+        assert!(press.withdrawn());
+        assert!(matches!(
+            press.ask(SignInWait::HostKey {
+                host: "mini".to_owned(),
+                fingerprint: "SHA256:abc".to_owned(),
+            }),
+            Err(Refusal::Cancelled)
+        ));
+        assert_eq!(control.view().sign_in, None);
+
+        // The dialog closed with nothing shown: its Cancel naming no
+        // question ends the checks' sign-in all the same.
+        idle();
+        let a = MoveScreen::new(&control);
+        assert_eq!(a.request_event(&check), Ok(()));
+        let press = control.take_press().unwrap();
+        let closed = serde_json::json!({"payload": {"action": "sign_in", "reply": "cancel"}});
+        assert_eq!(a.request_event(&closed), Ok(()));
+        assert!(press.withdrawn());
+
+        // Checks no screen asked for ask nobody.
+        idle();
+        assert_eq!(control.request(MoveRequest::Check { device: "mini".to_owned() }), Ok(()));
+        assert!(control.take_press().is_none());
     }
 
     /// An abandon taken from one wait and published after that wait's offer

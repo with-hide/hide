@@ -21,7 +21,7 @@ use axum::routing::get;
 use serde_json::{Value, json};
 use tokio::sync::watch;
 
-use super::control::{MoveControl, frame};
+use super::control::MoveControl;
 
 #[derive(Clone)]
 struct ScreenState {
@@ -129,7 +129,7 @@ async fn serve(mut socket: WebSocket, mut state: ScreenState, origin: Option<Str
     }
     let mover = super::control::MoveScreen::new(&state.moves);
     let mut frames = state.moves.subscribe();
-    let first = frame(&frames.borrow_and_update());
+    let first = mover.frame(&frames.borrow_and_update());
     if socket.send(Message::Text(first.into())).await.is_err() {
         return;
     }
@@ -139,7 +139,7 @@ async fn serve(mut socket: WebSocket, mut state: ScreenState, origin: Option<Str
                 if changed.is_err() {
                     break;
                 }
-                let next = frame(&frames.borrow_and_update());
+                let next = mover.frame(&frames.borrow_and_update());
                 if socket.send(Message::Text(next.into())).await.is_err() {
                     return;
                 }

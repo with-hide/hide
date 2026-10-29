@@ -31,7 +31,7 @@ use hide_node::ssh::session::{SessionError, SshTarget};
 use hide_node::ssh::upstream::Upstream;
 use hide_node::terminal::OutputSink;
 use hide_node::terminal::device::NodeTerminals;
-use hide_node_link::device::{ShownSignIn, SignInReply, SshFailure, Wake};
+use hide_node_link::device::{ShownSignIn, SignIn, SignInReply, SshFailure};
 use hide_platform::ipc::{LocalStream, ShutdownHandle};
 use serde_json::json;
 use tokio::sync::watch;
@@ -40,7 +40,7 @@ use crate::attach::{self, Accepted, AttachOutcome, Line, NodeHello};
 use crate::backoff::Backoff;
 use crate::link_mux::Mux;
 use crate::placement::Placement;
-use crate::screen_sign_in::ScreenSignIn;
+use crate::screen_sign_in::{NotOwner, ScreenSignIn, Shown};
 
 /// A link that lived this long starts the wait over.
 const SETTLED: Duration = Duration::from_secs(30);
@@ -283,10 +283,13 @@ struct State {
     /// Set by [`NodeRole::wake`]: the next attempt does not wait.
     woken: bool,
     /// Set by a window's connect ([`NodeRole::connect_again`]) during a wait
-    /// on the operator: the only end of that wait, and the one attempt
-    /// that may ask the operator what ssh asks (PRD system-ssh-device-link
-    /// D-06, B33).
+    /// on the operator: the only end of that wait.
     asked: bool,
+    /// The sign-in of that connect when a held window's Retry made it: the
+    /// one attempt that may ask the operator what ssh asks, on that window
+    /// only (PRD system-ssh-device-link D-06, B33). A connect no screen made
+    /// (`hide connect`, a launch) asks nobody.
+    press: Option<Arc<dyn SignIn>>,
     /// The live link's stream, ended to end the link.
     link: Option<ShutdownHandle>,
     /// This connection's one update of the core (B20).
@@ -297,7 +300,35 @@ struct State {
     /// a sign-in nobody could be asked for: the operator's next connect
     /// signs in for the update first and attaches on that same session, so
     /// one press is one sign-in.
-    update_owed: Option<(String, crate::build_order::Release)>,
+    update_owed: Option<OwedUpdate>,
+}
+
+/// What the next attempt owes: the update a sign-in stopped, run first
+/// with the one sign-in the operator's press allows.
+type OwedUpdate = (String, crate::build_order::Release);
+
+impl State {
+    /// The next attempt: a connect that ended the last wait is spent by it,
+    /// with the sign-in of the window that pressed, the only one that may
+    /// ask the operator (D-06), and it runs first the update a sign-in
+    /// stopped. Without a connect nothing is asked and the update stays
+    /// owed.
+    fn next_attempt(&mut self) -> (Option<Arc<dyn SignIn>>, Option<OwedUpdate>) {
+        if std::mem::take(&mut self.asked) {
+            (self.press.take(), self.update_owed.take())
+        } else {
+            (None, None)
+        }
+    }
+
+    /// Whether the wait after a failure ends now: one on the operator ends
+    /// only on their connect, never on a wake from the watch or a retry, so
+    /// nothing dials while it waits.
+    fn wait_over(&self, on_operator: bool) -> bool {
+        self.stopping
+            || self.disconnected
+            || if on_operator { self.asked } else { self.woken }
+    }
 }
 
 /// Where a connection's one update of the core stands (B10, B20).
@@ -375,10 +406,10 @@ struct Shared {
     /// How this node updates an older core to its build; none leaves an
     /// older core refused as another build.
     updates: Option<Updates>,
-    /// What the dial the operator started asks, on this machine's held
-    /// windows (`core_link` frame's `sign_in`).
+    /// What the dial the operator's Retry started asks, on the held window
+    /// that pressed it (`core_link` frame's `sign_in`).
     sign_in: Arc<ScreenSignIn>,
-    sign_ins: watch::Receiver<Option<ShownSignIn>>,
+    sign_ins: watch::Receiver<Option<Shown>>,
 }
 
 /// What a node needs to update its core to this build (PRD
@@ -446,6 +477,7 @@ impl NodeRole {
                 stopping: false,
                 woken: false,
                 asked: false,
+                press: None,
                 link: None,
                 update: Update::Untried,
                 disconnected: placement.disconnected,
@@ -500,21 +532,28 @@ impl NodeRole {
         self.shared.phases.subscribe()
     }
 
-    /// What the dial asks the operator, as it changes.
-    pub fn sign_ins(&self) -> watch::Receiver<Option<ShownSignIn>> {
+    /// What the dial asks the operator, and the window it asks, as it
+    /// changes.
+    pub fn sign_ins(&self) -> watch::Receiver<Option<Shown>> {
         self.shared.sign_ins.clone()
     }
 
-    /// A window's answer to what the dial asks; one for a question no longer
-    /// asked reaches nothing.
-    pub fn answer_sign_in(&self, question: u64, reply: SignInReply) -> bool {
-        self.shared.sign_in.answer(question, reply)
+    /// The window `screen`'s answer to what the dial asks; one for a
+    /// question no longer asked reaches nothing, and another window's is
+    /// `NotOwner`.
+    pub fn answer_sign_in(
+        &self,
+        screen: u64,
+        question: Option<u64>,
+        reply: SignInReply,
+    ) -> Result<bool, NotOwner> {
+        self.shared.sign_in.answer(screen, question, reply)
     }
 
-    /// No window is left to answer what the dial shows: the attempt ends as
-    /// a cancelled sign-in (B8).
-    pub fn withdraw_sign_in(&self) {
-        self.shared.sign_in.withdraw();
+    /// The window `screen` went away: the dial its Retry started ends as a
+    /// cancelled sign-in, whether or not it asked anything yet (B8).
+    pub fn release_sign_in(&self, screen: u64) {
+        self.shared.sign_in.release(screen);
     }
 
     /// The operator ends the link from this machine's window (B16): the
@@ -581,7 +620,9 @@ impl NodeRole {
     /// operator could fix dials again; either starts at once. Anything else
     /// is left as it is: a connect while an attempt is in flight joins that
     /// attempt, so a cold launch dials once however its window connects.
-    pub fn connect_again(&self) {
+    /// `screen` is the held window whose Retry it is: the attempt asks it,
+    /// and only it, what ssh asks.
+    pub fn connect_again(&self, screen: Option<u64>) {
         let mut state = lock(&self.shared.state);
         // The operator ended the link; only their reconnect dials again.
         if state.disconnected {
@@ -593,6 +634,11 @@ impl NodeRole {
             return;
         }
         state.asked = owed;
+        // Taken with the press, so the window leaving before the dial ends
+        // it as surely as after.
+        state.press = screen
+            .filter(|_| owed)
+            .map(|screen| self.shared.sign_in.lease(screen) as Arc<dyn SignIn>);
         state.update = Update::Untried;
         state.phase = Phase::Connecting;
         self.shared.phases.send_replace(Phase::Connecting);
@@ -649,18 +695,12 @@ fn keep_linked(shared: &Shared, home: &Path, placement: &Placement, identity: &N
             return;
         }
         generation += 1;
-        // A connect that ended the last wait is spent by this attempt, the
-        // only one that may ask the operator (D-06).
-        let wake = if std::mem::take(&mut lock(&shared.state).asked) {
-            Wake::Allowed
-        } else {
-            Wake::NotAllowed
-        };
+        let (press, owed) = lock(&shared.state).next_attempt();
         if set_phase(shared, Phase::Connecting) {
             return;
         }
         let started = Instant::now();
-        let reason = link_once(shared, home, &placement, identity, generation, wake);
+        let reason = link_once(shared, home, &placement, identity, generation, press, owed);
         // The core now runs this build: the next dial reaches it at once.
         if let LinkFailure::CoreUpdated { program } = reason {
             placement.program = program;
@@ -677,8 +717,8 @@ fn keep_linked(shared: &Shared, home: &Path, placement: &Placement, identity: &N
             backoff.reset();
         }
         // A wait on the operator has no retry: only their connect ends it.
-        let owed = reason.waits_for_operator();
-        let wait = (!owed).then(|| backoff.failed());
+        let on_operator = reason.waits_for_operator();
+        let wait = (!on_operator).then(|| backoff.failed());
         herdr_core::diagnostic!(json!({
             "component": "node_role",
             "kind": "link.ended",
@@ -692,10 +732,7 @@ fn keep_linked(shared: &Shared, home: &Path, placement: &Placement, identity: &N
         }
         let deadline = wait.map(|wait| Instant::now() + wait);
         let mut state = lock(&shared.state);
-        while !state.stopping
-            && !state.disconnected
-            && !(if owed { state.asked } else { state.woken })
-        {
+        while !state.wait_over(on_operator) {
             state = match deadline {
                 Some(deadline) => {
                     let left = deadline.saturating_duration_since(Instant::now());
@@ -718,7 +755,7 @@ fn keep_linked(shared: &Shared, home: &Path, placement: &Placement, identity: &N
             return;
         }
         // Woken or asked, the wait starts over.
-        if std::mem::take(&mut state.woken) || owed {
+        if std::mem::take(&mut state.woken) || on_operator {
             backoff.reset();
         }
     }
@@ -968,9 +1005,10 @@ fn link_once(
     placement: &Placement,
     identity: &NodeIdentity,
     generation: u64,
-    wake: Wake,
+    press: Option<Arc<dyn SignIn>>,
+    owed: Option<OwedUpdate>,
 ) -> LinkFailure {
-    match try_link(shared, home, placement, identity, generation, wake) {
+    match try_link(shared, home, placement, identity, generation, press, owed) {
         Ok(ended) | Err(ended) => ended,
     }
 }
@@ -981,7 +1019,8 @@ fn try_link(
     placement: &Placement,
     identity: &NodeIdentity,
     generation: u64,
-    wake: Wake,
+    press: Option<Arc<dyn SignIn>>,
+    owed: Option<OwedUpdate>,
 ) -> Result<LinkFailure, LinkFailure> {
     // `ssh` reads the alias at every dial, so a fix the operator makes to
     // it reaches the next one; a connection the watch or the operator
@@ -991,31 +1030,27 @@ fn try_link(
         match slot.as_ref() {
             Some(upstream) if !upstream.closed() => Arc::clone(upstream),
             _ => {
-                let upstream = Arc::new(
-                    Upstream::new(SshTarget::new(home, &placement.alias))
-                        .with_sign_in(Arc::clone(&shared.sign_in) as _),
-                );
+                let upstream = Arc::new(Upstream::new(SshTarget::new(home, &placement.alias)));
                 *slot = Some(Arc::clone(&upstream));
                 upstream
             }
         }
     };
-    // Only the attempt their connect started may ask, and only at its first
+    // Only the attempt their Retry started may ask, and only at its first
     // dial: the update that follows an attach dials again and asks nobody.
-    upstream.may_ask(wake);
+    upstream.may_ask(press);
     // That press is owed to an update that stopped on a sign-in: it signs in
     // for the update, and the attach takes the session the update left.
-    let owed = (wake == Wake::Allowed)
-        .then(|| lock(&shared.state).update_owed.take())
-        .flatten();
+    // A press that step did not dial for, on a session already open, is
+    // spent with it: no later dial of this connection asks.
     if let Some((machine, core)) = owed {
-        return Err(update_core(
-            shared, &upstream, placement, identity, machine, core,
-        ));
+        let updated = update_core(shared, &upstream, placement, identity, machine, core);
+        upstream.may_ask(None);
+        return Err(updated);
     }
-    let channel = upstream
-        .attach(&placement.program, placement.state_dir.as_deref())
-        .map_err(attach_failure)?;
+    let channel = upstream.attach(&placement.program, placement.state_dir.as_deref());
+    upstream.may_ask(None);
+    let channel = channel.map_err(attach_failure)?;
     let stream = channel.stream;
     {
         let mut state = lock(&shared.state);
@@ -1550,6 +1585,53 @@ mod tests {
                 "{error}"
             );
         }
+    }
+
+    /// An update that stopped on a sign-in waits for the operator: no wake
+    /// from the watch or a retry ends that wait, so no press means no dial.
+    /// Their connect runs the update first, with the sign-in of the window
+    /// that pressed, and the attach after it asks nobody and takes the
+    /// session the update signed in (PRD system-ssh-device-link B33).
+    #[test]
+    fn an_update_stopped_on_a_sign_in_runs_first_on_the_next_press() {
+        use hide_node_link::device::{SshFailure, SshProblem};
+        let core = crate::build_order::Release {
+            version: "1.0.0".to_owned(),
+            order: 1010,
+            commit: None,
+        };
+        let screen = Arc::new(ScreenSignIn::new("test", Box::new(|_| {})));
+        let mut state = State {
+            phase: Phase::Connecting,
+            stopping: false,
+            woken: false,
+            asked: false,
+            press: None,
+            link: None,
+            update: Update::Untried,
+            disconnected: false,
+            update_owed: Some(("mini".to_owned(), core.clone())),
+        };
+        let stopped = LinkFailure::Operator(SshFailure {
+            problem: SshProblem::SignInNeeded,
+            detail: "detail".to_owned(),
+        });
+        assert!(stopped.waits_for_operator());
+        state.woken = true;
+        assert!(!state.wait_over(true), "a wake ended the wait on the operator");
+        let (press, owed) = state.next_attempt();
+        assert!(press.is_none() && owed.is_none(), "an attempt without a press");
+        assert!(state.update_owed.is_some(), "an attempt without a press took the update");
+
+        state.asked = true;
+        state.press = Some(screen.lease(7) as Arc<dyn SignIn>);
+        assert!(state.wait_over(true));
+        let (press, owed) = state.next_attempt();
+        assert!(press.is_some_and(|press| !press.withdrawn()));
+        assert_eq!(owed, Some(("mini".to_owned(), core)));
+        // The attach after the update dials with no press of its own.
+        let (press, owed) = state.next_attempt();
+        assert!(press.is_none() && owed.is_none());
     }
 
     /// The port is probed for a dial that could not reach the core's

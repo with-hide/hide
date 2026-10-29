@@ -328,8 +328,12 @@ mod unix {
     fn a_core_link_asks_on_its_screen_only_for_the_operator_s_own_dial() {
         use hide_node::ssh::session::{SessionError, SshTarget};
         use hide_node::ssh::upstream::Upstream;
-        use hided::screen_sign_in::{ScreenSignIn, SignInAnswer};
+        use hide_node_link::device::SignIn;
+        use hided::screen_sign_in::{NotOwner, ScreenSignIn, SignInAnswer};
         use std::time::{Duration, Instant};
+        // The screen connections of two windows.
+        const A: u64 = 1;
+        const B: u64 = 2;
 
         let fixture = fixture();
         let sshd = &fixture.sshd;
@@ -345,19 +349,19 @@ mod unix {
             "test",
             Box::new(move |shown| heard.lock().unwrap().push(shown)),
         ));
-        let upstream = |wake: Wake| {
+        let upstream = |press: Option<Arc<dyn SignIn>>| {
             let upstream = Upstream::new(
                 SshTarget::new(&fixture.local, "core")
                     .with_askpass_program(PathBuf::from(env!("CARGO_BIN_EXE_hide"))),
-            )
-            .with_sign_in(Arc::clone(&screen) as _);
-            upstream.may_ask(wake);
+            );
+            upstream.may_ask(press);
             upstream
         };
+        let pressed_by = |screen_id: u64| Some(screen.lease(screen_id) as Arc<dyn SignIn>);
         let run =
             |upstream: &Upstream| upstream.run(&["true".to_owned()], 1024, Duration::from_secs(30));
-        // The window's side: waits for the question and sends `reply`.
-        let answer = |reply: serde_json::Value| {
+        // Waits for the question and hands it to `then`, on the window's side.
+        let on_question = |then: Box<dyn FnOnce(&ScreenSignIn, u64) + Send>| {
             let screen = Arc::clone(&screen);
             std::thread::spawn(move || {
                 let deadline = Instant::now() + Duration::from_secs(30);
@@ -368,12 +372,18 @@ mod unix {
                     assert!(Instant::now() < deadline, "nothing was asked");
                     std::thread::sleep(Duration::from_millis(20));
                 };
-                let mut payload = reply;
-                payload["question"] = shown.question.into();
-                let answer: SignInAnswer = serde_json::from_value(payload).unwrap();
-                assert!(screen.answer(answer.question, answer.reply));
-                shown.wait
+                assert_eq!(shown.owner, A);
+                then(&screen, shown.sign_in.question);
+                shown.sign_in.wait
             })
+        };
+        let answer = |reply: serde_json::Value| {
+            on_question(Box::new(move |screen, question| {
+                let mut payload = reply;
+                payload["question"] = question.into();
+                let answer: SignInAnswer = serde_json::from_value(payload).unwrap();
+                assert_eq!(screen.answer(A, answer.question, answer.reply), Ok(true));
+            }))
         };
         let needed = |result: Result<_, SessionError>| match result {
             Err(SessionError::Ssh(failure)) => {
@@ -387,7 +397,7 @@ mod unix {
             other => panic!("the dial went on: {:?}", other.err()),
         };
 
-        let background = upstream(Wake::NotAllowed);
+        let background = upstream(None);
         needed(run(&background));
         assert_eq!(background.ssh_problem(), Some(SshProblem::SignInNeeded));
         assert!(
@@ -396,8 +406,14 @@ mod unix {
             told.lock().unwrap()
         );
 
-        let cancelled = answer(serde_json::json!({"reply": "cancel"}));
-        let pressed = upstream(Wake::Allowed);
+        // A pressed, B is open: B's answer is refused, A's Cancel ends it.
+        let cancelled = on_question(Box::new(|screen, question| {
+            let accept = serde_json::from_value(serde_json::json!({"reply": "accept"})).unwrap();
+            assert_eq!(screen.answer(B, Some(question), accept), Err(NotOwner));
+            let cancel = serde_json::from_value(serde_json::json!({"reply": "cancel"})).unwrap();
+            assert_eq!(screen.answer(A, Some(question), cancel), Ok(true));
+        }));
+        let pressed = upstream(pressed_by(A));
         needed(run(&pressed));
         let fingerprint = sshd.fingerprint().unwrap();
         assert!(
@@ -414,10 +430,27 @@ mod unix {
             "{:?}",
             told.lock().unwrap()
         );
+
+        // A closes on the question: the dial ends at once, not at the bound.
+        let closed = on_question(Box::new(|screen, _| screen.release(A)));
+        let started = Instant::now();
+        needed(run(&upstream(pressed_by(A))));
+        assert!(matches!(closed.join().unwrap(), SignInWait::HostKey { .. }));
+        assert!(started.elapsed() < Duration::from_secs(20), "{:?}", started.elapsed());
+        assert_eq!(screen.shown(), None);
+
+        // A closes before anything is asked: nothing shows, and the dial
+        // ends as a sign-in needed.
+        let press = pressed_by(A);
+        screen.release(B);
+        screen.release(A);
+        let shown_before = told.lock().unwrap().len();
+        needed(run(&upstream(press)));
+        assert_eq!(told.lock().unwrap().len(), shown_before);
         assert!(!known.exists() || std::fs::read_to_string(&known).unwrap().is_empty());
 
         let trusted = answer(serde_json::json!({"reply": "accept"}));
-        let operator = upstream(Wake::Allowed);
+        let operator = upstream(pressed_by(A));
         let ran = run(&operator).unwrap();
         assert_eq!(ran.status, 0);
         assert!(matches!(
@@ -432,6 +465,13 @@ mod unix {
                 .contains("ssh-ed25519")
         );
         assert_eq!(told.lock().unwrap().last(), Some(&None));
+        // The dial after it, as an attach after the update the press signed
+        // in for, asks nobody and runs on the session that press opened:
+        // with the trust gone it could not dial again without asking.
+        std::fs::remove_file(&known).unwrap();
+        let shown_before = told.lock().unwrap().len();
+        assert_eq!(run(&operator).unwrap().status, 0);
+        assert_eq!(told.lock().unwrap().len(), shown_before);
     }
 
     /// B9: ssh prints only the first 100 bytes of a key's path in its

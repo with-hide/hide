@@ -1514,6 +1514,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "core_move", payload: { action: "sign_in", question, ...reply } });
     },
 
+    /** Ends the sign-in of the checks this window asked for, whatever it shows, before its first question too (B8). */
+    cancelCoreMoveSignIn() {
+      dispatch({ schema_version: 2, kind: "core_move", payload: { action: "sign_in", reply: "cancel" } });
+    },
+
     /**
      * The core closes the device's file tabs without saving, so every draft of
      * them this browser is still writing lands first and stays as a recovery

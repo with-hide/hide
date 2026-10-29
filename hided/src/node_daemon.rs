@@ -49,7 +49,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use futures_util::{SinkExt, StreamExt};
 use hide_node::terminal::OutputSink;
-use hide_node_link::device::{ShownSignIn, SignInReply};
+use hide_node_link::device::SignInReply;
+
+use crate::screen_sign_in::{NotOwner, Shown};
 use hide_node_link::terminal::{
     KeyTarget, MAX_PANE_ID_BYTES, TerminalDown, TerminalLine, TerminalNode, TerminalUp,
     decode_base64, device_pane_prefix, encode_base64,
@@ -102,23 +104,22 @@ pub struct NodeState {
     /// names until the core's hello names its machine.
     pub core_alias: Arc<str>,
     /// Gives a failed core update this connection's attempt
-    /// (`NodeRole::connect_again`).
+    /// (`NodeRole::connect_again`), from no screen (`hide connect`).
     pub connect_again: Arc<dyn Fn() + Send + Sync>,
     /// Ends or restores the link at the operator's word from this
-    /// machine's window (B16), recorded in the placement first.
-    pub link_control: Arc<dyn Fn(LinkAction) -> Result<(), String> + Send + Sync>,
-    /// What the dial a window's Retry or connect started asks, which a held
-    /// screen is told (PRD system-ssh-device-link B33).
-    pub sign_ins: watch::Receiver<Option<ShownSignIn>>,
-    /// A held screen's answer to it; one for a question no longer asked
-    /// reaches nothing.
-    pub answer_sign_in: Arc<dyn Fn(u64, SignInReply) -> bool + Send + Sync>,
-    /// Ends what the dial shows when no held screen is left to answer it.
-    pub withdraw_sign_in: Arc<dyn Fn() + Send + Sync>,
-    /// Screens held while the link is down: when the last one leaves, a
-    /// question still waiting is cancelled, so the attempt ends rather than
-    /// wait for a screen nobody sees (B8).
-    pub held_screens: Arc<AtomicUsize>,
+    /// machine's window (B16), recorded in the placement first, or retries
+    /// it from the window whose connection is given.
+    pub link_control: Arc<dyn Fn(LinkAction, u64) -> Result<(), String> + Send + Sync>,
+    /// What the dial a held window's Retry started asks, and that window,
+    /// which alone is told (PRD system-ssh-device-link B33).
+    pub sign_ins: watch::Receiver<Option<Shown>>,
+    /// A held window's answer to it, by its connection; one for a question
+    /// no longer asked reaches nothing, another window's is refused.
+    pub answer_sign_in:
+        Arc<dyn Fn(u64, Option<u64>, SignInReply) -> Result<bool, NotOwner> + Send + Sync>,
+    /// The held window of this connection went away: the dial its Retry
+    /// started ends, whether or not it asked anything yet (B8).
+    pub release_sign_in: Arc<dyn Fn(u64) + Send + Sync>,
     pub clients: Arc<AtomicUsize>,
     pub connections: Arc<AtomicU64>,
     pub last_client_gone: Arc<Mutex<Instant>>,
@@ -218,7 +219,7 @@ impl NodeDaemon {
             let role = Arc::downgrade(&role);
             Arc::new(move || {
                 if let Some(role) = role.upgrade() {
-                    role.connect_again();
+                    role.connect_again(None);
                 }
             }) as Arc<dyn Fn() + Send + Sync>
         };
@@ -226,10 +227,10 @@ impl NodeDaemon {
             let role = Arc::downgrade(&role);
             let state_dir = server.state_dir.clone();
             let own_node = screen_node.clone();
-            Arc::new(move |action: LinkAction| {
+            Arc::new(move |action: LinkAction, screen: u64| {
                 let role = role.upgrade().ok_or("the node is stopping")?;
                 if action == LinkAction::Retry {
-                    role.connect_again();
+                    role.connect_again(Some(screen));
                     return Ok(());
                 }
                 let disconnected = action == LinkAction::Disconnect;
@@ -246,24 +247,30 @@ impl NodeDaemon {
                     role.reconnect();
                 }
                 Ok(())
-            }) as Arc<dyn Fn(LinkAction) -> Result<(), String> + Send + Sync>
+            }) as Arc<dyn Fn(LinkAction, u64) -> Result<(), String> + Send + Sync>
         };
         let phases = role.phases();
         let sign_ins = role.sign_ins();
         let answer_sign_in = {
             let role = Arc::downgrade(&role);
-            Arc::new(move |question: u64, reply: SignInReply| {
-                role.upgrade()
-                    .is_some_and(|role| role.answer_sign_in(question, reply))
-            }) as Arc<dyn Fn(u64, SignInReply) -> bool + Send + Sync>
+            Arc::new(
+                move |screen: u64, question: Option<u64>, reply: SignInReply| {
+                    role.upgrade().map_or(Ok(false), |role| {
+                        role.answer_sign_in(screen, question, reply)
+                    })
+                },
+            )
+                as Arc<
+                    dyn Fn(u64, Option<u64>, SignInReply) -> Result<bool, NotOwner> + Send + Sync,
+                >
         };
-        let withdraw_sign_in = {
+        let release_sign_in = {
             let role = Arc::downgrade(&role);
-            Arc::new(move || {
+            Arc::new(move |screen: u64| {
                 if let Some(role) = role.upgrade() {
-                    role.withdraw_sign_in();
+                    role.release_sign_in(screen);
                 }
-            }) as Arc<dyn Fn() + Send + Sync>
+            }) as Arc<dyn Fn(u64) + Send + Sync>
         };
         let browser_routes = BrowserRoutes::new(Arc::new(NodePages::new(
             screen_node,
@@ -292,8 +299,7 @@ impl NodeDaemon {
                 link_control,
                 sign_ins,
                 answer_sign_in,
-                withdraw_sign_in,
-                held_screens: Arc::new(AtomicUsize::new(0)),
+                release_sign_in,
                 clients: Arc::new(AtomicUsize::new(0)),
                 connections: Arc::new(AtomicU64::new(0)),
                 last_client_gone: Arc::new(Mutex::new(Instant::now())),
