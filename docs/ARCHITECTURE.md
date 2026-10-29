@@ -349,6 +349,10 @@ Merged pointers apply only to the revision they describe, so a changed claim is 
 One meaningful human exchange is eligible for analysis; instructions from a delegating agent are never human evidence.
 Each extraction group admits at most eight new cards ranked by significance and confidence, so earlier groups cannot exhaust a conversation's lifetime admission.
 The worker stores completed group progress separately from its source cursor and handles at most four groups from one session in a pass.
+Beside the daily call cap, two limits bound what one long session and one catch-up of many sessions spend, both counted from the groups written (`analysis_batches`), checked before each group so a group is never cut in half, and both deferring rather than dropping (`hide_memory::GroupDeferral`).
+A session writes at most 36 groups a UTC day (`SESSION_DAILY_GROUP_LIMIT`, at most 72 calls with each group's comparison); past it the session keeps its progress and queue place, the turn goes to the next session, and it goes on the next UTC day.
+Background analysis writes at most 40 groups in any hour across every session (`HOURLY_GROUP_LIMIT`, hand-added cards apart); while the last hour is full the whole queue waits with its order kept, so a backlog is caught up at that pace.
+A limit that stops a session with groups left logs `analysis.session_deferred` with the session, the reason, the limit and the groups deferred; a pass the hour holds logs `analysis.deferred` with reason `hourly_groups`; neither is shown.
 A persisted machine-wide queue alternates FIFO and recent opportunities across Projects; every stable eligible member receives an opportunity within twice the number of pending sessions, even with new arrivals.
 A spending or account pause preserves the queue position; a provider failure rotates its session and backs its Project off, and an unusable answer rotates it with no backoff, both retaining unfinished work.
 At most eight maintenance calls and eight extraction/document-comparison calls are admitted per pass across all Projects, within the unchanged daily and maintenance reservations.

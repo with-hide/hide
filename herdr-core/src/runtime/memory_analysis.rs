@@ -30,7 +30,8 @@ use crate::node_access::NodeLink;
 use hide_ai::{AiError, AiRouter, CancelToken};
 use hide_memory::{
     AnalysisBatch, ApplyOptions, ApplySummary, Candidate, CandidateRelation, CursorReader,
-    HideNativeAnalyzer, MemoryStore, ReceiptRecord, SessionCursorRecord, SessionSourceRecord,
+    GroupDeferral, HideNativeAnalyzer, MemoryStore, ReceiptRecord, SessionCursorRecord,
+    SessionSourceRecord,
 };
 use hide_node_link::sessions::ReaderFeature;
 use hide_session::{EventKind, ProjectSession, SessionAvailability};
@@ -1191,8 +1192,10 @@ struct PendingAnalysis {
 }
 
 /// One admitted session quantum per pass, at most four extraction and four
-/// creation-comparison calls. Discovery and maintenance keep their existing
-/// owners; new arrivals cannot replace the persisted FIFO opportunity.
+/// creation-comparison calls, inside the session's day of groups and the
+/// last hour's groups of every session (`hide_memory::GroupDeferral`).
+/// Discovery and maintenance keep their existing owners; new arrivals cannot
+/// replace the persisted FIFO opportunity.
 fn run_analysis_turn(
     input: &PassInput,
     store: &mut MemoryStore,
@@ -1216,13 +1219,37 @@ fn run_analysis_turn(
             return;
         }
     };
-    let Some(task) = ordered.iter().find_map(|(project, provider, session)| {
-        pending.iter().find(|task| {
+    // A session that wrote its day's groups keeps its place and gives the
+    // turn to the next; a full hour holds the whole queue, so the session in
+    // front keeps its place too.
+    let mut task = None;
+    for (project, provider, session) in &ordered {
+        let Some(candidate) = pending.iter().find(|task| {
             task.project_id == *project
                 && task.session.agent.as_str() == provider
                 && task.session.id == *session
-        })
-    }) else {
+        }) else {
+            continue;
+        };
+        match store.group_deferral(now_ms(), project, provider, session) {
+            Ok(None) => {
+                task = Some(candidate);
+                break;
+            }
+            Ok(Some(GroupDeferral::SessionDay)) => {}
+            Ok(Some(GroupDeferral::Hour)) => {
+                *deferred = Some(GroupDeferral::Hour.as_str());
+                return;
+            }
+            Err(error) => {
+                crate::diagnostic!(
+                    json!({"component":"memory","kind":"analysis.queue_unavailable","message":error.to_string()})
+                );
+                return;
+            }
+        }
+    }
+    let Some(task) = task else {
         return;
     };
     let Some((_, link)) = input.nodes.iter().find(|(node, _)| *node == task.node) else {
@@ -2198,6 +2225,7 @@ fn analyze_session(
     };
     let total_groups = groups.len();
     let mut completed = next_group;
+    let mut held = None;
     for (index, group) in groups
         .into_iter()
         .enumerate()
@@ -2206,6 +2234,12 @@ fn analyze_session(
     {
         if cancel.is_cancelled() {
             return Err(AnalysisFailure::Cancelled);
+        }
+        held = store
+            .group_deferral(now_ms(), project_id, provider, &session.id)
+            .map_err(|error| local(error.to_string()))?;
+        if held.is_some() {
+            break;
         }
         let written = write_cards(
             store,
@@ -2295,6 +2329,26 @@ fn analyze_session(
             .map_err(|error| local(error.to_string()))?;
     }
     if completed < total_groups {
+        // The groups left wait with their progress for a later turn: the
+        // next day for a session's own limit, a later pass for the hour's.
+        let held = match held {
+            Some(reason) => Some(reason),
+            None => store
+                .group_deferral(now_ms(), project_id, provider, &session.id)
+                .map_err(|error| local(error.to_string()))?,
+        };
+        if let Some(reason) = held {
+            crate::diagnostic!(json!({
+                "component": "memory",
+                "kind": "analysis.session_deferred",
+                "project_id": project_id,
+                "provider": provider,
+                "session_id": session.id,
+                "reason": reason.as_str(),
+                "limit": reason.limit(),
+                "deferred_groups": total_groups - completed,
+            }));
+        }
         return Ok(learned);
     }
     for number in left_out.values() {
@@ -3495,6 +3549,31 @@ mod tests {
 
         fn calls(&self) -> usize {
             self.backend.calls.load(Ordering::SeqCst)
+        }
+
+        /// Records `count` groups of a session's analysis as written now.
+        fn write_groups(&self, provider: &str, session: &str, count: u64) {
+            let connection = rusqlite::Connection::open(&self.database).unwrap();
+            for n in 0..count {
+                let id = format!("{provider}:{session}:{n}");
+                connection
+                    .execute(
+                        "INSERT INTO analysis_batches VALUES(?1,?2,?3,'claude',?4,?1,?5)",
+                        rusqlite::params![id, self.project_id, provider, session, now_ms()],
+                    )
+                    .unwrap();
+            }
+        }
+
+        /// Moves every written group `by` into the past.
+        fn age_groups(&self, by: u64) {
+            rusqlite::Connection::open(&self.database)
+                .unwrap()
+                .execute(
+                    "UPDATE analysis_batches SET created_at_ms=created_at_ms-?1",
+                    [by],
+                )
+                .unwrap();
         }
 
         /// Lets the next walk compare every card's evidence again, as it
@@ -5014,6 +5093,74 @@ mod tests {
             calls,
             "completed groups never ask the provider again"
         );
+    }
+
+    #[test]
+    fn a_session_past_its_days_groups_keeps_its_progress_and_resumes_the_next_day() {
+        let mut fixture = Fixture::new();
+        fixture.lines.truncate(1);
+        let text = format!("{} retain_tail_nextest", "한글 context ".repeat(15_000));
+        fixture.lines[0]["message"]["content"] = json!(text);
+        fixture.write(&fixture.lines);
+        let key = ("claude", SESSION.to_owned());
+        for _ in 0..40 {
+            fixture.push(json!({"candidates":[],"alias_backfill":[]}));
+        }
+        let earlier = hide_memory::SESSION_DAILY_GROUP_LIMIT - 2;
+        fixture.write_groups("claude", SESSION, earlier);
+        let progress = || {
+            fixture
+                .store()
+                .analysis_progress(&fixture.project_id, "claude", SESSION, 0)
+                .unwrap()
+                .0
+        };
+
+        let (_, outcome) = fixture.pass_for(key.clone(), false, true);
+        assert_eq!(
+            fixture.calls(),
+            2,
+            "the day's last two groups, not a quantum"
+        );
+        assert_eq!(progress(), 2);
+        assert!(!outcome.settled.contains(&key));
+        fixture.pass_for(key.clone(), false, true);
+        assert_eq!(fixture.calls(), 2, "the rest waits for the next day");
+        assert_eq!(progress(), 2);
+
+        fixture.age_groups(86_400_000);
+        fixture.pass_for(key.clone(), false, true);
+        assert_eq!(
+            fixture.calls(),
+            6,
+            "the next day goes on from the third group"
+        );
+        assert_eq!(progress(), 6);
+        let inputs = fixture.backend.inputs.lock().unwrap();
+        let unique = inputs.iter().collect::<HashSet<_>>();
+        assert_eq!(unique.len(), inputs.len(), "no group is asked twice");
+    }
+
+    #[test]
+    fn a_full_hour_of_groups_holds_the_queue_without_a_provider_call_until_it_passes() {
+        let fixture = Fixture::new();
+        fixture.answer(&[]);
+        for n in 0..hide_memory::HOURLY_GROUP_LIMIT {
+            fixture.write_groups("codex", &format!("backlog-{n}"), 1);
+        }
+        assert!(fixture.pass(false, true).is_empty());
+        assert_eq!(fixture.calls(), 0);
+        assert!(
+            fixture
+                .store()
+                .item_by_number(&fixture.project_id, 2)
+                .unwrap()
+                .is_none(),
+            "the conversation waits, unread"
+        );
+
+        fixture.age_groups(hide_memory::GROUP_WINDOW_MS);
+        assert_eq!(fixture.pass(false, true), ["analyzing", "learned one"]);
     }
 
     fn confirm_fixture_correction(fixture: &Fixture, number: u64) {

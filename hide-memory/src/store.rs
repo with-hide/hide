@@ -1644,6 +1644,35 @@ impl MemoryStore {
             .unwrap_or(0))
     }
 
+    /// Why background analysis would start no further group of the session
+    /// now, read from the groups written: a group's calls are spent when it
+    /// is written, and a group that fails is bounded by its input's failure
+    /// limit instead. Hand-added cards are the operator's, and count for
+    /// neither limit.
+    pub fn group_deferral(
+        &self,
+        now_unix_ms: u64,
+        project: &str,
+        provider: &str,
+        session: &str,
+    ) -> Result<Option<crate::GroupDeferral>, MemoryError> {
+        let day_start = now_unix_ms - now_unix_ms % DAY_MS;
+        let session_today: u64 = self.connection.query_row(
+            "SELECT COUNT(*) FROM analysis_batches WHERE project_id=?1 AND provider=?2 AND session_id=?3 AND created_at_ms>=?4",
+            params![project, provider, session, day_start],
+            |row| row.get(0),
+        )?;
+        let last_hour: u64 = self.connection.query_row(
+            "SELECT COUNT(*) FROM analysis_batches WHERE created_at_ms>?1 AND provider!=?2",
+            params![
+                now_unix_ms.saturating_sub(crate::GROUP_WINDOW_MS),
+                crate::HAND_ADDED_PROVIDER
+            ],
+            |row| row.get(0),
+        )?;
+        Ok(crate::budget::group_deferral(session_today, last_hour))
+    }
+
     /// Counts checks that may ask now, for one Project or all enabled and
     /// consented Projects. Both pass scheduling and call reservation use
     /// this predicate: re-verification and the check before a promotion.
@@ -10513,6 +10542,71 @@ PRAGMA user_version=14;"#,
         assert_eq!(store.analysis_calls(10 * day + 5).unwrap(), 2);
         assert_eq!(store.analysis_calls(11 * day - 1).unwrap(), 2);
         assert_eq!(store.analysis_calls(11 * day).unwrap(), 0);
+    }
+
+    #[test]
+    fn group_deferral_counts_the_sessions_utc_day_and_every_sessions_last_hour() {
+        use crate::GroupDeferral;
+        let (_temp, store, project) = store();
+        let day = 86_400_000;
+        let hour = crate::GROUP_WINDOW_MS;
+        let write = |id: String, provider: &str, session: &str, at: u64| {
+            store
+                .connection
+                .execute(
+                    "INSERT INTO analysis_batches VALUES(?1,?2,?3,'claude',?4,?1,?5)",
+                    params![id, project, provider, session, at],
+                )
+                .unwrap();
+        };
+        // The day's groups, written over its hours: the session may start
+        // no further one until the UTC day turns.
+        let start = 10 * day + 2 * hour;
+        for n in 0..crate::SESSION_DAILY_GROUP_LIMIT {
+            write(format!("s{n}"), "claude", "s", start + n * hour);
+        }
+        let late = 10 * day + 20 * hour;
+        assert_eq!(
+            store.group_deferral(late, &project, "claude", "s").unwrap(),
+            Some(GroupDeferral::SessionDay)
+        );
+        assert_eq!(
+            store.group_deferral(late, &project, "claude", "t").unwrap(),
+            None,
+            "another session's turn goes on"
+        );
+        assert_eq!(
+            store
+                .group_deferral(11 * day, &project, "claude", "s")
+                .unwrap(),
+            None
+        );
+        // Every session's groups in the last hour, the operator's hand-added
+        // cards apart: the whole queue waits until the oldest is an hour old.
+        let busy = 12 * day;
+        for n in 0..crate::HOURLY_GROUP_LIMIT - 1 {
+            write(format!("h{n}"), "codex", &format!("h{n}"), busy + n);
+        }
+        write("hand".into(), crate::HAND_ADDED_PROVIDER, "add", busy + 100);
+        assert_eq!(
+            store
+                .group_deferral(busy + 200, &project, "claude", "s")
+                .unwrap(),
+            None
+        );
+        write("last".into(), "codex", "h-last", busy + 100);
+        assert_eq!(
+            store
+                .group_deferral(busy + 200, &project, "claude", "s")
+                .unwrap(),
+            Some(GroupDeferral::Hour)
+        );
+        assert_eq!(
+            store
+                .group_deferral(busy + hour, &project, "claude", "s")
+                .unwrap(),
+            None
+        );
     }
 
     #[test]

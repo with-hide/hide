@@ -1,4 +1,5 @@
-//! The two consumers of Memory's single UTC-day call budget.
+//! The two consumers of Memory's single UTC-day call budget, and the pace
+//! background analysis writes its groups at.
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MemoryCallKind {
@@ -38,5 +39,43 @@ pub(crate) fn deferral(
             Some(MemoryCallDeferral::ReservedForChecks)
         }
         _ => None,
+    }
+}
+
+/// Why background analysis starts no further group now. A group is the unit
+/// both limits count: one extraction call and at most one comparison call.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GroupDeferral {
+    /// The session wrote [`crate::SESSION_DAILY_GROUP_LIMIT`] groups this
+    /// UTC day; its other sessions' turns go on.
+    SessionDay,
+    /// The last hour holds [`crate::HOURLY_GROUP_LIMIT`] groups of every
+    /// session; the whole queue waits.
+    Hour,
+}
+
+impl GroupDeferral {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::SessionDay => "session_daily_groups",
+            Self::Hour => "hourly_groups",
+        }
+    }
+
+    pub fn limit(self) -> u64 {
+        match self {
+            Self::SessionDay => crate::SESSION_DAILY_GROUP_LIMIT,
+            Self::Hour => crate::HOURLY_GROUP_LIMIT,
+        }
+    }
+}
+
+pub(crate) fn group_deferral(session_today: u64, last_hour: u64) -> Option<GroupDeferral> {
+    if session_today >= crate::SESSION_DAILY_GROUP_LIMIT {
+        Some(GroupDeferral::SessionDay)
+    } else if last_hour >= crate::HOURLY_GROUP_LIMIT {
+        Some(GroupDeferral::Hour)
+    } else {
+        None
     }
 }
