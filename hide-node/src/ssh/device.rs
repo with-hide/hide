@@ -12,15 +12,18 @@
 //! so a connection signs in once.
 
 use super::host::bootstrap::{self, HerdrChoice, Pipe, ProbeError, Stop};
-use super::host::{ChildLink, ChildOutput, HelperPackages, PaneEventsSlot, PaneHook, TerminalHook};
+use super::host::{
+    ATTEMPT_ENDED as ENDED, ChildLink, ChildOutput, HelperPackages, PaneEventsSlot, PaneHook,
+    TerminalHook,
+};
 use super::hosts::{Resolve, ssh_g};
 use super::openssh::{self, SignInLine, SshProgram, Version};
 use super::*;
 use hide_node_link::call_as;
 use hide_node_link::device::{
-    Attempt, DeviceConnector, DeviceTransport, DialedTransport, EstablishError, Established,
-    HostConsent, HostIdentity, NodeReady, SignIn, SignInWait, SshFailure, SshHostListing,
-    SshProblem, Wake,
+    Attempt, Cancel, DeviceConnector, DeviceTransport, DialedTransport, EstablishError,
+    Established, HostConsent, HostIdentity, NodeReady, SignIn, SignInWait, SshFailure,
+    SshHostListing, SshProblem, Wake,
 };
 use hide_node_link::protocol::{Call, Hello, KitAction};
 
@@ -46,6 +49,10 @@ const STDERR_TAIL: usize = 64;
 const HERDR_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 /// How long the kit pass a connection runs before its services may take.
 const KIT_TIMEOUT: Duration = Duration::from_secs(180);
+
+fn ended() -> EstablishError {
+    EstablishError::Helper(ENDED.to_owned())
+}
 
 /// Opens the transport to a device by alias. It carries this build's
 /// device packages, which a transport installs on a device that lacks them.
@@ -323,8 +330,9 @@ struct Turns {
 struct Turn(&'static Turns);
 
 impl Turns {
-    /// Waits for a turn, showing the row queued meanwhile.
-    fn take(&'static self, sign_in: &dyn SignIn) -> Option<Turn> {
+    /// Waits for a turn, showing the row queued meanwhile; none once
+    /// `cancel` ends the attempt or the wait runs out.
+    fn take(&'static self, sign_in: &dyn SignIn, cancel: &Cancel) -> Option<Turn> {
         let deadline = Instant::now() + TURN_WITHIN;
         let mut taken = lock_recover(&self.taken);
         let mut shown = false;
@@ -333,12 +341,19 @@ impl Turns {
                 sign_in.show(Some(SignInWait::Queued));
                 shown = true;
             }
+            if cancel.is_cancelled() {
+                return None;
+            }
             let left = deadline.checked_duration_since(Instant::now())?;
+            // A second at a time, so a cancel is seen while queued.
             taken = self
                 .freed
-                .wait_timeout(taken, left)
+                .wait_timeout(taken, left.min(Duration::from_secs(1)))
                 .map(|(guard, _)| guard)
                 .unwrap_or_else(|poisoned| poisoned.into_inner().0);
+        }
+        if cancel.is_cancelled() {
+            return None;
         }
         *taken += 1;
         drop(taken);
@@ -367,6 +382,7 @@ struct SigningIn<'a> {
     desk: Option<askpass::Desk>,
     sign_in: &'a dyn SignIn,
     wake: Wake,
+    cancel: Cancel,
     stderr: std::collections::VecDeque<String>,
     signed_in: bool,
     /// When a sign-in link was shown on the row (or, for an attempt nobody
@@ -433,6 +449,9 @@ impl SigningIn<'_> {
 
 impl Pipe for SigningIn<'_> {
     fn send(&mut self, bytes: &[u8], until: Instant) -> Result<(), String> {
+        if self.cancel.is_cancelled() {
+            return Err(ENDED.to_owned());
+        }
         self.link
             .send(bytes, until + self.held)
             .map_err(|error| error.to_string())
@@ -440,6 +459,20 @@ impl Pipe for SigningIn<'_> {
 
     fn line(&mut self, until: Instant) -> Result<Vec<u8>, Stop> {
         loop {
+            if self.cancel.is_cancelled() {
+                return Err(Stop::Ended(ENDED.to_owned()));
+            }
+            // B8: the first question the operator cancelled or left
+            // unanswered ends the attempt; ssh would only ask again or try
+            // its next way of signing in.
+            if !self.signed_in
+                && self
+                    .desk
+                    .as_ref()
+                    .is_some_and(|desk| desk.refusal().is_some())
+            {
+                return Err(Stop::Ended("a sign-in question got no answer".to_owned()));
+            }
             let now = Instant::now();
             if !self.signed_in && self.operator_turn() {
                 self.held += now.saturating_duration_since(self.tick);
@@ -525,7 +558,9 @@ impl DialedTransport for SshDevice {
                 return report;
             }
         }
-        report.pass(RemoteStage::Git, "through the node link");
+        if !host::check_git(&linked.host, &mut report) {
+            return report;
+        }
         report.connected();
         report
     }
@@ -542,6 +577,7 @@ impl DialedTransport for SshDevice {
         let Attempt {
             wake,
             sign_in,
+            cancel,
             on_close,
         } = attempt;
         stage("resolve");
@@ -550,7 +586,10 @@ impl DialedTransport for SshDevice {
             .program
             .resolve(&self.alias)
             .map_err(EstablishError::Ssh)?;
-        let _turn = DIALING.take(&*sign_in).ok_or_else(|| {
+        let _turn = DIALING.take(&*sign_in, &cancel).ok_or_else(|| {
+            if cancel.is_cancelled() {
+                return ended();
+            }
             EstablishError::Ssh(SshFailure {
                 problem: SshProblem::Unclassified,
                 detail: format!(
@@ -568,14 +607,18 @@ impl DialedTransport for SshDevice {
                         program.display()
                     )));
                 }
+                // ssh expands `~` and `%d` to the user database's home,
+                // whatever HOME it was given.
+                let key_files = hide_platform::user_agents::account_home()
+                    .ok()
+                    .and_then(|home| resolved.identity_files(&home, &self.alias));
                 Some(
-                    askpass::Desk::open(&std::env::temp_dir(), Arc::clone(&sign_in)).map_err(
-                        |error| {
+                    askpass::Desk::open(&std::env::temp_dir(), Arc::clone(&sign_in), key_files)
+                        .map_err(|error| {
                             EstablishError::Helper(format!(
                                 "The sign-in desk could not open: {error}"
                             ))
-                        },
-                    )?,
+                        })?,
                 )
             }
             _ => None,
@@ -600,7 +643,9 @@ impl DialedTransport for SshDevice {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
         stage("dial");
-        let child = match hide_platform::process::OwnedChild::spawn(&mut command) {
+        // Tied: ssh still signing in reads nothing that would tell it this
+        // process died, so its group ends with this process either way.
+        let child = match hide_platform::process::OwnedChild::spawn_tied(&mut command) {
             Ok(child) => child,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 return Err(EstablishError::Ssh(openssh::missing(self.program.path())));
@@ -619,6 +664,7 @@ impl DialedTransport for SshDevice {
             desk,
             sign_in: &*sign_in,
             wake,
+            cancel: cancel.clone(),
             stderr: std::collections::VecDeque::new(),
             signed_in: false,
             browser: None,
@@ -626,67 +672,83 @@ impl DialedTransport for SshDevice {
             held: Duration::ZERO,
             tick: Instant::now(),
         };
-        stage("sign_in");
-        let facts = match bootstrap::probe(&mut pipe, Instant::now() + SIGN_IN_TIMEOUT) {
-            Ok(facts) => facts,
-            Err(ProbeError::Unsupported(reason)) => {
-                return Err(EstablishError::Unsupported(reason));
-            }
-            Err(ProbeError::Stopped(stop)) => {
-                let stderr: Vec<String> = pipe.stderr.iter().cloned().collect();
-                let mut failure =
-                    openssh::classify(&openssh::Ending {
-                        stderr: &stderr,
-                        refusal: pipe.desk.as_ref().and_then(askpass::Desk::refusal).or_else(
-                            || {
-                                (pipe.browser_expired && wake == Wake::NotAllowed)
-                                    .then_some(hide_node_link::device::Refusal::NotAllowed)
-                            },
-                        ),
-                        proxied: resolved.proxied(),
-                        prompts_unavailable: !version.asks_through_askpass(),
-                        browser_waited: pipe.browser_expired,
-                    });
-                if failure.problem == SshProblem::Unclassified && stderr.is_empty() {
-                    failure.detail = match stop {
-                        Stop::Quiet => {
-                            format!("ssh did not sign in within {} s", SIGN_IN_TIMEOUT.as_secs())
-                        }
-                        Stop::Ended(reason) => reason,
-                    };
+        // Until the helper starts, every way out ends and reaps the `ssh`
+        // child before the attempt returns (B8, B26).
+        let started = (|pipe: &mut SigningIn<'_>| -> Result<(HostIdentity, bootstrap::Installed), EstablishError> {
+            stage("sign_in");
+            let facts = match bootstrap::probe(&mut *pipe, Instant::now() + SIGN_IN_TIMEOUT) {
+                Ok(facts) => facts,
+                Err(ProbeError::Unsupported(reason)) => {
+                    return Err(EstablishError::Unsupported(reason));
                 }
-                crate::diagnostic!(json!({
-                    "component": "remote_host",
-                    "kind": "host.ssh_failed",
-                    "target": target,
-                    "problem": failure.problem.code(),
-                    "stderr_tail": stderr,
-                }));
-                return Err(EstablishError::Ssh(failure));
+                Err(ProbeError::Stopped(stop)) => {
+                    let stderr: Vec<String> = pipe.stderr.iter().cloned().collect();
+                    let mut failure =
+                        openssh::classify(&openssh::Ending {
+                            stderr: &stderr,
+                            refusal: pipe.desk.as_ref().and_then(askpass::Desk::refusal).or_else(
+                                || {
+                                    (pipe.browser_expired && wake == Wake::NotAllowed)
+                                        .then_some(hide_node_link::device::Refusal::NotAllowed)
+                                },
+                            ),
+                            proxied: resolved.proxied(),
+                            prompts_unavailable: !version.asks_through_askpass(),
+                            browser_waited: pipe.browser_expired,
+                        });
+                    if failure.problem == SshProblem::Unclassified && stderr.is_empty() {
+                        failure.detail = match stop {
+                            Stop::Quiet => {
+                                format!("ssh did not sign in within {} s", SIGN_IN_TIMEOUT.as_secs())
+                            }
+                            Stop::Ended(reason) => reason,
+                        };
+                    }
+                    crate::diagnostic!(json!({
+                        "component": "remote_host",
+                        "kind": "host.ssh_failed",
+                        "target": target,
+                        "problem": failure.problem.code(),
+                        "stderr_tail": stderr,
+                    }));
+                    return Err(EstablishError::Ssh(failure));
+                }
+            };
+            // Signed in: nothing more is asked on this connection.
+            pipe.desk = None;
+            let identity = HostIdentity {
+                user: resolved.user.clone(),
+                hostname: resolved.hostname.clone(),
+                port: resolved.port,
+                machine_id: Some(facts.machine_id.clone()),
+                host_key_sha256: String::new(),
+            };
+            if let Some(bound) = consent.identity.as_ref()
+                && !bound.covers(&identity)
+            {
+                return Err(EstablishError::IdentityChanged {
+                    bound: Box::new(bound.clone()),
+                    observed: Box::new(identity),
+                });
+            }
+            let payload = self.packages.payload(&facts.os, &facts.arch)?;
+            stage("install");
+            let installed = bootstrap::install(&mut *pipe, &consent.helper_root, &facts.home, &payload)?;
+            stage("start");
+            bootstrap::start(&mut *pipe, &installed.helper_relative, &self.herdr)?;
+            Ok((identity, installed))
+        })(&mut pipe);
+        let (identity, installed) = match started {
+            Ok(started) => started,
+            Err(error) => {
+                pipe.link.kill();
+                return Err(if cancel.is_cancelled() {
+                    ended()
+                } else {
+                    error
+                });
             }
         };
-        // Signed in: nothing more is asked on this connection.
-        pipe.desk = None;
-        let identity = HostIdentity {
-            user: resolved.user.clone(),
-            hostname: resolved.hostname.clone(),
-            port: resolved.port,
-            machine_id: facts.machine_id.clone(),
-            host_key_sha256: String::new(),
-        };
-        if let Some(bound) = consent.identity.as_ref()
-            && !bound.covers(&identity)
-        {
-            return Err(EstablishError::IdentityChanged {
-                bound: Box::new(bound.clone()),
-                observed: Box::new(identity),
-            });
-        }
-        let payload = self.packages.payload(&facts.os, &facts.arch)?;
-        stage("install");
-        let installed = bootstrap::install(&mut pipe, &consent.helper_root, &facts.home, &payload)?;
-        stage("start");
-        bootstrap::start(&mut pipe, &installed.helper_relative, &self.herdr)?;
         let SigningIn { mut link, .. } = pipe;
         let rest = link.take_rest();
         let host = link.into_host(rest, self.panes.clone(), on_close);
@@ -698,6 +760,10 @@ impl DialedTransport for SshDevice {
         if let Some(reason) = host::helper_protocol_refusal(&hello) {
             host.close("helper protocol mismatch");
             return Err(EstablishError::Helper(reason));
+        }
+        if cancel.is_cancelled() {
+            host.close(ENDED);
+            return Err(ended());
         }
         let readers = hello.readers();
         for reason in readers.diagnostics() {
@@ -755,6 +821,12 @@ impl DialedTransport for SshDevice {
                 host::start_terminals_at(socket.clone(), &host, hook)
             }
         };
+        // A cancel during the kit pass, which does not stop, still ends the
+        // link before it is handed out.
+        if cancel.is_cancelled() {
+            host.close(ENDED);
+            return Err(ended());
+        }
         *lock_recover(&self.link) = Some(Linked {
             host: host.clone(),
             version,

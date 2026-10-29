@@ -164,6 +164,10 @@ impl BranchConfigKey {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum GitCommand {
+    /// The Git the node runs (`git --version`), which needs no repository: a
+    /// device's test asks it over the link it has (PRD
+    /// system-ssh-device-link B25).
+    Version,
     /// Every uncommitted change, untracked files included.
     Status,
     /// The absolute path of the repository's shared `.git` folder.
@@ -231,6 +235,7 @@ impl GitCommand {
     pub fn args(&self) -> Result<Vec<String>, String> {
         let owned = |args: &[&str]| Ok(args.iter().map(|arg| (*arg).to_owned()).collect());
         match self {
+            Self::Version => owned(&["--version"]),
             Self::Status => owned(&["status", "--porcelain=v1", "--untracked-files=all"]),
             Self::CommonDir => owned(&["rev-parse", "--path-format=absolute", "--git-common-dir"]),
             Self::RefCommit { name } => owned(&[

@@ -14,7 +14,7 @@
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use hide_node_link::device::{Answer, Refusal, SignIn, SignInWait};
@@ -36,6 +36,36 @@ const ANSWER_WITHIN: Duration = Duration::from_secs(6 * 60);
 /// Askpass connections a desk serves at once. ssh asks one question at a
 /// time; anything past this is refused, not queued.
 const MAX_ASKING: usize = 4;
+/// A desk's folder name: this prefix, the opening process's id, a dash and
+/// random hex.
+const DESK_PREFIX: &str = "hide-ssh-";
+
+/// Removes the desk folders under `parent` whose opening process is gone: a
+/// process that died without closing its desk (killed, or its machine lost
+/// power) leaves its folder, which held only the socket of a desk no `ssh`
+/// can reach now. A folder of a live process, or another account's, stays.
+fn sweep(parent: &Path) {
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(owner) = name
+            .to_str()
+            .and_then(|name| name.strip_prefix(DESK_PREFIX))
+            .and_then(|rest| rest.split_once('-'))
+            .and_then(|(pid, _)| pid.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        if owner != std::process::id()
+            && !hide_platform::process::is_alive(owner)
+            && entry.file_type().is_ok_and(|kind| kind.is_dir())
+        {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
 
 /// What ssh asked, as the row shows it.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -88,6 +118,30 @@ pub fn asked(prompt: &str, hint: Option<&str>) -> Asked {
     })
 }
 
+/// How much of a key's path ssh prints in its passphrase prompt: `%.100s`
+/// bytes (OpenSSH `sshconnect2.c`).
+const PROMPT_PATH_BYTES: usize = 100;
+
+/// The whole path of the key a passphrase prompt names as `shown`: `shown`
+/// itself when ssh printed all of it, else the one key file of the alias it
+/// begins. `None` when that is not certain, a relative path or a shortened
+/// one no single known file begins, so the row offers no command naming a
+/// file that is not the key (B9).
+fn key_file(shown: &str, key_files: Option<&[PathBuf]>) -> Option<String> {
+    if !Path::new(shown).is_absolute() {
+        return None;
+    }
+    if shown.len() < PROMPT_PATH_BYTES {
+        return Some(shown.to_owned());
+    }
+    let mut whole = key_files?
+        .iter()
+        .filter_map(|file| file.to_str())
+        .filter(|file| file.starts_with(shown));
+    let file = whole.next()?;
+    whole.next().is_none().then(|| file.to_owned())
+}
+
 fn between<'a>(text: &'a str, start: &str, end: &str) -> Option<&'a str> {
     let rest = &text[text.find(start)? + start.len()..];
     Some(&rest[..rest.find(end)?])
@@ -122,8 +176,16 @@ pub struct Desk {
 struct DeskState {
     sign_in: Arc<dyn SignIn>,
     token: String,
-    /// The first question the attempt got no answer to, and why.
+    /// The key files ssh tries for the alias, whole; `None` when they are
+    /// not all known ([`key_file`]).
+    key_files: Option<Vec<PathBuf>>,
+    /// The first question the attempt got no answer to, and why. Once set,
+    /// that question and every later one are held unanswered until the desk
+    /// closes ([`hold`]), and the attempt ends at its next look (B8, B14).
     refusal: Mutex<Option<Refusal>>,
+    /// Wakes the questions [`hold`] keeps once the desk closes; it waits on
+    /// `refusal`'s lock.
+    held: Condvar,
     /// Questions and touches the operator holds now.
     operator: AtomicUsize,
     asking: AtomicUsize,
@@ -132,12 +194,24 @@ struct DeskState {
 
 impl Desk {
     /// Opens a desk whose questions go to `sign_in`, in a private folder of
-    /// its own under `parent`.
-    pub fn open(parent: &Path, sign_in: Arc<dyn SignIn>) -> std::io::Result<Self> {
+    /// its own under `parent`, and removes the folders desks there left when
+    /// the process that opened them died without closing them. `key_files`
+    /// are the alias's key files, whole, for a passphrase prompt that names
+    /// one shortened.
+    pub fn open(
+        parent: &Path,
+        sign_in: Arc<dyn SignIn>,
+        key_files: Option<Vec<PathBuf>>,
+    ) -> std::io::Result<Self> {
+        sweep(parent);
         let token = random_hex(16)?;
         // Short, because a Unix socket's path is limited to about a hundred
-        // bytes.
-        let folder = parent.join(format!("hide-ssh-{}", random_hex(6)?));
+        // bytes; the opening process's id names whose it is.
+        let folder = parent.join(format!(
+            "{DESK_PREFIX}{}-{}",
+            std::process::id(),
+            random_hex(6)?
+        ));
         hide_platform::fs::private::create_dir_all(&folder)?;
         let path = folder.join("askpass");
         let listener = match LocalListener::bind(&path) {
@@ -151,7 +225,9 @@ impl Desk {
         let state = Arc::new(DeskState {
             sign_in,
             token: token.clone(),
+            key_files,
             refusal: Mutex::new(None),
+            held: Condvar::new(),
             operator: AtomicUsize::new(0),
             asking: AtomicUsize::new(0),
             closed: AtomicBool::new(false),
@@ -201,7 +277,12 @@ impl Desk {
 
 impl Drop for Desk {
     fn drop(&mut self) {
-        self.state.closed.store(true, Ordering::SeqCst);
+        {
+            // Under the lock `hold` waits on, so no held question misses it.
+            let _refusal = lock(&self.state.refusal);
+            self.state.closed.store(true, Ordering::SeqCst);
+        }
+        self.state.held.notify_all();
         self.closer.close();
         if let Some(accepting) = self.accepting.take() {
             let _ = accepting.join();
@@ -272,7 +353,13 @@ fn serve(stream: LocalStream, state: &DeskState) {
             state.operator.fetch_sub(1, Ordering::SeqCst);
             return;
         }
-        Asked::Question(question) => {
+        Asked::Question(_) if lock(&state.refusal).is_some() => return hold(state),
+        Asked::Question(mut question) => {
+            if let SignInWait::Secret { key_file, .. } = &mut question {
+                *key_file = key_file
+                    .take()
+                    .and_then(|shown| self::key_file(&shown, state.key_files.as_deref()));
+            }
             state.operator.fetch_add(1, Ordering::SeqCst);
             let answer = state.sign_in.ask(question);
             state.operator.fetch_sub(1, Ordering::SeqCst);
@@ -285,7 +372,7 @@ fn serve(stream: LocalStream, state: &DeskState) {
                 },
                 Err(refusal) => {
                     lock(&state.refusal).get_or_insert(refusal);
-                    Reply { answer: None }
+                    return hold(state);
                 }
             }
         }
@@ -295,6 +382,21 @@ fn serve(stream: LocalStream, state: &DeskState) {
     if let Ok(mut bytes) = serde_json::to_vec(&reply) {
         bytes.push(b'\n');
         let _ = writing.write_all(&bytes);
+    }
+}
+
+/// Keeps a question the attempt will not answer until the desk closes. An
+/// askpass that answered nothing would have ssh send an empty secret, which a
+/// server counts as a failed sign-in, or try its next way of signing in; held,
+/// ssh waits until the attempt ends it, and its askpass with it, at its next
+/// look (B8, B14).
+fn hold(state: &DeskState) {
+    let mut refusal = lock(&state.refusal);
+    while !state.closed.load(Ordering::SeqCst) {
+        refusal = state
+            .held
+            .wait(refusal)
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
     }
 }
 
@@ -468,7 +570,7 @@ mod tests {
             answer: Mutex::new(Some(answer)),
             seen: Mutex::new(Vec::new()),
         });
-        let desk = Desk::open(parent.path(), Arc::clone(&row) as Arc<dyn SignIn>).unwrap();
+        let desk = Desk::open(parent.path(), Arc::clone(&row) as Arc<dyn SignIn>, None).unwrap();
         (desk, row, parent)
     }
 
@@ -490,17 +592,63 @@ mod tests {
         assert_eq!(lock(&row.seen).len(), 1);
     }
 
+    /// A refused question is held, not answered empty, so ssh sends the
+    /// server nothing it would count as a failed sign-in; it and any later
+    /// question end with the desk, and the row is asked once.
     #[test]
-    fn a_refused_question_is_no_answer_and_the_attempt_remembers_why() {
-        let (desk, _row, _parent) = desk_with(Err(Refusal::NotAllowed));
-        let answer = ask_desk(
-            &desk.path,
-            desk.token.clone(),
-            "password: ".to_owned(),
-            None,
-        );
-        assert_eq!(answer, None);
-        assert_eq!(desk.refusal(), Some(Refusal::NotAllowed));
+    #[allow(clippy::disallowed_methods)] // a window in which a held question must not end: no state reports an answer that was never sent
+    fn a_refused_question_waits_unanswered_until_the_attempt_ends() {
+        let (desk, row, _parent) = desk_with(Err(Refusal::Cancelled));
+        let ask = |desk: &Desk| {
+            let (path, token) = (desk.path.clone(), desk.token.clone());
+            std::thread::spawn(move || ask_desk(&path, token, "password: ".to_owned(), None))
+        };
+        let first = ask(&desk);
+        let deadline = Instant::now() + std::time::Duration::from_secs(10);
+        while desk.refusal().is_none() {
+            assert!(Instant::now() < deadline, "the row was never asked");
+            std::thread::yield_now();
+        }
+        assert_eq!(desk.refusal(), Some(Refusal::Cancelled));
+        let again = ask(&desk);
+        while desk.state.asking.load(Ordering::SeqCst) < 2 {
+            assert!(
+                Instant::now() < deadline,
+                "the second question never arrived"
+            );
+            std::thread::yield_now();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        assert!(!first.is_finished() && !again.is_finished());
+        drop(desk);
+        assert_eq!(first.join().unwrap(), None);
+        assert_eq!(again.join().unwrap(), None);
+        assert_eq!(*lock(&row.seen), ["secret"]);
+    }
+
+    /// A desk whose process died leaves its folder; the next desk opened
+    /// beside it removes that one and no other.
+    #[test]
+    fn a_dead_process_s_desk_is_removed_by_the_next_one() {
+        let parent = tempfile::tempdir().unwrap();
+        let gone = 0x7fff_fff0_u32;
+        assert!(!hide_platform::process::is_alive(gone));
+        let dead = parent.path().join(format!("{DESK_PREFIX}{gone}-aaaa"));
+        let own = parent
+            .path()
+            .join(format!("{DESK_PREFIX}{}-bbbb", std::process::id()));
+        let other = parent.path().join("hide-ssh-notes");
+        for folder in [&dead, &own, &other] {
+            std::fs::create_dir(folder).unwrap();
+        }
+        let row = Arc::new(Row {
+            answer: Mutex::new(None),
+            seen: Mutex::new(Vec::new()),
+        });
+        let desk = Desk::open(parent.path(), row, None).unwrap();
+        assert!(!dead.exists());
+        assert!(own.exists() && other.exists());
+        drop(desk);
     }
 
     #[test]
@@ -514,6 +662,26 @@ mod tests {
         );
         assert_eq!(answer.as_deref(), Some("yes"));
         assert_eq!(*lock(&row.seen), ["host_key"]);
+    }
+
+    /// ssh prints at most 100 bytes of a key's path; the row's command names
+    /// the whole file, or none when no single known file is it (B9).
+    #[test]
+    fn a_shortened_key_path_is_the_one_whole_file_it_begins_or_none() {
+        let folder = std::env::temp_dir().join("k".repeat(120));
+        let whole = folder.join("id_ed25519").to_str().unwrap().to_owned();
+        let other = folder.join("id_rsa").to_str().unwrap().to_owned();
+        let shown = &whole[..PROMPT_PATH_BYTES];
+        let short = std::env::temp_dir().join("id_ed25519");
+        let short = short.to_str().unwrap();
+        assert_eq!(key_file(short, None).as_deref(), Some(short));
+        assert_eq!(key_file(".ssh/id_ed25519", None), None);
+        let one = [PathBuf::from(&whole)];
+        assert_eq!(key_file(shown, Some(&one)).as_deref(), Some(whole.as_str()));
+        let two = [PathBuf::from(&whole), PathBuf::from(&other)];
+        assert_eq!(key_file(shown, Some(&two)), None);
+        assert_eq!(key_file(shown, Some(&[])), None);
+        assert_eq!(key_file(shown, None), None);
     }
 
     #[test]

@@ -126,8 +126,9 @@ pub(crate) struct Facts {
     pub os: String,
     pub arch: String,
     /// The machine's own id, lowercased, as `hide_platform::host::machine_id`
-    /// reads it there; `None` when the machine reports none.
-    pub machine_id: Option<String>,
+    /// reads it there. A consent binds to it (D-09), so a machine that
+    /// reports none is refused before anything is installed.
+    pub machine_id: String,
 }
 
 #[derive(Debug)]
@@ -190,9 +191,10 @@ fn read_probe(fields: &[String]) -> Result<Facts, String> {
         );
     }
     let (os, arch) = platform_of(&format!("{system} {machine}"))?;
-    let id = id.trim().to_lowercase();
-    let machine_id =
-        (id != "-" && !id.is_empty() && !id.chars().any(char::is_control)).then_some(id);
+    let machine_id = id.trim().to_lowercase();
+    if !valid_machine_id(&machine_id) {
+        return Err(NO_MACHINE_ID.to_owned());
+    }
     Ok(Facts {
         user: user.clone(),
         home: home.clone(),
@@ -200,6 +202,21 @@ fn read_probe(fields: &[String]) -> Result<Facts, String> {
         arch,
         machine_id,
     })
+}
+
+/// Why a machine that names itself by no usable id gets nothing installed:
+/// the consent binds to that id, and without it this machine cannot be told
+/// from another that answers at the same address.
+pub(crate) const NO_MACHINE_ID: &str = "The device reports no machine id (/etc/machine-id, or a Mac's hardware id), so Hide cannot tell it from another machine at this address and installs nothing; give it one (on Linux, `sudo systemd-machine-id-setup`) and connect again";
+
+/// An id as a system writes it: letters, digits and `-`, `_` or `.`, at most
+/// 128 of them; `-` alone is the script's word for none.
+fn valid_machine_id(id: &str) -> bool {
+    id != "-"
+        && (1..=128).contains(&id.len())
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
 }
 
 /// What the install did: where the helper is and how the files arrived.

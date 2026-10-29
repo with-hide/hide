@@ -128,6 +128,48 @@ impl Resolved {
             .map(String::as_str)
     }
 
+    /// The key files ssh tries for this alias, as ssh expands them: `~` and
+    /// `%d` are the account's home in the user database (`home`), and the
+    /// alias's own `%h`, `%r`, `%p`, `%n` and `%%` are filled in. `None` when
+    /// any one names a token or variable this cannot fill, so no shortened
+    /// path is ever matched against a list that may miss its key (B9).
+    pub fn identity_files(&self, home: &Path, alias: &str) -> Option<Vec<PathBuf>> {
+        let expand = |file: &str| -> Option<PathBuf> {
+            if file.contains("${") {
+                return None;
+            }
+            let mut expanded = String::new();
+            let mut characters = file.chars();
+            while let Some(character) = characters.next() {
+                if character != '%' {
+                    expanded.push(character);
+                    continue;
+                }
+                match characters.next()? {
+                    '%' => expanded.push('%'),
+                    'd' => expanded.push_str(home.to_str()?),
+                    'h' => expanded.push_str(&self.hostname),
+                    'r' => expanded.push_str(&self.user),
+                    'p' => expanded.push_str(&self.port.to_string()),
+                    'n' => expanded.push_str(alias),
+                    _ => return None,
+                }
+            }
+            let path = match expanded.strip_prefix('~') {
+                Some("") => home.to_owned(),
+                Some(rest) if rest.starts_with(['/', '\\']) => home.join(&rest[1..]),
+                Some(_) => return None,
+                None => PathBuf::from(expanded),
+            };
+            path.is_absolute().then_some(path)
+        };
+        self.options
+            .get("identityfile")
+            .map_or(Some(Vec::new()), |files| {
+                files.iter().map(|file| expand(file)).collect()
+            })
+    }
+
     /// Whether the alias reaches its server through a proxy command or a
     /// jump host, whose failure the row names as the proxy's.
     pub fn proxied(&self) -> bool {
@@ -505,6 +547,33 @@ mod tests {
         minor: 6,
         windows: false,
     };
+
+    /// `ssh -G` prints key files as configured; they are read whole as ssh
+    /// expands them, or not at all when one names what this cannot fill.
+    #[test]
+    fn key_files_are_the_alias_s_as_ssh_expands_them_or_none() {
+        let home = std::env::temp_dir();
+        let files = resolved("identityfile %d/keys/%h-%r-%p\nidentityfile ~/keys/%n%%x\n")
+            .identity_files(&home, "studio")
+            .unwrap();
+        assert_eq!(
+            files,
+            [
+                home.join(".ssh/id_ed25519"),
+                home.join(".ssh/id_rsa"),
+                home.join("keys/studio.example.test-al-22"),
+                home.join("keys/studio%x"),
+            ]
+        );
+        for unknown in ["~/.ssh/%C", "${KEYS}/a", "~other/.ssh/a", "keys/a"] {
+            let extra = format!("identityfile {unknown}\n");
+            assert_eq!(
+                resolved(&extra).identity_files(&home, "studio"),
+                None,
+                "{unknown}"
+            );
+        }
+    }
 
     #[test]
     fn versions_are_read_from_each_ports_line() {

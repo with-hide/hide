@@ -363,8 +363,9 @@ impl DialedTransport for WslDevice {
                 return report;
             }
         }
-        for stage in [RemoteStage::Pty, RemoteStage::Git] {
-            report.pass(stage, "through the node link");
+        report.pass(RemoteStage::Pty, "through the node link");
+        if !super::check_git(&link, &mut report) {
+            return report;
         }
         report.connected();
         report
@@ -376,7 +377,12 @@ impl DialedTransport for WslDevice {
         _retirement_projects: &[String],
         attempt: Attempt,
     ) -> Result<Established, EstablishError> {
-        let Attempt { wake, on_close, .. } = attempt;
+        let Attempt {
+            wake,
+            cancel,
+            on_close,
+            ..
+        } = attempt;
         let since = Instant::now();
         let target = self.target();
         let stage = |name: &str| super::establish_stage(&target, name, since);
@@ -423,40 +429,57 @@ impl DialedTransport for WslDevice {
         let link = ChildLink::start(&target, child).map_err(|error| {
             EstablishError::Helper(format!("The distribution's link could not start: {error}"))
         })?;
-        let mut pipe = UnaskedStart::new(link);
-        let facts = match bootstrap::probe(&mut pipe, Instant::now() + PROBE_TIMEOUT) {
-            Ok(facts) => facts,
-            Err(bootstrap::ProbeError::Unsupported(reason)) => {
-                return Err(EstablishError::Unsupported(reason));
+        let mut pipe = UnaskedStart::new(link, cancel.clone());
+        // Until the helper starts, every way out ends and reaps `wsl.exe`
+        // before the attempt returns (PRD system-ssh-device-link B26).
+        let started = (|pipe: &mut UnaskedStart| -> Result<(bootstrap::Installed, HostIdentity), EstablishError> {
+            let facts = match bootstrap::probe(&mut *pipe, Instant::now() + PROBE_TIMEOUT) {
+                Ok(facts) => facts,
+                Err(bootstrap::ProbeError::Unsupported(reason)) => {
+                    return Err(EstablishError::Unsupported(reason));
+                }
+                Err(bootstrap::ProbeError::Stopped(stop)) => {
+                    return Err(EstablishError::Helper(Self::stopped(pipe, stop)));
+                }
+            };
+            if facts.os != "linux" {
+                return Err(EstablishError::Unsupported(format!(
+                    "The distribution reported {}, not Linux",
+                    facts.os
+                )));
             }
-            Err(bootstrap::ProbeError::Stopped(stop)) => {
-                return Err(EstablishError::Helper(Self::stopped(&pipe, stop)));
+            let identity = identity_of(&distribution, &facts.user);
+            if let Some(bound) = consent.identity.as_ref()
+                && !covers(bound, &identity)
+            {
+                return Err(EstablishError::IdentityChanged {
+                    bound: Box::new(bound.clone()),
+                    observed: Box::new(identity),
+                });
+            }
+            let payload = self.packages.payload(&facts.os, &facts.arch)?;
+            stage("install");
+            let installed =
+                bootstrap::install(&mut *pipe, &consent.helper_root, &facts.home, &payload)?;
+            stage("start");
+            bootstrap::start(
+                &mut *pipe,
+                &installed.helper_relative,
+                &bootstrap::HerdrChoice::Account,
+            )?;
+            Ok((installed, identity))
+        })(&mut pipe);
+        let (installed, identity) = match started {
+            Ok(started) => started,
+            Err(error) => {
+                pipe.link.kill();
+                return Err(if cancel.is_cancelled() {
+                    EstablishError::Helper(super::ATTEMPT_ENDED.to_owned())
+                } else {
+                    error
+                });
             }
         };
-        if facts.os != "linux" {
-            return Err(EstablishError::Unsupported(format!(
-                "The distribution reported {}, not Linux",
-                facts.os
-            )));
-        }
-        let identity = identity_of(&distribution, &facts.user);
-        if let Some(bound) = consent.identity.as_ref()
-            && !covers(bound, &identity)
-        {
-            return Err(EstablishError::IdentityChanged {
-                bound: Box::new(bound.clone()),
-                observed: Box::new(identity),
-            });
-        }
-        let payload = self.packages.payload(&facts.os, &facts.arch)?;
-        stage("install");
-        let installed = bootstrap::install(&mut pipe, &consent.helper_root, &facts.home, &payload)?;
-        stage("start");
-        bootstrap::start(
-            &mut pipe,
-            &installed.helper_relative,
-            &bootstrap::HerdrChoice::Account,
-        )?;
         drop(admitted);
         let host = pipe
             .link

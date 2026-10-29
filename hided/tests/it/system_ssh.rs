@@ -61,8 +61,8 @@ mod unix {
     use super::*;
     use crate::support::sshd::{Sshd, account};
     use hide_node_link::device::{
-        Attempt, DeviceConnector, EstablishError, HOST_CONSENT_CONTRACT, HostConsent, SshProblem,
-        Wake,
+        Attempt, Cancel, DeviceConnector, EstablishError, HOST_CONSENT_CONTRACT, HostConsent,
+        SshProblem, Wake,
     };
 
     struct Fixture {
@@ -131,6 +131,7 @@ mod unix {
                 Attempt {
                     wake,
                     sign_in: row,
+                    cancel: Cancel::default(),
                     on_close: Box::new(|_| {}),
                 },
             )
@@ -209,7 +210,7 @@ mod unix {
             other => panic!("an unattended attempt went on: {:?}", other.err()),
         }
         // The core's row refuses an unattended attempt's question at once and
-        // shows nothing (herdr-core `ssh_sign_in`); ssh then gives up.
+        // shows nothing (herdr-core `ssh_sign_in`); the attempt then ends ssh.
         assert_eq!(unattended.asked().len(), 1);
         assert!(!known.exists() || std::fs::read_to_string(&known).unwrap().is_empty());
 
@@ -257,7 +258,7 @@ mod unix {
             refused.err()
         );
         // The core's row refuses an unattended attempt's question at once and
-        // shows nothing (herdr-core `ssh_sign_in`); ssh then gives up.
+        // shows nothing (herdr-core `ssh_sign_in`); the attempt then ends ssh.
         assert_eq!(unattended.asked().len(), 1);
 
         let row = Row::answering(vec![text("wrong"), text("fixture passphrase")]);
@@ -270,6 +271,75 @@ mod unix {
                 "{question:?}"
             );
         }
+    }
+
+    /// B8, B14: the first question the operator cancels ends the attempt.
+    /// ssh gets no answer, so it sends the server nothing the server counts
+    /// as a failed sign-in and asks about no second key; the row is asked
+    /// once, and ssh is ended and reaped before the attempt returns.
+    #[test]
+    #[ignore = "the system's sshd; the remote mailbox lane runs it"]
+    fn a_cancelled_question_ends_the_attempt_before_the_server_counts_a_failure() {
+        let fixture = fixture();
+        let first = fixture.key("first", "first passphrase");
+        let second = fixture.key("second", "second passphrase");
+        let config = fixture.sshd.client_config("device").replace(
+            &format!("  IdentityFile {}\n", fixture.sshd.client_key.display()),
+            &format!(
+                "  IdentityFile {}\n  IdentityFile {}\n",
+                first.display(),
+                second.display()
+            ),
+        );
+        let row = Row::answering(Vec::new());
+        let result = fixture.attempt(&config, "device", Wake::Allowed, row.clone());
+        assert!(
+            matches!(&result, Err(EstablishError::Ssh(failure)) if failure.problem == SshProblem::SignInNeeded),
+            "{:?}",
+            result.err()
+        );
+        assert!(
+            matches!(row.asked().as_slice(), [SignInWait::Secret { key_file: Some(file), .. }] if Path::new(file) == first),
+            "{:?}",
+            row.asked()
+        );
+        let ssh = std::process::Command::new("pgrep")
+            .args(["-x", "-P", &std::process::id().to_string(), "ssh"])
+            .output()
+            .unwrap();
+        assert!(
+            ssh.stdout.is_empty(),
+            "an ssh of the attempt outlived it: {}",
+            String::from_utf8_lossy(&ssh.stdout)
+        );
+        let log = fixture.sshd.log();
+        assert!(!log.contains("Failed "), "{log}");
+    }
+
+    /// B9: ssh prints only the first 100 bytes of a key's path in its
+    /// prompt; the row gets the whole file, the one the alias names.
+    #[test]
+    #[ignore = "the system's sshd; the remote mailbox lane runs it"]
+    fn a_long_key_path_reaches_the_row_whole() {
+        let fixture = fixture();
+        let folder = fixture.base.join("d".repeat(110));
+        std::fs::create_dir(&folder).unwrap();
+        let key = fixture.key(
+            &format!("{}/locked", folder.display()),
+            "fixture passphrase",
+        );
+        assert!(key.as_os_str().len() > 100);
+        let config = fixture.sshd.client_config("device").replace(
+            &fixture.sshd.client_key.display().to_string(),
+            &key.display().to_string(),
+        );
+        let row = Row::answering(vec![text("fixture passphrase")]);
+        reached_the_device(fixture.attempt(&config, "device", Wake::Allowed, row.clone()));
+        assert!(
+            matches!(row.asked().as_slice(), [SignInWait::Secret { key_file: Some(file), .. }] if Path::new(file) == key),
+            "{:?}",
+            row.asked()
+        );
     }
 
     /// B1: a key ssh finds by itself in the account's own `~/.ssh`, named

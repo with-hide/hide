@@ -10,7 +10,7 @@ use crate::domain::{DomainEvent, DomainProjection, DomainSnapshot, HostScope};
 
 pub use crate::herdr_contract::HERDR_PROTOCOL_REVISION as REMOTE_PROTOCOL_REVISION;
 pub use hide_node_link::device::{
-    Arrived, Attempt, CapabilityReport, CapabilityResult, CapabilityState, DEFAULT_CLI_DIR,
+    Arrived, Attempt, Cancel, CapabilityReport, CapabilityResult, CapabilityState, DEFAULT_CLI_DIR,
     DEFAULT_HELPER_ROOT, DeviceConnector, DeviceTransport, DialedTransport, EstablishError,
     Established, HOST_CONSENT_CARRIED_FROM, HOST_CONSENT_CONTRACT, NodeReady, OnClose,
     RemoteConnectionState, RemoteDiagnostic, RemoteError, RemoteHostIdentity, RemoteResult,

@@ -138,6 +138,39 @@ const DRAIN_BOUND: Duration = Duration::from_secs(250);
 const CANCEL_TIMEOUT: Duration = Duration::from_secs(5);
 pub(super) const HELLO_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// A device test's Git stage: the node runs `git --version` over the link
+/// the device has, read-only and with no login of its own (PRD
+/// system-ssh-device-link B25). Answers whether it passed.
+pub(super) fn check_git(
+    link: &dyn hide_node_link::NodeLink,
+    report: &mut hide_node_link::device::CapabilityReport,
+) -> bool {
+    use hide_node_link::device::RemoteStage;
+    let asked = call_as::<String>(
+        link,
+        Call::Git {
+            root: "/".to_owned(),
+            command: hide_node_link::git::GitCommand::Version,
+        },
+        Duration::from_secs(10),
+    );
+    match asked {
+        Ok(version) => {
+            report.pass(RemoteStage::Git, version);
+            true
+        }
+        Err(error) => {
+            report.fail(
+                RemoteStage::Git,
+                format!("Git did not answer on the device: {error}"),
+                true,
+                true,
+            );
+            false
+        }
+    }
+}
+
 /// Local helpers, plus a manifest for device bundles fetched on connection.
 #[derive(Clone, Debug, Default)]
 pub struct HelperPackages {
@@ -2212,6 +2245,12 @@ impl ChildLink {
         Some(())
     }
 
+    /// Ends the child and its tree at once and returns once it is reaped, so
+    /// an attempt that stops before its helper starts leaves nothing running.
+    pub(super) fn kill(&mut self) {
+        self.ending.kill();
+    }
+
     /// Writes `bytes` to the child's input. A write the child does not take
     /// by `until` ends the child, which ends the write.
     pub(super) fn send(&mut self, bytes: &[u8], until: Instant) -> std::io::Result<()> {
@@ -2285,16 +2324,18 @@ impl ChildLink {
 pub(super) struct UnaskedStart {
     pub(super) link: ChildLink,
     errors: std::collections::VecDeque<String>,
+    cancel: hide_node_link::device::Cancel,
 }
 
 /// The error lines an [`UnaskedStart`] keeps.
 const UNASKED_ERROR_TAIL: usize = 8;
 
 impl UnaskedStart {
-    pub(super) fn new(link: ChildLink) -> Self {
+    pub(super) fn new(link: ChildLink, cancel: hide_node_link::device::Cancel) -> Self {
         Self {
             link,
             errors: std::collections::VecDeque::new(),
+            cancel,
         }
     }
 
@@ -2310,6 +2351,9 @@ impl UnaskedStart {
 
 impl bootstrap::Pipe for UnaskedStart {
     fn send(&mut self, bytes: &[u8], until: Instant) -> Result<(), String> {
+        if self.cancel.is_cancelled() {
+            return Err(ATTEMPT_ENDED.to_owned());
+        }
         self.link
             .send(bytes, until)
             .map_err(|error| error.to_string())
@@ -2317,7 +2361,15 @@ impl bootstrap::Pipe for UnaskedStart {
 
     fn line(&mut self, until: Instant) -> Result<Vec<u8>, bootstrap::Stop> {
         loop {
-            match self.link.next(until) {
+            if self.cancel.is_cancelled() {
+                return Err(bootstrap::Stop::Ended(ATTEMPT_ENDED.to_owned()));
+            }
+            // A second at a time, so a cancel is seen while it waits.
+            let now = Instant::now();
+            if now >= until {
+                return Err(bootstrap::Stop::Quiet);
+            }
+            match self.link.next(until.min(now + Duration::from_secs(1))) {
                 ChildOutput::Line(line) => return Ok(line),
                 ChildOutput::Error(line) => {
                     if self.errors.len() == UNASKED_ERROR_TAIL {
@@ -2325,12 +2377,15 @@ impl bootstrap::Pipe for UnaskedStart {
                     }
                     self.errors.push_back(line);
                 }
-                ChildOutput::Quiet => return Err(bootstrap::Stop::Quiet),
+                ChildOutput::Quiet => {}
                 ChildOutput::Ended(reason) => return Err(bootstrap::Stop::Ended(reason)),
             }
         }
     }
 }
+
+/// Why an attempt the core cancelled stopped.
+pub(super) const ATTEMPT_ENDED: &str = "The connection attempt was ended";
 
 /// Takes the first whole line out of `buffer`, without its end.
 fn take_line(buffer: &mut Vec<u8>) -> Option<Vec<u8>> {
@@ -2352,10 +2407,13 @@ fn take_line(buffer: &mut Vec<u8>) -> Option<Vec<u8>> {
 /// write is armed with a deadline, passing it ends the tree at once.
 struct ChildEnding {
     told: Option<mpsc::SyncSender<Told>>,
+    thread: Option<std::thread::JoinHandle<()>>,
 }
 
 enum Told {
     End,
+    /// End the child at once, without its grace.
+    Kill,
     Arm(Option<Instant>),
 }
 
@@ -2367,12 +2425,13 @@ impl ChildEnding {
     ) -> std::io::Result<Self> {
         let (told, heard) = mpsc::sync_channel::<Told>(4);
         let target = target.to_owned();
-        std::thread::Builder::new()
+        let thread = std::thread::Builder::new()
             .name("node-link-child".into())
             .spawn(move || {
                 // Told, every sender gone, or an armed write's deadline
                 // passed: either way the link is over.
                 let mut armed: Option<Instant> = None;
+                let mut kill = false;
                 let late = loop {
                     let heard = match armed {
                         None => heard
@@ -2384,6 +2443,10 @@ impl ChildEnding {
                     };
                     match heard {
                         Ok(Told::Arm(until)) => armed = until,
+                        Ok(Told::Kill) => {
+                            kill = true;
+                            break false;
+                        }
                         Ok(Told::End) | Err(mpsc::RecvTimeoutError::Disconnected) => break false,
                         Err(mpsc::RecvTimeoutError::Timeout) => break true,
                     }
@@ -2392,7 +2455,7 @@ impl ChildEnding {
                 let since = Instant::now();
                 let mut input_open = true;
                 let mut status = None;
-                while !late && since.elapsed() < CHILD_EXIT_GRACE {
+                while !late && !kill && since.elapsed() < CHILD_EXIT_GRACE {
                     if input_open {
                         input_open = !close_unless_writing(&input);
                     }
@@ -2424,7 +2487,20 @@ impl ChildEnding {
                     "after_ms": since.elapsed().as_millis() as u64,
                 }));
             })?;
-        Ok(Self { told: Some(told) })
+        Ok(Self {
+            told: Some(told),
+            thread: Some(thread),
+        })
+    }
+
+    /// Ends the child and its tree now and returns once it is reaped.
+    fn kill(&mut self) {
+        if let Some(told) = self.told.take() {
+            let _ = told.send(Told::Kill);
+        }
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
     }
 
     fn arm(&self, until: Option<Instant>) {

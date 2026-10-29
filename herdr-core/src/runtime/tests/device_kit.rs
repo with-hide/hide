@@ -1206,6 +1206,41 @@ fn removing_a_connected_device_takes_its_kit_off_and_then_closes_the_helper() {
 /// one leaves the kit for the other and only closes its own helper.
 #[test]
 fn removing_one_of_two_registrations_of_the_same_account_keeps_the_kit() {
+    let legacy = |hostname: &str| hide_node_link::device::HostIdentity {
+        user: "me".to_owned(),
+        hostname: hostname.to_owned(),
+        port: 22,
+        machine_id: None,
+        host_key_sha256: "SHA256:studio".to_owned(),
+    };
+    removing_one_keeps_the_kit_for(legacy("studio.local"), legacy("10.0.0.7"));
+}
+
+/// The same account when one consent was carried to the machine id it
+/// answered with and the other is still from before contract 4: the kept
+/// host key says they are one install, so removing the carried one leaves
+/// what the other still uses.
+#[test]
+fn a_carried_consent_and_a_legacy_one_for_the_same_account_keep_the_kit() {
+    let legacy = hide_node_link::device::HostIdentity {
+        user: "me".to_owned(),
+        hostname: "10.0.0.7".to_owned(),
+        port: 22,
+        machine_id: None,
+        host_key_sha256: "SHA256:studio".to_owned(),
+    };
+    let carried = hide_node_link::device::HostIdentity {
+        hostname: "studio.local".to_owned(),
+        machine_id: Some("m-studio".to_owned()),
+        ..legacy.clone()
+    };
+    removing_one_keeps_the_kit_for(carried, legacy);
+}
+
+fn removing_one_keeps_the_kit_for(
+    own: hide_node_link::device::HostIdentity,
+    twin_identity: hide_node_link::device::HostIdentity,
+) {
     let helper = KitDevice::answering(Ok(report(&[])));
     let shared = with_consent(Some(Arc::clone(&helper)));
     {
@@ -1215,26 +1250,13 @@ fn removing_one_of_two_registrations_of_the_same_account_keeps_the_kit() {
             .iter_mut()
             .find(|registration| registration.id == DEVICE)
             .unwrap();
-        device.host_consent.as_mut().unwrap().identity =
-            Some(hide_node_link::device::HostIdentity {
-                user: "me".to_owned(),
-                hostname: "studio.local".to_owned(),
-                port: 22,
-                machine_id: None,
-                host_key_sha256: "SHA256:studio".to_owned(),
-            });
+        device.host_consent.as_mut().unwrap().identity = Some(own);
         let mut twin = device.clone();
         twin.id = "studio-second-herdr".to_owned();
         twin.origin = crate::model::LinkOrigin::Dialed {
             ssh_alias: "studio-by-address".to_owned(),
         };
-        twin.host_consent
-            .as_mut()
-            .unwrap()
-            .identity
-            .as_mut()
-            .unwrap()
-            .hostname = "10.0.0.7".to_owned();
+        twin.host_consent.as_mut().unwrap().identity = Some(twin_identity);
         twin.label = "Studio, second Herdr".to_owned();
         registrations.push(twin);
         runtime.refresh_device_snapshots();

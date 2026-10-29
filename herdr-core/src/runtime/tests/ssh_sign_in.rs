@@ -6,12 +6,13 @@
 
 use super::*;
 use crate::remote::{
-    Attempt, CapabilityReport, DeviceConnector, DeviceTransport, DialedTransport, EstablishError,
-    Established, SshFailure, SshHostListing, SshProblem, Wake, WslListing,
+    Attempt, Cancel, CapabilityReport, DeviceConnector, DeviceTransport, DialedTransport,
+    EstablishError, Established, SshFailure, SshHostListing, SshProblem, Wake, WslListing,
 };
 use hide_node_link::device::{
     Answer, HostConsent, Refusal, RemoteHostIdentity, SignInWait, SnapshotCheck,
 };
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 const DEVICE: &str = "mini";
 
@@ -20,6 +21,14 @@ const DEVICE: &str = "mini";
 struct Asked {
     wakes: Mutex<Vec<Wake>>,
     answers: Mutex<Vec<Result<String, Refusal>>>,
+    cancels: Mutex<Vec<Cancel>>,
+    /// Set, an attempt whose question ended waits on it before it returns,
+    /// as one does while ssh is ended and reaped.
+    ending: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+    running: AtomicUsize,
+    most_running: AtomicUsize,
+    /// Set, an attempt asks nothing and fails as ssh does with this class.
+    fails_with: Mutex<Option<SshProblem>>,
 }
 
 struct Devices(Arc<Asked>);
@@ -102,7 +111,20 @@ impl DialedTransport for AskingDevice {
         _retirement_projects: &[String],
         attempt: Attempt,
     ) -> Result<Established, EstablishError> {
+        let running = self.0.running.fetch_add(1, Ordering::SeqCst) + 1;
+        self.0.most_running.fetch_max(running, Ordering::SeqCst);
         self.0.wakes.lock().unwrap().push(attempt.wake);
+        self.0.cancels.lock().unwrap().push(attempt.cancel.clone());
+        if let Some(problem) = *self.0.fails_with.lock().unwrap() {
+            if let Some(ending) = self.0.ending.lock().unwrap().take() {
+                let _ = ending.recv();
+            }
+            self.0.running.fetch_sub(1, Ordering::SeqCst);
+            return Err(EstablishError::Ssh(SshFailure {
+                problem,
+                detail: "The server's key differs from the one known_hosts holds".to_owned(),
+            }));
+        }
         let answer = attempt.sign_in.ask(SignInWait::Secret {
             prompt: "alice@mini's password:".to_owned(),
             key_file: None,
@@ -119,6 +141,10 @@ impl DialedTransport for AskingDevice {
                 Answer::Text(secret) => secret.expose().to_owned(),
                 Answer::Accept => "yes".to_owned(),
             }));
+        if let Some(ending) = self.0.ending.lock().unwrap().take() {
+            let _ = ending.recv();
+        }
+        self.0.running.fetch_sub(1, Ordering::SeqCst);
         Err(EstablishError::Ssh(SshFailure {
             problem,
             detail: "Permission denied".to_owned(),
@@ -314,7 +340,8 @@ fn hides_own_attempt_asks_nobody_and_the_app_opening_may_ask() {
     );
 }
 
-/// The device's removal ends the question its attempt waits on.
+/// The device's removal ends the question its attempt waits on and tells
+/// the attempt to end (B26).
 #[test]
 fn removing_the_device_ends_its_question() {
     let (shared, asked) = ssh_runtime();
@@ -327,4 +354,123 @@ fn removing_the_device_ends_its_question() {
         answers(&asked),
         [Err(Refusal::NotAllowed), Err(Refusal::Ended)]
     );
+    assert!(asked.cancels.lock().unwrap()[1].is_cancelled());
+}
+
+/// B14: once a sign-in is needed, nothing Hide does by itself starts ssh
+/// again, so the server sees no sign-in nobody typed; the operator's retry
+/// does.
+#[test]
+fn once_a_sign_in_is_needed_hides_own_work_starts_no_ssh() {
+    let (shared, asked) = ssh_runtime();
+    shared.lock().unwrap().connect_registered_devices();
+    settled(&shared);
+    {
+        let mut runtime = shared.lock().unwrap();
+        assert_eq!(row(&runtime).problem.as_deref(), Some("sign_in_needed"));
+        // The core starting again, a read that needs the link, a due retry
+        // and the device's session answering again.
+        runtime.connect_registered_devices();
+        assert!(!runtime.start_device_host(DEVICE, hosts::HostAttempt::Background));
+        runtime.tick_device_hosts(u64::MAX);
+        runtime.device_reachable_again(DEVICE);
+        assert!(!runtime.device_host_connecting(DEVICE));
+        assert_eq!(row(&runtime).problem.as_deref(), Some("sign_in_needed"));
+    }
+    assert_eq!(*asked.wakes.lock().unwrap(), [Wake::NotAllowed]);
+    let retry = event(
+        "device_host_retry",
+        serde_json::json!({"device_id": DEVICE}),
+    );
+    assert!(shared.lock().unwrap().dispatch_json(&retry));
+    question(&shared);
+    assert_eq!(
+        *asked.wakes.lock().unwrap(),
+        [Wake::NotAllowed, Wake::Allowed]
+    );
+}
+
+/// B26: withdrawing consent ends the running attempt, and the attempt the
+/// consent given again starts waits until that one has ended, so two never
+/// run for one device.
+#[test]
+#[allow(clippy::disallowed_methods)] // a window in which the next attempt must not start: no state reports a start that did not happen
+fn withdrawing_consent_ends_the_attempt_and_the_next_waits_for_it() {
+    let (shared, asked) = ssh_runtime();
+    retry(&shared);
+    question(&shared);
+    let (release, ending) = std::sync::mpsc::channel();
+    *asked.ending.lock().unwrap() = Some(ending);
+    let consent = |allow: bool| {
+        event(
+            "device_host_consent",
+            serde_json::json!({"device_id": DEVICE, "allow": allow}),
+        )
+    };
+    shared.lock().unwrap().dispatch_json(&consent(false));
+    super::wait_for("the question to end", || answers(&asked).len() == 2);
+    assert_eq!(answers(&asked)[1], Err(Refusal::Ended));
+    assert!(asked.cancels.lock().unwrap()[1].is_cancelled());
+    shared.lock().unwrap().dispatch_json(&consent(true));
+    super::wait(&shared, "the next attempt to start", |runtime| {
+        runtime.device_host_connecting(DEVICE)
+    });
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert_eq!(asked.wakes.lock().unwrap().len(), 2);
+    release.send(()).unwrap();
+    super::wait_for("the next attempt to reach ssh", || {
+        asked.wakes.lock().unwrap().len() == 3
+    });
+    assert_eq!(asked.most_running.load(Ordering::SeqCst), 1);
+}
+
+/// B13, B18: a changed server key stays the row's reason and action. Hide's
+/// own work starts nothing for it, the device's session saying its old link
+/// ended does not replace it, and while the operator's retry runs the row
+/// still says it.
+#[test]
+fn a_changed_server_key_stays_the_rows_reason_until_an_attempt_ends_otherwise() {
+    let (shared, asked) = ssh_runtime();
+    *asked.fails_with.lock().unwrap() = Some(SshProblem::HostKeyChanged);
+    shared.lock().unwrap().connect_registered_devices();
+    settled(&shared);
+    let reason = |runtime: &Runtime| {
+        let device = row(runtime);
+        (device.problem.clone(), device.message.clone())
+    };
+    let changed = reason(&shared.lock().unwrap());
+    assert_eq!(changed.0.as_deref(), Some("host_key_changed"));
+    {
+        let mut runtime = shared.lock().unwrap();
+        let status = runtime
+            .snapshot
+            .status
+            .remote
+            .iter_mut()
+            .find(|status| status.target_id == DEVICE)
+            .expect("the device's session status");
+        status.message = Some(
+            "the node's Herdr could not be reached: the node's link has ended (the helper's output closed)"
+                .to_owned(),
+        );
+        runtime.start_device_host(DEVICE, hosts::HostAttempt::Background);
+        runtime.tick_device_hosts(u64::MAX);
+        runtime.refresh_device_snapshots();
+        assert_eq!(reason(&runtime), changed);
+    }
+    assert_eq!(asked.wakes.lock().unwrap().len(), 1);
+    let (release, ending) = std::sync::mpsc::channel();
+    *asked.ending.lock().unwrap() = Some(ending);
+    let retry = event(
+        "device_host_retry",
+        serde_json::json!({"device_id": DEVICE}),
+    );
+    assert!(shared.lock().unwrap().dispatch_json(&retry));
+    super::wait_for("the operator's attempt to reach ssh", || {
+        asked.running.load(Ordering::SeqCst) == 1
+    });
+    assert_eq!(reason(&shared.lock().unwrap()), changed);
+    release.send(()).unwrap();
+    settled(&shared);
+    assert_eq!(reason(&shared.lock().unwrap()), changed);
 }

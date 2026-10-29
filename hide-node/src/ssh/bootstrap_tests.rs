@@ -43,7 +43,10 @@ impl Device {
             .stderr(Stdio::piped());
         let child = hide_platform::process::OwnedChild::spawn(&mut command).unwrap();
         self.pid.set(child.id());
-        UnaskedStart::new(ChildLink::start("device:test", child).unwrap())
+        UnaskedStart::new(
+            ChildLink::start("device:test", child).unwrap(),
+            hide_node_link::device::Cancel::default(),
+        )
     }
 
     /// A build for this machine whose helper is `helper`.
@@ -99,13 +102,21 @@ fn a_probe_answer_names_only_a_machine_hide_runs_on() {
         "probe\talice\t/home/alice\tLinux\taarch64\tAB-12\tyes",
     ))
     .unwrap();
-    assert_eq!(facts.machine_id.as_deref(), Some("ab-12"));
+    assert_eq!(facts.machine_id, "ab-12");
     assert_eq!(
         (facts.os.as_str(), facts.arch.as_str()),
         ("linux", "aarch64")
     );
-    let none = read_probe(&fields("probe\talice\t/home/alice\tLinux\tx86_64\t-\tyes")).unwrap();
-    assert_eq!(none.machine_id, None);
+    // P1-5: a machine with no usable id is refused, never bound to nothing.
+    for id in ["-", "", "a b", "ab\u{7}c", &"a".repeat(129)] {
+        assert_eq!(
+            read_probe(&fields(&format!(
+                "probe\talice\t/home/alice\tLinux\tx86_64\t{id}\tyes"
+            ))),
+            Err(super::NO_MACHINE_ID.to_owned()),
+            "{id:?}"
+        );
+    }
     for refused in [
         "probe\talice\t/home/alice\tLinux\tx86_64\t-\tnone",
         "probe\tAlice Smith\t/home/alice\tLinux\tx86_64\t-\tyes",

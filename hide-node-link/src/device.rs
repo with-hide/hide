@@ -355,17 +355,38 @@ impl HostIdentity {
     }
 
     /// Whether `observed` is the device a consent bound to `self` covers: the
-    /// same account, address and port, and the same machine once the
-    /// consent names one (B16, B17). A consent from before contract 4 names
-    /// no machine and is carried to the one that answers (D-09).
+    /// same account, address and port, and the same machine (B16, B17). A
+    /// consent from before contract 4 names no machine, only the host key it
+    /// was given for, and is carried to the machine that answers (D-09). A
+    /// record that names neither is bound to nothing and covers no device:
+    /// it never stands for any machine at that address.
     pub fn covers(&self, observed: &HostIdentity) -> bool {
+        let machine = match &self.machine_id {
+            Some(machine) => observed.machine_id.as_ref() == Some(machine),
+            None => !self.host_key_sha256.is_empty() && observed.machine_id.is_some(),
+        };
         self.user == observed.user
             && self.hostname == observed.hostname
             && self.port == observed.port
-            && self
-                .machine_id
-                .as_ref()
-                .is_none_or(|machine| observed.machine_id.as_ref() == Some(machine))
+            && machine
+    }
+
+    /// Whether `self` and `other` name the same account on the same machine:
+    /// the machine ids when both have one, else the host key a consent from
+    /// before contract 4 kept when both have one, else the same address. Two
+    /// registrations for one account share its install, so a doubt reads as
+    /// the same: removing one then leaves the other's kit in place.
+    pub fn same_account(&self, other: &HostIdentity) -> bool {
+        if self.user != other.user {
+            return false;
+        }
+        match (&self.machine_id, &other.machine_id) {
+            (Some(mine), Some(theirs)) => mine == theirs,
+            _ if !self.host_key_sha256.is_empty() && !other.host_key_sha256.is_empty() => {
+                self.host_key_sha256 == other.host_key_sha256
+            }
+            _ => self.hostname == other.hostname && self.port == other.port,
+        }
     }
 }
 
@@ -672,11 +693,12 @@ pub type OnClose = Box<dyn FnOnce(String) + Send + 'static>;
 
 /// One connection attempt as the core starts it: whether a machine that is
 /// off may be started and the operator may be asked (`wake`, decided once
-/// per attempt), the row the attempt's questions and waits go to, and what
-/// hears the link's end.
+/// per attempt), the row the attempt's questions and waits go to, what ends
+/// it from outside, and what hears the link's end.
 pub struct Attempt {
     pub wake: Wake,
     pub sign_in: std::sync::Arc<dyn SignIn>,
+    pub cancel: Cancel,
     pub on_close: OnClose,
 }
 
@@ -686,8 +708,27 @@ impl Attempt {
         Self {
             wake,
             sign_in: std::sync::Arc::new(NoSignIn),
+            cancel: Cancel::default(),
             on_close,
         }
+    }
+}
+
+/// Ends one connection attempt from outside it: the core cancels the
+/// attempt of a device that was removed, whose consent was withdrawn, or
+/// that a newer attempt replaced, and the transport stops at its next wait
+/// (its turn, the sign-in, the install, the start), ending and reaping the
+/// `ssh` it started before it returns (PRD system-ssh-device-link B26).
+#[derive(Clone, Debug, Default)]
+pub struct Cancel(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl Cancel {
+    pub fn cancel(&self) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
     }
 }
 
@@ -960,6 +1001,60 @@ mod tests {
         };
         assert!(legacy.covers(&observed(|it| it.machine_id = Some("m2".to_owned()))));
         assert!(!legacy.covers(&observed(|it| it.port = 2222)));
+        // A machine that names no id is never one a consent covers, and a
+        // record bound to nothing covers no machine at all (P1-5).
+        assert!(!legacy.covers(&observed(|it| it.machine_id = None)));
+        let unbound = HostIdentity {
+            machine_id: None,
+            host_key_sha256: String::new(),
+            ..bound.clone()
+        };
+        assert!(!unbound.covers(&bound));
+    }
+
+    /// Two registrations reach one account's install when their consents
+    /// name the same machine, or, with a consent from before contract 4 on
+    /// either side, the same host key, or failing both, the same address.
+    #[test]
+    fn registrations_share_an_account_by_the_evidence_both_consents_carry() {
+        let fresh = HostIdentity {
+            user: "me".to_owned(),
+            hostname: "studio.local".to_owned(),
+            port: 22,
+            machine_id: Some("m1".to_owned()),
+            host_key_sha256: String::new(),
+        };
+        let carried = HostIdentity {
+            host_key_sha256: "SHA256:old".to_owned(),
+            ..fresh.clone()
+        };
+        let legacy = HostIdentity {
+            machine_id: None,
+            ..carried.clone()
+        };
+        assert!(fresh.same_account(&carried));
+        assert!(carried.same_account(&legacy));
+        assert!(
+            legacy.same_account(&fresh),
+            "no evidence apart: the address"
+        );
+        let elsewhere = HostIdentity {
+            hostname: "other.local".to_owned(),
+            ..legacy.clone()
+        };
+        assert!(!fresh.same_account(&elsewhere));
+        assert!(!fresh.same_account(&HostIdentity {
+            machine_id: Some("m2".to_owned()),
+            ..fresh.clone()
+        }));
+        assert!(!legacy.same_account(&HostIdentity {
+            host_key_sha256: "SHA256:new".to_owned(),
+            ..legacy.clone()
+        }));
+        assert!(!fresh.same_account(&HostIdentity {
+            user: "other".to_owned(),
+            ..fresh.clone()
+        }));
     }
 
     #[test]

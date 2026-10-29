@@ -1244,6 +1244,9 @@ pub struct Runtime {
     device_hosts: HashMap<String, hosts::DeviceHost>,
     /// When each device's lost or failed link is tried again.
     device_host_retries: HashMap<String, hosts::HostRetry>,
+    /// Each device's latest dial, kept past the device's removal until it
+    /// ends, so the next one for that device waits for it.
+    device_attempts: HashMap<String, hosts::AttemptRun>,
     /// The devices for which an attempt that may wake the machine was asked
     /// while one that may not was running (`hosts::HostAttempt`): should
     /// that one find the machine off, the next one may wake it.
@@ -2246,6 +2249,7 @@ impl Runtime {
             device_herdr_behind: HashMap::new(),
             device_hosts: HashMap::new(),
             device_host_retries: HashMap::new(),
+            device_attempts: HashMap::new(),
             device_wake_pending: HashSet::new(),
             last_sign_in_question: 0,
             last_host_generation: 0,

@@ -649,11 +649,13 @@ impl Runtime {
             let host = self.device_hosts.get(&device.id);
             // The device's Herdr rides its node link, so a link that could
             // not start is why the session is away, in the words the attempt
-            // ended with (PRD system-ssh-device-link B18, B19).
+            // ended with, also while the next attempt runs (PRD
+            // system-ssh-device-link B13, B18, B19).
             let link_failure = host.and_then(|host| match &host.phase {
-                hosts::HostPhase::Unavailable(message)
-                | hosts::HostPhase::Unsupported(message)
-                | hosts::HostPhase::IdentityChanged(message) => Some(message.clone()),
+                hosts::HostPhase::Unavailable(_)
+                | hosts::HostPhase::Unsupported(_)
+                | hosts::HostPhase::IdentityChanged(_)
+                | hosts::HostPhase::Connecting => host.failure.clone(),
                 _ => None,
             });
             let (state, message) = match status {
