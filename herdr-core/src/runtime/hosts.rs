@@ -949,18 +949,11 @@ impl Runtime {
                         windows_drives: node.hello.windows_drives.clone(),
                     },
                 );
-                // A WSL distribution's Herdr rides this link: its session
-                // reads again now rather than at its next reconnect.
-                if self
-                    .link_origin(device_id)
-                    .is_some_and(|origin| origin.wsl_distro().is_some())
-                    && let Some(sync) = self
-                        .remote_connections
-                        .get(device_id)
-                        .and_then(|connection| connection.sync.as_ref())
-                {
-                    sync.republish_waker().refresh_topology();
-                }
+                // The device's Herdr rides this link, an SSH device's as a WSL
+                // distribution's (PRD system-ssh-device-link): its session
+                // reads again now rather than at its next reconnect, which
+                // the attempts before the link backed off to seconds away.
+                self.refresh_remote_topology(device_id);
                 match node.terminals {
                     Ok(terminals) => {
                         self.terminals.install_device(device_id, terminals);

@@ -2281,6 +2281,7 @@ An OpenSSH older than 8.4, which has no `SSH_ASKPASS_REQUIRE` to send a question
 A run that did not connect is classified in one place, from ssh's exit and its last error lines (`openssh::classify`), as `DeviceSnapshot.problem` (`contracts/snapshot-wire-enums.json`: `device_problem`): the sign-in was needed, refused, or its browser check timed out; an access policy such as a Tailscale ACL refused it; the server key no longer matches known_hosts, which Hide refuses without asking; the name was not found, the device did not answer, or the proxy command failed; the device's system is unsupported; there is no `ssh`; or none of these, which keeps ssh's last line for the row (D-13).
 The raw lines go to the diagnostic log; a refused sign-in, a changed server key, a missing `ssh` and an old OpenSSH are retried only by the operator, since a retry of Hide's own would be refused again.
 Because the device's Herdr rides the helper's link, an SSH device needs the helper's consent to connect at all, and its row's message is the link's.
+For the same reason the device's session reads its Herdr again the moment the link is ready, rather than at the next reconnect its attempts before the link backed off to.
 
 ### WSL distributions as devices
 
