@@ -30,8 +30,8 @@ use crate::node_access::NodeLink;
 use hide_ai::{AiError, AiRouter, CancelToken};
 use hide_memory::{
     AnalysisBatch, ApplyOptions, ApplySummary, Candidate, CandidateRelation, CursorReader,
-    GroupDeferral, HideNativeAnalyzer, MemoryStore, ReceiptRecord, SessionCursorRecord,
-    SessionSourceRecord,
+    HideNativeAnalyzer, MemoryCallDeferral, MemoryStore, ReceiptRecord, SessionCall,
+    SessionCursorRecord, SessionSourceRecord,
 };
 use hide_node_link::sessions::ReaderFeature;
 use hide_session::{EventKind, ProjectSession, SessionAvailability};
@@ -1192,8 +1192,8 @@ struct PendingAnalysis {
 }
 
 /// One admitted session quantum per pass, at most four extraction and four
-/// creation-comparison calls, inside the session's day of groups and the
-/// last hour's groups of every session (`hide_memory::GroupDeferral`).
+/// creation-comparison calls, inside the session's day of calls and the
+/// last hour's calls of every session (`MemoryStore::admit_session_call`).
 /// Discovery and maintenance keep their existing owners; new arrivals cannot
 /// replace the persisted FIFO opportunity.
 fn run_analysis_turn(
@@ -1219,7 +1219,19 @@ fn run_analysis_turn(
             return;
         }
     };
-    // A session that wrote its day's groups keeps its place and gives the
+    match store.rewind_future_calls(now_ms()) {
+        Ok(0) => {}
+        Ok(calls) => crate::diagnostic!(
+            json!({"component":"memory","kind":"analysis.clock_rewound","calls":calls})
+        ),
+        Err(error) => {
+            crate::diagnostic!(
+                json!({"component":"memory","kind":"analysis.queue_unavailable","message":error.to_string()})
+            );
+            return;
+        }
+    }
+    // A session that spent its day's calls keeps its place and gives the
     // turn to the next; a full hour holds the whole queue, so the session in
     // front keeps its place too.
     let mut task = None;
@@ -1231,14 +1243,28 @@ fn run_analysis_turn(
         }) else {
             continue;
         };
-        match store.group_deferral(now_ms(), project, provider, session) {
+        let call = SessionCall {
+            project,
+            provider,
+            session,
+        };
+        match store.session_call_deferral(now_ms(), &call) {
             Ok(None) => {
                 task = Some(candidate);
                 break;
             }
-            Ok(Some(GroupDeferral::SessionDay)) => {}
-            Ok(Some(GroupDeferral::Hour)) => {
-                *deferred = Some(GroupDeferral::Hour.as_str());
+            // New words of a session past its day: what waits is unknown
+            // until they are read tomorrow.
+            Ok(Some(MemoryCallDeferral::SessionDay)) => {
+                if let Err(error) = log_hold(store, &call, MemoryCallDeferral::SessionDay, None) {
+                    crate::diagnostic!(
+                        json!({"component":"memory","kind":"analysis.queue_unavailable","message":error})
+                    );
+                    return;
+                }
+            }
+            Ok(Some(reason)) => {
+                *deferred = Some(deferral_reason(reason));
                 return;
             }
             Err(error) => {
@@ -1257,8 +1283,13 @@ fn run_analysis_turn(
     };
     let project_id = &task.project_id;
     let mut analyzing = false;
+    let call = SessionCall {
+        project: project_id,
+        provider: task.session.agent.as_str(),
+        session: &task.session.id,
+    };
     let mut admit = |store: &MemoryStore| {
-        admit_call(store)?;
+        admit_session_call(store, &call)?;
         if !analyzing {
             analyzing = true;
             report(PassReport::Analyzing {
@@ -1874,18 +1905,73 @@ fn admit_budget(
     store: &MemoryStore,
     kind: hide_memory::MemoryCallKind,
 ) -> Result<(), AnalysisFailure> {
-    use hide_memory::MemoryCallDeferral;
     match store
         .admit_memory_call(now_ms(), kind)
         .map_err(|error| AnalysisFailure::Local(error.to_string()))?
     {
         None => Ok(()),
-        Some(reason) => Err(AnalysisFailure::Deferred(match reason {
-            MemoryCallDeferral::DailyCap => "daily_cap",
-            MemoryCallDeferral::CheckShareSpent => "daily_cap_for_checks",
-            MemoryCallDeferral::ReservedForChecks => "reserved_for_checks",
-        })),
+        Some(reason) => Err(AnalysisFailure::Deferred(deferral_reason(reason))),
     }
+}
+
+fn deferral_reason(reason: MemoryCallDeferral) -> &'static str {
+    match reason {
+        MemoryCallDeferral::DailyCap => "daily_cap",
+        MemoryCallDeferral::CheckShareSpent => "daily_cap_for_checks",
+        MemoryCallDeferral::ReservedForChecks => "reserved_for_checks",
+        MemoryCallDeferral::SessionDay => "session_daily_calls",
+        MemoryCallDeferral::Hour => "hourly_calls",
+    }
+}
+
+/// Admits one background analysis call for a session: the daily cap, and
+/// the session's day and the machine's hour, counted when admitted.
+fn admit_session_call(store: &MemoryStore, call: &SessionCall<'_>) -> Result<(), AnalysisFailure> {
+    if let Some(reason) = deferral(store).map_err(AnalysisFailure::Local)? {
+        return Err(AnalysisFailure::Deferred(reason));
+    }
+    match store
+        .admit_session_call(now_ms(), call)
+        .map_err(|error| AnalysisFailure::Local(error.to_string()))?
+    {
+        None => Ok(()),
+        Some(reason) => Err(AnalysisFailure::Deferred(deferral_reason(reason))),
+    }
+}
+
+/// Logs a session the pace holds: a session's day once a UTC day, the hour
+/// each time it stops a session with groups left. `deferred_groups` is
+/// `None` when the session's new words were not read.
+fn log_hold(
+    store: &MemoryStore,
+    call: &SessionCall<'_>,
+    reason: MemoryCallDeferral,
+    deferred_groups: Option<usize>,
+) -> Result<(), String> {
+    let limit = match reason {
+        MemoryCallDeferral::SessionDay => {
+            if !store
+                .hold_session(now_ms(), call)
+                .map_err(|error| error.to_string())?
+            {
+                return Ok(());
+            }
+            hide_memory::SESSION_DAILY_CALL_LIMIT
+        }
+        MemoryCallDeferral::Hour => hide_memory::HOURLY_CALL_LIMIT,
+        _ => return Ok(()),
+    };
+    crate::diagnostic!(json!({
+        "component": "memory",
+        "kind": "analysis.session_deferred",
+        "project_id": call.project,
+        "provider": call.provider,
+        "session_id": call.session,
+        "reason": deferral_reason(reason),
+        "limit": limit,
+        "deferred_groups": deferred_groups,
+    }));
+    Ok(())
 }
 
 /// Admits one analysis call against the machine's daily cap and counts it.
@@ -2308,6 +2394,11 @@ fn analyze_session(
     };
     let total_groups = groups.len();
     let mut completed = next_group;
+    let call = SessionCall {
+        project: project_id,
+        provider,
+        session: &session.id,
+    };
     let mut held = None;
     for (index, group) in groups
         .into_iter()
@@ -2317,12 +2408,6 @@ fn analyze_session(
     {
         if cancel.is_cancelled() {
             return Err(AnalysisFailure::Cancelled);
-        }
-        held = store
-            .group_deferral(now_ms(), project_id, provider, &session.id)
-            .map_err(|error| local(error.to_string()))?;
-        if held.is_some() {
-            break;
         }
         let written = write_cards(
             store,
@@ -2378,6 +2463,18 @@ fn analyze_session(
                     .map_err(|error| local(error.to_string()))?;
                 continue;
             }
+            // The pace refused the group's call: the group and the rest wait
+            // with their progress, and a validated extraction is kept, so the
+            // later turn asks only what was not answered.
+            Err(AnalysisFailure::Deferred(reason)) => {
+                held = store
+                    .session_call_deferral(now_ms(), &call)
+                    .map_err(|error| local(error.to_string()))?;
+                if held.is_none() {
+                    return Err(AnalysisFailure::Deferred(reason));
+                }
+                break;
+            }
             Err(failure) => return Err(failure),
         };
         last_hash = Some(written.content_hash);
@@ -2423,20 +2520,11 @@ fn analyze_session(
         let held = match held {
             Some(reason) => Some(reason),
             None => store
-                .group_deferral(now_ms(), project_id, provider, &session.id)
+                .session_call_deferral(now_ms(), &call)
                 .map_err(|error| local(error.to_string()))?,
         };
         if let Some(reason) = held {
-            crate::diagnostic!(json!({
-                "component": "memory",
-                "kind": "analysis.session_deferred",
-                "project_id": project_id,
-                "provider": provider,
-                "session_id": session.id,
-                "reason": reason.as_str(),
-                "limit": reason.limit(),
-                "deferred_groups": total_groups - completed,
-            }));
+            log_hold(store, &call, reason, Some(total_groups - completed)).map_err(local)?;
         }
         return Ok(learned);
     }
@@ -3885,28 +3973,25 @@ mod tests {
             self.backend.calls.load(Ordering::SeqCst)
         }
 
-        /// Records `count` groups of a session's analysis as written now.
-        fn write_groups(&self, provider: &str, session: &str, count: u64) {
-            let connection = rusqlite::Connection::open(&self.database).unwrap();
-            for n in 0..count {
-                let id = format!("{provider}:{session}:{n}");
-                connection
-                    .execute(
-                        "INSERT INTO analysis_batches VALUES(?1,?2,?3,'claude',?4,?1,?5)",
-                        rusqlite::params![id, self.project_id, provider, session, now_ms()],
-                    )
-                    .unwrap();
+        /// Admits `count` calls of a session's analysis now, as earlier
+        /// turns would have.
+        fn spend_calls(&self, session: &str, count: u64) {
+            let store = self.store();
+            let call = SessionCall {
+                project: &self.project_id,
+                provider: "claude",
+                session,
+            };
+            for _ in 0..count {
+                assert_eq!(store.admit_session_call(now_ms(), &call).unwrap(), None);
             }
         }
 
-        /// Moves every written group `by` into the past.
-        fn age_groups(&self, by: u64) {
+        /// Moves every admitted call `by` into the past.
+        fn age_calls(&self, by: u64) {
             rusqlite::Connection::open(&self.database)
                 .unwrap()
-                .execute(
-                    "UPDATE analysis_batches SET created_at_ms=created_at_ms-?1",
-                    [by],
-                )
+                .execute("UPDATE analysis_admissions SET at_ms=at_ms-?1", [by])
                 .unwrap();
         }
 
@@ -5432,7 +5517,7 @@ mod tests {
     }
 
     #[test]
-    fn a_session_past_its_days_groups_keeps_its_progress_and_resumes_the_next_day() {
+    fn a_session_past_its_days_calls_keeps_its_progress_and_resumes_the_next_day() {
         let mut fixture = Fixture::new();
         fixture.lines.truncate(1);
         let text = format!("{} retain_tail_nextest", "한글 context ".repeat(15_000));
@@ -5442,8 +5527,7 @@ mod tests {
         for _ in 0..40 {
             fixture.push(json!({"candidates":[],"alias_backfill":[],"repeats":[],"merges":[]}));
         }
-        let earlier = hide_memory::SESSION_DAILY_GROUP_LIMIT - 2;
-        fixture.write_groups("claude", SESSION, earlier);
+        fixture.spend_calls(SESSION, hide_memory::SESSION_DAILY_CALL_LIMIT - 2);
         let progress = || {
             fixture
                 .store()
@@ -5456,7 +5540,7 @@ mod tests {
         assert_eq!(
             fixture.calls(),
             2,
-            "the day's last two groups, not a quantum"
+            "the day's last two calls, not a quantum"
         );
         assert_eq!(progress(), 2);
         assert!(!outcome.settled.contains(&key));
@@ -5464,7 +5548,7 @@ mod tests {
         assert_eq!(fixture.calls(), 2, "the rest waits for the next day");
         assert_eq!(progress(), 2);
 
-        fixture.age_groups(86_400_000);
+        fixture.age_calls(86_400_000);
         fixture.pass_for(key.clone(), false, true);
         assert_eq!(
             fixture.calls(),
@@ -5478,11 +5562,34 @@ mod tests {
     }
 
     #[test]
-    fn a_full_hour_of_groups_holds_the_queue_without_a_provider_call_until_it_passes() {
+    fn failed_calls_and_their_retries_spend_the_sessions_day_and_the_hour() {
+        // A request the provider never answers is asked again every pass;
+        // each try is a call the session's day and the hour count.
+        let fixture = Fixture::new();
+        fixture.fail_with(Some(AiError::Timeout));
+        fixture.spend_calls(SESSION, hide_memory::SESSION_DAILY_CALL_LIMIT - 2);
+        for _ in 0..5 {
+            fixture.pass(false, true);
+        }
+        assert_eq!(fixture.calls(), 2);
+
+        let fixture = Fixture::new();
+        fixture.fail_with(Some(AiError::Timeout));
+        for n in 0..hide_memory::HOURLY_CALL_LIMIT - 2 {
+            fixture.spend_calls(&format!("backlog-{n}"), 1);
+        }
+        for _ in 0..5 {
+            fixture.pass(false, true);
+        }
+        assert_eq!(fixture.calls(), 2);
+    }
+
+    #[test]
+    fn a_full_hour_of_calls_holds_the_queue_without_a_provider_call_until_it_passes() {
         let fixture = Fixture::new();
         fixture.answer(&[]);
-        for n in 0..hide_memory::HOURLY_GROUP_LIMIT {
-            fixture.write_groups("codex", &format!("backlog-{n}"), 1);
+        for n in 0..hide_memory::HOURLY_CALL_LIMIT {
+            fixture.spend_calls(&format!("backlog-{n}"), 1);
         }
         assert!(fixture.pass(false, true).is_empty());
         assert_eq!(fixture.calls(), 0);
@@ -5495,7 +5602,7 @@ mod tests {
             "the conversation waits, unread"
         );
 
-        fixture.age_groups(hide_memory::GROUP_WINDOW_MS);
+        fixture.age_calls(hide_memory::CALL_WINDOW_MS);
         assert_eq!(fixture.pass(false, true), ["analyzing", "learned one"]);
     }
 

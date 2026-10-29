@@ -28,9 +28,10 @@ CREATE TABLE repeat_requests(project_id TEXT NOT NULL REFERENCES projects(id) ON
 CREATE TABLE split_pairs(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,left_id TEXT NOT NULL,right_id TEXT NOT NULL,PRIMARY KEY(project_id,left_id,right_id));
 "#;
 
-/// What a test runs to take a current store back to schema 21.
+/// What a test runs to take a current store back to schema 21: schema 23's
+/// pace tables, then what schema 22 added.
 #[cfg(test)]
-pub(crate) const DROP: &str = "DROP TRIGGER recheck_ends_on_check; DROP TRIGGER recheck_ends_on_change; DROP TABLE card_changes; DROP TABLE card_misses; DROP TABLE repeat_requests; DROP TABLE split_pairs; ALTER TABLE memory_items DROP COLUMN aging; ALTER TABLE memory_items DROP COLUMN aging_clock_ms; ALTER TABLE memory_items DROP COLUMN last_given_at_ms; ALTER TABLE memory_items DROP COLUMN recheck_at_ms; ALTER TABLE projects DROP COLUMN aged_at_ms; ALTER TABLE injection_receipts DROP COLUMN kind;";
+pub(crate) const DROP: &str = "DROP TABLE analysis_admissions; DROP TABLE analysis_holds; DROP TRIGGER recheck_ends_on_check; DROP TRIGGER recheck_ends_on_change; DROP TABLE card_changes; DROP TABLE card_misses; DROP TABLE repeat_requests; DROP TABLE split_pairs; ALTER TABLE memory_items DROP COLUMN aging; ALTER TABLE memory_items DROP COLUMN aging_clock_ms; ALTER TABLE memory_items DROP COLUMN last_given_at_ms; ALTER TABLE memory_items DROP COLUMN recheck_at_ms; ALTER TABLE projects DROP COLUMN aged_at_ms; ALTER TABLE injection_receipts DROP COLUMN kind;";
 
 /// Schema 22 from 21, after the writer kept the v21 store as a backup. Every
 /// existing card's clock starts at `now`, so none goes stale the day the

@@ -14,7 +14,7 @@ mod redaction;
 mod store;
 mod verify;
 
-pub use budget::{GroupDeferral, MemoryCallDeferral, MemoryCallKind, memory_call_reset_at};
+pub use budget::{MemoryCallDeferral, MemoryCallKind, SessionCall, memory_call_reset_at};
 pub use engine::{
     AliasBackfill, AnalysisOutput, HideNativeAnalyzer, HideNativeOutputError,
     SYSTEM_PROMPT_LIMIT_BYTES,
@@ -135,16 +135,16 @@ pub const PROMOTION_OPEN_LIMIT: usize = 3;
 pub const NEW_CARDS_PER_GROUP: usize = 8;
 /// Extraction groups one session may process in a background pass.
 pub const ANALYSIS_GROUP_QUANTUM: usize = 4;
-/// Extraction groups one session's background analysis writes in a UTC day.
-/// A group is one extraction call and at most one creation-comparison call,
-/// so a session spends at most twice this many calls a day; its later groups
-/// keep their place and wait for the next day.
-pub const SESSION_DAILY_GROUP_LIMIT: u64 = 36;
-/// Extraction groups background analysis writes in any hour, all sessions
+/// Calls one session's background analysis is admitted in a UTC day,
+/// failed and retried calls included; its later groups keep their place and
+/// wait for the next day. A group asks one extraction and at most one
+/// comparison, so this is at least 36 groups.
+pub const SESSION_DAILY_CALL_LIMIT: u64 = 72;
+/// Calls background analysis is admitted in any hour, every session
 /// together: a backlog of sessions is caught up at this pace, and the queue
 /// waits while the last hour is full.
-pub const HOURLY_GROUP_LIMIT: u64 = 40;
-pub const GROUP_WINDOW_MS: u64 = 3_600_000;
+pub const HOURLY_CALL_LIMIT: u64 = 80;
+pub const CALL_WINDOW_MS: u64 = 3_600_000;
 /// The most characters of the reason an agent gives when it calls a card
 /// outdated.
 pub const OUTDATED_REASON_LIMIT_CHARS: usize = 500;
