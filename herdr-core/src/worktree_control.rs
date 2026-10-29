@@ -378,6 +378,110 @@ fn remove_on_host(
     }
 }
 
+/// A worktree Hide made for a start that was given up before anything ran in
+/// it, and the one pane the start opened there.
+pub(crate) struct MadeWorktree<'a> {
+    pub repository_root: &'a str,
+    pub checkout: &'a str,
+    pub branch: &'a str,
+    pub pane: &'a str,
+}
+
+/// Why a made worktree was kept, and whether its pane was closed on the way.
+#[derive(Debug)]
+pub(crate) struct WorktreeKept {
+    pub pane_closed: bool,
+    pub reason: String,
+}
+
+/// Removes a worktree Hide made, with its branch and the workspace Herdr
+/// opened for it, through the operator's own deletion path, so a start that
+/// keeps being refused leaves nothing behind (with-hide/hide-private#56).
+/// Nothing is ever forced: another pane in the folder keeps everything, the
+/// host's recheck stops at any change or untracked file, Git removes the
+/// folder only while it is clean, and the branch goes with `git branch -d`,
+/// which keeps one that holds a commit. Closing the folder's last pane ends
+/// the workspace. The pane must already be one the caller knows is its own.
+pub(crate) fn discard_made_worktree(
+    connector: &dyn ApiConnector,
+    host: &dyn crate::node_access::NodeLink,
+    local: bool,
+    made: &MadeWorktree,
+) -> Result<hide_node_link::worktrees::RemovalBranch, WorktreeKept> {
+    let kept = |pane_closed: bool| {
+        move |reason: String| WorktreeKept {
+            pane_closed,
+            reason,
+        }
+    };
+    let paths = [made.checkout.to_owned()];
+    let snapshot =
+        control_request(connector, "session.snapshot", json!({})).map_err(kept(false))?;
+    let panes = snapshot
+        .pointer("/snapshot/panes")
+        .and_then(Value::as_array)
+        .ok_or_else(|| kept(false)("session.snapshot is missing snapshot.panes".into()))?;
+    let others = panes.iter().any(|pane| {
+        pane.get("pane_id").and_then(Value::as_str) != Some(made.pane)
+            && confirmation_state(std::slice::from_ref(pane), &paths)
+                .is_ok_and(|(_, at_checkout)| at_checkout)
+    });
+    if others {
+        return Err(kept(false)("another pane works in the worktree".into()));
+    }
+    let head: String = crate::node_access::call_as(
+        host,
+        Call::Git {
+            root: made.checkout.to_owned(),
+            command: GitCommand::RefCommit {
+                name: "HEAD".into(),
+            },
+        },
+        GIT_TIMEOUT,
+    )
+    .map_err(|error| kept(false)(error.to_string()))?;
+    let removal = hide_node_link::worktrees::ConfirmedRemoval {
+        repository_root: made.repository_root.to_owned(),
+        checkout_path: made.checkout.to_owned(),
+        expected_head_sha: Some(head.trim().to_owned()),
+        expected_branch: Some(made.branch.to_owned()),
+        protected_base_branch: None,
+        delete_branch: Some(made.branch.to_owned()),
+        force_delete_branch: false,
+        discard_changes: false,
+        expected_ignored_repositories: Vec::new(),
+    };
+    match crate::node_access::call_as::<Option<hide_node_link::worktrees::Stopped>>(
+        host,
+        Call::WorktreeRemovalCheck {
+            removal: removal.clone(),
+        },
+        HOST_CHECK_TIMEOUT,
+    ) {
+        Ok(None) => {}
+        Ok(Some(stopped)) => return Err(kept(false)(stopped.message)),
+        Err(error) => return Err(kept(false)(error.to_string())),
+    }
+    let pane_ids = panes
+        .iter()
+        .any(|pane| pane.get("pane_id").and_then(Value::as_str) == Some(made.pane))
+        .then(|| made.pane.to_owned())
+        .into_iter()
+        .collect::<Vec<_>>();
+    close_checkout_panes_for_removal(
+        connector,
+        host,
+        &paths,
+        &pane_ids,
+        ProcessWait::for_folder_removal(local),
+        CONFIRM_TIMEOUT,
+    )
+    .map_err(|failure| kept(false)(failure.message))?;
+    remove_on_host(host, removal)
+        .map(|removed| removed.branch)
+        .map_err(|failure| kept(true)(failure.detail))
+}
+
 /// Asks the repository's host whether `branch` may be created; nothing is
 /// created by the question.
 fn check_new_branch(

@@ -30,8 +30,10 @@ struct Node {
     integrated: AtomicBool,
     /// The folder trusts the node recorded, as `(agent, path)`.
     trusted: Mutex<Vec<(String, String)>>,
-    /// Whether the node fails to record the next trust.
-    trust_fails: AtomicBool,
+    /// How many of the next trusts the node fails to record.
+    trust_fails: AtomicUsize,
+    /// The worktree the spawn makes, which the node removes.
+    worktree: Arc<Mutex<Worktree>>,
     /// How many checks the spawn has asked this node.
     calls: AtomicUsize,
 }
@@ -57,7 +59,14 @@ impl NodeLink for Node {
             Call::ShellIntegration => {
                 json!({"command": ["/bin/sh"], "readiness": "plain", "env": {}})
             }
-            Call::AgentTrust { .. } if self.trust_fails.swap(false, Ordering::SeqCst) => {
+            Call::AgentTrust { .. }
+                if self
+                    .trust_fails
+                    .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                        left.checked_sub(1)
+                    })
+                    .is_ok() =>
+            {
                 return Err(LinkError::Refused(hide_node_link::HostError::new(
                     hide_node_link::ErrorCode::Io,
                     "Codex marks /srv/repo untrusted",
@@ -70,6 +79,19 @@ impl NodeLink for Node {
             } => {
                 self.trusted.lock().unwrap().push((agent, path));
                 Value::Null
+            }
+            // The removal of a worktree the spawn made, which the host
+            // rechecks first and runs without force.
+            Call::Git {
+                command: hide_node_link::git::GitCommand::RefCommit { .. },
+                ..
+            } => json!("c0ffee\n"),
+            Call::WorktreeRemovalCheck { .. } => Value::Null,
+            Call::WorktreeRemove { removal } => {
+                let mut worktree = self.worktree.lock().unwrap();
+                worktree.exists = false;
+                worktree.removed.push(removal);
+                json!({"removed": true, "message": "Deleted", "branch": "deleted"})
             }
             // The catalog's reads of the device's folders, which a session
             // pass of the device asks for, are no part of a spawn.
@@ -100,6 +122,20 @@ fn agent_row(session: Option<&str>, shows: bool) -> Value {
     row
 }
 
+/// The device's worktree, as the tests that `follow` it see it: whether it
+/// exists, whether the spawn's pane is open in it and whether another pane
+/// works there, how many times it was made and each removal the node ran.
+/// Other tests leave Herdr's worktree list empty and its snapshot unanswered.
+#[derive(Default)]
+struct Worktree {
+    follow: bool,
+    exists: bool,
+    pane_open: bool,
+    other_pane: bool,
+    created: usize,
+    removed: Vec<hide_node_link::worktrees::ConfirmedRemoval>,
+}
+
 /// The device's Herdr: no worktree yet, one created on request, an agent that
 /// exists once it is started, unless `shows` is false, and reports `session`
 /// once it has one; closing its pane ends it. A start whose agent
@@ -114,14 +150,33 @@ fn device_herdr(
     held: Arc<AtomicBool>,
     unmarked: Arc<AtomicUsize>,
     refused: Arc<AtomicBool>,
+    worktree: Arc<Mutex<Worktree>>,
 ) -> FakeHerdr {
     FakeHerdr::start_with_errors("remote-spawn", move |method, _| {
         Ok(match method {
-            "worktree.list" => json!({"type": "worktree_list", "source": {
-            "repo_key": "/srv/repo/.git", "repo_name": "repo",
-            "repo_root": "/srv/repo", "source_checkout_path": "/srv/repo",
-            "source_workspace_id": "w1"}, "worktrees": []}),
-            "worktree.create" => json!({
+            "worktree.list" => {
+                let worktree = worktree.lock().unwrap();
+                json!({"type": "worktree_list", "source": {
+                "repo_key": "/srv/repo/.git", "repo_name": "repo",
+                "repo_root": "/srv/repo", "source_checkout_path": "/srv/repo",
+                "source_workspace_id": "w1"}, "worktrees":
+                if worktree.follow && worktree.exists {
+                    vec![json!({"branch": "topic", "is_bare": false, "is_detached": false,
+                        "is_linked_worktree": true, "is_prunable": false, "label": "repo",
+                        "open_workspace_id": "w2", "path": WORKTREE})]
+                } else {
+                    Vec::new()
+                }})
+            }
+            "worktree.create" => {
+                let mut worktree = worktree.lock().unwrap();
+                if worktree.follow {
+                    assert!(!worktree.exists, "a second worktree for the same branch");
+                    worktree.exists = true;
+                    worktree.pane_open = true;
+                    worktree.created += 1;
+                }
+                json!({
                 "type": "worktree_created",
                 "workspace": {"workspace_id": "w2", "label": "repo", "number": 2, "focused": false,
                     "pane_count": 1, "tab_count": 1, "active_tab_id": "w2:t1", "agent_status": "idle"},
@@ -133,7 +188,8 @@ fn device_herdr(
                 "worktree": {"branch": "topic", "is_bare": false, "is_detached": false,
                     "is_linked_worktree": true, "is_prunable": false, "label": "repo",
                     "open_workspace_id": "w2", "path": WORKTREE}
-            }),
+                })
+            }
             "layout.apply" => json!({"type": "layout_apply", "layout": {"workspace_id": "w2",
             "tab_id": "w2:t2", "zoomed": false, "focused_pane_id": "w2:p1",
             "root": {"type": "pane", "pane_id": "w2:p1"}}}),
@@ -177,11 +233,28 @@ fn device_herdr(
             "agent.get" => json!({"type": "agent_info", "agent": agent_row(None, false)}),
             "pane.close" => {
                 started.store(false, Ordering::SeqCst);
+                worktree.lock().unwrap().pane_open = false;
                 json!({"type": "ok"})
             }
             "pane.report_metadata" => json!({"type": "ok"}),
             // The lineage writer's naming of the spawn's workspace and tab,
             // which these tests do not follow.
+            "session.snapshot" if worktree.lock().unwrap().follow => {
+                let worktree = worktree.lock().unwrap();
+                let pane = |pane: &str| {
+                    json!({"pane_id": pane, "workspace_id": "w2",
+                    "tab_id": "w2:t2", "terminal_id": format!("terminal-{pane}"),
+                    "focused": false, "agent_status": "idle", "revision": 1, "cwd": WORKTREE})
+                };
+                let panes = [
+                    worktree.pane_open.then(|| pane("w2:p1")),
+                    worktree.other_pane.then(|| pane("w2:p9")),
+                ];
+                json!({"type": "session_snapshot", "snapshot": {
+                    "version": "fixture", "protocol": hide_herdr_client::HERDR_PROTOCOL_REVISION,
+                    "workspaces": [], "tabs": [], "layouts": [], "agents": [],
+                    "panes": panes.into_iter().flatten().collect::<Vec<_>>()}})
+            }
             "session.snapshot" => {
                 return Err(("internal_error".into(), "not followed here".into()));
             }
@@ -238,6 +311,7 @@ fn spawner() -> Spawner {
     let held = Arc::new(AtomicBool::new(false));
     let unmarked = Arc::new(AtomicUsize::new(0));
     let refused = Arc::new(AtomicBool::new(false));
+    let worktree = Arc::new(Mutex::new(Worktree::default()));
     let herdr = device_herdr(
         started,
         session.clone(),
@@ -245,13 +319,15 @@ fn spawner() -> Spawner {
         held.clone(),
         unmarked.clone(),
         refused.clone(),
+        worktree.clone(),
     );
     let node = Arc::new(Node {
         repository: AtomicBool::new(true),
         installed: AtomicBool::new(true),
         integrated: AtomicBool::new(false),
         trusted: Mutex::new(Vec::new()),
-        trust_fails: AtomicBool::new(false),
+        trust_fails: AtomicUsize::new(0),
+        worktree: worktree.clone(),
         calls: AtomicUsize::new(0),
     });
     {
@@ -668,7 +744,7 @@ fn a_spawn_refuses_a_choice_the_agent_does_not_take_before_anything_is_made() {
 #[test]
 fn a_device_that_cannot_record_the_worktree_trust_starts_no_agent_there() {
     let spawner = spawner();
-    spawner.node.trust_fails.store(true, Ordering::SeqCst);
+    spawner.node.trust_fails.store(1, Ordering::SeqCst);
     let refused = spawner
         .spawn(Some("here"), Some(DEVICE), "untrusted")
         .expect_err("refused");
@@ -679,6 +755,58 @@ fn a_device_that_cannot_record_the_worktree_trust_starts_no_agent_there() {
     );
     assert_eq!(spawner.count("agent.start"), 0);
     assert!(spawner.node.trusted.lock().unwrap().is_empty());
+}
+
+/// A spawn refused after it made its worktree, here because Codex's trust of
+/// it could not be recorded, takes that worktree away again with its branch
+/// and pane, never forced, so the same intent asked again makes it anew and
+/// leaves none behind (with-hide/hide-private#56).
+#[test]
+fn a_spawn_refused_after_making_its_worktree_leaves_none_behind() {
+    let spawner = spawner();
+    spawner.node.worktree.lock().unwrap().follow = true;
+    spawner.node.trust_fails.store(2, Ordering::SeqCst);
+    for _ in 0..2 {
+        let refused = spawner
+            .spawn(Some("here"), Some(DEVICE), "untrusted")
+            .expect_err("refused");
+        assert!(refused.starts_with("agent_trust_failed: "), "{refused}");
+    }
+    let worktree = spawner.node.worktree.lock().unwrap();
+    assert_eq!(worktree.created, 2);
+    assert!(!worktree.exists && !worktree.pane_open);
+    let removed = worktree
+        .removed
+        .iter()
+        .map(|removal| {
+            (
+                removal.checkout_path.as_str(),
+                removal.delete_branch.as_deref(),
+                removal.force_delete_branch || removal.discard_changes,
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(removed, [(WORKTREE, Some("topic"), false); 2]);
+    assert_eq!(spawner.count("agent.start"), 0);
+}
+
+/// A refused spawn's worktree that another pane works in is the operator's
+/// now: it is kept with its branch, and no pane of it is closed.
+#[test]
+fn a_refused_spawns_worktree_another_pane_works_in_is_kept() {
+    let spawner = spawner();
+    {
+        let mut worktree = spawner.node.worktree.lock().unwrap();
+        worktree.follow = true;
+        worktree.other_pane = true;
+    }
+    spawner.node.trust_fails.store(1, Ordering::SeqCst);
+    spawner
+        .spawn(Some("here"), Some(DEVICE), "untrusted")
+        .expect_err("refused");
+    let worktree = spawner.node.worktree.lock().unwrap();
+    assert!(worktree.exists && worktree.pane_open && worktree.removed.is_empty());
+    assert_eq!(spawner.count("pane.close"), 0);
 }
 
 /// B4: without `--parent` the device's agent is the operator's, unwatched,
