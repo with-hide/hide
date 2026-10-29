@@ -44,7 +44,9 @@ pub(crate) struct PlanRuntime {
     laid: BTreeMap<String, Laid>,
     /// The core's questions the rows shown were last laid with: a book
     /// edit that leaves them as they were lays nothing again.
-    asked: Vec<CoreAsk>,
+    /// None once a sync laid rows from other questions, so the next
+    /// refresh relays every row set whatever it reads.
+    asked: Option<Vec<CoreAsk>>,
     /// The plan book's and the mission book's edit `asked` was read at.
     made_asks_at: (u64, u64),
 }
@@ -610,6 +612,9 @@ impl Runtime {
             self.plans.laid.remove(&agent.pane_id);
         }
         let asks = self.core_asks();
+        if self.plans.asked.as_ref() != Some(&asks) {
+            self.plans.asked = None;
+        }
         self.lay_reviews_on(device, agents, &asks);
     }
 
@@ -626,10 +631,10 @@ impl Runtime {
         }
         self.plans.made_asks_at = (self.plans.edit, self.missions.book_edit);
         let asks = self.core_asks();
-        if asks == self.plans.asked {
+        if self.plans.asked.as_ref() == Some(&asks) {
             return false;
         }
-        self.plans.asked = asks.clone();
+        self.plans.asked = Some(asks.clone());
         let node = self.node.as_str().to_owned();
         let mut agents = std::mem::take(&mut self.snapshot.navigator.agents);
         let mut moved = self.relay_reviews(&node, &mut agents, &asks);

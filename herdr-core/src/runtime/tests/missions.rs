@@ -3719,3 +3719,32 @@ fn a_missions_open_decision_waits_on_the_operator_on_its_resting_conductors_row(
     .unwrap();
     assert_eq!(conductor_shown(&mut runtime).ask_subject, None);
 }
+
+/// A decision a Herdr sync laid before any refresh read it, cleared before
+/// the next refresh, still leaves the row (needs-you-cleanup B3).
+#[test]
+fn a_decision_laid_by_a_sync_and_cleared_before_the_next_refresh_leaves_the_row() {
+    let fixture = conducting();
+    let mut runtime = fixture.runtime.lock().unwrap();
+    runtime.snapshot.navigator.agents = vec![conductor_row()];
+    running(&mut runtime);
+    conductor_shown(&mut runtime);
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": "Skip the check line?"}),
+    )
+    .unwrap();
+    // Herdr sends the row again before the next pull reads the books.
+    let mut synced = std::mem::take(&mut runtime.snapshot.navigator.agents);
+    runtime.lay_plan_reviews(crate::node::TEST_NODE, &mut synced);
+    assert!(synced[0].ask_subject.is_some());
+    runtime.snapshot.navigator.agents = synced;
+    command(
+        &mut runtime,
+        "sender",
+        json!({"op": "decide", "line": null}),
+    )
+    .unwrap();
+    assert_eq!(conductor_shown(&mut runtime).ask_subject, None);
+}
