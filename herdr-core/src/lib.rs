@@ -67,6 +67,7 @@ pub mod plans;
 mod ports;
 pub mod product_analytics;
 mod project_context;
+pub mod project_open;
 mod project_settings;
 mod reader;
 mod recent_closed;

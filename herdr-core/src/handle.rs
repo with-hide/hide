@@ -666,6 +666,33 @@ impl Core {
         Ok(value)
     }
 
+    /// `hide <path>` for a caller on `device`: brings the project holding
+    /// `path` in front, or starts its registration, under `request_id`,
+    /// whose receipt [`Self::project_open_receipt`] reads.
+    pub fn project_open(&self, device: &str, path: &str, request_id: &str) -> Result<(), String> {
+        if !check_owner_thread(self, "project.open") {
+            return Err("project_open_unavailable".into());
+        }
+        let (changed, retired_syncs) = {
+            let mut runtime = lock_recover(&self.runtime);
+            let changed = runtime.project_open(device, path, request_id);
+            (changed, runtime.take_retired_remote_syncs())
+        };
+        drop(retired_syncs);
+        if changed? {
+            notify_change(self);
+        }
+        Ok(())
+    }
+
+    /// Where the `hide <path>` request `request_id` stands.
+    pub fn project_open_receipt(
+        &self,
+        request_id: &str,
+    ) -> Option<crate::project_open::ProjectOpenReceipt> {
+        lock_recover(&self.runtime).project_open_receipt(request_id)
+    }
+
     /// `hide ps` for a caller on `device` in `pane`: the rows are taken under
     /// the lock, and joined with the ledger and serialized after it.
     pub fn ps(&self, device: &str, pane: &str, all: bool) -> Result<serde_json::Value, String> {
