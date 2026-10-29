@@ -726,7 +726,7 @@ pub(crate) fn native_question_line(
     turn: Option<&hide_session::turns::UserTurnFact>,
 ) -> Option<String> {
     let turn = turn.filter(|turn| turn.kind == hide_session::turns::UserTurnKind::Question)?;
-    first_line_cut(&turn.content.as_ref()?.text())
+    first_line_cut(turn.content.as_ref()?.text())
 }
 
 /// The first line of `text`, one line and cut on a character boundary to
