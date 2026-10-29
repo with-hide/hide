@@ -331,10 +331,10 @@ describe("language-dependent sentences", () => {
 
   it("names the version a remote device lacks, or says it is unknown", () => {
     const remote = workspace({ remote_target_id: "mini" });
-    expect(remotePurposeProblem(remote, [{ target_id: "mini", herdr_version: "0.9.0" }] as never)).toBe("Set purpose requires Herdr 0.9.1 or newer on the remote device; 0.9.0 is installed.");
-    expect(remotePurposeProblem(remote, [{ target_id: "mini", herdr_version: null }] as never)).toBe("Set purpose requires Herdr 0.9.1 or newer on the remote device; its version is unavailable.");
+    expect(remotePurposeProblem(remote, [{ target_id: "mini", herdr_version: "0.9.0" }] as never)).toBe("Set purpose requires Herdr 0.9.1 or newer on that device; 0.9.0 is installed.");
+    expect(remotePurposeProblem(remote, [{ target_id: "mini", herdr_version: null }] as never)).toBe("Set purpose requires Herdr 0.9.1 or newer on that device; its version is unavailable.");
     expect(remotePurposeProblem(remote, [{ target_id: "mini", herdr_version: "0.9.1" }] as never)).toBeNull();
-    expect(manage.remotePurposeProblem(remote, [{ target_id: "mini", herdr_version: "0.9.0" }] as never, ko)).toBe("용도를 설정하려면 원격 기기에 Herdr 0.9.1 이상이 필요해요. 설치된 버전: 0.9.0");
+    expect(manage.remotePurposeProblem(remote, [{ target_id: "mini", herdr_version: "0.9.0" }] as never, ko)).toBe("용도를 설정하려면 그 기기에 Herdr 0.9.1 이상이 필요해요. 설치된 버전: 0.9.0");
   });
 });
 

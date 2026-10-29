@@ -233,10 +233,12 @@ export function deviceLine(device: Device, remote: RemoteStatus | undefined, t: 
  * read on this machine, so a fact the device has not reported is left out
  * rather than filled in; this machine has no alias to show.
  */
-export function deviceSubtitle(device: Device, remote: RemoteStatus | undefined, t: Translate): string {
+export function deviceSubtitle(device: Device, remote: RemoteStatus | undefined, t: Translate, coreName?: string): string {
   if (device.kind !== "remote") return t("devices.localAlias");
   const parts: string[] = [device.ssh_alias ?? registeredName(device)];
-  if (device.host?.state === "ready" && device.host.platform) parts.push(device.host.platform);
+  // A WSL distribution is named where it is, the core's PC, in place of its Linux platform (PRD wsl-device B5).
+  if (device.wsl_distro && coreName) parts.push(coreName);
+  else if (device.host?.state === "ready" && device.host.platform) parts.push(device.host.platform);
   if (remote?.herdr_version) parts.push(`Herdr ${remote.herdr_version}`);
   return parts.join(" · ");
 }

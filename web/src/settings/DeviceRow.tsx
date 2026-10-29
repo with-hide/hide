@@ -49,7 +49,7 @@ export function DeviceRow({ device, status, focused, place, actions, handlers }:
   // A node that dials in has no SSH connection to test or retry here.
   const remote = device.kind === "remote" && device.dials_in !== true;
   // The core's machine seen from a node: its platform, since "local" would name the window's machine.
-  const subtitle = device.kind !== "remote" && place.windowIsNode ? (device.host?.platform ?? "") : deviceSubtitle(device, status, t);
+  const subtitle = device.kind !== "remote" && place.windowIsNode ? (device.host?.platform ?? "") : deviceSubtitle(device, status, t, place.coreName);
   return (
     <Row
       data-device-row={device.id}

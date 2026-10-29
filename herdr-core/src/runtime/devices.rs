@@ -763,7 +763,9 @@ impl Runtime {
                     "A device is either an SSH alias or a WSL distribution",
                 ));
             }
-            return self.register_wsl_device(distro.trim(), payload.host_consent);
+            return self
+                .register_wsl_device(distro.trim(), payload.host_consent)
+                .map(|registration| registration.id);
         }
         let id = payload.id.trim().to_owned();
         let label = payload.label.trim().to_owned();
@@ -855,12 +857,13 @@ impl Runtime {
     /// Registers this PC's WSL distribution `distro` as the device
     /// `wsl-<distro>-<digest>` named `WSL <distro>` (PRD wsl-device D-20) and starts
     /// its connection, which installs Hide's helper there only when
-    /// `consent` is given (B2, B4). One device per distribution.
-    fn register_wsl_device(
+    /// `consent` is given (B2, B4). One device per distribution. Add device
+    /// and the first-run step's row both come here.
+    pub(super) fn register_wsl_device(
         &mut self,
         distro: &str,
         consent: bool,
-    ) -> Result<String, DeviceRefusal> {
+    ) -> Result<crate::model::DeviceRegistration, DeviceRefusal> {
         if !hide_platform::wsl::valid_distribution_name(distro) {
             return Err(DeviceRefusal::new(
                 "device.invalid",
@@ -898,7 +901,7 @@ impl Runtime {
             format!("Registered WSL device {id} ({distro})"),
         );
         self.connect_remote_device(&registration, super::hosts::HostAttempt::Operator);
-        Ok(id)
+        Ok(registration)
     }
 
     /// Forgets a device and everything Hide recorded for it, takes Hide's

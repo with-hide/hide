@@ -3130,7 +3130,10 @@ impl FirstRunStep {
 #[serde(default)]
 pub struct FirstRunChoices {
     pub agents: Option<Vec<String>>,
-    pub devices: Vec<String>,
+    /// The checked device rows; none until the operator checks or unchecks
+    /// one, so the step can start with this PC's default WSL distribution
+    /// checked (PRD wsl-device B1) and keep it unchecked once they say so.
+    pub devices: Option<Vec<String>>,
     pub project_device: Option<String>,
     pub project_path: String,
     pub project_form: FirstRunProjectForm,
@@ -6563,8 +6566,14 @@ impl Default for HerdrProfilesSnapshot {
 pub struct HerdrProfileSnapshot {
     pub id: String,
     pub label: String,
+    /// The SSH target, or the distribution of a WSL row.
     pub target: String,
     pub session: String,
+    /// Set on the one row that is not a saved Herdr profile: this PC's
+    /// default WSL distribution (PRD wsl-device B1), which connects as a
+    /// WSL device.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wsl_distro: Option<String>,
     pub enabled: bool,
     pub added_as: Option<String>,
     pub problem: Option<String>,
