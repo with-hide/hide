@@ -325,9 +325,7 @@ impl State {
     /// only on their connect, never on a wake from the watch or a retry, so
     /// nothing dials while it waits.
     fn wait_over(&self, on_operator: bool) -> bool {
-        self.stopping
-            || self.disconnected
-            || if on_operator { self.asked } else { self.woken }
+        self.stopping || self.disconnected || if on_operator { self.asked } else { self.woken }
     }
 }
 
@@ -1618,10 +1616,19 @@ mod tests {
         });
         assert!(stopped.waits_for_operator());
         state.woken = true;
-        assert!(!state.wait_over(true), "a wake ended the wait on the operator");
+        assert!(
+            !state.wait_over(true),
+            "a wake ended the wait on the operator"
+        );
         let (press, owed) = state.next_attempt();
-        assert!(press.is_none() && owed.is_none(), "an attempt without a press");
-        assert!(state.update_owed.is_some(), "an attempt without a press took the update");
+        assert!(
+            press.is_none() && owed.is_none(),
+            "an attempt without a press"
+        );
+        assert!(
+            state.update_owed.is_some(),
+            "an attempt without a press took the update"
+        );
 
         state.asked = true;
         state.press = Some(screen.lease(7) as Arc<dyn SignIn>);

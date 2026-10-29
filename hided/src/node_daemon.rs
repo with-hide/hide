@@ -84,6 +84,11 @@ use terminals::{OwnPanes, ScreenTerminals, keep_terminals_relay};
 /// The largest message a relay of the core may send this daemon.
 const RELAY_MAX_MESSAGE: usize = 16 * 1024 * 1024;
 
+/// A held window's answer to what the dial asks: its connection, the
+/// question it names, and the reply.
+pub type AnswerSignIn =
+    Arc<dyn Fn(u64, Option<u64>, SignInReply) -> Result<bool, NotOwner> + Send + Sync>;
+
 /// What the node role's screen server holds.
 #[derive(Clone)]
 pub struct NodeState {
@@ -115,8 +120,7 @@ pub struct NodeState {
     pub sign_ins: watch::Receiver<Option<Shown>>,
     /// A held window's answer to it, by its connection; one for a question
     /// no longer asked reaches nothing, another window's is refused.
-    pub answer_sign_in:
-        Arc<dyn Fn(u64, Option<u64>, SignInReply) -> Result<bool, NotOwner> + Send + Sync>,
+    pub answer_sign_in: AnswerSignIn,
     /// The held window of this connection went away: the dial its Retry
     /// started ends, whether or not it asked anything yet (B8).
     pub release_sign_in: Arc<dyn Fn(u64) + Send + Sync>,
@@ -259,10 +263,7 @@ impl NodeDaemon {
                         role.answer_sign_in(screen, question, reply)
                     })
                 },
-            )
-                as Arc<
-                    dyn Fn(u64, Option<u64>, SignInReply) -> Result<bool, NotOwner> + Send + Sync,
-                >
+            ) as AnswerSignIn
         };
         let release_sign_in = {
             let role = Arc::downgrade(&role);

@@ -345,9 +345,14 @@ mod unix {
         std::fs::write(fixture.local.join(".ssh/config"), config).unwrap();
         let told = Arc::new(Mutex::new(Vec::new()));
         let heard = Arc::clone(&told);
+        let (shows, shown_rx) = std::sync::mpsc::channel();
+        let shown_rx = Arc::new(Mutex::new(shown_rx));
         let screen = Arc::new(ScreenSignIn::new(
             "test",
-            Box::new(move |shown| heard.lock().unwrap().push(shown)),
+            Box::new(move |shown| {
+                heard.lock().unwrap().push(shown.clone());
+                let _ = shows.send(shown);
+            }),
         ));
         let upstream = |press: Option<Arc<dyn SignIn>>| {
             let upstream = Upstream::new(
@@ -360,17 +365,21 @@ mod unix {
         let pressed_by = |screen_id: u64| Some(screen.lease(screen_id) as Arc<dyn SignIn>);
         let run =
             |upstream: &Upstream| upstream.run(&["true".to_owned()], 1024, Duration::from_secs(30));
+        type Then = Box<dyn FnOnce(&ScreenSignIn, u64) + Send>;
         // Waits for the question and hands it to `then`, on the window's side.
-        let on_question = |then: Box<dyn FnOnce(&ScreenSignIn, u64) + Send>| {
+        let on_question = |then: Then| {
             let screen = Arc::clone(&screen);
+            let shown_rx = Arc::clone(&shown_rx);
             std::thread::spawn(move || {
                 let deadline = Instant::now() + Duration::from_secs(30);
+                let shown_rx = shown_rx.lock().unwrap();
                 let shown = loop {
-                    if let Some(shown) = screen.shown() {
-                        break shown;
+                    let left = deadline.saturating_duration_since(Instant::now());
+                    match shown_rx.recv_timeout(left) {
+                        Ok(Some(shown)) => break shown,
+                        Ok(None) => {}
+                        Err(_) => panic!("nothing was asked"),
                     }
-                    assert!(Instant::now() < deadline, "nothing was asked");
-                    std::thread::sleep(Duration::from_millis(20));
                 };
                 assert_eq!(shown.owner, A);
                 then(&screen, shown.sign_in.question);
@@ -436,7 +445,11 @@ mod unix {
         let started = Instant::now();
         needed(run(&upstream(pressed_by(A))));
         assert!(matches!(closed.join().unwrap(), SignInWait::HostKey { .. }));
-        assert!(started.elapsed() < Duration::from_secs(20), "{:?}", started.elapsed());
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "{:?}",
+            started.elapsed()
+        );
         assert_eq!(screen.shown(), None);
 
         // A closes before anything is asked: nothing shows, and the dial

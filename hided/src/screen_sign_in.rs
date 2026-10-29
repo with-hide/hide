@@ -198,7 +198,11 @@ impl ScreenSignIn {
     /// (B8).
     pub fn release(&self, owner: u64) {
         let mut slot = self.lock();
-        if slot.current.as_ref().is_some_and(|held| held.owner == owner) {
+        if slot
+            .current
+            .as_ref()
+            .is_some_and(|held| held.owner == owner)
+        {
             self.end(&mut slot, Refusal::Cancelled, "screen_left");
         }
     }
@@ -288,11 +292,12 @@ impl SignIn for Lease {
             Ok(answer) => answer,
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 let mut slot = screen.lock();
-                let unanswered = ScreenSignIn::held(&mut slot, self.generation).is_some_and(|held| {
-                    held.shown
-                        .as_ref()
-                        .is_some_and(|shown| shown.question == question)
-                });
+                let unanswered =
+                    ScreenSignIn::held(&mut slot, self.generation).is_some_and(|held| {
+                        held.shown
+                            .as_ref()
+                            .is_some_and(|shown| shown.question == question)
+                    });
                 if unanswered {
                     screen.end(&mut slot, Refusal::TimedOut, "timed_out");
                 }
@@ -316,7 +321,10 @@ impl SignIn for Lease {
             return true;
         };
         // A browser check or a key touch nobody finished in time.
-        if held.deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+        if held
+            .deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
             self.screen.end(&mut slot, Refusal::TimedOut, "timed_out");
             return true;
         }
@@ -396,7 +404,10 @@ mod tests {
     fn asked_after(sign_in: &ScreenSignIn, after: u64) -> Shown {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
-            if let Some(shown) = sign_in.shown().filter(|shown| shown.sign_in.question > after) {
+            if let Some(shown) = sign_in
+                .shown()
+                .filter(|shown| shown.sign_in.question > after)
+            {
                 return shown;
             }
             assert!(Instant::now() < deadline, "nothing was asked");
@@ -475,7 +486,11 @@ mod tests {
         assert!(matches!(lease.ask(secret()), Err(Refusal::Cancelled)));
         lease.show(Some(browser()));
         assert_eq!(sign_in.shown(), None);
-        assert!(told.lock().unwrap().is_empty(), "{:?}", told.lock().unwrap());
+        assert!(
+            told.lock().unwrap().is_empty(),
+            "{:?}",
+            told.lock().unwrap()
+        );
     }
 
     /// B8: the screen that pressed leaving between two questions ends the
@@ -515,12 +530,19 @@ mod tests {
     #[test]
     fn a_touch_or_a_browser_check_nobody_finishes_ends_the_attempt_at_its_bound() {
         for wait in [touch(), browser()] {
-            let (sign_in, told) = screen_within(Duration::from_millis(200));
+            // Inside its bound the wait goes on.
+            let (sign_in, _) = screen();
             let lease = sign_in.lease(A);
             lease.show(Some(wait.clone()));
-            assert_eq!(sign_in.shown().map(|shown| shown.sign_in.wait), Some(wait));
+            assert_eq!(
+                sign_in.shown().map(|shown| shown.sign_in.wait),
+                Some(wait.clone())
+            );
             assert!(!lease.withdrawn());
-            std::thread::sleep(Duration::from_millis(250));
+            // Past it (a bound that has already run out), the attempt ends.
+            let (sign_in, told) = screen_within(Duration::ZERO);
+            let lease = sign_in.lease(A);
+            lease.show(Some(wait));
             assert!(lease.withdrawn());
             assert_eq!(sign_in.shown(), None);
             assert_eq!(told.lock().unwrap().last(), Some(&None));
@@ -556,7 +578,10 @@ mod tests {
         let (sign_in, _) = screen();
         let lease = sign_in.lease(A);
         lease.show(Some(touch()));
-        assert_eq!(sign_in.shown().map(|shown| shown.sign_in.wait), Some(touch()));
+        assert_eq!(
+            sign_in.shown().map(|shown| shown.sign_in.wait),
+            Some(touch())
+        );
         lease.show(None);
         assert_eq!(sign_in.shown(), None);
         let waiting = asking(&lease, secret());

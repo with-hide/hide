@@ -858,7 +858,12 @@ mod tests {
 
         // Checks no screen asked for ask nobody.
         idle();
-        assert_eq!(control.request(MoveRequest::Check { device: "mini".to_owned() }), Ok(()));
+        assert_eq!(
+            control.request(MoveRequest::Check {
+                device: "mini".to_owned()
+            }),
+            Ok(())
+        );
         assert!(control.take_press().is_none());
     }
 
