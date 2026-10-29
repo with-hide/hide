@@ -209,7 +209,7 @@ describe("the line's words (status-marks D-04, B7, B10, B13, B16)", () => {
     const { t } = await createInterfaceI18n("ko");
     const said = row("w", { activity: "stopped", status_code: "waiting", wait: "background", detail: "빌드 끝나기를 기다림" });
     expect(lineText(t, said, sidebarLine(said)!)).toBe("백그라운드 기다림 · 빌드 끝나기를 기다림");
-    const unproven = row("u", { activity: "stopped", status_code: "waiting", wait: null, detail: "결과 기다리는 중" });
+    const unproven = row("u", { activity: "stopped", status_code: "waiting", wait: undefined, detail: "결과 기다리는 중" });
     unproven.state = { ...unproven.state, line: { text: "결과 기다리는 중", mode: "waiting", tone: { kind: "subtle", read: false } } };
     expect(lineText(t, unproven, sidebarLine(unproven)!)).toBe("대기 · 결과 기다리는 중");
     expect(treeLine(said)).toMatchObject({ mode: "waiting" });
