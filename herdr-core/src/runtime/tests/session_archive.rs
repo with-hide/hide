@@ -747,8 +747,9 @@ fn an_archived_root_keeps_its_star_and_wears_it_again_once_resumed() {
 
 /// A child that went to sleep keeps its conversation in its sleep record and
 /// its pane's label, not in row facts: the archive takes it with the tree
-/// once that label proves the session, with the transcript its resume proves
-/// it by, and refuses while nothing proves it.
+/// once that label proves the session, with the reference a live row's facts
+/// would carry for its resume (Claude's is its id), and refuses while nothing
+/// proves it.
 #[test]
 fn a_sleeping_child_is_archived_with_its_root_once_its_label_proves_the_conversation() {
     let mut runtime = archive_runtime(&[]);
@@ -762,7 +763,6 @@ fn a_sleeping_child_is_archived_with_its_root_once_its_label_proves_the_conversa
         .expect("the child");
     let mut slept = crate::agent_sleep::SleepRecord::ending(&sleeper, None, 0).unwrap();
     slept.phase = crate::agent_sleep::SleepPhase::Sleeping;
-    slept.parent_session = crate::wire::session_digest(&session_of("w1:p2"));
     runtime
         .snapshot
         .ui_state
@@ -826,8 +826,8 @@ fn a_sleeping_child_is_archived_with_its_root_once_its_label_proves_the_conversa
             .source_reference
             .as_ref()
             .map(|reference| (reference.kind.as_str(), reference.value.as_str())),
-        Some(("path", transcript.as_str())),
-        "its resume proves the transcript the label read"
+        Some(("id", session.as_str())),
+        "Claude resumes by the id its record kept"
     );
     assert_eq!(saved.members.len(), 5);
 }
