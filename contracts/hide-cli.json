@@ -584,6 +584,25 @@
             ],
             "type": "object"
         },
+        "device_retried": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "description": "`hide device retry`'s answer: whether this retry started an attempt, and the device as `list` answers it after the retry.",
+            "properties": {
+                "device": {
+                    "additionalProperties": true,
+                    "type": "object"
+                },
+                "started": {
+                    "type": "boolean"
+                }
+            },
+            "required": [
+                "device",
+                "started"
+            ],
+            "title": "Retried",
+            "type": "object"
+        },
         "inbox": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "definitions": {
@@ -2215,6 +2234,42 @@
         },
         {
             "answers": [
+                "device_retried"
+            ],
+            "arguments": [
+                {
+                    "name": "device_id",
+                    "value": {
+                        "type": "key"
+                    }
+                }
+            ],
+            "command": "device retry",
+            "options": [
+                {
+                    "name": "--wait",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                },
+                {
+                    "name": "--json",
+                    "required": false,
+                    "requires": [],
+                    "value": null
+                }
+            ],
+            "refusals": [
+                "machine_not_permitted",
+                "device_unknown",
+                "device_dials_in",
+                "device_wait_timeout"
+            ],
+            "repeats_at_most": null,
+            "rest": null
+        },
+        {
+            "answers": [
                 "letter"
             ],
             "arguments": [
@@ -3553,7 +3608,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:b711f3291862bea12d5d3bccee299e221261318d64e700ab05e86c650f87e089",
+    "digest": "sha256:6e5e8ab27883bef8eadc0c46f08c3c3a4d62ffdcd266a1fcab603fe22d96def1",
     "envelopes": {
         "agent": {
             "answer": "value",
