@@ -920,9 +920,10 @@ fn owner_loop(
         .herdr_socket_path
         .as_deref()
         .map(|socket| hide_node::herdr(std::path::Path::new(socket)));
-    // The program builds devices run ship beside this binary; a daemon
-    // anywhere else carries none, which leaves each device's node
-    // `unsupported` with that reason.
+    // The program builds devices run, and the `hide` that answers ssh's
+    // sign-in questions, ship beside this binary; a daemon anywhere else
+    // carries none, which leaves each device's node `unsupported` with that
+    // reason.
     let devices = hide_node::ssh::Connector::new(
         std::env::current_exe()
             .ok()
@@ -934,12 +935,6 @@ fn owner_loop(
             .as_ref()
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::PathBuf::from("herdr")),
-    )
-    .with_helper_root(
-        options
-            .host_helper_root
-            .clone()
-            .unwrap_or_else(|| hide_node::ssh::host::DEFAULT_HELPER_ROOT.to_owned()),
     )
     .with_pane_events(panes)
     .with_terminals(Arc::clone(&terminals) as Arc<dyn DeviceSink>);

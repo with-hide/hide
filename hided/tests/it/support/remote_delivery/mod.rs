@@ -147,6 +147,14 @@ impl Environment {
         command
     }
 
+    /// Every variable a session of the account gets.
+    pub fn values(&self) -> Vec<(OsString, OsString)> {
+        self.values
+            .iter()
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect()
+    }
+
     pub fn set(&mut self, name: &str, value: impl Into<OsString>) {
         self.values.insert(name.into(), value.into());
     }
@@ -487,7 +495,7 @@ impl PaneOutput {
 pub struct Fixture {
     pub local: Herdr,
     pub remote: Herdr,
-    pub ssh: Ssh,
+    pub ssh: super::sshd::Sshd,
     pub state: PathBuf,
     pub hide: PathBuf,
     pub hooks: PathBuf,
@@ -625,33 +633,12 @@ impl Fixture {
         fs::create_dir_all(remote_env.home.join(".local/bin"))?;
         std::os::unix::fs::symlink(&bin, remote_env.home.join(".local/bin/herdr"))?;
         fs::create_dir_all(local_env.home.join(".ssh"))?;
-        for name in ["host", "client"] {
-            let mut command = local_env.command("/usr/bin/ssh-keygen");
-            command
-                .args(["-q", "-t", "ed25519", "-N", "", "-f"])
-                .arg(local_env.home.join(".ssh").join(name));
-            successful(command)?;
-        }
         let local = Herdr::start(root.join("l"), local_env.clone(), bin.clone(), Some(&state))?;
         let remote = Herdr::start(root.join("r"), remote_env.clone(), bin, None)?;
-        let ssh = Ssh::start(
-            remote_env,
-            ipc.path().join("r.sock"),
-            &local_env.home.join(".ssh/host"),
-            &local_env.home.join(".ssh/client"),
-        )?;
-        let public = fs::read_to_string(local_env.home.join(".ssh/host.pub"))?;
-        fs::write(
-            local_env.home.join(".ssh/known_hosts"),
-            format!("[127.0.0.1]:{} {}\n", ssh.port, public.trim()),
-        )?;
+        let ssh = super::sshd::Sshd::start(&root.join("sshd"), &remote_env.values())?;
         fs::write(
             local_env.home.join(".ssh/config"),
-            format!(
-                "Host delivery-fixture\n  HostName 127.0.0.1\n  Port {}\n  User fixture\n  IdentityFile {}\n  IdentityAgent none\n",
-                ssh.port,
-                local_env.home.join(".ssh/client").display()
-            ),
+            ssh.client_config("delivery-fixture"),
         )?;
         local_env.set("HIDE_STATE_DIR", state.as_os_str());
         local_env.set("HIDE_KEEP_ALIVE", "1");

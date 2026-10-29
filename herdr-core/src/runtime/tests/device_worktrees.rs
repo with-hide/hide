@@ -119,15 +119,15 @@ fn device_runtime_with_host(
     });
     runtime.device_hosts.insert(
         DEVICE.to_owned(),
-        hosts::DeviceHost {
-            phase: hosts::HostPhase::Ready {
+        hosts::DeviceHost::new(
+            hosts::HostPhase::Ready {
                 host,
                 platform: "macos aarch64".to_owned(),
                 helper_path: Some("/fake/hided".to_owned()),
                 windows_drives: None,
             },
-            generation: 1,
-        },
+            1,
+        ),
     );
     runtime.request_device_worktrees(DEVICE, true);
     let shared = SharedRuntime::new(runtime);

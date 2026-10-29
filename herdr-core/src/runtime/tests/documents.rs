@@ -219,15 +219,15 @@ impl Fixture {
         let device = FakeDevice::new();
         runtime.device_hosts.insert(
             DEVICE.to_owned(),
-            hosts::DeviceHost {
-                phase: hosts::HostPhase::Ready {
+            hosts::DeviceHost::new(
+                hosts::HostPhase::Ready {
                     host: device.clone(),
                     platform: "macos aarch64".to_owned(),
                     helper_path: Some("/fake/hided".to_owned()),
                     windows_drives: None,
                 },
-                generation: 1,
-            },
+                1,
+            ),
         );
         // The checkout is written by the runtime's workers, so it is the
         // runtime's and goes after they have let go.
@@ -1467,6 +1467,7 @@ fn a_closed_device_file_reopens_only_on_its_device_and_leaves_this_machines_clos
             state: "connected".to_owned(),
             message: None,
             problem: None,
+            sign_in: None,
             ssh_alias: Some(DEVICE.to_owned()),
             wsl_distro: None,
             herdr_socket_path: None,

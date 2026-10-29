@@ -36,15 +36,15 @@ fn dialed_link(runtime: &mut Runtime, device: &str, host: Arc<dyn crate::node_ac
     }
     runtime.device_hosts.insert(
         device.to_owned(),
-        super::super::hosts::DeviceHost {
-            generation: 1,
-            phase: super::super::hosts::HostPhase::Ready {
+        super::super::hosts::DeviceHost::new(
+            super::super::hosts::HostPhase::Ready {
                 host,
                 platform: "linux".to_owned(),
                 helper_path: Some("/fixture/hided".to_owned()),
                 windows_drives: None,
             },
-        },
+            1,
+        ),
     );
 }
 

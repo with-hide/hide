@@ -56,6 +56,7 @@ fn fixture() -> Runtime {
         state: "connected".to_owned(),
         message: None,
         problem: None,
+        sign_in: None,
         ssh_alias: Some("mini".to_owned()),
         wsl_distro: None,
         herdr_socket_path: None,

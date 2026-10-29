@@ -1,10 +1,12 @@
 //! The node contract (PRD core-host-node b5): the core's own node
 //! (`hide_node::Local`) and a device's node reached over SSH, `hided node
-//! serve` behind the loopback SSH server, answer the same calls alike, and a
-//! device's channels share its one connection.
+//! serve` behind the system's own `sshd` on loopback, answer the same calls
+//! alike, and everything a device does rides its one connection (PRD
+//! system-ssh-device-link B22). The server is a real `sshd`, which the
+//! remote mailbox lane provides, so these tests are run there.
 #![cfg(unix)]
 
-use crate::support::ssh_server;
+use crate::support::sshd::Sshd;
 
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
@@ -34,8 +36,8 @@ struct Account {
     values: Vec<(OsString, OsString)>,
 }
 
-impl ssh_server::Account for Account {
-    #[allow(clippy::disallowed_methods)] // env_clear: an SSH exec's environment (Unix only)
+impl Account {
+    #[allow(clippy::disallowed_methods)] // env_clear: a session's environment (Unix only)
     fn command(&self, program: &OsStr) -> Command {
         let mut command = Command::new(program);
         command
@@ -43,10 +45,6 @@ impl ssh_server::Account for Account {
             .envs(self.values.iter().map(|(name, value)| (name, value)))
             .current_dir(&self.home);
         command
-    }
-
-    fn home(&self) -> &Path {
-        &self.home
     }
 }
 
@@ -56,7 +54,7 @@ struct Device {
     _root: tempfile::TempDir,
     home: PathBuf,
     project: PathBuf,
-    ssh: ssh_server::Ssh,
+    ssh: Sshd,
     transport: Arc<dyn DialedTransport>,
     link: Arc<dyn NodeLink>,
     /// The device's state folder, where its node binds its pane socket.
@@ -186,11 +184,15 @@ impl Device {
                 ("PATH".into(), "/usr/bin:/bin:/usr/sbin:/sbin".into()),
                 ("SHELL".into(), "/bin/sh".into()),
                 ("HIDE_STATE_DIR".into(), state.clone().into()),
+                // The device's node bridges its own Herdr, the one its
+                // account's environment names (PRD system-ssh-device-link
+                // B24).
+                ("HERDR_SOCKET_PATH".into(), herdr_socket.clone().into()),
                 ("HIDE_TEST_HIDED".into(), env!("CARGO_BIN_EXE_hided").into()),
             ],
         };
         let git = |args: &[&str]| {
-            let mut command = ssh_server::Account::command(&account, OsStr::new("/usr/bin/git"));
+            let mut command = account.command(OsStr::new("/usr/bin/git"));
             command.args(["-c", "init.defaultBranch=main", "-c", "user.name=Fixture"]);
             command.args(["-c", "user.email=fixture@example.invalid", "-C"]);
             command.arg(&project).args(args);
@@ -221,37 +223,10 @@ impl Device {
             }
         });
 
-        let keys = base.join("k");
-        fs::create_dir(&keys).unwrap();
-        for name in ["host", "client"] {
-            run(Command::new("/usr/bin/ssh-keygen")
-                .args(["-q", "-t", "ed25519", "-N", "", "-f"])
-                .arg(keys.join(name)));
-        }
-        let ssh = ssh_server::Ssh::start(
-            account,
-            herdr_socket,
-            &keys.join("host"),
-            &keys.join("client"),
-        )
-        .unwrap();
+        let ssh = Sshd::start(&base.join("k"), &account.values).unwrap();
         let local = base.join("l");
         fs::create_dir_all(local.join(".ssh")).unwrap();
-        let public = fs::read_to_string(keys.join("host.pub")).unwrap();
-        fs::write(
-            local.join(".ssh/known_hosts"),
-            format!("[127.0.0.1]:{} {}\n", ssh.port, public.trim()),
-        )
-        .unwrap();
-        fs::write(
-            local.join(".ssh/config"),
-            format!(
-                "Host {ALIAS}\n  HostName 127.0.0.1\n  Port {}\n  User fixture\n  IdentityFile {}\n  IdentityAgent none\n",
-                ssh.port,
-                keys.join("client").display()
-            ),
-        )
-        .unwrap();
+        fs::write(local.join(".ssh/config"), ssh.client_config(ALIAS)).unwrap();
         // The build this daemon carries for the device: a launcher for the
         // `hided` under test, so the install moves a few bytes rather than a
         // debug binary, and the device runs this build's node.
@@ -267,6 +242,7 @@ impl Device {
         let mut connector = hide_node::ssh::Connector::new(Some(
             retained_packages.unwrap_or_else(|| packages.clone()),
         ))
+        .with_askpass_program(PathBuf::from(env!("CARGO_BIN_EXE_hide")))
         .with_pane_events(slot);
         if let Some(sink) = terminals {
             connector = connector.with_terminals(sink);
@@ -284,8 +260,10 @@ impl Device {
         let established = match transport.establish(
             &consent,
             &[],
-            hide_node_link::device::Wake::Allowed,
-            Box::new(|_| {}),
+            hide_node_link::device::Attempt::unattended(
+                hide_node_link::device::Wake::Allowed,
+                Box::new(|_| {}),
+            ),
         ) {
             Ok(established) => established,
             Err(error) => panic!("the device's node did not start: {error:?}"),
@@ -574,6 +552,7 @@ fn a_retained_protocol24_node_keeps_legacy_readers_then_upgrades_normally() {
     assert_eq!(project.identity, expected.identity);
     device.link.close("ordinary build upgrade");
     let transport = hide_node::ssh::Connector::new(Some(device.current_packages.clone()))
+        .with_askpass_program(PathBuf::from(env!("CARGO_BIN_EXE_hide")))
         .transport(&device.local, "contract-node", ALIAS, None)
         .unwrap();
     let consent = HostConsent {
@@ -587,8 +566,10 @@ fn a_retained_protocol24_node_keeps_legacy_readers_then_upgrades_normally() {
         .establish(
             &consent,
             &[],
-            hide_node_link::device::Wake::Allowed,
-            Box::new(|_| {}),
+            hide_node_link::device::Attempt::unattended(
+                hide_node_link::device::Wake::Allowed,
+                Box::new(|_| {}),
+            ),
         )
         .unwrap();
     assert_eq!(
@@ -716,8 +697,10 @@ fn a_saturated_core_answers_busy_over_ssh_and_keeps_its_reader_usable() {
                 .establish(
                     &consent,
                     &[],
-                    hide_node_link::device::Wake::Allowed,
-                    Box::new(|_| {}),
+                    hide_node_link::device::Attempt::unattended(
+                        hide_node_link::device::Wake::Allowed,
+                        Box::new(|_| {}),
+                    ),
                 )
                 .unwrap()
                 .node
@@ -781,7 +764,8 @@ fn a_saturated_core_answers_busy_over_ssh_and_keeps_its_reader_usable() {
         read(&mut request(&sockets[2], 33)),
         json!({"ok": false, "reason": "hide_unavailable", "next_action": "Reconnect the pane and retry"})
     );
-    assert_eq!(device.ssh.accepted(), 1);
+    // Each attempt is one connection of its own, and nothing else dialed.
+    assert_eq!(device.ssh.accepted(), 3);
     for link in &links {
         link.close("contract");
     }
@@ -969,9 +953,9 @@ fn a_published_guardrail_policy_is_what_the_devices_hooks_read() {
 #[test]
 fn a_device_s_channels_share_its_one_connection() {
     let device = Device::start();
-    // The link and the install's reads made one connection.
+    // The start script, the install and the link made one connection.
     assert_eq!(device.ssh.accepted(), 1);
-    // A Herdr channel opens on it, and an attachment rides the node's link.
+    // The device's Herdr is a stream of it, and an attachment rides it too.
     device.transport.herdr_api_connector().connect().unwrap();
     let request = "8a6e0e4c-3f0b-4d2c-9a51-0c6f2b9d7e10";
     let staged = stage(&device, request, 0, 1, "attached.txt").unwrap();
@@ -990,9 +974,10 @@ fn a_device_s_channels_share_its_one_connection() {
     .unwrap();
     assert!(!Path::new(&staged).exists());
     assert_eq!(device.ssh.accepted(), 1);
-    // Closing the link ends its node and leaves the connection to the rest.
+    // The link is the connection: closing it ends the device's Herdr too,
+    // and nothing dials again on its own.
     device.link.close("contract");
-    device.transport.herdr_api_connector().connect().unwrap();
+    assert!(device.transport.herdr_api_connector().connect().is_err());
     assert_eq!(device.ssh.accepted(), 1);
 }
 

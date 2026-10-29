@@ -27,21 +27,6 @@ pub fn ssh_alias_is_one_token(alias: &str) -> bool {
         || alias.starts_with('-'))
 }
 
-/// Which trust or sign-in step a connection failure names, read off the
-/// words this module wrote into it: a changed host key, an unknown one, or a
-/// refused authentication (PRD S5.5 B38). Any other failure is `None`.
-pub fn connection_problem(message: &str) -> Option<&'static str> {
-    if message.contains(HOST_KEY_CHANGED) {
-        Some("host_key_changed")
-    } else if message.contains(HOST_KEY_UNKNOWN) {
-        Some("host_key_unknown")
-    } else if message.contains("stage=auth ") {
-        Some("authentication")
-    } else {
-        None
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RemoteStage {
@@ -218,16 +203,18 @@ pub struct CapabilityReport {
 }
 
 impl CapabilityReport {
+    /// A report with a device test's stages pending, in the order the row
+    /// lists them: the connection, the sign-in, the helper's protocol, Herdr,
+    /// the terminals and Git (PRD system-ssh-device-link B25). Each is read
+    /// off the connection the device already has; the test dials nothing.
     pub fn new(operation_id: impl Into<String>, host: RemoteHostIdentity) -> Self {
         let stages = [
             RemoteStage::Ssh,
             RemoteStage::Auth,
-            RemoteStage::Herdr,
             RemoteStage::Protocol,
+            RemoteStage::Herdr,
             RemoteStage::Pty,
-            RemoteStage::Sftp,
             RemoteStage::Git,
-            RemoteStage::Tunnel,
         ]
         .into_iter()
         .map(|stage| CapabilityResult {
@@ -327,26 +314,58 @@ pub struct HostConsent {
     #[serde(default)]
     pub cli_dir: Option<String>,
     pub granted_at_unix_ms: u64,
-    /// The account, address and host key the node first ran on; bound on
-    /// the first connection after consent and never rewritten by one.
+    /// The account, address, port and machine the node first ran on;
+    /// bound on the first connection after consent and never rewritten by
+    /// one, except that a consent bound before contract 4 gains the machine
+    /// id it lacked.
     #[serde(default)]
     pub identity: Option<HostIdentity>,
 }
 
+/// Who a consent was given for: the account and address `ssh` reaches, and
+/// the machine that answered there (PRD system-ssh-device-link D-09). The
+/// host key is OpenSSH's to check against `known_hosts`, so a consent is no
+/// longer bound to it.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HostIdentity {
     pub user: String,
     pub hostname: String,
     pub port: u16,
+    /// The id the machine reports of itself (`hide_platform::host::machine_id`
+    /// read on the device; a WSL distribution's install id as `wsl:<id>`).
+    /// Absent in a consent bound before contract 4.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine_id: Option<String>,
+    /// The host key a consent before contract 4 was bound to. Kept as it
+    /// was, so a build before contract 4 still recognizes the device; a
+    /// consent given since leaves it empty.
+    #[serde(default)]
     pub host_key_sha256: String,
 }
 
 impl HostIdentity {
     pub fn describe(&self) -> String {
-        format!(
-            "{}@{}:{} ({})",
-            self.user, self.hostname, self.port, self.host_key_sha256
-        )
+        match &self.machine_id {
+            Some(machine) => format!(
+                "{}@{}:{} (machine {machine})",
+                self.user, self.hostname, self.port
+            ),
+            None => format!("{}@{}:{}", self.user, self.hostname, self.port),
+        }
+    }
+
+    /// Whether `observed` is the device a consent bound to `self` covers: the
+    /// same account, address and port, and the same machine once the
+    /// consent names one (B16, B17). A consent from before contract 4 names
+    /// no machine and is carried to the one that answers (D-09).
+    pub fn covers(&self, observed: &HostIdentity) -> bool {
+        self.user == observed.user
+            && self.hostname == observed.hostname
+            && self.port == observed.port
+            && self
+                .machine_id
+                .as_ref()
+                .is_none_or(|machine| observed.machine_id.as_ref() == Some(machine))
     }
 }
 
@@ -356,12 +375,14 @@ impl HostIdentity {
 /// link in the consented command folder. Contract 3 is the whole install kit
 /// (PRD device-parity D-12): the hook entries besides the command
 /// (it also held the labels plugin, which labels-in-hided retired, so the
-/// scope only narrowed); a contract-2 consent with the same folders is
-/// carried to 3 on its next connection without asking (D-13).
-pub const HOST_CONSENT_CONTRACT: u32 = 3;
+/// scope only narrowed). Contract 4 binds the consent to the machine id the
+/// device reports instead of its host key (PRD system-ssh-device-link D-09);
+/// the scope is unchanged, so a contract-2 or -3 consent with the same
+/// folders is carried to 4 on its next connection without asking (D-13).
+pub const HOST_CONSENT_CONTRACT: u32 = 4;
 
-/// The contract a consent may be carried forward from without asking.
-pub const HOST_CONSENT_CARRIED_FROM: u32 = 2;
+/// The contracts a consent may be carried forward from without asking.
+pub const HOST_CONSENT_CARRIED_FROM: [u32; 2] = [2, 3];
 
 /// Where the node is installed on the device unless the daemon was started
 /// with another root; `~` is the remote account's home.
@@ -371,22 +392,214 @@ pub const DEFAULT_HELPER_ROOT: &str = hide_kit::layout::HELPER_ROOT;
 /// with another folder; `~` is the remote account's home.
 pub const DEFAULT_CLI_DIR: &str = "~/.local/bin";
 
-/// Whether a connection attempt may start a machine that is off: a WSL
-/// distribution that is not running (PRD wsl-device D-11). Only the app's
-/// launch and the operator's own `다시 연결` (or consent, or a fresh
-/// registration) may; a scheduled retry, a read that needs the link and
-/// every background job may not, and such an attempt on a machine that is
-/// off ends as [`EstablishError::Stopped`]. A device that cannot be off
-/// (one reached over SSH) ignores it.
+/// Whether a connection attempt has the operator behind it: it may start a
+/// machine that is off, a WSL distribution that is not running (PRD
+/// wsl-device D-11), and it may ask the operator on the device row (PRD
+/// system-ssh-device-link D-06). Only the app's launch and the operator's
+/// own `다시 연결` (or consent, or a fresh registration) may; a scheduled
+/// retry, a read that needs the link and every background job may not. Such
+/// an attempt on a machine that is off ends as [`EstablishError::Stopped`],
+/// and one that needs a question ends as [`SshProblem::SignInNeeded`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Wake {
     Allowed,
     NotAllowed,
 }
 
+/// What a connection attempt waits on, as the device's row shows it (PRD
+/// system-ssh-device-link B4-B12, B27). The words are ssh's own; a secret
+/// the operator types is never part of it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SignInWait {
+    /// Other devices are connecting; this one dials when a place is free.
+    Queued,
+    /// ssh asks for something to type that is shown masked: a password, a
+    /// key's passphrase (with the key's file, for the `ssh-add` line), a
+    /// one-time code or a security key's PIN. `prompt` is ssh's sentence.
+    Secret {
+        prompt: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        key_file: Option<String>,
+    },
+    /// The server is not in `known_hosts`: its name and key fingerprint, for
+    /// the operator to trust or not.
+    HostKey { host: String, fingerprint: String },
+    /// ssh asks yes or no.
+    Confirm { prompt: String },
+    /// A security key waits for a touch; it ends by itself.
+    Touch { prompt: String },
+    /// The sign-in waits for a page in the browser.
+    Browser { url: String },
+}
+
+impl SignInWait {
+    /// Whether the operator answers it on the row, as opposed to a wait that
+    /// ends by itself.
+    pub fn is_question(&self) -> bool {
+        matches!(
+            self,
+            Self::Secret { .. } | Self::HostKey { .. } | Self::Confirm { .. }
+        )
+    }
+
+    /// The `kind` the row and `hide device` read.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Secret { .. } => "secret",
+            Self::HostKey { .. } => "host_key",
+            Self::Confirm { .. } => "confirm",
+            Self::Touch { .. } => "touch",
+            Self::Browser { .. } => "browser",
+        }
+    }
+}
+
+/// Text the operator typed for ssh. It is handed to ssh and dropped: it has
+/// no serialization, and its `Debug` shows nothing of it (B10).
+pub struct Secret(String);
+
+impl Secret {
+    pub fn new(text: String) -> Self {
+        Self(text)
+    }
+
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for Secret {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("Secret(..)")
+    }
+}
+
+/// The operator's answer to a question.
+#[derive(Debug)]
+pub enum Answer {
+    /// What they typed for a secret.
+    Text(Secret),
+    /// They trusted the server or said yes.
+    Accept,
+}
+
+/// Why a question got no answer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Refusal {
+    /// The attempt is Hide's own, so nobody may be asked (D-06, B14).
+    NotAllowed,
+    /// The operator chose Cancel (B8).
+    Cancelled,
+    /// Nobody answered within the bound (D-05: five minutes).
+    TimedOut,
+    /// The attempt the question belonged to is over.
+    Ended,
+}
+
+/// The device row's side of one connection attempt, which the core gives
+/// the transport (PRD system-ssh-device-link D-05, D-06, D-10). Blocking;
+/// called from the attempt's own threads, never under the runtime lock.
+pub trait SignIn: Send + Sync {
+    /// Shows a wait that takes no answer on the row, or clears it.
+    fn show(&self, wait: Option<SignInWait>);
+    /// Asks `question` on the row and waits for the operator, at most the
+    /// core's bound; an attempt Hide started by itself is answered
+    /// [`Refusal::NotAllowed`] at once.
+    fn ask(&self, question: SignInWait) -> Result<Answer, Refusal>;
+}
+
+/// A [`SignIn`] that asks nobody and shows nothing: a test's, or a caller
+/// that has no row.
+pub struct NoSignIn;
+
+impl SignIn for NoSignIn {
+    fn show(&self, _wait: Option<SignInWait>) {}
+
+    fn ask(&self, _question: SignInWait) -> Result<Answer, Refusal> {
+        Err(Refusal::NotAllowed)
+    }
+}
+
+/// Why `ssh` did not connect, decided in one place from what it said and
+/// how it ended (`hide_node::ssh::openssh`); the row words each one with
+/// what to do (PRD system-ssh-device-link B5, B7, B8, B13, B14, B18-B21).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SshProblem {
+    /// A question or a browser check was needed and nobody was asked, or
+    /// the operator cancelled or left it unanswered.
+    SignInNeeded,
+    /// The browser check was not finished in time.
+    BrowserTimeout,
+    /// The server refused every way of signing in that was tried.
+    SignInRefused,
+    /// The server's access policy refused the account (a `tailscale: `
+    /// banner).
+    PolicyRefused,
+    /// The server's key differs from the one `known_hosts` holds.
+    HostKeyChanged,
+    /// The alias's host name does not resolve.
+    NameNotFound,
+    /// The server could not be reached.
+    Unreachable,
+    /// The alias's proxy command or jump host failed.
+    ProxyFailed,
+    /// The machine is not one Hide can run on.
+    Unsupported,
+    /// This computer has no `ssh` program.
+    SshMissing,
+    /// This computer's OpenSSH is older than 8.4, which cannot hand Hide a
+    /// question.
+    OpenSshOld,
+    /// None of the above; the row shows ssh's last line.
+    Unclassified,
+}
+
+impl SshProblem {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::SignInNeeded => "sign_in_needed",
+            Self::BrowserTimeout => "browser_timeout",
+            Self::SignInRefused => "sign_in_refused",
+            Self::PolicyRefused => "policy_refused",
+            Self::HostKeyChanged => "host_key_changed",
+            Self::NameNotFound => "name_not_found",
+            Self::Unreachable => "unreachable",
+            Self::ProxyFailed => "proxy_failed",
+            Self::Unsupported => "unsupported",
+            Self::SshMissing => "ssh_missing",
+            Self::OpenSshOld => "openssh_old",
+            Self::Unclassified => "unclassified",
+        }
+    }
+
+    /// Whether Hide tries again by itself after the backoff: only what a
+    /// network or a server coming back can change. Everything else waits for
+    /// the operator, so a background retry never repeats a refused sign-in
+    /// at the server.
+    pub fn retried(self) -> bool {
+        matches!(
+            self,
+            Self::NameNotFound | Self::Unreachable | Self::ProxyFailed | Self::Unclassified
+        )
+    }
+}
+
+/// A classified ssh failure: the class and the one line the row may show
+/// with it (ssh's last line for an unclassified one), never a secret.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SshFailure {
+    pub problem: SshProblem,
+    pub detail: String,
+}
+
 #[derive(Debug)]
 pub enum EstablishError {
     Connect(RemoteError),
+    /// `ssh` did not connect, for the classified reason.
+    Ssh(SshFailure),
     /// The machine is off and this attempt may not start it ([`Wake`]):
     /// nothing was started, and only an attempt that may wake it, or the
     /// machine starting by itself, brings the link back.
@@ -412,6 +625,7 @@ impl fmt::Display for EstablishError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Connect(error) => write!(formatter, "{}", error.diagnostic().reason),
+            Self::Ssh(failure) => formatter.write_str(&failure.detail),
             Self::IdentityChanged { bound, observed } => write!(
                 formatter,
                 "The device now answers as {}, not {} that the helper was allowed on; allow it again in Settings to continue",
@@ -455,6 +669,27 @@ pub struct Established {
 
 /// Hears why a link ended, once.
 pub type OnClose = Box<dyn FnOnce(String) + Send + 'static>;
+
+/// One connection attempt as the core starts it: whether a machine that is
+/// off may be started and the operator may be asked (`wake`, decided once
+/// per attempt), the row the attempt's questions and waits go to, and what
+/// hears the link's end.
+pub struct Attempt {
+    pub wake: Wake,
+    pub sign_in: std::sync::Arc<dyn SignIn>,
+    pub on_close: OnClose,
+}
+
+impl Attempt {
+    /// An attempt that asks nobody, for a caller with no device row.
+    pub fn unattended(wake: Wake, on_close: OnClose) -> Self {
+        Self {
+            wake,
+            sign_in: std::sync::Arc::new(NoSignIn),
+            on_close,
+        }
+    }
+}
 
 /// A node that dialed the core, as the core takes it (PRD
 /// core-host-node-remote-core D-04, D-10): its link is up and its node
@@ -673,14 +908,12 @@ pub trait DialedTransport: DeviceTransport {
     fn capability_test(&self, operation_id: &str, check: SnapshotCheck<'_>) -> CapabilityReport;
     /// Connects, checks `consent` against the device that answered, installs
     /// this build's node when the device lacks it, and starts it. Blocking;
-    /// run it off the runtime lock. `on_close` hears why the link ended;
-    /// `wake` says whether a machine that is off may be started for it.
+    /// run it off the runtime lock.
     fn establish(
         &self,
         consent: &HostConsent,
         retirement_projects: &[String],
-        wake: Wake,
-        on_close: OnClose,
+        attempt: Attempt,
     ) -> Result<Established, EstablishError>;
 }
 
@@ -697,22 +930,54 @@ mod tests {
         }
     }
 
+    /// D-09, B16, B17: a consent covers the same account, address and port;
+    /// once bound to a machine, only that machine; one from before contract
+    /// 4 names none and covers whichever answers.
+    #[test]
+    fn a_consent_covers_its_account_and_the_machine_it_was_bound_to() {
+        let bound = HostIdentity {
+            user: "me".to_owned(),
+            hostname: "studio.local".to_owned(),
+            port: 22,
+            machine_id: Some("m1".to_owned()),
+            host_key_sha256: String::new(),
+        };
+        let observed = |change: fn(&mut HostIdentity)| {
+            let mut identity = bound.clone();
+            change(&mut identity);
+            identity
+        };
+        assert!(bound.covers(&bound));
+        assert!(!bound.covers(&observed(|it| it.machine_id = Some("m2".to_owned()))));
+        assert!(!bound.covers(&observed(|it| it.machine_id = None)));
+        assert!(!bound.covers(&observed(|it| it.user = "other".to_owned())));
+        assert!(!bound.covers(&observed(|it| it.hostname = "elsewhere".to_owned())));
+        assert!(!bound.covers(&observed(|it| it.port = 2222)));
+        let legacy = HostIdentity {
+            machine_id: None,
+            host_key_sha256: "SHA256:old".to_owned(),
+            ..bound.clone()
+        };
+        assert!(legacy.covers(&observed(|it| it.machine_id = Some("m2".to_owned()))));
+        assert!(!legacy.covers(&observed(|it| it.port = 2222)));
+    }
+
     #[test]
     fn capability_report_has_staged_failure_and_visible_recovery() {
         let mut report = CapabilityReport::new("op-1", identity());
-        report.fail(RemoteStage::Tunnel, "forward denied", true, true);
+        report.fail(RemoteStage::Auth, "sign-in needed", true, true);
         assert!(matches!(
             report.connection,
             RemoteConnectionState::ActionRequired { .. }
         ));
         assert!(matches!(
-            report.stage(RemoteStage::Tunnel).unwrap().state,
+            report.stage(RemoteStage::Auth).unwrap().state,
             CapabilityState::Failed {
                 retryable: true,
                 action_required: true
             }
         ));
-        report.pass(RemoteStage::Tunnel, "retried after approval");
+        report.pass(RemoteStage::Auth, "retried after sign-in");
         report.connected();
         assert_eq!(report.connection, RemoteConnectionState::Connected);
     }
@@ -723,16 +988,14 @@ mod tests {
         for stage in [
             RemoteStage::Ssh,
             RemoteStage::Auth,
-            RemoteStage::Herdr,
             RemoteStage::Protocol,
+            RemoteStage::Herdr,
             RemoteStage::Pty,
-            RemoteStage::Sftp,
-            RemoteStage::Git,
         ] {
             report.pass(stage, "ok");
         }
         assert!(!report.all_required_passed());
-        report.pass(RemoteStage::Tunnel, "ok");
+        report.pass(RemoteStage::Git, "ok");
         assert!(report.all_required_passed());
     }
 }

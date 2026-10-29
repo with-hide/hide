@@ -375,7 +375,6 @@ impl Upstream {
         self.sftp("core-update-install", |raw| async move {
             super::host::install_build(&raw, packages, &os, &arch, helper_root)
                 .await
-                .map(|installed| installed.helper_path)
                 .map_err(|error| super::transfer::TransferError::Remote(error.to_string()))
         })
         .map_err(|error| error.to_string())

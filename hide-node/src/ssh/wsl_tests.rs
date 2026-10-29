@@ -47,7 +47,11 @@ fn fixture() -> Fixture {
     let shims = dir.path().join("shims");
     std::fs::create_dir(&shims).unwrap();
     let uname = shims.join("uname");
-    std::fs::write(&uname, "#!/bin/sh\necho Linux x86_64\n").unwrap();
+    std::fs::write(
+        &uname,
+        "#!/bin/sh\ncase $1 in -s) echo Linux ;; -m) echo x86_64 ;; *) echo Linux x86_64 ;; esac\n",
+    )
+    .unwrap();
     std::fs::set_permissions(&uname, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::create_dir(dir.path().join("home")).unwrap();
     let found = Arc::new(Mutex::new(vec![distribution()]));
@@ -117,7 +121,7 @@ fn consent(identity: Option<HostIdentity>) -> HostConsent {
 }
 
 fn establish(device: &WslDevice, consent: &HostConsent, wake: Wake) -> EstablishError {
-    match device.establish(consent, &[], wake, Box::new(|_| {})) {
+    match device.establish(consent, &[], Attempt::unattended(wake, Box::new(|_| {}))) {
         Ok(_) => panic!("the stand-in has no helper to start"),
         Err(error) => error,
     }
@@ -150,7 +154,8 @@ fn a_failing_listing_is_no_answer_and_wakes_nothing() {
 }
 
 /// B3, B23: the same attempt on a distribution that runs, or one that may
-/// wake it, goes on to the account probe.
+/// wake it, goes on to the start script, whose probe is the first thing it
+/// runs in the distribution.
 #[test]
 fn a_running_distribution_or_an_attempt_that_may_wake_it_is_probed() {
     let fixture = fixture();
@@ -160,7 +165,7 @@ fn a_running_distribution_or_an_attempt_that_may_wake_it_is_probed() {
     let calls = fixture.calls();
     assert_eq!(calls[0], "--list --running --quiet");
     assert!(
-        calls[1].starts_with("-d Ubuntu --cd ~ -e sh -c id -un;"),
+        calls[1].starts_with("-d Ubuntu --cd ~ -e sh -c IFS= read -r s"),
         "{calls:?}"
     );
 
@@ -169,7 +174,7 @@ fn a_running_distribution_or_an_attempt_that_may_wake_it_is_probed() {
     establish(&device, &consent(None), Wake::Allowed);
     let calls = fixture.calls();
     assert!(
-        calls[0].starts_with("-d Ubuntu --cd ~ -e sh -c id -un;"),
+        calls[0].starts_with("-d Ubuntu --cd ~ -e sh -c IFS= read -r s"),
         "{calls:?}"
     );
 }
@@ -215,7 +220,7 @@ fn a_reinstalled_distribution_or_another_default_user_asks_consent_again() {
     .unwrap();
     let bound = identity_of(&distribution(), user.trim());
     let reinstalled = HostIdentity {
-        host_key_sha256: "wsl:00000000-0000-0000-0000-000000000000".to_owned(),
+        machine_id: Some("wsl:00000000-0000-0000-0000-000000000000".to_owned()),
         ..bound.clone()
     };
     let error = establish(&device, &consent(Some(reinstalled)), Wake::Allowed);
@@ -225,64 +230,35 @@ fn a_reinstalled_distribution_or_another_default_user_asks_consent_again() {
     );
     let other_user = HostIdentity {
         user: "someone-else".to_owned(),
-        ..bound
+        ..bound.clone()
     };
     let error = establish(&device, &consent(Some(other_user)), Wake::Allowed);
     assert!(
         matches!(error, EstablishError::IdentityChanged { .. }),
         "{error}"
     );
+    // A consent from before contract 4 named the install in its host key
+    // field, and still names only that install.
+    let legacy_other = HostIdentity {
+        machine_id: None,
+        host_key_sha256: "wsl:00000000-0000-0000-0000-000000000000".to_owned(),
+        ..bound.clone()
+    };
+    let error = establish(&device, &consent(Some(legacy_other)), Wake::Allowed);
+    assert!(
+        matches!(error, EstablishError::IdentityChanged { .. }),
+        "{error}"
+    );
     assert!(!fixture.home().join(".hide").exists());
-}
-
-/// B26: the install sends each file once, reuses what is there whole, and
-/// sends again only what an interrupted or damaged install left wrong.
-#[test]
-fn an_install_resumes_with_only_what_is_missing_or_damaged() {
-    let fixture = fixture();
-    let packages = fixture.packages();
-    let device = fixture.device(packages.clone());
-    let payload = packages.payload("linux", "x86_64").unwrap();
-    let user = String::from_utf8(
-        std::process::Command::new("id")
-            .arg("-un")
-            .output()
-            .unwrap()
-            .stdout,
-    )
-    .unwrap();
-    let root = fixture.home().join(".hide/helper");
-    let root_text = root.to_str().unwrap();
-
-    let (helper, fresh, upload) = device.install(user.trim(), root_text, &payload).unwrap();
-    assert!(fresh);
-    assert_eq!((upload.sent, upload.reused), (3, 0));
-    assert_eq!(std::fs::read(&helper).unwrap(), b"helper build 1");
-    let mode = std::fs::metadata(&helper).unwrap().permissions().mode();
-    assert_eq!(mode & 0o777, 0o700);
-    let root_mode = std::fs::metadata(&root).unwrap().permissions().mode();
-    assert_eq!(
-        root_mode & 0o077,
-        0,
-        "the helper root is the account's alone"
-    );
-
-    let (_, fresh, upload) = device.install(user.trim(), root_text, &payload).unwrap();
-    assert!(!fresh);
-    assert_eq!((upload.sent, upload.reused), (0, 3));
-
-    // An upload cut off before its rename leaves its staging name and the
-    // final one untouched; a damaged final copy is replaced.
-    let folder = std::path::Path::new(&helper).parent().unwrap();
-    std::fs::write(folder.join(".upload-hide-4242"), b"half").unwrap();
-    std::fs::write(folder.join("hide"), b"damaged").unwrap();
-    let (_, fresh, upload) = device.install(user.trim(), root_text, &payload).unwrap();
-    assert!(!fresh);
-    assert_eq!((upload.sent, upload.reused), (1, 2));
-    assert_eq!(
-        std::fs::read(folder.join("hide")).unwrap(),
-        b"command build 1"
-    );
+    let legacy_same = HostIdentity {
+        machine_id: None,
+        host_key_sha256: bound.machine_id.clone().unwrap(),
+        ..bound
+    };
+    assert!(covers(
+        &legacy_same,
+        &identity_of(&distribution(), user.trim())
+    ));
 }
 
 /// B27: the link owns its `wsl.exe`: closing the link ends the child, and
@@ -331,23 +307,6 @@ fn a_child_link_ends_its_child_and_ends_with_it() {
     let reason = closed.recv_timeout(Duration::from_secs(10)).unwrap();
     assert!(reason.contains("output closed"), "{reason}");
     assert!(link.closed_reason().is_some());
-}
-
-#[test]
-fn the_probe_reads_the_account_and_refuses_what_it_cannot_run_as() {
-    let probe = Probe::read("alice\n1000\n/srv/alice\nLinux x86_64\nsha256sum\n").unwrap();
-    assert_eq!(
-        probe,
-        Probe {
-            user: "alice".to_owned(),
-            home: "/srv/alice".to_owned(),
-            os: "linux".to_owned(),
-            arch: "x86_64".to_owned(),
-        }
-    );
-    assert!(Probe::read("alice\n1000\n/srv/alice\nLinux x86_64\nnone\n").is_err());
-    assert!(Probe::read("Alice Smith\n1000\n/srv/alice\nLinux x86_64\nsha256sum\n").is_err());
-    assert!(Probe::read("alice\n1000\n/srv/alice\nLinux riscv64\nsha256sum\n").is_err());
 }
 
 #[test]

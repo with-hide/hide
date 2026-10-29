@@ -376,10 +376,12 @@ fn official_remote_terminal_session_fixture_probe() {
         .establish(
             &consent,
             &[],
-            hide_node_link::device::Wake::Allowed,
-            Box::new(move |reason| {
-                let _ = closed_sender.send(reason);
-            }),
+            hide_node_link::device::Attempt::unattended(
+                hide_node_link::device::Wake::Allowed,
+                Box::new(move |reason| {
+                    let _ = closed_sender.send(reason);
+                }),
+            ),
         )
         .expect("the device's node link is established");
     let terminals = established

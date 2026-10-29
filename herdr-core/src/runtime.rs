@@ -22,6 +22,7 @@ pub(crate) mod delivery;
 mod detail;
 mod device_analytics;
 mod device_catalog;
+mod device_sign_in;
 mod devices;
 mod direct_observation;
 mod disk_sweep;
@@ -1247,6 +1248,9 @@ pub struct Runtime {
     /// while one that may not was running (`hosts::HostAttempt`): should
     /// that one find the machine off, the next one may wake it.
     device_wake_pending: HashSet<String>,
+    /// The last sign-in question number, for every device
+    /// (`device_sign_in`); never reset.
+    last_sign_in_question: u64,
     /// The last helper attempt number, for every device. Never reset, so an
     /// answer from an attempt made before a device was removed and added
     /// again under the same id cannot match the new attempt.
@@ -2243,6 +2247,7 @@ impl Runtime {
             device_hosts: HashMap::new(),
             device_host_retries: HashMap::new(),
             device_wake_pending: HashSet::new(),
+            last_sign_in_question: 0,
             last_host_generation: 0,
             changes_published_key: None,
             checkout_header: checkout_git::State::default(),

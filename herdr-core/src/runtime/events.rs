@@ -1568,6 +1568,7 @@ pub(super) enum Event {
     RemoveWorkspace(RemoveWorkspacePayload),
     RegisterDevice(RegisterDevicePayload),
     DeviceHostConsent(DeviceHostConsentPayload),
+    DeviceSignIn(super::device_sign_in::DeviceSignInPayload),
     DeviceHostRetry(DeviceHostRetryPayload),
     RemoveDevice(RemoveDevicePayload),
     TestDevice(TestDevicePayload),
@@ -1845,6 +1846,7 @@ pub(super) fn validate_event(event: EventEnvelope) -> Result<Event, EventValidat
         "register_device" => decode!(RegisterDevicePayload, RegisterDevice),
         "device_host_consent" => decode!(DeviceHostConsentPayload, DeviceHostConsent),
         "device_host_retry" => decode!(DeviceHostRetryPayload, DeviceHostRetry),
+        "device_sign_in" => decode!(super::device_sign_in::DeviceSignInPayload, DeviceSignIn),
         "remove_device" => decode!(RemoveDevicePayload, RemoveDevice),
         "test_device" => decode!(TestDevicePayload, TestDevice),
         "create_pane" => decode!(CreatePanePayload, CreatePane),
@@ -2980,6 +2982,7 @@ impl Runtime {
             Event::DeviceHostConsent(payload) => {
                 self.set_host_consent(payload.device_id.trim(), payload.allow)
             }
+            Event::DeviceSignIn(payload) => self.answer_device_sign_in(payload),
             Event::DeviceHostRetry(payload) => {
                 let device_id = payload.device_id.trim().to_owned();
                 if self

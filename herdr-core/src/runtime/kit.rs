@@ -1658,8 +1658,9 @@ impl Runtime {
     }
 
     /// Another registration that reaches the same account on the same
-    /// machine: its consent bound the same user and host key, as two
-    /// registrations for two Herdr servers there do. The hooks, the `hide`
+    /// machine: its consent bound the same user and machine (a consent from
+    /// before contract 4, the same host key), as two registrations for two
+    /// Herdr servers there do. The hooks, the `hide`
     /// link and the helper root belong to that account, not to one
     /// registration, so removing one of them leaves those for the other.
     fn registration_sharing_account(
@@ -1668,7 +1669,11 @@ impl Runtime {
     ) -> Option<&crate::model::DeviceRegistration> {
         fn account(registration: &crate::model::DeviceRegistration) -> Option<(&str, &str)> {
             let identity = registration.host_consent.as_ref()?.identity.as_ref()?;
-            Some((&identity.user, &identity.host_key_sha256))
+            let machine = identity
+                .machine_id
+                .as_deref()
+                .unwrap_or(&identity.host_key_sha256);
+            Some((&identity.user, machine))
         }
         let own = account(registration)?;
         self.snapshot

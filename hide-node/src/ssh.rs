@@ -22,7 +22,7 @@ use russh::keys::{
     PrivateKeyWithHashAlg, PublicKeyOrCertificate, agent::client::AgentClient,
     check_known_hosts_path, load_secret_key,
 };
-use russh::{Channel, ChannelMsg, Disconnect, Pty};
+use russh::{ChannelMsg, Disconnect, Pty};
 use russh_sftp::client::SftpSession;
 use russh_sftp::protocol::OpenFlags;
 use serde::{Deserialize, Serialize};
@@ -34,9 +34,11 @@ use tokio::sync::{Semaphore, oneshot};
 
 use hide_herdr_client::{ApiConnector, ApiError, ApiStream, ConnectionShutdown};
 
+pub mod askpass;
 mod device;
 pub mod host;
 pub mod hosts;
+pub mod openssh;
 pub mod profiles;
 pub mod transfer;
 pub mod upstream;
@@ -1236,11 +1238,6 @@ impl RusshRemoteClient {
         }
     }
 
-    /// The host key the connection's last dial accepted.
-    fn observed_host_key(&self) -> Option<String> {
-        lock_recover(&self.connection.observed_key).clone()
-    }
-
     /// Admission for one session channel on the device's connection, held
     /// while the channel is open. Past [`MAX_SESSION_CHANNELS`] a use waits
     /// for one to close, at most the SSH operation bound, and then fails.
@@ -1335,22 +1332,6 @@ impl RusshRemoteClient {
         lock_recover(&self.herdr_status)
             .as_ref()
             .map(|status| status.socket.clone())
-    }
-
-    pub(crate) fn cached_herdr_version(&self) -> Option<String> {
-        lock_recover(&self.herdr_status)
-            .as_ref()
-            .and_then(|status| status.version.clone())
-    }
-
-    pub(crate) fn herdr_session_readable(&self) -> bool {
-        lock_recover(&self.herdr_status)
-            .as_ref()
-            .is_some_and(|status| {
-                status.running
-                    && status.protocol.map(u64::from)
-                        == Some(hide_herdr_client::HERDR_PROTOCOL_REVISION)
-            })
     }
 
     pub(crate) fn forget_herdr_socket(&self) {
@@ -2470,7 +2451,6 @@ fn combine_cleanup<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hide_node_link::device::connection_problem;
 
     #[test]
     fn ssh_protocol_wait_has_an_absolute_deadline() {
@@ -2654,11 +2634,11 @@ mod tests {
         drop(client);
     }
 
-    /// A changed host key, an unknown one and a refused sign-in each need a
-    /// different action, so the device row names which one it was (B38): the
-    /// words come from the real known_hosts check, not a copy of them.
+    /// A changed host key and an unknown one need a different action, so an
+    /// upstream dial names which one it was: the words come from the real
+    /// known_hosts check, not a copy of them.
     #[test]
-    fn a_changed_or_unknown_host_key_and_a_refused_sign_in_are_told_apart() {
+    fn a_changed_or_unknown_host_key_are_told_apart() {
         let offered = russh::keys::PublicKey::from_openssh(
             "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBmTEAgbvSH51RTwhPKbL+uBW92zVlMr81wfUEJlRNkr",
         )
@@ -2684,44 +2664,14 @@ mod tests {
         };
 
         let changed = answer(&format!("[mini.example.test]:2200 {recorded}\n")).unwrap_err();
-        assert_eq!(
-            connection_problem(&changed),
-            Some("host_key_changed"),
-            "{changed}"
-        );
+        assert!(changed.contains(HOST_KEY_CHANGED), "{changed}");
         let unknown = answer("").unwrap_err();
-        assert_eq!(
-            connection_problem(&unknown),
-            Some("host_key_unknown"),
-            "{unknown}"
-        );
+        assert!(unknown.contains(HOST_KEY_UNKNOWN), "{unknown}");
         let trusted = answer(&format!(
             "[mini.example.test]:2200 {}\n",
             offered.to_openssh().unwrap()
         ));
         assert_eq!(trusted, Ok(true));
-
-        let refused = remote_error(
-            "remote-auth",
-            "mini",
-            RemoteStage::Auth,
-            "the ssh config sets IdentityAgent none and no IdentityFile authenticated",
-            false,
-            true,
-        );
-        assert_eq!(
-            connection_problem(&refused.to_string()),
-            Some("authentication")
-        );
-        let unreachable = remote_error(
-            "remote-connect",
-            "mini",
-            RemoteStage::Ssh,
-            "Connection refused",
-            true,
-            false,
-        );
-        assert_eq!(connection_problem(&unreachable.to_string()), None);
     }
 
     fn status_output(exit_status: u32, stdout: &str) -> RemoteCommandOutput {

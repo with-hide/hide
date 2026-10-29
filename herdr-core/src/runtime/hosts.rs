@@ -19,8 +19,8 @@ use crate::agent_state::header::LinkWait;
 use crate::model::{DeviceHostSnapshot, HostConsent};
 use crate::node_access::NodeLink;
 use crate::remote::{
-    EstablishError, Established, HOST_CONSENT_CARRIED_FROM, HOST_CONSENT_CONTRACT, NodeReady,
-    OnClose, Wake,
+    Attempt, EstablishError, Established, HOST_CONSENT_CARRIED_FROM, HOST_CONSENT_CONTRACT,
+    NodeReady, OnClose, SshFailure, SshProblem, Wake,
 };
 
 /// A node and the link that reads its files.
@@ -154,6 +154,25 @@ pub(super) struct DeviceHost {
     /// before the device was removed and added again, is recognised and
     /// dropped.
     pub(super) generation: u64,
+    /// Whether the running or last attempt might ask the operator.
+    pub(super) wake: Wake,
+    /// Why the last attempt's `ssh` did not connect, by class (B18); none
+    /// once an attempt starts or the link is up.
+    pub(super) problem: Option<SshProblem>,
+    /// What the running attempt waits on from the operator (B4-B12, B27).
+    pub(super) sign_in: Option<super::device_sign_in::SignInState>,
+}
+
+impl DeviceHost {
+    pub(super) fn new(phase: HostPhase, generation: u64) -> Self {
+        Self {
+            phase,
+            generation,
+            wake: Wake::NotAllowed,
+            problem: None,
+            sign_in: None,
+        }
+    }
 }
 
 impl Runtime {
@@ -203,10 +222,13 @@ impl Runtime {
 
     /// Whether a consent still covers what this build would do: the same
     /// contract, the same install root and the same command folder. A
-    /// contract-2 consent for the same folders counts, because the operator
-    /// chose to carry it to the whole kit on its next connection (D-13).
+    /// contract-2 or -3 consent for the same folders counts: the operator
+    /// chose to carry it to the whole kit on its next connection (PRD
+    /// device-parity D-13), and contract 4 changed only what the consent is
+    /// bound to (PRD system-ssh-device-link D-09, B16).
     fn consent_current(&self, consent: &HostConsent) -> bool {
-        (consent.contract == HOST_CONSENT_CONTRACT || consent.contract == HOST_CONSENT_CARRIED_FROM)
+        (consent.contract == HOST_CONSENT_CONTRACT
+            || HOST_CONSENT_CARRIED_FROM.contains(&consent.contract))
             && (consent.helper_root == self.host_helper_root || self.carries_root(consent))
             && consent.cli_dir.as_deref() == Some(self.host_cli_dir.as_str())
     }
@@ -231,9 +253,10 @@ impl Runtime {
         }
     }
 
-    /// Rewrites a carried consent to this build's scope (a contract-2 consent
-    /// to contract 3, a legacy default root to the default root), keeping the
-    /// identity it was bound to, before the connection it covers starts.
+    /// Rewrites a carried consent to this build's scope (a contract-2 or -3
+    /// consent to contract 4, a legacy default root to the default root),
+    /// keeping the identity it was bound to, before the connection it covers
+    /// starts.
     fn carry_consent_forward(&mut self, device_id: &str) {
         let root = self.host_helper_root.clone();
         let carries_root = self
@@ -247,7 +270,9 @@ impl Runtime {
             .iter_mut()
             .find(|registration| registration.id == device_id)
             .and_then(|registration| registration.host_consent.as_mut())
-            .filter(|consent| consent.contract == HOST_CONSENT_CARRIED_FROM || carries_root)
+            .filter(|consent| {
+                HOST_CONSENT_CARRIED_FROM.contains(&consent.contract) || carries_root
+            })
         else {
             return;
         };
@@ -255,12 +280,12 @@ impl Runtime {
         consent.contract = HOST_CONSENT_CONTRACT;
         let from_root = carries_root.then(|| std::mem::replace(&mut consent.helper_root, root));
         self.persist_current_ui_state();
-        if from_contract == HOST_CONSENT_CARRIED_FROM {
+        if HOST_CONSENT_CARRIED_FROM.contains(&from_contract) {
             crate::diagnostic!(serde_json::json!({
                 "component": "remote_host",
                 "kind": "host.consent_upgraded",
                 "target": device_id,
-                "from": HOST_CONSENT_CARRIED_FROM,
+                "from": from_contract,
                 "contract": HOST_CONSENT_CONTRACT,
             }));
         }
@@ -389,14 +414,16 @@ impl Runtime {
         if !registration.origin.core_redials() || self.effects_held() {
             return false;
         }
-        match self.device_hosts.get(device_id).map(|host| &host.phase) {
-            Some(HostPhase::Connecting) => {
-                if attempt.wake() == Wake::Allowed {
+        match self.device_hosts.get(device_id) {
+            Some(host) if matches!(host.phase, HostPhase::Connecting) => {
+                // Leave for the attempt after this one, should this one
+                // need what it could not ask for; one that may ask has it.
+                if attempt.wake() == Wake::Allowed && host.wake == Wake::NotAllowed {
                     self.device_wake_pending.insert(device_id.to_owned());
                 }
                 return false;
             }
-            Some(HostPhase::Ready { .. }) => return false,
+            Some(host) if matches!(host.phase, HostPhase::Ready { .. }) => return false,
             _ => {}
         }
         let generation = self.advance_host_generation(device_id);
@@ -467,16 +494,25 @@ impl Runtime {
     }
 
     /// The app opened a window on this core: each WSL distribution that is
-    /// off or lost is tried with leave to start it (B3); one whose attempt
-    /// is running gets that leave for the attempt after it, should it find
-    /// the distribution off.
+    /// off or lost is tried with leave to start it (PRD wsl-device B3), and
+    /// each SSH device that stopped because signing in needed the operator
+    /// is tried with leave to ask (PRD system-ssh-device-link D-06, B10);
+    /// one whose attempt is running gets that leave for the attempt after
+    /// it, should that one need it.
     pub(super) fn wake_devices_for_app(&mut self) -> bool {
         let woken: Vec<String> = self
             .snapshot
             .ui_state
             .device_registrations
             .iter()
-            .filter(|registration| registration.origin.wsl_distro().is_some())
+            .filter(|registration| {
+                registration.origin.wsl_distro().is_some()
+                    || registration.origin.ssh_alias().is_some()
+                        && self.device_hosts.get(&registration.id).is_some_and(|host| {
+                            matches!(host.phase, HostPhase::Connecting)
+                                || host.problem == Some(SshProblem::SignInNeeded)
+                        })
+            })
             .map(|registration| registration.id.clone())
             .collect();
         let mut changed = false;
@@ -511,6 +547,12 @@ impl Runtime {
     /// blocks, and a link that already ended tells its end at once, which
     /// takes the lock.
     fn spawn_host_start(&mut self, device_id: &str, generation: u64, start: HostStart) -> bool {
+        let host = self.device_host_entry(device_id);
+        host.problem = None;
+        host.wake = match &start {
+            HostStart::Dial { wake, .. } => *wake,
+            HostStart::Arrived { .. } => Wake::NotAllowed,
+        };
         if matches!(start, HostStart::Dial { .. }) {
             self.begin_device_connect(device_id);
         }
@@ -553,12 +595,24 @@ impl Runtime {
                         consent,
                         retirement_projects,
                         wake,
-                    } => (
-                        client
-                            .establish(&consent, &retirement_projects, wake, on_close)
-                            .map(HostReady::Dialed),
-                        None,
-                    ),
+                    } => {
+                        let attempt = Attempt {
+                            wake,
+                            sign_in: Arc::new(super::device_sign_in::RowSignIn {
+                                context: context.clone(),
+                                device_id: device.clone(),
+                                generation,
+                                wake,
+                            }),
+                            on_close,
+                        };
+                        (
+                            client
+                                .establish(&consent, &retirement_projects, attempt)
+                                .map(HostReady::Dialed),
+                            None,
+                        )
+                    }
                     HostStart::Arrived { node, hear_close } => {
                         (Ok(HostReady::Arrived(node)), Some((hear_close, on_close)))
                     }
@@ -671,10 +725,7 @@ impl Runtime {
     fn device_host_entry(&mut self, device_id: &str) -> &mut DeviceHost {
         self.device_hosts
             .entry(device_id.to_owned())
-            .or_insert(DeviceHost {
-                phase: HostPhase::NotAllowed,
-                generation: 0,
-            })
+            .or_insert_with(|| DeviceHost::new(HostPhase::NotAllowed, 0))
     }
 
     fn set_host_phase(&mut self, device_id: &str, phase: HostPhase) {
@@ -769,7 +820,11 @@ impl Runtime {
     pub(super) fn advance_host_generation(&mut self, device_id: &str) -> u64 {
         self.last_host_generation += 1;
         let generation = self.last_host_generation;
-        self.device_host_entry(device_id).generation = generation;
+        let host = self.device_host_entry(device_id);
+        host.generation = generation;
+        // A question of the attempt this one replaces answers nothing now:
+        // its channel goes with it, which ends the wait.
+        host.sign_in = None;
         generation
     }
 
@@ -828,6 +883,7 @@ impl Runtime {
                 let mut bound_now = false;
                 let mut helper_path = None;
                 if let Some((identity, installed, path, upload)) = dialed {
+                    let mut machine_carried = false;
                     if let Some(consent) = self
                         .snapshot
                         .ui_state
@@ -835,13 +891,35 @@ impl Runtime {
                         .iter_mut()
                         .find(|registration| registration.id == device_id)
                         .and_then(|registration| registration.host_consent.as_mut())
-                        && consent.identity.is_none()
                     {
-                        consent.identity = Some(identity);
-                        bound_now = true;
+                        match &mut consent.identity {
+                            None => {
+                                consent.identity = Some(identity);
+                                bound_now = true;
+                            }
+                            // A consent bound before contract 4 names no
+                            // machine; the one that answered as its account,
+                            // address and port is the one it was given for,
+                            // and from now on the only one (D-09, B16).
+                            Some(bound)
+                                if bound.machine_id.is_none() && identity.machine_id.is_some() =>
+                            {
+                                bound.machine_id = identity.machine_id;
+                                machine_carried = true;
+                            }
+                            Some(_) => {}
+                        }
                     }
-                    if bound_now {
+                    if bound_now || machine_carried {
                         self.persist_current_ui_state();
+                    }
+                    if machine_carried {
+                        crate::diagnostic!(serde_json::json!({
+                            "component": "remote_host",
+                            "kind": "host.consent_machine_bound",
+                            "target": device_id,
+                            "generation": generation,
+                        }));
                     }
                     crate::diagnostic!(serde_json::json!({
                         "component": "remote_host",
@@ -859,6 +937,9 @@ impl Runtime {
                 // Connected: leave the app gave meanwhile has nothing left to
                 // start, and must not start the distribution after a later end.
                 self.device_wake_pending.remove(device_id);
+                let host = self.device_host_entry(device_id);
+                host.problem = None;
+                host.sign_in = None;
                 self.set_host_phase(
                     device_id,
                     HostPhase::Ready {
@@ -956,24 +1037,48 @@ impl Runtime {
                     .entry(device_id.to_owned())
                     .or_default()
                     .unavailable = Some(message.clone());
-                // A changed identity or an unsupported device waits for the
-                // operator, and drops leave the app gave meanwhile; a WSL
-                // distribution that is off waits for an attempt that may
-                // wake it, at once when the app gave that leave meanwhile;
+                // A changed identity, an unsupported device or an ssh
+                // failure only the operator can change wait for the operator
+                // and drop leave the app gave meanwhile, except a sign-in
+                // that needed someone to ask, which the app's leave tries
+                // again at once, as it does a WSL distribution that is off;
                 // anything else may pass, so it is tried again, and the
                 // retry takes the app's leave.
-                let wake_next = matches!(error, EstablishError::Stopped(_))
+                let needs_operator = matches!(
+                    &error,
+                    EstablishError::Ssh(SshFailure {
+                        problem: SshProblem::SignInNeeded,
+                        ..
+                    })
+                );
+                let wake_next = (matches!(error, EstablishError::Stopped(_)) || needs_operator)
                     && self.device_wake_pending.contains(device_id);
+                let ssh_device = self
+                    .link_origin(device_id)
+                    .is_some_and(|origin| origin.ssh_alias().is_some());
+                let problem = match &error {
+                    EstablishError::Ssh(failure) => Some(failure.problem),
+                    EstablishError::Unsupported(_) if ssh_device => Some(SshProblem::Unsupported),
+                    _ => None,
+                };
                 if matches!(
-                    error,
+                    &error,
                     EstablishError::IdentityChanged { .. } | EstablishError::Unsupported(_)
-                ) {
+                ) || problem.is_some_and(|problem| !problem.retried()) && !needs_operator
+                {
                     self.device_wake_pending.remove(device_id);
                 }
+                self.device_host_entry(device_id).problem = problem;
                 let phase = match error {
                     EstablishError::IdentityChanged { .. } => HostPhase::IdentityChanged(message),
                     EstablishError::Unsupported(_) => HostPhase::Unsupported(message),
                     EstablishError::Stopped(_) => HostPhase::Unavailable(message),
+                    // A refused sign-in, a changed server key or a missing
+                    // ssh would only be refused again: the operator's retry
+                    // tries it (B7, B13, B14, B18).
+                    EstablishError::Ssh(failure) if !failure.problem.retried() => {
+                        HostPhase::Unavailable(message)
+                    }
                     _ => {
                         if self
                             .link_origin(device_id)
