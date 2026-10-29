@@ -34,6 +34,11 @@ export function ConnectionBadge({ actions }: { actions: Actions }) {
           {t("coreMove.reconnect")}
         </Button>
       ) : null}
+      {strip.action === "retry" ? (
+        <Button variant="link" size="sm" className="h-auto shrink-0 p-0 text-caption" data-core-retry="true" onClick={() => actions.coreLink("retry")}>
+          {t("common.retry")}
+        </Button>
+      ) : null}
       {strip.action === "give_up" ? (
         // It only opens the move dialog at its confirm; nothing is given up from the strip.
         <Button variant="link" size="sm" className="h-auto shrink-0 p-0 text-caption" data-core-move-strip-give-up="true" onClick={() => useUiStore.getState().openMoveGiveUp()}>

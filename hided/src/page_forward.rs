@@ -1,9 +1,11 @@
-//! A page on a device's loopback, reached from this machine through the
-//! device's node link (PRD wsl-device B9): a listener on this machine's
-//! loopback whose every connection is one link stream to the node's own
-//! loopback, over whichever link the device has. The forward owns its
-//! listener and its connections; dropping it ends them, and a link that
-//! ends ends every stream it carried.
+//! A page on another machine's loopback, reached from this one: a device's
+//! through its node link, whichever link that is (PRD wsl-device B9), and
+//! the core machine's, from a node, through the node's connection to its
+//! core (`link_mux`). A listener on this machine's loopback whose every
+//! connection is one stream to that machine's own loopback. The forward
+//! owns its listener; dropping it ends a device's connections with it,
+//! while a connection to the core's machine ends with its own ends. A link
+//! that ends ends every stream it carried.
 
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -11,6 +13,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use hide_node::ssh::{OpenError, RemoteHost};
+
+use crate::link_mux::Mux;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
 use tokio::task::{JoinHandle, JoinSet};
@@ -18,8 +22,33 @@ use tokio::task::{JoinHandle, JoinSet};
 /// Connections one page's forward carries at once; one past it is closed.
 pub const MAX_CONNECTIONS: usize = 16;
 
+/// The machine whose loopback a page is on.
+#[derive(Clone)]
+pub enum PageLink {
+    /// A connected device, through its node link.
+    Device(RemoteHost),
+    /// The core's machine, from a node, through its connection to the core.
+    Core(Arc<Mux>),
+}
+
+impl PageLink {
+    fn target(&self) -> &str {
+        match self {
+            Self::Device(link) => link.target(),
+            Self::Core(_) => "core",
+        }
+    }
+
+    fn live(&self) -> bool {
+        match self {
+            Self::Device(link) => link.closed_reason().is_none(),
+            Self::Core(mux) => mux.live(),
+        }
+    }
+}
+
 pub struct PageForward {
-    link: RemoteHost,
+    link: PageLink,
     local_addr: SocketAddr,
     task: JoinHandle<()>,
 }
@@ -30,7 +59,7 @@ impl PageForward {
     /// resolve to, tried when the node cannot reach `remote`, and a numeric
     /// HTTPS host keeps its address for the certificate.
     pub async fn start(
-        link: RemoteHost,
+        link: PageLink,
         remote: SocketAddr,
         alternate: Option<SocketAddr>,
         preserve_numeric_host: bool,
@@ -69,7 +98,7 @@ impl PageForward {
     /// Whether the link it rides still carries streams; a forward whose
     /// link ended reaches nothing and is built again on the next link.
     pub fn live(&self) -> bool {
-        self.link.closed_reason().is_none()
+        self.link.live()
     }
 }
 
@@ -112,7 +141,7 @@ async fn bind(
 }
 
 async fn accept(
-    link: RemoteHost,
+    link: PageLink,
     primary: TcpListener,
     ipv6: Option<TcpListener>,
     remote: SocketAddr,
@@ -155,17 +184,44 @@ async fn accept(
     }
 }
 
-/// One connection: a stream to the node's loopback, and the bytes both
+/// One connection: a stream to the machine's loopback, and the bytes both
 /// ways until either end closes. The first refusal a forward meets goes
 /// to the log; the page shows its own failure to load.
 async fn carry(
-    link: RemoteHost,
-    mut local: TcpStream,
+    link: PageLink,
+    local: TcpStream,
     remote: SocketAddr,
     alternate: Option<SocketAddr>,
     reported: &AtomicBool,
 ) {
     let target = link.target().to_owned();
+    let link = match link {
+        PageLink::Device(link) => link,
+        PageLink::Core(mux) => {
+            // The core's end tries each address in turn. The carry never
+            // waits on the connection, and the page's permit is held until
+            // the stream's slot is free, so one page holds at most
+            // MAX_CONNECTIONS of the connection's streams.
+            let to: Vec<SocketAddr> = std::iter::once(remote).chain(alternate).collect();
+            let carried = local
+                .into_std()
+                .and_then(|local| local.set_nonblocking(false).map(|()| local))
+                .and_then(|local| mux.carry(local, &to));
+            match carried {
+                Ok(carried) => carried.ended().await,
+                Err(error) => {
+                    if !reported.swap(true, Ordering::Relaxed) {
+                        eprintln!(
+                            "{}",
+                            serde_json::json!({"component":"page_forward","kind":"stream.refused","node":target,"reason":error.to_string()})
+                        );
+                    }
+                }
+            }
+            return;
+        }
+    };
+    let mut local = local;
     let opened = tokio::task::spawn_blocking(move || match (link.page_stream(remote), alternate) {
         (Err(OpenError::Refused(_)), Some(alternate)) => link.page_stream(alternate),
         (opened, _) => opened,

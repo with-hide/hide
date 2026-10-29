@@ -16,8 +16,9 @@ use hide_platform::process::OwnedChild;
 use serde_json::{Value, json};
 
 use super::remote_delivery::renderer::Renderer;
-use super::remote_delivery::{Environment, Ssh, capture, read, successful, wait_for};
+use super::remote_delivery::{Environment, capture, read, successful, wait_for};
 use super::run::{Run, finish};
+use super::sshd::Sshd;
 
 /// The core machine's node id.
 pub const CORE_NODE: &str = "fixture-core-machine";
@@ -126,7 +127,7 @@ pub struct Fixture {
     pub core_state: PathBuf,
     /// The screen machine: its account and Herdr.
     pub screen: Herdr,
-    pub ssh: Ssh,
+    pub ssh: Sshd,
     pub hided: PathBuf,
     pub root: PathBuf,
     removed: bool,
@@ -196,34 +197,12 @@ impl Fixture {
         }
         let ssh_dir = screen_env.home.join(".ssh");
         fs::create_dir_all(&ssh_dir)?;
-        for name in ["host", "client"] {
-            let mut command = screen_env.command("/usr/bin/ssh-keygen");
-            command
-                .args(["-q", "-t", "ed25519", "-N", "", "-f"])
-                .arg(ssh_dir.join(name));
-            successful(command)?;
-        }
-        let core = Herdr::start(&root.join("c"), core_env.clone(), core_socket.clone(), &bin)?;
+        let core = Herdr::start(&root.join("c"), core_env.clone(), core_socket, &bin)?;
         let screen = Herdr::start(&root.join("s"), screen_env, screen_socket, &bin)?;
-        let ssh = Ssh::start(
-            core_env.clone(),
-            core_socket,
-            &ssh_dir.join("host"),
-            &ssh_dir.join("client"),
-        )?;
-        let public = fs::read_to_string(ssh_dir.join("host.pub"))?;
-        fs::write(
-            ssh_dir.join("known_hosts"),
-            format!("[127.0.0.1]:{} {}\n", ssh.port, public.trim()),
-        )?;
-        fs::write(
-            ssh_dir.join("config"),
-            format!(
-                "Host {ALIAS}\n  HostName 127.0.0.1\n  Port {}\n  User fixture\n  IdentityFile {}\n  IdentityAgent none\n",
-                ssh.port,
-                ssh_dir.join("client").display(),
-            ),
-        )?;
+        // The core machine is the system's own `sshd`, whose sessions run
+        // in the core account's environment.
+        let ssh = Sshd::start(&root.join("sshd"), &core_env.values())?;
+        fs::write(ssh_dir.join("config"), ssh.client_config(ALIAS))?;
         let mut fixture = Self {
             core,
             core_state,

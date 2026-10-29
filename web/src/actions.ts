@@ -1495,8 +1495,11 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "core_move", payload: request });
     },
 
-    /** A node's window ends or restores its link to the core on another machine (B16); the node's own daemon answers. */
-    coreLink(action: "disconnect" | "reconnect") {
+    /**
+     * A node's window ends or restores its link to the core on another machine (B16), or retries a link that stopped
+     * on what only the operator can fix; the node's own daemon answers.
+     */
+    coreLink(action: "disconnect" | "reconnect" | "retry") {
       dispatch({ schema_version: 2, kind: "core_link", payload: { action } });
     },
 

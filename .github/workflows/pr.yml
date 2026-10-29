@@ -594,8 +594,8 @@ jobs:
   # checks the device's node link over the system's ssh and sshd, its sign-in,
   # helper attestation and the durable mailbox, the same code on every system; what differs by system under it is
   # `os-contract`'s and `windows check`'s to prove. The fixture's macOS-only
-  # branches (codesign of the staged binaries, BSD `ps` and `strip`, the SFTP
-  # server path) and the Mac as the usual remote device are why `nightly.yml`
+  # branches (codesign of the staged binaries, BSD `ps` and `strip`) and the
+  # Mac as the usual remote device are why `nightly.yml`
   # runs it on macOS too. It is planned for a change to the crates it builds
   # and tests (`MAILBOX_CRATES` in scripts/ci-plan.py).
   remote-mailbox:

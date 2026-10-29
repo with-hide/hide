@@ -6,7 +6,8 @@
 //! The same registry serves a node whose core runs on another machine
 //! (`node_pages`): there the View's source comes from the core over the
 //! link, and a page of the core's machine reaches its loopback through the
-//! link's own SSH connection. [`PageSources`] is what each side supplies.
+//! node's connection to its core. [`PageSources`] is what each side
+//! supplies.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -23,8 +24,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use herdr_core::node_access::{self, NodeLink};
 use herdr_core::workspace_control::BrowserRouteSource;
-use hide_node::ssh::upstream::Upstream;
-use hide_node::ssh::{RemoteHost, RemoteLocalForward};
+use hide_node::ssh::RemoteHost;
 use percent_encoding::{NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
@@ -32,7 +32,8 @@ use tokio::sync::{Mutex, Semaphore, oneshot, watch};
 
 use crate::browser_assets::{self, Asset};
 use crate::core::CoreHandle;
-use crate::page_forward::PageForward;
+use crate::link_mux::Mux;
+use crate::page_forward::{PageForward, PageLink};
 use crate::state_file::new_token;
 use hide_node::pane_proof::process_start;
 
@@ -65,9 +66,9 @@ pub enum Way {
     /// link, whichever link that is.
     Device(RemoteHost),
     /// The core's machine, from a node whose core runs there: its loopback
-    /// through the link's SSH connection. Its files are not read from here,
-    /// so its `file:` pages are refused.
-    Core(Arc<Upstream>),
+    /// through the node's connection to its core. Its files are not read
+    /// from here, so its `file:` pages are refused.
+    Core(Arc<Mux>),
 }
 
 impl PageSources for CoreHandle {
@@ -113,10 +114,8 @@ struct Key {
 }
 
 enum RouteKind {
-    /// A device's page, over its node link.
+    /// A page of a device or of the core's machine.
     Page(PageForward),
-    /// A page of the core's machine, over the node's SSH connection to it.
-    Http(RemoteLocalForward),
     File(oneshot::Sender<()>),
 }
 
@@ -134,7 +133,6 @@ enum RouteEntry {
         owner_started: u64,
         source: BrowserRouteSource,
         result: watch::Sender<Option<RouteResult>>,
-        cancel: oneshot::Sender<()>,
     },
     Ready(Route),
 }
@@ -161,15 +159,14 @@ impl RouteEntry {
             Self::Pending { .. } => true,
             Self::Ready(route) => match &route.kind {
                 RouteKind::Page(forward) => forward.live(),
-                RouteKind::Http(_) | RouteKind::File(_) => true,
+                RouteKind::File(_) => true,
             },
         }
     }
 
     fn close(self) {
         match self {
-            Self::Pending { result, cancel, .. } => {
-                let _ = cancel.send(());
+            Self::Pending { result, .. } => {
                 result.send_replace(Some(Err("view_unavailable")));
             }
             Self::Ready(route) => route.close(),
@@ -181,7 +178,6 @@ impl Route {
     fn close(self) {
         match self.kind {
             RouteKind::Page(forward) => drop(forward),
-            RouteKind::Http(forward) => forward.close(),
             RouteKind::File(stop) => {
                 let _ = stop.send(());
             }
@@ -270,14 +266,12 @@ impl BrowserRoutes {
             .map_err(|_| "browser_route_build_limit")?;
         let old = routes.remove(&key);
         let (result, waiting) = watch::channel(None);
-        let (cancel, canceled) = oneshot::channel();
         routes.insert(
             key.clone(),
             RouteEntry::Pending {
                 owner_started,
                 source: source.clone(),
                 result: result.clone(),
-                cancel,
             },
         );
         drop(routes);
@@ -287,9 +281,7 @@ impl BrowserRoutes {
         let routes = Arc::clone(self);
         tokio::spawn(async move {
             let _build_permit = build_permit;
-            let built = routes
-                .build_route(&key, &source, owner_started, canceled)
-                .await;
+            let built = routes.build_route(&key, &source, owner_started).await;
             routes
                 .finish_route(key, source, owner_started, result, built)
                 .await;
@@ -302,7 +294,6 @@ impl BrowserRoutes {
         key: &Key,
         source: &BrowserRouteSource,
         owner_started: u64,
-        canceled: oneshot::Receiver<()>,
     ) -> Result<Option<Route>, &'static str> {
         let pages = Arc::clone(&self.pages);
         let device = key.device.clone();
@@ -374,21 +365,14 @@ impl BrowserRoutes {
             ));
             let preserve_numeric_host =
                 scheme == "https" && host != "localhost" && host != "0.0.0.0";
-            let forwarded = match way {
-                Way::Device(link) => {
-                    PageForward::start(link, remote, alternate, preserve_numeric_host)
-                        .await
-                        .map(|forward| (forward.local_addr(), RouteKind::Page(forward)))
-                        .map_err(|error| error.to_string())
-                }
-                Way::Core(upstream) => tokio::task::spawn_blocking(move || {
-                    upstream.page_forward(remote, alternate, preserve_numeric_host, canceled)
-                })
-                .await
-                .map_err(|error| error.to_string())
-                .and_then(|forward| forward.map_err(|error| error.to_string()))
-                .map(|forward| (forward.local_addr(), RouteKind::Http(forward))),
+            let link = match way {
+                Way::Device(link) => PageLink::Device(link),
+                Way::Core(mux) => PageLink::Core(mux),
             };
+            let forwarded = PageForward::start(link, remote, alternate, preserve_numeric_host)
+                .await
+                .map(|forward| (forward.local_addr(), RouteKind::Page(forward)))
+                .map_err(|error| error.to_string());
             let (local_addr, kind) = forwarded.map_err(|reason| {
                 eprintln!(
                     "{}",

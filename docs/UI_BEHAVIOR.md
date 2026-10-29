@@ -2431,7 +2431,8 @@ A window on a machine whose core runs elsewhere shows its core's state and takes
 - while a move holds the window, `core를 Mac mini 기기로 옮기는 중 · 3/5 프로젝트와 기록 복사 · 다시 연결될 때까지 입력을 받지 않아요`, the move's step of five, with `…`, and the window sends nothing but the move's own give-up (a rollback says `옮기지 못해 이 Mac의 core로 되돌리는 중`); while the move waits on a machine that took its link and stopped answering, the strip ends with `그만 기다리기` (`여기로 가져오기` for a move back), which only opens the move dialog at its confirm;
 - while this machine updates its core to this app's build, `Mac mini의 core를 이 앱의 빌드로 바꾸는 중 · 에이전트는 계속 실행돼요`, with `…`;
 - while the core cannot be reached, `! Mac mini의 core에 연결할 수 없어요 · 다시 연결하는 중`;
-- after the operator ended the link here, `! Mac mini core와 연결을 끊었어요` with `다시 연결` at its end, which links it again and is the only thing the window sends while it waits;
+- while the link stopped on what only the operator can fix, which nothing dials again until they retry, what they can do in a terminal with `다시 시도` at its end: a sign-in it could not ask (`! Mac mini core에 로그인하려면 확인이 필요해요 · 터미널에서 ssh mini 명령을 한 번 실행하거나 ssh-add로 키를 더해 주세요`), a changed server key (`! Mac mini core의 서버 키가 바뀌었어요 · 터미널에서 확인해 주세요`), and any other such failure (`! ssh로 Mac mini core에 연결하지 못했어요 · 터미널에서 ssh mini 명령으로 이유를 확인해 주세요`);
+- after the operator ended the link here, `! Mac mini core와 연결을 끊었어요` with `다시 연결` at its end, which links it again and is, with `다시 시도`, the only thing the window sends while it waits;
 - otherwise the shell's own connecting state.
 
 The window takes no input while its strip shows, and sends none of what was typed meanwhile once the core is back; the strip goes when the core's snapshot arrives, and a move that ends on another machine rewrites the window's address to it without a reload (`addressAfterMove`).

@@ -21,7 +21,17 @@ impl Device {
             pid: std::cell::Cell::new(0),
         };
         std::fs::create_dir(device.home()).unwrap();
+        std::fs::create_dir(device.tmp()).unwrap();
         device
+    }
+
+    /// The account's temporary folder, where a run's output waits.
+    fn tmp(&self) -> PathBuf {
+        self.dir.path().join("tmp")
+    }
+
+    fn tmp_is_empty(&self) -> bool {
+        std::fs::read_dir(self.tmp()).unwrap().next().is_none()
     }
 
     fn home(&self) -> PathBuf {
@@ -37,6 +47,7 @@ impl Device {
             .args(["-c", &format!("{greeting}{}", WRAPPER[2])])
             .current_dir(self.home())
             .env("HOME", self.home())
+            .env("TMPDIR", self.tmp())
             .env_remove(hide_platform::host::MACHINE_ID_VARIABLE)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -259,4 +270,229 @@ fn a_step_naming_a_line_end_is_never_sent() {
         )
         .is_err()
     );
+}
+
+fn words(words: &[&str]) -> Vec<String> {
+    words.iter().map(|word| (*word).to_owned()).collect()
+}
+
+/// A core move's command answers its status and both outputs, its words
+/// arrive whole, and the script takes the next step after it; output past
+/// the cap is refused with the connection still in step.
+#[test]
+fn a_command_answers_its_status_and_output_and_the_next_step_follows() {
+    let device = Device::new();
+    let mut pipe = device.connect("");
+    probe(&mut pipe, soon()).unwrap();
+    let ran = run(
+        &mut pipe,
+        &words(&["sh", "-c", "printf 'out\\n'; printf err >&2; exit 3"]),
+        1024,
+        soon(),
+    )
+    .unwrap();
+    assert_eq!(
+        (ran.status, ran.stdout.as_slice(), ran.stderr.as_slice()),
+        (3, &b"out\n"[..], &b"err"[..])
+    );
+    let ran = run(
+        &mut pipe,
+        &words(&["printf", "%s|", "a b", "'c\"", "$HOME", "*"]),
+        1024,
+        soon(),
+    )
+    .unwrap();
+    assert_eq!(ran.stdout, b"a b|'c\"|$HOME|*|");
+    assert!(matches!(
+        run(
+            &mut pipe,
+            &words(&["head", "-c", "2000", "/dev/zero"]),
+            1024,
+            soon()
+        ),
+        Err(StepError::Refused(_))
+    ));
+    // The script's own helpers are not commands a step can run.
+    assert_eq!(
+        run(&mut pipe, &words(&["store", "x"]), 1024, soon())
+            .unwrap()
+            .status,
+        127
+    );
+    assert!(run(&mut pipe, &words(&["a\nb"]), 1024, soon()).is_err());
+    assert_eq!(
+        run(&mut pipe, &words(&["true"]), 16, soon())
+            .unwrap()
+            .status,
+        0
+    );
+}
+
+/// A copied file lands whole under a private folder, a damaged one leaves
+/// the file already there alone, and the same file reads back with the
+/// digest the machine states for it.
+#[test]
+fn a_file_goes_whole_into_a_private_folder_and_comes_back_whole() {
+    use sha2::{Digest, Sha256};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    let device = Device::new();
+    let mut pipe = device.connect("");
+    probe(&mut pipe, soon()).unwrap();
+    let bytes: Vec<u8> = (0..200_000_u32).map(|index| (index % 251) as u8).collect();
+    let digest: String = Sha256::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let remote = device.home().join("moved/deep/file");
+    let spelled = remote.to_str().unwrap();
+    let sent = AtomicU64::new(0);
+    put_file(
+        &mut pipe,
+        spelled,
+        &digest,
+        bytes.len() as u64,
+        &mut bytes.as_slice(),
+        &|chunk| {
+            sent.fetch_add(chunk, Ordering::SeqCst);
+        },
+    )
+    .unwrap();
+    assert_eq!(sent.load(Ordering::SeqCst), bytes.len() as u64);
+    assert_eq!(std::fs::read(&remote).unwrap(), bytes);
+    assert_eq!(mode(&device.home().join("moved")), 0o700);
+    assert_eq!(mode(&remote) & 0o077, 0);
+
+    assert!(matches!(
+        put_file(
+            &mut pipe,
+            spelled,
+            &"0".repeat(64),
+            5,
+            &mut &b"other"[..],
+            &|_| {}
+        ),
+        Err(StepError::Refused(_))
+    ));
+    assert_eq!(std::fs::read(&remote).unwrap(), bytes);
+    assert_eq!(
+        std::fs::read_dir(remote.parent().unwrap()).unwrap().count(),
+        1
+    );
+
+    let mut back = Vec::new();
+    let (size, stated) = get_file(&mut pipe, spelled, &mut back, &|_| {}).unwrap();
+    assert_eq!(
+        (size, stated.as_str()),
+        (bytes.len() as u64, digest.as_str())
+    );
+    assert_eq!(back, bytes);
+    assert!(matches!(
+        get_file(&mut pipe, "/no/such/file", &mut Vec::new(), &|_| {}),
+        Err(StepError::Refused(_))
+    ));
+    for refused in ["relative/file", "/a/../b"] {
+        assert!(matches!(
+            put_file(&mut pipe, refused, &digest, 0, &mut &b""[..], &|_| {}),
+            Err(StepError::Refused(_))
+        ));
+    }
+    assert_eq!(
+        run(&mut pipe, &words(&["true"]), 16, soon())
+            .unwrap()
+            .status,
+        0
+    );
+}
+
+/// The attach step hands the connection's pipes to the core's program, with
+/// its state folder when one is named.
+#[test]
+fn attach_hands_the_pipes_to_the_core_program() {
+    let device = Device::new();
+    let program = device.dir.path().join("hided");
+    std::fs::write(&program, "#!/bin/sh\necho \"args:$*\"\nexec cat\n").unwrap();
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let spelled = program.to_str().unwrap();
+
+    let mut pipe = device.connect("");
+    probe(&mut pipe, soon()).unwrap();
+    attach(&mut pipe, spelled, Some("/state/dir")).unwrap();
+    assert_eq!(
+        pipe.line(soon()).unwrap(),
+        b"args:attach --state-dir /state/dir"
+    );
+    pipe.send(b"carried\n", soon()).unwrap();
+    assert_eq!(pipe.line(soon()).unwrap(), b"carried");
+
+    let mut pipe = device.connect("");
+    probe(&mut pipe, soon()).unwrap();
+    attach(&mut pipe, spelled, None).unwrap();
+    assert_eq!(pipe.line(soon()).unwrap(), b"args:attach");
+
+    let mut pipe = device.connect("");
+    probe(&mut pipe, soon()).unwrap();
+    assert!(matches!(
+        attach(&mut pipe, "/no/such/hided", None),
+        Err(StepError::Refused(_))
+    ));
+    assert!(attach(&mut pipe, "hided", None).is_err());
+}
+
+/// A command that writes past the cap is refused while it writes, not
+/// after: one that never stops writing ends, the connection stays in step,
+/// and nothing is left in the temporary folder.
+#[test]
+fn a_command_writing_past_its_cap_is_refused_while_it_writes() {
+    let device = Device::new();
+    let mut pipe = device.connect("");
+    probe(&mut pipe, soon()).unwrap();
+    for endless in [&["yes"][..], &["sh", "-c", "yes >&2"]] {
+        assert!(matches!(
+            run(&mut pipe, &words(endless), 1024, soon()),
+            Err(StepError::Refused(_))
+        ));
+    }
+    assert_eq!(
+        run(&mut pipe, &words(&["true"]), 16, soon())
+            .unwrap()
+            .status,
+        0
+    );
+    // The script removes a run's files after it answers; the next answer
+    // comes after that removal.
+    let missing = device.home().join("missing");
+    assert!(matches!(
+        get_file(
+            &mut pipe,
+            missing.to_str().unwrap(),
+            &mut Vec::new(),
+            &|_| {}
+        ),
+        Err(StepError::Refused(_))
+    ));
+    assert!(device.tmp_is_empty());
+}
+
+/// A run the caller gave up on leaves nothing in the temporary folder once
+/// the script ends.
+#[test]
+fn a_run_given_up_leaves_no_temporary_file() {
+    let device = Device::new();
+    let mut pipe = device.connect("");
+    probe(&mut pipe, soon()).unwrap();
+    let given_up = run(
+        &mut pipe,
+        &words(&["sh", "-c", "sleep 1; echo late"]),
+        1024,
+        Instant::now() + Duration::from_millis(200),
+    );
+    assert!(matches!(given_up, Err(StepError::Lost(_))));
+    assert!(!device.tmp_is_empty());
+    drop(pipe);
+    let deadline = soon();
+    while !device.tmp_is_empty() {
+        assert!(Instant::now() < deadline, "the run's files outlived it");
+        std::thread::yield_now();
+    }
 }

@@ -7,6 +7,13 @@
 //! already holds ([`install`]), each missing file whole, and the helper's
 //! start ([`start`]), after which the same pipes are the helper's link.
 //!
+//! The connection to a core on another machine runs the same script (PRD
+//! system-ssh-device-link B33, `super::super::session`), with steps of its
+//! own between the probe and the end: a command whose output comes back
+//! counted ([`run`]), a file sent to or read from an absolute path
+//! ([`put_file`], [`get_file`]), and the attach role's start in place of the
+//! script ([`attach`]).
+//!
 //! The steps go in lock step on purpose. A file's bytes are read with
 //! `head -c <size>`, and macOS's `head` reads through a buffer that would
 //! take bytes past the file's end if they were already waiting; the node
@@ -51,6 +58,9 @@ else hs=none; sum() { echo none; }; fi;
 safe() { set -- $(ls -ldn -- "$1" 2>/dev/null); case ${1:-} in d*) ;; *) return 3;; esac; [ "${3:-}" = "$uid" ] || [ "${3:-}" = 0 ] || return 1; case $1 in ?????w*|????????w*) ;; *) return 0;; esac; [ "$3" = 0 ] || return 2; case $1 in ?????????[tT]*) return 0;; esac; return 2; };
 mine() { set -- $(ls -ldn -- "$1" 2>/dev/null); [ "${3:-}" = "$uid" ] || return 1; case ${1:-} in ?????w*|????????w*) return 1;; esac; return 0; };
 store() { { (umask 077; mkdir -p -- "${1%/*}") && cat > "$1"; } || { cat > /dev/null; return 1; }; };
+o= e= x= t=;
+trap 'rm -f -- ${o:+"$o"} ${e:+"$e"} ${x:+"$x"} ${t:+"$t"}' EXIT;
+trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 141' PIPE; trap 'exit 143' TERM;
 say probe "$me" "${HOME:-}" "$(uname -s)" "$(uname -m)" "${mid:--}" "$hs";
 root=;
 while IFS=$T read -r cmd a b c d; do
@@ -69,12 +79,24 @@ while [ "$i" -lt "$a" ] && IFS=$T read -r rel dig; do i=$((i+1)); f=$root/$rel; 
 say end;;
 put) [ -n "$root" ] || { say fail "no install folder was chosen"; exit 65; }; f=$root/$a; t=${f%/*}/.upload-${f##*/}-$$;
 find "${f%/*}" -maxdepth 1 -name '.upload-*' -mmin +10 -exec rm -f {} + 2>/dev/null;
-if head -c "$d" | store "$t" && [ "$(sum "$t")" = "$b" ] && chmod -- "$c" "$t" && mv -f -- "$t" "$f"; then say ok; else rm -f -- "$t"; say fail "$a did not arrive whole"; fi;;
+if head -c "$d" | store "$t" && [ "$(sum "$t")" = "$b" ] && chmod -- "$c" "$t" && mv -f -- "$t" "$f"; then t=; say ok; else rm -f -- "$t"; t=; say fail "$a did not arrive whole"; fi;;
 start) [ -n "$root" ] || { say fail "no install folder was chosen"; exit 65; }; h=$root/$a;
 case $b in session=*) unset HERDR_SOCKET_PATH; HERDR_SESSION=${b#session=}; export HERDR_SESSION;; socket=*) unset HERDR_SESSION; HERDR_SOCKET_PATH=${b#socket=}; export HERDR_SOCKET_PATH;; esac;
 [ -x "$h" ] || { say fail "the helper $h is missing"; exit 65; };
 cd -- "$HOME" 2>/dev/null || :;
 say start; exec "$h" node serve --own-herdr;;
+run) set --; i=0; while [ "$i" -lt "$a" ] && IFS= read -r w; do set -- "$@" "$w"; i=$((i+1)); done;
+o=$(mktemp "${TMPDIR:-/tmp}/hide-run.XXXXXX") && e=$(mktemp "${TMPDIR:-/tmp}/hide-run.XXXXXX") && x=$(mktemp "${TMPDIR:-/tmp}/hide-run.XXXXXX") || { rm -f -- ${o:+"$o"} ${e:+"$e"}; o= e= x=; say fail "no temporary file for the command's output"; continue; };
+{ { command "$@" </dev/null; echo $? >"$x"; } 2>&1 1>&3 3>&- | head -c $((b+1)) >"$e"; } 3>&1 | head -c $((b+1)) >"$o";
+s=$(cat -- "$x"); s=${s:-255}; ol=$(($(wc -c <"$o"))); el=$(($(wc -c <"$e")));
+if [ "$ol" -gt "$b" ] || [ "$el" -gt "$b" ]; then say big "$s" "$ol" "$el"; else say ran "$s" "$ol" "$el"; cat -- "$o" "$e"; fi;
+rm -f -- "$o" "$e" "$x"; o= e= x=;;
+fput) case $a in /*) ;; *) head -c "$c" >/dev/null; say fail "$a is not absolute"; continue;; esac; t=$a.part;
+if head -c "$c" | (umask 077; store "$t") && [ "$(sum "$t")" = "$b" ] && mv -f -- "$t" "$a"; then t=; say ok; else rm -f -- "$t"; t=; say fail "$a did not arrive whole"; fi;;
+fget) if [ -f "$a" ] && [ -r "$a" ]; then n=$(($(wc -c <"$a"))); say file "$n" "$(sum "$a")"; head -c "$n" <"$a"; else say fail "$a is not a file Hide can read"; fi;;
+attach) [ -x "$a" ] || { say fail "$a is missing"; exit 65; };
+cd -- "${HOME:-/}" 2>/dev/null || :;
+say attach; case $b in -) exec "$a" attach;; *) exec "$a" attach --state-dir "$b";; esac;;
 *) say fail "unknown step $cmd"; exit 64;;
 esac;
 done
@@ -99,6 +121,9 @@ pub(crate) trait Pipe {
     fn send(&mut self, bytes: &[u8], until: Instant) -> Result<(), String>;
     /// The next line of the device's output, without its end.
     fn line(&mut self, until: Instant) -> Result<Vec<u8>, Stop>;
+    /// At most `max` bytes of the device's output, at least one, for a step
+    /// that answers in counted bytes.
+    fn bytes(&mut self, max: usize, until: Instant) -> Result<Vec<u8>, Stop>;
 }
 
 /// Why no line came.
@@ -383,6 +408,289 @@ pub(crate) fn start(
         [kind] if kind == "start" => Ok(()),
         other => Err(EstablishError::Helper(refusal(other))),
     }
+}
+
+/// Puts this build in its version folder under `root` on a machine that
+/// already runs a build of Hide's (a core update, PRD core-host-node-move
+/// B10), sending only the files it lacks or holds damaged, without the
+/// device's Herdr. Answers where the build's `hided` is.
+pub(crate) fn install_build(
+    pipe: &mut dyn Pipe,
+    root: &str,
+    home: &str,
+    payload: Payload,
+) -> Result<String, EstablishError> {
+    let payload = payload.without_herdr();
+    if !payload.missing.is_empty() {
+        return Err(EstablishError::Install(format!(
+            "This build cannot update a core without all of its parts: {}",
+            payload.missing.join("; ")
+        )));
+    }
+    install(pipe, root, home, &payload).map(|installed| installed.helper_path)
+}
+
+/// Why a step of a connection to a core's machine did not finish. After
+/// any but [`StepError::Refused`] the script's input and output are out of
+/// step, and the connection is not used again.
+#[derive(Debug)]
+pub enum StepError {
+    /// The connection ended, or answered nothing in time: what the step did
+    /// there is unknown.
+    Lost(String),
+    /// The machine answered that the step failed, and why.
+    Refused(String),
+    /// A file on this machine could not be read or written.
+    Local(String),
+}
+
+impl fmt::Display for StepError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Lost(reason) => write!(formatter, "the connection was lost: {reason}"),
+            Self::Refused(reason) => formatter.write_str(reason),
+            Self::Local(reason) => write!(formatter, "local: {reason}"),
+        }
+    }
+}
+
+/// What a command run on the machine answered.
+#[derive(Debug)]
+pub struct Ran {
+    pub status: i32,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
+/// The most of a counted answer taken from the pipe at once.
+const COUNTED_CHUNK: usize = 64 * 1024;
+/// How long one chunk of a file may wait to be taken or to arrive: a copy
+/// takes as long as its size needs, and one that stops moving ends.
+pub(crate) const STALL_TIMEOUT: Duration = Duration::from_secs(30);
+
+fn lost(stop: Stop) -> StepError {
+    StepError::Lost(match stop {
+        Stop::Quiet => "the machine did not answer in time".to_owned(),
+        Stop::Ended(reason) => reason,
+    })
+}
+
+/// Sends `line` and reads the script's answer to it.
+fn ask(pipe: &mut dyn Pipe, line: &str, until: Instant) -> Result<Vec<String>, StepError> {
+    pipe.send(line.as_bytes(), until).map_err(StepError::Lost)?;
+    let answered = pipe.line(until).map_err(lost)?;
+    answer(&answered).ok_or_else(|| {
+        StepError::Lost(format!(
+            "the machine answered {:?}",
+            String::from_utf8_lossy(&answered)
+        ))
+    })
+}
+
+/// Exactly `size` bytes of the pipe, handed to `take` as they arrive, each
+/// chunk within `stall` of the one before.
+fn counted(
+    pipe: &mut dyn Pipe,
+    size: u64,
+    stall: Duration,
+    take: &mut dyn FnMut(&[u8]) -> Result<(), StepError>,
+) -> Result<(), StepError> {
+    let mut left = size;
+    while left > 0 {
+        let wanted = usize::try_from(left)
+            .unwrap_or(usize::MAX)
+            .min(COUNTED_CHUNK);
+        let chunk = pipe.bytes(wanted, Instant::now() + stall).map_err(lost)?;
+        take(&chunk)?;
+        left -= chunk.len() as u64;
+    }
+    Ok(())
+}
+
+fn number<T: std::str::FromStr>(field: &str) -> Result<T, StepError> {
+    field.parse().map_err(|_| {
+        StepError::Lost(format!(
+            "the machine answered an unreadable count {field:?}"
+        ))
+    })
+}
+
+/// Runs `argv` on the machine with no input, from the account's home, and
+/// answers its exit status and output, each at most `cap` bytes: the script
+/// keeps no more than one byte past the cap of either while the command
+/// writes, and a command that writes past it is refused (the command ends
+/// on its next write). A command still running at `until` loses the
+/// connection, and the command is not waited for; the script removes its
+/// temporary files however it ends.
+pub(crate) fn run(
+    pipe: &mut dyn Pipe,
+    argv: &[String],
+    cap: usize,
+    until: Instant,
+) -> Result<Ran, StepError> {
+    if argv.is_empty() || !argv.iter().all(|word| plain(word)) {
+        return Err(StepError::Refused(
+            "The command names a word Hide cannot send".to_owned(),
+        ));
+    }
+    let mut asked = format!("run\t{}\t{cap}\n", argv.len());
+    for word in argv {
+        asked.push_str(word);
+        asked.push('\n');
+    }
+    match ask(pipe, &asked, until)?.as_slice() {
+        [kind, status, out, err] if kind == "ran" => {
+            let (status, out, err): (i32, u64, u64) = (number(status)?, number(out)?, number(err)?);
+            if out > cap as u64 || err > cap as u64 {
+                return Err(StepError::Lost(
+                    "the machine sent more output than it was asked for".to_owned(),
+                ));
+            }
+            let mut stdout = Vec::new();
+            let mut stderr = Vec::new();
+            let left = until.saturating_duration_since(Instant::now());
+            counted(pipe, out, left, &mut |chunk| {
+                stdout.extend_from_slice(chunk);
+                Ok(())
+            })?;
+            counted(pipe, err, left, &mut |chunk| {
+                stderr.extend_from_slice(chunk);
+                Ok(())
+            })?;
+            Ok(Ran {
+                status,
+                stdout,
+                stderr,
+            })
+        }
+        [kind, ..] if kind == "big" => Err(StepError::Refused(format!(
+            "the command wrote more than {cap} bytes"
+        ))),
+        other => Err(StepError::Refused(refusal(other))),
+    }
+}
+
+/// Sends `size` bytes that `read` gives to the absolute path `remote` on the
+/// machine, whose SHA-256 is `digest`. The bytes go to `<remote>.part`
+/// beside their final name, in a folder made private where it is missing,
+/// are checked against the digest and renamed into place, so the final name
+/// only ever holds a whole copy. `sent` hears each chunk's size as it goes.
+pub(crate) fn put_file(
+    pipe: &mut dyn Pipe,
+    remote: &str,
+    digest: &str,
+    size: u64,
+    read: &mut dyn std::io::Read,
+    sent: &(dyn Fn(u64) + Sync),
+) -> Result<(), StepError> {
+    if !remote_path(remote) {
+        return Err(StepError::Refused(format!(
+            "{remote} is not a plain absolute path"
+        )));
+    }
+    pipe.send(
+        format!("fput\t{remote}\t{digest}\t{size}\n").as_bytes(),
+        Instant::now() + STALL_TIMEOUT,
+    )
+    .map_err(StepError::Lost)?;
+    let mut buffer = vec![0_u8; COUNTED_CHUNK];
+    let mut left = size;
+    while left > 0 {
+        let wanted = usize::try_from(left)
+            .unwrap_or(usize::MAX)
+            .min(buffer.len());
+        let filled = match read.read(&mut buffer[..wanted]) {
+            Ok(0) => {
+                return Err(StepError::Local(format!(
+                    "the file for {remote} ended {left} bytes short of its size"
+                )));
+            }
+            Ok(filled) => filled,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(StepError::Local(error.to_string())),
+        };
+        pipe.send(&buffer[..filled], Instant::now() + STALL_TIMEOUT)
+            .map_err(StepError::Lost)?;
+        sent(filled as u64);
+        left -= filled as u64;
+    }
+    let answered = pipe.line(Instant::now() + STALL_TIMEOUT).map_err(lost)?;
+    match answer(&answered).as_deref() {
+        Some([kind]) if kind == "ok" => Ok(()),
+        Some(other) => Err(StepError::Refused(refusal(other))),
+        None => Err(StepError::Lost(format!(
+            "the machine answered {:?}",
+            String::from_utf8_lossy(&answered)
+        ))),
+    }
+}
+
+/// Reads the file at the absolute path `remote` on the machine, handing its
+/// bytes to `write` as they arrive; `received` hears each chunk's size.
+/// Answers its size and the SHA-256 the machine stated for it, for the
+/// caller to check what it wrote against.
+pub(crate) fn get_file(
+    pipe: &mut dyn Pipe,
+    remote: &str,
+    write: &mut dyn std::io::Write,
+    received: &(dyn Fn(u64) + Sync),
+) -> Result<(u64, String), StepError> {
+    if !remote_path(remote) {
+        return Err(StepError::Refused(format!(
+            "{remote} is not a plain absolute path"
+        )));
+    }
+    match ask(
+        pipe,
+        &format!("fget\t{remote}\n"),
+        Instant::now() + STALL_TIMEOUT,
+    )?
+    .as_slice()
+    {
+        [kind, size, digest] if kind == "file" => {
+            let size: u64 = number(size)?;
+            counted(pipe, size, STALL_TIMEOUT, &mut |chunk| {
+                write
+                    .write_all(chunk)
+                    .map_err(|error| StepError::Local(error.to_string()))?;
+                received(chunk.len() as u64);
+                Ok(())
+            })?;
+            Ok((size, digest.clone()))
+        }
+        other => Err(StepError::Refused(refusal(other))),
+    }
+}
+
+/// Starts `program attach` in place of the script, with `--state-dir` when
+/// one is named; from its answer on, the pipes are the attach role's.
+pub(crate) fn attach(
+    pipe: &mut dyn Pipe,
+    program: &str,
+    state_dir: Option<&str>,
+) -> Result<(), StepError> {
+    let state_dir = state_dir.unwrap_or("-");
+    if !remote_path(program) || (state_dir != "-" && !remote_path(state_dir)) {
+        return Err(StepError::Refused(
+            "The core's program or state folder is not a plain absolute path".to_owned(),
+        ));
+    }
+    match ask(
+        pipe,
+        &format!("attach\t{program}\t{state_dir}\n"),
+        Instant::now() + STEP_TIMEOUT,
+    )?
+    .as_slice()
+    {
+        [kind] if kind == "attach" => Ok(()),
+        other => Err(StepError::Refused(refusal(other))),
+    }
+}
+
+/// An absolute path the script takes as one field: plain, `/`-separated,
+/// with no `.` or `..` step.
+fn remote_path(path: &str) -> bool {
+    plain(path) && path.starts_with('/') && !path.split('/').any(|part| part == "." || part == "..")
 }
 
 /// A field the script reads whole: no tab, no line end, no control

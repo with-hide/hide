@@ -329,13 +329,21 @@ fn herdr_running(home: &Path, herdr: &Herdr<'_>, stop: &AtomicBool) -> Result<()
             finished.last_error_line()
         ));
     }
-    let status: hide_node::ssh::RemoteHerdrServerStatus =
-        serde_json::from_str(finished.stdout.trim())
-            .map_err(|error| format!("herdr status server was not readable: {error}"))?;
+    let status: ServerStatus = serde_json::from_str(finished.stdout.trim())
+        .map_err(|error| format!("herdr status server was not readable: {error}"))?;
     if !status.running {
         return Err(format!("no Herdr server answers at {}", status.socket));
     }
     Ok(())
+}
+
+/// The fields of `herdr status server --json` the preflight reads. The CLI
+/// is the boundary here, not the socket schema: the socket cannot be reached
+/// before this answer says where it is.
+#[derive(serde::Deserialize)]
+struct ServerStatus {
+    running: bool,
+    socket: String,
 }
 
 /// `gh auth status` exits 0: the core reads GitHub with this machine's

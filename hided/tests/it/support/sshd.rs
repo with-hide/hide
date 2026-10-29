@@ -199,6 +199,12 @@ impl Sshd {
         self.log().matches("Accepted publickey for").count()
     }
 
+    /// How many connections reached the server since it first started,
+    /// signed in or not.
+    pub fn connections(&self) -> usize {
+        self.log().matches("Connection from ").count()
+    }
+
     /// How many connections the server holds now: each is a process of its
     /// own under the server.
     pub fn open(&self) -> usize {

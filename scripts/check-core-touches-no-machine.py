@@ -52,8 +52,6 @@ BANNED = [
     (r"\.(try_exists|is_symlink)\(\)", "reads the file system; ask a node"),
     (r"\b(std::)?env::(current_exe|current_dir|set_current_dir|home_dir)\b",
      "reads where this process runs; that is a node's"),
-    (r"\brussh(_config|_sftp)?\b",
-     "speaks SSH; a device is reached through `hide_node_link::device`"),
     (r"\bhide_ai::settings::(load|save)\b",
      "reads or writes the AI choice file; keep it in one of the core's stores"),
 ]

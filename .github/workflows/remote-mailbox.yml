@@ -7,8 +7,8 @@
 # (hided/tests/it/system_ssh.rs) run against the system's own `sshd` on
 # loopback. `pr.yml` runs it on Linux for
 # a change to the crates it builds, and `nightly.yml` on macOS, the system of
-# the usual remote device: the fixture signs its staged binaries there and
-# serves SFTP from the system's own server. It also runs the one other hided
+# the usual remote device: the fixture signs its staged binaries there. It
+# also runs the one other hided
 # test that needs the pinned Herdr beside a real daemon and no SSH
 # (hided/tests/it/held_letter_notice.rs), because this is the lane that already
 # fetches the pinned binary for a change to `hided` or `herdr-core`, and the
@@ -55,16 +55,15 @@ jobs:
       - name: Install zsh and the SSH server
         # The fixture starts every pane's shell from SHELL=/bin/zsh, and the
         # Herdr fetch script is zsh; the Linux image has neither. A device's
-        # tests run against the system's sshd, and the core move's install
-        # still needs the SFTP server its fixture serves. The mirror can
-        # stall (web-e2e.yml), so apt retries and gives up on a silent
-        # connection. macOS has all three.
+        # tests, the remote core's and the core move's run against the
+        # system's sshd. The mirror can stall (web-e2e.yml), so apt retries
+        # and gives up on a silent connection. macOS has both.
         if: runner.os == 'Linux'
         timeout-minutes: 5
         run: |
           printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' \
             | sudo tee /etc/apt/apt.conf.d/99-ci-timeouts >/dev/null
-          sudo apt-get install -y --no-install-recommends zsh openssh-server openssh-sftp-server
+          sudo apt-get install -y --no-install-recommends zsh openssh-server
       - name: A default key and a password account for the sign-in journeys
         # hided/tests/it/system_ssh.rs signs in with a key ssh finds by itself
         # in the runner account's own ~/.ssh, and as a second account with a

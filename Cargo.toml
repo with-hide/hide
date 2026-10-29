@@ -40,47 +40,9 @@ incremental = false
 # no debug info", owns the measurement and how to turn it back on locally.
 debug = false
 
-# A device's node is installed and spoken to over SSH, and every byte of
-# both goes through these crates' ciphers and packet code. Unoptimized they
-# move a few MiB a second, so a debug build's own node, which is what a
-# development daemon installs on a device, took longer to upload than the
-# remote mailbox lane waits for a ready device. Optimizing them keeps a dev
-# build's SSH as fast as a shipped one's for a few seconds more of build.
-[profile.dev.package.russh]
-opt-level = 3
-
-[profile.dev.package.russh-sftp]
-opt-level = 3
-
-[profile.dev.package.russh-cryptovec]
-opt-level = 3
-
-[profile.dev.package.ssh-cipher]
-opt-level = 3
-
-[profile.dev.package.chacha20]
-opt-level = 3
-
-[profile.dev.package.poly1305]
-opt-level = 3
-
-[profile.dev.package.aes]
-opt-level = 3
-
-[profile.dev.package.aes-gcm]
-opt-level = 3
-
-[profile.dev.package.ctr]
-opt-level = 3
-
-[profile.dev.package.ghash]
-opt-level = 3
-
-[profile.dev.package.polyval]
-opt-level = 3
-
+# A device's node is installed over SSH with each file's SHA-256 taken
+# here first, and a development daemon installs its own debug build, whose
+# `hided` and `hide` are about 140 MB each. Unoptimized, the digest alone
+# took longer than the remote mailbox lane waits for a ready device.
 [profile.dev.package.sha2]
-opt-level = 3
-
-[profile.dev.package.hmac]
 opt-level = 3

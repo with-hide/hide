@@ -1,4 +1,5 @@
-//! Read-only predicates shared by local kit and the pre-upload SFTP inspection.
+//! Read-only predicates the coordination retirement inspects with, on this
+//! machine and on a device.
 //! They check path authority and occupancy; no legacy contents are imported or rewritten.
 
 use serde_json::Value;

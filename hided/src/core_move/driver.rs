@@ -7,9 +7,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use herdr_core::node_migration::{self, IdTable, KnownProject, OwnerChange, copy};
+use hide_node::ssh::session::SshTarget;
 use hide_node::ssh::transfer::FileCopy;
 use hide_node::ssh::upstream::Upstream;
-use hide_node::ssh::{SshAlias, shell_quote};
 use serde_json::{Value, json};
 
 use super::answer::{StepAnswer, StepLine};
@@ -22,18 +22,15 @@ const STEP_OUTPUT_CAP: usize = 64 * 1024;
 /// waits up to 30 s for it to take links.
 const STEP_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// The other machine, reached over one SSH connection for the move. The
-/// connection ends when this is dropped, on every way a move's turn ends
-/// (the SSH connection's own drop disconnects it).
+/// The other machine, reached through one owned `ssh` for the move, signed
+/// in once and kept for its later steps and copies. The connection ends
+/// when this is dropped, on every way a move's turn ends.
 pub struct Remote {
-    /// The account's SSH config and the alias the move reaches the peer
-    /// by, read at the first step that reaches it.
-    ssh_config: PathBuf,
-    alias: String,
-    /// Made by the first step that resolves the alias: until then a step
-    /// fails as the peer not reached, which a wait asks again, so an alias
-    /// that does not resolve at a start never keeps the daemon from it.
-    upstream: std::sync::OnceLock<Upstream>,
+    /// Dialed by the first step that reaches the peer: `ssh` reads the
+    /// alias then, and a dial that fails is the peer not reached, which a
+    /// wait asks again, so an alias that does not resolve at a start never
+    /// keeps the daemon from it.
+    upstream: Upstream,
     program: String,
     state_dir: Option<String>,
     /// This machine's build: the only build whose answers it reads.
@@ -44,30 +41,11 @@ impl Remote {
     /// Reads and dials nothing yet: the first step does.
     pub fn new(home: &Path, alias: &str, program: &str, build: &str) -> Self {
         Self {
-            ssh_config: home.join(".ssh/config"),
-            alias: alias.to_owned(),
-            upstream: std::sync::OnceLock::new(),
+            upstream: Upstream::new(SshTarget::new(home, alias)),
             program: program.to_owned(),
             state_dir: None,
             build: build.to_owned(),
         }
-    }
-
-    /// The connection, made on first use from the alias as the SSH config
-    /// names it then.
-    fn upstream(&self) -> Result<&Upstream, MoveFailure> {
-        if let Some(upstream) = self.upstream.get() {
-            return Ok(upstream);
-        }
-        let alias = SshAlias::from_config_file(&self.ssh_config, &self.alias).map_err(|error| {
-            MoveFailure::Unreachable {
-                reason: format!("ssh_alias: {}", error.diagnostic().reason),
-            }
-        })?;
-        let upstream = Upstream::new(alias).map_err(|error| MoveFailure::Unreachable {
-            reason: error.to_string(),
-        })?;
-        Ok(self.upstream.get_or_init(|| upstream))
     }
 
     pub fn with_state_dir(mut self, state_dir: &str) -> Self {
@@ -83,28 +61,34 @@ impl Remote {
         let root = hide_kit::build_of(&self.program)
             .map_err(|reason| MoveFailure::Local { reason })?
             .root;
-        self.upstream()?
+        self.upstream
             .install_build(
                 &hide_node::ssh::host::HelperPackages::new(Some(packages.to_path_buf())),
                 &root,
             )
-            .map_err(|reason| MoveFailure::Copy { reason })
+            .map_err(|error| MoveFailure::Copy {
+                reason: error.to_string(),
+            })
     }
 
     /// Runs `hided core-move <step>` there and answers its line. A line of
     /// another build is `OtherBuild`, a refusal `Refused` (`Load` for a
     /// file the verify could not load), and a busy answer `Busy`.
     pub fn step(&self, step: &str, args: &[(&str, &str)]) -> Result<StepAnswer, MoveFailure> {
-        let mut command = format!("{} core-move {step}", shell_quote(&self.program));
+        let mut command = vec![
+            self.program.clone(),
+            "core-move".to_owned(),
+            step.to_owned(),
+        ];
         if let Some(state_dir) = &self.state_dir {
-            command.push_str(&format!(" --state-dir {}", shell_quote(state_dir)));
+            command.extend(["--state-dir".to_owned(), state_dir.clone()]);
         }
         for (flag, value) in args {
-            command.push_str(&format!(" --{flag} {}", shell_quote(value)));
+            command.extend([format!("--{flag}"), (*value).to_owned()]);
         }
         let output = self
-            .upstream()?
-            .exec("core-move-step", &command, STEP_OUTPUT_CAP, STEP_TIMEOUT)
+            .upstream
+            .run(&command, STEP_OUTPUT_CAP, STEP_TIMEOUT)
             .map_err(|error| {
                 if error.never_reached_server() || error.a_move_can_change() {
                     MoveFailure::Unreachable {
@@ -117,14 +101,19 @@ impl Remote {
                     }
                 }
             })?;
-        let line = output.stdout.lines().last().unwrap_or_default();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let line = stdout.lines().last().unwrap_or_default();
         read_line(step, line, &self.build).map_err(|unread| {
             unread.unwrap_or_else(|| MoveFailure::Refused {
                 step: step.to_owned(),
                 reason: format!(
                     "exit {}: {}",
-                    output.exit_status,
-                    output.stderr.trim().chars().take(512).collect::<String>()
+                    output.status,
+                    String::from_utf8_lossy(&output.stderr)
+                        .trim()
+                        .chars()
+                        .take(512)
+                        .collect::<String>()
                 ),
             })
         })
@@ -135,7 +124,7 @@ impl Remote {
         files: &[FileCopy],
         sent: &(dyn Fn(u64) + Sync),
     ) -> Result<(), MoveFailure> {
-        self.upstream()?
+        self.upstream
             .upload(files, sent)
             .map_err(|error| MoveFailure::Copy {
                 reason: error.to_string(),
@@ -149,7 +138,7 @@ impl Remote {
         files: &[FileCopy],
         received: &(dyn Fn(u64) + Sync),
     ) -> Result<(), MoveFailure> {
-        self.upstream()?
+        self.upstream
             .download(into, files, received)
             .map_err(|error| MoveFailure::Copy {
                 reason: error.to_string(),

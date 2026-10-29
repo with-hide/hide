@@ -58,8 +58,6 @@ anyhow = "=1.0.104"
 # The core's Memory store a journey seeds, keyed by the Project it reads.
 hide-memory = { path = "../hide-memory" }
 hide-project = { path = "../hide-project" }
-# The loopback SSH server of the device link's tests (tests/support).
-russh = { version = "=0.64.1", default-features = false, features = ["ring", "rsa"] }
 http-body-util = "=0.1.5"
 hyper = { version = "=1.12.0", features = ["client", "http1", "server"] }
 hyper-util = { version = "=0.1.21", features = ["client-legacy", "http1", "service", "tokio"] }

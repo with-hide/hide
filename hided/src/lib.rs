@@ -26,6 +26,7 @@ pub mod file_url;
 pub mod guide;
 pub mod herdr_handoff;
 pub mod index;
+pub mod link_mux;
 pub mod login_item;
 pub mod mission_cli;
 pub mod mobile;

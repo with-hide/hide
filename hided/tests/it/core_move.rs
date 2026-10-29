@@ -1036,11 +1036,12 @@ fn a_resumed_move_whose_alias_cannot_be_read_waits_for_its_peer() -> Result<()> 
         std::fs::rename(&config, &away)?;
         fixture.start_source()?;
         let failed = fixture.logged_after_link_wait(&fixture.source, "status.failed")?;
+        // `ssh` names the configuration it could not read.
         ensure!(
             failed["failure"]["kind"] == "unreachable"
                 && failed["failure"]["reason"]
                     .as_str()
-                    .is_some_and(|reason| reason.starts_with("ssh_alias")),
+                    .is_some_and(|reason| reason.contains(".ssh/config")),
             "{failed}"
         );
         ensure!(fixture.role()? == "node");
@@ -1573,11 +1574,11 @@ fn an_upload_cut_midway_resumes_by_digest() -> Result<()> {
         fixture.event("core_move", json!({"action": "start", "device": DEVICE_ID}))?;
         // Armed once the core is stopping, so only the move's own upload
         // counts: the manifest, then the copy's files in name order. The
-        // cut comes as the fourth of them opens, three already whole.
+        // cut comes as the fourth of them starts, three already whole.
         fixture.journal_until("stopping")?;
-        fixture.ssh.cut_sftp_at_open(5);
-        // The connection's end ends the upload, well before an SFTP
-        // request's 30 s limit would.
+        fixture.cut_upload_at(5)?;
+        // The connection's end ends the upload, well before a stalled
+        // chunk's 30 s limit would.
         let journal = wait_within(
             "the cut move rolled back",
             std::time::Duration::from_secs(15),

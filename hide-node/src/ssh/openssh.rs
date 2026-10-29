@@ -434,10 +434,23 @@ pub struct Ending<'a> {
     pub refusal: Option<Refusal>,
     /// The alias goes through a proxy command or a jump host.
     pub proxied: bool,
-    /// This ssh cannot hand Hide a question (B21).
-    pub prompts_unavailable: bool,
+    /// Who could have heard a question ssh met.
+    pub asking: Asking,
     /// A browser check was shown and not finished.
     pub browser_waited: bool,
+}
+
+/// Who could have heard a question an attempt met.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Asking {
+    /// A sign-in desk took ssh's questions; its refusal, if any, says why
+    /// one went unanswered.
+    Desk,
+    /// No desk was open, so ssh ran with `BatchMode=yes` and asked nothing:
+    /// a sign-in that needed a question waits for the operator.
+    Nobody,
+    /// This ssh cannot hand Hide a question (B21).
+    OldSsh,
 }
 
 /// Classifies an attempt that ended before the device's start script
@@ -492,14 +505,25 @@ pub fn classify(ending: &Ending<'_>) -> SshFailure {
         return failure(SshProblem::NameNotFound, &last());
     }
     // An unknown key under BatchMode, or a sign-in that needed a question,
-    // on an ssh that cannot ask one.
-    if ending.prompts_unavailable
-        && (has("Permission denied") || has("Host key verification failed"))
-    {
-        return failure(
-            SshProblem::OpenSshOld,
-            "This OpenSSH cannot ask for a password or a new server key",
-        );
+    // where no question could be asked.
+    let unanswered = has("Permission denied") || has("Host key verification failed");
+    match ending.asking {
+        Asking::OldSsh if unanswered => {
+            return failure(
+                SshProblem::OpenSshOld,
+                "This OpenSSH cannot ask for a password or a new server key",
+            );
+        }
+        Asking::Nobody if has("Host key verification failed") => {
+            return failure(
+                SshProblem::SignInNeeded,
+                "The server's key is not in known_hosts yet",
+            );
+        }
+        Asking::Nobody if unanswered => {
+            return failure(SshProblem::SignInNeeded, "Signing in needs an answer");
+        }
+        _ => {}
     }
     if has("Permission denied") || has("Too many authentication failures") {
         return failure(SshProblem::SignInRefused, &last());
@@ -727,7 +751,7 @@ mod tests {
             stderr: &lines,
             refusal: None,
             proxied: false,
-            prompts_unavailable: false,
+            asking: Asking::Desk,
             browser_waited: false,
         })
     }
@@ -793,7 +817,7 @@ mod tests {
             stderr: &lines,
             refusal: None,
             proxied: true,
-            prompts_unavailable: false,
+            asking: Asking::Desk,
             browser_waited: false,
         });
         assert_eq!(proxied.problem, SshProblem::ProxyFailed);
@@ -801,7 +825,7 @@ mod tests {
             stderr: &lines,
             refusal: None,
             proxied: false,
-            prompts_unavailable: false,
+            asking: Asking::Desk,
             browser_waited: false,
         });
         assert_eq!(direct.problem, SshProblem::Unreachable);
@@ -815,7 +839,7 @@ mod tests {
                 stderr: &lines,
                 refusal: Some(refusal),
                 proxied: false,
-                prompts_unavailable: false,
+                asking: Asking::Desk,
                 browser_waited: false,
             });
             assert_eq!(failure.problem, SshProblem::SignInNeeded, "{refusal:?}");
@@ -824,7 +848,7 @@ mod tests {
             stderr: &[],
             refusal: None,
             proxied: false,
-            prompts_unavailable: false,
+            asking: Asking::Desk,
             browser_waited: true,
         });
         assert_eq!(browser.problem, SshProblem::BrowserTimeout);
@@ -832,9 +856,54 @@ mod tests {
             stderr: &["Host key verification failed.".to_owned()],
             refusal: None,
             proxied: false,
-            prompts_unavailable: true,
+            asking: Asking::OldSsh,
             browser_waited: false,
         });
         assert_eq!(old.problem, SshProblem::OpenSshOld);
+    }
+
+    /// With no desk, ssh runs with BatchMode and asks nothing: a new server
+    /// key or a password the alias needs waits for the operator, while a
+    /// changed key, a policy and the network keep their own classes.
+    #[test]
+    fn a_question_no_desk_could_hear_is_a_sign_in_the_operator_owes() {
+        let unasked = |lines: &[&str]| {
+            let lines: Vec<String> = lines.iter().map(|line| (*line).to_owned()).collect();
+            classify(&Ending {
+                stderr: &lines,
+                refusal: None,
+                proxied: false,
+                asking: Asking::Nobody,
+                browser_waited: false,
+            })
+            .problem
+        };
+        assert_eq!(
+            unasked(&[
+                "No ED25519 host key is known for studio and you have requested strict checking.",
+                "Host key verification failed.",
+            ]),
+            SshProblem::SignInNeeded
+        );
+        assert_eq!(
+            unasked(&["al@studio: Permission denied (publickey,password,keyboard-interactive)."]),
+            SshProblem::SignInNeeded
+        );
+        assert_eq!(
+            unasked(&[
+                "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@",
+                "@    WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!     @",
+                "Host key verification failed.",
+            ]),
+            SshProblem::HostKeyChanged
+        );
+        assert_eq!(
+            unasked(&["tailscale: tailnet policy does not permit you to SSH to this node"]),
+            SshProblem::PolicyRefused
+        );
+        assert_eq!(
+            unasked(&["ssh: connect to host studio port 22: Connection refused"]),
+            SshProblem::Unreachable
+        );
     }
 }

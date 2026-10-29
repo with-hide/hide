@@ -1149,7 +1149,7 @@ fn a_device_answers_hide_ai_for_its_own_agents() {
 #[test]
 #[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn a_device_page_rides_its_node_link_and_ends_with_it() {
-    use hided::page_forward::PageForward;
+    use hided::page_forward::{PageForward, PageLink};
     use std::io::Write;
     let device = Device::start();
     let server = PageServer::start();
@@ -1163,7 +1163,12 @@ fn a_device_page_rides_its_node_link_and_ends_with_it() {
     };
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let forward = runtime
-        .block_on(PageForward::start(link(), server.address, None, false))
+        .block_on(PageForward::start(
+            PageLink::Device(link()),
+            server.address,
+            None,
+            false,
+        ))
         .unwrap();
     let mut page = std::net::TcpStream::connect(forward.local_addr()).unwrap();
     page.set_read_timeout(Some(TIMEOUT)).unwrap();
@@ -1177,7 +1182,12 @@ fn a_device_page_rides_its_node_link_and_ends_with_it() {
         .expect("the node kept the page's connection after its forward ended");
 
     let forward = runtime
-        .block_on(PageForward::start(link(), server.address, None, false))
+        .block_on(PageForward::start(
+            PageLink::Device(link()),
+            server.address,
+            None,
+            false,
+        ))
         .unwrap();
     device.link.close("contract");
     assert!(!forward.live());

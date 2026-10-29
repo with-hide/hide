@@ -250,10 +250,10 @@ fn leaf_link(state_dir: &Path) -> Option<String> {
 }
 
 /// `state_dir` with every link on the way resolved, the part below the
-/// deepest folder that exists kept as it is: the copy goes over SFTP, which
-/// refuses a link on the way, and a machine whose home is reached through
-/// one (`/tmp` on macOS, `/home` on a Linux with its homes elsewhere) still
-/// has a folder the copy can reach by its resolved path. What cannot be
+/// deepest folder that exists kept as it is: the copy names its files by
+/// this path, so a machine whose home is reached through a link (`/tmp` on
+/// macOS, `/home` on a Linux with its homes elsewhere) still has one folder
+/// the copy reaches by its resolved path. What cannot be
 /// resolved is left as it is for `path_refused` to name.
 fn reachable(state_dir: &Path) -> PathBuf {
     state_dir

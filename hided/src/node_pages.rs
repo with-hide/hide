@@ -3,7 +3,7 @@
 //! asks this machine's daemon for a View's route as it asks a core's: the
 //! View's source comes from the core over the link's relay port, a page of
 //! this machine loads as it is, and a loopback page of the core's machine
-//! reaches that machine's loopback through the link's own SSH connection.
+//! reaches that machine's loopback through the node's connection to its core.
 //! The registry, its caps and its reaper are the core's (`browser_routes`).
 
 use std::sync::Arc;
@@ -142,6 +142,6 @@ impl PageSources for NodePages {
         if device != self.core {
             return Err("host_unavailable");
         }
-        Ok(Way::Core(Arc::clone(&self.link()?.upstream)))
+        Ok(Way::Core(Arc::clone(&self.link()?.core)))
     }
 }
