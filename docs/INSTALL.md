@@ -518,6 +518,8 @@ A move back whose copy has not reached this Mac yet only waits: while the core's
 A move back that fails waits the same way until the core's machine says its core runs again, keeping the copy it placed here; when that machine answers but cannot start its core, the window shows Waiting with the reason, and the move back goes on once that reason is fixed.
 A machine the core moved back from runs no hided afterwards: its `core-handover.json` says the core retired there, so every start of its state folder, by the login item, a window or `hide connect`, ends at once and successfully.
 From then on this Mac is a node of that core: its panes, files and terminals stay here, and the rail marks the core's machine with a crown.
+The move, and this Mac's link to the core after it, run your system's `ssh` with the alias the machine was added with, as the machine's own connection does, so its keys, ssh-agent, ProxyJump and Tailscale SSH apply.
+They ask nothing yet: an alias that needs a password, a key's passphrase or a server key you have not trusted stops the window at Waiting with `sign_in_needed`, so put the key in your agent (`ssh-add`) or connect once with `ssh <alias>` in a terminal first.
 Hide keeps its kit current on both machines as before: on the core's machine from the build the move placed in `~/.hide/host-helper`, at every start of its core, and on this Mac from this app, every time it links to the core; each machine's row in Settings > Devices shows its kit with Reinstall, and Settings > Agents lists both.
 This Mac's own `⋯` menu moves the core back, or disconnects from the core: while disconnected the core refuses this Mac's panes, files and browser, and **Reconnect** in the window's strip restores them.
 
@@ -566,7 +568,7 @@ State under `~/.hide/state` and the desktop profile (`~/Library/Application Supp
 Files the previous Swift app left under `~/Library/Application Support/hide/` are not read by the current app, apart from `state.json`'s shortcut bindings, which are imported once, and can be deleted by hand.
 Each packaged launch replaces an outdated part of the kit on this machine, and each device connection does the same there, hook entries included; a part you removed stays removed.
 A connected device whose system the package carries also gets the app's pinned Herdr, and its Herdr server moves onto it when it runs an older release ([Connect another Mac](#connect-another-mac-over-ssh)); you do nothing on the device.
-When the core runs on another machine, a newer app updates it to its own build before it connects, once per connection, while agents keep running; if that fails, the window shows both builds with Retry, and the core goes on with its previous build.
+When the core runs on another machine, a newer app updates it to its own build before it connects, once per connection, while agents keep running; it signs in to that machine twice, once to find the older core and once to update it and connect; if that fails, the window shows both builds with Retry, and the core goes on with its previous build.
 An updated app on the core's own machine updates the core the login item runs in the same way, and an older app there is told to update.
 
 ### When an update goes wrong

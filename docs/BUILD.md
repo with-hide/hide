@@ -30,7 +30,7 @@ Hide's own merged-worktree cleanup had grown a step that forked `bash` to comput
 `[profile.dev] incremental = false` in the workspace manifest is deliberate, not a leftover.
 An agent worktree is built a few times and discarded, which never repays an incremental cache; what it does instead is grow one per worktree, and those had reached 1.5 GB.
 Debug output is what makes a stale worktree expensive, because nothing strips it: a debug `hided` measures about 165 MB, with no debug info, against 24 MB for the release binary.
-The SSH transport's crates (`russh`, `russh-sftp` and the ciphers and hashes it runs) are built at `opt-level = 3` in dev builds too: a development daemon installs its own debug `hided` on a device over SSH, and unoptimized those crates moved about 4 MiB a second, so the remote mailbox lane's device was not ready within its bound; optimized, its install takes about 6 seconds.
+`sha2` is built at `opt-level = 3` in dev builds too: a development daemon installs its own debug `hided` and `hide` (about 140 MB each) on a device over SSH and takes each file's SHA-256 here first, and unoptimized that digest took longer than the remote mailbox lane waits for a ready device; the SSH itself is the system `ssh`, which no build compiles.
 
 ## A debug build is kept small
 
