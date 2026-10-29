@@ -1,13 +1,21 @@
 import { Select as SelectPrimitive } from "radix-ui";
 import { CheckIcon, ChevronDownIcon, ChevronUpIcon } from "lucide-react";
-import type { ComponentProps } from "react";
+import { createContext, useContext, useRef, type ComponentProps, type RefObject } from "react";
 import { cn } from "../../lib/utils";
-import { useLayerOpen } from "./layer";
+import { useLayerOpen, useReturnFocus } from "./layer";
 import { menuContent, menuItem, menuLabel, menuSeparator } from "./menu-styles";
+
+/** The open state and trigger of one Select, so its content hands the keyboard back through the shell's guard. */
+const SelectLayerContext = createContext<{ open: boolean; trigger: RefObject<HTMLButtonElement | null> } | null>(null);
 
 function Select({ open, defaultOpen, onOpenChange, ...props }: ComponentProps<typeof SelectPrimitive.Root>) {
   const [current, change] = useLayerOpen(open, defaultOpen, onOpenChange);
-  return <SelectPrimitive.Root data-slot="select" open={current} onOpenChange={change} {...props} />;
+  const trigger = useRef<HTMLButtonElement>(null);
+  return (
+    <SelectLayerContext.Provider value={{ open: current, trigger }}>
+      <SelectPrimitive.Root data-slot="select" open={current} onOpenChange={change} {...props} />
+    </SelectLayerContext.Provider>
+  );
 }
 
 function SelectGroup(props: ComponentProps<typeof SelectPrimitive.Group>) {
@@ -19,8 +27,10 @@ function SelectValue(props: ComponentProps<typeof SelectPrimitive.Value>) {
 }
 
 function SelectTrigger({ className, size = "default", children, ...props }: ComponentProps<typeof SelectPrimitive.Trigger> & { size?: "sm" | "default" }) {
+  const layer = useContext(SelectLayerContext);
   return (
     <SelectPrimitive.Trigger
+      ref={layer?.trigger}
       data-slot="select-trigger"
       data-size={size}
       className={cn(
@@ -37,14 +47,24 @@ function SelectTrigger({ className, size = "default", children, ...props }: Comp
   );
 }
 
-function SelectContent({ className, children, position = "popper", ...props }: ComponentProps<typeof SelectPrimitive.Content>) {
+function SelectContent({ className, children, position = "popper", onCloseAutoFocus, ...props }: ComponentProps<typeof SelectPrimitive.Content>) {
+  const layer = useContext(SelectLayerContext);
+  const surface = useRef<HTMLDivElement>(null);
+  // Radix hands the keyboard to the trigger from a timer after the close, unconditionally;
+  // the shell's guard keeps a control or layer that took the keyboard in the meantime.
+  const returnFocus = useReturnFocus(layer?.open ?? false, { target: () => layer?.trigger.current ?? null, within: () => surface.current });
   return (
     <SelectPrimitive.Portal>
       <SelectPrimitive.Content
+        ref={surface}
         data-slot="select-content"
         className={cn(menuContent, "relative max-h-(--radix-select-content-available-height)", position === "popper" && "w-full min-w-(--radix-select-trigger-width)", className)}
         position={position}
         sideOffset={position === "popper" ? 4 : undefined}
+        onCloseAutoFocus={(event) => {
+          onCloseAutoFocus?.(event);
+          if (!event.defaultPrevented) returnFocus(event);
+        }}
         {...props}
       >
         <SelectPrimitive.ScrollUpButton className="flex cursor-default items-center justify-center py-xxs">

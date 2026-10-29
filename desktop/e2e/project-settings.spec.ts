@@ -160,6 +160,9 @@ test("Project settings fit a narrow native window in every language and theme", 
       await page.locator('[data-interface-language]').click();
       await page.locator(`[data-language-option="${language}"]`).click();
       await expect(page.locator("html")).toHaveAttribute("lang", language);
+      // The closing select hands the keyboard back to its trigger from a
+      // timer; wait for it, or that late hand-back takes the slider's End.
+      await expect(page.locator("[data-interface-language]")).toBeFocused();
       await page.locator('[data-settings-tab="general"]').click();
       await page.locator('[data-font-size] [role="slider"]').focus();
       await page.keyboard.press("End");
