@@ -34,6 +34,9 @@ const BROWSER_WITHIN: Duration = Duration::from_secs(5 * 60);
 const UNATTENDED_BROWSER_GRACE: Duration = Duration::from_secs(15);
 /// The lines of ssh's error output kept for the classification and the log.
 const STDERR_TAIL: usize = 64;
+/// Why ssh did not start once an app update replaced this program's file
+/// (macOS): the app's next start replaces this daemon with the new build.
+const UPDATED: &str = "Hide was updated since it started. Quit Hide and open it again to connect.";
 
 /// The start script's pipe on an `ssh` that may still be signing in: what
 /// ssh prints on its error output meanwhile is read for a browser check
@@ -254,6 +257,11 @@ pub(super) fn sign_in(
         Ok(child) => child,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Err(EstablishError::Ssh(openssh::missing(dial.program.path())));
+        }
+        // macOS, after an app update replaced this program's file: only the
+        // new build starts ssh, and the app's next start replaces this one.
+        Err(error) if hide_platform::process::program_replaced(&error) => {
+            return Err(EstablishError::Helper(UPDATED.to_owned()));
         }
         Err(error) => {
             return Err(EstablishError::Helper(format!(
