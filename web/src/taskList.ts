@@ -12,7 +12,8 @@ import type { AgentRow, ArchivedSession, TaskView, Workspace } from "./snapshot"
  * The open groups of the 상태별 view and the bands of a 프로젝트별 group, in
  * the order they are drawn (status-marks D-22, B32): 내 차례 (a question, an
  * approval or a block), 읽을 것, whose tasks want the operator's look, 다시 볼 것
- * (PRD revisit-group D-01), a read ask or a quiet task the operator starred,
+ * (PRD revisit-group D-01), a task the operator starred (a read ask stays in
+ * 내 차례, needs-you-cleanup D-04),
  * above 작업 중, whose agents work, and 대기 last, whose tasks wait on proven work.
  */
 export type TaskGroupState = "needs_you" | "done" | "revisit" | "working" | "waiting";

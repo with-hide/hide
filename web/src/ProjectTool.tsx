@@ -346,7 +346,7 @@ function AgentTodo({ row, agent, actions }: { row: ProjectTodo; agent: AgentRow 
   const { t } = useInterfaceTranslation();
   if (row.kind === "pr") return null;
   const words = row.kind === "revisit"
-    ? t(row.record || agent?.revisit?.read_ask ? "projectTool.todo.readAsk" : "projectTool.todo.starred")
+    ? t("projectTool.todo.starred")
     : (agent ? (rowLine(agent)?.text ?? markWords(t, agent)) : t("projectTool.todo.ask"));
   return (
     <li className="min-w-0" data-project-todo-row={row.kind} data-todo-pane={row.pane_id}>

@@ -781,7 +781,7 @@ Web owners: `web/src/components/view-menu.tsx` and `web/src/PaneHeaderBand.tsx`;
 
 Hide draws no count of the subagents an agent runs inside its own session, on any surface: not on a sidebar row, in a pane header, in the 태스크 list, in an Overview line, in ⌘K and not in Settings (operator decision on issue #810).
 A subagent has no pane of its own, so it is not a delegated child: it has no row to open and the operator can neither enter it nor act on it, so the number is not a state they would act on (design principle 13).
-The child marks on screen mean only the agents Hide started, which have their own panes and tree rows: the descendant mark `! N` on a row, the tree button with its `자식 에이전트 N` tooltip, and the child popover.
+The child marks on screen mean only the agents Hide started, which have their own panes and tree rows: the descendant mark `! N` in the tree popover, the tree button with its `자식 에이전트 N` tooltip, and the child popover.
 A subagent count beside them would give "child" two meanings on one row.
 The count reaches the core and is used off the screen.
 Hide's hook keeps a `working` and a `done` count per pane and reports them as the Herdr pane tokens `hide_sub_working` and `hide_sub_done`; the core reads them in `PaneHookTokens`, projects them as `PaneChildren.subagents` beside `instrumented`, which no web code reads, and sums `working` for the pet's badge (docs/status-model.md, The subagent badge; the desktop app draws no pet today).
