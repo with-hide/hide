@@ -4309,10 +4309,7 @@ COMMIT;"#,
     // time (with-hide/hide-private#65). Two new tables and no row changed,
     // so there is nothing a backup would restore.
     if version == 22 {
-        let transaction = connection.unchecked_transaction()?;
-        transaction.execute_batch(pace::TABLES)?;
-        transaction.execute_batch("PRAGMA user_version=23;")?;
-        transaction.commit()?;
+        pace::migrate_version_twenty_two(connection)?;
         version = SCHEMA_VERSION;
     }
     if version != SCHEMA_VERSION {
@@ -10982,6 +10979,50 @@ PRAGMA user_version=14;"#,
                 .unwrap(),
             None,
             "an hour from the correction, not an hour past the wrong time"
+        );
+    }
+
+    #[test]
+    fn a_version_twenty_two_store_opened_by_two_at_once_is_upgraded_once() {
+        let (temp, store, _project) = store();
+        let path = temp.path().join("memory.sqlite3");
+        store
+            .connection
+            .execute_batch(
+                "DROP TABLE analysis_admissions; DROP TABLE analysis_holds; PRAGMA user_version=22;",
+            )
+            .unwrap();
+        drop(store);
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let openers: Vec<_> = (0..2)
+            .map(|_| {
+                let path = path.clone();
+                let barrier = std::sync::Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    MemoryStore::open(&path).map(|_| ())
+                })
+            })
+            .collect();
+        for opener in openers {
+            opener.join().unwrap().unwrap();
+        }
+        let connection = Connection::open(&path).unwrap();
+        assert_eq!(
+            connection
+                .pragma_query_value::<i64, _>(None, "user_version", |row| row.get(0))
+                .unwrap(),
+            SCHEMA_VERSION
+        );
+        // The opener that read version 22 before the other upgraded finds
+        // the work done under the write lock instead of creating it again.
+        pace::migrate_version_twenty_two(&connection).unwrap();
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM analysis_admissions", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
         );
     }
 

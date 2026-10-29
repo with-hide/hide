@@ -14,6 +14,31 @@ CREATE INDEX analysis_admissions_at ON analysis_admissions(at_ms);
 CREATE TABLE analysis_holds(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,provider TEXT NOT NULL,session_id TEXT NOT NULL,day INTEGER NOT NULL,PRIMARY KEY(project_id,provider,session_id,day));
 ";
 
+/// Schema 23 from 22. The version is read again under the write lock: two
+/// openers may both have read 22, and the second finds the tables made.
+pub(super) fn migrate_version_twenty_two(connection: &Connection) -> Result<(), MemoryError> {
+    connection.execute_batch("BEGIN IMMEDIATE")?;
+    let result = (|| -> Result<(), MemoryError> {
+        let actual: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        match actual {
+            22 => Ok(connection.execute_batch(&format!("{TABLES} PRAGMA user_version=23;"))?),
+            SCHEMA_VERSION => Ok(()),
+            found => Err(MemoryError::WrongSchema {
+                found,
+                expected: SCHEMA_VERSION,
+            }),
+        }
+    })();
+    match result {
+        Ok(()) => connection.execute_batch("COMMIT")?,
+        Err(error) => {
+            let _ = connection.execute_batch("ROLLBACK");
+            return Err(error);
+        }
+    }
+    Ok(())
+}
+
 /// The session's calls in its UTC day and every session's in the last hour,
 /// both closed at `now`: a call stamped later than now was made by a clock
 /// that ran ahead, and [`rewind`] has moved it to now before this is read.
