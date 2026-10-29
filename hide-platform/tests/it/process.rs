@@ -129,13 +129,7 @@ fn child_role() {
         }
         "sleep" => {
             println!("READY {}", std::process::id());
-            if let Some(path) = std::env::var_os(READY_FILE) {
-                // Renamed into place, so a reader never sees half a number.
-                let path = PathBuf::from(path);
-                let partial = path.with_extension("partial");
-                std::fs::write(&partial, std::process::id().to_string()).unwrap();
-                std::fs::rename(&partial, &path).unwrap();
-            }
+            write_ready_file();
             thread::sleep(Duration::from_secs(60));
         }
         // A child with one child of its own that has left no handle behind.
@@ -183,6 +177,7 @@ fn child_role() {
         "setsid_sleep" => {
             // SAFETY: setsid takes nothing and has no memory effects.
             assert!(unsafe { libc::setsid() } >= 0);
+            write_ready_file();
             thread::sleep(Duration::from_secs(60));
         }
         // Windows' form of a tied child that leaves a process detached from
@@ -200,7 +195,8 @@ fn child_role() {
             std::process::exit(0);
         }
         // An owner whose tied child left an orphan: a process it started
-        // through a shell that has exited, so its parent is gone.
+        // through a shell that has exited, so its parent is gone. The orphan
+        // writes the ready file this role was given.
         #[cfg(target_os = "linux")]
         "tied_owner_orphan" => {
             let mut child = OwnedChild::spawn_tied(&mut setsid_sleep_from(LEAVES_ORPHAN)).unwrap();
@@ -434,11 +430,14 @@ fn setsid_sleep_from(script: &str) -> Command {
 }
 
 /// Starts the `setsid_sleep` role from a subshell that exits at once, so
-/// the role's parent is gone, and says `GONE` once it has: the shell waits
-/// for the subshell before it goes on.
+/// the role's parent is gone, and says `GONE` once the role has left the
+/// group for a session of its own (its ready file, [`READY_FILE`]): the
+/// shell waits for the subshell before it goes on.
 #[cfg(target_os = "linux")]
-const LEAVES_ORPHAN: &str =
-    r#"( "$@" >/dev/null 2>&1 & echo "READY $!" ); echo GONE; exec sleep 60"#;
+const LEAVES_ORPHAN: &str = r#"( "$@" >/dev/null 2>&1 & echo "READY $!" )
+until [ -e "$HIDE_PLATFORM_PROC_READY_FILE" ]; do :; done
+echo GONE
+exec sleep 60"#;
 
 /// The pid [`LEAVES_ORPHAN`] says, once its parent is gone.
 #[cfg(target_os = "linux")]
@@ -458,6 +457,17 @@ fn orphaned_number(stdout: std::process::ChildStdout) -> u32 {
     heard
         .recv_timeout(Duration::from_secs(30))
         .expect("the orphan's parent did not exit")
+}
+
+/// Writes this role's pid to the file [`READY_FILE`] names, when it names
+/// one; renamed into place, so a reader never sees half a number.
+fn write_ready_file() {
+    if let Some(path) = std::env::var_os(READY_FILE) {
+        let path = PathBuf::from(path);
+        let partial = path.with_extension("partial");
+        std::fs::write(&partial, std::process::id().to_string()).unwrap();
+        std::fs::rename(&partial, &path).unwrap();
+    }
 }
 
 /// The pid a `sleep` child wrote to `path` once it ran.
@@ -869,7 +879,10 @@ fn a_killed_tied_tree_has_ended_when_its_child_is_reaped() {
 #[test]
 fn a_tied_childs_orphan_ends_with_its_kill() {
     let _serial = serial();
-    let mut child = OwnedChild::spawn_tied(&mut setsid_sleep_from(LEAVES_ORPHAN)).unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let mut command = setsid_sleep_from(LEAVES_ORPHAN);
+    command.env(READY_FILE, folder.path().join("left"));
+    let mut child = OwnedChild::spawn_tied(&mut command).unwrap();
     let orphan = orphaned_number(child.take_stdout().unwrap());
     let _identity = FixtureProcess::live(orphan);
     assert!(child.kill_tree().unwrap());
@@ -885,7 +898,11 @@ fn a_tied_childs_orphan_ends_with_its_kill() {
 #[test]
 fn a_tied_childs_orphan_ends_with_its_owners_death() {
     let _serial = serial();
-    let mut owner = role_command("tied_owner_orphan").spawn().unwrap();
+    let folder = tempfile::tempdir().unwrap();
+    let mut owner = role_command("tied_owner_orphan")
+        .env(READY_FILE, folder.path().join("left"))
+        .spawn()
+        .unwrap();
     let stdout = owner.stdout.take().unwrap();
     let (send, recv) = mpsc::channel();
     let reader = thread::spawn(move || {

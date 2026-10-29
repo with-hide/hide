@@ -1238,20 +1238,22 @@ mod sys {
     /// runs once a line reaches it on its input ([`started`]). It then starts
     /// a watcher that reads the watch: a line is this process standing down;
     /// the watch closing without one is this process's death, and the
-    /// watcher ends the tree ([`WATCHER`]). When the child exits, the
-    /// supervisor ends what is left under it ([`REST`]) and exits with the
-    /// child's status. The child gets the supervisor's standard streams: an
-    /// asynchronous list's input is `/dev/null` unless redirected, so it is
-    /// passed on through descriptor 4.
+    /// watcher sends the supervisor `TERM` ([`WATCHER`]). When the child
+    /// exits, or on that `TERM`, the supervisor ends what is under it
+    /// ([`REST`]) and exits with the child's status. The child gets the
+    /// supervisor's standard streams: an asynchronous list's input is
+    /// `/dev/null` unless redirected, so it is passed on through descriptor
+    /// 4.
     const SUPERVISOR: &str = r#"watcher=$HIDE_TIED_WATCHER
 rest=$HIDE_TIED_REST
 unset HIDE_TIED_WATCHER HIDE_TIED_REST
+trap '/bin/sh -c "$rest" hide-tied-rest "$$"' TERM
 exec 4<&0
 { IFS= read -r _ <&4 || exit 125; exec "$@" <&4 3<&- 4<&-; } &
 child=$!
 exec 4<&-
 echo "$child" >&3
-/bin/sh -c "$watcher" hide-tied-watch "$$" "$rest" <&3 >/dev/null 2>&1 3<&- &
+/bin/sh -c "$watcher" hide-tied-watch "$$" <&3 >/dev/null 2>&1 3<&- &
 exec 3<&-
 wait "$child"
 status=$?
@@ -1259,25 +1261,24 @@ status=$?
 exit "$status"
 "#;
 
-    /// The watcher [`SUPERVISOR`] starts: `$1` the supervisor, `$2`
-    /// [`REST`]. Told nothing before the watch closes, it stops the
-    /// supervisor, so the supervisor stays where everything under it is
-    /// found (and, on Linux, where orphans come back), ends everything
-    /// under it but the watcher itself, and then the supervisor's group.
+    /// The watcher [`SUPERVISOR`] starts: `$1` the supervisor. Told nothing
+    /// before the watch closes, it has the supervisor end its tree. It
+    /// stops nothing: once the owner is gone the supervisor's group has no
+    /// parent outside it, and the system hangs up on every member of such a
+    /// group as soon as one of them stops and another exits, the walk that
+    /// would end the tree among them.
     const WATCHER: &str = r#"read -r _ && exit 0
-kill -s STOP "$1" 2>/dev/null
-/bin/sh -c "$2" hide-tied-rest "$1" "$$"
-kill -s KILL -- "-$1" 2>/dev/null
+kill -s TERM "$1" 2>/dev/null
 "#;
 
-    /// Ends every process under `$1` but itself and, when given, `$2` and
-    /// what is under it: it kills what the walk of the process table finds
-    /// alive and walks again, until a walk finds nothing alive, since a
-    /// process can start another between a walk and its kill. It gives up
-    /// after 50 walks, which only a process the kill cannot end reaches.
+    /// Ends every process under `$1` but itself: it kills what the walk of
+    /// the process table finds alive and walks again, until a walk finds
+    /// nothing alive, since a process can start another between a walk and
+    /// its kill. It gives up after 50 walks, which only a process the kill
+    /// cannot end, or one that keeps starting others, reaches.
     const REST: &str = r#"n=0
 while [ "$n" -lt 50 ]; do
-  pids=$(ps -A -o pid= -o ppid= -o stat= 2>/dev/null | awk -v root="$1" -v self="$$" -v spare="${2:-}" '
+  pids=$(ps -A -o pid= -o ppid= -o stat= 2>/dev/null | awk -v root="$1" -v self="$$" '
 { kids[$2] = kids[$2] " " $1; zombie[$1] = ($3 ~ /^Z/) }
 END {
   n = 1; queue[1] = root
@@ -1285,7 +1286,7 @@ END {
     m = split(kids[queue[i]], k, " ")
     for (j = 1; j <= m; j++) {
       p = k[j]
-      if ((p in seen) || p == self || p == spare) continue
+      if ((p in seen) || p == self) continue
       seen[p] = 1; queue[++n] = p
       if (!zombie[p]) print p
     }
@@ -2013,7 +2014,9 @@ exit 1
         let leader = child.id();
         // A tied child's supervisor is stopped first, so it cannot end
         // before the tree under it, and the tree is killed until nothing of
-        // it lives; the group's kill below then ends the supervisor.
+        // it lives; the group's kill below then ends the supervisor. This
+        // process is the supervisor's parent in another group, so the
+        // stopped group is not one the system hangs up on.
         let mut tied = false;
         if let (Some(tree), false) = (&tie.tree, reaped) {
             let _ = signal(leader as libc::pid_t, libc::SIGSTOP);
@@ -2170,9 +2173,10 @@ exit 1
         exists && !is_zombie(pid)
     }
 
-    /// Whether the system lists `pid` as ended and waiting to be reaped.
-    /// `proc_pidinfo` has no answer for such a process (its task is gone), so
-    /// the state is read from the process table, as `ps` reads it.
+    /// Whether the system lists `pid` as ended and waiting to be reaped, or
+    /// no longer lists it. `proc_pidinfo` has no answer for such a process
+    /// (its task is gone), so the state is read from the process table, as
+    /// `ps` reads it.
     #[cfg(target_os = "macos")]
     fn is_zombie(pid: u32) -> bool {
         // The head of `struct extern_proc` (`sys/proc.h`) through `p_stat`:
@@ -2205,6 +2209,11 @@ exit 1
                 0,
             )
         };
+        // A process reaped between the caller's signal 0 and this read is
+        // no longer listed, and has ended too.
+        if read == 0 && size == 0 {
+            return true;
+        }
         if read != 0 || size != KINFO_PROC {
             return false;
         }
@@ -2215,11 +2224,23 @@ exit 1
     }
 
     /// Whether the system lists `pid` as ended and waiting to be reaped
-    /// (`Z`), or in the instant before its entry goes (`X`).
+    /// (`Z`), or in the instant before its entry goes (`X`), or no longer
+    /// lists it: a process reaped between the caller's signal 0 and this
+    /// read has ended too. A process whose first thread has ended is listed
+    /// `Z` while its other threads are still on their way out, so it has
+    /// ended only once that thread is the last one it lists.
     #[cfg(target_os = "linux")]
     fn is_zombie(pid: u32) -> bool {
-        linux::fields(pid)
-            .is_ok_and(|fields| matches!(fields.first().map(String::as_str), Some("Z" | "X")))
+        match linux::fields(pid) {
+            Ok(fields) => {
+                matches!(fields.first().map(String::as_str), Some("Z" | "X"))
+                    && std::fs::read_dir(format!("/proc/{pid}/task"))
+                        .map_or(true, |tasks| tasks.count() <= 1)
+            }
+            Err(error) => {
+                error.kind() == io::ErrorKind::NotFound || error.raw_os_error() == Some(libc::ESRCH)
+            }
+        }
     }
 
     #[cfg(target_os = "macos")]
