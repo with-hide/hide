@@ -39,6 +39,9 @@ test("an agent reads what a device waits on and retries it until the attempt's o
   try {
     daemon = await startHided(herdr, "device-cli");
     writeSshHost(daemon, ALIAS);
+    // A pane's command needs its checkout registered, which entering the Workspace waits for.
+    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
+    await enterWorkspace(page, "fixture");
 
     // B29, B31: an added device waits on the operator's Allow, and says what to ask them.
     const added = await fromPane(herdr, daemon, ["add", ALIAS], 1);
@@ -52,8 +55,6 @@ test("an agent reads what a device waits on and retries it until the attempt's o
     expect(notAllowed.value.device.next_action).toContain("Allow and install");
 
     // The operator allows the helper on the row.
-    await page.goto(`${daemon.origin}/#token=${daemon.token}`);
-    await enterWorkspace(page, "fixture");
     await page.locator("[data-open-settings]").click();
     await page.locator('[data-settings-tab="devices"]').click();
     await page.locator(`[data-device-host-allow-inline="${ALIAS}"]`).click();
