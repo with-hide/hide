@@ -585,18 +585,22 @@
             "type": "object"
         },
         "device_retried": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "description": "`hide device retry`'s answer: whether this retry started an attempt, and the device as `list` answers it after the retry.",
             "properties": {
                 "device": {
+                    "additionalProperties": true,
                     "type": "object"
                 },
                 "started": {
-                    "type": "object"
+                    "type": "boolean"
                 }
             },
             "required": [
-                "started",
-                "device"
+                "device",
+                "started"
             ],
+            "title": "Retried",
             "type": "object"
         },
         "inbox": {
@@ -3604,7 +3608,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:d92c5a9dbe78feaab4273a3c3c97f0545ebbf7b4146e2f294dfc052080eaa3e1",
+    "digest": "sha256:6e5e8ab27883bef8eadc0c46f08c3c3a4d62ffdcd266a1fcab603fe22d96def1",
     "envelopes": {
         "agent": {
             "answer": "value",

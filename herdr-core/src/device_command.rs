@@ -117,6 +117,19 @@ pub fn next_action(code: &str) -> &'static str {
     }
 }
 
+/// `hide device retry`'s answer: whether this retry started an attempt, and
+/// the device as `list` answers it after the retry.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct Retried {
+    pub started: bool,
+    pub device: serde_json::Map<String, serde_json::Value>,
+}
+
+/// The JSON Schema of [`Retried`], which `hide contract` publishes.
+pub fn retried_schema() -> serde_json::Value {
+    serde_json::to_value(schemars::schema_for!(Retried)).expect("a JSON Schema serializes")
+}
+
 /// One device as `hide device` answers it (B29, B31): where its connection
 /// is, what it waits on from the operator, why its last attempt failed and
 /// the one thing to do next. It carries no question's words, no server key
@@ -260,9 +273,13 @@ fn connection(
         failure: Some(json!({
             "action": action,
             "cause": problem.map(SshProblem::code),
-            // ssh's last line, or what the link ended with: the row's own
-            // words, never a question or anything typed.
-            "detail": device.message,
+            // ssh's last line, or what the link ended with, only where it is
+            // what to fix: a refused sign-in's or a changed key's names the
+            // account and server, and their action says all there is to do.
+            "detail": match action {
+                FailureAction::Retry => device.message.as_deref(),
+                FailureAction::SignIn | FailureAction::CheckHostKey => None,
+            },
         })),
         next_action: Some(next_action),
     }

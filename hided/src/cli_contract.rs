@@ -958,7 +958,10 @@ fn answers() -> Value {
     map.insert("device_list".into(), shape(&["devices"]));
     map.insert("device_added".into(), shape(&["device", "next_action"]));
     map.insert("device_removed".into(), shape(&["device_id"]));
-    map.insert("device_retried".into(), shape(&["started", "device"]));
+    map.insert(
+        "device_retried".into(),
+        herdr_core::device_command::retried_schema(),
+    );
     answers
 }
 

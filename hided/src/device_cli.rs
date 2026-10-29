@@ -300,6 +300,22 @@ mod tests {
         }
     }
 
+    /// A sign-in failure carries no ssh line (the core leaves it out), so
+    /// the lines for a person show only its action, cause and next step.
+    #[test]
+    fn a_sign_in_failure_shows_its_action_without_a_detail() {
+        let line = device_line(&json!({
+            "id": "studio", "label": "Studio", "ssh_alias": "studio", "state": "failed",
+            "waits_on": null,
+            "failure": {"action": "sign_in", "cause": "sign_in_refused", "detail": null},
+            "next_action": "Run hide device retry studio --wait: it signs in again and may ask the operator on Studio's row in Settings > Devices",
+        }));
+        assert_eq!(
+            line,
+            "studio  Studio  ssh studio  failed\n  failed: sign in (sign_in_refused)\n  next: Run hide device retry studio --wait: it signs in again and may ask the operator on Studio's row in Settings > Devices\n"
+        );
+    }
+
     #[test]
     fn a_device_says_what_it_waits_on_and_what_to_do() {
         let line = device_line(&json!({

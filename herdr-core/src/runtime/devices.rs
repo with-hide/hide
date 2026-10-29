@@ -1124,8 +1124,15 @@ impl Runtime {
                 if started {
                     self.retry_remote_device(&device_id);
                 }
+                let answer = crate::device_command::Retried {
+                    started,
+                    device: state(self)?
+                        .as_object()
+                        .cloned()
+                        .ok_or("device_unavailable")?,
+                };
                 Ok((
-                    serde_json::json!({ "started": started, "device": state(self)? }),
+                    serde_json::to_value(answer).map_err(|_| "device_unavailable")?,
                     started,
                 ))
             }

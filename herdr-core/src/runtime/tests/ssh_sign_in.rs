@@ -16,6 +16,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 const DEVICE: &str = "mini";
 
+/// The line ssh ends a failed attempt with in this test, naming the account
+/// and server as a refused sign-in's does.
+const RAW_LINE: &str = "alice@mini: Permission denied (publickey).";
+
 /// What each attempt was given and what its question got.
 #[derive(Default)]
 struct Asked {
@@ -128,7 +132,7 @@ impl DialedTransport for AskingDevice {
             self.0.running.fetch_sub(1, Ordering::SeqCst);
             return Err(EstablishError::Ssh(SshFailure {
                 problem,
-                detail: "The server's key differs from the one known_hosts holds".to_owned(),
+                detail: RAW_LINE.to_owned(),
             }));
         }
         let answer = attempt.sign_in.ask(SignInWait::Secret {
@@ -658,13 +662,36 @@ fn hide_device_retry_starts_the_rows_attempt_and_leaves_its_question_alone() {
 /// B29, operator decision 2026-10-30: a failure reads as the row's one
 /// action for it, with the core's finer cause beside it; a changed server
 /// key is checked in a terminal, and a refusing access policy is retried
-/// once changed, not signed in again.
+/// once changed, not signed in again. ssh's last line comes along only for
+/// a retry, where it names what to fix: a refused sign-in's names the
+/// account, in the JSON and in the lines for a person alike.
 #[test]
 fn hide_device_reads_a_failure_as_the_rows_action() {
-    for (problem, action, said) in [
-        (SshProblem::HostKeyChanged, "check_host_key", "ssh mini"),
-        (SshProblem::PolicyRefused, "retry", "hide device retry mini"),
-        (SshProblem::Unreachable, "retry", "hide device retry mini"),
+    for (problem, action, said, detail) in [
+        (
+            SshProblem::SignInRefused,
+            "sign_in",
+            "hide device retry mini --wait",
+            None,
+        ),
+        (
+            SshProblem::HostKeyChanged,
+            "check_host_key",
+            "ssh mini",
+            None,
+        ),
+        (
+            SshProblem::PolicyRefused,
+            "retry",
+            "hide device retry mini",
+            Some(RAW_LINE),
+        ),
+        (
+            SshProblem::Unreachable,
+            "retry",
+            "hide device retry mini",
+            Some(RAW_LINE),
+        ),
     ] {
         let (shared, asked) = ssh_runtime();
         *asked.fails_with.lock().unwrap() = Some(problem);
@@ -675,6 +702,10 @@ fn hide_device_reads_a_failure_as_the_rows_action() {
         assert_eq!(device["state"], "failed", "{problem:?}");
         assert_eq!(device["failure"]["action"], action, "{problem:?}");
         assert_eq!(device["failure"]["cause"], problem.code());
+        assert_eq!(device["failure"]["detail"].as_str(), detail, "{problem:?}");
+        if detail.is_none() {
+            assert!(!list.to_string().contains("alice"), "{list}");
+        }
         assert!(
             device["next_action"]
                 .as_str()
@@ -682,4 +713,31 @@ fn hide_device_reads_a_failure_as_the_rows_action() {
             "{device}"
         );
     }
+}
+
+/// `hide contract` publishes the retry's answer from its type, and the
+/// answer the core gives has each field the schema requires, of its type.
+#[test]
+fn hide_device_retry_answers_as_its_published_schema() {
+    let (shared, _asked) = ssh_runtime();
+    shared.lock().unwrap().connect_registered_devices();
+    settled(&shared);
+    let answer = device_command(&shared, retry_command());
+    let schema = crate::device_command::retried_schema();
+    let required = schema["required"].as_array().expect("required fields");
+    assert!(!required.is_empty());
+    for field in required {
+        let field = field.as_str().unwrap();
+        let value = &answer[field];
+        let fits = match schema["properties"][field]["type"].as_str() {
+            Some("boolean") => value.is_boolean(),
+            Some("object") => value.is_object(),
+            Some("string") => value.is_string(),
+            Some(other) => panic!("{field} is declared {other}, which this check does not read"),
+            // `true`: any value.
+            None => !value.is_null(),
+        };
+        assert!(fits, "{field} = {value} does not fit {schema}");
+    }
+    assert_eq!(schema["properties"]["started"]["type"], "boolean");
 }
