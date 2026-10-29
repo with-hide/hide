@@ -7,7 +7,7 @@ import { clearPending, receiveBytes, receiveBytesError, receiveBytesRefusal } fr
 import { isOperatorFocus, numbered } from "./operatorFocus";
 import { noteArrival, probeEnabled } from "./probe";
 import { useShellStore, type TerminalChunk } from "./store";
-import { hostKind } from "./host";
+import { hostBridge, hostKind } from "./host";
 import type { ViewCommentAnchor } from "./snapshot";
 import { browserCommentKey, closeBrowserNote, noteBrowserComment, openBrowserNote, resetBrowserComments, type PagePlace } from "./viewFeedback";
 
@@ -193,6 +193,12 @@ export function connectShell(handlers: Handlers): { dispatch: DispatchFn; sendBi
         if (moveUnderWay(view.state) || nodeHolds) useShellStore.getState().setConnection("moving");
         else if (drawn && useShellStore.getState().connection === "moving") useShellStore.getState().setConnection("live");
         reportAccess(drawn);
+        return;
+      }
+      // `hide <path>` brought a project in front: the core already moved
+      // there, so only the desktop window itself has to come forward.
+      if (frame.type === "window_call") {
+        hostBridge()?.comeForward?.();
         return;
       }
       if (frame.type === "agent_notice") {

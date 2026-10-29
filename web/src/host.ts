@@ -188,6 +188,8 @@ export type HostBridge = {
    * over a notification click that started the app, and then on each change.
    */
   reportBadge(count: number): void;
+  /** Brings the window forward, as a Dock click does, after `hide <path>` brought a project in front (the daemon's `window_call`); absent from an older host. */
+  comeForward?(): void;
   /**
    * The window frame the shell draws its top row inside (PRD
    * sidebar-titlebar-refresh D-15, D-17): delivered once at once and again on

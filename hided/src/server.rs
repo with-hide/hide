@@ -1080,7 +1080,7 @@ async fn screen_loop(
             // this loop, and a window that lagged behind calls still comes
             // forward once.
             _ = window_calls.recv(), if renderer && relay.is_none() => {
-                let frame = json!({"type": "window_call"}).to_string();
+                let frame = json!({"type": "window_call", "payload": {}}).to_string();
                 if socket.send(Message::Text(frame.into())).await.is_err() {
                     break;
                 }
