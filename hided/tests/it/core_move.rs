@@ -2713,18 +2713,10 @@ fn a_pending_core_does_nothing_outside_until_its_link_commits() -> Result<()> {
             search_path: None,
         }))
         .map_err(anyhow::Error::msg)?;
-    // Bound after the daemon, so it closes first: a redial waiting in its
-    // backlog for an SSH greeting would hold the core's stop until the
-    // dial's own timeout.
-    let device = std::net::TcpListener::bind("127.0.0.1:0")?;
-    device.set_nonblocking(true)?;
     std::fs::create_dir_all(home.join(".ssh"))?;
     std::fs::write(
         home.join(".ssh/config"),
-        format!(
-            "Host probe\n  HostName 127.0.0.1\n  Port {}\n  User fixture\n  IdentityAgent none\n",
-            device.local_addr()?.port()
-        ),
+        "Host probe\n  HostName 127.0.0.1\n  Port 1\n  User fixture\n  IdentityAgent none\n",
     )?;
     let snapshot = || -> Result<Value> {
         Ok(Renderer::connect(running.port, &running.token)?
@@ -2738,9 +2730,11 @@ fn a_pending_core_does_nothing_outside_until_its_link_commits() -> Result<()> {
             .is_some_and(|rows| rows.iter().any(|row| row["target_id"] == "probe"))
     };
 
+    // Allowed, as Add device allows it: a device's Herdr rides its helper's
+    // link, so a device without consent is never dialed.
     Renderer::connect(running.port, &running.token)?.event(
         "register_device",
-        json!({"id": "probe", "label": "Probe", "ssh_alias": "probe"}),
+        json!({"id": "probe", "label": "Probe", "ssh_alias": "probe", "host_consent": true}),
     )?;
     let pending = snapshot()?;
     ensure!(
@@ -2768,17 +2762,12 @@ fn a_pending_core_does_nothing_outside_until_its_link_commits() -> Result<()> {
         .move_gate
         .admit(SOURCE_NODE, Some(INTENT))
         .map_err(anyhow::Error::msg)?;
+    // The core dials once the commit admits it. This process has no `hide`
+    // beside it to answer ssh's questions, so the attempt ends before ssh
+    // runs; its connection row is the dial, as its absence was above.
     wait_for("the device dialed after the commit", || {
-        match device.accept() {
-            Ok(_) => Ok(Some(())),
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
-            Err(error) => Err(error.into()),
-        }
+        Ok(attempted(&snapshot()?).then_some(()))
     })?;
-    ensure!(
-        attempted(&snapshot()?),
-        "no connection row after the commit"
-    );
     wait_for("Mobile's first check after the commit", || {
         Ok(tailscale.calls().contains("status").then_some(()))
     })?;
