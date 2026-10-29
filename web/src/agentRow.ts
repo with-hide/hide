@@ -128,9 +128,9 @@ export function lineParts(t: TFunction<"translation">, agent: LineAgent, line: R
     case "vanished":
       return parts(statusText(t, "stopped"), t("agents.line.vanished"));
     case "checks_passed":
-      return parts(null, t("agents.line.checksPassed", { number: line.pull_request ?? 0 }));
+      return parts(null, t("agents.line.checksPassed", { number: String(line.pull_request ?? 0) }));
     case "checks_failed":
-      return parts(null, t("agents.line.checksFailed", { number: line.pull_request ?? 0 }));
+      return parts(null, t("agents.line.checksFailed", { number: String(line.pull_request ?? 0) }));
     case "waiting":
       return parts(waitWord(t, agent.wait), line.text || waitDetail(t, agent, line));
     case "kept":
@@ -164,7 +164,7 @@ export function waitWord(t: TFunction<"translation">, wait: AgentWait | null | u
 function waitDetail(t: TFunction<"translation">, agent: LineAgent, line: RowLine): string | null {
   switch (agent.wait) {
     case "checks":
-      return line.pull_request ? t("agents.line.pullRequest", { number: line.pull_request }) : null;
+      return line.pull_request ? t("agents.line.pullRequest", { number: String(line.pull_request) }) : null;
     case "children":
       return t("agents.line.children", { count: agent.descendant_counts?.working ?? 0 });
     default:

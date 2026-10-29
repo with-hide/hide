@@ -222,7 +222,7 @@ describe("the line's words (status-marks D-04, B7, B10, B13, B16)", () => {
       agent.state = { ...agent.state, line: { text: "", mode: "waiting", tone: { kind: "subtle", read: false }, pull_request } };
       return lineText(t, agent, sidebarLine(agent)!);
     };
-    expect(waiting("checks", 12)).toBe("CI 기다림 · PR #12");
+    expect(waiting("checks", 1846)).toBe("CI 기다림 · PR #1846");
     expect(waiting("children")).toBe("자식 기다림 · 자식 2개 작업 중");
     expect(waiting("background")).toBe("백그라운드 기다림");
     expect(waiting("reply")).toBe("답장 기다림");
@@ -275,16 +275,16 @@ describe("the line's words (status-marks D-04, B7, B10, B13, B16)", () => {
     }
   });
 
-  it("names the pull request whose checks ended, in warning only when they failed", async () => {
+  it("names the pull request whose checks ended, as GitHub numbers it, in warning only when they failed", async () => {
     const { t } = await createInterfaceI18n("ko");
     const ended = (mode: "checks_passed" | "checks_failed") => {
       const agent = row("c", { activity: "stopped", mark: "unread", status_code: "stopped", group: "done", unread: true });
-      agent.state = { ...agent.state, line: { text: "", mode, tone: { kind: mode === "checks_failed" ? "warning" : "news", read: false }, pull_request: 12 } };
+      agent.state = { ...agent.state, line: { text: "", mode, tone: { kind: mode === "checks_failed" ? "warning" : "news", read: false }, pull_request: 1846 } };
       const line = sidebarLine(agent)!;
       return [lineText(t, agent, line), lineTone(line, agent)];
     };
-    expect(ended("checks_passed")).toEqual(["CI 통과 · PR #12", "text-foreground"]);
-    expect(ended("checks_failed")).toEqual(["CI 실패 · PR #12", "text-warning"]);
+    expect(ended("checks_passed")).toEqual(["CI 통과 · PR #1846", "text-foreground"]);
+    expect(ended("checks_failed")).toEqual(["CI 실패 · PR #1846", "text-warning"]);
   });
 
   it("says in words that the work a stopped row waited for is gone, only on the sidebar (B16)", async () => {
