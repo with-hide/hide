@@ -164,6 +164,7 @@ fn an_install_sends_only_what_the_device_does_not_hold_whole() {
 /// B23: a connection that ends part way through a file leaves the final
 /// name as it was, so nothing half sent is ever started.
 #[test]
+#[allow(clippy::disallowed_methods)] // a polling helper: it sleeps between observations of a state, bounded by a deadline
 fn an_install_cut_off_mid_file_leaves_no_half_file_in_use() {
     let device = Device::new();
     let mut pipe = device.connect("");

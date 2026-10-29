@@ -149,6 +149,7 @@ impl Sshd {
 
     /// `false` ends the server and every session it holds, as a device that
     /// went away; `true` starts it again on the same port.
+    #[allow(clippy::disallowed_methods)] // a polling helper: it sleeps between observations of a state, bounded by a deadline
     pub fn online(&self, value: bool) -> Result<()> {
         let mut child = self.child.lock().expect("sshd child");
         if !value {

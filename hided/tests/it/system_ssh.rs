@@ -208,8 +208,8 @@ mod unix {
             other => panic!("an unattended attempt went on: {:?}", other.err()),
         }
         // The core's row refuses an unattended attempt's question at once and
-    // shows nothing (herdr-core `ssh_sign_in`); ssh then gives up.
-    assert_eq!(unattended.asked().len(), 1);
+        // shows nothing (herdr-core `ssh_sign_in`); ssh then gives up.
+        assert_eq!(unattended.asked().len(), 1);
         assert!(!known.exists() || std::fs::read_to_string(&known).unwrap().is_empty());
 
         let row = Row::answering(vec![Answer::Accept]);
@@ -256,8 +256,8 @@ mod unix {
             refused.err()
         );
         // The core's row refuses an unattended attempt's question at once and
-    // shows nothing (herdr-core `ssh_sign_in`); ssh then gives up.
-    assert_eq!(unattended.asked().len(), 1);
+        // shows nothing (herdr-core `ssh_sign_in`); ssh then gives up.
+        assert_eq!(unattended.asked().len(), 1);
 
         let row = Row::answering(vec![text("wrong"), text("fixture passphrase")]);
         reached_the_device(fixture.attempt(&config, "device", Wake::Allowed, row.clone()));
