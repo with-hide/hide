@@ -773,13 +773,6 @@ mod tests {
         let output = std::process::Command::new("git")
             .arg("-C")
             .arg(dir)
-            .args([
-                "-c",
-                "user.name=Fixture",
-                "-c",
-                "user.email=f@example.invalid",
-            ])
-            .args(["-c", "commit.gpgsign=false"])
             .args(args)
             .output()
             .unwrap();
@@ -796,6 +789,10 @@ mod tests {
             let folder = tempfile::tempdir().unwrap();
             let dir = folder.path();
             git(dir, &["init", "-q", "-b", "main"]);
+            // In the repository, so the merge's own `commit-tree` reads them.
+            git(dir, &["config", "user.name", "Fixture"]);
+            git(dir, &["config", "user.email", "fixture@example.invalid"]);
+            git(dir, &["config", "commit.gpgsign", "false"]);
             std::fs::write(dir.join(".gitignore"), "secret\n").unwrap();
             git(dir, &["add", ".gitignore"]);
             git(dir, &["commit", "-qm", "ignore"]);
