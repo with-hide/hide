@@ -10,6 +10,10 @@ a few minutes on the operator's account, and Codex logged, under the target
 `codex_core::responses_retry`, `stream disconnected - retrying sampling
 request (1/5 in 500.99994175s) ... last status: 429 Too Many Requests`, so the
 cell's 3-minute wait ended with no answer.
+
+Each row names the conversation it belongs to (`thread_id`, the session id
+the journey knows the agent by), so only the agent's own conversation is
+read, and only rows written since the step began (`cursor`).
 """
 
 import contextlib
@@ -37,25 +41,47 @@ def codex_logs(codex_home):
     return max(found)[1] if found else None
 
 
-def codex_refusal(codex_home, since):
-    """Why Codex got no answer from its provider for a turn from `since`
-    (Unix seconds) on: the newest retry Codex logged after a 429, or None
-    when it logged none. Raises Unreadable when the database cannot be read,
-    which leaves the cell's own verdict standing."""
+def cursor(codex_home):
+    """Where Codex's log stands now: its database's name and newest row id,
+    so a row read later against it is one Codex wrote after this moment,
+    whatever its clock says. (None, 0) before Codex made the database.
+    Raises Unreadable."""
+    logs = codex_logs(codex_home)
+    if logs is None:
+        return None, 0
+    try:
+        with contextlib.closing(sqlite3.connect(f"file:{logs}?mode=ro", uri=True, timeout=2)) as db:
+            newest = db.execute("SELECT max(id) FROM logs").fetchone()[0]
+    except sqlite3.Error as error:
+        raise Unreadable(f"{logs.name}: {error}") from error
+    return logs.name, newest or 0
+
+
+def codex_refusal(codex_home, mark, thread):
+    """Why Codex got no answer from its provider for the conversation
+    `thread` since `mark` (a `cursor`): its newest retry there waits on a
+    429, or None when that thread retried nothing since or its newest retry
+    had another cause. A database of a newer schema than the mark's is read
+    from its start. Raises Unreadable, which leaves the cell's verdict
+    standing."""
     logs = codex_logs(codex_home)
     if logs is None:
         return None
+    name, after = mark
+    if name != logs.name:
+        after = 0
     try:
         with contextlib.closing(sqlite3.connect(f"file:{logs}?mode=ro", uri=True, timeout=2)) as db:
             row = db.execute(
-                "SELECT feedback_log_body FROM logs WHERE target = ? AND ts >= ? AND instr(feedback_log_body, ?) > 0"
-                " ORDER BY ts DESC, id DESC LIMIT 1",
-                (RETRY_TARGET, int(since), TOO_MANY_REQUESTS)).fetchone()
+                "SELECT feedback_log_body FROM logs WHERE target = ? AND thread_id = ? AND id > ?"
+                " ORDER BY id DESC LIMIT 1",
+                (RETRY_TARGET, thread, after)).fetchone()
     except sqlite3.Error as error:
         raise Unreadable(f"{logs.name}: {error}") from error
-    if row is None:
+    body = (row or ("",))[0] or ""
+    if TOO_MANY_REQUESTS not in body:
         return None
-    retry = RETRY.search(row[0] or "")
+    retry = RETRY.search(body)
     wait = ""
     if retry:
         seconds = float(retry.group(3)) / (1000 if retry.group(4) == "ms" else 1)

@@ -9,6 +9,29 @@ gave the screens (`journey_composer`).
 """
 
 PASS, FAIL, NOT_MEASURED, NA, EXCLUDED, PENDING = "pass", "fail", "not measured", "N/A", "excluded", "pending"
+# A failed turn the agent never answered at all, after its prompt: the one
+# failure a provider's refusal of that turn can explain (provider_limit.py).
+NO_ANSWER = "no_answer"
+
+
+class Verdict(tuple):
+    """A (status, reason) verdict that also says what kind of failure it
+    is; it unpacks and settles as the pair."""
+
+    def __new__(cls, status, reason, kind=None):
+        verdict = super().__new__(cls, (status, reason))
+        verdict.kind = kind
+        return verdict
+
+
+def kind(verdict):
+    """The kind of a failed verdict, or None for a plain pair."""
+    return getattr(verdict, "kind", None)
+
+
+def assistant_after(events, after=0):
+    """Whether the agent said anything from `after` on."""
+    return any(event.get("role") == "assistant" for event in events[after:])
 
 # The contract's cell names in table order (contracts/agent-journey.json).
 CELLS = ("start", "start_untrusted", "reply", "integration", "guidance_memory", "letter",
@@ -165,7 +188,8 @@ def turn_verdict(observed, events, token, after=0):
     detection misses a turn shorter than its reading."""
     answer = answer_of(events, token, after)
     if answer is None:
-        return FAIL, "Hide's reader found no answer to the prompt"
+        return Verdict(FAIL, "Hide's reader found no answer to the prompt",
+                       None if assistant_after(events, after) else NO_ANSWER)
     prompt_at, answer_at = answer
     if not answer_at:
         return FAIL, "the answer has no session time"
@@ -198,9 +222,9 @@ def emitter_verdict(session, expected):
 
 def start_verdict(*verdicts):
     """The first verdict that did not pass, or all of their reasons."""
-    for status, reason in verdicts:
-        if status != PASS:
-            return status, reason
+    for verdict in verdicts:
+        if verdict[0] != PASS:
+            return verdict
     return PASS, "; ".join(reason for _, reason in verdicts)
 
 
@@ -216,8 +240,8 @@ def reply_verdict(read, session, token, after=0):
     if read.get("session") != session:
         return FAIL, f"Hide's reader read session {read.get('session')}, not {session}"
     events = read.get("events", [])[after:]
-    if not any(event.get("role") == "assistant" for event in events):
-        return FAIL, "Hide's reader found no assistant message"
+    if not assistant_after(events):
+        return Verdict(FAIL, "Hide's reader found no assistant message", NO_ANSWER)
     if any(event.get("role") == "assistant" and token in (event.get("text") or "") for event in events):
         return PASS, "assistant message carries " + token
     return FAIL, "no assistant message carries " + token
@@ -254,8 +278,8 @@ def letter_verdict(shown, read, session, token):
     after = bell_turn(read.get("events", []), shown["bell_line"])
     if after is None:
         return FAIL, "Hide's reader found no turn the doorbell opened"
-    status, reason = reply_verdict(read, session, token, after)
-    return status, ("delivered; " + reason) if status == PASS else reason
+    verdict = reply_verdict(read, session, token, after)
+    return (PASS, "delivered; " + verdict[1]) if verdict[0] == PASS else verdict
 
 
 def prompt_letter_verdict(shown, read, session, token, after):
@@ -267,8 +291,8 @@ def prompt_letter_verdict(shown, read, session, token, after):
     if shown.get("state") != "delivered" or shown.get("hook_confirmed") is not True:
         return FAIL, (f"letter state is {shown.get('state')} and hook confirmed {shown.get('hook_confirmed')}, "
                       "not delivered by the prompt hook")
-    status, reason = reply_verdict(read, session, token, after)
-    return status, ("delivered with the next prompt; " + reason) if status == PASS else reason
+    verdict = reply_verdict(read, session, token, after)
+    return (PASS, "delivered with the next prompt; " + verdict[1]) if verdict[0] == PASS else verdict
 
 
 def composer_verdict(steps):
@@ -301,5 +325,4 @@ def sleep_verdict(asleep, awake, failure=None):
 def resume_verdict(before, after, reply):
     if not before or before != after:
         return FAIL, f"native session changed across Wake ({before} -> {after})"
-    status, reason = reply
-    return status, ("same session " + before + "; " + reason) if status == PASS else reason
+    return (PASS, "same session " + before + "; " + reply[1]) if reply[0] == PASS else reply
