@@ -1244,15 +1244,15 @@ fn a_device_folder_hide_opens_is_judged_by_the_device_s_helper() {
     let mut runtime = runtime();
     runtime.device_hosts.insert(
         TARGET.to_owned(),
-        hosts::DeviceHost {
-            phase: hosts::HostPhase::Ready {
+        hosts::DeviceHost::new(
+            hosts::HostPhase::Ready {
                 host: FakeDevice::new(),
                 platform: "macos aarch64".to_owned(),
                 helper_path: Some("/fake/hided".to_owned()),
                 windows_drives: None,
             },
-            generation: 1,
-        },
+            1,
+        ),
     );
     assert!(!Path::new(&t.other).starts_with(std::env::var("HOME").unwrap()));
 
