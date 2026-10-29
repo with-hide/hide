@@ -58,9 +58,10 @@ const SIGN_IN: Device[] = [
 ];
 
 /**
- * The three failure states a device row draws: sign in (needed, refused),
- * the changed server key, and cannot connect over ssh's last line or Hide's
- * sentence where ssh has none.
+ * The failure states a device row draws: sign in (needed, refused), the
+ * changed server key, cannot connect over ssh's last line or Hide's sentence
+ * where ssh has none, and a Hide an update replaced, which only opening Hide
+ * again mends.
  */
 const FAILURES: Device[] = [
   failed("studio", "sign_in_needed"),
@@ -71,6 +72,7 @@ const FAILURES: Device[] = [
   failed("ci", "cannot_connect", "kex_exchange_identification: read: Connection reset by peer"),
   failed("old-box", "openssh_old"),
   failed("tower", "ssh_missing"),
+  failed("mac-mini", "hide_updated"),
 ];
 
 export function AddDeviceScene({ params }: { params: URLSearchParams }) {

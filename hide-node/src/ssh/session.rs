@@ -274,7 +274,10 @@ pub(super) fn sign_in(
         // macOS, after an app update replaced this program's file: only the
         // new build starts ssh, and the app's next start replaces this one.
         Err(error) if hide_platform::process::program_replaced(&error) => {
-            return Err(EstablishError::Helper(UPDATED.to_owned()));
+            return Err(EstablishError::Ssh(SshFailure {
+                problem: SshProblem::HideUpdated,
+                detail: UPDATED.to_owned(),
+            }));
         }
         Err(error) => {
             return Err(EstablishError::Helper(format!(

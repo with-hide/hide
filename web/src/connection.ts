@@ -1,6 +1,6 @@
 import type { TFunction } from "i18next";
 import { giveUpOffered, movingStripText, type CoreLink, type MoveMachines, type MoveView } from "./coreMove";
-import { deviceProblemLine, retrySignsIn } from "./settings";
+import { deviceProblemLine, retryCanHelp, retrySignsIn } from "./settings";
 import type { DeviceSignIn } from "./snapshot";
 
 /** `moving`: a move holds the window until the machine that takes the core draws it; input is refused meanwhile. */
@@ -51,7 +51,8 @@ export type WindowStrip = {
 
 /**
  * What the strip says while the link waits for the operator, by the ssh failure it stopped on as the device row
- * groups it: a sign-in their Sign in asks for, a changed server key they check in a terminal, or a connection to retry.
+ * groups it: a sign-in their Sign in asks for, a changed server key they check in a terminal, a Hide an update replaced
+ * that only opening Hide again mends, or a connection to retry.
  */
 function stoppedText(link: CoreLink, machine: string, t: TFunction<"translation">): string {
   switch (link.problem) {
@@ -61,6 +62,8 @@ function stoppedText(link: CoreLink, machine: string, t: TFunction<"translation"
       return t("coreMove.strip.signInRefused", { machine });
     case "host_key_changed":
       return t("coreMove.strip.hostKeyChanged", { machine });
+    case "hide_updated":
+      return t("coreMove.strip.hideUpdated", { machine });
     default:
       return t("coreMove.strip.stopped", { machine, alias: link.alias });
   }
@@ -96,10 +99,10 @@ export function windowStrip(
       case "waiting":
         return { kind: "unreachable", text: t("coreMove.strip.unreachable", { machine }), mark: "warn" };
       case "stopped": {
-        // A changed server key is checked in a terminal and offers no Retry, as on the device row: a retry would meet
-        // the same key.
+        // A changed server key is checked in a terminal and a Hide an update replaced is opened again; neither offers
+        // a Retry, as on the device row: a retry would meet the same key, or start the same replaced program.
         const command = deviceProblemLine(link.problem, link.alias, t)?.command ?? undefined;
-        if (link.problem === "host_key_changed") return { kind: "stopped", text: stoppedText(link, machine, t), mark: "warn", ...(command ? { command } : {}) };
+        if (!retryCanHelp(link.problem)) return { kind: "stopped", text: stoppedText(link, machine, t), mark: "warn", ...(command ? { command } : {}) };
         return { kind: "stopped", text: stoppedText(link, machine, t), mark: "warn", action: retrySignsIn(link.problem) ? "sign_in" : "retry" };
       }
       case "connecting":

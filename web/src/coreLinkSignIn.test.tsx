@@ -82,6 +82,9 @@ it("offers Sign in for a stopped sign-in and the terminal check for a changed se
     await view.set({ coreLink: link({ phase: "stopped", problem: "host_key_changed" }) });
     expect(view.q('[data-core-link-command="ssh mini"]')?.textContent).toContain("ssh mini");
     expect(view.q("[data-core-retry]")).toBeNull();
+    await view.set({ coreLink: link({ phase: "stopped", problem: "hide_updated" }) });
+    expect(view.q("[data-core-retry]")).toBeNull();
+    expect(view.q("[data-core-link-command]")).toBeNull();
     await view.set({ coreLink: link({ phase: "stopped", problem: "cannot_connect" }) });
     expect(view.q('[data-core-retry="retry"]')?.textContent).toBe("Retry");
   } finally {
@@ -198,6 +201,9 @@ it("words a connection check that stopped on a sign-in as the device row does an
     await view.set({ coreMove: { ...failed, ssh_problem: "host_key_changed" } });
     expect(view.q('[data-core-move-check="connection"]')?.textContent).toContain("Server key changed");
     expect(view.q('[data-core-move-check="connection"]')?.textContent).toContain("ssh mini");
+    expect(view.q('[data-core-move-recheck="true"]')).toBeNull();
+    await view.set({ coreMove: { ...failed, ssh_problem: "hide_updated" } });
+    expect(view.q('[data-core-move-check="connection"]')?.textContent).toContain("Quit Hide and open it again");
     expect(view.q('[data-core-move-recheck="true"]')).toBeNull();
     await view.set({ coreMove: { ...failed, ssh_problem: "cannot_connect" } });
     expect(view.q('[data-core-move-recheck="true"]')?.textContent).toBe("Check again");

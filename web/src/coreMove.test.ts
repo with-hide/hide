@@ -101,6 +101,8 @@ describe("the strip above the window (W1 to W3)", () => {
     expect(stopped("sign_in_refused")).toMatchObject({ text: "Mac mini core가 로그인을 거절했어요", action: "sign_in" });
     // A changed server key: the terminal command that checks it, and no Retry (#1840's decision for the device row).
     expect(stopped("host_key_changed")).toEqual({ kind: "stopped", mark: "warn", text: "Mac mini core의 서버 키가 바뀌었어요 · 터미널에서 확인해 주세요", command: "ssh mini" });
+    // A Hide an update replaced: only opening Hide again mends it, so neither a Retry nor a command.
+    expect(stopped("hide_updated")).toEqual({ kind: "stopped", mark: "warn", text: "Hide가 실행된 뒤에 업데이트됐어요 · Hide를 종료하고 다시 열면 Mac mini core에 연결돼요" });
     // Anything else is a retry.
     expect(stopped("cannot_connect")).toMatchObject({ text: "ssh로 Mac mini core에 연결하지 못했어요 · 터미널에서 ssh mini 명령으로 이유를 확인해 주세요", action: "retry" });
     expect(stopped("cannot_connect")?.command).toBeUndefined();

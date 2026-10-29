@@ -674,6 +674,10 @@ pub enum SshProblem {
     /// This computer's OpenSSH is older than 8.4, which cannot hand Hide a
     /// question.
     OpenSshOld,
+    /// An app update replaced this Hide's program since it started (macOS),
+    /// so it cannot start `ssh`: only Hide opened again, which runs the new
+    /// build, can.
+    HideUpdated,
     /// None of the above; the row shows ssh's last line.
     Unclassified,
 }
@@ -692,6 +696,7 @@ impl SshProblem {
             Self::Unsupported => "unsupported",
             Self::SshMissing => "ssh_missing",
             Self::OpenSshOld => "openssh_old",
+            Self::HideUpdated => "hide_updated",
             Self::Unclassified => "unclassified",
         }
     }
@@ -709,13 +714,14 @@ impl SshProblem {
 
     /// What the operator does about it, the one grouping the device row and
     /// `hide device` share: sign in again, check the server key in a
-    /// terminal, or retry.
+    /// terminal, open Hide again, or retry.
     pub fn action(self) -> FailureAction {
         match self {
             Self::SignInNeeded | Self::BrowserTimeout | Self::SignInRefused => {
                 FailureAction::SignIn
             }
             Self::HostKeyChanged => FailureAction::CheckHostKey,
+            Self::HideUpdated => FailureAction::ReopenHide,
             Self::PolicyRefused
             | Self::NameNotFound
             | Self::Unreachable
@@ -734,6 +740,8 @@ impl SshProblem {
 pub enum FailureAction {
     SignIn,
     CheckHostKey,
+    /// Quit Hide and open it again: no retry of this Hide can succeed.
+    ReopenHide,
     Retry,
 }
 
@@ -742,6 +750,7 @@ impl FailureAction {
         match self {
             Self::SignIn => "sign_in",
             Self::CheckHostKey => "check_host_key",
+            Self::ReopenHide => "reopen_hide",
             Self::Retry => "retry",
         }
     }

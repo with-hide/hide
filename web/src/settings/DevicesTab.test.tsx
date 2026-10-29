@@ -469,6 +469,21 @@ it("draws a changed server key with its terminal check and a connection that cou
   }
 });
 
+it("draws a Hide an update replaced as opening Hide again, with no Retry from it", async () => {
+  const unavailable = { ...host, state: "unavailable" as const, message: "Hide was updated since it started." };
+  const view = await mount(state([remote("mini", { state: "unavailable", problem: "hide_updated", message: "Hide was updated since it started.", host: unavailable })]));
+  try {
+    expect(view.q('[data-device-problem="mini:hide_updated"]')?.textContent).toBe(
+      "!Couldn't connectHide was updated after it started. Quit Hide and open it again to connect.",
+    );
+    // Only Hide opened again can connect: a retry from this one starts the same old program.
+    expect(view.q('[data-device-retry="mini"]')).toBeNull();
+    expect(view.q('[data-device-host]')).toBeNull();
+  } finally {
+    await view.unmount();
+  }
+});
+
 it("reads a refused sign-in with the same Sign in as a needed one", async () => {
   const view = await mount(state([remote("mini", { state: "unavailable", problem: "sign_in_refused", message: "Permission denied (publickey,password).", host: { ...host, state: "unavailable", message: "Permission denied (publickey,password)." } })]));
   try {
