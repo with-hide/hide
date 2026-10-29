@@ -278,8 +278,12 @@ fn read_connection(
     };
     // Bytes of 2.x rows SQLite has scanned in place in this read.
     let mut scanned = 0_u64;
-    for _ in 0..ROWS {
-        if started.elapsed() >= super::STEP_TIME || step.read_bytes + ROW_BYTES + 256 > READ_BYTES {
+    for index in 0..ROWS {
+        // The time budget is checked from the second row on, so a read whose
+        // opening outlasted it still takes a row and the next read moves on.
+        if (index > 0 && started.elapsed() >= super::STEP_TIME)
+            || step.read_bytes + ROW_BYTES + 256 > READ_BYTES
+        {
             step.has_more = true;
             break;
         }
