@@ -33,5 +33,6 @@ mod shell_exec;
 mod stand_ins;
 #[cfg(unix)]
 mod support;
+mod system_ssh;
 mod terminal_children;
 mod wsl_device;

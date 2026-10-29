@@ -161,6 +161,7 @@ class Selection(unittest.TestCase):
         for path in (
             "herdr-core/src/lib.rs", "hided/src/lib.rs", "hide-agent-hooks/src/lib.rs", "hide-host/src/lib.rs",
             "hide-platform/src/process.rs", "hide-kit/src/lib.rs", "hide-session/src/lib.rs", "hided/tests/it/remote_delivery.rs",
+            "hide-node/src/ssh/bootstrap.rs", "hide-node-link/src/device.rs", "hided/tests/it/system_ssh.rs",
         ):
             with self.subTest(path=path):
                 self.assertIn("remote-mailbox", plan(path)["lanes"])

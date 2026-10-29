@@ -112,6 +112,29 @@ impl Sshd {
         Ok(sshd)
     }
 
+    /// Lets the key whose public half is `public` sign in too.
+    pub fn authorize(&self, public: &Path) -> Result<()> {
+        let key = std::fs::read_to_string(public)?;
+        let mut keys = std::fs::OpenOptions::new()
+            .append(true)
+            .open(self.dir.join("authorized_keys"))?;
+        std::io::Write::write_all(&mut keys, key.as_bytes())?;
+        Ok(())
+    }
+
+    /// The server's host key fingerprint, as ssh shows it.
+    pub fn fingerprint(&self) -> Result<String> {
+        let output = Command::new("/usr/bin/ssh-keygen")
+            .args(["-l", "-E", "sha256", "-f"])
+            .arg(self.dir.join("host.pub"))
+            .output()?;
+        String::from_utf8_lossy(&output.stdout)
+            .split_whitespace()
+            .nth(1)
+            .map(str::to_owned)
+            .context("the host key's fingerprint")
+    }
+
     /// A client config block for `alias` reaching this server: its key, its
     /// known_hosts, and no agent or other file of this account's.
     pub fn client_config(&self, alias: &str) -> String {
@@ -143,7 +166,12 @@ impl Sshd {
             .append(true)
             .open(self.dir.join("sshd.log"))?;
         let mut command = Command::new(program()?);
+        // Nothing of this process's environment, such as the operator's
+        // Herdr socket, reaches the server or a session it starts.
+        #[allow(clippy::disallowed_methods)] // env_clear: a Unix test server's environment
+        command.env_clear();
         command
+            .env("PATH", "/usr/bin:/bin:/usr/sbin:/sbin")
             .args(["-D", "-e", "-f"])
             .arg(self.dir.join("sshd_config"))
             .stdin(Stdio::null())

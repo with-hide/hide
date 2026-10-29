@@ -287,6 +287,7 @@ impl Device {
 }
 
 #[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn authenticated_node_advertises_only_its_compiled_readers() {
     use hide_node_link::sessions::{ReaderFeature, ReaderFeatures};
     let device = Device::start();
@@ -656,6 +657,7 @@ impl Drop for ReleaseOnDrop {
 /// The production overflow callback answers the actual node caller with
 /// bridge_busy, keeps its reader usable, and reaches normal close cleanup.
 #[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn a_saturated_core_answers_busy_over_ssh_and_keeps_its_reader_usable() {
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixStream;
@@ -876,6 +878,7 @@ fn unbound(value: &mut Value) {
 }
 
 #[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn the_core_s_own_node_and_a_device_link_answer_alike() {
     let device = Device::start();
     let local = hide_node::Local::new(Some(device.home.clone()));
@@ -901,6 +904,7 @@ fn the_core_s_own_node_and_a_device_link_answer_alike() {
 }
 
 #[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn a_published_guardrail_policy_is_what_the_devices_hooks_read() {
     use hide_agent_hooks::guardrails::{Policy, ProjectPolicy, Rules, read_policy};
     let device = Device::start();
@@ -951,6 +955,7 @@ fn a_published_guardrail_policy_is_what_the_devices_hooks_read() {
 }
 
 #[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn a_device_s_channels_share_its_one_connection() {
     let device = Device::start();
     // The start script, the install and the link made one connection.
@@ -983,6 +988,7 @@ fn a_device_s_channels_share_its_one_connection() {
 
 /// B10: a request the link ends part way leaves nothing behind.
 #[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn a_link_ending_mid_request_removes_what_it_staged() {
     let device = Device::start();
     let request = "0d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d";
@@ -1000,6 +1006,7 @@ fn a_link_ending_mid_request_removes_what_it_staged() {
 /// first file leaves nothing behind. Which comes first, the end or the
 /// file, is ordered step by step in `hide-host`'s staging tests.
 #[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn a_link_ending_during_a_write_leaves_no_file() {
     let device = Device::start();
     let request = "5b0c9d8e-7f6a-4b5c-8d4e-3f2a1b0c9d8e";
@@ -1037,6 +1044,7 @@ fn a_link_ending_during_a_write_leaves_no_file() {
 /// backend of its own built for the core's instance and released by it,
 /// where a device used to refuse them. No provider is run.
 #[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn a_device_answers_hide_ai_for_its_own_agents() {
     let device = Device::start();
     let backend = hide_node_link::ai::BackendSpec {
@@ -1076,6 +1084,7 @@ fn a_device_answers_hide_ai_for_its_own_agents() {
 /// server, dropping the forward ends that server's connection, and a
 /// forward whose link ended reaches nothing.
 #[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn a_device_page_rides_its_node_link_and_ends_with_it() {
     use hided::page_forward::PageForward;
     use std::io::Write;
@@ -1216,6 +1225,7 @@ impl hide_node::terminal::device::DeviceSink for HeardTerminals {
 /// several of its panes opens no connection of their own, and each pane's
 /// word comes back up the same link.
 #[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn a_device_s_terminals_ride_its_one_connection() {
     use hide_node_link::terminal::{GridSize, TerminalControl, TerminalReport};
     let heard = Arc::new(HeardTerminals::default());
@@ -1261,6 +1271,7 @@ fn a_device_s_terminals_ride_its_one_connection() {
 /// connection; the link keeps the connection it runs on, so the call (the
 /// kit coming off) still gets its answer.
 #[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn a_link_outlives_its_device_s_hold_on_the_connection() {
     let Device {
         _root,
@@ -1279,6 +1290,7 @@ fn a_link_outlives_its_device_s_hold_on_the_connection() {
 /// reports up as it runs, a report answered with false stops it on the
 /// device, and the call ends with the watch's own answer.
 #[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn a_device_s_reporting_call_reports_and_stops_when_told() {
     use hide_node_link::worktrees::GitWatchReport;
     let device = Device::start();
@@ -1323,6 +1335,7 @@ fn a_device_s_reporting_call_reports_and_stops_when_told() {
 /// A draining link (consent withdrawn) stops the reporting call it would
 /// otherwise wait out for its whole bound, and closes once it has.
 #[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn a_draining_link_stops_its_reporting_call_and_closes() {
     let device = Device::start();
     let socket = pane_sockets(&device.state).pop().unwrap();
@@ -1388,6 +1401,7 @@ fn pane_sockets(state: &Path) -> Vec<PathBuf> {
 /// caller the node cannot prove is refused with today's reason, and the
 /// socket lives exactly as long as the link it answers for.
 #[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn a_device_s_pane_socket_lives_with_its_link() {
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixStream;
@@ -1443,6 +1457,7 @@ fn ask(socket: &Path, pane_id: &str, nonce: char, one_shot: bool) -> Value {
 /// reported up the link for the core's record; and closing the link takes
 /// the credential's reference with it.
 #[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn a_device_pane_s_proof_crosses_the_link_and_its_refusals_are_reported() {
     use std::os::unix::net::UnixStream;
     let device = Device::start();
@@ -1559,6 +1574,7 @@ impl hide_node::ssh::PaneEvents for IssuingEvents {
 /// again. A lasting credential names its token in the local prelude, but
 /// the node still proves the peer against the pane it issued that token for.
 #[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn a_stream_opened_by_a_one_shot_holder_names_its_pane() {
     use std::io::Write;
     use std::os::unix::net::UnixStream;
@@ -1625,6 +1641,7 @@ fn a_stream_opened_by_a_one_shot_holder_names_its_pane() {
 /// The socket proves a hook's caller before forwarding the typed command,
 /// answers that command once, and leaves no reusable reference behind.
 #[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn a_hook_proof_answers_once_and_never_hands_out_a_reference() {
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixStream;
@@ -1692,6 +1709,7 @@ fn a_hook_proof_answers_once_and_never_hands_out_a_reference() {
 }
 
 #[test]
+#[ignore = "the system's sshd; the remote mailbox lane runs it"]
 fn workspace_guidance_gets_one_reusable_reference_and_rejects_writes() {
     use std::io::{BufRead, BufReader, Write};
     use std::os::unix::net::UnixStream;

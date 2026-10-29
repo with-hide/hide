@@ -87,10 +87,12 @@ AGY_CRATES = {"hide-agent-adapter", "hide-agent-hooks", "hide-ai", "hide-kit", "
 # through `hide connect` there, the system's processes and local stream.
 OS_LANES = ("os-contract", "windows-check", "windows-e2e", "windows-desktop")
 # The remote mailbox lane builds `hided`, `hide`, the host helper and the hook
-# binary, and runs `hided`'s `remote_delivery` test against them over
-# private SSH, and its `held_letter_notice` test against the pinned Herdr; a
-# change to any crate they link, or to the tests, can change its result, and
-# nothing else can. Web code and web specs do not reach it.
+# binary, and runs `hided`'s `remote_delivery`, `node_contract`,
+# `device_bootstrap` and `system_ssh` tests against them over the system's
+# ssh and sshd, and its `held_letter_notice` test against the pinned Herdr; a
+# change to any crate they link (the device link's `hide-node` and
+# `hide-node-link` reach it through `hided`), or to the tests, can change its
+# result, and nothing else can. Web code and web specs do not reach it.
 MAILBOX_CRATES = {"herdr-core", "hided", "hide-agent-hooks", "hide-host"}
 # The WSL device lane (`wsl-device.yml`) connects a real WSL 2 distribution
 # through `wsl.exe`: the crates the link crosses (the platform layer's WSL

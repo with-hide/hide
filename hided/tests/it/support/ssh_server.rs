@@ -1,8 +1,9 @@
 //! Real loopback SSH boundary, with fixture-only keys and owned channel jobs.
 //! The account is a private HOME; streamlocal opens only its exact Herdr socket,
 //! and direct-tcpip only a loopback port.
-//! Shared by the device link's tests (`remote_delivery`, `node_contract`),
-//! each of which uses part of it.
+//! Shared by the core's own SSH link's tests (`remote_core`, `core_move`),
+//! each of which uses part of it; a device is reached with the system `ssh`,
+//! whose tests use the system's `sshd` (`sshd.rs`).
 #![allow(dead_code)]
 
 use std::collections::HashMap;

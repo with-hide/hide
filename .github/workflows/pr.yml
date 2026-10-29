@@ -472,6 +472,13 @@ jobs:
         env:
           HIDE_E2E_HERDR_BIN: ${{ steps.herdr.outputs.bin }}
         run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(/^real_herdr::/)' --run-ignored only --no-capture
+      - name: Windows' own OpenSSH asks through Hide's askpass
+        # hided/tests/it/system_ssh.rs (PRD system-ssh-device-link, B34): the
+        # inbox ssh-keygen.exe reads a key's passphrase through `hide` as its
+        # askpass, the same question ssh.exe asks at sign-in.
+        if: ${{ !cancelled() && steps.tests.outcome == 'success' }}
+        timeout-minutes: 5
+        run: bash scripts/verify-cargo.sh nextest --profile ci $TEST_TARGETS -E 'binary_id(hided::it) & test(=system_ssh::windows_inbox_openssh_asks_through_hides_askpass)' --run-ignored only --no-capture
       - name: Attribute a native listening port to its working directory
         # Cleanup must refuse an unreadable in-use check. This unchanged core
         # contract exposes the native read reason that a browser error lacks.
@@ -575,8 +582,8 @@ jobs:
   # the tail of `web e2e (macOS)` (6.8 minutes of `@platform` tests, then 3.2 of
   # this lane after a 4.4-minute build of every CLI binary, 14.4 minutes in
   # all, the longest job of a run on 2026-10-05). It runs on Linux here: it
-  # checks the device's node link, helper attestation and the durable mailbox,
-  # the same code on every system; what differs by system under it is
+  # checks the device's node link over the system's ssh and sshd, its sign-in,
+  # helper attestation and the durable mailbox, the same code on every system; what differs by system under it is
   # `os-contract`'s and `windows check`'s to prove. The fixture's macOS-only
   # branches (codesign of the staged binaries, BSD `ps` and `strip`, the SFTP
   # server path) and the Mac as the usual remote device are why `nightly.yml`
