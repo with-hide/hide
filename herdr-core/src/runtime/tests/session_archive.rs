@@ -13,8 +13,9 @@ fn session_of(pane: &str) -> String {
     format!("s-{}", pane.replace(':', "-"))
 }
 
-/// `present` with each agent reporting its own conversation, and the rows
-/// proven the way the label overlay proves a live one.
+/// `present` with each agent reporting its own conversation, and the live
+/// rows proven the way the label overlay proves one; a sleeping row is drawn
+/// from its record after the overlay is laid, so it carries no facts.
 fn ingest(runtime: &mut Runtime, present: &[&str], status: &[(&str, &str)]) {
     let mut payload = tree_payload(present, status);
     for agent in &mut payload.agents {
@@ -25,7 +26,9 @@ fn ingest(runtime: &mut Runtime, present: &[&str], status: &[(&str, &str)]) {
     }
     runtime.ingest_session_with_catalog(Ok(payload), Some(tree_catalog()));
     for row in &mut runtime.snapshot.navigator.agents {
-        row.row_facts.get_or_insert_with(Default::default);
+        if row.sleep.is_none() {
+            row.row_facts.get_or_insert_with(Default::default);
+        }
     }
 }
 
@@ -740,4 +743,91 @@ fn an_archived_root_keeps_its_star_and_wears_it_again_once_resumed() {
         runtime.snapshot.ui_state.revisit_sessions["w1:p1"].starred_at_unix_ms,
         at
     );
+}
+
+/// A child that went to sleep keeps its conversation in its sleep record and
+/// its pane's label, not in row facts: the archive takes it with the tree
+/// once that label proves the session, with the reference a live row's facts
+/// would carry for its resume (Claude's is its id), and refuses while nothing
+/// proves it.
+#[test]
+fn a_sleeping_child_is_archived_with_its_root_once_its_label_proves_the_conversation() {
+    let mut runtime = archive_runtime(&[]);
+    let sleeper = runtime
+        .snapshot
+        .navigator
+        .agents
+        .iter()
+        .find(|agent| agent.pane_id == "w1:p3")
+        .cloned()
+        .expect("the child");
+    let mut slept = crate::agent_sleep::SleepRecord::ending(&sleeper, None, 0).unwrap();
+    slept.phase = crate::agent_sleep::SleepPhase::Sleeping;
+    runtime
+        .snapshot
+        .ui_state
+        .agent_sleep
+        .records
+        .insert("w1:p3".into(), slept);
+    ingest(&mut runtime, &EVERY, &[]);
+    let row = runtime
+        .snapshot
+        .navigator
+        .agents
+        .iter()
+        .find(|agent| agent.pane_id == "w1:p3")
+        .expect("the sleeping row");
+    assert!(row.sleep.is_some() && row.row_facts.is_none());
+    assert!(
+        runtime
+            .snapshot
+            .navigator
+            .agents
+            .iter()
+            .find(|agent| agent.pane_id == "w1:p1")
+            .unwrap()
+            .close_descendant_pane_ids
+            .contains(&"w1:p3".to_owned()),
+        "the sleeping child closes with its root"
+    );
+
+    archive(&mut runtime, "w1:p1", false);
+    assert_eq!(
+        error_kind(&runtime).as_deref(),
+        Some("archive.session_unknown")
+    );
+    assert!(record(&runtime).is_none(), "nothing was saved");
+
+    let session = session_of("w1:p3");
+    let transcript = format!("{A}/s-w1-p3.jsonl");
+    let owner = hide_session::label_reference_token("claude", "id", &session);
+    let label = crate::labels::store::PaneRecord {
+        owner: owner.clone(),
+        proven_reference: owner,
+        native_session_id: Some(session.clone()),
+        native_source_path: Some(transcript.clone()),
+        ..Default::default()
+    };
+    runtime.set_label_overlay(crate::labels::overlay::LabelOverlay::of_records(
+        [(&"w1:p3".to_owned(), &label)],
+        true,
+        false,
+    ));
+    archive(&mut runtime, "w1:p1", false);
+    let (_, saved) = record(&runtime).expect("the saved archive");
+    let member = saved
+        .members
+        .iter()
+        .find(|member| member.pane_id == "w1:p3")
+        .expect("the sleeping child is a member");
+    assert_eq!(member.native_session_id, session);
+    assert_eq!(
+        member
+            .source_reference
+            .as_ref()
+            .map(|reference| (reference.kind.as_str(), reference.value.as_str())),
+        Some(("id", session.as_str())),
+        "Claude resumes by the id its record kept"
+    );
+    assert_eq!(saved.members.len(), 5);
 }

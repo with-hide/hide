@@ -98,7 +98,7 @@ self.addEventListener("message", (event) => {
   if (!data || data.type !== "words" || !data.words || typeof data.words !== "object") return;
   const { needs_you, done, observer_unconfirmed, letter_undelivered } = data.words;
   if (!isWord(needs_you) || !isWord(done)) return;
-  const statusWords = Object.fromEntries([...["question", "approval", "error", "working", "done", "idle", "unknown", "waiting", "stopped", "unfinished"].map((code) => `status_${code}`), "subject_plan_review"].map((key) => [key, data.words[key]]).filter(([, word]) => isWord(word)));
+  const statusWords = Object.fromEntries([...["question", "approval", "error", "working", "done", "idle", "unknown", "waiting", "stopped", "unfinished"].map((code) => `status_${code}`), "subject_plan_review", "subject_mission_decision"].map((key) => [key, data.words[key]]).filter(([, word]) => isWord(word)));
   const words = JSON.stringify({ needs_you, done, observer_unconfirmed, letter_undelivered, ...statusWords });
   event.waitUntil(
     caches
@@ -108,11 +108,18 @@ self.addEventListener("message", (event) => {
 });
 
 // A question the core asks for the agent comes as its subject; the page
-// posted its words with `{{count}}` left for the steps.
+// posted its words with `{{count}}` left for the steps. A mission decision
+// carries its own line, led by the word the page posted for it. A cause
+// this worker does not know falls back to the payload's plain sentence.
 function subjectWords(words, subject) {
   if (!subject || typeof subject !== "object" || typeof subject.cause !== "string") return null;
+  if (subject.cause === "mission_decision") return isWord(subject.line) ? subject.line : null;
   const template = words[`subject_${subject.cause}`];
   return isWord(template) ? template.replace("{{count}}", String(subject.steps)) : null;
+}
+
+function subjectLead(words, subject) {
+  return subject && subject.cause === "mission_decision" && isWord(words.subject_mission_decision) ? words.subject_mission_decision : null;
 }
 
 async function storedWords() {
@@ -143,7 +150,7 @@ self.addEventListener("push", (event) => {
   event.waitUntil(
     Promise.all([closeTags(payload.clear), storedWords()]).then(([, words]) =>
       self.registration.showNotification(payload.title, {
-        body: [words[`status_${payload.status_code}`] || words[payload.state], subjectWords(words, payload.subject) || payload.detail, payload.place].filter(isWord).join(" · "),
+        body: [subjectLead(words, payload.subject) || words[`status_${payload.status_code}`] || words[payload.state], subjectWords(words, payload.subject) || payload.detail, payload.place].filter(isWord).join(" · "),
         tag: payload.tag,
         icon: "/m/icon-192.png",
         badge: "/m/icon-192.png",

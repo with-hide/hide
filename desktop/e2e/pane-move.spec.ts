@@ -31,6 +31,9 @@ test("pane moves render and cancel in a narrow candidate with long titles and la
       await page.locator(`[data-theme-option="${theme}"]`).click();
       await page.locator("[data-interface-language]").click();
       await page.locator(`[data-language-option="${language}"]`).click();
+      // The closing select hands the keyboard back to its trigger from a
+      // timer; wait for it, or that late hand-back takes the slider's End.
+      await expect(page.locator("[data-interface-language]")).toBeFocused();
       const size = page.locator("[data-font-size] [role=slider]");
       await size.focus();
       await page.keyboard.press("End");

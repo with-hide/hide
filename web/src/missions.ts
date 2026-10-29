@@ -166,11 +166,20 @@ export function chipWords(mission: Mission): { key: MessageKey; counts: string |
 /** The Conductor pane's chip (PRD mission-pane-chip B2): the state it reads as, its word and its count. */
 export type PaneChipState = "planning" | "running" | "decision" | "merge_wait" | "done" | "cancelled";
 
-/** A mission holds at most one decision (`decision`), so the chip's count is always one. */
+/** Whether an open mission waits on the operator's decision: its chips keep their progress and add `!` in the decision colour (needs-you-cleanup D-02). */
+export function missionDeciding(mission: Mission): boolean {
+  return Boolean(mission.decision) && missionOpen(mission);
+}
+
+/** The pane chip's words, its progress kept while a decision waits; the decision only colours it (`decision`) and marks it `!` (needs-you-cleanup B6). */
 export function paneChipWords(mission: Mission): { state: PaneChipState; key: MessageKey; counts: string | null } {
+  const words = paneStateWords(mission);
+  return missionDeciding(mission) ? { ...words, state: "decision" } : words;
+}
+
+function paneStateWords(mission: Mission): { state: PaneChipState; key: MessageKey; counts: string | null } {
   const { done, total } = missionCounts(mission);
   const counts = `${done}/${total}`;
-  if (mission.decision && missionOpen(mission)) return { state: "decision", key: "mission.pane.decision", counts: null };
   switch (mission.status) {
     case "planning":
       // A plan put up and not started yet counts from none done (approved board 4).
@@ -242,7 +251,7 @@ export function missionHeadCells(mission: Mission): HeadCell[] {
 
 /** The colour a mission's own chip wears on the sidebar row and the Overview (B35): its decision, else its state. */
 export function missionTone(mission: Mission): CellTone {
-  if (mission.decision && missionOpen(mission)) return "hold";
+  if (missionDeciding(mission)) return "hold";
   switch (mission.status) {
     case "planning":
       return "waiting";

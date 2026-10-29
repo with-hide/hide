@@ -81,6 +81,12 @@ describe("the Memory tab", () => {
       root.render(<TooltipProvider><ToolRail actions={actions} />{tool === "memory" ? <MemoryTab actions={actions} /> : null}</TooltipProvider>);
     });
   }
+  /** Opens a question row's `⋯` menu, which a pointer press on its trigger does. */
+  const openRowMenu = async (number: number) => {
+    const trigger = document.body.querySelector<HTMLElement>(`[data-memory-row-menu='${number}']`);
+    if (!trigger) throw new Error(`missing menu of ${number}`);
+    await act(async () => { trigger.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, button: 0 })); });
+  };
   const sent = (kind: string) => events.filter((event) => event.kind === kind).map((event) => event.payload);
   const click = async (selector: string) => {
     // A dialog renders in a portal beside the tab.
@@ -154,10 +160,13 @@ describe("the Memory tab", () => {
     expect([...asked!.querySelectorAll("[data-memory-question]")].map((element) => element.getAttribute("data-memory-question"))).toEqual(["docs_disagree"]);
     // The promoted and failed memories stay in the list; their rows are in 제안.
     expect([...container.querySelectorAll("[data-memory-cards] [data-memory-card]")].map((element) => element.getAttribute("data-memory-card"))).toEqual(["3", "9"]);
-    await click("[data-memory-promote='7']");
+    // Checked from the start: the one button applies it, and `기억이 틀림` is in the row's menu.
+    expect(container.querySelector<HTMLInputElement>("[data-memory-select='7']")?.getAttribute("aria-checked")).toBe("true");
+    await click("[data-memory-open-batch]");
+    await openRowMenu(7);
     await click("[data-memory-dismiss='7']");
     expect(sent("memory_action")).toEqual([
-      { workspace_id: "p", action: "promote", number: 7 },
+      { workspace_id: "p", action: "promote", number: null, numbers: [7] },
       { workspace_id: "p", action: "doc_right", number: 7 },
     ]);
     await render(memory({ questions: [{ kind: "promote", number: 3, title: "card 3", human_session_count: 3, pulled_session_count: 9 }] }));
@@ -175,26 +184,63 @@ describe("the Memory tab", () => {
     expect(container.querySelector("[data-memory-card='7']")?.textContent).toContain("AGENTS.md");
   });
 
-  it("selection hides row fix actions while unknown authority still needs an answer", async () => {
-    await render(memory({ questions: [
-      { kind: "docs_disagree", number: 3, title: "card 3", document: { authority: "card_newer", document: "docs/TESTING.md", document_at_unix_ms: null, operator_at_unix_ms: 1 } },
-      { kind: "docs_disagree", number: 7, title: "card 7", document: { authority: "ask", document: "AGENTS.md", document_at_unix_ms: null, operator_at_unix_ms: 1 } },
-    ] }));
-    expect(container.querySelector<HTMLButtonElement>("[data-memory-select='7']")?.disabled).toBe(true);
-    await click("[data-memory-select='3']");
-    expect(container.querySelector("[data-memory-promote='3']")).toBeNull();
-    expect(container.querySelector("[data-memory-dismiss='3']")).toBeNull();
-    expect(container.querySelector("[data-memory-promote='7']")).not.toBeNull();
+  it("checks every confirmed correction up to five, leaves an unanswered comparison unchecked, and applies the checked ones", async () => {
+    const document = (authority: "card_newer" | "ask", at: number) => ({ authority, document: "docs/TESTING.md", document_at_unix_ms: null, operator_at_unix_ms: at });
+    const confirmed = [1, 2, 3, 4, 5, 6].map((number) => ({ kind: "docs_disagree" as const, number, title: `card ${number}`, document: document("card_newer", number) }));
+    await render(memory({ rows: [], questions: [...confirmed, { kind: "docs_disagree", number: 9, title: "card 9", document: document("ask", 99) }] }));
+    const box = (number: number) => container.querySelector<HTMLButtonElement>(`[data-memory-select='${number}']`)!;
+    // The five most recent are checked and the sixth cannot be added; the unanswered one cannot be checked at all.
+    expect([6, 5, 4, 3, 2, 1].map((number) => box(number).getAttribute("aria-checked"))).toEqual(["true", "true", "true", "true", "true", "false"]);
+    expect(box(1).disabled).toBe(true);
+    expect(box(9).disabled).toBe(true);
+    expect(container.querySelector("[data-memory-open-batch]")?.textContent).toBe("Apply to 5 documents");
+    await click("[data-memory-select='6']");
+    expect(box(1).disabled).toBe(false);
     await click("[data-memory-open-batch]");
-    expect(sent("memory_action").at(-1)).toEqual({ workspace_id: "p", action: "promote", number: null, numbers: [3] });
+    expect(sent("memory_action").at(-1)).toEqual({ workspace_id: "p", action: "promote", number: null, numbers: [5, 4, 3, 2] });
+    for (const number of [5, 4, 3, 2]) await click(`[data-memory-select='${number}']`);
+    expect(container.querySelector<HTMLButtonElement>("[data-memory-open-batch]")?.disabled).toBe(true);
+  });
+
+  it("tells a full branch queue instead of starting", async () => {
+    const document = { authority: "card_newer" as const, document: "AGENTS.md", document_at_unix_ms: null, operator_at_unix_ms: 1 };
+    await render(memory({ branches_full: true, questions: [{ kind: "docs_disagree", number: 3, title: "card 3", document }] }));
+    expect(container.querySelector<HTMLButtonElement>("[data-memory-open-batch]")?.disabled).toBe(true);
+    expect(container.querySelector("[data-memory-selection]")?.textContent).toContain("5 branches are waiting");
+  });
+
+  it("shows a confirmed correction as the document sentence struck, its replacement, and the operator's words", async () => {
+    const document = { authority: "card_newer" as const, document: "docs/TESTING.md", document_at_unix_ms: null, operator_at_unix_ms: Date.UTC(2026, 9, 20, 12), operator_line: "never run the full suite", document_sentence: "Run the full suite before a merge.", replacement: "Run only the lane the diff touches." };
+    await render(memory({ questions: [{ kind: "docs_disagree", number: 3, title: "card 3", document }] }));
+    const shown = container.querySelector("[data-memory-card='3'][data-memory-question]")!;
+    expect(shown.querySelector("del[data-memory-sentence='document']")?.textContent).toBe("Run the full suite before a merge.");
+    expect(shown.querySelector("ins[data-memory-sentence='replacement']")?.textContent).toBe("Run only the lane the diff touches.");
+    expect(shown.querySelector("[data-memory-said]")?.textContent).toContain('"never run the full suite"');
+    expect(shown.querySelector("[data-memory-document]")?.textContent).toBe("TESTING.md");
+    // Without a stored pair only the operator's line and 비교 remain.
+    await render(memory({ questions: [{ kind: "docs_disagree", number: 3, title: "card 3", document: { ...document, document_sentence: null, replacement: null } }] }));
+    expect(container.querySelector("[data-memory-pair]")).toBeNull();
+    expect(container.querySelector("[data-memory-said]")).not.toBeNull();
+    expect(container.querySelector("[data-memory-compare='3']")).not.toBeNull();
+  });
+
+  it("shows an unanswered comparison as the document's and the memory's sentence, and answers it", async () => {
+    const document = { authority: "ask" as const, document: "AGENTS.md", document_at_unix_ms: null, operator_at_unix_ms: 1, document_sentence: "Keep the hook slow.", replacement: "Keep the hook under 100 ms." };
+    await render(memory({ questions: [{ kind: "docs_disagree", number: 3, title: "card 3", document }] }));
+    expect(container.querySelector("[data-memory-sides]")?.textContent).toBe("Doc:Keep the hook slow.Memory:Keep the hook under 100 ms.");
+    expect(container.querySelector("[data-memory-open-batch]")).toBeNull();
+    await click("[data-memory-promote='3']");
+    expect(sent("memory_action").at(-1)).toEqual({ workspace_id: "p", action: "card_right", number: 3 });
   });
 
   it("discloses a whole question row while its checkbox and buttons act on their own", async () => {
     const document = { authority: "card_newer" as const, document: "AGENTS.md", document_at_unix_ms: null, operator_at_unix_ms: 1 };
     await render(memory({ questions: [{ kind: "docs_disagree", number: 3, title: "card 3", document }] }));
-    await click("[data-memory-promote='3']");
     await click("[data-memory-select='3']");
     expect(sent("memory_expand")).toEqual([]);
+    await click("[data-memory-compare='3']");
+    expect(sent("memory_expand")).toEqual([{ workspace_id: "p", number: 3 }]);
+    events.length = 0;
     await click("[data-memory-row-toggle='3']");
     expect(sent("memory_expand")).toEqual([{ workspace_id: "p", number: 3 }]);
   });

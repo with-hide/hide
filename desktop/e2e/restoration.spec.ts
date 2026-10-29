@@ -39,6 +39,9 @@ test("failed terminals remain legible and keyboard reachable in a narrow native 
       await page.locator('[data-settings-tab="general"]').click();
       await page.locator("[data-interface-language]").click();
       await page.locator('[data-language-option="ko"]').click();
+      // The closing select hands the keyboard back to its trigger from a
+      // timer; wait for it, or that late hand-back takes the slider's End.
+      await expect(page.locator("[data-interface-language]")).toBeFocused();
       await page.locator(`[data-theme-option="${theme}"]`).click();
       const fontSize = page.locator('[data-font-size] [role="slider"]');
       await fontSize.focus();

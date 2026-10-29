@@ -1741,6 +1741,18 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       dispatch({ schema_version: 2, kind: "links_close", payload: {} });
     },
 
+    /**
+     * A Hide AI branch in the lane's 보기 slot (PRD hide-ai-branch-first-apply
+     * B4): its card of files, or with `path` that file's diff against the
+     * branch's base. One event; the checkout in front, its Agent tab and the
+     * keyboard stay where they are.
+     */
+    openBranchCard(workspaceId: string, row: string, path?: string | null) {
+      const state = ui();
+      if (state.overviewOpen) state.setOverviewOpen(false);
+      dispatch({ schema_version: 2, kind: "detail_open", payload: { item: { kind: "branch", workspace_id: workspaceId, row, ...(path ? { path } : {}) } } });
+    },
+
     /** A session link retains repository identity even when its maker moved projects. */
     openSessionPullRequest(pull: {workspace_id: string | null; url: string; number: number}) {
       const projects = catalogWorkspaces(rest());

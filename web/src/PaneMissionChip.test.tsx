@@ -93,7 +93,8 @@ it("reads each state in words with a cell per node, in the plan chip's place, an
   const cases: [Partial<Mission>, string, string, string | undefined][] = [
     [{ status: "planning", nodes: [] }, "planning", "Planning", undefined],
     [{}, "running", "Mission1/3", "done working waiting"],
-    [{ decision: "Which base for the screen PR?" }, "decision", "1 to decide", "done working waiting"],
+    // A decision keeps the progress and adds `!` in its colour (needs-you-cleanup B6).
+    [{ decision: "Which base for the screen PR?" }, "decision", "!Mission1/3", "done working waiting"],
     [{ status: "merge_wait" }, "merge_wait", "Waiting to merge", "done working waiting"],
     [{ status: "done", nodes: allDone, closed_at_unix_ms: 9 }, "done", "Mission3/3", "done done done"],
     [{ status: "cancelled", closed_at_unix_ms: 9 }, "cancelled", "Cancelled", "done cancelled cancelled"],

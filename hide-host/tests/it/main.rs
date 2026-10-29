@@ -3,6 +3,7 @@
 //! crate and all its dependencies again; docs/BUILD.md, "One integration
 //! test binary per crate", owns the rule.
 
+mod branch_merge;
 mod clone;
 mod copy;
 mod document;

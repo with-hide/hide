@@ -82,7 +82,8 @@ export type HideAiTask = { kind: string; target?: string };
 export type HideAiHome = "suggestions";
 
 /** What the home waits for the operator to do, beyond what the agent itself asks (D-14); the core decides it. */
-export type HomeTurn = { kind: "pr_review" | "ci_failed"; pr_number: number };
+/** `branch_ready`: the agent committed on its branch and the operator decides (PRD hide-ai-branch-first-apply B3). */
+export type HomeTurn = { kind: "pr_review" | "ci_failed"; pr_number: number } | { kind: "branch_ready" };
 
 /**
  * Hide AI started this agent (PRD hide-ai-origin-mark D-01); `task` is absent for a start that named none.
@@ -188,9 +189,9 @@ export type UserTurnFact = {
   content: { text: string; choices: string[]; truncated: boolean } | null;
 };
 
-export const ASK_SUBJECT_CAUSES = ["plan_review"] as const;
-/** A question the core asks on a row for the agent (`AskSubject`), which every surface words in the interface language. */
-export type AskSubject = { cause: typeof ASK_SUBJECT_CAUSES[number]; steps: number };
+export const ASK_SUBJECT_CAUSES = ["plan_review", "mission_decision"] as const;
+/** A question the core asks on a row for the agent (`AskSubject`), which every surface words in the interface language: a plan waiting for review, or the decision a Conductor's mission waits on. */
+export type AskSubject = { cause: "plan_review"; steps: number } | { cause: "mission_decision"; line: string };
 
 /** How the label read a turn's end (`LabelEnd`). */
 export type LabelEnd = "working" | "question" | "blocked" | "done" | "waiting" | "unfinished" | "limited";
@@ -684,7 +685,10 @@ export type PrFeedback = {
 };
 
 /** The Overview's pull-request work in flight (`PrWorkSnapshot`), one slot each. */
-export type PrWork = { link: PrLink | null; feedback: PrFeedback | null; cards?: PrCard[] };
+export type PrWork = { link: PrLink | null; feedback: PrFeedback | null; cards?: PrCard[]; branch_diff?: BranchDiff | null };
+
+/** One file's committed diff on a Hide AI branch against its base, read on the Project's machine (PRD hide-ai-branch-first-apply B4). */
+export type BranchDiff = { workspace_id: string; row: string; path: string; reading: boolean; failed: boolean; text: string | null; notice: DiffNotice | null };
 
 export type Purpose = { text: string; origin: string };
 
@@ -1246,7 +1250,9 @@ export type DetailItem =
   | { kind: "worktrees"; workspace_id: string }
   /** A project's last seven days of cost, from the Project tool's cost tile (B31). */
   | { kind: "cost"; workspace_id: string }
-  | { kind: "plan"; session: WorkSession };
+  | { kind: "plan"; session: WorkSession }
+  /** A Hide AI branch waiting for a decision, by its 제안 row: its files, or one file's diff (PRD hide-ai-branch-first-apply B4). */
+  | { kind: "branch"; workspace_id: string; row: string; path?: string | null };
 
 /** Whether two 보기 items show the same thing: a record by its session, the rest by their fields. */
 export function sameDetailItem(a: DetailItem | null | undefined, b: DetailItem): boolean {
@@ -1258,6 +1264,7 @@ export function sameDetailItem(a: DetailItem | null | undefined, b: DetailItem):
     case "worktrees": return b.kind === "worktrees" && a.workspace_id === b.workspace_id;
     case "cost": return b.kind === "cost" && a.workspace_id === b.workspace_id;
     case "plan": return b.kind === "plan" && a.session.device_id === b.session.device_id && a.session.agent === b.session.agent && a.session.session_id === b.session.session_id;
+    case "branch": return b.kind === "branch" && a.workspace_id === b.workspace_id && a.row === b.row && (a.path ?? null) === (b.path ?? null);
   }
 }
 
@@ -2341,7 +2348,18 @@ export type MemoryQuestion =
  */
 export type MemoryStartFailure = { code: "shell_starting" | "agent_not_started" | "card_not_processed" | "other"; detail: string | null };
 
-export type MemoryDocument = { authority: "outdated" | "card_newer" | "ask"; document: string; document_at_unix_ms: number | null; operator_at_unix_ms: number | null };
+export type MemoryDocument = {
+  authority: "outdated" | "card_newer" | "ask";
+  document: string;
+  document_at_unix_ms: number | null;
+  operator_at_unix_ms: number | null;
+  /** The first line of the operator's words behind the comparison; null when the conversation cannot be read. Absent on older daemons. */
+  operator_line?: string | null;
+  /** The document's current sentence the correction replaces; null until a comparison answer carried the pair. Absent on older daemons. */
+  document_sentence?: string | null;
+  /** The sentence that replaces `document_sentence`; set and cleared with it. */
+  replacement?: string | null;
+};
 export type MemoryDocumentComparison = MemoryDocument & { document_text: string; operator_text: string; source_session: string | null };
 
 /** The card shown in full (`memory_expand`). */
@@ -2365,6 +2383,8 @@ export type ProjectMemory = {
   loading: boolean;
   enabled: boolean;
   capacity_reached: boolean;
+  /** True when the Project already has 5 branches waiting for a decision: `N개 문서에 반영` starts nothing until one is decided. Absent on older daemons. */
+  branches_full?: boolean;
   /** Cards forgotten automatically to make room for new ones since the tab last said so. */
   evicted_cards: number;
   /** When the newest of those was forgotten; the tab names it back once it said so. */
@@ -2412,7 +2432,23 @@ export type SuggestionGroup = "choose" | "applying" | "applied";
 /** `suggestion_state`: a row's mark (D-37). */
 export type SuggestionState = "new" | "my_turn" | "hide_ai_working" | "watching" | "effective" | "applied";
 /** `suggestion_attempt_phase`: where applying a row stands. */
-export type SuggestionAttemptPhase = "starting" | "working" | "pr_open" | "ci_failed" | "failed" | "issue_open" | "merged";
+/** `ready`: the agent committed on its branch and the operator decides; `merging`: Hide merges it now (PRD hide-ai-branch-first-apply). */
+export type SuggestionAttemptPhase = "starting" | "working" | "ready" | "merging" | "pr_open" | "ci_failed" | "failed" | "issue_open" | "merged";
+
+/** What the attempt's agent was asked: commit on the branch, push it as one pull request, or make it again on its base. */
+export type SuggestionAttemptPurpose = "branch" | "pr" | "rebase";
+
+/** A ready branch as its row and the 보기 slot's branch card draw it (B3, B4). */
+export type SuggestionBranch = {
+  name: string;
+  base: string | null;
+  /** The attempt's worktree on the Project's machine; none once it is gone. */
+  checkout: string | null;
+  files: { path: string; added: number; removed: number; binary: boolean }[];
+  files_total: number;
+  added: number;
+  removed: number;
+};
 
 export type SuggestionBasis = { signal: SuggestionSignal; tag: string };
 
@@ -2468,7 +2504,7 @@ export type SuggestionRow = {
   /** Hide applied it by itself (`자동`, D-29). */
   auto: boolean;
   /** `suggestion_hold`: why a new suggestion waits instead of being applied. */
-  hold: "github_needed" | "auto_pr_unreviewed" | null;
+  hold: "github_needed" | "branches_full" | "auto_pr_unreviewed" | null;
   /** The problem came back after its fix merged (`문서로는 안 됐어요`); level 1 is a script or a check, 2 a hook. */
   escalated: { level: number; previous_pr_url: string | null } | null;
   /** It rose again after a skip because new evidence piled up as much as before (`넘어갔지만 다시 생겼어요`, D-43). */
@@ -2481,14 +2517,19 @@ export type SuggestionRow = {
     url: string | null;
     /** The applying agent's registration id while it lives. */
     agent_id: string | null;
-    /** Why a failed attempt failed, as a code. */
+    /** Why a failed attempt failed, as a code; on a ready branch, why the last merge did not happen. */
     failure: string | null;
+    /** The branch while it waits for the operator's decision. Absent on older daemons. */
+    branch?: SuggestionBranch | null;
+    purpose?: SuggestionAttemptPurpose;
   } | null;
   watch: { sessions_seen: number; sessions_needed: number } | null;
   /** A global instruction line's state; null for other rows. Absent on older daemons. */
   local?: SuggestionLocal | null;
   /** The row's evidence was opened and none of its words could be read, so it cannot be applied (B7). */
   evidence_unconfirmed?: boolean;
+  /** The Memory cards a promotion batch's row carries (`정정 N개 문서에 반영`); empty for a notebook line. */
+  memory_cards?: number[];
 };
 
 export type SuggestionSignalSetting = { signal: SuggestionSignal; enabled: boolean; unavailable: "no_github" | "memory_off" | "analysis_off" | null };
@@ -2529,7 +2570,7 @@ export type ProjectSuggestions = {
 export type SuggestionsSection = { project: ProjectSuggestions | null };
 
 /** What the operator does to one row (`suggestion_action`). */
-export type SuggestionAction = "apply" | "dismiss" | "restore" | "retry" | "revert";
+export type SuggestionAction = "apply" | "dismiss" | "restore" | "retry" | "revert" | "merge" | "open_pr" | "discard" | "rebase";
 
 /** Where ⚙'s 읽을 곳 reads (D-52): the session records' four signals or GitHub's two; one switch turns its group. */
 export type SuggestionSignalGroup = "session" | "github";

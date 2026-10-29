@@ -21,7 +21,8 @@ pub enum TaskState {
     Working,
     Waiting,
     Done,
-    /// A read, unanswered ask, or a quiet task the operator starred.
+    /// A quiet task the operator starred; a read, unanswered ask stays in
+    /// `NeedsYou` (needs-you-cleanup D-04).
     Revisit,
     /// Nothing to do and nothing to clean, a resolved task included:
     /// folded under `쉬는 중 N`.
@@ -53,6 +54,11 @@ pub struct Card {
     /// The root agent's pane.
     pub root: String,
     pub state: TaskState,
+    /// In `NeedsYou` for an ask the operator read and has not answered: the
+    /// list draws it dimmed, while the row's own group, and with it every
+    /// notification, badge and pet, stays read (needs-you-cleanup D-10).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub read: bool,
     /// `작업 → PR → 검토 → 머지` filled up to here (1 to 4); absent for a
     /// task that is only a conversation, with no worktree and no PR (B9).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -224,11 +230,18 @@ impl<'a> Forest<'a> {
     fn settle(&self, tasks: &mut Tasks) {
         tasks.cards.sort_by(|a, b| {
             a.state.cmp(&b.state).then_with(|| match a.state {
-                TaskState::NeedsYou => self.places[a.root.as_str()]
-                    .agent
-                    .state
-                    .request_since
-                    .cmp(&self.places[b.root.as_str()].agent.state.request_since),
+                TaskState::NeedsYou => {
+                    // A read ask waits since its ask, as an unread one does.
+                    let since = |card: &Card| {
+                        let agent = self.places[card.root.as_str()].agent;
+                        if card.read {
+                            agent.revisit.map(|revisit| revisit.since_unix_ms)
+                        } else {
+                            agent.state.request_since
+                        }
+                    };
+                    since(a).cmp(&since(b))
+                }
                 // Longest waiting first (PRD revisit-group D-06).
                 TaskState::Revisit => {
                     let since = |card: &Card| {
@@ -247,7 +260,7 @@ impl<'a> Forest<'a> {
             .iter()
             .filter(|c| {
                 let agent = self.places[c.root.as_str()].agent;
-                agent.group == "needs_you" && agent.resolved.is_none()
+                (agent.group == "needs_you" && agent.resolved.is_none()) || c.read
             })
             .count();
         tasks.recency = tasks
@@ -294,6 +307,7 @@ impl<'a> Forest<'a> {
         Card {
             root: root.agent.pane_id.clone(),
             state,
+            read: state == TaskState::NeedsYou && read_ask(root.agent),
             stage,
             members: members.iter().map(|id| (*id).to_owned()).collect(),
             checkouts,
@@ -388,6 +402,13 @@ pub(crate) fn stage_of(state: PrState) -> u8 {
     }
 }
 
+/// An ask the operator read and has not answered, not put off with ☆.
+fn read_ask(agent: &SidebarAgentSnapshot) -> bool {
+    agent
+        .revisit
+        .is_some_and(|revisit| revisit.read_ask && !revisit.starred)
+}
+
 fn state(root: &Place<'_>, stage: Option<u8>, rows: &[&Place<'_>]) -> TaskState {
     let agent = root.agent;
     if agent.resolved.is_none() {
@@ -404,9 +425,14 @@ fn state(root: &Place<'_>, stage: Option<u8>, rows: &[&Place<'_>]) -> TaskState 
         }
     }
     // The current state wins over the mark (D-04); a ★ wins over waiting,
-    // rest and an automatic resolution, an operator's 해결 having taken it.
-    if agent.revisit.is_some() {
+    // rest and an automatic resolution, an operator's 해결 having taken it,
+    // and over a read ask, which ☆ put off. A read ask not put off is still
+    // the operator's to answer (needs-you-cleanup D-04).
+    if agent.revisit.is_some_and(|revisit| revisit.starred) {
         return TaskState::Revisit;
+    }
+    if read_ask(agent) {
+        return TaskState::NeedsYou;
     }
     if agent.resolved.is_none() && agent.wait.is_some() {
         return TaskState::Waiting;

@@ -134,7 +134,9 @@ test("the Conductor's first plan shows on its pane, the map follows the record, 
     // Nor does a replan open the pane's popover again (B12).
     await expect(small).toHaveCount(0);
     // The Conductor's row carries the mission mark, and pressing it opens the map again (B14).
-    const chip = page.locator("nav[data-sidebar] [data-mission-chip]");
+    // Its open decision also lifts the row into the tree's 내 차례, so the row stands there and in its
+    // project, each chip keeping its progress with the decision's `!` (needs-you-cleanup B1, B5).
+    const chip = page.locator('nav[data-sidebar] [data-mission-chip][data-mission-chip-decision="true"]').first();
     await expect(chip).toHaveAttribute("data-mission-chip-status", "running");
     await expect(chip).toContainText("0/4");
     await chip.click();

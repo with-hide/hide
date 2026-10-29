@@ -207,6 +207,17 @@ impl Client {
             .map_err(|_| "delivery_timeout".to_owned())?
     }
 
+    /// A client of a store that has stopped: every submit fails, as one the
+    /// store does not answer in time fails for its caller.
+    #[cfg(test)]
+    pub(crate) fn stopped(&self) -> Self {
+        let (requests, _) = mpsc::sync_channel(1);
+        Self {
+            requests,
+            runtime: self.runtime.clone(),
+        }
+    }
+
     /// Queues `effect` without waiting for its answer: a change made under
     /// the runtime lock that must reach the store before any command its
     /// caller sends next, which the queue's order guarantees.

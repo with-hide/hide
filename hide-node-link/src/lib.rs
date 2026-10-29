@@ -11,6 +11,7 @@
 
 pub mod ai;
 pub mod attachments;
+pub mod branch;
 pub mod bytes;
 pub mod catalog;
 pub mod cleanup;

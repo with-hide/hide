@@ -186,9 +186,61 @@ impl Runtime {
             );
             return true;
         }
+        // ☆ on an ask the operator has not read reads it: the ask goes to
+        // 다시 볼 것 and stops calling for attention (needs-you-cleanup B13).
+        self.read_ask_now(pane);
         mark.starred_at_unix_ms = Some(unix_milliseconds());
         mark.session = session;
         self.save_revisit(pane, Some(mark))
+    }
+
+    /// Records the unread ask on `pane` as read, as the operator's focus on
+    /// it would, wherever the pane runs.
+    fn read_ask_now(&mut self, pane: &str) {
+        let target = if self
+            .snapshot
+            .navigator
+            .agents
+            .iter()
+            .any(|row| row.pane_id == pane)
+        {
+            None
+        } else {
+            self.snapshot
+                .status
+                .remote
+                .iter()
+                .find(|remote| {
+                    remote
+                        .session
+                        .as_ref()
+                        .is_some_and(|session| session.agents.iter().any(|row| row.pane_id == pane))
+                })
+                .map(|remote| remote.target_id.clone())
+        };
+        let Some(row) = self
+            .session_rows()
+            .find(|row| row.pane_id == pane)
+            .filter(|row| row.unread && matches!(row.demand.as_str(), "question" | "approval"))
+            .cloned()
+        else {
+            return;
+        };
+        let mut records = std::mem::take(&mut self.snapshot.ui_state.pane_read_records);
+        let change = crate::agent_state::read_now(
+            &row,
+            &mut records,
+            self.read_connection(target.as_deref()),
+        );
+        self.snapshot.ui_state.pane_read_records = records;
+        let Some(change) = change else {
+            return;
+        };
+        self.record_read_record_changes(&[change]);
+        // A device's rows take the record on its next sync, as its focus does.
+        if target.is_none() {
+            self.refresh_pane_read_state();
+        }
     }
 
     /// 다 봤음 (PRD revisit-group D-05, B11): the ★ goes and the read ask
@@ -205,7 +257,7 @@ impl Runtime {
         let ask = row
             .revisit
             .filter(|revisit| revisit.read_ask)
-            .and(row.changed_at_unix_ms);
+            .and(sessions::ask_stamp(row));
         let next = sessions::RevisitMark {
             starred_at_unix_ms: None,
             dismissed_ask_since: ask.or(current.as_ref().and_then(|m| m.dismissed_ask_since)),
@@ -214,6 +266,23 @@ impl Runtime {
         let next = (!next.is_empty()).then_some(next);
         if next == current || (next.is_none() && current.is_none()) {
             return false;
+        }
+        if let Some(since) = ask
+            && current.as_ref().and_then(|m| m.dismissed_ask_since) != Some(since)
+        {
+            // An unanswered ask put away: a sign the question verdict may
+            // have been wrong, with ids only (needs-you-cleanup D-06, D-15).
+            crate::diagnostic!(serde_json::json!({
+                "component": "session",
+                "kind": "verdict.ask_put_away",
+                "source": "revisit",
+                "pane_id": pane,
+                "turn": since,
+                "ask": row.ask_subject.as_ref().map_or(row.demand.as_str(), |subject| match subject {
+                    crate::model::AskSubject::PlanReview { .. } => "plan_review",
+                    crate::model::AskSubject::MissionDecision { .. } => "mission_decision",
+                }),
+            }));
         }
         self.save_revisit(pane, next)
     }

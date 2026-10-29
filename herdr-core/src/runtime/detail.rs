@@ -414,6 +414,16 @@ impl Runtime {
         if before == top.as_ref() && !again {
             return;
         }
+        // A branch file's diff is read while the slot shows it, and
+        // forgotten when it shows anything else.
+        self.read_branch_diff(match &top {
+            Some(DetailItem::Branch {
+                workspace_id,
+                row,
+                path: Some(path),
+            }) => Some((workspace_id.clone(), row.clone(), path.clone())),
+            _ => None,
+        });
         match top {
             Some(DetailItem::PullRequest {
                 workspace_id,
@@ -432,13 +442,14 @@ impl Runtime {
                 self.open_session_record(super::links::RecordOpenPayload { session });
             }
             // A map draws the mission or the plan the snapshot already
-            // carries, and a project's worktrees and cost what its row and
-            // the usage frame already carry.
+            // carries, a project's worktrees and cost what its row and the
+            // usage frame already carry, and a branch card its 제안 row.
             Some(
                 DetailItem::Mission { .. }
                 | DetailItem::Plan { .. }
                 | DetailItem::Worktrees { .. }
-                | DetailItem::Cost { .. },
+                | DetailItem::Cost { .. }
+                | DetailItem::Branch { .. },
             )
             | None => {
                 if matches!(before, Some(DetailItem::Record { .. })) {

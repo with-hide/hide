@@ -723,6 +723,8 @@ mod tests {
             message: None,
             user_turn: None,
             ask_subject: None,
+            laid_since_unix_ms: None,
+            laid_more: 0,
             status_word_visible: true,
             changed_at_unix_ms: Some(1_788_871_000_000),
             last_prompt_at_unix_ms: None,

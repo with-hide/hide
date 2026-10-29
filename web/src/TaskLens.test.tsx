@@ -280,7 +280,7 @@ it("draws the first step when the device has no project, and New agent when it h
 });
 
 // A task row draws the row's own mark and line, as the sidebar's (status-marks D-12, D-22, D-24, B16, B33, B35).
-it("draws each task's row mark and line as the sidebar does, counts no folded children, and dims only an unknown row", async () => {
+it("draws each task's row mark and line as the sidebar does, counts no folded children or raises, and dims only an unknown row", async () => {
   const waits = row("waits", { mark: "waiting", status_code: "waiting", wait: "checks", activity: "stopped" });
   waits.state = { ...waits.state, line: { text: "", mode: "waiting", tone: { kind: "subtle", read: false }, pull_request: 58 } };
   const agents = [
@@ -300,12 +300,12 @@ it("draws each task's row mark and line as the sidebar does, counts no folded ch
   const mark = (pane: string) => at(pane).querySelector("[data-mark]")?.getAttribute("data-mark");
   const said = (pane: string) => [...at(pane).querySelectorAll("[data-task-line] [data-line-part]")].map((part) => part.textContent).join("");
   expect(mark("waits")).toBe("waiting");
-  expect(said("waits")).toBe("대기 · CI · PR #58");
+  expect(said("waits")).toBe("CI 기다림 · PR #58");
   // The row's name and hover say the mark as the sidebar does (B3, B33).
   const named = (pane: string) => at(pane).querySelector('[data-task-focus="row"]')!;
-  expect(named("waits").getAttribute("aria-label")).toContain("진행 중 · 대기");
-  expect(named("waits").getAttribute("title")).toContain("대기 · CI · PR #58");
-  expect(named("waits").getAttribute("title")).toContain("진행 중 · 대기");
+  expect(named("waits").getAttribute("aria-label")).toContain("진행 중 · CI 기다림");
+  expect(named("waits").getAttribute("title")).toContain("CI 기다림 · PR #58");
+  expect(named("waits").getAttribute("title")).toContain("진행 중 · CI 기다림");
   expect(named("left").getAttribute("aria-label")).toContain("읽을 것 · 일 남음");
   expect(said("left")).toBe("일 남음 · 테스트 환경 연결 남음");
   expect(mark("left")).toBe("unread");
@@ -318,17 +318,24 @@ it("draws each task's row mark and line as the sidebar does, counts no folded ch
   expect(said("lost")).toBe("상태 모름");
   expect(at("lost").className).toContain("opacity-(--opacity-dimmed)");
   for (const pane of ["waits", "left", "read", "sleep", "parent"]) expect(at(pane).className).not.toContain("opacity-(--opacity-dimmed)");
-  // A folded parent counts no children; a raise below it is its one mark.
+  // A folded parent counts no children, and a raise below it draws no `!N`:
+  // its root stands in 내 차례 with the raised ask on its line (needs-you-cleanup B7).
   expect(at("parent").querySelector("[data-task-children]")).toBeNull();
-  expect(at("parent").querySelector("[data-descendant-mark]")?.textContent).toBe("!1");
+  expect(at("parent").querySelector("[data-descendant-mark]")).toBeNull();
 });
 
-it("draws the row's ★ only on a task the operator starred, so a read question waiting in 다시 볼 것 is starred by its button, not put away (PRD revisit-group B8)", async () => {
+it("keeps a read question in 내 차례 dimmed with a hollow ! and 읽음, and its ☆ puts it off to 다시 볼 것 (needs-you-cleanup B10, B13)", async () => {
   const agents = [
-    row("asked", { mark: "turn", group: "seen", demand: "question", activity: "idle", revisit: { starred: false, read_ask: true, since_unix_ms: 1 } } as Partial<AgentRow>),
+    row("asked", { mark: "quiet", group: "seen", demand: "question", activity: "idle", revisit: { starred: false, read_ask: true, since_unix_ms: 1 } } as Partial<AgentRow>),
     row("kept", { mark: "quiet", group: "seen", activity: "idle", revisit: { starred: true, read_ask: false, since_unix_ms: 1 } } as Partial<AgentRow>),
   ];
-  const { container, sent } = await render(snapshot(agents, [card("asked", "revisit", "hide-main"), card("kept", "revisit", "hide-main")]), agents);
+  const { container, sent } = await render(snapshot(agents, [{ ...card("asked", "needs_you", "hide-main"), read: true }, card("kept", "revisit", "hide-main")]), agents);
+  const at = (pane: string) => container.querySelector(`[data-task-row="${pane}"]`)!;
+  expect(at("asked").getAttribute("data-task-read")).toBe("true");
+  expect(at("asked").querySelector("[data-mark]")?.getAttribute("data-mark-read")).toBe("true");
+  expect(at("asked").querySelector("[data-task-read-tag]")?.textContent).toBe("읽음");
+  expect(at("asked").querySelector('[data-task-focus="row"]')?.getAttribute("aria-label")).toContain("내 차례 · 읽은 질문");
+  expect(at("kept").getAttribute("data-task-read")).toBeNull();
   const button = (id: string) => container.querySelector<HTMLButtonElement>(`[data-task-revisit="${id}"]`)!;
   expect(button("asked").getAttribute("aria-pressed")).toBe("false");
   expect(button("asked").getAttribute("aria-label")).toBe("다시 볼 것으로 표시");

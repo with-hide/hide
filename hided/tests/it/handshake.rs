@@ -325,6 +325,12 @@ async fn semantic_snapshot_negotiation_keeps_legacy_complete_and_refuses_unknown
         ))
         .await
         .unwrap();
+    // A partial delta carries each field that changed in its burst, and only
+    // those: the UI update can share a burst with a change the daemon's own
+    // start makes later (a slower runner's link backfill moved `navigator` in
+    // the same frame, with-hide/hide-private#266), so what the modern reader
+    // is owed is that no field it carries is one it already has.
+    let mut seen = rest_fields(&full["payload"]["rest"]);
     for (socket, partial) in [(&mut modern, true), (&mut legacy, false)] {
         let delta = tokio::time::timeout(Duration::from_secs(10), async {
             loop {
@@ -332,13 +338,29 @@ async fn semantic_snapshot_negotiation_keeps_legacy_complete_and_refuses_unknown
                 if frame["payload"]["rest"]["ui_state"]["sidebar_width"] == 401 {
                     break frame;
                 }
+                // A delta whose burst moved no rest section carries `rest: null`.
+                if partial && !frame["payload"]["rest"].is_null() {
+                    seen.extend(rest_fields(&frame["payload"]["rest"]));
+                }
             }
         })
         .await
         .expect("the UI update reaches both independent readers");
         assert_eq!(delta["type"], "delta");
         if partial {
-            assert!(delta["payload"]["rest"].get("navigator").is_none());
+            let carried = rest_fields(&delta["payload"]["rest"]);
+            assert!(
+                carried.len() < seen.len(),
+                "a partial delta carries less than the whole rest: {:?}",
+                carried.keys().collect::<Vec<_>>()
+            );
+            for (field, value) in &carried {
+                assert_ne!(
+                    seen.get(field),
+                    Some(value),
+                    "a partial delta carries {field} unchanged"
+                );
+            }
         } else {
             assert!(delta["payload"]["rest"]["navigator"]["workspaces"].is_array());
         }
@@ -355,6 +377,26 @@ async fn semantic_snapshot_negotiation_keeps_legacy_complete_and_refuses_unknown
         .unwrap();
     assert_eq!(wait_close(&mut unknown).await, Some(4003));
     running.stop();
+}
+
+/// The fields a semantic `rest` carries, by path: `navigator`, `terminal` and
+/// `status` carry their changed direct fields, every other section is one
+/// field (docs/ARCHITECTURE.md, the snapshot wire).
+fn rest_fields(rest: &Value) -> std::collections::BTreeMap<String, Value> {
+    let mut fields = std::collections::BTreeMap::new();
+    for (section, value) in rest.as_object().expect("rest is an object") {
+        match value.as_object() {
+            Some(group) if ["navigator", "terminal", "status"].contains(&section.as_str()) => {
+                for (field, inner) in group {
+                    fields.insert(format!("{section}.{field}"), inner.clone());
+                }
+            }
+            _ => {
+                fields.insert(section.clone(), value.clone());
+            }
+        }
+    }
+    fields
 }
 
 /// Settings reads the daemon from this frame: what it is, where its state

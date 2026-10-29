@@ -83,7 +83,30 @@ export function memoryTabQuestions(project: ProjectMemory): MemoryQuestion[] {
   return project.questions.filter((question) => question.kind === "docs_disagree");
 }
 
-/** The questions a batch document fix takes: a confirmed newer memory; an `ask` comparison is answered first. */
-export function selectableMemoryQuestions(project: ProjectMemory): Set<number> {
-  return new Set(memoryTabQuestions(project).filter((question) => question.kind === "docs_disagree" && question.document.authority === "card_newer").map((question) => question.number));
+/** Most corrections one `N개 문서에 반영` takes; the core's `PROMOTION_BATCH_LIMIT`. */
+export const MEMORY_BATCH_LIMIT = 5;
+
+export type DocumentQuestion = Extract<MemoryQuestion, { kind: "docs_disagree" }>;
+
+/**
+ * The confirmed corrections waiting for a document update, the one the
+ * operator spoke most recently first; the batch takes these. A comparison
+ * still `ask` is answered first and is not among them.
+ */
+export function confirmedCorrections(project: ProjectMemory): DocumentQuestion[] {
+  return memoryTabQuestions(project)
+    .filter((question): question is DocumentQuestion => question.kind === "docs_disagree" && question.document.authority === "card_newer")
+    .sort((a, b) => (b.document.operator_at_unix_ms ?? 0) - (a.document.operator_at_unix_ms ?? 0) || b.number - a.number);
+}
+
+/**
+ * The corrections the next `N개 문서에 반영` takes: every confirmed one is
+ * checked from the start, the most recent {@link MEMORY_BATCH_LIMIT}; an
+ * `overrides` entry is the operator's own check or uncheck of one number.
+ */
+export function checkedCorrections(project: ProjectMemory, overrides: Readonly<Record<number, boolean>>): number[] {
+  return confirmedCorrections(project)
+    .filter((question, index) => overrides[question.number] ?? index < MEMORY_BATCH_LIMIT)
+    .slice(0, MEMORY_BATCH_LIMIT)
+    .map((question) => question.number);
 }

@@ -1437,7 +1437,8 @@ fn the_project_to_do_list_follows_the_task_rows_and_the_operator_s_pull_requests
     let status = &runtime.snapshot.navigator.workspaces[0].agent_scope.status;
     assert_eq!((status.prs.open, status.prs.mergeable), (4, 4));
 
-    // Read, not answered: the row moves down and the number stays.
+    // Read, not answered: the row stays an ask, read (needs-you-cleanup
+    // B11), and the number stays.
     let asks = &mut runtime.snapshot.navigator.agents[0];
     asks.group = "seen".into();
     asks.revisit = Some(Revisit {
@@ -1446,10 +1447,40 @@ fn the_project_to_do_list_follows_the_task_rows_and_the_operator_s_pull_requests
         since_unix_ms: 5,
     });
     assert!(runtime.refresh_agent_scopes());
-    let rows = todo(&runtime);
-    assert_eq!(rows.len(), 4);
-    assert!(rows[..2].iter().all(|row| row.0 == "revisit"));
-    assert!(rows.iter().any(|row| row.1.as_deref() == Some("asks")));
+    assert_eq!(
+        todo(&runtime)[..2],
+        [
+            ("ask", Some("asks".to_owned()), None),
+            ("revisit", Some("starred".to_owned()), None),
+        ]
+    );
+    let card = |runtime: &Runtime, root: &str| {
+        let scope = &runtime.snapshot.navigator.workspaces[0].agent_scope;
+        let card = scope
+            .tasks
+            .cards
+            .iter()
+            .find(|card| card.root == root)
+            .unwrap();
+        (card.state, card.read)
+    };
+    assert_eq!(card(&runtime, "asks"), (TaskState::NeedsYou, true));
+    assert_eq!(
+        runtime.snapshot.navigator.workspaces[0]
+            .agent_scope
+            .tasks
+            .needs_you,
+        1,
+        "a read ask counts in 내 차례"
+    );
+    // ☆ puts it off: it waits in 다시 볼 것 (B13).
+    runtime.snapshot.navigator.agents[0].revisit = Some(Revisit {
+        starred: true,
+        read_ask: true,
+        since_unix_ms: 5,
+    });
+    assert!(runtime.refresh_agent_scopes());
+    assert_eq!(card(&runtime, "asks"), (TaskState::Revisit, false));
 
     // Answered: it leaves; the ★ leaves when it is taken off.
     runtime.snapshot.navigator.agents[0].demand = "none".into();
@@ -1467,9 +1498,8 @@ fn the_project_to_do_list_follows_the_task_rows_and_the_operator_s_pull_requests
 }
 
 /// PRD lane-two-columns B34: an open ask the session's record holds stands in
-/// 할 일 though no 태스크 card asks: new while the row is unread, 다시 볼 것
-/// once it is read with the number unchanged, and gone once the record
-/// resolves it. A row a Needs You card already shows stays one line.
+/// 할 일 though no 태스크 card asks, read or not (needs-you-cleanup B11),
+/// and gone once the record resolves it. A row a Needs You card already shows stays one line.
 #[test]
 fn a_record_s_open_ask_stands_in_the_to_do_list_until_it_is_answered() {
     let mut runtime = runtime();
@@ -1556,16 +1586,29 @@ fn a_record_s_open_ask_stands_in_the_to_do_list_until_it_is_answered() {
         ]
     );
 
-    // Read: down to 다시 볼 것, the number unchanged.
+    // Read: still the operator's to answer, the number unchanged
+    // (needs-you-cleanup B11).
     runtime.snapshot.navigator.agents[0].unread = false;
-    assert!(runtime.refresh_agent_scopes());
+    runtime.refresh_agent_scopes();
     assert_eq!(
         todo(&runtime),
         [
             ("ask", "asks".to_owned(), false),
-            ("revisit", "finished".to_owned(), true),
+            ("ask", "finished".to_owned(), true),
         ]
     );
+
+    // 치우기 on the asking row's read question: its record still holds the
+    // ask, yet the line goes until the agent asks again (needs-you-cleanup B15).
+    let asks = &mut runtime.snapshot.navigator.agents[1];
+    asks.unread = false;
+    asks.group = "seen".into();
+    asks.changed_at_unix_ms = Some(7);
+    asks.revisit = None;
+    runtime.refresh_agent_scopes();
+    assert_eq!(todo(&runtime), [("ask", "finished".to_owned(), true)]);
+    runtime.snapshot.navigator.agents[1].unread = true;
+    runtime.snapshot.navigator.agents[1].group = "needs_you".into();
 
     // Answered: the record resolves the ask and the line goes.
     record(&mut runtime, 0);

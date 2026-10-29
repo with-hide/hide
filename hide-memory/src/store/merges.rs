@@ -60,7 +60,7 @@ fn unmergeable(
         return Ok(Some("card_held"));
     }
     let in_docs: bool = transaction.query_row(
-        "SELECT EXISTS(SELECT 1 FROM card_promotions p WHERE p.item_id=?1 AND p.state IN('merged','running','pr_open','building','kept'))",
+        "SELECT EXISTS(SELECT 1 FROM card_promotions p WHERE p.item_id=?1 AND p.state IN('merged','running','pr_open','building','kept','ready'))",
         [item_id],
         |row| row.get(0),
     )?;

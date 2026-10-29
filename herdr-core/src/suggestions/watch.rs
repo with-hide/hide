@@ -27,8 +27,9 @@ pub(crate) struct WatchedLine {
     pub base: Option<String>,
     pub holding: BTreeSet<String>,
     /// The pull request that merged, whose merge commit is asked for while
-    /// `merge_commit` is unknown.
-    pub pr: PrRef,
+    /// `merge_commit` is unknown; none for a branch merged locally, whose
+    /// merge commit is known (PRD hide-ai-branch-first-apply B14).
+    pub pr: Option<PrRef>,
     pub merge_commit: Option<String>,
     /// Heads of the line's pull request records after the merge that GitHub
     /// was not asked about yet, at most [`policy::WATCH_HEADS`].
@@ -205,7 +206,7 @@ pub(crate) fn settle(
         WatchEnd::Recurred => {
             // Suggested again at once with a stronger fix and the pull
             // request that did not hold (D-13).
-            life.escalated_from = Some(watch.pr.clone());
+            life.escalated_from = watch.pr.clone();
             life.watch = None;
             life.attempt = None;
             life.raised_at_unix_ms = Some(now);
@@ -278,10 +279,10 @@ mod tests {
         let life = LineLife {
             watch: Some(Watch {
                 merged_at_unix_ms: MERGED,
-                pr: PrRef {
+                pr: Some(PrRef {
                     number: 40,
                     url: "https://github.com/acme/app/pull/40".into(),
-                },
+                }),
                 base: Some("main".into()),
                 ci,
                 holding: BTreeSet::from(["/repo".to_owned()]),

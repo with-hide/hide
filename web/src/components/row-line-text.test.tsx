@@ -62,12 +62,12 @@ it("draws a waiting ring dashed and names it by its whole line, and draws a slee
   const { container, unmount } = await render(<ul>{row(waiting)}{row(sleeping)}</ul>);
   try {
     const item = (pane: string) => container.querySelector(`[data-pane="${pane}"]`)!;
-    expect(item("w").querySelector("[data-agent-line]")!.textContent).toBe("대기 · CI · PR #58");
+    expect(item("w").querySelector("[data-agent-line]")!.textContent).toBe("CI 기다림 · PR #58");
     // A waiting ring is dashed and says so (status-marks D-25, B36).
     expect(item("w").querySelector("[data-mark]")?.getAttribute("data-mark")).toBe("waiting");
     expect(item("w").querySelector('[data-mark] path')?.getAttribute("stroke-dasharray")).toBe("2.2 2");
-    expect(item("w").querySelector("[data-agent-open]")!.getAttribute("aria-label")).toContain("진행 중 · 대기");
-    expect(item("w").querySelector("[data-agent-open]")!.getAttribute("aria-label")).toContain("대기 · CI · PR #58");
+    expect(item("w").querySelector("[data-agent-open]")!.getAttribute("aria-label")).toContain("진행 중 · CI 기다림");
+    expect(item("w").querySelector("[data-agent-open]")!.getAttribute("aria-label")).toContain("CI 기다림 · PR #58");
     expect(item("s").querySelector('[data-mark="asleep"]')).not.toBeNull();
     expect(item("s").querySelector("[data-agent-line]")).toBeNull();
     expect(item("s").className).not.toContain("opacity-(--opacity-dimmed)");

@@ -40,7 +40,7 @@ pub use reinforcement::words_digest;
 pub use repeats::{RepeatRequest, RepeatScope, RepeatSource, instruction_line};
 pub use upkeep::{Aging, AgingReport, CHANGE_LIMIT, CardChange, ChangeKind};
 
-const SCHEMA_VERSION: i64 = 23;
+const SCHEMA_VERSION: i64 = 24;
 /// Version 2 names where analysis can go: the agent Hide AI runs on and any
 /// agent the operator added under its fallback list (PRD settings-cleanup
 /// D-26), which now includes vendors other than the two it was limited to.
@@ -412,6 +412,10 @@ pub enum PromotionState {
     /// nothing asks about again, its document disagreement included, until
     /// its text changes.
     Kept,
+    /// The agent committed the card on its batch's branch and stopped: the
+    /// branch waits for the operator to merge it, send it as a pull request
+    /// or discard it (PRD hide-ai-branch-first-apply D-01, D-13).
+    Ready,
 }
 
 impl PromotionState {
@@ -427,6 +431,7 @@ impl PromotionState {
             Self::Building => "building",
             Self::Unbuilt => "unbuilt",
             Self::Kept => "kept",
+            Self::Ready => "ready",
         }
     }
 
@@ -442,6 +447,7 @@ impl PromotionState {
             "building" => Ok(Self::Building),
             "unbuilt" => Ok(Self::Unbuilt),
             "kept" => Ok(Self::Kept),
+            "ready" => Ok(Self::Ready),
             _ => Err(MemoryError::InvalidState(value.to_owned())),
         }
     }
@@ -457,13 +463,14 @@ impl PromotionState {
             | Self::Merged
             | Self::Building
             | Self::Unbuilt
-            | Self::Kept => true,
+            | Self::Kept
+            | Self::Ready => true,
         }
     }
 }
 
 /// Every promotion state, which a test holds to the ones the store accepts.
-const PROMOTION_STATES: [PromotionState; 10] = [
+const PROMOTION_STATES: [PromotionState; 11] = [
     PromotionState::Dismissed,
     PromotionState::Running,
     PromotionState::PrOpen,
@@ -474,6 +481,7 @@ const PROMOTION_STATES: [PromotionState; 10] = [
     PromotionState::Building,
     PromotionState::Unbuilt,
     PromotionState::Kept,
+    PromotionState::Ready,
 ];
 
 /// One card's promotion as the core last decided it.
@@ -511,6 +519,46 @@ pub struct Promotion {
     /// or removes its worktree ever reaches the work that builds it.
     #[serde(default)]
     pub building_branch: Option<String>,
+}
+
+/// What a promotion batch's agent is asked to do on its branch (PRD
+/// hide-ai-branch-first-apply D-01, D-06, B12).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BatchPurpose {
+    /// Commit the cards on the branch and stop.
+    Branch,
+    /// Push the branch and open one pull request.
+    Pr,
+    /// Make the branch again on the base as it is now.
+    Rebase,
+}
+
+impl BatchPurpose {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Branch => "branch",
+            Self::Pr => "pr",
+            Self::Rebase => "rebase",
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "branch" => Some(Self::Branch),
+            "pr" => Some(Self::Pr),
+            "rebase" => Some(Self::Rebase),
+            _ => None,
+        }
+    }
+}
+
+/// A promotion batch's branch, as the store keeps it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BatchBranch {
+    /// `None` for a batch started before branch-first apply, which asked
+    /// for a pull request.
+    pub purpose: Option<BatchPurpose>,
+    pub tip: Option<String>,
 }
 
 /// A card whose use crossed the bar for a repository file, with the counts
@@ -942,27 +990,39 @@ fn fold_promotion_batches(
     into: &str,
     renumbered: &BTreeMap<u64, u64>,
 ) -> Result<Vec<u64>, MemoryError> {
-    let read = |id: &str| -> Result<Vec<(String, Vec<u64>)>, MemoryError> {
-        let mut statement = transaction
-            .prepare("SELECT branch, numbers FROM promotion_batches WHERE project_id=?1")?;
+    type BatchRow = (String, Vec<u64>, Option<String>, Option<String>);
+    let read = |id: &str| -> Result<Vec<BatchRow>, MemoryError> {
+        let mut statement = transaction.prepare(
+            "SELECT branch, numbers, purpose, tip FROM promotion_batches WHERE project_id=?1",
+        )?;
         let rows = statement
             .query_map([id], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
         rows.into_iter()
-            .map(|(branch, data)| {
+            .map(|(branch, data, purpose, tip)| {
                 serde_json::from_str(&data)
-                    .map(|numbers| (branch, numbers))
+                    .map(|numbers| (branch, numbers, purpose, tip))
                     .map_err(|error| MemoryError::InvalidState(error.to_string()))
             })
             .collect()
     };
     let mut joined: BTreeMap<String, Vec<u64>> = BTreeMap::new();
-    for (branch, numbers) in read(moving)? {
+    // What each batch's agent was asked and its branch's commit go with the
+    // batch (PRD hide-ai-branch-first-apply).
+    let mut branch_facts: BTreeMap<String, (Option<String>, Option<String>)> = BTreeMap::new();
+    for (branch, numbers, purpose, tip) in read(moving)? {
+        branch_facts.entry(branch.clone()).or_insert((purpose, tip));
         joined.entry(branch).or_default().extend(numbers);
     }
-    for (branch, numbers) in read(into)? {
+    for (branch, numbers, purpose, tip) in read(into)? {
+        branch_facts.entry(branch.clone()).or_insert((purpose, tip));
         joined.entry(branch).or_default().extend(
             numbers
                 .into_iter()
@@ -988,9 +1048,10 @@ fn fold_promotion_batches(
         }
         let data = serde_json::to_string(&kept)
             .map_err(|error| MemoryError::InvalidState(error.to_string()))?;
+        let (purpose, tip) = branch_facts.remove(&branch).unwrap_or((None, None));
         transaction.execute(
-            "INSERT INTO promotion_batches(branch,project_id,numbers) VALUES(?1,?2,?3)",
-            params![branch, into, data],
+            "INSERT INTO promotion_batches(branch,project_id,numbers,purpose,tip) VALUES(?1,?2,?3,?4,?5)",
+            params![branch, into, data, purpose, tip],
         )?;
     }
     Ok(dropped)
@@ -2693,7 +2754,7 @@ impl MemoryStore {
         let mut statement = self.connection.prepare(
             "SELECT pr.id,pr.root,i.number FROM card_promotions p JOIN memory_items i ON i.id=p.item_id \
              JOIN projects pr ON pr.id=i.project_id WHERE pr.device_id=?1 \
-             AND p.state IN ('running','pr_open','building') ORDER BY pr.id,i.number",
+             AND p.state IN ('running','pr_open','building','ready') ORDER BY pr.id,i.number",
         )?;
         let rows = statement
             .query_map([device], |row| {
@@ -2936,7 +2997,7 @@ impl MemoryStore {
                 numbers.push(*number);
             }
             let current: u64 = transaction.query_row("SELECT current_revision FROM memory_items WHERE project_id=?1 AND number=?2 AND lifecycle='active'", params![project_id, number], |row| row.get(0))?;
-            let moving: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM card_promotions c JOIN memory_items i ON i.id=c.item_id WHERE i.project_id=?1 AND i.number=?2 AND (c.state IN ('running','pr_open','building') OR (c.state='merged' AND c.revision=i.current_revision)))", params![project_id, number], |row| row.get(0))?;
+            let moving: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM card_promotions c JOIN memory_items i ON i.id=c.item_id WHERE i.project_id=?1 AND i.number=?2 AND (c.state IN ('running','pr_open','building','ready') OR (c.state='merged' AND c.revision=i.current_revision)))", params![project_id, number], |row| row.get(0))?;
             if moving
                 || current != promotion.revision
                 || promotion.branch.as_deref() != Some(branch)
@@ -2951,7 +3012,10 @@ impl MemoryStore {
         }
         let data = serde_json::to_string(&numbers)
             .map_err(|error| MemoryError::InvalidState(error.to_string()))?;
-        transaction.execute("INSERT INTO promotion_batches(branch,project_id,numbers) VALUES(?1,?2,?3) ON CONFLICT(project_id,branch) DO UPDATE SET numbers=excluded.numbers", params![branch, project_id, data])?;
+        // A new batch commits its cards on its branch and stops (PRD
+        // hide-ai-branch-first-apply D-01); a retry keeps what its batch was
+        // asked.
+        transaction.execute("INSERT INTO promotion_batches(branch,project_id,numbers,purpose) VALUES(?1,?2,?3,'branch') ON CONFLICT(project_id,branch) DO UPDATE SET numbers=excluded.numbers", params![branch, project_id, data])?;
         transaction.execute("DELETE FROM promotion_batches WHERE NOT EXISTS(SELECT 1 FROM card_promotions c JOIN memory_items i ON i.id=c.item_id WHERE c.branch=promotion_batches.branch AND i.project_id=promotion_batches.project_id)", [])?;
         transaction.commit()?;
         certify_projection(&self.connection)?;
@@ -2976,6 +3040,83 @@ impl MemoryStore {
                 .map_err(|error| MemoryError::InvalidState(error.to_string()))
         })
         .transpose()
+    }
+
+    /// What a batch's agent was asked to do on its branch and the commit the
+    /// branch had when it was last read ready (PRD hide-ai-branch-first-apply
+    /// D-01, D-08); `None` for a batch Hide does not know.
+    pub fn promotion_batch_branch(
+        &self,
+        project_id: &str,
+        branch: &str,
+    ) -> Result<Option<BatchBranch>, MemoryError> {
+        Ok(self
+            .connection
+            .query_row(
+                "SELECT purpose,tip FROM promotion_batches WHERE project_id=?1 AND branch=?2",
+                params![project_id, branch],
+                |row| {
+                    Ok(BatchBranch {
+                        purpose: row
+                            .get::<_, Option<String>>(0)?
+                            .as_deref()
+                            .and_then(BatchPurpose::parse),
+                        tip: row.get(1)?,
+                    })
+                },
+            )
+            .optional()?)
+    }
+
+    /// Records what a batch's agent is asked to do now and, once its branch
+    /// was read ready, the branch's commit.
+    pub fn set_promotion_batch_branch(
+        &mut self,
+        project_id: &str,
+        branch: &str,
+        purpose: BatchPurpose,
+        tip: Option<&str>,
+    ) -> Result<bool, MemoryError> {
+        self.require_writer()?;
+        Ok(self.connection.execute(
+            "UPDATE promotion_batches SET purpose=?3,tip=COALESCE(?4,tip) WHERE project_id=?1 AND branch=?2",
+            params![project_id, branch, purpose.as_str(), tip],
+        )? == 1)
+    }
+
+    /// Sets why Hide's last merge or discard of card `number`'s ready
+    /// branch did not happen, or clears it; answers false when the row moved
+    /// on since it was read.
+    pub fn set_ready_failure(
+        &mut self,
+        project_id: &str,
+        number: u64,
+        from: &Promotion,
+        failure: Option<&str>,
+        now: u64,
+    ) -> Result<bool, MemoryError> {
+        self.require_writer()?;
+        Ok(self.connection.execute(
+            "UPDATE card_promotions SET failure=?1,updated_at_ms=?2 WHERE item_id=(SELECT id FROM memory_items WHERE project_id=?3 AND number=?4) AND state='ready' AND attempt=?5",
+            params![failure, now, project_id, number, from.attempt],
+        )? == 1)
+    }
+
+    /// Starts a new attempt on a ready card's same branch (`PR 올리기`, `다시
+    /// 맞추기`): the card runs again with no agent yet; answers false when the
+    /// row moved on since it was read.
+    pub fn restart_promotion(
+        &mut self,
+        project_id: &str,
+        number: u64,
+        from: &Promotion,
+        now: u64,
+    ) -> Result<bool, MemoryError> {
+        self.require_writer()?;
+        Ok(self.connection.execute(
+            "UPDATE card_promotions SET state='running',attempt=attempt+1,agent_id=NULL,failure=NULL,started_at_ms=?1,updated_at_ms=?1 WHERE item_id=(SELECT id FROM memory_items WHERE project_id=?2 AND number=?3) AND state='ready' AND attempt=?4",
+            params![now, project_id, number, from.attempt],
+        )? == 1)
     }
 
     /// A skipped card returns to To ask while its peers retain their shared PR.
@@ -3104,7 +3245,7 @@ impl MemoryStore {
              (SELECT COUNT(DISTINCT ir.runtime||':'||ir.session_id) FROM injection_receipt_items rii JOIN injection_receipts ir ON ir.id=rii.receipt_id \
               WHERE rii.item_id=i.id AND ir.turn_id='show' AND ir.created_at_ms>=?2) AS pulled \
              FROM memory_items i JOIN memory_revisions r ON r.item_id=i.id AND r.revision=i.current_revision \
-             LEFT JOIN card_promotions p ON p.item_id=i.id AND (p.revision=i.current_revision OR p.state IN ('running','pr_open','building')) \
+             LEFT JOIN card_promotions p ON p.item_id=i.id AND (p.revision=i.current_revision OR p.state IN ('running','pr_open','building','ready')) \
              WHERE i.project_id=?1 AND i.lifecycle='active' AND r.kind IN ('rule','lesson','decision') AND r.verified_at_ms IS NOT NULL AND NOT {} \
              AND NOT EXISTS(SELECT 1 FROM card_comparisons c WHERE c.item_id=i.id AND c.revision=i.current_revision) AND ((i.promotion_ok_revision IS i.current_revision)=?6) \
              AND (?6 OR i.reverify_at_ms IS NULL OR i.reverify_at_ms<=?7) \
@@ -4310,6 +4451,16 @@ COMMIT;"#,
     // so there is nothing a backup would restore.
     if version == 22 {
         pace::migrate_version_twenty_two(connection)?;
+        version = 23;
+    }
+    // Version 24 keeps a promotion's branch for the operator's decision (PRD
+    // hide-ai-branch-first-apply D-01): a card can be `ready` on its batch's
+    // branch, and the batch remembers what its agent was asked and the
+    // branch's commit. The promotion table is rebuilt to check the new state
+    // with every row copied as it was, so there is nothing a backup would
+    // restore.
+    if version == 23 {
+        migrate_version_twenty_three(connection)?;
         version = SCHEMA_VERSION;
     }
     if version != SCHEMA_VERSION {
@@ -4318,6 +4469,60 @@ COMMIT;"#,
             expected: SCHEMA_VERSION,
         });
     }
+    Ok(())
+}
+
+/// Adds `ready` to the promotion states and the batch's purpose and tip.
+fn migrate_version_twenty_three(connection: &Connection) -> Result<(), MemoryError> {
+    connection.execute_batch("BEGIN IMMEDIATE")?;
+    let result = (|| -> Result<(), MemoryError> {
+        // Another opener may have upgraded the store while this one waited
+        // for the write lock.
+        let actual: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        match actual {
+            23 => add_branch_decision(connection),
+            SCHEMA_VERSION => Ok(()),
+            found => Err(MemoryError::WrongSchema {
+                found,
+                expected: SCHEMA_VERSION,
+            }),
+        }
+    })();
+    match result {
+        Ok(()) => connection.execute_batch("COMMIT")?,
+        Err(error) => {
+            let _ = connection.execute_batch("ROLLBACK");
+            return Err(error);
+        }
+    }
+    Ok(())
+}
+
+fn add_branch_decision(connection: &Connection) -> Result<(), MemoryError> {
+    // An older store whose upgrade made `promotion_batches` from today's
+    // schema has the two columns already.
+    let has = |column: &str| -> Result<bool, MemoryError> {
+        Ok(connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('promotion_batches') WHERE name=?1)",
+            [column],
+            |row| row.get(0),
+        )?)
+    };
+    if !has("purpose")? {
+        connection.execute_batch(
+            "ALTER TABLE promotion_batches ADD COLUMN purpose TEXT CHECK(purpose IN('branch','pr','rebase'));",
+        )?;
+    }
+    if !has("tip")? {
+        connection.execute_batch("ALTER TABLE promotion_batches ADD COLUMN tip TEXT;")?;
+    }
+    connection.execute_batch(
+        r#"CREATE TABLE card_promotions_v24(item_id TEXT PRIMARY KEY REFERENCES memory_items(id) ON DELETE CASCADE,state TEXT NOT NULL CHECK(state IN('dismissed','running','pr_open','merged','closed_unmerged','failed','outdated','building','unbuilt','kept','ready')),revision INTEGER NOT NULL,attempt INTEGER NOT NULL,agent_id TEXT,branch TEXT,pr_number INTEGER,target_path TEXT,started_at_ms INTEGER NOT NULL,updated_at_ms INTEGER NOT NULL,failure TEXT,repository TEXT,building_branch TEXT);
+INSERT INTO card_promotions_v24 SELECT item_id,state,revision,attempt,agent_id,branch,pr_number,target_path,started_at_ms,updated_at_ms,failure,repository,building_branch FROM card_promotions;
+DROP TABLE card_promotions;
+ALTER TABLE card_promotions_v24 RENAME TO card_promotions;
+PRAGMA user_version=24;"#,
+    )?;
     Ok(())
 }
 
@@ -5030,9 +5235,9 @@ CREATE INDEX injection_receipts_session ON injection_receipts(runtime,session_id
 CREATE INDEX memory_sources_session ON memory_sources(provider,session_id);
 CREATE TABLE injection_receipt_items(receipt_id TEXT NOT NULL REFERENCES injection_receipts(id) ON DELETE CASCADE,item_id TEXT NOT NULL REFERENCES memory_items(id) ON DELETE CASCADE,revision INTEGER NOT NULL,PRIMARY KEY(receipt_id,item_id));
 CREATE TABLE analysis_calls(day INTEGER PRIMARY KEY,calls INTEGER NOT NULL,checks INTEGER NOT NULL DEFAULT 0);
-CREATE TABLE card_promotions(item_id TEXT PRIMARY KEY REFERENCES memory_items(id) ON DELETE CASCADE,state TEXT NOT NULL CHECK(state IN('dismissed','running','pr_open','merged','closed_unmerged','failed','outdated','building','unbuilt','kept')),revision INTEGER NOT NULL,attempt INTEGER NOT NULL,agent_id TEXT,branch TEXT,pr_number INTEGER,target_path TEXT,started_at_ms INTEGER NOT NULL,updated_at_ms INTEGER NOT NULL,failure TEXT,repository TEXT,building_branch TEXT);
+CREATE TABLE card_promotions(item_id TEXT PRIMARY KEY REFERENCES memory_items(id) ON DELETE CASCADE,state TEXT NOT NULL CHECK(state IN('dismissed','running','pr_open','merged','closed_unmerged','failed','outdated','building','unbuilt','kept','ready')),revision INTEGER NOT NULL,attempt INTEGER NOT NULL,agent_id TEXT,branch TEXT,pr_number INTEGER,target_path TEXT,started_at_ms INTEGER NOT NULL,updated_at_ms INTEGER NOT NULL,failure TEXT,repository TEXT,building_branch TEXT);
 CREATE TABLE card_comparisons(item_id TEXT PRIMARY KEY REFERENCES memory_items(id) ON DELETE CASCADE,revision INTEGER NOT NULL,data TEXT NOT NULL);
-CREATE TABLE promotion_batches(branch TEXT NOT NULL,project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,numbers TEXT NOT NULL,PRIMARY KEY(project_id,branch));
+CREATE TABLE promotion_batches(branch TEXT NOT NULL,project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,numbers TEXT NOT NULL,purpose TEXT CHECK(purpose IN('branch','pr','rebase')),tip TEXT,PRIMARY KEY(project_id,branch));
 CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXED,body,normalized_terms,tokenize='unicode61');
 "#;
 
@@ -6433,6 +6638,8 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
             operator_text: "Run lint before tests".into(),
             operator_at_unix_ms: Some(200),
             source_session: Some("session-1".into()),
+            document_sentence: None,
+            replacement: None,
         };
         assert!(
             store
@@ -6500,6 +6707,8 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
             operator_text: "Always run lint before tests".into(),
             operator_at_unix_ms: Some(90),
             source_session: Some("session-1".into()),
+            document_sentence: None,
+            replacement: None,
         };
         for authority in [
             crate::DocumentAuthority::Ask,
@@ -7232,6 +7441,8 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
             operator_text: "Card one".into(),
             operator_at_unix_ms: Some(20),
             source_session: None,
+            document_sentence: None,
+            replacement: None,
         };
         store
             .set_document_comparison(&project, 1, 1, &comparison)
@@ -7627,6 +7838,8 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
             operator_at_unix_ms: Some(10),
             operator_text: "앞으로 테스트는 nextest로 실행해 주세요.".into(),
             source_session: Some("human".into()),
+            document_sentence: None,
+            replacement: None,
         };
         store
             .apply_candidates_with(
@@ -8444,6 +8657,8 @@ PRAGMA user_version=14;"#,
             operator_text: "Run the linter first".into(),
             operator_at_unix_ms: Some(20),
             source_session: Some("other-session".into()),
+            document_sentence: None,
+            replacement: None,
         };
         store
             .set_document_comparison(&project, 1, 1, &comparison)

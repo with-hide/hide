@@ -23,7 +23,8 @@ pub(super) fn migrate_version_twenty_two(connection: &Connection) -> Result<(), 
         let actual: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         match actual {
             22 => Ok(connection.execute_batch(&format!("{TABLES} PRAGMA user_version=23;"))?),
-            SCHEMA_VERSION => Ok(()),
+            // Another opener upgraded the store while this one waited.
+            23..=SCHEMA_VERSION => Ok(()),
             found => Err(MemoryError::WrongSchema {
                 found,
                 expected: SCHEMA_VERSION,

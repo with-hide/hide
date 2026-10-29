@@ -380,7 +380,7 @@ function useRevisitOffer(paneId: string, open: boolean): RevisitOffer {
     if (!open) return "hidden";
     const agent = agentsByPane(allAgents(s.agents, s.rest?.status?.remote)).get(paneId);
     if (!agent || agent.hide_ai || agent.delegated || agent.lineage_parent_pane_id) return "hidden";
-    return agent.revisit ? "done" : "star";
+    return agent.revisit?.starred ? "done" : "star";
   });
 }
 

@@ -13,7 +13,7 @@ use super::analysis::{
     Analysis, AnalysisBudget, AnalysisEnd, AnalysisInput, NotebookPen, PartialReason, PenRefused,
     StopFlag, TagGrouping, Written,
 };
-use super::apply::{self as applying, ApplyOrder, FollowedAttempt};
+use super::apply::{self as applying, ApplyOrder, Begin, FollowedAttempt};
 use super::ledger::{Observation, RecordIndex, SessionRef, SignalGroup};
 use super::lifecycle::{AttemptMove, AttemptPhase, LocalFailure, LocalWrite};
 use super::notebook::{Line, LineId, Notebook, NotebookEdit, Outcome, Stage, Strike, StruckBy};
@@ -115,6 +115,10 @@ pub(crate) enum LineAction {
     Apply,
     /// `다시 시도` on an attempt that failed (B12).
     Retry,
+    /// `PR 올리기` on a ready branch (PRD hide-ai-branch-first-apply D-06).
+    OpenPr,
+    /// `다시 맞추기` on a ready branch the base moved under (B8, B12).
+    Rebase,
     /// `되돌리기` on a line Hide wrote into its global instruction: only that
     /// line comes out (PRD memory-self-improve D-30, B9).
     Revert,
@@ -536,9 +540,10 @@ impl Worker {
                     LineAction::Apply | LineAction::Retry if self.is_local(&id, line) => {
                         self.apply_local(&id, line, seen.as_deref());
                     }
-                    LineAction::Apply | LineAction::Retry => {
-                        self.apply_line(&id, line, action == LineAction::Retry, false, sink);
-                    }
+                    LineAction::Apply => self.apply_line(&id, line, Begin::New, false, sink),
+                    LineAction::Retry => self.apply_line(&id, line, Begin::Retry, false, sink),
+                    LineAction::OpenPr => self.apply_line(&id, line, Begin::OpenPr, false, sink),
+                    LineAction::Rebase => self.apply_line(&id, line, Begin::Rebase, false, sink),
                     LineAction::Revert => self.revert_local(&id, line),
                     LineAction::Dismiss | LineAction::Restore => self.act(&id, line, action),
                 }
@@ -711,7 +716,7 @@ impl Worker {
         &mut self,
         project: &str,
         line_id: LineId,
-        retry: bool,
+        how: Begin,
         auto: bool,
         sink: &impl Sink,
     ) {
@@ -741,8 +746,11 @@ impl Worker {
             return refused("unknown_line");
         };
         let mut life = lives.get(&line_id).cloned().unwrap_or_default();
-        let Ok((outcome, branch, agent_name, brief)) =
-            applying::begin(&mut line, &mut life, &index, retry, auto, now)
+        let previous_agent = matches!(how, Begin::OpenPr | Begin::Rebase)
+            .then(|| life.attempt.as_ref()?.agent_id.clone())
+            .flatten();
+        let Ok((outcome, branch, agent_name, brief, purpose)) =
+            applying::begin(&mut line, &mut life, &index, how, auto, now)
         else {
             return refused("not_ready");
         };
@@ -753,7 +761,7 @@ impl Worker {
         }
         crate::diagnostic!(json!({
             "component": "suggestions", "kind": "apply.started",
-            "project_id": project, "line": line_id.0, "auto": auto, "retry": retry,
+            "project_id": project, "line": line_id.0, "auto": auto, "how": begin_code(how),
             "outcome": match outcome { Outcome::Pr => "pr", Outcome::Issue => "issue", Outcome::Local => "local" },
         }));
         sink.apply(ApplyOrder {
@@ -768,6 +776,8 @@ impl Worker {
             brief,
             issue_title,
             issue_since,
+            purpose,
+            previous_agent,
         });
     }
 
@@ -785,7 +795,7 @@ impl Worker {
             return;
         };
         let mut life = lives.get(&line_id).cloned().unwrap_or_default();
-        let closed = change == AttemptMove::Closed;
+        let closed = matches!(change, AttemptMove::Closed | AttemptMove::Discarded);
         if !applying::moved(&mut line, &mut life, started, change, now) {
             return;
         }
@@ -834,7 +844,7 @@ impl Worker {
             .and_then(|line| line.outcome)
             .unwrap_or(Outcome::Pr);
         if sink.can_apply(location, outcome) {
-            self.apply_line(project, line, false, true, sink);
+            self.apply_line(project, line, Begin::New, true, sink);
         }
     }
 
@@ -1145,7 +1155,11 @@ impl Worker {
                 line.struck = None;
             }
             // Begun by `apply_line` or `apply_local`, never here.
-            LineAction::Apply | LineAction::Retry | LineAction::Revert => return,
+            LineAction::Apply
+            | LineAction::Retry
+            | LineAction::OpenPr
+            | LineAction::Rebase
+            | LineAction::Revert => return,
         }
         line.updated_at_unix_ms = now;
         if let Err(code) = store.save_line(project, &line, &life) {
@@ -1921,12 +1935,22 @@ fn phase_code(phase: AttemptPhase) -> &'static str {
     match phase {
         AttemptPhase::Starting => "starting",
         AttemptPhase::Working => "working",
+        AttemptPhase::Ready => "ready",
         AttemptPhase::PrOpen => "pr_open",
         AttemptPhase::CiFailed => "ci_failed",
         AttemptPhase::Failed => "failed",
         AttemptPhase::IssueOpen => "issue_open",
         AttemptPhase::Merged => "merged",
         AttemptPhase::Closed => "closed",
+    }
+}
+
+fn begin_code(how: Begin) -> &'static str {
+    match how {
+        Begin::New => "new",
+        Begin::Retry => "retry",
+        Begin::OpenPr => "open_pr",
+        Begin::Rebase => "rebase",
     }
 }
 
@@ -2766,12 +2790,13 @@ mod tests {
             line: LineId(1),
             started_at_unix_ms: order.started_at_unix_ms,
             change: AttemptMove::Merged {
-                pr: crate::suggestions::ledger::PrRef {
+                pr: Some(crate::suggestions::ledger::PrRef {
                     number: 12,
                     url: "https://github.com/acme/app/pull/12".into(),
-                },
+                }),
                 at_unix_ms: merged_at,
                 base: Some("main".into()),
+                merge_commit: None,
             },
         });
         fixture.read_until(|read| read.rows[0].state == SuggestionState::Watching);

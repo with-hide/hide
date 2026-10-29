@@ -239,11 +239,19 @@ use crate::error::HostError;
 /// by `ProofAnswer::ProjectOpenAccepted` and `ProofAnswer::ProjectOpen`. A
 /// helper on 57 would end on the new answers, so it is refused at Hello and
 /// upgraded.
-/// 59: a device's test asks its node which Git it runs
+/// 59: a node reads a branch against its base (`Call::BranchFacts`) and merges
+/// it into the base on the machine that owns the checkout, never pushing and
+/// changing nothing it cannot merge cleanly (`Call::BranchMerge`,
+/// [`crate::branch::MergeOutcome`]), reads one file's committed diff against
+/// the merge base (`Call::BranchDiff`), and deletes a branch ref that no
+/// worktree has checked out (`Call::BranchDiscard`; PRD
+/// hide-ai-branch-first-apply). A helper on 58 would refuse all four, so it is
+/// refused at Hello and upgraded.
+/// 60: a device's test asks its node which Git it runs
 /// (`GitCommand::Version`) over the link it has, where it used to report Git
-/// without asking (PRD system-ssh-device-link B25). A helper on 58 would
+/// without asking (PRD system-ssh-device-link B25). A helper on 59 would
 /// refuse the command, so it is refused at Hello and upgraded.
-pub const PROTOCOL_VERSION: u32 = 59;
+pub const PROTOCOL_VERSION: u32 = 60;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).
@@ -510,6 +518,52 @@ pub enum Call {
     /// (`hide_host::home::sync`).
     HomeSync {
         projects: Vec<String>,
+    },
+    /// A branch measured against `base` in the repository at `root`
+    /// (`hide_host::branch_merge::facts`): how far ahead, whether it is in
+    /// the base, and the committed diff from their merge base. `tip` is the
+    /// commit the branch last pointed at, measured instead when the branch
+    /// is gone. Reads only.
+    BranchFacts {
+        root: String,
+        branch: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tip: Option<String>,
+        base: String,
+    },
+    /// Merges `branch` into `base` in the repository at `root`
+    /// (`hide_host::branch_merge::merge`), locally: no push, no fetch. The
+    /// answer is a [`crate::branch::MergeOutcome`] and only `Merged` changes
+    /// anything; a retry after a merge answers `already_merged`.
+    BranchMerge {
+        root: String,
+        branch: String,
+        /// The commit the operator read; a branch that moved since is not
+        /// merged (`MergeOutcome::BranchMoved`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tip: Option<String>,
+        base: String,
+        message: String,
+    },
+    /// The committed diff of one repository-relative `path` from the merge
+    /// base of `base` and `branch` to the branch's tip
+    /// (`hide_host::branch_merge::diff`), answered as a
+    /// [`crate::git::Diff`] bounded like a Changes diff. Reads only.
+    BranchDiff {
+        root: String,
+        branch: String,
+        base: String,
+        path: String,
+    },
+    /// Deletes `refs/heads/<branch>` in the repository at `root`
+    /// (`hide_host::branch_merge::discard`) and nothing else: no worktree, no
+    /// remote. With `tip`, only while the branch still points at it. The
+    /// answer is a [`crate::branch::DiscardOutcome`].
+    BranchDiscard {
+        root: String,
+        branch: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tip: Option<String>,
     },
     /// Retires a worktree owned by a completed or discarded background task.
     WorktreeRetire {
@@ -1054,6 +1108,10 @@ impl Call {
             | Self::Directory { .. }
             | Self::Registrable { .. }
             | Self::HomeSync { .. }
+            | Self::BranchFacts { .. }
+            | Self::BranchMerge { .. }
+            | Self::BranchDiscard { .. }
+            | Self::BranchDiff { .. }
             | Self::WorktreeRetire { .. }
             | Self::WorktreeRemove { .. }
             | Self::WorktreeRemovalCheck { .. }
@@ -1318,6 +1376,46 @@ mod tests {
             serde_json::to_value(&unasked).unwrap(),
             serde_json::json!({"kind": "reinstall", "components": []})
         );
+    }
+
+    /// The branch calls are on the wire as `op` objects; a facts request
+    /// without a remembered tip omits it, and a helper answers a device.
+    #[test]
+    fn the_branch_calls_round_trip_and_a_device_answers_them() {
+        let facts = Call::BranchFacts {
+            root: "/repo".into(),
+            branch: "feat".into(),
+            tip: None,
+            base: "main".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(&facts).unwrap(),
+            serde_json::json!({"op": "branch_facts", "root": "/repo", "branch": "feat", "base": "main"})
+        );
+        let merge = Call::BranchMerge {
+            root: "/repo".into(),
+            branch: "feat".into(),
+            tip: Some("b".repeat(40)),
+            base: "main".into(),
+            message: "Merge feat".into(),
+        };
+        let discard = Call::BranchDiscard {
+            root: "/repo".into(),
+            branch: "feat".into(),
+            tip: Some("a".repeat(40)),
+        };
+        let diff = Call::BranchDiff {
+            root: "/repo".into(),
+            branch: "feat".into(),
+            base: "main".into(),
+            path: "src/a.rs".into(),
+        };
+        for call in [facts, merge, discard, diff] {
+            let text = serde_json::to_string(&call).unwrap();
+            assert_eq!(serde_json::from_str::<Call>(&text).unwrap(), call);
+            assert!(call.answered_by_device());
+            assert!(!call.runs_until_stopped() && !call.is_control() && !call.is_background());
+        }
     }
 
     #[test]

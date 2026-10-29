@@ -9,8 +9,8 @@ use super::*;
 use crate::model::{
     HomeTurn, MemoryAction, MemoryPromotionSnapshot, MemoryPromotionState, MemoryQuestionSnapshot,
     MemoryRowSnapshot, MemoryStartFailureCode, ProjectSuggestionsSnapshot, SuggestionAttemptPhase,
-    SuggestionAttemptSnapshot, SuggestionGroup, SuggestionHold, SuggestionRowSnapshot,
-    SuggestionSource, SuggestionState,
+    SuggestionAttemptSnapshot, SuggestionGroup, SuggestionRowSnapshot, SuggestionSource,
+    SuggestionState,
 };
 use crate::suggestions::notebook::Outcome;
 use crate::suggestions::policy::APPLIED_ROWS;
@@ -26,6 +26,9 @@ pub(super) struct MemoryFacts {
     /// The turn the sidebar laid on each promoting card's agent, in the
     /// order of `promoting`.
     turns: Vec<Option<HomeTurn>>,
+    /// What the tracker knows of each promoting card's batch branch, in the
+    /// order of `promoting` (PRD hide-ai-branch-first-apply D-13).
+    batches: Vec<Option<super::memory_branch::BatchBranchFacts>>,
 }
 
 /// A card on its way into the documents, from the Memory list.
@@ -90,11 +93,22 @@ impl Runtime {
                 self.hide_ai_turn(pane)
             })
             .collect();
+        let batches = self
+            .suggestions_work
+            .promoting
+            .promoting
+            .iter()
+            .map(|card| {
+                let branch = card.promotion.branch.as_deref()?;
+                self.memory_batch_facts(branch).cloned()
+            })
+            .collect();
         Some(MemoryFacts {
             workspace_id: workspace_id.to_owned(),
             questions,
             promoting: self.suggestions_work.promoting.promoting.clone(),
             turns,
+            batches,
         })
     }
 
@@ -188,7 +202,7 @@ pub(super) fn lay_memory_rows(project: &mut ProjectSuggestionsSnapshot, facts: &
                 row.attempt = Some(ended(
                     started_at(facts, *number),
                     match start_failure.as_ref().map(|failure| failure.code) {
-                        None => "no_pr",
+                        None => "no_change",
                         Some(MemoryStartFailureCode::AgentNotStarted) => "agent_not_started",
                         Some(MemoryStartFailureCode::ShellStarting) => "shell_starting",
                         Some(MemoryStartFailureCode::CardNotProcessed) => "card_not_processed",
@@ -217,8 +231,30 @@ pub(super) fn lay_memory_rows(project: &mut ProjectSuggestionsSnapshot, facts: &
         drawn.insert(row.id.clone());
         project.rows.push(row);
     }
-    for (card, turn) in facts.promoting.iter().zip(&facts.turns) {
-        let Some(row) = promoting_row(card, *turn) else {
+    // A batch is one row, named by its first card (PRD
+    // hide-ai-branch-first-apply D-13, B20); a card from before batches is
+    // its own.
+    let mut batches: Vec<(Option<&str>, Vec<usize>)> = Vec::new();
+    for (index, card) in facts.promoting.iter().enumerate() {
+        let branch = card.promotion.branch.as_deref();
+        match batches
+            .iter_mut()
+            .find(|(seen, _)| branch.is_some() && *seen == branch)
+        {
+            Some((_, members)) => members.push(index),
+            None => batches.push((branch, vec![index])),
+        }
+    }
+    for (_, members) in batches {
+        let cards = members
+            .iter()
+            .map(|index| &facts.promoting[*index])
+            .collect::<Vec<_>>();
+        let turn = members.iter().find_map(|index| facts.turns[*index]);
+        let batch = members
+            .iter()
+            .find_map(|index| facts.batches.get(*index).cloned().flatten());
+        let Some(row) = batch_row(&cards, turn, batch.as_ref()) else {
             continue;
         };
         if drawn.insert(row.id.clone()) {
@@ -269,6 +305,7 @@ fn row(
         watch: None,
         local: None,
         evidence_unconfirmed: false,
+        memory_cards: Vec::new(),
     }
 }
 
@@ -288,27 +325,35 @@ fn ended(started_at_unix_ms: u64, failure: &str) -> SuggestionAttemptSnapshot {
         url: None,
         agent_id: None,
         failure: Some(failure.to_owned()),
+        branch: None,
+        purpose: crate::suggestions::lifecycle::AttemptPurpose::Branch,
     }
 }
 
-/// A card whose promotion runs, waits on its pull request or merged; a
-/// failed or unbuilt one is drawn from its question, and none without one.
-fn promoting_row(card: &Promoting, turn: Option<HomeTurn>) -> Option<SuggestionRowSnapshot> {
+/// A batch whose promotion runs, waits on its branch or its pull request,
+/// or merged, drawn as one row named by its first card (B20); a failed or
+/// unbuilt card is drawn from its question, and none without one.
+fn batch_row(
+    cards: &[&Promoting],
+    turn: Option<HomeTurn>,
+    batch: Option<&super::memory_branch::BatchBranchFacts>,
+) -> Option<SuggestionRowSnapshot> {
+    // The batch stands where its least settled card stands: a card still
+    // running keeps the row working.
+    let card = cards
+        .iter()
+        .min_by_key(|card| state_rank(card.promotion.state))?;
     let promotion = &card.promotion;
     let working = (SuggestionGroup::Applying, SuggestionState::HideAiWorking);
+    let mine = (SuggestionGroup::Applying, SuggestionState::MyTurn);
     let (phase, (group, state)) = match promotion.state {
         MemoryPromotionState::Running
         | MemoryPromotionState::Building
         | MemoryPromotionState::Unconfirmed => (SuggestionAttemptPhase::Working, working),
+        MemoryPromotionState::Ready => (SuggestionAttemptPhase::Ready, mine),
         MemoryPromotionState::PrOpen => match turn {
-            Some(HomeTurn::PrReview { .. }) => (
-                SuggestionAttemptPhase::PrOpen,
-                (SuggestionGroup::Applying, SuggestionState::MyTurn),
-            ),
-            Some(HomeTurn::CiFailed { .. }) => (
-                SuggestionAttemptPhase::CiFailed,
-                (SuggestionGroup::Applying, SuggestionState::MyTurn),
-            ),
+            Some(HomeTurn::PrReview { .. }) => (SuggestionAttemptPhase::PrOpen, mine),
+            Some(HomeTurn::CiFailed { .. }) => (SuggestionAttemptPhase::CiFailed, mine),
             _ => (SuggestionAttemptPhase::PrOpen, working),
         },
         MemoryPromotionState::Merged => (
@@ -317,10 +362,10 @@ fn promoting_row(card: &Promoting, turn: Option<HomeTurn>) -> Option<SuggestionR
         ),
         MemoryPromotionState::Failed | MemoryPromotionState::Unbuilt => return None,
     };
-    let mut row = row(card.number, &card.title, group, state);
-    if promotion.state == MemoryPromotionState::Unconfirmed {
-        row.hold = Some(SuggestionHold::GithubNeeded);
-    }
+    let first = cards.iter().map(|card| card.number).min()?;
+    let mut row = row(first, &card.title, group, state);
+    row.memory_cards = cards.iter().map(|card| card.number).collect();
+    row.memory_cards.sort_unstable();
     row.attempt = Some(SuggestionAttemptSnapshot {
         phase,
         started_at_unix_ms: promotion.started_at_unix_ms,
@@ -328,13 +373,50 @@ fn promoting_row(card: &Promoting, turn: Option<HomeTurn>) -> Option<SuggestionR
             .pr_number
             .and_then(|number| u32::try_from(number).ok()),
         url: promotion.pr_url.clone(),
-        agent_id: promotion
-            .agent
-            .as_ref()
-            .and_then(|agent| agent.agent_id.clone()),
-        failure: None,
+        agent_id: cards
+            .iter()
+            .find_map(|card| card.promotion.agent.as_ref()?.agent_id.clone()),
+        failure: promotion.failure.clone(),
+        branch: promotion.branch.as_ref().map(|name| {
+            let summary = batch.and_then(|batch| batch.summary.as_ref());
+            crate::model::SuggestionBranchSnapshot {
+                name: name.clone(),
+                base: summary.map(|summary| summary.base.clone()),
+                checkout: None,
+                files: summary.map_or_else(Vec::new, |summary| {
+                    summary
+                        .files
+                        .iter()
+                        .map(|file| crate::model::SuggestionBranchFileSnapshot {
+                            path: file.path.clone(),
+                            added: file.added,
+                            removed: file.removed,
+                            binary: file.binary,
+                        })
+                        .collect()
+                }),
+                files_total: summary.map_or(0, |summary| summary.files_total),
+                added: summary.map_or(0, |summary| summary.added),
+                removed: summary.map_or(0, |summary| summary.removed),
+                tip: summary.map(|summary| summary.tip.clone()),
+            }
+        }),
+        purpose: super::memory_branch::attempt_purpose(batch.and_then(|batch| batch.purpose)),
     });
     Some(row)
+}
+
+/// How far a card's promotion is from settled, least first.
+fn state_rank(state: MemoryPromotionState) -> u8 {
+    match state {
+        MemoryPromotionState::Running
+        | MemoryPromotionState::Unconfirmed
+        | MemoryPromotionState::Building => 0,
+        MemoryPromotionState::Ready => 1,
+        MemoryPromotionState::PrOpen => 2,
+        MemoryPromotionState::Failed | MemoryPromotionState::Unbuilt => 3,
+        MemoryPromotionState::Merged => 4,
+    }
 }
 
 #[cfg(test)]
@@ -358,6 +440,8 @@ mod tests {
                 pr_url: Some(format!("https://github.com/acme/app/pull/{}", 900 + number)),
                 target_path: None,
                 github_failure: None,
+                branch: None,
+                failure: None,
             },
         }
     }
@@ -424,6 +508,7 @@ mod tests {
                 None,
                 None,
             ],
+            batches: Vec::new(),
         };
         lay_memory_rows(&mut project, &facts);
         use SuggestionGroup as G;
@@ -481,6 +566,7 @@ mod tests {
             questions: vec![promote(1), promote(2), promote(3)],
             promoting: vec![promoting(4, MemoryPromotionState::Running)],
             turns: vec![None],
+            batches: Vec::new(),
         };
         let mut project = tab();
         project.rows.push(SuggestionRowSnapshot {

@@ -163,14 +163,23 @@ export function seedKitRecord(home: string): void {
  */
 export async function endChild(child: ChildProcess, ms = 10_000): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return;
-  const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
+  const exited = exitOf(child, ms, "after SIGTERM");
   child.kill("SIGTERM");
+  await exited;
+}
+
+/** How long a closed app's process may take to exit before its close fails naming it. */
+const CANDIDATE_EXIT_MS = 10_000;
+
+/** Returns once `child` has exited; one that has not within `ms` is a failure that names it and what came `before`. */
+async function exitOf(child: ChildProcess, ms: number, before: string): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
   let timer: NodeJS.Timeout | undefined;
   const late = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`child ${child.pid} did not exit within ${ms} ms after SIGTERM`)), ms);
+    timer = setTimeout(() => reject(new Error(`child ${child.pid} did not exit within ${ms} ms ${before}`)), ms);
   });
   try {
-    await Promise.race([exited, late]);
+    await Promise.race([new Promise<void>((resolve) => child.once("exit", () => resolve())), late]);
   } finally {
     clearTimeout(timer);
   }
@@ -340,6 +349,16 @@ async function start(appDir: string, env: Record<string, string>, executablePath
     // retains this handle beyond test teardown if closing the app fails.
     const child = app.process();
     owner.candidates.add(child);
+    // Playwright's `close()` returns once the app's debugging pipe closes,
+    // which can come before this process has exited: on Windows the process is
+    // the cmd.exe Playwright starts the app under, which exits after it. A
+    // cleanup right after then found the candidate still running. This close
+    // returns once the recorded process has exited.
+    const closeApp = app.close.bind(app);
+    app.close = async () => {
+      await closeApp();
+      await exitOf(child, CANDIDATE_EXIT_MS, "after app.close() returned");
+    };
     focusReports.apps.push({ close: () => app.close(), child });
     return app;
   } finally {

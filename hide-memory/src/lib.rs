@@ -24,20 +24,21 @@ pub use evidence::{
     still_holds, written_names,
 };
 pub use reconcile::{
-    COMPARISON_EXCERPT_BYTES, DocumentAuthority, DocumentComparison, PROMOTION_BATCH_LIMIT,
+    COMPARISON_EXCERPT_BYTES, COMPARISON_SENTENCE_CHARS, DocumentAuthority, DocumentComparison,
+    PROMOTION_BATCH_LIMIT, accepted_sentence_pair,
 };
 pub use redaction::{RedactedText, is_invisible, redact};
 pub use store::hold::{
     CardHold, EndedHold, ReleasedReport, StaleOutcome, StaleRefusal, StaleReporter,
 };
 pub use store::{
-    AnalysisBatch, ApplyOptions, ApplySummary, Candidate, CandidateKind, CandidateOutcome,
-    CandidateRelation, CardEvidence, ComparisonCard, Conversion, CorrectionCheck, CursorReader,
-    DeleteProjectOutcome, InjectedItem, Injection, InjectionKind, InjectionOutcome, InputFailure,
-    MemoryDetail, MemoryError, MemoryItem, MemoryLifecycle, MemorySource, MemoryStore, PendingCard,
-    PreviousRevision, ProjectMemoryState, Promotion, PromotionState, PromotionSuggestion,
-    ReceiptRecord, RetrievalQuery, SessionCursorRecord, SessionSourceRecord, StoreMode,
-    branch_name, card_name, parse_card_name, repository_path, words_digest,
+    AnalysisBatch, ApplyOptions, ApplySummary, BatchBranch, BatchPurpose, Candidate, CandidateKind,
+    CandidateOutcome, CandidateRelation, CardEvidence, ComparisonCard, Conversion, CorrectionCheck,
+    CursorReader, DeleteProjectOutcome, InjectedItem, Injection, InjectionKind, InjectionOutcome,
+    InputFailure, MemoryDetail, MemoryError, MemoryItem, MemoryLifecycle, MemorySource,
+    MemoryStore, PendingCard, PreviousRevision, ProjectMemoryState, Promotion, PromotionState,
+    PromotionSuggestion, ReceiptRecord, RetrievalQuery, SessionCursorRecord, SessionSourceRecord,
+    StoreMode, branch_name, card_name, parse_card_name, repository_path, words_digest,
 };
 /// The bounds an analysis answer's repeats and merges are held to (PRD
 /// memory-self-improve D-44).

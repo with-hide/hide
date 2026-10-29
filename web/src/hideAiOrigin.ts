@@ -25,9 +25,13 @@ export function originLine(t: TFunction<"translation">, hideAi: HideAi): string 
   return taskLine(t, hideAi.task) ?? t("hideAi.name");
 }
 
-/** What the home waits for, in words (`PR #n 리뷰`, `CI 실패`); the core decides the turn and the screen only words it (PRD hide-ai-work-home D-14). */
+/** What the home waits for, in words (`PR #n 리뷰`, `CI 실패`, `바뀐 것 보기`); the core decides the turn and the screen only words it (PRD hide-ai-work-home D-14). */
 export function homeTurnLine(t: TFunction<"translation">, turn: HomeTurn): string {
-  return turn.kind === "pr_review" ? t("hideAi.turn.pr_review", { number: turn.pr_number }) : t("hideAi.turn.ci_failed");
+  switch (turn.kind) {
+    case "pr_review": return t("hideAi.turn.pr_review", { number: turn.pr_number });
+    case "ci_failed": return t("hideAi.turn.ci_failed");
+    case "branch_ready": return t("hideAi.turn.branch_ready");
+  }
 }
 
 /** Hide AI's part of a row's accessible name (D-09, B12): the name, the task and the turn, so a screen reader hears who started it and what waits. */

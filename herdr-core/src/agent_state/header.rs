@@ -278,7 +278,7 @@ pub(crate) fn of(
                 agent.raised.len()
             },
             raised: None,
-            subject: agent.ask_subject.filter(|_| kind == "answer"),
+            subject: agent.ask_subject.clone().filter(|_| kind == "answer"),
         }),
         ..Header::default()
     }
