@@ -1362,7 +1362,7 @@ pub struct DeviceSignInSnapshot {
 }
 
 /// One staged connection test of an SSH device: SSH, authentication, Herdr,
-/// protocol, PTY, SFTP and Git, each with the host's answer.
+/// protocol, PTY and Git, each with the host's answer.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct DeviceTestSnapshot {
     /// `running`, `passed` or `failed`.

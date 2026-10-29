@@ -2,15 +2,15 @@
 # Refuses a device measurement that could reach an operator's account, before
 # anything dials the device; run.sh and device-herdr.sh source it.
 #
-# hided installs its node with folders it spells `~/` from the SFTP home,
-# which is the account's own home even where a private sshd gives its
-# commands another HOME: on 2026-10-09 a probe with the `~/` defaults
-# uploaded its node into a real account's ~/.hide/host-helper. So the private
-# sshd's port (MEASURE_DEVICE_PORT) is never 22; the private HOME
-# (MEASURE_DEVICE_HOME) lives under /tmp, where no account's own home does;
-# the consent folders are absolute and inside it; and the device's Herdr
-# socket is named under /tmp, so nothing asks for the account's default
-# Herdr.
+# A private sshd still signs in as the account itself, so a `~/` folder
+# spelled from any HOME but the private one lands in the account's own: on
+# 2026-10-09 a probe with the `~/` defaults uploaded its node into a real
+# account's ~/.hide/host-helper. So the private sshd's port
+# (MEASURE_DEVICE_PORT) is never 22; the private HOME (MEASURE_DEVICE_HOME)
+# lives under /tmp, where no account's own home does; the consent folders are
+# absolute and inside it, so none depends on which HOME a session reports;
+# and the device's Herdr socket is named under /tmp, so nothing asks for the
+# account's default Herdr.
 #
 # The SSH alias is never read from a caller's configuration: hided's parser
 # and OpenSSH read some spellings (`Port=22841`, a tab, `Include`, `Match`)

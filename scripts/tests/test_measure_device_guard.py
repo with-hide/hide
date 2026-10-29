@@ -1,10 +1,9 @@
 """A device measurement must refuse any target but the isolated account.
 
-hided installs its node into folders it spells `~/` from the SFTP home, which
-is the account's own home even where a private sshd gives its commands
-another HOME. On 2026-10-09 a probe with the `~/` defaults uploaded its node
-into a production account's `~/.hide/host-helper` while every command it ran
-saw the private HOME. `scripts/web-shell-measure/device-guard.sh` is what
+A private sshd still signs in as the account itself, so a `~/` folder spelled
+from any HOME but the private one lands in the account's own. On 2026-10-09 a
+probe with the `~/` defaults uploaded its node into a production account's
+`~/.hide/host-helper` while every command it ran saw the private HOME. `scripts/web-shell-measure/device-guard.sh` is what
 stops the measurement harness doing the same; this checks that it refuses
 each such target before anything dials, accepts the isolated one, and writes
 the alias hided reads in the one form its parser and OpenSSH read alike.
