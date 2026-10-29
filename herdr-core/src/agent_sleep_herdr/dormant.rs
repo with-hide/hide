@@ -364,6 +364,8 @@ fn start_dormant(
             crate::agent_start::ShellStart::Plain,
             params,
             answer_timeout,
+            // The wake's own new tab: no agent ran in it.
+            crate::agent_start::PaneLine::Fresh,
             &confirm,
         )
     } else {

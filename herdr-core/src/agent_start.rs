@@ -28,6 +28,22 @@
 //! that start again on exactly that refusal, inside a bounded wait. The other
 //! starts take that refusal as the answer, since their name is someone else's.
 //!
+//! Such a start in the pane the agent was ended in ([`PaneLine::AfterAgent`])
+//! may find the shell's line holding input that was meant for that agent and
+//! that it never read: a key that reached it after it had begun to quit, or a
+//! terminal's answer to a query it sent, encoded for the modes the agent had
+//! turned on (a Ctrl+C in its keyboard protocol, `ESC[99;5u`, which zsh shows
+//! as `9;5u`, with-hide/hide-private#37). Typed behind it, the start line is
+//! not the command. Such a start therefore abandons the shell's line first,
+//! with the terminal's interrupt character: a Unix shell drops its line on it
+//! in every editing mode (Ctrl+U does not, in zsh's or bash's vi mode after
+//! an Escape left in the line), the terminal drops what it still holds
+//! unread, and Windows PowerShell cancels its line on it. It is the raw byte,
+//! sent as text: Herdr encodes a named key from the terminal modes the pane
+//! reports, and an agent ended by a signal leaves its keyboard protocol on
+//! there (Codex CLI 0.165.0), so a named Ctrl+C would reach the shell as the
+//! same `ESC[99;5u`.
+//!
 //! The shell holding the terminal does not say its startup files are done:
 //! a startup file that asks a question (oh-my-zsh's `[Y/n]` update prompt
 //! reads one key with `read -k 1`) leaves the shell alone in the foreground
@@ -152,6 +168,20 @@ pub(crate) const SHELL_STARTING: &str = "shell_starting";
 const PROMPT_TOKEN: &str = "hide_prompt";
 /// The most of a screen line a refusal carries.
 const SCREEN_LINE_CHARS: usize = 120;
+/// The terminal's interrupt character (Ctrl+C, `VINTR`), which abandons a
+/// shell's line.
+const INTERRUPT: &str = "\u{3}";
+
+/// What the shell's line may hold when a start types into it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PaneLine {
+    /// Nothing an agent was meant to read: no agent has run in the pane, or
+    /// the pane is a new one.
+    Fresh,
+    /// The pane an agent was just ended in: the line is abandoned before the
+    /// start is typed.
+    AfterAgent,
+}
 
 /// What says a pane's shell has finished starting.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -237,7 +267,8 @@ pub(crate) enum StartError {
     /// not marked its first prompt within the wait, stopped in its startup
     /// files (a question waiting for a key). Carries the screen's last line.
     ShellStarting(Option<String>),
-    /// Herdr's own answer to `agent.start`: a refusal, or no answer at all.
+    /// Herdr's own answer to `agent.start`, or to the line's abandon before it: a
+    /// refusal, or no answer at all.
     Herdr(ApiError),
 }
 
@@ -395,16 +426,17 @@ pub(crate) fn start_at_shell_checked(
         answer_timeout,
         SHELL_WAIT,
         Duration::ZERO,
+        PaneLine::Fresh,
         check,
     )
 }
 
-/// A start for an agent that goes back under the name of the one
-/// just ended in this pane: `agent_name_taken` is answered by sending the
-/// start again until Herdr has released the name, within [`NAME_RELEASE_WAIT`].
-/// `check` is the action proof [`start_at_shell_checked`] repeats before every
-/// attempt.
-#[allow(clippy::too_many_arguments)] // one start: its pane, how its shell says it is ready, and its effect admission
+/// A start for an agent that goes back under the name of the one just
+/// ended: `agent_name_taken` is answered by sending the start again until
+/// Herdr has released the name, within [`NAME_RELEASE_WAIT`]. `line` says
+/// whether that agent ended in this pane. `check` is the action proof
+/// [`start_at_shell_checked`] repeats before every attempt.
+#[allow(clippy::too_many_arguments)] // one start: its pane, how its shell says it is ready, what its line holds, and its effect admission
 pub(crate) fn start_at_shell_reusing_name(
     connector: &dyn ApiConnector,
     node: Option<&dyn NodeLink>,
@@ -413,6 +445,7 @@ pub(crate) fn start_at_shell_reusing_name(
     shell: ShellStart,
     params: Value,
     answer_timeout: Duration,
+    line: PaneLine,
     check: &dyn Fn() -> Result<(), String>,
 ) -> Result<Value, StartError> {
     start_within(
@@ -425,12 +458,13 @@ pub(crate) fn start_at_shell_reusing_name(
         answer_timeout,
         SHELL_WAIT,
         NAME_RELEASE_WAIT,
+        line,
         check,
     )
 }
 
 #[allow(clippy::disallowed_methods)] // a production wait, not test code
-#[allow(clippy::too_many_arguments)] // one bounded start with shell/name waits and effect admission
+#[allow(clippy::too_many_arguments)] // one bounded start with shell/name waits, its line and effect admission
 fn start_within(
     connector: &dyn ApiConnector,
     node: Option<&dyn NodeLink>,
@@ -441,6 +475,7 @@ fn start_within(
     answer_timeout: Duration,
     wait: Duration,
     name_release_wait: Duration,
+    line: PaneLine,
     check: &dyn Fn() -> Result<(), String>,
 ) -> Result<Value, StartError> {
     let started = Instant::now();
@@ -460,9 +495,15 @@ fn start_within(
     };
     let mut settled = false;
     let mut busy = 0_u32;
+    // Once, while the shell holds the terminal: a start Herdr refused typed
+    // nothing, so the line is still empty when it is sent again.
+    let mut abandon = line == PaneLine::AfterAgent;
     loop {
         shell.wait(started, deadline)?;
         check().map_err(StartError::refused)?;
+        if std::mem::take(&mut abandon) {
+            shell.abandon_line()?;
+        }
         match request_with_correlation_id(
             connector,
             correlation_id,
@@ -725,6 +766,26 @@ impl Shell<'_> {
         released
     }
 
+    /// Abandons whatever the shell's line holds, before a start in the pane
+    /// an agent was ended in types into it ([`PaneLine::AfterAgent`]).
+    fn abandon_line(&self) -> Result<(), StartError> {
+        let params = wire::pane_send_text_params(self.pane_id, INTERRUPT).map_err(|detail| {
+            StartError::NotStarted {
+                reason: "agent_start.failed".into(),
+                detail,
+            }
+        })?;
+        request_with_correlation_id(
+            self.connector,
+            self.correlation_id,
+            "pane.send_text",
+            params,
+            READ_TIMEOUT,
+        )
+        .map(drop)
+        .map_err(StartError::Herdr)
+    }
+
     /// `None` when the start line reaches `shell` whole now; the limit of a
     /// terminal that would cut it, while the shell's line editor is not
     /// reading yet.
@@ -960,6 +1021,7 @@ mod tests {
             Duration::from_secs(5),
             wait,
             Duration::ZERO,
+            PaneLine::Fresh,
             &|| Ok(()),
         )
     }
@@ -975,6 +1037,7 @@ mod tests {
             Duration::from_secs(5),
             Duration::from_secs(5),
             name_wait,
+            PaneLine::Fresh,
             &|| Ok(()),
         )
     }
@@ -1032,6 +1095,66 @@ mod tests {
         );
     }
 
+    /// A start in the pane an agent was ended in abandons the shell's line
+    /// with the raw interrupt character, once the shell holds the terminal
+    /// and before Herdr types the start; a start Herdr refused typed nothing,
+    /// so the line is not abandoned again before it is sent again.
+    #[test]
+    fn a_start_after_an_agent_abandons_the_shells_line_once_before_it_types() {
+        let reads = Arc::new(AtomicUsize::new(0));
+        let starts = Arc::new(AtomicUsize::new(0));
+        let (read, started_once) = (Arc::clone(&reads), Arc::clone(&starts));
+        let herdr =
+            FakeHerdr::start_with_errors(
+                "agent-start-after-agent",
+                move |method, _| match method {
+                    // The ended agent still holds the terminal at the first read.
+                    "pane.process_info" if read.fetch_add(1, Ordering::SeqCst) == 0 => {
+                        Ok(process_info(4200, &[4200]))
+                    }
+                    "pane.process_info" => Ok(process_info(SHELL, &[SHELL])),
+                    "pane.send_text" => Ok(json!({"type": "ok"})),
+                    "agent.start" if started_once.fetch_add(1, Ordering::SeqCst) == 0 => {
+                        Err((PANE_BUSY.into(), "a prompt hook holds the terminal".into()))
+                    }
+                    "agent.start" => Ok(started()),
+                    other => panic!("unexpected {other}"),
+                },
+            );
+        let answer = start_within(
+            &herdr.connector(),
+            None,
+            "test:wake",
+            "w1:p1",
+            ShellStart::Plain,
+            json!({"pane_id": "w1:p1"}),
+            Duration::from_secs(5),
+            Duration::from_secs(5),
+            Duration::ZERO,
+            PaneLine::AfterAgent,
+            &|| Ok(()),
+        );
+        assert!(answer.is_ok(), "{answer:?}");
+        assert_eq!(
+            herdr.methods(),
+            [
+                "pane.process_info",
+                "pane.process_info",
+                "pane.send_text",
+                "agent.start",
+                "pane.process_info",
+                "agent.start"
+            ]
+        );
+        let abandoned: Vec<Value> = herdr
+            .calls()
+            .into_iter()
+            .filter(|(method, _)| method == "pane.send_text")
+            .map(|(_, params)| params)
+            .collect();
+        assert_eq!(abandoned, [json!({"pane_id": "w1:p1", "text": "\u{3}"})]);
+    }
+
     /// On Windows Herdr refuses a shell with any child process, while
     /// `pane.process_info` names the shell alone unless that child is an
     /// agent: the read keeps saying ready and only Herdr's answer can change.
@@ -1084,6 +1207,7 @@ mod tests {
                 Duration::from_secs(5),
                 Duration::from_secs(5),
                 Duration::ZERO,
+                PaneLine::Fresh,
                 &|| {
                     let count = checks.get();
                     checks.set(count + 1);
@@ -1172,6 +1296,7 @@ mod tests {
             Duration::from_secs(5),
             Duration::from_secs(5),
             Duration::ZERO,
+            PaneLine::Fresh,
             &|| Ok(()),
         )
     }
@@ -1327,6 +1452,7 @@ mod tests {
             Duration::from_secs(5),
             wait,
             Duration::ZERO,
+            PaneLine::Fresh,
             &|| Ok(()),
         )
     }
@@ -1445,6 +1571,7 @@ mod tests {
             Duration::from_secs(5),
             wait,
             Duration::ZERO,
+            PaneLine::Fresh,
             &|| Ok(()),
         )
     }
@@ -1570,6 +1697,7 @@ mod tests {
             Duration::from_secs(5),
             Duration::from_millis(300),
             Duration::ZERO,
+            PaneLine::Fresh,
             &|| Ok(()),
         );
         assert!(

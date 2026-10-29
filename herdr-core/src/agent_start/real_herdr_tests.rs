@@ -24,6 +24,9 @@ use serde_json::json;
 use super::*;
 
 const QUESTION: &str = "Update the framework now? [Y/n]";
+/// The start of the prompt the user's files give a Unix shell.
+#[cfg(unix)]
+const PROMPT: &str = "fixture";
 
 /// B8: the seed tab must remain discoverable when shell integration is absent.
 #[test]
@@ -453,32 +456,37 @@ fn windows_agent(herdr: &PrivateHerdr) {
     .unwrap();
 }
 
-/// What the user's own startup files hold for `shell`: the question, and
-/// the answer recorded with the folder it was asked in.
+/// What the user's own startup files hold for `shell`: the prompt, then,
+/// when `ask`, the question and the answer recorded with the folder it was
+/// asked in.
 #[cfg(unix)]
-fn user_files(herdr: &PrivateHerdr, shell: &str) {
-    let (file, text) = match shell {
+fn user_files(herdr: &PrivateHerdr, shell: &str, ask: bool) {
+    let (file, prompt, question) = match shell {
         "zsh" => (
             ".zshrc",
+            format!("PS1='{PROMPT} %# '\n"),
             format!(
-                "PS1='fixture %# '\nread -k 1 'answer?{QUESTION} '\nprint -r -- \"${{PWD:t}} answered [$answer]\" >> ~/answers\n"
+                "read -k 1 'answer?{QUESTION} '\nprint -r -- \"${{PWD:t}} answered [$answer]\" >> ~/answers\n"
             ),
         ),
         "bash" => (
             ".bashrc",
+            format!("PS1='{PROMPT}$ '\n"),
             format!(
-                "PS1='fixture$ '\nread -n 1 -p '{QUESTION} ' answer; echo\nprintf '%s\\n' \"${{PWD##*/}} answered [$answer]\" >> ~/answers\n"
+                "read -n 1 -p '{QUESTION} ' answer; echo\nprintf '%s\\n' \"${{PWD##*/}} answered [$answer]\" >> ~/answers\n"
             ),
         ),
         "fish" => (
             // Herdr gives its panes its own XDG_CONFIG_HOME.
             "xdg-config/fish/config.fish",
+            format!("function fish_prompt; echo -n '{PROMPT}> '; end\n"),
             format!(
-                "function fish_prompt; echo -n 'fixture> '; end\nread -n 1 -P '{QUESTION} ' answer\necho (basename $PWD)\" answered [$answer]\" >> ~/answers\n"
+                "read -n 1 -P '{QUESTION} ' answer\necho (basename $PWD)\" answered [$answer]\" >> ~/answers\n"
             ),
         ),
         _ => unreachable!(),
     };
+    let text = if ask { prompt + &question } else { prompt };
     let path = herdr.home.join(file);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, text).unwrap();
@@ -498,12 +506,16 @@ fn user_files(herdr: &PrivateHerdr, shell: &str) {
     std::fs::create_dir_all(herdr.home.join(".local/share/fish/generated_completions")).unwrap();
 }
 
-/// The Windows PowerShell profile asks the question. The profile lives in
-/// the Documents folder, which follows `USERPROFILE`, so with the server's
-/// home it is the test's own file, not the account's. Windows names no
-/// Documents folder that does not exist, and PowerShell then has no profile.
+/// The Windows PowerShell profile asks the question when `ask`; with none,
+/// PowerShell's own prompt shows. The profile lives in the Documents folder,
+/// which follows `USERPROFILE`, so with the server's home it is the test's
+/// own file, not the account's. Windows names no Documents folder that does
+/// not exist, and PowerShell then has no profile.
 #[cfg(windows)]
-fn user_files(herdr: &PrivateHerdr, _shell: &str) {
+fn user_files(herdr: &PrivateHerdr, _shell: &str, ask: bool) {
+    if !ask {
+        return;
+    }
     std::fs::create_dir_all(herdr.home.join("Documents")).unwrap();
     let profile = Command::new("powershell.exe")
         .args(["-NoProfile", "-Command", "$PROFILE.CurrentUserCurrentHost"])
@@ -552,6 +564,7 @@ fn start(
         Duration::from_secs(10),
         wait,
         Duration::ZERO,
+        PaneLine::Fresh,
         &|| Ok(()),
     )
 }
@@ -586,7 +599,7 @@ fn startup_question(shell: &str, variable: &str) {
     unix_agent(&herdr);
     #[cfg(windows)]
     windows_agent(&herdr);
-    user_files(&herdr, shell);
+    user_files(&herdr, shell, true);
     let node = Node {
         home: herdr.home.clone(),
         shell: std::env::var(variable).ok(),
@@ -794,4 +807,101 @@ fn a_fish_startup_question_is_never_answered_by_a_start_and_each_tab_runs_its_ow
 fn a_windows_powershell_startup_question_is_never_answered_by_a_start_and_each_tab_runs_its_own_prompt()
  {
     startup_question("powershell", "HIDE_TEST_POWERSHELL_BIN");
+}
+
+/// What zsh showed in a sleeping Codex's shell line (with-hide/hide-private#37):
+/// the tail of the sleep's second Ctrl+C, which Codex had quit before reading
+/// and which Herdr had encoded in the keyboard protocol Codex turned on
+/// (`ESC[99;5u`). Typed behind it, the wake ran `9;5ucodex ... resume <id>`.
+const STRAY: &str = "9;5u";
+
+/// The scenario every shell runs: text an ended agent left in its shell's
+/// line is there when the wake types into that pane, and the resume line
+/// still runs, with its own arguments, as the agent the wake names.
+fn wake_after_stray_text(shell: &str, variable: &str) {
+    let herdr = PrivateHerdr::new(std::env::var(variable).ok());
+    #[cfg(unix)]
+    unix_agent(&herdr);
+    #[cfg(windows)]
+    windows_agent(&herdr);
+    user_files(&herdr, shell, false);
+    let created = herdr.request(
+        "workspace.create",
+        json!({"cwd": herdr.home, "label": "agents", "focus": false}),
+    );
+    let workspace = created["workspace"]["workspace_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // Herdr's own shell, the server's `SHELL` on unix, as an agent's pane is
+    // once the agent has ended.
+    let pane = herdr.tab(&workspace, "woken", None);
+    let prompt = if cfg!(windows) { "PS " } else { PROMPT };
+    herdr.wait_on(&pane, Duration::from_secs(30), "the prompt shows", || {
+        herdr.screen(&pane).contains(prompt)
+    });
+    herdr.request(
+        "pane.send_text",
+        wire::pane_send_text_params(&pane, STRAY).unwrap(),
+    );
+    herdr.wait_on(
+        &pane,
+        Duration::from_secs(30),
+        "the shell's line holds the stray text",
+        || herdr.screen(&pane).contains(STRAY),
+    );
+
+    let woke = crate::agent_sleep_herdr::start_agent(
+        &herdr.connector(),
+        &Node {
+            home: herdr.home.clone(),
+            shell: None,
+        },
+        &crate::agent_sleep_herdr::WakeRequest {
+            pane_id: pane.clone(),
+            kind: "claude".into(),
+            name: "woken".into(),
+            mode: crate::agent_sleep::WakeMode::Resume,
+            args: vec!["--resume".into(), "slept-session".into()],
+            cwd: None,
+            session_id: Some("slept-session".into()),
+            codex_daemon: crate::codex_launch::CodexDaemon::Unknown,
+        },
+    );
+    assert_eq!(woke, crate::agent_sleep_herdr::WakeOutcome::Started);
+    herdr.wait_on(
+        &pane,
+        Duration::from_secs(30),
+        "the woken agent shows",
+        || agent_pane(&herdr, "woken").as_deref() == Some(pane.as_str()),
+    );
+    assert_eq!(herdr.file("claude-args"), "woken --resume slept-session\n");
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "needs the pinned Herdr and zsh: HIDE_E2E_HERDR_BIN, HIDE_TEST_ZSH_BIN"]
+fn a_zsh_wake_runs_its_resume_line_past_text_the_ended_agent_left_in_the_shell() {
+    wake_after_stray_text("zsh", "HIDE_TEST_ZSH_BIN");
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "needs the pinned Herdr and bash: HIDE_E2E_HERDR_BIN, HIDE_TEST_BASH_BIN"]
+fn a_bash_wake_runs_its_resume_line_past_text_the_ended_agent_left_in_the_shell() {
+    wake_after_stray_text("bash", "HIDE_TEST_BASH_BIN");
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "needs the pinned Herdr and fish: HIDE_E2E_HERDR_BIN, HIDE_TEST_FISH_BIN"]
+fn a_fish_wake_runs_its_resume_line_past_text_the_ended_agent_left_in_the_shell() {
+    wake_after_stray_text("fish", "HIDE_TEST_FISH_BIN");
+}
+
+#[cfg(windows)]
+#[test]
+#[ignore = "needs the pinned Herdr: HIDE_E2E_HERDR_BIN"]
+fn a_windows_powershell_wake_runs_its_resume_line_past_text_the_ended_agent_left_in_the_shell() {
+    wake_after_stray_text("powershell", "HIDE_TEST_POWERSHELL_BIN");
 }

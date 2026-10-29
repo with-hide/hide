@@ -129,6 +129,8 @@ fn starting_herdr(
             "agent_status": "idle", "revision": 1
         }})),
         "agent.get" => Ok(json!({"type":"agent_info", "agent": *observed.lock().unwrap()})),
+        // A wake in the pane its agent ended in abandons the shell's line first.
+        "pane.send_text" => Ok(json!({"type": "ok"})),
         "agent.start" => {
             *observed.lock().unwrap() = json!({
                 "pane_id":params["pane_id"], "terminal_id":"term", "workspace_id":"w-order",
