@@ -338,7 +338,8 @@ async fn semantic_snapshot_negotiation_keeps_legacy_complete_and_refuses_unknown
                 if frame["payload"]["rest"]["ui_state"]["sidebar_width"] == 401 {
                     break frame;
                 }
-                if partial {
+                // A delta whose burst moved no rest section carries `rest: null`.
+                if partial && !frame["payload"]["rest"].is_null() {
                     seen.extend(rest_fields(&frame["payload"]["rest"]));
                 }
             }
