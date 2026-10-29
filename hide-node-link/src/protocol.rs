@@ -534,6 +534,10 @@ pub enum Call {
     BranchMerge {
         root: String,
         branch: String,
+        /// The commit the operator read; a branch that moved since is not
+        /// merged (`MergeOutcome::BranchMoved`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tip: Option<String>,
         base: String,
         message: String,
     },
@@ -1387,6 +1391,7 @@ mod tests {
         let merge = Call::BranchMerge {
             root: "/repo".into(),
             branch: "feat".into(),
+            tip: Some("b".repeat(40)),
             base: "main".into(),
             message: "Merge feat".into(),
         };

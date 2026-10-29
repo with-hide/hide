@@ -5008,6 +5008,10 @@ pub struct BranchDiffSnapshot {
     pub text: Option<String>,
     /// Why the text is short or absent, as the diff documents word it.
     pub notice: Option<hide_node_link::git::DiffNotice>,
+    /// The branch commit the read was asked at; a row whose branch moved
+    /// is read again (`runtime::branch_card`).
+    #[serde(skip)]
+    pub tip: Option<String>,
 }
 
 /// Cards kept at once; the least recently asked for is dropped.

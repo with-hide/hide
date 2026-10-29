@@ -256,6 +256,7 @@ pub(crate) fn branch(
         files_total: facts.map_or(0, |facts| facts.files_total),
         added: facts.map_or(0, |facts| facts.added),
         removed: facts.map_or(0, |facts| facts.removed),
+        tip: facts.map(|facts| facts.tip.clone()),
     }
 }
 

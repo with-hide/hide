@@ -1258,11 +1258,13 @@ pub fn handle_with_progress(
         Call::BranchMerge {
             root,
             branch,
+            tip,
             base,
             message,
         } => to_value(crate::branch_merge::merge(
             &absolute(&root)?,
             &branch,
+            tip.as_deref(),
             &base,
             &message,
         )?),

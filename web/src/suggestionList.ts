@@ -98,6 +98,7 @@ const FAILURE_KEYS: Record<string, MessageKey> = {
   merge_dirty: "suggestions.failure.merge_dirty",
   merge_conflict: "suggestions.failure.merge_conflict",
   merge_moved: "suggestions.failure.merge_moved",
+  merge_branch_moved: "suggestions.failure.merge_branch_moved",
   merge_failed: "suggestions.failure.merge_failed",
   discard_failed: "suggestions.failure.discard_failed",
 };

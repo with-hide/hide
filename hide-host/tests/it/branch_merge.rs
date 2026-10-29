@@ -122,7 +122,7 @@ fn parents(dir: &Path, revision: &str) -> usize {
 fn a_branch_ahead_of_the_base_fast_forwards_the_base_and_its_worktree() {
     let fixture = fixture();
     let tip = commit(&fixture.feat, "b.txt", "new\n");
-    let outcome = merge(&fixture.main, "feat", "main", "Merge feat").unwrap();
+    let outcome = merge(&fixture.main, "feat", None, "main", "Merge feat").unwrap();
     assert_eq!(
         outcome,
         MergeOutcome::Merged {
@@ -144,7 +144,7 @@ fn a_diverged_base_gets_a_merge_commit_of_both_parents() {
     let fixture = fixture();
     let base = commit(&fixture.main, "main-only.txt", "m\n");
     let tip = commit(&fixture.feat, "feat-only.txt", "f\n");
-    let outcome = merge(&fixture.main, "feat", "main", "Merge feat into main").unwrap();
+    let outcome = merge(&fixture.main, "feat", None, "main", "Merge feat into main").unwrap();
     let MergeOutcome::Merged {
         commit,
         fast_forward,
@@ -183,7 +183,7 @@ fn an_uncommitted_change_in_a_file_the_branch_changes_refuses_with_nothing_moved
         write(&fixture.main, "a.txt", "zero\none\ntwo\nthree\n");
         write(&fixture.main, "z.txt", "unrelated edit\n");
         let before = snapshot(&fixture.main);
-        let outcome = merge(&fixture.main, "feat", "main", "Merge feat").unwrap();
+        let outcome = merge(&fixture.main, "feat", None, "main", "Merge feat").unwrap();
         assert_eq!(
             outcome,
             MergeOutcome::Dirty {
@@ -205,7 +205,7 @@ fn an_untracked_file_where_the_branch_adds_one_and_a_staged_change_refuse_too() 
     write(&fixture.main, "a.txt", "one\ntwo\nthree\nstaged\n");
     git(&fixture.main, &["add", "a.txt"]);
     let before = snapshot(&fixture.main);
-    let outcome = merge(&fixture.main, "feat", "main", "Merge feat").unwrap();
+    let outcome = merge(&fixture.main, "feat", None, "main", "Merge feat").unwrap();
     assert_eq!(
         outcome,
         MergeOutcome::Dirty {
@@ -213,6 +213,53 @@ fn an_untracked_file_where_the_branch_adds_one_and_a_staged_change_refuse_too() 
         }
     );
     assert_eq!(snapshot(&fixture.main), before);
+}
+
+#[test]
+fn an_ignored_file_where_the_branch_adds_one_refuses() {
+    let fixture = fixture();
+    let common = git(&fixture.main, &["rev-parse", "--git-common-dir"]);
+    write(
+        &fixture.main.join(common),
+        "info/exclude",
+        "*.log\nbuild/\n",
+    );
+    for path in ["notes.log", "build/out.txt"] {
+        write(&fixture.feat, path, "from the branch\n");
+        git(&fixture.feat, &["add", "-f", "--", path]);
+    }
+    git(&fixture.feat, &["commit", "-qm", "add ignored files"]);
+    write(&fixture.main, "notes.log", "mine\n");
+    write(&fixture.main, "build/out.txt", "mine\n");
+    let head = git(&fixture.main, &["rev-parse", "HEAD"]);
+    let outcome = merge(&fixture.main, "feat", None, "main", "Merge feat").unwrap();
+    assert_eq!(
+        outcome,
+        MergeOutcome::Dirty {
+            files: vec!["build/out.txt".to_owned(), "notes.log".to_owned()]
+        }
+    );
+    assert_eq!(git(&fixture.main, &["rev-parse", "HEAD"]), head);
+    assert_eq!(
+        fs::read_to_string(fixture.main.join("notes.log")).unwrap(),
+        "mine\n"
+    );
+}
+
+#[test]
+fn a_branch_that_moved_since_it_was_read_is_not_merged() {
+    let fixture = fixture();
+    let read = commit(&fixture.feat, "b.txt", "new\n");
+    let moved = commit(&fixture.feat, "c.txt", "later\n");
+    let before = snapshot(&fixture.main);
+    let outcome = merge(&fixture.main, "feat", Some(&read), "main", "Merge feat").unwrap();
+    assert_eq!(outcome, MergeOutcome::BranchMoved);
+    assert_eq!(snapshot(&fixture.main), before);
+    let outcome = merge(&fixture.main, "feat", Some(&moved), "main", "Merge feat").unwrap();
+    assert!(
+        matches!(outcome, MergeOutcome::Merged { .. }),
+        "{outcome:?}"
+    );
 }
 
 #[test]
@@ -225,7 +272,7 @@ fn a_dirty_file_the_branch_does_not_touch_does_not_block() {
         }
         write(&fixture.main, "z.txt", "unrelated edit\n");
         write(&fixture.main, "scratch.txt", "untracked\n");
-        let outcome = merge(&fixture.main, "feat", "main", "Merge feat").unwrap();
+        let outcome = merge(&fixture.main, "feat", None, "main", "Merge feat").unwrap();
         assert!(
             matches!(outcome, MergeOutcome::Merged { fast_forward, .. } if fast_forward != diverged),
             "diverged: {diverged}: {outcome:?}"
@@ -249,7 +296,7 @@ fn a_conflict_refuses_with_nothing_moved_and_no_merge_left_behind() {
     commit(&fixture.main, "a.txt", "one\nfrom the base\nthree\n");
     write(&fixture.main, "z.txt", "unrelated edit\n");
     let before = snapshot(&fixture.main);
-    let outcome = merge(&fixture.main, "feat", "main", "Merge feat").unwrap();
+    let outcome = merge(&fixture.main, "feat", None, "main", "Merge feat").unwrap();
     assert_eq!(outcome, MergeOutcome::Conflict);
     assert_eq!(snapshot(&fixture.main), before);
     assert!(!git_dir(&fixture.main).join("MERGE_HEAD").exists());
@@ -278,7 +325,7 @@ fn a_worktree_in_the_middle_of_a_merge_is_not_merged_into() {
     assert!(!stopped.status.success());
     assert!(git_dir(&fixture.main).join("MERGE_HEAD").exists());
     let before = snapshot(&fixture.main);
-    let outcome = merge(&fixture.main, "feat", "main", "Merge feat").unwrap();
+    let outcome = merge(&fixture.main, "feat", None, "main", "Merge feat").unwrap();
     assert_eq!(outcome, MergeOutcome::Dirty { files: Vec::new() });
     assert_eq!(snapshot(&fixture.main), before);
     assert!(git_dir(&fixture.main).join("MERGE_HEAD").exists());
@@ -297,7 +344,7 @@ fn a_base_checked_out_nowhere_fast_forwards_by_its_ref_alone() {
     let fixture = fixture();
     let tip = commit(&fixture.feat, "b.txt", "new\n");
     let (head, files) = base_checked_out_nowhere(&fixture);
-    let outcome = merge(&fixture.main, "feat", "main", "Merge feat").unwrap();
+    let outcome = merge(&fixture.main, "feat", None, "main", "Merge feat").unwrap();
     assert_eq!(
         outcome,
         MergeOutcome::Merged {
@@ -316,7 +363,7 @@ fn a_base_checked_out_nowhere_gets_its_merge_commit_by_plumbing() {
     let base = commit(&fixture.main, "main-only.txt", "m\n");
     let tip = commit(&fixture.feat, "feat-only.txt", "f\n");
     let (head, files) = base_checked_out_nowhere(&fixture);
-    let outcome = merge(&fixture.main, "feat", "main", "Merge feat into main");
+    let outcome = merge(&fixture.main, "feat", None, "main", "Merge feat into main");
     if !hide_host::git_run::version().is_some_and(|version| version >= (2, 38)) {
         let error = outcome.unwrap_err();
         assert_eq!(error.code, ErrorCode::Unsupported);
@@ -358,7 +405,7 @@ fn a_conflict_with_the_base_checked_out_nowhere_moves_nothing() {
     commit(&fixture.feat, "a.txt", "one\nfrom the branch\nthree\n");
     let base = commit(&fixture.main, "a.txt", "one\nfrom the base\nthree\n");
     base_checked_out_nowhere(&fixture);
-    let outcome = merge(&fixture.main, "feat", "main", "Merge feat");
+    let outcome = merge(&fixture.main, "feat", None, "main", "Merge feat");
     if hide_host::git_run::version().is_some_and(|version| version >= (2, 38)) {
         assert_eq!(outcome.unwrap(), MergeOutcome::Conflict);
     } else {
@@ -373,11 +420,11 @@ fn a_retry_after_the_merge_finds_it_already_done() {
     commit(&fixture.main, "main-only.txt", "m\n");
     commit(&fixture.feat, "feat-only.txt", "f\n");
     let MergeOutcome::Merged { commit, .. } =
-        merge(&fixture.main, "feat", "main", "Merge feat").unwrap()
+        merge(&fixture.main, "feat", None, "main", "Merge feat").unwrap()
     else {
         panic!("expected a merge");
     };
-    let again = merge(&fixture.main, "feat", "main", "Merge feat").unwrap();
+    let again = merge(&fixture.main, "feat", None, "main", "Merge feat").unwrap();
     assert_eq!(
         again,
         MergeOutcome::AlreadyMerged {
@@ -392,13 +439,13 @@ fn a_missing_branch_and_a_bad_name_change_nothing() {
     let fixture = fixture();
     let before = snapshot(&fixture.main);
     assert_eq!(
-        merge(&fixture.main, "gone", "main", "Merge").unwrap(),
+        merge(&fixture.main, "gone", None, "main", "Merge").unwrap(),
         MergeOutcome::BranchMissing
     );
-    let error = merge(&fixture.main, "feat", "nowhere", "Merge").unwrap_err();
+    let error = merge(&fixture.main, "feat", None, "nowhere", "Merge").unwrap_err();
     assert_eq!(error.code, ErrorCode::NotFound);
     for (branch, base) in [("--orphan=x", "main"), ("feat", "a..b"), ("main", "main")] {
-        let error = merge(&fixture.main, branch, base, "Merge").unwrap_err();
+        let error = merge(&fixture.main, branch, None, base, "Merge").unwrap_err();
         assert_eq!(error.code, ErrorCode::InvalidRequest, "{branch} {base}");
     }
     let error = facts(&fixture.main, "feat", Some("main"), "main").unwrap_err();

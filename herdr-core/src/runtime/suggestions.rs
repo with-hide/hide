@@ -7,10 +7,9 @@
 
 use super::*;
 use crate::model::{
-    SuggestionAttemptPhase,
-    MemoryAction, ProjectSuggestionsSnapshot, SignalUnavailable, SuggestionCountsSnapshot,
-    SuggestionGroup, SuggestionHold, SuggestionState, SuggestionsAi, SuggestionsGithub,
-    SuggestionsSnapshot,
+    MemoryAction, ProjectSuggestionsSnapshot, SignalUnavailable, SuggestionAttemptPhase,
+    SuggestionCountsSnapshot, SuggestionGroup, SuggestionHold, SuggestionState, SuggestionsAi,
+    SuggestionsGithub, SuggestionsSnapshot,
 };
 use crate::suggestions::analysis::{Analysis, TagGrouping};
 use crate::suggestions::investigation::node::{Checkout, ProjectReads};
@@ -266,15 +265,9 @@ impl Runtime {
         if let Some(number) = super::suggestion_memory::card_of_row(&payload.id) {
             let decision = match payload.action {
                 SuggestionActionKind::Merge => Some(super::memory_branch::BatchDecision::Merge),
-                SuggestionActionKind::OpenPr => {
-                    Some(super::memory_branch::BatchDecision::OpenPr)
-                }
-                SuggestionActionKind::Discard => {
-                    Some(super::memory_branch::BatchDecision::Discard)
-                }
-                SuggestionActionKind::Rebase => {
-                    Some(super::memory_branch::BatchDecision::Rebase)
-                }
+                SuggestionActionKind::OpenPr => Some(super::memory_branch::BatchDecision::OpenPr),
+                SuggestionActionKind::Discard => Some(super::memory_branch::BatchDecision::Discard),
+                SuggestionActionKind::Rebase => Some(super::memory_branch::BatchDecision::Rebase),
                 _ => None,
             };
             if let Some(decision) = decision {
@@ -339,6 +332,15 @@ impl Runtime {
             }));
             return false;
         };
+        if matches!(action, LineAction::OpenPr | LineAction::Rebase)
+            && self.suggestion_branch_deciding(&project, line.0)
+        {
+            crate::diagnostic!(json!({
+                "component": "suggestions", "kind": "decision.refused",
+                "line": line.0, "reason": "deciding",
+            }));
+            return false;
+        }
         self.send_suggestions(Command::Action {
             project,
             line,
@@ -674,6 +676,7 @@ impl Runtime {
             return false;
         }
         self.snapshot.suggestions = Some(Arc::new(next));
+        self.follow_branch_diff();
         true
     }
 
@@ -738,7 +741,9 @@ impl Runtime {
             {
                 continue;
             }
-            if work.deciding.get(&(attempt.project_id.clone(), attempt.line.0))
+            if work
+                .deciding
+                .get(&(attempt.project_id.clone(), attempt.line.0))
                 == Some(&super::suggestion_apply::BranchDecision::Merge)
             {
                 merging.insert(crate::suggestions::read::row_id(attempt.line));
@@ -848,9 +853,9 @@ struct BranchOverlay {
 /// the checkout each branch is in.
 fn lay_branches(project: &mut ProjectSuggestionsSnapshot, overlay: &BranchOverlay) {
     if !overlay.git {
-        project.rows.retain(|row| {
-            !(row.state == SuggestionState::New && row.outcome == Outcome::Pr)
-        });
+        project
+            .rows
+            .retain(|row| !(row.state == SuggestionState::New && row.outcome == Outcome::Pr));
     }
     let waiting = project
         .rows

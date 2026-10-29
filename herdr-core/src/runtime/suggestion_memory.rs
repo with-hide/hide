@@ -9,8 +9,8 @@ use super::*;
 use crate::model::{
     HomeTurn, MemoryAction, MemoryPromotionSnapshot, MemoryPromotionState, MemoryQuestionSnapshot,
     MemoryRowSnapshot, MemoryStartFailureCode, ProjectSuggestionsSnapshot, SuggestionAttemptPhase,
-    SuggestionAttemptSnapshot, SuggestionGroup, SuggestionRowSnapshot,
-    SuggestionSource, SuggestionState,
+    SuggestionAttemptSnapshot, SuggestionGroup, SuggestionRowSnapshot, SuggestionSource,
+    SuggestionState,
 };
 use crate::suggestions::notebook::Outcome;
 use crate::suggestions::policy::APPLIED_ROWS;
@@ -398,6 +398,7 @@ fn batch_row(
                 files_total: summary.map_or(0, |summary| summary.files_total),
                 added: summary.map_or(0, |summary| summary.added),
                 removed: summary.map_or(0, |summary| summary.removed),
+                tip: summary.map(|summary| summary.tip.clone()),
             }
         }),
         purpose: super::memory_branch::attempt_purpose(batch.and_then(|batch| batch.purpose)),

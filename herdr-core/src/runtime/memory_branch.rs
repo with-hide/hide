@@ -49,6 +49,12 @@ pub(super) struct BatchBranchFacts {
     pub(super) purpose: Option<BatchPurpose>,
 }
 
+/// How a batch's machine is reached: its Herdr and its node.
+pub(super) type BatchReach = (
+    Arc<dyn hide_herdr_client::ApiConnector>,
+    Arc<dyn crate::node_access::NodeLink>,
+);
+
 /// Reads each checked batch's branch on its machine and moves its cards
 /// (D-08, B5, B13, B20): a stopped agent's branch with commits makes the
 /// placed cards ready and returns the rest with their reason, one with none
@@ -56,7 +62,7 @@ pub(super) struct BatchBranchFacts {
 /// reached the base merged its cards, one gone unmerged was discarded.
 pub(super) fn read_batches(
     checks: Vec<BatchCheck>,
-    reach: &HashMap<NodeId, (Arc<dyn hide_herdr_client::ApiConnector>, Arc<dyn crate::node_access::NodeLink>)>,
+    reach: &HashMap<NodeId, BatchReach>,
     store: &mut MemoryStore,
     now: u64,
 ) -> BatchesRead {
@@ -128,7 +134,14 @@ fn read_stopped(
         for (number, promotion) in &check.cards {
             if promotion.state == PromotionState::Running {
                 moved |= store
-                    .move_promotion(&check.project_id, *number, promotion, PromotionState::Failed, None, now)
+                    .move_promotion(
+                        &check.project_id,
+                        *number,
+                        promotion,
+                        PromotionState::Failed,
+                        None,
+                        now,
+                    )
                     .map_err(|error| error.to_string())?;
             }
         }
@@ -141,7 +154,14 @@ fn read_stopped(
         }
         moved |= if promotion.target_path.is_some() {
             store
-                .move_promotion(&check.project_id, *number, promotion, PromotionState::Ready, None, now)
+                .move_promotion(
+                    &check.project_id,
+                    *number,
+                    promotion,
+                    PromotionState::Ready,
+                    None,
+                    now,
+                )
                 .map_err(|error| error.to_string())?
         } else {
             store
@@ -157,7 +177,12 @@ fn read_stopped(
         };
     }
     store
-        .set_promotion_batch_branch(&check.project_id, &check.branch, BatchPurpose::Branch, Some(&summary.tip))
+        .set_promotion_batch_branch(
+            &check.project_id,
+            &check.branch,
+            BatchPurpose::Branch,
+            Some(&summary.tip),
+        )
         .map_err(|error| error.to_string())?;
     log_batch(check, "promotion.batch_ready", "ready");
     read.facts
@@ -207,7 +232,12 @@ fn read_ready(
     if let Some(summary) = summary(&place.base, &facts) {
         if check.tip.as_deref() != Some(summary.tip.as_str()) {
             store
-                .set_promotion_batch_branch(&check.project_id, &check.branch, check.purpose, Some(&summary.tip))
+                .set_promotion_batch_branch(
+                    &check.project_id,
+                    &check.branch,
+                    check.purpose,
+                    Some(&summary.tip),
+                )
                 .map_err(|error| error.to_string())?;
         }
         read.facts
@@ -218,7 +248,10 @@ fn read_ready(
 
 /// What a branch holds, when it holds anything.
 fn summary(base: &str, facts: &BranchFacts) -> Option<BranchSummary> {
-    let tip = facts.tip.clone().filter(|_| facts.exists && facts.ahead > 0)?;
+    let tip = facts
+        .tip
+        .clone()
+        .filter(|_| facts.exists && facts.ahead > 0)?;
     Some(BranchSummary {
         base: base.to_owned(),
         tip,
@@ -270,7 +303,11 @@ impl Runtime {
     /// The ready batch card `number` is in, in the opened Project: its
     /// branch and every ready card on it, with the Project's machine and
     /// folder.
-    fn ready_batch(&self, workspace_id: &str, number: u64) -> Option<(NodeId, String, String, Vec<u64>)> {
+    fn ready_batch(
+        &self,
+        workspace_id: &str,
+        number: u64,
+    ) -> Option<(NodeId, String, String, Vec<u64>)> {
         let memory = self
             .snapshot
             .memory
@@ -566,7 +603,7 @@ fn decide(
     };
     match decision {
         BatchDecision::Merge => {
-            match branch_decision::merge(connector.as_deref(), link.as_ref(), place, own) {
+            match branch_decision::merge(connector.as_deref(), link.as_ref(), place, own, tip) {
                 Ok(MergeOutcome::Merged { .. } | MergeOutcome::AlreadyMerged { .. }) => {
                     branch_decision::log(place, &subject, "merge", "merged");
                     move_all(&mut store, PromotionState::Merged);
@@ -589,7 +626,9 @@ fn decide(
         }
         BatchDecision::Discard => {
             let discarded = match connector.as_deref() {
-                Some(connector) => branch_decision::discard(connector, link.as_ref(), place, own, tip),
+                Some(connector) => {
+                    branch_decision::discard(connector, link.as_ref(), place, own, tip)
+                }
                 None => Err("herdr_unavailable".to_owned()),
             };
             match discarded {

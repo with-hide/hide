@@ -19,6 +19,7 @@ struct DiffPlace {
     root: String,
     branch: String,
     base: String,
+    tip: Option<String>,
 }
 
 impl Runtime {
@@ -53,6 +54,8 @@ impl Runtime {
                 return;
             }
         };
+        let tip = place.tip.clone();
+        shown.tip = tip.clone();
         self.snapshot.pr_work.branch_diff = Some(shown);
         let call = Call::BranchDiff {
             root: place.root,
@@ -67,8 +70,12 @@ impl Runtime {
                 let Some(shown) = runtime.snapshot.pr_work.branch_diff.as_mut() else {
                     return false;
                 };
-                // The slot moved on while the read ran.
-                if shown.workspace_id != workspace_id || shown.row != row || shown.path != path {
+                // The slot moved on, or the branch did, while the read ran.
+                if shown.workspace_id != workspace_id
+                    || shown.row != row
+                    || shown.path != path
+                    || shown.tip != tip
+                {
                     return false;
                 }
                 shown.reading = false;
@@ -93,6 +100,26 @@ impl Runtime {
         {
             shown.reading = false;
             shown.failed = true;
+        }
+    }
+
+    /// Reads the open file again when its row's branch moved since it was
+    /// read: an agent that committed after the card opened must not leave
+    /// the operator looking at the older diff.
+    pub(super) fn follow_branch_diff(&mut self) {
+        let Some(shown) = self.snapshot.pr_work.branch_diff.as_ref() else {
+            return;
+        };
+        let target = (
+            shown.workspace_id.clone(),
+            shown.row.clone(),
+            shown.path.clone(),
+        );
+        let Some(place) = self.branch_diff_place(&target.0, &target.1, &target.2) else {
+            return;
+        };
+        if place.tip != shown.tip {
+            self.read_branch_diff(Some(target));
         }
     }
 
@@ -123,6 +150,7 @@ impl Runtime {
             root: workspace.path.clone(),
             branch: branch.name.clone(),
             base: branch.base.clone()?,
+            tip: branch.tip.clone(),
         })
     }
 }

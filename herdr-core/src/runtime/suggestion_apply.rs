@@ -407,6 +407,21 @@ impl Runtime {
     /// hide-ai-branch-first-apply D-05, D-07, B6-B8, B10): Hide merges or
     /// deletes the branch on the Project's machine, off the lock, and hands
     /// the worker what came of it. A press while one runs is dropped.
+    /// Whether a merge or a discard of this line's branch is under way: a
+    /// pull request or a rebase started now would work on a branch that is
+    /// being merged or deleted.
+    pub(super) fn suggestion_branch_deciding(&self, project: &ProjectRef, line: u64) -> bool {
+        let work = &self.suggestions_work.apply;
+        work.followed.iter().any(|attempt| {
+            attempt.line.0 == line
+                && attempt.location.node == project.node.as_str()
+                && attempt.location.path == project.path
+                && work
+                    .deciding
+                    .contains_key(&(attempt.project_id.clone(), line))
+        })
+    }
+
     pub(super) fn decide_suggestion_branch(
         &mut self,
         project: &ProjectRef,
@@ -434,7 +449,8 @@ impl Runtime {
         else {
             return refused("no_attempt");
         };
-        let (Some(facts), AttemptPhase::Ready) = (attempt.branch_facts.clone(), attempt.phase) else {
+        let (Some(facts), AttemptPhase::Ready) = (attempt.branch_facts.clone(), attempt.phase)
+        else {
             return refused("not_ready");
         };
         let deciding = (attempt.project_id.clone(), line);
@@ -478,8 +494,9 @@ impl Runtime {
                         link.as_ref(),
                         &place,
                         &own,
+                        Some(facts.tip.as_str()),
                     );
-                    let change = match merged {
+                    match merged {
                         Ok(
                             hide_node_link::branch::MergeOutcome::Merged { commit, .. }
                             | hide_node_link::branch::MergeOutcome::AlreadyMerged { commit },
@@ -493,7 +510,12 @@ impl Runtime {
                             }
                         }
                         Ok(hide_node_link::branch::MergeOutcome::BranchMissing) => {
-                            super::branch_decision::log(&place, &subject, "merge", "branch_missing");
+                            super::branch_decision::log(
+                                &place,
+                                &subject,
+                                "merge",
+                                "branch_missing",
+                            );
                             AttemptMove::Discarded
                         }
                         Ok(outcome) => {
@@ -508,8 +530,7 @@ impl Runtime {
                             super::branch_decision::log(&place, &subject, "merge", "merge_failed");
                             AttemptMove::DecisionRefused("merge_failed".into())
                         }
-                    };
-                    change
+                    }
                 }
                 BranchDecision::Discard => {
                     let Some(connector) = connector else {
@@ -527,7 +548,12 @@ impl Runtime {
                             AttemptMove::Discarded
                         }
                         Err(_) => {
-                            super::branch_decision::log(&place, &subject, "discard", "discard_failed");
+                            super::branch_decision::log(
+                                &place,
+                                &subject,
+                                "discard",
+                                "discard_failed",
+                            );
                             AttemptMove::DecisionRefused("discard_failed".into())
                         }
                     }
@@ -968,7 +994,8 @@ impl Runtime {
         let spawned = self.spawn_issue_worker(
             "suggestion-branch",
             move || {
-                let facts = super::branch_decision::read_facts(link.as_ref(), &place, tip.as_deref());
+                let facts =
+                    super::branch_decision::read_facts(link.as_ref(), &place, tip.as_deref());
                 let change = facts.map(|facts| branch_change(phase, &place.base, facts));
                 // A branch merged by hand retires its agent and worktree as
                 // Hide's own merge does.
@@ -995,15 +1022,22 @@ impl Runtime {
                 match change {
                     // A ready branch read again as it was moves nothing.
                     Ok(Some(AttemptMove::Ready(facts)))
-                        if runtime.suggestions_work.apply.followed.iter().any(|attempt| {
-                            key_of(attempt) == carried
-                                && attempt.phase == AttemptPhase::Ready
-                                && attempt.branch_facts.as_ref() == Some(&facts)
-                        }) => {}
+                        if runtime
+                            .suggestions_work
+                            .apply
+                            .followed
+                            .iter()
+                            .any(|attempt| {
+                                key_of(attempt) == carried
+                                    && attempt.phase == AttemptPhase::Ready
+                                    && attempt.branch_facts.as_ref() == Some(&facts)
+                            }) => {}
                     Ok(Some(change)) => {
                         let work = &mut runtime.suggestions_work.apply;
-                        if let Some(followed) =
-                            work.followed.iter_mut().find(|attempt| key_of(attempt) == carried)
+                        if let Some(followed) = work
+                            .followed
+                            .iter_mut()
+                            .find(|attempt| key_of(attempt) == carried)
                         {
                             note_move(followed, &change);
                         }
@@ -1045,7 +1079,12 @@ impl Runtime {
 
     /// The worktree that has `branch` checked out in the Project at `root`,
     /// as the node's worktree facts list it.
-    pub(super) fn branch_checkout(&self, node: &NodeId, root: &str, branch: &str) -> Option<String> {
+    pub(super) fn branch_checkout(
+        &self,
+        node: &NodeId,
+        root: &str,
+        branch: &str,
+    ) -> Option<String> {
         let project = if *node == self.node {
             self.worktree_catalog.project(root)
         } else {
@@ -1064,7 +1103,7 @@ impl Runtime {
     /// nothing, on this machine or a device.
     pub(super) fn suggestion_agent_stopped(&self, id: &str) -> bool {
         self.suggestion_agent_row(id).is_some_and(|agent| {
-            super::branch_decision::agent_stopped(&agent.activity, &agent.demand)
+            super::branch_decision::agent_stopped(&agent.activity, &agent.demand, agent.completed)
         })
     }
 
@@ -1381,7 +1420,11 @@ fn strength(level: u8) -> &'static str {
 /// fix is committed on this worktree's branch and stops there; only `PR
 /// 올리기` asks for a push and a pull request (PRD hide-ai-branch-first-apply
 /// D-01, D-06), and `다시 맞추기` makes the branch again on the base (B12).
-fn prompt(brief: &ApplyBrief, purpose: AttemptPurpose, language: hide_ai::OutputLanguage) -> String {
+fn prompt(
+    brief: &ApplyBrief,
+    purpose: AttemptPurpose,
+    language: hide_ai::OutputLanguage,
+) -> String {
     let mut facts = Vec::new();
     if let Some(discomfort) = &brief.discomfort {
         facts.push(format!("discomfort: {discomfort}"));
@@ -1656,7 +1699,11 @@ mod tests {
             records: 4,
             ..ApplyBrief::default()
         };
-        let branch = prompt(&brief, AttemptPurpose::Branch, hide_ai::OutputLanguage::Korean);
+        let branch = prompt(
+            &brief,
+            AttemptPurpose::Branch,
+            hide_ai::OutputLanguage::Korean,
+        );
         assert!(branch.contains("Do not push, do not open a pull request, do not merge"));
         assert!(!branch.contains("open one pull request"));
         assert!(branch.contains("a script or an automated check"));
@@ -1674,12 +1721,20 @@ mod tests {
         assert!(pr.contains("pull request #9: continue it"));
 
         brief.base = Some("trunk".into());
-        let rebase = prompt(&brief, AttemptPurpose::Rebase, hide_ai::OutputLanguage::Korean);
+        let rebase = prompt(
+            &brief,
+            AttemptPurpose::Rebase,
+            hide_ai::OutputLanguage::Korean,
+        );
         assert!(rebase.contains("Rebase this branch onto the local `trunk`"));
         assert!(rebase.contains("Do not push"));
     }
 
-    fn facts(exists: bool, ahead: u32, merged: Option<bool>) -> hide_node_link::branch::BranchFacts {
+    fn facts(
+        exists: bool,
+        ahead: u32,
+        merged: Option<bool>,
+    ) -> hide_node_link::branch::BranchFacts {
         hide_node_link::branch::BranchFacts {
             exists,
             tip: exists.then(|| "a".repeat(40)),

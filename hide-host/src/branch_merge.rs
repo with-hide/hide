@@ -26,8 +26,8 @@ use std::process::Output;
 use std::time::Duration;
 
 use hide_node_link::branch::{
-    BranchFacts, BranchFile, DIRTY_FILES_MAX, DiscardOutcome, FILES_MAX, MergeOutcome,
-    check_diff, check_discard, check_facts, check_merge,
+    BranchFacts, BranchFile, DIRTY_FILES_MAX, DiscardOutcome, FILES_MAX, MergeOutcome, check_diff,
+    check_discard, check_facts, check_merge,
 };
 use hide_node_link::git::{Diff, DiffNotice};
 
@@ -275,6 +275,35 @@ fn holder(root: &Path, base: &str) -> HostResult<Option<PathBuf>> {
     Ok(Some(row.path))
 }
 
+/// The ignored files and folders in `worktree`, a folder ending in `/`. A
+/// branch that adds a path the operator keeps ignored would overwrite it,
+/// and `git status` does not list it.
+fn ignored_paths(worktree: &Path) -> HostResult<Vec<String>> {
+    let listed = read(
+        worktree,
+        &[
+            "ls-files",
+            "-z",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--directory",
+        ],
+    )?;
+    Ok(listed
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| String::from_utf8_lossy(entry).into_owned())
+        .collect())
+}
+
+/// Whether `path` is one of `ignored` or inside an ignored folder.
+fn covers(ignored: &[String], path: &str) -> bool {
+    ignored
+        .iter()
+        .any(|entry| entry == path || (entry.ends_with('/') && path.starts_with(entry.as_str())))
+}
+
 /// Every path in `git status -z` output, a rename's or copy's two included.
 fn status_paths(worktree: &Path) -> HostResult<BTreeSet<String>> {
     let status = read(
@@ -361,13 +390,23 @@ fn trial_merge(root: &Path, base: &str, tip: &str) -> HostResult<Option<String>>
 }
 
 /// Merges `branch` into `base` in the repository at `root`; see the module
-/// for what each answer promises. `message` is the merge commit's, used when
-/// the merge is not a fast-forward.
-pub fn merge(root: &Path, branch: &str, base: &str, message: &str) -> HostResult<MergeOutcome> {
-    check_merge(branch, base, message).map_err(invalid)?;
+/// for what each answer promises. With `read`, the branch must still point at
+/// that commit, the one the operator looked at. `message` is the merge
+/// commit's, used when the merge is not a fast-forward.
+pub fn merge(
+    root: &Path,
+    branch: &str,
+    read: Option<&str>,
+    base: &str,
+    message: &str,
+) -> HostResult<MergeOutcome> {
+    check_merge(branch, read, base, message).map_err(invalid)?;
     let Some(tip) = resolve(root, branch)? else {
         return Ok(MergeOutcome::BranchMissing);
     };
+    if read.is_some_and(|read| read != tip) {
+        return Ok(MergeOutcome::BranchMoved);
+    }
     let Some(base_tip) = resolve(root, base)? else {
         return Err(HostError::new(
             ErrorCode::NotFound,
@@ -457,9 +496,18 @@ impl Plan<'_> {
             })?
         };
         let changed = changed_paths(root, &fork, &self.tip)?;
+        let ignored = ignored_paths(worktree)?;
         let overlap: Vec<String> = status_paths(worktree)?
             .into_iter()
             .filter(|path| changed.contains(path))
+            .chain(
+                changed
+                    .iter()
+                    .filter(|path| covers(&ignored, path))
+                    .cloned(),
+            )
+            .collect::<BTreeSet<_>>()
+            .into_iter()
             .collect();
         if !overlap.is_empty() {
             return Ok(dirty(overlap));
@@ -489,7 +537,21 @@ impl Plan<'_> {
         } else {
             &merge_args
         };
-        let output = run_within(worktree, args, crate::git_run::CHANGE_DEADLINE)?;
+        let output = match run_within(worktree, args, crate::git_run::CHANGE_DEADLINE) {
+            Ok(output) => output,
+            Err(error) => {
+                // A merge that ran out of time or could not be read may have
+                // stopped halfway; the operator's tree is put back first.
+                if git_dir(worktree)?.join("MERGE_HEAD").exists() {
+                    run_within(
+                        worktree,
+                        &["merge", "--abort"],
+                        crate::git_run::CHANGE_DEADLINE,
+                    )?;
+                }
+                return Err(error);
+            }
+        };
         if output.status.success() {
             return Ok(self.merged(read_text(worktree, &["rev-parse", "--verify", "HEAD"])?));
         }

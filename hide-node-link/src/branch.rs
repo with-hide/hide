@@ -71,6 +71,9 @@ pub enum MergeOutcome {
     BranchMissing,
     /// The base moved while the merge was prepared; nothing was written.
     BaseMoved,
+    /// The request named a `tip` and the branch no longer points at it:
+    /// someone committed after the operator read it; nothing was written.
+    BranchMoved,
     /// The branch's tip is already in the base, so there was nothing to do.
     /// `commit` is the base's head now, which a retry after a merge finds.
     AlreadyMerged { commit: String },
@@ -131,9 +134,15 @@ pub fn check_diff(branch: &str, base: &str, path: &str) -> Result<(), String> {
 }
 
 /// A `BranchMerge` request's values, or why they cannot make a git command.
-pub fn check_merge(branch: &str, base: &str, message: &str) -> Result<(), String> {
+pub fn check_merge(
+    branch: &str,
+    tip: Option<&str>,
+    base: &str,
+    message: &str,
+) -> Result<(), String> {
     check_branch(branch)?;
     check_branch(base)?;
+    tip.map(check_tip).transpose()?;
     if branch == base {
         return Err("a branch is not merged into itself".to_owned());
     }
@@ -249,9 +258,9 @@ mod tests {
             assert!(check_facts("feat/x", Some(tip), "main").is_err(), "{tip}");
         }
         assert!(check_tip(&"f".repeat(64)).is_ok());
-        assert!(check_merge("feat/x", "main", "Merge feat/x").is_ok());
-        assert!(check_merge("main", "main", "Merge").is_err());
-        assert!(check_merge("feat/x", "main", "  ").is_err());
-        assert!(check_merge("feat/x", "main", &"x".repeat(MESSAGE_MAX_BYTES + 1)).is_err());
+        assert!(check_merge("feat/x", None, "main", "Merge feat/x").is_ok());
+        assert!(check_merge("main", None, "main", "Merge").is_err());
+        assert!(check_merge("feat/x", None, "main", "  ").is_err());
+        assert!(check_merge("feat/x", None, "main", &"x".repeat(MESSAGE_MAX_BYTES + 1)).is_err());
     }
 }

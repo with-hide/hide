@@ -375,6 +375,10 @@ pub struct SuggestionBranchSnapshot {
     pub files_total: u32,
     pub added: u32,
     pub removed: u32,
+    /// The commit these facts were read at; the core alone uses it, to
+    /// read an open file's diff again when the branch moves.
+    #[serde(skip)]
+    pub tip: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]

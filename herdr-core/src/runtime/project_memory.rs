@@ -974,6 +974,25 @@ impl Runtime {
         if matches!(payload.action, MemoryAction::Disable | MemoryAction::Delete) {
             self.cancel_memory_pass();
         }
+        // A batch commits on a local branch: a folder that is not a git
+        // repository takes none, and none starts while five branches wait
+        // for the operator's decision (PRD hide-ai-branch-first-apply D-09,
+        // D-17, B28). The tab holds the button; a screen behind it is
+        // refused here.
+        if payload.action == MemoryAction::Promote && !self.branch_room(&node, &path) {
+            crate::diagnostic!(json!({
+                "component": "memory", "kind": "promotion.refused",
+                "workspace_id": payload.workspace_id, "reason": "no_branch_room",
+            }));
+            self.memory_action_failed(
+                &payload.workspace_id,
+                payload.action,
+                "memory.branches_full",
+                "Merge or discard a waiting branch before starting another",
+                false,
+            );
+            return true;
+        }
         let start = match payload.action {
             MemoryAction::Promote => match self.promotion_start(&node, &path) {
                 Ok(start) => Some(start),
