@@ -243,11 +243,20 @@ fn a_flooding_pane_holds_back_neither_another_panes_keys_nor_its_frames() {
     for _ in 0..40 {
         flooding.frame(SIZE, false, &[b'y'; 48 * 1024]);
     }
+    // The frames reach the link's queue on the pane's own reader thread; a
+    // read begun before they pass the cap makes room for the rest of the
+    // flood, and the echo's place among it is the scheduler's.
+    wait_for(|| {
+        lock(&node.uplink.state)
+            .panes
+            .get("w1:p1")
+            .is_some_and(|pane| pane.dropping)
+    });
     node.line(key_line("w1:p2", b"typed").trim_ascii_end());
     assert_eq!(quiet.next_input(), b"typed");
     quiet.frame(SIZE, false, b"echo");
-    // The quiet pane's echo goes up within a few lines of the reader
-    // coming back, not behind the flood.
+    // The flood past the cap was dropped, so the quiet pane's echo goes up
+    // once the reader comes back with nothing of the flood ahead of it.
     let mut seen = Vec::new();
     let deadline = std::time::Instant::now() + WAIT;
     while std::time::Instant::now() < deadline {
@@ -266,8 +275,8 @@ fn a_flooding_pane_holds_back_neither_another_panes_keys_nor_its_frames() {
         seen.last().is_some_and(|pane| pane == "w1:p2"),
         "the quiet pane's echo went up: {seen:?}"
     );
-    assert!(
-        flood_lines_before_echo <= 3,
+    assert_eq!(
+        flood_lines_before_echo, 0,
         "the echo waited behind {flood_lines_before_echo} flood lines"
     );
     node.stop();
