@@ -335,3 +335,21 @@ it("only the primary button's release opens a link, never a right-click's or a m
   osc8.activate({ button: 0, metaKey: false, ctrlKey: false } as MouseEvent, "https://example.test/b", link!.range);
   expect(actions.openLink.mock.calls).toEqual([["https://example.test/a", false, "w1:p1"], ["https://example.test/b", false, "w1:p1"]]);
 });
+
+it("a ⌘-click on macOS and a Ctrl-click elsewhere still hand a link to the operating system, and a modified right-click opens nothing", async () => {
+  const { term, links } = terminalShowing("see https://example.test/a");
+  const actions = { openLink: vi.fn(), openTerminalPath: vi.fn() };
+  registerTerminalLinks(term, "w1:p1", { hovered: false }, () => actions);
+  const [link] = await links();
+  const platform = vi.spyOn(navigator, "platform", "get");
+  try {
+    for (const [system, held] of [["MacIntel", { metaKey: true, ctrlKey: false }], ["Win32", { metaKey: false, ctrlKey: true }], ["Linux x86_64", { metaKey: false, ctrlKey: true }]] as const) {
+      platform.mockReturnValue(system);
+      link!.activate({ button: 2, ...held } as MouseEvent, link!.text);
+      link!.activate({ button: 0, ...held } as MouseEvent, link!.text);
+    }
+  } finally {
+    platform.mockRestore();
+  }
+  expect(actions.openLink.mock.calls).toEqual([["https://example.test/a", true, "w1:p1"], ["https://example.test/a", true, "w1:p1"], ["https://example.test/a", true, "w1:p1"]]);
+});
