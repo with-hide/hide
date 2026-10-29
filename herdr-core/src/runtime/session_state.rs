@@ -257,7 +257,7 @@ impl Runtime {
         let ask = row
             .revisit
             .filter(|revisit| revisit.read_ask)
-            .and(row.changed_at_unix_ms);
+            .and(sessions::ask_stamp(row));
         let next = sessions::RevisitMark {
             starred_at_unix_ms: None,
             dismissed_ask_since: ask.or(current.as_ref().and_then(|m| m.dismissed_ask_since)),

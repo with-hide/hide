@@ -1598,6 +1598,18 @@ fn a_record_s_open_ask_stands_in_the_to_do_list_until_it_is_answered() {
         ]
     );
 
+    // 치우기 on the asking row's read question: its record still holds the
+    // ask, yet the line goes until the agent asks again (needs-you-cleanup B15).
+    let asks = &mut runtime.snapshot.navigator.agents[1];
+    asks.unread = false;
+    asks.group = "seen".into();
+    asks.changed_at_unix_ms = Some(7);
+    asks.revisit = None;
+    runtime.refresh_agent_scopes();
+    assert_eq!(todo(&runtime), [("ask", "finished".to_owned(), true)]);
+    runtime.snapshot.navigator.agents[1].unread = true;
+    runtime.snapshot.navigator.agents[1].group = "needs_you".into();
+
     // Answered: the record resolves the ask and the line goes.
     record(&mut runtime, 0);
     assert_eq!(todo(&runtime), [("ask", "asks".to_owned(), false)]);
