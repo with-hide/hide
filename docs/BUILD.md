@@ -113,6 +113,7 @@ Startup to a healthy `/health` took 168 ms against 134 ms, the median of four tr
 A pull request's package lane builds its release binaries at opt-level 1 without LTO, in 256 codegen units (`.github/actions/quick-release-build`).
 That lane checks that the app packages, installs, starts and updates; none of that depends on how well the binaries are optimized, and the optimization was most of the lane's time.
 Each of the three binaries runs thin LTO over the whole program at its link, so after the last hide crate started compiling, a Windows release build still took about 12 more minutes (2026-10-30, pull request #1913).
+Measured on 2026-10-30 against the same lane's recent pull-request runs, with the dependencies rebuilt from source in both: `compile (windows)` went from 17-24 to 7.6 minutes (its cargo build from 14.7 to 6.2), `compile (macos)` from 15-21 to 8.8, and `package (linux)` from 16-22 to 12.1 (pull request #1916).
 
 The settings are cargo's own profile variables, set in the job's environment, so the binaries still land in `target/release`, the path `desktop/scripts/package.mjs` reads, and keep the release profile's name, strip and debug-assertion settings.
 The cost is that a pull request's package never holds what ships.
