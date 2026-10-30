@@ -563,20 +563,7 @@ impl Fixture {
         let cli = root.join("cli");
         fs::create_dir(&cli)?;
         for name in ["hide", "hided", "hide-agent-hooks"] {
-            let staged = cli.join(name);
-            fs::copy(source_cli.join(name), &staged)?;
-            // Frozen build inputs may be read-only. Only this private copy
-            // needs owner write access for strip and ad-hoc signing.
-            hide_platform::fs::private::restrict_to_owner(&staged)?;
-            let mut strip = local_env.command("/usr/bin/strip");
-            strip.arg(&staged);
-            successful(strip)?;
-            #[cfg(target_os = "macos")]
-            {
-                let mut sign = local_env.command("/usr/bin/codesign");
-                sign.args(["--force", "--sign", "-"]).arg(&staged);
-                successful(sign)?;
-            }
+            super::shipped::place(&source_cli.join(name), &cli.join(name), &local_env)?;
         }
         let manifest: Value =
             serde_json::from_slice(&read(&repository.join("contracts/herdr-bundle.json"))?)?;
