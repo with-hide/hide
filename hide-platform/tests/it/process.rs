@@ -36,6 +36,8 @@ const PIPE_OWNER: &str = "HIDE_PLATFORM_PROC_PIPE_OWNER";
 /// Where the `sleep` role writes its pid once it runs, for a test that cannot
 /// read the child's output before the call that started it returns.
 const READY_FILE: &str = "HIDE_PLATFORM_PROC_READY_FILE";
+/// How many holders a `holder_spawner` starts at most.
+const HOLDERS: usize = 64;
 
 /// The file the `output_aside` role's output is set aside from, and its limit.
 const OUTPUT_LOG: &str = "HIDE_PLATFORM_PROC_OUTPUT_LOG";
@@ -138,6 +140,55 @@ fn child_role() {
             let _held = options.open(path).unwrap();
             println!("READY {}", std::process::id());
             thread::sleep(Duration::from_secs(60));
+        }
+        // Holds the file `READY_FILE` names as `hold_file` does, and ends on
+        // its own at once, so the system closes the file in its own time.
+        "hold_file_briefly" => {
+            let path = std::env::var_os(READY_FILE).unwrap();
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create(true);
+            #[cfg(windows)]
+            std::os::windows::fs::OpenOptionsExt::share_mode(&mut options, 0);
+            let _held = options.open(path).unwrap();
+        }
+        // Starts holders of files in the folder `READY_FILE` names, one after
+        // another, half of them ending on their own; it says SPAWNING once
+        // the first holds its file and keeps starting the rest.
+        "holder_spawner" => {
+            let folder = PathBuf::from(std::env::var_os(READY_FILE).unwrap());
+            for n in 0..HOLDERS {
+                let role = if n % 2 == 0 {
+                    "hold_file"
+                } else {
+                    "hold_file_briefly"
+                };
+                let mut command = role_command(role);
+                command.env(READY_FILE, folder.join(format!("held-{n}")));
+                if n != 0 {
+                    command.stdout(Stdio::null());
+                }
+                #[allow(clippy::zombie_processes)]
+                let mut holder = command.spawn().unwrap();
+                if n == 0 {
+                    ready_number(holder.stdout.take().unwrap());
+                    println!("SPAWNING");
+                }
+            }
+            thread::sleep(Duration::from_secs(60));
+        }
+        // Exits as soon as its `holder_spawner` has a file held, so its owner
+        // ends the tree while the spawner is still starting holders.
+        "holders_leader" => {
+            #[allow(clippy::zombie_processes)]
+            let mut spawner = role_command("holder_spawner").spawn().unwrap();
+            let spawning = BufReader::new(spawner.stdout.take().unwrap())
+                .lines()
+                .map_while(Result::ok)
+                .any(|line| line.ends_with("SPAWNING"));
+            assert!(
+                spawning,
+                "the spawner ended before its first holder held a file"
+            );
         }
         "sleep" => {
             println!("READY {}", std::process::id());
@@ -908,6 +959,44 @@ fn a_process_that_has_ended_holds_no_file_it_had_open() {
         removed.unwrap_or_else(|error| {
             panic!("round {round}: the file of a process that ended is held: {error}")
         });
+    }
+}
+
+/// A capture returns only once every process its tree ran has let go of
+/// what it held. Windows counts a process out of its job before it closes
+/// the process's handles, so an end confirmed by that count, or by a list
+/// of the job read once, could return while a holder started during the
+/// end, or one that had just ended on its own, still held its file
+/// (with-hide/hide-private#327). Those orders happen inside the system's end
+/// of the job, where no test can hold them, so each round has the end race a
+/// stream of holders starting, and half of them ending on their own, and
+/// then removes every file a holder opened.
+#[test]
+fn a_capture_returns_after_every_process_its_tree_ran_has_let_go_of_its_files() {
+    let _serial = serial();
+    for round in 0..3 {
+        let folder = tempfile::tempdir().unwrap();
+        let mut command = role_command("holders_leader");
+        command.env(READY_FILE, folder.path());
+        let mut child = OwnedChild::spawn(&mut command).unwrap();
+        let output = child
+            .capture_until(Instant::now() + HANG_LIMIT, 64 * 1024)
+            .unwrap();
+        assert!(output.status.success(), "round {round}: {output:?}");
+        let mut opened = 0;
+        let mut held = Vec::new();
+        for entry in std::fs::read_dir(folder.path()).unwrap() {
+            let path = entry.unwrap().path();
+            opened += 1;
+            if let Err(error) = std::fs::remove_file(&path) {
+                held.push(format!("{}: {error}", path.display()));
+            }
+        }
+        assert!(opened > 0, "round {round}: the first holder held no file");
+        assert!(
+            held.is_empty(),
+            "round {round}: held after the capture returned, of {opened}: {held:?}"
+        );
     }
 }
 
