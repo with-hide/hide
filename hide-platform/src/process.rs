@@ -3172,7 +3172,13 @@ mod sys {
     /// process the group's id while a member keeps it. A member that left the
     /// group was signalled by `kill_tree_of` but is not waited for here,
     /// since only its pid would name it. A tied child's tree has ended once
-    /// its supervisor confirmed it.
+    /// its supervisor confirmed it. Asked only after the group was signalled
+    /// to end, so a member still running then may have been started while
+    /// the signal was sent, by a parent it had not yet stopped: macOS does
+    /// not hold such a start back, and the started process keeps running
+    /// (`a_capture_returns_after_every_process_its_tree_ran_has_let_go_of_its_files`).
+    /// The group is signalled again each time one is found; a member that is
+    /// only on its way out is signalled for nothing.
     pub(super) fn tree_ended(child: &Child, tie: &mut Tie) -> io::Result<bool> {
         if let Some(supervisor) = &tie.supervisor {
             return Ok(matches!(
@@ -3180,7 +3186,18 @@ mod sys {
                 Some(super::Ending::Confirmed { .. })
             ));
         }
-        Ok(!group_members(child.id())?.into_iter().any(is_alive))
+        let group = child.id();
+        if !group_members(group)?.into_iter().any(is_alive) {
+            return Ok(true);
+        }
+        match signal(-(group as libc::pid_t), libc::SIGKILL) {
+            // Only zombies were left by now (`EPERM` on macOS), or nothing.
+            Err(error)
+                if error.raw_os_error() == Some(libc::EPERM)
+                    || error.kind() == io::ErrorKind::NotFound => {}
+            result => result?,
+        }
+        Ok(false)
     }
 
     /// The processes whose group is `group`, zombies included.
@@ -4986,12 +5003,19 @@ mod sys {
     /// Whether everything in the child's job has ended: the job counts
     /// nothing running and every process it announced is signalled
     /// (`Members`). A terminated job ends its processes after
-    /// `TerminateJobObject` returns, so this is asked until it holds. A
-    /// child whose assignment failed is alone in its tree, and its exit was
-    /// seen before this is asked.
+    /// `TerminateJobObject` returns, so this is asked until it holds; it is
+    /// asked only after the job was ended, and while the job still counts a
+    /// process running it is ended again, so a process started while the
+    /// first end was sent is ended too, as on Unix. A child whose assignment
+    /// failed is alone in its tree, and its exit was seen before this is
+    /// asked.
     pub(super) fn tree_ended(_: &Child, tie: &mut Tie) -> io::Result<bool> {
         if !tie.1 {
             return Ok(true);
+        }
+        // SAFETY: the job handle is open for as long as `tie` lives.
+        if active_processes(tie)? > 0 && unsafe { TerminateJobObject((tie.0).0, 1) } == 0 {
+            return Err(io::Error::last_os_error());
         }
         Ok(left_running(tie)? == 0)
     }
