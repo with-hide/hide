@@ -199,6 +199,11 @@ impl ChangesPump {
             .name("changes-pump".into())
             .spawn(move || {
                 let mut reader = ChangesReader::new();
+                // The Project tool's `남은 것`, read by its worktree's own
+                // path beside the checkout in front (PRD
+                // project-panel-results B9).
+                let mut remains = ChangesReader::new();
+                let mut remains_resting = true;
                 let mut git = crate::checkout_git::git_reader();
                 let mut ci = crate::checkout_git::ci_reader();
                 // The closed view's empty projection has landed: until
@@ -243,21 +248,33 @@ impl ChangesPump {
                     if header_changed {
                         notifier.notify();
                     }
-                    let Ok(request) = runtime.lock().map(|mut runtime| runtime.changes_request())
+                    let Ok((request, remains_request)) = runtime
+                        .lock()
+                        .map(|mut runtime| (runtime.changes_request(), runtime.remains_request()))
                     else {
                         break;
                     };
-                    if request.is_none() && resting {
+                    let answer = (request.is_some() || !resting)
+                        .then(|| reader.read_if_due(request))
+                        .flatten();
+                    let remains_answer = (remains_request.is_some() || !remains_resting)
+                        .then(|| remains.read_if_due(remains_request))
+                        .flatten();
+                    if answer.is_none() && remains_answer.is_none() {
                         continue;
                     }
-                    let Some(answer) = reader.read_if_due(request) else {
-                        continue;
-                    };
-                    resting = answer.key.is_none();
-                    let Ok(changed) = runtime
-                        .lock()
-                        .map(|mut runtime| runtime.ingest_changes(answer))
-                    else {
+                    let Ok(changed) = runtime.lock().map(|mut runtime| {
+                        let mut changed = false;
+                        if let Some(answer) = answer {
+                            resting = answer.key.is_none();
+                            changed |= runtime.ingest_changes(answer);
+                        }
+                        if let Some(answer) = remains_answer {
+                            remains_resting = answer.key.is_none();
+                            changed |= runtime.ingest_remains(answer);
+                        }
+                        changed
+                    }) else {
                         break;
                     };
                     drop(runtime);

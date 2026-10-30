@@ -43,7 +43,7 @@ const cost = (overrides: Partial<ProjectCost> = {}): ProjectCost => ({
   ...overrides,
 });
 
-function snapshot(projectStatus: ProjectStatus | undefined, detail: { kind: "worktrees" | "cost"; workspace_id: string } | null = null): SnapshotRest {
+function snapshot(projectStatus: ProjectStatus | undefined, detail: { kind: "worktrees" | "cost" | "remains"; workspace_id: string; checkout_id?: string } | null = null): SnapshotRest {
   return {
     navigator: {
       focused_device_id: "local", focused_checkout_id: "c", focused_workspace_id: "p",
@@ -180,6 +180,16 @@ describe("the Project tool", () => {
     await render(receipt("failed"));
     await press('[data-stray-hand-off="w"]');
     expect(sent("stray_hand_off")).toHaveLength(2);
+  });
+
+  it("lists another worktree's 남은 것 from its own read, never from the checkout in front (B9)", async () => {
+    const shown = snapshot(status({ strays: [stray()], strays_total: 1 }), { kind: "remains", workspace_id: "p", checkout_id: "w" });
+    const file = (path: string) => ({ path: `/w/${path}`, relative_path: path, status: "modified" });
+    await render({ ...shown, remains: { root_path: "/p", entries: [file("front.ts")], committed: [] } } as unknown as SnapshotRest);
+    expect(container.querySelector('[data-remains-view="pending"]')).not.toBeNull();
+    await render({ ...shown, remains: { root_path: "/w", entries: [file("mailer.ts")], committed: [] } } as unknown as SnapshotRest);
+    expect(container.querySelector('[data-remains-file="mailer.ts"]')).not.toBeNull();
+    expect(container.querySelector('[data-remains-file="front.ts"]')).toBeNull();
   });
 
   it("asks the core to keep 놔두기, and its 되돌리기 to take it back (B15)", async () => {

@@ -2832,6 +2832,8 @@ export type SnapshotRest = {
   /** Each pane's own plan (PRD hide-plan). */
   plans?: PlansSnapshot;
   git_worktrees_loading?: boolean;
+  /** The Project tool's `남은 것`: the shown worktree's changes, read by its own path (PRD project-panel-results B9). */
+  remains?: ChangesSnapshot | null;
   navigator?: {
     agent_scope?: AgentScope;
     focused_workspace_id?: string | null;

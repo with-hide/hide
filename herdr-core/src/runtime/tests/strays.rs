@@ -295,3 +295,68 @@ fn an_agent_that_stops_working_has_its_project_s_worktrees_read_again() {
     runtime.refresh_agent_scopes();
     assert_eq!(generation(&runtime), before + 1, "once per stop");
 }
+
+/// B9: `남은 것` reads the worktree it shows by that worktree's own path,
+/// beside the checkout in front, whatever else is on screen; an answer for a
+/// worktree the operator has left is dropped, and closing it empties it.
+#[test]
+fn the_remains_view_reads_its_worktree_apart_from_the_checkout_in_front() {
+    let mut runtime = runtime();
+    project(&mut runtime, vec![worktree("emails", 4, "aaa", None)]);
+    runtime.snapshot.navigator.focused_workspace_id = Some("project".into());
+    runtime.snapshot.navigator.focused_checkout_id = Some("main".into());
+    runtime.ui_attached = true;
+    runtime.snapshot.ui_state.right_panel_visible = true;
+    runtime.snapshot.ui_state.right_panel_section = RightPanelSection::Changes;
+    assert!(runtime.remains_request().is_none(), "nothing shows it yet");
+    assert!(event(
+        &mut runtime,
+        "detail_open",
+        serde_json::json!({"item": {"kind": "remains", "workspace_id": "project", "checkout_id": "emails"}})
+    ));
+    let front = runtime
+        .changes_request()
+        .expect("the Changes section reads the front");
+    let remains = runtime
+        .remains_request()
+        .expect("the remains view reads its own");
+    assert_eq!(front.root_path, "/fixture");
+    assert_eq!(remains.root_path, "/fixture/emails");
+    assert_eq!(
+        (remains.selected_path.as_deref(), remains.diffs.len()),
+        (None, 0)
+    );
+
+    let answer =
+        |key: Option<crate::changes::ChangesKey>, root: &str| crate::changes::ChangesAnswer {
+            key,
+            detail: None,
+            selection: (None, false),
+            changes: crate::model::ChangesSnapshot {
+                root_path: Some(root.into()),
+                ..Default::default()
+            },
+        };
+    assert!(!runtime.ingest_remains(answer(Some(front.key()), "/fixture")));
+    assert!(
+        runtime.snapshot.remains.is_none(),
+        "another folder's answer is dropped"
+    );
+    assert!(runtime.ingest_remains(answer(Some(remains.key()), "/fixture/emails")));
+    assert_eq!(
+        runtime
+            .snapshot
+            .remains
+            .as_ref()
+            .and_then(|r| r.root_path.as_deref()),
+        Some("/fixture/emails")
+    );
+    assert!(event(
+        &mut runtime,
+        "detail_show",
+        serde_json::json!({"shown": false})
+    ));
+    assert!(runtime.remains_request().is_none());
+    assert!(runtime.ingest_remains(answer(None, "")));
+    assert!(runtime.snapshot.remains.is_none());
+}

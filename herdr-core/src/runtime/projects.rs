@@ -281,6 +281,98 @@ impl Runtime {
         })
     }
 
+    /// The worktree the viewing column's `남은 것` shows (PRD
+    /// project-panel-results B9): its workspace, checkout and the folder
+    /// read, while a renderer is attached and the item is on top.
+    fn remains_target(&self) -> Option<(String, String, String)> {
+        if !self.ui_attached {
+            return None;
+        }
+        let detail = &self.snapshot.ui_state.detail;
+        let Some(crate::model::DetailItem::Remains {
+            workspace_id,
+            checkout_id,
+        }) = detail.shown.then(|| detail.top()).flatten()
+        else {
+            return None;
+        };
+        let root_path = self.changes_root_path(workspace_id, checkout_id)?;
+        Some((workspace_id.clone(), checkout_id.clone(), root_path))
+    }
+
+    /// What `남은 것` needs read: the worktree's own changes and committed
+    /// group by its path, apart from the checkout in front, with no row and
+    /// no diff. `None` while nothing shows it.
+    pub fn remains_request(&mut self) -> Option<crate::changes::ChangesRequest> {
+        let (workspace_id, checkout_id, root_path) = self.remains_target()?;
+        let root = self.document_root(&workspace_id, &checkout_id).ok()?;
+        let channel = self
+            .changes_channel(&root.device_id)
+            .map(crate::changes::ChannelRef);
+        let base_branch = self
+            .catalog_checkout(&workspace_id, &checkout_id)
+            .and_then(|(_, checkout)| checkout.base_branch.clone());
+        Some(crate::changes::ChangesRequest {
+            root,
+            channel,
+            root_path,
+            selected_path: None,
+            selected_committed: false,
+            base_branch,
+            diffs: Vec::new(),
+        })
+    }
+
+    /// Takes a `남은 것` read when it still describes the worktree shown; an
+    /// answer for one the operator has left is dropped, and nothing shown
+    /// empties it. A failed read of the worktree already listed keeps that
+    /// list, marked stale. True when the snapshot changed.
+    pub fn ingest_remains(&mut self, answer: crate::changes::ChangesAnswer) -> bool {
+        let key = self
+            .remains_target()
+            .and_then(|(workspace_id, checkout_id, root_path)| {
+                let (workspace, _) = self.catalog_checkout(&workspace_id, &checkout_id)?;
+                Some(crate::changes::ChangesKey {
+                    device_id: workspace.device_id.clone(),
+                    root_path,
+                })
+            });
+        if answer.key != key {
+            return false;
+        }
+        let next = answer.key.map(|_| {
+            let mut changes = answer.changes;
+            if let Some(reason) = changes.unavailable_reason.clone()
+                && let Some(held) = self.snapshot.remains.as_ref()
+                && held.unavailable_reason.is_none()
+                && held.root_path == changes.root_path
+            {
+                let mut kept = held.clone();
+                kept.stale_reason = Some(reason);
+                changes = kept;
+            }
+            changes
+        });
+        if self.snapshot.remains == next {
+            return false;
+        }
+        if let Some(reason) = next.as_ref().and_then(|changes| {
+            changes
+                .unavailable_reason
+                .clone()
+                .or_else(|| changes.stale_reason.clone())
+        }) {
+            crate::diagnostic!(serde_json::json!({
+                "component": "changes",
+                "kind": "remains.unavailable",
+                "error": reason,
+                "reason": answer.detail,
+            }));
+        }
+        self.snapshot.remains = next;
+        true
+    }
+
     /// The row whose diff the next read takes, and its group: the diff in
     /// front, otherwise the row History has selected.
     fn changes_selection(&self) -> (Option<String>, bool) {
@@ -347,18 +439,7 @@ impl Runtime {
             && self.visible_view_diffs().is_empty()
             && !self.new_tab_visible()
         {
-            // The 보기 slot showing a worktree's 흘린 것 reads that worktree,
-            // in front or not (PRD project-panel-results B9).
-            let detail = &self.snapshot.ui_state.detail;
-            let Some(crate::model::DetailItem::Remains {
-                workspace_id,
-                checkout_id,
-            }) = detail.shown.then(|| detail.top()).flatten()
-            else {
-                return None;
-            };
-            let root_path = self.changes_root_path(workspace_id, checkout_id)?;
-            return Some((workspace_id.clone(), checkout_id.clone(), root_path));
+            return None;
         }
         let (workspace_id, checkout_id) = self.front_checkout_owned()?;
         let root_path = self.focused_changes_root_path()?;

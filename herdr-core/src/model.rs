@@ -108,6 +108,12 @@ pub struct Snapshot {
     pub git_worktrees: Option<ProjectWorktreesSnapshot>,
     pub git_worktrees_loading: bool,
     pub git_worktrees_remote: bool,
+    /// The Project tool's `남은 것` (PRD project-panel-results B9): the
+    /// changed files and the committed group of the worktree the viewing
+    /// column shows, read by that worktree's path on a read of its own, so
+    /// it never waits on the checkout in front. Absent while nothing shows
+    /// it; it carries no diff text.
+    pub remains: Option<ChangesSnapshot>,
     pub worktree_removal: Option<WorktreeRemovalSnapshot>,
     pub task_operation: Option<TaskOperationSnapshot>,
     pub repository_clone: Option<RepositoryCloneSnapshot>,
@@ -7414,6 +7420,7 @@ impl Snapshot {
             git_worktrees: None,
             git_worktrees_loading: true,
             git_worktrees_remote: false,
+            remains: None,
             worktree_removal: None,
             task_operation: None,
             repository_clone: None,

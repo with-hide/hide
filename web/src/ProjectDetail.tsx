@@ -20,7 +20,7 @@ import { ToggleGroup, ToggleGroupItem } from "./components/ui/toggle-group";
 import type { TaskCost, TaskMission } from "./generated/hided-ws";
 import { costPrefix, dayHeights, durationWords, filterCounts, projectCost, sessionName, TASK_FILTERS, taskIn, taskName, tokenWords, usd, type TaskFilter } from "./projectStatus";
 import { TaskResultMark } from "./ProjectTool";
-import { catalogWorkspaces, changesFor, frontCheckout, localDeviceId, type ChangedFileSnapshot, type Checkout, type Workspace } from "./snapshot";
+import { catalogWorkspaces, frontCheckout, localDeviceId, type ChangedFileSnapshot, type Checkout, type Workspace } from "./snapshot";
 import type { WorkspaceView } from "./workspace";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
@@ -356,7 +356,13 @@ export function RemainsView({ workspaceId, checkoutId, actions }: { workspaceId:
   const { t } = useInterfaceTranslation();
   const project = useProject(workspaceId);
   const checkout = project?.checkouts.find((row) => row.id === checkoutId) ?? null;
-  const changes = useShellStore((s) => changesFor(s.changes, checkout?.path ?? null));
+  // The core reads the worktree shown by its own path, apart from the
+  // checkout in front: the checkout's folder, or a registered folder below it.
+  const changes = useShellStore((s) => {
+    const remains = s.rest?.remains ?? null;
+    const root = remains?.root_path;
+    return checkout && root && (root === checkout.path || root.startsWith(`${checkout.path}/`)) ? remains : null;
+  });
   const front = useShellStore((s) => frontCheckout(s.rest)?.id === checkoutId);
   const git = useShellStore((s) => (front ? (s.rest?.workspace_view as WorkspaceView | undefined)?.git ?? null : null));
   if (!project || !checkout) return <Missing />;
