@@ -51,17 +51,25 @@ async function inkOf(page: Page, screen: Locator, grid: { cols: number; rows: nu
     };
     // The focused pane's ring overlaps the screen's left edge.
     const ring = Math.ceil(2 * window.devicePixelRatio);
+    // Only the pixels wholly inside a cell are its own: where a cell is a
+    // fraction of a pixel wide (DejaVu Sans Mono's 16.86 on a 2x Linux
+    // runner), the pixel across its edge holds the next cell's antialiasing too.
+    const inside = (from: number, to: number) => [Math.ceil(from), Math.floor(to)] as const;
     const share = (x0: number, x1: number, y0: number, y1: number, across: boolean) => {
       const hit = new Set<number>();
-      for (let x = Math.max(ring, Math.floor(x0)); x < Math.floor(x1); x += 1)
-        for (let y = Math.floor(y0); y < Math.floor(y1); y += 1) if (inked(x, y)) hit.add(across ? x : y);
-      return hit.size / Math.floor(across ? x1 - x0 : y1 - y0);
+      const [left, right] = inside(Math.max(ring, x0), x1);
+      const [top, bottom] = inside(y0, y1);
+      for (let x = left; x < right; x += 1)
+        for (let y = top; y < bottom; y += 1) if (inked(x, y)) hit.add(across ? x : y);
+      return hit.size / (across ? right - left : bottom - top);
     };
     // Per column of `row`, the box its ink fills.
     const box = (column: number) => {
       let left = Infinity, right = -Infinity, top = Infinity, bottom = -Infinity;
-      for (let y = Math.floor(row * cellHeight); y < Math.floor((row + 1) * cellHeight); y += 1)
-        for (let x = Math.max(ring, Math.floor(column * cellWidth)); x < Math.floor((column + 1) * cellWidth); x += 1)
+      const [first, last] = inside(row * cellHeight, (row + 1) * cellHeight);
+      const [start, end] = inside(Math.max(ring, column * cellWidth), (column + 1) * cellWidth);
+      for (let y = first; y < last; y += 1)
+        for (let x = start; x < end; x += 1)
           if (inked(x, y)) { left = Math.min(left, x); right = Math.max(right, x); top = Math.min(top, y); bottom = Math.max(bottom, y); }
       return right < left ? { width: 0, height: 0 } : { width: right - left + 1, height: bottom - top + 1 };
     };
