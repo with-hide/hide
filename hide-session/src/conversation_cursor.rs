@@ -24,6 +24,11 @@ pub struct ConversationCheckpoint {
     classifier: Option<Box<LargeRecord>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     native: Option<Box<crate::cursor::Checkpoint>>,
+    /// The ids of calls that make a pull request whose output the next
+    /// poll may hold (`links::LinkAccumulator`): an id the format pairs a
+    /// call with its output by, never its text.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    creating: Vec<String>,
 }
 
 impl ConversationCheckpoint {
@@ -157,6 +162,7 @@ pub struct ConversationCursor {
     read_bytes: u64,
     native: Option<Box<crate::cursor::Checkpoint>>,
     human_anchors: Vec<(u64, crate::cursor::Checkpoint)>,
+    creating: Vec<String>,
 }
 
 impl ConversationCursor {
@@ -172,6 +178,7 @@ impl ConversationCursor {
             has_more: self.has_more,
             classifier: self.classifier.clone(),
             native: self.native.clone(),
+            creating: self.creating.clone(),
         }
     }
 
@@ -200,6 +207,7 @@ impl ConversationCursor {
             has_more: false,
             classifier: None,
             native: None,
+            creating: Vec::new(),
         })
     }
 
@@ -223,6 +231,7 @@ impl ConversationCursor {
             read_bytes: 0,
             native: checkpoint.native,
             human_anchors: Vec::new(),
+            creating: checkpoint.creating,
         }
     }
 
@@ -233,6 +242,7 @@ impl ConversationCursor {
         self.classifier = None;
         self.native = None;
         self.human_anchors.clear();
+        self.creating.clear();
     }
 
     /// More bytes from the last observed file size remain to be read.
@@ -335,6 +345,7 @@ impl ConversationCursor {
         if rescan_reason.is_some() {
             self.discarded_bytes = 0;
             self.classifier = None;
+            self.creating.clear();
         }
         let mut offset = start_offset;
         let mut pending = self.cursor.pending.clone();
@@ -344,7 +355,7 @@ impl ConversationCursor {
             rescan_reason,
             ..ParsedSession::default()
         };
-        let mut found = crate::links::LinkAccumulator::default();
+        let mut found = crate::links::LinkAccumulator::resuming(self.creating.clone());
         let mut consumed = 0;
         let window_start = start_offset.saturating_sub(self.cursor.pending.len() as u64);
         for fragment in records(&appended) {
@@ -459,6 +470,7 @@ impl ConversationCursor {
             parsed.tool_steps.extend(line.tool_steps);
             pending.clear();
         }
+        let creating = found.creating().to_vec();
         parsed.links = found.finish();
         parsed.coalesce();
         parsed.plan_hold = plan_hold;
@@ -474,6 +486,7 @@ impl ConversationCursor {
         self.discarded_bytes = discarded_bytes;
         self.classifier = classifier;
         self.has_more = has_more;
+        self.creating = creating;
         Ok(parsed)
     }
 }

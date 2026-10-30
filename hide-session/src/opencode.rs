@@ -1326,7 +1326,8 @@ impl Read {
             .pointer("/state/time/start")
             .and_then(Value::as_u64)
             .unwrap_or(message_at);
-        self.note_call(part.pointer("/state/input"), called);
+        let input = part.pointer("/state/input");
+        self.note_call(input, called);
         let Some(output) = part.pointer("/state/output").and_then(Value::as_str) else {
             return;
         };
@@ -1334,7 +1335,8 @@ impl Read {
             .pointer("/state/time/end")
             .and_then(Value::as_u64)
             .unwrap_or(message_at);
-        self.note_sightings(output, at);
+        let made = made_by(part.get("tool").and_then(Value::as_str), input, output);
+        self.note_sightings(output, at, &made);
     }
 
     /// The pull requests a tool call's input named, as of `at`.
@@ -1354,17 +1356,22 @@ impl Read {
         self.named.push((at, named));
     }
 
-    /// The pull requests and issues a tool's output printed, as of `at`.
-    fn note_sightings(&mut self, output: &str, at: u64) {
+    /// The pull requests and issues a tool's output printed, as of `at`;
+    /// `made` are the ones its call made.
+    fn note_sightings(&mut self, output: &str, at: u64, made: &[(String, u64)]) {
         for (repository, number) in pull_request_addresses(output) {
             if self.sightings.len() >= MAX_SIGHTINGS_PER_OUTPUT * 4 {
                 self.skip("pr_sighting_capacity");
                 break;
             }
+            let made = made.iter().any(|(made, made_number)| {
+                *made_number == number && made.eq_ignore_ascii_case(&repository)
+            });
             self.sightings.push(PrSighting {
                 repository,
                 number,
                 at_unix_ms: at,
+                made,
             });
         }
         for (repository, number) in crate::issue_addresses(output) {
@@ -1376,8 +1383,20 @@ impl Read {
                 repository,
                 number,
                 at_unix_ms: at,
+                made: false,
             });
         }
+    }
+}
+
+/// The pull requests a tool part made: one part holds the call and its
+/// output together, so a call that makes a pull request
+/// (`named_prs::creates_pull_request`) gives back the addresses it made.
+fn made_by(name: Option<&str>, input: Option<&Value>, output: &str) -> Vec<(String, u64)> {
+    if input.is_some_and(|input| crate::named_prs::creates_pull_request(name, input)) {
+        crate::named_prs::created_addresses(&[output])
+    } else {
+        Vec::new()
     }
 }
 

@@ -4,8 +4,9 @@
 //! Only tool output counts: an address in the agent's own reply or in the
 //! operator's request is a mention, never a creation. The scan runs on the
 //! records a read already decodes and adds no file read, `gh` call or
-//! GitHub request (B53); whether a sighting means the session made that pull
-//! request is decided later against GitHub's `createdAt`.
+//! GitHub request (B53). A sighting in the output of a call that makes a pull
+//! request is that making (`made`); whether any other one means the session
+//! made the pull request is decided later against GitHub's `createdAt`.
 
 use serde::{Deserialize, Serialize};
 
@@ -17,6 +18,10 @@ pub struct PrSighting {
     pub repository: String,
     pub number: u64,
     pub at_unix_ms: u64,
+    /// The output answered a call that makes a pull request, and gave this
+    /// address back as the one it made.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub made: bool,
 }
 
 /// The most addresses one tool output contributes; a listing of every pull

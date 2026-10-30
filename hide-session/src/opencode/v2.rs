@@ -464,7 +464,8 @@ impl super::Read {
             .pointer("/time/created")
             .and_then(Value::as_u64)
             .unwrap_or(message_at);
-        self.note_call(item.pointer("/state/input"), called);
+        let input = item.pointer("/state/input");
+        self.note_call(input, called);
         let output = item
             .pointer("/state/content")
             .and_then(Value::as_array)
@@ -481,6 +482,7 @@ impl super::Read {
             .pointer("/time/completed")
             .and_then(Value::as_u64)
             .unwrap_or(message_at);
-        self.note_sightings(&output, at);
+        let made = super::made_by(item.get("name").and_then(Value::as_str), input, &output);
+        self.note_sightings(&output, at, &made);
     }
 }

@@ -14,6 +14,10 @@
 //! runs: heredoc bodies, quotes and comments are text, so an address in a
 //! commit message or a letter's body names nothing. A command hidden a layer
 //! deeper (`bash -c`, a script, an alias) is not looked for.
+//!
+//! A call that makes a pull request ([`creates_pull_request`]) is read the
+//! same way, and the address its output gives back ([`created_addresses`])
+//! is the one it made, whatever the clocks say.
 
 use crate::{pull_request_addresses, sightings::is_name};
 use serde_json::Value;
@@ -62,33 +66,7 @@ pub(crate) fn tool_call(input: &Value, folder: Option<&str>) -> Vec<NamedPr> {
         .filter(|folder| !folder.trim().is_empty())
         .or(folder);
     let place = folder.map_or(Place::Session, |folder| Place::At(PathBuf::from(folder)));
-    for key in COMMAND_KEYS {
-        match object.get(key) {
-            Some(Value::String(text)) => shell(text, place.clone(), 0, &mut found),
-            Some(Value::Array(argv)) => {
-                let words: Option<Vec<String>> = argv
-                    .iter()
-                    .map(|word| word.as_str().map(str::to_owned))
-                    .collect();
-                match words.as_deref() {
-                    // `["bash", "-lc", "<script>"]`: the script is the line.
-                    Some([shell_program, flag, script])
-                        if is_shell(shell_program)
-                            && flag.starts_with('-')
-                            && flag.contains('c') =>
-                    {
-                        shell(script, place.clone(), 0, &mut found);
-                    }
-                    Some(words) => {
-                        let mut place = place.clone();
-                        command(words, &mut place, &mut found);
-                    }
-                    None => {}
-                }
-            }
-            _ => {}
-        }
-    }
+    commands(object, &place, &mut found);
     // A tool whose argument is the address itself: a fetch, a browser's
     // navigation.
     for (key, value) in object {
@@ -119,9 +97,88 @@ pub(crate) fn tool_call(input: &Value, folder: Option<&str>) -> Vec<NamedPr> {
     found.named
 }
 
+/// Every shell command the call carries, under each of [`COMMAND_KEYS`].
+fn commands(object: &serde_json::Map<String, Value>, place: &Place, found: &mut Found) {
+    for key in COMMAND_KEYS {
+        match object.get(key) {
+            Some(Value::String(text)) => shell(text, place.clone(), 0, found),
+            Some(Value::Array(argv)) => {
+                let words: Option<Vec<String>> = argv
+                    .iter()
+                    .map(|word| word.as_str().map(str::to_owned))
+                    .collect();
+                match words.as_deref() {
+                    // `["bash", "-lc", "<script>"]`: the script is the line.
+                    Some([shell_program, flag, script])
+                        if is_shell(shell_program)
+                            && flag.starts_with('-')
+                            && flag.contains('c') =>
+                    {
+                        shell(script, place.clone(), 0, found);
+                    }
+                    Some(words) => {
+                        let mut place = place.clone();
+                        command(words, &mut place, found);
+                    }
+                    None => {}
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Whether a tool call makes a pull request: a shell command `gh pr
+/// create`, a `gh api` POST to `repos/<owner>/<name>/pulls`, or a GitHub
+/// tool named for it (`create_pull_request`, as the GitHub MCP server names
+/// it, under any prefix). `name` is the tool's own name when the record
+/// keeps one.
+pub(crate) fn creates_pull_request(name: Option<&str>, input: &Value) -> bool {
+    if name.is_some_and(|name| name.to_ascii_lowercase().ends_with("create_pull_request")) {
+        return true;
+    }
+    let Some(object) = input.as_object() else {
+        return false;
+    };
+    let mut found = Found::default();
+    commands(object, &Place::Session, &mut found);
+    found.creates
+}
+
+/// The pull requests a creating call's output gives back: an address alone
+/// on its line, as `gh pr create` prints the one it made, or the `html_url`
+/// of GitHub's answer to the create request. An address inside other text,
+/// a pull request body the answer echoes included, is not the one made.
+pub(crate) fn created_addresses(outputs: &[&str]) -> Vec<(String, u64)> {
+    let mut made: Vec<(String, u64)> = Vec::new();
+    let mut keep = |address: (String, u64)| {
+        if made.len() < crate::MAX_SIGHTINGS_PER_OUTPUT && !made.contains(&address) {
+            made.push(address);
+        }
+    };
+    for output in outputs {
+        for line in output.lines() {
+            if let Some(address) = whole_address(line) {
+                keep(address);
+            }
+        }
+        if let Ok(answer) = serde_json::from_str::<Value>(output.trim())
+            && let Some(address) = answer
+                .get("html_url")
+                .and_then(Value::as_str)
+                .and_then(whole_address)
+        {
+            keep(address);
+        }
+    }
+    made
+}
+
 #[derive(Default)]
 struct Found {
     named: Vec<NamedPr>,
+    /// A command among them makes a pull request.
+    creates: bool,
 }
 
 impl Found {
@@ -215,6 +272,10 @@ fn gh(args: &[String], variable: Option<String>, place: &Place, found: &mut Foun
             let Some((verb, rest)) = rest.split_first() else {
                 return;
             };
+            if matches!(verb.as_str(), "create" | "new") {
+                found.creates = true;
+                return;
+            }
             if !PR_VERBS.contains(&verb.as_str()) {
                 return;
             }
@@ -228,10 +289,14 @@ fn gh(args: &[String], variable: Option<String>, place: &Place, found: &mut Foun
             flag_repository(rest),
         ),
         "api" => {
-            if let Some(endpoint) = first_positional(rest, API_VALUE_FLAGS)
+            let endpoint = first_positional(rest, API_VALUE_FLAGS);
+            if let Some(endpoint) = endpoint
                 && let Some((repository, number)) = api_path(endpoint)
             {
                 name(repository, number, place, found);
+            }
+            if endpoint.is_some_and(is_pulls_path) && api_posts(rest) {
+                found.creates = true;
             }
             return;
         }
@@ -414,6 +479,40 @@ fn api_path(endpoint: &str) -> Option<(Option<String>, u64)> {
         return Some((None, number));
     }
     (is_name(owner) && is_name(name)).then(|| (Some(format!("{owner}/{name}")), number))
+}
+
+/// `repos/<owner>/<name>/pulls`, the path a pull request is made at.
+fn is_pulls_path(endpoint: &str) -> bool {
+    let path = endpoint
+        .strip_prefix("https://api.github.com/")
+        .unwrap_or(endpoint)
+        .trim_start_matches('/');
+    let path = path.split(['?', '#']).next().unwrap_or_default();
+    let parts: Vec<&str> = path.trim_end_matches('/').split('/').collect();
+    matches!(parts.as_slice(), ["repos", _, _, "pulls"])
+}
+
+/// Whether a `gh api` call sends a POST: `-X POST` or `--method POST`, or
+/// with no method named, a field or an input, which `gh api` sends as one.
+fn api_posts(args: &[String]) -> bool {
+    let mut method = None;
+    let mut fields = false;
+    let mut words = args.iter();
+    while let Some(word) = words.next() {
+        match word.as_str() {
+            "-X" | "--method" => method = words.next().map(|value| value.to_ascii_uppercase()),
+            "-f" | "--raw-field" | "-F" | "--field" | "--input" => fields = true,
+            other => {
+                if let Some(value) = other
+                    .strip_prefix("--method=")
+                    .or_else(|| other.strip_prefix("-X").filter(|value| !value.is_empty()))
+                {
+                    method = Some(value.to_ascii_uppercase());
+                }
+            }
+        }
+    }
+    method.map_or(fields, |method| method == "POST")
 }
 
 /// A word that is a pull request's address and nothing else (a trailing
@@ -653,6 +752,70 @@ mod tests {
         assert_eq!(
             shell_call("cd ~/x && gh pr view 5 --repo acme/app"),
             vec![at("acme/app", 5)]
+        );
+    }
+
+    /// The review of #1859: the four pull requests mission-13's record lost
+    /// were each made by a Bash call that wrote the body in a heredoc and
+    /// ran `gh pr create`; a listing or a view makes nothing.
+    #[test]
+    fn a_creating_call_is_told_from_one_that_lists_or_views() {
+        for command in [
+            "cat > /tmp/body.md <<'EOF'\nStacked on https://github.com/acme/app/pull/12\nEOF\ngh pr create --repo acme/app --base main --head fix/x --title 'fix: x' --body-file /tmp/body.md",
+            "cd /work/app && GH_REPO=acme/app gh pr create --fill",
+            "gh pr new -t x -b y",
+            "gh api -X POST repos/acme/app/pulls -f title=x -f head=a -f base=main",
+            "gh api repos/{owner}/{repo}/pulls -f title=x",
+            "gh api --method=post /repos/acme/app/pulls --input body.json",
+        ] {
+            assert!(
+                creates_pull_request(None, &json!({ "command": command })),
+                "{command}"
+            );
+        }
+        assert!(creates_pull_request(
+            None,
+            &json!({"command": ["bash", "-lc", "gh pr create --fill"]})
+        ));
+        assert!(creates_pull_request(
+            Some("mcp__github__create_pull_request"),
+            &json!({"owner": "acme", "repo": "app", "title": "x"})
+        ));
+        for command in [
+            "gh pr list --state open",
+            "gh pr view 12",
+            "gh api repos/acme/app/pulls",
+            "gh api -X GET repos/acme/app/pulls -f state=open",
+            "gh api -X POST repos/acme/app/pulls/12/comments -f body=x",
+            "echo gh pr create",
+            "cat <<EOF\ngh pr create\nEOF",
+            "# gh pr create",
+        ] {
+            assert!(
+                !creates_pull_request(None, &json!({ "command": command })),
+                "{command}"
+            );
+        }
+        assert!(!creates_pull_request(
+            Some("mcp__github__get_pull_request"),
+            &json!({"owner": "acme", "repo": "app", "pull_number": 3})
+        ));
+    }
+
+    #[test]
+    fn a_creating_calls_output_gives_back_the_address_it_made_alone() {
+        let printed = "Warning: 1 uncommitted change\n\nCreating pull request for fix/x into main in acme/app\n\nhttps://github.com/acme/app/pull/1812\n";
+        assert_eq!(
+            created_addresses(&[printed]),
+            [("acme/app".to_owned(), 1812)]
+        );
+        let answer = r#"{"html_url":"https://github.com/acme/app/pull/77","body":"Stacked on https://github.com/acme/app/pull/12","url":"https://api.github.com/repos/acme/app/pulls/77"}"#;
+        assert_eq!(created_addresses(&[answer]), [("acme/app".to_owned(), 77)]);
+        assert_eq!(
+            created_addresses(&[
+                "pull request create failed: see https://github.com/acme/app/pull/5 first"
+            ]),
+            []
         );
     }
 
