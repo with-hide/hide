@@ -85,8 +85,7 @@
             "command": "if [ -x '/kit path/it'\\''s/hide-agent-hooks' ]; then exec '/kit path/it'\\''s/hide-agent-hooks' hook --runtime claude-code --event PostToolUse --source hide-subagents@11; fi",
             "timeout": 8
           }
-        ],
-        "matcher": "Bash|PowerShell"
+        ]
       }
     ],
     "PostToolUseFailure": [
@@ -97,8 +96,7 @@
             "command": "if [ -x '/kit path/it'\\''s/hide-agent-hooks' ]; then exec '/kit path/it'\\''s/hide-agent-hooks' hook --runtime claude-code --event PostToolUseFailure --source hide-subagents@11; fi",
             "timeout": 8
           }
-        ],
-        "matcher": "Bash|PowerShell"
+        ]
       }
     ],
     "PermissionRequest": [

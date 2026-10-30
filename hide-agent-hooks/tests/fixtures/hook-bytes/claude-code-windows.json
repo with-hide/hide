@@ -127,8 +127,7 @@
             ],
             "timeout": 8
           }
-        ],
-        "matcher": "Bash|PowerShell"
+        ]
       }
     ],
     "PostToolUseFailure": [
@@ -145,8 +144,7 @@
             ],
             "timeout": 8
           }
-        ],
-        "matcher": "Bash|PowerShell"
+        ]
       }
     ],
     "PermissionRequest": [
