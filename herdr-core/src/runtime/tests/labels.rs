@@ -1250,7 +1250,9 @@ fn a_hook_turn_ends_on_the_session_files_interruption_with_summaries_off() {
     use hide_node_link::panes::{HookStatusReport, HookTurn};
     use hide_session::label_transcript::{LabelTranscriptRequest, read};
     let home = tempfile::tempdir().unwrap();
-    let folder = home.path().join(".claude/projects/-private-tmp-hide-labels-overlay");
+    let folder = home
+        .path()
+        .join(".claude/projects/-private-tmp-hide-labels-overlay");
     std::fs::create_dir_all(&folder).unwrap();
     let record = |at: &str, kind: &str, content: serde_json::Value| {
         let mut record = serde_json::json!({
