@@ -372,23 +372,26 @@ The command installs nothing; [The Installed App Is The Operator's](../AGENTS.md
 
 `release-candidate.yml` is a manual preparation workflow on protected `main`.
 It creates no tag or release and reads no signing credential.
-Its four required string inputs are `public_sha` (a full lowercase commit SHA), `tag` (`vX.Y.Z` or `vX.Y.Z-rc.N`), `verification_run_id` (the `pr.yml` push/main run of that exact source, queued, running or passed), and `build_order` (a positive decimal integer no larger than 9007199254740991); `macos_runner` picks where [the Mac binaries](#the-candidates-mac-build) compile, `mini` unless the operator chooses `hosted`.
-The source must already be an ancestor of main; a branch, fork, PR run or different source is refused before building, and so is a verify run that failed or still waits behind another main run (`pending`), which the next push to main replaces.
-The candidate does not wait for that verify run: it may start while the source's push verify runs, and the publish, not the candidate, requires that the run it names concluded success.
+Its four required string inputs are `public_sha` (a full lowercase commit SHA), `tag` (`vX.Y.Z` or `vX.Y.Z-rc.N`), `verification_run_id` (the `pr.yml` push/main run of that exact source, pending, queued, running or passed), and `build_order` (a positive decimal integer no larger than 9007199254740991); `macos_runner` picks where [the Mac binaries](#the-candidates-mac-build) compile, `mini` unless the operator chooses `hosted`.
+The source must already be an ancestor of main; a branch, fork, PR run or different source is refused before building, and so is a verify run that failed.
+A verify run that still waits behind another main run (`pending`) is read again every 30 seconds, for up to 45 minutes, until it starts, and the job summary says how long `validate` waited; main merges queue their verify runs behind each other, so a fresh merge's run is usually pending when a release starts.
+When the next push to main replaces that pending run, it ends `cancelled` and the candidate is refused, so the source stays a commit whose verify actually runs; a run still pending after 45 minutes refuses the candidate too.
+The candidate does not wait for that verify run to finish: it may build while the source's push verify runs, and the publish, not the candidate, requires that the run it names concluded success.
 The workflow revision is main's dispatch revision and may differ from the source revision it builds.
 `package.yml`, `device-helpers.yml` and `agent-journey.yml` run their steps from that dispatch revision on the source's checkout, so the workflow refuses a source at which any of them differs from main; choose a newer source instead.
 
 The workflow reuses `package.yml` for unsigned Linux and Windows installers, including their installation, packaged-window and update checks, and for both [Linux device helpers](#device-helper-release-bundles), built beside them on public runners.
 Beside them it compiles the Mac app's release binaries on the Mac mini ([The candidate's Mac build](#the-candidates-mac-build)).
 It runs the existing `agent-journey.yml` on the same source, with stand-ins on Linux and macOS, Windows form checks, and fake-model lanes on all three systems.
-It signs no agent in: since 2026-10-27, by the operator's decision, a real login is measured only by the release's local run on the Mac ([CONTRIBUTING.md: Releases](../CONTRIBUTING.md#releases)), so the workflow summary records signed-in providers as **not measured**; package, stand-in and fake-model failures block the receipt.
+It signs no agent in: since 2026-10-27, by the operator's decision, a real login is measured only by the release's local run on the Mac ([CONTRIBUTING.md: Releases](../CONTRIBUTING.md#releases)), so the workflow summary records signed-in providers as **not measured**; a package failure blocks the receipt, and a stand-in or fake-model failure fails the run, which no consumer takes.
 A successful candidate does not establish that any provider answered.
-Rerunning only the failed jobs does not make a selectable candidate: the receipt keeps the first attempt and the earlier attempt's artifacts stay beside the new ones, so a failed candidate is dispatched again with the same inputs.
+The receipt waits for the builds and not for the journey, which uploads none of the artifacts a release takes, so when only journey jobs fail, **Re-run failed jobs** reruns them alone and the run's successful latest attempt is selectable: the private publisher takes every artifact from the one attempt that made them, and refuses the run if any job other than an `agent-journey / ` job ran after it.
+When a package, helper, Mac binary or receipt job fails, rerunning it alone mixes two attempts' artifacts and is refused; use **Re-run all jobs** or dispatch again with the same inputs.
 The reusable workflows' optional `source-sha` defaults to the caller commit, and `package.yml`'s optional `build-order` defaults to its existing history-based ordering, so existing callers keep their behavior.
 An explicit order allows separately prepared packages of one numeric version to share one build identity.
 The operator assigns a strictly increasing order within that numeric version, including release-candidate to stable transitions; a private-only change takes a new patch version.
 
-Only after packaging, both helpers, the Mac binaries and the selected journey succeed does the workflow upload `hide-release-candidate`, containing only `candidate.json`:
+Only after packaging, both helpers and the Mac binaries succeed does the workflow upload `hide-release-candidate`, containing only `candidate.json`; the run succeeds only when the journey passes too, and a consumer takes only a successful run:
 
 ```json
 {"schema":4,"repository":"with-hide/hide","public_sha":"<source SHA>","tag":"vX.Y.Z","build_order":"<decimal>","verification_run_id":"<decimal>","workflow_sha":"<workflow SHA>","run_id":"<decimal>","run_attempt":1,"live_agents":false,
