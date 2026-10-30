@@ -21,15 +21,17 @@ const PRESS: Record<MentionKind, string> = {
  * so it sits in the sentence. With `onPress` it is the way to what it names,
  * and `label` says where that goes; without, it only names it.
  */
-export function MentionChip({ kind, name, label, onPress, className }: {
+export function MentionChip(props: {
   kind: MentionKind;
   /** The name after `@`, as the operator typed or Hide shows it. */
   name: string;
-  /** The pressable chip's accessible name: what pressing opens. */
-  label?: string;
-  onPress?: () => void;
   className?: string;
-}) {
+} & (
+  | { onPress?: undefined; label?: undefined }
+  /** A pressable chip names what pressing opens: its accessible name. */
+  | { onPress: () => void; label: string }
+)) {
+  const { kind, name, label, onPress, className } = props;
   const look = cn("max-w-full rounded-xs px-xxs align-baseline", TONE[kind], className);
   const text = <span className="truncate">@{name}</span>;
   if (!onPress) {
