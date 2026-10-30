@@ -642,23 +642,27 @@ impl Core {
     }
 
     /// Runs a `hide plan` command (PRD hide-plan D-27): one change under the
-    /// lock, saved by the link worker.
+    /// lock, saved by the link worker, judged with the evidence `proofs`
+    /// already read. A change whose evidence still needs reading answers
+    /// the reads, which the caller makes off the owner thread before asking
+    /// again with what they read (PRD hide-plan-delegate D-19).
     pub fn plan_command(
         &self,
         device: &str,
         caller: &str,
         expected: &crate::workspace_control::Context,
         command: crate::plans::PlanCommand,
-    ) -> Result<serde_json::Value, String> {
+        proofs: &crate::plans::Proofs,
+    ) -> Result<crate::plans::PlanTurn, String> {
         if !check_owner_thread(self, "plan.command") {
             return Err("plan_unavailable".into());
         }
-        let (answer, changed) =
-            lock_recover(&self.runtime).plan_command(device, caller, expected, command)?;
-        if changed {
+        let turn =
+            lock_recover(&self.runtime).plan_command(device, caller, expected, command, proofs)?;
+        if let crate::plans::PlanTurn::Answered { changed: true, .. } = &turn {
             notify_change(self);
         }
-        Ok(answer)
+        Ok(turn)
     }
 
     /// The plan and mission summary the prompt hook keeps for `caller`'s

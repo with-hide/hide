@@ -1299,6 +1299,10 @@ async fn screen_loop(
 /// What a refused delivery or agent command asks of its caller.
 pub(crate) fn delivery_next_action(code: &str) -> &'static str {
     match herdr_core::coordination::split_refusal(code).0 {
+        // A spawn that hands a plan step, or a letter that would wake a
+        // plan's sleeping child, is refused as the plan words it (PRD
+        // hide-plan-delegate B5, B6).
+        code if code.starts_with("plan_") => herdr_core::plans::next_action(code),
         "agent_pane_required" => {
             "Run the command inside a pane where the agent is running; an agent on Codex's shared daemon needs a session started with --no-daemon"
         }
@@ -1435,33 +1439,20 @@ fn refusal_answer(reason: String, next_action: &'static str) -> (String, String)
             code.to_owned(),
             format!("{next_action}; {name} conducts it now"),
         ),
-        // A plan's refusal names the step or the field to fix (PRD hide-plan
-        // B1, B2), and a mission's the node and the lines it means (PRD
-        // mission-map-git-criteria B1, B9, B10).
-        (
-            code @ ("plan_invalid"
-            | "plan_order_refused"
-            | "plan_too_large"
-            | "plan_node_unknown"
-            | "mission_criteria_missing"
-            | "mission_criteria_too_many"
-            | "mission_criteria_unmet"
-            | "mission_criteria_protected"
-            | "mission_checkers_invalid"
-            | "mission_checker_is_worker"
-            | "mission_external_invalid"
-            | "mission_nodes_unfinished"),
-            Some(detail),
-        ) => (code.to_owned(), format!("{next_action} ({detail})")),
-        (code, Some("")) => (
+        // Only an unknown machine's detail lists the devices to name.
+        (code @ "machine_unknown", Some("")) => (
             code.to_owned(),
             "No other device is connected; connect one in Settings > Devices, then retry"
                 .to_owned(),
         ),
-        (code, Some(connected)) => (
+        (code @ "machine_unknown", Some(connected)) => (
             code.to_owned(),
             format!("Use one of the connected device ids with --machine: {connected}"),
         ),
+        // Every other detail names the step, node, field or evidence to fix:
+        // a plan's (PRD hide-plan B1, B2; hide-plan-delegate B5, B10-B13) and
+        // a mission's (PRD mission-map-git-criteria B1, B9, B10).
+        (code, Some(detail)) => (code.to_owned(), format!("{next_action} ({detail})")),
         (_, None) => (reason, next_action.to_owned()),
     }
 }
@@ -4866,6 +4857,63 @@ mod tests {
             let (reason, next) = refusal_answer(code.to_owned(), delivery_next_action(code));
             assert_eq!(reason, code);
             assert_ne!(next, delivery_next_action("other"), "{code}");
+        }
+    }
+
+    /// A plan's refusal answers as the plan words it, with the step, field or
+    /// evidence it names, from `hide plan` and from a spawn or a letter
+    /// alike, never as a device list (PRD hide-plan-delegate B5, B10, B24).
+    #[test]
+    fn a_plan_refusal_answers_the_plans_next_action_and_what_it_names() {
+        for (reason, words) in [
+            ("plan_evidence_missing\u{1f}pr --pr", "--pr <number>"),
+            ("plan_pr_not_yours\u{1f}pr #12", "name the pull request"),
+            ("plan_pr_unconfirmed\u{1f}pr #12", "ask GitHub"),
+            (
+                "plan_file_outside\u{1f}spec ../spec.md",
+                "inside this session's checkout",
+            ),
+            ("plan_file_missing\u{1f}spec docs/spec.md", "write it"),
+            (
+                "plan_file_unconfirmed\u{1f}spec docs/spec.md",
+                "run the same command again",
+            ),
+            ("plan_report_missing\u{1f}web", "report letter"),
+            (
+                "plan_order_refused\u{1f}web waits on spec",
+                "Finish or drop",
+            ),
+            ("plan_node_finished\u{1f}web", "already done or dropped"),
+            ("plan_node_unknown\u{1f}nope", "hide plan show"),
+            ("plan_delegate_full\u{1f}3", "do this step yourself"),
+        ] {
+            let (code, detail) = herdr_core::coordination::split_refusal(reason);
+            let detail = detail.unwrap();
+            for next in [
+                herdr_core::plans::next_action(code),
+                delivery_next_action(reason),
+            ] {
+                let (answered, text) = refusal_answer(reason.to_owned(), next);
+                assert_eq!(answered, code);
+                assert!(text.contains(words), "{code}: {text}");
+                assert!(text.ends_with(&format!("({detail})")), "{code}: {text}");
+                assert!(!text.contains("--machine"), "{code}: {text}");
+            }
+        }
+        // A spawn's refusals that carry nothing more read as the plan's.
+        for code in [
+            "plan_missing",
+            "plan_review_pending",
+            "plan_delegate_needs_parent",
+            "plan_candidate_refused",
+            "plan_delegate_not_permitted",
+            "plan_unavailable",
+            "plan_session_unknown",
+        ] {
+            let (answered, text) = refusal_answer(code.to_owned(), delivery_next_action(code));
+            assert_eq!(answered, code);
+            assert_eq!(text, herdr_core::plans::next_action(code));
+            assert_ne!(text, herdr_core::plans::next_action("other"), "{code}");
         }
     }
 

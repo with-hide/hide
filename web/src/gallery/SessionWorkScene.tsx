@@ -68,7 +68,7 @@ BASE.outputs = [pr(1533, "pane 카드 정리", "merged", SESSION, BASE.title), .
 BASE.pr_groups = [{ child: null, name: BASE.title, pulls: [listed(1533, "pane 카드 정리", "merged")] }, ...children.filter((child) => child.pr_groups.length).map((child) => ({ child: child.session, name: child.title, pulls: child.pr_groups[0]!.pulls.map((pull) => ({ ...pull, own: false, holders: [child.title] })) }))];
 BASE.children = children;
 
-const step = (key: string, title: string, status: "done" | "working" | "planned", line: string | null = null) => ({ key, title, depends_on: [], status, line, output: null, changed: false, change: null, waiting: false });
+const step = (key: string, title: string, status: "done" | "working" | "planned", line: string | null = null) => ({ key, title, depends_on: [], status, line, output: null, changed: false, change: null, waiting: false, delegate: false, evidence: null, delegation: null });
 // The session's own plan while it works (PRD session-docs-and-assistant D-41).
 const PLAN: PlanView = {
   pane_id: "a1", session: SESSION, review: "approved", ask: null, created_at_unix_ms: AT, updated_at_unix_ms: AT + 240 * MIN,

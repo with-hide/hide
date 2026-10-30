@@ -104,6 +104,7 @@ function planView(model: PlanModel): PlanView | null {
     changed: false, change: null,
     // A step waits while a step it waits on is neither done nor dropped.
     waiting: step.depends_on.length > 0,
+    delegate: false, evidence: null, delegation: null,
   }));
   return {
     pane_id: LEAD,
