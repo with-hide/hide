@@ -37,10 +37,11 @@ describe("shortcut registry", () => {
     }
   });
 
-  it("marks exactly the ten moved chords", () => {
+  it("marks exactly the eleven moved chords", () => {
     const moved = REGISTRY.filter((command) => command.moved).map((command) => command.id).sort();
     // Chrome keeps ⇧⌘R (reload) and ⇧⌘B (bookmarks bar), so the PR list and the sidebar lens move to ⌥⇧ in a tab (PRD sidebar-task-lens D-32).
-    expect(moved).toEqual(["add_backlog", "close_pane", "close_tab", "new_tab", "previous_recent_area_tab", "recent_area_tab", "reopen_closed_tab", "settings", "open_sidebar_prs", "toggle_sidebar_lens"].sort());
+    // Chrome keeps Ctrl+Shift+J for its DevTools console on Windows and Linux, so Desk's ⌘J moves to ⌥⇧J in a tab (PRD session-docs-and-assistant B35).
+    expect(moved).toEqual(["add_backlog", "close_pane", "close_tab", "desk_terminal", "new_tab", "previous_recent_area_tab", "recent_area_tab", "reopen_closed_tab", "settings", "open_sidebar_prs", "toggle_sidebar_lens"].sort());
   });
 
   it("adds to the backlog with ⇧⌘M in the desktop app and ⌥⇧M in a browser, where Chrome keeps ⇧⌘M (PRD overview-device-tasks B37)", () => {
@@ -523,7 +524,8 @@ describe("Windows and Linux (operator decision 2026-10-03)", () => {
   });
 
   it("notes a browser chord as moved only where Chrome keeps the desktop chord on this system", () => {
-    expect(pc.filter((command) => command.moved).map((command) => command.id).sort()).toEqual(["close_tab", "new_tab", "previous_recent_area_tab", "recent_area_tab", "reopen_closed_tab", "toggle_sidebar_lens"]);
+    expect(pc.filter((command) => command.moved).map((command) => command.id).sort()).toEqual(["close_tab", "desk_terminal", "new_tab", "previous_recent_area_tab", "recent_area_tab", "reopen_closed_tab", "toggle_sidebar_lens"]);
+    expect(sheetRows("Navigate", pc, "browser", "pc").find((row) => row.id === "desk_terminal")).toMatchObject({ chord: "Alt+Shift+J", moved: true, movedFrom: "Ctrl+Shift+J" });
     expect(sheetRows("Tabs", pc, "browser", "pc").find((row) => row.id === "new_tab")).toMatchObject({ chord: "Alt+T", moved: true, movedFrom: "Ctrl+Shift+T" });
     // Chrome keeps Alt+Shift+T for its toolbar, and the macOS ⌥⇧T is those keys.
     expect(sheetRows("Tabs", pc, "browser", "pc").find((row) => row.id === "reopen_closed_tab")).toMatchObject({ chord: "Ctrl+Alt+Shift+T", moved: true, movedFrom: "Alt+Shift+T" });

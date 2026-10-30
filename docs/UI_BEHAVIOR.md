@@ -1013,7 +1013,7 @@ A row, a job card, a session chip or `답하기` opens the thread in the tool co
 ‹ goes back to the Threads list, or from a worker's thread to its Conductor's.
 
 Pressing an output, in a thread, on a card's chip, or in ▣'s list of every thread's outputs under each thread's mark and title, opens it in the 보기 column as a preview tab, its title in italics, which the next output pressed replaces (B31).
-Pressed again, or ↵ on the preview tab, keeps it as an ordinary tab, which stays when another thread opens.
+A double click on the preview tab, or ↵ on it, keeps it as an ordinary tab, which stays when another thread opens.
 The pin and the kept tabs are the core's (`desk.lane`), kept in Desk's store through a restart, 16 kept tabs at most; a seventeenth is refused as `desk_tabs_full` and the kept ones stay. Which tab is in front and the preview tab are the window's.
 An output is drawn read-only with the viewer its kind has (an image, a video, a PDF, a Markdown or text document), read from the session's device and checkout without making a View, so it never joins that project's Files list (D-65).
 Showing it marks its View seen (`desk_output_seen`), which takes it out of the session's To look at in Needs You, as looking at it in its checkout does.
@@ -1033,6 +1033,7 @@ A thread's head has `터미널로` with ⌘J beside it (B35, D-42).
 Either one opens the thread's Agent tab and gives its pane the keyboard; that pane's head carries `Desk로` with ⌘J while it is a Desk thread, a job or a mission's worker.
 ⌘J there, or `Desk로`, comes back to Desk as it was left, with that thread open in the tool column.
 ⌘J does nothing elsewhere; the press goes to the diagnostic log.
+In a browser tab the chord is ⌥⇧J, and Alt+Shift+J on Windows and Linux, where Chrome keeps Ctrl+Shift+J for its DevTools console; the desktop app keeps ⌘J and Ctrl+Shift+J, its own developer tools being Ctrl+Shift+I.
 
 ## Hide AI: the Hide AI tool
 
@@ -3494,6 +3495,7 @@ The sheet carries no row or explanation for a command the removed native app alo
 | Toggle Mission tool | none | none | none | none |
 | Open Project Memory | `⇧⌘L` | `Alt+Shift+L` | `⇧⌘L` | `Alt+Shift+L` |
 | Open PR list | `⇧⌘R` | `Alt+Shift+R` | `⌥⇧R` | `Alt+Shift+R` |
+| Desk thread ⇄ terminal | `⌘J` | `Ctrl+Shift+J` | `⌥⇧J` | `Alt+Shift+J` |
 | Toggle documents | none | none | none | none |
 | Toggle Changes tool | `⇧⌘G` | `Alt+Shift+G` | `⇧⌘G` | `Alt+Shift+G` |
 | Toggle Explorer tool | `⇧⌘E` | `Alt+Shift+E` | `⇧⌘E` | `Alt+Shift+E` |
@@ -3520,7 +3522,6 @@ The sheet carries no row or explanation for a command the removed native app alo
 | Copy Path | `⌥⌘C` | `Alt+Shift+C` | none | none |
 | Copy Relative Path (exception) | `⌥⇧⌘C` | `Alt+Shift+H` | none | none |
 | Cut File or Folder (exception) | `⌘X` | `Ctrl+X` | `⌘X` | `Ctrl+X` |
-| Desk thread ⇄ terminal | `⌘J` | `Ctrl+Shift+J` | `⌘J` | `Ctrl+Shift+J` |
 | Copy File or Folder (exception) | `⌘C` | `Ctrl+C` | `⌘C` | `Ctrl+C` |
 | Paste File or Folder (exception) | `⌘V` | `Ctrl+V` | `⌘V` | `Ctrl+V` |
 | Settings | `⌘,` | `Ctrl+Shift+,` | `⌥,` | `Ctrl+Shift+,` |

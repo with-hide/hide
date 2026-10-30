@@ -630,7 +630,7 @@ test("the shortcut sheet marks the moved chords and ⌘F reaches the agent's own
     // Add to backlog moves in a macOS browser, where Chrome keeps ⌘⇧M for its profiles; Alt+Shift+M is free on Windows and Linux.
     // Assert the exact moved commands, including the unchanged platform exceptions.
     const movedCommands = [
-      "new_tab", "close_tab", "reopen_closed_tab", "recent_area_tab", "previous_recent_area_tab", "toggle_sidebar_lens",
+      "new_tab", "close_tab", "reopen_closed_tab", "recent_area_tab", "previous_recent_area_tab", "toggle_sidebar_lens", "desk_terminal",
       ...(SYSTEM === "mac" ? ["close_pane", "settings", "add_backlog", "open_sidebar_prs"] : []),
     ];
     const movedRows = page.locator("[data-shortcut]").filter({ hasText: "moved for Chrome" });
