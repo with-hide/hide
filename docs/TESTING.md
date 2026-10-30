@@ -70,6 +70,8 @@ Keep one representative journey per user-visible flow; when a long spec carries 
 - A poll only observes (`hide-e2e/no-action-in-poll` in the e2e lint).
   A click, focus, creation or resend is one explicit action outside the poll; an action repeated inside `toPass` or `expect.poll` turns one intent into several and can satisfy the assertion with the wrong one.
 - Prefer subject IDs, request identity and generation or revision numbers over wall-clock comparisons and the last diagnostic string.
+- A value the page computes from its own clock (a countdown, an age, a duration) is read with that clock held: `page.clock.setFixedTime` in a web e2e, `vi.useFakeTimers({ toFake: ["Date"] })` with `vi.setSystemTime` in a unit test.
+  The test and the page each read a real clock, and a minute or an hour turning between the two reads draws a different answer: `weekly-usage.spec.ts` drew `5d 3h` for `5d 4h` (with-hide/hide-private#315), and `MissionMap.test.tsx` drew `held 26m` for `held 25m` (#354).
 - A barrier on what the page sent is not a barrier on what the daemon accepted.
   After a burst of clicks, `terminal_click` frames counted at the page say the page sent them; hided may still hold a dozen on its socket, and the last `pane.focus` diagnostic the page has seen can be an earlier request's confirmation.
   Count the diagnostics the daemon sent back against the changes the page sent, with a cumulative count (`observeDiagnostics(...).added` in `web/e2e/pane-focus-ordering.spec.ts`): the list is capped and drops from its front, so the number of entries of one kind in it falls while a burst appends.

@@ -27,7 +27,8 @@ export function usageShim() {
   const frame = path.join(root, "frame.json");
   const now = new Date();
   const hour = Math.floor(now.getTime() / 3_600_000) * 3_600_000;
-  const reset = printedReset(new Date(hour + (5 * 24 + 5) * 3_600_000), now);
+  const weeklyResetAt = hour + (5 * 24 + 5) * 3_600_000;
+  const reset = printedReset(new Date(weeklyResetAt), now);
   const result = [
     "You are currently using your subscription to power your Claude Code usage",
     "",
@@ -46,6 +47,8 @@ process.stdout.write(fs.readFileSync(${JSON.stringify(frame)}));
   );
   return {
     path: fixtureToolPath(bin),
+    /** When both weekly windows reset, on the whole hour the CLI prints. */
+    weeklyResetAt,
     release: () => fs.writeFileSync(gate, ""),
     cleanup: () => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }),
   };
