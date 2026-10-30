@@ -1047,6 +1047,18 @@ impl SshAddress {
             format!("{}@{}:{}", self.user, self.host, self.port)
         }
     }
+
+    /// The form two routes are compared in: `user@host:port` with the host
+    /// name in lowercase, as DNS reads it, so one server named in two cases
+    /// is one server wherever Hide asks.
+    pub fn endpoint_key(&self) -> String {
+        format!(
+            "{}@{}:{}",
+            self.user,
+            self.host.to_ascii_lowercase(),
+            self.port
+        )
+    }
 }
 
 /// Why an alias has no address; the dialog shows a short line per code.

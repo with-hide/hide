@@ -190,3 +190,189 @@ fn a_missing_config_or_program_lists_nothing_or_names_the_problem() {
     assert_eq!(hosts[0].alias, "lonely");
     assert_eq!(hosts[0].problem.as_deref(), Some("ssh_missing"));
 }
+
+/// The real ssh connector for Hosts, beside a Herdr that saved no machine:
+/// the first-run step of a person who never used Herdr.
+struct NoSavedMachines(hide_node::ssh::Connector);
+
+impl crate::remote::DeviceConnector for NoSavedMachines {
+    fn transport(
+        &self,
+        home: &std::path::Path,
+        node: &str,
+        alias: &str,
+        herdr_socket: Option<String>,
+    ) -> Result<Arc<dyn crate::remote::DialedTransport>, String> {
+        self.0.transport(home, node, alias, herdr_socket)
+    }
+
+    fn herdr_profiles(
+        &self,
+        _home: &std::path::Path,
+        _registered: &[String],
+        _stop: &std::sync::atomic::AtomicBool,
+    ) -> Result<hide_node_link::device::HerdrProfileListing, String> {
+        Ok(hide_node_link::device::HerdrProfileListing::default())
+    }
+
+    fn ssh_hosts(
+        &self,
+        home: &std::path::Path,
+        registered: &[String],
+        stop: &std::sync::atomic::AtomicBool,
+    ) -> crate::remote::SshHostListing {
+        self.0.ssh_hosts(home, registered, stop)
+    }
+
+    fn wsl_transport(
+        &self,
+        node: &str,
+        distro: &str,
+    ) -> Result<Arc<dyn crate::remote::DialedTransport>, String> {
+        self.0.wsl_transport(node, distro)
+    }
+
+    fn wsl_distributions(&self) -> crate::remote::WslListing {
+        self.0.wsl_distributions()
+    }
+}
+
+/// A runtime whose account has `config` as its ssh config and whose `ssh -G`
+/// answers as `resolve` does.
+fn first_run_runtime(config: &str, resolve: Resolve) -> Arc<Mutex<Runtime>> {
+    let mut runtime = super::devices::runtime_with_home();
+    let home = runtime.home_path.clone().expect("fixture home");
+    std::fs::create_dir_all(home.join(".ssh")).unwrap();
+    std::fs::write(home.join(".ssh/config"), config).unwrap();
+    runtime.devices = Arc::new(NoSavedMachines(
+        hide_node::ssh::Connector::new(None).with_resolve(resolve),
+    ));
+    let shared = Arc::new(Mutex::new(runtime));
+    shared.lock().unwrap().install_worker_context(
+        Arc::downgrade(&shared),
+        crate::handle::ChangeNotifier::noop(),
+    );
+    shared
+}
+
+fn event(kind: &str) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({
+        "schema_version": SCHEMA_VERSION,
+        "kind": kind,
+        "payload": {}
+    }))
+    .unwrap()
+}
+
+/// Add device's list and the first-run step read one config and say the
+/// same thing about each Host: a Host whose server is a registered device,
+/// spelled in another case, reads as that device on both, and a different
+/// port, a named session or a custom socket on the same host reads as not
+/// added on both.
+#[test]
+fn add_device_and_the_first_run_step_agree_on_which_host_is_added() {
+    let shared = first_run_runtime(
+        "Host lower other-port named socket\n",
+        Arc::new(|_, alias, _| {
+            let (user, host, port) = match alias {
+                "upper" => ("alice", "BOX.example", 22),
+                "lower" => ("alice", "box.example", 22),
+                "other-port" => ("alice", "box.example", 2222),
+                "named" => ("carol", "box.example", 22),
+                "socket" => ("dave", "box.example", 22),
+                _ => return Err(Problem::SshFailed),
+            };
+            Ok(Address {
+                user: user.to_owned(),
+                host: host.to_owned(),
+                port,
+            })
+        }),
+    );
+    shared
+        .lock()
+        .unwrap()
+        .snapshot
+        .ui_state
+        .device_registrations = vec![
+        // Added under an alias the config no longer names, in capitals.
+        registration("box", "Box", "upper"),
+        DeviceRegistration {
+            herdr_session: Some("work".to_owned()),
+            ..registration("box-work", "Box work", "named")
+        },
+        DeviceRegistration {
+            herdr_socket_path: Some("/run/herdr.sock".to_owned()),
+            ..registration("box-socket", "Box socket", "socket")
+        },
+    ];
+    for kind in ["ssh_hosts_list", "herdr_profiles_list"] {
+        assert!(shared.lock().unwrap().dispatch_json(&event(kind)));
+    }
+    wait(&shared, "both listings", |runtime| {
+        runtime.snapshot().status.ssh_hosts.state == "ready"
+            && runtime.snapshot().status.herdr_profiles.state == "ready"
+    });
+    let runtime = shared.lock().unwrap();
+    let add_device: Vec<(String, Option<String>)> = runtime
+        .snapshot()
+        .status
+        .ssh_hosts
+        .hosts
+        .iter()
+        .map(|host| (host.alias.clone(), host.added_as.clone()))
+        .collect();
+    let first_run: Vec<(String, Option<String>)> = runtime
+        .snapshot()
+        .status
+        .herdr_profiles
+        .profiles
+        .iter()
+        .map(|row| (row.ssh_host.clone().unwrap(), row.added_as.clone()))
+        .collect();
+    let expected = [
+        ("lower", Some("Box")),
+        ("other-port", None),
+        ("named", None),
+        ("socket", None),
+    ]
+    .map(|(alias, added)| (alias.to_owned(), added.map(str::to_owned)));
+    assert_eq!(add_device, expected);
+    assert_eq!(first_run, expected);
+}
+
+/// A wildcard Include whose folder cannot be opened says nothing about
+/// the Hosts it names: the first-run step reads it as a failed read with
+/// Retry, never as a list that could be skipped. The folder is a file,
+/// which no account can list; Windows answers that path with another
+/// error, so the case runs on Unix.
+#[cfg(unix)]
+#[test]
+fn an_include_folder_that_cannot_be_opened_fails_the_first_run_read_with_retry() {
+    let shared = first_run_runtime(
+        "Host first\nInclude fragments/*\n",
+        Arc::new(|_, _, _| panic!("an unreadable config resolves nothing")),
+    );
+    let home = shared.lock().unwrap().home_path.clone().unwrap();
+    std::fs::write(home.join(".ssh/fragments"), "Host not-a-folder\n").unwrap();
+    {
+        let mut runtime = shared.lock().unwrap();
+        runtime.snapshot.ui_state.first_run = Some(crate::model::FirstRun {
+            version: crate::model::FIRST_RUN_VERSION,
+            step: crate::model::FirstRunStep::Devices,
+        });
+        assert!(runtime.dispatch_json(&event("herdr_profiles_list")));
+    }
+    wait(&shared, "the device listing", |runtime| {
+        runtime.snapshot().status.herdr_profiles.state != "loading"
+    });
+    let runtime = shared.lock().unwrap();
+    let listing = &runtime.snapshot().status.herdr_profiles;
+    assert_eq!(listing.state, "failed");
+    assert!(listing.error.is_some());
+    assert!(listing.profiles.is_empty());
+    assert_eq!(
+        runtime.first_run_step(),
+        Some(crate::model::FirstRunStep::Devices)
+    );
+}

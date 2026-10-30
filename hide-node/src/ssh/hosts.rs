@@ -130,9 +130,13 @@ impl Reader<'_> {
                 for argument in arguments {
                     let included = match self.includes.expand(self.home, &argument) {
                         Ok(included) => included,
-                        Err(_) => {
+                        Err(error) => {
+                            // A folder that could not be read names unknown
+                            // Hosts, as a config that could not be read does;
+                            // a bound that cut the read leaves it incomplete.
                             self.found.aliases.clear();
                             self.found.truncated = true;
+                            self.found.unreadable = error == IncludeError::Unreadable;
                             self.found.include_failed = true;
                             return;
                         }
@@ -167,6 +171,15 @@ impl Reader<'_> {
     }
 }
 
+/// Why an Include could not be expanded: what it names could not be read,
+/// or a bound of the shared allowance (deadline, work, entries, files, name
+/// length) cut the read.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum IncludeError {
+    Unreadable,
+    Bound,
+}
+
 /// One shared allowance for every Include in a config read, including
 /// directory enumeration and wildcard comparisons before any file is read.
 pub(super) struct IncludeBudget {
@@ -184,24 +197,25 @@ impl IncludeBudget {
         }
     }
 
-    fn consume(&mut self, work: usize) -> Result<(), String> {
+    fn consume(&mut self, work: usize) -> Result<(), IncludeError> {
         if Instant::now() >= self.deadline {
-            return Err("SSH configuration Include deadline expired".to_owned());
+            return Err(IncludeError::Bound);
         }
-        self.work = self
-            .work
-            .checked_sub(work)
-            .ok_or_else(|| "SSH configuration Include work limit exceeded".to_owned())?;
+        self.work = self.work.checked_sub(work).ok_or(IncludeError::Bound)?;
         Ok(())
     }
 
     /// The files an `Include` argument names: `~` is the account's home, a
     /// relative path is under `~/.ssh`, and `*` or `?` in the last component
     /// match the folder's files, sorted by name as `ssh` reads them.
-    pub(super) fn expand(&mut self, home: &Path, argument: &str) -> Result<Vec<PathBuf>, String> {
+    pub(super) fn expand(
+        &mut self,
+        home: &Path,
+        argument: &str,
+    ) -> Result<Vec<PathBuf>, IncludeError> {
         self.consume(argument.len())?;
         if argument.len() > MAX_INCLUDE_NAME_BYTES {
-            return Err("SSH configuration Include pattern is too long".to_owned());
+            return Err(IncludeError::Bound);
         }
         let path = if let Some(rest) = argument.strip_prefix("~/") {
             home.join(rest)
@@ -222,27 +236,22 @@ impl IncludeBudget {
         let entries = match std::fs::read_dir(folder) {
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(error) => {
-                return Err(format!(
-                    "SSH configuration Include could not be read: {error}"
-                ));
-            }
+            Err(_) => return Err(IncludeError::Unreadable),
         };
         let mut matched = Vec::new();
         for entry in entries {
             self.consume(1)?;
             self.entries += 1;
             if self.entries > MAX_INCLUDE_ENTRIES {
-                return Err("SSH configuration Include directory entry limit exceeded".to_owned());
+                return Err(IncludeError::Bound);
             }
-            let entry = entry
-                .map_err(|error| format!("SSH configuration Include could not be read: {error}"))?;
+            let entry = entry.map_err(|_| IncludeError::Unreadable)?;
             let filename = entry.file_name();
             if let Some(candidate) = filename.to_str()
                 && wildcard_match(name, candidate, self)?
             {
                 if matched.len() >= MAX_CONFIG_FILES {
-                    return Err("SSH configuration exceeds the Include file limit".to_owned());
+                    return Err(IncludeError::Bound);
                 }
                 matched.push(entry.path());
             }
@@ -257,10 +266,10 @@ fn wildcard_match(
     pattern: &str,
     candidate: &str,
     budget: &mut IncludeBudget,
-) -> Result<bool, String> {
+) -> Result<bool, IncludeError> {
     budget.consume(pattern.len() + candidate.len())?;
     if pattern.len() > MAX_INCLUDE_NAME_BYTES || candidate.len() > MAX_INCLUDE_NAME_BYTES {
-        return Err("SSH configuration Include pattern is too long".to_owned());
+        return Err(IncludeError::Bound);
     }
     let pattern: Vec<char> = pattern.chars().collect();
     let candidate: Vec<char> = candidate.chars().collect();
@@ -670,24 +679,50 @@ mod tests {
         assert!(listing.entries.is_empty());
         assert!(listing.registered.is_empty());
         assert!(listing.truncated);
+        // A bound cut the read: it is incomplete, not unreadable.
+        assert!(!listing.unreadable);
+    }
+
+    /// A wildcard Include whose folder cannot be opened names unknown Hosts:
+    /// the listing is unreadable, which the first-run step answers with
+    /// Retry, and nothing it would have resolved is resolved. The folder is
+    /// a file here, which no account, root included, can list; Windows
+    /// answers that path with a different error, so the case runs on Unix.
+    #[cfg(unix)]
+    #[test]
+    fn an_include_folder_that_cannot_be_opened_makes_the_listing_unreadable() {
+        let home = tempfile::tempdir().unwrap();
+        write(
+            &home.path().join(".ssh/config"),
+            "Host first\nInclude fragments/*\n",
+        );
+        write(&home.path().join(".ssh/fragments"), "Host not-a-folder\n");
+        let resolve: Resolve =
+            Arc::new(|_, _, _| panic!("an unreadable Include must not resolve SSH"));
+        let listing = list(
+            &resolve,
+            home.path(),
+            &["registered".into()],
+            &AtomicBool::new(false),
+        );
+        assert!(listing.unreadable);
+        assert!(listing.entries.is_empty());
+        assert!(listing.registered.is_empty());
     }
 
     #[test]
     fn include_deadline_and_match_work_are_finite_before_enumeration() {
         let home = tempfile::tempdir().unwrap();
         let mut expired = IncludeBudget::new(Instant::now());
-        assert!(
-            expired
-                .expand(home.path(), "absent/*")
-                .unwrap_err()
-                .contains("deadline")
+        assert_eq!(
+            expired.expand(home.path(), "absent/*"),
+            Err(IncludeError::Bound)
         );
         let mut budget = IncludeBudget::new(Instant::now() + RESOLVE_DEADLINE);
         budget.work = 2;
-        assert!(
-            wildcard_match("*z", "aaaa", &mut budget)
-                .unwrap_err()
-                .contains("work limit")
+        assert_eq!(
+            wildcard_match("*z", "aaaa", &mut budget),
+            Err(IncludeError::Bound)
         );
     }
 

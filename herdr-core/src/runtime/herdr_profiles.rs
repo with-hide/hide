@@ -18,17 +18,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// The id prefix of a Host row; a Herdr profile id is Herdr's own.
 const SSH_HOST_ROW: &str = "ssh:";
 
-/// Where an alias leads, spelled as a saved profile's endpoint is
-/// (`hide-node`'s `profiles::endpoints`): `user@host:port`, host lower-cased.
-fn endpoint_key(address: &hide_node_link::device::SshAddress) -> String {
-    format!(
-        "{}@{}:{}",
-        address.user,
-        address.host.to_ascii_lowercase(),
-        address.port
-    )
-}
-
 /// One server: an endpoint and the Herdr session on it.
 fn server_key(endpoint: &str, session: &str) -> String {
     format!("{endpoint} {session}")
@@ -186,13 +175,14 @@ impl Runtime {
                 {
                     self.herdr_profile_endpoints
                         .entry(alias.clone())
-                        .or_insert_with(|| Ok(endpoint_key(address)));
+                        .or_insert_with(|| Ok(address.endpoint_key()));
                 }
                 let profiles: Vec<HerdrProfileSnapshot> = listing
                     .profiles
                     .into_iter()
                     .map(|profile| {
-                        let existing = self.profile_registration(&profile.target, &profile.session);
+                        let existing =
+                            self.endpoint_registration(&profile.target, &profile.session);
                         let (device_id, added_as) = existing
                             .map(|r| (Some(r.id.clone()), Some(r.label.clone())))
                             .unwrap_or_default();
@@ -238,7 +228,7 @@ impl Runtime {
                 let mut rows: Vec<(String, HerdrProfileSnapshot)> = Vec::new();
                 for entry in &hosts.entries {
                     let key = match &entry.address {
-                        Ok(address) => server_key(&endpoint_key(address), "default"),
+                        Ok(address) => server_key(&address.endpoint_key(), "default"),
                         Err(_) => format!("alias {}", entry.alias),
                     };
                     if rows.iter().any(|(found, _)| *found == key) {
@@ -289,27 +279,20 @@ impl Runtime {
         true
     }
 
-    /// A custom socket cannot be equated to a named server without evidence.
-    fn profile_registration(
+    /// The registered device on the server `target` leads to in `session`,
+    /// by Add device's own decision (`ssh_registration`), where an alias or
+    /// target leads where this listing resolved it.
+    fn endpoint_registration(
         &self,
         target: &str,
         session: &str,
     ) -> Option<&crate::model::DeviceRegistration> {
-        let endpoint = self.herdr_profile_endpoints.get(target)?.as_ref().ok()?;
-        self.snapshot
-            .ui_state
-            .device_registrations
-            .iter()
-            .find(|registration| {
-                registration.herdr_socket_path.is_none()
-                    && registration.herdr_session.as_deref().unwrap_or("default") == session
-                    && registration
-                        .origin
-                        .ssh_alias()
-                        .and_then(|alias| self.herdr_profile_endpoints.get(alias))
-                        .and_then(|endpoint| endpoint.as_ref().ok())
-                        == Some(endpoint)
-            })
+        self.ssh_registration(target, session, |alias| {
+            self.herdr_profile_endpoints
+                .get(alias)
+                .and_then(|endpoint| endpoint.as_ref().ok())
+                .cloned()
+        })
     }
 
     fn profile_connection(&self, device: &str) -> String {
@@ -422,18 +405,7 @@ impl Runtime {
         if let Some(distro) = row.wsl_distro.as_deref() {
             return self.wsl_registration(distro);
         }
-        self.profile_registration(&row.target, &row.session)
-            .or_else(|| {
-                self.snapshot
-                    .ui_state
-                    .device_registrations
-                    .iter()
-                    .find(|r| {
-                        r.herdr_socket_path.is_none()
-                            && r.herdr_session.as_deref().unwrap_or("default") == row.session
-                            && r.origin.ssh_alias() == Some(row.target.as_str())
-                    })
-            })
+        self.endpoint_registration(&row.target, &row.session)
     }
 
     fn wsl_registration(&self, distro: &str) -> Option<&crate::model::DeviceRegistration> {
