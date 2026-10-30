@@ -1,9 +1,10 @@
 // A Conductor's worker on an isolated pinned Herdr and hided (PRD
-// mission-worker-sleep B1-B3, B5, B8, B12, B14): `hide agent sleep` ends the
+// mission-worker-sleep B1-B3, B5, B8, B14): `hide agent sleep` ends the
 // worker in its pane, a report letter to it waits while a request letter
 // wakes it into the same conversation and then rings, the operator's pane
-// keeps the focus throughout, and the worker's node finishing puts it to
-// sleep again without the hours.
+// keeps the focus throughout, the worker's node finishing puts it to sleep
+// again without the hours, and the request still pending does not wake it a
+// second time. B12 (no sleep again after a wake) is the runtime test's.
 
 import { expect, test } from "@playwright/test";
 import { spawnSync } from "node:child_process";
@@ -131,7 +132,7 @@ test("a finished worker sleeps, a request letter wakes it into the same conversa
     const letterWakes = () => wakes().filter((record) => record.trigger === "letter").length;
     await expect.poll(letterWakes, { timeout: 20_000 }).toBe(1);
     expect(wakes().every((record) => record.mode === "resume"), JSON.stringify(wakes())).toBe(true);
-    expect(nativeSession(), "the worker resumed its own conversation").toBe(session);
+    await expect.poll(nativeSession, { message: "the worker resumed its own conversation", timeout: 20_000 }).toBe(session);
     await expect(leadView).toHaveAttribute("data-focused", "true");
     expect(herdrHasFocus(herdr, lead)).toBe(true);
     // One bell rings for the worker's turn: the oldest letter's, which counts the request with it.
@@ -160,6 +161,7 @@ test("a finished worker sleeps, a request letter wakes it into the same conversa
     const missionSleeps = diagnostics(daemon!, '"agent_sleep.ending"').filter((record) => record.pane_id === worker.pane && record.trigger === "mission");
     expect(missionSleeps.length, `the node's finish put it to sleep; ${sleepRecords()}`).toBeGreaterThan(0);
     // The request still pending woke it once already, so it does not wake it again.
+    expect(await show(requestId), "the request is still pending, so only the once rule keeps the worker asleep").toContain('"state":"pending"');
     await quietFor(page, 10_000, "a pending letter's wake starts within a tick of the sleep landing");
     expect(asleep(), `a letter wakes its recipient once; ${sleepRecords()}`).toBe(true);
     expect(letterWakes()).toBe(1);
