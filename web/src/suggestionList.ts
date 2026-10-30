@@ -127,6 +127,7 @@ const FAILURE_KEYS: Record<string, MessageKey> = {
   no_pr: "suggestions.failure.no_pr",
   shell_starting: "suggestions.failure.shell_starting",
   start_failed: "suggestions.failure.start_failed",
+  not_started: "suggestions.failure.not_started",
   card_not_processed: "suggestions.failure.card_not_processed",
   unbuilt: "suggestions.failure.unbuilt",
   issue_failed: "suggestions.failure.issue_failed",

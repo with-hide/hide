@@ -2010,12 +2010,14 @@ fn building_next(
 /// written as running before the spawn, so a start Hide never finished fails
 /// by the tracker's grace rather than holding the card forever. Answers the
 /// attempt and its start when the agent was started but has not shown its
-/// session yet, for the tracker to ask again.
+/// session yet, for the tracker to ask again. `reserved` runs once the
+/// cards are written as running, before the agent's start.
 pub(super) fn start_promotion(
     store: &mut MemoryStore,
     project_id: &str,
     numbers: &[u64],
     mut start: PromotionStart,
+    reserved: &dyn Fn(),
 ) -> Result<Option<(u32, PromotionStart)>, String> {
     let effects = Arc::clone(&start.effects);
     let _permit = effects.try_lock().map_err(|_| {
@@ -2183,6 +2185,7 @@ pub(super) fn start_promotion(
     store
         .set_promotion_batch(project_id, &branch, &promotions)
         .map_err(|error| error.to_string())?;
+    reserved();
     start.numbers = numbers;
     start.evidence = evidence;
     let (number, promotion) = &promotions[0];
@@ -3168,7 +3171,7 @@ mod tests {
         let effects = Arc::clone(&start().effects);
         let permit = effects.lock().unwrap();
         assert!(
-            start_promotion(&mut store, "p", &[1, 2], start())
+            start_promotion(&mut store, "p", &[1, 2], start(), &|| ())
                 .err()
                 .unwrap()
                 .contains("still being checked")
@@ -3190,15 +3193,15 @@ mod tests {
         drop(permit);
 
         assert!(
-            start_promotion(&mut store, "p", &[3], start()).is_err(),
+            start_promotion(&mut store, "p", &[3], start(), &|| ()).is_err(),
             "a fact"
         );
-        start_promotion(&mut store, "p", &[1, 2], start()).unwrap();
+        start_promotion(&mut store, "p", &[1, 2], start(), &|| ()).unwrap();
         let failed = promotion(&store).unwrap();
         let mut wrong_target = start();
         wrong_target.repository = Some("acme/other".into());
         assert!(
-            start_promotion(&mut store, "p", &[1, 2], wrong_target)
+            start_promotion(&mut store, "p", &[1, 2], wrong_target, &|| ())
                 .err()
                 .unwrap()
                 .contains("original promotion repository")
@@ -3260,7 +3263,7 @@ mod tests {
         store.set_promotion("p", 1, &running).unwrap();
         store.set_promotion("p", 2, &running).unwrap();
         assert!(
-            start_promotion(&mut store, "p", &[1, 2], start())
+            start_promotion(&mut store, "p", &[1, 2], start(), &|| ())
                 .unwrap()
                 .is_none(),
             "the same running intent converges"
@@ -3288,7 +3291,7 @@ mod tests {
                 )
                 .unwrap();
             assert!(
-                start_promotion(&mut store, "p", &[1], start())
+                start_promotion(&mut store, "p", &[1], start(), &|| ())
                     .err()
                     .unwrap()
                     .contains("still running"),
@@ -3300,12 +3303,12 @@ mod tests {
         wrong_target.repository = Some("acme/other".into());
         store.set_promotion("p", 2, &peer).unwrap();
         assert!(
-            start_promotion(&mut store, "p", &[1], wrong_target)
+            start_promotion(&mut store, "p", &[1], wrong_target, &|| ())
                 .err()
                 .unwrap()
                 .contains("original promotion repository")
         );
-        start_promotion(&mut store, "p", &[1, 2], start()).unwrap();
+        start_promotion(&mut store, "p", &[1, 2], start(), &|| ()).unwrap();
         assert_eq!(promotion(&store).unwrap().branch, failed.branch);
         assert_eq!(
             promotion(&store).unwrap().attempt,
@@ -3320,7 +3323,7 @@ mod tests {
         placed.state = PromotionState::PrOpen;
         placed.pr_number = Some(72);
         store.set_promotion("p", 2, &placed).unwrap();
-        start_promotion(&mut store, "p", &[1], start()).unwrap();
+        start_promotion(&mut store, "p", &[1], start(), &|| ()).unwrap();
         assert_eq!(promotion(&store).unwrap().pr_number, Some(72));
         assert_eq!(promotion(&store).unwrap().branch, placed.branch);
         assert_eq!(
