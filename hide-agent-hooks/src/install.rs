@@ -356,10 +356,12 @@ fn hook_group<'a>(
 /// trust step read it here, so an event that has a matcher is written and
 /// recognised as Hide's by the same line.
 ///
-/// Select the shell, native questions and the file tools the guardrails read
-/// (PRD agent-guardrails D-12): Claude Code 2.1.300's `Edit`, `Write`,
-/// `MultiEdit`, `NotebookEdit` and `Read`, and Codex 0.162.1's `apply_patch`,
-/// which its `Edit` and `Write` aliases also select. Pinned Codex 0.160.1
+/// Claude Code's `PreToolUse` has none: every tool call reaches the helper, so
+/// a turn waiting on an approval reads working again at the next call of any
+/// tool, an MCP tool, a search or a subagent included. Codex's selects the
+/// shell, native questions and the file tools the guardrails read (PRD
+/// agent-guardrails D-12): Codex 0.162.1's `apply_patch`, which its `Edit`
+/// and `Write` aliases also select. Pinned Codex 0.160.1
 /// sends real plan-mode request_user_input through PreToolUse as well, and
 /// 0.162.1 asks with `request_user_input_async`. Codex matches a tool by its
 /// whole name (a hook on `request_user_input` stayed silent for the async
@@ -371,9 +373,6 @@ pub(crate) fn hook_matcher(runtime: AgentRuntime, event: HookEvent) -> Option<&'
         // rests at the prompt after an interrupt.
         (AgentRuntime::ClaudeCode, HookEvent::Notification) => {
             Some("permission_prompt|elicitation_dialog|idle_prompt")
-        }
-        (AgentRuntime::ClaudeCode, HookEvent::PreToolUse) => {
-            Some("Bash|AskUserQuestion|ExitPlanMode|Edit|Write|MultiEdit|NotebookEdit|Read")
         }
         (AgentRuntime::Codex, HookEvent::PreToolUse) => {
             Some("Bash|request_user_input|request_user_input_async|apply_patch|Edit|Write")
@@ -1184,21 +1183,20 @@ mod tests {
     }"#;
 
     #[test]
-    fn the_guard_entry_selects_shell_and_native_questions_and_asks_for_no_memory() {
+    fn the_guard_entry_reaches_every_claude_tool_and_codex_shell_and_questions_and_asks_for_no_memory()
+     {
         for runtime in AgentRuntime::ALL {
             let fixture = Fixture::new("guard-entry");
             install(runtime, fixture.home(), &helper(&fixture)).unwrap();
             let written = fixture.read(runtime);
             let group = &written["hooks"]["PreToolUse"][0];
-            let expected = match runtime {
-                AgentRuntime::ClaudeCode => {
-                    "Bash|AskUserQuestion|ExitPlanMode|Edit|Write|MultiEdit|NotebookEdit|Read"
-                }
-                AgentRuntime::Codex => {
+            match runtime {
+                AgentRuntime::ClaudeCode => assert!(group.get("matcher").is_none(), "{group}"),
+                AgentRuntime::Codex => assert_eq!(
+                    group["matcher"],
                     "Bash|request_user_input|request_user_input_async|apply_patch|Edit|Write"
-                }
-            };
-            assert_eq!(group["matcher"], expected, "{runtime:?}");
+                ),
+            }
             let hook = &group["hooks"][0];
             let text = hook_texts(hook).collect::<Vec<_>>().join(" ");
             assert!(text.contains("--event PreToolUse"), "{text}");

@@ -38,7 +38,9 @@ Claude Code also registers `PostToolUseFailure` and `Notification`, the latter f
 Codex declares both of its events from 0.155.1, its minimum, in `codex-rs/config/src/hook_config.rs` of `rust-v0.155.1`, and the installed 0.166.0 lists them among its hook events.
 The Post matcher selects `Bash|PowerShell` and produces no replacement output or permission decision.
 `SessionEnd` is not registered by either: a session's record is read only while Herdr reports that session for the pane, so a session that ends needs no event to be forgotten.
-`PreToolUse` selects `Bash|AskUserQuestion|ExitPlanMode|Edit|Write|MultiEdit|NotebookEdit|Read` in Claude Code and `Bash|request_user_input|request_user_input_async|apply_patch|Edit|Write` in Codex (`install::hook_matcher`, the one function the writer and Codex's trust check both read): the shell, the native questions, and the file tools the [project guardrails](#project-guardrails) judge; a search never starts the helper.
+`PreToolUse` has no matcher in Claude Code and selects `Bash|request_user_input|request_user_input_async|apply_patch|Edit|Write` in Codex (`install::hook_matcher`, the one function the writer and Codex's trust check both read).
+In Claude Code every tool call reaches the helper, an MCP tool, a search, a subagent's `Task` or a `Skill` included, because an approval sends no event of its own: the next tool call is what says the turn runs again ([The turn the hook reports](#the-turn-the-hook-reports)); the guards judge the shell, the native questions and the file tools the [project guardrails](#project-guardrails) read, and refuse nothing a call of another tool asks.
+In Codex the matcher keeps to the shell, the native questions and those file tools.
 Codex matches a tool by its whole name: with a hook on `request_user_input` alone, the async question tool of 0.162.1 never reached the helper (measured 2026-10-15 in an isolated `CODEX_HOME`), so each question tool is named.
 An entry of Hide's whose matcher differs from the one written today reads Outdated at its own version, so the next kit pass rewrites it and records its Codex trust.
 The version-eleven marker makes earlier entries Outdated until the normal kit pass at launch, connection or Reinstall replaces Hide's entries and records their exact Codex trust.
@@ -233,12 +235,14 @@ The turn is the first thing the core reads for a pane's activity, completion and
 | Grok | its prompt, and a tool event that moves the turn | `Stop` of the session | not reported | not reported |
 | Antigravity | its prompt, and a tool event after a gap | `Stop` of the root session | not reported | not reported |
 
-A tool event of Claude Code or Codex reads the pane file and starts no process unless the session's last report was not working, so an ordinary tool call costs one small file read; the first tool after a turn ended, as when a background task wakes the agent without a prompt, reports it working.
+A tool event of Claude Code or Codex reads the pane file and starts no process unless the session's last report was not working, so an ordinary tool call costs one helper run and one small file read; the first tool after a turn ended, waited or rested, as after an approval or when a background task wakes the agent without a prompt, reports it working.
+Every other event that names a turn (a prompt, `Stop`, a permission, a notification, an interrupt) reports it each time, with one `hide` process, as do a session start and a change of the subagent count.
 `UserPromptSubmit`'s report runs on a thread of its own beside the prompt's letters and Memory, so it does not lengthen the prompt's budget.
 A plugin or extension sends one turn report at a time and lets a newer turn replace one still waiting, so a burst of events costs at most two helper runs.
 A turn stands until the same session's next hook event; no timer ends it (design principle 13).
 Where a cell says not reported, the core reads Herdr's state for that part until the agent gives an event for it: an OpenCode 2, Pi or omp permission prompt, and a Grok or Antigravity interrupt, show as Herdr reads the screen.
-A Claude Code approval of a tool outside the `PreToolUse` matcher sends no tool event of Hide's, so the turn reads waiting until the next matched tool or the turn's end.
+A Claude Code or Codex approval sends no event of its own, so the turn reads waiting while the approved call runs and working again at the session's next tool call or its turn's end; an answered MCP `elicitation_dialog` reads the same way, since the tool that asked is still running.
+Codex's `PreToolUse` matcher keeps to its shell, question and file tools, so an approval of an MCP tool in Codex reads waiting until the next of those or the turn's end.
 
 #### Which subagents run
 

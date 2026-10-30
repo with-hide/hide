@@ -1101,3 +1101,64 @@ fn a_reopen_in_its_pane_resumes_with_the_choice_the_agent_was_started_with() {
         "the same conversation keeps its choice for the next restart"
     );
 }
+
+/// B10, from the report to the row: a permission wait the hook reports asks
+/// the coordinator to publish again, the next session lays it on the agent,
+/// and the row reads an approval while Herdr still reads the agent working;
+/// the tool call after the answer reports it working and takes the approval
+/// back.
+#[test]
+fn a_waiting_hook_report_reaches_the_row_as_an_approval_until_the_turn_runs_again() {
+    use hide_node_link::panes::HookTurn;
+    let mut runtime = runtime();
+    runtime.ingest_hook_diagnosis(diagnosis(installed(), installed()));
+    let mut working = session(&[("w1:p1", "claude", false)]);
+    working["agents"][0]["agent_status"] = "working".into();
+    let publish = |runtime: &mut Runtime| {
+        runtime.ingest_session(Ok(
+            crate::sidebar::owned_label_fixture(working.clone()).expect("session payload")
+        ));
+    };
+    let turn = |runtime: &mut Runtime, turn| {
+        let report = hide_node_link::panes::HookStatusReport {
+            runtime: "claude-code".to_owned(),
+            version: hide_agent_hooks::HOOK_VERSION,
+            session: Some("session-w1:p1".to_owned()),
+            turn: Some(turn),
+            counts: None,
+            session_start: false,
+        };
+        runtime
+            .ingest_hook_status(crate::node::TEST_NODE, "w1:p1", &report)
+            .expect("the report is recorded");
+    };
+    let row = |runtime: &Runtime| {
+        let row = runtime
+            .snapshot
+            .navigator
+            .agents
+            .iter()
+            .find(|row| row.pane_id == "w1:p1")
+            .expect("the agent is a row");
+        (row.demand.clone(), row.activity.clone())
+    };
+    publish(&mut runtime);
+    assert_eq!(row(&runtime), ("none".into(), "working".into()));
+
+    turn(&mut runtime, HookTurn::Waiting);
+    assert!(
+        runtime.take_republish_request(),
+        "the report asks for a publish"
+    );
+    publish(&mut runtime);
+    assert_eq!(row(&runtime), ("approval".into(), "stopped".into()));
+
+    // The same report again changes nothing and asks for nothing.
+    turn(&mut runtime, HookTurn::Waiting);
+    assert!(!runtime.take_republish_request());
+
+    turn(&mut runtime, HookTurn::Working);
+    assert!(runtime.take_republish_request());
+    publish(&mut runtime);
+    assert_eq!(row(&runtime), ("none".into(), "working".into()));
+}

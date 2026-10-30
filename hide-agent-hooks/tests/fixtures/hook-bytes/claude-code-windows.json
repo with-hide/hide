@@ -110,8 +110,7 @@
             ],
             "timeout": 8
           }
-        ],
-        "matcher": "Bash|AskUserQuestion|ExitPlanMode|Edit|Write|MultiEdit|NotebookEdit|Read"
+        ]
       }
     ],
     "PostToolUse": [

@@ -74,8 +74,7 @@
             "command": "if [ -x '/kit path/it'\\''s/hide-agent-hooks' ]; then exec '/kit path/it'\\''s/hide-agent-hooks' hook --runtime claude-code --event PreToolUse --source hide-subagents@11; fi",
             "timeout": 8
           }
-        ],
-        "matcher": "Bash|AskUserQuestion|ExitPlanMode|Edit|Write|MultiEdit|NotebookEdit|Read"
+        ]
       }
     ],
     "PostToolUse": [
