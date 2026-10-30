@@ -1019,26 +1019,30 @@ impl Runtime {
             // A plan's child and a mission's worker or checker start no
             // agents, and a step's spawn takes the intent the core makes for
             // its attempt (PRD hide-plan-delegate B1, B7, B8).
-            *plan = self.plan_spawn_admission(
-                &actor,
-                device,
-                parent.as_deref(),
-                plan_node.as_deref(),
-                kind,
-                launch,
-                self.missions.book.conducted_open(&actor).is_some(),
-            )?;
+            *plan = self
+                .plan_spawn_admission(
+                    &actor,
+                    device,
+                    parent.as_deref(),
+                    plan_node.as_deref(),
+                    kind,
+                    launch,
+                    self.missions.book.conducted_open(&actor).is_some(),
+                )?
+                .map(Box::new);
             if let Some(admission) = plan {
                 *intent = crate::coordination::plan_intent(&admission.link);
             }
-            *mission = self.mission_spawn_admission(
-                &actor,
-                machine.as_deref(),
-                kind,
-                launch,
-                intent,
-                brief.is_some(),
-            )?;
+            *mission = self
+                .mission_spawn_admission(
+                    &actor,
+                    machine.as_deref(),
+                    kind,
+                    launch,
+                    intent,
+                    brief.is_some(),
+                )?
+                .map(Box::new);
         }
         // Only the pane's own session proves its composer was submitted, so a
         // stray `hide inbox --hook` from a tool in the pane clears no draft.

@@ -129,7 +129,7 @@ pub enum Command {
         /// software-factory-conductor D-45). Only the core sets it, from the
         /// caller's mission; no command names it.
         #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
-        mission: Option<crate::runtime::missions::MissionAdmission>,
+        mission: Option<Box<crate::runtime::missions::MissionAdmission>>,
         /// The step of the caller's own plan the child is handed (`hide
         /// agent spawn --plan-node <key>`, PRD hide-plan-delegate B1): the
         /// core makes the intent from it.
@@ -138,7 +138,7 @@ pub enum Command {
         /// The plan step this spawn's child works on, and the main's plan
         /// children asleep now. Only the core sets it, from `plan_node`.
         #[serde(default, skip_deserializing, skip_serializing_if = "Option::is_none")]
-        plan: Option<PlanAdmission>,
+        plan: Option<Box<PlanAdmission>>,
     },
 }
 
@@ -2361,10 +2361,10 @@ mod tests {
         let worker = |intent: &str| {
             let mut spawn = command(intent);
             if let Command::Spawn { mission: slot, .. } = &mut spawn {
-                *slot = Some(crate::runtime::missions::MissionAdmission {
+                *slot = Some(Box::new(crate::runtime::missions::MissionAdmission {
                     mission: "mission-1".into(),
                     cap: 1,
-                });
+                }));
             }
             Mutation::Reserve {
                 parent: id.clone(),
@@ -2457,10 +2457,10 @@ mod tests {
             };
             let mut spawn = command(&plan_intent(&link));
             if let Command::Spawn { plan: slot, .. } = &mut spawn {
-                *slot = Some(PlanAdmission {
+                *slot = Some(Box::new(PlanAdmission {
                     link,
                     asleep: asleep.iter().map(|id| (*id).to_owned()).collect(),
-                });
+                }));
             }
             Mutation::Reserve {
                 parent: id.clone(),
@@ -2546,10 +2546,10 @@ mod tests {
         let worker_spawn = || {
             let mut spawn = command("mission-1:api");
             if let Command::Spawn { mission: slot, .. } = &mut spawn {
-                *slot = Some(crate::runtime::missions::MissionAdmission {
+                *slot = Some(Box::new(crate::runtime::missions::MissionAdmission {
                     mission: "mission-1".into(),
                     cap: 2,
-                });
+                }));
             }
             spawn
         };
@@ -2651,10 +2651,10 @@ mod tests {
             } = &mut spawn
             {
                 *parent = None;
-                *slot = Some(crate::runtime::missions::MissionAdmission {
+                *slot = Some(Box::new(crate::runtime::missions::MissionAdmission {
                     mission: mission.into(),
                     cap: 2,
-                });
+                }));
             }
             spawn
         };
