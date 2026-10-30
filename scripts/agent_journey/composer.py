@@ -2,7 +2,9 @@
 the operator sees it, judged by the parser the core uses.
 
 On an agent at rest the cell types a short text, erases it, pastes a block of
-lines, and clears it, with the keys Hide's terminal sends. After each step it
+lines, and clears it, with the keys Hide's terminal sends; an agent that on
+Windows can only guess a paste from key timing gets the lines typed with its
+newline key instead (`TIMED_PASTE`). After each step it
 reads the pane's visible screen with its styling through Herdr
 (`pane read --source visible --format ansi`) and has `journey_composer`, which
 holds the adapter's own composer declaration and the one parser, say `empty`,
@@ -22,6 +24,7 @@ import time
 
 from agent_live_check.processes import ProcessError
 from agent_live_check.protection import write_private
+from agent_live_check.system import WINDOWS
 
 from . import cells
 
@@ -33,6 +36,16 @@ TEXT = "hello 안녕하세요"
 # reached Grok 1.0.52 on Windows as eleven prompts (run 39635682277).
 BLOCK = "\r".join(f"composer check line {number:02d}" for number in range(1, 13))
 PASTE = ("\x1b[200~" + BLOCK + "\x1b[201~").encode()
+# The agents that on Windows read console key records, are never told of a
+# paste, and join its keys into one only when each arrives soon after the
+# last: Grok's window is 10 ms (grok-build `coalesce_live_keys`,
+# `PASTE_CONTINUE_TIMEOUT`), and a pause under load made a line break of the
+# paste an Enter that sent lines 01 to 04 (with-hide/hide-private#361). No
+# form of a paste is safe there (docs/INSTALL.md, What each system supports),
+# so the same twelve lines go in with Alt+Enter, Grok's own newline key,
+# which never submits.
+TIMED_PASTE = {"grok"}
+DRAFT = "\x1b\r".join(BLOCK.split("\r")).encode()
 BACKSPACE = b"\x7f"
 # An erase sends a few Backspaces before each read, up to a cap, since an
 # agent may keep pasted lines as text and not as one mark; the screen says
@@ -47,6 +60,13 @@ STEP_SECONDS = 30
 POLL_SECONDS = 0.5
 # Each step and the verdict the operator would see after it.
 STEPS = (("typed", "not_empty"), ("erased", "empty"), ("pasted", "not_empty"), ("cleared", "empty"))
+
+
+def block(journey):
+    """The step that puts the twelve lines in the composer and what it sends."""
+    if WINDOWS and journey.id in TIMED_PASTE:
+        return "drafted", DRAFT
+    return "pasted", PASTE
 
 
 def verdict_of(journey, screen):
@@ -133,7 +153,8 @@ def measure(journey):
             if name == "typed":
                 send(journey, TEXT.encode())
             elif name == "pasted":
-                send(journey, PASTE)
+                name, data = block(journey)
+                send(journey, data)
             else:
                 backspaces = Backspaces(journey)
             verdict, reads, seconds = wait_for(journey, expected, backspaces)

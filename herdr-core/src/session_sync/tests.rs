@@ -2220,6 +2220,78 @@ fn a_pane_and_layout_announced_before_their_tab_apply_when_it_arrives() {
     }
 }
 
+/// Herdr drains each subscribed event kind on its own cursor, so a workspace
+/// created while a drain runs reaches the stream as its tab, pane and layout
+/// before its `workspace_created` (Windows CI, with-hide/hide-private#360:
+/// `worktree.create` opened the repository and the worktree as two
+/// workspaces, the worktree's tab came first, and the rejected event dropped
+/// the session while a spawn checked its caller). The tab waits for its
+/// workspace and releases what waits for it, in either mode.
+#[test]
+fn a_tab_announced_before_its_workspace_applies_when_the_workspace_arrives() {
+    let workspace = |id: &str| -> Value {
+        serde_json::from_str(&snapshot().to_string().replace("w1", id)).unwrap()
+    };
+    let (root, worktree) = (workspace("w2"), workspace("w3"));
+    for mode in [ApplyMode::Reconcile, ApplyMode::Strict] {
+        let mut replica = SessionReplica::from_snapshot(&snapshot()).expect("snapshot");
+        let mut events = vec![event(
+            "workspace_created",
+            json!({"type": "workspace_created", "workspace": root["workspaces"][0]}),
+        )];
+        for (kind, field, key) in [
+            ("tab_created", "tabs", "tab"),
+            ("pane_created", "panes", "pane"),
+            ("layout_updated", "layouts", "layout"),
+        ] {
+            for created in [&root, &worktree] {
+                events.push(event(kind, json!({"type": kind, key: created[field][0]})));
+            }
+        }
+        events.push(event(
+            "workspace_created",
+            json!({"type": "workspace_created", "workspace": worktree["workspaces"][0]}),
+        ));
+        for (index, next) in events.into_iter().enumerate() {
+            replica
+                .apply(next, mode)
+                .unwrap_or_else(|error| panic!("{mode:?} event {index}: {error:?}"));
+        }
+        assert!(replica.ready_to_publish(), "{mode:?}");
+        let projected = replica.project();
+        let ids = |ids: Vec<&str>| ids.join(",");
+        assert_eq!(
+            ids(projected
+                .workspaces
+                .iter()
+                .map(|w| w.workspace_id.as_str())
+                .collect()),
+            "w1,w2,w3",
+            "{mode:?}"
+        );
+        assert_eq!(
+            ids(projected
+                .tabs
+                .iter()
+                .map(|tab| tab.tab_id.as_str())
+                .collect()),
+            "w1:t1,w2:t1,w3:t1",
+            "{mode:?}"
+        );
+        assert!(
+            projected.panes.iter().any(|pane| pane.pane_id == "w3:p1"),
+            "{mode:?}"
+        );
+        assert!(
+            projected
+                .layouts
+                .iter()
+                .any(|layout| layout.tab_id == "w3:t1"),
+            "{mode:?}"
+        );
+    }
+}
+
 /// A held focus is Herdr's focus of an earlier moment; a focus Herdr applies
 /// after it wins, so the held one never moves focus back when its pane lands.
 #[test]

@@ -146,10 +146,14 @@ const powershell = (script: string, env: NodeJS.ProcessEnv = {}): string =>
 
 /**
  * What holds TCP connections on this Windows machine now: the total, the
- * count in each state, and the ten process names holding the most. Chromium's
- * `ERR_NO_BUFFER_SPACE` (WSAENOBUFS) on a loopback connect to a test's hided
- * left nothing saying who held the sockets; `windows-sockets-reporter.ts`
- * prints this when a test attempt fails.
+ * count in each state, the ten process names holding the most, the dynamic
+ * port range those connections draw from, and the kernel's nonpaged pool
+ * beside the memory still available. Chromium's `ERR_NO_BUFFER_SPACE`
+ * (WSAENOBUFS) on a loopback connect to a test's hided left nothing saying
+ * who held the sockets, and when the count turned out far below the port range
+ * (with-hide/hide-private#296), nothing saying whether the kernel's own buffer
+ * memory ran short; `windows-sockets-reporter.ts` prints this when a test
+ * attempt fails.
  */
 export function windowsTcpSummary(): string[] {
   return powershell(`
@@ -160,6 +164,26 @@ export function windowsTcpSummary(): string[] {
     "by state: " + (($connections | Group-Object State | Sort-Object Count -Descending | ForEach-Object { "$($_.Name) $($_.Count)" }) -join ', ')
     "by process: " + (($connections | ForEach-Object { $name = $names[[int]$_.OwningProcess]; if ($name) { $name } else { "pid $($_.OwningProcess)" } } |
       Group-Object | Sort-Object Count -Descending | Select-Object -First 10 | ForEach-Object { "$($_.Name) $($_.Count)" }) -join ', ')
+    $ports = Get-NetTCPSetting -SettingName Internet
+    "dynamic ports: $($ports.DynamicPortRangeStartPort)-$($ports.DynamicPortRangeStartPort + $ports.DynamicPortRangeNumberOfPorts - 1)"
+    $memory = Get-CimInstance Win32_PerfFormattedData_PerfOS_Memory
+    "memory: nonpaged pool $([math]::Round($memory.PoolNonpagedBytes / 1MB)) MB, available $($memory.AvailableMBytes) MB"
+  `).split(/\r?\n/).filter(Boolean);
+}
+
+/**
+ * The eight processes that have used the most processor time on this Windows
+ * machine, with their seconds and resident memory, and the memory still
+ * available. A unit test that ran in half a second on every other run timed
+ * out at 5 s on a Windows runner beside the files running with it
+ * (with-hide/hide-private issue 354); `unit-failure-reporter.ts` prints this
+ * when a unit test fails, so the next one says what else held the machine.
+ */
+export function windowsBusiestProcesses(): string[] {
+  return powershell(`
+    "busiest: " + ((Get-Process | Sort-Object CPU -Descending | Select-Object -First 8 | ForEach-Object {
+      "$($_.ProcessName) $([math]::Round($_.CPU)) s $([math]::Round($_.WorkingSet64 / 1MB)) MB" }) -join ', ')
+    "available memory: $((Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1KB -as [int]) MB"
   `).split(/\r?\n/).filter(Boolean);
 }
 

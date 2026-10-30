@@ -56,7 +56,7 @@ test("@platform a native session's record groups its requests by goal flow and k
     // The pane head carries no task chip (PRD session-record-goal-flow B1).
     await expect(page.locator(`[data-pane-view="${herdr.panes[0]}"]`)).toBeVisible();
     await expect(page.locator("[data-pane-task-chip]")).toHaveCount(0);
-    await openRecord(page, root, herdr.panes[0]);
+    await openRecord(page, root, herdr.panes[0], "resting");
     const record = page.locator(RECORD);
     // The parent's own flows; an expanded child draws its flows inside its row.
     const flows = record.locator("[data-record-flows]").first().locator(":scope > ol > [data-record-flow]");
@@ -81,7 +81,7 @@ test("@platform a native session's record groups its requests by goal flow and k
     await setFixtureLifecycle(herdr, herdr.panes[0], "idle");
     // The record button shows the record whether or not typing in the
     // terminal put the unpinned lane away (PRD right-lane B15).
-    await openRecord(page, root, herdr.panes[0]);
+    await openRecord(page, root, herdr.panes[0], "resting");
     // A new goal opens a second flow; the first folds to its result and the current one is open (B3, B13, B14).
     // Its own and its child's pull requests merged after its last line, so once the link store holds their merge
     // times Hide's fact stands for its result (fact-status B1).
@@ -152,8 +152,13 @@ test("@platform a native session's record groups its requests by goal flow and k
  * Opens a task row's record from its record button, which the row shows
  * while it holds focus or the pointer. Focus, not a hover: a row the list
  * moves under a still pointer (a child nesting under it) loses the hover.
+ * The row first reaches the state the core settles it in: a turn ending in
+ * the pane on screen is seen at once, and the row then moves to its new group,
+ * drawn anew, so focus given before the move fell back to the terminal and
+ * the button stayed hidden.
  */
-async function openRecord(page: Page, row: Locator, pane: string): Promise<void> {
+async function openRecord(page: Page, row: Locator, pane: string, settled: string): Promise<void> {
+  await expect(row).toHaveAttribute("data-task-state", settled, { timeout: 45_000 });
   await row.locator('[data-task-focus="row"]').focus();
   await page.locator(`[data-task-record="${pane}"]`).click();
 }
@@ -181,7 +186,7 @@ test("a report letter is a dim line in the record and the question it wakes wait
     });
     declareParent(herdr, herdr.panes[1], herdr.panes[0]);
     const root = await taskRow(page, herdr.panes[0], goal);
-    await openRecord(page, root, herdr.panes[0]);
+    await openRecord(page, root, herdr.panes[0], "resting");
     const record = page.locator(RECORD);
     await expect(record.locator("[data-record-request]")).toHaveCount(1, { timeout: 45_000 });
     // The child's report wakes the parent, which ends asking; the envelope
