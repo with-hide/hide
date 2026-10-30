@@ -177,6 +177,9 @@ impl Runtime {
                     }
                     // It slept: the mark is spent (B12).
                     Some(_) => continue,
+                    // It slept by closing its pane and woke since into
+                    // another, which carried its registration: spent too.
+                    None if actor.pane_id != pane => continue,
                     // Its end was refused: it is tried again below.
                     None => {}
                 }
@@ -233,6 +236,10 @@ impl Runtime {
             .iter()
             .find(|agent| &agent.pane_id == pane)
         else {
+            // A machine that does not answer now may still list it later.
+            if device.is_some_and(|device| self.remote_herdr_api(device).is_none()) {
+                return Verdict::Keep;
+            }
             return Verdict::Drop("pane_gone");
         };
         if agent

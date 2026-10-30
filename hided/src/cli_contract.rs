@@ -252,6 +252,7 @@ pub const COMMANDS: &[Spec] = &[
         rest: None,
         answers: &["agent"],
         refusals: &[
+            "agent_pane_required",
             "agent_unavailable",
             "agent_ended",
             "parent_authority_required",

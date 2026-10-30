@@ -156,24 +156,33 @@ impl Runtime {
     }
 
     /// The recipients asleep now, for the delivery store's pass: their
-    /// letters wait for their wake with the deadline paused (D-13). Read from
-    /// the sleep records alone, which are few, never from the ledger.
+    /// letters wait for their wake with the deadline paused (D-13). An agent
+    /// whose wake failed is not among them: nothing will wake it, so its
+    /// letters' hour runs again. Read from the sleep records alone, which are
+    /// few, never from the ledger.
     pub(crate) fn delivery_asleep(&self) -> Asleep {
         let store = &self.snapshot.ui_state.agent_sleep;
-        let panes = store.records.iter().map(|(pane, record)| {
-            (
-                pane.clone(),
-                Sleeper {
-                    device_id: pane_device(pane).unwrap_or(self.node.as_str()).to_owned(),
-                    session: record
-                        .session_id
-                        .as_deref()
-                        .and_then(crate::wire::session_digest),
-                    since: record.since_unix_ms,
-                },
-            )
-        });
+        let panes = store
+            .records
+            .iter()
+            .filter(|(_, record)| record.phase != SleepPhase::Failed)
+            .map(|(pane, record)| {
+                (
+                    pane.clone(),
+                    Sleeper {
+                        device_id: pane_device(pane).unwrap_or(self.node.as_str()).to_owned(),
+                        session: record
+                            .session_id
+                            .as_deref()
+                            .and_then(crate::wire::session_digest),
+                        since: record.since_unix_ms,
+                    },
+                )
+            });
         let dormant = store.dormant.values().filter_map(|record| {
+            if record.phase == DormantPhase::Failed {
+                return None;
+            }
             let registration = record.registration.as_ref()?;
             Some((
                 registration.actor.pane_id.clone(),
@@ -230,12 +239,23 @@ impl Runtime {
     /// and as many queued wakes as the caps allow. Run by the coordinator's
     /// tick; a tick with nothing moved is one flag test.
     pub(crate) fn drive_letter_wakes(&mut self) -> bool {
-        if !std::mem::take(&mut self.letter_wakes.dirty) || self.effects_held() {
+        if !self.letter_wakes.dirty || self.effects_held() {
             return false;
         }
         let Ok(ledger) = self.delivery_ledger.as_ref().map(Arc::clone) else {
             return false;
         };
+        self.letter_wakes.dirty = false;
+        let store = &self.snapshot.ui_state.agent_sleep;
+        if store.records.is_empty()
+            && store.dormant.is_empty()
+            && self.letter_wakes.running.is_empty()
+            && self.letter_wakes.failed.is_empty()
+        {
+            // Nothing sleeps and nothing is owed: no letter to look at.
+            self.letter_wakes.queue.clear();
+            return false;
+        }
         let mut changed = false;
         for route in std::mem::take(&mut self.letter_wakes.running) {
             match self.route_stage(&route) {
@@ -330,9 +350,29 @@ impl Runtime {
     /// its letters at once.
     fn start_letter_wake(&mut self, ledger: &Ledger, route: Route) -> bool {
         let changed = match &route {
+            // No connection to wake it on, or a terminal Herdr could not
+            // restore: no wake is tried, so its letters wait rather than
+            // fail with an earlier wake's reason.
+            Route::Pane(pane)
+                if self.failed_terminal_id(pane).is_some() || self.sleep_target(pane).is_none() =>
+            {
+                self.letter_wakes.queue.push_back(route);
+                return false;
+            }
             Route::Pane(pane) => self.begin_agent_wake(pane, WakeMode::Resume, "letter"),
             Route::Dormant(id) => match self.begin_dormant_wake(id) {
                 Ok(started) => started,
+                // A busy checkout, a spent transition budget or a close not
+                // yet confirmed passes: the wake waits its turn.
+                Err(refusal)
+                    if matches!(
+                        refusal.code,
+                        "agent_sleep.admission_refused" | "agent_sleep.wake_refused"
+                    ) =>
+                {
+                    self.letter_wakes.queue.push_back(route);
+                    return false;
+                }
                 Err(refusal) => {
                     let reason = refusal.code.to_owned();
                     self.fail_letters(ledger, &route, &reason);
@@ -401,8 +441,8 @@ impl Runtime {
     /// not woken and why (B6), once the ledger shows the letter undelivered.
     /// A sender that is Hide's or the operator's own reads no letters.
     fn note_failed_letters(&mut self, ledger: &Ledger) {
+        // The thread marks the wakes moved when it ends, which looks again.
         if self.letter_wakes.noting {
-            self.letter_wakes.dirty = true;
             return;
         }
         let mut notes = Vec::new();
@@ -467,6 +507,20 @@ impl Runtime {
         let spawned = std::thread::Builder::new()
             .name("hide-wake-notes".to_owned())
             .spawn(move || {
+                // A send that panics must not leave the runtime thinking a
+                // thread still tells senders, or no note would go again.
+                struct Ending(std::sync::Weak<std::sync::Mutex<Runtime>>);
+                impl Drop for Ending {
+                    fn drop(&mut self) {
+                        if let Some(runtime) = self.0.upgrade() {
+                            let mut guard =
+                                runtime.lock().unwrap_or_else(|poison| poison.into_inner());
+                            guard.letter_wakes.noting = false;
+                            guard.letter_wakes.dirty = true;
+                        }
+                    }
+                }
+                let _ending = Ending(runtime);
                 for note in notes {
                     let prepared = crate::delivery::worker::Prepared::new(
                         client.clone(),
@@ -491,11 +545,6 @@ impl Runtime {
                             "letter_id": note.letter, "code": code,
                         }));
                     }
-                }
-                if let Some(runtime) = runtime.upgrade() {
-                    let mut guard = runtime.lock().unwrap_or_else(|poison| poison.into_inner());
-                    guard.letter_wakes.noting = false;
-                    guard.letter_wakes.dirty = true;
                 }
             });
         if let Err(error) = spawned {

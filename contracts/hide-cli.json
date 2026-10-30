@@ -1978,6 +1978,7 @@
                 }
             ],
             "refusals": [
+                "agent_pane_required",
                 "agent_unavailable",
                 "agent_ended",
                 "parent_authority_required",
@@ -3658,7 +3659,7 @@
             "rest": null
         }
     ],
-    "digest": "sha256:65100c718352bccd298cdd21cf8e3a9405357cbc3ae779cc3278011e100e0e45",
+    "digest": "sha256:0826270596fd45f7884584e06cb8b1447ea7abb392f60949609f66d18536e3bd",
     "envelopes": {
         "agent": {
             "answer": "value",

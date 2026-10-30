@@ -323,6 +323,30 @@ fn a_failed_letter_wake_fails_its_requests_and_the_next_one_tries_again() {
     assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Waking));
 }
 
+/// D-13, D-16: an agent whose wake failed takes letters but no longer
+/// pauses their hour, since nothing will wake it; and a `request` that finds
+/// no connection to wake it on waits, rather than failing with the earlier
+/// wake's reason.
+#[test]
+fn a_failed_sleeper_runs_its_letters_deadline_and_waits_for_a_connection() {
+    let mut runtime = sleepers(&[WORKER]);
+    assert!(runtime.delivery_asleep().contains_key(WORKER));
+    runtime
+        .snapshot
+        .ui_state
+        .agent_sleep
+        .records
+        .get_mut(WORKER)
+        .unwrap()
+        .phase = SleepPhase::Failed;
+    assert!(!runtime.delivery_asleep().contains_key(WORKER));
+    runtime.live = None;
+    let request = letter(&mut runtime, WORKER, "request");
+    runtime.drive_letter_wakes();
+    assert!(!runtime.delivery_wake_failures().contains_key(&request));
+    assert_eq!(phase(&runtime, WORKER), Some(SleepPhase::Failed));
+}
+
 /// B7: a restart reads a wake that was running as asleep again, and the
 /// request still pending wakes it again.
 #[test]
@@ -414,7 +438,12 @@ fn a_finished_nodes_worker_sleeps_once() {
     assert!(marks(&runtime).is_empty());
     // It wakes, and the same finish asks nothing again.
     runtime.snapshot.ui_state.agent_sleep.records.remove(WORKER);
+    runtime.missions.book.missions[0].nodes[0].line = Some("merged".into());
     runtime.save_missions();
+    assert!(
+        marks(&runtime).is_empty(),
+        "a save of the same finish marks nothing"
+    );
     runtime.sleep_finished_mission_agents(unix_milliseconds());
     assert_eq!(phase(&runtime, WORKER), None);
 }
