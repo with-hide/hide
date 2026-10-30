@@ -78,10 +78,14 @@ export function DeskThreadScene({ params }: { params: URLSearchParams }) {
   const jobs = useMemo(() => storyJobs(now), [now]);
   const actions = useMemo(() => createActions(() => true), []);
   const missions = useMemo(() => missionFixture("running", now), [now]);
-  const job: DeskJob = state === "asking" ? jobs.gallery! : jobs.conductor!;
+  const plan = useMemo(() => planFixture("running", now), [now]);
+  // The job counts the plan the store holds for its pane, so the head's plan chip and the plan part agree.
+  const job: DeskJob = useMemo(() => {
+    const base = state === "asking" ? jobs.gallery! : jobs.conductor!;
+    return { ...base, plan: { done: plan.progress.done, total: plan.progress.total } };
+  }, [jobs, plan, state]);
 
   useLayoutEffect(() => {
-    const plan = { ...planFixture("running", now), pane_id: job.pane_id! };
     const rows = [row("w1:1a", "1a Desk 방", "done", "codex"), row("w1:1b", "1b 스레드 화면", "going", "codex"), row(job.pane_id!, job.title, job.mark ?? "going", job.agent_kind)];
     const page: Record<SceneState, SessionThreadSection> = {
       live: thread(job.pane_id!, conductorPage(now, missions.mission.id)),
@@ -91,12 +95,12 @@ export function DeskThreadScene({ params }: { params: URLSearchParams }) {
     };
     // The model Hide launched the Conductor with, which the head's second line names (letter-18465).
     const overview_graph = { sessions: [{ device_id: "mac", pane_id: job.pane_id!, session_digest: "d", launch_model: "opus", launch_effort: "high" }] };
-    const rest = { ...missions.rest, plans: { items: [plan] }, overview_graph } as unknown as SnapshotRest;
+    const rest = { ...missions.rest, plans: { items: [{ ...plan, pane_id: job.pane_id! }] }, overview_graph } as unknown as SnapshotRest;
     useShellStore.setState({ rest, agents: rows, connection: "live", sessionThread: page[state], sessionThreadHistory: { generation: 1, pages: [] } });
     document.documentElement.classList.toggle("dark", theme === "dark");
     document.documentElement.classList.toggle("light", theme === "light");
     document.documentElement.style.setProperty("--interface-scale", params.get("scale") ?? "1");
-  }, [job, missions, now, state, theme, params]);
+  }, [job, missions, now, plan, state, theme, params]);
 
   const mentions: DeskMention[] = [{ kind: "session", id: "w1:1a", name: "1a-desk-room", mark: "done", agent_kind: "codex" }];
   return (
