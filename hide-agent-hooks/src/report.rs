@@ -203,8 +203,10 @@ mod tests {
 
     #[test]
     fn a_report_without_a_daemon_to_ask_ends_at_once() {
-        // No `hide` sits beside a test binary, which is the missing CLI a
-        // hook outside a Hide install meets.
+        // A test binary has no daemon to ask: a lane with no `hide` beside it
+        // meets the missing CLI a hook outside a Hide install meets, and one
+        // that built `hide` there (Windows) meets the daemon's absence. Both
+        // end at once with their cause.
         let started = Instant::now();
         let outcome = report(
             &HookStatusReport {
@@ -217,7 +219,10 @@ mod tests {
             },
             started + REPORT_TIMEOUT,
         );
-        assert_eq!(outcome, Err("cli".to_owned()));
+        assert!(
+            matches!(outcome.as_deref(), Err("cli" | "unavailable")),
+            "{outcome:?}"
+        );
         assert!(started.elapsed() < REPORT_TIMEOUT);
     }
 
