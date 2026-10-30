@@ -124,9 +124,6 @@
   "web/src/ProjectTool.tsx": {
     "button": 6
   },
-  "web/src/ProjectsTab.tsx": {
-    "button": 7
-  },
   "web/src/QuickAdd.tsx": {
     "input": 1
   },
