@@ -288,9 +288,9 @@ function Ways({ mission, node, actions }: { mission: Mission; node: MissionNode;
   return (
     <div className="flex flex-wrap gap-xs" data-panel-part="ways">
       {node.pr != null ? (
-        <Button size="sm" disabled={!node.pr_url} onClick={() => node.pr_url && actions.openSessionPullRequest({ workspace_id: mission.workspace_id, url: node.pr_url, number: node.pr! })} data-node-pr-card="true">{t("mission.prCard")}</Button>
+        <Button variant="secondary" size="sm" disabled={!node.pr_url} onClick={() => node.pr_url && actions.openSessionPullRequest({ workspace_id: mission.workspace_id, url: node.pr_url, number: node.pr! })} data-node-pr-card="true">{t("mission.prCard")}</Button>
       ) : null}
-      <Button size="sm" variant={node.pr != null ? "secondary" : "default"} disabled={!node.pane_id || !row} onClick={() => node.pane_id && actions.openAgent(node.pane_id)} data-node-terminal="true">{t("mission.toTerminal")}</Button>
+      <Button size="sm" variant="secondary" disabled={!node.pane_id || !row} onClick={() => node.pane_id && actions.openAgent(node.pane_id)} data-node-terminal="true">{t("mission.toTerminal")}</Button>
       <Button size="sm" variant="secondary" disabled={!session} onClick={() => session && actions.openChildRecord(session)} data-node-record="true">{t("mission.record")}</Button>
     </div>
   );

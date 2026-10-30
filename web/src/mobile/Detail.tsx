@@ -170,7 +170,7 @@ function SleepState({ sleep, agentKey }: { sleep: AgentSleep; agentKey: AgentKey
         </>
       )}
       {sleep.state === "sleeping" ? (
-        <Button className="mt-xs h-(--size-touch-target) px-lg text-title" disabled={blocked} data-phone-wake="wake" onClick={() => wakeAgent(agentKey)}>
+        <Button variant="secondary" className="mt-xs h-(--size-touch-target) px-lg text-title" disabled={blocked} data-phone-wake="wake" onClick={() => wakeAgent(agentKey)}>
           {t("panes.sleep.wake")}
         </Button>
       ) : null}

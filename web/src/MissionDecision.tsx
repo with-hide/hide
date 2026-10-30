@@ -149,16 +149,16 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
               <Button
                 key={index}
                 size="sm"
-                variant={recommended ? "default" : "secondary"}
+                variant="secondary"
                 disabled={closed}
                 onClick={() => choose(index)}
-                className="max-w-full"
+                className={recommended ? "max-w-full font-semibold" : "max-w-full"}
                 title={option}
                 data-mission-option={index + 1}
                 data-mission-recommended={recommended || undefined}
               >
                 <span className="min-w-0 truncate">{option}</span>
-                {recommended ? <span className="shrink-0 rounded-xs bg-background/20 px-xxs text-micro">{t("mission.banner.recommended")}</span> : null}
+                {recommended ? <span className="shrink-0 rounded-xs bg-background px-xxs text-micro text-foreground">{t("mission.banner.recommended")}</span> : null}
               </Button>
             );
           })}
