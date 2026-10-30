@@ -13,6 +13,8 @@ import { boardProjects } from "./navigation";
 import { checkSummary, confirmHolds, defaultMethod, fileOpen, mergeWhy, milestones, prFacts, primaryAction, splitFiles, type Confirmed, type PrFact, type PrimaryAction } from "./prCardModel";
 import { IssuePicker, PrLinks } from "./PrLinks";
 import { ReasonLine } from "./prReason";
+import { prReview } from "./prReview";
+import { ReviewBlock } from "./PrReviewers";
 import { badgeWord, staleLabel, staleness } from "./prMark";
 import { findPrEntry, opensCard, type PrEntry } from "./prWork";
 import { requireInterfaceLanguage } from "./i18n/locale";
@@ -157,6 +159,8 @@ function CardMenu({ project, pr, entry, actions }: { project: Workspace; pr: Pul
       <DropdownMenuContent align="end" onCloseAutoFocus={(event) => { if (linking) event.preventDefault(); }}>
         {linkable ? <DropdownMenuItem onSelect={() => setLinking(true)}>{t("prList.linkIssue")}</DropdownMenuItem> : null}
         {!merged ? <DropdownMenuItem onSelect={() => useUiStore.getState().setWorkspaceDialog({ kind: "pr_delegate", workspaceId: project.id, prNumber: pr.number })}>{t("prList.delegate")}</DropdownMenuItem> : null}
+        {/* With no review block to hold it, the pre-check stays one menu away on any open pull request that is not a draft (B12). */}
+        {!merged && !pr.is_draft && !prReview(pr) ? <DropdownMenuItem onSelect={() => preCheck(project, pr)} data-pr-card-menu-pre-check="true">{t("work.review.preCheck")}</DropdownMenuItem> : null}
         {linkable ? <DropdownMenuItem onSelect={() => useUiStore.getState().setWorkspaceDialog({ kind: "pr_new_issue", workspaceId: project.id, prNumber: pr.number })}>{t("prList.newIssue")}</DropdownMenuItem> : null}
         <DropdownMenuItem onSelect={() => void actions.copyText(pr.head_branch ?? "", "branch name")} data-pr-card-copy="true">{t("prList.copyBranch")}</DropdownMenuItem>
       </DropdownMenuContent>
@@ -199,6 +203,8 @@ function DecisionBox({ project, pr, entry, card, actions }: { project: Workspace
   const passing = pr.checks === "passing";
   const summary = checkSummary(pr);
   const Icon = failed ? TriangleAlertIcon : passing ? CheckCircle2Icon : LoaderCircleIcon;
+  // The review block stands beside the CI block, in its shape (PRD pr-review-status D-03); none while review neither applies nor was read (B10, B15).
+  const review = prReview(pr);
   return (
     <section className="flex min-w-0 flex-col gap-xs border-t border-border pt-md" data-pr-card-reason={entry?.reason.kind} data-pr-card-group={entry?.row.group}>
       <Buttons project={project} pr={pr} entry={entry} card={card} actions={actions}>
@@ -207,6 +213,7 @@ function DecisionBox({ project, pr, entry, card, actions }: { project: Workspace
           {counts && counts.total > 0 ? <p className="mt-xs flex flex-wrap gap-x-sm gap-y-xxs text-micro text-muted-foreground" data-pr-card-check-counts="true">{(["passed", "running", "waiting", "failed", "skipped", "unknown"] as const).filter((key) => counts[key] > 0).map((key) => <span key={key}>{t(`recordCard.ci.${key}`, { count: counts[key] })}</span>)}</p> : null}
           <button type="button" className="mt-xs inline-flex items-center gap-xxs rounded-xs text-micro text-muted-foreground outline-none hover:underline focus-visible:ring-1 focus-visible:ring-ring" onClick={() => actions.openPullRequest(`${pr.url}/checks`, project.device_id, true)}>{t("recordCard.checksLink")}<ExternalLinkIcon aria-hidden="true" className="size-(--size-icon-sm)" /></button>
         </div>
+        {review ? <ReviewBlock review={review} onPreCheck={() => preCheck(project, pr)} /> : null}
       </Buttons>
       {entry && ["queued", "unjudged", "checking"].includes(entry.reason.kind) ? <ReasonLine reason={entry.reason} group={entry.row.group} className="whitespace-normal [overflow-wrap:anywhere]" /> : null}
       {facts.length > 0 ? <p className="text-micro text-muted-foreground" data-pr-card-fact-line="true">{facts.map((fact) => factText(fact, t)).join(" · ")}</p> : null}
@@ -308,13 +315,13 @@ function Buttons({ project, pr, entry, card, actions, children }: { project: Wor
   );
   return (
     <div className="flex flex-col gap-sm" data-pr-card-buttons={primary}>
-      <div className="flex min-w-0 flex-wrap items-center gap-sm">
+      <div className="flex min-w-0 flex-wrap items-start gap-sm">
         {children}
         <span className="flex min-w-0 flex-wrap items-center justify-end gap-xs">
           {primary === "update" || pr.work?.merge_state === "behind" ? UpdateButton : null}
-          {primary === "review" ? <><Button size="sm" variant="outline" onClick={() => review(project, pr)} data-pr-card-review-agent="true">{t("work.card.reviewAgent")}</Button><Button size="sm" onClick={() => github("/files")} data-pr-card-review-github="true"><ExternalLinkIcon aria-hidden="true" />{t("work.card.reviewGithub")}</Button></> : null}
+          {primary === "review" ? <Button size="sm" onClick={() => github("/files")} data-pr-card-review-github="true"><ExternalLinkIcon aria-hidden="true" />{t("work.card.reviewGithub")}</Button> : null}
           {primary === "assign" ? <Button size="sm" onClick={() => useUiStore.getState().setWorkspaceDialog({ kind: "pr_delegate", workspaceId: project.id, prNumber: pr.number })} data-pr-card-assign="true">{t("work.card.assign")}</Button> : null}
-          {primary === "assign_reviewer" ? <Button size="sm" variant="outline" onClick={() => github()} data-pr-card-assign-reviewer="true">{t("work.card.assignReviewer")}</Button> : null}
+          {primary === "assign_reviewer" ? <Button size="sm" onClick={() => github()} data-pr-card-assign-reviewer="true"><ExternalLinkIcon aria-hidden="true" />{t("work.card.assignReviewer")}</Button> : null}
           {mine && primary !== "review" ? MergeButton : null}
         </span>
       </div>
@@ -351,8 +358,13 @@ function WriteLine({ write, base, card, actions, projectId, number }: { write: P
   );
 }
 
-/** `Have an agent review`: the Start dialog's agent opens on the branch with the review instruction. */
-function review(project: Workspace, pr: PullRequest) {
+/**
+ * `에이전트로 미리 점검` (PRD pr-review-status D-10): the Start dialog's agent
+ * opens on the branch with the review instruction that forbids posting to
+ * GitHub, and its session is recorded as the pull request's agent review. It
+ * is never a GitHub approval.
+ */
+function preCheck(project: Workspace, pr: PullRequest) {
   useUiStore.getState().setWorkspaceDialog({ kind: "pr_delegate", workspaceId: project.id, prNumber: pr.number, intent: "review" });
 }
 
