@@ -4,7 +4,7 @@
 //! its own receipt of how that ended.
 
 use super::*;
-use crate::project_open::ProjectOpenReceipt;
+use crate::project_open::{ProjectOpenReceipt, Unheld};
 
 fn registered(runtime: &mut Runtime, path: &str, label: &str) -> WorkspaceRegistration {
     let registration = workspace::registration(path, label, crate::node::TEST_NODE).unwrap();
@@ -54,7 +54,12 @@ fn a_folder_a_registered_checkout_holds_comes_forward_and_registers_nothing() {
     let node = runtime.node.as_str().to_owned();
     assert!(
         runtime
-            .project_open(&node, &format!("{alpha_path}/src"), "1-open")
+            .project_open(
+                &node,
+                &format!("{alpha_path}/src"),
+                "1-open",
+                Unheld::Refuse
+            )
             .unwrap()
     );
 
@@ -81,7 +86,11 @@ fn another_folder_is_added_by_create_workspace_and_its_receipt_follows_the_creat
     let node = runtime.node.as_str().to_owned();
     let path = "/tmp/hide-open-new";
 
-    assert!(runtime.project_open(&node, path, "1-new").unwrap());
+    assert!(
+        runtime
+            .project_open(&node, path, "1-new", Unheld::Register)
+            .unwrap()
+    );
     assert_eq!(
         runtime.project_open_receipt("1-new"),
         Some(ProjectOpenReceipt::Pending)
@@ -91,7 +100,11 @@ fn another_folder_is_added_by_create_workspace_and_its_receipt_follows_the_creat
         "the dialog's own creation runs"
     );
     // The same request asked again joins it rather than adding twice.
-    assert!(!runtime.project_open(&node, path, "1-new").unwrap());
+    assert!(
+        !runtime
+            .project_open(&node, path, "1-new", Unheld::Register)
+            .unwrap()
+    );
 
     let registration = workspace::registration(path, "hide-open-new", &node).unwrap();
     assert!(runtime.ingest_workspace_creation(
@@ -119,7 +132,9 @@ fn a_registration_that_fails_is_the_receipt_s_refusal() {
     let mut runtime = live_runtime();
     let node = runtime.node.as_str().to_owned();
     let path = "/tmp/hide-open-missing";
-    runtime.project_open(&node, path, "1-missing").unwrap();
+    runtime
+        .project_open(&node, path, "1-missing", Unheld::Register)
+        .unwrap();
 
     runtime.ingest_workspace_creation(
         path,
@@ -138,7 +153,9 @@ fn a_registration_that_fails_is_the_receipt_s_refusal() {
     // With no Herdr to open the project's first tab in, the add is refused at once.
     let mut offline = super::runtime();
     let node = offline.node.as_str().to_owned();
-    offline.project_open(&node, path, "2-offline").unwrap();
+    offline
+        .project_open(&node, path, "2-offline", Unheld::Register)
+        .unwrap();
     assert_eq!(
         offline.project_open_receipt("2-offline"),
         Some(ProjectOpenReceipt::Refused {
@@ -157,11 +174,39 @@ fn every_receipt_still_waiting_refuses_one_more_request() {
                 &node,
                 &format!("/tmp/hide-open-{index}"),
                 &format!("{index}-wait"),
+                Unheld::Register,
             )
             .unwrap();
     }
     assert_eq!(
-        runtime.project_open(&node, "/tmp/hide-open-more", "99-more"),
+        runtime.project_open(&node, "/tmp/hide-open-more", "99-more", Unheld::Register),
         Err("project_open_busy".to_owned())
     );
+}
+
+/// A path the daemon admitted only as one inside a registered checkout is
+/// never registered by the core: when no registered checkout holds it by
+/// the time the core reads it (its registration was removed in between, or
+/// the checkout was Herdr's alone), the open is refused, so a folder outside
+/// home is never added without the question Add a project asks.
+#[test]
+fn a_folder_admitted_as_a_checkout_s_is_refused_rather_than_registered_when_none_holds_it() {
+    let mut runtime = live_runtime();
+    let node = runtime.node.as_str().to_owned();
+    let path = "/Volumes/Work/project";
+
+    assert!(
+        runtime
+            .project_open(&node, path, "1-held", Unheld::Refuse)
+            .unwrap()
+    );
+
+    assert_eq!(
+        runtime.project_open_receipt("1-held"),
+        Some(ProjectOpenReceipt::Refused {
+            reason: "needs_confirmation".to_owned()
+        })
+    );
+    assert!(runtime.workspace_creations_in_flight.is_empty());
+    assert!(runtime.snapshot.ui_state.workspace_registrations.is_empty());
 }

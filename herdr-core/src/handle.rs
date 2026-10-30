@@ -677,14 +677,21 @@ impl Core {
 
     /// `hide <path>` for a caller on `device`: brings the project holding
     /// `path` in front, or starts its registration, under `request_id`,
-    /// whose receipt [`Self::project_open_receipt`] reads.
-    pub fn project_open(&self, device: &str, path: &str, request_id: &str) -> Result<(), String> {
+    /// whose receipt [`Self::project_open_receipt`] reads; `unheld` says
+    /// whether a folder no registered checkout holds may be registered.
+    pub fn project_open(
+        &self,
+        device: &str,
+        path: &str,
+        request_id: &str,
+        unheld: crate::project_open::Unheld,
+    ) -> Result<(), String> {
         if !check_owner_thread(self, "project.open") {
             return Err("project_open_unavailable".into());
         }
         let (changed, retired_syncs) = {
             let mut runtime = lock_recover(&self.runtime);
-            let changed = runtime.project_open(device, path, request_id);
+            let changed = runtime.project_open(device, path, request_id, unheld);
             (changed, runtime.take_retired_remote_syncs())
         };
         drop(retired_syncs);

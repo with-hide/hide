@@ -183,7 +183,7 @@ impl NodePanes {
             let windows = state.renderers.load(std::sync::atomic::Ordering::SeqCst);
             let outcome = crate::project_open::run(
                 &state.core,
-                &state.boundary,
+                &state.roots,
                 &state.window_calls,
                 windows,
                 &node,

@@ -30,6 +30,19 @@ pub enum ProjectOpenReceipt {
     Refused { reason: String },
 }
 
+/// What a request does when no registered checkout holds its folder.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unheld {
+    /// Register the folder through `create_workspace`, as Add a project does.
+    Register,
+    /// Refuse it `needs_confirmation`: the caller admitted the path only as
+    /// one inside a registered checkout, so a folder no registration holds
+    /// by the time the core reads it is a project the operator never
+    /// confirmed, and registering it would skip the question Add a project
+    /// asks.
+    Refuse,
+}
+
 /// The longest path a request may name, as the wire takes it.
 pub const PATH_LIMIT: usize = 4096;
 

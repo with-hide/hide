@@ -11,7 +11,7 @@ use std::collections::VecDeque;
 
 use super::events::{CreateWorkspacePayload, Event, RemoteControlPayload, RemoteControlRequest};
 use super::*;
-use crate::project_open::ProjectOpenReceipt;
+use crate::project_open::{ProjectOpenReceipt, Unheld};
 
 /// Receipts kept at once; past it a settled one makes room, and with every
 /// one still waiting a new request is refused `project_open_busy`.
@@ -74,13 +74,16 @@ fn folder_label(path: &str) -> String {
 impl Runtime {
     /// Starts `hide <path>` for a caller on `device`, `path` being that
     /// device's absolute folder (on this machine, the spelling hided's
-    /// `$HOME` line checked). A request id seen before changes nothing, so
-    /// a retry never registers twice; true when the snapshot changed.
+    /// `$HOME` line or a registered checkout's line checked), and `unheld`
+    /// what happens when no registered checkout holds it. A request id seen
+    /// before changes nothing, so a retry never registers twice; true when
+    /// the snapshot changed.
     pub(crate) fn project_open(
         &mut self,
         device: &str,
         path: &str,
         request_id: &str,
+        unheld: Unheld,
     ) -> Result<bool, String> {
         if self
             .project_opens
@@ -109,9 +112,15 @@ impl Runtime {
                     added: false,
                 }
             }
-            None => ProjectOpenReceipt::Pending,
+            None => match unheld {
+                Unheld::Register => ProjectOpenReceipt::Pending,
+                Unheld::Refuse => ProjectOpenReceipt::Refused {
+                    reason: "needs_confirmation".to_owned(),
+                },
+            },
         };
         let pending = receipt == ProjectOpenReceipt::Pending;
+        let registered = matches!(receipt, ProjectOpenReceipt::Opened { .. });
         self.project_opens.entries.push_back(ProjectOpen {
             request_id: request_id.to_owned(),
             device: device.to_owned(),
@@ -120,7 +129,7 @@ impl Runtime {
         });
         crate::diagnostic!(serde_json::json!({
             "component": "project_open", "kind": "requested",
-            "request_id": request_id, "device": device, "registered": !pending,
+            "request_id": request_id, "device": device, "registered": registered,
         }));
         if pending {
             let local = device == self.node.as_str();

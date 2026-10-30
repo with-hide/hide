@@ -1685,7 +1685,7 @@ async fn scoped_client_loop(
                         let command_request_id = request_id.clone();
                         let caller_node = source.as_ref().map(|(node, _)| node.clone());
                         let command_relay = Arc::clone(&chosen);
-                        let boundary = Arc::clone(&state.boundary);
+                        let roots = Arc::clone(&state.roots);
                         let window_calls = state.window_calls.clone();
                         let outcome = if let Some(Err((reason, next_action))) = &relay_slot {
                             Ok(Err(((*reason).to_owned(), *next_action)))
@@ -1791,7 +1791,7 @@ async fn scoped_client_loop(
                                 }
                                 ScopedRequest::ProjectOpen(path) => crate::project_open::run(
                                     &core,
-                                    &boundary,
+                                                                        &roots,
                                     &window_calls,
                                     renderers.load(Ordering::SeqCst),
                                     &cap.context.device_id,
@@ -3758,7 +3758,7 @@ fn refused_outside_checkout(frame: &Value) -> bool {
 /// Brings the roots current with the core for a check that found no root:
 /// true once they are, whether this read or one it waited for applied them,
 /// so the check is worth running again. False only when the core is gone.
-fn roots_current(roots: &crate::RootFollower) -> bool {
+pub(crate) fn roots_current(roots: &crate::RootFollower) -> bool {
     match roots.catch_up() {
         Ok(_) => true,
         Err(error) => {
