@@ -54,6 +54,14 @@ class EngineBoundary(unittest.TestCase):
             self.assertIn(f'hided/src/reader.rs:{line}:', output)
         self.assertIn('herdr_core::engine::EngineHandle', output)
 
+    def test_the_handoff_reached_from_anywhere_else_is_found(self):
+        root, check = self.tree({'hided/src/probe.rs':
+            'fn probe() { herdr_core::engine::herdr::handoff::ping_params(); }\n'})
+        status, output = self.failures(check)
+        self.assertEqual(status, 1)
+        self.assertIn('hided/src/probe.rs:1:', output)
+        self.assertIn('only `hided/src/herdr_handoff.rs` may', output)
+
     def test_starting_the_herdr_program_is_found(self):
         root, check = self.tree({'hided/src/start.rs':
             'fn status(herdr_bin: &Path) {\n'

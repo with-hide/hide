@@ -52,6 +52,9 @@ RUST_BANNED = [
     (r"\bApiConnector\b", f"holds a Herdr connection; {INSTEAD}"),
     (r"(?<![\w:])(?:[\w:]*::)?wire::|herdr_(?:request|success_response|event)\.rs",
      f"names Herdr's wire terms, which only the engine's Herdr implementation reads; {INSTEAD}"),
+    (r"\bengine::herdr::handoff\b",
+     f"reaches Herdr's wire terms through the handoff to a server it replaces, which only "
+     f"`hided/src/herdr_handoff.rs` may until bundle 4 deletes it; {INSTEAD}"),
 ]
 
 # A process start whose program is Herdr's: the start itself, and Herdr's
@@ -86,7 +89,7 @@ IMPLEMENTATION = [
 ALLOWED = {
     # Herdr runtime management: the operator's Herdr server and its program.
     "hided/src/herdr_handoff.rs": (
-        10, "moves the operator's Herdr server onto the bundled one; bundle 4 deletes the handoff"),
+        20, "moves the operator's Herdr server onto the bundled one; bundle 4 deletes the handoff"),
     "hided/src/login_item.rs": (
         1, "starts this account's Herdr server at login; bundle 4 deletes the bundled Herdr"),
     "hided/src/core_move/preflight.rs": (
