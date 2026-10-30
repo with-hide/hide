@@ -708,7 +708,7 @@ fn tab(workspace_id: &str, checkout_id: &str, pane: Option<PaneSnapshot>) -> Tab
     }
 }
 
-fn checkout(
+pub(super) fn checkout(
     workspace_id: &str,
     checkout_id: &str,
     path: &str,
@@ -736,7 +736,7 @@ fn checkout(
     }
 }
 
-fn workspace(
+pub(super) fn workspace(
     id: &str,
     label: &str,
     path: &str,
