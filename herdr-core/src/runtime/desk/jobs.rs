@@ -493,7 +493,11 @@ struct CardIndex<'a> {
     plans: HashMap<&'a str, &'a crate::plans::PlanView>,
     /// The missions each pane conducts.
     missions: HashMap<&'a str, Vec<&'a crate::runtime::missions::MissionView>>,
-    displays: Vec<&'a crate::view_layout::Display>,
+    /// Every open View that is a 결과물 (B30), with the checkout whose list holds it.
+    displays: Vec<(
+        super::super::workspace_view::WorkspaceKey,
+        &'a crate::view_layout::Display,
+    )>,
 }
 
 impl Runtime {
@@ -536,7 +540,15 @@ impl Runtime {
                 .map(|plan| (plan.pane_id.as_str(), plan))
                 .collect(),
             missions,
-            displays: self.open_displays(),
+            displays: self
+                .every_view_layout()
+                .flat_map(|(key, layout)| {
+                    layout
+                        .displays()
+                        .filter(|display| super::super::view_sessions::is_output(display))
+                        .map(move |display| (key.clone(), display))
+                })
+                .collect(),
         }
     }
 
@@ -831,17 +843,33 @@ impl Runtime {
                     state: pull.state,
                 })
                 .collect();
-            card.outputs = self
-                .session_displays_among(&row.pane_id, &index.displays)
-                .into_iter()
+            let scope = self.session_scope_of_pane(&row.pane_id);
+            card.outputs = index
+                .displays
+                .iter()
+                .filter(|(_, display)| {
+                    scope.as_ref().is_some_and(|scope| {
+                        display
+                            .openers
+                            .iter()
+                            .any(|opener| opener.of_session(scope))
+                    })
+                })
                 .take(MAX_OUTPUTS)
-                .map(|display| crate::model::DeskJobOutput {
-                    id: display.id.clone(),
-                    kind: output_kind(display),
-                    label: super::super::view_areas::display_label(display),
-                    thumb: None,
-                    seen: display.unseen.is_none(),
-                    pr_state: None,
+                .map(|((device, checkout), display)| {
+                    let page = display.kind == crate::view_layout::DisplayKind::Browser;
+                    crate::model::DeskJobOutput {
+                        id: display.id.clone(),
+                        kind: output_kind(display),
+                        label: super::super::view_areas::display_label(display),
+                        thumb: None,
+                        seen: display.unseen.is_none(),
+                        pr_state: None,
+                        device_id: Some(device.clone()),
+                        checkout: Some(checkout.clone()),
+                        path: (!page && !display.path.is_empty()).then(|| display.path.clone()),
+                        url: display.url.clone().filter(|_| page),
+                    }
                 })
                 .chain(pulls.iter().map(|pull| crate::model::DeskJobOutput {
                     id: pull.url.clone(),
@@ -850,6 +878,10 @@ impl Runtime {
                     thumb: None,
                     seen: true,
                     pr_state: Some(pull.state),
+                    device_id: None,
+                    checkout: None,
+                    path: None,
+                    url: Some(pull.url.clone()),
                 }))
                 .collect();
         }

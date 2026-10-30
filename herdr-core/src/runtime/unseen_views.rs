@@ -67,6 +67,38 @@ impl Runtime {
         }
     }
 
+    /// The operator looked at `view_id` of `key` somewhere other than its
+    /// own View area: Desk's lane shows a job's output with the file viewers
+    /// (PRD session-docs-and-assistant B31). A View already seen, or gone,
+    /// changes nothing.
+    pub(super) fn mark_view_seen(&mut self, key: &WorkspaceKey, view_id: &str) -> bool {
+        let unseen = self
+            .view_layout_of(key)
+            .and_then(|layout| layout.display(view_id))
+            .is_some_and(|display| display.unseen.is_some());
+        if !unseen {
+            return false;
+        }
+        let seen = self.change_view_layout(key, |layout, _| {
+            let display = layout
+                .display_mut(view_id)
+                .ok_or_else(|| crate::view_layout::LayoutError::UnknownDisplay(view_id.into()))?;
+            Ok(((), display.unseen.take().is_some()))
+        });
+        if let Err(error) = seen {
+            crate::diagnostic!(serde_json::json!({
+                "component": "unseen_views",
+                "kind": "unseen.seen_failed",
+                "device": key.0,
+                "view": view_id,
+                "error": error.kind(),
+            }));
+            return false;
+        }
+        self.refresh_unseen_rows();
+        true
+    }
+
     /// Settles before a snapshot read: the View in front is seen, and when a
     /// View list moved since the rows were laid (a View closed, one opened
     /// on another path) while anything is unseen, the rows are laid again.
@@ -129,31 +161,7 @@ impl Runtime {
         let Some((key, view_id)) = self.looked_at_view() else {
             return false;
         };
-        let unseen = self
-            .view_layout_of(&key)
-            .and_then(|layout| layout.display(&view_id))
-            .is_some_and(|display| display.unseen.is_some());
-        if !unseen {
-            return false;
-        }
-        let seen = self.change_view_layout(&key, |layout, _| {
-            let display = layout
-                .display_mut(&view_id)
-                .ok_or_else(|| crate::view_layout::LayoutError::UnknownDisplay(view_id.clone()))?;
-            Ok(((), display.unseen.take().is_some()))
-        });
-        if let Err(error) = seen {
-            crate::diagnostic!(serde_json::json!({
-                "component": "unseen_views",
-                "kind": "unseen.seen_failed",
-                "device": key.0,
-                "view": view_id,
-                "error": error.kind(),
-            }));
-            return false;
-        }
-        self.refresh_unseen_rows();
-        true
+        self.mark_view_seen(&key, &view_id)
     }
 
     /// An ancestor of the agent that opened `view_id` read it through the CLI
