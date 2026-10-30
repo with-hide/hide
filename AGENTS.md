@@ -186,7 +186,7 @@ Conventions:
 ## Design Reference
 
 Read [docs/UI_BEHAVIOR.md](docs/UI_BEHAVIOR.md) before changing any surface a user looks at; it owns what the UI does.
-Read [docs/DESIGN_GUIDE.md](docs/DESIGN_GUIDE.md) before changing a screen or a token; it says which part to build from and the rules that keep screens alike, and a project hook (`scripts/hooks/design-guide-first.sh`) refuses the first such edit of a session until it has been read.
+Read [docs/DESIGN_GUIDE.md](docs/DESIGN_GUIDE.md) before changing a screen or a token; it says which part to build from and the rules that keep screens alike, and a `PreToolUse` hook (`scripts/hooks/design-guide-first.sh`, registered for Claude Code in `.claude/settings.json` and for Codex in `~/.codex/hooks.json`) refuses the first such edit of a session until it has been read.
 Read [docs/DESIGN_WORKFLOW.md](docs/DESIGN_WORKFLOW.md) before making a design change; it owns how a change moves from proposal to a shipped PR and how it is visually reviewed.
 Numeric authority is `design/tokens.json`, and code authority is `web/src/components/ui` and `web/src/components`.
 `scripts/gen-tokens.mjs` writes `web/src/tokens.css` and `web/src/generated/accents.ts` from the tokens.
