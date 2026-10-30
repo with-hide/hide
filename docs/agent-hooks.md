@@ -693,6 +693,7 @@ As measured on 2026-10-30:
 
 `session/load` is not a read-only way to look at a session: on 2026-10-30 claude-agent-acp 0.97.0 appended a `cost-state` record and codex-acp 2.3.0 a `thread_settings_applied` record to the session file it loaded, and codex-acp refuses to load a sub-agent's session without its parent.
 Replay quality differs by server: pi-acp 0.0.34 replayed tool calls titled only `bash`, `read` or `edit`, with no input, location, diff or command output, all of which Pi's own session file keeps.
+An ACP server can keep sessions of its own: Antigravity's `agy_acp_server.par` 1.4.5 looks for `~/.gemini/antigravity-acp/conversations/<id>.db` and refused a conversation the `agy` CLI wrote under `~/.gemini/antigravity-cli/brain/`, and it asks for a sign-in of its own (its `authenticate` method or `auth.type` in `~/.gemini/antigravity-acp/settings.json`) rather than the CLI's.
 
 ### Adding an agent
 
