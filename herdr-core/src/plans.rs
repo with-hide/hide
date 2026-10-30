@@ -611,15 +611,27 @@ pub(crate) fn apply_node(
 /// What a change's evidence needs read off the lock before it is judged.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Asks {
-    /// Pull request numbers, read in the session's checkout's repository.
-    pub prs: BTreeSet<u32>,
-    /// Paths below the session's checkout.
-    pub files: BTreeSet<String>,
+    /// Pull request numbers, read in the session's checkout's repository,
+    /// each with the step that claims it.
+    pub prs: BTreeMap<u32, String>,
+    /// Paths below the session's checkout, each with the step that claims
+    /// it.
+    pub files: BTreeMap<String, String>,
 }
 
 impl Asks {
     pub fn is_empty(&self) -> bool {
         self.prs.is_empty() && self.files.is_empty()
+    }
+
+    /// The refusal for evidence these asks could not get read: the kind
+    /// still owed and its step, as the judgment words a read that failed.
+    pub fn unconfirmed(&self) -> String {
+        match (self.prs.first_key_value(), self.files.first_key_value()) {
+            (Some((number, key)), _) => refused("plan_pr_unconfirmed", format!("{key} #{number}")),
+            (None, Some((path, key))) => refused("plan_file_unconfirmed", format!("{key} {path}")),
+            (None, None) => "plan_unavailable".to_owned(),
+        }
     }
 }
 
@@ -737,7 +749,7 @@ pub(crate) fn judge(
         match new {
             Some(Evidence::Pr { number, .. }) => match proofs.prs.get(number) {
                 None => {
-                    asks.prs.insert(*number);
+                    asks.prs.insert(*number, step.key.clone());
                 }
                 Some(PrProof::Yours { .. }) => {}
                 Some(PrProof::NotYours) => {
@@ -755,17 +767,20 @@ pub(crate) fn judge(
             },
             Some(Evidence::File { path }) => match proofs.files.get(path) {
                 None => {
-                    asks.files.insert(path.clone());
+                    asks.files.insert(path.clone(), step.key.clone());
                 }
                 Some(FileProof::Present) => {}
                 Some(FileProof::Outside) => {
-                    return Err(refused("plan_file_outside", path));
+                    return Err(refused("plan_file_outside", format!("{} {path}", step.key)));
                 }
                 Some(FileProof::Missing) => {
-                    return Err(refused("plan_file_missing", path));
+                    return Err(refused("plan_file_missing", format!("{} {path}", step.key)));
                 }
                 Some(FileProof::Unconfirmed) => {
-                    return Err(refused("plan_file_unconfirmed", path));
+                    return Err(refused(
+                        "plan_file_unconfirmed",
+                        format!("{} {path}", step.key),
+                    ));
                 }
             },
             None => {}
@@ -840,10 +855,16 @@ pub struct PlanProof {
 }
 
 impl PlanProof {
+    /// The refusal when the reads this proof owes never got answered.
+    pub fn unconfirmed(&self) -> String {
+        self.asks.unconfirmed()
+    }
+
     /// Reads every ask into `proofs`; an answer already there is not read
     /// again.
     pub fn run(&self, proofs: &mut Proofs) {
         use hide_node_link::catalog::PathFacts;
+        use hide_node_link::git::GitCommand;
         use hide_node_link::protocol::Call;
         let facts = |paths: Vec<String>| -> Result<PathFacts, String> {
             crate::node_access::call_as(self.link.as_ref(), Call::PathFacts { paths }, PROOF_CALL)
@@ -853,7 +874,7 @@ impl PlanProof {
         if self
             .asks
             .prs
-            .iter()
+            .keys()
             .any(|number| !proofs.prs.contains_key(number))
         {
             let mut branches = self.branches.clone();
@@ -871,25 +892,45 @@ impl PlanProof {
                 })),
             }
             let place = crate::github::Where::Checkout(std::path::PathBuf::from(&self.root));
-            for number in &self.asks.prs {
+            for number in self.asks.prs.keys() {
                 if proofs.prs.contains_key(number) {
                     continue;
                 }
+                let unconfirmed = |reason: String| {
+                    crate::diagnostic!(json!({
+                        "component": "plans", "kind": "plans.pr_unconfirmed",
+                        "plan": self.plan, "session_id": self.session_id,
+                        "number": number, "reason": reason,
+                    }));
+                    PrProof::Unconfirmed
+                };
                 let proof = match crate::github::pr_head(self.link.as_ref(), &place, *number) {
-                    Ok(head) if !head.cross_repository && branches.contains(&head.branch) => {
-                        PrProof::Yours {
+                    Ok(head) if head.cross_repository => PrProof::NotYours,
+                    Ok(head) if branches.contains(&head.branch) => PrProof::Yours {
+                        repo: head.repository,
+                    },
+                    // Any branch of the checkout's own is the session's too,
+                    // such as one it opened a pull request from and left:
+                    // git on the node says whether `refs/heads/<branch>` is
+                    // there, and refuses when it is not.
+                    Ok(head) => match crate::node_access::call_as::<String>(
+                        self.link.as_ref(),
+                        Call::Git {
+                            root: self.root.clone(),
+                            command: GitCommand::HasLocalBranch {
+                                branch: head.branch.clone(),
+                            },
+                        },
+                        PROOF_CALL,
+                    ) {
+                        Ok(_) => PrProof::Yours {
                             repo: head.repository,
-                        }
-                    }
-                    Ok(_) | Err(crate::github::PrHeadFailure::Missing) => PrProof::NotYours,
-                    Err(crate::github::PrHeadFailure::Unread(reason)) => {
-                        crate::diagnostic!(json!({
-                            "component": "plans", "kind": "plans.pr_unconfirmed",
-                            "plan": self.plan, "session_id": self.session_id,
-                            "number": number, "reason": reason,
-                        }));
-                        PrProof::Unconfirmed
-                    }
+                        },
+                        Err(hide_node_link::LinkError::Refused(_)) => PrProof::NotYours,
+                        Err(error) => unconfirmed(error.to_string()),
+                    },
+                    Err(crate::github::PrHeadFailure::Missing) => PrProof::NotYours,
+                    Err(crate::github::PrHeadFailure::Unread(reason)) => unconfirmed(reason),
                 };
                 proofs.prs.insert(*number, proof);
             }
@@ -897,7 +938,7 @@ impl PlanProof {
         let files: Vec<&String> = self
             .asks
             .files
-            .iter()
+            .keys()
             .filter(|path| !proofs.files.contains_key(*path))
             .collect();
         if files.is_empty() {
@@ -1394,7 +1435,20 @@ mod tests {
         let asks = node_with(&plan, "pr", Done, claim(), &Proofs::default())
             .unwrap()
             .unwrap_err();
-        assert_eq!(asks.prs, BTreeSet::from([12]));
+        assert_eq!(asks.prs, BTreeMap::from([(12, "pr".to_owned())]));
+        assert_eq!(
+            asks.unconfirmed(),
+            crate::coordination::refusal("plan_pr_unconfirmed", "pr #12")
+        );
+        // Owing only a file, the refusal names the file and its step.
+        let files = Asks {
+            prs: BTreeMap::new(),
+            files: BTreeMap::from([("docs/spec.md".to_owned(), "spec".to_owned())]),
+        };
+        assert_eq!(
+            files.unconfirmed(),
+            crate::coordination::refusal("plan_file_unconfirmed", "spec docs/spec.md")
+        );
         let mut proofs = Proofs::default();
         proofs.prs.insert(12, PrProof::NotYours);
         assert_eq!(
@@ -1447,7 +1501,7 @@ mod tests {
             proofs.files.insert("docs/spec.md".into(), proof);
             assert_eq!(
                 node_with(&plan, "spec", Done, claim(), &proofs).unwrap_err(),
-                crate::coordination::refusal(code, "docs/spec.md")
+                crate::coordination::refusal(code, "spec docs/spec.md")
             );
         }
         let mut proofs = Proofs::default();
@@ -1653,9 +1707,10 @@ mod tests {
     }
 
     /// A session's checkout on branch `main-branch`, where pull request 1 is
-    /// from it, 2 from a child's branch, 3 from another branch, 4 from a
-    /// fork, 5 is not there and 6 cannot be asked about; `docs/spec.md` is
-    /// there, `docs/link.md` leads out of the checkout.
+    /// from it, 2 from a child's branch, 3 from a branch the checkout does
+    /// not have, 4 from a fork, 5 is not there, 6 cannot be asked about and
+    /// 7 is from `left-branch`, a local branch the checkout is no longer on;
+    /// `docs/spec.md` is there, `docs/link.md` leads out of the checkout.
     struct Checkout;
 
     impl crate::node_access::NodeLink for Checkout {
@@ -1718,9 +1773,24 @@ mod tests {
                         "5" => failed(
                             "GraphQL: Could not resolve to a PullRequest with the number of 5.",
                         ),
+                        "7" => head("left-branch", false),
                         _ => failed("error connecting to api.github.com"),
                     })
                     .unwrap()
+                }
+                Call::Git {
+                    command: hide_node_link::git::GitCommand::HasLocalBranch { branch },
+                    ..
+                } => {
+                    if branch != "left-branch" {
+                        return Err(hide_node_link::LinkError::Refused(
+                            hide_node_link::HostError::new(
+                                hide_node_link::ErrorCode::Io,
+                                "exit status 1",
+                            ),
+                        ));
+                    }
+                    json!("")
                 }
                 other => panic!("not asked: {other:?}"),
             };
@@ -1735,12 +1805,13 @@ mod tests {
             root: "/work/app".into(),
             branches: BTreeSet::from(["child-branch".to_owned()]),
             asks: Asks {
-                prs: BTreeSet::from([1, 2, 3, 4, 5, 6]),
-                files: BTreeSet::from([
-                    "docs/spec.md".to_owned(),
-                    "docs/gone.md".to_owned(),
-                    "docs/link.md".to_owned(),
-                ]),
+                prs: (1..=7)
+                    .map(|number| (number, format!("pr{number}")))
+                    .collect(),
+                files: ["docs/spec.md", "docs/gone.md", "docs/link.md"]
+                    .into_iter()
+                    .map(|path| (path.to_owned(), "spec".to_owned()))
+                    .collect(),
             },
             plan: "1000".into(),
             session_id: "s1".into(),
@@ -1760,6 +1831,7 @@ mod tests {
         );
         assert_eq!(proofs.prs[&5], PrProof::NotYours, "no such pull request");
         assert_eq!(proofs.prs[&6], PrProof::Unconfirmed);
+        assert_eq!(proofs.prs[&7], yours, "made from a local branch it left");
         assert_eq!(proofs.files["docs/spec.md"], FileProof::Present);
         assert_eq!(proofs.files["docs/gone.md"], FileProof::Missing);
         assert_eq!(proofs.files["docs/link.md"], FileProof::Outside);

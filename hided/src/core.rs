@@ -391,6 +391,7 @@ impl CoreHandle {
         command: herdr_core::plans::PlanCommand,
     ) -> Result<serde_json::Value, String> {
         let mut proofs = herdr_core::plans::Proofs::default();
+        let mut owed = None;
         for _ in 0..3 {
             let (reply, result) = mpsc::channel();
             self.commands
@@ -405,10 +406,18 @@ impl CoreHandle {
                 .map_err(|_| "plan_unavailable".to_owned())?;
             match result.recv().map_err(|_| "plan_unavailable".to_owned())?? {
                 herdr_core::plans::PlanTurn::Answered { answer, .. } => return Ok(answer),
-                herdr_core::plans::PlanTurn::Prove(proof) => proof.run(&mut proofs),
+                herdr_core::plans::PlanTurn::Prove(proof) => {
+                    proof.run(&mut proofs);
+                    owed = Some(proof);
+                }
             }
         }
-        Err("plan_pr_unconfirmed".to_owned())
+        // The plan kept moving under three rounds of reads: refuse with the
+        // evidence still owed, as a read that failed is refused.
+        Err(owed.map_or_else(
+            || "plan_unavailable".to_owned(),
+            |proof| proof.unconfirmed(),
+        ))
     }
 
     /// The pane's plan summary for its prompt hook, on the owner thread;

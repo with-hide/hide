@@ -494,13 +494,7 @@ impl Runtime {
                 "plan": plan.id(), "session_id": session.session_id, "device": device,
                 "reason": reason,
             }));
-            match asks.prs.first() {
-                Some(number) => refusal("plan_pr_unconfirmed", &format!("#{number}")),
-                None => refusal(
-                    "plan_file_unconfirmed",
-                    asks.files.first().map_or("", String::as_str),
-                ),
-            }
+            asks.unconfirmed()
         })?;
         let branches = self
             .delivery_state()
