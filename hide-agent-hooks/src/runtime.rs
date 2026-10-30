@@ -36,7 +36,7 @@ pub const HOOK_ENTRY_VERSION: u32 = 10;
 #[macro_export]
 macro_rules! intent_table {
     () => {
-        "Inside Hide, turn what the operator asks for into its command:\n| The operator asks | Run |\n| --- | --- |\n| show the operator a file, a diff or a web page | `hide file open <path>`, `hide diff open <path>`, `hide browser open <url-or-path>`: it opens as a tab of the active View area and waits in the operator's Needs You as To look at until they look at it |\n| check a page for yourself (your own browser QA) | your own browser tool, such as `aside`, not `hide browser open`: a page you open in Hide waits for the operator |\n| collect what a delegated child opened | `hide view list` shows what the operator has not seen and who opened it; read it with `hide view status <view-id>` or `hide browser snapshot <display>`, and to show it, open it again from your own pane |\n| start an agent beside you | `hide agent spawn --beside …` (your own checkout only; add `--parent here` to supervise it) |\n| hand work to an agent and collect its result | `hide agent spawn --parent here …` |\n| start independent work the operator will handle | `hide agent spawn …` without --parent |\nWithout --beside, `hide agent spawn` opens the agent in a tab of its own. Never start an agent with `\"${HERDR_BIN_PATH:-herdr}\" pane split` or `\"${HERDR_BIN_PATH:-herdr}\" agent start`: that pane has no parent, letters or watch. Never show the operator a result with the system opener (`open`, `xdg-open`, `start`, `Start-Process`, `Invoke-Item`): it lands in an app outside Hide with no trace of who opened it, and Hide refuses the call. Use `hide browser open` for a page or a URL and `hide file open` for anything else, for a file outside the checkout too."
+        "Inside Hide, turn what the operator asks for into its command:\n| The operator asks | Run |\n| --- | --- |\n| show the operator a file, a diff or a web page | `hide file open <path>`, `hide diff open <path>`, `hide browser open <url-or-path>`: it opens as a tab of the active View area and waits in the operator's Needs You as To look at until they look at it |\n| check a page for yourself (your own browser QA) | your own browser tool, such as `aside`, not `hide browser open`: a page you open in Hide waits for the operator |\n| collect what a delegated child opened | `hide view list` shows what the operator has not seen and who opened it; read it with `hide view status <view-id>` or `hide browser snapshot <display>`, and to show it, open it again from your own pane |\n| start an agent beside you | `hide agent spawn --beside …` (your own checkout only; add `--parent here` to supervise it) |\n| hand work to an agent and collect its result | `hide agent spawn --parent here …` |\n| start independent work the operator will handle | `hide agent spawn …` without --parent |\nWithout --beside, `hide agent spawn` opens the agent in a tab of its own. Never start an agent with `hide pane open` or by typing its program into a pane: that agent has no parent, letters or watch. Never show the operator a result with the system opener (`open`, `xdg-open`, `start`, `Start-Process`, `Invoke-Item`): it lands in an app outside Hide with no trace of who opened it, and Hide refuses the call. Use `hide browser open` for a page or a URL and `hide file open` for anything else, for a file outside the checkout too."
     };
 }
 
@@ -49,7 +49,7 @@ macro_rules! intent_table {
 pub const PURPOSE_CONTEXT: &str = concat!(
     intent_table!(),
     "\n\n",
-    "Herdr provides direct terminal input and control. Call it as `\"${HERDR_BIN_PATH:-herdr}\"` (PowerShell: `& $env:HERDR_BIN_PATH`), the Herdr that serves this pane, because a `herdr` found on PATH may be an older one its server refuses. `\"${HERDR_BIN_PATH:-herdr}\" agent prompt` submits input directly; Hide may show a passive observation, but this creates no Hide letter, watch, or parent relationship. Use Hide letters for stored delivery, replies and retry management. When you create a worktree, set its one-line purpose in 40 characters or fewer by running `\"${HERDR_BIN_PATH:-herdr}\" workspace report-metadata <workspace> --source <you> --token purpose=\"…\"`. For work you will supervise, delegate with `hide agent spawn --parent here …`; this records responsibility and starts an automatic watch. For independent work the operator will handle, hand it off with `hide agent spawn …` without --parent; it becomes an operator-owned root with no automatic watch. Both modes record you as origin and leave the current screen and keyboard focus unchanged. From the machine that runs Hide, start the agent on a connected device by adding `--machine <device id>` (the device_id `hide workspace info` shows, the machine `hide agent list` shows for agents there); `--repo` and `--path` are then that device's paths. An agent on a device cannot use `--machine`: it is refused with `machine_not_permitted`."
+    "Read and drive the panes of your machine through Hide: `hide pane read <pane>` and `hide agent read <agent>` print a pane's last 120 lines, unwrapped (`--lines <n>`, 2000 at most), `hide pane send <pane> <text>` types text and presses Enter only with `--enter`, and `hide pane open --beside -- <command>` runs a command in a new pane right of yours and prints its id, leaving your focus where it is unless `--focus`; `hide ps` lists the panes and their ids. Text typed into another agent's pane is no letter: hand an agent something with `hide request send`, which keeps it with its reply and retry, and add `--force` to put it into the agent's input now even while it works, which is refused while someone is typing there. When you create a worktree, set its one-line purpose in 40 characters or fewer with `hide workspace purpose \"…\"`. For work you will supervise, delegate with `hide agent spawn --parent here …`; this records responsibility and starts an automatic watch. For independent work the operator will handle, hand it off with `hide agent spawn …` without --parent; it becomes an operator-owned root with no automatic watch. Both modes record you as origin and leave the current screen and keyboard focus unchanged. From the machine that runs Hide, start the agent on a connected device by adding `--machine <device id>` (the device_id `hide workspace info` shows, the machine `hide agent list` shows for agents there); `--repo` and `--path` are then that device's paths. An agent on a device cannot use `--machine`: it is refused with `machine_not_permitted`."
 );
 
 pub fn hook_stdout(runtime: AgentRuntime, event: HookEvent) -> Option<String> {
@@ -507,10 +507,12 @@ mod tests {
                 PURPOSE_CONTEXT
             );
             assert!(PURPOSE_CONTEXT.contains("40 characters or fewer"));
-            assert!(PURPOSE_CONTEXT.contains(
-                "`\"${HERDR_BIN_PATH:-herdr}\" workspace report-metadata <workspace> --source <you> --token purpose=\"…\"`"
-            ));
-            assert!(!PURPOSE_CONTEXT.contains("`herdr "));
+            assert!(PURPOSE_CONTEXT.contains("`hide workspace purpose \"…\"`"));
+            // Hide's commands only: no Herdr program, variable or command
+            // (PRD engine-bundle-1 D-6, B1).
+            for herdr in ["herdr", "Herdr", "HERDR"] {
+                assert!(!PURPOSE_CONTEXT.contains(herdr), "{herdr}");
+            }
             assert!(PURPOSE_CONTEXT.contains("`hide agent spawn --parent here"));
             assert!(PURPOSE_CONTEXT.contains("`hide agent spawn …` without --parent"));
             assert!(PURPOSE_CONTEXT.contains("operator-owned root with no automatic watch"));
@@ -532,7 +534,12 @@ mod tests {
                 "`hide agent spawn --beside …`",
                 "`hide agent spawn --parent here …`",
                 "`hide agent spawn …` without --parent",
-                "Never start an agent with `\"${HERDR_BIN_PATH:-herdr}\" pane split` or `\"${HERDR_BIN_PATH:-herdr}\" agent start`",
+                "Never start an agent with `hide pane open` or by typing its program into a pane",
+                "`hide pane read <pane>`",
+                "`hide agent read <agent>`",
+                "`hide pane send <pane> <text>`",
+                "`hide pane open --beside -- <command>`",
+                "add `--force`",
                 "Never show the operator a result with the system opener (`open`, `xdg-open`, `start`, `Start-Process`, `Invoke-Item`)",
                 "for a file outside the checkout too",
             ] {

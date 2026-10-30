@@ -53,6 +53,7 @@ hide watch list
 hide watch stop watch-2
 hide request send parent-name --kind progress --intent task-plan-1 --body 'Plan: core first, then web.'
 hide request send parent-name --kind report --intent task-complete-1 --body 'The check passed.'
+hide request send child-name --intent task-stop-1 --body 'Stop and report what you have.' --force
 ```
 
 A `request` or `block` letter waits for an answer; a `progress` letter is an interim report, such as a plan or a checkpoint, and a `report` letter says the work is finished.
@@ -250,6 +251,21 @@ The same picker opened through Hide leaves an unsent draft and holds the bell.
 A background workflow approval card on Grok's daemon route is not yet verified: the measured 1.0.62 session used the shell route, where `await_user` produced an idle, paused workflow rather than that card.
 Until a native `blocked` status or a session wait is measured for that card, do not treat it as a proven bell hold; this remains a native-route coverage gap.
 A swallowed bell moves no observed state, so `Rung` prevents another ring in that episode; at most three later episodes ring before the letter waits for `hide inbox`.
+
+### Forced letters
+
+`hide request send … --force` puts a letter into the recipient's input now, even while it works (PRD engine-bundle-1 D-5, D-14, B4); there is no separate prompt command, and the letter is recorded, answered and retried like any other.
+It is how an agent hands another agent input since Hide stopped teaching Herdr's `agent prompt`, and the letter's record replaces the relationship a passive observation of that call recorded ([agent-hooks.md](agent-hooks.md#passive-direct-prompt-observations)).
+
+1. Before anything is recorded, the daemon reads the recipient's visible screen off the runtime lock and judges it by the agent's composer declaration ([Reading the composer](#reading-the-composer)), for any version of the agent (`delivery/composer.rs`, `forced_clear`).
+   Text there refuses the send with `composer_not_empty`, and a screen that cannot be read empty (no declaration for the kind, no composer where it is declared, as under a menu or a dialog, or a failed or cut read) with `composer_unconfirmed`; nothing is recorded or typed, each refusal is logged as `delivery.forced_refused` with the pane and the code, and its `next_action` says to send again without `--force`.
+   A recipient Hide put to sleep has no input to read and is refused `force_target_asleep`; an ordinary `request` or `block` wakes it.
+2. The letter is then recorded as one sent with `--now` and marked `forced` (`Letter.forced`), and the doorbell's next pass, within 250 ms, judges it without the kind's bell declaration, the mid-turn wait, an unsettled session read, Hide's draft record and the quiet period (`doorbell::judge`); it still waits while Herdr reads the agent `blocked`, while the agent's own question or plan approval waits for the operator, and, for a kind that takes letters at its tools, while it works, since its next tool call hands the letter over.
+3. Right before it types the bell line, the doorbell reads the composer again, inside its eight Herdr calls a pass, because someone can start typing between the send and the bell.
+   Text there, or a screen not read empty, types nothing: the letter loses its `forced` mark and stays pending as a `--now` letter behind every ordinary guard, and `delivery.forced_deferred` is logged with the letter, the pane and the reason, never the screen's text.
+
+The bell line names `hide inbox` for a kind the doorbell does not ring on its own, whose prompt hook then takes the letter as it takes any prompt's.
+The residual is the [external-input race](#safe-intake-and-manual-fallback) every bell has: a key that lands between the second read and the bell's submission.
 
 ### The bell line
 
@@ -731,6 +747,22 @@ A core move carries each wait with the machine it names (`node_migration::KEYS`)
 At most 64 waits are held at once: a spawn past that answers `identity_waits_full`, whose next action is to give one of the waiting agents a first prompt or close its pane, and a fork past it is logged as `registration_failed` with that code.
 The waits ride on the existing one-second agent refresh, with no timer, no Herdr read of their own and no work under `Mutex<Runtime>`; an unchanged list with unchanged waits plans nothing.
 A ledger with no wait writes no `identity_waits` field, and a build from before waits ignores the field.
+
+## Pane commands
+
+`hide pane read <pane> [--lines <n>]`, `hide agent read <agent> [--lines <n>]`, `hide pane send <pane> <text> [--enter]`, `hide pane open --beside [--focus] -- <command>` and `hide workspace purpose <text>` are an agent's reads of and input to the panes of its machine, and its checkout's purpose, in place of Herdr's own commands (PRD engine-bundle-1 D-5, D-13).
+They need the running daemon and a pane-bound caller, like the letter commands; a caller outside a Hide pane is refused by the credential boundary, and a checkout-bound one with `pane_required`.
+The daemon admits the caller's pane and checkout on the core's owner thread (`Runtime::prepare_pane_command`), and the engine calls run on the caller's task, off the runtime lock, through the engine boundary (`herdr_core::pane_command`); nothing they do is recorded in the ledger.
+
+- They reach every pane of the machine they name, as Herdr's commands did: a bare pane id is a pane of the caller's machine, as `hide ps` lists it, and `remote:<device>:pane:<id>` a device's; an agent is named as a letter's target is, by its name, registration id or pane, and two agents of one name are `target_ambiguous`.
+- A read prints the pane's last 120 lines unwrapped and without styling (`recent_unwrapped`), at most 2,000 (`lines_out_of_range` past it); `--json` prints the answer line `{"ok":true,"value":{"pane","text","truncated"}}` instead.
+- `hide pane send` types at most 16 KiB (`text_too_long`) and presses Enter only with `--enter`.
+  Typing into an agent's pane is input, not a letter: it has no reply, retry or record, and Hide's draft guard does not see it.
+- `hide pane open --beside` splits the caller's pane to its right, unfocused, in the caller's checkout, waits up to 10 s for the new shell to hold its terminal alone, as an agent start does, types the command as one line of at most 1,000 bytes (`command_too_long`, under the shortest terminal line a supported system keeps whole) and answers the new pane's id; `--focus` then focuses it.
+  A split whose answer never came is `pane_open_unconfirmed`, and a shell that did not take the command is `shell_not_ready` with the pane open.
+- `hide workspace purpose` writes the checkout's purpose token on its engine workspace, the one the checkout row's Set purpose writes, at most 40 characters on one line (`purpose_too_long`, `purpose_invalid`).
+- Every refusal is one line, `{"ok":false,"error":{"code","message"}}`, whose message is the next step, with a non-zero exit; a limit is checked by the CLI before it asks the daemon and by the daemon again.
+- They work the same on macOS, Linux and Windows: each step is an engine call, and the command line is typed into whatever shell the pane runs.
 
 ## What runs now: `hide ps`
 
