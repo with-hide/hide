@@ -423,7 +423,7 @@ export const PaneView = memo(function PaneView({
         {agentKind ? <PaneAskMark paneId={paneId} header={header} actions={actions} /> : null}
         {agentKind && lettersWaiting > 0 ? <PaneLetterButton paneId={paneId} letters={lettersWaiting} onDeliver={actions.deliverLettersNow} /> : null}
         <span data-pane-move-blank="true" className="h-full flex-1" />
-        {agentKind ? <PaneDeskReturn paneId={paneId} actions={actions} /> : null}
+        <PaneDeskReturn paneId={paneId} actions={actions} />
         {agentKind ? <PaneHeadChildren paneId={paneId} actions={actions} /> : null}
         <PaneConnectionChip pane={pane} agentKind={agentKind} actions={actions} local={local} />
         {agentKind ? <PaneMention paneId={paneId} actions={actions} className={tools} /> : null}
