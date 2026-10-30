@@ -670,6 +670,30 @@ Grok keeps the Basic tier: its hook carries the spawn guard and subagent count, 
 It carries no new operator prompt's letters or Memory.
 A new agent follows [Adding an agent](#adding-an-agent), which starts from these facts; the web shell reads the generated `contracts/agent-adapters.json` rather than maintaining its own order, names or links.
 
+### ACP servers
+
+The [Agent Client Protocol](https://agentclientprotocol.com) is how an editor drives a coding agent over stdio and receives its conversation as typed updates (messages, tool calls with their kind, diffs and output, plans).
+Hide drives no agent over ACP: it runs each agent in a Herdr pane and reads the agent's own session files (`hide-session/`).
+An agent's ACP server is still the vendor's own answer to how its conversation is shaped, so it is the reference to read before mapping that agent's session records onto a conversation view.
+
+Find an agent's server in the ACP registry: [zed.dev/acp](https://zed.dev/acp) lists every registered agent with its page, and the machine-readable list is `https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json`, which names each server's version, launch command and per-system download with its sha256.
+A server built into the CLI can be missing from the registry, so also read the CLI's own help.
+
+As measured on 2026-10-30:
+
+| Agent | ACP server |
+| --- | --- |
+| Claude Code | `@agentclientprotocol/claude-agent-acp` (registry `claude-acp`), a separate package |
+| Codex | `@agentclientprotocol/codex-acp` (registry `codex-acp`), a separate package |
+| OpenCode | built in, `opencode acp` (registry `opencode`, `opencode-v2`) |
+| Pi | `pi-acp` (registry `pi-acp`), a separate package |
+| omp | built in, `omp acp`; not in the registry |
+| Grok | built in, `grok agent stdio` (registry `grok-build`); the top-level `grok --help` does not name ACP |
+| Antigravity | `agy_acp_server.par` (registry `antigravity-acp`), a separate program Google publishes for macOS, Linux and Windows, not part of the `agy` CLI |
+
+`session/load` is not a read-only way to look at a session: on 2026-10-30 claude-agent-acp 0.97.0 appended a `cost-state` record and codex-acp 2.3.0 a `thread_settings_applied` record to the session file it loaded, and codex-acp refuses to load a sub-agent's session without its parent.
+Replay quality differs by server: pi-acp 0.0.34 replayed tool calls titled only `bash`, `read` or `edit`, with no input, location, diff or command output, all of which Pi's own session file keeps.
+
 ### Adding an agent
 
 Prove it on the real agent first, before any code, and pin what you measure with a test:
@@ -690,6 +714,7 @@ Each line says what to add, where, and the check that fails while it is missing;
 
 1. Herdr target: the pinned Herdr lists one for the agent (`herdr integration status`) and says which folder it needs; the journey contract, against `contracts/herdr-api.schema.json`.
 2. Vendor facts: the page that names the skills folder and the program the installer puts down, and a published mark (`docs/BRAND.md`) or a monogram; no check, so the row's `doc_url` cites that page.
+   Note its ACP server too, from the registry or the CLI's help, in [ACP servers](#acp-servers); no check.
 3. Declaration: an `AgentId` variant and one row of `ADAPTERS` in `hide-agent-adapter/src/declarations.rs`, with a canonical id that stays stable across records, hook commands and device reports, and the aliases on the row; the compiler and `declarations_match_independent_support_samples`.
 4. Capabilities: `guidance`, `memory` and `titles` as `Support::Supported` with the typed route or reader, or `Support::Unsupported(CapabilityAbsence)` with a reason, evidence and what would close it, and prompt intake, spawn refusal, subagent counts, bell and `observation` each declared on its own; `context_and_title_support_require_matching_routes_or_documented_absences` and the bell assertions of `declarations_match_independent_support_samples`.
 5. Hook, plugin or extension: a `HookDialect` or `PluginDialect` implemented in `hide-agent-hooks`, with its Windows form, its installed-command fixtures and, for native observation, its row in `hide-agent-hooks/tests/fixtures/observation-native.json`; the compiler's exhaustive matches, `adapter_contract` and `windows_hook_command`.
