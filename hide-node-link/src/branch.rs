@@ -123,11 +123,12 @@ pub enum MergePushOutcome {
     NoUpstream,
     /// The upstream could not be fetched, so nothing was merged.
     FetchFailed,
-    /// The local base has commits its upstream does not, which a push would
-    /// send along; nothing was merged.
-    BaseAhead,
-    /// The local base and its upstream each have commits the other does not.
-    BaseDiverged,
+    /// The local base has `commits` its upstream does not, which a push
+    /// would send along; nothing was merged.
+    BaseAhead { commits: u32 },
+    /// The local base and its upstream each have commits the other does
+    /// not; `commits` are the local base's own.
+    BaseDiverged { commits: u32 },
     /// The remote turned the push away (a protected branch, a hook, a base
     /// that moved there). With `reverted`, the local base is back on the
     /// commit it had before the merge.
@@ -147,6 +148,54 @@ pub const MERGE_WAIT: std::time::Duration = std::time::Duration::from_secs(3 * 1
 /// node's change deadline (10 minutes).
 pub const MERGE_PUSH_WAIT: std::time::Duration =
     MERGE_WAIT.saturating_add(std::time::Duration::from_secs(3 * 10 * 60));
+
+/// What a base sync request did (`Call::BaseSync`): the local base moved
+/// to its upstream as just fetched, and the commits only the local base had
+/// kept on a new branch. Only `Synced` changes the repository, and nothing
+/// is ever deleted.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum BaseSyncOutcome {
+    /// The base, here and in the worktree that holds it, is on its
+    /// upstream's commit `commit`; the commits only it had are on `branch`,
+    /// none when it had none of its own.
+    Synced {
+        commit: String,
+        branch: Option<String>,
+    },
+    /// The base has no upstream branch on a remote.
+    NoUpstream,
+    /// The upstream could not be fetched; nothing was changed.
+    FetchFailed,
+    /// The worktree that holds the base has uncommitted changes, or files
+    /// git does not track that its upstream's would overwrite (at most
+    /// [`DIRTY_FILES_MAX`]), or, with `files` empty, is partway through a
+    /// merge, rebase, cherry-pick or revert; nothing was changed.
+    Dirty { files: Vec<String> },
+    /// The base moved while it was synced; nothing was changed.
+    BaseMoved,
+    /// Git stopped at `step`; a branch made for the base's commits stays.
+    Failed { step: MergeStep },
+}
+
+/// How many names a base sync tries for its new branch: `branch`, then
+/// `branch-2` up to this.
+pub const SYNC_NAMES: u32 = 99;
+
+/// A `BaseSync` request's values, or why they cannot make a git command.
+pub fn check_sync(base: &str, branch: &str) -> Result<(), String> {
+    check_branch(base)?;
+    check_branch(branch)?;
+    if base == branch {
+        return Err("the base's commits go to another branch".to_owned());
+    }
+    Ok(())
+}
+
+/// How long a caller waits for a `BaseSync` answer: the fetch and the base's
+/// move are each bounded by the node's change deadline (10 minutes), with a
+/// minute for its reads and the link.
+pub const SYNC_WAIT: std::time::Duration = std::time::Duration::from_secs(2 * 10 * 60 + 60);
 
 /// What a discard request did. Only `Deleted` changes the repository.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

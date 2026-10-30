@@ -261,8 +261,11 @@ use crate::error::HostError;
 /// 61 would refuse it, so it is refused at Hello and upgraded.
 /// 63: a merge answers where git failed while it wrote the merge
 /// (`MergeOutcome::Failed`, [`crate::branch::MergeStep`]) instead of an
-/// error whose words name paths. A core on 62 cannot read that answer, so it
-/// is refused at Hello and upgraded.
+/// error whose words name paths, a merge and push refused for a base apart
+/// from its upstream counts the base's own commits, and a node moves a base
+/// to its upstream, keeping the base's own commits on a new branch
+/// (`Call::BaseSync`, [`crate::branch::BaseSyncOutcome`]). A helper on 62
+/// would refuse it, so it is refused at Hello and upgraded.
 pub const PROTOCOL_VERSION: u32 = 63;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
@@ -569,6 +572,16 @@ pub enum Call {
         tip: Option<String>,
         base: String,
         message: String,
+    },
+    /// Moves `base` to its upstream as just fetched, after the commits only
+    /// the local base has are put on a new branch named `branch` (or
+    /// `branch-2` and on while that is taken), and only in a worktree with
+    /// nothing uncommitted (`hide_host::branch_merge::sync_base`). The answer
+    /// is a [`crate::branch::BaseSyncOutcome`]; nothing is deleted.
+    BaseSync {
+        root: String,
+        base: String,
+        branch: String,
     },
     /// The committed diff of one repository-relative `path` from the merge
     /// base of `base` and `branch` to the branch's tip
@@ -1145,6 +1158,7 @@ impl Call {
             | Self::BranchFacts { .. }
             | Self::BranchMerge { .. }
             | Self::BranchMergePush { .. }
+            | Self::BaseSync { .. }
             | Self::BranchDiscard { .. }
             | Self::BranchCatchUp { .. }
             | Self::BranchDiff { .. }
@@ -1465,7 +1479,16 @@ mod tests {
             serde_json::to_value(&merge_push).unwrap()["op"],
             "branch_merge_push"
         );
-        for call in [facts, merge, merge_push, discard, diff, catch_up] {
+        let sync = Call::BaseSync {
+            root: "/repo".into(),
+            base: "main".into(),
+            branch: "local-main-1030".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(&sync).unwrap(),
+            serde_json::json!({"op": "base_sync", "root": "/repo", "base": "main", "branch": "local-main-1030"})
+        );
+        for call in [facts, merge, merge_push, sync, discard, diff, catch_up] {
             let text = serde_json::to_string(&call).unwrap();
             assert_eq!(serde_json::from_str::<Call>(&text).unwrap(), call);
             assert!(call.answered_by_device());
