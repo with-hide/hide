@@ -1,0 +1,57 @@
+import type { DeskAgent, DeskSettings } from "../../desk";
+import { agentPickable } from "../../desk";
+import { AgentMark } from "../../AgentMark";
+import { useInterfaceTranslation } from "../../i18n/client";
+import { Group, Row } from "../settings-rows";
+import { RadioGroup, RadioGroupItem } from "../ui/radio-group";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
+
+const LOCATIONS = ["desk", "worktree", "checkout"] as const;
+/** The cap's choices (D-23): 8 by default. */
+const CAP_CHOICES = [1, 2, 4, 6, 8, 12, 16];
+
+/**
+ * Settings › Desk (D-20, D-23, B4, B19, B21): the agent Desk starts with,
+ * where its tasks run (Desk decides, by default) and how many run at once.
+ * An agent that cannot ask before acting is not offered.
+ */
+export function DeskSettingsTab({ settings, agents, onChange }: { settings: DeskSettings; agents: readonly DeskAgent[]; onChange: (settings: DeskSettings) => void }) {
+  const { t } = useInterfaceTranslation();
+  return (
+    <div className="flex min-w-0 flex-col" data-desk-settings="true">
+      <Group title={t("desk.settings.title")} note={t("desk.settings.accounts")}>
+        <Row label={t("desk.settings.defaultAgent")} detail={<span className="text-caption text-muted-foreground">{t("desk.settings.defaultAgentDetail")}</span>}>
+          <Select value={settings.default_agent} onValueChange={(value) => onChange({ ...settings, default_agent: value })}>
+            <SelectTrigger size="sm" aria-label={t("desk.settings.defaultAgent")}><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {agents.filter(agentPickable).map((agent) => (
+                <SelectItem key={agent.id} value={agent.id}><AgentMark kind={agent.id} />{agent.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Row>
+        <Row label={t("desk.settings.location")} detail={(
+          <RadioGroup value={settings.location} onValueChange={(value) => onChange({ ...settings, location: value as DeskSettings["location"] })} aria-label={t("desk.settings.location")} className="gap-xs">
+            {LOCATIONS.map((location) => (
+              <label key={location} className="flex items-start gap-sm text-body" data-desk-settings-location={location}>
+                <RadioGroupItem value={location} className="mt-xxs" />
+                <span className="flex min-w-0 flex-col">
+                  <span className="text-foreground">{t(`desk.settings.location.${location}`)}</span>
+                  {location === "desk" ? <span className="whitespace-normal break-keep text-caption text-muted-foreground">{t("desk.settings.location.deskDetail")}</span> : null}
+                </span>
+              </label>
+            ))}
+          </RadioGroup>
+        )} />
+        <Row label={t("desk.settings.cap")} detail={<span className="text-caption text-muted-foreground">{t("desk.settings.capDetail")}</span>}>
+          <Select value={String(settings.cap)} onValueChange={(value) => onChange({ ...settings, cap: Number(value) })}>
+            <SelectTrigger size="sm" aria-label={t("desk.settings.cap")} className="w-auto" data-desk-settings-cap={settings.cap}><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {CAP_CHOICES.map((cap) => <SelectItem key={cap} value={String(cap)}>{cap}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </Row>
+      </Group>
+    </div>
+  );
+}

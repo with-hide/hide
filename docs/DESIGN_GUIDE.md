@@ -58,7 +58,7 @@ These already draw a thing Hide shows in several places; use them instead of dra
 | A session as a row (태스크 줄) | `SessionRowBody` (`session-row.tsx`), the marks, title line and lines under it, which the sidebar's `SidebarAgentRow`, the session record's children (`size="record"`) and `SessionRow` all draw; `SessionRow` is the pressable list item of it |
 | A plan's steps | `PlanChecklist` (`plan-checklist.tsx`) |
 | A letter | `letter-mark.tsx`: `LetterTag` at the head of a letter's line, `RowLetterMark` on a sidebar row, `PaneLetterButton` in a pane header |
-| A mission a session conducts | `MissionChip` (`mission-chip.tsx`) |
+| A mission a session conducts | `MissionChip` (`mission-chip.tsx`), reading the store; `MissionChipView` draws one from values a caller holds |
 | An `@name` in a line of words | `MentionChip` (`mention-chip.tsx`), `kind` `session` or `project` |
 | An agent's runtime logo | `agent-logo.tsx` |
 | Time since something | `Elapsed`, `useElapsed` (`elapsed.tsx`) |
@@ -69,6 +69,7 @@ These already draw a thing Hide shows in several places; use them instead of dra
 | A device | `DeviceChip`, `device-rail.tsx` |
 | What a close would take with it | `SubtreeList` |
 | A state that stands in a box | `StateBox` |
+| Desk: its chat, job and approval cards, composer and agent bar, `@` menu, Threads list, a thread, outputs, lane columns and rail, Settings › Desk | `components/desk/*`, drawn from props in the shape of `web/src/desk.ts`; the gallery's `scene=desk` shows every state |
 
 ## Tokens at a glance
 
@@ -91,6 +92,6 @@ These already draw a thing Hide shows in several places; use them instead of dra
 
 ## Before delivery
 
-1. Add or update the gallery state of any part you changed (`web/src/gallery`, served at `/gallery` by `pnpm --dir web dev`); the shared parts above are in its `scene=shared-parts`.
+1. Add or update the gallery state of any part you changed (`web/src/gallery`, served at `/gallery` by `pnpm --dir web dev`); the shared parts above are in its `scene=shared-parts` and Desk's parts in `scene=desk`.
 2. Run `node scripts/check-design-contract.mjs`; it runs the token, contrast, logo and part-count checks.
 3. Put a capture of the changed screen in the pull request, following [DESIGN_WORKFLOW.md](DESIGN_WORKFLOW.md#visual-review).
