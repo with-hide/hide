@@ -14,7 +14,7 @@
 //
 // Korean, Japanese and Chinese text is not fitted: the browser draws it from
 // the system's fallback at the terminal's own size, as it always has, since
-// enlarging it to fill two cells crowded the rows (#1881).
+// enlarging it to fill two cells crowded the rows.
 //
 // The icon face only takes the Private Use Areas and comes after the primary
 // font and its generic family, so a font the operator chose that has its own
