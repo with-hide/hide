@@ -150,7 +150,7 @@
     "button": 9
   },
   "web/src/TaskLens.tsx": {
-    "button": 12
+    "button": 3
   },
   "web/src/Tools.tsx": {
     "button": 4
@@ -234,6 +234,6 @@
     "button": 1
   },
   "web/src/sidebar.tsx": {
-    "button": 14
+    "button": 2
   }
 }
