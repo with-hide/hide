@@ -31,6 +31,7 @@ bash scripts/check-no-workstation-identity.sh
 bash scripts/check-worktree-removal-boundary.sh
 zsh scripts/check-herdr-pin-single-source.sh
 python3 scripts/check-core-touches-no-machine.py
+python3 scripts/check-engine-boundary.py
 python3 scripts/check-ai-prompt-language.py
 zsh scripts/check-herdr-contract.sh --schema-only
 
