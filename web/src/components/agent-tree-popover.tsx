@@ -18,7 +18,7 @@ import { useUiStore } from "../ui";
 import { askWhat, AskLine, DescendantMark, TreeChevron, TreeRails, treePlaces } from "./agent-tree";
 import { AgentPrHover } from "./pr-mark";
 import { AgentRecordTitle } from "./agent-record-title";
-import { agentStaleness } from "../prMark";
+import { rowPulls } from "../prMark";
 import { DeviceChip } from "./device-chip";
 import { Elapsed } from "./elapsed";
 import { StatusMark } from "./status-mark";
@@ -318,7 +318,6 @@ function TreeItem({
         : remoteTargetOfPane(rest, ask.open_pane_id) ?? localDeviceId(rest);
   const askUnavailable = !deviceConnected(rest, askDevice);
   const branch = child.state.branch_badge;
-  const staleness = agentStaleness(rest, child);
   // The same second line a tree row draws: a block's cause, a waiting ring's 대기 line, a sleep or unknown state (status-marks B29, B31).
   const childLine = ask || unavailable ? null : treeLine(child);
   const minutes = ask?.since_unix_ms == null ? null : Math.max(0, Math.floor((Date.now() - ask.since_unix_ms) / 60_000));
@@ -340,7 +339,7 @@ function TreeItem({
           <StatusMark mark={unavailable ? null : child.mark} className={unavailable ? undefined : markTone(child)} />
           <AgentMark kind={child.agent_kind} />
           <AgentRecordTitle agent={child} className="text-foreground" />
-          <AgentPrHover agent={child} staleness={staleness} />
+          <AgentPrHover agent={child} pulls={rowPulls(child, "own")} />
           {line.hasChildren && !line.open && !unavailable ? <DescendantMark agent={child} /> : null}
           {unavailable ? null : <Elapsed since={child.last_prompt_at_unix_ms} className="shrink-0 font-mono text-micro text-muted-foreground" />}
         </span>

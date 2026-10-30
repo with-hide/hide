@@ -6,7 +6,8 @@ import { createActions } from "./actions";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { initializeInterfaceI18n } from "./i18n/instance";
 import { SessionRecord, SlotSessionRecord } from "./SessionRecord";
-import type { MissedWork, RecordStatus, RecordView, SessionRecord as RecordValue, SnapshotRest, WorkFlow, WorkOutput, WorkRequest, WorkSession } from "./snapshot";
+import type { MissedWork, PrState, RecordStatus, RecordView, SessionPull, SessionRecord as RecordValue, SnapshotRest, WorkFlow, WorkOutput, WorkRequest, WorkSession } from "./snapshot";
+import { sessionPull } from "../test/sessionPull";
 import { useShellStore } from "./store";
 import { useUiStore } from "./ui";
 import { REFERENCE_FOLDS, sidebarScene } from "./gallery/sceneData";
@@ -28,6 +29,7 @@ const CHILD: WorkSession = { device_id: "local", agent: "codex", session_id: "ch
 const request = (offset: number, text: string, patch: Partial<WorkRequest> = {}): WorkRequest => ({ offset, at_unix_ms: AT + offset * MIN, text, author: "operator", images: 0, summary: null, answers: null, letter_from: null, count: 1, goal_command: false, ...patch });
 const ask = (id: string, text: string): MissedWork => ({ id, kind: "ask", text, status: "open", at_unix_ms: AT, turn_offset: 1, issue_repository: null, issue_number: null, creating: false, backlog_key: null });
 const output = (number: number, state: string, source: WorkSession): WorkOutput => ({ kind: "pr", repository: "acme/app", number, title: `PR title ${number}`, url: `https://example.invalid/pull/${number}`, state, stale: false, last_read_at_unix_ms: AT, created_at_unix_ms: AT + number, source, source_name: source.session_id });
+const pull = (number: number, state: PrState, extra: Partial<SessionPull> = {}) => sessionPull(number, state, { title: `PR title ${number}`, ...extra });
 const flow = (id: string, name: string, at: number, requests: WorkRequest[], result: WorkFlow["result"] = null): WorkFlow => ({ id, name, at_unix_ms: at, requests, request_count: requests.filter((one) => !one.letter_from).length, result });
 const status = (end: RecordStatus["end"], line: string, limited: string | null = null): RecordStatus => ({ end, line, at_unix_ms: AT + 20 * MIN, limited, settled: null });
 const EMPTY = { status: null, asks: [], flows: [], omitted_requests: 0, outputs: [], pr_groups: [], artifacts: [], children: [] };
@@ -41,7 +43,7 @@ const BASE: RecordValue = {
     flow("flow-2", "Record PRD", AT + 10 * MIN, [request(10, "Write the PRD now", { summary: "Write the PRD" }), request(11, "How is it going?", { summary: "Question: how far along" })]),
   ],
   outputs: [output(1100, "review", SESSION), output(1093, "merged", CHILD)],
-  pr_groups: [{ child: null, name: "Session goal", outputs: [output(1100, "review", SESSION)] }, { child: CHILD, name: "Child work", outputs: [output(1093, "merged", CHILD)] }],
+  pr_groups: [{ child: null, name: "Session goal", pulls: [pull(1100, "pending")] }, { child: CHILD, name: "Child work", pulls: [pull(1093, "merged", { own: false, holders: ["Child work"] })] }],
   children: [child],
 };
 
@@ -257,6 +259,20 @@ it("groups descendants' PRs under the direct child and folds merged and closed o
   } finally { await unmount(); }
 });
 
+it("keeps a closed PR in the fold, dimmed, beside the merged ones (status-model, One list per session)", async () => {
+  const groups = [{ child: null, name: "Session goal", pulls: [pull(1100, "pending"), pull(1099, "merged"), pull(1098, "closed")] }];
+  const { container, unmount } = await mount({ ...BASE, pr_groups: groups });
+  try {
+    expect(container.querySelector("[data-record-prs]")!.getAttribute("data-record-prs")).toBe("3");
+    const fold = container.querySelector<HTMLButtonElement>("[data-record-settled]")!;
+    expect(text(fold)).toContain("2 merged or closed");
+    await act(async () => fold.click());
+    const rows = [...container.querySelectorAll<HTMLElement>("[data-record-pr-row]")];
+    expect(rows.map((row) => [row.dataset.recordPrRow, row.dataset.prClosed ?? null])).toEqual([["1100", null], ["1099", null], ["1098", "true"]]);
+    expect(rows[2]!.querySelector("[data-pr-mark]")!.className).toContain("opacity-(--opacity-dimmed)");
+  } finally { await unmount(); }
+});
+
 it("lists outputs other than PRs once, and no line without them (B22)", async () => {
   const shown = await mount({ ...BASE, artifacts: ["Record PRD", "record-cases.html"] });
   try { expect([...shown.container.querySelectorAll("[data-record-artifact]")].map(text)).toEqual(["Record PRD", "record-cases.html"]); } finally { await shown.unmount(); }
@@ -348,8 +364,8 @@ it("expands a child in place and opens its full record only with the explicit ac
 });
 
 it("gives a PR button the last read time while GitHub cannot be read", async () => {
-  const stale = { ...output(1100, "review", SESSION), stale: true, last_read_at_unix_ms: AT };
-  const { container, unmount } = await mount({ ...BASE, outputs: [stale], pr_groups: [{ child: null, name: "Session goal", outputs: [stale] }] });
+  const stale = pull(1100, "pending", { stale: true, last_read_at_unix_ms: AT });
+  const { container, unmount } = await mount({ ...BASE, pr_groups: [{ child: null, name: "Session goal", pulls: [stale] }] });
   try {
     expect(container.querySelector("[data-record-output]")!.getAttribute("aria-label")).toContain(new Date(AT).toLocaleString());
   } finally { await unmount(); }

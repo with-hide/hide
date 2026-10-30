@@ -42,7 +42,7 @@ function restedState(read: boolean, since: number, line: string): AgentState {
     chip_tone: { kind: read ? "subtle" : "success", read: false }, mark_tone: { kind: read ? "subtle" : "success", read: false },
     line: null, branch_badge: null, bucket: read ? "resting" : "turn", attention_rank: read ? 4 : 2, link_rank: 2, search_tone: read ? "muted" : "done", subtree: "quiet", link: "idle",
     descendant_asking: 0, verb: "idle", request_todo: false, request_since: since,
-    session: { group: "idle", line, unfinished: false }, ask: null, tree_rank: 3, pr: null,
+    session: { group: "idle", line, unfinished: false }, ask: null, tree_rank: 3,
   };
 }
 
@@ -145,7 +145,7 @@ function loginRecord(nowMs: number): SessionRecord {
     }],
     omitted_requests: 0,
     outputs: [output],
-    pr_groups: [{ child: null, name: LOGIN_TITLE, outputs: [output] }],
+    pr_groups: [{ child: null, name: LOGIN_TITLE, pulls: [{ url: PR_URL, number: PR_NUMBER, title: PR_TITLE, state: "pending", own: true, holders: [], stale: false, last_read_at_unix_ms: at(1) }] }],
     artifacts: [],
     children: [],
   };

@@ -88,8 +88,7 @@
         "unfinished": false
       },
       "ask": null,
-      "tree_rank": 3,
-      "pr": null
+      "tree_rank": 3
     },
     {
       "attention": false,
@@ -126,8 +125,7 @@
         "unfinished": false
       },
       "ask": null,
-      "tree_rank": 1,
-      "pr": null
+      "tree_rank": 1
     },
     {
       "attention": false,
@@ -164,8 +162,7 @@
         "unfinished": false
       },
       "ask": null,
-      "tree_rank": 1,
-      "pr": null
+      "tree_rank": 1
     },
     {
       "attention": false,
@@ -202,8 +199,7 @@
         "unfinished": false
       },
       "ask": null,
-      "tree_rank": 3,
-      "pr": null
+      "tree_rank": 3
     },
     {
       "attention": false,
@@ -240,8 +236,7 @@
         "unfinished": false
       },
       "ask": null,
-      "tree_rank": 1,
-      "pr": null
+      "tree_rank": 1
     },
     {
       "attention": false,
@@ -285,8 +280,7 @@
         "unfinished": false
       },
       "ask": null,
-      "tree_rank": 0,
-      "pr": null
+      "tree_rank": 0
     },
     {
       "attention": false,
@@ -323,8 +317,7 @@
         "unfinished": false
       },
       "ask": null,
-      "tree_rank": 1,
-      "pr": null
+      "tree_rank": 1
     },
     {
       "attention": true,
@@ -368,8 +361,7 @@
         "unfinished": false
       },
       "ask": null,
-      "tree_rank": 3,
-      "pr": null
+      "tree_rank": 3
     },
     {
       "attention": false,
@@ -406,8 +398,7 @@
         "unfinished": false
       },
       "ask": null,
-      "tree_rank": 3,
-      "pr": null
+      "tree_rank": 3
     },
     {
       "attention": false,
@@ -444,8 +435,7 @@
         "unfinished": false
       },
       "ask": null,
-      "tree_rank": 1,
-      "pr": null
+      "tree_rank": 1
     },
     {
       "attention": false,
@@ -482,8 +472,7 @@
         "unfinished": false
       },
       "ask": null,
-      "tree_rank": 1,
-      "pr": null
+      "tree_rank": 1
     },
     {
       "attention": false,
@@ -520,8 +509,7 @@
         "unfinished": false
       },
       "ask": null,
-      "tree_rank": 1,
-      "pr": null
+      "tree_rank": 1
     },
     {
       "attention": false,
@@ -558,8 +546,7 @@
         "unfinished": false
       },
       "ask": null,
-      "tree_rank": 3,
-      "pr": null
+      "tree_rank": 3
     },
     {
       "attention": false,
@@ -596,17 +583,7 @@
         "unfinished": false
       },
       "ask": null,
-      "tree_rank": 1,
-      "pr": {
-        "count": 1,
-        "worst": "mergeable",
-        "pulls": [
-          {
-            "index": 0,
-            "state": "mergeable"
-          }
-        ]
-      }
+      "tree_rank": 1
     },
     {
       "attention": false,
@@ -643,17 +620,7 @@
         "unfinished": false
       },
       "ask": null,
-      "tree_rank": 0,
-      "pr": {
-        "count": 1,
-        "worst": "failed",
-        "pulls": [
-          {
-            "index": 0,
-            "state": "failed"
-          }
-        ]
-      }
+      "tree_rank": 0
     },
     {
       "attention": false,
@@ -697,8 +664,7 @@
         "unfinished": false
       },
       "ask": null,
-      "tree_rank": 0,
-      "pr": null
+      "tree_rank": 0
     },
     {
       "attention": false,
@@ -735,8 +701,7 @@
         "unfinished": false
       },
       "ask": null,
-      "tree_rank": 3,
-      "pr": null
+      "tree_rank": 3
     },
     {
       "attention": false,
@@ -780,17 +745,7 @@
         "unfinished": false
       },
       "ask": null,
-      "tree_rank": 0,
-      "pr": {
-        "count": 1,
-        "worst": "pending",
-        "pulls": [
-          {
-            "index": 0,
-            "state": "pending"
-          }
-        ]
-      }
+      "tree_rank": 0
     },
     {
       "attention": false,
@@ -827,17 +782,7 @@
         "unfinished": false
       },
       "ask": null,
-      "tree_rank": 2,
-      "pr": {
-        "count": 1,
-        "worst": "mergeable",
-        "pulls": [
-          {
-            "index": 0,
-            "state": "mergeable"
-          }
-        ]
-      }
+      "tree_rank": 2
     },
     {
       "attention": false,
@@ -874,17 +819,7 @@
         "unfinished": false
       },
       "ask": null,
-      "tree_rank": 3,
-      "pr": {
-        "count": 1,
-        "worst": "merged",
-        "pulls": [
-          {
-            "index": 0,
-            "state": "merged"
-          }
-        ]
-      }
+      "tree_rank": 3
     },
     {
       "attention": false,
@@ -921,8 +856,7 @@
         "unfinished": false
       },
       "ask": null,
-      "tree_rank": 3,
-      "pr": null
+      "tree_rank": 3
     }
   ]
 }

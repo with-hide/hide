@@ -13,8 +13,7 @@ import { GithubIcon } from "./components/github-icon";
 import { Hint } from "./components/ui/tooltip";
 import { CHECKOUT_KIND_ICON } from "./components/checkout-icon";
 import { PrMark } from "./components/pr-mark";
-import { agentsByPane, allAgents as allPaneAgents } from "./paneAgents";
-import { familyPulls, PR_LOOK, type SessionPull } from "./prMark";
+import { PR_LOOK, rowPulls } from "./prMark";
 import { CheckoutCardHint, pullRequestOpenExternal } from "./components/pr-card";
 import { DeviceRail } from "./components/device-rail";
 import { frontDeviceId, frontTitle, railShown, readsHere, sidebarBody } from "./devices";
@@ -58,7 +57,7 @@ import { agentReference } from "./agentReference";
 import { agentMenu, checkoutMenu, checkoutRemoving, FOLDER_CHECKOUT_ITEMS, folderMenu, primaryCheckout, projectMenu, remotePurposeProblem, type MenuHost, type MenuItem } from "./workspaceManage";
 import { projectIssueSource, projectRepository, settingsTarget } from "./projectSettings";
 import { machineName, windowDeviceId, windowFirst } from "./screenMachine";
-import { focusedRemoteDevice, localDeviceId, type AgentRow, type Checkout, type HideAiCheckout, type SleepingSession, type SnapshotRest, type Workspace } from "./snapshot";
+import { focusedRemoteDevice, localDeviceId, type AgentRow, type Checkout, type HideAiCheckout, type SessionPull, type SleepingSession, type SnapshotRest, type Workspace } from "./snapshot";
 import { useStartPanel } from "./startDraft";
 import { HelpMenu } from "./components/help-menu";
 import { PracticeInvite } from "./components/practice-invite";
@@ -446,12 +445,6 @@ function ProjectList({ actions }: { actions: Actions }) {
   useStuckHeaders(list, loaded);
   const agentRowMenu = useAgentRowMenu(actions);
   const children = useMemo(() => new Map(agents.map((agent) => [agent.pane_id, directChildren(agent, agents)])), [agents]);
-  // A root row's PR mark gathers its family over the rows the 태스크 list reads, so the two agree (PRD project-tree-pr-family D-01, D-02).
-  const families = useMemo(() => {
-    const every = allPaneAgents(localAgents, remoteStatuses);
-    const byPane = agentsByPane(every);
-    return new Map(every.flatMap((agent) => (agent.state.root ? [[agent.pane_id, familyPulls(agent, byPane)] as const] : [])));
-  }, [localAgents, remoteStatuses]);
   // A row Hide AI started names its task in its place line, so the place reads the agents too.
   const hideAiOf = useMemo(() => new Map(agents.flatMap((agent) => (agent.hide_ai ? [[agent.pane_id, agent.hide_ai] as const] : []))), [agents]);
   const placeOf = useMemo(() => agentPlaces(localWorkspaces, remoteStatuses, devices, hideAiOf), [localWorkspaces, remoteStatuses, devices, hideAiOf, t]);
@@ -468,7 +461,7 @@ function ProjectList({ actions }: { actions: Actions }) {
   const context: ListContext = {
     agents,
     childrenOf: (agent) => children.get(agent.pane_id)!,
-    familyOf: (agent) => families.get(agent.pane_id),
+    familyOf: (agent) => (agent.state.root ? rowPulls(agent) : undefined),
     placeOf,
     numberOf: numberOfPane,
     focusedCheckoutId,
@@ -533,6 +526,7 @@ type ListContext = {
   agents: AgentRow[];
   childrenOf: (agent: AgentRow) => AgentRow[];
   /** A root's own and every descendant's PRs, undefined for a child or a root without children. */
+  /** A root's whole PR list, as the 태스크 row draws it (PRD project-tree-pr-family D-01, D-02); a child row keeps its own. */
   familyOf: (agent: AgentRow) => SessionPull[] | undefined;
   /** The Agents list's context line for a raised row, which no project row above names. */
   placeOf: (device: string | null, paneId: string) => string | null;
@@ -714,7 +708,7 @@ function RaisedAgentRow({ listed: { agent, device }, context }: { listed: Listed
       inset={PROJECT_COLUMN}
       number={context.numberOf?.(agent.pane_id, null) ?? null}
       menu={context.agentRowMenu}
-      family={context.familyOf(agent)}
+      pulls={context.familyOf(agent)}
       onOpenMission={(id) => context.actions.openMission(id)}
     />
   );
@@ -1636,7 +1630,7 @@ function AgentTreeRows({ checkoutId, deviceId, agentRows, inset, context }: { ch
             branchShown={false}
             number={depth === 0 ? context.numberOf?.(agent.pane_id, checkoutId) ?? null : null}
             menu={context.agentRowMenu}
-            family={context.familyOf(agent)}
+            pulls={context.familyOf(agent)}
             onOpenMission={depth === 0 ? (id) => context.actions.openMission(id) : undefined}
           />
         );

@@ -6,10 +6,10 @@ import { TaskLens } from "../TaskLens";
 import { TooltipProvider } from "../components/ui/tooltip";
 import type { TaskState } from "../agentScope";
 import { PaneView } from "../PaneView";
-import type { AgentRow, AgentState, AgentWait, Mission, PaneConnection, PaneHeader, PrState, RaisedAsk, SessionGroup } from "../snapshot";
+import type { AgentRow, AgentState, AgentWait, Mission, PaneConnection, PaneHeader, PrState, RaisedAsk, SessionGroup, SessionPull } from "../snapshot";
 import type { RowMark, StatusTone, RequestVerb } from "../snapshot";
 import { useShellStore } from "../store";
-import { REFERENCE_FOLDS, sidebarScene } from "./sceneData";
+import { listedPull, REFERENCE_FOLDS, sidebarScene } from "./sceneData";
 import type { SceneParams } from "./SidebarScene";
 
 type Example = { title: string; group: SessionGroup; line: string | null; ask?: NonNullable<AgentState["ask"]>; pr?: PrState; unfinished?: boolean; mark?: AgentRow["descendant_mark"]; read?: boolean; wait?: AgentWait; pull?: number };
@@ -115,9 +115,9 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
         descendant_mark: example.mark ?? null,
         wait: example.wait, descendant_counts: example.wait === "children" ? { error: 0, approval: 0, question: 0, working: 2, done: 0 } : undefined,
         state: { ...seed.state, verb, mark_tone: { kind: tone, read: example.read ?? false }, chip_tone: { kind: tone, read: example.read ?? false }, session: { group: example.group, line: example.line, unfinished: example.unfinished ?? false }, ask: example.ask ?? null, tree_rank: 1,
-          pr: example.pr ? { count: 1, worst: example.pr, pulls: [{ index: 0, state: example.pr }] } : null,
           request_since: Date.now() - 180_000, line: example.wait ? { text: "", mode: "waiting", tone: { kind: "working", read: false }, pull_request: example.pull } : example.line ? { text: example.line, mode: "request", tone: { kind: "subtle", read: false } } : null },
         request: { verb, verb_since_unix_ms: Date.now(), line: example.line ?? undefined, request: null, later_by: null, pull_requests: example.pr ? [{ number: 220 + index, title: example.title, url: `https://example.invalid/pull/${220 + index}`, badge: example.pr === "merged" ? "merged" : "open", checks: example.pr === "failed" ? "failed" : example.pr === "pending" ? "pending" : "passing", review: example.pr === "mergeable" ? "approved" : "review_required", head_branch: "prd/session-ui", closing_issues: [], live: true, duty: true, created: true, settled_at_unix_ms: null }] : [] },
+        pulls: example.pr ? { pulls: [listedPull(220 + index, example.title, example.pr, null, `https://example.invalid/pull/${220 + index}`)] } : null,
         resolved: example.group === "resolved" ? { at_unix_ms: Date.now(), source: "operator" } : null,
         // A quiet task starred to revisit, and a working one that keeps its group with a ★ (PRD revisit-group B6, B7).
         revisit: index === 6 || index === 4 ? { starred: true, read_ask: false, since_unix_ms: Date.now() - 600_000 } : example.read ? { starred: false, read_ask: true, since_unix_ms: Date.now() - 900_000 } : null,
@@ -146,19 +146,29 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
       const number = 230 + index;
       const line = index === 0 ? "브랜치와 진행 설명을 분리하는 중" : index === 2 ? "좁은 화면 검증을 끝냈습니다" : null;
       return { ...child, lineage_parent_pane_id: index === 2 ? "a1c1" : "s5", lineage_child_pane_ids: index === 0 ? ["a1g1"] : [],
-        state: { ...child.state, session: { group: index === 0 ? "working" : "idle", line, unfinished: false }, pr: { count: 1, worst: state, pulls: [{ index: 0, state }] }, branch_badge: index === 0 ? "feat/session-row-clarity-and-branch-label" : null },
+        pulls: { pulls: [listedPull(number, child.identity_label, state, null, `https://example.invalid/pull/${number}`)] },
+        state: { ...child.state, session: { group: index === 0 ? "working" : "idle", line, unfinished: false }, branch_badge: index === 0 ? "feat/session-row-clarity-and-branch-label" : null },
         request: { verb: index === 0 ? "working" : "idle", verb_since_unix_ms: Date.now(), request: null, later_by: null, pull_requests: [{ number, title: child.identity_label, url: `https://example.invalid/pull/${number}`, badge: "open", checks: state === "failed" ? "failed" : state === "pending" ? "pending" : "passing", review: state === "mergeable" ? "approved" : "review_required", head_branch: "feat/session-row-clarity-and-branch-label", closing_issues: [], live: true, duty: true, created: true, settled_at_unix_ms: null }] } };
     });
+    // The core's lists, written out: a parent's holds its descendants' pull requests.
+    const ownOf = (row: AgentRow) => row.pulls?.pulls.filter((pull) => pull.own) ?? [];
+    const heldBy = (row: AgentRow) => ownOf(row).map((pull) => ({ ...pull, own: false, holders: [row.identity_label] }));
+    const listOf = (...parts: SessionPull[][]) => (parts.flat().length ? { pulls: parts.flat() } : null);
+    children[0] = { ...children[0]!, pulls: listOf(ownOf(children[0]!), heldBy(children[2]!)) };
+    agents[5] = { ...agents[5]!, pulls: listOf(ownOf(agents[5]!), heldBy(children[1]!), heldBy(children[0]!), heldBy(children[2]!)) };
+    const tree = [heldBy(children[1]!), heldBy(children[0]!), heldBy(children[2]!)];
+    const CHILDLESS = ["idle", "approval", "merge", "solo", "empty", "turn-question", "turn-working", "turn-finished", "turn-image", ...CHILD_CASES];
+    const headerPulls = (id: string) => listOf(ownOf(seed), ...(CHILDLESS.includes(id) ? [] : id === "raised-case" ? [heldBy(children[1]!), heldBy(children[0]!)] : id === "narrow" ? [heldBy(children[0]!)] : id === "unknown" ? [heldBy(children[1]!)] : tree));
     const childPanes = children.map((child) => ({ ...pane, id: child.pane_id, identity_label: child.identity_label }));
     feature.tabs[0]!.panes.push(childPanes[0]!);
     checkout.tabs[0]!.panes.push(...childPanes.slice(1));
     const headers = Object.fromEntries([...HEADERS.map(([id, header]) => [id, { ...header, working: id === "working", band: header.band && { ...header.band, since_unix_ms: Date.now() - 180_000 } }]), ...PANE_HEADER_CASES.map(([id, , header]) => [id, { ...header, progress: id === "narrow" && content === "long" ? "헤더 상태별 표시와 요청 우선순위를 검토하고 다음 단계의 배치와 접근성까지 다시 확인하고 있어요" : header.progress, working: ["progress", "solo", "popover", "narrow", "turn-working", "turn-image", "turn-request-only"].includes(id), band: header.band && { ...header.band, since_unix_ms: Date.now() - 180_000 } }])]);
     // The fix and merge panes own one PR each: their header's PR chip is all
     // that says it, with no second row (B21, B22).
-    const ownPr = (id: string): Pick<AgentRow, "state" | "request"> => {
+    const ownPr = (id: string): Pick<AgentRow, "pulls" | "request"> => {
       const state = id === "fix" ? "failed" as const : "mergeable" as const;
       return {
-        state: { ...seed.state, pr: { count: 1, worst: state, pulls: [{ index: 0, state }] } },
+        pulls: { pulls: [listedPull(221, "세션 상태 투영 정리", state, null, "https://github.com/acme/app/pull/221")] },
         request: { verb: "working", verb_since_unix_ms: Date.now(), line: undefined, request: null, later_by: null, pull_requests: [{ number: 221, title: "세션 상태 투영 정리", url: "https://github.com/acme/app/pull/221", badge: "open", checks: state === "failed" ? "failed" : "passing", review: "approved", head_branch: "prd/session-ui", closing_issues: [], live: true, duty: true, created: true, settled_at_unix_ms: null }] },
       };
     };
@@ -185,9 +195,10 @@ export function SessionWorkflowScene({ scene: kind, theme, content, scale, width
       raised: id === "raised" ? [RAISED, { ...RAISED, raised_pane_id: "a1c2", origin_title: children[1]!.identity_label, pane_id: "a1c2", open_pane_id: "a1c2", title: children[1]!.identity_label, verb: "answer" as const, what: "PR을 함께 올릴까요?" }] : id === "raised-case" ? [PANE_RAISED] : [],
       // A childless approval and merge show the row only for the ask, and none for a PR.
       lineage_child_pane_ids: ["idle", "approval", "merge", "solo", "empty", "turn-question", "turn-working", "turn-finished", "turn-image", ...CHILD_CASES].includes(id) ? [] : id === "raised-case" ? [raisedChild.pane_id, ...childExamples.slice(1, 3).map((child) => child.pane_id)] : id === "popover" ? popoverChildren.map((child) => child.pane_id) : id === "narrow" ? narrowChildren.map((child) => child.pane_id) : ["children", "progress", "question", "approval-case", "blocked-case", "stopped", "tree-only", "finished", "turn-narrow", "turn-children"].includes(id) ? childExamples.slice(0, 3).map((child) => child.pane_id) : id === "unknown" ? ["b2-unknown"] : ["a1c1", "a1c2"],
+      pulls: headerPulls(id),
       direct_child_counts: id === "narrow" ? { error: 0, approval: 0, question: 0, working: 12, done: 0 } : ["children", "progress", "question", "approval-case", "blocked-case", "raised-case", "stopped", "tree-only", "finished", "popover", "turn-narrow"].includes(id) ? { error: 0, approval: 0, question: 1, working: 1, done: 1 } : id === "unknown" ? { error: 0, approval: 0, question: 0, working: 0, done: 0 } : { error: 0, approval: 0, question: 0, working: 1, done: 0 },
       ...(id === "fix" || id === "merge" ? ownPr(id) : {}),
-      ...(TURN_CASES.includes(id) ? { session_id: `turn-${id}`, state: { ...seed.state, pr: null }, request: { verb: "answer" as const, verb_since_unix_ms: Date.now(), line: "1~3번을 한 PR로 묶어 진행할지 답해 주세요.", end: "question" as const, pull_requests: [], ...TURN_VIEW } } : {}) }));
+      ...(TURN_CASES.includes(id) ? { session_id: `turn-${id}`, pulls: null, request: { verb: "answer" as const, verb_since_unix_ms: Date.now(), line: "1~3번을 한 PR로 묶어 진행할지 답해 주세요.", end: "question" as const, pull_requests: [], ...TURN_VIEW } } : {}) }));
     base.rest.terminal = { headers };
     // The Conductor row's mission, its open decision the row asks (needs-you-cleanup B1, B5).
     const conductor = agents[9]!;

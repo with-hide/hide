@@ -7,8 +7,8 @@ import { AgentPrMark } from "./components/pr-mark";
 import { AgentRecordTitle } from "./components/agent-record-title";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { clientI18n } from "./i18n/translator";
-import type { SessionPull } from "./prMark";
-import type { AgentPullRequest, PrState } from "./snapshot";
+import type { PrState, SessionPull } from "./snapshot";
+import { sessionPull } from "../test/sessionPull";
 import { useUiStore } from "./ui";
 
 // The shell imports xterm, whose canvas API is absent from jsdom.
@@ -29,14 +29,14 @@ it.each([
 ] as const)("names provisional history in %s and keeps its PR accessible", async (language, connection, words) => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   await clientI18n.changeLanguage(language);
-  const pull: AgentPullRequest = { number: 231, title: "연결된 결과물", url: "https://example.invalid/pull/231", badge: "open", checks: "pending", head_branch: "feature/old", closing_issues: [], live: false, duty: false, created: false, settled_at_unix_ms: null };
+  const pull = sessionPull(231, "pending", { title: "연결된 결과물" });
   const agent = { ...legacyAgentRow({ pane_id: "resumed", identity_label: "긴 한국어 제목과 mixed text 기록" }), record_connection: connection, record_summary: "저장된 짧은 요약" };
-  const opened: AgentPullRequest[] = [];
+  const opened: SessionPull[] = [];
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
   try {
-    await act(async () => root.render(<TooltipProvider><AgentRecordTitle agent={agent} /><AgentPrMark agent={agent} family={[{pull,state:"pending",owners:[agent]}]} onOpen={p => opened.push(p)} /></TooltipProvider>));
+    await act(async () => root.render(<TooltipProvider><AgentRecordTitle agent={agent} /><AgentPrMark agent={agent} pulls={[pull]} onOpen={p => opened.push(p)} /></TooltipProvider>));
     // An unconfirmed title is only dimmed; its words ride the hint and accessible name.
     expect(container.querySelector("[data-agent-title]")?.getAttribute("data-record-connection")).toBe(connection);
     expect(container.textContent).not.toContain(words);
@@ -65,18 +65,14 @@ it.each([
   await clientI18n.changeLanguage(language);
   const agent = legacyAgentRow({ pane_id: "parent", identity_label: "부모" });
   const states: PrState[] = ["failed", "pending", "mergeable"];
-  const family: SessionPull[] = states.map((state, index) => ({
-    state,
-    pull: { number: 231 + index, title: `검증 ${index}`, url: `https://example.invalid/pull/${231 + index}`, badge: "open", checks: "pending", head_branch: "feat/menu", closing_issues: [], live: true, duty: false, created: true, settled_at_unix_ms: null },
-    owners: [legacyAgentRow({ pane_id: `child-${index}`, identity_label: `소유 세션 ${index}` })],
-  }));
-  const opened: AgentPullRequest[] = [];
+  const pulls = states.map((state, index) => sessionPull(231 + index, state, { title: `검증 ${index}`, own: false, holders: [`소유 세션 ${index}`] }));
+  const opened: SessionPull[] = [];
   let rowOpens = 0;
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
   try {
-    await act(async () => root.render(<TooltipProvider><div onClick={() => rowOpens++}><AgentPrMark agent={agent} family={family} onOpen={(pull) => opened.push(pull)} /></div></TooltipProvider>));
+    await act(async () => root.render(<TooltipProvider><div onClick={() => rowOpens++}><AgentPrMark agent={agent} pulls={pulls} onOpen={(pull) => opened.push(pull)} /></div></TooltipProvider>));
     const trigger = container.querySelector("button")!;
     await act(async () => trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
     const items = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]'));
@@ -88,6 +84,30 @@ it.each([
     expect(opened.map((pull) => pull.url)).toEqual(["https://example.invalid/pull/232"]);
     expect(rowOpens).toBe(0);
     expect(document.querySelector('[role="menu"]')).toBeNull();
+  } finally {
+    await act(async () => root.unmount());
+  }
+});
+
+// One list per session (docs/status-model.md): a closed pull request stays in
+// the list, dimmed, after the merged ones, and the mark counts it.
+it("keeps a closed PR in the list, dimmed, and counts it", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} unobserve() {} });
+  await clientI18n.changeLanguage("en");
+  const agent = legacyAgentRow({ pane_id: "lead", identity_label: "lead" });
+  const pulls = [sessionPull(12, "merged"), sessionPull(11, "merged", { own: false, holders: ["ended child"] }), sessionPull(10, "closed", { own: false, holders: ["ended child"] })];
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<TooltipProvider><AgentPrMark agent={agent} pulls={pulls} onOpen={() => {}} /></TooltipProvider>));
+    const trigger = container.querySelector("button")!;
+    expect(trigger.getAttribute("aria-label")).toBe("PR 3 · Merged 2 · Closed 1");
+    expect(container.querySelector('[data-pr-count="closed"]')?.className).toContain("opacity-(--opacity-dimmed)");
+    await act(async () => trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })));
+    const items = Array.from(document.querySelectorAll<HTMLElement>("[data-pr-list-item]"));
+    expect(items.map((item) => [item.dataset.prListItem, Boolean(item.querySelector("[data-pr-closed]"))])).toEqual([["12", false], ["11", false], ["10", true]]);
   } finally {
     await act(async () => root.unmount());
   }

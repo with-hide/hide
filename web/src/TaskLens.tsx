@@ -13,7 +13,7 @@ import { RevisitStar, starred } from "./components/revisit-mark";
 import { askParts, TreeChevron, TreeRails, type TreePlace } from "./components/agent-tree";
 import { childrenOf } from "./components/agent-tree-popover";
 import { Elapsed } from "./components/elapsed";
-import { AgentPrMark, useAgentStaleness } from "./components/pr-mark";
+import { AgentPrMark } from "./components/pr-mark";
 import { MissionChip } from "./components/mission-chip";
 import { RowLineText } from "./components/row-line-text";
 import { StatusMark } from "./components/status-mark";
@@ -31,7 +31,7 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
 import { numberedPanes, numberOf } from "./numbering";
 import { allAgents as everyPaneAgent, agentsByPane } from "./paneAgents";
-import { familyPulls, type SessionPull } from "./prMark";
+import { rowPulls } from "./prMark";
 import { remoteTargetOfPane } from "./remote";
 import { machineName } from "./screenMachine";
 import { checkoutPathOfPane, sessionTreeLines } from "./sessionTree";
@@ -341,10 +341,9 @@ function Folds({ group, resting, cleanup, archived, open, onToggle, rows, archiv
 /** A task's row and, through every opened row, its descendants (B10). */
 function TaskTree({ entry, lines, byPane, opened, selected, number, showProject, disabled, actions, onShowAll }: { entry: TaskEntry; lines: SidebarTreeLine[]; byPane: ReadonlyMap<string, AgentRow>; opened: ReadonlySet<string>; selected: string | null; number: number | null; showProject: boolean; disabled: boolean; actions: Actions; onShowAll: (parent: string) => void }) {
   const { agent } = entry;
-  const family = useMemo(() => familyPulls(agent, byPane), [agent, byPane]);
   const openOf = (of: AgentRow) => (childrenOf(of, byPane).length > 0 ? opened.has(of.pane_id) : null);
   return <>
-    <TaskRow entry={entry} family={family} open={openOf(agent)} selected={selected === agent.pane_id} number={number} showProject={showProject} disabled={disabled} actions={actions} />
+    <TaskRow entry={entry} open={openOf(agent)} selected={selected === agent.pane_id} number={number} showProject={showProject} disabled={disabled} actions={actions} />
     {lines.slice(1).map((line) => {
       if (line.kind === "more") return <TreeMoreRow key={`more:${line.parent}`} line={line} onShowAll={onShowAll} />;
       const child = line.row.agent;
@@ -355,10 +354,9 @@ function TaskTree({ entry, lines, byPane, opened, selected, number, showProject,
 }
 
 /** A task's row; `number` is the digit an ⌥ hold shows on it, floating at its top right over the time, moving nothing. */
-function TaskRow({ entry, family, open, selected, number, showProject, disabled, actions }: { entry: TaskEntry; family?: SessionPull[]; open: boolean | null; selected: boolean; number: number | null; showProject: boolean; disabled: boolean; actions: Actions }) {
+function TaskRow({ entry, open, selected, number, showProject, disabled, actions }: { entry: TaskEntry; open: boolean | null; selected: boolean; number: number | null; showProject: boolean; disabled: boolean; actions: Actions }) {
   const { t } = useInterfaceTranslation();
   const { agent, card, project } = entry;
-  const staleness = useAgentStaleness(agent, family);
   // A primitive, so a snapshot that moves nothing of this row leaves it alone.
   const localId = useShellStore((s) => localDeviceId(s.rest));
   const session = useMemo(() => sessionOfAgentOn(agent, localId), [agent, localId]);
@@ -398,7 +396,7 @@ function TaskRow({ entry, family, open, selected, number, showProject, disabled,
             <AgentForkMark agent={agent} />
             {starred(agent) && !starMark ? <RevisitStar className="group-hover/task:hidden group-focus-within/task:hidden hoverless:hidden" /> : null}
           </button>
-          <AgentPrMark agent={agent} family={family} staleness={staleness} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: project?.id ?? null, url: pull.url, number: pull.number })} onExternal={(pull) => actions.openLink(pull.url, true)} />
+          <AgentPrMark agent={agent} pulls={rowPulls(agent)} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: project?.id ?? null, url: pull.url, number: pull.number })} onExternal={(pull) => actions.openLink(pull.url, true)} />
           <MissionChip agent={agent} onOpen={(id) => actions.openMission(id)} />
           {read ? <span aria-hidden="true" className="shrink-0 rounded-xs border border-border px-xxs text-micro text-subtle-foreground group-hover/task:hidden group-focus-within/task:hidden hoverless:hidden" data-task-read-tag="">{t("taskLens.readTag")}</span> : null}
           <TimeSlot agent={agent} record={record} menu={menu} revisit={{ on: starred(agent), disabled, actions }} />
@@ -434,7 +432,7 @@ function ArchivedRow({ entry, showProject, disabled, actions }: { entry: Archive
   const failed = row.members.some((member) => member.resume === "failed");
   const state = row.phase === "deleting" ? t("archive.deleting") : row.phase === "archiving" ? t("archive.archiving") : row.phase === "unknown" ? t("archive.unknown")
     : row.members.some((member) => member.resume === "queued" || member.resume === "starting") ? t("archive.resuming") : failed ? t("archive.resumeFailed") : null;
-  const parts = prMarkParts(row.members.flatMap((member) => member.pulls.map((pull) => ({ pull, state: pull.state }))));
+  const parts = prMarkParts(row.members.flatMap((member) => member.pulls));
   const items = (): MenuEntry<ArchivedMenuId>[] => [
     { id: "record", icon: "record", label: t("taskLens.menu.record"), unavailable: null, shortcut: "Space" },
     { id: "resume", icon: "resume", label: t("archive.resume"), unavailable: disabled || pending || away || row.phase === "unknown" ? "" : null },
@@ -647,7 +645,6 @@ const partsTitle = (parts: LineParts) => [parts.lead, parts.text, parts.tail].fi
  */
 function ChildRow({ parent, child, depth, place, open, selected, disabled, actions, workspace }: { parent: AgentRow; child: AgentRow; depth: number; place: TreePlace; open: boolean | null; selected: boolean; disabled: boolean; actions: Actions; workspace: string | null }) {
   const { t } = useInterfaceTranslation();
-  const staleness = useAgentStaleness(child);
   // A primitive, so a snapshot that moves nothing of this row leaves it alone.
   const localId = useShellStore((s) => localDeviceId(s.rest));
   const session = useMemo(() => sessionOfAgentOn(child, localId), [child, localId]);
@@ -678,7 +675,7 @@ function ChildRow({ parent, child, depth, place, open, selected, disabled, actio
             <AgentForkMark agent={child} />
           </button>
           {device ? <span className="flex shrink-0 items-center gap-xxs rounded-xs border border-border px-xxs text-micro text-muted-foreground" data-task-device={device}><ServerIcon aria-hidden="true" className="size-(--size-icon-sm)" />{device}</span> : null}
-          <AgentPrMark agent={child} staleness={staleness} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: workspace, url: pull.url, number: pull.number })} onExternal={(pull) => actions.openLink(pull.url, true)} />
+          <AgentPrMark agent={child} pulls={rowPulls(child, "own")} disabled={disabled} onOpen={(pull) => actions.openSessionPullRequest({ workspace_id: workspace, url: pull.url, number: pull.number })} onExternal={(pull) => actions.openLink(pull.url, true)} />
           <TimeSlot agent={child} record={record} menu={menu} />
         </div>
         <ChildLine child={child} />

@@ -683,6 +683,32 @@ mod tests {
         assert_eq!(numbers(&list), [(5, PrState::Merged), (4, PrState::Closed)]);
     }
 
+    /// Two sessions holding one pull request list it once with both names;
+    /// the same number in another repository is another pull request; a
+    /// lineage that repeats, loops or names a gone pane still ends.
+    #[test]
+    fn a_shared_pull_request_is_listed_once_and_a_lineage_loop_ends() {
+        let (mut rows, sessions) = rows(&[
+            ("root", "s-root", &["child", "child", "gone"]),
+            ("child", "s-child", &["root"]),
+        ]);
+        let shared = listed(42, PullRequestBadge::Open, PullRequestChecks::Failed);
+        let mut foreign = listed(42, PullRequestBadge::Open, PullRequestChecks::Passing);
+        foreign.url = "https://github.com/acme/other/pull/42".into();
+        holds(&mut rows[0], &shared);
+        holds(&mut rows[1], &shared);
+        holds(&mut rows[1], &foreign);
+        let github = github(vec![shared, foreign]);
+        let sources = Sources::new(rows.iter(), &sessions, [&github]);
+        let list = sources.pulls(Some(0), None, &Recorded::default()).unwrap();
+        assert_eq!(
+            numbers(&list),
+            [(42, PrState::Failed), (42, PrState::Mergeable)]
+        );
+        assert_eq!(list.pulls[0].holders, ["label root", "label child"]);
+        assert!(list.pulls[0].own && !list.pulls[1].own);
+    }
+
     /// GitHub's list holds the 200 newest pull requests: one past it keeps the
     /// state the record last read, as stale, instead of leaving the list.
     #[test]

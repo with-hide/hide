@@ -8,6 +8,7 @@ import type { IncomingTaskScope, TaskCardScope, TaskState } from "./agentScope";
 import { cardLine, cardOfItem, cardOfPane, cardPulls, cardQuestion, itemToken, overviewDeviceOf, projectOrder } from "./overviewTasks";
 import type { BoardProject } from "./projectBoard";
 import type { AgentRow, SnapshotRest, Workspace } from "./snapshot";
+import { sessionPull } from "../test/sessionPull";
 
 type CheckoutSeed = { id: string; branch?: string; task_key?: string };
 
@@ -77,13 +78,11 @@ describe("the backlog's project order (B25, B5)", () => {
 });
 
 describe("a card's pull requests (B10)", () => {
-  it("names a pull request two members carry once, at its worse state", () => {
-    const url = "https://example.invalid/pull/5";
-    const rows = rowsOf(
-      agent("a", { request: { pull_requests: [{ number: 5, url }] }, state: { pr: { pulls: [{ index: 0, state: "mergeable" }] } } }),
-      agent("b", { request: { pull_requests: [{ number: 5, url }, { number: 6, url: "https://example.invalid/pull/6" }] }, state: { pr: { pulls: [{ index: 0, state: "failed" }, { index: 1, state: "merged" }] } } }),
-    );
-    expect(cardPulls({ members: ["a", "b"] }, rows)).toEqual([{ number: 5, url, state: "failed" }, { number: 6, url: "https://example.invalid/pull/6", state: "merged" }]);
+  it("reads its root's list, where a member that ended keeps the pull request it made", () => {
+    const made = sessionPull(5, "failed", { own: false, holders: ["child"] });
+    const rows = rowsOf(agent("r", { pulls: { pulls: [made, sessionPull(6, "merged")] } }));
+    expect(cardPulls(card("r", "working"), rows)).toEqual([made, sessionPull(6, "merged")]);
+    expect(cardLine(card("r", "working", { stage: 2 }), rows)).toEqual({ kind: "pr", number: 5, state: "failed" });
   });
 });
 
@@ -103,7 +102,7 @@ describe("a card's status line (B9)", () => {
   });
 
   it("names the open pull request rather than a merged one", () => {
-    const rows = rowsOf(agent("r", { request: { pull_requests: [{ number: 1, url: "u1" }, { number: 2, url: "u2" }] }, state: { pr: { pulls: [{ index: 0, state: "merged" }, { index: 1, state: "draft" }] } } }));
+    const rows = rowsOf(agent("r", { pulls: { pulls: [sessionPull(1, "merged"), sessionPull(2, "draft")] } }));
     expect(cardLine(card("r", "working", { stage: 2 }), rows)).toEqual({ kind: "pr", number: 2, state: "draft" });
   });
 

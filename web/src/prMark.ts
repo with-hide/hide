@@ -3,7 +3,7 @@ import type { TFunction } from "i18next";
 import type { MessageKey } from "./i18n/catalogs";
 import { formatDateTime } from "./i18n/format";
 import type { InterfaceLanguage } from "./i18n/locale";
-import { catalogWorkspaces, type AgentPullRequest, type AgentRow, type GithubStatus, type PrState, type PullRequest, type SnapshotRest } from "./snapshot";
+import type { AgentRow, GithubStatus, PrState, PullRequest, SessionPull } from "./snapshot";
 
 // The one place a pull request's state becomes an icon, a colour and a word
 // (docs/status-model.md, Pull request visual states). The core decides the
@@ -83,94 +83,39 @@ export function staleLabel(value: PrStaleness | undefined, t: TFunction<"transla
   return t("agentSessions.pr.stale", { time });
 }
 
-/** The row's own PRs, worst first, as the core ordered them. */
-export function ownPulls(agent: AgentRow): { pull: AgentPullRequest; state: PrState }[] {
-  const pulls = agent.request?.pull_requests ?? [];
-  return (agent.state.pr?.pulls ?? []).map(({ index, state }) => {
-    const pull = pulls[index];
-    if (!pull) throw new Error("Own PR summary points past the row's pull requests");
-    return { pull, state };
-  });
+/**
+ * A row's pull requests as the core lists them (`agent_state::work::family`):
+ * its session's and every descendant's, live or ended, worst first; `own`
+ * keeps those its own session holds or made, which a 프로젝트 tree child row
+ * draws under a root that already draws the family.
+ */
+export function rowPulls(agent: AgentRow, scope: "family" | "own" = "family"): SessionPull[] {
+  const pulls = agent.pulls?.pulls ?? [];
+  return scope === "own" ? pulls.filter((pull) => pull.own) : pulls;
 }
 
-/** A distinct PR in a Sessions root's tree, with the sessions that hold it. */
-export type SessionPull = { pull: AgentPullRequest; state: PrState; owners: AgentRow[] };
+/** A list's GitHub read: stale while any of its pull requests is, with the oldest of those last reads; undefined for no pull request. */
+export function pullsStaleness(pulls: readonly SessionPull[]): PrStaleness | undefined {
+  if (pulls.length === 0) return undefined;
+  const stale = pulls.filter((pull) => pull.stale);
+  if (stale.length === 0) return { stale: false, lastRead: null };
+  return { stale: true, lastRead: stale.some((pull) => pull.last_read_at_unix_ms === null) ? null : Math.min(...stale.map((pull) => pull.last_read_at_unix_ms!)) };
+}
+
+/** A closed pull request is drawn dimmed in a session's list: it stays, but asks nothing (docs/status-model.md, One list per session). */
+export const CLOSED_DIM = "opacity-(--opacity-dimmed)";
 
 const PR_RANK = Object.fromEntries(Object.keys(PR_LOOK).map((state, rank) => [state, rank])) as Record<PrState, number>;
-
-/**
- * The root's and every descendant's core-projected PRs, independent of tree
- * folds and sibling limits. URL is identity: equal numbers in different
- * repositories remain separate, and repeated sightings keep all owners.
- */
-export function sessionPulls(root: AgentRow, byPane: ReadonlyMap<string, AgentRow>): SessionPull[] {
-  const pulls = new Map<string, SessionPull>();
-  const seen = new Set<string>();
-  const pending = [root];
-  while (pending.length > 0) {
-    const agent = pending.pop()!;
-    if (seen.has(agent.pane_id)) continue;
-    seen.add(agent.pane_id);
-    for (const { pull, state } of ownPulls(agent)) {
-      const existing = pulls.get(pull.url);
-      if (!existing) pulls.set(pull.url, { pull, state, owners: [agent] });
-      else {
-        existing.owners.push(agent);
-        if (PR_RANK[state] < PR_RANK[existing.state]) {
-          existing.pull = pull;
-          existing.state = state;
-        }
-      }
-    }
-    for (const pane of [...(agent.lineage_child_pane_ids ?? [])].reverse()) {
-      const child = byPane.get(pane);
-      if (child && !seen.has(pane)) pending.push(child);
-    }
-  }
-  return [...pulls.values()].sort((a, b) => PR_RANK[a.state] - PR_RANK[b.state]);
-}
-
-/**
- * What a row's PR mark gathers: a parent's family, itself and every
- * descendant, or undefined for a row with no child in the list, which shows
- * its own PRs. The 태스크 row and the pane header ask it of any parent, the
- * 프로젝트 tree only of a root, whose child rows keep their own.
- */
-export function familyPulls(agent: AgentRow, byPane: ReadonlyMap<string, AgentRow>): SessionPull[] | undefined {
-  return (agent.lineage_child_pane_ids ?? []).some((pane) => byPane.has(pane)) ? sessionPulls(agent, byPane) : undefined;
-}
-
-/** Any stale contributing GitHub read dims the tree's mark, using its oldest failed read. */
-export function sessionStaleness(rest: SnapshotRest | null, pulls: SessionPull[]): PrStaleness | undefined {
-  const urls = new Set(pulls.map(({ pull }) => pull.url));
-  if (urls.size === 0) return undefined;
-  const reads = catalogWorkspaces(rest)
-    .filter((project) => project.pull_requests?.some((pull) => urls.has(pull.url)))
-    .map((project) => staleness(project.checkouts.find((checkout) => checkout.github)?.github))
-    .filter((read): read is PrStaleness => read !== undefined);
-  if (reads.length === 0) return undefined;
-  const stale = reads.filter((read) => read.stale);
-  const contributing = stale.length > 0 ? stale : reads;
-  return { stale: stale.length > 0, lastRead: contributing.some((read) => read.lastRead === null) ? null : Math.min(...contributing.map((read) => read.lastRead!)) };
-}
 
 /** What a mark draws: one PR's state and number, or for several, how many of each state, worst first. */
 export type PrMarkParts = { state: PrState; number: number } | { counts: { state: PrState; count: number }[] };
 
-/** The mark of a row's own PRs or a root's family; null for none. */
-export function prMarkParts(pulls: readonly { pull: Pick<AgentPullRequest, "number">; state: PrState }[]): PrMarkParts | null {
+/** The mark of a list of PRs; null for none. */
+export function prMarkParts(pulls: readonly Pick<SessionPull, "number" | "state">[]): PrMarkParts | null {
   const [first] = pulls;
   if (!first) return null;
-  if (pulls.length === 1) return { state: first.state, number: first.pull.number };
+  if (pulls.length === 1) return { state: first.state, number: first.number };
   const counts = new Map<PrState, number>();
   for (const { state } of pulls) counts.set(state, (counts.get(state) ?? 0) + 1);
   return { counts: [...counts].sort(([a], [b]) => PR_RANK[a] - PR_RANK[b]).map(([state, count]) => ({ state, count })) };
-}
-
-/** The GitHub read of the project that lists the row's own PRs, each row its own. */
-export function agentStaleness(rest: SnapshotRest | null, agent: AgentRow): PrStaleness | undefined {
-  const urls = new Set(ownPulls(agent).map(({ pull }) => pull.url));
-  if (urls.size === 0) return undefined;
-  const project = catalogWorkspaces(rest).find((row) => row.pull_requests?.some((pull) => urls.has(pull.url)));
-  return staleness(project?.checkouts.find((checkout) => checkout.github)?.github);
 }
