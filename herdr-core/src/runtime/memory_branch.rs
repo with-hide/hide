@@ -358,6 +358,20 @@ impl Runtime {
         number: u64,
         decision: BatchDecision,
     ) -> bool {
+        self.decide_batch_as(workspace_id, number, decision, true)
+    }
+
+    /// A decision on a ready batch; with `remake`, a merge the base conflicts
+    /// with starts `다시 맞추기` and is pressed again once the remade batch
+    /// is ready. The merge pressed again after a remake has no `remake`: a
+    /// second refusal stops for the operator.
+    fn decide_batch_as(
+        &mut self,
+        workspace_id: &str,
+        number: u64,
+        decision: BatchDecision,
+        remake: bool,
+    ) -> bool {
         let refused = |reason: &str| {
             crate::diagnostic!(json!({
                 "component": "memory", "kind": "promotion.decision_refused",
@@ -411,14 +425,17 @@ impl Runtime {
             // A merge refused because the branch no longer applies on its
             // base starts `다시 맞추기` itself, so it carries the start a
             // rebase needs; without one the refusal and its button stay.
-            BatchDecision::Merge | BatchDecision::MergePush => {
+            BatchDecision::Merge | BatchDecision::MergePush if remake => {
                 self.promotion_start(&node, &root).ok().map(|mut start| {
                     start.purpose = BatchPurpose::Rebase;
                     start.base = Some(base.clone());
                     start
                 })
             }
-            BatchDecision::Discard | BatchDecision::SyncBase => None,
+            BatchDecision::Merge
+            | BatchDecision::MergePush
+            | BatchDecision::Discard
+            | BatchDecision::SyncBase => None,
         };
         let own = self.memory_batch_agents(&project_id, &cards);
         let place = BranchPlace {
@@ -435,6 +452,7 @@ impl Runtime {
             .deciding
             .insert(key.clone(), decision);
         let carried = key.clone();
+        let workspace_id = workspace_id.to_owned();
         let pushed = decision == BatchDecision::MergePush;
         let based = (place.node.clone(), place.root.clone(), place.base.clone());
         let day = branch_decision::sync_day(super::memory::now_ms());
@@ -454,8 +472,18 @@ impl Runtime {
                     &day,
                 )
             },
-            move |runtime, (unseen, learned)| {
+            move |runtime, (unseen, learned, remade)| {
                 runtime.project_memory.promotions.deciding.remove(&carried);
+                if remade {
+                    runtime.project_memory.promotions.finish.insert(
+                        carried.clone(),
+                        BatchFinish {
+                            decision,
+                            workspace_id,
+                            running: false,
+                        },
+                    );
+                }
                 let (node, root, base) = based;
                 // Whatever GitHub answered the push, its rules are read again
                 // before the button is offered again.
@@ -572,6 +600,77 @@ impl Runtime {
     }
 }
 
+/// A merge a remake carries out (operator decision 2026-10-31): the decision
+/// the operator pressed, the Project it was pressed in, and whether the
+/// remade batch was seen running yet, so the batch's old ready rows are
+/// never taken for the remake's.
+#[derive(Clone, Debug)]
+pub(super) struct BatchFinish {
+    decision: BatchDecision,
+    workspace_id: String,
+    running: bool,
+}
+
+impl Runtime {
+    /// Presses again the merge a remake carries out once the Memory read
+    /// shows the remade batch ready; a batch that ended any other way drops
+    /// it, and its row offers what its state offers.
+    pub(super) fn finish_remade_batches(&mut self) {
+        if self.project_memory.promotions.finish.is_empty() {
+            return;
+        }
+        let Some(project_id) = self.project_memory.project_id.clone() else {
+            return;
+        };
+        let Some(memory) = self
+            .snapshot
+            .memory
+            .as_ref()
+            .and_then(|memory| memory.project.as_ref())
+            .cloned()
+        else {
+            return;
+        };
+        let mut due = Vec::new();
+        self.project_memory
+            .promotions
+            .finish
+            .retain(|(project, branch), finish| {
+                if *project != project_id || finish.workspace_id != memory.workspace_id {
+                    return true;
+                }
+                let rows = memory
+                    .rows
+                    .iter()
+                    .filter_map(|row| {
+                        let promotion = row.promotion.as_ref()?;
+                        (promotion.branch.as_deref() == Some(branch.as_str()))
+                            .then_some((row.number, promotion.state))
+                    })
+                    .collect::<Vec<_>>();
+                use crate::model::MemoryPromotionState as State;
+                if rows.iter().any(|(_, state)| *state == State::Running) {
+                    finish.running = true;
+                    return true;
+                }
+                if !finish.running {
+                    return rows.iter().any(|(_, state)| *state == State::Ready);
+                }
+                if let Some((number, _)) = rows.iter().find(|(_, state)| *state == State::Ready) {
+                    due.push((finish.workspace_id.clone(), *number, finish.decision));
+                }
+                false
+            });
+        for (workspace_id, number, decision) in due {
+            crate::diagnostic!(json!({
+                "component": "memory", "kind": "promotion.finish",
+                "card": hide_memory::card_name(number),
+            }));
+            self.decide_batch_as(&workspace_id, number, decision, false);
+        }
+    }
+}
+
 /// The purpose a batch's agent was asked, as a 제안 row words it.
 pub(super) fn attempt_purpose(purpose: Option<BatchPurpose>) -> AttemptPurpose {
     match purpose {
@@ -598,8 +697,9 @@ fn decide(
     cards: &[u64],
     start: Option<PromotionStart>,
     day: &str,
-) -> (Unseen, Option<branch_decision::BaseChange>) {
+) -> (Unseen, Option<branch_decision::BaseChange>, bool) {
     let mut learned = None;
+    let mut remade = false;
     let unseen = decide_batch(
         decision,
         connector,
@@ -612,8 +712,9 @@ fn decide(
         start,
         day,
         &mut learned,
+        &mut remade,
     );
-    (unseen, learned)
+    (unseen, learned, remade)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -629,6 +730,7 @@ fn decide_batch(
     start: Option<PromotionStart>,
     day: &str,
     learned: &mut Option<branch_decision::BaseChange>,
+    remade: &mut bool,
 ) -> Unseen {
     let now = super::memory::now_ms();
     let mut store = match super::memory::open_memory_store(database) {
@@ -710,6 +812,7 @@ fn decide_batch(
                             now,
                         )
                     {
+                        *remade = true;
                         return unseen;
                     }
                     refuse_all(&mut store, code);

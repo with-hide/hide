@@ -309,7 +309,7 @@ describe("the Hide AI tool", () => {
     expect(q('[data-suggestion-merge-push="s3"]')?.textContent).toBe("Try again");
     expect(q('[data-suggestion="s4"] [data-suggestion-attempt]')?.textContent).toContain("main changed, so it has to be made again");
     expect(q('[data-suggestion-merge="s4"]')).toBeNull();
-    expect(q('[data-suggestion-rebase="s4"]')?.textContent).toBe("Make it again");
+    expect(q('[data-suggestion-merge-push="s4"]')?.textContent).toBe("Try again");
     expect(q('[data-suggestion="s5"] [data-suggestion-attempt]')?.textContent).toContain("Fixing");
     expect(q('[data-suggestion="s6"] [data-suggestion-attempt]')?.textContent).toContain("Ended without changing anything");
     expect(q('[data-suggestion-retry="s6"]')).not.toBeNull();
@@ -317,7 +317,7 @@ describe("the Hide AI tool", () => {
     await click('[data-suggestion-branch-view="s2"]');
     await click('[data-suggestion-open-pr="s1"]');
     await click('[data-suggestion-merge-push="s1"]');
-    await click('[data-suggestion-rebase="s4"]');
+    await click('[data-suggestion-merge-push="s4"]');
     await click('[data-suggestion-discard="s1"]');
     expect(sent("detail_open")).toEqual([
       { item: { kind: "branch", workspace_id: "p", row: "s1" } },
@@ -326,12 +326,12 @@ describe("the Hide AI tool", () => {
     expect(sent("suggestion_action")).toEqual([
       { workspace_id: "p", id: "s1", action: "open_pr" },
       { workspace_id: "p", id: "s1", action: "merge_push" },
-      { workspace_id: "p", id: "s4", action: "rebase" },
+      { workspace_id: "p", id: "s4", action: "merge_push" },
       { workspace_id: "p", id: "s1", action: "discard" },
     ]);
   });
 
-  it("offers a local merge and no PR without GitHub, fixes the docs without it, (hide-ai-branch-first-apply B1, B7, B9)", async () => {
+  it("offers a local merge and no PR without GitHub, fixes the docs without it (hide-ai-branch-first-apply B1, B7, B9)", async () => {
     await render(suggestionsProject({ github: "missing", rows: [
       suggestionRow("s1", ready(null)),
       suggestionRow("s2"),

@@ -83,7 +83,7 @@ export type AttemptLine = { text: string; tone: "muted" | "warning" | "destructi
  * (B7, B8): `pr` after a push GitHub did not take, `sync` after a push that
  * found the local base apart from GitHub's.
  */
-export type BranchChoice = { again: "merge" | "rebase" | "discard" | "pr" | "sync" | null };
+export type BranchChoice = { again: "merge" | "discard" | "pr" | "sync" | null };
 
 /** The line of a row being applied (B2-B12, B14): what the attempt is doing, in words; null before one started. */
 export function attemptLine(t: TFunction<"translation">, row: Pick<SuggestionRow, "outcome" | "attempt">): AttemptLine | null {
@@ -153,7 +153,7 @@ const sync = (reason: MessageKey): Refusal => ({ lead: "suggestions.failure.lead
 const REFUSALS: Record<string, Refusal> = {
   merge_dirty: merge("suggestions.failure.merge_dirty"),
   merge_in_progress: merge("suggestions.failure.in_progress"),
-  merge_conflict: merge("suggestions.failure.merge_conflict", "rebase"),
+  merge_conflict: merge("suggestions.failure.merge_conflict"),
   merge_moved: merge("suggestions.failure.merge_moved"),
   merge_branch_moved: merge("suggestions.failure.merge_branch_moved"),
   merge_sign_failed: merge("suggestions.failure.sign_failed"),

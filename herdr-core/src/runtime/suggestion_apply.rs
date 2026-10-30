@@ -117,6 +117,21 @@ pub(super) struct ApplyWork {
     /// Project and line: a merging row says `합치는 중`, and a second press
     /// waits.
     pub(super) deciding: HashMap<(String, u64), BranchDecision>,
+    /// Merges a remake carries out, by Project and line: the operator's
+    /// `main에 합치기` or `{base}에 바로 올리기` was refused because the
+    /// branch no longer applied on its base, so Hide remade it and presses
+    /// the same decision once more when the remake is ready (operator
+    /// decision 2026-10-31). Kept in memory: after a restart the remade
+    /// branch waits for the operator.
+    finish: HashMap<(String, u64), Finish>,
+}
+
+/// A merge waiting on its remake: the decision the operator pressed, and the
+/// start of the attempt it was refused on, which the remake replaces.
+#[derive(Clone, Copy, Debug)]
+struct Finish {
+    decision: BranchDecision,
+    refused: u64,
 }
 
 impl ApplyWork {
@@ -154,8 +169,53 @@ impl Runtime {
         work.holding_sent.retain(|key, _| lines.contains(key));
         work.ask_after.retain(|key, _| lines.contains(key));
         work.watched = watched;
+        self.finish_remade_branches();
         self.track_suggestion_attempts();
         false
+    }
+
+    /// Presses again the merge a remake carries out, once its remake is a
+    /// ready branch; a remake that failed, or a line no longer followed,
+    /// drops it, and the row offers what its state offers.
+    fn finish_remade_branches(&mut self) {
+        let work = &mut self.suggestions_work.apply;
+        let followed = &work.followed;
+        let mut due = Vec::new();
+        work.finish.retain(|(project_id, line), finish| {
+            let Some(attempt) = followed
+                .iter()
+                .find(|attempt| attempt.project_id == *project_id && attempt.line.0 == *line)
+            else {
+                return false;
+            };
+            if attempt.started_at_unix_ms == finish.refused {
+                return true;
+            }
+            match attempt.phase {
+                AttemptPhase::Starting | AttemptPhase::Working => true,
+                AttemptPhase::Ready if attempt.purpose == AttemptPurpose::Rebase => {
+                    if let Ok(node) = NodeId::parse(&attempt.location.node) {
+                        due.push((
+                            ProjectRef {
+                                node,
+                                path: attempt.location.path.clone(),
+                            },
+                            *line,
+                            finish.decision,
+                        ));
+                    }
+                    false
+                }
+                _ => false,
+            }
+        });
+        for (project, line, decision) in due {
+            crate::diagnostic!(json!({
+                "component": "suggestions", "kind": "decision.finish",
+                "line": line,
+            }));
+            self.decide_branch(&project, line, decision, false);
+        }
     }
 
     /// Starts what the worker began: the agent of a pull request line, or
@@ -453,6 +513,20 @@ impl Runtime {
         line: u64,
         decision: BranchDecision,
     ) -> bool {
+        self.decide_branch(project, line, decision, true)
+    }
+
+    /// A decision on a ready line; with `remake`, a merge the base conflicts
+    /// with starts `다시 맞추기` and is pressed again once the remake is
+    /// ready. The merge pressed again after a remake has no `remake`: a
+    /// second refusal stops for the operator.
+    fn decide_branch(
+        &mut self,
+        project: &ProjectRef,
+        line: u64,
+        decision: BranchDecision,
+        remake: bool,
+    ) -> bool {
         let refused = |reason: &str| {
             crate::diagnostic!(json!({
                 "component": "suggestions", "kind": "decision.refused",
@@ -638,7 +712,8 @@ impl Runtime {
                 {
                     note_move(followed, &change);
                 }
-                let remake = matches!(&change, AttemptMove::DecisionRefused(code)
+                let remake = remake
+                    && matches!(&change, AttemptMove::DecisionRefused(code)
                     if super::branch_decision::remakes(code));
                 runtime.move_attempt(&key, change);
                 // The branch no longer applies on its base: an agent makes it
@@ -646,6 +721,13 @@ impl Runtime {
                 // working. A remake that cannot start leaves the refusal and
                 // its button.
                 if remake {
+                    runtime.suggestions_work.apply.finish.insert(
+                        deciding.clone(),
+                        Finish {
+                            decision,
+                            refused: key.2,
+                        },
+                    );
                     runtime.send_suggestions(Command::Action {
                         project,
                         line: LineId(key.1),

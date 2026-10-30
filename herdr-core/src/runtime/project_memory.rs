@@ -811,6 +811,7 @@ impl Runtime {
         project.search = load.search;
         project.archived = load.archived;
         self.sync_project_memory();
+        self.finish_remade_batches();
         true
     }
 

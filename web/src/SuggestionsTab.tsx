@@ -578,8 +578,9 @@ function Buttons({ row, project, actions }: { row: SuggestionRow; project: Proje
  * merges and pushes, only while the core read that GitHub's base takes a
  * direct push; a base that takes pull requests only says so in its place, and
  * an unread one shows nothing. A quiet `버리기` either way. A refused merge
- * puts its answer first: `다시 시도` merges again, `다시 맞추기` makes the
- * branch again on its base, and a push GitHub did not take leaves `PR 올리기`.
+ * puts its answer first: `다시 시도` merges again (where the base conflicts,
+ * Hide remakes the branch on it and merges once that is ready), and a push
+ * GitHub did not take leaves `PR 올리기`.
  * A push that found the local base apart from GitHub's offers `PR 올리기`
  * first, since the pull request goes up from the branch whatever main holds,
  * and `내 커밋을 브랜치로 옮기고 main 맞추기`, which keeps main's own commits
@@ -595,12 +596,10 @@ export function BranchButtons({ row, project, actions, again, className }: { row
   const push = pr && again !== "pr" && again !== "sync" ? branch?.push ?? "unknown" : "unknown";
   return (
     <div className={cn("col-start-2 flex flex-wrap items-center gap-xs pt-xxs", className)} data-suggestion-branch-buttons={row.id}>
-      {again === "rebase" ? (
-        <Button className="pointer-events-auto" size="sm" onClick={() => actions.suggestionAction(id, row.id, "rebase")} data-suggestion-rebase={row.id}>{t("suggestions.branch.rebase")}</Button>
-      ) : github ? null : (
+      {github ? null : (
         <Button className="pointer-events-auto" size="sm" onClick={() => actions.suggestionAction(id, row.id, "merge")} data-suggestion-merge={row.id}>{t(again === "merge" ? "suggestions.retry" : "suggestions.branch.merge", { base })}</Button>
       )}
-      {pr ? <Button className="pointer-events-auto" size="sm" variant={again === "rebase" ? "outline" : "default"} onClick={() => actions.suggestionAction(id, row.id, "open_pr")} data-suggestion-open-pr={row.id}>{t("suggestions.branch.openPr")}</Button> : null}
+      {pr ? <Button className="pointer-events-auto" size="sm" onClick={() => actions.suggestionAction(id, row.id, "open_pr")} data-suggestion-open-pr={row.id}>{t("suggestions.branch.openPr")}</Button> : null}
       {again === "sync" ? <Button className="pointer-events-auto" size="sm" variant="outline" onClick={() => actions.suggestionAction(id, row.id, "sync_base")} data-suggestion-sync-base={row.id}>{t("suggestions.branch.sync", { base })}</Button> : null}
       {push === "allowed" ? (
         <Button className="pointer-events-auto" size="sm" variant="outline" onClick={() => actions.suggestionAction(id, row.id, "merge_push")} data-suggestion-merge-push={row.id}>{t(again === "merge" ? "suggestions.retry" : "suggestions.branch.mergePush", { base })}</Button>
