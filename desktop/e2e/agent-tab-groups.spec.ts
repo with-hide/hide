@@ -38,7 +38,7 @@ test("Agent edge drag splits the desktop column into two live tab groups", async
       await terminal.click();
       await page.keyboard.type("printf 'desktop-group-live\\n'");
       await page.keyboard.press("Enter");
-      await expect.poll(() => execFileSync(herdr.bin, ["pane", "read", pane, "--source", "visible", "--format", "text"], { env: herdr.env, encoding: "utf8", timeout: 10_000 })).toMatch(/(?:^|\n)desktop-group-live\r?(?:\n|$)/);
+      await expect.poll(() => execFileSync(herdr.bin, ["pane", "read", pane, "--source", "recent-unwrapped", "--lines", "200", "--format", "text"], { env: herdr.env, encoding: "utf8", timeout: 10_000 })).toMatch(/(?:^|\n)desktop-group-live\r?(?:\n|$)/);
     }
     // Each group ran the line exactly once: Herdr's late answer to the drop's
     // focus once moved the keyboard to the other group mid-line (#413).
