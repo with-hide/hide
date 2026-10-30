@@ -2,7 +2,7 @@
 // beside the CPU time its worker spent and the longest the worker's event loop
 // was held, and the machine's size and free memory. A test that took half a
 // second on every other Windows run timed out at 5 s together with the files
-// running beside it (with-hide/hide-private#354), and the run said nothing of
+// running beside it (with-hide/hide-private issue 354), and the run said nothing of
 // whether the test worked that long, its worker got no CPU, or something held
 // the loop. A passing test prints nothing.
 import os from "node:os";
