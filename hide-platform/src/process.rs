@@ -578,23 +578,27 @@ impl OwnedChild {
                     return Err(CaptureFailureKind::Deadline);
                 }
                 if !exited && sys::has_exited(&self.child).map_err(CaptureFailureKind::Io)? {
-                    // The walk needs the leader unreaped, the group check
-                    // needs it reaped.
+                    // The walk needs the leader unreaped, and so does the
+                    // end's confirmation, which may signal the group again
+                    // (`sys::tree_ended`): only the unreaped leader keeps the
+                    // group's id from being another group's.
                     self.kill_tree().map_err(CaptureFailureKind::Io)?;
-                    self.try_wait()
-                        .map_err(CaptureFailureKind::Io)?
-                        .ok_or_else(|| {
-                            CaptureFailureKind::Io(io::Error::other(
-                                "observed exit could not be reaped",
-                            ))
-                        })?;
                     exited = true;
                 }
                 // Asked before the reads, so they come after the last write
                 // anything in the tree could make.
                 if exited && !tree_ended {
-                    tree_ended =
-                        sys::tree_ended(&self.child, &self.tie).map_err(CaptureFailureKind::Io)?;
+                    tree_ended = sys::tree_ended(&self.child, &mut self.tie)
+                        .map_err(CaptureFailureKind::Io)?;
+                    if tree_ended {
+                        self.try_wait()
+                            .map_err(CaptureFailureKind::Io)?
+                            .ok_or_else(|| {
+                                CaptureFailureKind::Io(io::Error::other(
+                                    "observed exit could not be reaped",
+                                ))
+                            })?;
+                    }
                 }
                 let out_progress = read_capture(&mut out, &mut stdout, stderr.len(), output_limit)?;
                 let err_progress = read_capture(&mut err, &mut stderr, stdout.len(), output_limit)?;
@@ -1007,20 +1011,26 @@ fn capture_run(
     let (mut out, mut err) = (Vec::new(), Vec::new());
     let (mut out_end, mut err_end) = (false, false);
     let mut status = None;
+    let mut exited = false;
     let mut tree_ended = false;
     loop {
-        if status.is_none() && sys::has_exited(&child.child).map_err(RunFailure::Wait)? {
+        if !exited && sys::has_exited(&child.child).map_err(RunFailure::Wait)? {
             // Observe without reaping: the leader's identity still belongs to
-            // this owner while its group and remaining descendants are ended.
+            // this owner while its group and remaining descendants are ended,
+            // and while the end's confirmation may signal the group again
+            // (`sys::tree_ended`).
             child.kill_tree().map_err(RunFailure::Wait)?;
-            status = Some(child.try_wait().map_err(RunFailure::Wait)?.ok_or_else(|| {
-                RunFailure::Wait(io::Error::other("observed exit could not be reaped"))
-            })?);
+            exited = true;
         }
         // Asked before the reads, so they come after the last write anything
         // in the tree could make.
-        if status.is_some() && !tree_ended {
-            tree_ended = sys::tree_ended(&child.child, &child.tie).map_err(RunFailure::Wait)?;
+        if exited && !tree_ended {
+            tree_ended = sys::tree_ended(&child.child, &mut child.tie).map_err(RunFailure::Wait)?;
+            if tree_ended {
+                status = Some(child.try_wait().map_err(RunFailure::Wait)?.ok_or_else(|| {
+                    RunFailure::Wait(io::Error::other("observed exit could not be reaped"))
+                })?);
+            }
         }
         if stop.load(Ordering::Relaxed) {
             return Err(RunFailure::Stopped);
@@ -1177,7 +1187,9 @@ pub struct LeftRunning {
 /// another account counts while it runs. One that has ended has ended before
 /// anything reaps it: a Unix zombie answers signal 0 until its parent, or init
 /// once it is orphaned, waits for it, and a Windows process stays open while
-/// any handle to it does, and neither counts.
+/// any handle to it does, and neither counts. A Windows process counts until
+/// the system has closed every handle it held, so a file it held can be
+/// removed once it no longer counts.
 pub fn is_alive(pid: u32) -> bool {
     pid != 0 && sys::is_alive(pid)
 }
@@ -3161,19 +3173,39 @@ mod sys {
     /// its way out has not, so no member can write any more once this holds.
     /// Signal 0 to the group cannot say it: macOS refuses it with `EPERM`
     /// both when only zombies are left and while a killed member is still
-    /// exiting. Asked once the leader is reaped; the system hands no new
-    /// process the group's id while a member keeps it. A member that left the
-    /// group was signalled by `kill_tree_of` but is not waited for here,
-    /// since only its pid would name it. A tied child's tree has ended once
-    /// its supervisor confirmed it.
-    pub(super) fn tree_ended(child: &Child, tie: &Tie) -> io::Result<bool> {
+    /// exiting. A member that left the group was signalled by `kill_tree_of`
+    /// but is not waited for here, since only its pid would name it. A tied
+    /// child's tree has ended once its supervisor confirmed it.
+    ///
+    /// Asked only after the group was signalled to end, and only while the
+    /// leader is unreaped: its id, which is the group's, cannot be another
+    /// process's then, so the members this counts and a signal it sends are
+    /// this group's alone; the caller reaps the leader once this holds. A
+    /// member still running may have been started while the first signal
+    /// was sent, by a parent it had not yet stopped: macOS does not hold such
+    /// a start back, and the started process kept running
+    /// (`a_capture_returns_after_every_process_its_tree_ran_has_let_go_of_its_files`).
+    /// The group is signalled again each time one is found; a member that is
+    /// only on its way out is signalled for nothing.
+    pub(super) fn tree_ended(child: &Child, tie: &mut Tie) -> io::Result<bool> {
         if let Some(supervisor) = &tie.supervisor {
             return Ok(matches!(
                 supervisor.report,
                 Some(super::Ending::Confirmed { .. })
             ));
         }
-        Ok(!group_members(child.id())?.into_iter().any(is_alive))
+        let group = child.id();
+        if !group_members(group)?.into_iter().any(is_alive) {
+            return Ok(true);
+        }
+        match signal(-(group as libc::pid_t), libc::SIGKILL) {
+            // Only zombies were left by now (`EPERM` on macOS), or nothing.
+            Err(error)
+                if error.raw_os_error() == Some(libc::EPERM)
+                    || error.kind() == io::ErrorKind::NotFound => {}
+            result => result?,
+        }
+        Ok(false)
     }
 
     /// The processes whose group is `group`, zombies included.
@@ -4280,9 +4312,9 @@ mod sys {
     use std::os::windows::process::CommandExt;
 
     use windows_sys::Win32::Foundation::{
-        CloseHandle, ERROR_ALREADY_EXISTS, FILETIME, GetHandleInformation, GetLastError, HANDLE,
-        HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE, STILL_ACTIVE, SetHandleInformation,
-        WAIT_OBJECT_0, WAIT_TIMEOUT,
+        CloseHandle, DUPLICATE_SAME_ACCESS, DuplicateHandle, ERROR_ALREADY_EXISTS, FILETIME,
+        GetHandleInformation, GetLastError, HANDLE, HANDLE_FLAG_INHERIT, INVALID_HANDLE_VALUE,
+        STILL_ACTIVE, SetHandleInformation, WAIT_OBJECT_0, WAIT_TIMEOUT,
     };
     use windows_sys::Win32::System::Console::{
         GetConsoleCP, GetStdHandle, STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE,
@@ -4291,10 +4323,12 @@ mod sys {
         CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
         TH32CS_SNAPPROCESS, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
     };
+    use windows_sys::Win32::System::IO::{CreateIoCompletionPort, GetQueuedCompletionStatus};
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob,
-        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
-        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectBasicAccountingInformation,
+        JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOBOBJECT_ASSOCIATE_COMPLETION_PORT,
+        JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JobObjectAssociateCompletionPortInformation, JobObjectBasicAccountingInformation,
         JobObjectExtendedLimitInformation, OpenJobObjectW, QueryInformationJobObject,
         SetInformationJobObject, TerminateJobObject,
     };
@@ -4302,12 +4336,20 @@ mod sys {
     use windows_sys::Win32::System::ProcessStatus::{
         K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
     };
-    use windows_sys::Win32::System::SystemServices::JOB_OBJECT_QUERY;
+    use windows_sys::Win32::System::SystemServices::{
+        JOB_OBJECT_MSG_NEW_PROCESS, JOB_OBJECT_QUERY,
+    };
+    use windows_sys::Win32::System::Threading::INFINITE;
+
+    use std::collections::HashMap;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
     use windows_sys::Win32::System::Threading::{
         CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW, CREATE_SUSPENDED, DETACHED_PROCESS,
-        GetCurrentProcess, GetExitCodeProcess, GetProcessTimes, OpenProcess, OpenThread,
-        PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE, QueryFullProcessImageNameW,
-        ResumeThread, THREAD_SUSPEND_RESUME, TerminateProcess, WaitForSingleObject,
+        GetCurrentProcess, GetExitCodeProcess, GetProcessId, GetProcessTimes, OpenProcess,
+        OpenThread, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+        QueryFullProcessImageNameW, ResumeThread, THREAD_SUSPEND_RESUME, TerminateProcess,
+        WaitForSingleObject,
     };
 
     use super::*;
@@ -4357,9 +4399,56 @@ mod sys {
     }
 
     /// The job a child lives in. Closing it ends everything still in it.
-    /// The child's job, whether the child was put in it, and, for a tied
-    /// child, the bound its tree's end is confirmed within.
-    pub(super) struct Tie(Owned, bool, Option<Duration>);
+    /// The child's job, whether the child was put in it, for a tied child
+    /// the bound its tree's end is confirmed within, and every process the
+    /// job has run, followed from its start (`Members`).
+    pub(super) struct Tie(Owned, bool, Option<Duration>, Members);
+
+    /// Every process a child's job has run, followed from the moment it
+    /// joined. The system counts a process out of its job before it has
+    /// closed the handles the process held, and signals the process's object
+    /// only after (Microsoft's "Terminating a Process" lists the handles
+    /// closed before the object signalled), so a job that counts nothing
+    /// running can still hold a file or a folder its last process used; the
+    /// end of a tree waits for the signal of every process it ran.
+    ///
+    /// The job announces each process that joins it, before it can run, on
+    /// the one completion port of this process, set on the job before the
+    /// child is started; one thread reads that port for the life of the
+    /// process as each notice arrives (`serve`), so nothing waits there for
+    /// an owner to ask. It holds each announced process until it is
+    /// signalled. A pid that no longer opens, or opens as a process outside
+    /// the job, had its object deleted, which happens only after its handles
+    /// were closed, so it has ended whole. Microsoft does not guarantee a
+    /// job's notices arrive, so the notices are counted against the job's own
+    /// count of the processes it ever ran: an end is not confirmed while one
+    /// is missing. A process that could not be followed (one that refuses to
+    /// be held or waited on, or one past [`HELD_LIMIT`]) is kept as the
+    /// reason, and every later question about the end answers with it.
+    pub(super) struct Members {
+        key: usize,
+        followed: Arc<Mutex<Followed>>,
+    }
+
+    /// What the notice thread has learned of one job's processes.
+    struct Followed {
+        /// The job, by a handle of the thread's own, so a pid can be checked
+        /// against it after the owner's handle is closed.
+        job: Owned,
+        announced: u64,
+        held: Vec<Owned>,
+        lost: Option<String>,
+    }
+
+    /// The completion port every child's job announces its processes on,
+    /// and the jobs it is read for.
+    struct Notices {
+        port: Owned,
+        jobs: Mutex<HashMap<usize, Arc<Mutex<Followed>>>>,
+        next: AtomicUsize,
+        /// Why the port stopped being read, once it has.
+        down: Mutex<Option<String>>,
+    }
 
     pub(super) fn spawn(
         command: &mut Command,
@@ -4416,6 +4505,7 @@ mod sys {
         if set == 0 {
             return Err(io::Error::last_os_error());
         }
+        let members = Members::follow(&job)?;
         // Suspended, so the child cannot start a process of its own before it
         // is inside the job. An owner with no console of its own (a detached
         // daemon) would have Windows open a visible console window for every
@@ -4437,7 +4527,7 @@ mod sys {
             if let Some(deadline) = deadline {
                 let owned = OwnedChild {
                     child,
-                    tie: Tie(job, false, None),
+                    tie: Tie(job, false, None, members),
                     tied: false,
                     ended: false,
                     reaped: false,
@@ -4454,7 +4544,7 @@ mod sys {
             if let Some(deadline) = deadline {
                 let owned = OwnedChild {
                     child,
-                    tie: Tie(job, true, None),
+                    tie: Tie(job, true, None, members),
                     tied: false,
                     ended: false,
                     reaped: false,
@@ -4467,7 +4557,7 @@ mod sys {
             let _ = child.wait();
             return Err(error);
         }
-        let tie = Tie(job, true, None);
+        let tie = Tie(job, true, None, members);
         if let Some(deadline) = deadline.filter(|deadline| Instant::now() >= *deadline) {
             let owned = OwnedChild {
                 child,
@@ -4718,9 +4808,9 @@ mod sys {
     }
 
     /// Ends everything in a tied child's job and waits, up to `limit`, until
-    /// the job counts nothing running: `TerminateJobObject` returns before
+    /// it has all ended (`left_running`): `TerminateJobObject` returns before
     /// its processes have ended.
-    fn end_job(tie: &Tie, limit: Duration) -> io::Result<bool> {
+    fn end_job(tie: &mut Tie, limit: Duration) -> io::Result<bool> {
         if !tie.1 {
             // Assignment failed before the suspended child could run, so the
             // child was alone and its exit was seen first.
@@ -4733,7 +4823,7 @@ mod sys {
         }
         let until = Instant::now() + limit;
         loop {
-            let left = active_processes(tie)?;
+            let left = left_running(tie)?;
             if left == 0 {
                 return super::Ending::Confirmed {
                     ended_any: running > 0,
@@ -4741,10 +4831,7 @@ mod sys {
                 .result();
             }
             if Instant::now() >= until {
-                return super::Ending::Unconfirmed {
-                    left: Some(left as usize),
-                }
-                .result();
+                return super::Ending::Unconfirmed { left: Some(left) }.result();
             }
             pause_until(Instant::now() + Duration::from_millis(1));
         }
@@ -4801,18 +4888,291 @@ mod sys {
         Ok(active > 0)
     }
 
-    /// Whether nothing is left running in the child's job. A terminated job
-    /// ends its processes after `TerminateJobObject` returns, so this is
-    /// asked until it holds. A child whose assignment failed is alone in its
+    /// The most processes of one child's job held at once; a tree with more
+    /// left to end cannot be followed, which is its end's answer.
+    const HELD_LIMIT: usize = 4096;
+
+    /// The notices of this process, started with the first child.
+    fn notices() -> io::Result<&'static Notices> {
+        static NOTICES: OnceLock<Result<Notices, String>> = std::sync::OnceLock::new();
+        NOTICES
+            .get_or_init(|| {
+                // SAFETY: a new port that no file handle is tied to.
+                let port = unsafe {
+                    CreateIoCompletionPort(INVALID_HANDLE_VALUE, std::ptr::null_mut(), 0, 1)
+                };
+                if port.is_null() {
+                    return Err(io::Error::last_os_error().to_string());
+                }
+                Ok(Notices {
+                    port: Owned(port),
+                    jobs: Mutex::new(HashMap::new()),
+                    next: AtomicUsize::new(1),
+                    down: Mutex::new(None),
+                })
+            })
+            .as_ref()
+            .map_err(|reason| io::Error::other(format!("job notices cannot be read: {reason}")))
+            .and_then(|notices| {
+                static SERVED: std::sync::Once = std::sync::Once::new();
+                let mut started = Ok(());
+                SERVED.call_once(|| {
+                    started = std::thread::Builder::new()
+                        .name("hide-job-notices".into())
+                        .spawn(move || serve(notices))
+                        .map(drop);
+                    if let Err(error) = &started {
+                        notices.stop(format!("its thread could not start: {error}"));
+                    }
+                });
+                started.map(|()| notices)
+            })
+    }
+
+    /// Reads the port as long as this process lives, one notice at a time.
+    fn serve(notices: &'static Notices) {
+        loop {
+            let (mut message, mut key, mut overlapped) = (0u32, 0usize, std::ptr::null_mut());
+            // SAFETY: the port is never closed and every output is writable.
+            let read = unsafe {
+                GetQueuedCompletionStatus(
+                    notices.port.0,
+                    &mut message,
+                    &mut key,
+                    &mut overlapped,
+                    INFINITE,
+                )
+            };
+            if read == 0 {
+                notices.stop(io::Error::last_os_error().to_string());
+                return;
+            }
+            let followed = lock(&notices.jobs).get(&key).cloned();
+            // A job whose owner has let it go has nothing left to follow.
+            if let (Some(followed), JOB_OBJECT_MSG_NEW_PROCESS) = (followed, message) {
+                // The notice carries the pid where an overlapped pointer
+                // would be.
+                lock(&followed).announce(overlapped as usize as u32);
+            }
+        }
+    }
+
+    /// The lock's value; a thread that panicked while holding it left
+    /// nothing a reader could not read.
+    fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+        mutex.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    impl Notices {
+        /// The port is no longer read: every job's end is unconfirmable
+        /// from now on.
+        fn stop(&self, reason: String) {
+            diagnose(&format!("process.job_notices_down reason={reason}\n"));
+            for followed in lock(&self.jobs).values() {
+                lock(followed).lose(format!("job notices stopped: {reason}"));
+            }
+            *lock(&self.down) = Some(reason);
+        }
+    }
+
+    impl Members {
+        /// Follows `job`'s processes: its notices go to this process's port
+        /// from before anything joins it.
+        fn follow(job: &Owned) -> io::Result<Self> {
+            let notices = notices()?;
+            if let Some(reason) = lock(&notices.down).clone() {
+                return Err(io::Error::other(format!("job notices stopped: {reason}")));
+            }
+            let mut copy = std::ptr::null_mut();
+            // SAFETY: both process handles are this process's, the job's is
+            // open, and `copy` is writable.
+            let copied = unsafe {
+                DuplicateHandle(
+                    GetCurrentProcess(),
+                    job.0,
+                    GetCurrentProcess(),
+                    &mut copy,
+                    0,
+                    0,
+                    DUPLICATE_SAME_ACCESS,
+                )
+            };
+            if copied == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            let followed = Arc::new(Mutex::new(Followed {
+                job: Owned(copy),
+                announced: 0,
+                held: Vec::new(),
+                lost: None,
+            }));
+            let key = notices
+                .next
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            lock(&notices.jobs).insert(key, Arc::clone(&followed));
+            // Registered before the job can announce anything, and let go
+            // of on any failure below.
+            let members = Self { key, followed };
+            let association = JOBOBJECT_ASSOCIATE_COMPLETION_PORT {
+                CompletionKey: key as *mut core::ffi::c_void,
+                CompletionPort: notices.port.0,
+            };
+            // SAFETY: both handles are open and `association` is valid for
+            // the size passed.
+            let set = unsafe {
+                SetInformationJobObject(
+                    job.0,
+                    JobObjectAssociateCompletionPortInformation,
+                    (&association as *const JOBOBJECT_ASSOCIATE_COMPLETION_PORT).cast(),
+                    std::mem::size_of::<JOBOBJECT_ASSOCIATE_COMPLETION_PORT>() as u32,
+                )
+            };
+            if set == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(members)
+        }
+    }
+
+    impl Drop for Members {
+        fn drop(&mut self) {
+            if let Ok(notices) = notices() {
+                lock(&notices.jobs).remove(&self.key);
+            }
+        }
+    }
+
+    impl Followed {
+        /// A process joined the job.
+        fn announce(&mut self, pid: u32) {
+            self.announced += 1;
+            if self.lost.is_none()
+                && let Err(error) = self.hold(pid)
+            {
+                self.lose(format!("process {pid}: {error}"));
+            }
+        }
+
+        /// Holds the process `pid` names while it is this job's and has not
+        /// ended.
+        fn hold(&mut self, pid: u32) -> io::Result<()> {
+            // SAFETY: each handle is open while it is held.
+            if self
+                .held
+                .iter()
+                .any(|process| unsafe { GetProcessId(process.0) } == pid)
+            {
+                return Ok(());
+            }
+            let process = match open(pid, PROCESS_SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION) {
+                Ok(process) => process,
+                // Its object is gone, so its handles were closed.
+                Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+                Err(error) => return Err(error),
+            };
+            let mut member = 0;
+            // SAFETY: both handles are open and `member` is writable.
+            if unsafe { IsProcessInJob(process.0, self.job.0, &mut member) } == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            // Another process took the pid of one whose object is gone.
+            if member == 0 || signalled(&process)? {
+                return Ok(());
+            }
+            if self.held.len() >= HELD_LIMIT {
+                self.let_go_of_ended();
+            }
+            if self.held.len() >= HELD_LIMIT {
+                return Err(io::Error::other(format!(
+                    "more than {HELD_LIMIT} processes left to end"
+                )));
+            }
+            self.held.push(process);
+            Ok(())
+        }
+
+        /// Lets go of every held process that has ended; one whose wait
+        /// fails stays held, and the failure is kept.
+        fn let_go_of_ended(&mut self) {
+            let mut failure = None;
+            self.held.retain(|process| match signalled(process) {
+                Ok(ended) => !ended,
+                Err(error) => {
+                    failure.get_or_insert(error);
+                    true
+                }
+            });
+            if let Some(error) = failure {
+                self.lose(format!("a held process could not be waited on: {error}"));
+            }
+        }
+
+        /// The first reason a process could not be followed; it stays.
+        fn lose(&mut self, reason: String) {
+            if self.lost.is_none() {
+                diagnose(&format!("process.job_follow_lost reason={reason}\n"));
+                self.lost = Some(reason);
+            }
+        }
+    }
+
+    /// Whether `process` has ended: its object is signalled. A wait that
+    /// fails is the error, with what the system said.
+    fn signalled(process: &Owned) -> io::Result<bool> {
+        // SAFETY: the handle is open with the access a wait needs.
+        match unsafe { WaitForSingleObject(process.0, 0) } {
+            WAIT_OBJECT_0 => Ok(true),
+            WAIT_TIMEOUT => Ok(false),
+            _ => Err(io::Error::last_os_error()),
+        }
+    }
+
+    /// How many processes of the job have not ended, at least: the most of
+    /// those it counts as running, those it ran whose notice has not been
+    /// read yet, and those announced that are not signalled. The job's count
+    /// is read before the notices, so each process it counts is either
+    /// announced by then or still owed. A process that could not be followed
+    /// is the error, now and every time after.
+    fn left_running(tie: &Tie) -> io::Result<usize> {
+        let (active, total) = accounting(tie)?;
+        let mut followed = lock(&tie.3.followed);
+        if followed.lost.is_none() {
+            followed.let_go_of_ended();
+        }
+        if let Some(lost) = &followed.lost {
+            return Err(io::Error::other(format!(
+                "the job's processes could not all be followed: {lost}"
+            )));
+        }
+        let owed = u64::from(total).saturating_sub(followed.announced) as usize;
+        Ok((active as usize).max(owed).max(followed.held.len()))
+    }
+
+    /// Whether everything in the child's job has ended: the job counts
+    /// nothing running and every process it ran is signalled (`Members`). A
+    /// terminated job ends its processes after `TerminateJobObject` returns,
+    /// so this is asked until it holds; it is asked only after the job was
+    /// ended, and while the job still counts a process running it is ended
+    /// again, so a process started while the first end was sent is ended
+    /// too, as on Unix. A child whose assignment failed is alone in its
     /// tree, and its exit was seen before this is asked.
-    pub(super) fn tree_ended(_: &Child, tie: &Tie) -> io::Result<bool> {
+    pub(super) fn tree_ended(_: &Child, tie: &mut Tie) -> io::Result<bool> {
         if !tie.1 {
             return Ok(true);
         }
-        Ok(active_processes(tie)? == 0)
+        // SAFETY: the job handle is open for as long as `tie` lives.
+        if active_processes(tie)? > 0 && unsafe { TerminateJobObject((tie.0).0, 1) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(left_running(tie)? == 0)
     }
 
     fn active_processes(tie: &Tie) -> io::Result<u32> {
+        Ok(accounting(tie)?.0)
+    }
+
+    /// The processes the job counts as running and those it has ever run.
+    fn accounting(tie: &Tie) -> io::Result<(u32, u32)> {
         // SAFETY: an all-zero accounting structure is a valid value.
         let mut accounting: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION = unsafe { std::mem::zeroed() };
         // SAFETY: the job handle is open for as long as `tie` lives and
@@ -4829,7 +5189,7 @@ mod sys {
         if queried == 0 {
             return Err(io::Error::last_os_error());
         }
-        Ok(accounting.ActiveProcesses)
+        Ok((accounting.ActiveProcesses, accounting.TotalProcesses))
     }
 
     pub(super) fn kill_tree(pid: u32) -> io::Result<()> {
@@ -5012,16 +5372,49 @@ mod sys {
         Ok((u64::from(created.dwHighDateTime) << 32) | u64::from(created.dwLowDateTime))
     }
 
+    /// A process has ended once its object is signalled: the system ends a
+    /// process after `TerminateProcess` returns, closes its handles, and
+    /// signals its object last, and Microsoft documents the wait on it as the
+    /// way to be sure. A test told by the exit code that a process had ended
+    /// was refused a folder it had used (with-hide/hide-private#327). Only a
+    /// process that refuses to be waited on is read by its exit code. A wait
+    /// or a read that fails confirms nothing, so the process still counts and
+    /// the failure is logged.
     pub(super) fn is_alive(pid: u32) -> bool {
-        let process = match open(pid, PROCESS_QUERY_LIMITED_INFORMATION) {
-            Ok(process) => process,
-            // A process of another account refuses the query and exists.
-            Err(error) => return error.kind() == io::ErrorKind::PermissionDenied,
-        };
+        match open(pid, PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE) {
+            Ok(process) => signalled(&process).map_or_else(
+                |error| {
+                    diagnose(&format!(
+                        "process.alive_unconfirmed pid={pid} step=wait error={error}\n"
+                    ));
+                    true
+                },
+                |ended| !ended,
+            ),
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+                match open(pid, PROCESS_QUERY_LIMITED_INFORMATION) {
+                    Ok(process) => still_active(pid, &process),
+                    // A process of another account refuses the query and exists.
+                    Err(error) => error.kind() == io::ErrorKind::PermissionDenied,
+                }
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// Whether the exit code `process` reads says it has not ended; one
+    /// that cannot be read says nothing, so the process still counts.
+    fn still_active(pid: u32, process: &Owned) -> bool {
         let mut code = 0u32;
         // SAFETY: the handle is open and `code` is writable.
-        let read = unsafe { GetExitCodeProcess(process.0, &mut code) };
-        read != 0 && code == STILL_ACTIVE as u32
+        if unsafe { GetExitCodeProcess(process.0, &mut code) } == 0 {
+            let error = io::Error::last_os_error();
+            diagnose(&format!(
+                "process.alive_unconfirmed pid={pid} step=exit_code error={error}\n"
+            ));
+            return true;
+        }
+        code == STILL_ACTIVE as u32
     }
 
     pub(super) fn start_time(pid: u32) -> io::Result<u64> {
