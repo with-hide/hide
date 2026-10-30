@@ -492,6 +492,7 @@ pub fn allowed(arguments: &[&str]) -> bool {
         || is_checks_verdict_read(arguments)
         || is_merge_commit_read(arguments)
         || is_compare_read(arguments)
+        || is_branch_push_read(arguments)
         || matches!(
             arguments,
             ["pr", "list", "--state", "open", "--limit", PULL_REQUEST_LIMIT, "--json", OPEN_CHECK_FIELDS]
@@ -695,6 +696,111 @@ fn is_compare_read(arguments: &[&str]) -> bool {
     range
         .split_once("...")
         .is_some_and(|(base, head)| is_repository(repository) && is_commit(base) && is_commit(head))
+}
+
+/// One of the three reads that decide whether a branch on GitHub takes a
+/// direct push (`Hide AI`'s `{base}에 바로 올리기`): whether it is protected,
+/// what its classic protection asks, and the rulesets that apply to it. Each
+/// prints `push`, `pr_only`, or for [`BranchPushRead::Protected`] `true` or
+/// `false`, through a fixed filter; any other answer, a 403 or a 404 included,
+/// leaves the question open.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BranchPushRead {
+    /// `repos/OWNER/NAME/branches/BRANCH`, readable with read access.
+    Protected,
+    /// `repos/OWNER/NAME/branches/BRANCH/protection`, which GitHub answers
+    /// only to an administrator of the repository.
+    Protection,
+    /// `repos/OWNER/NAME/rules/branches/BRANCH`, the active ruleset rules.
+    Rules,
+}
+
+impl BranchPushRead {
+    const ALL: [Self; 3] = [Self::Protected, Self::Protection, Self::Rules];
+
+    /// The filter `gh` applies. A pull request, a required check, a push
+    /// allowance list or a locked branch turns a direct push away whatever it
+    /// carries; a linear history or signature rule depends on the commit, and
+    /// a push it refuses is put back.
+    pub const fn jq(self) -> &'static str {
+        match self {
+            Self::Protected => ".protected",
+            Self::Protection => {
+                "if (.required_pull_request_reviews != null) or (.restrictions != null) \
+                 or (((.required_status_checks.contexts // []) + (.required_status_checks.checks // [])) | length > 0) \
+                 or (.lock_branch.enabled // false) then \"pr_only\" else \"push\" end"
+            }
+            Self::Rules => {
+                "if any(.[]; .type == \"pull_request\" or .type == \"required_status_checks\" \
+                 or .type == \"update\" or .type == \"merge_queue\" or .type == \"required_deployments\" \
+                 or .type == \"workflows\" or .type == \"code_scanning\") then \"pr_only\" else \"push\" end"
+            }
+        }
+    }
+
+    fn endpoint(self, repository: &str, branch: &str) -> String {
+        match self {
+            Self::Protected => format!("repos/{repository}/branches/{branch}"),
+            Self::Protection => format!("repos/{repository}/branches/{branch}/protection"),
+            Self::Rules => format!("repos/{repository}/rules/branches/{branch}"),
+        }
+    }
+}
+
+/// A branch name a REST path carries as it is: git's own rules, and only the
+/// characters that need no escaping in a URL path.
+fn is_path_branch(branch: &str) -> bool {
+    crate::git::branch_name(branch).is_ok()
+        && branch
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'/'))
+}
+
+/// `gh api --jq FILTER ENDPOINT` for one [`BranchPushRead`] of `branch`.
+pub fn branch_push_arguments(
+    read: BranchPushRead,
+    repository: &str,
+    branch: &str,
+) -> Option<Vec<String>> {
+    if !is_repository(repository) || !is_path_branch(branch) {
+        return None;
+    }
+    Some(vec![
+        "api".to_owned(),
+        "--jq".to_owned(),
+        read.jq().to_owned(),
+        read.endpoint(repository, branch),
+    ])
+}
+
+fn is_branch_push_read(arguments: &[&str]) -> bool {
+    let ["api", "--jq", jq, endpoint] = arguments else {
+        return false;
+    };
+    BranchPushRead::ALL.iter().any(|read| {
+        *jq == read.jq()
+            && endpoint
+                .strip_prefix("repos/")
+                .and_then(|rest| {
+                    let (owner, rest) = rest.split_once('/')?;
+                    let (name, rest) = rest.split_once('/')?;
+                    Some((format!("{owner}/{name}"), rest))
+                })
+                .is_some_and(|(repository, rest)| {
+                    let branch = match read {
+                        BranchPushRead::Protected => rest.strip_prefix("branches/"),
+                        BranchPushRead::Protection => rest
+                            .strip_prefix("branches/")
+                            .and_then(|rest| rest.strip_suffix("/protection")),
+                        BranchPushRead::Rules => rest.strip_prefix("rules/branches/"),
+                    };
+                    branch.is_some_and(|branch| {
+                        is_repository(&repository)
+                            && is_path_branch(branch)
+                            && read.endpoint(&repository, branch) == *endpoint
+                    })
+                })
+    })
 }
 
 /// The check runs list as the poll reads it: a hundred a page, so a commit
@@ -1521,6 +1627,34 @@ mod tests {
             "--jq",
             ".files",
             &format!("repos/acme/app/compare/{MERGE}...{HEAD}")
+        ]));
+    }
+
+    #[test]
+    fn a_branch_push_read_is_one_of_three_fixed_reads_of_a_plain_branch() {
+        for read in BranchPushRead::ALL {
+            for branch in ["main", "release/1.0"] {
+                let arguments = branch_push_arguments(read, "acme/app", branch).expect("a branch");
+                let borrowed: Vec<&str> = arguments.iter().map(String::as_str).collect();
+                assert!(allowed(&borrowed), "{borrowed:?}");
+            }
+            assert!(branch_push_arguments(read, "../app", "main").is_none());
+            assert!(branch_push_arguments(read, "acme/app", "a?b").is_none());
+            assert!(branch_push_arguments(read, "acme/app", "-main").is_none());
+            assert!(branch_push_arguments(read, "acme/app", "a..b").is_none());
+        }
+        assert!(!allowed(&["api", "--jq", ".", "repos/acme/app/branches/main"]));
+        assert!(!allowed(&[
+            "api",
+            "--jq",
+            BranchPushRead::Rules.jq(),
+            "repos/acme/app/branches/main"
+        ]));
+        assert!(!allowed(&[
+            "api",
+            "--jq",
+            BranchPushRead::Protection.jq(),
+            "repos/acme/app/rules/branches/main"
         ]));
     }
 

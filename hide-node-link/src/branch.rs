@@ -1,9 +1,12 @@
 //! What a node answers about a branch against its base and about merging it
-//! (`Call::BranchFacts`, `Call::BranchMerge`; PRD hide-ai-branch-first-apply).
+//! (`Call::BranchFacts`, `Call::BranchMerge`, `Call::BranchMergePush`; PRD
+//! hide-ai-branch-first-apply).
 //!
-//! Both run on the machine that owns the checkout. A merge is local: it
+//! All run on the machine that owns the checkout. A merge is local: it
 //! never pushes or fetches, and every answer but `Merged` means nothing in
-//! the repository changed.
+//! the repository changed. A merge-and-push fetches the base's upstream,
+//! merges as a merge does and pushes the base; a push the remote does not
+//! take puts the local base back.
 
 use serde::{Deserialize, Serialize};
 
@@ -78,6 +81,45 @@ pub enum MergeOutcome {
     /// `commit` is the base's head now, which a retry after a merge finds.
     AlreadyMerged { commit: String },
 }
+
+/// What a merge-and-push request did (`Call::BranchMergePush`). `Pushed` and
+/// `AlreadyMerged` leave the local base and its upstream on the same commit;
+/// every other answer leaves the local base where the request found it,
+/// caught up to its upstream at most, except `PushRefused` and `PushFailed`
+/// with `reverted: false`, where the base moved on after the merge and was
+/// left alone.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum MergePushOutcome {
+    /// The base, here and on its upstream, now holds the branch at `commit`.
+    Pushed { commit: String, fast_forward: bool },
+    /// The upstream already had the branch's tip; nothing was pushed.
+    AlreadyMerged { commit: String },
+    /// The local merge refused before anything was written; `merge` is the
+    /// [`MergeOutcome`] that says why, never `Merged` or `AlreadyMerged`.
+    NotMerged { merge: MergeOutcome },
+    /// The base has no upstream branch on a remote to push to.
+    NoUpstream,
+    /// The upstream could not be fetched, so nothing was merged.
+    FetchFailed,
+    /// The local base has commits its upstream does not, which a push would
+    /// send along; nothing was merged.
+    BaseAhead,
+    /// The local base and its upstream each have commits the other does not.
+    BaseDiverged,
+    /// The remote turned the push away (a protected branch, a hook, a base
+    /// that moved there). With `reverted`, the local base is back on the
+    /// commit it had before the merge.
+    PushRefused { reverted: bool },
+    /// The push did not reach the remote or did not finish; as `PushRefused`.
+    PushFailed { reverted: bool },
+}
+
+/// How long a caller waits for a `BranchMergePush` answer: the node's fetch,
+/// merge and push are each bounded by its change deadline (10 minutes), with
+/// a minute for its reads and the link.
+pub const MERGE_PUSH_WAIT: std::time::Duration =
+    std::time::Duration::from_secs(3 * 10 * 60 + 60);
 
 /// What a discard request did. Only `Deleted` changes the repository.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]

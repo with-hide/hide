@@ -1,14 +1,18 @@
 //! A branch against its base, and the local merge of one into the other
 //! (`Call::BranchFacts`, `Call::BranchMerge`; PRD hide-ai-branch-first-apply),
 //! and a checkout's branch moved to its upstream as last fetched
-//! (`Call::BranchCatchUp`), which only ever fast-forwards.
+//! (`Call::BranchCatchUp`), which only ever fast-forwards. A merge and push
+//! (`Call::BranchMergePush`) is the one place here that reaches a remote: it
+//! fetches the base's upstream, catches the base up to it, merges as a merge
+//! does, and pushes the base; a push the remote does not take puts the local
+//! base back on the commit it had, so it never stays ahead of its upstream.
 //!
 //! The base is usually the operator's own main, so a merge changes nothing
 //! it cannot finish cleanly: every refusal is decided before the first write
 //! (the paths the branch changes against the worktree's uncommitted ones, a
 //! trial merge in the object store where git can), and a merge that still
-//! fails is aborted. Nothing here pushes, fetches, or touches a worktree
-//! other than the one that holds the base. Git is started with `LC_ALL=C`,
+//! fails is aborted. Nothing but a merge and push pushes or fetches, and
+//! nothing touches a worktree other than the one that holds the base. Git is started with `LC_ALL=C`,
 //! and no answer is read from its wording: the exit codes, the porcelain
 //! formats and the state files in the git directory decide.
 //!
@@ -35,7 +39,8 @@ use std::time::Duration;
 
 use hide_node_link::branch::{
     BranchFacts, BranchFile, CatchUpOutcome, DIRTY_FILES_MAX, DiscardOutcome, FILES_MAX,
-    MergeOutcome, check_catch_up, check_diff, check_discard, check_facts, check_merge,
+    MergeOutcome, MergePushOutcome, check_catch_up, check_diff, check_discard, check_facts,
+    check_merge,
 };
 use hide_node_link::git::{Diff, DiffNotice};
 
@@ -108,7 +113,12 @@ fn read_text(cwd: &Path, args: &[&str]) -> HostResult<String> {
 /// The commit `refs/heads/<name>` points at, or `None` when there is no such
 /// branch.
 fn resolve(root: &Path, name: &str) -> HostResult<Option<String>> {
-    let spec = format!("refs/heads/{name}^{{commit}}");
+    resolve_ref(root, &format!("refs/heads/{name}"))
+}
+
+/// The commit any full ref name points at, or `None` when there is none.
+fn resolve_ref(root: &Path, reference: &str) -> HostResult<Option<String>> {
+    let spec = format!("{reference}^{{commit}}");
     let args = ["rev-parse", "--verify", "-q", &spec];
     let output = run(root, &args)?;
     match output.status.code() {
@@ -470,6 +480,205 @@ pub fn merge(
     match holder(root, base)? {
         Some(worktree) => plan.in_worktree(root, &worktree),
         None => plan.on_ref(root),
+    }
+}
+
+/// Where a base's upstream lives: the remote's name, the branch there, and
+/// the local ref that holds it as last fetched.
+struct Upstream {
+    remote: String,
+    branch: String,
+    tracking: String,
+}
+
+/// The upstream `refs/heads/<base>` is configured to follow on a remote, or
+/// `None` when it follows none, or a branch of this repository itself.
+fn upstream_of(root: &Path, base: &str) -> HostResult<Option<Upstream>> {
+    let reference = format!("refs/heads/{base}");
+    let field = |format: &str| read_text(root, &["for-each-ref", format, &reference]);
+    let remote = field("--format=%(upstream:remotename)")?;
+    let branch = field("--format=%(upstream:remoteref)")?;
+    let tracking = field("--format=%(upstream)")?;
+    let named = !remote.is_empty() && remote != ".";
+    Ok((named && branch.starts_with("refs/heads/") && tracking.starts_with("refs/remotes/"))
+        .then_some(Upstream {
+            remote,
+            branch,
+            tracking,
+        }))
+}
+
+/// A run that reaches the remote, with the operator's ssh and no prompt
+/// (`git_run::remote`), bounded like a change. As the background fetch,
+/// nothing it starts outlives it: no automatic gc or maintenance.
+fn run_remote(root: &Path, args: &[&str]) -> HostResult<Output> {
+    let mut command = crate::git_run::remote(root);
+    command
+        .env("LC_ALL", "C")
+        .args(["-c", "gc.auto=0", "-c", "maintenance.auto=false"])
+        .args(args);
+    crate::git_run::output(&mut command, crate::git_run::CHANGE_DEADLINE, Some(READ_LIMIT))
+        .map_err(|error| failed(format!("git could not be run: {error}")))?
+        .ok_or_else(|| failed(format!("git {} did not finish", args[0])))
+}
+
+/// Moves `refs/heads/<base>` from `local` to `upstream`, a fast-forward the
+/// caller has checked, in the worktree that holds it or on the ref alone.
+/// `None` when it moved; otherwise the refusal a merge would have answered.
+fn catch_base_up(
+    root: &Path,
+    base: &str,
+    local: &str,
+    upstream: &str,
+) -> HostResult<Option<MergePushOutcome>> {
+    let refused = |merge| Ok(Some(MergePushOutcome::NotMerged { merge }));
+    match holder(root, base)? {
+        Some(worktree) => match catch_up(&worktree, local)? {
+            CatchUpOutcome::Updated { .. } | CatchUpOutcome::AlreadyCurrent { .. } => Ok(None),
+            CatchUpOutcome::Diverged => Ok(Some(MergePushOutcome::BaseDiverged)),
+            CatchUpOutcome::NoUpstream => Ok(Some(MergePushOutcome::NoUpstream)),
+            CatchUpOutcome::HeadMoved => refused(MergeOutcome::BaseMoved),
+            CatchUpOutcome::InProgress => refused(dirty([])),
+            CatchUpOutcome::Dirty { files, .. } => refused(dirty(files)),
+        },
+        None => {
+            let reference = format!("refs/heads/{base}");
+            let args = ["update-ref", &reference, upstream, local];
+            let output = run_within(root, &args, crate::git_run::CHANGE_DEADLINE)?;
+            if output.status.success() {
+                Ok(None)
+            } else {
+                refused(MergeOutcome::BaseMoved)
+            }
+        }
+    }
+}
+
+/// Puts `refs/heads/<base>` back from `merged` to `before` after a push the
+/// remote did not take, only while it still points at `merged`: on the ref
+/// with a compare-and-swap, or in the worktree that holds it with `git reset
+/// --keep`, which moves the files the merge wrote back and refuses rather
+/// than overwrites one the operator changed since. Whether it went back.
+fn put_base_back(root: &Path, base: &str, before: &str, merged: &str) -> bool {
+    let reference = format!("refs/heads/{base}");
+    let back = || -> HostResult<bool> {
+        match holder(root, base)? {
+            Some(worktree) => {
+                let head = read_text(&worktree, &["symbolic-ref", "--quiet", "HEAD"])?;
+                if head != reference
+                    || read_text(&worktree, &["rev-parse", "--verify", "HEAD"])? != merged
+                {
+                    return Ok(false);
+                }
+                let args = ["reset", "--quiet", "--keep", before];
+                Ok(run_within(&worktree, &args, crate::git_run::CHANGE_DEADLINE)?
+                    .status
+                    .success())
+            }
+            None => {
+                let args = ["update-ref", &reference, before, merged];
+                Ok(run_within(root, &args, crate::git_run::CHANGE_DEADLINE)?
+                    .status
+                    .success())
+            }
+        }
+    };
+    back().unwrap_or(false)
+}
+
+/// Merges `branch` into `base` and pushes the base to its upstream; see
+/// [`MergePushOutcome`] for what each answer promises. The upstream is
+/// fetched first, and a base behind it is caught up, fast-forward only, so
+/// the push sends the branch's commits and nothing else of the operator's; a
+/// base ahead of it or apart from it is refused before anything is written.
+/// The push names the merged commit, never forced, so a remote that moved
+/// since the fetch turns it away. `read` and `message` are a merge's.
+pub fn merge_push(
+    root: &Path,
+    branch: &str,
+    read: Option<&str>,
+    base: &str,
+    message: &str,
+) -> HostResult<MergePushOutcome> {
+    check_merge(branch, read, base, message).map_err(invalid)?;
+    let Some(upstream) = upstream_of(root, base)? else {
+        return Ok(MergePushOutcome::NoUpstream);
+    };
+    let refspec = format!("+{}:{}", upstream.branch, upstream.tracking);
+    // `--` so a remote's name is never read as an option.
+    let fetch = [
+        "fetch",
+        "--quiet",
+        "--no-tags",
+        "--no-recurse-submodules",
+        "--",
+        &upstream.remote,
+        &refspec,
+    ];
+    if !run_remote(root, &fetch).is_ok_and(|output| output.status.success()) {
+        return Ok(MergePushOutcome::FetchFailed);
+    }
+    let Some(before) = resolve_ref(root, &upstream.tracking)? else {
+        return Ok(MergePushOutcome::FetchFailed);
+    };
+    let Some(local) = resolve(root, base)? else {
+        return Err(HostError::new(
+            ErrorCode::NotFound,
+            format!("the branch {base} is not in this repository"),
+        ));
+    };
+    if local != before {
+        let unknown = || failed("git could not tell how the base and its upstream relate");
+        if is_ancestor(root, &before, &local)?.ok_or_else(unknown)? {
+            return Ok(MergePushOutcome::BaseAhead);
+        }
+        if !is_ancestor(root, &local, &before)?.ok_or_else(unknown)? {
+            return Ok(MergePushOutcome::BaseDiverged);
+        }
+        if let Some(refused) = catch_base_up(root, base, &local, &before)? {
+            return Ok(refused);
+        }
+    }
+    let (commit, fast_forward) = match merge(root, branch, read, base, message)? {
+        MergeOutcome::Merged {
+            commit,
+            fast_forward,
+        } => (commit, fast_forward),
+        MergeOutcome::AlreadyMerged { commit } => {
+            return Ok(MergePushOutcome::AlreadyMerged { commit });
+        }
+        merge => return Ok(MergePushOutcome::NotMerged { merge }),
+    };
+    let target = format!("{commit}:{}", upstream.branch);
+    let push = ["push", "--porcelain", "--", &upstream.remote, &target];
+    match run_remote(root, &push) {
+        Ok(output) if output.status.success() => {
+            // Git moves the remote-tracking ref after a push it can map to
+            // one; this keeps it on the pushed commit either way.
+            if resolve_ref(root, &upstream.tracking)?.as_deref() != Some(commit.as_str()) {
+                run(root, &["update-ref", &upstream.tracking, &commit])?;
+            }
+            Ok(MergePushOutcome::Pushed {
+                commit,
+                fast_forward,
+            })
+        }
+        // `--porcelain` marks a ref the remote turned away with `!`; a push
+        // that failed without one did not reach it, or did not finish.
+        Ok(output) => {
+            let refused = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .any(|line| line.starts_with('!'));
+            let reverted = put_base_back(root, base, &before, &commit);
+            Ok(if refused {
+                MergePushOutcome::PushRefused { reverted }
+            } else {
+                MergePushOutcome::PushFailed { reverted }
+            })
+        }
+        Err(_) => Ok(MergePushOutcome::PushFailed {
+            reverted: put_base_back(root, base, &before, &commit),
+        }),
     }
 }
 

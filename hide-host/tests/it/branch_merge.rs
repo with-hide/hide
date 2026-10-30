@@ -1,6 +1,7 @@
-//! Branch facts and the local merge (`hide_host::branch_merge`): the base is
-//! the operator's main, so every refusal is checked by comparing its HEAD,
-//! index and working tree before and after, byte for byte.
+//! Branch facts, the local merge and the merge and push
+//! (`hide_host::branch_merge`): the base is the operator's main, so every
+//! refusal is checked by comparing its HEAD, index and working tree before
+//! and after, byte for byte. A push goes to a bare repository on disk.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -8,8 +9,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use hide_host::ErrorCode;
-use hide_host::branch_merge::{catch_up, diff, discard, facts, merge};
-use hide_node_link::branch::{CatchUpOutcome, DiscardOutcome, FILES_MAX, MergeOutcome};
+use hide_host::branch_merge::{catch_up, diff, discard, facts, merge, merge_push};
+use hide_node_link::branch::{
+    CatchUpOutcome, DiscardOutcome, FILES_MAX, MergeOutcome, MergePushOutcome,
+};
 use hide_node_link::git::DiffNotice;
 
 /// Runs git in `dir` and answers its trimmed stdout.
@@ -772,4 +775,153 @@ fn a_catch_up_request_with_a_head_that_is_not_an_object_name_is_refused() {
     let fixture = fixture();
     let error = catch_up(&fixture.feat, "HEAD~1").unwrap_err();
     assert_eq!(error.code, ErrorCode::InvalidRequest);
+}
+
+/// [`fixture`] whose `main` follows `origin/main` in a bare repository on
+/// disk, pushed to once.
+fn with_remote() -> (Fixture, PathBuf) {
+    let fixture = fixture();
+    let remote = fixture._folder.path().join("origin.git");
+    git(
+        fixture._folder.path(),
+        &["init", "-q", "--bare", "-b", "main", remote.to_str().unwrap()],
+    );
+    git(&fixture.main, &["remote", "add", "origin", remote.to_str().unwrap()]);
+    git(&fixture.main, &["push", "-q", "-u", "origin", "main"]);
+    (fixture, remote)
+}
+
+/// A `pre-receive` hook in `remote` that turns every push away, as a
+/// protected branch does.
+fn refuse_pushes(remote: &Path) {
+    let hook = remote.join("hooks").join("pre-receive");
+    fs::write(&hook, "#!/bin/sh\nexit 1\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
+#[test]
+fn a_merge_push_moves_the_base_here_and_on_its_remote_to_the_same_commit() {
+    let (fixture, remote) = with_remote();
+    let tip = commit(&fixture.feat, "b.txt", "new\n");
+    let outcome = merge_push(&fixture.main, "feat", Some(&tip), "main", "Merge feat").unwrap();
+    assert_eq!(
+        outcome,
+        MergePushOutcome::Pushed {
+            commit: tip.clone(),
+            fast_forward: true
+        }
+    );
+    assert_eq!(git(&fixture.main, &["rev-parse", "main"]), tip);
+    assert_eq!(git(&remote, &["rev-parse", "main"]), tip);
+    assert_eq!(git(&fixture.main, &["rev-parse", "origin/main"]), tip);
+    assert_eq!(git(&fixture.main, &["status", "--porcelain"]), "");
+    assert_eq!(git(&fixture.main, &["rev-parse", "feat"]), tip, "the branch stays");
+}
+
+#[test]
+fn a_base_behind_its_remote_catches_up_first_and_pushes_one_merge_commit() {
+    let (fixture, remote) = with_remote();
+    let tip = commit(&fixture.feat, "b.txt", "new\n");
+    // Someone else's commit reaches the remote after the last fetch.
+    let other = fixture._folder.path().join("other");
+    git(
+        fixture._folder.path(),
+        &["clone", "-q", remote.to_str().unwrap(), other.to_str().unwrap()],
+    );
+    git(&other, &["config", "user.name", "Other"]);
+    git(&other, &["config", "user.email", "other@example.invalid"]);
+    git(&other, &["config", "commit.gpgsign", "false"]);
+    let theirs = commit(&other, "c.txt", "theirs\n");
+    git(&other, &["push", "-q", "origin", "main"]);
+
+    let outcome = merge_push(&fixture.main, "feat", Some(&tip), "main", "Merge feat").unwrap();
+    let MergePushOutcome::Pushed {
+        commit,
+        fast_forward: false,
+    } = outcome
+    else {
+        panic!("a merge commit pushed, not {outcome:?}");
+    };
+    assert_eq!(git(&remote, &["rev-parse", "main"]), commit);
+    assert_eq!(git(&fixture.main, &["rev-parse", "main"]), commit);
+    assert_eq!(git(&fixture.main, &["rev-parse", &format!("{commit}^1")]), theirs);
+    assert_eq!(git(&fixture.main, &["rev-parse", &format!("{commit}^2")]), tip);
+    assert_eq!(fs::read_to_string(fixture.main.join("c.txt")).unwrap(), "theirs\n");
+}
+
+#[test]
+fn a_push_the_remote_turns_away_puts_the_base_back_and_keeps_the_branch() {
+    let (fixture, remote) = with_remote();
+    let tip = commit(&fixture.feat, "b.txt", "new\n");
+    write(&fixture.main, "z.txt", "the operator's own edit\n");
+    let before = snapshot(&fixture.main);
+    let remote_before = git(&remote, &["rev-parse", "main"]);
+    refuse_pushes(&remote);
+
+    let outcome = merge_push(&fixture.main, "feat", Some(&tip), "main", "Merge feat").unwrap();
+    assert_eq!(outcome, MergePushOutcome::PushRefused { reverted: true });
+    assert_eq!(snapshot(&fixture.main), before, "the base and its files are back");
+    assert_eq!(git(&remote, &["rev-parse", "main"]), remote_before);
+    assert_eq!(git(&fixture.main, &["rev-parse", "feat"]), tip, "the branch stays");
+}
+
+#[test]
+fn a_push_turned_away_with_the_base_checked_out_nowhere_puts_its_ref_back() {
+    let (fixture, remote) = with_remote();
+    let tip = commit(&fixture.feat, "b.txt", "new\n");
+    git(&fixture.main, &["checkout", "-q", "--detach"]);
+    let before = git(&fixture.main, &["rev-parse", "main"]);
+    refuse_pushes(&remote);
+
+    let outcome = merge_push(&fixture.main, "feat", Some(&tip), "main", "Merge feat").unwrap();
+    assert_eq!(outcome, MergePushOutcome::PushRefused { reverted: true });
+    assert_eq!(git(&fixture.main, &["rev-parse", "main"]), before);
+}
+
+#[test]
+fn a_base_ahead_of_or_apart_from_its_remote_is_refused_with_nothing_moved() {
+    let (fixture, remote) = with_remote();
+    let tip = commit(&fixture.feat, "b.txt", "new\n");
+    commit(&fixture.main, "local.txt", "not pushed\n");
+    let before = snapshot(&fixture.main);
+    let remote_before = git(&remote, &["rev-parse", "main"]);
+    assert_eq!(
+        merge_push(&fixture.main, "feat", Some(&tip), "main", "Merge feat").unwrap(),
+        MergePushOutcome::BaseAhead
+    );
+    assert_eq!(snapshot(&fixture.main), before);
+
+    let other = fixture._folder.path().join("other");
+    git(
+        fixture._folder.path(),
+        &["clone", "-q", remote.to_str().unwrap(), other.to_str().unwrap()],
+    );
+    git(&other, &["config", "user.name", "Other"]);
+    git(&other, &["config", "user.email", "other@example.invalid"]);
+    git(&other, &["config", "commit.gpgsign", "false"]);
+    commit(&other, "c.txt", "theirs\n");
+    git(&other, &["push", "-q", "origin", "main"]);
+    assert_eq!(
+        merge_push(&fixture.main, "feat", Some(&tip), "main", "Merge feat").unwrap(),
+        MergePushOutcome::BaseDiverged
+    );
+    assert_eq!(snapshot(&fixture.main), before);
+    assert_ne!(git(&remote, &["rev-parse", "main"]), remote_before);
+    assert_ne!(git(&remote, &["rev-parse", "main"]), tip);
+}
+
+#[test]
+fn a_base_with_no_remote_upstream_is_not_merged_or_pushed() {
+    let fixture = fixture();
+    let tip = commit(&fixture.feat, "b.txt", "new\n");
+    let before = snapshot(&fixture.main);
+    assert_eq!(
+        merge_push(&fixture.main, "feat", Some(&tip), "main", "Merge feat").unwrap(),
+        MergePushOutcome::NoUpstream
+    );
+    assert_eq!(snapshot(&fixture.main), before);
 }
