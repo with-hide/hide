@@ -7,6 +7,7 @@ import { cardLine, liveNodes, missionOpen, missionPulls, missionResultCounts, ne
 import type { Mission, MissionNode } from "../snapshot";
 import { formatElapsed } from "./elapsed";
 import { MissionPrMark } from "./mission-pr";
+import { Button } from "./ui/button";
 
 // The map's right column while no node is picked (PRD mission-tool D-13,
 // B19): an open mission's 지금 (each node a worker is at, with its line),
@@ -90,9 +91,9 @@ function ClosedRows({ mission }: { mission: Mission }) {
 
 function NodeName({ node, onSelect }: { node: MissionNode; onSelect: (key: string) => void }) {
   return (
-    <button type="button" onClick={() => onSelect(node.key)} title={node.title} className="min-w-0 truncate rounded-xs text-left outline-none hover:underline focus-visible:ring-1 focus-visible:ring-ring" data-mission-summary-node={node.key}>
+    <Button variant="text-link" size="inline" onClick={() => onSelect(node.key)} title={node.title} className="block min-w-0 shrink truncate text-left text-inherit" data-mission-summary-node={node.key}>
       {node.title}
-    </button>
+    </Button>
   );
 }
 

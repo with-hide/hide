@@ -6,6 +6,7 @@ import { cn } from "../lib/utils";
 import { useRunWords } from "../missionParts";
 import { checkerState } from "../missions";
 import type { Mission, MissionChecker, MissionCriterion } from "../snapshot";
+import { Button } from "./ui/button";
 import { Hint } from "./ui/tooltip";
 
 // The other agents checking a node, each a round mark tethered to its card's
@@ -51,10 +52,11 @@ function Satellite({ mission, line, onSelect }: { mission: Mission; line: Satell
   const label = [agentMarkOf(checker.worker.agent)?.label ?? checker.worker.agent, run?.text, status].filter(Boolean).join(" · ");
   return (
     <Hint label={label}>
-      <button
-        type="button"
+      <Button
+        variant="ghost"
+        size="icon-xs"
         onClick={onSelect}
-        className={cn("relative flex size-(--size-icon-lg) shrink-0 items-center justify-center rounded-full border-2 bg-card outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring", RING[state])}
+        className={cn("relative size-(--size-icon-lg) rounded-full border-2 bg-card p-0", RING[state])}
         data-node-satellite={checker.worker.agent}
         data-checker-state={state}
       >
@@ -64,7 +66,7 @@ function Satellite({ mission, line, onSelect }: { mission: Mission; line: Satell
             {state === "pass" ? <CheckIcon strokeWidth={3} className="size-full p-px" /> : <XIcon strokeWidth={3} className="size-full p-px" />}
           </span>
         ) : null}
-      </button>
+      </Button>
     </Hint>
   );
 }

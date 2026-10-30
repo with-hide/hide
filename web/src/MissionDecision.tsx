@@ -1,4 +1,4 @@
-import { CheckIcon, ChevronRightIcon, CircleAlertIcon } from "lucide-react";
+import { CheckIcon, CircleAlertIcon } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { Actions } from "./actions";
 import { useElapsed } from "./components/elapsed";
@@ -125,13 +125,7 @@ export function DecisionBanner({ mission, device, actions, onNode }: { mission: 
           </button>
         ) : null}
         {waited ? <span className="shrink-0 text-caption text-muted-foreground tabular-nums" data-mission-banner-waited="true">{t("mission.banner.waited", { elapsed: waited })}</span> : null}
-        {/* With no Conductor, 이어받기 is the Conductor row's, just above (PRD mission-tool B13). */}
-        {gone ? null : (
-          <Button size="sm" variant="ghost" onClick={() => actions.openAgent(mission.conductor.pane_id)} data-mission-conversation="true">
-            {t("mission.banner.conversation")}
-            <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />
-          </Button>
-        )}
+        {/* The Conductor row just above carries 터미널로 ›, or 이어받기 with no Conductor (PRD mission-tool B12, B13). */}
       </div>
       {question?.why ? <p className="min-w-0 break-words text-caption text-muted-foreground" data-mission-banner-why="true">{question.why}</p> : null}
       {sent?.state === "unconfirmed" ? (

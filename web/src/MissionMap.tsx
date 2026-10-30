@@ -379,8 +379,9 @@ function NodeCard({ mission, node, selected, dimmed, onSelect, events, end }: { 
         {/* One line laid out from the right that wraps out of sight: the count or the old sentence, the result or
             stage and the landing tag keep their place, and the line and the worker's model and effort truncate first,
             the planned mark never, leaving the line once they cannot keep a readable width; the face then stands
-            alone with its hover and the card's name keeping them. The free space goes before the count. */}
-        <span className="flex h-lh min-w-0 flex-1 flex-row-reverse flex-wrap items-center gap-x-xs overflow-hidden" data-node-row="true">
+            alone with its hover and the card's name keeping them. The facts start beside the worker's mark (`justify-end`
+            packs a reversed row to the left), and the free space goes before the count. */}
+        <span className="flex h-lh min-w-0 flex-1 flex-row-reverse flex-wrap items-center justify-end gap-x-xs overflow-hidden" data-node-row="true">
           {tally ? (
             <span className="ml-auto shrink-0 tabular-nums" data-node-criteria={`${tally.passed}/${tally.total}`}>
               {t("mission.criteria.count", { passed: String(tally.passed), total: String(tally.total) })}

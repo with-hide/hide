@@ -5,6 +5,7 @@ import { missionPulls, missionResultCounts } from "../missions";
 import { PR_LOOK } from "../prMark";
 import type { Mission } from "../snapshot";
 import { MissionPrMark } from "./mission-pr";
+import { RowButton } from "./ui/row-button";
 
 // What a finished or cancelled mission left, first under its head (PRD
 // mission-tool D-07, B20): four result tiles counted from the record (merged
@@ -48,11 +49,11 @@ export function PullList({ mission, onSelect }: { mission: Mission; onSelect: (k
     <ul aria-label={t("mission.prs")} className="mx-md mb-sm flex min-w-0 flex-col overflow-hidden rounded-md border border-border" data-mission-pulls={pulls.map((node) => node.pr).join(" ")}>
       {pulls.map((node) => (
         <li key={node.key} className="min-w-0 border-b border-border last:border-b-0">
-          <button type="button" onClick={() => onSelect(node.key)} title={node.title} className="flex w-full min-w-0 items-center gap-sm px-sm py-xs text-left text-body outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-inset" data-mission-pull={node.pr}>
+          <RowButton onClick={() => onSelect(node.key)} title={node.title} className="gap-sm rounded-none px-sm text-body" data-mission-pull={node.pr}>
             <MissionPrMark number={node.pr!} state={node.pr_state} stale={mission.github_stale} />
             <span className="min-w-0 flex-1 truncate">{node.title}</span>
             {node.pr_state ? <span className={cn("shrink-0 text-caption", PR_LOOK[node.pr_state].tone)} data-mission-pull-state={node.pr_state}>{t(PR_LOOK[node.pr_state].word)}</span> : null}
-          </button>
+          </RowButton>
         </li>
       ))}
     </ul>

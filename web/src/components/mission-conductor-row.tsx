@@ -1,4 +1,3 @@
-import { ChevronRightIcon } from "lucide-react";
 import { MissionTakeOver } from "../MissionTakeOver";
 import { useMemo } from "react";
 import type { Actions } from "../actions";
@@ -49,7 +48,7 @@ export function ConductorRow({ mission, actions }: { mission: Mission; actions: 
     );
   }
   const word = state === "unknown" ? null : t(STATE_WORD[state]);
-  const terminal = t("mission.conductor.terminal");
+  const terminal = t("mission.toTerminal");
   return (
     <div className={frame} data-mission-conductor={state}>
       <AgentMark kind={mission.conductor.agent_kind} />
@@ -67,7 +66,6 @@ export function ConductorRow({ mission, actions }: { mission: Mission; actions: 
         data-mission-conductor-terminal="true"
       >
         {terminal}
-        <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />
       </Button>
     </div>
   );

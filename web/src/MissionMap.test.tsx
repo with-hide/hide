@@ -140,7 +140,9 @@ it("shows the decision with why, the node it stopped, its wait and the choices, 
     await map.rerender(asked({ answer: { key: 3, text: "Wait for the API PR to merge", option: 2, state: "waiting" } }));
     expect(map.q("[data-mission-banner-sent]")?.getAttribute("data-mission-banner-sent")).toBe("waiting");
     expect(map.q("[data-mission-banner-sent]")?.textContent).toContain("Sent · waiting for its turn");
-    await act(async () => map.q("[data-mission-conversation]")!.click());
+    // The decision has no button of its own to the Conductor: the Conductor row above carries 터미널로 (PRD mission-tool B12).
+    expect(map.q('[data-mission-banner="decision"] [data-mission-conversation]')).toBeNull();
+    await act(async () => map.q("[data-mission-conductor-terminal]")!.click());
     expect(map.events.at(-1)).toMatchObject({ kind: "focus_pane", payload: { pane_id: "p1" } });
     // A new question asks again; the answer to the old one is not shown on it (B29).
     await map.rerender(asked({ decision: "Merge order?", question: { key: 4, why: null, recommend: null, node: null, asked_at_unix_ms: Date.now() } }));
@@ -226,7 +228,7 @@ it("turns the choices off with a reason when no Conductor or no device can read 
   const unsupported = await mount({ items: [asked({ conductor: { ...mission().conductor, agent_kind: "opencode", takes_answers: false } })] });
   try {
     expect([...unsupported.container.querySelectorAll<HTMLButtonElement>("[data-mission-option], [data-mission-write]")].every((button) => button.disabled)).toBe(true);
-    expect(unsupported.q("[data-mission-conversation]")).not.toBeNull();
+    expect(unsupported.q("[data-mission-conductor-terminal]")).not.toBeNull();
     expect(unsupported.q("[data-mission-banner-reason]")?.getAttribute("data-mission-banner-reason")).toBe("unsupported");
   } finally { await unsupported.unmount(); }
   const failed = await mount({ items: [asked({ answer_failed: "send_failed" })] });
@@ -281,7 +283,7 @@ it("names the Conductor under the head with its model and state, and 터미널�
     expect(row.querySelector("[data-run]")?.textContent).toBe("opus·high");
     expect(row.querySelector("[data-mission-conductor-state]")?.textContent).toBe("Working");
     // One button, no record.
-    expect([...row.querySelectorAll("button")].map((button) => button.textContent)).toEqual(["To terminal"]);
+    expect([...row.querySelectorAll("button")].map((button) => button.textContent)).toEqual(["Go to terminal"]);
     await act(async () => row.querySelector<HTMLElement>("[data-mission-conductor-terminal]")!.click());
     expect(map.events.find((event) => event.kind === "focus_pane")?.payload).toMatchObject({ pane_id: "p1" });
   } finally { await map.unmount(); }

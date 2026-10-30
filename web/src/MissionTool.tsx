@@ -6,6 +6,7 @@ import { useElapsed } from "./components/elapsed";
 import { ProgressCells } from "./components/mission-tone";
 import { PrMark } from "./components/pr-mark";
 import { Button } from "./components/ui/button";
+import { RowButton } from "./components/ui/row-button";
 import { Hint } from "./components/ui/tooltip";
 import { DEFAULT_CONDUCTOR } from "./conductorSettings";
 import { useInterfaceTranslation } from "./i18n/client";
@@ -150,10 +151,10 @@ function Group({ group, entries, selected, actions }: { group: MissionGroup; ent
         <span>{t(`missionTool.group.${group}`)}</span>
         <span className="font-normal tabular-nums text-subtle-foreground">{entries.length}</span>
         {closed && entries.length > CLOSED_SHOWN ? (
-          <button type="button" className="ml-auto flex items-center rounded-xs font-normal text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring" aria-expanded={all} data-mission-closed-all={all ? "open" : "folded"} onClick={() => useUiStore.getState().setMissionClosedAll(!all)}>
+          <Button variant="text" size="inline" className="ml-auto gap-0" aria-expanded={all} data-mission-closed-all={all ? "open" : "folded"} onClick={() => useUiStore.getState().setMissionClosedAll(!all)}>
             {all ? t("missionTool.fewer") : t("missionTool.all")}
             {all ? null : <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />}
-          </button>
+          </Button>
         ) : null}
       </h3>
       {closed ? (
@@ -180,12 +181,11 @@ function OpenRow({ entry, selected, actions }: { entry: MissionEntry; selected: 
   const { done, total } = missionCounts(mission);
   const elapsed = useElapsed(mission.stale ? null : (mission.started_at_unix_ms ?? mission.created_at_unix_ms));
   return (
-    <button
-      type="button"
+    <RowButton
       aria-label={t("missionTool.open", { title: mission.title })}
       aria-current={selected ? "true" : undefined}
       className={cn(
-        "flex min-w-0 flex-col gap-xxs rounded-md border bg-card px-sm py-xs text-left outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring",
+        "flex-col items-stretch gap-xxs rounded-md border bg-card px-sm py-xs",
         selected ? "border-primary ring-1 ring-primary" : group === "turn" ? "border-mission-hold/40" : "border-border",
         mission.stale && "opacity-(--opacity-dimmed)",
       )}
@@ -211,7 +211,7 @@ function OpenRow({ entry, selected, actions }: { entry: MissionEntry; selected: 
           {elapsed ? <span className="shrink-0" data-mission-row-elapsed="true">· {elapsed}</span> : null}
         </span>
       ) : null}
-    </button>
+    </RowButton>
   );
 }
 
@@ -296,11 +296,10 @@ function ClosedRow({ mission, selected, actions }: { mission: Mission; selected:
   const closed = mission.closed_at_unix_ms;
   const done = mission.status === "done";
   return (
-    <button
-      type="button"
+    <RowButton
       aria-label={t("missionTool.open", { title: mission.title })}
       aria-current={selected ? "true" : undefined}
-      className={cn("flex min-w-0 items-center gap-xs rounded-sm px-xs py-xxs text-left text-caption outline-none hover:bg-accent focus-visible:ring-1 focus-visible:ring-ring", selected && "bg-secondary")}
+      className={cn("rounded-sm py-xxs text-caption", selected && "bg-secondary")}
       data-mission-row={mission.id}
       data-mission-row-group="closed"
       data-selected={selected ? "true" : undefined}
@@ -309,7 +308,7 @@ function ClosedRow({ mission, selected, actions }: { mission: Mission; selected:
       {done ? <CheckIcon aria-label={t("mission.pill.done")} className="size-(--size-icon-sm) shrink-0 text-mission-done" /> : <XIcon aria-label={t("mission.pill.cancelled")} className="size-(--size-icon-sm) shrink-0 text-muted-foreground" />}
       <span className="min-w-0 flex-1 truncate text-foreground" title={mission.title}>{mission.title}</span>
       {closed != null ? <span className="shrink-0 tabular-nums text-subtle-foreground">{formatDateTime(language, closed, { month: "numeric", day: "numeric" })}</span> : null}
-    </button>
+    </RowButton>
   );
 }
 

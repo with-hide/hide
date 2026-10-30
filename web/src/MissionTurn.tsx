@@ -39,7 +39,7 @@ function Item({ item, mission, device, actions, onSelect }: { item: TurnItem; mi
   const { t } = useInterfaceTranslation();
   const conversation = (
     <Button size="sm" variant="ghost" onClick={() => actions.openAgent(mission.conductor.pane_id)} data-mission-conversation="true">
-      {t("mission.banner.conversation")}
+      {t("mission.toTerminal")}
       <ChevronRightIcon aria-hidden="true" className="size-(--size-icon-sm)" />
     </Button>
   );
@@ -55,7 +55,7 @@ function Item({ item, mission, device, actions, onSelect }: { item: TurnItem; mi
           <span className="min-w-0 flex-1 truncate text-body" title={item.line ?? undefined} data-mission-turn-cause={item.cause}>
             {t("mission.turn.workerBlocked")}: {item.line ?? t(`mission.turn.cause.${item.cause}`)}
           </span>
-          {item.node.pane_id ? <Button size="sm" variant="ghost" onClick={() => actions.openAgent(item.node.pane_id!)} data-mission-turn-terminal="true">{t("mission.goTerminal")}</Button> : null}
+          {item.node.pane_id ? <Button size="sm" variant="ghost" onClick={() => actions.openAgent(item.node.pane_id!)} data-mission-turn-terminal="true">{t("mission.toTerminal")}</Button> : null}
         </Row>
       );
     case "outside_closed":
