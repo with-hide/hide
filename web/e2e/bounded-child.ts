@@ -122,13 +122,10 @@ function windowsJob(executable: string, child: ChildProcess): Tree {
     if (!report) resolve();
     else report.once("close", () => resolve());
   });
-  // An input it no longer reads is one it has already acted on: it ended the
-  // job at its own exit, and its report says how.
-  child.stdin?.on("error", () => undefined);
   return {
     end: async () => {
-      // Its input ending is the caller's end.
-      if (child.exitCode === null && child.signalCode === null) child.stdin?.end();
+      // Its input ending is the caller's end; once it has exited this changes nothing.
+      child.stdin?.destroy();
       await within(done, `hide-processes did not report the end of ${executable}'s tree`);
       const [kind, ...fields] = reported.trim().split(" ");
       if (kind === "ended") return Number(fields[1]);
@@ -136,7 +133,9 @@ function windowsJob(executable: string, child: ChildProcess): Tree {
       if (kind === "unstarted") throw new Unstarted(`${executable} did not start: ${fields.join(" ")}`);
       throw new Error(`hide-processes ended without a report (status ${child.exitCode}, signal ${child.signalCode})${reported ? `: ${reported.trim()}` : ""}`);
     },
-    abandon: () => void child.kill(),
+    // Its input closes with this process anyway, however it exits; closing it
+    // now has it end the job and report, so a run still awaited settles.
+    abandon: () => void child.stdin?.destroy(),
   };
 }
 
