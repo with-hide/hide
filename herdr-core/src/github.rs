@@ -505,16 +505,23 @@ fn add_extra_facts(
             // A pull request past the facts query's hundred has no answer:
             // its reviewers stay unknown rather than none.
             if let Some(fact) = fact.filter(|_| open) {
-                let (reviewers, more) = reviewers(&work.review_requests, fact);
+                let (reviewers, more) =
+                    reviewers(&work.review_requests, work.author.as_deref(), fact);
                 work.reviewers = Some(reviewers);
                 work.reviewers_more = more;
-                work.required_approvals = required_approvals(
-                    pull_request.review,
-                    [
-                        fact.classic_approvals,
-                        approvals.get(&pull_request.base_branch).copied().flatten(),
-                    ],
-                );
+                // A base whose rulesets were not read (a failed read, or past
+                // the cap) has no count: the classic rule alone may be the
+                // smaller one (design principle 10).
+                work.required_approvals = approvals
+                    .get(&pull_request.base_branch)
+                    .copied()
+                    .flatten()
+                    .and_then(|rulesets| {
+                        required_approvals(
+                            pull_request.review,
+                            [fact.classic_approvals, Some(rulesets)],
+                        )
+                    });
             }
         }
     }
@@ -522,16 +529,17 @@ fn add_extra_facts(
 }
 
 /// The most base branches one read asks the rulesets of: the bases of the
-/// open pull requests, newest pull request first. A pull request to another
-/// base has no ruleset answer, and its count is the classic protection's
-/// alone (PRD pr-review-status B17).
+/// open pull requests review decides, newest pull request first; with no
+/// review decision no count is drawn, so nothing is asked. A pull request to another
+/// base has no ruleset answer, and its count is unknown (PRD
+/// pr-review-status B17).
 const APPROVAL_BASE_LIMIT: usize = 4;
 
 fn open_bases(pull_requests: &[PullRequestSnapshot], repository: Option<&str>) -> Vec<String> {
     let mut bases: Vec<String> = Vec::new();
     for pull_request in pull_requests
         .iter()
-        .filter(|pull_request| is_open(pull_request))
+        .filter(|pull_request| is_open(pull_request) && pull_request.review.is_some())
     {
         if !bases.contains(&pull_request.base_branch) {
             bases.push(pull_request.base_branch.clone());
@@ -560,35 +568,54 @@ fn read_base_approvals(
     repository: &str,
     bases: &[String],
 ) -> HashMap<String, Option<u32>> {
-    bases
-        .iter()
-        .map(|base| {
-            let count = hide_node_link::gh::required_approvals_arguments(repository, base)
-                .ok_or_else(|| "the base branch cannot be asked about its rules".to_owned())
-                .and_then(|arguments| {
-                    let arguments = arguments.iter().map(String::as_str).collect::<Vec<_>>();
-                    run(&arguments).map_err(|failure| failure.reason)
-                })
-                .and_then(|output| {
-                    output.trim().parse::<u32>().map_err(|error| {
-                        format!("gh returned a ruleset count Hide could not read: {error}")
-                    })
-                });
-            let count = match count {
-                Ok(count) => Some(count),
-                Err(reason) => {
-                    crate::diagnostic!(serde_json::json!({
-                        "component": "github",
-                        "kind": "pull_requests.approvals_unread",
-                        "base": base,
-                        "message": reason,
-                    }));
-                    None
-                }
-            };
-            (base.clone(), count)
-        })
-        .collect()
+    // At most four reads, each its own round trip on a device: asked at once.
+    std::thread::scope(|scope| {
+        let reads = bases
+            .iter()
+            .map(|base| {
+                (
+                    base,
+                    scope.spawn(|| read_base_approval(run, repository, base)),
+                )
+            })
+            .collect::<Vec<_>>();
+        reads
+            .into_iter()
+            .map(|(base, read)| {
+                let count = read
+                    .join()
+                    .unwrap_or_else(|_| Err("the ruleset reader failed".to_owned()));
+                let count = match count {
+                    Ok(count) => Some(count),
+                    Err(reason) => {
+                        crate::diagnostic!(serde_json::json!({
+                            "component": "github",
+                            "kind": "pull_requests.approvals_unread",
+                            "base": base,
+                            "message": reason,
+                        }));
+                        None
+                    }
+                };
+                (base.clone(), count)
+            })
+            .collect()
+    })
+}
+
+fn read_base_approval(
+    run: &(impl Fn(&[&str]) -> Result<String, GhFailure> + Sync),
+    repository: &str,
+    base: &str,
+) -> Result<u32, String> {
+    let arguments = hide_node_link::gh::required_approvals_arguments(repository, base)
+        .ok_or_else(|| "the base branch cannot be asked about its rules".to_owned())?;
+    let arguments = arguments.iter().map(String::as_str).collect::<Vec<_>>();
+    let output = run(&arguments).map_err(|failure| failure.reason)?;
+    output
+        .trim()
+        .parse::<u32>()
+        .map_err(|error| format!("gh returned a ruleset count Hide could not read: {error}"))
 }
 
 /// The approvals a pull request needs, as the screen may draw it: only when
@@ -611,10 +638,18 @@ fn required_approvals(decision: Option<ReviewDecision>, answers: [Option<u32>; 2
 /// reviewer is kept as such, and a review still asked of someone wins over
 /// what they said before (D-13). Pending reviews are not submitted and are
 /// not read.
-fn reviewers(requests: &[ReviewRequest], fact: &PullRequestFacts) -> (Vec<PrReviewer>, u32) {
+fn reviewers(
+    requests: &[ReviewRequest],
+    author: Option<&str>,
+    fact: &PullRequestFacts,
+) -> (Vec<PrReviewer>, u32) {
     let mut by_name: std::collections::BTreeMap<(bool, String), PrReviewer> =
         std::collections::BTreeMap::new();
-    for review in fact.opinionated.iter().chain(&fact.latest) {
+    // The author's own review is a reply in a thread, never a review of the
+    // pull request: GitHub does not let them approve it, and on a repository
+    // that does not require review it would open the review block (B10).
+    let others = |review: &&FactReview| Some(review.login.as_str()) != author;
+    for review in fact.opinionated.iter().chain(&fact.latest).filter(others) {
         by_name
             .entry((false, review.login.clone()))
             .or_insert_with(|| PrReviewer {
@@ -4903,7 +4938,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_ruleset_read_keeps_the_reviewers_and_the_classic_count() {
+    fn a_failed_ruleset_read_keeps_the_reviewers_and_leaves_the_count_unknown() {
         let mut pull_requests = sample_with_requests();
         pull_requests[0].review = Some(ReviewDecision::ReviewRequired);
         pull_requests[1].review = Some(ReviewDecision::ReviewRequired);
@@ -4922,9 +4957,36 @@ mod tests {
             Vec::<ExtraQuery>::new(),
             "a log line, no warning (B11)"
         );
-        assert_eq!(pull_requests[0].work.required_approvals, Some(2));
+        // The classic rule asks for 2, but a ruleset may ask for more.
+        assert_eq!(pull_requests[0].work.required_approvals, None);
         assert_eq!(pull_requests[1].work.required_approvals, None);
+        assert!(pull_requests[0].work.reviewers.is_some());
         assert!(pull_requests[1].work.reviewers.is_some());
+    }
+
+    #[test]
+    fn with_no_review_decision_no_ruleset_is_asked() {
+        let mut pull_requests = sample_with_requests();
+        let gh = gh_answering(&[]);
+        let rules_reads = std::sync::atomic::AtomicUsize::new(0);
+        let unread = add_extra_facts(
+            &|arguments: &[&str]| {
+                if matches!(arguments, ["api", "--jq", ..]) {
+                    rules_reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+                gh(arguments)
+            },
+            Ok("acme/app".to_owned()),
+            Some("hoyeon"),
+            &mut pull_requests,
+        );
+        assert_eq!(unread, Vec::<ExtraQuery>::new());
+        assert_eq!(rules_reads.into_inner(), 0);
+        assert!(
+            pull_requests
+                .iter()
+                .all(|pr| pr.work.required_approvals.is_none())
+        );
     }
 
     #[test]
@@ -4944,9 +5006,48 @@ mod tests {
                 name: format!("r{index:02}"),
             })
             .collect::<Vec<_>>();
-        let (listed, more) = reviewers(&requests, &fact);
+        let (listed, more) = reviewers(&requests, None, &fact);
         assert_eq!(listed.len(), PR_REVIEWER_LIMIT);
         assert_eq!(more, 5);
+    }
+
+    #[test]
+    fn the_authors_own_reply_in_a_review_thread_is_not_a_reviewer() {
+        let review = |login: &str, state| FactReview {
+            login: login.to_owned(),
+            state,
+            at: Some(1),
+        };
+        let fact = PullRequestFacts {
+            queue_position: None,
+            review_requested_at: None,
+            opinionated: vec![review("kim", PrReviewerState::Approved)],
+            latest: vec![
+                review("ann", PrReviewerState::Commented),
+                review("kim", PrReviewerState::Commented),
+            ],
+            unlisted: 0,
+            asked: HashMap::new(),
+            classic_approvals: None,
+        };
+        let (listed, _) = reviewers(&[], Some("ann"), &fact);
+        assert_eq!(
+            listed,
+            [PrReviewer {
+                login: "kim".to_owned(),
+                team: false,
+                state: PrReviewerState::Approved,
+                at_unix_ms: Some(1),
+            }]
+        );
+        // Alone, the author's reply leaves no reviewer at all, so a
+        // repository that does not require review draws no review block.
+        let alone = PullRequestFacts {
+            opinionated: Vec::new(),
+            latest: vec![review("ann", PrReviewerState::Commented)],
+            ..fact
+        };
+        assert_eq!(reviewers(&[], Some("ann"), &alone).0, []);
     }
 
     #[test]
