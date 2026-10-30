@@ -12,8 +12,8 @@ import { askingCount, unseenOutputs, type DeskItem, type DeskJob, type DeskMenti
 import { activeTab, backFromThread, closeLane, closeTab, closeTool, closeView, openMission, openThread, outputTab, showTab, showThreads, tabKey, toggleOutputs, toggleThreads, viewTabs } from "./deskLane";
 import { DeskOutputView } from "./DeskOutputView";
 import { MissionMap } from "./MissionMap";
-import { JobLead, OutputMark } from "./components/desk/desk-job-card";
-import { DeskOutputs } from "./components/desk/desk-outputs";
+import { OutputMark } from "./components/desk/desk-job-card";
+import { EveryOutput } from "./components/desk/desk-outputs";
 import { ThreadList } from "./components/desk/thread-list";
 import { ThreadPanel } from "./components/desk/thread-panel";
 import type { DeskKeptTab } from "./snapshot";
@@ -536,23 +536,6 @@ function DeskLaneColumns({ actions, lane, chat }: { actions: Actions; lane: Lane
         expanded={place.expanded}
         rail={<DeskRail asking={askingCount(threads)} unseen={unseenOutputs(threads)} threads={place.up && place.tool !== null} outputs={place.up && place.view} onThreads={() => set(toggleThreads)} onOutputs={() => set(toggleOutputs)} />}
       />
-    </div>
-  );
-}
-
-/** ▣ with no tab open: every thread's 결과물 under its session's mark and title, as the session record's gallery groups them. */
-function EveryOutput({ threads, onOpen }: { threads: readonly DeskJob[]; onOpen: (job: DeskJob, output: DeskOutput) => void }) {
-  const { t } = useInterfaceTranslation();
-  const made = threads.filter((job) => job.outputs.length > 0);
-  if (made.length === 0) return <p className="px-md py-lg text-caption text-muted-foreground" data-desk-outputs="0">{t("desk.outputs.empty")}</p>;
-  return (
-    <div className="flex min-w-0 flex-col gap-md overflow-y-auto px-md py-md" data-desk-every-output={made.length}>
-      {made.map((job) => (
-        <section key={job.id} className="flex min-w-0 flex-col gap-xs" aria-label={job.title}>
-          <h3 className="flex min-w-0 items-center gap-xs text-caption text-subtle-foreground"><JobLead job={job} /><span className="truncate">{job.title}</span></h3>
-          <DeskOutputs outputs={job.outputs} onOpen={(output) => onOpen(job, output)} />
-        </section>
-      ))}
     </div>
   );
 }

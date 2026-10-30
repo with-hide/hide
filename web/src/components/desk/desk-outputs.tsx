@@ -1,8 +1,8 @@
-import type { DeskOutput } from "../../desk";
+import type { DeskJob, DeskOutput } from "../../desk";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { cn } from "../../lib/utils";
 import { RowButton } from "../ui/row-button";
-import { OutputMark, UnseenDot } from "./desk-job-card";
+import { JobLead, OutputMark, UnseenDot } from "./desk-job-card";
 
 const PICTURE = "relative flex aspect-[3/2] w-(--size-desk-output-thumb) overflow-hidden rounded-sm border border-border bg-muted outline-none hover:border-ring focus-visible:ring-1 focus-visible:ring-ring";
 
@@ -49,6 +49,23 @@ export function DeskOutputs({ outputs, selected = null, onOpen }: {
           ))}
         </ul>
       ) : null}
+    </div>
+  );
+}
+
+/** ▣ with no tab open: every thread's 결과물 under its session's mark and title, as the session record's gallery groups them. */
+export function EveryOutput({ threads, onOpen }: { threads: readonly DeskJob[]; onOpen: (job: DeskJob, output: DeskOutput) => void }) {
+  const { t } = useInterfaceTranslation();
+  const made = threads.filter((job) => job.outputs.length > 0);
+  if (made.length === 0) return <p className="px-md py-lg text-caption text-muted-foreground" data-desk-outputs="0">{t("desk.outputs.empty")}</p>;
+  return (
+    <div className="flex min-w-0 flex-col gap-md overflow-y-auto px-md py-md" data-desk-every-output={made.length}>
+      {made.map((job) => (
+        <section key={job.id} className="flex min-w-0 flex-col gap-xs" aria-label={job.title}>
+          <h3 className="flex min-w-0 items-center gap-xs text-caption text-subtle-foreground"><JobLead job={job} /><span className="truncate">{job.title}</span></h3>
+          <DeskOutputs outputs={job.outputs} onOpen={(output) => onOpen(job, output)} />
+        </section>
+      ))}
     </div>
   );
 }

@@ -154,8 +154,9 @@ export function DeskViewColumn({ tabs, active, onTab, onKeep, onCloseTab, contro
 export function DeskRoom({ chat, view = null, tool = null, pinned, expanded = false, rail }: { chat: ReactNode; view?: ReactNode; tool?: ReactNode; pinned: boolean; expanded?: boolean; rail: ReactNode }) {
   const up = view !== null || tool !== null;
   const over = up && !pinned && !expanded;
-  // The chat moves left out from under a lane over it, but never narrower than a lane column's minimum.
-  const covered = view !== null && tool !== null ? "pr-[min(calc(var(--size-lane-panel-ideal)*2),max(0px,calc(100%_-_var(--size-lane-min))))]" : "pr-[min(var(--size-lane-panel-ideal),max(0px,calc(100%_-_var(--size-lane-min))))]";
+  // The chat moves left out from under a lane over it, but never narrower than a lane column's minimum;
+  // a padding below zero computes to zero.
+  const covered = view !== null && tool !== null ? "pr-[min(calc(var(--size-lane-panel-ideal)*2),calc(100%_-_var(--size-lane-min)))]" : "pr-[min(var(--size-lane-panel-ideal),calc(100%_-_var(--size-lane-min)))]";
   const columns = up ? (
     <div className={cn("flex min-h-0 min-w-0", pinned && !expanded ? "flex-[2]" : "absolute inset-y-0 right-0 z-10 border-l border-border bg-background shadow-lg", expanded && "left-0")} data-desk-lane={pinned ? "pinned" : "over"}>
       {view !== null ? <div className={cn("flex min-h-0 min-w-0 flex-col", expanded || pinned ? "flex-1" : "w-(--size-lane-panel-ideal)")} data-desk-lane-column="view">{view}</div> : null}
