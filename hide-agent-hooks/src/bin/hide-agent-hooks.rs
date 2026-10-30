@@ -817,9 +817,10 @@ fn guard_failed(arguments: &[String], cause: &str) {
 
 /// The guards' decision for one tool call: the reason it is refused, or
 /// `None` to let it run. The project's guardrails refuse what a protection
-/// that is on names; the spawn guard refuses a launch through Herdr (not a
-/// launch, not in a registered checkout, the daemon unreachable and any
-/// failure of its own let it run). A refusal and an unreachable daemon are
+/// that is on names; the spawn guard refuses a launch through Herdr and the
+/// opener guard a result handed to the system opener (neither, not in a
+/// registered checkout, the daemon unreachable and any failure of their own
+/// let it run). A refusal and an unreachable daemon are
 /// written to the guard's log here; the caller prints the answer in its
 /// runtime's form.
 fn guard_refusal(
@@ -829,7 +830,7 @@ fn guard_refusal(
     payload: &[u8],
     truncated: bool,
 ) -> Option<String> {
-    use hide_agent_hooks::spawn_guard::{self as guard, Registration};
+    use hide_agent_hooks::spawn_guard as guard;
 
     let pane = std::env::var("HERDR_PANE_ID")
         .ok()
@@ -883,34 +884,25 @@ fn guard_refusal(
     }
     // Outside a Herdr pane there is nothing to redirect.
     let pane = pane?;
-    // Every shell call comes through here: this one search decides the rest.
-    if !guard::may_hold_launch(payload) {
+    // Every shell call comes through here: these two searches decide the rest.
+    if !guard::may_hold_launch(payload)
+        && !hide_agent_hooks::opener_guard::may_hold_opening(payload)
+    {
         return None;
     }
     let call = guard::read_call(payload, truncated, dialect)?;
-    let launch = guard::find_launch(&call.command, &|name| std::env::var(name).ok())?;
     let home = home_directory()?;
     let program = workspace_context::cli_program()?;
-    match guard::registration(&program, Instant::now() + GUARD_BUDGET) {
-        Registration::Registered => {}
-        Registration::NotRegistered => return None,
-        Registration::Unreachable(cause) => {
-            guard::unreachable(&home, runtime_id, cause);
-            return None;
-        }
-    }
-    let cwd = call
-        .cwd
-        .clone()
-        .or_else(|| std::env::current_dir().ok())
-        .unwrap_or_default();
-    let (repo, branch) = guard::checkout_facts(&cwd);
-    let delegation = guard::spawn_command(&launch, repo.as_deref(), branch.as_deref(), true);
-    let handoff = guard::spawn_command(&launch, repo.as_deref(), branch.as_deref(), false);
-    // The refusal is logged before it is printed, and the refusal stands even
-    // when the log cannot be written.
-    guard::record_refusal(&home, runtime_id, &pane, &launch);
-    Some(guard::refusal_reason(&delegation, &handoff))
+    guard::pane_refusal(
+        &home,
+        runtime_id,
+        &pane,
+        &call.command,
+        call.cwd,
+        &program,
+        Instant::now() + GUARD_BUDGET,
+        &|name| std::env::var(name).ok(),
+    )
 }
 
 /// The refusal the pane's plan record names for this call, logged like

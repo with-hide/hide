@@ -417,11 +417,17 @@ test("a shell call that starts an agent through Herdr is refused with the helper
     cwd: "/checkouts/fixture",
   });
 
-  // A call that cannot start an agent never reaches the helper.
+  // A call that can hand a result to the system opener asks the helper too.
+  await assert.rejects(hooks["tool.execute.before"]({ ...launch.input }, { args: { command: "open out/index.html" } }));
+  const [, opener] = await until("tool", 2);
+  assert.equal(opener.input.command, "open out/index.html");
+
+  // A call that can do neither never reaches the helper.
   await hooks["tool.execute.before"]({ ...launch.input }, { args: { command: "ls -la" } });
+  await hooks["tool.execute.before"]({ ...launch.input }, { args: { command: "open ." } });
   await hooks["tool.execute.before"]({ ...launch.input, tool: "read" }, { args: { filePath: "/x" } });
   await sleep(100);
-  assert.equal(calls().filter((c) => c.operation === "tool").length, 1);
+  assert.equal(calls().filter((c) => c.operation === "tool").length, 2);
 });
 
 
