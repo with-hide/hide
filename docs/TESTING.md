@@ -72,6 +72,9 @@ Keep one representative journey per user-visible flow; when a long spec carries 
 - Prefer subject IDs, request identity and generation or revision numbers over wall-clock comparisons and the last diagnostic string.
 - A value the page computes from its own clock (a countdown, an age, a duration) is read with that clock held: `page.clock.setFixedTime` in a web e2e, `vi.useFakeTimers({ toFake: ["Date"] })` with `vi.setSystemTime` in a unit test.
   The test and the page each read a real clock, and a minute or an hour turning between the two reads draws a different answer: `weekly-usage.spec.ts` drew `5d 3h` for `5d 4h` (with-hide/hide-private#315), and `MissionMap.test.tsx` drew `held 26m` for `held 25m` (#354).
+- A test's time limit does not pay for loading the runtime it runs on.
+  Every web unit test file runs in a new Node process, and on a Windows runner the first ones paged the Node binary in from the slow system disk a few kilobytes at a time: a first test waited there for 12 to 18 s and passed its 5 s limit (with-hide/hide-private#354).
+  `web/e2e/unit-node-binary.ts` reads the binary once, in vitest's own process before any worker starts, so its pages are in memory when a test asks for them.
 - A barrier on what the page sent is not a barrier on what the daemon accepted.
   After a burst of clicks, `terminal_click` frames counted at the page say the page sent them; hided may still hold a dozen on its socket, and the last `pane.focus` diagnostic the page has seen can be an earlier request's confirmation.
   Count the diagnostics the daemon sent back against the changes the page sent, with a cumulative count (`observeDiagnostics(...).added` in `web/e2e/pane-focus-ordering.spec.ts`): the list is capped and drops from its front, so the number of entries of one kind in it falls while a burst appends.
