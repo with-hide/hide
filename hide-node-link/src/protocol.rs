@@ -271,7 +271,11 @@ use crate::error::HostError;
 /// approval count, and a node reads the approvals a branch's rulesets ask
 /// for (`gh::required_approvals_arguments`; PRD pr-review-status). A helper on
 /// 63 would refuse both reads, so it is refused at Hello and upgraded.
-pub const PROTOCOL_VERSION: u32 = 64;
+/// 65: a node reads the thread of the session an agent pane runs, a page of
+/// ACP session updates, newest, before a page or forward from one
+/// (`Call::SessionThread`; PRD session-docs-and-assistant B25). A helper on
+/// 64 would refuse it, so it is refused at Hello and upgraded.
+pub const PROTOCOL_VERSION: u32 = 65;
 
 /// What agy's index held in a checkout before Hide typed `/fork`
 /// ([`Call::AntigravityForkMark`]).
@@ -985,6 +989,12 @@ pub enum Call {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         scope: Option<hide_session::SessionReadScope>,
     },
+    /// One page of the thread of the session an agent pane runs, named as
+    /// Herdr reports the pane's session (`hide_session::thread::read_pane_thread`):
+    /// ACP session updates and the page's cursors, never a path.
+    SessionThread {
+        request: hide_session::thread::ThreadRequest,
+    },
     /// A bounded provider-neutral conversation page, including native graphs.
     SessionConversation {
         agent: hide_session::Agent,
@@ -1210,6 +1220,7 @@ impl Call {
             | Self::SessionStat { .. }
             | Self::SessionText { .. }
             | Self::SessionConversation { .. }
+            | Self::SessionThread { .. }
             | Self::PanesStart { .. }
             | Self::TerminalsStart { .. }
             | Self::PaneProofAnswer { .. }
