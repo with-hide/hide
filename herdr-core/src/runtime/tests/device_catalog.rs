@@ -17,7 +17,7 @@ const TARGET: &str = "mini";
 pub(super) struct Tree {
     _dir: tempfile::TempDir,
     pub(super) main: String,
-    linked: String,
+    pub(super) linked: String,
     other: String,
 }
 
