@@ -12,9 +12,9 @@ use crate::evidence::{EVIDENCE_ROW_LIMIT, Evidence, EvidenceKind};
 use crate::matcher::{CardTerms, MINIMUM_SCORE, Query, normalize};
 use crate::{
     ACTIVE_MEMORY_LIMIT, ALIAS_LIMIT, ALIAS_LIMIT_CHARS, CITED_PATH_LIMIT, CITED_PATH_LIMIT_BYTES,
-    HOOK_CANDIDATE_LIMIT, HOOK_DEADLINE_MS, INDEX_LINE_LIMIT, INJECTION_TOKEN_LIMIT,
-    PROMOTION_HUMAN_SESSIONS, PROMOTION_PULLED_SESSIONS, PROMOTION_WINDOW_MS, PROMPT_ITEM_LIMIT,
-    RECEIPT_LIMIT, RECEIPT_STALE_AFTER_MS, TITLE_LIMIT_CHARS, redact,
+    HOOK_CANDIDATE_LIMIT, INDEX_LINE_LIMIT, INJECTION_TOKEN_LIMIT, PROMOTION_HUMAN_SESSIONS,
+    PROMOTION_PULLED_SESSIONS, PROMOTION_WINDOW_MS, PROMPT_ITEM_LIMIT, RECEIPT_LIMIT,
+    RECEIPT_STALE_AFTER_MS, TITLE_LIMIT_CHARS, redact,
 };
 
 pub(crate) mod hold;
@@ -6043,7 +6043,7 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
 
     fn invocation_clock() -> (Arc<AtomicU64>, impl Fn() -> bool + Clone + Send + 'static) {
         let anchor = Instant::now();
-        let end = anchor + Duration::from_millis(HOOK_DEADLINE_MS);
+        let end = anchor + Duration::from_millis(crate::HOOK_DEADLINE_MS);
         let elapsed = Arc::new(AtomicU64::new(0));
         let clock = Arc::clone(&elapsed);
         let expired = move || anchor + Duration::from_millis(clock.load(Ordering::SeqCst)) >= end;
