@@ -8,7 +8,7 @@ import { createActions } from "./actions";
 import type { AgentScope, TaskCardScope, TaskState } from "./agentScope";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { clientI18n } from "./i18n/translator";
-import type { AgentRow, Checkout, SnapshotRest, TaskView, Workspace } from "./snapshot";
+import type { AgentRow, Checkout, SessionPull, SnapshotRest, TaskView, Workspace } from "./snapshot";
 import { useShellStore } from "./store";
 import { TaskLens } from "./TaskLens";
 import { useUiStore } from "./ui";
@@ -343,4 +343,24 @@ it("keeps a read question in 내 차례 dimmed with a hollow ! and 읽음, and i
   await act(async () => button("asked").click());
   await act(async () => button("kept").click());
   expect(sent.map((event) => [event.kind, event.payload.pane_id])).toEqual([["revisit_star", "asked"], ["revisit_done", "kept"]]);
+});
+
+it("draws a middle child's whole pull request list on its child row, its grandchild's included, as its pane and record do", async () => {
+  // A -> B -> C: B made #41 and C made #42. The core lays one list on each
+  // session (docs/status-model.md, One list per session); B's is both.
+  const pull = (number: number, state: SessionPull["state"], holder: string, own: boolean): SessionPull => ({
+    url: `https://github.com/acme/app/pull/${number}`, number, title: `PR ${number}`, state, own, holders: [holder], stale: false, last_read_at_unix_ms: null,
+  });
+  const agents = [
+    row("a", { lineage_child_pane_ids: ["b"], pulls: { pulls: [pull(41, "mergeable", "작업 b", false), pull(42, "merged", "작업 c", false)] } }),
+    row("b", { lineage_parent_pane_id: "a", lineage_child_pane_ids: ["c"], delegated: true, pulls: { pulls: [pull(41, "mergeable", "작업 b", true), pull(42, "merged", "작업 c", false)] } }),
+    row("c", { lineage_parent_pane_id: "b", delegated: true, pulls: { pulls: [pull(42, "merged", "작업 c", true)] } }),
+  ];
+  const { container } = await render(snapshot(agents, [card("a", "working", "hide-main", ["a", "b", "c"])], "status", ["a", "b"]), agents);
+  const mark = (selector: string) => container.querySelector(`${selector} [data-agent-pr]`);
+  const counts = (selector: string) => mark(selector)?.querySelector("[data-pr-counts]")?.getAttribute("data-pr-counts");
+  expect(container.querySelector('[data-task-child="b"]')).not.toBeNull();
+  expect(counts('[data-task-child="b"]')).toBe("mergeable:1 merged:1");
+  expect(counts('[data-task-row="a"]')).toBe("mergeable:1 merged:1");
+  expect(mark('[data-task-child="c"]')?.textContent).toBe("#42");
 });
