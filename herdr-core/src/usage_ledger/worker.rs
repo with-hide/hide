@@ -260,6 +260,9 @@ struct Costs {
     built: Option<Instant>,
     /// New calls the build reads, or a new price table, since the last one.
     dirty: bool,
+    /// Hide AI rows written since `hide_ai` was built: only that figure is
+    /// built again, from the `ai_daily` rows, not the projects' calls.
+    hide_ai_dirty: bool,
     /// The latest build's failure; the last built value stays.
     failure: Option<&'static str>,
     /// The last built value was past `EVENT_LIMIT` and that was logged.
@@ -633,9 +636,8 @@ impl Engine {
             Ok(recorded) => {
                 self.ai_dirty = true;
                 // The projects' cost carries the week's Hide AI figure
-                // (PRD project-panel-results B24), rebuilt at most every
-                // `COST_REBUILD`.
-                self.costs.dirty = true;
+                // (PRD project-panel-results B24).
+                self.costs.hide_ai_dirty = true;
                 if recorded.refused > 0 {
                     diagnostic("ai_usage_row_capacity", None, recorded.refused as u64);
                 }
@@ -675,8 +677,28 @@ impl Engine {
                 .built
                 .is_none_or(|at| at.elapsed() >= COST_REBUILD);
         if !moved && !due {
+            if self.costs.hide_ai_dirty && self.costs.value.is_some() {
+                self.costs.hide_ai_dirty = false;
+                let hide_ai = today
+                    .parse::<jiff::civil::Date>()
+                    .map_err(|_| "usage_date_invalid")
+                    .and_then(project_cost::first_day)
+                    .and_then(|first| {
+                        project_cost::hide_ai_cost(
+                            &self.store.ai_rows()?,
+                            first,
+                            self.prices.table.as_ref(),
+                            now,
+                        )
+                    });
+                match hide_ai {
+                    Ok(value) => self.costs.hide_ai = Some(value),
+                    Err(code) => diagnostic(code, None, 0),
+                }
+            }
             return self.costs.published();
         }
+        self.costs.hide_ai_dirty = false;
         self.costs.projects = Arc::clone(projects);
         self.costs.today = today.clone();
         self.costs.built = Some(Instant::now());

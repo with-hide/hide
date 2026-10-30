@@ -247,6 +247,11 @@ function StrayRow({ project, stray, actions, onDismiss }: { project: Workspace; 
       setRequest(null);
     }
   }, [receipt?.state]);
+  // A row that comes back after its agent ended starts over (B14).
+  useEffect(() => {
+    setSent(false);
+    setRequest(null);
+  }, [stray.since_unix_ms]);
   const sending = request !== null && !sent && (receipt === null || receipt.state === "sending");
   const handedOff = request !== null && (sending || sent);
   const parts = strayParts(stray);

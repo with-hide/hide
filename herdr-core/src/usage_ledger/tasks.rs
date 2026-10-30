@@ -146,7 +146,7 @@ pub struct PerPr {
 /// A session the project's record holds: its agent, the session that
 /// started it, the pull requests it made, where it ran, its last judged
 /// line and its last `git commit` call.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Recorded {
     pub agent: String,
     pub parent: Option<String>,
@@ -159,7 +159,7 @@ pub struct Recorded {
 
 /// A mission of the project as its map stands: the Conductor's session and
 /// each node with its pull request.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Mission {
     pub id: String,
     pub title: String,
@@ -168,7 +168,7 @@ pub struct Mission {
     pub started_at_unix_ms: Option<u64>,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct MissionNode {
     pub key: String,
     pub title: String,
@@ -178,15 +178,17 @@ pub struct MissionNode {
 }
 
 /// A pull request of the project as the catalog last read it.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Pull {
     /// `open`, `merged` or `closed`.
     pub state: &'static str,
     pub merged_at_unix_ms: Option<u64>,
+    /// The local day of its merge, as the cost's `days` name days.
+    pub merged_day: Option<String>,
 }
 
 /// A checkout of the project and what it holds now.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Place {
     pub path: String,
     /// Changes not committed or commits not pushed.
@@ -196,9 +198,11 @@ pub struct Place {
     pub landed: bool,
 }
 
-/// Everything a project's tasks read beside the spends.
-#[derive(Default)]
-pub struct Facts<'a> {
+/// Everything a project's tasks read beside the spends: plain data, so the
+/// runtime builds a project's tasks again only when these or its spends
+/// moved.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Facts {
     pub recorded: HashMap<String, Recorded>,
     pub missions: Vec<Mission>,
     /// Sessions whose live agent works or waits on the operator.
@@ -207,9 +211,8 @@ pub struct Facts<'a> {
     pub last_lines: HashMap<String, String>,
     pub pulls: HashMap<u32, Pull>,
     pub places: Vec<Place>,
-    /// The cost's seven days, oldest first, and the day a time falls on.
+    /// The cost's seven days, oldest first.
     pub days: Vec<String>,
-    pub day_of: Option<&'a dyn Fn(u64) -> Option<String>>,
     pub open_prs: usize,
 }
 
@@ -232,11 +235,17 @@ pub fn build(spends: &[SessionSpend], facts: &Facts) -> Built {
         capped |= cut;
         groups.entry(key).or_default().push((spend, depth));
     }
+    // Each recorded session's checkout, found once per build.
+    let placed: Placed = facts
+        .recorded
+        .keys()
+        .filter_map(|session| Some((session.as_str(), place_of(session, facts)?)))
+        .collect();
     // Changes left in a checkout are the result of the task that ran there
     // last, not of every earlier task there.
     let mut last_here: HashMap<&str, u64> = HashMap::new();
     for (key, members) in &groups {
-        if let Some(place) = place_of(&root_of(key, facts), facts) {
+        if let Some(place) = placed.get(root_of(key, facts).as_str()) {
             let ended = members
                 .iter()
                 .map(|(spend, _)| spend.last_ms)
@@ -250,7 +259,7 @@ pub fn build(spends: &[SessionSpend], facts: &Facts) -> Built {
         .into_iter()
         .map(|(key, members)| {
             capped |= members.len() > TASK_SESSION_LIMIT;
-            task(key, members, facts, &last_here)
+            task(key, members, facts, &placed, &last_here)
         })
         .collect();
     capped |= tasks.len() > TASK_LIMIT
@@ -289,6 +298,9 @@ fn root_of(key: &str, facts: &Facts) -> String {
         None => key.trim_start_matches("task:").to_owned(),
     }
 }
+
+/// Each recorded session's checkout.
+type Placed<'a> = HashMap<&'a str, &'a Place>;
 
 /// The checkout a session ran in: the deepest one holding its folder.
 fn place_of<'a>(session: &str, facts: &'a Facts) -> Option<&'a Place> {
@@ -360,6 +372,7 @@ fn task(
     key: String,
     mut members: Vec<(&SessionSpend, usize)>,
     facts: &Facts,
+    placed: &Placed,
     last_here: &HashMap<&str, u64>,
 ) -> TaskCost {
     members.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.first_ms.cmp(&b.0.first_ms)));
@@ -422,12 +435,12 @@ fn task(
         .iter()
         .filter_map(|number| facts.pulls.get(number)?.merged_at_unix_ms)
         .max();
-    let latest_here = place_of(&root_id, facts).is_some_and(|place| {
+    let latest_here = placed.get(root_id.as_str()).is_some_and(|place| {
         last_here
             .get(place.path.as_str())
             .is_some_and(|last| *last <= ended)
     });
-    let result = result(&root_id, &sessions, &made, latest_here, facts);
+    let result = result(&root_id, &sessions, &made, latest_here, facts, placed);
     let mission = mission.map(|mission| mission_cost(mission, &members, facts));
     TaskCost {
         id: key,
@@ -484,6 +497,7 @@ fn result(
     made: &[u32],
     latest_here: bool,
     facts: &Facts,
+    placed: &Placed,
 ) -> TaskResult {
     if sessions.iter().any(|id| facts.working.contains(*id)) || facts.working.contains(root) {
         return TaskResult::of("working");
@@ -497,7 +511,7 @@ fn result(
             state: facts.pulls.get(number).map(|pull| pull.state),
         };
     }
-    if latest_here && place_of(root, facts).is_some_and(|place| place.left) {
+    if latest_here && placed.get(root).is_some_and(|place| place.left) {
         return TaskResult::of("changes");
     }
     let committed = sessions.iter().any(|session| {
@@ -505,7 +519,7 @@ fn result(
             .recorded
             .get(*session)
             .is_some_and(|row| row.committed_at_unix_ms.is_some())
-            && place_of(session, facts).is_some_and(|place| place.landed)
+            && placed.get(*session).is_some_and(|place| place.landed)
     });
     if committed {
         return TaskResult::of("commit");
@@ -612,7 +626,7 @@ fn week(tasks: &[TaskCost], facts: &Facts) -> ProjectWeek {
     let mut merged_by_day = vec![0; facts.days.len()];
     let mut merged_prs = 0;
     for pull in facts.pulls.values() {
-        let Some(day) = pull.merged_at_unix_ms.and_then(|at| facts.day_of?(at)) else {
+        let Some(day) = pull.merged_day.clone() else {
             continue;
         };
         if day < first {
@@ -627,8 +641,8 @@ fn week(tasks: &[TaskCost], facts: &Facts) -> ProjectWeek {
         facts
             .pulls
             .get(&number)
-            .and_then(|pull| facts.day_of?(pull.merged_at_unix_ms?))
-            .is_some_and(|day| day >= first)
+            .and_then(|pull| pull.merged_day.as_ref())
+            .is_some_and(|day| *day >= first)
     };
     let landed: Vec<&TaskCost> = tasks
         .iter()

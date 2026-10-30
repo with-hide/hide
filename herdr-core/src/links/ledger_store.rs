@@ -2026,7 +2026,7 @@ impl LinkStore {
             (SELECT goal FROM ledger_chapters WHERE device=?1 AND agent=?2 AND id=?3 ORDER BY at DESC LIMIT 1), \
             (SELECT native_title FROM ledger_titles WHERE device=?1 AND agent=?2 AND id=?3), \
             (SELECT manual_title FROM ledger_titles WHERE device=?1 AND agent=?2 AND id=?3), \
-            (SELECT line FROM ledger_turns WHERE device=?1 AND agent=?2 AND id=?3 AND line<>'' ORDER BY end_at DESC LIMIT 1), \
+            (SELECT line FROM ledger_turns WHERE device=?1 AND agent=?2 AND id=?3 AND line<>'' ORDER BY offset DESC LIMIT 1), \
             (SELECT at FROM ledger_sightings WHERE device=?1 AND agent=?2 AND id=?3 AND kind='commit')").map_err(failed)?;
         let mut summaries = Vec::new();
         let mut missed_count = 0;

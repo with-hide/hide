@@ -586,6 +586,9 @@ struct Input {
 #[derive(Default)]
 pub(crate) struct Cache {
     previous: Option<Input>,
+    /// Counts the projections whose input moved, for a reader that follows
+    /// the same input (the project tasks).
+    pub(crate) input_generation: u64,
     output: Output,
     /// Where each pull request stood on the last projection, by project: a
     /// pull request GitHub has not judged yet keeps its place (B12).
@@ -820,6 +823,7 @@ impl Cache {
         if self.previous.as_ref() == Some(&input) {
             return self.apply(snapshot);
         }
+        self.input_generation = self.input_generation.wrapping_add(1);
         let mut projects = HashMap::new();
         let mut checkouts = HashMap::new();
         let mut device_scopes = HashMap::new();

@@ -1878,6 +1878,11 @@ pub struct Runtime {
     /// The projects whose last task build crossed a cap, so the crossing is
     /// logged once (`project_tasks_capacity`).
     tasks_capped: HashSet<String>,
+    /// Each local project's last task build and what it read
+    /// (`publish_project_tasks`).
+    tasks_built: HashMap<String, project_tasks::TasksBuilt>,
+    /// The agent scopes' input generation the tasks last followed.
+    tasks_scope_input: u64,
     /// Where each local project is in the re-read cycle: five minutes after a
     /// good answer, sooner after a failed read (`reread_stale_github`).
     github_clock: HashMap<String, projects::GithubClock>,
@@ -2550,6 +2555,8 @@ impl Runtime {
             turn_working_panes: HashSet::new(),
             ledger_spends: None,
             tasks_capped: HashSet::new(),
+            tasks_built: HashMap::new(),
+            tasks_scope_input: 0,
             github_clock: HashMap::new(),
             github_wanted: HashSet::new(),
             github_sighted: HashMap::new(),

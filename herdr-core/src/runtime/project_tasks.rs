@@ -2,11 +2,12 @@
 //! the ledger worker's per-session spends become each project's tasks and
 //! week here, with the record's sessions, the missions, the live rows and
 //! the catalog's pull requests and checkouts. It runs when the worker
-//! reports, when the record's summaries change and when the agent scopes
-//! are built again (their compared input holds the agents, pull requests and
-//! Git facts a result reads, and the minute), never per keystroke; the work
-//! grows with the seven days' sessions, which the worker already bounded,
-//! and a build that changes nothing leaves the frame alone.
+//! reports, when the record's summaries change and when the agent scopes'
+//! compared input moves (the agents, pull requests and Git facts a result
+//! reads, and the minute), never per keystroke. A project is built again
+//! only when its facts or the spends moved; the work grows with the seven
+//! days' sessions, which the worker already bounded, and a build that
+//! changes nothing leaves the frame alone.
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -16,22 +17,61 @@ use crate::model::PullRequestBadge;
 use crate::usage_ledger::project_cost::ProjectCost;
 use crate::usage_ledger::tasks::{self, Facts, Mission, MissionNode, Place, Pull, Recorded};
 
+/// One project's last build: the spends and facts it read, and what it made.
+pub(super) struct TasksBuilt {
+    spends: Arc<Vec<ProjectCost>>,
+    facts: Facts,
+    cost: ProjectCost,
+    capped: bool,
+}
+
 impl Runtime {
-    /// Builds every local project's tasks from the last spends and puts
-    /// the result on the usage frame; true when the frame changed.
+    /// Builds the local projects' tasks from the last spends and puts the
+    /// result on the usage frame; true when the frame changed. A project
+    /// whose spends and facts are the ones it was last built from keeps that
+    /// build, so a call whose inputs moved for one project builds that one.
     pub(super) fn publish_project_tasks(&mut self) -> bool {
+        let Some(spends) = self.ledger_spends.clone() else {
+            self.tasks_built.clear();
+            return false;
+        };
         // The zone is read once per publication, not per project.
         let zone = jiff::tz::TimeZone::system();
-        let mut capped = HashSet::new();
-        let published = self.ledger_spends.as_ref().map(|spends| {
-            Arc::new(
-                spends
-                    .iter()
-                    .map(|cost| self.project_tasks(cost, &zone, &mut capped))
-                    .collect::<Vec<_>>(),
-            )
-        });
+        let mut built = HashMap::new();
+        let mut published = Vec::with_capacity(spends.len());
+        for cost in spends.iter() {
+            let Some(facts) = self.project_facts(cost, &zone) else {
+                published.push(cost.clone());
+                continue;
+            };
+            let kept = self
+                .tasks_built
+                .remove(&cost.workspace_id)
+                .filter(|last| Arc::ptr_eq(&last.spends, &spends) && last.facts == facts);
+            let last = kept.unwrap_or_else(|| {
+                let tasks = tasks::build(&cost.spends, &facts);
+                let mut made = cost.clone();
+                made.tasks = tasks.tasks;
+                made.tasks_total = tasks.total;
+                made.week = tasks.week;
+                TasksBuilt {
+                    spends: Arc::clone(&spends),
+                    facts,
+                    cost: made,
+                    capped: tasks.capped,
+                }
+            });
+            published.push(last.cost.clone());
+            built.insert(cost.workspace_id.clone(), last);
+        }
+        self.tasks_built = built;
         // A cap crossing is logged once, when a project first crosses it.
+        let capped: HashSet<String> = self
+            .tasks_built
+            .iter()
+            .filter(|(_, last)| last.capped)
+            .map(|(id, _)| id.clone())
+            .collect();
         for workspace_id in capped.difference(&self.tasks_capped) {
             crate::diagnostic!(serde_json::json!({
                 "component": "usage_ledger",
@@ -43,6 +83,7 @@ impl Runtime {
             }));
         }
         self.tasks_capped = capped;
+        let published = Some(Arc::new(published));
         let own = &mut self.snapshot.usage.nodes[0];
         if own.projects == published {
             return false;
@@ -52,22 +93,15 @@ impl Runtime {
         true
     }
 
-    fn project_tasks(
-        &self,
-        cost: &ProjectCost,
-        zone: &jiff::tz::TimeZone,
-        capped: &mut HashSet<String>,
-    ) -> ProjectCost {
-        let mut cost = cost.clone();
-        let Some(project) = self
+    /// What a local project's tasks read beside its spends; none for a
+    /// project the navigator no longer lists.
+    fn project_facts(&self, cost: &ProjectCost, zone: &jiff::tz::TimeZone) -> Option<Facts> {
+        let project = self
             .snapshot
             .navigator
             .workspaces
             .iter()
-            .find(|project| project.id == cost.workspace_id)
-        else {
-            return cost;
-        };
+            .find(|project| project.id == cost.workspace_id)?;
         let summary = self
             .snapshot
             .link_summaries
@@ -142,6 +176,9 @@ impl Runtime {
                     Pull {
                         state,
                         merged_at_unix_ms: pull.merged_at_unix_ms,
+                        merged_day: pull
+                            .merged_at_unix_ms
+                            .and_then(|at| crate::usage_ledger::local_day(at, zone).ok()),
                     },
                 )
             })
@@ -187,8 +224,7 @@ impl Runtime {
                 started_at_unix_ms: mission.started_at_unix_ms,
             })
             .collect();
-        let day_of = |at: u64| crate::usage_ledger::local_day(at, zone).ok();
-        let facts = Facts {
+        Some(Facts {
             recorded,
             missions,
             working,
@@ -196,16 +232,7 @@ impl Runtime {
             pulls,
             places,
             days: cost.days.iter().map(|day| day.date.clone()).collect(),
-            day_of: Some(&day_of),
             open_prs: project.agent_scope.status.prs.open,
-        };
-        let built = tasks::build(&cost.spends, &facts);
-        if built.capped {
-            capped.insert(project.id.clone());
-        }
-        cost.tasks = built.tasks;
-        cost.tasks_total = built.total;
-        cost.week = built.week;
-        cost
+        })
     }
 }

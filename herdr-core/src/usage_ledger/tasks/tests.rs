@@ -135,6 +135,7 @@ fn a_mission_is_one_task_with_each_node_s_worker_cost() {
                 Pull {
                     state: "merged",
                     merged_at_unix_ms: Some(HOUR),
+                    merged_day: Some("d1".into()),
                 },
             ),
             (
@@ -142,6 +143,7 @@ fn a_mission_is_one_task_with_each_node_s_worker_cost() {
                 Pull {
                     state: "open",
                     merged_at_unix_ms: None,
+                    merged_day: None,
                 },
             ),
         ]),
@@ -210,6 +212,7 @@ fn a_result_follows_the_order_working_pr_changes_commit_none() {
             Pull {
                 state: "merged",
                 merged_at_unix_ms: Some(3 * HOUR),
+                merged_day: Some("d2".into()),
             },
         )]),
         places: vec![
@@ -273,13 +276,6 @@ fn the_week_counts_merges_by_day_and_averages_over_merged_tasks() {
         spend("b", 2, 0, HOUR),
         spend("c", 100, 0, HOUR),
     ];
-    let day_of = |at: u64| {
-        Some(if at < 10 * HOUR {
-            "d1".to_owned()
-        } else {
-            "d2".to_owned()
-        })
-    };
     let facts = Facts {
         recorded: HashMap::from([
             ("a".into(), recorded(None, &[1], "/p")),
@@ -292,6 +288,7 @@ fn the_week_counts_merges_by_day_and_averages_over_merged_tasks() {
                 Pull {
                     state: "merged",
                     merged_at_unix_ms: Some(HOUR),
+                    merged_day: Some("d1".into()),
                 },
             ),
             (
@@ -299,6 +296,7 @@ fn the_week_counts_merges_by_day_and_averages_over_merged_tasks() {
                 Pull {
                     state: "merged",
                     merged_at_unix_ms: Some(11 * HOUR),
+                    merged_day: Some("d2".into()),
                 },
             ),
             (
@@ -306,11 +304,11 @@ fn the_week_counts_merges_by_day_and_averages_over_merged_tasks() {
                 Pull {
                     state: "merged",
                     merged_at_unix_ms: Some(12 * HOUR),
+                    merged_day: Some("d2".into()),
                 },
             ),
         ]),
         days: vec!["d1".into(), "d2".into()],
-        day_of: Some(&day_of),
         open_prs: 4,
         ..Facts::default()
     };
