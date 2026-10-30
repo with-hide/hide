@@ -1,0 +1,22 @@
+[package]
+name = "hide-desk"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Desk's agent boundary: the ACP client for the operator's chosen agent, its adapters, their installation and the permission rule"
+
+[lib]
+name = "hide_desk"
+
+[dependencies]
+hide-platform = { path = "../hide-platform" }
+hide-shell = { path = "../hide-shell" }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
+
+[dev-dependencies]
+tempfile = "=3.27.0"
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
