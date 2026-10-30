@@ -7,10 +7,10 @@
 //! panels and `hide links` open it read-only.
 
 use super::{
-    CREATED_WITHIN_MS, DAY_MS, FileState, IssueSource, LinkedIssue, LinkedParent, LinkedSession,
-    OPEN_EXCEPTION_MS, PANEL_SESSION_LIMIT, PaneFact, ParentFact, ProjectFacts, ProjectLinkSummary,
-    SESSION_NAMED_LIMIT, SESSION_PR_LIMIT, STORE_PAGE_LIMIT, SUMMARY_SESSION_LIMIT, SessionPrChip,
-    SessionRole, WorktreeFact, within,
+    CREATED_AFTER_MS, CREATED_BEFORE_MS, DAY_MS, FileState, IssueSource, LinkedIssue, LinkedParent,
+    LinkedSession, OPEN_EXCEPTION_MS, PANEL_SESSION_LIMIT, PaneFact, ParentFact, ProjectFacts,
+    ProjectLinkSummary, SESSION_NAMED_LIMIT, SESSION_PR_LIMIT, STORE_PAGE_LIMIT,
+    SUMMARY_SESSION_LIMIT, SessionPrChip, SessionRole, WorktreeFact, within,
 };
 use crate::links::ledger::SessionIdentity;
 use hide_session::ConversationCheckpoint;
@@ -27,7 +27,7 @@ use std::time::Duration;
 #[path = "ledger_store.rs"]
 mod ledger;
 
-const SCHEMA_VERSION: i64 = 11;
+const SCHEMA_VERSION: i64 = 12;
 
 const SCHEMA: &str = "
 CREATE TABLE projects(key TEXT PRIMARY KEY, device TEXT NOT NULL, root TEXT NOT NULL,
@@ -952,12 +952,13 @@ impl LinkStore {
                     break;
                 }
                 // The first sighting stands: it is the one GitHub's creation
-                // time is matched against (D-44).
+                // time is matched against (D-44). A sighting its creating call
+                // gave back marks the making for good.
                 tx.execute(
-                    "INSERT INTO session_prs VALUES(?1,?2,?3,?4,?5,?6,?7,?8) \
+                    "INSERT INTO session_prs VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9) \
                      ON CONFLICT(device,agent,id,repo_name,number) DO UPDATE SET \
                      request=CASE WHEN excluded.at < at THEN excluded.request ELSE request END, \
-                     at=MIN(at, excluded.at)",
+                     at=MIN(at, excluded.at), made=MAX(made, excluded.made)",
                     params![
                         device,
                         agent,
@@ -967,6 +968,7 @@ impl LinkStore {
                         mark.number as i64,
                         mark.at_unix_ms as i64,
                         mark.request.as_ref().or(before.as_ref()),
+                        mark.made,
                     ],
                 )
                 .map_err(failed)?;
@@ -1408,13 +1410,14 @@ impl LinkStore {
                      LEFT JOIN repo_names r ON r.name=sp.repo_name \
                      JOIN prs p ON p.repo=COALESCE(r.repo, sp.repo_name) AND p.number=sp.number \
                      WHERE p.repo=?1 AND s.cwd IS NOT NULL AND p.created_at IS NOT NULL \
-                     AND abs(sp.at-p.created_at)<=?2",
+                     AND (sp.made=1 OR (sp.at>=p.created_at-?2 AND sp.at<=p.created_at+?3))",
                 )
                 .map_err(failed)?;
             let learned: Vec<DevicePath> = statement
-                .query_map(params![repo, CREATED_WITHIN_MS as i64], |row| {
-                    Ok((row.get(0)?, row.get(1)?))
-                })
+                .query_map(
+                    params![repo, CREATED_BEFORE_MS as i64, CREATED_AFTER_MS as i64],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
                 .and_then(Iterator::collect)
                 .map_err(failed)?;
             paths.extend(learned.into_iter().filter(|place| fences.admit(place)));
@@ -1607,16 +1610,17 @@ impl LinkStore {
     ) -> Result<Vec<LinkedSession>, String> {
         let names = pass.repo_names(&pr.repo);
         let mut printed: BTreeMap<SessionKey, (u64, Option<String>)> = BTreeMap::new();
+        let mut made: BTreeSet<SessionKey> = BTreeSet::new();
         {
             let mut statement = self
                 .connection
                 .prepare_cached(
-                    "SELECT device, agent, id, at, request FROM session_prs \
+                    "SELECT device, agent, id, at, request, made FROM session_prs \
                      WHERE repo_name=?1 AND number=?2",
                 )
                 .map_err(failed)?;
             for name in &names {
-                let rows: Vec<(SessionKey, u64, Option<String>)> = statement
+                let rows: Vec<(SessionKey, u64, Option<String>, bool)> = statement
                     .query_map(params![name, pr.number as i64], |row| {
                         Ok((
                             SessionKey {
@@ -1626,11 +1630,15 @@ impl LinkStore {
                             },
                             row.get::<_, i64>(3)? as u64,
                             row.get(4)?,
+                            row.get(5)?,
                         ))
                     })
                     .and_then(Iterator::collect)
                     .map_err(failed)?;
-                for (key, at, request) in rows {
+                for (key, at, request, by_call) in rows {
+                    if by_call {
+                        made.insert(key.clone());
+                    }
                     let entry = printed.entry(key).or_insert((at, request.clone()));
                     if at < entry.0 {
                         *entry = (at, request);
@@ -1639,13 +1647,13 @@ impl LinkStore {
             }
         }
         // An address a tool printed is the session's making of the pull
-        // request when GitHub made it then, and nothing else: a listing, a
-        // browser's tabs or a log prints addresses of work it never touched.
+        // request when its call made it, or when GitHub made it then, and
+        // nothing else: a listing, a browser's tabs or a log prints
+        // addresses of work it never touched.
         let created: BTreeSet<SessionKey> = printed
             .iter()
-            .filter(|(_, (at, _))| {
-                pr.created_at
-                    .is_some_and(|created| crate::links::printed_at_creation(*at, created))
+            .filter(|(key, (at, _))| {
+                crate::links::made_by_print(made.contains(*key), *at, pr.created_at)
             })
             .map(|(key, _)| key.clone())
             .collect();
@@ -2373,6 +2381,13 @@ DELETE FROM meta WHERE key='listed_at' OR key LIKE 'listed_at:%';
 const PANE_SEEN_COLUMN: &str = "ALTER TABLE sessions ADD COLUMN pane_first_at INTEGER;";
 const PANE_SEEN_MARK: &str = "UPDATE sessions SET pane_first_at=COALESCE(started_at, ended_at, 0) WHERE pane_first_at IS NULL;";
 
+/// Which printed addresses their creating call gave back (version 12,
+/// `hide_session::links::PrMark::made`). A record older than that never
+/// asked, so every file is read again as [`NAMED_REREAD`] does, and a pull
+/// request a session made is found made whatever the clocks said; a store a
+/// test rolled back may already hold the column.
+const MADE_COLUMN: &str = "ALTER TABLE session_prs ADD COLUMN made INTEGER NOT NULL DEFAULT 0;";
+
 /// The project ids a node conversion or a core move gave new ids, so the
 /// old session search file's `policy`, which is never written (D-20), still
 /// names each project's Copied history days. Version 4.
@@ -2423,11 +2438,19 @@ fn migrate(connection: &Connection) -> Result<(), OpenFailure> {
         };
         let plans = if version < 9 { ledger::PLAN_SCHEMA } else { "" };
         let named = if version < 10 { NAMED_SCHEMA } else { "" };
-        let reread = if (1..10).contains(&version) {
+        // A store before version 12 is read again for `made`, which also
+        // gives one before version 10 its named pull requests.
+        let reread = if (1..12).contains(&version) {
             NAMED_REREAD
         } else {
             ""
         };
+        let made =
+            if version >= 12 || (version > 0 && has_column(connection, "session_prs", "made")?) {
+                ""
+            } else {
+                MADE_COLUMN
+            };
         let pane_seen = if version >= 11 {
             String::new()
         } else if version > 0 && has_column(connection, "sessions", "pane_first_at")? {
@@ -2437,7 +2460,7 @@ fn migrate(connection: &Connection) -> Result<(), OpenFailure> {
         };
         connection
             .execute_batch(&format!(
-                "BEGIN IMMEDIATE; {initial} {work_ledger} {origins} {backlog} {aliases} {observations} {metadata} {flows} {closed_flows} {plans} {named} {reread} {pane_seen} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;"
+                "BEGIN IMMEDIATE; {initial} {work_ledger} {origins} {backlog} {aliases} {observations} {metadata} {flows} {closed_flows} {plans} {named} {made} {reread} {pane_seen} PRAGMA user_version={SCHEMA_VERSION}; COMMIT;"
             ))
             .map_err(|error| {
                 let _ = connection.execute_batch("ROLLBACK");

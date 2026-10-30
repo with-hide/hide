@@ -1775,6 +1775,82 @@ fn a_record_from_before_named_pull_requests_reads_its_files_again_and_finds_them
     );
 }
 
+/// The review of #1859: mission-13's #1810 to #1813 were printed by the
+/// `gh pr create` that made them up to 3.2 s before GitHub's `createdAt`, on
+/// another clock, and fell outside the -2 s edge. The call that made one is
+/// its maker at any distance; a listing printed as early stays a look.
+#[test]
+fn a_session_whose_creating_call_printed_the_address_made_it_whatever_the_clocks_say() {
+    let home = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let mut store = open(state.path());
+    store
+        .apply_project(&project(vec![pr(7, "feat/x", T0, None)]), T0)
+        .unwrap();
+    // `claude_call` prints the address 2 s after the request.
+    let made = claude_call(
+        home.path(),
+        "s-make",
+        ROOT,
+        T0 - 5_400,
+        "PR 올려줘",
+        "cat > /tmp/body.md <<'EOF'\nbody\nEOF\ngh pr create --repo acme/app --body-file /tmp/body.md",
+        Some(7),
+    );
+    let listed = claude_call(
+        home.path(),
+        "s-list",
+        ROOT,
+        T0 - 5_000,
+        "열린 PR 보여줘",
+        "gh pr list",
+        Some(7),
+    );
+    ingest(&mut store, home.path(), &made);
+    ingest(&mut store, home.path(), &listed);
+    assert_eq!(
+        roles(&panel(&store, 7)),
+        vec![("s-make", SessionRole::Created, Some("PR 올려줘"))]
+    );
+}
+
+/// `made` (version 12): a record from before it gains the column and reads
+/// every file again, so a pull request made before the upgrade is found.
+#[test]
+fn a_record_from_before_made_pull_requests_reads_its_files_again() {
+    let home = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let path = state.path().join("links.sqlite3");
+    let made = claude_call(
+        home.path(),
+        "s-make",
+        ROOT,
+        T0 - 5_400,
+        "PR 올려줘",
+        "gh pr create --fill",
+        Some(7),
+    );
+    {
+        let (mut store, _) = LinkStore::open(&path).unwrap();
+        store
+            .apply_project(&project(vec![pr(7, "feat/x", T0, None)]), T0)
+            .unwrap();
+        ingest(&mut store, home.path(), &made);
+        store
+            .connection
+            .execute_batch("ALTER TABLE session_prs DROP COLUMN made; PRAGMA user_version=11;")
+            .unwrap();
+    }
+    let (mut store, _) = LinkStore::open(&path).unwrap();
+    assert!(panel(&store, 7).is_empty(), "nothing said it was made");
+    assert_eq!(store.checkpoint(DEVICE, &made).unwrap(), None);
+    ingest(&mut store, home.path(), &made);
+    assert_eq!(
+        roles(&panel(&store, 7)),
+        vec![("s-make", SessionRole::Created, Some("PR 올려줘"))]
+    );
+}
+
 /// `pane_first_at` (version 11): an upgrade marks every session the record
 /// already held, so only a session no pane carried before is first, once.
 #[test]

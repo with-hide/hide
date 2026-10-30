@@ -1005,7 +1005,7 @@ an active menu or plan approval, or an unread AI question, is `answer`; an unrea
 Reading an AI question skips only the demand step; another applicable duty, such as failed CI, still wins at its later step.
 Only the label gives `stopped` and `blocked` (D-33); `waiting` comes from `wait` alone: with summaries off, without a provider or after a failed analysis no row stops.
 The block also carries the label's `line` and `end` when there is one: the request view shows the line in place of the reply (B18) and both as the expanded row's verdict (B6); `end` is pinned as `label_end` in `contracts/snapshot-wire-enums.json`.
-A row's pull requests are its checkout branch's and those its session made: a tool in the session printed the address within thirty seconds of GitHub's `createdAt`, before or after it, since the two times are read on two clocks (D-31), judged once by the label worker and kept with the session's facts.
+A row's pull requests are its checkout branch's and those its session made, judged once by the label worker and kept with the session's facts (D-31): the output of a call that makes a pull request (`gh pr create`, a `gh api` POST to `repos/<owner>/<name>/pulls`, a `create_pull_request` tool) gave the address back, whatever the clocks say, or a tool printed it from 2 s before to 30 s after GitHub's `createdAt`.
 An address in a reply or a request is a mention and links nothing.
 A pull request on several rows gives its duty to one row, so `fix` and `review` appear once: on its branch's checkout the row nearest its lineage root (`lineage_depth`), then the one whose session printed it, then the lowest pane id; with no row there, the row whose session printed it first.
 Activity never decides, so agents on one checkout that take turns working never trade a pull request; an Observer and the implementor it spawned there keep it on the Observer's row, the one the 태스크 list draws, even when the implementor's session printed it.
@@ -1049,12 +1049,17 @@ Regression owners: `runtime::tests::session_state`, `request_view::tests`, `web/
 Every surface that draws a session's pull requests reads one list the core lays on its row, `row.pulls` (`agent_state::work::family`): the 태스크 row, the pane header, the 프로젝트 tree, the Overview task card and the session record's PR section.
 The list holds the pull requests the session holds the duty of or made, and every descendant's, live or ended.
 A live descendant is found by Herdr's lineage; an ended one by the link record's parent edges, which the link worker's summary carries (`SessionWorkSummary.parent`) beside the pull requests each recorded session made (`ProjectLinkSummary.creators`), so a child that ends leaves its pull requests on its parent's list.
-Each pull request is listed once by URL with every session that holds or made it (`holders`); `own` marks the ones the session itself holds or made, and a 프로젝트 tree child row and a tree popover child draw only those.
+Each pull request is listed once by URL with every session that holds or made it (`holders`); `own` marks the ones the session itself holds or made, and a 프로젝트 tree child row and a tree popover child draw only those, under a root that already draws the family.
+A 태스크 child row draws its session's whole list, as its pane header and its record do, so a middle session in A -> B -> C shows C's pull requests on its row too.
 Every merged pull request is listed, however long ago it merged, and a closed one stays listed after the merged ones, drawn dimmed; the list runs worst first by Pull request visual states, then by number, newest first.
 A pull request's state is GitHub's read while the project's list holds it.
+When this machine and a device both read it, the list takes a fresh read over a stale one, then the later read by each machine's own clock, then the worse state, so the order the reads arrive in never decides; two machines' clocks only order two reads GitHub gave within one poll of each other.
 That list holds only the 200 newest pull requests, so one past it keeps the state the link record last read (`merged`, `closed`, `ci_failed`, else pending), marked stale with that read's time, instead of leaving the list.
+Only a stale pull request carries its read time; a fresh one carries none, so GitHub answering the same again changes no list.
 A list holds at most 200 pull requests and counts the rest in `omitted`; crossing that writes one `pulls.capacity` diagnostic for the row.
-The record's `pr_groups` is laid from the same list, so a session's record and its row show the same pull requests in the same states.
+A list follows at most 2,000 recorded sessions down its lineage; past that it stops, and the same diagnostic says `lineage_capped`.
+The record's `pr_groups` is laid from the same capped list, with the same `pr_omitted`: each direct child's subtree says which of the list falls in its group, and one reached through no named child stays in the session's own group, so the section holds exactly what the row holds; a record past either cap writes one `record_pulls.capacity` diagnostic when it is laid.
+The record reads the link worker's summaries, as the rows do, and then its own tree for a session no summary holds.
 The lists are laid in the pass that settles every row's cross-row facts, in memory: the recorded side is rebuilt only when the link worker's summaries change, a row is published only when its list changed, and an open record's groups are copied only when they changed, so a GitHub read or a summary that moves nothing publishes nothing.
 
 ### The session work record

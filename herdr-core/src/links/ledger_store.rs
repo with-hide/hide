@@ -3,7 +3,7 @@
 use super::{LinkStore, ProjectPass, SessionKey, failed};
 use crate::labels::analysis::LabelEnd;
 use crate::links::ledger::*;
-use crate::links::{CREATED_WITHIN_MS, SUMMARY_SESSION_LIMIT};
+use crate::links::{CREATED_AFTER_MS, CREATED_BEFORE_MS, SUMMARY_SESSION_LIMIT};
 use rusqlite::{OptionalExtension, Transaction, params};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -2351,9 +2351,9 @@ pub(super) fn refresh_outputs(tx: &Transaction<'_>) -> Result<(), String> {
             SELECT s.device,s.agent,s.id,'pr',s.repo_name,p.number,p.title,p.url,CASE WHEN p.merged_at IS NOT NULL THEN 'merged' \
             WHEN p.closed_at IS NOT NULL THEN 'closed' ELSE 'open' END,p.created_at,s.at \
             FROM session_prs s JOIN repo_names n ON n.name=s.repo_name JOIN prs p ON p.repo=n.repo AND p.number=s.number \
-            WHERE p.created_at IS NOT NULL AND abs(s.at-p.created_at)<=?1 \
+            WHERE p.created_at IS NOT NULL AND (s.made=1 OR (s.at>=p.created_at-?1 AND s.at<=p.created_at+?2)) \
             ON CONFLICT(device,agent,id,kind,repo,number) DO UPDATE SET title=excluded.title,url=excluded.url,state=excluded.state",
-            params![CREATED_WITHIN_MS as i64]).map_err(failed)?;
+            params![CREATED_BEFORE_MS as i64,CREATED_AFTER_MS as i64]).map_err(failed)?;
     // The label judged these pull requests made by the session against
     // GitHub's creation time (`SessionFacts::judge_created`), so a sighting
     // the link reader's window missed still finds its session (D-14, B21).
@@ -2367,9 +2367,9 @@ pub(super) fn refresh_outputs(tx: &Transaction<'_>) -> Result<(), String> {
     tx.execute("INSERT INTO ledger_outputs(device,agent,id,kind,repo,number,title,url,state,created_at,sighted_at) \
             SELECT s.device,s.agent,s.id,s.kind,s.repo,s.number,f.title,f.url,f.state,f.created_at,s.at \
             FROM ledger_sightings s JOIN ledger_output_facts f ON f.repo=s.repo AND f.kind=s.kind AND f.number=s.number \
-            WHERE f.created_at IS NOT NULL AND abs(s.at-f.created_at)<=?1 \
+            WHERE f.created_at IS NOT NULL AND s.at>=f.created_at-?1 AND s.at<=f.created_at+?2 \
             ON CONFLICT(device,agent,id,kind,repo,number) DO UPDATE SET title=excluded.title,url=excluded.url,state=excluded.state",
-            params![CREATED_WITHIN_MS as i64]).map_err(failed)?;
+            params![CREATED_BEFORE_MS as i64,CREATED_AFTER_MS as i64]).map_err(failed)?;
     tx.execute("UPDATE ledger_outputs SET state=COALESCE((SELECT f.state FROM ledger_output_facts f WHERE f.kind=ledger_outputs.kind AND f.number=ledger_outputs.number AND (f.repo=ledger_outputs.repo OR f.repo=(SELECT name FROM repo_names n WHERE n.repo=ledger_outputs.repo LIMIT 1))),state)",[]).map_err(failed)?;
     // GitHub may arrive after END. Retain the proposed number and the
     // resolving turn, then attach only that turn's verified creation.

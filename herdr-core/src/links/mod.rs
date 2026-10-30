@@ -78,20 +78,23 @@ pub const BACKFILL_MS: u64 = 90 * DAY_MS;
 pub const OPEN_EXCEPTION_MS: u64 = 365 * DAY_MS;
 pub const DAY_MS: u64 = 86_400_000;
 /// The created-PR judgement (D-31, D-44), the link record's and the label
-/// worker's (`labels/facts.rs`): an address first printed within this
-/// distance of GitHub's `createdAt`, either way. The two times come from two
-/// clocks, the session's machine's and GitHub's, and a tool's print stood up
-/// to 3.4 s before GitHub's time on a synchronized Mac, so no side of the
-/// window assumes the clocks agree. The early side admits no new kind of
-/// print: nothing can print an address before its pull request exists, so a
-/// print that reads early does so by the clocks alone, and a session that
-/// printed it then is one the late side already admits.
-pub const CREATED_WITHIN_MS: u64 = 30_000;
+/// worker's (`labels/facts.rs`): an address the output of a call that makes a
+/// pull request gave back is the session's making of it, whenever the clocks
+/// put it (`hide_session::links::PrMark::made`); any other print is the
+/// making only when first printed within this window of GitHub's
+/// `createdAt`. A print reads before `createdAt` by the two clocks alone, the
+/// session machine's and GitHub's, so the early side stays narrow: a listing
+/// another session printed then must not read as a making.
+pub const CREATED_BEFORE_MS: u64 = 2_000;
+pub const CREATED_AFTER_MS: u64 = 30_000;
 
-/// Whether an address printed at `printed` is the making of a pull request
-/// GitHub made at `created` ([`CREATED_WITHIN_MS`]).
-pub fn printed_at_creation(printed: u64, created: u64) -> bool {
-    printed.abs_diff(created) <= CREATED_WITHIN_MS
+/// Whether a print at `printed` is the making of a pull request GitHub made
+/// at `created`: `made` by its call, or within the window.
+pub fn made_by_print(made: bool, printed: u64, created: Option<u64>) -> bool {
+    made || created.is_some_and(|created| {
+        printed.saturating_add(CREATED_BEFORE_MS) >= created
+            && printed <= created.saturating_add(CREATED_AFTER_MS)
+    })
 }
 
 /// One registered project as the runtime knows it, handed to the worker
