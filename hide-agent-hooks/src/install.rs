@@ -374,9 +374,7 @@ pub(crate) fn hook_matcher(runtime: AgentRuntime, event: HookEvent) -> Option<&'
     match (runtime, event) {
         // Claude Code's end of every call reaches the helper: the end of the
         // call a permission waited on is what says the turn runs again.
-        (AgentRuntime::ClaudeCode, HookEvent::PostToolUse | HookEvent::PostToolUseFailure) => {
-            None
-        }
+        (AgentRuntime::ClaudeCode, HookEvent::PostToolUse | HookEvent::PostToolUseFailure) => None,
         (_, HookEvent::PostToolUse | HookEvent::PostToolUseFailure) => Some("Bash|PowerShell"),
         // Claude Code's notifications that a turn waits on the operator, or
         // rests at the prompt after an interrupt.
