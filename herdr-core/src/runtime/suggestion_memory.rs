@@ -2,8 +2,9 @@
 //! B12): a Memory card's way into the repository's documents, which the
 //! tab took over from the Memory tab. Memory still decides which card is
 //! suggested and follows its promotion (`memory_promotion`); this module
-//! only draws what the Memory section already holds as rows, and hands a
-//! row's press back to Memory's own action.
+//! draws what the Memory section already holds as rows, and hands a row's
+//! press back to Memory's own action, holding the press on its row until a
+//! read of the store shows what it did.
 
 use super::*;
 use crate::model::{
@@ -32,6 +33,120 @@ pub(super) struct MemoryFacts {
     /// The text of each card offered for the documents, which its row shows
     /// when it opens, by card.
     bodies: Vec<(u64, Option<String>)>,
+    /// The rows' presses on cards that no read has answered yet, by card.
+    pressed: Vec<(u64, Pressed)>,
+}
+
+/// What a row draws of a press on its card before a read of the store shows
+/// what the press did.
+#[derive(Clone, Debug, PartialEq)]
+enum Pressed {
+    /// The card is on its way into the documents from the press on.
+    Promoting { pressed_at_unix_ms: u64 },
+    /// The card's dismissal is underway; its row is out of the tab.
+    Dismissing,
+    /// The promotion did not start, and why.
+    Refused {
+        refusal: Refusal,
+        pressed_at_unix_ms: u64,
+    },
+}
+
+/// Why a press did not start: the code the tab words, and the core's
+/// sentence, which the tab shows only under a code it has no words for.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct Refusal {
+    code: &'static str,
+    reason: String,
+}
+
+impl Refusal {
+    /// A refusal Memory answered with `kind` (`memory.branches_full`).
+    pub(super) fn of(kind: &str, reason: String) -> Self {
+        let code = match kind {
+            "memory.branches_full" => "branches_full",
+            "memory.not_git" => "not_git",
+            "memory.promotion_unavailable" => "promotion_unavailable",
+            "memory.action_busy" => "action_busy",
+            "memory.presses_full" => "presses_full",
+            "memory.worker_unavailable" | "memory.worker_failed" => "store_unavailable",
+            "memory.project_unavailable" => "project_unavailable",
+            "memory.project_unreachable" => "project_unreachable",
+            // The store's own refusals each say something different
+            // (`m3 is no longer in Memory`), so their sentence is the reason.
+            _ => "not_started",
+        };
+        Self { code, reason }
+    }
+}
+
+/// The most row presses held at once; settled ones give way, oldest first.
+const ROW_PRESSES: usize = 16;
+/// The most presses waiting or running at once; a press past it is refused
+/// on its row.
+const PRESSES_UNDERWAY: usize = 8;
+
+/// The 제안 rows' presses on Memory cards. Memory runs one action at a
+/// time and a promotion's action lasts until its agent started, so a press
+/// meanwhile waits here for its turn rather than being refused; each press
+/// is kept until the read after its write lands, so its row hands over to
+/// what the store says without going back to its button.
+#[derive(Default)]
+pub(super) struct RowPresses(Vec<RowPress>);
+
+struct RowPress {
+    workspace_id: String,
+    number: u64,
+    action: MemoryAction,
+    pressed_at_unix_ms: u64,
+    stage: PressStage,
+}
+
+#[derive(PartialEq)]
+enum PressStage {
+    /// Behind the Memory action that runs; it starts when that one ends.
+    Waiting,
+    /// Its write runs.
+    Running,
+    /// Written; a read of this generation or later shows what it did.
+    Written(u64),
+    /// Refused or failed before the store took it, with why.
+    Refused(Refusal),
+}
+
+impl RowPress {
+    fn underway(&self) -> bool {
+        matches!(self.stage, PressStage::Waiting | PressStage::Running)
+    }
+
+    fn of(&self, workspace_id: &str, number: u64) -> bool {
+        self.workspace_id == workspace_id && self.number == number
+    }
+
+    fn drawn(&self) -> Option<Pressed> {
+        match (&self.stage, self.action) {
+            (PressStage::Refused(refusal), MemoryAction::Promote) => Some(Pressed::Refused {
+                refusal: refusal.clone(),
+                pressed_at_unix_ms: self.pressed_at_unix_ms,
+            }),
+            // A refused dismissal leaves the row as it was; Memory reports
+            // why.
+            (PressStage::Refused(_), _) => None,
+            (_, MemoryAction::Dismiss) => Some(Pressed::Dismissing),
+            (_, _) => Some(Pressed::Promoting {
+                pressed_at_unix_ms: self.pressed_at_unix_ms,
+            }),
+        }
+    }
+}
+
+impl RowPresses {
+    /// A read of `generation` landed: the presses it shows are let go.
+    pub(super) fn shown(&mut self, generation: u64) {
+        self.0.retain(
+            |press| !matches!(press.stage, PressStage::Written(written) if written <= generation),
+        );
+    }
 }
 
 /// A card on its way into the documents, from the Memory list.
@@ -121,9 +236,18 @@ impl Runtime {
                 (number, body)
             })
             .collect();
+        let pressed = self
+            .project_memory
+            .presses
+            .0
+            .iter()
+            .filter(|press| press.workspace_id == workspace_id)
+            .filter_map(|press| Some((press.number, press.drawn()?)))
+            .collect();
         Some(MemoryFacts {
             workspace_id: workspace_id.to_owned(),
             bodies,
+            pressed,
             questions,
             promoting: self.suggestions_work.promoting.promoting.clone(),
             turns,
@@ -151,20 +275,113 @@ impl Runtime {
     }
 
     /// A press on a Memory row is Memory's own action on its card: apply and
-    /// retry promote it, dismiss is `안 올림` (B29).
+    /// retry promote it, dismiss is `안 올림` (B29). The row shows the press
+    /// at once; behind another Memory action it waits for that one to end.
     pub(super) fn apply_memory_row_action(
         &mut self,
         workspace_id: String,
         number: u64,
         action: MemoryAction,
     ) -> bool {
-        self.apply_memory_action(events::MemoryActionPayload {
-            numbers: Vec::new(),
+        let presses = &mut self.project_memory.presses.0;
+        // A second press on a card underway is the same intent (rule 11).
+        if presses
+            .iter()
+            .any(|press| press.of(&workspace_id, number) && press.underway())
+        {
+            return false;
+        }
+        presses.retain(|press| !press.of(&workspace_id, number));
+        let stage = if presses.iter().filter(|press| press.underway()).count() < PRESSES_UNDERWAY {
+            PressStage::Waiting
+        } else {
+            crate::diagnostic!(serde_json::json!({
+                "component": "memory", "kind": "memory.presses_full",
+                "workspace_id": workspace_id, "card": hide_memory::card_name(number),
+            }));
+            PressStage::Refused(Refusal::of(
+                "memory.presses_full",
+                "Too many Memory changes are waiting; press again when one finishes".into(),
+            ))
+        };
+        presses.push(RowPress {
             workspace_id,
+            number,
             action,
-            number: Some(number),
-            change: None,
-        })
+            pressed_at_unix_ms: super::memory::now_ms(),
+            stage,
+        });
+        while presses.len() > ROW_PRESSES {
+            let Some(settled) = presses.iter().position(|press| !press.underway()) else {
+                break;
+            };
+            presses.remove(settled);
+        }
+        self.run_row_presses();
+        true
+    }
+
+    /// Starts the waiting presses in the order they came while no Memory
+    /// action runs; a refused one is drawn refused on its row.
+    pub(super) fn run_row_presses(&mut self) {
+        while self.project_memory.action.is_none() {
+            let Some(press) = self
+                .project_memory
+                .presses
+                .0
+                .iter_mut()
+                .find(|press| press.stage == PressStage::Waiting)
+            else {
+                return;
+            };
+            press.stage = PressStage::Running;
+            let workspace_id = press.workspace_id.clone();
+            let number = press.number;
+            let action = press.action;
+            let refused = self.begin_memory_action(events::MemoryActionPayload {
+                numbers: Vec::new(),
+                workspace_id: workspace_id.clone(),
+                action,
+                number: Some(number),
+                change: None,
+            });
+            if let Err(refusal) = refused {
+                self.settle_row_press(
+                    &workspace_id,
+                    number,
+                    Err(Refusal::of(refusal.kind, refusal.message.clone())),
+                );
+                self.memory_action_failed(
+                    &workspace_id,
+                    action,
+                    refusal.kind,
+                    refusal.message,
+                    refusal.retryable,
+                );
+            }
+        }
+    }
+
+    /// The running press on card `number` was written, to be shown by a
+    /// read of the given generation, or refused with why.
+    pub(super) fn settle_row_press(
+        &mut self,
+        workspace_id: &str,
+        number: u64,
+        outcome: Result<u64, Refusal>,
+    ) {
+        if let Some(press) = self
+            .project_memory
+            .presses
+            .0
+            .iter_mut()
+            .find(|press| press.of(workspace_id, number) && press.stage == PressStage::Running)
+        {
+            press.stage = match outcome {
+                Ok(generation) => PressStage::Written(generation),
+                Err(refusal) => PressStage::Refused(refusal),
+            };
+        }
     }
 }
 
@@ -191,13 +408,48 @@ pub(super) fn lay_memory_rows(project: &mut ProjectSuggestionsSnapshot, facts: &
     let mut room = project.settings.quantity.open_cap().saturating_sub(open);
     let mut drawn = BTreeSet::new();
     for question in &facts.questions {
-        let row = match question {
-            MemoryQuestionSnapshot::Promote {
-                number,
-                title,
-                human_session_count,
-                pulled_session_count,
-            } => {
+        let (number, title) = match question {
+            MemoryQuestionSnapshot::Promote { number, title, .. }
+            | MemoryQuestionSnapshot::Failed { number, title, .. }
+            | MemoryQuestionSnapshot::Unbuilt { number, title, .. } => (*number, title),
+            MemoryQuestionSnapshot::DocsDisagree { .. } => continue,
+        };
+        let pressed = facts
+            .pressed
+            .iter()
+            .find(|(card, _)| *card == number)
+            .map(|(_, pressed)| pressed);
+        let row = match (question, pressed) {
+            (_, Some(Pressed::Dismissing)) => continue,
+            (_, Some(Pressed::Promoting { pressed_at_unix_ms })) => {
+                pressed_row(number, title, *pressed_at_unix_ms)
+            }
+            (
+                _,
+                Some(Pressed::Refused {
+                    refusal,
+                    pressed_at_unix_ms,
+                }),
+            ) => {
+                let mut row = row(
+                    number,
+                    title,
+                    SuggestionGroup::of_attempt(SuggestionAttemptPhase::Failed),
+                    SuggestionState::MyTurn,
+                );
+                row.cause = Some(refusal.reason.clone());
+                row.attempt = Some(ended(*pressed_at_unix_ms, refusal.code));
+                row
+            }
+            (
+                MemoryQuestionSnapshot::Promote {
+                    number,
+                    title,
+                    human_session_count,
+                    pulled_session_count,
+                },
+                None,
+            ) => {
                 if !offered || room == 0 {
                     continue;
                 }
@@ -219,11 +471,14 @@ pub(super) fn lay_memory_rows(project: &mut ProjectSuggestionsSnapshot, facts: &
                 });
                 row
             }
-            MemoryQuestionSnapshot::Failed {
-                number,
-                title,
-                start_failure,
-            } => {
+            (
+                MemoryQuestionSnapshot::Failed {
+                    number,
+                    title,
+                    start_failure,
+                },
+                None,
+            ) => {
                 let mut row = row(
                     *number,
                     title,
@@ -245,11 +500,14 @@ pub(super) fn lay_memory_rows(project: &mut ProjectSuggestionsSnapshot, facts: &
                 ));
                 row
             }
-            MemoryQuestionSnapshot::Unbuilt {
-                number,
-                title,
-                reason,
-            } => {
+            (
+                MemoryQuestionSnapshot::Unbuilt {
+                    number,
+                    title,
+                    reason,
+                },
+                None,
+            ) => {
                 let mut row = row(
                     *number,
                     title,
@@ -260,7 +518,7 @@ pub(super) fn lay_memory_rows(project: &mut ProjectSuggestionsSnapshot, facts: &
                 row.attempt = Some(ended(started_at(facts, *number), "unbuilt"));
                 row
             }
-            MemoryQuestionSnapshot::DocsDisagree { .. } => continue,
+            (MemoryQuestionSnapshot::DocsDisagree { .. }, None) => continue,
         };
         drawn.insert(row.id.clone());
         project.rows.push(row);
@@ -340,6 +598,24 @@ fn row(
         memory_cards: Vec::new(),
         memory: None,
     }
+}
+
+/// A row pressed to fix the documents, drawn working from the press until
+/// the store's promotion takes its place.
+fn pressed_row(number: u64, title: &str, pressed_at_unix_ms: u64) -> SuggestionRowSnapshot {
+    let mut row = row(
+        number,
+        title,
+        SuggestionGroup::Applying,
+        SuggestionState::HideAiWorking,
+    );
+    row.memory_cards = vec![number];
+    row.attempt = Some(SuggestionAttemptSnapshot {
+        phase: SuggestionAttemptPhase::Working,
+        failure: None,
+        ..ended(pressed_at_unix_ms, "")
+    });
+    row
 }
 
 fn started_at(facts: &MemoryFacts, number: u64) -> u64 {
@@ -525,6 +801,7 @@ mod tests {
     fn a_cards_way_into_the_documents_is_drawn_as_a_suggestion_row() {
         let mut project = tab();
         let facts = MemoryFacts {
+            pressed: Vec::new(),
             bodies: Vec::new(),
             workspace_id: "w".into(),
             questions: vec![
@@ -616,6 +893,7 @@ mod tests {
             pulled_session_count: 0,
         };
         let facts = MemoryFacts {
+            pressed: Vec::new(),
             bodies: Vec::new(),
             workspace_id: "w".into(),
             questions: vec![promote(1), promote(2), promote(3)],
@@ -646,6 +924,63 @@ mod tests {
             .map(|row| row.id.as_str())
             .collect::<Vec<_>>();
         assert_eq!(ids, ["m4"]);
+    }
+
+    /// A press is drawn on its row until a read answers it: a promotion
+    /// working from the press, a refused one failed with why, a dismissal
+    /// out of the tab.
+    #[test]
+    fn a_press_is_drawn_on_its_row_until_a_read_answers_it() {
+        let promote = |number: u64| MemoryQuestionSnapshot::Promote {
+            number,
+            title: format!("card {number}"),
+            human_session_count: 2,
+            pulled_session_count: 0,
+        };
+        let facts = MemoryFacts {
+            workspace_id: "w".into(),
+            questions: vec![promote(1), promote(2), promote(3)],
+            pressed: vec![
+                (
+                    1,
+                    Pressed::Promoting {
+                        pressed_at_unix_ms: 7,
+                    },
+                ),
+                (
+                    2,
+                    Pressed::Refused {
+                        refusal: Refusal::of("memory.branches_full", "busy".into()),
+                        pressed_at_unix_ms: 8,
+                    },
+                ),
+                (3, Pressed::Dismissing),
+            ],
+            ..MemoryFacts::default()
+        };
+        let mut project = tab();
+        lay_memory_rows(&mut project, &facts);
+        use SuggestionGroup as G;
+        use SuggestionState as S;
+        assert_eq!(
+            drawn(&project),
+            [
+                ("m2", G::Choose, S::MyTurn),
+                ("m1", G::Applying, S::HideAiWorking)
+            ]
+        );
+        let working = project.rows[1].attempt.as_ref().unwrap();
+        assert_eq!(
+            (working.phase, working.started_at_unix_ms),
+            (SuggestionAttemptPhase::Working, 7)
+        );
+        assert_eq!(project.rows[1].memory_cards, [1]);
+        let refused = &project.rows[0];
+        assert_eq!(refused.cause.as_deref(), Some("busy"));
+        assert_eq!(
+            refused.attempt.as_ref().unwrap().failure.as_deref(),
+            Some("branches_full")
+        );
     }
 
     #[test]
