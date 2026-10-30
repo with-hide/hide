@@ -22,6 +22,13 @@ vi.mock("./overviewGraphLayout", () => ({
   useOverviewGraphLayout: () => ({ phase: "failed", size: null, points: new Map(), map: null, reset: () => {} }),
   useGraphTheme: () => "light",
 }));
+// The map's node budget is 400; what these tests claim holds for a project past any budget, and filling
+// 400 nodes made the overflow case take up to 5.8 s on the Windows runner (hide-private issue 145).
+// Every project takes its name and one access slot, so BUDGET / 2 projects fill the map and one more is left out.
+const { BUDGET } = vi.hoisted(() => ({ BUDGET: 8 }));
+vi.mock("./dependencyLayout", async (importOriginal) => ({ ...await importOriginal<typeof import("./dependencyLayout")>(), LAYOUT_NODE_LIMIT: BUDGET }));
+const OUTSIDE = BUDGET / 2;
+const OUTSIDE_PROJECT = `project-${String(OUTSIDE).padStart(3, "0")}`;
 const savedShell = useShellStore.getState();
 const savedUi = useUiStore.getState();
 afterEach(() => {
@@ -46,7 +53,7 @@ it.each([
   const checkout: Checkout = { id: "checkout", workspace_id: "project", label: "main", path: "/fixture/project", branch: "main", purpose: null, is_worktree: false, exists: true, has_panes: true, pull_request: null, tabs: [], active_tab_id: null, next_tab_label: "Tab 1", strip: [], agent_scope: emptyScope() };
   const workspace: Workspace = { id: "project", label: "Project", device_id: device, path: "/fixture/project", registered: true, temporary: false, pinned: false, checkouts: [checkout], inactive_checkouts: { expanded: false, checkout_ids: [] }, agent_scope: { ...emptyScope(), members: [{ pane_id: pane, project_id: "project", checkout_id: checkout.id }] } };
   const project: BoardProject = { workspace, agents: [agent], device: device === "local" ? null : "Mini" };
-  const projects = overflow ? Array.from({ length: 401 }, (_, index): BoardProject => {
+  const projects = overflow ? Array.from({ length: OUTSIDE + 1 }, (_, index): BoardProject => {
     const id = `project-${String(index).padStart(3, "0")}`;
     const paneId = `pane-${index}`;
     const row = { ...agent, id: paneId, pane_id: paneId, identity_label: `Session ${index}`, session_id: `native-${index}` };
@@ -72,18 +79,19 @@ it.each([
     expect(container.querySelector("[data-graph-preview]")).toBeNull();
     expect(container.querySelector("[data-graph-session-list] > button")?.getAttribute("aria-pressed")).toBe(String(!overflow && front === device));
     if (overflow) {
+      expect(container.querySelector(".og-notice")?.textContent).toContain(`Up to ${BUDGET} visible nodes`);
       const search = container.querySelector<HTMLInputElement>("[data-graph-session-list] input")!;
       await act(async () => {
-        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(search, "Session 400");
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(search, `Session ${OUTSIDE}`);
         search.dispatchEvent(new Event("input", { bubbles: true }));
       });
       await act(async () => container.querySelector<HTMLButtonElement>("[data-graph-session-list] > button")!.click());
-      expect(useUiStore.getState().overview.projectId).toBe("project-400");
-      expect(container.querySelector("[data-graph-preview]")?.textContent).toContain("Session 400");
+      expect(useUiStore.getState().overview.projectId).toBe(OUTSIDE_PROJECT);
+      expect(container.querySelector("[data-graph-preview]")?.textContent).toContain(`Session ${OUTSIDE}`);
       expect(container.querySelector("[data-graph-session-list] > button")?.getAttribute("aria-pressed")).toBe("true");
       expect(events).toHaveLength(0);
       await act(async () => useUiStore.getState().setOverview({ projectId: null }));
-      await act(async () => useUiStore.getState().setOverview({ projectId: "project-400" }));
+      await act(async () => useUiStore.getState().setOverview({ projectId: OUTSIDE_PROJECT }));
       expect(container.querySelector("[data-graph-preview]")).toBeNull();
       return;
     }
@@ -321,7 +329,7 @@ it("opens the project scope for a pane outside the graph budget", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("CSS", { escape: (value: string) => value });
   initializeInterfaceI18n("en");
-  const projects = Array.from({ length: 401 }, (_, index): BoardProject => {
+  const projects = Array.from({ length: OUTSIDE + 1 }, (_, index): BoardProject => {
     const id = `project-${String(index).padStart(3, "0")}`;
     const pane = `pane-${index}`;
     const checkout: Checkout = { id: `${id}-main`, workspace_id: id, label: "main", path: `/fixture/${id}`, branch: "main", purpose: null, is_worktree: false, exists: true, has_panes: true, pull_request: null, tabs: [], active_tab_id: null, next_tab_label: "Tab 1", strip: [], agent_scope: emptyScope() };
@@ -337,10 +345,10 @@ it("opens the project scope for a pane outside the graph budget", async () => {
   document.body.append(container);
   const reactRoot = createRoot(container);
   try {
-    actions.openPaneInOverview("pane-400");
+    actions.openPaneInOverview(`pane-${OUTSIDE}`);
     await act(async () => reactRoot.render(<TooltipProvider><OverviewGraph projects={projects} deviceId="local" actions={actions} /></TooltipProvider>));
-    expect(useUiStore.getState().overview.projectId).toBe("project-400");
-    expect(container.querySelector("[data-graph-preview] .og-details-head")?.textContent).toContain("Session 400");
+    expect(useUiStore.getState().overview.projectId).toBe(OUTSIDE_PROJECT);
+    expect(container.querySelector("[data-graph-preview] .og-details-head")?.textContent).toContain(`Session ${OUTSIDE}`);
   } finally { await act(async () => reactRoot.unmount()); }
 });
 
