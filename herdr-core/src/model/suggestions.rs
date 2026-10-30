@@ -324,10 +324,6 @@ pub enum SuggestionHold {
     /// GitHub (D-41). A document fix never waits on it (PRD
     /// hide-ai-branch-first-apply D-03).
     GithubNeeded,
-    /// The Project already has five branches waiting for the operator's
-    /// decision, so no new fix starts until one is decided (PRD
-    /// hide-ai-branch-first-apply D-17, B28).
-    BranchesFull,
     /// An automatic pull request nobody reviewed yet holds the next one
     /// (D-29).
     AutoPrUnreviewed,

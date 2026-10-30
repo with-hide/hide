@@ -250,7 +250,8 @@ impl Runtime {
             engine,
             context.runtime.clone(),
             context.notifier.clone(),
-        );
+        )
+        .with_hook_facts(self.hook_facts());
         // Its machine is read through its node, as this machine is through
         // its own: a node that dials in, and a WSL distribution of this PC.
         if registration.origin.reports_own_facts() {

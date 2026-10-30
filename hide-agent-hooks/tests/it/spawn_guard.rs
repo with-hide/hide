@@ -25,6 +25,16 @@ pub(crate) const PANE: &str = "w1:p2";
 const FAKE_HIDE: &str = r#"#!/bin/sh
 [ "$1" = --help ] && exit 0
 fixture="${HOME%/*}"
+# A status report is kept apart from the calls, with the report it carried.
+if [ "$1 $2 $3" = "workspace status --hook" ]; then
+  { /bin/cat; echo; } >> "$fixture/hide-status"
+  if [ -f "$fixture/status-down" ]; then
+    echo '{"ok":false,"reason":"hide_unavailable","next_action":"Start Hide"}'
+    exit 2
+  fi
+  echo '{"ok":true,"result":{"recorded":true}}'
+  exit 0
+fi
 echo "$@" >> "$fixture/hide-calls"
 mode="$(/bin/cat "$fixture/mode")"
 # A daemon with no letter for the pane answers a tool event's ask with nothing.
@@ -208,6 +218,27 @@ impl Machine {
             .collect()
     }
 
+    /// The status reports the hooks sent to `hide workspace status --hook`.
+    pub(crate) fn status_reports(&self) -> Vec<serde_json::Value> {
+        std::fs::read_to_string(self.root.join("hide-status"))
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect()
+    }
+
+    /// Whether the stand-in refuses status reports as a daemon that is not
+    /// running does.
+    pub(crate) fn status_down(&self, down: bool) {
+        let flag = self.root.join("status-down");
+        if down {
+            std::fs::write(flag, "").unwrap();
+        } else {
+            let _ = std::fs::remove_file(flag);
+        }
+    }
+
     pub(crate) fn guard_log(&self) -> String {
         std::fs::read_to_string(self.home.join(".hide/agent-hooks/spawn-guard.log"))
             .unwrap_or_default()
@@ -330,6 +361,7 @@ fn what_is_not_a_launch_runs_and_never_asks_the_daemon() {
     }
     // B13: not even a process for `hide` was started for any of them.
     assert!(machine.calls().is_empty(), "{:?}", machine.calls());
+    assert!(machine.status_reports().is_empty());
     assert_eq!(machine.guard_log(), "");
 }
 

@@ -12,6 +12,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { agentRunner, type AgentRun, type HideAnswer } from "./agent-pane";
 import { startHerdr, type HerdrFixture } from "./herdr-fixture";
 import { startHided, type Daemon } from "./hided-fixture";
 import { enterWorkspace, screenshot } from "./wire";
@@ -242,13 +243,14 @@ test("a Grok file the operator removed or edited shows on its row until Reinstal
  * A pane of its own in the fixture's checkout that runs the stand-in `kind`, which Herdr classifies by the
  * program in the pane's foreground. Returns the pane once the sidebar lists its row.
  */
-async function agentPane(page: Page, herdr: HerdrFixture, kind: "grok" | "cursor"): Promise<string> {
+async function agentPane(page: Page, herdr: HerdrFixture, kind: "grok" | "cursor", beforeStart?: (pane: string) => void): Promise<string> {
   const created = herdr.run(["workspace", "create", "--cwd", path.join(herdr.root, "fixture"), "--label", kind, "--env", `PATH=${herdr.fixturePath}`, "--no-focus"]) as {
     result: { root_pane: { pane_id: string } };
   };
   const pane = created.result.root_pane.pane_id;
   const screen = () => execFileSync(herdr.bin, ["pane", "read", pane, "--source", "recent", "--lines", "10"], { env: herdr.env, encoding: "utf8", timeout: 10_000 });
   await expect.poll(screen, { message: `a prompt in pane ${pane}`, timeout: 20_000 }).toContain("fixture %");
+  beforeStart?.(pane);
   herdr.run(["agent", "start", kind, "--kind", kind, "--pane", pane]);
   await expect(page.locator(`nav[data-sidebar] [data-pane="${pane}"]`)).toBeVisible({ timeout: 30_000 });
   return pane;
@@ -265,6 +267,29 @@ function runHook(stack: Stack, pane: string, command: string, payload: unknown, 
     timeout: 20_000,
   });
   return { stdout: run.stdout, stderr: run.stderr, status: run.status };
+}
+
+/**
+ * A Grok pane whose hooks run from inside the agent's own process, as Grok runs them: hided takes a status report
+ * only from a process it proves runs in the pane. Start it after any other agent pane, since every agent the fixture
+ * starts from then on runs as Grok.
+ */
+async function grokAgentPane(page: Page, stack: Stack): Promise<{ pane: string; run: (command: string, payload: unknown, env: Record<string, string>) => Promise<{ stdout: string; status: number }> }> {
+  let asAgent: ((args: string[], run?: AgentRun) => Promise<HideAnswer>) | undefined;
+  const pane = await agentPane(page, stack.herdr, "grok", (pane) => {
+    asAgent = agentRunner(stack.herdr, stack.daemon.stateDir, pane, "grok");
+  });
+  return {
+    pane,
+    run: async (command, payload, env) => {
+      const ran = await asAgent!(["-c", command], {
+        program: "/bin/sh",
+        input: typeof payload === "string" ? payload : JSON.stringify(payload),
+        env: { HOME: stack.daemon.home, HIDE_STATE_DIR: stack.daemon.stateDir, ...env },
+      });
+      return { stdout: ran.out, status: ran.status };
+    },
+  };
 }
 
 /** The runtimes of the guard's refusals so far, in order: its own log, one `launch.refused` line each. */
@@ -320,27 +345,27 @@ test("installed Grok events update counts while a historical Cursor pane stays u
     await installedEverywhere(home, false);
     await expect.poll(() => wire.hook("grok")?.state, { timeout: 60_000 }).toBe("installed");
     expect(wire.hook("cursor")).toBeUndefined();
-    const grok = await agentPane(page, herdr, "grok");
     const cursor = await agentPane(page, herdr, "cursor");
+    const { pane: grok, run: asGrok } = await grokAgentPane(page, stack);
     const kinds = (herdr.run(["agent", "list"]) as { result: { agents: { pane_id: string; agent: string }[] } }).result.agents;
     expect([grok, cursor].map((pane) => kinds.find((agent) => agent.pane_id === pane)?.agent)).toEqual(["grok", "cursor"]);
-    const send = (pane: string, event: string, nativeEvent: string, payload: unknown) => {
-      const run = runHook(stack, pane, installed.grok(home, event), payload, GROK_ENV(nativeEvent));
-      expect(run.status, run.stderr).toBe(0);
+    const send = async (event: string, nativeEvent: string, payload: unknown) => {
+      const run = await asGrok(installed.grok(home, event), payload, GROK_ENV(nativeEvent));
+      expect(run.status, event).toBe(0);
       return run.stdout;
     };
 
     // B3, Grok: two subagents work; the turn ends with one still running in the background, which stays counted;
     // its own SubagentStop moves it to done.
-    send(grok, "SessionStart", "session_start", { sessionId: "grok-session" });
+    await send("SessionStart", "session_start", { sessionId: "grok-session" });
     await expect.poll(() => wire.pane(grok)?.instrumented, { timeout: 20_000 }).toBe(true);
-    for (const type of ["explore", "general"]) send(grok, "SubagentStart", "subagent_start", { sessionId: "grok-session", subagentType: type });
+    for (const type of ["explore", "general"]) await send("SubagentStart", "subagent_start", { sessionId: "grok-session", subagentType: type });
     await expect.poll(() => wire.counts(grok), { timeout: 20_000 }).toEqual([2, 0]);
     const background = { sessionId: "grok-session", reason: "end_turn", backgroundTasks: [{ id: "a", type: "subagent", status: "running", agentType: "general" }, { id: "b", type: "shell", status: "running", command: "npm run dev" }] };
-    send(grok, "Stop", "stop", background);
+    await send("Stop", "stop", background);
     await expect.poll(() => wire.counts(grok), { timeout: 20_000 }).toEqual([1, 0]);
-    send(grok, "Stop", "stop", { sessionId: "child", subagentType: "general", backgroundTasks: [] });
-    send(grok, "SubagentStop", "subagent_stop", { sessionId: "child", subagentType: "general" });
+    await send("Stop", "stop", { sessionId: "child", subagentType: "general", backgroundTasks: [] });
+    await send("SubagentStop", "subagent_stop", { sessionId: "child", subagentType: "general" });
     await expect.poll(() => wire.counts(grok), { timeout: 20_000 }).toEqual([0, 1]);
 
     // B31: historical Cursor classification remains readable, but stale session/subagent callbacks do no work.
@@ -365,7 +390,7 @@ test("inside Grok, only its own hook counts and refuses beside Claude compatibil
     await page.goto(`${stack.daemon.origin}/#token=${stack.daemon.token}`);
     await enterWorkspace(page, "fixture");
     await installedEverywhere(home, true);
-    const grok = await agentPane(page, herdr, "grok");
+    const { pane: grok, run: asGrok } = await grokAgentPane(page, stack);
     const cwd = path.join(herdr.root, "fixture");
     const start = `herdr agent start worker --kind claude --pane ${grok}`;
     // Each hook gets its own agent's documented payload for the one event, in the environment Grok gives all three.
@@ -379,13 +404,16 @@ test("inside Grok, only its own hook counts and refuses beside Claude compatibil
 
     // B4: one subagent start reaches Hide's Claude Code hook and Grok file, as Grok runs them (Cursor's entry has no
     // subagent event). One count results, in the hook's own record and in the core's snapshot, and none prints anything.
-    const started = everyHook("SubagentStart", "subagent_start", payloads("SubagentStart", { subagentType: "explore" }), ["claude", "grok"]);
-    for (const { agent, run } of started) expect({ agent, status: run.status, stdout: run.stdout }).toEqual({ agent, status: 0, stdout: "" });
+    const subagent = payloads("SubagentStart", { subagentType: "explore" });
+    for (const agent of ["claude", "grok"] as const) {
+      const run = await asGrok(installed[agent](home, "SubagentStart"), subagent[agent], GROK_ENV("subagent_start"));
+      expect({ agent, status: run.status, stdout: run.stdout }).toEqual({ agent, status: 0, stdout: "" });
+    }
     // The pane's record is the only one: no hook counted under another pane.
     const records = path.join(home, ".hide", "agent-hooks", "panes");
     const names = fs.readdirSync(records).filter((name) => name.endsWith(".json"));
     expect(names).toHaveLength(1);
-    expect(json(path.join(records, names[0]!))).toMatchObject({ working: 1, done: 0 });
+    expect(json(path.join(records, names[0]!))).toMatchObject({ sessions: [{ agent: "grok", working: 1, done: 0 }] });
     await expect.poll(() => wire.counts(grok), { timeout: 20_000 }).toEqual([1, 0]);
 
     // B4: a direct agent start is refused once: only Hide's Grok file answers, and the guard logs one refusal.

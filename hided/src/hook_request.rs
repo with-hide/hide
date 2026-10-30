@@ -56,6 +56,7 @@ pub(crate) fn valid(request: &HookRequest) -> bool {
                 session,
                 prompt,
             } => memory_ask(event, runtime, session, prompt).is_some(),
+            HookCommand::Status { report } => valid_status(report),
             HookCommand::LetterPull {
                 prompt_digest,
                 session,
@@ -112,6 +113,7 @@ pub(crate) fn answer(
             }
             result
         }),
+        HookCommand::Status { report } => status(core, cap, report),
         HookCommand::Memory {
             event,
             runtime,
@@ -169,6 +171,43 @@ fn observation_answer(
         );
         (reason, "Continue without the passive observation")
     })
+}
+
+/// A report names a known agent and, when it names one, a session id the
+/// delivery ledger would take.
+fn valid_status(report: &hide_node_link::panes::HookStatusReport) -> bool {
+    hide_agent_adapter::adapter(&report.runtime).is_some_and(|adapter| adapter.id == report.runtime)
+        && report
+            .session
+            .as_ref()
+            .is_none_or(|session| herdr_core::delivery::valid_session(session))
+}
+
+/// Records the hook's report on the pane the proof named. Only a caller
+/// proved to run in its pane reports: a checkout-bound caller (a hook in
+/// Codex's shared server) names no pane the report could be about. A refusal
+/// is written to the diagnostic log with the pane and the agent; nothing
+/// reaches the screen (PRD engine-bundle-1 B14, design principle 13).
+fn status(
+    core: &CoreHandle,
+    cap: &Capability,
+    report: &hide_node_link::panes::HookStatusReport,
+) -> Result<Value, Failure> {
+    cap.pane_terminal()
+        .ok_or("agent_pane_required")
+        .and_then(|_| core.hook_status(&cap.context.device_id, &cap.pane_id, report.clone()))
+        .map(|()| json!({"recorded": true}))
+        .map_err(|reason| {
+            herdr_core::diagnostic!(json!({
+                "component": "agent_hooks",
+                "kind": "status.refused",
+                "pane": cap.pane_id,
+                "device": cap.context.device_id,
+                "agent": report.runtime,
+                "reason": reason,
+            }));
+            (reason.to_owned(), "Continue without the status report")
+        })
 }
 
 fn workspace_info(core: &CoreHandle, cap: &Capability, desktop: bool) -> Result<Value, Failure> {

@@ -6178,3 +6178,32 @@ fn a_turn_end_reads_its_tool_count_and_hands_its_improvements_to_the_suggestions
         )]
     );
 }
+
+/// D-9: the session read that ends a hook's turn is the status's, not the
+/// labels': with the agent-summary switch off, a state change still reads
+/// the session file, and Claude Code's Esc reaches the row's facts for that
+/// state with no analysis asked.
+#[test]
+fn an_interruption_is_read_from_the_session_file_with_summaries_off() {
+    let harness = Harness::new();
+    let (mut worker, woken, source) = harness.worker(harness.store());
+    worker.set_summaries(false, Instant::now());
+    let path = harness.session("esc", "esc", &[("user", "로그를 찾아줘")]);
+    let interrupted = json!({"type":"user","sessionId":"esc","timestamp":"2026-10-01T00:00:09Z",
+        "message":{"role":"user","content":[{"type":"text","text":"[Request interrupted by user]"}]}});
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    std::io::Write::write_all(&mut file, format!("{interrupted}\n").as_bytes()).unwrap();
+
+    let done = agent(&path, "done", 5);
+    observe(&mut worker, &done);
+    settle(&mut worker, &woken);
+    assert_eq!(source.reads.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        shown_facts(&worker, &done).and_then(|facts| facts.turn_ended),
+        Some(hide_session::turns::TurnEnded::Interrupted)
+    );
+    assert_eq!(harness.backend.calls(), 0, "nothing is analyzed");
+}

@@ -64,6 +64,8 @@
   --color-accent-choice-violet: var(--accent-choice-violet);
   --color-accent-choice-amber: var(--accent-choice-amber);
   --color-device-remote: var(--device-remote);
+  --color-mention-session: var(--mention-session);
+  --color-mention-project: var(--mention-project);
   --color-warning: var(--warning);
   --color-success: var(--success);
   --color-agent-working: var(--agent-working);
@@ -429,6 +431,8 @@
   --accent-choice-violet: #a78bfa;
   --accent-choice-amber: #fb923c;
   --device-remote: var(--accent-choice-violet);
+  --mention-session: var(--file-blue);
+  --mention-project: var(--file-green);
   --warning: #b45309;
   --success: #15803d;
   --agent-working: #2563eb;
@@ -528,6 +532,8 @@
   --accent-choice-violet: #c4b5fd;
   --accent-choice-amber: #fdba74;
   --device-remote: var(--accent-choice-violet);
+  --mention-session: var(--file-blue);
+  --mention-project: var(--file-green);
   --warning: #ffb847;
   --success: #5ee69e;
   --agent-working: #61a6ff;

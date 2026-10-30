@@ -1,18 +1,16 @@
 //! Grok's active hooks and retired Cursor entries, run as
 //! each agent runs them: the compiled helper with the agent's documented
 //! payload on stdin, its documented environment, a stand-in `hide` that
-//! answers the daemon's calls, and a stand-in Herdr socket that records the
-//! pane reports. What it asserts is what the agent and Herdr observe: the
-//! answer on stdout, and the counts Herdr is told.
+//! answers the daemon's calls and keeps the status reports. What it asserts is
+//! what the agent and the core observe: the answer on stdout, and the counts
+//! the core is told.
 
 #![cfg(unix)]
 
-use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::UnixListener;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 #[cfg(target_os = "macos")]
 use std::time::Duration;
+
+use std::io::Write;
 
 use serde_json::{Value, json};
 
@@ -450,80 +448,16 @@ fn a_running_tool_receives_grok_letters_while_retired_cursor_takes_none() {
     assert_eq!(machine.calls().len(), 3);
 }
 
-/// A stand-in Herdr that answers every `pane.report_metadata` and keeps the
-/// tokens it was told, in order.
-struct Herdr {
-    socket: PathBuf,
-    reports: Arc<Mutex<Vec<Value>>>,
-    /// The folder the socket binds in, removed with the stand-in.
-    _folder: tempfile::TempDir,
-}
-
-impl Herdr {
-    fn start() -> Self {
-        // A Unix socket path is capped at SUN_LEN, so it binds under /tmp. The
-        // folder is the test's own: a name made from the pid and the clock was
-        // shared by two tests of this binary that started in the same
-        // microsecond (issue 932).
-        let folder = tempfile::Builder::new()
-            .prefix("hah-gc-")
-            .tempdir_in("/tmp")
-            .unwrap();
-        let dir = folder.path().to_path_buf();
-        let socket = dir.join("herdr.sock");
-        let listener = UnixListener::bind(&socket).unwrap();
-        let reports = Arc::new(Mutex::new(Vec::new()));
-        let kept = reports.clone();
-        std::thread::spawn(move || {
-            for stream in listener.incoming() {
-                let Ok(mut stream) = stream else { return };
-                let mut line = String::new();
-                if BufReader::new(&stream).read_line(&mut line).is_err() {
-                    continue;
-                }
-                let Ok(request) = serde_json::from_str::<Value>(&line) else {
-                    continue;
-                };
-                kept.lock()
-                    .unwrap()
-                    .push(request["params"]["tokens"].clone());
-                let _ = writeln!(
-                    stream,
-                    "{}",
-                    json!({"id": request["id"], "result": {"type": "ok"}})
-                );
-            }
-        });
-        Self {
-            socket,
-            reports,
-            _folder: folder,
-        }
-    }
-
-    /// `(working, done)` of every report so far.
-    fn counts(&self) -> Vec<(String, String)> {
-        self.reports
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|tokens| {
-                (
-                    tokens["hide_sub_working"].as_str().unwrap().to_owned(),
-                    tokens["hide_sub_done"].as_str().unwrap().to_owned(),
-                )
-            })
-            .collect()
-    }
-}
-
-impl Drop for Herdr {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.socket);
-        if let Some(dir) = self.socket.parent() {
-            let _ = std::fs::remove_dir(dir);
-        }
-    }
+/// `(working, done)` of every status report that carried counts, in order.
+fn counts(machine: &Machine) -> Vec<(String, String)> {
+    machine
+        .status_reports()
+        .iter()
+        .filter_map(|report| {
+            let counts = report.get("counts")?;
+            Some((counts["working"].to_string(), counts["done"].to_string()))
+        })
+        .collect()
 }
 
 fn pair(working: u32, done: u32) -> (String, String) {
@@ -533,13 +467,10 @@ fn pair(working: u32, done: u32) -> (String, String) {
 #[test]
 fn grok_counts_its_subagents_and_keeps_background_ones_past_the_turn() {
     let machine = Machine::new("registered");
-    let herdr = Herdr::start();
-    let socket = herdr.socket.display().to_string();
     let env = |event: &'static str| {
         vec![
             ("GROK_HOOK_EVENT", event),
             ("GROK_SESSION_ID", "grok-session"),
-            ("HERDR_SOCKET_PATH", socket.as_str()),
         ]
     };
     let grok = |event: &str, grok_event: &'static str, payload: &str| {
@@ -583,20 +514,15 @@ fn grok_counts_its_subagents_and_keeps_background_ones_past_the_turn() {
         r#"{"sessionId":"child","subagentType":"general"}"#,
     );
     assert_eq!(
-        herdr.counts(),
+        counts(&machine),
         [pair(0, 0), pair(1, 0), pair(2, 0), pair(1, 0), pair(0, 1)]
     );
 }
 
 #[test]
-fn retired_cursor_subagent_hooks_are_silent_and_tell_herdr_no_count() {
+fn retired_cursor_subagent_hooks_are_silent_and_report_no_count() {
     let machine = Machine::new("registered");
-    let herdr = Herdr::start();
-    let socket = herdr.socket.display().to_string();
-    let env = vec![
-        ("CURSOR_VERSION", "2026.10.01"),
-        ("HERDR_SOCKET_PATH", socket.as_str()),
-    ];
+    let env = vec![("CURSOR_VERSION", "2026.10.01")];
     let start = json!({
         "conversation_id": "c1", "hook_event_name": "subagentStart", "subagent_id": "s1",
         "subagent_type": "explore", "task": "look", "parent_conversation_id": "c1",
@@ -621,7 +547,7 @@ fn retired_cursor_subagent_hooks_are_silent_and_tell_herdr_no_count() {
     assert!(run.status_ok, "{run:?}");
     assert_eq!(run.stdout, "", "stop asks for no follow-up");
     // Old entries left before retirement cannot publish pane counts.
-    assert_eq!(herdr.counts(), []);
+    assert_eq!(counts(&machine), []);
 }
 
 #[test]
@@ -629,12 +555,9 @@ fn inside_grok_one_subagent_is_counted_once_however_many_of_hides_hooks_run() {
     // Grok runs Hide's Claude Code hook, Hide's Cursor entry and Hide's own
     // Grok file for the same subagent; only the last one counts (B4).
     let machine = Machine::new("registered");
-    let herdr = Herdr::start();
-    let socket = herdr.socket.display().to_string();
     let env = vec![
         ("GROK_HOOK_EVENT", "subagent_start"),
         ("GROK_SESSION_ID", "grok-session"),
-        ("HERDR_SOCKET_PATH", socket.as_str()),
     ];
     let payload = r#"{"sessionId":"grok-session","subagentType":"explore"}"#;
     for runtime in ["claude-code", "cursor", "grok"] {
@@ -642,5 +565,5 @@ fn inside_grok_one_subagent_is_counted_once_however_many_of_hides_hooks_run() {
         assert!(run.status_ok, "{runtime}");
         assert_eq!(run.stdout, "", "{runtime}");
     }
-    assert_eq!(herdr.counts(), [pair(1, 0)]);
+    assert_eq!(counts(&machine), [pair(1, 0)]);
 }

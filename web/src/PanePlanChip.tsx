@@ -7,7 +7,7 @@ import { useInterfaceTranslation } from "./i18n/client";
 import { cn } from "./lib/utils";
 import { paneChildren } from "./paneChildren";
 import { usePaneAgents } from "./PaneHeaderBand";
-import { PlanChecklist } from "./PlanChecklist";
+import { PlanChecklist } from "./components/plan-checklist";
 import { PlanSummaryLine } from "./PlanMap";
 import { planCells, planCount, planOfPane, planProposed, stepOf } from "./plans";
 import { shellDragging } from "./shellDrag";

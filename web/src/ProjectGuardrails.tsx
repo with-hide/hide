@@ -126,7 +126,7 @@ export function ProjectGuardrails({ rules, isGit, base, disabled, unguarded, sav
           className="w-(--size-settings-control-w) max-w-full font-mono"
           onChange={(event) => { setDraft(event.target.value); setRefusal(null); setSent(null); }}
           onKeyDown={(event) => { if (!composingKey(event) && event.key === "Enter") add(); }} />
-        <Button size="sm" disabled={disabled} onClick={add}>{t("projectSettings.apply")}</Button>
+        <Button variant="secondary" size="sm" disabled={disabled} onClick={add}>{t("projectSettings.apply")}</Button>
       </div> : null}
       {refusal ? <Note tone="error">{t(pathRefusalKey(refusal))}</Note> : null}
       {stateFor("paths")}

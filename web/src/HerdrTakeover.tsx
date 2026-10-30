@@ -343,7 +343,7 @@ export function HerdrGate({ actions, gate }: { actions: Actions; gate: Gate }) {
   if (takeover) last.current = takeover;
   const shown = takeover ?? (restart.restarting && last.current?.kind === "restart" ? last.current : null);
   const look = () => actions.herdrTakeover("look");
-  const again = <Button variant={gate === "older" ? "default" : "secondary"} onClick={look} data-herdr-gate-look="true">{t("herdrTakeover.retry")}</Button>;
+  const again = <Button variant="secondary" onClick={look} data-herdr-gate-look="true">{t("herdrTakeover.retry")}</Button>;
   let parts: StepParts;
   if (shown && (gate === "move" || gate === "restart" || gate === "look" || shown !== takeover)) {
     parts = herdrStepParts({ takeover: shown, actions, restart, t, onLater: null, onMoved: () => {}, desktop: bridge !== null });
@@ -364,7 +364,7 @@ export function HerdrGate({ actions, gate }: { actions: Actions; gate: Gate }) {
       footer: (
         <>
           {again}
-          {bridge ? <Button onClick={checkForUpdates} data-herdr-takeover-check-updates="true">{t("herdrTakeover.checkUpdates")}</Button> : null}
+          {bridge ? <Button variant="secondary" onClick={checkForUpdates} data-herdr-takeover-check-updates="true">{t("herdrTakeover.checkUpdates")}</Button> : null}
         </>
       ),
       primary: bridge ? checkForUpdates : look,

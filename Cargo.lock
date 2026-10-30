@@ -910,6 +910,7 @@ dependencies = [
  "hide-memory",
  "hide-platform",
  "hide-project",
+ "hide-session",
  "hide-shell",
  "ignore",
  "libc",

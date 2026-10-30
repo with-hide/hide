@@ -9,6 +9,7 @@ mod agent_catalog;
 pub(crate) mod agent_choice;
 mod agent_close;
 mod agent_groups;
+mod agent_hook_status;
 mod agent_sleep;
 mod agents;
 mod attachments;
@@ -1709,6 +1710,12 @@ pub struct Runtime {
     /// The last labels the local session-sync coordinator published, laid on
     /// every local projection this runtime ingests, whichever path brings it.
     label_overlay: crate::labels::overlay::LabelOverlay,
+    /// What each pane's agent hook last reported (`agent_hooks::facts`),
+    /// shared with the device coordinators that lay it on their sessions.
+    hook_facts: crate::agent_hooks::facts::SharedHookFacts,
+    /// The hook tokens the last local session laid, by pane, until the next
+    /// session replaces them.
+    local_hook_tokens: BTreeMap<String, crate::agent_hooks::PaneHookTokens>,
     /// The label store and analyzer every session-sync coordinator's worker
     /// shares; `None` when the core was made without them (tests).
     label_services: Option<std::sync::Arc<crate::labels::LabelServices>>,
@@ -2476,6 +2483,8 @@ impl Runtime {
             window_focused: false,
             unseen_laid_generation: 0,
             label_overlay: Default::default(),
+            hook_facts: Default::default(),
+            local_hook_tokens: BTreeMap::new(),
             label_services: None,
             pull_request_times: Default::default(),
             request_view_observed: false,

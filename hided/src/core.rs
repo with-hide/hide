@@ -97,6 +97,12 @@ enum Command {
         pane_id: String,
         reply: Sender<Option<hide_agent_hooks::plan_record::PlanContext>>,
     },
+    HookStatus {
+        device_id: String,
+        pane_id: String,
+        report: hide_node_link::panes::HookStatusReport,
+        reply: Sender<Result<(), &'static str>>,
+    },
     AgentCatalog {
         device_id: String,
         machine: Option<String>,
@@ -448,6 +454,25 @@ impl CoreHandle {
             })
             .ok()?;
         result.recv().ok()?
+    }
+
+    /// What a pane's agent hook reported, recorded on the owner thread.
+    pub fn hook_status(
+        &self,
+        device: &str,
+        pane: &str,
+        report: hide_node_link::panes::HookStatusReport,
+    ) -> Result<(), &'static str> {
+        let (reply, result) = mpsc::channel();
+        self.commands
+            .send(Command::HookStatus {
+                device_id: device.to_owned(),
+                pane_id: pane.to_owned(),
+                report,
+                reply,
+            })
+            .map_err(|_| "hook_status_unavailable")?;
+        result.recv().map_err(|_| "hook_status_unavailable")?
     }
 
     /// `hide agent catalog`, read on the owner thread. While the core says a
@@ -1210,6 +1235,14 @@ fn owner_loop(
                 reply,
             } => {
                 let _ = reply.send(core.plan_context(&device_id, &pane_id));
+            }
+            Command::HookStatus {
+                device_id,
+                pane_id,
+                report,
+                reply,
+            } => {
+                let _ = reply.send(core.hook_status(&device_id, &pane_id, &report));
             }
             Command::AgentCatalog {
                 device_id,

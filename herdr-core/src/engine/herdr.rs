@@ -115,18 +115,11 @@ const PROOF_STAGE: Duration = Duration::from_secs(2);
 /// a device's through its link.
 pub(crate) struct HerdrEngine<'a> {
     connector: Arc<dyn ApiConnector + 'a>,
-    /// The same connection where it outlives every borrow, for the hook
-    /// token restorer; none on a gated engine. Temporary: hooks-status
-    /// deletes it with the restorer.
-    link: Option<Arc<dyn ApiConnector>>,
 }
 
 impl HerdrEngine<'static> {
     pub(crate) fn new(connector: Arc<dyn ApiConnector>) -> Self {
-        Self {
-            connector: Arc::clone(&connector),
-            link: Some(connector),
-        }
+        Self { connector }
     }
 
     pub(crate) fn shared(connector: Arc<dyn ApiConnector>) -> SharedEngine {
@@ -305,14 +298,7 @@ impl Engine for HerdrEngine<'_> {
                 inner: Arc::clone(&self.connector),
                 gate,
             }),
-            link: None,
         })
-    }
-
-    fn hook_token_link(&self) -> Option<Arc<dyn std::any::Any + Send + Sync>> {
-        self.link
-            .clone()
-            .map(|link| Arc::new(link) as Arc<dyn std::any::Any + Send + Sync>)
     }
 
     fn session(&self, wait: Wait) -> Answer<ProjectionState> {
@@ -1013,18 +999,6 @@ impl Engine for HerdrEngine<'_> {
             wait,
         )
     }
-}
-
-/// The Herdr connection under `engine`, for the hook token restorer
-/// (`coordination::hook_tokens`), which still reports a hook's tokens itself.
-/// Temporary: hooks-status deletes the restorer and this with it (PRD
-/// engine-bundle-1 D-8).
-pub(crate) fn hook_token_connector(engine: &SharedEngine) -> Option<Arc<dyn ApiConnector>> {
-    engine
-        .hook_token_link()?
-        .downcast::<Arc<dyn ApiConnector>>()
-        .ok()
-        .map(|link| Arc::clone(link.as_ref()))
 }
 
 impl EngineHandle {
