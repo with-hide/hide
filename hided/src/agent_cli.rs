@@ -168,6 +168,12 @@ pub fn parse<'a>(mut args: impl Iterator<Item = &'a String>) -> Result<Parsed, S
             // A plan step's intent is the core's to make from the plan, the
             // step and its attempt (PRD hide-plan-delegate B1).
             let plan_node = take("--plan-node").ok();
+            if plan_node
+                .as_deref()
+                .is_some_and(|key| key.starts_with('-') || !herdr_core::dag::valid_key(key))
+            {
+                return Err("--plan-node takes a step key of your plan".into());
+            }
             let intent = match (&plan_node, take("--intent").ok()) {
                 (Some(_), Some(_)) => return Err("Give --intent or --plan-node, not both".into()),
                 (Some(_), None) => "plan".to_owned(),
