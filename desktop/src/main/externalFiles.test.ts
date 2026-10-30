@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import { ExternalFiles, MAX_EXTERNAL_GRANTS, MAX_EXTERNAL_TEXT_BYTES, UNNAMED_GRANT_GRACE_MS, clickedRoute, externalPartition, externalRoute } from "./externalFiles";
+import { ExternalFiles, MAX_EXTERNAL_GRANTS, MAX_EXTERNAL_TEXT_BYTES, UNNAMED_GRANT_GRACE_MS, agentOpen, clickedRoute, externalPartition, externalRoute } from "./externalFiles";
 
 // The physical spelling `fs.realpath` answers, as the shell's probe sends it.
 const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "hide-external-files-")));
@@ -67,6 +67,48 @@ describe("clickedRoute", () => {
     expect(clicked).toMatchObject({ route: { action: "grant", kind: "text" } });
     expect(files.grant(notes, "text")).toEqual(first);
     expect(await files.read(first.id)).toEqual({ failure: "ENOENT" });
+  });
+});
+
+describe("agentOpen", () => {
+  const files = () => new ExternalFiles(() => undefined);
+
+  it("grants what a click would, a page or its text as the command asks, and the physical file behind a link", async () => {
+    const held = files();
+    const page = await agentOpen(held, file("agent/report.html", "<p>hi</p>"), true);
+    expect(page).toMatchObject({ grant: { name: "report.html", kind: "html" } });
+    expect(await agentOpen(held, path.join(root, "agent/report.html"), false)).toMatchObject({ grant: { kind: "text" } });
+    expect(await agentOpen(held, file("agent/shot.png", "png"), false)).toMatchObject({ grant: { kind: "image" } });
+    // The same page again keeps its one grant, so its tab comes forward (B10).
+    expect(await agentOpen(held, path.join(root, "agent/report.html"), true)).toEqual(page);
+    if (process.platform !== "win32") {
+      // An agent writes the path as it has it: `/tmp` is a link on macOS.
+      const link = path.join(root, "agent-link");
+      fs.symlinkSync(path.join(root, "agent"), link);
+      const through = await agentOpen(held, path.join(link, "report.html"), true);
+      expect(through).toEqual(page);
+      if ("grant" in through) expect(held.get(through.grant.id)?.real).toBe(path.join(root, "agent/report.html"));
+    }
+  });
+
+  it("refuses what it cannot show with a reason the agent acts on, and opens nothing outside Hide", async () => {
+    const held = files();
+    expect(await agentOpen(held, path.join(root, "agent/missing.png"), false)).toEqual({ refused: "file_missing" });
+    fs.mkdirSync(path.join(root, "agent/folder"), { recursive: true });
+    expect(await agentOpen(held, path.join(root, "agent/folder"), false)).toEqual({ refused: "unsupported_kind" });
+    expect(await agentOpen(held, file("agent/song.mp3", "x"), false)).toEqual({ refused: "unsupported_kind" });
+    expect(await agentOpen(held, file("agent/tool", MACH_O, 0o755), false)).toEqual({ refused: "unsupported_kind" });
+    expect(await agentOpen(held, file("agent/notes.md", "# hi\n"), true)).toEqual({ refused: "not_html" });
+    if (process.platform !== "win32" && process.getuid?.() !== 0) {
+      expect(await agentOpen(held, file("agent/locked.txt", "secret", 0o000), false)).toEqual({ refused: "file_unavailable" });
+    }
+    expect(held.live()).toEqual([]);
+  });
+
+  it("is told no past the grants' cap (B17)", async () => {
+    const held = files();
+    for (let index = 0; index < MAX_EXTERNAL_GRANTS; index += 1) held.grant(path.join(root, `cap-${index}.txt`), "text");
+    expect(await agentOpen(held, file("agent/one-more.txt", "x"), false)).toEqual({ refused: "outside_files_full" });
   });
 });
 

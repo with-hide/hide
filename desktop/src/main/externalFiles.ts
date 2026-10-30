@@ -129,6 +129,37 @@ export async function clickedRoute(asked: string, source: boolean): Promise<{ re
   return { real: asked, route: await externalRoute(asked, source) };
 }
 
+/** Why an agent's open of an outside file was refused; each is a `reason` the agent reads with its next action from hided. */
+export type AgentRefusal = "file_missing" | "file_unavailable" | "unsupported_kind" | "not_html" | "outside_files_full";
+
+/**
+ * An agent's `hide file open` or `hide browser open` of a file outside every
+ * checkout on this computer, which hided passes on from the agent's pane: the
+ * same judgment and the same grant a click gets, so its tab is the operator's
+ * External tab. Unlike a click, which names the physical path the shell
+ * probed, an agent names the path as it wrote it (`/tmp` is a link on macOS),
+ * so its links are resolved here first; the grant holds the physical path.
+ * What a click hands the operating system, an agent is refused, since nothing
+ * opens outside Hide for it; and a file it cannot read is refused rather than
+ * granted, since its tab could show nothing. A page asks for an HTML file in
+ * its browser display, and a file open shows an HTML file's text, as both do
+ * for a checkout's file.
+ */
+export async function agentOpen(files: ExternalFiles, asked: string, page: boolean): Promise<{ grant: GrantedFile } | { refused: AgentRefusal }> {
+  let real: string;
+  try {
+    real = await fs.realpath(asked);
+    await fs.access(real, constants.R_OK);
+  } catch (error) {
+    return { refused: errorCode(error) === "ENOENT" ? "file_missing" : "file_unavailable" };
+  }
+  const route = await externalRoute(real, !page);
+  if (route.action !== "grant") return { refused: "unsupported_kind" };
+  if (page && route.kind !== "html") return { refused: "not_html" };
+  const grant = files.grant(real, route.kind);
+  return grant ? { grant } : { refused: "outside_files_full" };
+}
+
 function byExtension(ext: string, source: boolean): ExternalKind {
   if (HTML.has(ext)) return source ? "text" : "html";
   if (IMAGES.has(ext)) return "image";

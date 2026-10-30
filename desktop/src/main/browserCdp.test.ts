@@ -81,6 +81,7 @@ async function fixture(options: { loseFirstOpenResponse?: boolean; alwaysLoseRes
   const intents = new Map<string, CdpActionResult>();
   const opened: { scope: CdpScope; url: string | undefined }[] = [];
   const actions: CdpAction[] = [];
+  const externalOpens: { path: string; page: boolean }[] = [];
   let sequence = 20;
   let incarnation: number | null = 1;
   const changed = (retirement?: CdpRetirement) => { for (const listener of listeners) listener(retirement); };
@@ -91,6 +92,7 @@ async function fixture(options: { loseFirstOpenResponse?: boolean; alwaysLoseRes
     changed: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
     attached: (page, value) => { attached.set(page.id, value); },
     ...(options.revive ? { revive: (scope: CdpScope) => options.revive!(scope, pages) } : {}),
+    externalOpen: async (path, page) => { externalOpens.push({ path, page }); return { grant: { id: "a1".repeat(16), name: "r.html", kind: page ? "html" : "text" } }; },
     chromeVersion: "144.0.0.0",
     now: () => time,
     log: () => {},
@@ -135,7 +137,7 @@ async function fixture(options: { loseFirstOpenResponse?: boolean; alwaysLoseRes
     shutdown.push(async () => { client.socket.terminate(); });
     return client;
   }
-  return { gateway, address, capability, client, first, second, foreign, pages, changed, attached, opened, actions,
+  return { gateway, address, capability, client, first, second, foreign, pages, changed, attached, opened, actions, externalOpens,
     authority: (value: boolean) => { incarnation = value ? 1 : null; changed(); },
     incarnate: (value: number) => { incarnation = value; changed(); }, advance: (milliseconds: number) => { time += milliseconds; } };
 }
@@ -821,6 +823,18 @@ describe("scoped desktop CDP public boundary", () => {
     expect((await browser.call("Runtime.evaluate", { expression: "1" }, session)).error).toBeDefined();
     expect(first.contents.debugger.isAttached()).toBe(false);
     expect(attached.get("d1")).toBe(false);
+  });
+
+  it("grants an agent's outside file to hided alone, with the control token and a path and kind", async () => {
+    const { address, externalOpens } = await fixture();
+    const body = JSON.stringify({ path: "/tmp/r.html", page: true });
+    expect(await customRequest(`${address.endpoint}/external-open`, "POST", { "content-type": "application/json" }, body)).toBe(401);
+    expect(await customRequest(`${address.endpoint}/external-open`, "POST", { authorization: `Bearer ${address.token}` }, JSON.stringify({ path: "/tmp/r.html" }))).toBe(400);
+    expect(externalOpens).toEqual([]);
+    const response = await fetch(`${address.endpoint}/external-open`, { method: "POST", headers: { authorization: `Bearer ${address.token}`, "content-type": "application/json" }, body });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ grant: { id: "a1".repeat(16), name: "r.html", kind: "html" } });
+    expect(externalOpens).toEqual([{ path: "/tmp/r.html", page: true }]);
   });
 
   it("revokes everything a node's ended link authorized and stays available for the next", async () => {

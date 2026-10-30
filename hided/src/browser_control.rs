@@ -427,6 +427,34 @@ impl BrowserControl {
         ask_gateway(&host, &scope)
     }
 
+    /// Asks the window registered here to grant itself `path` (wire
+    /// spelling), a file outside every checkout an agent on this machine
+    /// asked to open, as a page when `page`: the desktop host's answer, a
+    /// grant or the reason it refused (`desktop/src/main/externalFiles.ts`,
+    /// `agentOpen`). Only this machine's window can read this machine's
+    /// file, so a node's window is never asked.
+    pub fn external_open(&self, path: &str, page: bool) -> Result<Value, Failure> {
+        let _slot = self.acquire()?;
+        let host = self.own_host()?.ok_or((
+            "outside_file_no_window",
+            "Open the Hide desktop app on this computer and retry",
+        ))?;
+        let body = json!({"path": path, "page": page}).to_string();
+        let mut response = agent()
+            .post(format!("{}/external-open", host.endpoint))
+            .header("Authorization", format!("Bearer {}", host.token))
+            .header("Content-Type", "application/json")
+            .send(body.as_bytes())
+            .map_err(|_| unavailable())?;
+        let bytes = response
+            .body_mut()
+            .with_config()
+            .limit(MAX_ANSWER_BYTES)
+            .read_to_vec()
+            .map_err(|_| unavailable())?;
+        serde_json::from_slice(&bytes).map_err(|_| unavailable())
+    }
+
     /// Asks every window registered here to drop each capability it handed
     /// out, the link they were handed out over having ended: all at once,
     /// each asked again a few times before its failure is logged. The

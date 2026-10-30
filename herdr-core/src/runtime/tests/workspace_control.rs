@@ -1385,6 +1385,22 @@ fn browser_file_source_is_confined_to_the_calling_checkout() {
         panic!("file URL must read outside the lock")
     };
     assert_eq!(source.read().err().unwrap().reason, "path_outside_checkout");
+    // A device's agent has no window on its own machine to grant the file
+    // (an agent on the core's machine never reaches here with one: hided
+    // opens it by grant), and is told to bring it into the checkout.
+    let (root, channel) = runtime
+        .document_source(&expected.workspace_id, &expected.checkout_id)
+        .unwrap();
+    let elsewhere = crate::workspace_control::ActionSource::browser(
+        root,
+        channel,
+        outside.to_string_lossy().into_owned(),
+        false,
+    );
+    assert_eq!(
+        elsewhere.read().err().unwrap().reason,
+        "outside_file_on_device"
+    );
     let inside = checkout.join("index.html");
     std::fs::write(&inside, "<title>Inside</title>").unwrap();
     let action = Action::OpenBrowser {

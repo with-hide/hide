@@ -309,10 +309,16 @@ impl Runtime {
                         reason: "host_unavailable",
                         next_action: "Reconnect the device and retry",
                     })?;
+                let local = context.device_id == self.node.as_str();
                 return Ok(ActionPreparation::Read(ActionSource::browser(
-                    root, channel, path,
+                    root, channel, path, local,
                 )));
             }
+            return Ok(ActionPreparation::Ready);
+        }
+        if let Action::OpenExternal { grant, name, kind } = action {
+            crate::view_layout::ExternalFile::admitted(grant, name, *kind)
+                .map_err(|_| outside_file_refused())?;
             return Ok(ActionPreparation::Ready);
         }
         let (path, file) = match action {
@@ -340,10 +346,11 @@ impl Runtime {
                 reason: "host_unavailable",
                 next_action: "Reconnect the device and check file access consent, then retry",
             })?;
+        let local = context.device_id == self.node.as_str();
         let source = if file {
-            ActionSource::file(root, channel, path.clone(), already_open)
+            ActionSource::file(root, channel, path.clone(), already_open, local)
         } else {
-            ActionSource::diff(root, channel, path.clone())
+            ActionSource::diff(root, channel, path.clone(), local)
         };
         Ok(ActionPreparation::Read(source))
     }
@@ -521,6 +528,36 @@ impl Runtime {
                 load: Some(load),
             });
         }
+        if let Action::OpenExternal { grant, name, kind } = action {
+            let file = crate::view_layout::ExternalFile::admitted(grant, name, *kind)
+                .map_err(|_| outside_file_refused())?;
+            if !self.separate_view_areas() {
+                return Err(Refusal {
+                    reason: "views_unavailable",
+                    next_action: "Open this Workspace in the Hide desktop app and retry",
+                });
+            }
+            let (view_id, load) = self.put_external(key, file).map_err(layout_refusal)?;
+            crate::diagnostic!(serde_json::json!({
+                "component": "workspace_control",
+                "kind": "external.open",
+                "grant": grant,
+                "file_kind": kind,
+                "request_id": request_id,
+            }));
+            let area_id = self
+                .view_layout_of(key)
+                .and_then(|layout| layout.area_of(&view_id))
+                .map(|area| area.id.clone());
+            return Ok(ActionResult {
+                context: context.clone(),
+                request_id: request_id.to_owned(),
+                changed: true,
+                view_id,
+                area_id,
+                load: Some(load),
+            });
+        }
         if let Action::OpenFile { .. } | Action::OpenDiff { .. } = action {
             let Some(material) = material else {
                 return Err(Refusal {
@@ -644,7 +681,9 @@ impl Runtime {
         }
         let (view_id, changed, area_id) = match action {
             Action::OpenFile { .. } | Action::OpenDiff { .. } => unreachable!("handled above"),
-            Action::OpenBrowser { .. } => unreachable!("handled above"),
+            Action::OpenBrowser { .. } | Action::OpenExternal { .. } => {
+                unreachable!("handled above")
+            }
             Action::Select { view_id, .. } => {
                 let selected = self
                     .change_view_layout(key, |layout, stamp| {
@@ -1009,6 +1048,15 @@ fn path_within(path: &str, root: &str) -> bool {
         .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
 }
 
+/// An `open_external` whose grant or name is not one the desktop host makes,
+/// which only a broken hided would send.
+fn outside_file_refused() -> Refusal {
+    Refusal {
+        reason: "outside_file_unavailable",
+        next_action: "Reconnect the Hide desktop app and retry",
+    }
+}
+
 fn layout_refusal(error: crate::view_layout::LayoutError) -> Refusal {
     Refusal {
         reason: error.kind(),
@@ -1021,7 +1069,7 @@ fn layout_refusal(error: crate::view_layout::LayoutError) -> Refusal {
 /// where it already was.
 pub(super) fn lane_call(action: &Action) -> bool {
     match action {
-        Action::OpenFile { .. } | Action::OpenDiff { .. } => true,
+        Action::OpenFile { .. } | Action::OpenDiff { .. } | Action::OpenExternal { .. } => true,
         Action::OpenBrowser { area_id, .. } => area_id.is_none(),
         Action::Select {
             expected_browser_area,

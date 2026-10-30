@@ -41,6 +41,13 @@ type Options = {
   attached: (page: CdpPage, attached: boolean) => void;
   /** Loads a display's unloaded page again, hidden, for an agent's connection to it (`BrowserViews.cdpRevive`). */
   revive?: (scope: CdpScope) => Promise<"none" | "loaded" | "failed">;
+  /**
+   * Grants this window a file outside every checkout that an agent on this
+   * computer asked to open (`externalFiles.ts`, `agentOpen`): `path` is its
+   * wire spelling, `page` asks for an HTML page rather than a file's text.
+   * hided alone asks, with the control token, and gets the grant or a reason.
+   */
+  externalOpen?: (path: string, page: boolean) => Promise<Json>;
   log: (event: string, fields: Record<string, string | number | boolean>) => void;
   chromeVersion: string;
   /** Wall clock is a platform boundary; protocol/server timers stay native. */
@@ -356,6 +363,13 @@ export class BrowserCdpGateway {
         // through that link stops working, and the gateway stays available.
         this.revokeAll();
         this.reply(response, 200, {});
+        return;
+      }
+      if (path === "/external-open" && request.method === "POST" && this.options.externalOpen) {
+        if (!sameToken(request.headers.authorization ?? "", `Bearer ${this.controlToken}`)) { this.reply(response, 401, { error: "Unauthorized" }); return; }
+        const body = await this.body(request);
+        if (!object(body) || typeof body.path !== "string" || typeof body.page !== "boolean") { this.reply(response, 400, { error: "Invalid request" }); return; }
+        this.reply(response, 200, await this.options.externalOpen(body.path, body.page));
         return;
       }
       if (path === "/connect" && request.method === "POST") {

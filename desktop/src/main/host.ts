@@ -14,7 +14,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, net, Notification, powerMonitor, screen, session, shell, type IpcMainEvent, type IpcMainInvokeEvent, type NativeImage } from "electron";
 import { DebUpdater, MacUpdater, NsisUpdater, RpmUpdater } from "electron-updater";
-import { CHECK_UPDATES_COMMAND, SETUP_COMMAND, type HerdrRestart } from "../../../web/src/host";
+import { CHECK_UPDATES_COMMAND, SETUP_COMMAND, type ExternalGrant, type HerdrRestart } from "../../../web/src/host";
 import type { MenuCommand } from "./menu";
 import { BINDINGS_CHANNEL, COME_FORWARD_CHANNEL, COMMAND_CHANNEL, EDITOR_AVAILABLE_CHANNEL, EDITOR_OPEN_CHANNEL, LANGUAGE_CHANNEL, NOTIFY_BADGE_CHANNEL, NOTIFY_CHANNEL, NOTIFY_OPEN_CHANNEL, NOTIFY_PERMISSION_CHANNEL, NOTIFY_SETTINGS_CHANNEL, NOTIFY_WITHDRAW_CHANNEL, OPEN_PATH_CHANNEL, EXTERNAL_DESCRIBE_CHANNEL, EXTERNAL_LIVE_CHANNEL, EXTERNAL_OPEN_CHANNEL, EXTERNAL_READ_CHANNEL, PICK_FOLDER_CHANNEL, PRACTICE_OPEN_CHANNEL, PROBE_PATHS_CHANNEL, HERDR_RESTART_CHANNEL, QUIT_CHANNEL, REVEAL_CHANNEL, UPDATE_CHECK_CHANNEL, UPDATE_PRERELEASE_CHANNEL, UPDATE_RESTART_CHANNEL, UPDATE_STATUS_CHANNEL, UPDATE_STATUS_GET_CHANNEL, WINDOW_CHROME_CHANNEL, WINDOW_CHROME_GET_CHANNEL } from "../channel";
 import { BrowserViews, type ResolvedPage } from "./browser";
@@ -50,7 +50,7 @@ import { ChildRunner, executableFile, startDetached, type ChildResult } from "./
 import { fallbackScreen, fallbackScript, statusPageFile } from "./statusPage";
 import { MIN_SIZE, readWindowState, restoreBounds, windowStatePath, writeWindowState } from "./windowState";
 import { openRoute, probe, probeRequest } from "./localPath";
-import { ExternalFiles, clickedRoute } from "./externalFiles";
+import { ExternalFiles, agentOpen, clickedRoute } from "./externalFiles";
 import { WAKE_TIMEOUT_MS, wakeRequest, type WakeCause } from "./hideAiWake";
 import { revealTarget } from "./reveal";
 import { badgeRequest, ClickGate, KeptNotifications, launchedId, notifyRequest, OVERLAY_SIZE, overlayDot, toastXml, withdrawRequest } from "./notify";
@@ -855,6 +855,22 @@ export class DesktopHost {
     ipcMain.handle(EXTERNAL_LIVE_CHANNEL, (event: IpcMainInvokeEvent) => (this.fromShell(event) ? this.externals.live() : []));
   }
 
+  /**
+   * An agent's open of a file outside every checkout, which hided passes on
+   * through the browser control gateway: the grant a click would get, or why
+   * not. The log names the grant or the reason, never the path.
+   */
+  private async agentExternalOpen(reported: string, page: boolean): Promise<{ grant: ExternalGrant } | { refused: string }> {
+    const asked = fromPage(reported);
+    if (asked === null) {
+      this.log.event("external.agent_refused", { reason: "path" });
+      return { refused: "invalid_path" };
+    }
+    const opened = await agentOpen(this.externals, asked, page);
+    if ("refused" in opened) this.log.event("external.agent_refused", { reason: opened.refused });
+    return opened;
+  }
+
   /** An app-menu click, delivered to the shell only while it is loaded. */
   sendCommand(id: MenuCommand): void {
     // Check for Updates… looks whatever the window shows; the shell opens About for its outcome.
@@ -1206,6 +1222,7 @@ export class DesktopHost {
       attached: (page, attached) => browsers.cdpAttached(page, attached),
       revive: (scope) => browsers.cdpRevive(scope),
       action: (scope, action, signal) => this.browserControlAction(scope, action, signal),
+      externalOpen: (reported, page) => this.agentExternalOpen(reported, page),
       chromeVersion,
       log: (event, fields) => this.log.event(event, fields),
     });

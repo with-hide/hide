@@ -35,6 +35,7 @@ pub mod node_cli;
 pub mod node_daemon;
 pub mod node_pages;
 pub mod node_uploads;
+mod outside_open;
 pub mod page_forward;
 pub mod plan_cli;
 mod project_open;

@@ -1517,7 +1517,7 @@ fn browser_open(
         Err(_) => {
             return workspace_refusal(
                 "invalid_address",
-                "Use an http, https, or readable checkout HTML address",
+                "Use an http or https address, or a readable HTML file",
             );
         }
     };

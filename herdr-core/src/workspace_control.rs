@@ -10,7 +10,7 @@ use crate::files::{self, DocumentPlace, DocumentRoot, OpenFailure};
 use crate::model::EditorDocumentSnapshot;
 use crate::node_access::NodeLink;
 
-pub use crate::view_layout::Edge;
+pub use crate::view_layout::{Edge, ExternalKind};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Query {
@@ -92,6 +92,17 @@ pub enum Action {
         area_id: Option<String>,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         new_target: bool,
+    },
+    /// A caller's `hide file open` or `hide browser open` of a file outside
+    /// every registered checkout, named by the desktop host's grant alone:
+    /// hided asks the core machine's window for the grant and makes this
+    /// action, so the path never reaches the core (PRD outside-path-in-hide
+    /// D-05). No caller's wire decodes it.
+    #[serde(skip_deserializing)]
+    OpenExternal {
+        grant: String,
+        name: String,
+        kind: ExternalKind,
     },
     Select {
         view_id: String,
@@ -221,6 +232,9 @@ pub struct ActionSource {
     path: String,
     kind: SourceKind,
     already_open: bool,
+    /// Whether the checkout is on the core's machine, whose agents open a
+    /// file outside every checkout by the window's grant instead.
+    local: bool,
 }
 
 enum SourceKind {
@@ -246,6 +260,7 @@ impl ActionSource {
         channel: Arc<dyn NodeLink>,
         path: String,
         already_open: bool,
+        local: bool,
     ) -> Self {
         Self {
             root,
@@ -253,34 +268,61 @@ impl ActionSource {
             path,
             kind: SourceKind::File,
             already_open,
+            local,
         }
     }
 
-    pub(crate) fn diff(root: DocumentRoot, channel: Arc<dyn NodeLink>, path: String) -> Self {
+    pub(crate) fn diff(
+        root: DocumentRoot,
+        channel: Arc<dyn NodeLink>,
+        path: String,
+        local: bool,
+    ) -> Self {
         Self {
             root,
             channel,
             path,
             kind: SourceKind::Diff,
             already_open: false,
+            local,
         }
     }
 
-    pub(crate) fn browser(root: DocumentRoot, channel: Arc<dyn NodeLink>, path: String) -> Self {
+    pub(crate) fn browser(
+        root: DocumentRoot,
+        channel: Arc<dyn NodeLink>,
+        path: String,
+        local: bool,
+    ) -> Self {
         Self {
             root,
             channel,
             path,
             kind: SourceKind::Browser,
             already_open: false,
+            local,
         }
     }
 
     pub fn read(self) -> Result<ActionMaterial, Refusal> {
         let relative = files::relative_in_root(self.channel.as_ref(), &self.root.path, &self.path)
-            .map_err(|_| Refusal {
-                reason: "path_outside_checkout",
-                next_action: "Choose a path inside the calling pane's checkout",
+            .map_err(|_| {
+                if self.local {
+                    // A file outside every checkout of the core's machine
+                    // never comes here (hided opens it by the window's
+                    // grant), so this one is in another checkout.
+                    Refusal {
+                        reason: "path_outside_checkout",
+                        next_action: "Choose a path inside the calling pane's checkout",
+                    }
+                } else {
+                    // Only the core's machine has a window to grant a file
+                    // outside every checkout, and this file is not there.
+                    Refusal {
+                        reason: "outside_file_on_device",
+                        next_action: "Copy the file into this checkout and open it there; Hide shows a file outside every checkout only for an agent on the computer it runs on",
+                    }
+                }
             })?;
         let path = hide_platform::path::wire_join(&self.root.path, &relative);
         if matches!(self.kind, SourceKind::Browser) {

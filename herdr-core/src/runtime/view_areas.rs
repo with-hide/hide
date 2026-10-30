@@ -721,6 +721,7 @@ impl Runtime {
             (Action::OpenDiff { .. }, Some(path)) => {
                 !holds(&|display| display.shows(path, DisplayKind::Diff, Some(false)))
             }
+            (Action::OpenExternal { grant, .. }, _) => !self.shows_external(key, grant),
             (Action::OpenBrowser { url, .. }, _) => {
                 url.is_empty()
                     || !holds(&|display| {
@@ -1835,49 +1836,10 @@ impl Runtime {
         } else {
             None
         };
-        let shown = |display: &Display| {
-            display
-                .external
-                .as_ref()
-                .is_some_and(|shown| shown.grant == file.grant)
-        };
-        if !self.view_displays(&key).any(shown) {
+        if !self.shows_external(&key, &file.grant) {
             self.make_view_room(&key);
         }
-        let before_load = self
-            .workspace_views
-            .as_ref()
-            .map(|store| store.browser_load);
-        let load = self.next_browser_load();
-        let placed = self
-            .change_view_layout(&key, |layout, stamp| {
-                let existing = layout.displays().find(|d| shown(d)).map(|d| d.id.clone());
-                if let Some(display_id) = existing {
-                    // The same file clicked again comes forward and is read
-                    // again from the disk (B10).
-                    layout.focus(&display_id, stamp)?;
-                    if let Some(display) = layout.display_mut(&display_id) {
-                        display.load = load;
-                        display.external = Some(file.clone());
-                    }
-                    return Ok((display_id, true));
-                }
-                let display = layout.new_external_display(file.clone(), load);
-                let display_id = display.id.clone();
-                let area = layout.active_area().id.clone();
-                layout.insert(&area, display, stamp)?;
-                Ok((display_id, true))
-            })
-            .map_err(LayoutRefusal::from);
-        let display_id = match placed {
-            Ok(id) => id,
-            Err(error) => {
-                if let (Some(load), Some(store)) = (before_load, self.workspace_views.as_mut()) {
-                    store.browser_load = load;
-                }
-                return Err(error);
-            }
-        };
+        let (display_id, load) = self.put_external(&key, file).map_err(LayoutRefusal::from)?;
         self.apply_area_intent_to(&key, AreaIntent::Documents);
         if let Some(context) = reveal_context {
             self.reveal_workspace_control(
@@ -1888,6 +1850,64 @@ impl Runtime {
             );
         }
         Ok((key, display_id))
+    }
+
+    /// Whether a display of `key` stands on `grant`.
+    pub(super) fn shows_external(&self, key: &WorkspaceKey, grant: &str) -> bool {
+        self.view_displays(key).any(|display| {
+            display
+                .external
+                .as_ref()
+                .is_some_and(|shown| shown.grant == grant)
+        })
+    }
+
+    /// Puts `file` in `key`'s active area, or brings forward the display its
+    /// grant already has and reads it again from the disk (B10); answers the
+    /// display and its load. Room is the caller's to make first.
+    pub(super) fn put_external(
+        &mut self,
+        key: &WorkspaceKey,
+        file: ExternalFile,
+    ) -> Result<(String, u64), LayoutError> {
+        let before_load = self
+            .workspace_views
+            .as_ref()
+            .map(|store| store.browser_load);
+        let load = self.next_browser_load();
+        let placed = self.change_view_layout(key, |layout, stamp| {
+            let existing = layout
+                .displays()
+                .find(|display| {
+                    display
+                        .external
+                        .as_ref()
+                        .is_some_and(|shown| shown.grant == file.grant)
+                })
+                .map(|display| display.id.clone());
+            if let Some(display_id) = existing {
+                layout.focus(&display_id, stamp)?;
+                if let Some(display) = layout.display_mut(&display_id) {
+                    display.load = load;
+                    display.external = Some(file.clone());
+                }
+                return Ok((display_id, true));
+            }
+            let display = layout.new_external_display(file.clone(), load);
+            let display_id = display.id.clone();
+            let area = layout.active_area().id.clone();
+            layout.insert(&area, display, stamp)?;
+            Ok((display_id, true))
+        });
+        match placed {
+            Ok(display_id) => Ok((display_id, load)),
+            Err(error) => {
+                if let (Some(load), Some(store)) = (before_load, self.workspace_views.as_mut()) {
+                    store.browser_load = load;
+                }
+                Err(error)
+            }
+        }
     }
 
     /// `external_grants`: the desktop host's grants now. An outside file's tab

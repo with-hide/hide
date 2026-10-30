@@ -323,7 +323,8 @@ A page of a connected device's checkout is served through its own route, which r
 
 ### Outside pages
 
-An HTML file outside every registered checkout that the operator clicked in a terminal of the desktop app (PRD outside-path-in-hide) is an outside page, and its address never reaches hided or the core.
+An HTML file outside every registered checkout that the operator clicked in a terminal of the desktop app (PRD outside-path-in-hide), or that an agent on the core's machine opened with `hide browser open`, is an outside page, and its address never reaches the core; an agent's path passes through hided once, to the window's gateway, and is neither kept nor logged there ([ARCHITECTURE.md](ARCHITECTURE.md), A clicked path is one event).
+An agent's outside page is that agent's open like any other (`hide view list` names its opener with an empty target), and `hide browser` page commands on it answer `display_unsupported` as on a click's.
 The desktop host grants the clicked file and its folder to the window that clicked it (`desktop/src/main/externalFiles.ts`), and the core holds a display of kind `external` with the grant's 32-hex id, the file's name and `html`, never a path or an address; the browser sync names it by `grant` with an empty `url`, and the host loads the granted file itself, with no `/browser-route`.
 Its page follows every rule of a local page above with the grant's folder, links resolved, as its checkout: its own files load from that folder and below, and nothing outside it.
 A navigation to a `file:` address outside the folder, by a link or by `window.open`, is refused and logged as `browser.navigation_refused` (or `browser.window_open_refused`) with `reason: external_folder_boundary` and the grant, and a `window.open` of a file inside the folder loads in the same tab rather than opening another display.
