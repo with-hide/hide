@@ -79,10 +79,9 @@ const propertiesTheme = EditorView.theme({
     lineHeight: `${PROPERTY_LINE_HEIGHT}`,
     paddingTop: "var(--spacing-lg)",
     paddingBottom: "var(--spacing-md)",
-    borderBottom: "var(--size-hairline) solid var(--border)",
     color: "var(--subtle-foreground)",
   },
-  ".cm-activeLine": { backgroundColor: "transparent" },
+  "&.cm-editor .cm-activeLine": { backgroundColor: "transparent" },
   ".cm-line.cm-fm-property, .cm-line.cm-fm-more": {
     paddingLeft: "calc(var(--size-editor-property-key) + var(--spacing-md))",
     textIndent: "calc(-1 * (var(--size-editor-property-key) + var(--spacing-md)))",

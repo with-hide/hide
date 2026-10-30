@@ -1019,7 +1019,8 @@ test("Markdown Live draws frontmatter in its own scrolling pane", async ({ page 
     // delimiters and the colon hidden; the file keeps its text.
     await expect(pane.locator(".cm-fm-key").first()).toHaveText("title");
     await expect(pane.locator(".cm-fm-value").first()).toHaveText("Post");
-    await expect(pane.locator(".cm-content")).not.toContainText("---");
+    await expect(pane.locator(".cm-fm-hidden")).toHaveCount(2);
+    for (const delimiter of await pane.locator(".cm-fm-hidden").all()) await expect(delimiter).toBeHidden();
     // The block left the body: it is drawn once, in the pane (D-11).
     await expect(body).not.toContainText("title: Post");
     // Live hides the heading's hash when the caret is elsewhere, so the body

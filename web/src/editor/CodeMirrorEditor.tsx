@@ -424,7 +424,7 @@ export function CodeMirrorEditor({
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden" data-editor-codemirror="true">
       {split ? (
-        <div className="shrink-0 overflow-hidden" data-editor-frontmatter="true">
+        <div className="shrink-0 overflow-hidden border-b border-border" data-editor-frontmatter="true">
           <div ref={frontHost} data-editor-frontmatter-editor="true" />
         </div>
       ) : null}

@@ -125,7 +125,7 @@ export const liveDocumentTheme = EditorView.theme({
     paddingTop: "var(--spacing-lg)",
     paddingBottom: "var(--spacing-xxxl)",
   },
-  ".cm-activeLine": { backgroundColor: "transparent" },
+  "&.cm-editor .cm-activeLine": { backgroundColor: "transparent" },
 });
 
 /**
