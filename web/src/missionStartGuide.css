@@ -1,0 +1,220 @@
+/*
+ * The Mission tool's start picture (PRD mission-tool D-02, B3, B4): a mission
+ * drawn as it runs, one loop of about ten seconds. The Conductor hands three
+ * parts to workers side by side, the third stops once for a decision, each
+ * part is checked by a satellite as it finishes (purple, then green), two
+ * check the demo, and main lights. The plain rules below are the finished
+ * frame, which a reduced-motion setting keeps; the loop runs only under
+ * `no-preference`, and only while the picture is on screen
+ * (`data-playing`, MissionStartGuide.tsx). Colours are the mission tokens;
+ * sizes, type included, are the drawing's own coordinates, so the picture
+ * scales as one image with the tool's width.
+ */
+
+.msg-box {
+  fill: var(--card);
+  stroke: var(--border);
+  stroke-width: var(--size-mission-edge);
+}
+.msg-label {
+  fill: var(--foreground);
+  font-weight: 600;
+}
+.msg-track {
+  fill: var(--muted);
+}
+.msg-fill {
+  fill: var(--mission-done);
+  transform-box: fill-box;
+  transform-origin: left;
+}
+.msg-edge {
+  fill: none;
+  stroke-width: var(--size-mission-edge);
+  stroke-dasharray: 4 4;
+}
+.msg-edge-top {
+  stroke: var(--primary);
+}
+.msg-edge-done {
+  stroke: var(--mission-done);
+}
+.msg-worker {
+  stroke: var(--mission-done);
+}
+.msg-ring {
+  fill: var(--card);
+  stroke: var(--mission-done);
+  stroke-width: var(--size-mission-edge);
+}
+.msg-tether {
+  stroke: var(--mission-done);
+  stroke-width: var(--size-mission-edge);
+}
+.msg-tick {
+  fill: var(--mission-done);
+  font-weight: 700;
+}
+.msg-ask {
+  opacity: 0;
+}
+.msg-ask circle {
+  fill: var(--mission-hold);
+}
+.msg-ask text {
+  fill: var(--background);
+  font-weight: 700;
+}
+.msg-main {
+  fill: color-mix(in oklab, var(--mission-done) 15%, var(--card));
+  stroke: var(--mission-done);
+}
+.msg-main-label {
+  fill: var(--mission-done);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .msg-picture:not([data-playing="true"]) * {
+    animation-play-state: paused !important;
+  }
+  .msg-edge {
+    animation: msg-flow 0.6s linear infinite;
+  }
+  .msg-conductor { animation: msg-cg 10s infinite; }
+  .msg-w1 { animation: msg-w1b 10s infinite; }
+  .msg-w2 { animation: msg-w2b 10s infinite; }
+  .msg-w3 { animation: msg-w3b 10s infinite; }
+  .msg-w4 { animation: msg-w4b 10s infinite; }
+  .msg-f1 { animation: msg-w1f 10s infinite; }
+  .msg-f2 { animation: msg-w2f 10s infinite; }
+  .msg-f3 { animation: msg-w3f 10s infinite; }
+  .msg-f4 { animation: msg-w4f 10s infinite; }
+  .msg-ask { animation: msg-w3h 10s infinite; }
+  .msg-r1 { animation: msg-s1r 10s infinite; }
+  .msg-r2 { animation: msg-s2r 10s infinite; }
+  .msg-r3 { animation: msg-s3r 10s infinite; }
+  .msg-r4 { animation: msg-s4r 10s infinite; }
+  .msg-r5 { animation: msg-s5r 10s infinite; }
+  .msg-l1 { animation: msg-s1l 10s infinite; }
+  .msg-l2 { animation: msg-s2l 10s infinite; }
+  .msg-l3 { animation: msg-s3l 10s infinite; }
+  .msg-l4 { animation: msg-s4l 10s infinite; }
+  .msg-l5 { animation: msg-s5l 10s infinite; }
+  .msg-t1 { animation: msg-s1t 10s infinite; }
+  .msg-t2 { animation: msg-s2t 10s infinite; }
+  .msg-t3 { animation: msg-s3t 10s infinite; }
+  .msg-t4 { animation: msg-s4t 10s infinite; }
+  .msg-t5 { animation: msg-s5t 10s infinite; }
+  .msg-edge-top { animation: msg-flow 0.6s linear infinite, msg-e-top 10s infinite; }
+  .msg-e4 { animation: msg-flow 0.6s linear infinite, msg-e4 10s infinite; }
+  .msg-e5 { animation: msg-flow 0.6s linear infinite, msg-e5 10s infinite; }
+  .msg-e6 { animation: msg-flow 0.6s linear infinite, msg-e6 10s infinite; }
+  .msg-e7 { animation: msg-flow 0.6s linear infinite, msg-e7 10s infinite; }
+  .msg-main { animation: msg-mg 10s infinite; }
+  .msg-main-label { animation: msg-mt 10s infinite; }
+}
+
+@keyframes msg-flow { to { stroke-dashoffset: -8; } }
+
+/* The Conductor plans, then answers for the one decision. */
+@keyframes msg-cg {
+  0%, 0.5% { stroke: var(--border); }
+  1%, 11.5% { stroke: var(--primary); }
+  12%, 21.5% { stroke: var(--border); }
+  22%, 29.5% { stroke: var(--mission-hold); }
+  30%, 100% { stroke: var(--border); }
+}
+
+/* Three workers side by side, each blue while it works and green once done. */
+@keyframes msg-w1b {
+  0%, 7.5% { stroke: var(--border); }
+  8%, 29.5% { stroke: var(--mission-working); }
+  30%, 95.5% { stroke: var(--mission-done); }
+  100% { stroke: var(--border); }
+}
+@keyframes msg-w2b {
+  0%, 9.5% { stroke: var(--border); }
+  10%, 35.5% { stroke: var(--mission-working); }
+  36%, 95.5% { stroke: var(--mission-done); }
+  100% { stroke: var(--border); }
+}
+@keyframes msg-w3b {
+  0%, 11.5% { stroke: var(--border); }
+  12%, 21.5% { stroke: var(--mission-working); }
+  22%, 29.5% { stroke: var(--mission-hold); }
+  30%, 43.5% { stroke: var(--mission-working); }
+  44%, 95.5% { stroke: var(--mission-done); }
+  100% { stroke: var(--border); }
+}
+@keyframes msg-w4b {
+  0%, 53.5% { stroke: var(--border); }
+  54%, 69.5% { stroke: var(--mission-working); }
+  70%, 95.5% { stroke: var(--mission-done); }
+  100% { stroke: var(--border); }
+}
+@keyframes msg-w1f {
+  0%, 7.5% { transform: scaleX(0); fill: var(--mission-working); }
+  8%, 18.5% { transform: scaleX(0.08); fill: var(--mission-working); }
+  19%, 29.5% { transform: scaleX(0.55); fill: var(--mission-working); }
+  30%, 95.5% { transform: scaleX(1); fill: var(--mission-done); }
+  100% { transform: scaleX(0); }
+}
+@keyframes msg-w2f {
+  0%, 9.5% { transform: scaleX(0); fill: var(--mission-working); }
+  10%, 22.5% { transform: scaleX(0.08); fill: var(--mission-working); }
+  23%, 35.5% { transform: scaleX(0.55); fill: var(--mission-working); }
+  36%, 95.5% { transform: scaleX(1); fill: var(--mission-done); }
+  100% { transform: scaleX(0); }
+}
+@keyframes msg-w3f {
+  0%, 11.5% { transform: scaleX(0); fill: var(--mission-working); }
+  12%, 27.5% { transform: scaleX(0.08); fill: var(--mission-working); }
+  28%, 43.5% { transform: scaleX(0.55); fill: var(--mission-working); }
+  44%, 95.5% { transform: scaleX(1); fill: var(--mission-done); }
+  100% { transform: scaleX(0); }
+}
+@keyframes msg-w4f {
+  0%, 53.5% { transform: scaleX(0); fill: var(--mission-working); }
+  54%, 61.5% { transform: scaleX(0.08); fill: var(--mission-working); }
+  62%, 69.5% { transform: scaleX(0.55); fill: var(--mission-working); }
+  70%, 95.5% { transform: scaleX(1); fill: var(--mission-done); }
+  100% { transform: scaleX(0); }
+}
+/* The one decision: the third worker's `!`. */
+@keyframes msg-w3h {
+  0%, 21.5% { opacity: 0; }
+  22%, 29.5% { opacity: 1; }
+  30%, 100% { opacity: 0; }
+}
+
+/* A satellite check per finished part: purple while it checks, green with ✓ once it passed. */
+@keyframes msg-s1r { 0%, 29.5% { stroke: var(--border); } 30%, 37.5% { stroke: var(--mission-review); } 38%, 95.5% { stroke: var(--mission-done); } 100% { stroke: var(--border); } }
+@keyframes msg-s2r { 0%, 35.5% { stroke: var(--border); } 36%, 43.5% { stroke: var(--mission-review); } 44%, 95.5% { stroke: var(--mission-done); } 100% { stroke: var(--border); } }
+@keyframes msg-s3r { 0%, 43.5% { stroke: var(--border); } 44%, 51.5% { stroke: var(--mission-review); } 52%, 95.5% { stroke: var(--mission-done); } 100% { stroke: var(--border); } }
+@keyframes msg-s4r { 0%, 69.5% { stroke: var(--border); } 70%, 77.5% { stroke: var(--mission-review); } 78%, 95.5% { stroke: var(--mission-done); } 100% { stroke: var(--border); } }
+@keyframes msg-s5r { 0%, 70.5% { stroke: var(--border); } 71%, 79.5% { stroke: var(--mission-review); } 80%, 95.5% { stroke: var(--mission-done); } 100% { stroke: var(--border); } }
+@keyframes msg-s1l { 0%, 29.5% { stroke: var(--border); } 30%, 37.5% { stroke: var(--mission-review); } 38%, 95.5% { stroke: var(--mission-done); } 100% { stroke: var(--border); } }
+@keyframes msg-s2l { 0%, 35.5% { stroke: var(--border); } 36%, 43.5% { stroke: var(--mission-review); } 44%, 95.5% { stroke: var(--mission-done); } 100% { stroke: var(--border); } }
+@keyframes msg-s3l { 0%, 43.5% { stroke: var(--border); } 44%, 51.5% { stroke: var(--mission-review); } 52%, 95.5% { stroke: var(--mission-done); } 100% { stroke: var(--border); } }
+@keyframes msg-s4l { 0%, 69.5% { stroke: var(--border); } 70%, 77.5% { stroke: var(--mission-review); } 78%, 95.5% { stroke: var(--mission-done); } 100% { stroke: var(--border); } }
+@keyframes msg-s5l { 0%, 70.5% { stroke: var(--border); } 71%, 79.5% { stroke: var(--mission-review); } 80%, 95.5% { stroke: var(--mission-done); } 100% { stroke: var(--border); } }
+@keyframes msg-s1t { 0%, 37.5% { opacity: 0; } 38%, 95.5% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes msg-s2t { 0%, 43.5% { opacity: 0; } 44%, 95.5% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes msg-s3t { 0%, 51.5% { opacity: 0; } 52%, 95.5% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes msg-s4t { 0%, 77.5% { opacity: 0; } 78%, 95.5% { opacity: 1; } 100% { opacity: 0; } }
+@keyframes msg-s5t { 0%, 79.5% { opacity: 0; } 80%, 95.5% { opacity: 1; } 100% { opacity: 0; } }
+
+/* The edges light as the work moves down them. */
+@keyframes msg-e-top { 0%, 5.5% { stroke: var(--border); } 6%, 95.5% { stroke: var(--primary); } 100% { stroke: var(--border); } }
+@keyframes msg-e4 { 0%, 37.5% { stroke: var(--border); } 38%, 95.5% { stroke: var(--mission-done); } 100% { stroke: var(--border); } }
+@keyframes msg-e5 { 0%, 43.5% { stroke: var(--border); } 44%, 95.5% { stroke: var(--mission-done); } 100% { stroke: var(--border); } }
+@keyframes msg-e6 { 0%, 51.5% { stroke: var(--border); } 52%, 95.5% { stroke: var(--mission-done); } 100% { stroke: var(--border); } }
+@keyframes msg-e7 { 0%, 79.5% { stroke: var(--border); } 80%, 95.5% { stroke: var(--mission-done); } 100% { stroke: var(--border); } }
+
+/* main lights once the demo check passed. */
+@keyframes msg-mg {
+  0%, 81.5% { stroke: var(--border); fill: var(--card); }
+  82%, 95.5% { stroke: var(--mission-done); fill: color-mix(in oklab, var(--mission-done) 15%, var(--card)); }
+  100% { stroke: var(--border); fill: var(--card); }
+}
+@keyframes msg-mt { 0%, 81.5% { fill: var(--foreground); } 82%, 95.5% { fill: var(--mission-done); } 100% { fill: var(--foreground); } }

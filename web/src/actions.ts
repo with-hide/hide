@@ -1853,10 +1853,12 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
     },
 
     /**
-     * 이어받기 (D-40, B44): a new agent tab in the mission's checkout, told to
-     * take the mission; the core refuses it while a Conductor is still there.
+     * 이어받기's new agent (D-40, B44; PRD mission-tool D-11, B15): a tab in
+     * the mission's checkout told to take the mission, for a Conductor whose
+     * own conversation cannot be resumed; the core refuses it while a
+     * Conductor is still there. `request` lets the caller follow its answer.
      */
-    takeOverMission(missionId: string) {
+    takeOverMission(missionId: string, request?: { requestId: string; confirmOnly: boolean }) {
       const mission = rest()?.missions?.items.find((row) => row.id === missionId);
       if (!mission) return diagnostic(`mission_take: no mission ${missionId}`);
       const provider = takeOverProvider(mission, rest()?.ui_state?.agent_start);
@@ -1866,6 +1868,7 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
         provider,
         model: rest()?.ui_state?.agent_start?.models?.[provider] ?? null,
         prompt: takeOverPrompt(mission),
+        ...request,
       });
     },
 
@@ -1936,6 +1939,17 @@ export function createActions(send: DispatchFn, clipboard?: Clipboard) {
       if (!workspaceInFront()) return diagnostic("project_memory: no Workspace in front");
       useUiStore.getState().showHideAiTab("memory");
       showTool("memory");
+    },
+
+    /**
+     * The Mission tool on its defaults (PRD mission-tool B9): its head's ⚙,
+     * the empty tool's `바꾸기 ›` and the map head's ⚙ all open it here, never
+     * a settings window.
+     */
+    openMissionSettings() {
+      if (!workspaceInFront()) return diagnostic("mission_settings: no Workspace in front");
+      useUiStore.getState().setMissionToolPage("settings");
+      showTool("mission");
     },
 
     /** ← in the 보기 head (B47): the item opened before, or the slot closes. */
