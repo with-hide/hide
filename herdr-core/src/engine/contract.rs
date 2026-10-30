@@ -50,6 +50,7 @@ fn computed_echo_program(word: &str) -> Vec<String> {
     }
 }
 
+#[allow(clippy::disallowed_methods)] // a polling helper: it sleeps between observations of a state, bounded by a deadline
 fn shows(engine: &dyn Engine, pane: &str, text: &str) {
     let deadline = Instant::now() + SHOWN_WITHIN;
     loop {
@@ -67,6 +68,7 @@ fn shows(engine: &dyn Engine, pane: &str, text: &str) {
 
 /// Waits until the pane's shell has drawn something, its prompt, so typed
 /// text reaches a shell that reads it.
+#[allow(clippy::disallowed_methods)] // a polling helper: it sleeps between observations of a state, bounded by a deadline
 fn prompted(engine: &dyn Engine, pane: &str) {
     let deadline = Instant::now() + SHOWN_WITHIN;
     while !engine
@@ -84,7 +86,12 @@ fn panes(engine: &dyn Engine) -> Vec<(String, String)> {
         session
             .layouts
             .iter()
-            .find(|layout| layout.panes.iter().any(|candidate| candidate.pane_id == pane))
+            .find(|layout| {
+                layout
+                    .panes
+                    .iter()
+                    .any(|candidate| candidate.pane_id == pane)
+            })
             .map(|layout| layout.tab_id.clone())
             .unwrap_or_default()
     };
@@ -197,7 +204,9 @@ pub(crate) fn meets_the_contract(engine: &dyn Engine, folder: &str, stop: impl F
         engine.submit_text(WAIT, &beside, "echo nothing"),
         "typing into a closed pane",
     );
-    engine.close_tab(WAIT, &launched_tab).expect("the tab closes");
+    engine
+        .close_tab(WAIT, &launched_tab)
+        .expect("the tab closes");
     assert!(panes(engine).iter().all(|(id, _)| *id != launched));
 
     // An engine whose server has gone answers that nothing is running.
