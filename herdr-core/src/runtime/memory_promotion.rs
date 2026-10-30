@@ -137,10 +137,10 @@ pub(super) struct PromotionStart {
     /// a rebase makes it again on.
     pub(super) purpose: hide_memory::BatchPurpose,
     pub(super) base: Option<String>,
-    /// The Herdr and node of the machine that holds the Project, which
+    /// The engine and node of the machine that holds the Project, which
     /// release a failed attempt's worktree; none when that machine cannot be
     /// reached now, and the worktree then stays for the next attempt.
-    connector: Option<Arc<dyn crate::engine::Engine>>,
+    engine: Option<Arc<dyn crate::engine::Engine>>,
     node: Option<Arc<dyn crate::node_access::NodeLink>>,
 }
 
@@ -362,7 +362,7 @@ impl Runtime {
             machine: (*node != self.node).then(|| node.as_str().to_owned()),
             kind,
             launch,
-            connector: self.delivery_engine(node.as_str()),
+            engine: self.delivery_engine(node.as_str()),
             node: self.node_link(node.as_str()).ok(),
         })
     }
@@ -1152,11 +1152,11 @@ fn track_promotions(
         // panes and retire a settled one's, used off the lock.
         let mut reach = HashMap::new();
         for node in nodes {
-            if let (Some(connector), Ok(link)) = (
+            if let (Some(engine), Ok(link)) = (
                 guard.delivery_engine(node.as_str()),
                 guard.node_link(node.as_str()),
             ) {
-                reach.insert(node.clone(), (connector, link));
+                reach.insert(node.clone(), (engine, link));
             }
         }
         // The branches an attempt still followed holds: nothing is retired
@@ -1281,13 +1281,13 @@ fn track_promotions(
                         }
                         if state == PromotionState::Failed
                             && pr_number.is_none()
-                            && let (Some((connector, link)), Some(branch)) =
+                            && let (Some((engine, link)), Some(branch)) =
                                 (reach.get(*node), &promotion.branch)
                             && !held.contains(&(project_id.clone(), branch.clone()))
                             && released.insert((project_id.clone(), branch.clone()))
                         {
                             release_attempt(
-                                connector.as_ref(),
+                                engine.as_ref(),
                                 link.as_ref(),
                                 root,
                                 branch,
@@ -1340,7 +1340,7 @@ fn track_promotions(
     let mut retiring = retire_plan(carried, settled.into_iter().chain(converging), &held);
     let due = retire_due(&mut retiring, &held, |node| reach.contains_key(node));
     for retire in due {
-        let (connector, link) = &reach[&retire.node];
+        let (engine, link) = &reach[&retire.node];
         let note = &retiring[&retire];
         let noticed = note.tried == Tried::Failed;
         // The panes of the agents the store names for the attempt, from the
@@ -1353,7 +1353,7 @@ fn track_promotions(
             .collect::<Vec<_>>();
         let result = if note.empty_only {
             release_attempt(
-                connector.as_ref(),
+                engine.as_ref(),
                 link.as_ref(),
                 &retire.root,
                 &retire.branch,
@@ -1361,7 +1361,7 @@ fn track_promotions(
                 None,
             )
         } else {
-            retire_attempt(connector.as_ref(), link.as_ref(), &retire, &own, noticed)
+            retire_attempt(engine.as_ref(), link.as_ref(), &retire, &own, noticed)
         };
         match result {
             Retired::Failed => {
@@ -1510,19 +1510,12 @@ fn fail_start(
         return Ok(());
     }
     match (
-        start.connector.as_deref(),
+        start.engine.as_deref(),
         start.node.as_deref(),
         &promotion.branch,
     ) {
-        (Some(connector), Some(node), Some(branch)) => {
-            release_attempt(
-                connector,
-                node,
-                &start.repo,
-                branch,
-                project_id,
-                Some(number),
-            );
+        (Some(engine), Some(node), Some(branch)) => {
+            release_attempt(engine, node, &start.repo, branch, project_id, Some(number));
         }
         _ => crate::diagnostic!(json!({
             "component": "memory",
@@ -1570,7 +1563,7 @@ pub(super) fn agents_listed(
 /// (`start_promotion`), so retries never pile worktrees up. What happened is
 /// logged; a failure leaves the worktree for that next attempt too.
 fn release_attempt(
-    connector: &dyn crate::engine::Engine,
+    engine: &dyn crate::engine::Engine,
     node: &dyn crate::node_access::NodeLink,
     repo: &str,
     branch: &str,
@@ -1604,7 +1597,7 @@ fn release_attempt(
         Ok(own.trim() == "0" && git(path, GitCommand::Status)?.trim().is_empty())
     };
     let released = (|| -> Result<&'static str, String> {
-        let Some(path) = worktree_path(connector, repo, branch)? else {
+        let Some(path) = worktree_path(engine, repo, branch)? else {
             return Ok("gone");
         };
         // The branch checked out in the Project's own folder is the
@@ -1612,15 +1605,15 @@ fn release_attempt(
         if path.trim_end_matches('/') == repo.trim_end_matches('/') || !empty(&path)? {
             return Ok("kept");
         }
-        let panes = panes_in(connector, &path)?;
+        let panes = panes_in(engine, &path)?;
         // An agent there, or a start whose name Herdr still holds, may yet
         // do the attempt's work: nothing of it is closed.
-        let agents = agents_listed(connector)?;
+        let agents = agents_listed(engine)?;
         if agents.iter().any(|agent| panes.contains(&agent.pane_id)) {
             return Ok("active");
         }
         crate::worktree_control::close_checkout_panes(
-            connector,
+            engine,
             node,
             std::slice::from_ref(&path),
             &panes,
@@ -1749,7 +1742,7 @@ pub(super) enum Retired {
 /// branch always stays, for the merge or the operator to reuse. What
 /// happened is logged; a worktree that stays says why.
 pub(super) fn retire_attempt(
-    connector: &dyn crate::engine::Engine,
+    engine: &dyn crate::engine::Engine,
     node: &dyn crate::node_access::NodeLink,
     retire: &Retire,
     own: &[String],
@@ -1761,7 +1754,7 @@ pub(super) fn retire_attempt(
     let repo = retire.root.as_str();
     let mut at = None;
     let result = (|| -> Result<(Retired, &'static str), String> {
-        let Some(path) = worktree_path(connector, repo, &retire.branch)? else {
+        let Some(path) = worktree_path(engine, repo, &retire.branch)? else {
             return Ok((Retired::Done, "gone"));
         };
         at = Some(path.clone());
@@ -1770,8 +1763,8 @@ pub(super) fn retire_attempt(
         if path.trim_end_matches('/') == repo.trim_end_matches('/') {
             return Ok((Retired::Kept, "the Project's own folder"));
         }
-        let agents = agents_listed(connector)?;
-        let panes = panes_in(connector, &path)?;
+        let agents = agents_listed(engine)?;
+        let panes = panes_in(engine, &path)?;
         let (attempt, others): (Vec<_>, Vec<_>) = agents
             .iter()
             .filter(|agent| panes.contains(&agent.pane_id))
@@ -1782,7 +1775,7 @@ pub(super) fn retire_attempt(
             .map(|agent| agent.pane_id.clone())
             .collect::<Vec<_>>();
         crate::worktree_control::close_checkout_panes(
-            connector,
+            engine,
             node,
             &[],
             &attempt,
@@ -1799,7 +1792,7 @@ pub(super) fn retire_attempt(
             .filter(|pane| !attempt.contains(pane))
             .collect::<Vec<_>>();
         for pane in &remaining {
-            let held = connector
+            let held = engine
                 .pane_processes(READ_WAIT, pane)
                 .map_err(String::from)?;
             if !held.foreground_pids.is_empty() && !held.shell_holds_terminal() {
@@ -1819,7 +1812,7 @@ pub(super) fn retire_attempt(
             return Ok((Retired::Kept, "it holds uncommitted changes"));
         }
         crate::worktree_control::close_checkout_panes(
-            connector,
+            engine,
             node,
             std::slice::from_ref(&path),
             &remaining,
@@ -3100,7 +3093,7 @@ mod tests {
         assert_eq!(remote.machine.as_deref(), Some("node-elsewhere"));
         // A failed attempt there is released by that node or not at all,
         // never by this Mac's Herdr reading the other machine's folder.
-        assert!(remote.connector.is_none() && remote.node.is_none());
+        assert!(remote.engine.is_none() && remote.node.is_none());
 
         let mut store = MemoryStore::open(&root.path().join("memory.sqlite3")).unwrap();
         store
@@ -3464,14 +3457,14 @@ mod tests {
             .panes
             .push(("w2:p1".into(), "/r.worktrees/first/docs".into()));
         let herdr = herdr(&repository);
-        let connector = herdr.engine();
+        let engine = herdr.engine();
         let failed = Promotion {
             state: PromotionState::Failed,
             ..running(None, 1)
         };
 
         release_attempt(
-            connector.as_ref(),
+            engine.as_ref(),
             &Machine(Arc::clone(&repository)),
             "/r",
             &first,
@@ -3500,7 +3493,7 @@ mod tests {
         );
         // Asked again, nothing is left to release.
         release_attempt(
-            connector.as_ref(),
+            engine.as_ref(),
             &Machine(Arc::clone(&repository)),
             "/r",
             &first,
@@ -3527,9 +3520,9 @@ mod tests {
                 repository.changed = changed;
             }
             let herdr = herdr(&repository);
-            let connector = herdr.engine();
+            let engine = herdr.engine();
             release_attempt(
-                connector.as_ref(),
+                engine.as_ref(),
                 &Machine(Arc::clone(&repository)),
                 "/r",
                 &first,

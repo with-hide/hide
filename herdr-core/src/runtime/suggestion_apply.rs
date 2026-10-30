@@ -253,9 +253,9 @@ impl Runtime {
         let spawned = self.spawn_issue_worker(
             "suggestion-apply",
             move || {
-                if let Some((connector, link, pane)) = end_first
+                if let Some((engine, link, pane)) = end_first
                     && let Err(reason) =
-                        super::branch_decision::end_agent(connector.as_ref(), link.as_ref(), &pane)
+                        super::branch_decision::end_agent(engine.as_ref(), link.as_ref(), &pane)
                 {
                     crate::diagnostic!(json!({
                         "component": "suggestions", "kind": "apply.previous_agent_kept",
@@ -496,8 +496,8 @@ impl Runtime {
         let Ok(link) = self.node_link(node.as_str()) else {
             return refused("node_unavailable");
         };
-        let connector = self.delivery_engine(node.as_str());
-        if decision == BranchDecision::Discard && connector.is_none() {
+        let engine = self.delivery_engine(node.as_str());
+        if decision == BranchDecision::Discard && engine.is_none() {
             return refused("herdr_unavailable");
         }
         let own = attempt
@@ -544,7 +544,7 @@ impl Runtime {
                     let push = decision == BranchDecision::MergePush;
                     let kind = if push { "merge_push" } else { "merge" };
                     let (landing, base) = super::branch_decision::land(
-                        connector.as_deref(),
+                        engine.as_deref(),
                         link.as_ref(),
                         &place,
                         &own,
@@ -573,11 +573,11 @@ impl Runtime {
                     (change, base)
                 }
                 BranchDecision::Discard => {
-                    let Some(connector) = connector else {
+                    let Some(engine) = engine else {
                         return (AttemptMove::DecisionRefused("discard_failed".into()), None);
                     };
                     let change = match super::branch_decision::discard(
-                        connector.as_ref(),
+                        engine.as_ref(),
                         link.as_ref(),
                         &place,
                         &own,
@@ -1031,7 +1031,7 @@ impl Runtime {
         let Ok(link) = self.node_link(node.as_str()) else {
             return;
         };
-        let connector = self.delivery_engine(node.as_str());
+        let engine = self.delivery_engine(node.as_str());
         let own = attempt
             .agent_id
             .as_deref()
@@ -1061,10 +1061,10 @@ impl Runtime {
                 // A branch merged by hand retires its agent and worktree as
                 // Hide's own merge does.
                 if let Ok(Some(AttemptMove::Merged { .. })) = &change
-                    && let Some(connector) = connector
+                    && let Some(engine) = engine
                 {
                     super::memory_promotion::retire_attempt(
-                        connector.as_ref(),
+                        engine.as_ref(),
                         link.as_ref(),
                         &super::memory_promotion::Retire {
                             node: place.node.clone(),

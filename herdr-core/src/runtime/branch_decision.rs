@@ -102,7 +102,7 @@ enum Asked {
 /// words can name paths, so a failure is answered as a code alone, and a
 /// call the node did not answer is logged by its kind and error code (B27).
 pub(super) fn land(
-    connector: Option<&dyn crate::engine::Engine>,
+    engine: Option<&dyn crate::engine::Engine>,
     link: &dyn NodeLink,
     place: &BranchPlace,
     own_panes: &[String],
@@ -149,12 +149,12 @@ pub(super) fn land(
         (landing, None)
     };
     if matches!(landing, Landing::Merged(_))
-        && let Some(connector) = connector
+        && let Some(engine) = engine
     {
         // The merge stands whatever the retire answers; a worktree kept is
         // logged and found in the cleanup review.
         retire_attempt(
-            connector,
+            engine,
             link,
             &Retire {
                 node: place.node.clone(),
@@ -300,28 +300,28 @@ pub(super) fn sync_day(unix_ms: u64) -> String {
 /// worktree and branch are deleted without asking. A worktree another agent
 /// works in is left, and the discard fails for the operator to see again.
 pub(super) fn discard(
-    connector: &dyn crate::engine::Engine,
+    engine: &dyn crate::engine::Engine,
     link: &dyn NodeLink,
     place: &BranchPlace,
     own_panes: &[String],
     tip: Option<&str>,
 ) -> Result<(), String> {
-    if let Some(path) = worktree_path(connector, &place.root, &place.branch)? {
+    if let Some(path) = worktree_path(engine, &place.root, &place.branch)? {
         // The branch checked out in the Project's own folder is the
         // operator's, never an attempt's worktree.
         if path.trim_end_matches('/') == place.root.trim_end_matches('/') {
             return Err("the branch is checked out in the Project's own folder".into());
         }
-        let panes = panes_in(connector, &path)?;
+        let panes = panes_in(engine, &path)?;
         let (own, others): (Vec<_>, Vec<_>) =
             panes.into_iter().partition(|pane| own_panes.contains(pane));
-        let agents = agents_listed(connector)?;
+        let agents = agents_listed(engine)?;
         if agents.iter().any(|agent| others.contains(&agent.pane_id)) {
             return Err("another agent works in the worktree".into());
         }
         let all = own.iter().chain(&others).cloned().collect::<Vec<_>>();
         crate::worktree_control::close_checkout_panes(
-            connector,
+            engine,
             link,
             std::slice::from_ref(&path),
             &all,
@@ -361,12 +361,12 @@ pub(super) fn discard(
 /// Ends the agent of an attempt whose branch a new agent takes over (`PR
 /// 올리기`, `다시 맞추기`), so one worktree never holds two of Hide's agents.
 pub(super) fn end_agent(
-    connector: &dyn crate::engine::Engine,
+    engine: &dyn crate::engine::Engine,
     link: &dyn NodeLink,
     pane: &str,
 ) -> Result<(), String> {
     crate::worktree_control::close_checkout_panes(
-        connector,
+        engine,
         link,
         &[],
         &[pane.to_owned()],
