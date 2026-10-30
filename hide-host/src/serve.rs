@@ -843,6 +843,7 @@ fn session_refusal(refusal: hide_session::ReadRefusal) -> HostError {
         hide_session::ReadRefusal::Refused(reason) => match reason.as_str() {
             "session_file_missing" => ErrorCode::NotFound,
             "session_kind_unsupported"
+            | "thread_unsupported"
             | "opencode_db_schema_unknown"
             | "opencode_data_home_invalid" => ErrorCode::Unsupported,
             reason if reason.starts_with("session_capacity:") => ErrorCode::TooLarge,

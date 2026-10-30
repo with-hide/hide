@@ -378,6 +378,7 @@ impl Runtime {
         changed |= self.tick_device_hosts(now_unix_ms);
         changed |= self.tick_session_window(now_unix_ms);
         changed |= self.tick_work_clock(now_unix_ms);
+        changed |= self.tick_session_thread(now_unix_ms);
         // Agents fall asleep and closes end on paths of their own; their
         // nodes hear of it here at the latest.
         changed |= self.sync_terminal_intents();

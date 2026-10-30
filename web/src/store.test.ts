@@ -26,6 +26,19 @@ describe("snapshot merge", () => {
     });
   });
 
+  it("keeps a thread's kept pages while only its live page moves", () => {
+    const store = useShellStore.getState();
+    const page = (text: string) => ({ updates: [{ sessionUpdate: "agent_message_chunk", content: { type: "text", text } }], parts: {} });
+    const thread = (tail: string) => ({ generation: 1, state: "ready" as const, pane_id: "w1:p1", machine: "mac", failure: null, pane: "same" as const, connected: true, has_older: false, older: "idle" as const, tail: page(tail), input: null });
+    store.applyFrame({ type: "snapshot", payload: { revision: 1, rest: {}, session_thread: thread("하나"), session_thread_history: { generation: 1, pages: [page("처음")] } } });
+    const kept = useShellStore.getState().sessionThreadHistory;
+    store.applyFrame({ type: "delta", payload: { revision: 2, session_thread: thread("둘") } });
+    expect(useShellStore.getState().sessionThreadHistory).toBe(kept);
+    expect(useShellStore.getState().sessionThread?.tail?.updates[0]).toEqual({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "둘" } });
+    store.applyFrame({ type: "snapshot", payload: { revision: 1, rest: {} } });
+    expect(useShellStore.getState().sessionThread).toBeNull();
+  });
+
   it("revisions usage independently and resets it on a fresh snapshot", () => {
     const store = useShellStore.getState();
     const usage = { nodes: [{ node: "local", agents: [], history: null }] };

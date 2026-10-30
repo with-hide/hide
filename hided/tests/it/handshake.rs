@@ -1590,12 +1590,14 @@ async fn browser_socket_cannot_start_a_host_file_handler() {
 async fn a_client_cannot_send_the_shell_attachment_events() {
     let (_dir, running) = start().await;
     let mut socket = live_socket(&running).await;
-    // The browser stages bytes through attachment_*; a client that sends the
-    // shell's own event would name an arbitrary path for the core to read.
+    // The browser stages bytes through attachment_* and a thread's input
+    // through thread_input; a client that sends the shell's own event would
+    // name an arbitrary path for the core to read.
     for kind in [
         "terminal_attachment",
         "terminal_attachment_ready",
         "terminal_attachment_action",
+        "session_thread_input",
     ] {
         let refused = send_event_expecting(
             &mut socket,
@@ -1611,6 +1613,36 @@ async fn a_client_cannot_send_the_shell_attachment_events() {
         )
         .await;
         assert_eq!(refused["type"], "error", "{kind}");
+    }
+    running.stop();
+}
+
+/// A thread's input commits its own stages before anything reaches the
+/// core; a stage it never made, or an id the core would refuse, is answered
+/// as an attachment refusal under the input's id.
+#[tokio::test]
+async fn a_thread_input_naming_files_it_never_staged_is_refused() {
+    let (_dir, running) = start().await;
+    let mut socket = live_socket(&running).await;
+    for (request_id, reason) in [
+        ("01234567-0123-0123-0123-0123456789ab", "unknown_stage"),
+        ("not-a-uuid", "invalid_request_id"),
+    ] {
+        let refused = send_event_expecting(
+            &mut socket,
+            "thread_input",
+            json!({
+                "generation": 1,
+                "pane_id": "p1",
+                "request_id": request_id,
+                "text": "이거 봐줘",
+                "stages": ["never-staged"],
+            }),
+            |frame| frame["type"] == "attachment_refused",
+        )
+        .await;
+        assert_eq!(refused["payload"]["request_id"], request_id);
+        assert_eq!(refused["payload"]["reason"], reason);
     }
     running.stop();
 }

@@ -1131,6 +1131,25 @@ It inserts paths even when a provider cannot decode the referenced file; provide
 Hide provides no thumbnail shelf, attachment membership, or synchronized removal; subsequent editing and submission remain native provider operations, and pasting a path is not proof of image acceptance.
 Reintroducing a shared attachment shelf requires a supported provider contract for stable attachment identity, idempotent add/remove, native draft changes, and accepted submission events; both surfaces would have to reflect the same attachment membership, and the shelf would have to clear only after confirmed submission, preserving items on failure.
 
+## Session thread
+
+Core owner: `herdr-core/src/runtime/session_thread.rs`; reader `hide-session/src/thread/`; web store `web/src/store.ts` (`sessionThread`, `sessionThreadHistory`), actions `openThread`, `readOlderThread`, `closeThread` in `web/src/actions.ts`, input `submitThreadInput` in `web/src/attachments.ts`.
+The screen that draws a thread comes with Desk (PRD session-docs-and-assistant); this section is what the thread under it does.
+
+A thread shows one agent pane's session as a conversation: what the operator and Hide said to the agent, what the agent said and thought, its tool calls with their input, diffs and output, and its plans, newest last (B25).
+It follows the session while it works: what the agent writes reaches the thread within about a second of Herdr seeing the agent work, and the earlier part stays as it was drawn.
+Older pages load on request, up to four kept pages besides the live one; past that the request is refused as `capacity` and the terminal has the rest.
+A shell call that ran a `hide` command which made something is drawn as that thing (B26): a plan's steps, a new session's row, a letter's line, an opened View, a mission's chip, looked up in Hide's own state by the names the command gave.
+When the record cannot be read, the thread says why in one line, `no_record` (no session reported, no file, or an agent Hide cannot read a thread of) or `refused` (the record is there and could not be read), beside `터미널로` (B27); a session the agent reports later is read then.
+A device whose link is down keeps the thread it drew, dimmed by `connected` false, and reads again when the link returns.
+
+The input box sends its words to the thread's pane only (B29, D-62): the same pane, terminal and session the thread was opened for, else it refuses as `pane_changed` or `pane_gone` and nothing is typed anywhere.
+Files picked or pasted into the box are staged as a terminal attachment's are and their quoted paths go before the words, a device's files staged on that device first; one input is in flight at a time.
+The words reach the agent as a phone's reply does, through Herdr's `pane.send_input` with Enter, not as keys typed into the terminal, and this differs from typing them in the terminal in a way the operator can see.
+When the pane's program has asked for bracketed paste, as Claude Code, Codex and most agent composers do, Herdr wraps the words in a paste, so a long text can show in the agent's composer as a pasted block (Claude Code's `[Pasted text]`) rather than as typed lines, and a new line in it stays inside the message instead of submitting it.
+Control characters other than a new line and a tab are refused before anything is sent, and the text is capped at 16 KiB.
+The input's state, `sending`, `sent` or `refused` with its reason, is the thread section's `input`; a refusal hided makes before the core (a file it never staged, a full staging area) reaches the thread as `threadInputRefusal` under the input's request id.
+
 ## Overview
 
 Web owner: `web/src/Overview.tsx` (the modal and the page, the title and the device switch), `web/src/MainScreen.tsx` (the tab row with its counts and controls, the unreachable device, with `web/src/HerdrTakeover.tsx` for this machine's Herdr on another protocol, the Home with no project, the side panel), `web/src/overviewTasks.ts` (a device's tasks as the record and the backlog read them), `web/src/OverviewRecord.tsx` (a session's record beside the tabs at Home), `web/src/BacklogTab.tsx` and `web/src/overviewBacklog.ts` (백로그), `web/src/ProjectsTab.tsx` and `web/src/overviewProjects.ts` (Projects), `web/src/QuickAdd.tsx` and `web/src/quickAddChoice.ts` (the quick add), `web/src/issueMarks.tsx` (an issue's glyph and labels), `web/src/IssueDialogs.tsx` and `web/src/issueStart.ts` (Start).

@@ -1423,6 +1423,7 @@ mod tests {
                 exact_route: false,
                 expected_id: None,
             }),
+            thread: None,
             host_scope: Some("fixture".into()),
             turn: crate::delivery::doorbell::Turn::Unread,
         };
