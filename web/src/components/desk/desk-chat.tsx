@@ -75,13 +75,13 @@ export function DeskThinking({ startedAt = null }: { startedAt?: number | null }
   );
 }
 
-const STEP_WORDS: Record<keyof DeskSteps, MessageKey> = {
+const STEP_WORDS = {
   sessions: "desk.steps.sessions",
   files: "desk.steps.files",
   letters: "desk.steps.letters",
   starts: "desk.steps.starts",
   other: "desk.steps.other",
-};
+} as const satisfies Record<keyof DeskSteps, string>;
 
 /** A Desk turn folded into one line above its answer (D-75): how long it thought and what it did, counted; a turn that did nothing has none. */
 export function DeskReplySteps({ thoughtMs, steps }: { thoughtMs: number | null; steps: DeskSteps }) {
