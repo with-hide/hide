@@ -1015,20 +1015,24 @@ test("Markdown Live draws frontmatter in its own scrolling pane", async ({ page 
     await expect(page.locator('[data-markdown-mode="live"]')).toBeVisible();
     const pane = page.locator("[data-editor-frontmatter]");
     const body = page.locator("[data-editor-body] .cm-content");
-    await expect(pane.locator(".cm-content")).toContainText("title: Post");
+    // The pane draws the block as properties: each key beside its value, the
+    // delimiters and the colon hidden; the file keeps its text.
+    await expect(pane.locator(".cm-fm-key").first()).toHaveText("title");
+    await expect(pane.locator(".cm-fm-value").first()).toHaveText("Post");
+    await expect(pane.locator(".cm-content")).not.toContainText("---");
     // The block left the body: it is drawn once, in the pane (D-11).
     await expect(body).not.toContainText("title: Post");
     // Live hides the heading's hash when the caret is elsewhere, so the body
     // reads as its text.
     await expect(body).toContainText("Body");
 
-    // The pane is about eight lines tall and scrolls inside itself, so the
-    // body below it does not move with the block (D-11).
+    // The pane is about eight property lines tall and scrolls inside itself,
+    // so the body below it does not move with the block (D-11).
     const measured = await pane.evaluate((element) => ({
       client: element.clientHeight,
       scroll: element.querySelector(".cm-scroller")?.scrollHeight ?? 0,
     }));
-    const lineHeight = await pane.evaluate(() => Number.parseFloat(getComputedStyle(document.querySelector("[data-editor-frontmatter] .cm-content")!).fontSize) * 1.5);
+    const lineHeight = await pane.evaluate(() => Number.parseFloat(getComputedStyle(document.querySelector("[data-editor-frontmatter] .cm-content")!).fontSize) * 1.6);
     expect(measured.scroll).toBeGreaterThan(measured.client);
     expect(measured.client).toBeGreaterThan(lineHeight * 6);
     expect(measured.client).toBeLessThan(lineHeight * 9);

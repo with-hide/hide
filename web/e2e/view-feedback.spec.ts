@@ -15,9 +15,19 @@ test.use({ actionTimeout: 15_000 });
 
 const front = (page: Page) => page.locator('[data-view-tab-bar] [role="tab"][aria-selected="true"]');
 
+/** Line `line` of the Markdown Live View in front, which numbers no lines. */
+const lineOf = (page: Page, line: number) => page.locator(".cm-content > .cm-line").nth(line - 1);
+
+/** Points at the comment gutter on line `line`'s first row (B12). */
+async function pointAtLine(page: Page, line: number): Promise<void> {
+  const row = (await lineOf(page, line).boundingBox())!;
+  const gutter = (await page.locator(".cm-view-comment-gutter").boundingBox())!;
+  await page.mouse.move(gutter.x + gutter.width / 2, row.y + 4);
+}
+
 /** Opens the note under line `line` of the View in front through the `+` the gutter shows on the pointer's row (B12). */
 async function noteOnLine(page: Page, line: number, note: string): Promise<void> {
-  await page.locator(".cm-lineNumbers .cm-gutterElement", { hasText: new RegExp(`^${line}$`) }).hover();
+  await pointAtLine(page, line);
   await page.locator(`[data-view-comment-add="${line}"]`).click();
   const field = page.locator("[data-view-note-field]");
   await expect(field).toBeFocused();
@@ -56,12 +66,11 @@ test("an agent's View wears its mark, and the operator's line comment reaches th
     // B8: the agent's pane counts the View it opened.
     await expect(page.locator(`[data-pane-views="${pane}"]`)).toHaveText(/1 view/);
 
-    // B12: on a wrapped line the `+` sits beside the line number, on the line's first row, not halfway down.
-    const numberOf = (line: number) => page.locator(".cm-lineNumbers .cm-gutterElement", { hasText: new RegExp(`^${line}$`) });
-    const oneRow = (await numberOf(3).boundingBox())!;
-    const wrapped = (await numberOf(4).boundingBox())!;
+    // B12: on a wrapped line the `+` sits beside the line, on its first row, not halfway down.
+    const oneRow = (await lineOf(page, 3).boundingBox())!;
+    const wrapped = (await lineOf(page, 4).boundingBox())!;
     expect(wrapped.height, "line 4 must wrap for this check").toBeGreaterThan(oneRow.height * 1.5);
-    await numberOf(4).hover();
+    await pointAtLine(page, 4);
     await screenshot(page, "comment-plus-wrapped-line");
     const plus = (await page.locator('[data-view-comment-add="4"]').boundingBox())!;
     expect(plus.y).toBeGreaterThanOrEqual(wrapped.y);
