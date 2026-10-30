@@ -483,7 +483,7 @@ mod tests {
             .to_string();
         let ascii = ascii_json(&json);
         assert!(ascii.is_ascii(), "{ascii}");
-        assert!(ascii.contains(r#"purpose=\"\u2026\""#));
+        assert!(ascii.contains(r#"purpose \"\u2026\""#));
         assert!(ascii.contains(r"\ud83d\ude00"), "outside the BMP as a pair");
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&ascii).unwrap(),
