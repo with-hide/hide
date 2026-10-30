@@ -273,11 +273,20 @@ Regression owners: `a_turn_end_is_not_a_stop_until_its_session_read_lands`, `a_r
 
 ## Where each axis comes from
 
-Activity and completion come only from Herdr's `agent_status` and `completion_seq`: `working` is Working, `idle` and `done` are stopped, `done` or `idle` with a `completion_seq` reports a completion, and any other value reads as unknown rather than idle.
+Activity, completion and approval are judged in one order: the agent's hook first, then its session file, then Herdr (PRD engine-bundle-1 D-9).
+
+1. The turn the hook of the pane's own session last reported (`working`, `done`, `waiting` or `idle`; [agent-hooks.md](agent-hooks.md#the-turn-the-hook-reports)), which the core keeps per pane and session (`agent_hooks::facts`) and lays on the agent as `SessionAgentPayload.hook`, never on the wire.
+   `working` is Working; `done` is stopped with a completion; `waiting` is stopped with an approval demand; `idle` is stopped with no completion, the turn an interrupt ended.
+   It stands until the same session's next hook event, so Herdr's reading of the screen never overrides it: a turn waiting on a background command that Herdr reads as finished (#348) stays Working.
+   No timer ends it (design principle 13); a turn no hook reports the end of is ended by the signal the agent does give, and the facts go when Herdr lists no agent in the pane or the pane closes.
+2. The session file, for the waits no hook reports: a plan waiting for approval (below), with the hook's `working` standing in for Herdr's `working` when the session has a hook turn.
+3. Herdr's `agent_status` and `completion_seq`, only for a session whose hook has reported no turn: `working` is Working, `idle` and `done` are stopped, `done` or `idle` with a `completion_seq` reports a completion, and any other value reads as unknown rather than idle.
+
 An agent-list transport failure makes the retained telemetry unconfirmed while the topology stream remains connected.
 Until a successful agent list or bootstrap snapshot confirms it again, the agent keeps its identity and task title but has Unknown activity, no completion or current demand, and requires a status check before closing.
 An identical successful list restores the confirmed state; a topology event alone does not confirm the entire agent list.
-No pane token is read for either.
+No pane token is read for any of these.
+Regression owners: `sidebar::tests::a_hook_turn_decides_the_axes_ahead_of_herdrs_state`, `agent_hooks::facts::tests`.
 Demand has these sources:
 
 - A question is the core's label verdict on the agent's last message (`label.question`, see Task identity below).
@@ -293,7 +302,8 @@ Demand has these sources:
   A reply whose id cannot be placed, or an async call whose arguments cannot be read, leaves the wait unknown rather than nothing.
   Missing content remains absent, and a failed, incomplete or older-state read publishes no structured fact; the independent letter hold stays unknown rather than assuming an answer.
   Native calls are bounded to eight per turn with 256-byte identities; exceeding the bound fails the read instead of dropping a pending question.
-- Approval is Herdr's `blocked` lifecycle, whether or not the operator has read it.
+- Approval is the hook's `waiting` turn: Claude Code's and Codex's `PermissionRequest`, Claude Code's `permission_prompt` and `elicitation_dialog` notifications, and an OpenCode permission ([agent-hooks.md](agent-hooks.md#the-turn-the-hook-reports)), whether or not the operator has read it.
+  For a session whose hook has reported no turn, it is Herdr's `blocked` lifecycle; a hook that has reported the turn has said whether it waits, so Herdr's `blocked` no longer decides that session.
 - Approval is also a plan waiting for the operator's approval that Herdr reads as an ordinary stop, Codex's "Implement this plan?" (PRD codex-plan-approval-hold).
   The core reads it from the session file, not the screen: the label worker's session read folds the agent's turn records into a turn tracker (`hide-session/src/turns.rs`), and a plan-mode turn that proposed a plan and finished, with no later turn or person's message, waits.
   The answer holds only for the Herdr `state_change_seq` the read was asked under and the session it proved, it is laid on the row's facts (`RowFacts.awaiting_operator`, never on the wire) and resolved by `agent_state::agent_blocked`, and it is not shown while Herdr says the agent works, except for an agent kind whose adapter declares `waits_while_working` (`SessionFormat`).
@@ -632,10 +642,10 @@ The pet dashboard's count tiles read the same four groups, plus the rows whose s
 
 The pet's badge row carries one more count after the three groups: the in-process subagents Hide's hook reports as working, in purple.
 The pet is its only reader: the desktop app draws no pet today, and the web shell draws no subagent count on any surface ([UI_BEHAVIOR.md, Subagent count](UI_BEHAVIOR.md#subagent-count)).
-`agent_state/tally.rs::subagents_active` sums the `working` hook token over the agents on an answering server, with saturation, and returns zero while disconnected; a pane whose agent has gone is not counted even if its token lingers, and an instrumented pane whose count is unknown adds nothing rather than a zero.
+`agent_state/tally.rs::subagents_active` sums the `working` count the hook reported to the core (`PaneHookTokens`, laid from `agent_hooks::facts`) over the agents on an answering server, with saturation, and returns zero while disconnected; a pane whose agent has gone is not counted even if its token lingers, and an instrumented pane whose count is unknown adds nothing rather than a zero.
 It is the one count the hook can vouch for; Herdr's own wire carries no ambient counts, and nothing here scans transcripts or output.
 
-Regression owner: `subagent_counts_sum_the_hook_tokens_of_listed_agents_and_go_quiet_while_disconnected`.
+Regression owner: `subagent_counts_sum_the_hook_tokens_of_listed_agents_and_go_quiet_while_disconnected`, which feeds the counts as the core lays them.
 
 ## Uninstrumented is not an unknown activity
 
@@ -671,8 +681,7 @@ Settings counts sessions and never these connections, so a pane that needs a Reo
 | `hooks_not_installed`, `config_unreadable`, `hook_outdated` | `setup_needed` (fix it in the agent's row in Settings; Reopen would change nothing) |
 | `hooks_switched_off`, `unknown`, an agent with no hook, or an agent asleep | no connection, so no chip |
 
-A Herdr live handoff or restart does not move a connected pane to `started_before_hide`: the tokens the instrumented judgement reads go with the old server, and hided puts them back from the pane's record within a few agent reads, without a hook event ([agent-hooks.md](agent-hooks.md#after-herdr-hands-off-or-restarts)).
-Until then, and for a pane on a device, a handed-off pane reads as a session that predates the install.
+A Herdr live handoff or restart does not move a connected pane to `started_before_hide`: the hook reports to the core, which keeps what it reported in its own `hook-facts.json`, so nothing the instrumented judgement reads goes with Herdr's server, for a pane on a device as for this Mac's ([agent-hooks.md](agent-hooks.md#what-the-hook-returns-and-reports-back)).
 `can_reopen` is false for `setup_needed`, `update_agent`, an agent other than Claude Code and Codex, and a pane on another device, because a Reopen restarts a Claude Code or Codex session through this Mac's Herdr and changes no agent's version.
 The `update_agent` reason is read from the machine's last kit report and the pane's agent kind on the projection pass that already judges the pane, so it adds no per-tick work; the sessions that wore it are remembered per machine (`Runtime::update_badges`) until they connect or end, so a session started on the old copy reads "restart to connect" once the update has put the piece in, and a session that never wore it keeps the rows below ([agent-hooks.md](agent-hooks.md#updating-an-agent-that-is-too-old)).
 The shared server is the machine's last kit read (`KitSnapshot::shares_codex_server`): a read that says the setting is on, or that a daemon still answers with the setting off, is what turns a Codex pane's reason into the shared server, and a later read that says neither turns it back into `started_before_hide` at once (PRD codex-daemon-apply D-07, B9).
