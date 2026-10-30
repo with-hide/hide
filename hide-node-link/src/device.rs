@@ -1085,7 +1085,11 @@ pub struct SshHostEntry {
 pub struct SshHostListing {
     pub entries: Vec<SshHostEntry>,
     pub registered: Vec<(String, SshAddress)>,
+    /// The read is incomplete (a bound was crossed): more may exist.
     pub truncated: bool,
+    /// A configuration file that exists could not be read: what it names is
+    /// unknown, which is not "no Host".
+    pub unreadable: bool,
 }
 
 /// Saved client configuration, never evidence of a reachable server.

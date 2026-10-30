@@ -52,15 +52,21 @@ const MAX_INCLUDE_NAME_BYTES: usize = 4096;
 #[derive(Debug, Default, Eq, PartialEq)]
 pub(crate) struct ConfigAliases {
     pub(crate) aliases: Vec<String>,
-    /// More than [`MAX_HOSTS`] concrete aliases were named; the rest are not
-    /// listed.
+    /// The read is incomplete: more than [`MAX_HOSTS`] concrete aliases, a
+    /// file past the size, count or Include depth bounds, or an Include that
+    /// could not be expanded; the rest are not listed.
     pub(crate) truncated: bool,
+    /// A configuration file that exists could not be read (not a file, an
+    /// I/O error, not UTF-8): what it names is unknown, which is not "no
+    /// Host". A file that does not exist is simply none.
+    pub(crate) unreadable: bool,
     /// Include refusal invalidates the entire listing, including extras.
     include_failed: bool,
 }
 
-/// Reads `<home>/.ssh/config` and what it includes. A missing or unreadable
-/// config names no host (the dialog then says where to add one, B52).
+/// Reads `<home>/.ssh/config` and what it includes. A missing config names
+/// no host (the dialog then says where to add one, B52); one that could not
+/// be read says so, and a read cut at a bound says it is incomplete.
 pub(crate) fn read_aliases(home: &Path) -> ConfigAliases {
     let mut reader = Reader {
         home,
@@ -82,15 +88,28 @@ pub(super) struct Reader<'a> {
 impl Reader<'_> {
     fn file(&mut self, path: &Path, depth: usize) {
         if self.files >= MAX_CONFIG_FILES {
+            self.found.truncated = true;
             return;
         }
-        let Ok(metadata) = std::fs::metadata(path) else {
-            return;
+        let metadata = match std::fs::metadata(path) {
+            Ok(metadata) => metadata,
+            // ssh skips an Include that names nothing, and no config is no Host.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+            Err(_) => {
+                self.found.unreadable = true;
+                return;
+            }
         };
-        if !metadata.is_file() || metadata.len() > MAX_CONFIG_BYTES {
+        if !metadata.is_file() {
+            self.found.unreadable = true;
+            return;
+        }
+        if metadata.len() > MAX_CONFIG_BYTES {
+            self.found.truncated = true;
             return;
         }
         let Ok(contents) = std::fs::read_to_string(path) else {
+            self.found.unreadable = true;
             return;
         };
         self.files += 1;
@@ -102,7 +121,12 @@ impl Reader<'_> {
                 for argument in arguments {
                     self.alias(argument);
                 }
-            } else if keyword.eq_ignore_ascii_case("include") && depth < MAX_INCLUDE_DEPTH {
+            } else if keyword.eq_ignore_ascii_case("include") {
+                // What an Include past the depth bound names is not read.
+                if depth >= MAX_INCLUDE_DEPTH {
+                    self.found.truncated = true;
+                    continue;
+                }
                 for argument in arguments {
                     let included = match self.includes.expand(self.home, &argument) {
                         Ok(included) => included,
@@ -433,6 +457,7 @@ pub(crate) fn list(
             entries: Vec::new(),
             registered: Default::default(),
             truncated: true,
+            unreadable: config.unreadable,
         };
     }
     let mut wanted = config.aliases.clone();
@@ -466,6 +491,7 @@ pub(crate) fn list(
         entries,
         registered,
         truncated: config.truncated,
+        unreadable: config.unreadable,
     }
 }
 
@@ -516,8 +542,72 @@ mod tests {
         write(&root.join("extra"), "Host from-extra\nInclude extra\n");
         let found = read_aliases(root);
         assert_eq!(found.aliases, ["from-a", "from-b", "first", "from-extra"]);
-        // A file that includes itself stops at the depth and file bounds.
+        // `Include extra` from ~/extra names ~/.ssh/extra, which is not
+        // there: ssh skips it, so the read is complete.
         assert!(!found.truncated);
+        assert!(!found.unreadable);
+    }
+
+    #[test]
+    fn a_missing_config_is_none_and_a_complete_one_is_complete() {
+        let home = tempfile::tempdir().unwrap();
+        assert_eq!(read_aliases(home.path()), ConfigAliases::default());
+        let found = aliases("Host one\nInclude missing\n");
+        assert_eq!(found.aliases, ["one"]);
+        assert!(!found.truncated && !found.unreadable);
+    }
+
+    #[test]
+    fn a_config_that_cannot_be_read_is_unreadable_not_empty() {
+        let home = tempfile::tempdir().unwrap();
+        let config = home.path().join(".ssh/config");
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        std::fs::write(&config, b"Host one\n\xff\xfe not text\n").unwrap();
+        let found = read_aliases(home.path());
+        assert!(found.unreadable);
+        assert!(found.aliases.is_empty());
+        // A folder where the config should be cannot be read either.
+        std::fs::remove_file(&config).unwrap();
+        std::fs::create_dir(&config).unwrap();
+        assert!(read_aliases(home.path()).unreadable);
+    }
+
+    #[test]
+    fn a_read_cut_at_a_bound_is_incomplete() {
+        // Larger than a config file may be.
+        let big = format!("Host big\n{}", "# padding\n".repeat(40_000));
+        let oversize = aliases(&big);
+        assert!(oversize.truncated && !oversize.unreadable);
+        assert!(oversize.aliases.is_empty());
+        // Includes nested past the depth bound.
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path();
+        write(&root.join(".ssh/config"), "Host top\nInclude d1\n");
+        for level in 1..=MAX_INCLUDE_DEPTH + 1 {
+            write(
+                &root.join(format!(".ssh/d{level}")),
+                &format!("Host d{level}\nInclude d{}\n", level + 1),
+            );
+        }
+        let deep = read_aliases(root);
+        assert!(deep.truncated);
+        assert_eq!(deep.aliases.len(), MAX_INCLUDE_DEPTH + 1);
+        // More files than one read takes.
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path();
+        let includes: String = (0..MAX_CONFIG_FILES)
+            .map(|index| format!("Include f{index}\n"))
+            .collect();
+        write(&root.join(".ssh/config"), &includes);
+        for index in 0..MAX_CONFIG_FILES {
+            write(
+                &root.join(format!(".ssh/f{index}")),
+                &format!("Host f{index}\n"),
+            );
+        }
+        let many = read_aliases(root);
+        assert!(many.truncated);
+        assert_eq!(many.aliases.len(), MAX_CONFIG_FILES - 1);
     }
 
     #[test]
@@ -529,15 +619,6 @@ mod tests {
         assert_eq!(found.aliases.len(), MAX_HOSTS);
         assert!(found.truncated);
         assert_eq!(found.aliases[MAX_HOSTS - 1], format!("h{}", MAX_HOSTS - 1));
-    }
-
-    #[test]
-    fn an_oversized_or_missing_config_names_no_host() {
-        let home = tempfile::tempdir().unwrap();
-        assert_eq!(read_aliases(home.path()), ConfigAliases::default());
-        let big = format!("Host big\n{}", "# padding\n".repeat(40_000));
-        write(&home.path().join(".ssh/config"), &big);
-        assert_eq!(read_aliases(home.path()), ConfigAliases::default());
     }
 
     #[test]

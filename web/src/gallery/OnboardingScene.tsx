@@ -319,7 +319,7 @@ function sceneRest(state: OnboardingState, system: OnboardingSystem): SnapshotRe
     : state === "devices-signin" ? [host("mini", "me@mini.example:22", linked("mini", "connected")), host("config-ubuntu", "ubuntu@config-ubuntu.example:22", linked("config-ubuntu", "connecting")), host("office", "dev@office.example:22", linked("office", "connecting")), host("lab", "me@lab.example:22", linked("lab", "connecting")), host("home-nas", "me@nas.example:22", linked("home-nas", "connecting"))]
     : state === "devices-ssh-failed" ? [host("office", "dev@office.example:22", linked("office", "failed")), host("lab", "me@lab.example:22", linked("lab", "failed")), host("home-nas", "me@nas.example:22", linked("home-nas", "failed"))]
     // The account's ssh config Hosts beside Herdr's profiles: one row per machine, a chip for where it came from.
-    : [host("config-ubuntu", "ubuntu@config-ubuntu.example:22"), profile("mini", "mini", { target: "mini", session: "main", ssh_host: "mini", address: "me@mini.example:22" }), host("office", "dev@office.example:22"), profile("gpu-box", "gpu-box", { target: "me@gpu-box.example", session: "default", address: null, added_as: "gpu-box", device_id: "gpu-box", connect_state: "added" })];
+    : [host("config-ubuntu", "ubuntu@config-ubuntu.example:22"), profile("mini", "mini", { target: "mini", session: "default", ssh_host: "mini", address: "me@mini.example:22" }), host("office", "dev@office.example:22"), profile("gpu-box", "gpu-box", { target: "me@gpu-box.example", session: "default", address: null, added_as: "gpu-box", device_id: "gpu-box", connect_state: "added" })];
   const deviceStep = state.startsWith("devices");
   return {
     revision: 1,

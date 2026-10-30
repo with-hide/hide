@@ -12,11 +12,12 @@ import { FIRST_RUN_VERSION, type AgentUpdate, type AiProvider, type FirstRunStep
 export type WizardStep = Exclude<FirstRunStep, "done">;
 
 /**
- * Failed or unread discovery has its own retry step; an observed empty list skips it. Moving the operator's
+ * Failed or unread discovery has its own retry step; only a complete read that found nothing skips it, so a list cut
+ * at a bound keeps the step (the core's `first_run_has_devices` holds the same rule). Moving the operator's
  * older Herdr comes first, and only while there is one to move (PRD herdr-takeover B1, B17).
  */
 export function wizardSteps(profiles: HerdrProfiles | undefined, herdr = false): readonly WizardStep[] {
-  const rest: readonly WizardStep[] = profiles?.state === "ready" && profiles.profiles.length === 0
+  const rest: readonly WizardStep[] = profiles?.state === "ready" && profiles.profiles.length === 0 && !profiles.truncated
     ? ["agents", "notifications", "project"]
     : ["agents", "devices", "notifications", "project"];
   return herdr ? ["herdr", ...rest] : rest;
