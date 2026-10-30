@@ -1451,6 +1451,76 @@ mod tests {
         );
     }
 
+    /// A device thread's words go to that device's Herdr, addressed by the
+    /// pane id the device knows, and never to this machine's.
+    #[test]
+    fn input_to_a_device_thread_reaches_the_pane_on_that_device() {
+        let node = Arc::new(ScriptedNode::default());
+        let mut runtime = runtime(&node);
+        let terminals = Arc::new(GrantingTerminals::default());
+        runtime.set_terminals(Arc::clone(&terminals) as _);
+        let local = crate::fake_herdr::FakeHerdr::start("thread-input-local", |method, _| {
+            unreachable!("a device thread's input reached this machine's Herdr: {method}")
+        });
+        crate::runtime::delivery::tests::set_live(&mut runtime, Some(&local));
+        let device = crate::fake_herdr::FakeHerdr::start("thread-input-mini", |method, _| {
+            assert_eq!(method, "pane.send_input");
+            json!({"type": "ok"})
+        });
+        runtime
+            .snapshot
+            .status
+            .remote
+            .push(crate::model::RemoteStatusSnapshot {
+                target_id: "mini".to_owned(),
+                state: "connected".to_owned(),
+                message: None,
+                herdr_version: None,
+                session: None,
+                files: crate::model::RemoteFileListSnapshot::idle(),
+                catalog: Default::default(),
+                unreachable_since_unix_ms: None,
+            });
+        runtime.install_remote_control(crate::live::RemoteControlContext::new(
+            "mini",
+            device.engine(),
+            std::sync::Weak::new(),
+            crate::handle::ChangeNotifier::noop(),
+        ));
+        let payload: SessionSnapshotPayload = serde_json::from_value(json!({
+            "agents": [{"id": "worker", "pane_id": "w1:p1", "agent": "claude",
+                "agent_status": "idle", "state_change_seq": 1, "lineage_session": "s",
+                "agent_session": {"kind": "id", "value": SESSION}}],
+            "panes": [{"pane_id": "w1:p1", "terminal_id": "t1"}],
+        }))
+        .unwrap();
+        runtime.observe_delivery("mini", &payload, None, None);
+        let pane = "remote:mini:pane:w1:p1";
+        runtime.open_session_thread(ThreadOpenPayload {
+            pane_id: pane.to_owned(),
+        });
+        let generation = thread(&runtime).generation;
+        runtime.send_session_thread_input(ThreadInputPayload {
+            generation,
+            pane_id: pane.to_owned(),
+            request_id: INPUT.to_owned(),
+            text: "계속해".to_owned(),
+            paths: Vec::new(),
+        });
+        let sent = device.requests();
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert_eq!(sent[0]["params"]["pane_id"], "w1:p1");
+        assert_eq!(sent[0]["params"]["text"], "계속해");
+        assert_eq!(
+            terminals.permits.lock().unwrap().as_slice(),
+            &[(pane.to_owned(), "계속해".len() + 1)]
+        );
+        assert_eq!(
+            thread(&runtime).input.map(|input| input.state),
+            Some(ThreadInputState::Sent)
+        );
+    }
+
     #[test]
     fn a_hide_command_call_is_named_as_its_part_and_a_spawn_takes_its_agent_from_a_later_page() {
         let first = vec![
