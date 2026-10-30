@@ -681,7 +681,6 @@ pub struct RetrievalQuery {
     pub excluded_memory_ids: Vec<String>,
     pub maximum_items: usize,
     pub maximum_tokens: usize,
-    pub deadline: Duration,
 }
 
 #[derive(Clone, Debug)]
@@ -715,7 +714,6 @@ impl RetrievalQuery {
             excluded_memory_ids: Vec::new(),
             maximum_items: INDEX_LINE_LIMIT,
             maximum_tokens: usize::MAX,
-            deadline: Duration::from_millis(HOOK_DEADLINE_MS),
         }
     }
 
@@ -733,7 +731,6 @@ impl RetrievalQuery {
             excluded_memory_ids,
             maximum_items: PROMPT_ITEM_LIMIT,
             maximum_tokens: INJECTION_TOKEN_LIMIT,
-            deadline: Duration::from_millis(HOOK_DEADLINE_MS),
         }
     }
 }
@@ -3699,10 +3696,11 @@ impl MemoryStore {
         Ok(true)
     }
 
+    /// Retrieves with no deadline, for a reader that is not the hook. The
+    /// hook's 100 ms belongs to its invocation (`hook::context_for`), which
+    /// reads through [`Self::retrieve_with_expiry`].
     pub fn retrieve(&self, query: &RetrievalQuery) -> Result<Injection, MemoryError> {
-        let started = Instant::now();
-        let deadline = query.deadline;
-        self.retrieve_with_expiry(query, move || started.elapsed() >= deadline)
+        self.retrieve_with_expiry(query, || false)
     }
 
     /// Retrieves within a caller-owned invocation deadline instead of starting
@@ -3712,10 +3710,6 @@ impl MemoryStore {
         query: &RetrievalQuery,
         expired: impl Fn() -> bool,
     ) -> Result<Injection, MemoryError> {
-        let started = Instant::now();
-        let caller_expired = expired;
-        let duration = query.deadline;
-        let expired = move || caller_expired() || started.elapsed() >= duration;
         let empty = |outcome| Injection {
             outcome,
             kind: query.kind,
@@ -7368,7 +7362,6 @@ CREATE VIRTUAL TABLE memory_fts USING fts5(item_id UNINDEXED,project_id UNINDEXE
                     excluded_memory_ids: Vec::new(),
                     maximum_items: 3,
                     maximum_tokens: 1_200,
-                    deadline: Duration::from_secs(5),
                 },
                 || false,
             )
@@ -10113,7 +10106,6 @@ PRAGMA user_version=14;"#,
             )
             .unwrap();
         let query = RetrievalQuery::session_start(&project);
-        assert_eq!(query.deadline, Duration::from_millis(100));
         let (elapsed, expired) = invocation_clock();
         elapsed.fetch_add(99, Ordering::SeqCst);
 

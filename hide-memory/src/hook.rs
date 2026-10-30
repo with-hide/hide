@@ -132,7 +132,7 @@ impl HookContext {
 }
 
 /// The context `store_path`'s Memory gives `request` for `project`, or none
-/// with why; `expired` bounds every step.
+/// with why; `expired` and the hook's own 100 ms from now bound every step.
 pub fn context_for<E>(
     store_path: &Path,
     project: &hide_project::ProjectIdentity,
@@ -142,17 +142,24 @@ pub fn context_for<E>(
 where
     E: Fn() -> bool + Clone + Send + 'static,
 {
-    let started = std::time::Instant::now();
-    let caller_expired = expired;
-    let expired = move || {
-        caller_expired()
-            || started.elapsed() >= std::time::Duration::from_millis(crate::HOOK_DEADLINE_MS)
-    };
-    context_until(store_path, project, request, expired)
+    context_until(store_path, project, request, within_hook_budget(expired))
 }
 
-/// One absolute invocation expiry owns opening, SQL work and rendering.
-fn context_until<E>(
+/// `expired`, or the hook's 100 ms from now passed.
+pub fn within_hook_budget<E>(expired: E) -> impl Fn() -> bool + Clone + Send + 'static
+where
+    E: Fn() -> bool + Clone + Send + 'static,
+{
+    let started = std::time::Instant::now();
+    move || {
+        expired() || started.elapsed() >= std::time::Duration::from_millis(crate::HOOK_DEADLINE_MS)
+    }
+}
+
+/// [`context_for`] with one absolute invocation expiry the caller owns
+/// whole, the hook's 100 ms included, over opening, SQL work and rendering:
+/// a caller that is not about the budget holds it with a clock of its own.
+pub fn context_until<E>(
     store_path: &Path,
     project: &hide_project::ProjectIdentity,
     request: HookRequest<'_>,
@@ -192,10 +199,6 @@ where
             RetrievalQuery::prompt(&project.id, request.prompt.unwrap_or_default(), excluded)
         }
     };
-    // The public entry already composed the caller and 100 ms budgets before
-    // opening. Keep that absolute expiry through retrieval rather than starting
-    // a second wall clock; tests can own the same boundary with a logical clock.
-    query.deadline = std::time::Duration::MAX;
     if expired() {
         return deadline();
     }
