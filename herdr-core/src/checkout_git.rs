@@ -55,13 +55,15 @@ pub(crate) struct Header {
 }
 
 /// What the screen shows of a catch-up: running until the Git read shows
-/// the new `HEAD`, or refused with the count of the operator's files in the
-/// way, or failed for a reason the log keeps.
+/// the new `HEAD`, refused with the count of the operator's files in the way,
+/// refused while a merge, rebase, cherry-pick or revert is in progress, or
+/// failed for a reason the log keeps.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub(crate) enum CatchUpView {
     Running,
     Refused { files: u32 },
+    Busy,
     Failed,
 }
 

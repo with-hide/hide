@@ -10,9 +10,12 @@ use hide_node_link::branch::CatchUpOutcome;
 use hide_node_link::protocol::Call;
 use serde_json::json;
 
-/// How long a catch-up may take on the checkout's machine: a fast-forward
-/// rewrites the operator's files, which is a change, not a read.
-const CATCH_UP_TIMEOUT: Duration = Duration::from_secs(120);
+/// How long the core waits for a catch-up: past the node's own bound on the
+/// fast-forward and the reads before it, so the screen never offers another
+/// press while the first may still be writing the operator's files.
+const CATCH_UP_TIMEOUT: Duration = Duration::from_secs(
+    hide_host::git_run::CHANGE_DEADLINE.as_secs() + 6 * hide_host::git_run::DEADLINE.as_secs(),
+);
 use crate::observed::{Freshness, Observation, now_unix_ms};
 
 #[derive(Default)]
@@ -49,6 +52,7 @@ pub(super) enum CatchUpPhase {
     Refused {
         files: u32,
     },
+    Busy,
     Failed,
 }
 
@@ -274,6 +278,17 @@ impl Runtime {
                 }
             }
             Err(reason) => {
+                // A run that landed waits for a read to show its `HEAD`; with
+                // reads failing it ends, and a press again answers from Git.
+                if self
+                    .checkout_header
+                    .catch_up
+                    .as_ref()
+                    .is_some_and(|catch_up| matches!(catch_up.phase, CatchUpPhase::Landed))
+                {
+                    self.checkout_header.catch_up = None;
+                    unread_moved = true;
+                }
                 header.state = if header.facts.is_some() {
                     GitState::Stale
                 } else {
@@ -403,6 +418,7 @@ impl Runtime {
             .map(|catch_up| match catch_up.phase {
                 CatchUpPhase::Running | CatchUpPhase::Landed => CatchUpView::Running,
                 CatchUpPhase::Refused { files } => CatchUpView::Refused { files },
+                CatchUpPhase::Busy => CatchUpView::Busy,
                 CatchUpPhase::Failed => CatchUpView::Failed,
             });
         Some(header)
@@ -538,14 +554,7 @@ impl Runtime {
                 );
                 None
             }
-            Ok(CatchUpOutcome::InProgress) => {
-                catch_up_diagnostic(
-                    "checkout_catch_up.failed",
-                    device_id,
-                    Some("the checkout is partway through a merge, rebase, cherry-pick or revert"),
-                );
-                Some(CatchUpPhase::Failed)
-            }
+            Ok(CatchUpOutcome::InProgress) => Some(CatchUpPhase::Busy),
             Err(reason) => {
                 catch_up_diagnostic("checkout_catch_up.failed", device_id, Some(&reason));
                 Some(CatchUpPhase::Failed)

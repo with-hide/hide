@@ -60,7 +60,7 @@ function CatchUp({ header, onCatchUp }: { header: Header; onCatchUp: (headSha: s
   const catchUp = header.catch_up ?? null;
   if (catchUp?.state !== "running" && facts.ahead) return <p className="border-t border-border pt-xs text-muted-foreground" data-checkout-catch-up="diverged">{t("checkoutGit.catchUpDiverged")}</p>;
   if (facts.ahead !== 0 && catchUp?.state !== "running") return null;
-  const note = catchUp?.state === "refused" ? t("checkoutGit.catchUpRefused", { count: catchUp.files }) : catchUp?.state === "failed" ? t("checkoutGit.catchUpFailed") : null;
+  const note = catchUp?.state === "refused" ? t("checkoutGit.catchUpRefused", { count: catchUp.files }) : catchUp?.state === "busy" ? t("checkoutGit.catchUpBusy") : catchUp?.state === "failed" ? t("checkoutGit.catchUpFailed") : null;
   return <div className="flex items-center justify-between gap-sm border-t border-border pt-xs" data-checkout-catch-up={catchUp?.state ?? "offered"}>
     {note ? <p role="status" className="min-w-0 text-destructive">{note}</p> : <span />}
     <Button variant="outline" size="sm" className="shrink-0 gap-xs" disabled={catchUp?.state === "running"} onClick={() => onCatchUp(head)}>{catchUp?.state === "running" ? <><LoaderCircleIcon className={`${iconClass} animate-spin`} />{t("checkoutGit.catchingUp")}</> : note ? t("checkoutGit.catchUpAgain") : t("checkoutGit.catchUp")}</Button>

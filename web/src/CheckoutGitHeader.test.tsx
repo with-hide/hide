@@ -185,6 +185,9 @@ it("offers 받기 only with nothing to send, says why not when both sides have c
     expect(refused.querySelector("[role=status]")!.textContent).toBe("3 uncommitted files are in the way");
     expect(refused.querySelector("button")!.textContent).toBe("Pull again");
 
+    const busy = (await open({ ...header, catch_up: { state: "busy" } }))!;
+    expect(busy.querySelector("[role=status]")!.textContent).toBe("Finish the merge or rebase in progress first");
+
     const diverged = (await open({ ...header, facts: facts({ ahead: 2, behind: 59 }) }))!;
     expect(diverged.dataset.checkoutCatchUp).toBe("diverged");
     expect(diverged.querySelector("button")).toBeNull();

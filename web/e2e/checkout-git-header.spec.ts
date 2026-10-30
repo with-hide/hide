@@ -125,7 +125,7 @@ test("a commit pushed to origin shows as one to receive, without a manual fetch,
     await screenshot(page, "checkout-pull-offered-browser");
     await pull.getByRole("button", { name: "Pull" }).click();
     await expect(pull).toHaveAttribute("data-checkout-catch-up", "refused", { timeout: 15_000 });
-    await expect(pull.getByRole("status")).toHaveText("1 uncommitted files are in the way");
+    await expect(pull.getByRole("status")).toHaveText("1 uncommitted file is in the way");
     await screenshot(page, "checkout-pull-refused-browser");
     expect(fs.readFileSync(path.join(root, "shared.txt"), "utf8")).toBe("mine\n");
     expect(git(root, ["rev-parse", "HEAD"]).trim()).not.toBe(incoming);
