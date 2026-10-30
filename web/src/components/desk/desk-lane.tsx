@@ -1,5 +1,8 @@
 import { ImagesIcon, ListIcon, Maximize2Icon, Minimize2Icon, PlusIcon, XIcon } from "lucide-react";
-import type { ReactNode, Ref } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode, type Ref } from "react";
+import { tabFit } from "../../AreaTree";
+import { tabStripFit, type TabStripFit } from "../../areaLayout";
+import { readTabStripSizes } from "../../tabStripSizes";
 import { useInterfaceTranslation } from "../../i18n/client";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
@@ -103,21 +106,26 @@ export type ViewTab = { id: string; label: string; preview: boolean; icon?: Reac
  */
 export function DeskViewColumn({ tabs, active, onTab, onKeep, onCloseTab, controls = null, children }: { tabs: readonly ViewTab[]; active: string | null; onTab: (id: string) => void; onKeep: (id: string) => void; onCloseTab: (id: string) => void; controls?: ReactNode; children: ReactNode }) {
   const { t } = useInterfaceTranslation();
+  const [zone, fit] = useTabStripFit(tabs.length, tabs.some((tab) => tab.id === active));
   return (
     <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-card" aria-label={t("desk.outputs.title")} data-desk-view-column={tabs.length}>
       <div className="flex h-(--size-tab-strip) shrink-0 items-center border-b border-border pr-xs">
-      <div role="tablist" className="flex h-full min-w-0 flex-1 items-end gap-xxs overflow-x-auto px-xs" data-desk-view-tabs="true">
+      <div ref={zone} className="flex h-full min-w-0 flex-1">
+      <div role="tablist" className="flex h-full min-w-0 items-end overflow-x-auto" data-desk-view-tabs="true">
         {tabs.map((tab) => {
           const on = tab.id === active;
+          // The View tab strip's rule (`tabStripFit`): the selected tab keeps its title longest.
+          const slot = fit ? (on ? fit.selected : fit.others) : null;
+          const shape = tabFit(on, slot?.fit ?? "titled");
           return (
             <Hint key={tab.id} label={tab.preview ? `${tab.label} · ${t("desk.lane.preview")}` : tab.label}>
-              <span className={cn("group/tab flex h-(--size-control-sm) min-w-0 max-w-(--size-tab-preferred) items-center gap-xxs rounded-t-sm pl-xs pr-xxs", on ? "bg-background text-foreground" : "text-muted-foreground hover:bg-accent")} data-desk-view-tab={tab.id} data-desk-view-tab-preview={tab.preview ? "true" : undefined}>
+              <span style={slot ? { width: slot.width } : undefined} className={cn("group/tab flex h-(--size-control-sm) min-w-0 shrink-0 items-center gap-xxs rounded-t-sm", slot ? "" : "max-w-(--size-tab-preferred)", shape.tab, on ? "bg-background text-foreground" : "text-muted-foreground hover:bg-accent")} data-desk-view-tab={tab.id} data-desk-view-tab-preview={tab.preview ? "true" : undefined}>
                 <Button
                   variant="text"
                   size="inline"
                   role="tab"
                   aria-selected={on}
-                  className={cn("min-w-0 gap-xxs text-caption", on && "text-foreground", tab.preview && "italic")}
+                  className={cn("min-w-0 flex-1 justify-start gap-xxs text-caption", on && "text-foreground", tab.preview && "italic")}
                   onClick={() => onTab(tab.id)}
                   onDoubleClick={() => onKeep(tab.id)}
                   onKeyDown={(event) => {
@@ -129,13 +137,15 @@ export function DeskViewColumn({ tabs, active, onTab, onKeep, onCloseTab, contro
                   }}
                 >
                   {tab.icon}
-                  <span className="truncate">{tab.label}</span>
+                  {/* An italic title leans past its box; the end padding keeps its last letter whole. */}
+                  <span className={cn("min-w-0 truncate", tab.preview && "pr-xxs", shape.title)}>{tab.label}</span>
                 </Button>
-                <Button variant="ghost" size="icon-xs" className={cn("text-muted-foreground", !on && "opacity-0 group-hover/tab:opacity-100 focus-visible:opacity-100")} aria-label={t("desk.lane.closeTab", { name: tab.label })} onClick={() => onCloseTab(tab.id)}><XIcon /></Button>
+                <Button variant="ghost" size="icon-xs" className={cn("shrink-0 text-muted-foreground", !on && "opacity-0 group-hover/tab:opacity-100 focus-visible:opacity-100", shape.close)} aria-label={t("desk.lane.closeTab", { name: tab.label })} onClick={() => onCloseTab(tab.id)}><XIcon /></Button>
               </span>
             </Hint>
           );
         })}
+      </div>
       </div>
       {controls}
       </div>
@@ -147,20 +157,24 @@ export function DeskViewColumn({ tabs, active, onTab, onKeep, onCloseTab, contro
 /**
  * Desk's room (D-64, B1, B32): the chat in the middle and, at the right,
  * the lane's columns and the rail. Unpinned, the columns float over the
- * chat and the chat moves left out from under them, keeping its width while
- * the room has it; pinned, they dock beside it and the chat narrows. `view` is the 보기 column, `tool` the Threads column; either
+ * chat and the chat's words move left out from under them; pinned, they
+ * dock beside it at the same width and the chat narrows by it. `view` is the 보기 column, `tool` the Threads column; either
  * may be absent.
  */
 export function DeskRoom({ chat, view = null, tool = null, pinned, expanded = false, rail }: { chat: ReactNode; view?: ReactNode; tool?: ReactNode; pinned: boolean; expanded?: boolean; rail: ReactNode }) {
   const up = view !== null || tool !== null;
   const over = up && !pinned && !expanded;
-  // The chat moves left out from under a lane over it, but never narrower than a lane column's minimum;
-  // a padding below zero computes to zero.
-  const covered = view !== null && tool !== null ? "pr-[min(calc(var(--size-lane-panel-ideal)*2),calc(100%_-_var(--size-lane-min)))]" : "pr-[min(var(--size-lane-panel-ideal),calc(100%_-_var(--size-lane-min)))]";
+  const both = view !== null && tool !== null;
+  // The lane is as wide as its columns, pinned or not, and never leaves the chat less than its
+  // minimum: the 보기 column gives up its width first. Over the chat, the chat moves left out from
+  // under it by the same width, so nothing it says is hidden.
+  const width = both ? "w-[min(calc(var(--size-lane-panel-ideal)*2),calc(100%_-_var(--size-lane-min)))]" : "w-[min(var(--size-lane-panel-ideal),calc(100%_-_var(--size-lane-min)))]";
+  const covered = both ? "pr-[min(calc(var(--size-lane-panel-ideal)*2),calc(100%_-_var(--size-lane-min)))]" : "pr-[min(var(--size-lane-panel-ideal),calc(100%_-_var(--size-lane-min)))]";
+  const placed = expanded ? "absolute inset-0 z-10 bg-background shadow-lg" : pinned ? cn("shrink-0", width) : cn("absolute inset-y-0 right-0 z-10 border-l border-border bg-background shadow-lg", width);
   const columns = up ? (
-    <div className={cn("flex min-h-0 min-w-0", pinned && !expanded ? "flex-[2]" : "absolute inset-y-0 right-0 z-10 border-l border-border bg-background shadow-lg", expanded && "left-0")} data-desk-lane={pinned ? "pinned" : "over"}>
-      {view !== null ? <div className={cn("flex min-h-0 min-w-0 flex-col", expanded || pinned ? "flex-1" : "w-(--size-lane-panel-ideal)")} data-desk-lane-column="view">{view}</div> : null}
-      {tool !== null ? <aside className={cn("flex min-h-0 min-w-0 flex-col border-l border-border bg-background", view !== null || !pinned ? "w-(--size-lane-panel-ideal) shrink-0" : "flex-1")} data-desk-lane-column="tool">{tool}</aside> : null}
+    <div className={cn("flex min-h-0 min-w-0 overflow-hidden", placed)} data-desk-lane={pinned ? "pinned" : "over"}>
+      {view !== null ? <div className="flex min-h-0 min-w-0 flex-1 flex-col" data-desk-lane-column="view">{view}</div> : null}
+      {tool !== null ? <aside className={cn("flex min-h-0 min-w-0 flex-col border-l border-border bg-background", both ? "w-(--size-lane-panel-ideal) shrink-0" : "flex-1")} data-desk-lane-column="tool">{tool}</aside> : null}
     </div>
   ) : null;
   return (
@@ -194,4 +208,24 @@ export function DeskChatColumn({ head, children, composer, scrollRef }: { head: 
       <div className="mx-auto w-full max-w-(--size-editor-measure) shrink-0 px-lg pb-md pt-xs">{composer}</div>
     </>
   );
+}
+
+/** How many pixels each 보기 tab gets, by the View tab strip's rule, measured from the room the strip has. */
+function useTabStripFit(count: number, hasSelected: boolean) {
+  const zone = useRef<HTMLDivElement>(null);
+  const [fit, setFit] = useState<TabStripFit | null>(null);
+  useLayoutEffect(() => {
+    const node = zone.current;
+    if (!node) return;
+    const sizes = readTabStripSizes();
+    const measure = () => {
+      const next = tabStripFit(Math.floor(node.getBoundingClientRect().width), count, hasSelected, sizes);
+      setFit((drawn) => (drawn && drawn.selected.width === next.selected.width && drawn.others.width === next.others.width && drawn.selected.fit === next.selected.fit && drawn.others.fit === next.others.fit ? drawn : next));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [count, hasSelected]);
+  return [zone, fit] as const;
 }
